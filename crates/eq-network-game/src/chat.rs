@@ -145,6 +145,29 @@ fn encode_chat_text(text: &str) -> String {
     encoded
 }
 
+/// Return the encoded byte length of chat text for one game dialect.
+///
+/// This includes client-generation escaping within the message field, but not
+/// the fixed channel-message header, terminator, or trailer.
+#[must_use]
+pub fn outbound_text_len(dialect: GameDialect, text: &str) -> usize {
+    match dialect {
+        GameDialect::TitaniumP99 => encode_chat_text(text).len(),
+        GameDialect::EqMac => text.len(),
+    }
+}
+
+/// Return the largest encoded chat-text field accepted by one game dialect.
+#[must_use]
+pub const fn outbound_text_limit(dialect: GameDialect) -> usize {
+    match dialect {
+        GameDialect::TitaniumP99 => MAX_OUTBOUND_MESSAGE,
+        // EQMac adds four bytes after the terminator; this keeps the complete
+        // variable region within the server's 2048-byte bound.
+        GameDialect::EqMac => MAX_MAC_OUTBOUND_MESSAGE,
+    }
+}
+
 /// Encode a client-to-zone `ChannelMessage_Struct` for the selected client family.
 ///
 /// # Errors
@@ -166,14 +189,8 @@ pub fn encode_outbound_for(
         GameDialect::TitaniumP99 => encode_chat_text(message_text),
         GameDialect::EqMac => message_text.to_owned(),
     };
-    let maximum = match protocol {
-        GameDialect::TitaniumP99 => MAX_OUTBOUND_MESSAGE,
-        // EQMac adds four bytes after the terminator; this keeps the complete
-        // variable region within the server's 2048-byte bound.
-        GameDialect::EqMac => MAX_MAC_OUTBOUND_MESSAGE,
-    };
     ensure!(
-        wire_text.len() <= maximum,
+        wire_text.len() <= outbound_text_limit(protocol),
         "chat message exceeds server field size"
     );
     ensure!(

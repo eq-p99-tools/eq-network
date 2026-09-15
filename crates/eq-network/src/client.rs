@@ -367,6 +367,51 @@ pub struct SessionStatus {
     pub last_received_seconds: Option<u64>,
 }
 
+impl SessionStatus {
+    /// Create an empty status snapshot for a connection state and session.
+    #[must_use]
+    pub fn new(state: ConnectionState, session_id: impl Into<String>) -> Self {
+        Self {
+            state,
+            timestamp: chrono::Utc::now().timestamp(),
+            session_id: session_id.into(),
+            zone: String::new(),
+            messages: 0,
+            packets: 0,
+            last_received_seconds: None,
+        }
+    }
+
+    /// Replace the timestamp, primarily for imported or synthetic events.
+    #[must_use]
+    pub const fn with_timestamp(mut self, timestamp: i64) -> Self {
+        self.timestamp = timestamp;
+        self
+    }
+
+    /// Attach the current short zone name.
+    #[must_use]
+    pub fn with_zone(mut self, zone: impl Into<String>) -> Self {
+        self.zone = zone.into();
+        self
+    }
+
+    /// Attach current communication and application-packet counters.
+    #[must_use]
+    pub const fn with_counters(mut self, messages: u64, packets: u64) -> Self {
+        self.messages = messages;
+        self.packets = packets;
+        self
+    }
+
+    /// Attach whole seconds since the last valid server datagram.
+    #[must_use]
+    pub const fn with_last_received(mut self, seconds: Option<u64>) -> Self {
+        self.last_received_seconds = seconds;
+        self
+    }
+}
+
 /// A recognized communication opcode whose body could not be decoded.
 #[derive(Clone, Debug, Serialize)]
 #[non_exhaustive]
@@ -379,6 +424,19 @@ pub struct DecodeError {
     pub payload_hex: String,
     /// Decoder error without credentials or packet secrets.
     pub error: String,
+}
+
+impl DecodeError {
+    /// Create a structured failure for one recognized communication packet.
+    #[must_use]
+    pub fn new(opcode: u16, payload_hex: impl Into<String>, error: impl Into<String>) -> Self {
+        Self {
+            kind: "decode_error",
+            opcode,
+            payload_hex: payload_hex.into(),
+            error: error.into(),
+        }
+    }
 }
 
 /// Preserves the existing flat `chat/decode_error` JSON representation.
@@ -411,6 +469,36 @@ pub struct Record {
     /// Decoded communication or decode failure.
     #[serde(flatten)]
     pub event: RecordEvent,
+}
+
+impl Record {
+    /// Create a communication record with the current UTC receive time.
+    #[must_use]
+    pub fn new(
+        server: impl Into<String>,
+        character: impl Into<String>,
+        zone: impl Into<String>,
+        session_id: impl Into<String>,
+        message_id: u64,
+        event: RecordEvent,
+    ) -> Self {
+        Self {
+            timestamp: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+            server: server.into(),
+            character: character.into(),
+            zone: zone.into(),
+            session_id: session_id.into(),
+            message_id,
+            event,
+        }
+    }
+
+    /// Replace the receive timestamp, primarily for imported or synthetic records.
+    #[must_use]
+    pub fn with_timestamp(mut self, timestamp: impl Into<String>) -> Self {
+        self.timestamp = timestamp.into();
+        self
+    }
 }
 
 /// Ordered connection milestones, from the start of an attempt to zone admission.
