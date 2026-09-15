@@ -6,7 +6,6 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-homepage.workspace = true
 documentation = "https://docs.rs/eq-network-login"
 readme = "README.md"
 keywords = ["everquest", "login", "networking", "protocol"]
@@ -16,7 +15,7 @@ categories = ["network-programming"]
 cbc.workspace = true
 cipher.workspace = true
 des.workspace = true
-eq-network-transport = { path = "../eq-network-transport", version = "0.1.1" }
+eq-network-transport = { path = "../eq-network-transport", version = "0.1.2" }
 thiserror.workspace = true
 zeroize.workspace = true
 

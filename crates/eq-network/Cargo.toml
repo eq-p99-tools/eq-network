@@ -6,7 +6,6 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-homepage.workspace = true
 documentation = "https://docs.rs/eq-network"
 readme = "README.md"
 keywords = ["everquest", "client", "chat", "networking"]
@@ -16,9 +15,9 @@ categories = ["network-programming"]
 anyhow.workspace = true
 chrono.workspace = true
 crc32fast.workspace = true
-eq-network-game = { path = "../eq-network-game", version = "0.1.1" }
-eq-network-login = { path = "../eq-network-login", version = "0.1.1" }
-eq-network-transport = { path = "../eq-network-transport", version = "0.1.1" }
+eq-network-game = { path = "../eq-network-game", version = "0.1.2" }
+eq-network-login = { path = "../eq-network-login", version = "0.1.2" }
+eq-network-transport = { path = "../eq-network-transport", version = "0.1.2" }
 hex.workspace = true
 md5.workspace = true
 rand.workspace = true
