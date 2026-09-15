@@ -9,8 +9,9 @@ native mobile client.
 The current high-level client can log in, select a world and character, enter a
 zone, receive structured chat (including item-link data), send chat, reconnect,
 and shut down cooperatively. It supports the Titanium/P99-V62 and Windows
-TAKP/EQMac protocol families. Project Quarm support is source-derived and has
-not yet been exercised against its live service.
+TAKP/EQMac protocol families. Live Project Quarm testing has exercised login,
+world and character selection, zone entry, received chat, outbound tells, and
+the required DLL version announcement through the Android client.
 
 ## Crates
 
@@ -91,12 +92,11 @@ guidelines.
 
 ## Publishing
 
-The crate names are available for publication in dependency order:
-`eq-network-transport`, `eq-network-login`, `eq-network-game`, then
-`eq-network`. The first release of each crate must be published manually because
-crates.io requires a crate to exist before trusted publishing can be configured.
-Later releases use the manual `publish.yml` workflow and short-lived crates.io
-OIDC credentials.
+The crates are published in dependency order: `eq-network-transport`,
+`eq-network-login`, `eq-network-game`, then `eq-network`. Their initial releases
+were bootstrapped with a crates.io token because trusted publishing requires an
+existing crate. Later releases use the manual `publish.yml` workflow and
+short-lived crates.io OIDC credentials.
 
 ## License
 
