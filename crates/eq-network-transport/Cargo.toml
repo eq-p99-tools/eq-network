@@ -1,0 +1,23 @@
+[package]
+name = "eq-network-transport"
+description = "EverQuest reliable UDP framing and transport codecs"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation = "https://docs.rs/eq-network-transport"
+readme = "README.md"
+keywords = ["everquest", "networking", "protocol", "udp"]
+categories = ["network-programming"]
+
+[dependencies]
+anyhow.workspace = true
+crc32fast.workspace = true
+miniz_oxide.workspace = true
+rand.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true

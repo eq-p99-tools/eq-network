@@ -1,0 +1,28 @@
+[package]
+name = "eq-network-game"
+description = "EverQuest world, zone, validation, and chat packet codecs"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation = "https://docs.rs/eq-network-game"
+readme = "README.md"
+keywords = ["everquest", "chat", "networking", "protocol"]
+categories = ["network-programming"]
+
+[dependencies]
+anyhow.workspace = true
+hex.workspace = true
+md5.workspace = true
+num-bigint.workspace = true
+rand.workspace = true
+serde.workspace = true
+zeroize.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+
+[lints]
+workspace = true
