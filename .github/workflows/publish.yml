@@ -15,23 +15,12 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
-      - name: Detect first-release token
-        id: bootstrap
-        env:
-          TOKEN: ${{ secrets.CRATES_IO_BOOTSTRAP_TOKEN }}
-        run: |
-          if [[ -n "$TOKEN" ]]; then
-            echo "available=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "available=false" >> "$GITHUB_OUTPUT"
-          fi
-      - name: Authenticate with crates.io using trusted publishing
-        if: steps.bootstrap.outputs.available != 'true'
+      - name: Authenticate with crates.io
         id: auth
         uses: rust-lang/crates-io-auth-action@v1
       - name: Publish crates in dependency order
         env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_IO_BOOTSTRAP_TOKEN || steps.auth.outputs.token }}
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
         run: |
           cargo publish --package eq-network-transport
           cargo publish --package eq-network-login

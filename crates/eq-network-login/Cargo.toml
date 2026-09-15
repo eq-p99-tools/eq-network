@@ -16,7 +16,7 @@ categories = ["network-programming"]
 cbc.workspace = true
 cipher.workspace = true
 des.workspace = true
-eq-network-transport = { path = "../eq-network-transport", version = "0.1.0" }
+eq-network-transport = { path = "../eq-network-transport", version = "0.1.1" }
 thiserror.workspace = true
 zeroize.workspace = true
 

@@ -16,9 +16,9 @@ categories = ["network-programming"]
 anyhow.workspace = true
 chrono.workspace = true
 crc32fast.workspace = true
-eq-network-game = { path = "../eq-network-game", version = "0.1.0" }
-eq-network-login = { path = "../eq-network-login", version = "0.1.0" }
-eq-network-transport = { path = "../eq-network-transport", version = "0.1.0" }
+eq-network-game = { path = "../eq-network-game", version = "0.1.1" }
+eq-network-login = { path = "../eq-network-login", version = "0.1.1" }
+eq-network-transport = { path = "../eq-network-transport", version = "0.1.1" }
 hex.workspace = true
 md5.workspace = true
 rand.workspace = true
