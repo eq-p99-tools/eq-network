@@ -1,0 +1,30 @@
+[package]
+name = "eq-network"
+description = "Native EverQuest login, world, and zone client"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation = "https://docs.rs/eq-network"
+readme = "README.md"
+keywords = ["everquest", "client", "chat", "networking"]
+categories = ["network-programming"]
+
+[dependencies]
+anyhow.workspace = true
+chrono.workspace = true
+crc32fast.workspace = true
+eq-network-game = { path = "../eq-network-game", version = "0.1.0" }
+eq-network-login = { path = "../eq-network-login", version = "0.1.0" }
+eq-network-transport = { path = "../eq-network-transport", version = "0.1.0" }
+hex.workspace = true
+md5.workspace = true
+rand.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+zeroize.workspace = true
+
+[lints]
+workspace = true
