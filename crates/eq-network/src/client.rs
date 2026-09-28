@@ -36,6 +36,7 @@
 //! ```
 
 mod quarm;
+mod selection;
 mod session;
 
 use crate::{
@@ -157,7 +158,7 @@ pub struct ClientConfig {
     pub credentials: Credentials,
     /// World-server display name selected after login.
     pub server: String,
-    /// Character selected on the world server.
+    /// Character to enter automatically; empty requests interactive selection.
     pub character: String,
     /// Whether decoded records retain raw packet representations.
     pub include_raw: bool,
@@ -201,7 +202,7 @@ impl ClientConfig {
     }
 
     fn validate(&self) -> Result<()> {
-        for value in [&self.host, &self.server, &self.character] {
+        for value in [&self.host, &self.server] {
             ensure!(
                 !value.is_empty() && !value.contains('\0'),
                 "required connection fields must be nonempty and contain no NUL"
@@ -221,7 +222,7 @@ impl ClientConfig {
             );
         }
         ensure!(
-            self.character.len() < 64,
+            self.character.len() < 64 && !self.character.contains('\0'),
             "character name exceeds protocol field size"
         );
         ensure!(
@@ -532,6 +533,8 @@ pub enum ConnectionStage {
 #[serde(tag = "type", content = "data", rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum ClientEvent {
+    /// World state for graphical clients; contains no login or profile secrets.
+    World(crate::world::WorldEvent),
     /// Periodic health and connection status.
     Status(SessionStatus),
     /// Completed connection milestone.
@@ -636,6 +639,10 @@ impl Client {
         handler: &mut dyn FnMut(ClientEvent) -> Result<()>,
     ) -> Result<()> {
         let mut events = Events::new(&self.config, handler);
+        ensure!(
+            !self.config.character.is_empty() || commands.is_some() || options.world_only,
+            "interactive character selection requires a command receiver"
+        );
         loop {
             if cancel.is_cancelled() {
                 return events.status(ConnectionState::Stopped, 0, None);
@@ -704,6 +711,7 @@ struct Events<'a> {
     session_id: String,
     zone: String,
     messages: u64,
+    character: String,
 }
 
 impl<'a> Events<'a> {
@@ -717,6 +725,7 @@ impl<'a> Events<'a> {
             session_id: String::new(),
             zone: String::new(),
             messages: 0,
+            character: config.character.clone(),
         }
     }
 
@@ -724,6 +733,7 @@ impl<'a> Events<'a> {
         self.session_id = format!("{:016x}", rand::random::<u64>());
         self.zone.clear();
         self.messages = 0;
+        self.character.clone_from(&self.config.character);
     }
 
     fn send(&mut self, event: ClientEvent) -> Result<()> {
@@ -761,7 +771,7 @@ impl<'a> Events<'a> {
         self.send(ClientEvent::Record(Box::new(Record {
             timestamp: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
             server: self.config.server.clone(),
-            character: self.config.character.clone(),
+            character: self.character.clone(),
             zone: zone.to_owned(),
             session_id: self.session_id.clone(),
             message_id: self.messages,

@@ -5,6 +5,28 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- Character-selection sessions and typed world state for graphical clients.
+- P99 movement, targeting, doors, inventory operations, spellbook editing,
+  casting, item activation, buff notifications, and zone/death handoff events.
+- Quarm admission and entity presentation for graphical clients; outbound
+  gameplay commands remain P99-only.
+- Synthetic regression coverage for inventory reconciliation, scribe consumption,
+  movement admission, cast state, and fresh-key world/zone handoffs.
+
+### Changed
+
+- Separate session helpers validate gameplay requests against current admission
+  state and retain server corrections rather than treating predictions as acknowledgments.
+
+### Known limitations
+
+- Movement still requires calibration. Online airborne movement and complete
+  server-specific buff reconciliation are not implemented.
+- Latest scribe-consumption reconciliation and fresh-key zoning changes have
+  offline regression coverage but still need fresh live verification.
+
 ## [0.1.2] - 2026-09-15
 
 ### Added
