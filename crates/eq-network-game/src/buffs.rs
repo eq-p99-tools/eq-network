@@ -80,7 +80,12 @@ pub struct BuffUpdate {
 /// Rejects profiles too short to contain the complete buff table.
 pub fn titanium_profile(profile: &[u8]) -> Result<Vec<Option<Buff>>> {
     ensure!(profile.len() >= 5508, "truncated Titanium buff table");
-    Ok(profile[5008..5508].chunks_exact(20).map(record).collect())
+    Ok(profile[5008..5508]
+        .as_chunks::<20>()
+        .0
+        .iter()
+        .map(|bytes| record(bytes))
+        .collect())
 }
 
 /// Decodes a Titanium server buff notification and its explicit fade flag.

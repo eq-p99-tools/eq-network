@@ -208,7 +208,7 @@ impl super::Inventory {
             "The expendable item has no charges remaining"
         );
         let mut body = [0; 20];
-        for (bytes, value) in body.chunks_exact_mut(4).zip([
+        for (bytes, value) in body.as_chunks_mut::<4>().0.iter_mut().zip([
             10,
             effect.spell_id,
             u32::try_from(slot.0)?,

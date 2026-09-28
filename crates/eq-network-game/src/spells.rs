@@ -139,7 +139,9 @@ impl SpellBook {
     pub fn titanium_profile(profile: &[u8]) -> Result<Self> {
         ensure!(profile.len() == 19592, "invalid Titanium profile length");
         let slots = profile[2312..3912]
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .map(|bytes| {
                 let id = u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
                 (!matches!(id, 0 | 0xffff | u32::MAX)).then_some(id)

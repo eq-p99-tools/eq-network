@@ -146,7 +146,7 @@ pub fn decode(opcode: u16, body: &[u8]) -> Result<Option<DoorUpdate>> {
             );
             let mut ids = std::collections::BTreeSet::new();
             let mut doors = Vec::with_capacity(body.len() / 80);
-            for record in body.chunks_exact(80) {
+            for record in body.as_chunks::<80>().0 {
                 let word = |offset| {
                     u32::from_le_bytes([
                         record[offset],

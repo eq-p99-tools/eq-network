@@ -51,7 +51,7 @@ impl ZonePoints {
             "invalid zone-point length"
         );
         let mut entries = BTreeMap::new();
-        for record in body[4..expected].chunks_exact(24) {
+        for record in body[4..expected].as_chunks::<24>().0 {
             let point = ZonePoint {
                 number: word(record, 0),
                 zone_id: half(record, 20),
