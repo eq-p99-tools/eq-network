@@ -52,7 +52,7 @@ pub(super) fn run(
     log: &mut Events<'_>,
 ) -> Result<()> {
     match config.protocol {
-        ServerProtocol::Project1999 => {
+        ServerProtocol::Project1999 | ServerProtocol::EqEmu => {
             run_p99(config, identity, assets, stop, options, commands, log)
         }
         ServerProtocol::Quarm => super::quarm::run(config, stop, options, commands, log),
@@ -381,10 +381,14 @@ fn decode_destination(
     assets: &Assets,
     log: &mut Events<'_>,
 ) -> Result<(String, u16, Vec<u8>)> {
-    ensure!(packet.len() > 130, "invalid zone handoff");
+    ensure!(packet.len() >= 130, "invalid zone handoff");
     let host = std::str::from_utf8(cstr(&packet[..128]))?.to_owned();
     let port = u16::from_le_bytes(packet[128..130].try_into()?);
     ensure!(!host.is_empty() && port != 0, "invalid zone endpoint");
+    // Stock EQEmu hands off only the endpoint; P99 appends an encrypted manifest.
+    if packet.len() == 130 {
+        return Ok((host, port, Vec::new()));
+    }
     let manifest = codec.zone_manifest(packet)?;
     Ok((host, port, file_response(assets, &manifest, log)?))
 }
@@ -470,6 +474,8 @@ fn world(
             packet.body.len()
         ))?;
         match WorldOpcode::from(packet.opcode) {
+            // Stock EQEmu's ApproveWorld is informational; only P99 expects an answer.
+            WorldOpcode::ApprovalChallenge if config.protocol == ServerProtocol::EqEmu => {}
             WorldOpcode::ApprovalChallenge => {
                 session.send(0x3c25, &codec.approve(&packet.body)?)?;
             }
@@ -578,7 +584,10 @@ fn zone(
     session.send(0x7752, &0u32.to_le_bytes())?;
     let mut entry = vec![0; 68];
     put_string(&mut entry[4..], &config.character)?;
-    codec.zone_entry(&entry)?;
+    let stock = config.protocol == ServerProtocol::EqEmu;
+    if !stock {
+        codec.zone_entry(&entry)?;
+    }
     session.send(0x7213, &entry)?;
     log.send(ClientEvent::Progress(ConnectionStage::LoadingCharacter))?;
     let connected = Instant::now();
@@ -1347,7 +1356,7 @@ fn zone(
             continue;
         };
         packets += 1;
-        if matches!(packet.opcode, 0x2e78 | 0x1860) {
+        if !stock && matches!(packet.opcode, 0x2e78 | 0x1860) {
             // V62 XOR runs continuously over the full batch, not per spawn.
             p99::session_xor(&mut packet.body, &credentials.key)?;
         }
@@ -1594,14 +1603,18 @@ fn zone(
             }
             ZoneOpcode::Weather => saw_weather = true,
             ZoneOpcode::PlayerSpawn if !saw_spawn => {
-                p99::session_xor(&mut packet.body, &credentials.key)?;
+                if !stock {
+                    p99::session_xor(&mut packet.body, &credentials.key)?;
+                }
                 ensure!(
                     packet.body.len() == 385
                         && cstr(&packet.body[7..71])
                             .eq_ignore_ascii_case(config.character.as_bytes()),
                     "zone returned a different character spawn"
                 );
-                codec.zone_spawn(&packet.body)?;
+                if !stock {
+                    codec.zone_spawn(&packet.body)?;
+                }
                 let id = u16::try_from(le32(&packet.body[340..344]))
                     .context("spawn ID exceeds Titanium position field")?;
                 stationary[..2].copy_from_slice(&id.to_le_bytes());
@@ -1731,8 +1744,10 @@ fn zone(
             _ => (),
         }
         if saw_spawn && saw_profile && saw_weather && !requested {
-            codec.file_response(&mut checksums)?;
-            session.send(0x1251, &checksums)?;
+            if !stock {
+                codec.file_response(&mut checksums)?;
+                session.send(0x1251, &checksums)?;
+            }
             session.send(0x7ac5, &[])?;
             session.send(0x367d, &[])?;
             session.send(0x5966, &[])?;
