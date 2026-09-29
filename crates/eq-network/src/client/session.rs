@@ -1,3 +1,4 @@
+mod actions;
 mod book_edits;
 mod camp;
 mod casting;
@@ -762,47 +763,19 @@ fn zone(
             if let Some(commands) = context.commands {
                 // Bound each pass so continuous producers cannot starve receive/ACK work.
                 for command in commands.try_iter().take(64) {
-                    if book_edits.blocks(&command) {
-                        log.send(ClientEvent::World(crate::world::WorldEvent::BookAction(
-                            BookActionStatus::AwaitingReply,
-                        )))?;
+                    // One table decides which in-flight actions a command must wait for.
+                    if let Some(reason) = actions::Held::from_state(
+                        &cast_guard,
+                        &book_edits,
+                        pending_memorization.as_ref(),
+                    )
+                    .conflict(&command)
+                    {
+                        actions::refuse(&command, reason, log)?;
                         continue;
                     }
                     if camp::handle(&mut camp, session_id, &command, &mut session, log)? {
                         continue;
-                    }
-                    // The server consumes the cursor scroll when it answers a scribe;
-                    // moving items meanwhile desynchronized inventory and P99 logged
-                    // the character out (seen live), so hold them until the result.
-                    if book_edits.scribing()
-                        || pending_memorization.as_ref().is_some_and(|pending| {
-                            matches!(pending.intent, BookIntent::Scribe { .. })
-                        })
-                    {
-                        let reason = "Wait for scribing to finish";
-                        match &command {
-                            ClientCommand::MoveInventory(request) => {
-                                log.send(ClientEvent::World(
-                                    crate::world::WorldEvent::InventoryAction {
-                                        session_id: request.session_id,
-                                        revision: request.revision,
-                                        error: Some(reason.into()),
-                                    },
-                                ))?;
-                                continue;
-                            }
-                            ClientCommand::UseItem(request) => {
-                                log.send(ClientEvent::World(
-                                    crate::world::WorldEvent::ItemUseAction {
-                                        session_id: request.session_id,
-                                        request_id: request.request_id,
-                                        error: Some(reason.into()),
-                                    },
-                                ))?;
-                                continue;
-                            }
-                            _ => (),
-                        }
                     }
                     if let ClientCommand::ClickDoor {
                         session_id: requested,
@@ -904,31 +877,6 @@ fn zone(
                                 ))?;
                             }
                         }
-                        continue;
-                    }
-                    if cast_guard.blocks(&command) {
-                        let reason = "Wait for the current cast to finish or interrupt it";
-                        if let Some(event) = casting::rejected(&command, reason) {
-                            log.send(ClientEvent::World(event))?;
-                        }
-                        if let ClientCommand::UseItem(request) = &command {
-                            log.send(ClientEvent::World(
-                                crate::world::WorldEvent::ItemUseAction {
-                                    session_id: request.session_id,
-                                    request_id: request.request_id,
-                                    error: Some(reason.into()),
-                                },
-                            ))?;
-                        }
-                        if !matches!(
-                            &command,
-                            ClientCommand::CastSpell { .. } | ClientCommand::UseItem(_)
-                        ) {
-                            log.send(ClientEvent::World(crate::world::WorldEvent::BookAction(
-                                BookActionStatus::Rejected(reason.into()),
-                            )))?;
-                        }
-                        log.diagnostic(reason.into())?;
                         continue;
                     }
                     if matches!(

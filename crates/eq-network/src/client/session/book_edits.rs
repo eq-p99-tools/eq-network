@@ -15,17 +15,16 @@ enum Edit {
 pub(super) struct BookEdits(Option<(Edit, Instant)>);
 
 impl BookEdits {
-    /// Blocks book mutations until the outstanding edit has a matching result.
-    pub fn blocks(&self, command: &ClientCommand) -> bool {
+    /// Whether an edit awaits its result; the shared action table then holds the book.
+    pub fn outstanding(&self) -> bool {
         self.0.is_some()
-            && matches!(
-                command,
-                ClientCommand::DeleteSpell { .. }
-                    | ClientCommand::SwapSpell { .. }
-                    | ClientCommand::ScribeSpell { .. }
-                    | ClientCommand::MemorizeSpell { .. }
-                    | ClientCommand::ForgetSpell { .. }
-            )
+    }
+
+    /// Whether the shared action table refuses this book mutation right now.
+    #[cfg(test)]
+    pub fn blocks(&self, command: &ClientCommand) -> bool {
+        self.outstanding()
+            && super::actions::needs(command).contains(&super::actions::Resource::Spellbook)
     }
 
     /// Whether a submitted scribe still awaits its result; the server consumes the

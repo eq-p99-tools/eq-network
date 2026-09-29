@@ -34,19 +34,11 @@ pub(super) struct CastGuard {
 }
 
 impl CastGuard {
-    /// Excludes spell changes while leaving movement and posture interruption available.
+    /// Whether the shared action table refuses this command while a cast is held;
+    /// movement and posture interruption stay available.
+    #[cfg(test)]
     pub fn blocks(&self, command: &ClientCommand) -> bool {
-        self.active()
-            && matches!(
-                command,
-                ClientCommand::CastSpell { .. }
-                    | ClientCommand::UseItem(_)
-                    | ClientCommand::ScribeSpell { .. }
-                    | ClientCommand::MemorizeSpell { .. }
-                    | ClientCommand::ForgetSpell { .. }
-                    | ClientCommand::DeleteSpell { .. }
-                    | ClientCommand::SwapSpell { .. }
-            )
+        self.active() && super::actions::needs(command).contains(&super::actions::Resource::Casting)
     }
 
     /// A duration reaching zero does not authorize another cast: await a server result.
