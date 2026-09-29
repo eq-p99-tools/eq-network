@@ -175,6 +175,78 @@ pub enum GameCommand {
         /// Reject delayed actions instead of replaying them after a stall.
         created: std::time::Instant,
     },
+    /// Open a nearby corpse for looting.
+    Loot {
+        /// Current zone admission.
+        session_id: u64,
+        /// Corpse entity.
+        corpse_id: u16,
+        /// Reject delayed actions instead of replaying them after a stall.
+        created: std::time::Instant,
+    },
+    /// Take one item from the open corpse.
+    LootItem {
+        /// Current zone admission.
+        session_id: u64,
+        /// Corpse entity.
+        corpse_id: u16,
+        /// Own spawn identifier from this admission.
+        own_id: u16,
+        /// Corpse slot listed by the server.
+        slot: u16,
+        /// Place directly into the inventory instead of on the cursor.
+        auto: bool,
+        /// Reject delayed actions instead of replaying them after a stall.
+        created: std::time::Instant,
+    },
+    /// Close the loot window.
+    EndLoot {
+        /// Current zone admission.
+        session_id: u64,
+        /// Corpse entity.
+        corpse_id: u16,
+    },
+    /// Open or close a merchant window.
+    Shop {
+        /// Current zone admission.
+        session_id: u64,
+        /// Merchant entity.
+        merchant_id: u16,
+        /// Own spawn identifier from this admission.
+        own_id: u16,
+        /// True opens, false closes.
+        open: bool,
+        /// Reject delayed actions instead of replaying them after a stall.
+        created: std::time::Instant,
+    },
+    /// Buy units from a merchant slot; the server sets the price.
+    Buy {
+        /// Current zone admission.
+        session_id: u64,
+        /// Merchant entity.
+        merchant_id: u16,
+        /// Own spawn identifier from this admission.
+        own_id: u16,
+        /// Merchant list slot.
+        slot: u32,
+        /// Units to buy.
+        quantity: u32,
+        /// Reject delayed actions instead of replaying them after a stall.
+        created: std::time::Instant,
+    },
+    /// Sell units from an inventory slot; the server sets the price.
+    Sell {
+        /// Current zone admission.
+        session_id: u64,
+        /// Merchant entity.
+        merchant_id: u16,
+        /// Inventory slot.
+        slot: i32,
+        /// Units to sell.
+        quantity: u32,
+        /// Reject delayed actions instead of replaying them after a stall.
+        created: std::time::Instant,
+    },
     /// Start or stop melee auto-attack against the current server-side target.
     AutoAttack {
         /// Current zone admission.
@@ -299,6 +371,12 @@ pub fn encode(
         GameCommand::Consider { .. } | GameCommand::AutoAttack { .. } => {
             encode_combat(dialect, command)
         }
+        GameCommand::Loot { .. }
+        | GameCommand::LootItem { .. }
+        | GameCommand::EndLoot { .. }
+        | GameCommand::Shop { .. }
+        | GameCommand::Buy { .. }
+        | GameCommand::Sell { .. } => encode_trade(dialect, command),
         GameCommand::MoveInventory(_) => {
             anyhow::bail!("inventory moves require the admitted session controller")
         }
@@ -335,6 +413,72 @@ fn encode_posture(dialect: GameDialect, spawn_id: u16, posture: Posture) -> Resu
         opcode: 0x7c32,
         body,
     })
+}
+
+/// Titanium-only corpse and merchant requests.
+fn encode_trade(dialect: GameDialect, command: &GameCommand) -> Result<EncodedCommand> {
+    anyhow::ensure!(
+        dialect == GameDialect::TitaniumP99,
+        "looting and merchants are not implemented for this dialect"
+    );
+    let (opcode, body) = match command {
+        GameCommand::Loot { corpse_id, .. } => (
+            crate::loot::REQUEST_OPCODE,
+            crate::loot::request(*corpse_id)?.to_vec(),
+        ),
+        GameCommand::LootItem {
+            corpse_id,
+            own_id,
+            slot,
+            auto,
+            ..
+        } => (
+            crate::loot::ITEM_OPCODE,
+            crate::loot::item_request(*corpse_id, *own_id, *slot, *auto)?.to_vec(),
+        ),
+        GameCommand::EndLoot { corpse_id, .. } => (
+            crate::loot::END_OPCODE,
+            crate::loot::end(*corpse_id)?.to_vec(),
+        ),
+        GameCommand::Shop {
+            merchant_id,
+            own_id,
+            open: true,
+            ..
+        } => (
+            crate::merchant::REQUEST_OPCODE,
+            crate::merchant::request(*merchant_id, *own_id, true)?.to_vec(),
+        ),
+        GameCommand::Shop {
+            merchant_id,
+            own_id,
+            ..
+        } => (
+            crate::merchant::END_OPCODE,
+            crate::merchant::end(*merchant_id, *own_id)?.to_vec(),
+        ),
+        GameCommand::Buy {
+            merchant_id,
+            own_id,
+            slot,
+            quantity,
+            ..
+        } => (
+            crate::merchant::BUY_OPCODE,
+            crate::merchant::buy(*merchant_id, *own_id, *slot, *quantity)?.to_vec(),
+        ),
+        GameCommand::Sell {
+            merchant_id,
+            slot,
+            quantity,
+            ..
+        } => (
+            crate::merchant::SELL_OPCODE,
+            crate::merchant::sell(*merchant_id, *slot, *quantity)?.to_vec(),
+        ),
+        _ => anyhow::bail!("not a corpse or merchant action"),
+    };
+    Ok(EncodedCommand { opcode, body })
 }
 
 /// Titanium-only consider and auto-attack requests.
@@ -447,6 +591,91 @@ mod tests {
         let packet = encode(GameDialect::TitaniumP99, &attack, "Example").unwrap();
         assert_eq!((packet.opcode, packet.body), (0x5e55, vec![1, 0, 0, 0]));
         assert!(encode(GameDialect::EqMac, &attack, "Example").is_err());
+    }
+
+    #[test]
+    fn corpse_and_merchant_commands_use_their_titanium_opcodes() {
+        let created = std::time::Instant::now();
+        for (command, opcode, length) in [
+            (
+                GameCommand::Loot {
+                    session_id: 1,
+                    corpse_id: 9,
+                    created,
+                },
+                0x6f90,
+                4,
+            ),
+            (
+                GameCommand::LootItem {
+                    session_id: 1,
+                    corpse_id: 9,
+                    own_id: 7,
+                    slot: 22,
+                    auto: true,
+                    created,
+                },
+                0x7081,
+                16,
+            ),
+            (
+                GameCommand::EndLoot {
+                    session_id: 1,
+                    corpse_id: 9,
+                },
+                0x2316,
+                4,
+            ),
+            (
+                GameCommand::Shop {
+                    session_id: 1,
+                    merchant_id: 9,
+                    own_id: 7,
+                    open: true,
+                    created,
+                },
+                0x45f9,
+                16,
+            ),
+            (
+                GameCommand::Shop {
+                    session_id: 1,
+                    merchant_id: 9,
+                    own_id: 7,
+                    open: false,
+                    created,
+                },
+                0x7e03,
+                8,
+            ),
+            (
+                GameCommand::Buy {
+                    session_id: 1,
+                    merchant_id: 9,
+                    own_id: 7,
+                    slot: 2,
+                    quantity: 1,
+                    created,
+                },
+                0x221e,
+                24,
+            ),
+            (
+                GameCommand::Sell {
+                    session_id: 1,
+                    merchant_id: 9,
+                    slot: 23,
+                    quantity: 1,
+                    created,
+                },
+                0x0e13,
+                16,
+            ),
+        ] {
+            let packet = encode(GameDialect::TitaniumP99, &command, "Example").unwrap();
+            assert_eq!((packet.opcode, packet.body.len()), (opcode, length));
+            assert!(encode(GameDialect::EqMac, &command, "Example").is_err());
+        }
     }
 
     #[test]

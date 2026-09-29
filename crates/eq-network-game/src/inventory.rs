@@ -7,6 +7,7 @@ pub use actions::{InventoryActor, InventoryMove, MoveQuantity};
 pub use activation::{ClickEffect, ClickKind, ItemActivation, ItemUse};
 pub use banking::banker_in_range;
 pub use titanium::decode;
+pub(crate) use titanium::parse as parse_items;
 
 use crate::items::ItemDetails;
 use serde::Serialize;

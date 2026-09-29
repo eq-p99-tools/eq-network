@@ -1109,10 +1109,58 @@ fn zone(
                             session_id: requested,
                             created,
                             ..
+                        }
+                        | ClientCommand::LootItem {
+                            session_id: requested,
+                            created,
+                            ..
+                        }
+                        | ClientCommand::Buy {
+                            session_id: requested,
+                            created,
+                            ..
+                        }
+                        | ClientCommand::Sell {
+                            session_id: requested,
+                            created,
+                            ..
                         } => {
                             *requested == session_id
                                 && created.elapsed() < Duration::from_secs(1)
                                 && *created <= Instant::now()
+                        }
+                        ClientCommand::EndLoot {
+                            session_id: requested,
+                            ..
+                        } => *requested == session_id,
+                        ClientCommand::Loot {
+                            session_id: requested,
+                            corpse_id: entity,
+                            created,
+                        }
+                        | ClientCommand::Shop {
+                            session_id: requested,
+                            merchant_id: entity,
+                            created,
+                            ..
+                        } => {
+                            *requested == session_id
+                                && created.elapsed() < Duration::from_secs(1)
+                                && *created <= Instant::now()
+                                && initial_spawns.get(entity).is_some_and(
+                                    |spawn: &crate::world::SpawnState| {
+                                        !spawn.invisible
+                                            && if matches!(command, ClientCommand::Loot { .. }) {
+                                                matches!(
+                                                    spawn.kind,
+                                                    crate::world::SpawnKind::NpcCorpse
+                                                        | crate::world::SpawnKind::PlayerCorpse
+                                                )
+                                            } else {
+                                                spawn.kind == crate::world::SpawnKind::Npc
+                                            }
+                                    },
+                                )
                         }
                         _ => true,
                     };
@@ -1591,6 +1639,9 @@ fn zone(
                         )))?;
                         log.send(ClientEvent::World(crate::world::WorldEvent::SpellBook(
                             spell_book,
+                        )))?;
+                        log.send(ClientEvent::World(crate::world::WorldEvent::Coins(
+                            crate::world::titanium_coins(&profile_data)?,
                         )))?;
                         inventory = eq_network_game::inventory::Inventory::default();
                         for update in admission {

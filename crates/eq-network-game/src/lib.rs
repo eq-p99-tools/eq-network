@@ -16,6 +16,10 @@ pub mod doors;
 pub mod inventory;
 /// Read-only item inspection requests and definitions.
 pub mod items;
+/// Corpse looting requests, listings and acknowledgements.
+pub mod loot;
+/// Merchant windows, stock, purchases and sales.
+pub mod merchant;
 /// Movement wire layout and session-scoped motion validation.
 pub mod movement;
 /// Titanium/P99-V62 world and zone validation codec.

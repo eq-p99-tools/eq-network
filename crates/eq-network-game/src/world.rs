@@ -204,6 +204,44 @@ pub fn titanium_spawns(body: &[u8]) -> Result<Vec<SpawnState>> {
         .collect()
 }
 
+/// Coins in each denomination.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize)]
+pub struct Coins {
+    /// Platinum pieces.
+    pub platinum: u32,
+    /// Gold pieces.
+    pub gold: u32,
+    /// Silver pieces.
+    pub silver: u32,
+    /// Copper pieces.
+    pub copper: u32,
+}
+
+impl Coins {
+    /// Total value in copper pieces.
+    #[must_use]
+    pub fn total_copper(&self) -> u64 {
+        u64::from(self.platinum) * 1000
+            + u64::from(self.gold) * 100
+            + u64::from(self.silver) * 10
+            + u64::from(self.copper)
+    }
+}
+
+/// Carried coins from the Titanium player profile.
+///
+/// # Errors
+/// Rejects profiles with an unexpected length.
+pub fn titanium_coins(profile: &[u8]) -> Result<Coins> {
+    ensure!(profile.len() == 19592, "unexpected Titanium profile layout");
+    Ok(Coins {
+        platinum: word(profile, 4428),
+        gold: word(profile, 4432),
+        silver: word(profile, 4436),
+        copper: word(profile, 4440),
+    })
+}
+
 /// Progress of a camp request; the server confirms only the final logout.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub enum CampStatus {
@@ -414,6 +452,12 @@ pub enum WorldEvent {
     Consideration(crate::combat::Consideration),
     /// Camp progress for the current admission.
     Camp(CampStatus),
+    /// Carried coins, from admission or a server money update.
+    Coins(Coins),
+    /// Corpse loot session changes.
+    Loot(crate::loot::LootUpdate),
+    /// Merchant window changes.
+    Merchant(crate::merchant::MerchantUpdate),
     /// A melee, skill or spell damage record for any nearby entities.
     Damage(crate::combat::Damage),
     /// Own-character skill update; unknown skill IDs remain available to consumers.
@@ -492,14 +536,8 @@ pub fn titanium_player(profile: &[u8], spawn: &[u8]) -> Result<PlayerState> {
 /// # Errors
 /// Rejects truncated recognized packets rather than indexing arbitrary bytes.
 pub fn titanium_update(opcode: u16, body: &[u8]) -> Result<Option<WorldEvent>> {
-    if opcode == 0x497c {
-        return Ok(crate::buffs::titanium_spell_effect(body)?.map(WorldEvent::SpellEffect));
-    }
-    if let Some(update) = crate::doors::decode(opcode, body)? {
-        return Ok(Some(WorldEvent::Doors(update)));
-    }
-    if let Some(update) = crate::inventory::decode(opcode, body)? {
-        return Ok(Some(WorldEvent::Inventory(update)));
+    if let Some(event) = titanium_views(opcode, body)? {
+        return Ok(Some(event));
     }
     Ok(Some(match opcode {
         0x6a53 => WorldEvent::Buff(crate::buffs::titanium_update(body)?),
@@ -577,12 +615,41 @@ pub fn titanium_update(opcode: u16, body: &[u8]) -> Result<Option<WorldEvent>> {
                 endurance: word(body, 4),
             }
         }
+        0x267c => WorldEvent::Coins(money_update(body)?),
         0x5ecd => {
             ensure!(body.len() >= 8, "truncated experience update");
             WorldEvent::Experience(word(body, 0).min(330))
         }
         _ => return Ok(None),
     }))
+}
+
+/// Spell actions, doors, loot, merchant and inventory packets, each owned by its codec.
+fn titanium_views(opcode: u16, body: &[u8]) -> Result<Option<WorldEvent>> {
+    if opcode == 0x497c {
+        return Ok(crate::buffs::titanium_spell_effect(body)?.map(WorldEvent::SpellEffect));
+    }
+    Ok(if let Some(update) = crate::doors::decode(opcode, body)? {
+        Some(WorldEvent::Doors(update))
+    } else if let Some(update) = crate::loot::decode(opcode, body)? {
+        Some(WorldEvent::Loot(update))
+    } else if let Some(update) = crate::merchant::decode(opcode, body)? {
+        Some(WorldEvent::Merchant(update))
+    } else {
+        crate::inventory::decode(opcode, body)?.map(WorldEvent::Inventory)
+    })
+}
+
+/// `OP_MoneyUpdate`: carried coins after a purchase, sale or loot.
+fn money_update(body: &[u8]) -> Result<Coins> {
+    ensure!(body.len() == 16, "invalid money update length");
+    let coin = |offset: usize| u32::try_from(word(body, offset).cast_signed());
+    Ok(Coins {
+        platinum: coin(0)?,
+        gold: coin(4)?,
+        silver: coin(8)?,
+        copper: coin(12)?,
+    })
 }
 
 /// Decodes persistent appearance state without interpreting unrelated update kinds.
