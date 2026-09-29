@@ -58,6 +58,7 @@ pub(super) fn handle(
                     backward_units_per_second: calibration
                         .backward
                         .map(|value| value.units_per_second),
+                    falls: motion.falls(),
                 })
         }
         ClientCommand::Move(request) => {

@@ -859,6 +859,7 @@ fn zone(
                                         strafe_units_per_second: None,
                                         walk_units_per_second: None,
                                         backward_units_per_second: None,
+                                        falls: false,
                                     },
                                 ))?;
                                 log.status(
@@ -1480,6 +1481,7 @@ fn zone(
                     strafe_units_per_second: None,
                     walk_units_per_second: None,
                     backward_units_per_second: None,
+                    falls: false,
                 }))?;
                 log.send(ClientEvent::World(crate::world::WorldEvent::Position {
                     spawn_id: player.spawn_id,
@@ -1510,6 +1512,7 @@ fn zone(
                     strafe_units_per_second: None,
                     walk_units_per_second: None,
                     backward_units_per_second: None,
+                    falls: false,
                 }))?;
             }
             continue;
@@ -1679,12 +1682,15 @@ fn zone(
                             race: player.race,
                             level: player.level,
                         });
-                        motion = Some(MotionSession::new(
-                            session_id,
-                            player.spawn_id,
-                            player.position,
-                            Instant::now(),
-                        )?);
+                        motion = Some(
+                            MotionSession::new(
+                                session_id,
+                                player.spawn_id,
+                                player.position,
+                                Instant::now(),
+                            )?
+                            .with_falls(stock),
+                        );
                         log.send(ClientEvent::World(crate::world::WorldEvent::Entered {
                             session_id,
                             zone: zone_name.clone(),
@@ -1909,6 +1915,7 @@ fn zone(
                                 strafe_units_per_second: None,
                                 walk_units_per_second: None,
                                 backward_units_per_second: None,
+                                falls: false,
                             }))?;
                             log.diagnostic(
                                 "Own character died; waiting for the server bind offer".into(),
@@ -1957,6 +1964,7 @@ fn zone(
                                 strafe_units_per_second: None,
                                 walk_units_per_second: None,
                                 backward_units_per_second: None,
+                                falls: false,
                             }))?;
                         }
                     }

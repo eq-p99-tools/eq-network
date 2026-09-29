@@ -372,6 +372,8 @@ pub enum WorldEvent {
         walk_units_per_second: Option<f32>,
         /// Optional separately calibrated sideways speed.
         strafe_units_per_second: Option<f32>,
+        /// Whether this server's session accepts `MovementMode::Fall` samples.
+        falls: bool,
     },
     /// Motion submitted to transport; this is not an acknowledgment by the server.
     MotionSent {

@@ -14,7 +14,12 @@ use std::time::{Duration, Instant};
 /// not a measured server limit or permission to encode falling as grounded motion.
 pub const MAX_GROUNDED_STEP: f32 = 2.0;
 
-/// Grounded locomotion mode used to choose measured motion parameters.
+/// Fastest descent a [`MovementMode::Fall`] sample may claim, in world units per
+/// second. This is the client's provisional terminal speed, not a measured Titanium
+/// or server limit.
+pub const MAX_FALL_SPEED: f32 = 40.0;
+
+/// Locomotion mode used to choose measured motion parameters.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum MovementMode {
     /// Forward or camera-directed grounded motion.
@@ -26,6 +31,9 @@ pub enum MovementMode {
     Walk,
     /// Sideways movement preserving character facing.
     Strafe,
+    /// Airborne descent after leaving a ledge: forward speed and animation, while
+    /// height falls under gravity instead of following the ground.
+    Fall,
 }
 
 /// A graphical client's proposed position, tied to its current zone admission.
@@ -236,8 +244,16 @@ impl MovementGuard {
             delta[0].hypot(delta[1]) <= speed * elapsed + 0.001,
             "movement exceeds elapsed-time budget"
         );
+        // A fall may only descend, at most at terminal speed; grounded modes follow
+        // stairs and slopes one riser at a time.
+        let vertical = if request.mode == MovementMode::Fall {
+            delta[2] <= MAX_GROUNDED_STEP
+                && -delta[2] <= MAX_FALL_SPEED * elapsed + MAX_GROUNDED_STEP
+        } else {
+            delta[2].abs() <= MAX_GROUNDED_STEP
+        };
         ensure!(
-            delta[2].abs() <= MAX_GROUNDED_STEP,
+            vertical,
             "vertical motion requires a supported movement mode"
         );
         self.position = request.position;
@@ -272,6 +288,36 @@ mod tests {
         assert!(guard.accept(&request, now).is_err());
         request.position.z = 2.0;
         assert!(guard.accept(&request, now).is_ok());
+    }
+
+    #[test]
+    fn falls_descend_at_most_at_terminal_speed_and_never_rise() {
+        let start = Instant::now();
+        let mut guard = MovementGuard::new(7, Position::default(), start);
+        guard.set_speed(Some(30.0), start);
+        let now = start + Duration::from_millis(100);
+        let mut request = MovementRequest {
+            mode: MovementMode::Forward,
+            session_id: 7,
+            position: Position {
+                x: 1.0,
+                z: -5.0,
+                ..Position::default()
+            },
+            created: now,
+        };
+        // Grounded modes still refuse the drop.
+        assert!(guard.accept(&request, now).is_err());
+        // 100 ms allows 4 units at terminal speed plus one grounded step.
+        request.mode = MovementMode::Fall;
+        request.position.z = -6.1;
+        assert!(guard.accept(&request, now).is_err());
+        request.position.z = -5.0;
+        assert!(guard.accept(&request, now).is_ok());
+        let later = now + Duration::from_millis(100);
+        request.created = later;
+        request.position.z = -2.9;
+        assert!(guard.accept(&request, later).is_err());
     }
     #[test]
     fn layout_keeps_axis_order_heading_and_signed_animation() {

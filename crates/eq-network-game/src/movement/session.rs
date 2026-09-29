@@ -123,8 +123,23 @@ pub struct MotionSession {
     last_sample: Instant,
     moving: bool,
     suspended: bool,
+    falls: bool,
 }
 impl MotionSession {
+    /// Permits [`MovementMode::Fall`] samples. Only stock `EQEmu` sessions enable it
+    /// until official-client falls are calibrated.
+    #[must_use]
+    pub const fn with_falls(mut self, allowed: bool) -> Self {
+        self.falls = allowed;
+        self
+    }
+
+    /// Whether [`MovementMode::Fall`] samples are accepted.
+    #[must_use]
+    pub const fn falls(&self) -> bool {
+        self.falls
+    }
+
     /// Starts stationary, without assuming any effective movement speed.
     ///
     /// # Errors
@@ -149,6 +164,7 @@ impl MotionSession {
             last_sample: now,
             moving: false,
             suspended: false,
+            falls: false,
         })
     }
 
@@ -211,6 +227,10 @@ impl MotionSession {
         send: impl FnOnce(&[u8; 36]) -> Result<()>,
     ) -> Result<()> {
         ensure!(!self.suspended, "movement session is suspended");
+        ensure!(
+            request.mode != MovementMode::Fall || self.falls,
+            "falling is not enabled for this server"
+        );
         let calibration = self
             .calibration
             .ok_or_else(|| anyhow::anyhow!("movement is not calibrated"))?;
@@ -232,7 +252,7 @@ impl MotionSession {
                     .ok_or_else(|| anyhow::anyhow!("walking is not calibrated"))?;
                 (walk.units_per_second, walk.velocity_scale, walk.animation)
             }
-            MovementMode::Forward => (
+            MovementMode::Forward | MovementMode::Fall => (
                 calibration.units_per_second,
                 calibration.velocity_scale,
                 calibration.animation,
@@ -256,8 +276,9 @@ impl MotionSession {
             .saturating_duration_since(self.last_sample)
             .as_secs_f32()
             .min(0.25);
-        // This controller admits grounded motion only. Following a slope changes
-        // position Z without creating the airborne velocity seen during a fall.
+        // Following a slope changes position Z without creating the airborne
+        // velocity seen during a fall. Falls also leave that field zero: its wire
+        // scale is unmeasured, so position Z alone carries the descent.
         let delta = [
             displacement[0] / elapsed * velocity_scale,
             displacement[1] / elapsed * velocity_scale,

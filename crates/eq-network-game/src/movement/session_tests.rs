@@ -234,6 +234,29 @@ fn stationary_turns_encode_rate_and_expire_to_a_zero_rate_stop() {
 }
 
 #[test]
+fn falls_need_permission_and_carry_the_descent_in_position_only() {
+    let start = Instant::now();
+    let now = start + Duration::from_millis(100);
+    let mut fall = request(now, 0.5);
+    fall.mode = MovementMode::Fall;
+    fall.position.z = -4.0;
+    let mut session = setup(start);
+    assert!(session
+        .send_move(&fall, now, |_| panic!("falls are off by default"))
+        .is_err());
+    let mut session = setup(start).with_falls(true);
+    session
+        .send_move(&fall, now, |body| {
+            assert_eq!(word(body, 8), 0.0f32.to_bits());
+            assert_eq!(word(body, 28), (-4.0f32).to_bits());
+            assert_eq!(word(body, 20) & 0x3ff, 12);
+            Ok(())
+        })
+        .unwrap();
+    assert_eq!(session.position().z.to_bits(), (-4.0f32).to_bits());
+}
+
+#[test]
 fn grounded_height_changes_do_not_encode_airborne_velocity() {
     let start = Instant::now();
     let mut session = setup(start);
