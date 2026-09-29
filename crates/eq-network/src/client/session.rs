@@ -437,6 +437,8 @@ fn world(
     let mut accepted = false;
     let mut entered = false;
     let mut selection = None;
+    // After camping, the world sends the list once, before its empty file notice.
+    let mut early_list: Option<Vec<u8>> = None;
     let mut chosen = None;
     loop {
         ensure!(!stop.is_cancelled(), "shutdown requested");
@@ -486,6 +488,14 @@ fn world(
                     log.send(ClientEvent::Progress(ConnectionStage::SelectingCharacter))?;
                     session.send(0x7752, &0u32.to_le_bytes())?;
                     session.send(0x5e99, &[])?;
+                    if let Some(body) = early_list.take() {
+                        let entries =
+                            eq_network_game::characters::decode(config.protocol.into(), &body)?;
+                        let (list, automatic) =
+                            super::selection::Selection::new(entries, &config.character, log)?;
+                        selection = Some(list);
+                        chosen = automatic;
+                    }
                 }
             }
             WorldOpcode::FileManifest => {
@@ -518,6 +528,9 @@ fn world(
                     session.close()?;
                     return Ok(None);
                 }
+            }
+            WorldOpcode::CharacterList if !accepted && !entered => {
+                early_list = Some(packet.body.clone());
             }
             WorldOpcode::CharacterList if accepted && !entered && selection.is_none() => {
                 let entries =
