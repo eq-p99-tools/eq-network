@@ -136,6 +136,18 @@ pub enum SpawnKind {
     Unknown(u8),
 }
 
+impl SpawnKind {
+    /// What an entity becomes when it dies; Titanium corpses keep the spawn ID.
+    #[must_use]
+    pub const fn corpse(self) -> Self {
+        match self {
+            Self::Player => Self::PlayerCorpse,
+            Self::Npc => Self::NpcCorpse,
+            other => other,
+        }
+    }
+}
+
 /// A zone entity. Asset selection stays outside the protocol layer.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct SpawnState {
@@ -966,5 +978,26 @@ mod tests {
     #[test]
     fn unknown_packet_is_not_misclassified() {
         assert!(titanium_update(0xffff, &[]).unwrap().is_none());
+    }
+
+    #[test]
+    fn deaths_turn_entities_into_matching_corpses_and_coins_total_copper() {
+        assert_eq!(SpawnKind::Npc.corpse(), SpawnKind::NpcCorpse);
+        assert_eq!(SpawnKind::Player.corpse(), SpawnKind::PlayerCorpse);
+        assert_eq!(SpawnKind::NpcCorpse.corpse(), SpawnKind::NpcCorpse);
+        assert_eq!(SpawnKind::Unknown(9).corpse(), SpawnKind::Unknown(9));
+        let mut money = [0u8; 16];
+        money[..4].copy_from_slice(&1i32.to_le_bytes());
+        money[12..].copy_from_slice(&5i32.to_le_bytes());
+        let Some(WorldEvent::Coins(coins)) = titanium_update(0x267c, &money).unwrap() else {
+            panic!("money update");
+        };
+        assert_eq!(coins.total_copper(), 1005);
+        money[4..8].copy_from_slice(&(-1i32).to_le_bytes());
+        assert!(titanium_update(0x267c, &money).is_err());
+        let mut profile = vec![0; 19592];
+        profile[4432..4436].copy_from_slice(&3u32.to_le_bytes());
+        assert_eq!(titanium_coins(&profile).unwrap().gold, 3);
+        assert!(titanium_coins(&profile[1..]).is_err());
     }
 }

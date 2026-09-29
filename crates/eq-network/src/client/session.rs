@@ -1851,6 +1851,15 @@ fn zone(
                         crate::world::WorldEvent::Despawn(id) => {
                             initial_spawns.remove(id);
                         }
+                        // Another entity died: its corpse keeps the spawn ID.
+                        crate::world::WorldEvent::Death(death) => {
+                            if let Some(spawn) = u16::try_from(death.spawn_id)
+                                .ok()
+                                .and_then(|id| initial_spawns.get_mut(&id))
+                            {
+                                spawn.kind = spawn.kind.corpse();
+                            }
+                        }
                         _ => (),
                     }
                     if let crate::world::WorldEvent::Position { spawn_id, position } = &event {
