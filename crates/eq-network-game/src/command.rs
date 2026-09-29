@@ -168,6 +168,13 @@ pub enum GameCommand {
         /// Reject delayed actions instead of replaying them after a stall.
         created: std::time::Instant,
     },
+    /// Sit-and-wait logout to character selection, abandoned by standing or moving.
+    Camp {
+        /// Current zone admission.
+        session_id: u64,
+        /// Reject delayed actions instead of replaying them after a stall.
+        created: std::time::Instant,
+    },
     /// Start or stop melee auto-attack against the current server-side target.
     AutoAttack {
         /// Current zone admission.
@@ -300,8 +307,9 @@ pub fn encode(
         }
         GameCommand::Move(_)
         | GameCommand::ConfigureMotion { .. }
-        | GameCommand::CrossZoneLine { .. } => {
-            anyhow::bail!("movement requires the admitted session controller")
+        | GameCommand::CrossZoneLine { .. }
+        | GameCommand::Camp { .. } => {
+            anyhow::bail!("movement and camping require the admitted session controller")
         }
         GameCommand::SendChat(message) => Ok(EncodedCommand {
             opcode: match dialect {

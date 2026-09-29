@@ -1,4 +1,5 @@
 mod book_edits;
+mod camp;
 mod casting;
 mod inventory;
 mod lifecycle;
@@ -91,6 +92,11 @@ fn run_p99(
             ZoneExit::Stopped => return Ok(()),
             ZoneExit::World => {
                 destination = world(&context, assets, &ip, false, true, log)?;
+            }
+            ZoneExit::CharacterSelect => {
+                // Show the list again rather than re-entering the camped character.
+                context.config.character.clear();
+                destination = world(&context, assets, &ip, false, false, log)?;
             }
             ZoneExit::Direct(packet) => {
                 let (host, port, checksums) =
@@ -365,6 +371,7 @@ enum ZoneExit {
     Stopped,
     World,
     Direct(Vec<u8>),
+    CharacterSelect,
 }
 
 /// Decode the endpoint and V62 manifest before rekeying for destination admission.
@@ -472,6 +479,15 @@ fn world(
                     chosen = Some(config.character.clone());
                 }
             }
+            // Returning after camp, the world skips file validation (official capture).
+            WorldOpcode::FileManifest if packet.body.is_empty() => {
+                if !accepted {
+                    accepted = true;
+                    log.send(ClientEvent::Progress(ConnectionStage::SelectingCharacter))?;
+                    session.send(0x7752, &0u32.to_le_bytes())?;
+                    session.send(0x5e99, &[])?;
+                }
+            }
             WorldOpcode::FileManifest => {
                 codec.manifest(&mut packet.body)?;
                 let mut response = file_response(assets, &packet.body, log)?;
@@ -576,6 +592,7 @@ fn zone(
     let mut admitted_book: Option<eq_network_game::spells::SpellBook> = None;
     let mut book_edits = book_edits::BookEdits::default();
     let mut cast_guard = casting::CastGuard::default();
+    let mut camp = camp::Camp::default();
     let mut zone_points = zoning::ZonePoints::default();
     let mut current_zone = (0u16, 0u16);
     let mut pending_memorization: Option<PendingBookAction> = None;
@@ -628,6 +645,20 @@ fn zone(
             "zone transfer approval timed out"
         );
         ensure!(!book_edits.expired(Instant::now()), "Spellbook edit result is unknown; reconnect for a fresh book snapshot. The edit will not be retried.");
+        if camp.logout_due(Instant::now()) {
+            session.send(camp::LOGOUT_OPCODE, &[])?;
+            camp.logout_sent(Instant::now());
+            log.send(ClientEvent::World(crate::world::WorldEvent::Camp(
+                crate::world::CampStatus::LoggingOut,
+            )))?;
+        }
+        if camp.reply_overdue(Instant::now()) {
+            log.send(ClientEvent::World(crate::world::WorldEvent::Camp(
+                crate::world::CampStatus::Camped,
+            )))?;
+            session.close()?;
+            return Ok(ZoneExit::CharacterSelect);
+        }
         if ready && !lifecycle.blocks_motion() {
             if let Some(motion) = motion.as_mut() {
                 motion.tick(Instant::now(), |body| session.send_unreliable(0x14cb, body))?;
@@ -651,6 +682,9 @@ fn zone(
                         log.send(ClientEvent::World(crate::world::WorldEvent::BookAction(
                             BookActionStatus::AwaitingReply,
                         )))?;
+                        continue;
+                    }
+                    if camp::handle(&mut camp, session_id, &command, &mut session, log)? {
                         continue;
                     }
                     if let ClientCommand::ClickDoor {
@@ -1367,6 +1401,13 @@ fn zone(
             }
             continue;
         }
+        if camp.logging_out() && packet.opcode == camp::LOGOUT_REPLY_OPCODE {
+            log.send(ClientEvent::World(crate::world::WorldEvent::Camp(
+                crate::world::CampStatus::Camped,
+            )))?;
+            session.close()?;
+            return Ok(ZoneExit::CharacterSelect);
+        }
         if ready && packet.opcode == 0x5dd8 {
             let pending = lifecycle
                 .pending()
@@ -1726,6 +1767,11 @@ fn zone(
                                 ])) =>
                         {
                             lifecycle.mark_dead();
+                            if camp.cancel() {
+                                log.send(ClientEvent::World(crate::world::WorldEvent::Camp(
+                                    crate::world::CampStatus::Abandoned,
+                                )))?;
+                            }
                             spellbook::cancel_pending(
                                 &mut pending_memorization,
                                 "Character died",

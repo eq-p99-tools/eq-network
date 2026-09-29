@@ -204,6 +204,21 @@ pub fn titanium_spawns(body: &[u8]) -> Result<Vec<SpawnState>> {
         .collect()
 }
 
+/// Progress of a camp request; the server confirms only the final logout.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub enum CampStatus {
+    /// `OP_Camp` was sent; logout follows after the preparation time.
+    Preparing,
+    /// Standing or moving abandoned the attempt before logout.
+    Abandoned,
+    /// Preparation finished and `OP_Logout` was sent.
+    LoggingOut,
+    /// The zone connection ended; character selection follows.
+    Camped,
+    /// Local validation rejected the request before transmission.
+    Rejected(String),
+}
+
 /// Changes delivered to a graphical consumer, independent of its rendering engine.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[non_exhaustive]
@@ -397,6 +412,8 @@ pub enum WorldEvent {
     },
     /// The server's assessment of a considered entity.
     Consideration(crate::combat::Consideration),
+    /// Camp progress for the current admission.
+    Camp(CampStatus),
     /// A melee, skill or spell damage record for any nearby entities.
     Damage(crate::combat::Damage),
     /// Own-character skill update; unknown skill IDs remain available to consumers.
