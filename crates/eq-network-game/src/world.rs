@@ -279,6 +279,13 @@ pub enum WorldEvent {
     BuffSnapshot(Vec<Option<crate::buffs::Buff>>),
     /// A server-owned slot replacement or fade for an entity.
     Buff(crate::buffs::BuffUpdate),
+    /// The server's answer to a character creation request.
+    CharacterCreation {
+        /// Requested name.
+        name: String,
+        /// Whether the character now exists; a new list follows on success.
+        accepted: bool,
+    },
     /// Available characters for this world connection; no zone has been entered.
     CharacterSelection {
         /// Fresh identity invalidates choices queued for an older connection.

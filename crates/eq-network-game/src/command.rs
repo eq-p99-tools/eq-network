@@ -39,6 +39,13 @@ pub enum GameCommand {
         /// Server slot to enter.
         slot: u8,
     },
+    /// Create a character from the current character-selection screen.
+    CreateCharacter {
+        /// Identity supplied with the character list.
+        selection_id: u64,
+        /// Requested name, race, class, deity, start zone and stats.
+        character: crate::creation::NewCharacter,
+    },
     /// Exchange two book slots after checking both expected contents.
     SwapSpell {
         /// Current zone admission.
@@ -301,7 +308,7 @@ pub fn encode(
     character: &str,
 ) -> Result<EncodedCommand> {
     match command {
-        GameCommand::SelectCharacter { .. } => {
+        GameCommand::SelectCharacter { .. } | GameCommand::CreateCharacter { .. } => {
             anyhow::bail!("character selection requires the world controller")
         }
         GameCommand::UseItem(_)

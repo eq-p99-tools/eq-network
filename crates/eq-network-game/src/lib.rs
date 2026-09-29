@@ -10,6 +10,8 @@ pub mod chat;
 pub mod combat;
 /// Typed client actions and dialect-specific application packet encoding.
 pub mod command;
+/// Titanium character creation requests and stat rules.
+pub mod creation;
 /// Server-defined interactive doors and their movement notifications.
 pub mod doors;
 /// Read-only inventory packets, slots, instances, and state.

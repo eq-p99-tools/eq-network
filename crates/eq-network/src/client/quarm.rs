@@ -248,6 +248,7 @@ fn world(
             if let Some(choice) = selection
                 .as_ref()
                 .and_then(|list: &super::selection::Selection| list.poll(commands))
+                .and_then(super::selection::Choice::entered)
             {
                 chosen = Some(choice);
             }

@@ -142,6 +142,7 @@ enum WorldOpcode {
     ValidationResult,
     CharacterList,
     ZoneHandoff,
+    ApproveName,
     Unknown(u16),
 }
 
@@ -153,6 +154,7 @@ impl From<u16> for WorldOpcode {
             0x1251 => Self::ValidationResult,
             0x4513 => Self::CharacterList,
             0x61b6 => Self::ZoneHandoff,
+            0x3ea6 => Self::ApproveName,
             value => Self::Unknown(value),
         }
     }
@@ -444,14 +446,34 @@ fn world(
     // After camping, the world sends the list once, before its empty file notice.
     let mut early_list: Option<Vec<u8>> = None;
     let mut chosen = None;
+    // A creation request awaiting name approval (false) or its new list (true).
+    let mut creating: Option<(eq_network_game::creation::NewCharacter, bool)> = None;
     loop {
         ensure!(!stop.is_cancelled(), "shutdown requested");
         if !entered {
-            if let Some(choice) = selection
+            match selection
                 .as_ref()
                 .and_then(|list: &super::selection::Selection| list.poll(context.commands))
             {
-                chosen = Some(choice);
+                Some(super::selection::Choice::Enter(name)) => chosen = Some(name),
+                Some(super::selection::Choice::Create(character)) if creating.is_none() => {
+                    match character.name_approval() {
+                        Ok(body) => {
+                            session.send(eq_network_game::creation::APPROVE_NAME_OPCODE, &body)?;
+                            creating = Some((character, false));
+                        }
+                        Err(error) => {
+                            log.diagnostic(format!("Rejected character creation: {error}"))?;
+                            log.send(ClientEvent::World(
+                                crate::world::WorldEvent::CharacterCreation {
+                                    name: character.name,
+                                    accepted: false,
+                                },
+                            ))?;
+                        }
+                    }
+                }
+                _ => (),
             }
             if let Some(name) = chosen.as_ref() {
                 deadline = enter_character(&mut session, name, log)?;
@@ -534,6 +556,46 @@ fn world(
                     session.close()?;
                     return Ok(None);
                 }
+            }
+            // Name approved: send the creation; any refusal ends this attempt.
+            WorldOpcode::ApproveName if creating.is_some() => {
+                let approved = packet.body.first() == Some(&1);
+                match creating.take() {
+                    Some((character, false)) if approved => {
+                        session.send(
+                            eq_network_game::creation::CREATE_OPCODE,
+                            &character.create_request()?,
+                        )?;
+                        creating = Some((character, true));
+                    }
+                    Some((character, _)) => {
+                        log.send(ClientEvent::World(
+                            crate::world::WorldEvent::CharacterCreation {
+                                name: character.name,
+                                accepted: false,
+                            },
+                        ))?;
+                    }
+                    None => (),
+                }
+            }
+            WorldOpcode::CharacterList
+                if accepted && !entered && creating.as_ref().is_some_and(|(_, sent)| *sent) =>
+            {
+                if let Some((character, _)) = creating.take() {
+                    log.send(ClientEvent::World(
+                        crate::world::WorldEvent::CharacterCreation {
+                            name: character.name,
+                            accepted: true,
+                        },
+                    ))?;
+                }
+                let entries =
+                    eq_network_game::characters::decode(config.protocol.into(), &packet.body)?;
+                let (list, automatic) =
+                    super::selection::Selection::new(entries, &config.character, log)?;
+                selection = Some(list);
+                chosen = automatic;
             }
             WorldOpcode::CharacterList if !accepted && !entered => {
                 early_list = Some(packet.body.clone());
