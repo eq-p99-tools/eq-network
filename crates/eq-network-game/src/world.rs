@@ -1,6 +1,6 @@
 //! Typed, credential-free world state decoded from Titanium zone packets.
 
-use anyhow::{ensure, Result};
+use anyhow::{ensure, Context, Result};
 use serde::Serialize;
 
 /// Server appearance stance, distinct from one-shot animation IDs.
@@ -446,7 +446,7 @@ pub enum WorldEvent {
     HitPoints {
         /// Spawn identifier.
         spawn_id: u16,
-        /// Current HP.
+        /// Current HP; negative (dying) values are reported as zero.
         current: u32,
         /// Maximum HP.
         maximum: u32,
@@ -623,9 +623,13 @@ pub fn titanium_update(opcode: u16, body: &[u8]) -> Result<Option<WorldEvent>> {
         }
         0x3bcf => {
             ensure!(body.len() == 10, "invalid hit-point update length");
+            // Both fields are signed; a dying character's HP is negative and, as for
+            // EQMac, is reported as zero rather than wrapping around.
+            let [current, maximum] =
+                [0, 4].map(|offset| i32::from_le_bytes(word(body, offset).to_le_bytes()));
             WorldEvent::HitPoints {
-                current: word(body, 0),
-                maximum: word(body, 4),
+                current: u32::try_from(current.max(0))?,
+                maximum: u32::try_from(maximum).context("negative maximum hit points")?,
                 spawn_id: u16::from_le_bytes([body[8], body[9]]),
             }
         }
@@ -929,6 +933,18 @@ mod tests {
                 maximum: 40,
             })
         );
+        // A dying character's negative HP does not wrap around.
+        hp[..4].copy_from_slice(&(-2i32).to_le_bytes());
+        assert_eq!(
+            titanium_update(0x3bcf, &hp).unwrap(),
+            Some(WorldEvent::HitPoints {
+                spawn_id: 7,
+                current: 0,
+                maximum: 40,
+            })
+        );
+        hp[4..8].copy_from_slice(&(-1i32).to_le_bytes());
+        assert!(titanium_update(0x3bcf, &hp).is_err());
         for (opcode, minimum) in [(0x3bcf, 10), (0x4839, 16), (0x5ecd, 8)] {
             for length in 0..minimum {
                 assert!(titanium_update(opcode, &vec![0; length]).is_err());
