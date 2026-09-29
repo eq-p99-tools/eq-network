@@ -395,6 +395,10 @@ pub enum WorldEvent {
         /// Experience on the Titanium 0..330 scale.
         experience: u32,
     },
+    /// The server's assessment of a considered entity.
+    Consideration(crate::combat::Consideration),
+    /// A melee, skill or spell damage record for any nearby entities.
+    Damage(crate::combat::Damage),
     /// Own-character skill update; unknown skill IDs remain available to consumers.
     Skill {
         /// Protocol skill index (22 is dual wield).
@@ -506,6 +510,10 @@ pub fn titanium_update(opcode: u16, body: &[u8]) -> Result<Option<WorldEvent>> {
             WorldEvent::ItemDetails(crate::items::response(body)?)
         }
         0x6160 => WorldEvent::Death(crate::zoning::death(body)?),
+        crate::combat::CONSIDER_OPCODE => {
+            WorldEvent::Consideration(crate::combat::consideration(body)?)
+        }
+        crate::combat::DAMAGE_OPCODE => WorldEvent::Damage(crate::combat::damage(body)?),
         0x0695 => {
             ensure!(
                 body.len() == 3 && body[2] <= 100,

@@ -6,6 +6,8 @@ pub mod buffs;
 pub mod characters;
 /// Communication packet codecs and structured item-link extraction.
 pub mod chat;
+/// Consider, auto-attack and combat-damage records.
+pub mod combat;
 /// Typed client actions and dialect-specific application packet encoding.
 pub mod command;
 /// Server-defined interactive doors and their movement notifications.

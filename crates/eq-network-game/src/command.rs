@@ -157,6 +157,26 @@ pub enum GameCommand {
         /// Exact hexadecimal link header received in chat.
         link_body: String,
     },
+    /// Ask the server how a visible entity regards this character.
+    Consider {
+        /// Current zone admission.
+        session_id: u64,
+        /// Own spawn identifier from this admission.
+        own_id: u16,
+        /// Visible entity to consider.
+        target_id: u16,
+        /// Reject delayed actions instead of replaying them after a stall.
+        created: std::time::Instant,
+    },
+    /// Start or stop melee auto-attack against the current server-side target.
+    AutoAttack {
+        /// Current zone admission.
+        session_id: u64,
+        /// Whether auto-attack should be on.
+        enabled: bool,
+        /// Reject delayed actions instead of replaying them after a stall.
+        created: std::time::Instant,
+    },
     /// Select or clear a target in the current zone session, without attacking.
     SelectTarget {
         /// Connection identifier supplied by zone admission.
@@ -244,20 +264,7 @@ pub fn encode(
         }
         GameCommand::SetPosture {
             spawn_id, posture, ..
-        } => {
-            anyhow::ensure!(
-                dialect == GameDialect::TitaniumP99,
-                "posture is not implemented for this dialect"
-            );
-            anyhow::ensure!(*spawn_id != 0, "posture requires an own-spawn ID");
-            let mut body = spawn_id.to_le_bytes().to_vec();
-            body.extend_from_slice(&14u16.to_le_bytes());
-            body.extend_from_slice(&posture.titanium_value().to_le_bytes());
-            Ok(EncodedCommand {
-                opcode: 0x7c32,
-                body,
-            })
-        }
+        } => encode_posture(dialect, *spawn_id, *posture),
         GameCommand::InspectItem { link_body, .. } => {
             anyhow::ensure!(
                 dialect == GameDialect::TitaniumP99,
@@ -282,6 +289,9 @@ pub fn encode(
                 body: u32::from(spawn_id.unwrap_or(0)).to_le_bytes().to_vec(),
             })
         }
+        GameCommand::Consider { .. } | GameCommand::AutoAttack { .. } => {
+            encode_combat(dialect, command)
+        }
         GameCommand::MoveInventory(_) => {
             anyhow::bail!("inventory moves require the admitted session controller")
         }
@@ -300,6 +310,43 @@ pub fn encode(
             },
             body: chat::encode_outbound_for(dialect, message, character)?,
         }),
+    }
+}
+
+/// Titanium appearance update for the player's own stance.
+fn encode_posture(dialect: GameDialect, spawn_id: u16, posture: Posture) -> Result<EncodedCommand> {
+    anyhow::ensure!(
+        dialect == GameDialect::TitaniumP99,
+        "posture is not implemented for this dialect"
+    );
+    anyhow::ensure!(spawn_id != 0, "posture requires an own-spawn ID");
+    let mut body = spawn_id.to_le_bytes().to_vec();
+    body.extend_from_slice(&14u16.to_le_bytes());
+    body.extend_from_slice(&posture.titanium_value().to_le_bytes());
+    Ok(EncodedCommand {
+        opcode: 0x7c32,
+        body,
+    })
+}
+
+/// Titanium-only consider and auto-attack requests.
+fn encode_combat(dialect: GameDialect, command: &GameCommand) -> Result<EncodedCommand> {
+    anyhow::ensure!(
+        dialect == GameDialect::TitaniumP99,
+        "combat actions are not implemented for this dialect"
+    );
+    match command {
+        GameCommand::Consider {
+            own_id, target_id, ..
+        } => Ok(EncodedCommand {
+            opcode: crate::combat::CONSIDER_OPCODE,
+            body: crate::combat::consider_request(*own_id, *target_id)?.to_vec(),
+        }),
+        GameCommand::AutoAttack { enabled, .. } => Ok(EncodedCommand {
+            opcode: crate::combat::AUTO_ATTACK_OPCODE,
+            body: crate::combat::auto_attack(*enabled).to_vec(),
+        }),
+        _ => anyhow::bail!("not a combat action"),
     }
 }
 
@@ -369,6 +416,29 @@ mod tests {
                 .body,
             vec![0; 4]
         );
+    }
+
+    #[test]
+    fn consider_and_auto_attack_use_titanium_combat_opcodes_only() {
+        let created = std::time::Instant::now();
+        let consider = GameCommand::Consider {
+            session_id: 1,
+            own_id: 7,
+            target_id: 9,
+            created,
+        };
+        let packet = encode(GameDialect::TitaniumP99, &consider, "Example").unwrap();
+        assert_eq!((packet.opcode, packet.body.len()), (0x65ca, 28));
+        assert_eq!(&packet.body[4..8], &[9, 0, 0, 0]);
+        assert!(encode(GameDialect::EqMac, &consider, "Example").is_err());
+        let attack = GameCommand::AutoAttack {
+            session_id: 1,
+            enabled: true,
+            created,
+        };
+        let packet = encode(GameDialect::TitaniumP99, &attack, "Example").unwrap();
+        assert_eq!((packet.opcode, packet.body), (0x5e55, vec![1, 0, 0, 0]));
+        assert!(encode(GameDialect::EqMac, &attack, "Example").is_err());
     }
 
     #[test]

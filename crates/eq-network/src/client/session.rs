@@ -1049,6 +1049,12 @@ fn zone(
                             spawn_id,
                             created,
                             ..
+                        }
+                        | ClientCommand::Consider {
+                            session_id: requested,
+                            own_id: spawn_id,
+                            created,
+                            ..
                         } => {
                             *requested == session_id
                                 && created.elapsed() < Duration::from_secs(1)
@@ -1056,6 +1062,23 @@ fn zone(
                                 && admitted_player
                                     .as_ref()
                                     .is_some_and(|player| player.spawn_id == *spawn_id)
+                                && match &command {
+                                    ClientCommand::Consider { target_id, .. } => {
+                                        initial_spawns.get(target_id).is_some_and(
+                                            |spawn: &crate::world::SpawnState| !spawn.invisible,
+                                        )
+                                    }
+                                    _ => true,
+                                }
+                        }
+                        ClientCommand::AutoAttack {
+                            session_id: requested,
+                            created,
+                            ..
+                        } => {
+                            *requested == session_id
+                                && created.elapsed() < Duration::from_secs(1)
+                                && *created <= Instant::now()
                         }
                         _ => true,
                     };
