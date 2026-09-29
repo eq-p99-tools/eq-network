@@ -687,6 +687,39 @@ fn zone(
                     if camp::handle(&mut camp, session_id, &command, &mut session, log)? {
                         continue;
                     }
+                    // The server consumes the cursor scroll when it answers a scribe;
+                    // moving items meanwhile desynchronized inventory and P99 logged
+                    // the character out (seen live), so hold them until the result.
+                    if book_edits.scribing()
+                        || pending_memorization.as_ref().is_some_and(|pending| {
+                            matches!(pending.intent, BookIntent::Scribe { .. })
+                        })
+                    {
+                        let reason = "Wait for scribing to finish";
+                        match &command {
+                            ClientCommand::MoveInventory(request) => {
+                                log.send(ClientEvent::World(
+                                    crate::world::WorldEvent::InventoryAction {
+                                        session_id: request.session_id,
+                                        revision: request.revision,
+                                        error: Some(reason.into()),
+                                    },
+                                ))?;
+                                continue;
+                            }
+                            ClientCommand::UseItem(request) => {
+                                log.send(ClientEvent::World(
+                                    crate::world::WorldEvent::ItemUseAction {
+                                        session_id: request.session_id,
+                                        request_id: request.request_id,
+                                        error: Some(reason.into()),
+                                    },
+                                ))?;
+                                continue;
+                            }
+                            _ => (),
+                        }
+                    }
                     if let ClientCommand::ClickDoor {
                         session_id: requested,
                         door_id,

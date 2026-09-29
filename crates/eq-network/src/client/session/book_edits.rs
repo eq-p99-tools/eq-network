@@ -28,6 +28,12 @@ impl BookEdits {
             )
     }
 
+    /// Whether a submitted scribe still awaits its result; the server consumes the
+    /// cursor scroll when it answers.
+    pub fn scribing(&self) -> bool {
+        matches!(self.0, Some((Edit::Slot { mode: 0, .. }, _)))
+    }
+
     /// Called only after an edit has been validated and handed to transport.
     pub fn sent(&mut self, command: &ClientCommand, now: Instant) {
         let edit = match command {
@@ -231,5 +237,31 @@ mod tests {
             );
             assert!(!guard.blocks(&delete));
         }
+    }
+
+    #[test]
+    fn only_an_outstanding_scribe_counts_as_scribing() {
+        use super::super::spellbook::BookIntent;
+        let now = Instant::now();
+        let mut guard = BookEdits::default();
+        assert!(!guard.scribing());
+        guard.prepared_sent(
+            &BookIntent::Memorize {
+                gem: 0,
+                spell_id: 42,
+            },
+            now,
+        );
+        assert!(!guard.scribing());
+        let mut guard = BookEdits::default();
+        guard.prepared_sent(
+            &BookIntent::Scribe {
+                revision: 1,
+                slot: 0,
+                spell_id: 42,
+            },
+            now,
+        );
+        assert!(guard.scribing());
     }
 }
