@@ -411,6 +411,8 @@ fn enter_character(session: &mut Session, name: &str, log: &mut Events<'_>) -> R
 }
 
 /// Complete world validation, select the character, and follow its zone handoff.
+// The linear handshake keeps packet ordering and state transitions together.
+#[allow(clippy::too_many_lines)]
 fn world(
     context: &CharacterSession<'_>,
     assets: &Assets,
@@ -426,9 +428,9 @@ fn world(
     let mut codec = open_world(&mut session, credentials, zoning)?;
     let mut deadline = Instant::now() + Duration::from_secs(60);
     let mut accepted = false;
-    let mut entered = zoning;
+    let mut entered = false;
     let mut selection = None;
-    let mut chosen = zoning.then(|| config.character.clone());
+    let mut chosen = None;
     loop {
         ensure!(!stop.is_cancelled(), "shutdown requested");
         if !entered {
@@ -463,8 +465,13 @@ fn world(
                 session.send(0x3c25, &codec.approve(&packet.body)?)?;
             }
             // Captured Titanium zoning sessions receive an empty notification here,
-            // followed by ZoneHandoff, with no world checksum response.
-            WorldOpcode::FileManifest if zoning && packet.body.is_empty() => {}
+            // with no world checksum response. The official client then repeats
+            // its character entry before the server sends ZoneHandoff.
+            WorldOpcode::FileManifest if zoning && packet.body.is_empty() => {
+                if !entered {
+                    chosen = Some(config.character.clone());
+                }
+            }
             WorldOpcode::FileManifest => {
                 codec.manifest(&mut packet.body)?;
                 let mut response = file_response(assets, &packet.body, log)?;
