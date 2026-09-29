@@ -8,6 +8,7 @@
 use super::{
     book_edits::BookEdits,
     casting::{self, CastGuard},
+    merchant::MerchantTrades,
     spellbook::{BookIntent, PendingBookAction},
     ClientCommand, ClientEvent, Events,
 };
@@ -34,6 +35,7 @@ impl Held {
         cast_guard: &CastGuard,
         book_edits: &BookEdits,
         pending: Option<&PendingBookAction>,
+        trades: &MerchantTrades,
     ) -> Self {
         let mut held = Vec::new();
         if cast_guard.active() {
@@ -41,6 +43,10 @@ impl Held {
                 Resource::Casting,
                 "Wait for the current cast to finish or interrupt it",
             ));
+        }
+        if trades.active() {
+            // A sold item leaves only when the merchant echoes the sale.
+            held.push((Resource::Inventory, "Wait for the merchant to answer"));
         }
         let scribing = book_edits.scribing()
             || pending.is_some_and(|pending| matches!(pending.intent, BookIntent::Scribe { .. }));
@@ -76,7 +82,9 @@ pub(super) fn needs(command: &ClientCommand) -> &'static [Resource] {
         | ClientCommand::ForgetSpell { .. }
         | ClientCommand::DeleteSpell { .. }
         | ClientCommand::SwapSpell { .. } => &[Casting, Spellbook],
-        ClientCommand::MoveInventory(_) => &[Inventory],
+        ClientCommand::MoveInventory(_)
+        | ClientCommand::Buy { .. }
+        | ClientCommand::Sell { .. } => &[Inventory],
         _ => &[],
     }
 }
@@ -101,6 +109,12 @@ pub(super) fn refuse(command: &ClientCommand, reason: &str, log: &mut Events<'_>
                 session_id: request.session_id,
                 revision: request.revision,
                 error: Some(reason.into()),
+            }))?;
+        }
+        ClientCommand::Buy { session_id, .. } | ClientCommand::Sell { session_id, .. } => {
+            log.send(ClientEvent::World(WorldEvent::MerchantRefused {
+                session_id: *session_id,
+                reason: reason.into(),
             }))?;
         }
         _ => log.send(ClientEvent::World(WorldEvent::BookAction(
@@ -136,13 +150,19 @@ mod tests {
 
     #[test]
     fn holds_refuse_only_commands_that_need_them() {
-        let idle = Held::from_state(&CastGuard::default(), &BookEdits::default(), None);
+        let idle_trades = MerchantTrades::default();
+        let idle = Held::from_state(
+            &CastGuard::default(),
+            &BookEdits::default(),
+            None,
+            &idle_trades,
+        );
         assert_eq!(idle.conflict(&cast()), None);
         assert_eq!(idle.conflict(&memorize()), None);
 
         let mut guard = CastGuard::default();
         guard.submitted(42, Instant::now());
-        let casting = Held::from_state(&guard, &BookEdits::default(), None);
+        let casting = Held::from_state(&guard, &BookEdits::default(), None, &idle_trades);
         assert!(casting.conflict(&cast()).is_some());
         assert!(casting.conflict(&memorize()).is_some());
         assert_eq!(
@@ -161,8 +181,12 @@ mod tests {
                 spell_id: 42,
             },
         };
-        let scribing =
-            Held::from_state(&CastGuard::default(), &BookEdits::default(), Some(&scribe));
+        let scribing = Held::from_state(
+            &CastGuard::default(),
+            &BookEdits::default(),
+            Some(&scribe),
+            &idle_trades,
+        );
         assert_eq!(scribing.conflict(&cast()), None);
         assert_eq!(
             scribing.conflict(&memorize()),
@@ -179,6 +203,7 @@ mod tests {
             &CastGuard::default(),
             &BookEdits::default(),
             Some(&memorizing),
+            &idle_trades,
         );
         assert!(held.conflict(&memorize()).is_some());
         assert!(!held
@@ -193,5 +218,26 @@ mod tests {
                 .map(|(_, reason)| *reason),
             Some("Wait for scribing to finish")
         );
+    }
+
+    #[test]
+    fn a_pending_trade_holds_the_inventory_but_not_casting() {
+        let sell = ClientCommand::Sell {
+            session_id: 1,
+            merchant_id: 7,
+            slot: 24,
+            quantity: 1,
+            created: Instant::now(),
+        };
+        let mut trades = MerchantTrades::default();
+        let idle = Held::from_state(&CastGuard::default(), &BookEdits::default(), None, &trades);
+        assert_eq!(idle.conflict(&sell), None);
+        trades.sent(&sell, Instant::now());
+        let trading = Held::from_state(&CastGuard::default(), &BookEdits::default(), None, &trades);
+        assert_eq!(
+            trading.conflict(&sell),
+            Some("Wait for the merchant to answer")
+        );
+        assert_eq!(trading.conflict(&cast()), None);
     }
 }

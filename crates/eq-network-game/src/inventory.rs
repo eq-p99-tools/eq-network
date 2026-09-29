@@ -160,6 +160,14 @@ pub enum InventoryUpdate {
     Set(Vec<InventoryItem>),
     /// Server explicitly removes a whole slot, including its container contents.
     Remove(InventorySlot),
+    /// Units the server took without sending an item update, as for a sale: a
+    /// stack loses `quantity` units and any other item leaves its slot.
+    Deduct {
+        /// Slot the units came from.
+        slot: InventorySlot,
+        /// Units taken from a stack.
+        quantity: u32,
+    },
     /// A mutation needs a refreshed definition before quantities can be trusted.
     Invalidated,
 }
@@ -283,6 +291,17 @@ impl Inventory {
                 self.reconcile(slot, &[]);
                 self.remove(slot);
             }
+            InventoryUpdate::Deduct { slot, quantity } => match self.items.get_mut(&slot) {
+                Some(item) if item.stack_count.is_some_and(|count| count > quantity) => {
+                    item.stack_count = item.stack_count.map(|count| count - quantity);
+                }
+                Some(_) => {
+                    self.reconcile(slot, &[]);
+                    self.remove(slot);
+                }
+                // The server took something this projection does not have.
+                None => self.stale = true,
+            },
             InventoryUpdate::Invalidated => self.stale = true,
         }
     }

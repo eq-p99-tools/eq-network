@@ -4,6 +4,7 @@ mod camp;
 mod casting;
 mod inventory;
 mod lifecycle;
+mod merchant;
 mod motion;
 mod scribe_consumption;
 mod spellbook;
@@ -677,6 +678,7 @@ fn zone(
     let mut admitted_book: Option<eq_network_game::spells::SpellBook> = None;
     let mut book_edits = book_edits::BookEdits::default();
     let mut cast_guard = casting::CastGuard::default();
+    let mut trades = merchant::MerchantTrades::default();
     let mut camp = camp::Camp::default();
     let mut zone_points = zoning::ZonePoints::default();
     let mut current_zone = (0u16, 0u16);
@@ -704,6 +706,15 @@ fn zone(
                 spell_id: None,
             }))?;
             log.diagnostic("Cast acknowledgement timed out; a manual retry is available".into())?;
+        }
+        if trades.expire(Instant::now()) {
+            log.send(ClientEvent::World(
+                crate::world::WorldEvent::MerchantRefused {
+                    session_id,
+                    reason: "The merchant did not accept that offer.".into(),
+                },
+            ))?;
+            log.diagnostic("Merchant trade was not answered; released the inventory".into())?;
         }
         if progress.elapsed() >= Duration::from_secs(30) {
             log.status(
@@ -768,6 +779,7 @@ fn zone(
                         &cast_guard,
                         &book_edits,
                         pending_memorization.as_ref(),
+                        &trades,
                     )
                     .conflict(&command)
                     {
@@ -1301,6 +1313,7 @@ fn zone(
                     match command::encode(config.protocol.into(), &command, &config.character) {
                         Ok(packet) => {
                             session.send(packet.opcode, &packet.body)?;
+                            trades.sent(&command, Instant::now());
                             if let ClientCommand::CastSpell { spell_id, .. } = &command {
                                 cast_guard.submitted(*spell_id, Instant::now());
                                 log.send(ClientEvent::World(
@@ -1906,6 +1919,7 @@ fn zone(
                                 log,
                             )?;
                             cast_guard.clear();
+                            trades.clear();
                             if let Some(motion) = motion.as_mut() {
                                 motion.suspend();
                             }
@@ -1936,6 +1950,15 @@ fn zone(
                                 .and_then(|id| initial_spawns.get_mut(&id))
                             {
                                 spawn.kind = spawn.kind.corpse();
+                            }
+                        }
+                        // A sale's echo is the only notice that the item left.
+                        crate::world::WorldEvent::Merchant(update) => {
+                            if let Some(change) = trades.observe(update) {
+                                inventory.apply(change.clone());
+                                log.send(ClientEvent::World(crate::world::WorldEvent::Inventory(
+                                    change,
+                                )))?;
                             }
                         }
                         _ => (),

@@ -479,6 +479,13 @@ pub enum WorldEvent {
     Loot(crate::loot::LootUpdate),
     /// Merchant window changes.
     Merchant(crate::merchant::MerchantUpdate),
+    /// A purchase or sale that was not sent, or that the merchant never answered.
+    MerchantRefused {
+        /// Admission from the request.
+        session_id: u64,
+        /// Why nothing was bought or sold.
+        reason: String,
+    },
     /// A melee, skill or spell damage record for any nearby entities.
     Damage(crate::combat::Damage),
     /// Own-character skill update; unknown skill IDs remain available to consumers.

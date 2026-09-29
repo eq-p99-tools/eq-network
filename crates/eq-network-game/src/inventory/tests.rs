@@ -577,3 +577,40 @@ fn server_resync_and_consumption_override_predicted_contents() {
     state.apply(decode(0x1c4a, &deletion).unwrap().unwrap());
     assert_eq!(state.items[&InventorySlot(22)].charges, 0);
 }
+
+#[test]
+fn deductions_shrink_stacks_and_remove_whole_items() {
+    let mut state = Inventory::default();
+    state.apply(
+        decode(0x5394, wire(22, 42, 0, true, 0, &[]).as_bytes())
+            .unwrap()
+            .unwrap(),
+    );
+    let mut charged = state.items[&InventorySlot(22)].clone();
+    charged.slot = InventorySlot(23);
+    charged.stack_count = None;
+    charged.charges = 3;
+    state.apply(InventoryUpdate::Set(vec![charged]));
+    state.apply(InventoryUpdate::Deduct {
+        slot: InventorySlot(22),
+        quantity: 5,
+    });
+    assert_eq!(state.items[&InventorySlot(22)].stack_count, Some(2));
+    state.apply(InventoryUpdate::Deduct {
+        slot: InventorySlot(22),
+        quantity: 2,
+    });
+    assert!(!state.items.contains_key(&InventorySlot(22)));
+    // An unstacked item leaves whole, whatever quantity the server reports.
+    state.apply(InventoryUpdate::Deduct {
+        slot: InventorySlot(23),
+        quantity: 1,
+    });
+    assert!(!state.items.contains_key(&InventorySlot(23)));
+    assert!(!state.stale());
+    state.apply(InventoryUpdate::Deduct {
+        slot: InventorySlot(24),
+        quantity: 1,
+    });
+    assert!(state.stale());
+}
