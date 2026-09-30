@@ -254,6 +254,14 @@ pub enum GameCommand {
         /// Reject delayed actions instead of replaying them after a stall.
         created: std::time::Instant,
     },
+    /// Announce a jump the client is simulating; only sessions that accept falls
+    /// send it.
+    Jump {
+        /// Current zone admission.
+        session_id: u64,
+        /// Reject delayed actions instead of replaying them after a stall.
+        created: std::time::Instant,
+    },
     /// Start or stop melee auto-attack against the current server-side target.
     AutoAttack {
         /// Current zone admission.
@@ -391,6 +399,7 @@ pub fn encode(
             anyhow::bail!("door interaction requires the admitted session controller")
         }
         GameCommand::Move(_)
+        | GameCommand::Jump { .. }
         | GameCommand::ConfigureMotion { .. }
         | GameCommand::CrossZoneLine { .. }
         | GameCommand::Camp { .. } => {

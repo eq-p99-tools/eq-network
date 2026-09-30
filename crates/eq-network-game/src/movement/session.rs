@@ -140,6 +140,16 @@ impl MotionSession {
         self.falls
     }
 
+    /// Checks that a jump may be announced: jumps rise and fall under the same
+    /// client-side physics as falls, so only sessions that accept falls allow them.
+    ///
+    /// # Errors
+    /// Rejects jumps on sessions without falls.
+    pub fn jump(&self) -> Result<()> {
+        ensure!(self.falls, "jumping is not enabled for this server");
+        Ok(())
+    }
+
     /// Starts stationary, without assuming any effective movement speed.
     ///
     /// # Errors

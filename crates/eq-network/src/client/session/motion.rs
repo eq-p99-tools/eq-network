@@ -39,6 +39,25 @@ pub(super) fn handle(
 ) -> Result<bool> {
     let now = Instant::now();
     let result = match command {
+        ClientCommand::Jump {
+            session_id: requested,
+            created,
+        } => {
+            let allowed = motion.jump().and_then(|()| {
+                anyhow::ensure!(
+                    *requested == session_id
+                        && now.saturating_duration_since(*created).as_secs() < 1,
+                    "stale jump"
+                );
+                Ok(())
+            });
+            match allowed {
+                // Transport failures end the admission like any other send.
+                Ok(()) => session.send(eq_network_game::movement::JUMP_OPCODE, &[])?,
+                Err(error) => log.diagnostic(format!("Rejected jump: {error}"))?,
+            }
+            return Ok(true);
+        }
         ClientCommand::ConfigureMotion {
             session_id: requested,
             calibration,

@@ -244,7 +244,10 @@ fn falls_need_permission_and_carry_the_descent_in_position_only() {
     assert!(session
         .send_move(&fall, now, |_| panic!("falls are off by default"))
         .is_err());
+    // Jumps share the falls' client-side physics and permission.
+    assert!(session.jump().is_err());
     let mut session = setup(start).with_falls(true);
+    assert!(session.jump().is_ok());
     session
         .send_move(&fall, now, |body| {
             assert_eq!(word(body, 8), 0.0f32.to_bits());
