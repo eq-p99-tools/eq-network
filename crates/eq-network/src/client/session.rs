@@ -708,6 +708,7 @@ fn zone(
     let mut book_edits = book_edits::BookEdits::default();
     let mut cast_guard = casting::CastGuard::default();
     let mut trades = merchant::MerchantTrades::default();
+    let mut settlement = inventory::Settlement::default();
     let mut camp = camp::Camp::default();
     let mut zone_points = zoning::ZonePoints::default();
     let mut current_zone = (0u16, 0u16);
@@ -735,6 +736,15 @@ fn zone(
                 spell_id: None,
             }))?;
             log.diagnostic("Cast acknowledgement timed out; a manual retry is available".into())?;
+        }
+        // Servers answer only a refused move, so silence settles the rest.
+        if let Some(update) = settlement.due(&inventory, Instant::now()) {
+            inventory.apply(update.clone());
+            if ready {
+                log.send(ClientEvent::World(crate::world::WorldEvent::Inventory(
+                    update,
+                )))?;
+            }
         }
         if trades.expire(Instant::now()) {
             log.send(ClientEvent::World(
@@ -1300,6 +1310,7 @@ fn zone(
                     }
                     if inventory::handle(
                         &mut inventory,
+                        &mut settlement,
                         inventory_actor.map(|mut actor| {
                             actor.bank_access = admitted_player.as_ref().is_some_and(|player| {
                                 let position = motion

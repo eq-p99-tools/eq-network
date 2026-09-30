@@ -169,6 +169,108 @@ fn container_correction_resolves_children_and_snapshot_resets_all_uncertainty() 
     assert!(!state.predicted());
 }
 
+fn move_item(state: &mut Inventory, from: i32, to: i32) {
+    let request = InventoryMove {
+        session_id: 0,
+        revision: state.revision(),
+        from: InventorySlot(from),
+        to: InventorySlot(to),
+        quantity: MoveQuantity::Whole,
+        created: std::time::Instant::now(),
+    };
+    let actor = InventoryActor {
+        bank_access: false,
+        class: Some(1),
+        deity: None,
+        dual_wield: None,
+        race: 1,
+        level: 1,
+    };
+    let update = state.plan_move(&request, actor).unwrap();
+    state.apply(update);
+}
+
+fn trade_packet(slot: i32, id: u32) -> InventoryUpdate {
+    let mut body = 0x67u32.to_le_bytes().to_vec();
+    body.extend(wire(slot, id, 0, false, 0, &[]).bytes());
+    decode(0x3397, &body).unwrap().unwrap()
+}
+
+#[test]
+fn unrefused_moves_settle_so_later_server_changes_to_their_slots_apply() {
+    let mut state = Inventory::default();
+    state.apply(
+        decode(0x5394, wire(22, 42, 0, false, 0, &[]).as_bytes())
+            .unwrap()
+            .unwrap(),
+    );
+    move_item(&mut state, 22, 30);
+    move_item(&mut state, 30, 23);
+    // The server acknowledges neither move; its silence settles them.
+    state.apply(InventoryUpdate::Settled);
+    assert!(!state.predicted());
+    // A purchase lands in the slot the first move emptied.
+    state.apply(trade_packet(22, 99));
+    assert!(!state.stale());
+    move_item(&mut state, 23, 24);
+}
+
+#[test]
+fn selling_a_moved_item_confirms_its_move_instead_of_contradicting_it() {
+    let mut state = Inventory::default();
+    state.apply(
+        decode(0x5394, wire(22, 42, 0, false, 0, &[]).as_bytes())
+            .unwrap()
+            .unwrap(),
+    );
+    move_item(&mut state, 22, 30);
+    move_item(&mut state, 30, 23);
+    state.apply(InventoryUpdate::Deduct {
+        slot: InventorySlot(23),
+        quantity: 1,
+    });
+    assert!(state.items.is_empty());
+    assert!(!state.stale());
+    assert_eq!(
+        state
+            .prediction_origins()
+            .map(|(slot, _)| slot)
+            .collect::<Vec<_>>(),
+        vec![InventorySlot(22), InventorySlot(30)]
+    );
+}
+
+#[test]
+fn a_refused_move_blocks_moves_only_until_the_others_settle() {
+    let mut state = Inventory::default();
+    let mut items = decode(0x5394, wire(22, 42, 0, false, 0, &[]).as_bytes())
+        .unwrap()
+        .unwrap();
+    if let (InventoryUpdate::Snapshot(items), InventoryUpdate::Snapshot(shield)) = (
+        &mut items,
+        decode(0x5394, wire(24, 43, 0, false, 0, &[]).as_bytes())
+            .unwrap()
+            .unwrap(),
+    ) {
+        items.extend(shield);
+    }
+    state.apply(items);
+    let sword = state.items[&InventorySlot(22)].clone();
+    move_item(&mut state, 22, 25);
+    move_item(&mut state, 24, 26);
+    // The first move is refused: the server resends both of its slots.
+    state.apply(InventoryUpdate::Set(vec![sword]));
+    state.apply(InventoryUpdate::Remove(InventorySlot(25)));
+    assert!(state.stale());
+    // The second move was not refused, so settling it ends the correction.
+    state.apply(InventoryUpdate::Settled);
+    assert!(!state.stale());
+    assert_eq!(
+        state.items.keys().copied().collect::<Vec<_>>(),
+        vec![InventorySlot(22), InventorySlot(26)]
+    );
+}
+
 fn wire(
     slot: i32,
     id: u32,

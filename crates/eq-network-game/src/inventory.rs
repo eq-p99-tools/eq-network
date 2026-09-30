@@ -170,6 +170,10 @@ pub enum InventoryUpdate {
     },
     /// A mutation needs a refreshed definition before quantities can be trusted.
     Invalidated,
+    /// Pending predictions the server had time to refuse and did not; they now
+    /// count as its contents. Servers such as `EQEmu` never acknowledge a
+    /// successful move and answer a refused one at once, by resending its slots.
+    Settled,
 }
 
 /// Current inventory projection; an absent snapshot is distinct from an empty one.
@@ -199,7 +203,8 @@ impl Inventory {
 
     /// Slots changed by pending predictions and their contents before the first change.
     /// An empty origin is retained too: predicted removal or insertion is not confirmation.
-    /// Origins remain until a covering server update or a complete snapshot arrives.
+    /// Origins remain until a covering server update, a settlement or a complete
+    /// snapshot arrives.
     pub fn prediction_origins(
         &self,
     ) -> impl Iterator<Item = (InventorySlot, Option<&InventoryItem>)> {
@@ -291,18 +296,30 @@ impl Inventory {
                 self.reconcile(slot, &[]);
                 self.remove(slot);
             }
-            InventoryUpdate::Deduct { slot, quantity } => match self.items.get_mut(&slot) {
-                Some(item) if item.stack_count.is_some_and(|count| count > quantity) => {
-                    item.stack_count = item.stack_count.map(|count| count - quantity);
+            InventoryUpdate::Deduct { slot, quantity } => {
+                if !self.items.contains_key(&slot) {
+                    // The server took something this projection does not have.
+                    self.stale = true;
+                    return;
                 }
-                Some(_) => {
-                    self.reconcile(slot, &[]);
-                    self.remove(slot);
+                // The server took what it held there, and this projection has an
+                // item there too: a prediction that put it there was right.
+                for covered in self.covered(slot) {
+                    self.unconfirmed.remove(&covered);
                 }
-                // The server took something this projection does not have.
-                None => self.stale = true,
-            },
+                self.resolved();
+                match self.items.get_mut(&slot) {
+                    Some(item) if item.stack_count.is_some_and(|count| count > quantity) => {
+                        item.stack_count = item.stack_count.map(|count| count - quantity);
+                    }
+                    _ => self.remove(slot),
+                }
+            }
             InventoryUpdate::Invalidated => self.stale = true,
+            InventoryUpdate::Settled => {
+                self.unconfirmed.clear();
+                self.resolved();
+            }
         }
     }
 
@@ -332,21 +349,31 @@ impl Inventory {
     }
 
     /// A slot update confirms only that slot and its serialized container contents.
-    /// Contradictions freeze new moves until every outstanding slot is authoritative.
+    /// Contradictions freeze new moves until every outstanding slot is authoritative
+    /// or settled.
     fn reconcile(&mut self, root: InventorySlot, authoritative: &[InventoryItem]) {
-        let covered: Vec<_> = self
-            .unconfirmed
-            .keys()
-            .copied()
-            .filter(|slot| *slot == root || slot.parent().is_some_and(|(parent, _)| parent == root))
-            .collect();
-        for slot in covered {
+        for slot in self.covered(root) {
             let actual = authoritative.iter().find(|item| item.slot == slot);
             if self.items.get(&slot) != actual {
                 self.correcting = true;
             }
             self.unconfirmed.remove(&slot);
         }
+        self.resolved();
+    }
+
+    /// Unconfirmed slots a server update for `root` covers: the slot and its
+    /// container contents.
+    fn covered(&self, root: InventorySlot) -> Vec<InventorySlot> {
+        self.unconfirmed
+            .keys()
+            .copied()
+            .filter(|slot| *slot == root || slot.parent().is_some_and(|(parent, _)| parent == root))
+            .collect()
+    }
+
+    /// Ends a correction once no prediction is left unconfirmed.
+    fn resolved(&mut self) {
         self.predicted = !self.unconfirmed.is_empty();
         if !self.predicted {
             self.correcting = false;
