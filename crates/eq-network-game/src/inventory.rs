@@ -11,7 +11,10 @@ pub(crate) use titanium::parse as parse_items;
 
 use crate::items::ItemDetails;
 use serde::Serialize;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
+
+/// The cursor; items pushed onto it queue behind the one shown there.
+const CURSOR: InventorySlot = InventorySlot(30);
 
 /// A Titanium inventory address; unknown slots retain their original number.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
@@ -158,6 +161,11 @@ pub enum InventoryUpdate {
     Snapshot(Vec<InventoryItem>),
     /// A replacement root or bag slot plus any serialized children.
     Set(Vec<InventoryItem>),
+    /// An item (and any bag contents) pushed onto the cursor, as Titanium's limbo
+    /// packet does: it shows there when the cursor is empty and otherwise waits
+    /// behind the item there until that one leaves. Servers never resend the
+    /// queue to Titanium clients, which move the next item up themselves.
+    Cursor(Vec<InventoryItem>),
     /// Server explicitly removes a whole slot, including its container contents.
     Remove(InventorySlot),
     /// Units the server took without sending an item update, as for a sale: a
@@ -181,6 +189,8 @@ pub enum InventoryUpdate {
 #[allow(clippy::struct_excessive_bools)] // Admission, invalidation, prediction and correction are distinct state.
 pub struct Inventory {
     items: BTreeMap<InventorySlot, InventoryItem>,
+    /// Items waiting behind the cursor's, each with its bag contents.
+    queued: VecDeque<Vec<InventoryItem>>,
     received: bool,
     stale: bool,
     revision: u64,
@@ -237,9 +247,27 @@ impl Inventory {
         self.correcting
     }
 
+    /// Items waiting behind the cursor's, next first, each with its bag contents.
+    pub fn queued(&self) -> impl Iterator<Item = &[InventoryItem]> {
+        self.queued.iter().map(Vec::as_slice)
+    }
+
     /// Applies a fully decoded update; a new snapshot replaces previous admission data.
     pub fn apply(&mut self, update: InventoryUpdate) {
         self.revision = self.revision.wrapping_add(1);
+        self.change(update);
+        // As the Titanium client does, the next queued item moves up as soon
+        // as the cursor empties.
+        while !self.items.contains_key(&CURSOR) {
+            let Some(next) = self.queued.pop_front() else {
+                break;
+            };
+            self.items
+                .extend(next.into_iter().map(|item| (item.slot, item)));
+        }
+    }
+
+    fn change(&mut self, update: InventoryUpdate) {
         match update {
             InventoryUpdate::Prediction(items) => {
                 let next: BTreeMap<_, _> =
@@ -269,6 +297,7 @@ impl Inventory {
             },
             InventoryUpdate::Snapshot(items) => {
                 self.items = items.into_iter().map(|item| (item.slot, item)).collect();
+                self.queued.clear();
                 self.received = true;
                 self.predicted = false;
                 self.stale = false;
@@ -290,6 +319,19 @@ impl Inventory {
                 }
                 for item in items {
                     self.items.insert(item.slot, item);
+                }
+            }
+            InventoryUpdate::Cursor(items) => {
+                let queued: usize = self.queued.iter().map(Vec::len).sum();
+                if self.items.len() + queued + items.len() > 1024 {
+                    self.stale = true;
+                } else if self.items.contains_key(&CURSOR) {
+                    self.queued.push_back(items);
+                } else {
+                    // Nothing was predicted into an empty cursor, so there is
+                    // nothing here to confirm or contradict.
+                    self.items
+                        .extend(items.into_iter().map(|item| (item.slot, item)));
                 }
             }
             InventoryUpdate::Remove(slot) => {
@@ -337,6 +379,7 @@ impl Inventory {
                 .map(|item| InventoryUpdate::Set(vec![item]))
                 .collect()
         };
+        updates.extend(self.queued.iter().cloned().map(InventoryUpdate::Cursor));
         if self.stale() {
             updates.push(InventoryUpdate::Invalidated);
         }

@@ -271,6 +271,77 @@ fn a_refused_move_blocks_moves_only_until_the_others_settle() {
     );
 }
 
+fn limbo_packet(id: u32, children: &[(usize, String)], bag: u8) -> InventoryUpdate {
+    let mut body = 0x6au32.to_le_bytes().to_vec();
+    body.extend(wire(30, id, bag, false, 0, children).bytes());
+    decode(0x3397, &body).unwrap().unwrap()
+}
+
+fn cursor_id(state: &Inventory) -> Option<u32> {
+    state
+        .items
+        .get(&InventorySlot(30))
+        .map(|item| item.details.id)
+}
+
+#[test]
+fn limbo_items_queue_behind_the_cursor_and_move_up_as_it_empties() {
+    let mut state = Inventory::default();
+    state.apply(
+        decode(0x5394, wire(30, 41, 0, false, 0, &[]).as_bytes())
+            .unwrap()
+            .unwrap(),
+    );
+    assert!(matches!(limbo_packet(42, &[], 0), InventoryUpdate::Cursor(_)));
+    state.apply(limbo_packet(42, &[], 0));
+    let child = wire(331, 44, 0, false, 1, &[]);
+    state.apply(limbo_packet(43, &[(0, child)], 2));
+    assert_eq!(cursor_id(&state), Some(41));
+    assert_eq!(state.queued().count(), 2);
+    // Placing the cursor item shows the next one at once.
+    move_item(&mut state, 30, 22);
+    assert_eq!(cursor_id(&state), Some(42));
+    assert_eq!(state.items[&InventorySlot(22)].details.id, 41);
+    // The move settles; later the server destroys the new cursor item, and
+    // the bag behind it moves up with its contents.
+    state.apply(InventoryUpdate::Settled);
+    state.apply(InventoryUpdate::Remove(InventorySlot(30)));
+    assert_eq!(cursor_id(&state), Some(43));
+    assert_eq!(state.items[&InventorySlot(331)].details.id, 44);
+    assert_eq!(state.queued().count(), 0);
+    // A limbo item onto an empty cursor shows there at once.
+    move_item(&mut state, 30, 23);
+    state.apply(limbo_packet(45, &[], 0));
+    assert_eq!(cursor_id(&state), Some(45));
+    assert!(!state.stale());
+}
+
+#[test]
+fn admission_replays_the_cursor_queue_in_order() {
+    let mut state = Inventory::default();
+    state.apply(
+        decode(0x5394, wire(30, 41, 0, false, 0, &[]).as_bytes())
+            .unwrap()
+            .unwrap(),
+    );
+    state.apply(limbo_packet(42, &[], 0));
+    state.apply(limbo_packet(43, &[], 0));
+    let mut replayed = Inventory::default();
+    for update in state.admission_updates() {
+        replayed.apply(update);
+    }
+    assert_eq!(replayed.items, state.items);
+    assert_eq!(replayed.queued, state.queued);
+    // A snapshot starts a new queue.
+    replayed.apply(
+        decode(0x5394, wire(22, 41, 0, false, 0, &[]).as_bytes())
+            .unwrap()
+            .unwrap(),
+    );
+    assert_eq!(replayed.queued().count(), 0);
+    assert_eq!(cursor_id(&replayed), None);
+}
+
 fn wire(
     slot: i32,
     id: u32,

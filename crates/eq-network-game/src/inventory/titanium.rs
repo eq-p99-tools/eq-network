@@ -37,6 +37,7 @@ pub fn decode(opcode: u16, body: &[u8]) -> Result<Option<InventoryUpdate>> {
             }
             if kind == 0x6a {
                 ensure!(root == InventorySlot(30), "summoned item is not on cursor");
+                return Ok(Some(InventoryUpdate::Cursor(items)));
             }
             Ok(Some(InventoryUpdate::Set(items)))
         }
