@@ -677,6 +677,7 @@ fn zone(
     let mut got_zone = false;
     let mut replied_experience = false;
     let mut zone_name = String::new();
+    let mut far_clip = None;
     let mut progress = Instant::now();
     let mut packets = 0u64;
     let mut stationary = [0u8; 36];
@@ -1662,6 +1663,7 @@ fn zone(
             ZoneOpcode::ZoneDescription if !ready => {
                 ensure!(packet.body.len() >= 96, "truncated zone description");
                 zone_name = String::from_utf8_lossy(cstr(&packet.body[64..96])).into_owned();
+                far_clip = crate::world::titanium_far_clip(&packet.body);
                 log.zone.clone_from(&zone_name);
                 log.status(
                     ConnectionState::Zoning,
@@ -1720,6 +1722,7 @@ fn zone(
                             session_id,
                             zone: zone_name.clone(),
                             player: Box::new(player),
+                            far_clip,
                         }))?;
                         log.send(ClientEvent::World(crate::world::WorldEvent::Spawns(
                             initial_spawns.values().cloned().collect(),

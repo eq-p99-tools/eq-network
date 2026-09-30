@@ -109,10 +109,12 @@ impl Presentation {
         player.run_speed = spawn.run_speed;
         self.entered = true;
         let mut events = vec![
+            // The EQMac zone header's clip fields have not been verified.
             WorldEvent::Entered {
                 session_id,
                 zone: zone.into(),
                 player: Box::new(player),
+                far_clip: None,
             },
             WorldEvent::Spawns(std::mem::take(&mut self.spawns).into_values().collect()),
         ];
@@ -212,6 +214,7 @@ mod tests {
             player,
             session_id,
             zone,
+            ..
         } = &events[0]
         else {
             panic!("missing admission")

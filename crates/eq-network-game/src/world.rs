@@ -446,6 +446,10 @@ pub enum WorldEvent {
         zone: String,
         /// Initial character state.
         player: Box<PlayerState>,
+        /// The zone's far clip distance. The official client draws and targets
+        /// nothing past it, and servers log targets beyond it as possible cheats.
+        /// None when the dialect has not reported it.
+        far_clip: Option<f32>,
     },
     /// Server-reported position, including corrections for the local player.
     Position {
@@ -570,6 +574,15 @@ pub fn titanium_player(profile: &[u8], spawn: &[u8]) -> Result<PlayerState> {
         run_speed,
         hp_percent: (spawn[86] <= 100).then_some(spawn[86]),
     })
+}
+
+/// Reads the far clip distance (`maxclip`) from a Titanium zone header
+/// (`OP_NewZone`), a float at offset 516; None when missing or not positive.
+#[must_use]
+pub fn titanium_far_clip(new_zone: &[u8]) -> Option<f32> {
+    let bytes = new_zone.get(516..520)?;
+    let value = f32::from_le_bytes(bytes.try_into().ok()?);
+    (value.is_finite() && value > 0.0).then_some(value)
 }
 
 /// Reads the world's short name from a Titanium log-server settings body
@@ -922,6 +935,17 @@ mod tests {
         );
         profile[13116..13120].copy_from_slice(&f32::NAN.to_le_bytes());
         assert!(titanium_player(&profile, &spawn).is_err());
+    }
+
+    #[test]
+    fn the_far_clip_comes_from_the_zone_header() {
+        // Synthetic header shaped like Titanium's 700-byte OP_NewZone.
+        let mut header = vec![0; 700];
+        header[516..520].copy_from_slice(&450.0f32.to_le_bytes());
+        assert_eq!(titanium_far_clip(&header), Some(450.0));
+        assert_eq!(titanium_far_clip(&header[..519]), None);
+        header[516..520].copy_from_slice(&0.0f32.to_le_bytes());
+        assert_eq!(titanium_far_clip(&header), None);
     }
 
     #[test]
