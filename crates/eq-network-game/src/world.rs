@@ -71,6 +71,8 @@ pub struct BaseAttributes {
 /// Character identity and saved state needed by a graphical consumer.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct PlayerState {
+    /// Character name as the profile spells it.
+    pub name: String,
     /// Base profile attributes, not effective stats or resource capacities.
     pub base_attributes: Option<BaseAttributes>,
     /// The active spawn, scoped to this zone connection.
@@ -285,6 +287,12 @@ pub enum WorldEvent {
         name: String,
         /// Whether the character now exists; a new list follows on success.
         accepted: bool,
+    },
+    /// The world's short name from its log-server settings. The official client
+    /// names per-character files after it, such as `UI_<character>_<short name>.ini`.
+    WorldName {
+        /// For example `P1999Green`.
+        short_name: String,
     },
     /// Available characters for this world connection; no zone has been entered.
     CharacterSelection {
@@ -528,6 +536,7 @@ pub fn titanium_player(profile: &[u8], spawn: &[u8]) -> Result<PlayerState> {
         "invalid spawn dimensions or speeds"
     );
     Ok(PlayerState {
+        name: String::from_utf8_lossy(until_nul(&profile[12940..13004])).into_owned(),
         base_attributes: Some(BaseAttributes {
             strength: i32::try_from(word(profile, 2236))?,
             stamina: i32::try_from(word(profile, 2240))?,
@@ -561,6 +570,21 @@ pub fn titanium_player(profile: &[u8], spawn: &[u8]) -> Result<PlayerState> {
         run_speed,
         hp_percent: (spawn[86] <= 100).then_some(spawn[86]),
     })
+}
+
+/// Reads the world's short name from a Titanium log-server settings body
+/// (`OP_LogServer`), which carries it NUL-terminated in 32 bytes at offset 32.
+///
+/// # Errors
+/// Rejects truncated bodies and names that are empty or not plain ASCII.
+pub fn titanium_world_name(body: &[u8]) -> Result<String> {
+    let field = body.get(32..64).context("truncated log-server settings")?;
+    let name = until_nul(field);
+    ensure!(
+        !name.is_empty() && name.iter().all(u8::is_ascii_graphic),
+        "invalid world short name"
+    );
+    Ok(String::from_utf8_lossy(name).into_owned())
 }
 
 /// Decode supported ongoing state updates. Unknown opcodes remain available to other codecs.
@@ -714,6 +738,12 @@ pub(crate) fn appearance(body: &[u8]) -> Result<Option<WorldEvent>> {
 fn signed_position(value: u32) -> f32 {
     (((value & 0x7ffff) << 13) as i32 >> 13) as f32 / 8.0
 }
+fn until_nul(bytes: &[u8]) -> &[u8] {
+    &bytes[..bytes
+        .iter()
+        .position(|&byte| byte == 0)
+        .unwrap_or(bytes.len())]
+}
 fn word(bytes: &[u8], offset: usize) -> u32 {
     u32::from_le_bytes(
         bytes[offset..offset + 4]
@@ -857,7 +887,9 @@ mod tests {
         profile[4360..4364].copy_from_slice(&42u32.to_le_bytes());
         profile[4364..4368].copy_from_slice(&u32::MAX.to_le_bytes());
         spawn[340..344].copy_from_slice(&7u32.to_le_bytes());
+        profile[12940..12947].copy_from_slice(b"Example");
         let mut player = titanium_player(&profile, &spawn).unwrap();
+        assert_eq!(player.name, "Example");
         assert_eq!(
             player.base_attributes,
             Some(BaseAttributes {
@@ -890,6 +922,19 @@ mod tests {
         );
         profile[13116..13120].copy_from_slice(&f32::NAN.to_le_bytes());
         assert!(titanium_player(&profile, &spawn).is_err());
+    }
+
+    #[test]
+    fn world_short_names_come_from_log_server_settings() {
+        // Synthetic body shaped like a captured Titanium OP_LogServer (266 bytes).
+        let mut body = vec![0; 266];
+        body[32..44].copy_from_slice(b"ExampleWorld");
+        assert_eq!(titanium_world_name(&body).unwrap(), "ExampleWorld");
+        assert!(titanium_world_name(&body[..63]).is_err());
+        body[32..44].fill(0);
+        assert!(titanium_world_name(&body).is_err());
+        body[32..36].copy_from_slice(b"a b\x01");
+        assert!(titanium_world_name(&body).is_err());
     }
 
     #[test]

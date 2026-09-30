@@ -139,6 +139,7 @@ impl From<u16> for LoginOpcode {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum WorldOpcode {
+    LogServer,
     ApprovalChallenge,
     FileManifest,
     ValidationResult,
@@ -151,6 +152,7 @@ enum WorldOpcode {
 impl From<u16> for WorldOpcode {
     fn from(value: u16) -> Self {
         match value {
+            0x0fa6 => Self::LogServer,
             0x3c25 => Self::ApprovalChallenge,
             0x52a4 => Self::FileManifest,
             0x1251 => Self::ValidationResult,
@@ -498,6 +500,16 @@ fn world(
             packet.body.len()
         ))?;
         match WorldOpcode::from(packet.opcode) {
+            // Consumers name per-character files after the world, as the official client does.
+            WorldOpcode::LogServer => match crate::world::titanium_world_name(&packet.body) {
+                Ok(short_name) => {
+                    let event = crate::world::WorldEvent::WorldName { short_name };
+                    log.send(ClientEvent::World(event))?;
+                }
+                Err(error) => {
+                    log.diagnostic(format!("World short name unavailable: {error}"))?;
+                }
+            },
             // Stock EQEmu's ApproveWorld is informational; only P99 expects an answer.
             WorldOpcode::ApprovalChallenge if config.protocol == ServerProtocol::EqEmu => {}
             WorldOpcode::ApprovalChallenge => {

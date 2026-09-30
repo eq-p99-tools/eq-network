@@ -141,6 +141,7 @@ mod tests {
     fn admission_waits_for_all_fields_then_flushes_current_entities_once() {
         let mut state = Presentation {
             player: Some(PlayerState {
+                name: "Example".into(),
                 base_attributes: None,
                 deity: None,
                 class: None,
