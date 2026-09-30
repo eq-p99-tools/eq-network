@@ -315,7 +315,8 @@ impl MotionSession {
         Ok(())
     }
 
-    /// Sends a stop after 250 ms without input, or a stationary heartbeat every 2 s.
+    /// Sends a stop after 250 ms without input, or a stationary heartbeat every
+    /// [`super::STATIONARY_HEARTBEAT`].
     ///
     /// # Errors
     /// Propagates encoding and transport failures without advancing state.
@@ -327,7 +328,7 @@ impl MotionSession {
         let interval = if self.moving {
             Duration::from_millis(250)
         } else {
-            Duration::from_secs(2)
+            super::STATIONARY_HEARTBEAT
         };
         if self.suspended || now.saturating_duration_since(self.last_sent) < interval {
             return Ok(false);

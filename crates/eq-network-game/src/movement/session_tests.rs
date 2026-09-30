@@ -328,8 +328,13 @@ fn input_expiry_sends_one_stop_then_stationary_heartbeats() {
             "duplicate stop"
         ))
         .unwrap());
+    assert!(!session
+        .tick(start + Duration::from_millis(1349), |_| panic!(
+            "early heartbeat"
+        ))
+        .unwrap());
     assert!(session
-        .tick(start + Duration::from_millis(2350), |body| {
+        .tick(start + Duration::from_millis(1350), |body| {
             assert_eq!(&body[2..4], &[2, 0]);
             Ok(())
         })

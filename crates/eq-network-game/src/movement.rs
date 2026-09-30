@@ -19,6 +19,10 @@ pub const MAX_GROUNDED_STEP: f32 = 2.0;
 /// or server limit.
 pub const MAX_FALL_SPEED: f32 = 40.0;
 
+/// How often a standing character repeats its position. The official P99 client
+/// sends one about every 1.1 s (median of its recorded stationary updates).
+pub const STATIONARY_HEARTBEAT: Duration = Duration::from_secs(1);
+
 /// `OP_Jump` (Titanium): an empty notice that the character jumped. `EQEmu` only
 /// charges endurance for it; the arc itself travels in position updates.
 pub const JUMP_OPCODE: u16 = 0x0797;

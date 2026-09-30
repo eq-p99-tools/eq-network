@@ -723,8 +723,9 @@ fn zone(
     let mut profile_data = Vec::new();
     let mut spawn_data = Vec::new();
     let mut position_sequence = 0u16;
+    // In the past, so the first stationary heartbeat goes out at once.
     let mut last_position = Instant::now()
-        .checked_sub(Duration::from_secs(2))
+        .checked_sub(eq_network_game::movement::STATIONARY_HEARTBEAT)
         .unwrap_or_else(Instant::now);
     loop {
         if stop.is_cancelled() || duration.is_some_and(|limit| connected.elapsed() >= limit) {
@@ -805,7 +806,7 @@ fn zone(
         if ready && !lifecycle.blocks_motion() {
             if let Some(motion) = motion.as_mut() {
                 motion.tick(Instant::now(), |body| session.send_unreliable(0x14cb, body))?;
-            } else if last_position.elapsed() >= Duration::from_secs(2) {
+            } else if last_position.elapsed() >= eq_network_game::movement::STATIONARY_HEARTBEAT {
                 stationary[2..4].copy_from_slice(&position_sequence.to_le_bytes());
                 session.send_unreliable(0x14cb, &stationary)?;
                 position_sequence = position_sequence.wrapping_add(1);
