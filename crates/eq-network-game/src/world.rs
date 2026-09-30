@@ -513,11 +513,21 @@ pub enum WorldEvent {
     },
 }
 
-/// Decode the profile and validated, decrypted own-spawn record.
+/// A profile heading on the 0..512 scale live movement uses. Project 1999 saves
+/// headings on a 256-unit revolution (verified against the matching official
+/// client profile and position sample); stock `EQEmu` saves the 512-unit heading
+/// itself (`m_pp.heading = m_Position.w`).
+#[must_use]
+pub fn profile_heading(raw: f32, revolution: f32) -> f32 {
+    (raw * 512.0 / revolution).rem_euclid(512.0)
+}
+
+/// Decode the profile and validated, decrypted own-spawn record. `revolution`
+/// is the profile's heading scale, see [`profile_heading`].
 ///
 /// # Errors
 /// Rejects wrong layouts and non-finite coordinates or speeds.
-pub fn titanium_player(profile: &[u8], spawn: &[u8]) -> Result<PlayerState> {
+pub fn titanium_player(profile: &[u8], spawn: &[u8], revolution: f32) -> Result<PlayerState> {
     ensure!(
         profile.len() == 19592 && spawn.len() == 385,
         "unexpected Titanium player layout"
@@ -526,9 +536,7 @@ pub fn titanium_player(profile: &[u8], spawn: &[u8]) -> Result<PlayerState> {
         x: float(profile, 13116)?,
         y: float(profile, 13120)?,
         z: float(profile, 13124)?,
-        // P99 profiles use a 256-unit revolution; live movement uses 512.
-        // Verified against the matching official-client profile and position sample.
-        heading: (float(profile, 13128)? * 2.0).rem_euclid(512.0),
+        heading: profile_heading(float(profile, 13128)?, revolution),
     };
     let spawn_id = u16::try_from(word(spawn, 340))?;
     ensure!(spawn_id != 0, "invalid own-spawn ID");
@@ -901,8 +909,11 @@ mod tests {
         profile[4364..4368].copy_from_slice(&u32::MAX.to_le_bytes());
         spawn[340..344].copy_from_slice(&7u32.to_le_bytes());
         profile[12940..12947].copy_from_slice(b"Example");
-        let mut player = titanium_player(&profile, &spawn).unwrap();
+        let mut player = titanium_player(&profile, &spawn, 256.0).unwrap();
         assert_eq!(player.name, "Example");
+        // Stock EQEmu saves the heading on the 512-unit scale itself.
+        let stock = titanium_player(&profile, &spawn, 512.0).unwrap();
+        assert!((stock.position.heading - 28.125).abs() < 0.001);
         assert_eq!(
             player.base_attributes,
             Some(BaseAttributes {
@@ -934,7 +945,7 @@ mod tests {
             Some([1000, 1001, 1002, 1003, 1004, 1005, 1006, 1007])
         );
         profile[13116..13120].copy_from_slice(&f32::NAN.to_le_bytes());
-        assert!(titanium_player(&profile, &spawn).is_err());
+        assert!(titanium_player(&profile, &spawn, 256.0).is_err());
     }
 
     #[test]

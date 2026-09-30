@@ -565,10 +565,6 @@ fn world(
                 log.diagnostic("World accepted native V62 client validation".into())?;
                 session.send(0x7752, &0u32.to_le_bytes())?;
                 session.send(0x5e99, &[])?;
-                if world_only {
-                    session.close()?;
-                    return Ok(None);
-                }
             }
             // Name approved: send the creation; any refusal ends this attempt.
             WorldOpcode::ApproveName if creating.is_some() => {
@@ -637,6 +633,11 @@ fn world(
             }
             _ => (),
         }
+        // Stock EQEmu accepts the client without the V62 validation reply.
+        if world_only && accepted {
+            session.close()?;
+            return Ok(None);
+        }
     }
 }
 
@@ -664,6 +665,8 @@ fn zone(
     let mut entry = vec![0; 68];
     put_string(&mut entry[4..], &config.character)?;
     let stock = config.protocol == ServerProtocol::EqEmu;
+    // Saved profile headings: P99 uses a 256-unit revolution, stock EQEmu 512.
+    let revolution = if stock { 512.0 } else { 256.0 };
     if !stock {
         codec.zone_entry(&entry)?;
     }
@@ -756,7 +759,13 @@ fn zone(
             !lifecycle.expired(Instant::now()),
             "zone transfer approval timed out"
         );
-        ensure!(!book_edits.expired(Instant::now()), "Spellbook edit result is unknown; reconnect for a fresh book snapshot. The edit will not be retried.");
+        // Servers refuse an edit (a spell above the character's level, another
+        // class's scroll) with only a chat message, so silence means refusal.
+        if let Some(status) = book_edits.expire(Instant::now()) {
+            log.send(ClientEvent::World(crate::world::WorldEvent::BookAction(
+                status,
+            )))?;
+        }
         if camp.logout_due(Instant::now()) {
             session.send(camp::LOGOUT_OPCODE, &[])?;
             camp.logout_sent(Instant::now());
@@ -796,13 +805,22 @@ fn zone(
                         &book_edits,
                         pending_memorization.as_ref(),
                         &trades,
+                        scribe_consumption.awaiting_cursor(Instant::now()),
                     )
                     .conflict(&command)
                     {
                         actions::refuse(&command, reason, log)?;
                         continue;
                     }
-                    if camp::handle(&mut camp, session_id, &command, &mut session, log)? {
+                    let own_spawn = admitted_player.as_ref().map(|player| player.spawn_id);
+                    if camp::handle(
+                        &mut camp,
+                        session_id,
+                        own_spawn,
+                        &command,
+                        &mut session,
+                        log,
+                    )? {
                         continue;
                     }
                     if let ClientCommand::ClickDoor {
@@ -1630,7 +1648,7 @@ fn zone(
                 stationary[24..28].copy_from_slice(&packet.body[13116..13120]);
                 stationary[28..32].copy_from_slice(&packet.body[13124..13128]);
                 let heading = f32::from_le_bytes(packet.body[13128..13132].try_into().unwrap());
-                let heading = heading.rem_euclid(512.0) * 8.0;
+                let heading = crate::world::profile_heading(heading, revolution) * 8.0;
                 #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
                 let heading = heading as u16;
                 stationary[32..34].copy_from_slice(&(heading & 0x0fff).to_le_bytes());
@@ -1688,7 +1706,7 @@ fn zone(
                 session.send(0x5e20, &[])?;
                 session.send(0x0c11, &1u32.to_le_bytes())?;
                 ready = true;
-                match crate::world::titanium_player(&profile_data, &spawn_data) {
+                match crate::world::titanium_player(&profile_data, &spawn_data, revolution) {
                     Ok(mut player) => {
                         if let Some(level) = initial_level.take() {
                             player.level = level;

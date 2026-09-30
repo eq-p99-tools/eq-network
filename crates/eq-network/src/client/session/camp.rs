@@ -86,6 +86,7 @@ impl Camp {
 pub(super) fn handle(
     camp: &mut Camp,
     session_id: u64,
+    own_spawn: Option<u16>,
     command: &ClientCommand,
     session: &mut Session,
     log: &mut Events<'_>,
@@ -120,6 +121,21 @@ pub(super) fn handle(
             | ClientCommand::ClickDoor { .. }
     );
     if abandons && camp.cancel() {
+        // Only a Standing appearance stops the server's own camp timer (EQEmu
+        // client_packet.cpp, OP_SpawnAppearance); without it the server logs the
+        // character out of its group and guild 29 seconds after /camp. Moving,
+        // ducking or opening a door stands the camping character up first.
+        let standing = matches!(
+            command,
+            ClientCommand::SetPosture {
+                posture: Posture::Standing,
+                ..
+            }
+        );
+        if let (false, Some(spawn_id)) = (standing, own_spawn) {
+            let stand = eq_network_game::command::titanium_posture(spawn_id, Posture::Standing)?;
+            session.send(stand.opcode, &stand.body)?;
+        }
         log.send(ClientEvent::World(WorldEvent::Camp(CampStatus::Abandoned)))?;
     }
     Ok(false)

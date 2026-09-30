@@ -101,7 +101,19 @@ impl BookEdits {
         }
     }
 
-    /// Unknown outcomes require a fresh admission snapshot, never speculative retry.
+    /// Ends an edit the server never answered, reporting it refused; it is never
+    /// retried.
+    pub fn expire(&mut self, now: Instant) -> Option<BookActionStatus> {
+        if !self.expired(now) {
+            return None;
+        }
+        self.0 = None;
+        Some(BookActionStatus::Rejected(
+            "The server did not accept the spellbook change".into(),
+        ))
+    }
+
+    /// Whether an edit has waited too long for its answer.
     pub fn expired(&self, now: Instant) -> bool {
         self.0
             .is_some_and(|(_, sent)| now.saturating_duration_since(sent) >= Duration::from_secs(30))
@@ -262,5 +274,27 @@ mod tests {
             now,
         );
         assert!(guard.scribing());
+    }
+
+    #[test]
+    fn an_unanswered_edit_ends_as_refused_without_retry() {
+        let now = Instant::now();
+        let mut edits = BookEdits::default();
+        edits.sent(
+            &ClientCommand::DeleteSpell {
+                session_id: 7,
+                slot: 3,
+                spell_id: 42,
+                created: now,
+            },
+            now,
+        );
+        assert_eq!(edits.expire(now + Duration::from_secs(29)), None);
+        assert!(matches!(
+            edits.expire(now + Duration::from_secs(30)),
+            Some(BookActionStatus::Rejected(_))
+        ));
+        assert!(!edits.outstanding());
+        assert_eq!(edits.expire(now + Duration::from_secs(60)), None);
     }
 }

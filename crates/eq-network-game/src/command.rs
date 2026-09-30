@@ -416,6 +416,14 @@ pub fn encode(
 }
 
 /// Titanium appearance update for the player's own stance.
+/// The Titanium appearance packet that sets the own spawn's posture.
+///
+/// # Errors
+/// Rejects a zero spawn ID.
+pub fn titanium_posture(spawn_id: u16, posture: Posture) -> Result<EncodedCommand> {
+    encode_posture(GameDialect::TitaniumP99, spawn_id, posture)
+}
+
 fn encode_posture(dialect: GameDialect, spawn_id: u16, posture: Posture) -> Result<EncodedCommand> {
     anyhow::ensure!(
         dialect == GameDialect::TitaniumP99,

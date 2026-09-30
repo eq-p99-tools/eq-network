@@ -36,6 +36,7 @@ impl Held {
         book_edits: &BookEdits,
         pending: Option<&PendingBookAction>,
         trades: &MerchantTrades,
+        scribe_awaiting_cursor: bool,
     ) -> Self {
         let mut held = Vec::new();
         if cast_guard.active() {
@@ -49,6 +50,7 @@ impl Held {
             held.push((Resource::Inventory, "Wait for the merchant to answer"));
         }
         let scribing = book_edits.scribing()
+            || scribe_awaiting_cursor
             || pending.is_some_and(|pending| matches!(pending.intent, BookIntent::Scribe { .. }));
         if scribing {
             // The server consumes the cursor scroll when it answers; moving items
@@ -82,6 +84,12 @@ pub(super) fn needs(command: &ClientCommand) -> &'static [Resource] {
         | ClientCommand::ForgetSpell { .. }
         | ClientCommand::DeleteSpell { .. }
         | ClientCommand::SwapSpell { .. } => &[Casting, Spellbook],
+        // EQEmu kicks a move from outside the cursor range (30-39) during a cast
+        // ("Inventory desync"); bard songs are exempt there, but the session
+        // cannot tell songs apart, so singing bards wait too.
+        ClientCommand::MoveInventory(request) if !(30..=39).contains(&request.from.0) => {
+            &[Casting, Inventory]
+        }
         ClientCommand::MoveInventory(_)
         | ClientCommand::Buy { .. }
         | ClientCommand::Sell { .. } => &[Inventory],
@@ -156,13 +164,14 @@ mod tests {
             &BookEdits::default(),
             None,
             &idle_trades,
+            false,
         );
         assert_eq!(idle.conflict(&cast()), None);
         assert_eq!(idle.conflict(&memorize()), None);
 
         let mut guard = CastGuard::default();
         guard.submitted(42, Instant::now());
-        let casting = Held::from_state(&guard, &BookEdits::default(), None, &idle_trades);
+        let casting = Held::from_state(&guard, &BookEdits::default(), None, &idle_trades, false);
         assert!(casting.conflict(&cast()).is_some());
         assert!(casting.conflict(&memorize()).is_some());
         assert_eq!(
@@ -186,6 +195,7 @@ mod tests {
             &BookEdits::default(),
             Some(&scribe),
             &idle_trades,
+            false,
         );
         assert_eq!(scribing.conflict(&cast()), None);
         assert_eq!(
@@ -204,6 +214,7 @@ mod tests {
             &BookEdits::default(),
             Some(&memorizing),
             &idle_trades,
+            false,
         );
         assert!(held.conflict(&memorize()).is_some());
         assert!(!held
@@ -221,6 +232,44 @@ mod tests {
     }
 
     #[test]
+    fn a_confirmed_scribe_holds_the_inventory_until_the_cursor_clears() {
+        let trades = MerchantTrades::default();
+        let held = Held::from_state(
+            &CastGuard::default(),
+            &BookEdits::default(),
+            None,
+            &trades,
+            true,
+        );
+        assert_eq!(
+            held.conflict(&move_from(23)),
+            Some("Wait for scribing to finish")
+        );
+    }
+
+    fn move_from(slot: i32) -> ClientCommand {
+        ClientCommand::MoveInventory(eq_network_game::inventory::InventoryMove {
+            session_id: 1,
+            revision: 1,
+            from: eq_network_game::inventory::InventorySlot(slot),
+            to: eq_network_game::inventory::InventorySlot(30),
+            quantity: eq_network_game::inventory::MoveQuantity::Whole,
+            created: Instant::now(),
+        })
+    }
+
+    #[test]
+    fn items_move_during_a_cast_only_from_the_cursor() {
+        let trades = MerchantTrades::default();
+        let mut guard = CastGuard::default();
+        guard.submitted(42, Instant::now());
+        let casting = Held::from_state(&guard, &BookEdits::default(), None, &trades, false);
+        assert!(casting.conflict(&move_from(23)).is_some());
+        assert!(casting.conflict(&move_from(251)).is_some());
+        assert_eq!(casting.conflict(&move_from(30)), None);
+    }
+
+    #[test]
     fn a_pending_trade_holds_the_inventory_but_not_casting() {
         let sell = ClientCommand::Sell {
             session_id: 1,
@@ -230,10 +279,22 @@ mod tests {
             created: Instant::now(),
         };
         let mut trades = MerchantTrades::default();
-        let idle = Held::from_state(&CastGuard::default(), &BookEdits::default(), None, &trades);
+        let idle = Held::from_state(
+            &CastGuard::default(),
+            &BookEdits::default(),
+            None,
+            &trades,
+            false,
+        );
         assert_eq!(idle.conflict(&sell), None);
         trades.sent(&sell, Instant::now());
-        let trading = Held::from_state(&CastGuard::default(), &BookEdits::default(), None, &trades);
+        let trading = Held::from_state(
+            &CastGuard::default(),
+            &BookEdits::default(),
+            None,
+            &trades,
+            false,
+        );
         assert_eq!(
             trading.conflict(&sell),
             Some("Wait for the merchant to answer")

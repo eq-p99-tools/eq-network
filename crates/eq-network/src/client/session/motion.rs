@@ -125,7 +125,8 @@ mod tests {
     fn correction_updates_all_position_owners_and_rejects_invalid_data_atomically() {
         let mut spawn = vec![0; 385];
         spawn[340..344].copy_from_slice(&7u32.to_le_bytes());
-        let mut player = eq_network_game::world::titanium_player(&vec![0; 19592], &spawn).unwrap();
+        let mut player =
+            eq_network_game::world::titanium_player(&vec![0; 19592], &spawn, 256.0).unwrap();
         let now = Instant::now();
         let mut motion = MotionSession::new(12, 7, player.position, now).unwrap();
         let mut stationary = [0; 36];

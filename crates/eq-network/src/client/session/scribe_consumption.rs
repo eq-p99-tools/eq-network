@@ -12,8 +12,12 @@ struct Receipt {
     revision: u64,
     book_slot: u32,
     spell_id: u32,
-    confirmed: bool,
+    /// When the server confirmed the scribe; its cursor removal follows.
+    confirmed: Option<std::time::Instant>,
 }
+
+/// How long a confirmed scribe waits for the cursor removal that follows it.
+const REMOVAL_WINDOW: std::time::Duration = std::time::Duration::from_secs(5);
 
 impl ScribeConsumption {
     /// Records only a validated request that transport has accepted.
@@ -27,7 +31,7 @@ impl ScribeConsumption {
                 revision,
                 book_slot: u32::from(slot),
                 spell_id,
-                confirmed: false,
+                confirmed: None,
             }),
             BookIntent::Memorize { .. } => None,
         };
@@ -40,9 +44,20 @@ impl ScribeConsumption {
                 && matches!(update, SpellUpdate::Slot { slot, spell_id, mode: 0 }
                 if *slot == receipt.book_slot && *spell_id == receipt.spell_id)
             {
-                receipt.confirmed = true;
+                receipt.confirmed = Some(std::time::Instant::now());
             }
         }
+    }
+
+    /// Whether a confirmed scribe still waits for its cursor removal. The
+    /// server confirms first and removes the scroll next, so moving items in
+    /// between would move a scroll it has already consumed.
+    pub fn awaiting_cursor(&self, now: std::time::Instant) -> bool {
+        self.0.as_ref().is_some_and(|receipt| {
+            receipt
+                .confirmed
+                .is_some_and(|at| now.saturating_duration_since(at) < REMOVAL_WINDOW)
+        })
     }
 
     /// Consumes the receipt on the next inventory update, never on a later retry.
@@ -52,7 +67,7 @@ impl ScribeConsumption {
             return update;
         };
         let cursor = InventorySlot(30);
-        if receipt.confirmed
+        if receipt.confirmed.is_some()
             && inventory.revision() == receipt.revision
             && !inventory.stale()
             && update == InventoryUpdate::Remove(cursor)
