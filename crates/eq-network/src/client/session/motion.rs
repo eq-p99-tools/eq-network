@@ -76,12 +76,14 @@ pub(super) fn handle(
                 log.send(ClientEvent::World(WorldEvent::MotionSent {
                     session_id,
                     position: motion.position(),
+                    refused: Some(error.to_string()),
                 }))?;
                 return Ok(true);
             }
             Ok(WorldEvent::MotionSent {
                 session_id,
                 position: motion.position(),
+                refused: None,
             })
         }
         _ => return Ok(false),

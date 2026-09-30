@@ -375,12 +375,16 @@ pub enum WorldEvent {
         /// Whether this server's session accepts `MovementMode::Fall` samples.
         falls: bool,
     },
-    /// Motion submitted to transport; this is not an acknowledgment by the server.
+    /// Motion submitted to transport (not an acknowledgment by the server), or a
+    /// sample the local movement guard refused.
     MotionSent {
         /// Current zone admission.
         session_id: u64,
-        /// Position accepted by local motion validation.
+        /// Position accepted by local motion validation; after a refusal, the last
+        /// accepted one.
         position: Position,
+        /// Why the guard refused the sample; None when it was sent.
+        refused: Option<String>,
     },
     /// Server-provided item definition for a clicked chat link.
     ItemDetails(crate::items::ItemDetails),
