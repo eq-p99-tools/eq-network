@@ -127,6 +127,7 @@ impl ZonePoint {
         );
         let preserve = |target, source| if target == 999_999.0 { source } else { target };
         Ok(ZoneOffer {
+            solicited: false,
             zone_id: self.zone_id,
             instance_id: self.instance_id,
             position: Position {

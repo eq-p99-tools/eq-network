@@ -22,6 +22,9 @@ pub struct ZoneOffer {
     pub reason: u32,
     /// Whether the server is returning the character to its bind point.
     pub to_bind: bool,
+    /// Whether the server asked for the transfer, rather than the client crossing
+    /// a zone line.
+    pub solicited: bool,
 }
 
 impl ZoneOffer {
@@ -113,6 +116,7 @@ pub fn offer(opcode: u16, body: &[u8]) -> Result<ZoneOffer> {
         position,
         reason: if to_bind { 10 } else { word(body, 20) },
         to_bind,
+        solicited: true,
     })
 }
 
@@ -181,7 +185,12 @@ pub enum ZoneReply {
     Rewind(Position),
 }
 
-/// Interprets the current-zone success response used by `EQEmu`'s zone cancellation.
+/// Interprets a zone-change response. A success naming the current zone instead
+/// of the requested one means two things in `EQEmu` (zone/zoning.cpp): for a zone
+/// line the client crossed, the server cancelled and supplies rewind coordinates
+/// (`SendZoneCancel`); for a transfer the server asked for, such as an evacuation
+/// or succor within the zone (offered with a stand-in zone), the server moved the
+/// character and expects it to zone back in through world (`DoZoneSuccess`).
 ///
 /// # Errors
 /// Rejects malformed replies, unexpected destinations and invalid rewind coordinates.
@@ -205,6 +214,9 @@ pub fn reply(
             ..pending.clone()
         };
         approved(body, character, &current)?;
+        if pending.solicited {
+            return Ok(ZoneReply::Approved);
+        }
         let position = Position {
             x: float(body, 72),
             y: float(body, 68),
@@ -247,6 +259,7 @@ mod tests {
             position: Position::default(),
             reason: 0,
             to_bind: false,
+            solicited: false,
         };
         let mut body = pending.response("Example").unwrap();
         for code in [0_i32, -1, -2, -3, -6, -7, -12345, 42, i32::MIN] {
@@ -282,6 +295,7 @@ mod tests {
             position,
             reason: 1,
             to_bind: false,
+            solicited: true,
         };
         assert_eq!(offer.local_position((22, 3)), Some(position));
         assert!(offer.local_position((22, 0)).is_none());
@@ -301,6 +315,7 @@ mod tests {
             position: Position::default(),
             reason: 0,
             to_bind: false,
+            solicited: false,
         };
         let mut body = pending.response("Example").unwrap();
         body[64..66].copy_from_slice(&7u16.to_le_bytes());
@@ -329,6 +344,25 @@ mod tests {
         );
         body[72..76].copy_from_slice(&f32::NAN.to_le_bytes());
         assert!(reply(&body, "Example", &pending, (7, 0), 64.0).is_err());
+    }
+
+    #[test]
+    fn a_same_zone_evacuation_zones_back_in_through_world() {
+        // EQEmu offers an evacuation within zone 7 as a transfer to stand-in
+        // zone 1, then answers success for zone 7 without coordinates.
+        let mut offer = [0; 24];
+        offer[..2].copy_from_slice(&1u16.to_le_bytes());
+        let pending = super::offer(0x7834, &offer).unwrap();
+        assert!(pending.solicited);
+        let mut body = pending.response("Example").unwrap();
+        body[64..66].copy_from_slice(&7u16.to_le_bytes());
+        body[68..80].fill(0);
+        body[84..88].copy_from_slice(&1u32.to_le_bytes());
+        assert_eq!(
+            reply(&body, "Example", &pending, (7, 0), 64.0).unwrap(),
+            ZoneReply::Approved
+        );
+        assert!(reply(&body, "Example", &pending, (8, 0), 64.0).is_err());
     }
     #[test]
     fn server_offers_preserve_axes_reason_and_instance() {

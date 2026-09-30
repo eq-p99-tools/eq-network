@@ -90,6 +90,7 @@ mod tests {
             position: eq_network_game::world::Position::default(),
             reason: 10,
             to_bind: true,
+            solicited: true,
         }
     }
     #[test]
