@@ -166,6 +166,7 @@ mod tests {
                 walk_speed: 0.0,
                 run_speed: 0.0,
                 hp_percent: None,
+                appearance: eq_network_game::appearance::Appearance::default(),
             }),
             ..Presentation::default()
         };
@@ -200,6 +201,7 @@ mod tests {
                     velocity: [0.0; 3],
                     size: 6.0,
                     invisible: false,
+                    appearance: eq_network_game::appearance::Appearance::default(),
                 },
             );
         }

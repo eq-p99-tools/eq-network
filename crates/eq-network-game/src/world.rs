@@ -108,6 +108,9 @@ pub struct PlayerState {
     pub run_speed: f32,
     /// HP percentage, if valid in the spawn record.
     pub hp_percent: Option<u8>,
+    /// Worn gear and features from the own spawn record; default where the
+    /// dialect does not report them.
+    pub appearance: crate::appearance::Appearance,
 }
 
 impl PlayerState {
@@ -174,6 +177,8 @@ pub struct SpawnState {
     pub size: f32,
     /// Server visibility flag; consumers must not expose invisible entities.
     pub invisible: bool,
+    /// Worn gear and features; default where the dialect does not report them.
+    pub appearance: crate::appearance::Appearance,
 }
 
 /// Decode a decrypted Titanium spawn batch, without accepting partial records.
@@ -214,6 +219,7 @@ pub fn titanium_spawns(body: &[u8]) -> Result<Vec<SpawnState>> {
                 invisible: record[84] != 0,
                 position,
                 velocity,
+                appearance: crate::appearance::titanium_spawn(record),
             })
         })
         .collect()
@@ -439,6 +445,8 @@ pub enum WorldEvent {
     },
     /// Initial or incremental spawn batch; IDs replace existing entries.
     Spawns(Vec<SpawnState>),
+    /// One texture slot of a spawn's worn gear changed, the player's own included.
+    WearChange(crate::appearance::WearChange),
     /// Server visibility changed; consumers must remove invisible entities.
     Visibility {
         /// Zone-local entity identifier.
@@ -602,6 +610,7 @@ pub fn titanium_player(profile: &[u8], spawn: &[u8], revolution: f32) -> Result<
         walk_speed,
         run_speed,
         hp_percent: (spawn[86] <= 100).then_some(spawn[86]),
+        appearance: crate::appearance::titanium_spawn(spawn),
     })
 }
 
@@ -684,6 +693,9 @@ pub fn titanium_update(opcode: u16, body: &[u8]) -> Result<Option<WorldEvent>> {
         }
         0x14cb => titanium_position(body)?,
         0x3a2b => p99_compact_position(body)?,
+        crate::appearance::WEAR_CHANGE_OPCODE => {
+            WorldEvent::WearChange(crate::appearance::titanium_wear_change(body)?)
+        }
         0x3bcf => {
             ensure!(body.len() == 10, "invalid hit-point update length");
             // Both fields are signed: the server sends only the player's own HP,

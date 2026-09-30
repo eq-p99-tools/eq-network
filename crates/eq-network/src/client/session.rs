@@ -719,6 +719,8 @@ fn zone(
     let mut scribe_consumption = scribe_consumption::ScribeConsumption::default();
     let mut initial_spawns = BTreeMap::new();
     let mut initial_postures = BTreeMap::new();
+    // Wear changes for the player that arrive before its state is built.
+    let mut initial_own_wear = Vec::new();
     let mut doors = eq_network_game::doors::Doors::default();
     let mut doors_changed_at = Instant::now();
     let mut ground = objects::GroundObjects::default();
@@ -1768,6 +1770,9 @@ fn zone(
                         if let Some(level) = initial_level.take() {
                             player.level = level;
                         }
+                        for change in std::mem::take(&mut initial_own_wear) {
+                            player.appearance.apply(&change);
+                        }
                         for (skill, value) in std::mem::take(&mut initial_skills) {
                             player.apply_skill(skill, value);
                         }
@@ -1928,8 +1933,26 @@ fn zone(
                 _ => (),
             }
         }
-        if !ready && matches!(packet.opcode, 0x2e78 | 0x1860 | 0x55bc | 0x14cb | 0x7c32) {
+        if !ready
+            && matches!(
+                packet.opcode,
+                0x2e78
+                    | 0x1860
+                    | 0x55bc
+                    | 0x14cb
+                    | 0x7c32
+                    | eq_network_game::appearance::WEAR_CHANGE_OPCODE
+            )
+        {
             match crate::world::titanium_update(packet.opcode, &packet.body) {
+                Ok(Some(crate::world::WorldEvent::WearChange(change))) => {
+                    if let Some(spawn) = initial_spawns.get_mut(&change.spawn_id) {
+                        spawn.appearance.apply(&change);
+                    }
+                    if change.spawn_id == u16::from_le_bytes([stationary[0], stationary[1]]) {
+                        initial_own_wear.push(change);
+                    }
+                }
                 Ok(Some(crate::world::WorldEvent::Spawns(spawns))) => {
                     for spawn in spawns {
                         initial_spawns.insert(spawn.spawn_id, spawn);
@@ -1987,6 +2010,17 @@ fn zone(
                         } => {
                             if let Some(spawn) = initial_spawns.get_mut(spawn_id) {
                                 spawn.invisible = *invisible;
+                            }
+                        }
+                        crate::world::WorldEvent::WearChange(change) => {
+                            if let Some(spawn) = initial_spawns.get_mut(&change.spawn_id) {
+                                spawn.appearance.apply(change);
+                            }
+                            if let Some(player) = admitted_player
+                                .as_mut()
+                                .filter(|player| player.spawn_id == change.spawn_id)
+                            {
+                                player.appearance.apply(change);
                             }
                         }
                         crate::world::WorldEvent::Doors(update) => {

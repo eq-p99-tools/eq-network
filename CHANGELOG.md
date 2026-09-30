@@ -15,6 +15,9 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Items on the ground (`objects`): Titanium ground objects are reported, and
   a nearby item can be picked up onto an empty cursor. World containers are
   not supported yet; one that opens for a click is closed again.
+- Worn gear (`appearance`): spawns and the player carry their materials,
+  tints and facial features from Titanium spawn records, and wear changes
+  update them. Quarm reports none yet.
 - Synthetic regression coverage for inventory reconciliation, scribe consumption,
   movement admission, cast state, and fresh-key world/zone handoffs.
 

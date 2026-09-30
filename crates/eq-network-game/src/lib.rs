@@ -1,5 +1,7 @@
 //! World, zone, validation, and chat codecs for EverQuest-compatible servers.
 
+/// Worn gear and features in EQ's texture slots, and wear changes.
+pub mod appearance;
 /// Admission buffs and server-driven buff changes.
 pub mod buffs;
 /// World-server character selection lists.

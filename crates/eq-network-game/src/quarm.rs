@@ -100,6 +100,7 @@ fn decoded_profile(data: &[u8], character: &str) -> Result<PlayerState> {
         walk_speed: 0.0,
         run_speed: 0.0,
         hp_percent: None,
+        appearance: crate::appearance::Appearance::default(),
     })
 }
 
@@ -174,6 +175,7 @@ pub fn spawns(body: &[u8]) -> Result<Vec<SpawnState>> {
                 gender: u32::from(record[88]),
                 size: nonnegative(record, 28)?,
                 invisible: record[90] != 0,
+                appearance: crate::appearance::Appearance::default(),
                 position: Position {
                     x: signed(record, 9),
                     y: signed(record, 7),

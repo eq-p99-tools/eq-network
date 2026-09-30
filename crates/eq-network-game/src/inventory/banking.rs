@@ -36,6 +36,7 @@ mod tests {
             velocity: [0.0; 3],
             size: 6.0,
             invisible: false,
+            appearance: crate::appearance::Appearance::default(),
         };
         let origin = Position::default();
         assert!(banker_in_range(origin, &banker));
