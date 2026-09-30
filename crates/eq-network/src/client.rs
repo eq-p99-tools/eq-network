@@ -178,6 +178,9 @@ pub struct ClientConfig {
     pub channels: Option<HashSet<ChannelName>>,
     /// Delay before starting a fresh session after a recoverable failure.
     pub reconnect_delay: Duration,
+    /// Refuse login, world and zone servers outside this machine and its private
+    /// network, so test tooling can never reach a public server.
+    pub local_only: bool,
 }
 
 impl ClientConfig {
@@ -210,6 +213,7 @@ impl ClientConfig {
             include_raw: false,
             channels: None,
             reconnect_delay: Duration::from_secs(30),
+            local_only: false,
         }
     }
 
@@ -792,10 +796,43 @@ impl<'a> Events<'a> {
     }
 }
 
+/// Resolves a server to the IPv4 address both client generations use, refusing
+/// one outside this machine and its private network when `local_only` is set.
+fn endpoint(host: &str, port: u16, local_only: bool) -> Result<std::net::SocketAddr> {
+    use std::net::ToSocketAddrs;
+    let address = (host, port)
+        .to_socket_addrs()?
+        .find(std::net::SocketAddr::is_ipv4)
+        .context("no IPv4 address for server")?;
+    ensure!(
+        !local_only || is_local(address.ip()),
+        "local-only session refused the non-local server {address}"
+    );
+    Ok(address)
+}
+
+/// Loopback, private (RFC 1918) and link-local addresses.
+fn is_local(ip: std::net::IpAddr) -> bool {
+    match ip {
+        std::net::IpAddr::V4(ip) => ip.is_loopback() || ip.is_private() || ip.is_link_local(),
+        std::net::IpAddr::V6(ip) => ip.is_loopback(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::chat;
+
+    #[test]
+    fn local_only_sessions_refuse_public_servers() {
+        assert!(endpoint("127.0.0.1", 5998, true).is_ok());
+        assert!(endpoint("172.19.88.182", 5998, true).is_ok());
+        assert!(endpoint("192.168.1.20", 9000, true).is_ok());
+        let public = endpoint("8.8.8.8", 5998, true).unwrap_err().to_string();
+        assert!(public.contains("local-only"), "{public}");
+        assert!(endpoint("8.8.8.8", 5998, false).is_ok());
+    }
 
     #[test]
     fn protocol_names_are_stable_and_p99_aliases_remain_readable() {

@@ -31,7 +31,7 @@ use eq_network_login::{
 };
 use std::{
     collections::BTreeMap,
-    net::{IpAddr, ToSocketAddrs},
+    net::IpAddr,
     sync::mpsc::Receiver,
     time::{Duration, Instant},
 };
@@ -193,14 +193,6 @@ impl From<u16> for ZoneOpcode {
     }
 }
 
-/// Resolve an endpoint to the IPv4 address required by the Titanium client.
-fn address(host: &str, port: u16) -> Result<std::net::SocketAddr> {
-    (host, port)
-        .to_socket_addrs()?
-        .find(std::net::SocketAddr::is_ipv4)
-        .context("no IPv4 address for server")
-}
-
 /// Wait for one application packet while enforcing shutdown and a deadline.
 fn next(session: &mut Session, deadline: Instant, stop: &CancellationToken) -> Result<Application> {
     loop {
@@ -218,8 +210,11 @@ fn login(
     stop: &CancellationToken,
     log: &mut Events<'_>,
 ) -> Result<(Credentials, String)> {
-    let mut session =
-        Session::connect_cancellable(address(&config.host, config.port)?, false, stop.flag())?;
+    let mut session = Session::connect_cancellable(
+        super::endpoint(&config.host, config.port, config.local_only)?,
+        false,
+        stop.flag(),
+    )?;
     let mut ready = vec![0; 12];
     ready[0] = 2;
     ready[9] = 8;
@@ -441,7 +436,11 @@ fn world(
     let config = &context.config;
     let credentials = context.credentials;
     let stop = context.stop;
-    let mut session = Session::connect_cancellable(address(ip, 9000)?, true, stop.flag())?;
+    let mut session = Session::connect_cancellable(
+        super::endpoint(ip, 9000, config.local_only)?,
+        true,
+        stop.flag(),
+    )?;
     let mut codec = open_world(&mut session, credentials, zoning)?;
     let mut deadline = Instant::now() + Duration::from_secs(60);
     let mut accepted = false;
@@ -656,7 +655,11 @@ fn zone(
     let credentials = context.credentials;
     let stop = context.stop;
     let duration = context.duration;
-    let mut session = Session::connect_cancellable(address(host, port)?, true, stop.flag())?;
+    let mut session = Session::connect_cancellable(
+        super::endpoint(host, port, config.local_only)?,
+        true,
+        stop.flag(),
+    )?;
     session.send(0x7752, &0u32.to_le_bytes())?;
     let mut entry = vec![0; 68];
     put_string(&mut entry[4..], &config.character)?;

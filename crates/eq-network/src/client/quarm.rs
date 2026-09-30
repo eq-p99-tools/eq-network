@@ -9,7 +9,6 @@ use anyhow::{bail, ensure, Context, Result};
 use eq_network_game::command;
 use eq_network_login::crypto::{des_encrypt, DesKeyIv};
 use std::{
-    net::ToSocketAddrs,
     sync::mpsc::Receiver,
     time::{Duration, Instant},
 };
@@ -86,13 +85,6 @@ pub(super) fn run(
     )
 }
 
-fn address(host: &str, port: u16) -> Result<std::net::SocketAddr> {
-    (host, port)
-        .to_socket_addrs()?
-        .find(std::net::SocketAddr::is_ipv4)
-        .context("no IPv4 address for server")
-}
-
 fn next(
     session: &mut OldSession,
     deadline: Instant,
@@ -113,8 +105,10 @@ fn login(
     stop: &CancellationToken,
     log: &mut Events<'_>,
 ) -> Result<(Credentials, String)> {
-    let mut session =
-        OldSession::connect_cancellable(address(&config.host, config.port)?, stop.flag())?;
+    let mut session = OldSession::connect_cancellable(
+        super::endpoint(&config.host, config.port, config.local_only)?,
+        stop.flag(),
+    )?;
     session.send(LOGIN_SESSION_READY, &[])?;
     let deadline = Instant::now() + Duration::from_secs(45);
     let mut account = None;
@@ -235,7 +229,10 @@ fn world(
     commands: Option<&Receiver<ClientCommand>>,
     log: &mut Events<'_>,
 ) -> Result<()> {
-    let mut session = OldSession::connect_cancellable(address(ip, 9000)?, stop.flag())?;
+    let mut session = OldSession::connect_cancellable(
+        super::endpoint(ip, 9000, config.local_only)?,
+        stop.flag(),
+    )?;
     let mut config = config.clone();
     session.send(WORLD_LOGIN, &*world_login(credentials)?)?;
     let mut deadline = Instant::now() + Duration::from_secs(60);
@@ -344,7 +341,10 @@ fn zone(
     host: &str,
     port: u16,
 ) -> Result<()> {
-    let mut session = OldSession::connect_cancellable(address(host, port)?, stop.flag())?;
+    let mut session = OldSession::connect_cancellable(
+        super::endpoint(host, port, config.local_only)?,
+        stop.flag(),
+    )?;
     session.send(ZONE_DATA_RATE, &10.0f32.to_le_bytes())?;
     let mut entry = [0; 68];
     put_string(&mut entry[4..], &config.character)?;
