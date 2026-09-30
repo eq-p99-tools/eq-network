@@ -451,6 +451,9 @@ fn world(
     let mut chosen = None;
     // A creation request awaiting name approval (false) or its new list (true).
     let mut creating: Option<(eq_network_game::creation::NewCharacter, bool)> = None;
+    // Stock EQEmu marks a world session that created a character as bound for the
+    // tutorial until the client sends OP_World_Client_CRC1 (world/client.cpp).
+    let mut tutorial_pending = false;
     loop {
         ensure!(!stop.is_cancelled(), "shutdown requested");
         if !entered {
@@ -479,6 +482,12 @@ fn world(
                 _ => (),
             }
             if let Some(name) = chosen.as_ref() {
+                if std::mem::take(&mut tutorial_pending) {
+                    // The official client sends it unless "Start Tutorial" was
+                    // chosen; stock EQEmu checks its contents only when checksum
+                    // verification is on, which it is not by default.
+                    session.send(0x5072, &[0; 2056])?;
+                }
                 deadline = enter_character(&mut session, name, log)?;
                 entered = true;
             }
@@ -592,6 +601,7 @@ fn world(
                 if accepted && !entered && creating.as_ref().is_some_and(|(_, sent)| *sent) =>
             {
                 if let Some((character, _)) = creating.take() {
+                    tutorial_pending |= config.protocol == ServerProtocol::EqEmu;
                     log.send(ClientEvent::World(
                         crate::world::WorldEvent::CharacterCreation {
                             name: character.name,
