@@ -143,7 +143,8 @@ fn health_updates_provide_absolute_and_percentage_values() {
             WorldEvent::HitPoints {
                 spawn_id: 7,
                 current: 75,
-                maximum: 150
+                maximum: 150,
+                without_items: false,
             },
             WorldEvent::HealthPercent {
                 spawn_id: 7,

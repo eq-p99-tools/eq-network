@@ -462,10 +462,15 @@ pub enum WorldEvent {
     HitPoints {
         /// Spawn identifier.
         spawn_id: u16,
-        /// Current HP; negative (dying) values are reported as zero.
-        current: u32,
-        /// Maximum HP.
-        maximum: u32,
+        /// Current HP; negative while dying, or below what equipped items add
+        /// when those are left out.
+        current: i32,
+        /// Maximum HP, never negative.
+        maximum: i32,
+        /// Both values leave out the HP equipped items add, which the client adds
+        /// back itself: Titanium's own update, where `EQEmu` subtracts
+        /// `itembonuses.HP` (zone/mob.cpp `Mob::SendHPUpdate`).
+        without_items: bool,
     },
     /// Current mana and endurance; maxima remain unknown.
     Resources {
@@ -679,14 +684,17 @@ pub fn titanium_update(opcode: u16, body: &[u8]) -> Result<Option<WorldEvent>> {
         }
         0x3bcf => {
             ensure!(body.len() == 10, "invalid hit-point update length");
-            // Both fields are signed; a dying character's HP is negative and, as for
-            // EQMac, is reported as zero rather than wrapping around.
+            // Both fields are signed: the server sends only the player's own HP,
+            // less what equipped items add, so the current value is negative while
+            // dying and also while below that item bonus.
             let [current, maximum] =
                 [0, 4].map(|offset| i32::from_le_bytes(word(body, offset).to_le_bytes()));
+            ensure!(maximum >= 0, "negative maximum hit points");
             WorldEvent::HitPoints {
-                current: u32::try_from(current.max(0))?,
-                maximum: u32::try_from(maximum).context("negative maximum hit points")?,
+                current,
+                maximum,
                 spawn_id: u16::from_le_bytes([body[8], body[9]]),
+                without_items: true,
             }
         }
         0x4839 => {
@@ -1022,16 +1030,18 @@ mod tests {
                 spawn_id: 7,
                 current: 27,
                 maximum: 40,
+                without_items: true,
             })
         );
-        // A dying character's negative HP does not wrap around.
+        // Negative HP, dying or below the equipped item bonus, stays negative.
         hp[..4].copy_from_slice(&(-2i32).to_le_bytes());
         assert_eq!(
             titanium_update(0x3bcf, &hp).unwrap(),
             Some(WorldEvent::HitPoints {
                 spawn_id: 7,
-                current: 0,
+                current: -2,
                 maximum: 40,
+                without_items: true,
             })
         );
         hp[4..8].copy_from_slice(&(-1i32).to_le_bytes());

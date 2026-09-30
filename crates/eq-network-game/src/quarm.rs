@@ -234,18 +234,15 @@ pub fn updates(opcode: u16, body: &[u8]) -> Result<Vec<WorldEvent>> {
                 maximum > 0 && current <= maximum,
                 "invalid EQMac health values"
             );
-            let current = u32::try_from(current.max(0))?;
-            let maximum = u32::try_from(maximum)?;
+            let percent = u8::try_from(i64::from(current.max(0)) * 100 / i64::from(maximum))?;
             vec![
                 WorldEvent::HitPoints {
                     spawn_id,
                     current,
                     maximum,
+                    without_items: false,
                 },
-                WorldEvent::HealthPercent {
-                    spawn_id,
-                    percent: u8::try_from(u64::from(current) * 100 / u64::from(maximum))?,
-                },
+                WorldEvent::HealthPercent { spawn_id, percent },
             ]
         }
         0x7f41 => {
