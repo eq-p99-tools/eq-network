@@ -24,6 +24,8 @@ pub mod loot;
 pub mod merchant;
 /// Movement wire layout and session-scoped motion validation.
 pub mod movement;
+/// Items on the ground and world containers.
+pub mod objects;
 /// Titanium/P99-V62 world and zone validation codec.
 pub mod p99;
 /// TAKP/EQMac player and entity presentation codecs.

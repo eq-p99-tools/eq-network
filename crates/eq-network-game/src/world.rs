@@ -322,6 +322,17 @@ pub enum WorldEvent {
         /// Local rejection; None means submission to transport succeeded.
         error: Option<String>,
     },
+    /// Items on the ground and world containers.
+    Objects(crate::objects::ObjectUpdate),
+    /// Result of validating/submitting a pickup, not proof that the item was taken.
+    ObjectAction {
+        /// Current admission.
+        session_id: u64,
+        /// Requested object.
+        drop_id: u32,
+        /// Local rejection; None means submission to transport succeeded.
+        error: Option<String>,
+    },
     /// A boundary request failed local admission or destination validation.
     ZoneLineRejected {
         /// Admission that submitted the request.
@@ -704,13 +715,16 @@ pub fn titanium_update(opcode: u16, body: &[u8]) -> Result<Option<WorldEvent>> {
     }))
 }
 
-/// Spell actions, doors, loot, merchant and inventory packets, each owned by its codec.
+/// Spell actions, doors, ground objects, loot, merchant and inventory packets,
+/// each owned by its codec.
 fn titanium_views(opcode: u16, body: &[u8]) -> Result<Option<WorldEvent>> {
     if opcode == 0x497c {
         return Ok(crate::buffs::titanium_spell_effect(body)?.map(WorldEvent::SpellEffect));
     }
     Ok(if let Some(update) = crate::doors::decode(opcode, body)? {
         Some(WorldEvent::Doors(update))
+    } else if let Some(update) = crate::objects::decode(opcode, body)? {
+        Some(WorldEvent::Objects(update))
     } else if let Some(update) = crate::loot::decode(opcode, body)? {
         Some(WorldEvent::Loot(update))
     } else if let Some(update) = crate::merchant::decode(opcode, body)? {

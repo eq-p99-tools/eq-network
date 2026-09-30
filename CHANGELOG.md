@@ -12,6 +12,9 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   casting, item activation, buff notifications, and zone/death handoff events.
 - Quarm admission and entity presentation for graphical clients; outbound
   gameplay commands remain P99-only.
+- Items on the ground (`objects`): Titanium ground objects are reported, and
+  a nearby item can be picked up onto an empty cursor. World containers are
+  not supported yet; one that opens for a click is closed again.
 - Synthetic regression coverage for inventory reconciliation, scribe consumption,
   movement admission, cast state, and fresh-key world/zone handoffs.
 

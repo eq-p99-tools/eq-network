@@ -90,7 +90,9 @@ pub(super) fn needs(command: &ClientCommand) -> &'static [Resource] {
         ClientCommand::MoveInventory(request) if !(30..=39).contains(&request.from.0) => {
             &[Casting, Inventory]
         }
+        // A picked-up item lands on the cursor.
         ClientCommand::MoveInventory(_)
+        | ClientCommand::PickUp { .. }
         | ClientCommand::Buy { .. }
         | ClientCommand::Sell { .. } => &[Inventory],
         _ => &[],
@@ -123,6 +125,17 @@ pub(super) fn refuse(command: &ClientCommand, reason: &str, log: &mut Events<'_>
             log.send(ClientEvent::World(WorldEvent::MerchantRefused {
                 session_id: *session_id,
                 reason: reason.into(),
+            }))?;
+        }
+        ClientCommand::PickUp {
+            session_id,
+            drop_id,
+            ..
+        } => {
+            log.send(ClientEvent::World(WorldEvent::ObjectAction {
+                session_id: *session_id,
+                drop_id: *drop_id,
+                error: Some(reason.into()),
             }))?;
         }
         _ => log.send(ClientEvent::World(WorldEvent::BookAction(
@@ -245,6 +258,12 @@ mod tests {
             held.conflict(&move_from(23)),
             Some("Wait for scribing to finish")
         );
+        let pickup = ClientCommand::PickUp {
+            session_id: 1,
+            drop_id: 71,
+            created: Instant::now(),
+        };
+        assert_eq!(held.conflict(&pickup), Some("Wait for scribing to finish"));
     }
 
     fn move_from(slot: i32) -> ClientCommand {

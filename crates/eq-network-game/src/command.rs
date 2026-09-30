@@ -72,6 +72,15 @@ pub enum GameCommand {
         /// Requests expire rather than surviving stalls or reconnects.
         created: std::time::Instant,
     },
+    /// Pick up a nearby item lying on the ground; it arrives on the cursor.
+    PickUp {
+        /// Current zone admission.
+        session_id: u64,
+        /// Object from this zone's server-provided table.
+        drop_id: u32,
+        /// Requests expire rather than surviving stalls or reconnects.
+        created: std::time::Instant,
+    },
     /// Request a transfer after entering a boundary in the local zone assets.
     CrossZoneLine {
         /// Current zone admission.
@@ -395,8 +404,8 @@ pub fn encode(
         GameCommand::MoveInventory(_) => {
             anyhow::bail!("inventory moves require the admitted session controller")
         }
-        GameCommand::ClickDoor { .. } => {
-            anyhow::bail!("door interaction requires the admitted session controller")
+        GameCommand::ClickDoor { .. } | GameCommand::PickUp { .. } => {
+            anyhow::bail!("doors and ground items require the admitted session controller")
         }
         GameCommand::Move(_)
         | GameCommand::Jump { .. }

@@ -6,6 +6,7 @@ mod inventory;
 mod lifecycle;
 mod merchant;
 mod motion;
+mod objects;
 mod posture;
 mod scribe_consumption;
 mod spellbook;
@@ -720,6 +721,7 @@ fn zone(
     let mut initial_postures = BTreeMap::new();
     let mut doors = eq_network_game::doors::Doors::default();
     let mut doors_changed_at = Instant::now();
+    let mut ground = objects::GroundObjects::default();
     let mut profile_data = Vec::new();
     let mut spawn_data = Vec::new();
     let mut position_sequence = 0u16;
@@ -881,6 +883,15 @@ fn zone(
                             door_id: *door_id,
                             error,
                         }))?;
+                        continue;
+                    }
+                    let player = admitted_player.as_ref().map(|player| {
+                        let position = motion
+                            .as_ref()
+                            .map_or(player.position, MotionSession::position);
+                        (player.spawn_id, position)
+                    });
+                    if ground.handle(&command, session_id, player, &inventory, &mut session, log)? {
                         continue;
                     }
                     if let ClientCommand::CrossZoneLine {
@@ -1807,6 +1818,9 @@ fn zone(
                         log.send(ClientEvent::World(crate::world::WorldEvent::Doors(
                             doors.admission(),
                         )))?;
+                        log.send(ClientEvent::World(crate::world::WorldEvent::Objects(
+                            ground.admission(),
+                        )))?;
                         let admission = inventory.admission_updates();
                         log.send(ClientEvent::World(crate::world::WorldEvent::BuffSnapshot(
                             eq_network_game::buffs::titanium_profile(&profile_data)?,
@@ -1873,6 +1887,18 @@ fn zone(
             match eq_network_game::doors::decode(packet.opcode, &packet.body) {
                 Ok(Some(update)) => doors.apply(&update),
                 Err(error) => log.diagnostic(format!("Initial door update rejected: {error}"))?,
+                Ok(None) => (),
+            }
+        }
+        if !ready
+            && matches!(
+                packet.opcode,
+                eq_network_game::objects::SPAWN_OPCODE | eq_network_game::objects::CLICK_OPCODE
+            )
+        {
+            match eq_network_game::objects::decode(packet.opcode, &packet.body) {
+                Ok(Some(update)) => ground.apply(&update),
+                Err(error) => log.diagnostic(format!("Initial ground object rejected: {error}"))?,
                 Ok(None) => (),
             }
         }
@@ -1972,6 +1998,10 @@ fn zone(
                                 doors_changed_at = Instant::now();
                             }
                             doors.apply(update);
+                        }
+                        crate::world::WorldEvent::Objects(update) => {
+                            let own = admitted_player.as_ref().map(|player| player.spawn_id);
+                            ground.observe(update, own, &mut session, log)?;
                         }
                         crate::world::WorldEvent::Level { current, .. } => {
                             if let Some(player) = admitted_player.as_mut() {

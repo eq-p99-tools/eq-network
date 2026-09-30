@@ -119,12 +119,14 @@ pub(super) fn handle(
         } | ClientCommand::Move(_)
             | ClientCommand::CrossZoneLine { .. }
             | ClientCommand::ClickDoor { .. }
+            | ClientCommand::PickUp { .. }
     );
     if abandons && camp.cancel() {
         // Only a Standing appearance stops the server's own camp timer (EQEmu
         // client_packet.cpp, OP_SpawnAppearance); without it the server logs the
         // character out of its group and guild 29 seconds after /camp. Moving,
-        // ducking or opening a door stands the camping character up first.
+        // ducking, opening a door or picking something up stands the camping
+        // character up first.
         let standing = matches!(
             command,
             ClientCommand::SetPosture {
