@@ -666,22 +666,8 @@ pub fn titanium_update(opcode: u16, body: &[u8]) -> Result<Option<WorldEvent>> {
             ensure!(body.len() == 4, "invalid despawn length");
             WorldEvent::Despawn(u16::try_from(word(body, 0))?)
         }
-        0x14cb => {
-            ensure!(body.len() == 22, "invalid server position length");
-            let first = word(body, 2);
-            let second = word(body, 6);
-            let third = word(body, 10);
-            let fourth = word(body, 14);
-            WorldEvent::Position {
-                spawn_id: u16::from_le_bytes([body[0], body[1]]),
-                position: Position {
-                    x: signed_position(first >> 10),
-                    y: signed_position(second),
-                    z: signed_position(third),
-                    heading: f32::from(u16::try_from((fourth >> 13) & 0xfff)?) / 4.0,
-                },
-            }
-        }
+        0x14cb => titanium_position(body)?,
+        0x3a2b => p99_compact_position(body)?,
         0x3bcf => {
             ensure!(body.len() == 10, "invalid hit-point update length");
             // Both fields are signed: the server sends only the player's own HP,
@@ -761,6 +747,48 @@ pub(crate) fn appearance(body: &[u8]) -> Result<Option<WorldEvent>> {
             invisible: word(body, 4) != 0,
         }
     }))
+}
+
+/// A server position update for another spawn, with its motion fields ignored.
+fn titanium_position(body: &[u8]) -> Result<WorldEvent> {
+    ensure!(body.len() == 22, "invalid server position length");
+    let first = word(body, 2);
+    let second = word(body, 6);
+    let third = word(body, 10);
+    let fourth = word(body, 14);
+    Ok(WorldEvent::Position {
+        spawn_id: u16::from_le_bytes([body[0], body[1]]),
+        position: Position {
+            x: signed_position(first >> 10),
+            y: signed_position(second),
+            z: signed_position(third),
+            heading: f32::from(u16::try_from((fourth >> 13) & 0xfff)?) / 4.0,
+        },
+    })
+}
+
+/// P99 only (absent from `EQEmu`'s Titanium table): a spawn's position and
+/// heading with no motion, as when it stops walking. Its 80 bits hold Y, Z and
+/// X as 19-bit fixed-point values, then the heading at bit 64. Checked against
+/// official-client recordings: after a standing update it repeats that position
+/// exactly.
+fn p99_compact_position(body: &[u8]) -> Result<WorldEvent> {
+    ensure!(body.len() == 12, "invalid compact position length");
+    let mut bits = [0; 16];
+    bits[..10].copy_from_slice(&body[2..]);
+    let bits = u128::from_le_bytes(bits);
+    // Truncation keeps the low 32 bits, which hold each 19-bit field.
+    #[allow(clippy::cast_possible_truncation)]
+    let field = |shift: u32| (bits >> shift) as u32;
+    Ok(WorldEvent::Position {
+        spawn_id: u16::from_le_bytes([body[0], body[1]]),
+        position: Position {
+            x: signed_position(field(38)),
+            y: signed_position(field(0)),
+            z: signed_position(field(19)),
+            heading: f32::from(u16::try_from(field(64) & 0xfff)?) / 4.0,
+        },
+    })
 }
 
 #[allow(clippy::cast_possible_wrap, clippy::cast_precision_loss)]
@@ -886,6 +914,29 @@ mod tests {
         assert_eq!(position.y, 10.0);
         assert_eq!(position.heading, 256.0);
         assert!(titanium_update(0x14cb, &body[..21]).is_err());
+    }
+    #[test]
+    #[allow(clippy::float_cmp)] // Exactly representable fixed-point fixture values.
+    fn p99_compact_positions_carry_coordinates_and_heading_without_motion() {
+        // Coordinates in eighths of a unit, as 19-bit two's complement.
+        let field = |eighths: i32| u128::try_from(eighths & 0x7ffff).unwrap();
+        let bits = field(100) | field(-24) << 19 | field(-2002) << 38 | 512u128 << 64;
+        let mut body = [0; 12];
+        body[..2].copy_from_slice(&42u16.to_le_bytes());
+        body[2..].copy_from_slice(&bits.to_le_bytes()[..10]);
+        assert_eq!(
+            titanium_update(0x3a2b, &body).unwrap(),
+            Some(WorldEvent::Position {
+                spawn_id: 42,
+                position: Position {
+                    x: -250.25,
+                    y: 12.5,
+                    z: -3.0,
+                    heading: 128.0,
+                },
+            })
+        );
+        assert!(titanium_update(0x3a2b, &body[..11]).is_err());
     }
     #[test]
     fn profile_and_spawn_keep_distinct_axes_and_allow_default_model_size() {
