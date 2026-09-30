@@ -22,8 +22,10 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Known limitations
 
-- Movement still requires calibration. Online airborne movement and complete
-  server-specific buff reconciliation are not implemented.
+- Movement still requires calibration. Airborne movement (falls and jumps) is
+  accepted only on stock EQEmu sessions, with provisional physics, until
+  official-client falls and jumps are measured; fall damage is not reported.
+  Complete server-specific buff reconciliation is not implemented.
 - Latest scribe-consumption reconciliation and fresh-key zoning changes have
   offline regression coverage but still need fresh live verification.
 
