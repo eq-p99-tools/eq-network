@@ -1577,6 +1577,7 @@ fn zone(
                 log.send(ClientEvent::World(crate::world::WorldEvent::Position {
                     spawn_id: player.spawn_id,
                     position,
+                    velocity: [0.0; 3],
                 }))?;
                 continue;
             }
@@ -1656,6 +1657,7 @@ fn zone(
                 log.send(ClientEvent::World(crate::world::WorldEvent::Position {
                     spawn_id: u16::from_le_bytes([stationary[0], stationary[1]]),
                     position,
+                    velocity: [0.0; 3],
                 }))?;
             }
             log.send(ClientEvent::World(
@@ -1923,9 +1925,14 @@ fn zone(
                         spawn.invisible = invisible;
                     }
                 }
-                Ok(Some(crate::world::WorldEvent::Position { spawn_id, position })) => {
+                Ok(Some(crate::world::WorldEvent::Position {
+                    spawn_id,
+                    position,
+                    velocity,
+                })) => {
                     if let Some(spawn) = initial_spawns.get_mut(&spawn_id) {
                         spawn.position = position;
+                        spawn.velocity = velocity;
                     }
                 }
                 Err(error) => log.diagnostic(format!("Initial entity decode rejected: {error}"))?,
@@ -2049,7 +2056,10 @@ fn zone(
                         }
                         _ => (),
                     }
-                    if let crate::world::WorldEvent::Position { spawn_id, position } = &event {
+                    if let crate::world::WorldEvent::Position {
+                        spawn_id, position, ..
+                    } = &event
+                    {
                         if *spawn_id == u16::from_le_bytes([stationary[0], stationary[1]]) {
                             spellbook::cancel_pending(
                                 &mut pending_memorization,

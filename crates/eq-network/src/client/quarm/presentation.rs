@@ -69,9 +69,14 @@ impl Presentation {
                         "too many initial Quarm postures"
                     );
                 }
-                WorldEvent::Position { spawn_id, position } => {
+                WorldEvent::Position {
+                    spawn_id,
+                    position,
+                    velocity,
+                } => {
                     if let Some(spawn) = self.spawns.get_mut(&spawn_id) {
                         spawn.position = position;
+                        spawn.velocity = velocity;
                     }
                     if self.assigned_id == Some(spawn_id) {
                         if let Some(spawn) = self.own_spawn.as_mut() {
@@ -192,6 +197,7 @@ mod tests {
                     race: 54,
                     gender: 2,
                     position: Position::default(),
+                    velocity: [0.0; 3],
                     size: 6.0,
                     invisible: false,
                 },

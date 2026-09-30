@@ -91,6 +91,7 @@ fn updates_reject_partial_batches_and_preserve_negative_positions() {
             z: -12.3,
             heading: 510.0,
         },
+        velocity: [0.0; 3],
     };
     assert_eq!(updates(0xf340, &update).unwrap(), vec![expected.clone()]);
     let mut batch = 2u32.to_le_bytes().to_vec();

@@ -180,6 +180,8 @@ pub fn spawns(body: &[u8]) -> Result<Vec<SpawnState>> {
                     z: signed(record, 11) / 10.0,
                     heading: f32::from(record[5]) * 2.0,
                 },
+                // EQMac motion fields are not decoded yet.
+                velocity: [0.0; 3],
             })
         })
         .collect()
@@ -196,6 +198,8 @@ fn position(body: &[u8]) -> Result<WorldEvent> {
             z: signed(body, 9) / 10.0,
             heading: f32::from(body[3]) * 2.0,
         },
+        // EQMac motion fields are not decoded yet.
+        velocity: [0.0; 3],
     })
 }
 

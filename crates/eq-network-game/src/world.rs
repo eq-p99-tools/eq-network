@@ -167,6 +167,9 @@ pub struct SpawnState {
     pub gender: u32,
     /// Authoritative location and direction.
     pub position: Position,
+    /// Motion at the last report, in EQ units per second along X, Y and Z; zero
+    /// when standing still or not reported.
+    pub velocity: [f32; 3],
     /// Requested model size; zero selects the racial default.
     pub size: f32,
     /// Server visibility flag; consumers must not expose invisible entities.
@@ -192,6 +195,8 @@ pub fn titanium_spawns(body: &[u8]) -> Result<Vec<SpawnState>> {
             ensure!(size >= 0.0, "negative spawn size");
             let name = &record[7..71];
             let end = name.iter().position(|b| *b == 0).unwrap_or(name.len());
+            let (position, velocity) =
+                titanium_motion([94, 98, 102, 106, 110].map(|at| word(record, at)))?;
             Ok(SpawnState {
                 class: Some(record[331]),
                 spawn_id,
@@ -207,12 +212,8 @@ pub fn titanium_spawns(body: &[u8]) -> Result<Vec<SpawnState>> {
                 gender: u32::from(record[334]),
                 size,
                 invisible: record[84] != 0,
-                position: Position {
-                    x: signed_position(word(record, 94) >> 10),
-                    y: signed_position(word(record, 98)),
-                    z: signed_position(word(record, 102)),
-                    heading: f32::from(u16::try_from((word(record, 106) >> 13) & 0xfff)?) / 4.0,
-                },
+                position,
+                velocity,
             })
         })
         .collect()
@@ -457,6 +458,10 @@ pub enum WorldEvent {
         spawn_id: u16,
         /// Authoritative position.
         position: Position,
+        /// Motion at this report, in EQ units per second along X, Y and Z; zero
+        /// when standing still or not reported. Clients carry it forward until
+        /// the next report, as the official client does.
+        velocity: [f32; 3],
     },
     /// Current/max HP received from the server.
     HitPoints {
@@ -749,22 +754,68 @@ pub(crate) fn appearance(body: &[u8]) -> Result<Option<WorldEvent>> {
     }))
 }
 
-/// A server position update for another spawn, with its motion fields ignored.
+/// EQ units per second for one unit of a Titanium motion delta, fitted on
+/// official-client P99 recordings: the median over 2,253 straight,
+/// constant-velocity stretches of NPC movement (10th to 90th percentile 0.1429
+/// to 0.1448). Newer `EQEmu` servers send no deltas.
+const DELTA_UNITS_PER_SECOND: f32 = 0.144;
+
+/// EQ units per second for one unit of a moving spawn's animation value, which
+/// is its speed: `EQEmu` moves NPCs `speed * 0.4 * 1.45` units per second
+/// (`zone/mob_movement_manager.cpp`), and P99's recorded NPCs match (0.57).
+const ANIMATION_UNITS_PER_SECOND: f32 = 0.4 * 1.45;
+
+/// A server position update for another spawn.
 fn titanium_position(body: &[u8]) -> Result<WorldEvent> {
     ensure!(body.len() == 22, "invalid server position length");
-    let first = word(body, 2);
-    let second = word(body, 6);
-    let third = word(body, 10);
-    let fourth = word(body, 14);
+    let (position, velocity) = titanium_motion([2, 6, 10, 14, 18].map(|at| word(body, at)))?;
     Ok(WorldEvent::Position {
         spawn_id: u16::from_le_bytes([body[0], body[1]]),
-        position: Position {
-            x: signed_position(first >> 10),
-            y: signed_position(second),
-            z: signed_position(third),
-            heading: f32::from(u16::try_from((fourth >> 13) & 0xfff)?) / 4.0,
-        },
+        position,
+        velocity,
     })
+}
+
+/// A Titanium position block: five words with the position, heading, animation
+/// and motion deltas, as in server position updates and spawn records.
+fn titanium_motion(words: [u32; 5]) -> Result<(Position, [f32; 3])> {
+    let position = Position {
+        x: signed_position(words[0] >> 10),
+        y: signed_position(words[1]),
+        z: signed_position(words[2]),
+        heading: f32::from(u16::try_from((words[3] >> 13) & 0xfff)?) / 4.0,
+    };
+    let deltas = [
+        signed_bits(words[3], 0, 13),
+        signed_bits(words[2], 19, 13),
+        signed_bits(words[4], 0, 13),
+    ];
+    let animation = signed_bits(words[1], 19, 10);
+    Ok((position, velocity(position.heading, deltas, animation)))
+}
+
+/// Motion in EQ units per second: from a report's deltas, or, from servers that
+/// send none, from its animation speed along the heading.
+fn velocity(heading: f32, deltas: [i16; 3], animation: i16) -> [f32; 3] {
+    if deltas != [0; 3] {
+        return deltas.map(|delta| f32::from(delta) * DELTA_UNITS_PER_SECOND);
+    }
+    let speed = f32::from(animation) * ANIMATION_UNITS_PER_SECOND;
+    // Heading 0 faces +Y and a quarter turn (128) faces +X.
+    let angle = heading / 512.0 * std::f32::consts::TAU;
+    [angle.sin() * speed, angle.cos() * speed, 0.0]
+}
+
+/// A two's complement bitfield of at most 16 bits.
+fn signed_bits(value: u32, shift: u32, width: u32) -> i16 {
+    let bits = (value >> shift) & ((1 << width) - 1);
+    let value = i32::try_from(bits).expect("masked to 16 bits")
+        - if bits >> (width - 1) == 1 {
+            1 << width
+        } else {
+            0
+        };
+    i16::try_from(value).expect("a 16-bit field fits i16")
 }
 
 /// P99 only (absent from `EQEmu`'s Titanium table): a spawn's position and
@@ -788,6 +839,7 @@ fn p99_compact_position(body: &[u8]) -> Result<WorldEvent> {
             z: signed_position(field(19)),
             heading: f32::from(u16::try_from(field(64) & 0xfff)?) / 4.0,
         },
+        velocity: [0.0; 3],
     })
 }
 
@@ -904,8 +956,11 @@ mod tests {
         body[2..6].copy_from_slice(&((0x7ffffu32 - 7) << 10).to_le_bytes());
         body[6..10].copy_from_slice(&80u32.to_le_bytes());
         body[14..18].copy_from_slice(&(1024u32 << 13).to_le_bytes());
-        let Some(WorldEvent::Position { spawn_id, position }) =
-            titanium_update(0x14cb, &body).unwrap()
+        let Some(WorldEvent::Position {
+            spawn_id,
+            position,
+            velocity,
+        }) = titanium_update(0x14cb, &body).unwrap()
         else {
             panic!("position");
         };
@@ -913,7 +968,34 @@ mod tests {
         assert_eq!(position.x, -1.0);
         assert_eq!(position.y, 10.0);
         assert_eq!(position.heading, 256.0);
+        assert_eq!(velocity, [0.0; 3]);
         assert!(titanium_update(0x14cb, &body[..21]).is_err());
+    }
+    #[test]
+    fn position_updates_carry_motion_from_deltas_or_animation_speed() {
+        let motion = |deltas: [i32; 3], animation: i32, heading: u32| {
+            let bits = |value: i32, width: u32| u32::try_from(value & ((1 << width) - 1)).unwrap();
+            let mut body = [0; 22];
+            body[6..10].copy_from_slice(&(bits(animation, 10) << 19).to_le_bytes());
+            body[10..14].copy_from_slice(&(bits(deltas[1], 13) << 19).to_le_bytes());
+            body[14..18].copy_from_slice(&(bits(deltas[0], 13) | heading << 13).to_le_bytes());
+            body[18..22].copy_from_slice(&bits(deltas[2], 13).to_le_bytes());
+            let Some(WorldEvent::Position { velocity, .. }) =
+                titanium_update(0x14cb, &body).unwrap()
+            else {
+                panic!("position");
+            };
+            velocity
+        };
+        let close = |a: [f32; 3], b: [f32; 3]| a.iter().zip(b).all(|(a, b)| (a - b).abs() < 1e-3);
+        // P99 sends deltas: 0.144 units per second each.
+        assert!(close(motion([100, -50, 8], 20, 0), [14.4, -7.2, 1.152]));
+        // Newer EQEmu sends none: animation speed along the heading, here a
+        // quarter turn (128, sent as 512), which faces +X.
+        assert!(close(motion([0; 3], 20, 512), [11.6, 0.0, 0.0]));
+        assert!(close(motion([0; 3], 20, 0), [0.0, 11.6, 0.0]));
+        // Standing still.
+        assert!(close(motion([0; 3], 0, 512), [0.0; 3]));
     }
     #[test]
     #[allow(clippy::float_cmp)] // Exactly representable fixed-point fixture values.
@@ -934,6 +1016,7 @@ mod tests {
                     z: -3.0,
                     heading: 128.0,
                 },
+                velocity: [0.0; 3],
             })
         );
         assert!(titanium_update(0x3a2b, &body[..11]).is_err());
