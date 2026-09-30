@@ -292,7 +292,10 @@ fn limbo_items_queue_behind_the_cursor_and_move_up_as_it_empties() {
             .unwrap()
             .unwrap(),
     );
-    assert!(matches!(limbo_packet(42, &[], 0), InventoryUpdate::Cursor(_)));
+    assert!(matches!(
+        limbo_packet(42, &[], 0),
+        InventoryUpdate::Cursor(_)
+    ));
     state.apply(limbo_packet(42, &[], 0));
     let child = wire(331, 44, 0, false, 1, &[]);
     state.apply(limbo_packet(43, &[(0, child)], 2));
