@@ -6,6 +6,7 @@ mod inventory;
 mod lifecycle;
 mod merchant;
 mod motion;
+mod posture;
 mod scribe_consumption;
 mod spellbook;
 use eq_network_game::spells::BookActionStatus;
@@ -710,6 +711,7 @@ fn zone(
     let mut trades = merchant::MerchantTrades::default();
     let mut settlement = inventory::Settlement::default();
     let mut camp = camp::Camp::default();
+    let mut own_posture = posture::OwnPosture::default();
     let mut zone_points = zoning::ZonePoints::default();
     let mut current_zone = (0u16, 0u16);
     let mut pending_memorization: Option<PendingBookAction> = None;
@@ -834,7 +836,7 @@ fn zone(
                     }
                     let own_spawn = admitted_player.as_ref().map(|player| player.spawn_id);
                     if camp::handle(
-                        &mut camp,
+                        (&mut camp, &mut own_posture),
                         session_id,
                         own_spawn,
                         &command,
@@ -1001,6 +1003,11 @@ fn zone(
                                         &config.character,
                                     )?;
                                     session.send(sit.opcode, &sit.body)?;
+                                    own_posture.sent(
+                                        player.spawn_id,
+                                        command::Posture::Sitting,
+                                        log,
+                                    )?;
                                     pending_memorization = Some(pending);
                                     log.send(ClientEvent::World(
                                         crate::world::WorldEvent::BookAction(
@@ -1119,6 +1126,11 @@ fn zone(
                                         &config.character,
                                     )?;
                                     session.send(sit.opcode, &sit.body)?;
+                                    own_posture.sent(
+                                        player.spawn_id,
+                                        command::Posture::Sitting,
+                                        log,
+                                    )?;
                                     pending_memorization = Some(PendingBookAction {
                                         started: Instant::now(),
                                         intent: BookIntent::Memorize {
@@ -1330,7 +1342,11 @@ fn zone(
                         continue;
                     }
                     if let Some(motion) = motion.as_mut() {
-                        if motion::handle(motion, session_id, &command, &mut session, log)? {
+                        let own = (
+                            &mut own_posture,
+                            admitted_player.as_ref().map(|player| player.spawn_id),
+                        );
+                        if motion::handle(motion, own, session_id, &command, &mut session, log)? {
                             continue;
                         }
                     }
@@ -1369,6 +1385,12 @@ fn zone(
                         Ok(packet) => {
                             session.send(packet.opcode, &packet.body)?;
                             trades.sent(&command, Instant::now());
+                            if let ClientCommand::SetPosture {
+                                spawn_id, posture, ..
+                            } = &command
+                            {
+                                own_posture.sent(*spawn_id, *posture, log)?;
+                            }
                             if let ClientCommand::CastSpell { spell_id, .. } = &command {
                                 cast_guard.submitted(*spell_id, Instant::now());
                                 log.send(ClientEvent::World(
@@ -1769,7 +1791,11 @@ fn zone(
                         log.send(ClientEvent::World(crate::world::WorldEvent::Spawns(
                             initial_spawns.values().cloned().collect(),
                         )))?;
+                        own_posture = posture::OwnPosture::default();
                         for (spawn_id, posture) in std::mem::take(&mut initial_postures) {
+                            if spawn_id == u16::from_le_bytes([stationary[0], stationary[1]]) {
+                                own_posture.observed(posture);
+                            }
                             log.send(ClientEvent::World(crate::world::WorldEvent::Posture {
                                 spawn_id,
                                 posture,
@@ -1910,14 +1936,16 @@ fn zone(
                 Ok(Some(event)) => {
                     match &event {
                         crate::world::WorldEvent::Posture { spawn_id, posture }
-                            if *spawn_id == u16::from_le_bytes([stationary[0], stationary[1]])
-                                && *posture != crate::world::PostureState::Sitting =>
+                            if *spawn_id == u16::from_le_bytes([stationary[0], stationary[1]]) =>
                         {
-                            spellbook::cancel_pending(
-                                &mut pending_memorization,
-                                "Server changed character posture",
-                                log,
-                            )?;
+                            own_posture.observed(*posture);
+                            if *posture != crate::world::PostureState::Sitting {
+                                spellbook::cancel_pending(
+                                    &mut pending_memorization,
+                                    "Server changed character posture",
+                                    log,
+                                )?;
+                            }
                         }
                         crate::world::WorldEvent::Visibility {
                             spawn_id,

@@ -32,6 +32,7 @@ pub(super) fn correct_own(
 
 pub(super) fn handle(
     motion: &mut MotionSession,
+    (posture, own_spawn): (&mut super::posture::OwnPosture, Option<u16>),
     session_id: u64,
     command: &ClientCommand,
     session: &mut Session,
@@ -81,6 +82,12 @@ pub(super) fn handle(
                 })
         }
         ClientCommand::Move(request) => {
+            let (to, from) = (request.position, motion.position());
+            if let (true, Some(spawn_id)) =
+                ((to.x, to.y, to.z) != (from.x, from.y, from.z), own_spawn)
+            {
+                posture.stand_to_move(spawn_id, session, log)?;
+            }
             let mut transport_failed = false;
             let result = motion.send_move(request, now, |body| {
                 let sent = session.send_unreliable(0x14cb, body);

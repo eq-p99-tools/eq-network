@@ -84,7 +84,7 @@ impl Camp {
 /// Starts camping, or abandons preparation when the character stands or moves.
 /// Returns true when the command was fully handled here.
 pub(super) fn handle(
-    camp: &mut Camp,
+    (camp, posture): (&mut Camp, &mut super::posture::OwnPosture),
     session_id: u64,
     own_spawn: Option<u16>,
     command: &ClientCommand,
@@ -135,6 +135,7 @@ pub(super) fn handle(
         if let (false, Some(spawn_id)) = (standing, own_spawn) {
             let stand = eq_network_game::command::titanium_posture(spawn_id, Posture::Standing)?;
             session.send(stand.opcode, &stand.body)?;
+            posture.sent(spawn_id, Posture::Standing, log)?;
         }
         log.send(ClientEvent::World(WorldEvent::Camp(CampStatus::Abandoned)))?;
     }
