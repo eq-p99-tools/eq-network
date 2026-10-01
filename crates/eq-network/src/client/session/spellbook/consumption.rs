@@ -1,5 +1,5 @@
 //! Correlates a confirmed book insertion with its subsequent cursor removal.
-use super::spellbook::BookIntent;
+use super::BookIntent;
 use eq_network_game::{
     inventory::{Inventory, InventorySlot, InventoryUpdate},
     spells::SpellUpdate,
@@ -88,11 +88,12 @@ impl ScribeConsumption {
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::*;
     use eq_network_game::{inventory::InventoryItem, items::ItemDetails};
 
-    fn inventory() -> Inventory {
+    /// A scroll for spell 73 moved from the inventory to the cursor.
+    pub(in crate::client::session::spellbook) fn scroll_on_cursor() -> Inventory {
         let mut scroll = InventoryItem {
             activation: eq_network_game::inventory::ItemActivation::default(),
             scroll_spell: Some(73),
@@ -143,7 +144,7 @@ mod tests {
 
     #[test]
     fn confirmed_scribe_consumes_cursor_in_worker_and_host_without_false_correction() {
-        let mut worker = inventory();
+        let mut worker = scroll_on_cursor();
         let mut host = worker.clone();
         let mut tracker = tracker(&worker);
         tracker.observe(&confirmation(), true);
@@ -171,7 +172,7 @@ mod tests {
     fn unrelated_replies_intervening_changes_and_unconfirmed_scribes_cannot_authorize_consumption()
     {
         for case in 0..7 {
-            let mut inventory = inventory();
+            let mut inventory = scroll_on_cursor();
             let mut tracker = tracker(&inventory);
             match case {
                 0 => tracker.observe(&confirmation(), false),
@@ -229,7 +230,7 @@ mod tests {
     #[test]
     fn stacked_scrolls_and_containers_are_not_treated_as_single_consumed_scrolls() {
         for stack in [true, false] {
-            let mut inventory = inventory();
+            let mut inventory = scroll_on_cursor();
             let mut item = inventory.items()[&InventorySlot(30)].clone();
             if stack {
                 item.stack_count = Some(2);

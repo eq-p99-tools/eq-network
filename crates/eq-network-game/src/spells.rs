@@ -1,6 +1,22 @@
 //! Server-driven Titanium spell state.
+use crate::command::EncodedCommand;
 use anyhow::{ensure, Result};
 use serde::Serialize;
+
+/// `OP_MemorizeSpell`: scribing, memorizing and forgetting, by mode.
+pub const MEMORIZE_OPCODE: u16 = 0x308e;
+/// `OP_DeleteSpell`: a book entry removed.
+pub const DELETE_OPCODE: u16 = 0x4f37;
+/// `OP_SwapSpell`: two book entries exchanged.
+pub const SWAP_OPCODE: u16 = 0x2126;
+
+/// A packet with this opcode and body.
+fn packet(opcode: u16, body: &[u8]) -> EncodedCommand {
+    EncodedCommand {
+        opcode,
+        body: body.to_vec(),
+    }
+}
 
 /// Local worker progress; submission is not confirmation of a server-side change.
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -23,7 +39,7 @@ pub enum BookActionStatus {
 ///
 /// # Errors
 /// Rejects invalid gems, empty slots, and stale spell identifiers.
-pub fn forget_packet(gems: &[Option<u32>; 8], gem: u8, spell_id: u32) -> Result<[u8; 16]> {
+pub fn forget_packet(gems: &[Option<u32>; 8], gem: u8, spell_id: u32) -> Result<EncodedCommand> {
     ensure!(
         !matches!(spell_id, 0 | 0xffff | u32::MAX)
             && gems.get(usize::from(gem)) == Some(&Some(spell_id)),
@@ -33,7 +49,7 @@ pub fn forget_packet(gems: &[Option<u32>; 8], gem: u8, spell_id: u32) -> Result<
     body[..4].copy_from_slice(&u32::from(gem).to_le_bytes());
     body[4..8].copy_from_slice(&spell_id.to_le_bytes());
     body[8..12].copy_from_slice(&2u32.to_le_bytes());
-    Ok(body)
+    Ok(packet(MEMORIZE_OPCODE, &body))
 }
 
 /// Spellbook slots from the admitted profile; empty slots retain their indexes.
@@ -62,7 +78,7 @@ impl SpellBook {
         to: u16,
         from_spell: u32,
         to_spell: Option<u32>,
-    ) -> Result<[u8; 8]> {
+    ) -> Result<EncodedCommand> {
         ensure!(
             from != to && !matches!(from_spell, 0 | 0xffff | u32::MAX),
             "invalid spell swap"
@@ -75,7 +91,7 @@ impl SpellBook {
         let mut body = [0; 8];
         body[..4].copy_from_slice(&u32::from(from).to_le_bytes());
         body[4..].copy_from_slice(&u32::from(to).to_le_bytes());
-        Ok(body)
+        Ok(packet(SWAP_OPCODE, &body))
     }
 
     /// Encodes deletion only when the expected spell still occupies the selected book slot.
@@ -83,7 +99,7 @@ impl SpellBook {
     ///
     /// # Errors
     /// Rejects invalid, empty, or replaced slots and sentinel spell identifiers.
-    pub fn delete_packet(&self, slot: u16, spell_id: u32) -> Result<[u8; 8]> {
+    pub fn delete_packet(&self, slot: u16, spell_id: u32) -> Result<EncodedCommand> {
         ensure!(
             !matches!(spell_id, 0 | 0xffff | u32::MAX)
                 && self.slots.get(usize::from(slot)) == Some(&Some(spell_id)),
@@ -91,7 +107,7 @@ impl SpellBook {
         );
         let mut body = [0; 8];
         body[..2].copy_from_slice(&slot.to_le_bytes());
-        Ok(body)
+        Ok(packet(DELETE_OPCODE, &body))
     }
 
     /// Encodes scribing only for a current cursor scroll and an empty book slot.
@@ -105,7 +121,7 @@ impl SpellBook {
         revision: u64,
         slot: u16,
         spell_id: u32,
-    ) -> Result<[u8; 16]> {
+    ) -> Result<EncodedCommand> {
         use anyhow::Context;
         ensure!(
             inventory.received() && !inventory.stale() && inventory.revision() == revision,
@@ -130,7 +146,7 @@ impl SpellBook {
         let mut body = [0; 16];
         body[..4].copy_from_slice(&u32::from(slot).to_le_bytes());
         body[4..8].copy_from_slice(&spell_id.to_le_bytes());
-        Ok(body)
+        Ok(packet(MEMORIZE_OPCODE, &body))
     }
     /// Reads the 400 Titanium book slots from an exact-sized player profile.
     ///
@@ -160,7 +176,7 @@ impl SpellBook {
     ///
     /// # Errors
     /// Rejects invalid gems and spells that have not been scribed.
-    pub fn memorize_packet(&self, gem: u8, spell_id: u32) -> Result<[u8; 16]> {
+    pub fn memorize_packet(&self, gem: u8, spell_id: u32) -> Result<EncodedCommand> {
         ensure!(
             gem < 8 && self.slots.contains(&Some(spell_id)),
             "spell is not scribed or gem is invalid"
@@ -171,7 +187,7 @@ impl SpellBook {
         body[8..12].copy_from_slice(&1u32.to_le_bytes());
         // No reuse reduction is requested. The capture's nonzero trailing value
         // is not copied because its client-side provenance is unverified.
-        Ok(body)
+        Ok(packet(MEMORIZE_OPCODE, &body))
     }
 
     /// Applies confirmed book changes without changing memorized slots.
@@ -387,7 +403,7 @@ mod tests {
             spell_id: 73,
             mode: 0,
         });
-        let body = book.swap_packet(0, 399, 42, Some(73)).unwrap();
+        let body = book.swap_packet(0, 399, 42, Some(73)).unwrap().body;
         assert_eq!(body, [0, 0, 0, 0, 143, 1, 0, 0]);
         assert_eq!(book.slots()[0], Some(42));
         let update = super::decode(0x2126, &body).unwrap().unwrap();
@@ -399,7 +415,7 @@ mod tests {
         assert!(book.swap_packet(0, 399, 42, Some(73)).is_err());
         assert!(book.swap_packet(0, 0, 73, Some(73)).is_err());
         assert!(book.swap_packet(400, 0, 73, Some(73)).is_err());
-        let body = book.swap_packet(399, 1, 42, None).unwrap();
+        let body = book.swap_packet(399, 1, 42, None).unwrap().body;
         book.apply(&super::decode(0x2126, &body).unwrap().unwrap());
         assert_eq!((book.slots()[399], book.slots()[1]), (None, Some(42)));
         assert!(super::decode(0x2126, &body[..7]).is_err());
@@ -415,7 +431,7 @@ mod tests {
             mode: 0,
         });
         assert_eq!(
-            book.delete_packet(399, 42).unwrap(),
+            book.delete_packet(399, 42).unwrap().body,
             [143, 1, 0, 0, 0, 0, 0, 0]
         );
         assert_eq!(book.slots()[399], Some(42));
@@ -495,7 +511,7 @@ mod tests {
         profile[2312..2316].copy_from_slice(&73u32.to_le_bytes());
         let mut book = SpellBook::titanium_profile(&profile).unwrap();
         let before = book.clone();
-        let body = forget_packet(&gems, 3, 73).unwrap();
+        let body = forget_packet(&gems, 3, 73).unwrap().body;
         assert_eq!(body, [3, 0, 0, 0, 73, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0]);
         let update = decode(0x308e, &body).unwrap().unwrap();
         update.apply_gems(&mut gems);
@@ -527,7 +543,7 @@ mod tests {
         assert_eq!(book.slots()[399], Some(73));
         assert!(book.memorize_packet(8, 73).is_err());
         assert!(book.memorize_packet(0, 99).is_err());
-        let packet = book.memorize_packet(2, 73).unwrap();
+        let packet = book.memorize_packet(2, 73).unwrap().body;
         assert_eq!(u32::from_le_bytes(packet[..4].try_into().unwrap()), 2);
         assert_eq!(u32::from_le_bytes(packet[8..12].try_into().unwrap()), 1);
         assert_eq!(book.slots()[0], None);

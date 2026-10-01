@@ -2,8 +2,7 @@
 //! move the player, its answer and the handoff to the next zone.
 use super::{
     feature::{Feature, Out, World},
-    motion, spellbook, zoning, ClientCommand, ClientEvent, ConnectionStage, ConnectionState,
-    ZoneExit,
+    motion, zoning, ClientCommand, ClientEvent, ConnectionStage, ConnectionState, ZoneExit,
 };
 use anyhow::{bail, ensure, Context, Result};
 use eq_network_game::{
@@ -60,7 +59,6 @@ impl Transfers {
     ) -> Result<()> {
         out.send(&offer.response(&self.character)?)?;
         world.lifecycle.offer(offer.clone(), Instant::now())?;
-        spellbook::cancel_pending(&mut world.book_action, "Zone transfer started", out.log)?;
         if let Some(motion) = world.motion.as_mut() {
             motion.suspend();
         }
@@ -174,11 +172,6 @@ fn relocate(position: Position, world: &mut World, out: &mut Out<'_, '_>) -> Res
         !world.lifecycle.blocks_motion(),
         "same-zone relocation conflicts with death or transfer"
     );
-    spellbook::cancel_pending(
-        &mut world.book_action,
-        "Server relocated character",
-        out.log,
-    )?;
     let player = world
         .player
         .as_mut()

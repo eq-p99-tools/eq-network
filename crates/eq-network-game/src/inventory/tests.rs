@@ -559,7 +559,10 @@ fn scribing_uses_current_cursor_definition_without_consuming_it_optimistically()
     let mut book = crate::spells::SpellBook::titanium_profile(&profile).unwrap();
     let revision = inventory.revision();
     let before = inventory.clone();
-    let packet = book.scribe_packet(&inventory, revision, 399, 73).unwrap();
+    let packet = book
+        .scribe_packet(&inventory, revision, 399, 73)
+        .unwrap()
+        .body;
     assert_eq!(&packet[..4], &399u32.to_le_bytes());
     assert_eq!(&packet[4..8], &73u32.to_le_bytes());
     assert_eq!(&packet[8..], &[0; 8]);

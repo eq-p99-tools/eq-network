@@ -1,5 +1,4 @@
 mod actions;
-mod book_edits;
 mod camp;
 mod casting;
 mod doors;
@@ -11,12 +10,9 @@ mod merchant;
 mod motion;
 mod objects;
 mod posture;
-mod scribe_consumption;
 mod spellbook;
 mod transfers;
 mod zone;
-use eq_network_game::spells::BookActionStatus;
-use spellbook::{BookIntent, PendingBookAction};
 
 use super::{
     servers::{self, Shield},

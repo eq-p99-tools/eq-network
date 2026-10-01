@@ -6,13 +6,7 @@
 //! module only turns their current state into held resources and refuses any
 //! command that needs one of them, or that was made for an earlier admission or
 //! too long ago, so these are decided in one place instead of by per-action guards.
-use super::{
-    book_edits::BookEdits,
-    casting,
-    merchant::MerchantTrades,
-    spellbook::{BookIntent, PendingBookAction},
-    ClientCommand, ClientEvent, Events,
-};
+use super::{casting, merchant::MerchantTrades, ClientCommand, ClientEvent, Events};
 use anyhow::Result;
 use eq_network_game::{
     spells::BookActionStatus,
@@ -74,18 +68,11 @@ impl Held {
         Self(holds)
     }
 
-    /// The holds the zone gathers, from the parts that track each action.
+    /// The holds of a cast and a trade in flight.
     #[cfg(test)]
-    fn from_state(
-        cast_guard: &casting::CastGuard,
-        book_edits: &BookEdits,
-        pending: Option<&PendingBookAction>,
-        trades: &MerchantTrades,
-        scribe_awaiting_cursor: bool,
-    ) -> Self {
+    fn from_state(cast_guard: &casting::CastGuard, trades: &MerchantTrades) -> Self {
         let mut held: Vec<_> = cast_guard.hold().into_iter().collect();
         held.extend(trade_hold(trades));
-        held.extend(book_holds(book_edits, pending, scribe_awaiting_cursor));
         Self(held)
     }
 
@@ -105,27 +92,6 @@ pub(super) fn trade_hold(trades: &MerchantTrades) -> Option<(Resource, &'static 
     trades
         .active()
         .then_some((Resource::Inventory, "Wait for the merchant to answer"))
-}
-
-/// What the spellbook's changes in flight hold.
-pub(super) fn book_holds(
-    book_edits: &BookEdits,
-    pending: Option<&PendingBookAction>,
-    scribe_awaiting_cursor: bool,
-) -> Vec<(Resource, &'static str)> {
-    let mut held = Vec::new();
-    let scribing = book_edits.scribing()
-        || scribe_awaiting_cursor
-        || pending.is_some_and(|pending| matches!(pending.intent, BookIntent::Scribe { .. }));
-    if scribing {
-        // The server consumes the cursor scroll when it answers; moving items
-        // meanwhile desynchronized P99's inventory and logged the character out.
-        held.push((Resource::Inventory, "Wait for scribing to finish"));
-    }
-    if scribing || pending.is_some() || book_edits.outstanding() {
-        held.push((Resource::Spellbook, "Wait for the current spellbook change"));
-    }
-    held
 }
 
 /// What a command needs exclusively; unlisted commands need nothing here.
@@ -315,19 +281,13 @@ mod tests {
     #[test]
     fn holds_refuse_only_commands_that_need_them() {
         let idle_trades = MerchantTrades::default();
-        let idle = Held::from_state(
-            &CastGuard::default(),
-            &BookEdits::default(),
-            None,
-            &idle_trades,
-            false,
-        );
+        let idle = Held::from_state(&CastGuard::default(), &idle_trades);
         assert_eq!(idle.conflict(&cast()), None);
         assert_eq!(idle.conflict(&memorize()), None);
 
         let mut guard = CastGuard::default();
         guard.submitted(42, Instant::now());
-        let casting = Held::from_state(&guard, &BookEdits::default(), None, &idle_trades, false);
+        let casting = Held::from_state(&guard, &idle_trades);
         assert!(casting.conflict(&cast()).is_some());
         assert!(casting.conflict(&memorize()).is_some());
         assert_eq!(
@@ -338,75 +298,16 @@ mod tests {
             None
         );
 
-        let scribe = PendingBookAction {
-            started: Instant::now(),
-            intent: BookIntent::Scribe {
-                revision: 1,
-                slot: 0,
-                spell_id: 42,
-            },
-        };
-        let scribing = Held::from_state(
-            &CastGuard::default(),
-            &BookEdits::default(),
-            Some(&scribe),
-            &idle_trades,
-            false,
-        );
-        assert_eq!(scribing.conflict(&cast()), None);
+        // The first hold a command needs gives the reason.
+        let held = Held::new(vec![
+            (Resource::Spellbook, "Wait for the current spellbook change"),
+            (Resource::Casting, "Wait for the current cast"),
+        ]);
+        assert_eq!(held.conflict(&cast()), Some("Wait for the current cast"));
         assert_eq!(
-            scribing.conflict(&memorize()),
+            held.conflict(&memorize()),
             Some("Wait for the current spellbook change")
         );
-        let memorizing = PendingBookAction {
-            started: Instant::now(),
-            intent: BookIntent::Memorize {
-                gem: 0,
-                spell_id: 42,
-            },
-        };
-        let held = Held::from_state(
-            &CastGuard::default(),
-            &BookEdits::default(),
-            Some(&memorizing),
-            &idle_trades,
-            false,
-        );
-        assert!(held.conflict(&memorize()).is_some());
-        assert!(!held
-            .0
-            .iter()
-            .any(|(resource, _)| *resource == Resource::Inventory));
-        assert_eq!(
-            scribing
-                .0
-                .iter()
-                .find(|(resource, _)| *resource == Resource::Inventory)
-                .map(|(_, reason)| *reason),
-            Some("Wait for scribing to finish")
-        );
-    }
-
-    #[test]
-    fn a_confirmed_scribe_holds_the_inventory_until_the_cursor_clears() {
-        let trades = MerchantTrades::default();
-        let held = Held::from_state(
-            &CastGuard::default(),
-            &BookEdits::default(),
-            None,
-            &trades,
-            true,
-        );
-        assert_eq!(
-            held.conflict(&move_from(23)),
-            Some("Wait for scribing to finish")
-        );
-        let pickup = ClientCommand::PickUp {
-            session_id: 1,
-            drop_id: 71,
-            created: Instant::now(),
-        };
-        assert_eq!(held.conflict(&pickup), Some("Wait for scribing to finish"));
     }
 
     fn move_from(slot: i32) -> ClientCommand {
@@ -425,7 +326,7 @@ mod tests {
         let trades = MerchantTrades::default();
         let mut guard = CastGuard::default();
         guard.submitted(42, Instant::now());
-        let casting = Held::from_state(&guard, &BookEdits::default(), None, &trades, false);
+        let casting = Held::from_state(&guard, &trades);
         assert!(casting.conflict(&move_from(23)).is_some());
         assert!(casting.conflict(&move_from(251)).is_some());
         assert_eq!(casting.conflict(&move_from(30)), None);
@@ -441,22 +342,10 @@ mod tests {
             created: Instant::now(),
         };
         let mut trades = MerchantTrades::default();
-        let idle = Held::from_state(
-            &CastGuard::default(),
-            &BookEdits::default(),
-            None,
-            &trades,
-            false,
-        );
+        let idle = Held::from_state(&CastGuard::default(), &trades);
         assert_eq!(idle.conflict(&sell), None);
         trades.sent(&sell, Instant::now());
-        let trading = Held::from_state(
-            &CastGuard::default(),
-            &BookEdits::default(),
-            None,
-            &trades,
-            false,
-        );
+        let trading = Held::from_state(&CastGuard::default(), &trades);
         assert_eq!(
             trading.conflict(&sell),
             Some("Wait for the merchant to answer")

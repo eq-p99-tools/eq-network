@@ -1,5 +1,6 @@
 //! Admission-local serialization of book edits whose results arrive asynchronously.
-use super::ClientCommand;
+use super::BookIntent;
+use crate::client::ClientCommand;
 use eq_network_game::spells::{BookActionStatus, SpellUpdate};
 use std::time::{Duration, Instant};
 
@@ -24,7 +25,8 @@ impl BookEdits {
     #[cfg(test)]
     pub fn blocks(&self, command: &ClientCommand) -> bool {
         self.outstanding()
-            && super::actions::needs(command).contains(&super::actions::Resource::Spellbook)
+            && super::super::actions::needs(command)
+                .contains(&super::super::actions::Resource::Spellbook)
     }
 
     /// Whether a submitted scribe still awaits its result; the server consumes the
@@ -45,8 +47,7 @@ impl BookEdits {
     }
 
     /// Tracks a prepared scribe/memorize request only after successful submission.
-    pub fn prepared_sent(&mut self, intent: &super::spellbook::BookIntent, now: Instant) {
-        use super::spellbook::BookIntent;
+    pub fn prepared_sent(&mut self, intent: &BookIntent, now: Instant) {
         let (slot, spell_id, mode) = match *intent {
             BookIntent::Memorize { gem, spell_id } => (u32::from(gem), spell_id, 1),
             BookIntent::Scribe { slot, spell_id, .. } => (u32::from(slot), spell_id, 0),
@@ -126,7 +127,6 @@ mod tests {
 
     #[test]
     fn prepared_requests_wait_for_exact_slot_spell_and_mode() {
-        use super::super::spellbook::BookIntent;
         let now = Instant::now();
         let next = ClientCommand::MemorizeSpell {
             session_id: 7,
@@ -252,7 +252,6 @@ mod tests {
 
     #[test]
     fn only_an_outstanding_scribe_counts_as_scribing() {
-        use super::super::spellbook::BookIntent;
         let now = Instant::now();
         let mut guard = BookEdits::default();
         assert!(!guard.scribing());

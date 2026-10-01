@@ -7,7 +7,7 @@
 
 use super::{
     actions::Resource, entities::Spawns, lifecycle::ZoneLifecycle, posture::OwnPosture,
-    spellbook::PendingBookAction, ClientCommand, ConnectionState, Events, Session, ZoneExit,
+    ClientCommand, ConnectionState, Events, Session, ZoneExit,
 };
 use anyhow::Result;
 use eq_network_game::{
@@ -98,9 +98,6 @@ pub(super) struct World {
     pub(super) sequence: u16,
     /// When the player's position was last sent.
     pub(super) last_position: Instant,
-    /// A spellbook action waiting for the player to sit, which moving,
-    /// casting, dying or zoning cancels.
-    pub(super) book_action: Option<PendingBookAction>,
     /// Whether the zone has admitted the player.
     pub(super) ready: bool,
     /// Application packets received in this zone session.
@@ -128,7 +125,6 @@ impl World {
             last_position: Instant::now()
                 .checked_sub(eq_network_game::movement::STATIONARY_HEARTBEAT)
                 .unwrap_or_else(Instant::now),
-            book_action: None,
             ready: false,
             packets: 0,
             spawns: Spawns::default(),
@@ -155,6 +151,11 @@ impl World {
 /// One part of the game in the zone session. Each step defaults to doing
 /// nothing, so a feature implements only the steps it takes part in.
 pub(super) trait Feature {
+    /// Explains a message that the feature's own action caused, before any
+    /// feature hears it: the cursor scroll a scribe used up arrives as an
+    /// item removed.
+    fn explain(&mut self, _message: &mut Message, _world: &World) {}
+
     /// Records a message that arrives before the zone admits the player; the
     /// host hears nothing until the admission.
     ///

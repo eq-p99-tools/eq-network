@@ -6,6 +6,8 @@ use std::fmt;
 
 /// `OP_LogoutReply`: the server ends the session after a logout.
 const LOGOUT_REPLY_OPCODE: u16 = 0x3cdc;
+/// `OP_PlayerProfile`: the player's saved state, sent as the zone admits them.
+const PROFILE_OPCODE: u16 = 0x75df;
 
 /// What a zone packet says.
 #[derive(Debug)]
@@ -60,7 +62,8 @@ impl fmt::Display for Part {
 }
 
 /// What one Titanium zone packet says. A mana update is both a spell notice
-/// and a change in resources, so one packet can say two things.
+/// and a change in resources, so one packet can say two things. Of the
+/// player's profile, only the spellbook is read here so far.
 #[must_use]
 pub fn titanium(opcode: u16, body: &[u8]) -> Vec<Message> {
     let mut messages = Vec::new();
@@ -77,6 +80,10 @@ pub fn titanium(opcode: u16, body: &[u8]) -> Vec<Message> {
         zoning::TO_BIND_OPCODE | zoning::MOVE_OPCODE => zoning::offer(opcode, body).map_or_else(
             |error| unreadable(Part::ZoneOffer, &error),
             Message::ZoneOffer,
+        ),
+        PROFILE_OPCODE => spells::SpellBook::titanium_profile(body).map_or_else(
+            |error| unreadable(Part::Spells, &error),
+            |book| Message::Event(WorldEvent::SpellBook(book)),
         ),
         zoning::CHANGE_OPCODE => Message::ZoneAnswer(body.to_vec()),
         zoning::HANDOFF_OPCODE => Message::Handoff(body.to_vec()),
@@ -121,6 +128,23 @@ mod tests {
                     endurance: 80
                 })
             ]
+        ));
+    }
+
+    #[test]
+    fn the_profile_says_what_is_in_the_spellbook() {
+        let mut profile = vec![0; 19592];
+        profile[2312..2316].copy_from_slice(&73u32.to_le_bytes());
+        assert!(matches!(
+            &titanium(PROFILE_OPCODE, &profile)[..],
+            [Message::Event(WorldEvent::SpellBook(book))] if book.slots()[0] == Some(73)
+        ));
+        assert!(matches!(
+            titanium(PROFILE_OPCODE, &[0; 8])[..],
+            [Message::Unreadable {
+                part: Part::Spells,
+                ..
+            }]
         ));
     }
 

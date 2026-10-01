@@ -4,7 +4,7 @@ use super::{
     actions::Resource,
     command,
     feature::{Feature, Out, World},
-    spellbook, ClientCommand, ClientEvent,
+    ClientCommand, ClientEvent,
 };
 use anyhow::{Context, Result};
 use eq_network_game::{
@@ -273,8 +273,7 @@ impl Feature for Casting {
             .diagnostic("Cast acknowledgement timed out; a manual retry is available".into())
     }
 
-    /// Follows the player's own casts; a cast that starts cancels a pending
-    /// spellbook change, and dying ends any cast.
+    /// Follows the player's own casts; dying ends any cast.
     fn observe(
         &mut self,
         message: &Message,
@@ -293,9 +292,6 @@ impl Feature for Casting {
                         session_id: world.session_id,
                         spell_id: None,
                     }))?;
-                }
-                if self.guard.active() && world.book_action.is_some() {
-                    spellbook::cancel_pending(&mut world.book_action, "Casting started", out.log)?;
                 }
             }
             Message::Event(WorldEvent::Death(death)) if world.is_player(death.spawn_id) => {
