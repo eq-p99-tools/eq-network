@@ -1,7 +1,11 @@
 //! Click-cast metadata from Titanium's serialized item definition.
+use crate::command::EncodedCommand;
 use anyhow::{ensure, Context, Result};
 use serde::Serialize;
-use std::time::{Duration, Instant};
+use std::time::Instant;
+
+/// Titanium `OP_CastSpell`, which also casts an item's click effect.
+pub const CAST_OPCODE: u16 = 0x304b;
 
 /// One explicit item-use intent, bound to the selected inventory and zone admission.
 #[derive(Clone, Debug, PartialEq)]
@@ -115,28 +119,19 @@ impl ItemActivation {
 }
 
 impl super::Inventory {
-    /// Validates an admitted item-use intent before encoding its current effect.
+    /// Validates an admitted item-use intent before encoding its current effect,
+    /// returning the effect's spell and the cast packet. The zone session has
+    /// already refused a request for an earlier admission or made too long ago.
     /// `target_available` must come from the controller's current zone spawn state.
     ///
     /// # Errors
-    /// Rejects old admissions, future/expired requests, unavailable targets and invalid inventory.
+    /// Rejects unavailable targets and invalid inventory.
     pub fn prepare_item_cast(
         &self,
         request: &ItemUse,
-        session_id: u64,
         level: u8,
         target_available: bool,
-        now: Instant,
-    ) -> Result<(u32, [u8; 20])> {
-        ensure!(
-            request.session_id == session_id,
-            "Item use belongs to an old admission"
-        );
-        ensure!(
-            now.checked_duration_since(request.created)
-                .is_some_and(|age| age < Duration::from_secs(1)),
-            "Item-use request expired or has a future timestamp"
-        );
+    ) -> Result<(u32, EncodedCommand)> {
         ensure!(target_available, "Item-use target is unavailable");
         let body =
             self.item_cast_packet(request.revision, request.slot, level, request.target_id)?;
@@ -146,7 +141,13 @@ impl super::Inventory {
             .as_ref()
             .context("Item effect unavailable")?
             .spell_id;
-        Ok((spell_id, body))
+        Ok((
+            spell_id,
+            EncodedCommand {
+                opcode: CAST_OPCODE,
+                body: body.to_vec(),
+            },
+        ))
     }
 
     /// Builds a Titanium item cast from the current instance, without consuming charges.

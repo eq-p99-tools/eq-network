@@ -152,7 +152,7 @@ fn encode_chat_text(text: &str) -> String {
 #[must_use]
 pub fn outbound_text_len(dialect: GameDialect, text: &str) -> usize {
     match dialect {
-        GameDialect::TitaniumP99 => encode_chat_text(text).len(),
+        GameDialect::Titanium => encode_chat_text(text).len(),
         GameDialect::EqMac => text.len(),
     }
 }
@@ -161,7 +161,7 @@ pub fn outbound_text_len(dialect: GameDialect, text: &str) -> usize {
 #[must_use]
 pub const fn outbound_text_limit(dialect: GameDialect) -> usize {
     match dialect {
-        GameDialect::TitaniumP99 => MAX_OUTBOUND_MESSAGE,
+        GameDialect::Titanium => MAX_OUTBOUND_MESSAGE,
         // EQMac adds four bytes after the terminator; this keeps the complete
         // variable region within the server's 2048-byte bound.
         GameDialect::EqMac => MAX_MAC_OUTBOUND_MESSAGE,
@@ -186,7 +186,7 @@ pub fn encode_outbound_for(
         "chat message must not contain NUL"
     );
     let wire_text = match protocol {
-        GameDialect::TitaniumP99 => encode_chat_text(message_text),
+        GameDialect::Titanium => encode_chat_text(message_text),
         GameDialect::EqMac => message_text.to_owned(),
     };
     ensure!(
@@ -199,7 +199,7 @@ pub fn encode_outbound_for(
     );
 
     let header = match protocol {
-        GameDialect::TitaniumP99 => TITANIUM_CHANNEL_MESSAGE_HEADER,
+        GameDialect::Titanium => TITANIUM_CHANNEL_MESSAGE_HEADER,
         GameDialect::EqMac => MAC_CHANNEL_MESSAGE_HEADER,
     };
     // The EQMac PC client includes four zero bytes after the message terminator.
@@ -215,7 +215,7 @@ pub fn encode_outbound_for(
     body[64..64 + sender.len()].copy_from_slice(sender.as_bytes());
     // Language 0 is Common Tongue. The two unknown words remain zero.
     match protocol {
-        GameDialect::TitaniumP99 => {
+        GameDialect::Titanium => {
             body[132..136].copy_from_slice(&u32::from(message.channel()).to_le_bytes());
             body[144..148].copy_from_slice(&100u32.to_le_bytes());
         }
@@ -235,7 +235,7 @@ pub fn encode_outbound_for(
 /// Returns an error when the sender, recipient, or message cannot be represented
 /// by the Titanium packet layout.
 pub fn encode_outbound(message: &OutboundChat, sender: &str) -> Result<Vec<u8>> {
-    encode_outbound_for(GameDialect::TitaniumP99, message, sender)
+    encode_outbound_for(GameDialect::Titanium, message, sender)
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -253,7 +253,7 @@ enum CommunicationOpcode {
 impl CommunicationOpcode {
     const fn for_protocol(protocol: GameDialect, value: u16) -> Self {
         match protocol {
-            GameDialect::TitaniumP99 => match value {
+            GameDialect::Titanium => match value {
                 0x024d => Self::Motd,
                 0x1004 => Self::ChannelMessage,
                 0x547a => Self::Emote,
@@ -365,7 +365,7 @@ fn hex_number(bytes: &[u8]) -> u32 {
 fn item_id(protocol: GameDialect, body: &[u8]) -> u32 {
     let digits = &body[1..];
     match protocol {
-        GameDialect::TitaniumP99 => hex_number(&digits[..5]),
+        GameDialect::Titanium => hex_number(&digits[..5]),
         GameDialect::EqMac => std::str::from_utf8(digits)
             .ok()
             .and_then(|value| value.parse().ok())
@@ -473,7 +473,7 @@ fn message_for(protocol: GameDialect, bytes: &[u8], include_raw: bool) -> Messag
     let mut pos = 0;
     while pos < bytes.len() {
         let body_size = match protocol {
-            GameDialect::TitaniumP99 => 45,
+            GameDialect::Titanium => 45,
             GameDialect::EqMac => 7,
         };
         if bytes[pos] == 0x12 && pos + body_size + 1 < bytes.len() {
@@ -516,7 +516,7 @@ fn message_for(protocol: GameDialect, bytes: &[u8], include_raw: bool) -> Messag
 /// Extract Titanium/P99 item links and readable text from a wire message.
 #[must_use]
 pub fn message(bytes: &[u8], include_raw: bool) -> Message {
-    message_for(GameDialect::TitaniumP99, bytes, include_raw)
+    message_for(GameDialect::Titanium, bytes, include_raw)
 }
 
 /// Decode every Titanium communication packet, without filtering channel IDs.
@@ -526,7 +526,7 @@ pub fn message(bytes: &[u8], include_raw: bool) -> Message {
 ///
 /// Returns an error when a recognized communication packet is malformed.
 pub fn parse(opcode: u16, body: &[u8], include_raw: bool) -> Result<Option<ChatEvent>> {
-    parse_for(GameDialect::TitaniumP99, opcode, body, include_raw)
+    parse_for(GameDialect::Titanium, opcode, body, include_raw)
 }
 
 /// Decode communication packets for the selected server protocol.
@@ -545,13 +545,13 @@ pub fn parse_for(
             .with_message(message_for(protocol, body, include_raw)),
         CommunicationOpcode::ChannelMessage => {
             let header = match protocol {
-                GameDialect::TitaniumP99 => TITANIUM_CHANNEL_MESSAGE_HEADER,
+                GameDialect::Titanium => TITANIUM_CHANNEL_MESSAGE_HEADER,
                 GameDialect::EqMac => MAC_CHANNEL_MESSAGE_HEADER,
             };
             ensure!(body.len() > header, "truncated ChannelMessage");
             ensure!(body[header..].contains(&0), "unterminated ChannelMessage");
             let channel = match protocol {
-                GameDialect::TitaniumP99 => u32_at(body, 132),
+                GameDialect::Titanium => u32_at(body, 132),
                 GameDialect::EqMac => u32::from(u16::from_le_bytes([body[130], body[131]])),
             };
             let mut event = ChatEvent::new(opcode, body, channel_name(channel), include_raw)
@@ -563,7 +563,7 @@ pub fn parse_for(
         }
         CommunicationOpcode::Emote => {
             let text_offset = match protocol {
-                GameDialect::TitaniumP99 => 4,
+                GameDialect::Titanium => 4,
                 GameDialect::EqMac => 2,
             };
             ensure!(body.len() > text_offset, "truncated Emote");
@@ -591,7 +591,7 @@ pub fn parse_for(
         }
         CommunicationOpcode::FormattedMessage => {
             let arguments_offset = match protocol {
-                GameDialect::TitaniumP99 => 12,
+                GameDialect::Titanium => 12,
                 GameDialect::EqMac => 6,
             };
             ensure!(body.len() >= arguments_offset, "truncated FormattedMessage");
@@ -602,7 +602,7 @@ pub fn parse_for(
                 .collect();
             let mut event = ChatEvent::new(opcode, body, ChannelName::System, include_raw);
             event.string_id = Some(match protocol {
-                GameDialect::TitaniumP99 => u32_at(body, 4),
+                GameDialect::Titanium => u32_at(body, 4),
                 GameDialect::EqMac => u32::from(u16_at(body, 2)),
             });
             event.arguments = Some(arguments);

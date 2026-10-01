@@ -1,13 +1,17 @@
 //! Items on the ground: the zone's object table, pickups, and world containers,
 //! which are not supported yet, so one that opens for this player is closed again.
-use super::{ClientCommand, ClientEvent, Events, Session};
+use super::{
+    feature::{Feature, Out, World},
+    ClientCommand, ClientEvent,
+};
 use anyhow::{anyhow, ensure, Result};
 use eq_network_game::{
+    command::EncodedCommand,
     inventory::{Inventory, InventorySlot},
-    objects::{ObjectUpdate, Objects, CLICK_OPCODE, CONTAINER_OPCODE},
+    message::Message,
+    objects::{ObjectUpdate, Objects},
     world::{Position, WorldEvent},
 };
-use std::time::{Duration, Instant};
 
 /// Where a picked-up item arrives.
 const CURSOR: InventorySlot = InventorySlot(30);
@@ -16,31 +20,69 @@ const CURSOR: InventorySlot = InventorySlot(30);
 #[derive(Debug, Default)]
 pub(super) struct GroundObjects(Objects);
 
-impl GroundObjects {
-    /// Records an update received before the zone is ready.
-    pub(super) fn apply(&mut self, update: &ObjectUpdate) {
-        self.0.apply(update);
+impl Feature for GroundObjects {
+    fn capabilities(&self) -> Vec<crate::world::Capability> {
+        use crate::world::Capability;
+        vec![Capability::GroundItems]
     }
 
-    /// The table to report when the zone becomes ready.
-    pub(super) fn admission(&self) -> ObjectUpdate {
-        self.0.admission()
+    fn admit(&mut self, message: &Message, _world: &mut World) -> Result<()> {
+        if let Message::Event(WorldEvent::Objects(update)) = message {
+            self.0.apply(update);
+        }
+        Ok(())
+    }
+
+    fn admitted(&mut self, _world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
+        out.log
+            .send(ClientEvent::World(WorldEvent::Objects(self.0.admission())))
+    }
+
+    fn owns(&self, command: &ClientCommand) -> bool {
+        matches!(command, ClientCommand::PickUp { .. })
+    }
+
+    /// Picks up an item from the ground.
+    fn handle(
+        &mut self,
+        command: &ClientCommand,
+        world: &mut World,
+        out: &mut Out<'_, '_>,
+    ) -> Result<()> {
+        let ClientCommand::PickUp { drop_id, .. } = command else {
+            return Ok(());
+        };
+        let checked = self.pickup(*drop_id, world.player_at(), &world.inventory);
+        let error = match checked {
+            Ok(packet) => {
+                out.send(&packet)?;
+                None
+            }
+            Err(error) => Some(error.to_string()),
+        };
+        out.log.send(ClientEvent::World(WorldEvent::ObjectAction {
+            session_id: world.session_id,
+            drop_id: *drop_id,
+            error,
+        }))
     }
 
     /// Records a server update, and closes a container that opened for this
     /// player, so the server does not keep it in use.
-    pub(super) fn observe(
+    fn observe(
         &mut self,
-        update: &ObjectUpdate,
-        own_spawn: Option<u16>,
-        session: &mut Session,
-        log: &mut Events<'_>,
+        message: &Message,
+        world: &mut World,
+        out: &mut Out<'_, '_>,
     ) -> Result<()> {
+        let Message::Event(WorldEvent::Objects(update)) = message else {
+            return Ok(());
+        };
         self.0.apply(update);
         if let ObjectUpdate::Container(view) = update {
-            if view.open && own_spawn.is_some_and(|id| u32::from(id) == view.player_id) {
-                session.send(CONTAINER_OPCODE, &view.close_packet())?;
-                log.diagnostic(format!(
+            if view.open && world.is_player(view.player_id) {
+                out.send(&view.close_packet())?;
+                out.log.diagnostic(format!(
                     "Closed world container {}: containers are not supported yet",
                     view.drop_id
                 ))?;
@@ -48,62 +90,18 @@ impl GroundObjects {
         }
         Ok(())
     }
+}
 
-    /// Handles a pickup request; false for any other command.
-    pub(super) fn handle(
-        &self,
-        command: &ClientCommand,
-        session_id: u64,
-        player: Option<(u16, Position)>,
-        inventory: &Inventory,
-        session: &mut Session,
-        log: &mut Events<'_>,
-    ) -> Result<bool> {
-        let ClientCommand::PickUp {
-            session_id: requested,
-            drop_id,
-            created,
-        } = command
-        else {
-            return Ok(false);
-        };
-        let pickup = Pickup {
-            requested: *requested,
-            drop_id: *drop_id,
-            created: *created,
-        };
-        let error = match self.pickup(&pickup, session_id, player, inventory, Instant::now()) {
-            Ok(body) => {
-                session.send(CLICK_OPCODE, &body)?;
-                None
-            }
-            Err(error) => Some(error.to_string()),
-        };
-        log.send(ClientEvent::World(WorldEvent::ObjectAction {
-            session_id,
-            drop_id: *drop_id,
-            error,
-        }))?;
-        Ok(true)
-    }
-
-    /// Checks a pickup against the admission, the cursor and the reach. The
-    /// item arrives on the cursor, so it must be empty, and an unsettled move
-    /// could still change it.
+impl GroundObjects {
+    /// Checks a pickup against the cursor and the reach. The item arrives on
+    /// the cursor, so it must be empty, and an unsettled move could still
+    /// change it.
     fn pickup(
         &self,
-        request: &Pickup,
-        session_id: u64,
+        drop_id: u32,
         player: Option<(u16, Position)>,
         inventory: &Inventory,
-        now: Instant,
-    ) -> Result<[u8; 8]> {
-        ensure!(
-            request.requested == session_id
-                && request.created <= now
-                && now.duration_since(request.created) < Duration::from_secs(1),
-            "stale pickup request"
-        );
+    ) -> Result<EncodedCommand> {
         ensure!(
             inventory.received() && !inventory.stale(),
             "the inventory is not loaded"
@@ -117,14 +115,8 @@ impl GroundObjects {
             "put down the item on your cursor first"
         );
         let (spawn_id, position) = player.ok_or_else(|| anyhow!("player is unavailable"))?;
-        self.0.pickup_packet(request.drop_id, spawn_id, position)
+        self.0.pickup_packet(drop_id, spawn_id, position)
     }
-}
-
-struct Pickup {
-    requested: u64,
-    drop_id: u32,
-    created: Instant,
 }
 
 #[cfg(test)]
@@ -137,12 +129,15 @@ mod tests {
 
     fn table() -> GroundObjects {
         let mut objects = GroundObjects::default();
-        objects.apply(&ObjectUpdate::Spawn(GroundObject {
+        let spawn = WorldEvent::Objects(ObjectUpdate::Spawn(GroundObject {
             drop_id: 71,
             model: "IT63_ACTORDEF".into(),
             position: Position::default(),
             object_type: 0,
         }));
+        objects
+            .admit(&Message::Event(spawn), &mut World::new(5))
+            .unwrap();
         objects
     }
 
@@ -184,72 +179,38 @@ mod tests {
     }
 
     #[test]
-    fn pickups_need_a_fresh_request_a_loaded_inventory_and_an_empty_cursor() {
+    fn pickups_need_a_loaded_inventory_and_an_empty_cursor() {
         let objects = table();
-        let now = Instant::now();
         let player = Some((9, Position::default()));
-        let request = Pickup {
-            requested: 5,
-            drop_id: 71,
-            created: now,
-        };
         assert_eq!(
-            objects
-                .pickup(&request, 5, player, &loaded(false), now)
-                .unwrap(),
+            objects.pickup(71, player, &loaded(false)).unwrap().body,
             [71, 0, 0, 0, 9, 0, 0, 0]
         );
-        let error = |request: &Pickup, player, inventory: &Inventory, at| {
+        let error = |player, inventory: &Inventory| {
             objects
-                .pickup(request, 5, player, inventory, at)
+                .pickup(71, player, inventory)
                 .unwrap_err()
                 .to_string()
         };
         assert_eq!(
-            error(&request, player, &loaded(true), now),
+            error(player, &loaded(true)),
             "put down the item on your cursor first"
         );
         assert_eq!(
-            error(&request, player, &Inventory::default(), now),
+            error(player, &Inventory::default()),
             "the inventory is not loaded"
         );
-        assert_eq!(
-            error(&request, None, &loaded(false), now),
-            "player is unavailable"
-        );
-        assert_eq!(
-            error(
-                &request,
-                player,
-                &loaded(false),
-                now + Duration::from_secs(1)
-            ),
-            "stale pickup request"
-        );
-        let other_session = Pickup {
-            requested: 4,
-            ..request
-        };
-        assert_eq!(
-            error(&other_session, player, &loaded(false), now),
-            "stale pickup request"
-        );
+        assert_eq!(error(None, &loaded(false)), "player is unavailable");
     }
 
     #[test]
     fn an_unsettled_move_holds_pickups_back() {
         let objects = table();
-        let now = Instant::now();
         let mut inventory = loaded(false);
         inventory.apply(InventoryUpdate::Prediction(vec![item(InventorySlot(23))]));
-        let request = Pickup {
-            requested: 5,
-            drop_id: 71,
-            created: now,
-        };
         assert_eq!(
             objects
-                .pickup(&request, 5, Some((9, Position::default())), &inventory, now)
+                .pickup(71, Some((9, Position::default())), &inventory)
                 .unwrap_err()
                 .to_string(),
             "wait for the last item move to settle"

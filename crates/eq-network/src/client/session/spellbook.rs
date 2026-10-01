@@ -1,76 +1,36 @@
-//! Delayed spellbook intentions are revalidated at submission time.
-use anyhow::Result;
-use eq_network_game::{inventory::Inventory, spells::SpellBook};
+//! The spellbook and the memorized spells: scribing scrolls, memorizing and
+//! forgetting spells, and deleting or swapping book entries.
+//!
+//! Scribing and memorizing sit the player and wait first, as the game
+//! requires, and anything that disturbs the player meanwhile cancels them. A
+//! waiting request is checked again against the book and cursor when it goes
+//! out, and every change is then held until the server answers it.
+mod consumption;
+mod edits;
+
+use super::{
+    actions::Resource,
+    feature::{Feature, Out, World},
+    ClientCommand, ClientEvent,
+};
+use anyhow::{bail, ensure, Context, Result};
+use consumption::ScribeConsumption;
+use edits::BookEdits;
+use eq_network_game::{
+    command::{EncodedCommand, Posture},
+    inventory::{Inventory, InventoryUpdate},
+    message::Message,
+    spells::{self, BookActionStatus, SpellBook, SpellUpdate},
+    world::{PostureState, WorldEvent},
+};
 use std::time::{Duration, Instant};
 
-/// Prepares immediate book edits against current admission and slot contents.
-pub(super) fn edit_packet(
-    command: &crate::client::ClientCommand,
-    book: Option<&SpellBook>,
-    session: u64,
-    busy: bool,
-    now: Instant,
-) -> Option<Result<(u16, [u8; 8])>> {
-    use crate::client::ClientCommand;
-    use anyhow::{ensure, Context};
-    let (requested, created) = match command {
-        ClientCommand::DeleteSpell {
-            session_id,
-            created,
-            ..
-        }
-        | ClientCommand::SwapSpell {
-            session_id,
-            created,
-            ..
-        } => (*session_id, *created),
-        _ => return None,
-    };
-    Some((|| {
-        ensure!(
-            requested == session
-                && created <= now
-                && now.duration_since(created) < Duration::from_secs(1)
-                && !busy,
-            "book edit is busy or stale"
-        );
-        let book = book.context("spellbook unavailable")?;
-        match command {
-            ClientCommand::DeleteSpell { slot, spell_id, .. } => {
-                Ok((0x4f37, book.delete_packet(*slot, *spell_id)?))
-            }
-            ClientCommand::SwapSpell {
-                from,
-                to,
-                from_spell,
-                to_spell,
-                ..
-            } => Ok((
-                0x2126,
-                book.swap_packet(*from, *to, *from_spell, *to_spell)?,
-            )),
-            _ => unreachable!("edit command matched above"),
-        }
-    })())
-}
+/// How long the player sits before a scribe or memorization goes out; not yet
+/// measured against a live client.
+const SITTING: Duration = Duration::from_secs(5);
 
-/// Cancels local preparation once and tells the host why it cannot be submitted.
-pub(super) fn cancel_pending(
-    pending: &mut Option<PendingBookAction>,
-    reason: &str,
-    log: &mut super::Events<'_>,
-) -> Result<()> {
-    if pending.take().is_some() {
-        log.send(super::ClientEvent::World(
-            crate::world::WorldEvent::BookAction(
-                eq_network_game::spells::BookActionStatus::Cancelled(reason.into()),
-            ),
-        ))?;
-    }
-    Ok(())
-}
-
-pub(super) enum BookIntent {
+/// What a scribe or memorization will ask for once the player has sat.
+enum BookIntent {
     Memorize {
         gem: u8,
         spell_id: u32,
@@ -82,20 +42,22 @@ pub(super) enum BookIntent {
     },
 }
 
-pub(super) struct PendingBookAction {
-    pub started: Instant,
-    pub intent: BookIntent,
+/// A scribe or memorization waiting for the player to sit.
+struct PendingBookAction {
+    started: Instant,
+    intent: BookIntent,
 }
 
 impl PendingBookAction {
-    /// Uses the provisional five-second sitting interval until live timing is verified.
-    pub fn ready(&self, now: Instant) -> bool {
+    /// Whether the player has sat long enough.
+    fn ready(&self, now: Instant) -> bool {
         now.checked_duration_since(self.started)
-            .is_some_and(|elapsed| elapsed >= Duration::from_secs(5))
+            .is_some_and(|elapsed| elapsed >= SITTING)
     }
 
-    /// Rechecks the current book and cursor instead of replaying cached packet bytes.
-    pub fn packet(&self, book: &SpellBook, inventory: &Inventory) -> Result<[u8; 16]> {
+    /// The request, checked against the book and cursor as they are now
+    /// rather than as they were when the player asked.
+    fn packet(&self, book: &SpellBook, inventory: &Inventory) -> Result<EncodedCommand> {
         match self.intent {
             BookIntent::Memorize { gem, spell_id } => book.memorize_packet(gem, spell_id),
             BookIntent::Scribe {
@@ -107,101 +69,680 @@ impl PendingBookAction {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+/// A book entry deleted, or two swapped, checked against the book as it is.
+fn edit_packet(
+    command: &ClientCommand,
+    book: Option<&SpellBook>,
+    busy: bool,
+) -> Result<EncodedCommand> {
+    ensure!(!busy, "book edit is busy");
+    let book = book.context("spellbook unavailable")?;
+    match *command {
+        ClientCommand::DeleteSpell { slot, spell_id, .. } => book.delete_packet(slot, spell_id),
+        ClientCommand::SwapSpell {
+            from,
+            to,
+            from_spell,
+            to_spell,
+            ..
+        } => book.swap_packet(from, to, from_spell, to_spell),
+        _ => bail!("not a spellbook edit"),
+    }
+}
 
-    #[test]
-    fn immediate_book_edits_require_fresh_current_unbusy_admission() {
-        let now = Instant::now();
-        let mut book = SpellBook::default();
-        book.apply(&eq_network_game::spells::SpellUpdate::Slot {
-            slot: 0,
-            spell_id: 42,
-            mode: 0,
-        });
-        for created in [
-            now,
-            now.checked_sub(Duration::from_secs(1)).unwrap(),
-            now + Duration::from_millis(1),
-        ] {
-            for command in [
-                crate::client::ClientCommand::SwapSpell {
-                    session_id: 7,
-                    from: 0,
-                    to: 1,
-                    from_spell: 42,
-                    to_spell: None,
-                    created,
-                },
-                crate::client::ClientCommand::DeleteSpell {
-                    session_id: 7,
-                    slot: 0,
-                    spell_id: 42,
-                    created,
-                },
-            ] {
-                assert_eq!(
-                    edit_packet(&command, Some(&book), 7, false, now)
-                        .unwrap()
-                        .is_ok(),
-                    created == now
-                );
-                assert!(edit_packet(&command, Some(&book), 8, false, now)
-                    .unwrap()
-                    .is_err());
-                assert!(edit_packet(&command, Some(&book), 7, true, now)
-                    .unwrap()
-                    .is_err());
-                assert!(edit_packet(&command, None, 7, false, now).unwrap().is_err());
+/// Tells the host how a spellbook change stands.
+fn report(status: BookActionStatus, out: &mut Out<'_, '_>) -> Result<()> {
+    out.log
+        .send(ClientEvent::World(WorldEvent::BookAction(status)))
+}
+
+/// The player's spellbook and the changes to it in flight.
+#[derive(Default)]
+pub(super) struct Spellbook {
+    /// The book as the server last described it.
+    book: Option<SpellBook>,
+    /// A scribe or memorization waiting for the player to sit.
+    pending: Option<PendingBookAction>,
+    /// The change waiting for the server's answer.
+    edits: BookEdits,
+    /// A scribe whose scroll the server takes from the cursor.
+    consumption: ScribeConsumption,
+}
+
+impl Spellbook {
+    /// Sits the player to scribe or memorize, once the request holds against
+    /// the book (and, for a scroll, the cursor) as they are now.
+    fn prepare(
+        &mut self,
+        intent: BookIntent,
+        world: &mut World,
+        out: &mut Out<'_, '_>,
+    ) -> Result<()> {
+        let (unavailable, starting, refused) = match intent {
+            BookIntent::Memorize { .. } => (
+                "memorization is unavailable",
+                "Memorizing spell",
+                "memorization",
+            ),
+            BookIntent::Scribe { .. } => ("scribing is unavailable", "Scribing scroll", "scribing"),
+        };
+        let pending = PendingBookAction {
+            started: Instant::now(),
+            intent,
+        };
+        let checked = self
+            .book
+            .as_ref()
+            .filter(|_| self.pending.is_none())
+            .context(unavailable)
+            .and_then(|book| pending.packet(book, &world.inventory));
+        if let Err(error) = checked {
+            report(BookActionStatus::Rejected(error.to_string()), out)?;
+            return out.log.diagnostic(format!("Rejected {refused}: {error}"));
+        }
+        let Some(spawn_id) = world.player.as_ref().map(|player| player.spawn_id) else {
+            return Ok(());
+        };
+        world.posture.set(spawn_id, Posture::Sitting, out)?;
+        self.pending = Some(pending);
+        report(BookActionStatus::Preparing, out)?;
+        out.log
+            .diagnostic(format!("{starting}; movement or posture changes cancel it"))
+    }
+
+    /// Deletes or swaps book entries at once.
+    fn edit(&mut self, command: &ClientCommand, out: &mut Out<'_, '_>) -> Result<()> {
+        let status = match edit_packet(command, self.book.as_ref(), self.pending.is_some()) {
+            Ok(packet) => {
+                out.send(&packet)?;
+                self.edits.sent(command, Instant::now());
+                BookActionStatus::AwaitingReply
+            }
+            Err(error) => BookActionStatus::Rejected(error.to_string()),
+        };
+        report(status, out)
+    }
+
+    /// Forgets a memorized spell; nothing waits for the server's answer.
+    fn forget(gem: u8, spell_id: u32, world: &World, out: &mut Out<'_, '_>) -> Result<()> {
+        let packet = world
+            .player
+            .as_ref()
+            .context("forget request is unavailable")
+            .and_then(|player| spells::forget_packet(&player.memorized_spells, gem, spell_id));
+        match packet {
+            Ok(packet) => {
+                out.send(&packet)?;
+                report(BookActionStatus::Submitted, out)
+            }
+            Err(error) => {
+                report(BookActionStatus::Rejected(error.to_string()), out)?;
+                out.log
+                    .diagnostic(format!("Rejected forgetting spell: {error}"))
             }
         }
     }
 
+    /// Sends the scribe or memorization the player has sat long enough for.
+    fn submit(&mut self, now: Instant, world: &World, out: &mut Out<'_, '_>) -> Result<()> {
+        let Some(pending) = self.pending.take_if(|pending| pending.ready(now)) else {
+            return Ok(());
+        };
+        let packet = self
+            .book
+            .as_ref()
+            .context("spellbook unavailable")
+            .and_then(|book| pending.packet(book, &world.inventory));
+        match packet {
+            Ok(packet) => {
+                out.send(&packet)?;
+                self.edits.prepared_sent(&pending.intent, now);
+                self.consumption.sent(&pending.intent);
+                report(BookActionStatus::AwaitingReply, out)
+            }
+            Err(error) => {
+                report(BookActionStatus::Cancelled(error.to_string()), out)?;
+                out.log
+                    .diagnostic(format!("Cancelled spellbook action: {error}"))
+            }
+        }
+    }
+
+    /// Follows the server's changes to the book and gems, settling the change
+    /// each one answers; the player starting a cast cancels a scribe or
+    /// memorization still waiting.
+    fn spell(
+        &mut self,
+        update: &SpellUpdate,
+        world: &mut World,
+        out: &mut Out<'_, '_>,
+    ) -> Result<()> {
+        let answer = self.edits.observe(update);
+        self.consumption
+            .observe(update, answer == Some(BookActionStatus::Confirmed));
+        // The character feature keeps the gems on the player's record.
+        if let Some(book) = self.book.as_mut() {
+            book.apply(update);
+        }
+        if let Some(status) = answer {
+            report(status, out)?;
+        }
+        if matches!(update, SpellUpdate::Began { caster_id, .. } if world.is_player(*caster_id)) {
+            self.cancel("Casting started", out)?;
+        }
+        Ok(())
+    }
+
+    /// Drops a scribe or memorization still waiting to go out, telling the
+    /// host why.
+    fn cancel(&mut self, reason: &str, out: &mut Out<'_, '_>) -> Result<()> {
+        if self.pending.take().is_none() {
+            return Ok(());
+        }
+        report(BookActionStatus::Cancelled(reason.into()), out)
+    }
+}
+
+impl Feature for Spellbook {
+    fn capabilities(&self) -> Vec<crate::world::Capability> {
+        use crate::world::Capability;
+        vec![Capability::Spellbook]
+    }
+
+    /// The book arrives with the player's profile, before the zone admits them.
+    fn admit(&mut self, message: &Message, _world: &mut World) -> Result<()> {
+        if let Message::Event(WorldEvent::SpellBook(book)) = message {
+            self.book = Some(book.clone());
+        }
+        Ok(())
+    }
+
+    fn admitted(&mut self, _world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
+        match &self.book {
+            Some(book) => out
+                .log
+                .send(ClientEvent::World(WorldEvent::SpellBook(book.clone()))),
+            None => Ok(()),
+        }
+    }
+
+    /// A scroll being scribed holds the inventory, since the server takes it
+    /// from the cursor when it answers; any change in flight holds the book.
+    fn holds(&self, _world: &World, now: Instant) -> Vec<(Resource, &'static str)> {
+        let mut held = Vec::new();
+        let scribing = self.edits.scribing()
+            || self.consumption.awaiting_cursor(now)
+            || self
+                .pending
+                .as_ref()
+                .is_some_and(|pending| matches!(pending.intent, BookIntent::Scribe { .. }));
+        if scribing {
+            // Moving items meanwhile desynchronized P99's inventory and
+            // logged the character out.
+            held.push((Resource::Inventory, "Wait for scribing to finish"));
+        }
+        if scribing || self.pending.is_some() || self.edits.outstanding() {
+            held.push((Resource::Spellbook, "Wait for the current spellbook change"));
+        }
+        held
+    }
+
+    /// Moving, casting or changing posture cancels a scribe or memorization
+    /// still waiting for the player to sit.
+    fn notice(
+        &mut self,
+        command: &ClientCommand,
+        _world: &mut World,
+        out: &mut Out<'_, '_>,
+    ) -> Result<()> {
+        if matches!(
+            command,
+            ClientCommand::Move(_)
+                | ClientCommand::CastSpell { .. }
+                | ClientCommand::UseItem(_)
+                | ClientCommand::SetPosture { .. }
+        ) {
+            self.cancel("Movement, casting or posture changed", out)?;
+        }
+        Ok(())
+    }
+
+    fn owns(&self, command: &ClientCommand) -> bool {
+        matches!(
+            command,
+            ClientCommand::ScribeSpell { .. }
+                | ClientCommand::MemorizeSpell { .. }
+                | ClientCommand::ForgetSpell { .. }
+                | ClientCommand::DeleteSpell { .. }
+                | ClientCommand::SwapSpell { .. }
+        )
+    }
+
+    fn handle(
+        &mut self,
+        command: &ClientCommand,
+        world: &mut World,
+        out: &mut Out<'_, '_>,
+    ) -> Result<()> {
+        match *command {
+            ClientCommand::ScribeSpell {
+                revision,
+                slot,
+                spell_id,
+                ..
+            } => self.prepare(
+                BookIntent::Scribe {
+                    revision,
+                    slot,
+                    spell_id,
+                },
+                world,
+                out,
+            ),
+            ClientCommand::MemorizeSpell { gem, spell_id, .. } => {
+                self.prepare(BookIntent::Memorize { gem, spell_id }, world, out)
+            }
+            ClientCommand::ForgetSpell { gem, spell_id, .. } => {
+                Self::forget(gem, spell_id, world, out)
+            }
+            _ => self.edit(command, out),
+        }
+    }
+
+    /// Ends a change the server never answered, cancels a waiting scribe or
+    /// memorization once the player dies or starts to zone, and sends one
+    /// the player has sat long enough for.
+    fn tick(&mut self, now: Instant, world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
+        // Servers refuse an edit (a spell above the character's level, another
+        // class's scroll) with only a chat message, so silence means refusal.
+        if let Some(status) = self.edits.expire(now) {
+            report(status, out)?;
+        }
+        if world.lifecycle.is_dead() {
+            self.cancel("Character died", out)
+        } else if world.lifecycle.pending().is_some() {
+            self.cancel("Zone transfer started", out)
+        } else {
+            self.submit(now, world, out)
+        }
+    }
+
+    /// The server's changes to the book and gems, and whatever the server
+    /// does to the player that cancels a scribe or memorization still waiting.
+    fn observe(
+        &mut self,
+        message: &Message,
+        world: &mut World,
+        out: &mut Out<'_, '_>,
+    ) -> Result<()> {
+        match message {
+            Message::Event(WorldEvent::SpellBook(book)) => {
+                self.book = Some(book.clone());
+                Ok(())
+            }
+            Message::Event(WorldEvent::Spell(update)) => self.spell(update, world, out),
+            Message::Event(WorldEvent::Posture { spawn_id, posture })
+                if world.is_player(*spawn_id) && *posture != PostureState::Sitting =>
+            {
+                self.cancel("Server changed character posture", out)
+            }
+            Message::Event(WorldEvent::Position { spawn_id, .. }) if world.is_player(*spawn_id) => {
+                self.cancel("Server corrected character position", out)
+            }
+            Message::Event(WorldEvent::Death(death)) if world.is_player(death.spawn_id) => {
+                self.cancel("Character died", out)
+            }
+            Message::ZoneOffer(offer) if offer.local_position(world.zone).is_some() => {
+                self.cancel("Server relocated character", out)
+            }
+            _ => Ok(()),
+        }
+    }
+
+    /// A confirmed scribe's cursor removal is the server using up the scroll.
+    fn explain(&mut self, message: &mut Message, world: &World) {
+        if let Message::Event(WorldEvent::Inventory(update)) = message {
+            let received = std::mem::replace(update, InventoryUpdate::Invalidated);
+            *update = self.consumption.reconcile(&world.inventory, received);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::{actions::Held, feature::testing};
+    use super::*;
+    use eq_network_game::{inventory::InventorySlot, world::Position, zoning};
+
+    /// A book with spell 73 in its first slot, or an empty one.
+    fn book(spell: Option<u32>) -> SpellBook {
+        let mut profile = vec![0; 19592];
+        if let Some(spell) = spell {
+            profile[2312..2316].copy_from_slice(&spell.to_le_bytes());
+        }
+        SpellBook::titanium_profile(&profile).unwrap()
+    }
+
+    /// The spellbook of admitted player 7.
+    fn admitted(spell: Option<u32>) -> (Spellbook, World) {
+        let mut spellbook = Spellbook::default();
+        let mut world = World::new(5);
+        spellbook
+            .admit(
+                &Message::Event(WorldEvent::SpellBook(book(spell))),
+                &mut world,
+            )
+            .unwrap();
+        world.own_spawn = Some(7);
+        world.player.admit(testing::player(7));
+        (spellbook, world)
+    }
+
+    fn memorize(gem: u8) -> ClientCommand {
+        ClientCommand::MemorizeSpell {
+            session_id: 5,
+            gem,
+            spell_id: 73,
+            created: Instant::now(),
+        }
+    }
+
+    /// Player 7 sitting to memorize spell 73 into gem 2.
+    fn memorizing() -> (Spellbook, World) {
+        let (mut spellbook, mut world) = admitted(Some(73));
+        testing::run(|out| spellbook.handle(&memorize(2), &mut world, out))
+            .result
+            .unwrap();
+        (spellbook, world)
+    }
+
+    /// The spellbook statuses among the host's events.
+    fn statuses(events: &[ClientEvent]) -> Vec<&BookActionStatus> {
+        events
+            .iter()
+            .filter_map(|event| match event {
+                ClientEvent::World(WorldEvent::BookAction(status)) => Some(status),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn cancelled(reason: &str) -> BookActionStatus {
+        BookActionStatus::Cancelled(reason.into())
+    }
+
     #[test]
-    fn cancellation_removes_both_intents_and_notifies_only_once() {
-        for intent in [
-            BookIntent::Memorize {
-                gem: 2,
-                spell_id: 73,
+    fn memorizing_sits_the_player_and_asks_once_they_have_sat_long_enough() {
+        let (mut spellbook, mut world) = admitted(Some(73));
+        let outcome = testing::run(|out| spellbook.handle(&memorize(2), &mut world, out));
+        outcome.result.unwrap();
+        assert_eq!(
+            outcome.sent,
+            [eq_network_game::command::titanium_posture(7, Posture::Sitting).unwrap()]
+        );
+        assert_eq!(statuses(&outcome.events), [&BookActionStatus::Preparing]);
+        assert_eq!(
+            spellbook.holds(&world, Instant::now()),
+            [(Resource::Spellbook, "Wait for the current spellbook change")]
+        );
+        let sat = Instant::now();
+        let outcome = testing::run(|out| spellbook.tick(sat, &mut world, out));
+        outcome.result.unwrap();
+        assert!(outcome.sent.is_empty());
+        let outcome = testing::run(|out| spellbook.tick(sat + SITTING, &mut world, out));
+        outcome.result.unwrap();
+        assert_eq!(outcome.sent.len(), 1);
+        assert_eq!(outcome.sent[0].opcode, spells::MEMORIZE_OPCODE);
+        assert_eq!(
+            statuses(&outcome.events),
+            [&BookActionStatus::AwaitingReply]
+        );
+        // The server's answer releases the book; the character feature fills
+        // the gem.
+        let answer = Message::Event(WorldEvent::Spell(SpellUpdate::Slot {
+            slot: 2,
+            spell_id: 73,
+            mode: 1,
+        }));
+        let outcome = testing::run(|out| spellbook.observe(&answer, &mut world, out));
+        outcome.result.unwrap();
+        assert_eq!(statuses(&outcome.events), [&BookActionStatus::Confirmed]);
+        assert!(spellbook.holds(&world, Instant::now()).is_empty());
+    }
+
+    #[test]
+    fn a_request_the_book_cannot_take_is_refused_without_sitting() {
+        let (mut spellbook, mut world) = admitted(None);
+        let outcome = testing::run(|out| spellbook.handle(&memorize(2), &mut world, out));
+        outcome.result.unwrap();
+        assert!(outcome.sent.is_empty());
+        assert!(matches!(
+            statuses(&outcome.events)[..],
+            [BookActionStatus::Rejected(_)]
+        ));
+        assert!(spellbook.holds(&world, Instant::now()).is_empty());
+    }
+
+    #[test]
+    fn the_player_moving_casting_or_standing_cancels_a_waiting_request_once() {
+        let created = Instant::now();
+        for command in [
+            ClientCommand::SetPosture {
+                session_id: 5,
+                spawn_id: 7,
+                posture: Posture::Standing,
+                created,
             },
-            BookIntent::Scribe {
-                revision: 4,
-                slot: 0,
-                spell_id: 73,
+            ClientCommand::CastSpell {
+                session_id: 5,
+                gem: 0,
+                spell_id: 202,
+                target_id: 7,
+                created,
             },
         ] {
-            let config = crate::client::ClientConfig::new(
-                "EXAMPLE_ACCOUNT",
-                "EXAMPLE_PASSWORD",
-                "Test Server",
-                "ExampleCharacter",
-            );
-            let mut received = Vec::new();
-            let mut handler = |event| {
-                received.push(event);
-                Ok(())
-            };
-            let mut log = super::super::Events::new(&config, &mut handler);
-            let mut pending = Some(PendingBookAction {
-                started: Instant::now().checked_sub(Duration::from_secs(5)).unwrap(),
-                intent,
-            });
-            assert!(pending.as_ref().unwrap().ready(Instant::now()));
-            cancel_pending(&mut pending, "Server relocated character", &mut log).unwrap();
-            assert!(pending.is_none());
-            cancel_pending(&mut pending, "Duplicate correction", &mut log).unwrap();
-            assert_eq!(received.len(), 1);
-            assert!(matches!(&received[0], crate::client::ClientEvent::World(
-                crate::world::WorldEvent::BookAction(
-                    eq_network_game::spells::BookActionStatus::Cancelled(reason)
-                )
-            ) if reason == "Server relocated character"));
+            let (mut spellbook, mut world) = memorizing();
+            for expected in [
+                vec![cancelled("Movement, casting or posture changed")],
+                vec![],
+            ] {
+                let outcome = testing::run(|out| spellbook.notice(&command, &mut world, out));
+                outcome.result.unwrap();
+                assert_eq!(
+                    statuses(&outcome.events),
+                    expected.iter().collect::<Vec<_>>()
+                );
+            }
+        }
+        // Commands that leave the player seated change nothing.
+        let (mut spellbook, mut world) = memorizing();
+        let target = ClientCommand::SelectTarget {
+            session_id: 5,
+            spawn_id: Some(9),
+        };
+        let outcome = testing::run(|out| spellbook.notice(&target, &mut world, out));
+        assert!(statuses(&outcome.events).is_empty());
+    }
+
+    #[test]
+    fn the_server_disturbing_the_player_cancels_a_waiting_request() {
+        let player = |event| Message::Event(event);
+        let relocation = Message::ZoneOffer(zoning::ZoneOffer {
+            zone_id: 2,
+            instance_id: 0,
+            position: Position::default(),
+            reason: 0,
+            to_bind: false,
+            solicited: true,
+        });
+        for (message, reason) in [
+            (
+                player(WorldEvent::Posture {
+                    spawn_id: 7,
+                    posture: PostureState::Standing,
+                }),
+                "Server changed character posture",
+            ),
+            (
+                player(WorldEvent::Position {
+                    spawn_id: 7,
+                    position: Position::default(),
+                    velocity: [0.0; 3],
+                }),
+                "Server corrected character position",
+            ),
+            (
+                player(WorldEvent::Death(zoning::Death {
+                    spawn_id: 7,
+                    killer_id: 0,
+                    corpse_id: 8,
+                    bind_zone_id: 2,
+                })),
+                "Character died",
+            ),
+            (
+                player(WorldEvent::Spell(SpellUpdate::Began {
+                    caster_id: 7,
+                    spell_id: 202,
+                    duration_ms: 0,
+                })),
+                "Casting started",
+            ),
+            (relocation, "Server relocated character"),
+        ] {
+            let (mut spellbook, mut world) = memorizing();
+            world.zone = (2, 0);
+            let outcome = testing::run(|out| spellbook.observe(&message, &mut world, out));
+            outcome.result.unwrap();
+            assert_eq!(statuses(&outcome.events), [&cancelled(reason)], "{reason}");
+            assert!(spellbook.holds(&world, Instant::now()).is_empty());
+        }
+        // Others standing, and the player sitting, leave the request waiting.
+        let (mut spellbook, mut world) = memorizing();
+        for (spawn_id, posture) in [(8, PostureState::Standing), (7, PostureState::Sitting)] {
+            let message = player(WorldEvent::Posture { spawn_id, posture });
+            let outcome = testing::run(|out| spellbook.observe(&message, &mut world, out));
+            assert!(statuses(&outcome.events).is_empty());
+        }
+        assert!(!spellbook.holds(&world, Instant::now()).is_empty());
+    }
+
+    #[test]
+    fn dying_or_zoning_cancels_a_waiting_request_before_it_goes_out() {
+        let later = Instant::now() + SITTING;
+        let (mut spellbook, mut world) = memorizing();
+        world.lifecycle.mark_dead();
+        let outcome = testing::run(|out| spellbook.tick(later, &mut world, out));
+        outcome.result.unwrap();
+        assert!(outcome.sent.is_empty());
+        assert_eq!(statuses(&outcome.events), [&cancelled("Character died")]);
+
+        let (mut spellbook, mut world) = memorizing();
+        world
+            .lifecycle
+            .offer(
+                zoning::ZoneOffer {
+                    zone_id: 3,
+                    instance_id: 0,
+                    position: Position::default(),
+                    reason: 0,
+                    to_bind: false,
+                    solicited: true,
+                },
+                Instant::now(),
+            )
+            .unwrap();
+        let outcome = testing::run(|out| spellbook.tick(later, &mut world, out));
+        outcome.result.unwrap();
+        assert!(outcome.sent.is_empty());
+        assert_eq!(
+            statuses(&outcome.events),
+            [&cancelled("Zone transfer started")]
+        );
+    }
+
+    #[test]
+    fn a_scribed_scroll_holds_the_inventory_until_the_server_uses_it_up() {
+        let (mut spellbook, mut world) = admitted(None);
+        world.inventory = consumption::tests::scroll_on_cursor().into();
+        let scribe = ClientCommand::ScribeSpell {
+            session_id: 5,
+            revision: world.inventory.revision(),
+            slot: 2,
+            spell_id: 73,
+            created: Instant::now(),
+        };
+        testing::run(|out| spellbook.handle(&scribe, &mut world, out))
+            .result
+            .unwrap();
+        let held = Held::new(spellbook.holds(&world, Instant::now()));
+        let pickup = ClientCommand::PickUp {
+            session_id: 5,
+            drop_id: 71,
+            created: Instant::now(),
+        };
+        assert_eq!(held.conflict(&pickup), Some("Wait for scribing to finish"));
+        assert_eq!(
+            held.conflict(&memorize(0)),
+            Some("Wait for the current spellbook change")
+        );
+        let outcome = testing::run(|out| spellbook.tick(Instant::now() + SITTING, &mut world, out));
+        outcome.result.unwrap();
+        assert_eq!(outcome.sent.len(), 1);
+        let answer = Message::Event(WorldEvent::Spell(SpellUpdate::Slot {
+            slot: 2,
+            spell_id: 73,
+            mode: 0,
+        }));
+        testing::run(|out| spellbook.observe(&answer, &mut world, out))
+            .result
+            .unwrap();
+        // Answered, but the scroll is still on the cursor until the server
+        // takes it.
+        let held = Held::new(spellbook.holds(&world, Instant::now()));
+        assert_eq!(held.conflict(&pickup), Some("Wait for scribing to finish"));
+        let mut removal = Message::Event(WorldEvent::Inventory(InventoryUpdate::Remove(
+            InventorySlot(30),
+        )));
+        spellbook.explain(&mut removal, &world);
+        assert!(matches!(
+            removal,
+            Message::Event(WorldEvent::Inventory(InventoryUpdate::Consume {
+                slot: InventorySlot(30),
+                charge: false
+            }))
+        ));
+        assert!(spellbook.holds(&world, Instant::now()).is_empty());
+    }
+
+    #[test]
+    fn book_edits_need_an_idle_admitted_book() {
+        let now = Instant::now();
+        let book = book(Some(42));
+        for command in [
+            ClientCommand::SwapSpell {
+                session_id: 7,
+                from: 0,
+                to: 1,
+                from_spell: 42,
+                to_spell: None,
+                created: now,
+            },
+            ClientCommand::DeleteSpell {
+                session_id: 7,
+                slot: 0,
+                spell_id: 42,
+                created: now,
+            },
+        ] {
+            assert!(edit_packet(&command, Some(&book), false).is_ok());
+            assert!(edit_packet(&command, Some(&book), true).is_err());
+            assert!(edit_packet(&command, None, false).is_err());
         }
     }
 
     #[test]
-    fn delayed_action_rechecks_book_and_does_not_run_early() {
+    fn a_waiting_request_is_checked_against_the_book_when_it_goes_out() {
         let now = Instant::now();
         let pending = PendingBookAction {
             started: now,
@@ -212,14 +753,12 @@ mod tests {
         };
         assert!(!pending.ready(now));
         assert!(!pending.ready(now + Duration::from_millis(4999)));
-        assert!(pending.ready(now + Duration::from_secs(5)));
+        assert!(pending.ready(now + SITTING));
         assert!(!pending.ready(now.checked_sub(Duration::from_secs(1)).unwrap()));
-        let mut profile = vec![0; 19592];
-        profile[2312..2316].copy_from_slice(&73u32.to_le_bytes());
-        let mut book = SpellBook::titanium_profile(&profile).unwrap();
+        let mut book = book(Some(73));
         let inventory = Inventory::default();
         assert!(pending.packet(&book, &inventory).is_ok());
-        book.apply(&eq_network_game::spells::SpellUpdate::Slot {
+        book.apply(&SpellUpdate::Slot {
             slot: 0,
             spell_id: 0xffff,
             mode: 0,

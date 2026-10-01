@@ -1,6 +1,14 @@
-//! Worker-side exclusion while awaiting a cast acknowledgement or result.
-use super::ClientCommand;
-use eq_network_game::spells::SpellUpdate;
+//! Casting: spells from the memorized gems and items' click effects, each held
+//! until the server answers it.
+use super::{
+    actions::Resource,
+    feature::{Encoder, Feature, Out, World},
+    ClientCommand, ClientEvent,
+};
+use anyhow::{Context, Result};
+use eq_network_game::{
+    inventory::ItemUse, message::Message, spells::SpellUpdate, world::WorldEvent,
+};
 use std::time::{Duration, Instant};
 
 /// Local retry policy, not a protocol timeout. Never resends a request automatically.
@@ -44,6 +52,14 @@ impl CastGuard {
     /// A duration reaching zero does not authorize another cast: await a server result.
     pub fn active(&self) -> bool {
         self.phase.is_some()
+    }
+
+    /// What a cast in flight holds.
+    pub fn hold(&self) -> Option<(Resource, &'static str)> {
+        self.active().then_some((
+            Resource::Casting,
+            "Wait for the current cast to finish or interrupt it",
+        ))
     }
 
     /// Records a request only after successful transport submission.
@@ -115,9 +131,219 @@ impl CastGuard {
     }
 }
 
+/// Casts spells and item effects for the player, one at a time.
+pub(super) struct Casting {
+    guard: CastGuard,
+    encoder: Encoder,
+}
+
+impl Casting {
+    pub(super) fn new(encoder: Encoder) -> Self {
+        Self {
+            guard: CastGuard::default(),
+            encoder,
+        }
+    }
+
+    /// Casts a memorized spell at a target the player can see.
+    fn cast(
+        &mut self,
+        command: &ClientCommand,
+        world: &World,
+        out: &mut Out<'_, '_>,
+    ) -> Result<()> {
+        let ClientCommand::CastSpell {
+            gem,
+            spell_id,
+            target_id,
+            ..
+        } = command
+        else {
+            return Ok(());
+        };
+        let ready = world.visible(*target_id)
+            && world.player.as_ref().is_some_and(|player| {
+                player.memorized_spells.get(usize::from(*gem)) == Some(&Some(*spell_id))
+            });
+        let refusal = if ready {
+            match self.encoder.encode(command) {
+                Ok(packet) => {
+                    out.send(&packet)?;
+                    return self.submitted(*spell_id, world, out);
+                }
+                Err(error) => (
+                    error.to_string(),
+                    format!("Rejected invalid outbound client command: {error}"),
+                ),
+            }
+        } else {
+            (
+                "The spell gem changed, or the target is unavailable".into(),
+                "Rejected an unavailable spell or target".into(),
+            )
+        };
+        if let Some(event) = rejected(command, &refusal.0) {
+            out.log.send(ClientEvent::World(event))?;
+        }
+        out.log.diagnostic(refusal.1)
+    }
+
+    /// Casts an item's click effect at a target the player can see.
+    fn use_item(&mut self, request: &ItemUse, world: &World, out: &mut Out<'_, '_>) -> Result<()> {
+        let target_available = world.player.is_some() && world.visible(request.target_id);
+        let prepared = world
+            .player
+            .as_ref()
+            .context("Character level is unavailable")
+            .and_then(|player| {
+                world
+                    .inventory
+                    .prepare_item_cast(request, player.level, target_available)
+            });
+        let error = match prepared {
+            Ok((spell_id, packet)) => {
+                out.send(&packet)?;
+                self.submitted(spell_id, world, out)?;
+                None
+            }
+            Err(error) => Some(error.to_string()),
+        };
+        out.log.send(ClientEvent::World(WorldEvent::ItemUseAction {
+            session_id: request.session_id,
+            request_id: request.request_id,
+            error,
+        }))
+    }
+
+    /// Holds casting until the server answers the request.
+    fn submitted(&mut self, spell_id: u32, world: &World, out: &mut Out<'_, '_>) -> Result<()> {
+        self.guard.submitted(spell_id, Instant::now());
+        out.log.send(ClientEvent::World(WorldEvent::CastPending {
+            session_id: world.session_id,
+            spell_id: Some(spell_id),
+        }))
+    }
+}
+
+impl Feature for Casting {
+    fn capabilities(&self) -> Vec<crate::world::Capability> {
+        use crate::world::Capability;
+        vec![Capability::Casting]
+    }
+
+    fn holds(&self, _world: &World, _now: Instant) -> Vec<(Resource, &'static str)> {
+        self.guard.hold().into_iter().collect()
+    }
+
+    fn owns(&self, command: &ClientCommand) -> bool {
+        matches!(
+            command,
+            ClientCommand::CastSpell { .. } | ClientCommand::UseItem(_)
+        )
+    }
+
+    fn handle(
+        &mut self,
+        command: &ClientCommand,
+        world: &mut World,
+        out: &mut Out<'_, '_>,
+    ) -> Result<()> {
+        match command {
+            ClientCommand::UseItem(request) => self.use_item(request, world, out),
+            _ => self.cast(command, world, out),
+        }
+    }
+
+    /// Releases a request the server never acknowledged, so the player may
+    /// try again.
+    fn tick(&mut self, now: Instant, world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
+        if !self.guard.expire(now) {
+            return Ok(());
+        }
+        out.log.send(ClientEvent::World(WorldEvent::CastPending {
+            session_id: world.session_id,
+            spell_id: None,
+        }))?;
+        out.log
+            .diagnostic("Cast acknowledgement timed out; a manual retry is available".into())
+    }
+
+    /// Follows the player's own casts; dying ends any cast.
+    fn observe(
+        &mut self,
+        message: &Message,
+        world: &mut World,
+        out: &mut Out<'_, '_>,
+    ) -> Result<()> {
+        match message {
+            Message::Event(WorldEvent::Spell(update)) => {
+                let Some(own) = world.player.as_ref().map(|player| player.spawn_id) else {
+                    return Ok(());
+                };
+                let pending = self.guard.pending();
+                self.guard.observe(own, update);
+                if pending.is_some() && self.guard.pending().is_none() {
+                    out.log.send(ClientEvent::World(WorldEvent::CastPending {
+                        session_id: world.session_id,
+                        spell_id: None,
+                    }))?;
+                }
+            }
+            Message::Event(WorldEvent::Death(death)) if world.is_player(death.spawn_id) => {
+                self.guard.clear();
+            }
+            _ => (),
+        }
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use super::super::feature::testing;
     use super::*;
+
+    #[test]
+    fn a_memorized_spell_goes_out_and_holds_casting_until_answered() {
+        let mut casting = Casting::new(Encoder::new(
+            eq_network_game::GameDialect::Titanium,
+            "Tester",
+        ));
+        let mut world = World::new(5);
+        world.own_spawn = Some(7);
+        let mut player = testing::player(7);
+        player.memorized_spells[0] = Some(202);
+        world.player.admit(player);
+        let cast = |gem| ClientCommand::CastSpell {
+            session_id: 5,
+            gem,
+            spell_id: 202,
+            target_id: 7,
+            created: Instant::now(),
+        };
+        let outcome = testing::run(|out| casting.handle(&cast(0), &mut world, out));
+        outcome.result.unwrap();
+        assert_eq!(outcome.sent.len(), 1);
+        assert!(matches!(
+            outcome.events[..],
+            [ClientEvent::World(WorldEvent::CastPending {
+                spell_id: Some(202),
+                ..
+            })]
+        ));
+        assert_eq!(casting.holds(&world, Instant::now()).len(), 1);
+        // A gem that does not hold the spell sends nothing and says why.
+        let outcome = testing::run(|out| casting.handle(&cast(1), &mut world, out));
+        outcome.result.unwrap();
+        assert!(outcome.sent.is_empty());
+        assert!(matches!(
+            outcome.events[..],
+            [
+                ClientEvent::World(WorldEvent::CastRejected { .. }),
+                ClientEvent::Diagnostic(_)
+            ]
+        ));
+    }
 
     #[test]
     fn rejection_preserves_request_identity_without_changing_cast_exclusion() {

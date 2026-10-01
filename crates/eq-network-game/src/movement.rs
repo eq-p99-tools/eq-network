@@ -5,7 +5,7 @@ pub use session::{
     BackwardCalibration, MotionCalibration, MotionSession, StrafeCalibration, WalkCalibration,
 };
 
-use crate::world::Position;
+use crate::{command::EncodedCommand, world::Position};
 use anyhow::{ensure, Result};
 use std::time::{Duration, Instant};
 
@@ -26,6 +26,10 @@ pub const STATIONARY_HEARTBEAT: Duration = Duration::from_secs(1);
 /// `OP_Jump` (Titanium): an empty notice that the character jumped. `EQEmu` only
 /// charges endurance for it; the arc itself travels in position updates.
 pub const JUMP_OPCODE: u16 = 0x0797;
+
+/// `OP_ClientUpdate` (Titanium): the player's position, sent unreliably since
+/// the next one replaces it.
+pub const POSITION_OPCODE: u16 = 0x14cb;
 
 /// Locomotion mode used to choose measured motion parameters.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -116,6 +120,17 @@ impl PositionPacket {
         let heading = (self.position.heading.rem_euclid(512.0) * 4.0) as u16;
         body[32..34].copy_from_slice(&(heading & 0x0fff).to_le_bytes());
         Ok(body)
+    }
+
+    /// The position update carrying this sample.
+    ///
+    /// # Errors
+    /// Rejects what [`Self::encode`] rejects.
+    pub fn packet(self) -> Result<EncodedCommand> {
+        Ok(EncodedCommand {
+            opcode: POSITION_OPCODE,
+            body: self.encode()?.to_vec(),
+        })
     }
 }
 

@@ -3,7 +3,7 @@
 //! Layouts follow `EQEmu`'s Titanium `Object_Struct` (`OP_GroundSpawn`),
 //! `ClickObject_Struct` (`OP_ClickObject`) and `ClickObjectAck_Struct`
 //! (`OP_ClickObjectAction`); `zone/object.cpp` decides what a click does.
-use crate::world::Position;
+use crate::{command::EncodedCommand, world::Position};
 use anyhow::{anyhow, ensure, Result};
 use serde::Serialize;
 use std::collections::BTreeMap;
@@ -109,8 +109,8 @@ impl ContainerView {
     /// `OP_ClickObjectAction` closing this container: its own record with `open`
     /// cleared, which `EQEmu` answers by closing it (`Object::Close`).
     #[must_use]
-    pub fn close_packet(&self) -> [u8; CONTAINER_LENGTH] {
-        let mut body = [0; CONTAINER_LENGTH];
+    pub fn close_packet(&self) -> EncodedCommand {
+        let mut body = vec![0; CONTAINER_LENGTH];
         for (offset, value) in [
             (0, self.player_id),
             (4, self.drop_id),
@@ -123,7 +123,10 @@ impl ContainerView {
         let name = self.name.as_bytes();
         let length = name.len().min(63);
         body[28..28 + length].copy_from_slice(&name[..length]);
-        body
+        EncodedCommand {
+            opcode: CONTAINER_OPCODE,
+            body,
+        }
     }
 }
 
@@ -177,7 +180,7 @@ impl Objects {
         drop_id: u32,
         player_id: u16,
         position: Position,
-    ) -> Result<[u8; 8]> {
+    ) -> Result<EncodedCommand> {
         let object = self
             .0
             .get(&drop_id)
@@ -194,10 +197,13 @@ impl Objects {
             distance.is_finite() && distance <= Self::USE_DISTANCE,
             "too far away to pick that up"
         );
-        let mut body = [0; 8];
+        let mut body = vec![0; 8];
         body[..4].copy_from_slice(&drop_id.to_le_bytes());
         body[4..].copy_from_slice(&u32::from(player_id).to_le_bytes());
-        Ok(body)
+        Ok(EncodedCommand {
+            opcode: CLICK_OPCODE,
+            body,
+        })
     }
 }
 
@@ -444,7 +450,8 @@ mod tests {
             heading: 0.0,
         };
         let packet = objects.pickup_packet(71, 0x1234, near).unwrap();
-        assert_eq!(packet, [71, 0, 0, 0, 0x34, 0x12, 0, 0]);
+        assert_eq!(packet.opcode, CLICK_OPCODE);
+        assert_eq!(packet.body, [71, 0, 0, 0, 0x34, 0x12, 0, 0]);
         assert!(objects.pickup_packet(72, 0x1234, near).is_err());
         assert!(objects.pickup_packet(73, 0x1234, near).is_err());
         assert!(objects.pickup_packet(71, 0, near).is_err());
@@ -472,7 +479,8 @@ mod tests {
         );
         let close = view.close_packet();
         body[8..12].fill(0);
-        assert_eq!(close, body);
+        assert_eq!(close.opcode, CONTAINER_OPCODE);
+        assert_eq!(close.body, body);
         assert!(decode(CONTAINER_OPCODE, &body[..91]).is_err());
     }
 }

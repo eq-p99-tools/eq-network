@@ -1,6 +1,6 @@
 //! Zone-scoped movement submission with caller-supplied calibration.
-use super::{MovementGuard, MovementMode, MovementRequest, PositionPacket};
-use crate::world::Position;
+use super::{MovementGuard, MovementMode, MovementRequest, PositionPacket, JUMP_OPCODE};
+use crate::{command::EncodedCommand, world::Position};
 use anyhow::{ensure, Result};
 use std::time::{Duration, Instant};
 
@@ -140,14 +140,17 @@ impl MotionSession {
         self.falls
     }
 
-    /// Checks that a jump may be announced: jumps rise and fall under the same
+    /// The notice that the character jumped. Jumps rise and fall under the same
     /// client-side physics as falls, so only sessions that accept falls allow them.
     ///
     /// # Errors
     /// Rejects jumps on sessions without falls.
-    pub fn jump(&self) -> Result<()> {
+    pub fn jump(&self) -> Result<EncodedCommand> {
         ensure!(self.falls, "jumping is not enabled for this server");
-        Ok(())
+        Ok(EncodedCommand {
+            opcode: JUMP_OPCODE,
+            body: Vec::new(),
+        })
     }
 
     /// Starts stationary, without assuming any effective movement speed.
@@ -191,10 +194,11 @@ impl MotionSession {
         Ok(())
     }
 
-    /// Calibrates from a queued request only if it postdates the latest reset.
+    /// Calibrates from a queued request only if it postdates the latest reset;
+    /// the zone session has already refused one made too long ago.
     ///
     /// # Errors
-    /// Rejects stale requests and invalid calibration values.
+    /// Rejects requests from before the latest reset and invalid calibration values.
     pub fn calibrate_fresh(
         &mut self,
         value: MotionCalibration,
@@ -202,9 +206,7 @@ impl MotionSession {
         now: Instant,
     ) -> Result<()> {
         ensure!(
-            created >= self.guard.input_epoch
-                && created <= now
-                && now.duration_since(created) <= Duration::from_millis(250),
+            created >= self.guard.input_epoch,
             "stale movement calibration"
         );
         self.calibrate(value, now)
@@ -234,7 +236,7 @@ impl MotionSession {
         &mut self,
         request: &MovementRequest,
         now: Instant,
-        send: impl FnOnce(&[u8; 36]) -> Result<()>,
+        send: impl FnOnce(&EncodedCommand) -> Result<()>,
     ) -> Result<()> {
         ensure!(!self.suspended, "movement session is suspended");
         ensure!(
@@ -304,7 +306,7 @@ impl MotionSession {
             animation: if moving { animation } else { 0 },
             delta_heading: turn,
         }
-        .encode()?;
+        .packet()?;
         send(&packet)?;
         self.guard = guard;
         self.position = request.position;
@@ -323,7 +325,7 @@ impl MotionSession {
     pub fn tick(
         &mut self,
         now: Instant,
-        send: impl FnOnce(&[u8; 36]) -> Result<()>,
+        send: impl FnOnce(&EncodedCommand) -> Result<()>,
     ) -> Result<bool> {
         let interval = if self.moving {
             Duration::from_millis(250)
@@ -341,7 +343,7 @@ impl MotionSession {
             animation: 0,
             delta_heading: 0,
         }
-        .encode()?;
+        .packet()?;
         send(&packet)?;
         self.sequence = self.sequence.wrapping_add(1);
         self.last_sent = now;

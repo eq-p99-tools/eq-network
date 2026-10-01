@@ -116,6 +116,9 @@ impl Presentation {
         let mut events = vec![
             // The EQMac zone header's clip fields have not been verified.
             WorldEvent::Entered {
+                // The EQMac loop sends chat; its other features are not built
+                // on the shared session yet.
+                capabilities: vec![crate::world::Capability::Talking],
                 session_id,
                 zone: zone.into(),
                 player: Box::new(player),

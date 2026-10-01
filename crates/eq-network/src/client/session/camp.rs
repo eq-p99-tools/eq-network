@@ -2,20 +2,17 @@
 //!
 //! The server only starts its own camp timer when it receives `OP_Camp`; the client
 //! decides when to log out, and standing or moving abandons the attempt.
-use super::{ClientCommand, ClientEvent, Events, Session};
+use super::{
+    feature::{Feature, Out, World},
+    ClientCommand, ClientEvent, ZoneExit,
+};
 use anyhow::Result;
 use eq_network_game::{
-    command::Posture,
+    command::{self, Posture},
+    message::Message,
     world::{CampStatus, WorldEvent},
 };
 use std::time::{Duration, Instant};
-
-/// `OP_Camp`, a four-byte request.
-pub(super) const CAMP_OPCODE: u16 = 0x78c1;
-/// `OP_Logout`, an empty request sent once the camp timer completes.
-pub(super) const LOGOUT_OPCODE: u16 = 0x61ff;
-/// `OP_LogoutReply`, after which the zone connection ends.
-pub(super) const LOGOUT_REPLY_OPCODE: u16 = 0x3cdc;
 
 const CAMP_DURATION: Duration = Duration::from_secs(30);
 const REPLY_TIMEOUT: Duration = Duration::from_secs(10);
@@ -36,12 +33,12 @@ pub(super) struct Camp {
 
 impl Camp {
     /// Whether a camp or logout is in progress.
-    pub(super) fn active(&self) -> bool {
+    fn active(&self) -> bool {
         !matches!(self.phase, Phase::Idle)
     }
 
     /// Starts the timer after `OP_Camp` was handed to transport.
-    pub(super) fn start(&mut self, now: Instant) {
+    fn start(&mut self, now: Instant) {
         if matches!(self.phase, Phase::Idle) {
             self.phase = Phase::Preparing(now);
         }
@@ -49,7 +46,7 @@ impl Camp {
 
     /// Abandons preparation; returns false when nothing was being prepared.
     /// A logout already sent cannot be taken back.
-    pub(super) fn cancel(&mut self) -> bool {
+    fn cancel(&mut self) -> bool {
         if matches!(self.phase, Phase::Preparing(_)) {
             self.phase = Phase::Idle;
             true
@@ -59,94 +56,192 @@ impl Camp {
     }
 
     /// Whether the preparation time has elapsed and `OP_Logout` should be sent.
-    pub(super) fn logout_due(&self, now: Instant) -> bool {
+    fn logout_due(&self, now: Instant) -> bool {
         matches!(self.phase, Phase::Preparing(started)
             if now.saturating_duration_since(started) >= CAMP_DURATION)
     }
 
     /// Records that `OP_Logout` was sent.
-    pub(super) fn logout_sent(&mut self, now: Instant) {
+    fn logout_sent(&mut self, now: Instant) {
         self.phase = Phase::LoggingOut(now);
     }
 
     /// Whether the logout reply should end the zone connection.
-    pub(super) fn logging_out(&self) -> bool {
+    fn logging_out(&self) -> bool {
         matches!(self.phase, Phase::LoggingOut(_))
     }
 
     /// Whether a sent logout has waited too long for its reply.
-    pub(super) fn reply_overdue(&self, now: Instant) -> bool {
+    fn reply_overdue(&self, now: Instant) -> bool {
         matches!(self.phase, Phase::LoggingOut(sent)
             if now.saturating_duration_since(sent) >= REPLY_TIMEOUT)
     }
 }
 
-/// Starts camping, or abandons preparation when the character stands or moves.
-/// Returns true when the command was fully handled here.
-pub(super) fn handle(
-    (camp, posture): (&mut Camp, &mut super::posture::OwnPosture),
-    session_id: u64,
-    own_spawn: Option<u16>,
-    command: &ClientCommand,
-    session: &mut Session,
-    log: &mut Events<'_>,
-) -> Result<bool> {
-    if let ClientCommand::Camp {
-        session_id: requested,
-        created,
-    } = command
-    {
-        let now = Instant::now();
-        if *requested != session_id
-            || *created > now
-            || now.duration_since(*created) >= Duration::from_secs(1)
-        {
-            log.send(ClientEvent::World(WorldEvent::Camp(CampStatus::Rejected(
-                "Camp request expired".into(),
-            ))))?;
-        } else if !camp.active() {
-            session.send(CAMP_OPCODE, &[0; 4])?;
-            camp.start(now);
-            log.send(ClientEvent::World(WorldEvent::Camp(CampStatus::Preparing)))?;
-        }
-        return Ok(true);
+impl Feature for Camp {
+    fn capabilities(&self) -> Vec<crate::world::Capability> {
+        use crate::world::Capability;
+        vec![Capability::Camping]
     }
-    let abandons = matches!(
-        command,
-        ClientCommand::SetPosture {
-            posture: Posture::Standing | Posture::Ducking,
-            ..
-        } | ClientCommand::Move(_)
-            | ClientCommand::CrossZoneLine { .. }
-            | ClientCommand::ClickDoor { .. }
-            | ClientCommand::PickUp { .. }
-    );
-    if abandons && camp.cancel() {
-        // Only a Standing appearance stops the server's own camp timer (EQEmu
-        // client_packet.cpp, OP_SpawnAppearance); without it the server logs the
-        // character out of its group and guild 29 seconds after /camp. Moving,
-        // ducking, opening a door or picking something up stands the camping
-        // character up first.
-        let standing = matches!(
+
+    fn owns(&self, command: &ClientCommand) -> bool {
+        matches!(command, ClientCommand::Camp { .. })
+    }
+
+    /// Starts camping.
+    fn handle(
+        &mut self,
+        command: &ClientCommand,
+        _world: &mut World,
+        out: &mut Out<'_, '_>,
+    ) -> Result<()> {
+        if !matches!(command, ClientCommand::Camp { .. }) || self.active() {
+            return Ok(());
+        }
+        out.send(&command::titanium_camp())?;
+        self.start(Instant::now());
+        out.log
+            .send(ClientEvent::World(WorldEvent::Camp(CampStatus::Preparing)))
+    }
+
+    /// Standing up, ducking or moving abandons a camp still being prepared.
+    fn notice(
+        &mut self,
+        command: &ClientCommand,
+        world: &mut World,
+        out: &mut Out<'_, '_>,
+    ) -> Result<()> {
+        let abandons = matches!(
             command,
             ClientCommand::SetPosture {
-                posture: Posture::Standing,
+                posture: Posture::Standing | Posture::Ducking,
                 ..
-            }
+            } | ClientCommand::Move(_)
+                | ClientCommand::CrossZoneLine { .. }
+                | ClientCommand::ClickDoor { .. }
+                | ClientCommand::PickUp { .. }
         );
-        if let (false, Some(spawn_id)) = (standing, own_spawn) {
-            let stand = eq_network_game::command::titanium_posture(spawn_id, Posture::Standing)?;
-            session.send(stand.opcode, &stand.body)?;
-            posture.sent(spawn_id, Posture::Standing, log)?;
+        if abandons && self.cancel() {
+            // Only a Standing appearance stops the server's own camp timer (EQEmu
+            // client_packet.cpp, OP_SpawnAppearance); without it the server logs the
+            // character out of its group and guild 29 seconds after /camp. Moving,
+            // ducking, opening a door or picking something up stands the camping
+            // character up first.
+            let standing = matches!(
+                command,
+                ClientCommand::SetPosture {
+                    posture: Posture::Standing,
+                    ..
+                }
+            );
+            let own_spawn = world.player.as_ref().map(|player| player.spawn_id);
+            if let (false, Some(spawn_id)) = (standing, own_spawn) {
+                world.posture.set(spawn_id, Posture::Standing, out)?;
+            }
+            out.log
+                .send(ClientEvent::World(WorldEvent::Camp(CampStatus::Abandoned)))?;
         }
-        log.send(ClientEvent::World(WorldEvent::Camp(CampStatus::Abandoned)))?;
+        Ok(())
     }
-    Ok(false)
+
+    /// Sends the logout once the camp timer completes, and gives up on a
+    /// reply that never came.
+    fn tick(&mut self, now: Instant, world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
+        if self.logout_due(now) {
+            out.send(&command::titanium_logout())?;
+            self.logout_sent(now);
+            out.log
+                .send(ClientEvent::World(WorldEvent::Camp(CampStatus::LoggingOut)))?;
+        }
+        if self.reply_overdue(now) {
+            out.log
+                .send(ClientEvent::World(WorldEvent::Camp(CampStatus::Camped)))?;
+            world.end(ZoneExit::CharacterSelect);
+        }
+        Ok(())
+    }
+
+    /// Dying abandons a camp still being prepared, and the logout's reply
+    /// ends the zone connection.
+    fn observe(
+        &mut self,
+        message: &Message,
+        world: &mut World,
+        out: &mut Out<'_, '_>,
+    ) -> Result<()> {
+        match message {
+            Message::Event(WorldEvent::Death(death))
+                if world.is_player(death.spawn_id) && self.cancel() =>
+            {
+                out.log
+                    .send(ClientEvent::World(WorldEvent::Camp(CampStatus::Abandoned)))?;
+            }
+            Message::LoggedOut if self.logging_out() => {
+                out.log
+                    .send(ClientEvent::World(WorldEvent::Camp(CampStatus::Camped)))?;
+                world.end(ZoneExit::CharacterSelect);
+            }
+            _ => (),
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]
 mod tests {
+    use super::super::feature::testing;
     use super::*;
+
+    #[test]
+    fn camping_sends_the_request_then_the_logout_and_the_reply_ends_the_session() {
+        let mut camp = Camp::default();
+        let mut world = World::new(5);
+        let request = ClientCommand::Camp {
+            session_id: 5,
+            created: Instant::now(),
+        };
+        let outcome = testing::run(|out| camp.handle(&request, &mut world, out));
+        outcome.result.unwrap();
+        assert_eq!(outcome.sent, [command::titanium_camp()]);
+        assert!(matches!(
+            outcome.events[..],
+            [ClientEvent::World(WorldEvent::Camp(CampStatus::Preparing))]
+        ));
+        let done = Instant::now() + CAMP_DURATION;
+        let outcome = testing::run(|out| camp.tick(done, &mut world, out));
+        outcome.result.unwrap();
+        assert_eq!(outcome.sent, [command::titanium_logout()]);
+        let outcome = testing::run(|out| camp.observe(&Message::LoggedOut, &mut world, out));
+        outcome.result.unwrap();
+        assert!(matches!(world.exit(), Some(ZoneExit::CharacterSelect)));
+    }
+
+    #[test]
+    fn using_a_door_abandons_the_camp_and_stands_the_player_up_first() {
+        let mut camp = Camp::default();
+        let mut world = World::new(5);
+        world.player.admit(testing::player(7));
+        camp.start(Instant::now());
+        let click = ClientCommand::ClickDoor {
+            session_id: 5,
+            door_id: 1,
+            created: Instant::now(),
+        };
+        let outcome = testing::run(|out| camp.notice(&click, &mut world, out));
+        outcome.result.unwrap();
+        assert_eq!(
+            outcome.sent,
+            [command::titanium_posture(7, Posture::Standing).unwrap()]
+        );
+        assert!(matches!(
+            outcome.events[..],
+            [
+                ClientEvent::World(WorldEvent::Posture { spawn_id: 7, .. }),
+                ClientEvent::World(WorldEvent::Camp(CampStatus::Abandoned)),
+            ]
+        ));
+        assert!(!camp.active());
+    }
 
     #[test]
     fn camp_waits_thirty_seconds_and_standing_cancels_only_before_logout() {

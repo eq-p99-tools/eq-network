@@ -1,10 +1,8 @@
 //! Validated carried, equipment and personal-bank moves. No destroy or trade sentinel is encoded.
 use super::{Inventory, InventoryItem, InventorySlot, InventoryUpdate};
+use crate::command::EncodedCommand;
 use anyhow::{ensure, Context, Result};
-use std::{
-    num::NonZeroU32,
-    time::{Duration, Instant},
-};
+use std::{num::NonZeroU32, time::Instant};
 
 /// Requested quantity; whole items use Titanium's zero-count move/swap form.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -30,6 +28,9 @@ pub struct InventoryMove {
     /// Local enqueue time; old requests cannot replay after a stall.
     pub created: Instant,
 }
+/// `OP_MoveItem`: an item moved between slots.
+pub const MOVE_OPCODE: u16 = 0x420f;
+
 /// Known character eligibility used for equipment checks; the server remains authoritative.
 #[derive(Clone, Copy, Debug)]
 pub struct InventoryActor {
@@ -118,26 +119,18 @@ impl Inventory {
     }
 
     /// Validates and sends once, committing a local prediction only after transport success.
+    /// The zone session has already refused a request for an earlier admission
+    /// or made too long ago, in its one freshness check.
     ///
     /// # Errors
-    /// Rejects old admissions/revisions, stale inventory, invalid placement or quantity,
+    /// Rejects old revisions, stale inventory, invalid placement or quantity,
     /// unsupported swaps and actions. Send failures leave state unchanged.
     pub fn submit_move(
         &mut self,
         request: &InventoryMove,
-        session_id: u64,
         actor: InventoryActor,
-        now: Instant,
-        send: impl FnOnce(&[u8; 12]) -> Result<()>,
+        send: impl FnOnce(&EncodedCommand) -> Result<()>,
     ) -> Result<InventoryUpdate> {
-        ensure!(
-            request.session_id == session_id,
-            "Inventory action belongs to an old zone"
-        );
-        ensure!(
-            request.created <= now && now.duration_since(request.created) <= Duration::from_secs(1),
-            "Inventory action expired"
-        );
         let update = self.plan_move(request, actor)?;
         let mut body = [0; 12];
         body[..4].copy_from_slice(&u32::try_from(request.from.0)?.to_le_bytes());
@@ -147,7 +140,10 @@ impl Inventory {
             MoveQuantity::Count(n) => n.get(),
         };
         body[8..].copy_from_slice(&count.to_le_bytes());
-        send(&body)?;
+        send(&EncodedCommand {
+            opcode: MOVE_OPCODE,
+            body: body.to_vec(),
+        })?;
         self.apply(update.clone());
         Ok(update)
     }
@@ -393,7 +389,7 @@ impl Inventory {
                 "This specialized container is not supported yet"
             );
         }
-        if (0..=21).contains(&slot.0) {
+        if slot.is_equipment() {
             let bit = u32::try_from(slot.0)?;
             ensure!(
                 item.details.slots & (1 << bit) != 0,
@@ -466,7 +462,10 @@ impl Inventory {
     }
 }
 fn movable(slot: InventorySlot, actor: InventoryActor) -> bool {
-    matches!(slot.0,0..=30|251..=330) || (actor.bank_access && slot.is_personal_bank())
+    slot.is_equipment()
+        || slot.is_carried()
+        || slot == InventorySlot::CURSOR
+        || (actor.bank_access && slot.is_personal_bank())
 }
 
 /// EQ item masks reserve bit zero for either agnostic profile identifier.

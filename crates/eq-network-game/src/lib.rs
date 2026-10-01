@@ -39,6 +39,9 @@ pub mod world;
 /// Death and server-directed zone transfer codecs.
 pub mod zoning;
 
+/// What one zone packet says, read once for the whole session.
+pub mod message;
+
 use serde::{Deserialize, Serialize};
 
 /// Game packet layout used by a client generation.
@@ -46,9 +49,27 @@ use serde::{Deserialize, Serialize};
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum GameDialect {
-    /// Titanium with the Project 1999 V62 patch.
+    /// Titanium, as stock `EQEmu` servers speak it and Project 1999 does
+    /// under its V62 protection.
     #[default]
-    TitaniumP99,
+    // Settings saved before the rename named it after Project 1999.
+    #[serde(alias = "titanium_p99")]
+    Titanium,
     /// The Windows TAKP/EQMac client used by Project Quarm.
     EqMac,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::GameDialect;
+
+    #[test]
+    fn titanium_reads_its_old_name_and_writes_its_new_one() {
+        let old: GameDialect = serde_json::from_str("\"titanium_p99\"").unwrap();
+        assert_eq!(old, GameDialect::Titanium);
+        assert_eq!(
+            serde_json::to_string(&GameDialect::Titanium).unwrap(),
+            "\"titanium\""
+        );
+    }
 }

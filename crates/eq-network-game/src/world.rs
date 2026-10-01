@@ -278,9 +278,68 @@ pub enum CampStatus {
     Rejected(String),
 }
 
+/// Something a zone session lets the player do. Which ones a session offers
+/// depends on the server type and on what its client generation has been
+/// built for; a front end greys out or hides the rest.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+pub enum Capability {
+    /// Casting memorized spells.
+    Casting,
+    /// Memorizing, scribing and forgetting spells.
+    Spellbook,
+    /// Moving and using items in the inventory and the bank.
+    Inventory,
+    /// Buying from and selling to merchants.
+    Trading,
+    /// Walking, running, sitting and standing.
+    Moving,
+    /// Jumping and falling, which the server takes from the client.
+    Falling,
+    /// Choosing a target.
+    Targeting,
+    /// Considering and attacking.
+    Combat,
+    /// Looting corpses.
+    Looting,
+    /// Talking on chat channels and inspecting linked items.
+    Talking,
+    /// Camping to the character list.
+    Camping,
+    /// Opening doors.
+    Doors,
+    /// Picking up items from the ground.
+    GroundItems,
+    /// Crossing zone lines and being moved between zones.
+    Zoning,
+}
+
+impl Capability {
+    /// Every capability, in order: what a session offers when its server and
+    /// client generation support everything.
+    pub const ALL: [Self; 14] = [
+        Self::Casting,
+        Self::Spellbook,
+        Self::Inventory,
+        Self::Trading,
+        Self::Moving,
+        Self::Falling,
+        Self::Targeting,
+        Self::Combat,
+        Self::Looting,
+        Self::Talking,
+        Self::Camping,
+        Self::Doors,
+        Self::GroundItems,
+        Self::Zoning,
+    ];
+}
+
 /// Changes delivered to a graphical consumer, independent of its rendering engine.
+///
+/// Exhaustive on purpose: a front end should handle every kind of news, so a
+/// new variant names itself in the consumer's build instead of falling into a
+/// wildcard arm.
 #[derive(Clone, Debug, PartialEq, Serialize)]
-#[non_exhaustive]
 pub enum WorldEvent {
     /// A server spell action; icon flags do not establish an authoritative buff slot.
     SpellEffect(crate::buffs::SpellEffect),
@@ -460,6 +519,9 @@ pub enum WorldEvent {
     Despawn(u16),
     /// A fully admitted zone session and its initial player state.
     Entered {
+        /// What this session lets the player do; front ends grey out or hide
+        /// the rest.
+        capabilities: Vec<Capability>,
         /// Unique connection identifier, never reused after reconnect.
         session_id: u64,
         /// Zone asset short name.
@@ -894,6 +956,31 @@ fn float(bytes: &[u8], offset: usize) -> Result<f32> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn every_capability_is_listed_once_in_order() {
+        use super::Capability;
+        // A new capability is a compile error here until it has a place.
+        let place = |capability| match capability {
+            Capability::Casting => 0,
+            Capability::Spellbook => 1,
+            Capability::Inventory => 2,
+            Capability::Trading => 3,
+            Capability::Moving => 4,
+            Capability::Falling => 5,
+            Capability::Targeting => 6,
+            Capability::Combat => 7,
+            Capability::Looting => 8,
+            Capability::Talking => 9,
+            Capability::Camping => 10,
+            Capability::Doors => 11,
+            Capability::GroundItems => 12,
+            Capability::Zoning => 13,
+        };
+        for (index, capability) in Capability::ALL.into_iter().enumerate() {
+            assert_eq!(place(capability), index, "{capability:?}");
+        }
+    }
+
     #[test]
     fn appearance_postures_preserve_known_and_unknown_states() {
         use super::PostureState;

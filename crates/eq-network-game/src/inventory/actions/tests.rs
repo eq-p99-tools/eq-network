@@ -51,7 +51,7 @@ fn bank_moves_require_current_access_and_preserve_filled_bags() {
     let before = inventory.clone();
     let sent = Cell::new(false);
     assert!(inventory
-        .submit_move(&action, action.session_id, actor(), Instant::now(), |_| {
+        .submit_move(&action, actor(), |_| {
             sent.set(true);
             Ok(())
         })
@@ -63,7 +63,8 @@ fn bank_moves_require_current_access_and_preserve_filled_bags() {
         ..actor()
     };
     inventory
-        .submit_move(&action, action.session_id, banker, Instant::now(), |body| {
+        .submit_move(&action, banker, |packet| {
+            let body = &packet.body[..];
             assert_eq!(u32::from_le_bytes(body[..4].try_into().unwrap()), 2000);
             assert_eq!(u32::from_le_bytes(body[4..8].try_into().unwrap()), 30);
             Ok(())
@@ -74,11 +75,7 @@ fn bank_moves_require_current_access_and_preserve_filled_bags() {
     // A queued deposit is denied if proximity has been lost before submission.
     let deposit = request(&inventory, 30, 2007);
     assert!(inventory.plan_move(&deposit, actor()).is_err());
-    inventory
-        .submit_move(&deposit, deposit.session_id, banker, Instant::now(), |_| {
-            Ok(())
-        })
-        .unwrap();
+    inventory.submit_move(&deposit, banker, |_| Ok(())).unwrap();
     assert_eq!(inventory.items[&InventorySlot(2101)].stack_count, Some(7));
     assert!(!inventory.items.contains_key(&InventorySlot(331)));
 }
@@ -123,9 +120,7 @@ fn automatic_storage_fills_stacks_before_empty_slots_without_equipping() {
     );
     let mut action = request(&inventory, 30, 22);
     action.quantity = MoveQuantity::Count(NonZeroU32::new(2).unwrap());
-    inventory
-        .submit_move(&action, 7, actor(), action.created, |_| Ok(()))
-        .unwrap();
+    inventory.submit_move(&action, actor(), |_| Ok(())).unwrap();
     assert_eq!(
         inventory.auto_store_destination(actor()).unwrap(),
         InventorySlot(23)
@@ -172,13 +167,14 @@ fn merging_preserves_remainder_and_encodes_exact_quantity() {
     action.quantity = MoveQuantity::Count(NonZeroU32::new(2).unwrap());
     let before = inventory.clone();
     assert!(inventory
-        .submit_move(&action, 7, actor(), action.created, |_| anyhow::bail!(
+        .submit_move(&action, actor(), |_| anyhow::bail!(
             "synthetic send failure"
         ))
         .is_err());
     assert_eq!(inventory, before);
     inventory
-        .submit_move(&action, 7, actor(), action.created, |body| {
+        .submit_move(&action, actor(), |packet| {
+            let body = &packet.body[..];
             assert_eq!(&body[8..], &2u32.to_le_bytes());
             Ok(())
         })
@@ -222,9 +218,7 @@ fn merge_consumes_cursor_and_rejects_invalid_capacity_or_item() {
         .unwrap()
         .details
         .id = 42;
-    inventory
-        .submit_move(&action, 7, actor(), action.created, |_| Ok(()))
-        .unwrap();
+    inventory.submit_move(&action, actor(), |_| Ok(())).unwrap();
     assert!(!inventory.items.contains_key(&InventorySlot(30)));
     assert_eq!(inventory.items[&InventorySlot(22)].stack_count, Some(20));
 }
@@ -248,7 +242,8 @@ fn whole_bag_move_sends_zero_count_and_relocates_contents() {
     let mut state = state(vec![item(22, None, 8), item(251, Some(7), 0)]);
     let request = request(&state, 22, 23);
     let update = state
-        .submit_move(&request, 7, actor(), request.created, |body| {
+        .submit_move(&request, actor(), |packet| {
+            let body = &packet.body[..];
             assert_eq!(*body, [22, 0, 0, 0, 23, 0, 0, 0, 0, 0, 0, 0]);
             Ok(())
         })
@@ -270,7 +265,8 @@ fn cursor_swap_preserves_both_items_and_bag_children() {
     ]);
     let action = request(&inventory, 30, 22);
     inventory
-        .submit_move(&action, 7, actor(), action.created, |body| {
+        .submit_move(&action, actor(), |packet| {
+            let body = &packet.body[..];
             assert_eq!(&body[8..], &[0; 4]);
             Ok(())
         })
@@ -286,9 +282,7 @@ fn cursor_swap_checks_eligibility_and_keeps_state_on_send_failure() {
     let action = request(&inventory, 30, 13);
     let original = inventory.clone();
     assert!(inventory
-        .submit_move(&action, 7, actor(), action.created, |_| anyhow::bail!(
-            "send failed"
-        ))
+        .submit_move(&action, actor(), |_| anyhow::bail!("send failed"))
         .is_err());
     assert_eq!(inventory, original);
     let stacks = state(vec![item(30, Some(3), 0), item(22, Some(7), 0)]);
@@ -302,7 +296,8 @@ fn split_preserves_remaining_stack_and_server_correction_overrides_prediction() 
     let mut request = request(&state, 22, 23);
     request.quantity = MoveQuantity::Count(NonZeroU32::new(1).unwrap());
     state
-        .submit_move(&request, 7, actor(), request.created, |body| {
+        .submit_move(&request, actor(), |packet| {
+            let body = &packet.body[..];
             assert_eq!(*body, [22, 0, 0, 0, 23, 0, 0, 0, 1, 0, 0, 0]);
             Ok(())
         })
@@ -315,37 +310,28 @@ fn split_preserves_remaining_stack_and_server_correction_overrides_prediction() 
     assert!(state.plan_move(&request, actor()).is_err());
 }
 #[test]
-fn stale_expired_and_failed_sends_never_mutate_or_retry() {
+fn old_revisions_and_failed_sends_never_mutate_or_retry() {
     let mut state = state(vec![item(22, None, 0)]);
     let original = state.clone();
     let request = request(&state, 22, 23);
     let sends = Cell::new(0);
     assert!(state
-        .submit_move(&request, 7, actor(), request.created, |_| {
+        .submit_move(&request, actor(), |_| {
             sends.set(sends.get() + 1);
             anyhow::bail!("synthetic send failure")
         })
         .is_err());
     assert_eq!(state, original);
     assert_eq!(sends.get(), 1);
-    for (sid, now, revision) in [
-        (8, request.created, request.revision),
-        (
-            7,
-            request.created + Duration::from_secs(2),
-            request.revision,
-        ),
-        (7, request.created, request.revision + 1),
-    ] {
-        let bad = InventoryMove {
-            revision,
-            ..request.clone()
-        };
-        assert!(state
-            .submit_move(&bad, sid, actor(), now, |_| panic!("invalid request sent"))
-            .is_err());
-        assert_eq!(state, original);
-    }
+    // A request for an older revision is never sent.
+    let bad = InventoryMove {
+        revision: request.revision + 1,
+        ..request.clone()
+    };
+    assert!(state
+        .submit_move(&bad, actor(), |_| panic!("invalid request sent"))
+        .is_err());
+    assert_eq!(state, original);
     state.apply(InventoryUpdate::Invalidated);
     assert!(state.plan_move(&request, actor()).is_err());
 }

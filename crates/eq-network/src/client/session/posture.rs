@@ -3,7 +3,7 @@
 //! last sent or was told, reports it to the client, and stands the character up
 //! before it moves, as the official client does; a server leaves a seated
 //! character seated while it walks.
-use super::{ClientEvent, Events, Session};
+use super::{feature::Out, ClientEvent, Events};
 use anyhow::Result;
 use eq_network_game::{
     command::Posture,
@@ -20,13 +20,26 @@ impl OwnPosture {
         self.0 = Some(posture);
     }
 
-    /// Notes a stance this session sent, and reports it since the server will not.
-    pub(super) fn sent(
+    /// Sits, stands or crouches the player: sends the stance, notes it and
+    /// reports it, since the server will not. Every feature that changes the
+    /// player's stance does it here.
+    ///
+    /// # Errors
+    /// Returns an error when the connection or the host's event handler fails.
+    pub(super) fn set(
         &mut self,
         spawn_id: u16,
         posture: Posture,
-        log: &mut Events<'_>,
+        out: &mut Out<'_, '_>,
     ) -> Result<()> {
+        out.send(&eq_network_game::command::titanium_posture(
+            spawn_id, posture,
+        )?)?;
+        self.sent(spawn_id, posture, out.log)
+    }
+
+    /// Notes a stance this session sent, and reports it since the server will not.
+    fn sent(&mut self, spawn_id: u16, posture: Posture, log: &mut Events<'_>) -> Result<()> {
         let posture = match posture {
             Posture::Standing => PostureState::Standing,
             Posture::Sitting => PostureState::Sitting,
@@ -48,18 +61,11 @@ impl OwnPosture {
     }
 
     /// Stands a seated, crouched or prone character up before it moves.
-    pub(super) fn stand_to_move(
-        &mut self,
-        spawn_id: u16,
-        session: &mut Session,
-        log: &mut Events<'_>,
-    ) -> Result<()> {
+    pub(super) fn stand_to_move(&mut self, spawn_id: u16, out: &mut Out<'_, '_>) -> Result<()> {
         if !self.grounded() {
             return Ok(());
         }
-        let stand = eq_network_game::command::titanium_posture(spawn_id, Posture::Standing)?;
-        session.send(stand.opcode, &stand.body)?;
-        self.sent(spawn_id, Posture::Standing, log)
+        self.set(spawn_id, Posture::Standing, out)
     }
 }
 

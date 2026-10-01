@@ -22,7 +22,7 @@ pub struct CharacterChoice {
 /// Rejects truncated records, unterminated/non-ASCII names and duplicate names.
 pub fn decode(dialect: GameDialect, body: &[u8]) -> Result<Vec<CharacterChoice>> {
     let offset = match dialect {
-        GameDialect::TitaniumP99 => {
+        GameDialect::Titanium => {
             ensure!(body.len() == 1704, "invalid Titanium character list length");
             1024
         }
@@ -60,7 +60,7 @@ pub fn decode(dialect: GameDialect, body: &[u8]) -> Result<Vec<CharacterChoice>>
                 .any(|choice| choice.name.eq_ignore_ascii_case(&name)),
             "duplicate character name"
         );
-        let titanium = dialect == GameDialect::TitaniumP99;
+        let titanium = dialect == GameDialect::Titanium;
         choices.push(CharacterChoice {
             slot: u8::try_from(index)?,
             name,
@@ -87,7 +87,7 @@ mod tests {
         body[1024 + 192..1024 + 199].copy_from_slice(b"Example");
         body[1697] = 12;
         body[976..980].copy_from_slice(&22u32.to_le_bytes());
-        let entries = decode(GameDialect::TitaniumP99, &body).unwrap();
+        let entries = decode(GameDialect::Titanium, &body).unwrap();
         assert_eq!(entries.len(), 1);
         assert_eq!(
             (
@@ -98,9 +98,9 @@ mod tests {
             ),
             (3, "Example", Some(12), Some(22))
         );
-        assert!(decode(GameDialect::TitaniumP99, &body[..1703]).is_err());
+        assert!(decode(GameDialect::Titanium, &body[..1703]).is_err());
         body[1024..1031].copy_from_slice(b"example");
-        assert!(decode(GameDialect::TitaniumP99, &body).is_err());
+        assert!(decode(GameDialect::Titanium, &body).is_err());
         let mut mac = vec![0; 1620];
         mac[64..71].copy_from_slice(b"Example");
         let entries = decode(GameDialect::EqMac, &mac).unwrap();
