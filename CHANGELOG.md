@@ -23,6 +23,24 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- `WorldEvent`, `GameCommand` and `ClientEvent` are exhaustive, so a front end
+  handles every kind of news and command instead of ignoring new ones in a
+  wildcard arm. `GameCommand::capability` names what each command needs of the
+  zone session, and `Capability::ALL` lists every capability.
+- Commands that arrive while the player is dead or between zones are refused
+  through the result each one waits for, instead of being dropped unanswered.
+- A command's session and age are checked once, by the zone session, before
+  any feature takes it: `Inventory::submit_move` and
+  `Inventory::prepare_item_cast` no longer take the session ID or the time,
+  and `MotionSession::calibrate_fresh` checks only that a calibration postdates
+  the latest reset.
+- `InventorySlot` names its ranges (`CURSOR`, `is_equipment`, `is_pack`,
+  `is_carried`, `is_in_cursor_bag`), so consumers stop spelling slot numbers.
+- Inside the zone session each piece of shared state has one writer: the
+  inventory feature for the inventory, the character feature for the server's
+  news about the player (now including the gems), the player's stance for every
+  sit, stand and crouch, and the world for the session's end and for stopping
+  and restarting movement around death and transfers.
 - Separate session helpers validate gameplay requests against current admission
   state and retain server corrections rather than treating predictions as acknowledgments.
 - Server types (`client::servers`): each difference between servers that speak

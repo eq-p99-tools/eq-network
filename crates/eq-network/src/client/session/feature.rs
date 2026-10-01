@@ -6,13 +6,13 @@
 //! it. The zone loop only fans packets and commands out to the features.
 
 use super::{
-    actions::Resource, entities::Spawns, lifecycle::ZoneLifecycle, motion::Body,
-    posture::OwnPosture, ClientCommand, ConnectionState, Events, ZoneExit,
+    actions::Resource, character::PlayerRecord, entities::Spawns, inventory::Carried,
+    lifecycle::ZoneLifecycle, motion::Body, posture::OwnPosture, ClientCommand, ConnectionState,
+    Events, ZoneExit,
 };
 use anyhow::{Context, Result};
 use eq_network_game::{
     command::{self, EncodedCommand},
-    inventory::Inventory,
     message::Message,
     world::{PlayerState, Position},
     GameDialect,
@@ -141,18 +141,19 @@ impl Encoder {
 pub(super) struct World {
     /// This admission's session, which host commands must name.
     pub(super) session_id: u64,
-    /// The admitted player, once the zone is ready.
-    pub(super) player: Option<PlayerState>,
+    /// The admitted player, once the zone is ready; see [`PlayerRecord`] for
+    /// who writes it.
+    pub(super) player: PlayerRecord,
     /// How the player's position reaches the server.
     pub(super) body: Body,
-    /// The player's inventory.
-    pub(super) inventory: Inventory,
+    /// The player's inventory, which only the inventory feature changes.
+    pub(super) inventory: Carried,
     /// The player's spawn ID, from the zone's first spawn record for them.
     pub(super) own_spawn: Option<u16>,
     /// The player's posture as last sent or reported.
     pub(super) posture: OwnPosture,
-    /// Set by a feature that ends the zone session.
-    pub(super) exit: Option<ZoneExit>,
+    /// How the zone session ends, once a feature has decided; see [`World::end`].
+    exit: Option<ZoneExit>,
     /// Death and zone transfers, which hold the player's actions.
     pub(super) lifecycle: ZoneLifecycle,
     /// The zone's ID and instance, from the player's profile.
@@ -170,9 +171,9 @@ impl World {
     pub(super) fn new(session_id: u64) -> Self {
         Self {
             session_id,
-            player: None,
+            player: PlayerRecord::default(),
             body: Body::default(),
-            inventory: Inventory::default(),
+            inventory: Carried::default(),
             own_spawn: None,
             posture: OwnPosture::default(),
             exit: None,
@@ -195,11 +196,77 @@ impl World {
         self.own_spawn.is_some_and(|own| u32::from(own) == spawn_id)
     }
 
+    /// Whether a spawn is the player or one the player can see: what a
+    /// target, a spell or an item's effect may be aimed at.
+    pub(super) fn visible(&self, spawn_id: u16) -> bool {
+        self.is_player(spawn_id) || self.spawns.visible(spawn_id).is_some()
+    }
+
+    /// Ends the zone session the way a feature decided: the one place the
+    /// session's end is written. The first decision stands.
+    pub(super) fn end(&mut self, exit: ZoneExit) {
+        if self.exit.is_none() {
+            self.exit = Some(exit);
+        }
+    }
+
+    /// Whether a feature has ended the zone session.
+    pub(super) const fn ending(&self) -> bool {
+        self.exit.is_some()
+    }
+
+    /// How the zone session ends, for the loop to carry out once.
+    pub(super) fn take_exit(&mut self) -> Option<ZoneExit> {
+        self.exit.take()
+    }
+
+    /// How the zone session ends, as decided so far.
+    #[cfg(test)]
+    pub(super) const fn exit(&self) -> Option<&ZoneExit> {
+        self.exit.as_ref()
+    }
+
     /// The admitted player's spawn ID and where they are now.
     pub(super) fn player_at(&self) -> Option<(u16, Position)> {
         let player = self.player.as_ref()?;
         let position = self.body.position().unwrap_or(player.position);
         Some((player.spawn_id, position))
+    }
+
+    /// The server offered a transfer: every command waits for its answer, and
+    /// the player stops where they are. Death and transfers stop and restart
+    /// the player's movement here and nowhere else, so the two stay in step.
+    ///
+    /// # Errors
+    /// Rejects an offer the lifecycle cannot take.
+    pub(super) fn transfer_offered(
+        &mut self,
+        offer: eq_network_game::zoning::ZoneOffer,
+        now: Instant,
+    ) -> Result<()> {
+        self.lifecycle.offer(offer, now)?;
+        self.body.suspend();
+        Ok(())
+    }
+
+    /// The server refused the transfer: the player stays, and moves again
+    /// unless they are dead.
+    ///
+    /// # Errors
+    /// Rejects a refusal without a transfer under way.
+    pub(super) fn transfer_refused(&mut self, now: Instant) -> Result<()> {
+        self.lifecycle.finish(false)?;
+        if !self.lifecycle.is_dead() {
+            self.body.resume(now);
+        }
+        Ok(())
+    }
+
+    /// The player died: commands wait for the offer home, and the player
+    /// stops.
+    pub(super) fn died(&mut self) {
+        self.lifecycle.mark_dead();
+        self.body.suspend();
     }
 
     /// Puts the admitted player where the server says they are.
@@ -209,7 +276,7 @@ impl World {
     pub(super) fn correct_own(&mut self, position: Position, now: Instant) -> Result<()> {
         let player = self
             .player
-            .as_mut()
+            .corrected()
             .context("correction without admitted player")?;
         self.body.correct(player, position, now)
     }

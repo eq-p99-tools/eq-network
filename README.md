@@ -70,10 +70,13 @@ codec decodes the offer, while the session engine closes the old zone session,
 connects to the assigned endpoint, and reports `ConnectionState::Zoning` until
 the new zone is ready.
 
-Public protocol, command, event, and state enums are non-exhaustive. Consumers
-should include a wildcard arm when matching them. New server families should be
-represented as explicit dialect/profile variants rather than conditionals in
-application code.
+The enums a front end matches to stay in step with the game, `WorldEvent`,
+`GameCommand` (`ClientCommand`) and `ClientEvent`, are exhaustive on purpose: a
+new event or command is a breaking change that names itself in the consumer's
+build, rather than news a wildcard arm silently ignores. Configuration, status
+and other protocol enums are non-exhaustive, and consumers should include a
+wildcard arm when matching them. New server families should be represented as
+explicit dialect/profile variants rather than conditionals in application code.
 
 ## Compatibility and safety
 

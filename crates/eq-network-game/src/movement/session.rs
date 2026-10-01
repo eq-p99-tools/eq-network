@@ -194,10 +194,11 @@ impl MotionSession {
         Ok(())
     }
 
-    /// Calibrates from a queued request only if it postdates the latest reset.
+    /// Calibrates from a queued request only if it postdates the latest reset;
+    /// the zone session has already refused one made too long ago.
     ///
     /// # Errors
-    /// Rejects stale requests and invalid calibration values.
+    /// Rejects requests from before the latest reset and invalid calibration values.
     pub fn calibrate_fresh(
         &mut self,
         value: MotionCalibration,
@@ -205,9 +206,7 @@ impl MotionSession {
         now: Instant,
     ) -> Result<()> {
         ensure!(
-            created >= self.guard.input_epoch
-                && created <= now
-                && now.duration_since(created) <= Duration::from_millis(250),
+            created >= self.guard.input_epoch,
             "stale movement calibration"
         );
         self.calibrate(value, now)

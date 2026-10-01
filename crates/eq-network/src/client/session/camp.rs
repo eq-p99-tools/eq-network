@@ -136,8 +136,7 @@ impl Feature for Camp {
             );
             let own_spawn = world.player.as_ref().map(|player| player.spawn_id);
             if let (false, Some(spawn_id)) = (standing, own_spawn) {
-                out.send(&command::titanium_posture(spawn_id, Posture::Standing)?)?;
-                world.posture.sent(spawn_id, Posture::Standing, out.log)?;
+                world.posture.set(spawn_id, Posture::Standing, out)?;
             }
             out.log
                 .send(ClientEvent::World(WorldEvent::Camp(CampStatus::Abandoned)))?;
@@ -157,7 +156,7 @@ impl Feature for Camp {
         if self.reply_overdue(now) {
             out.log
                 .send(ClientEvent::World(WorldEvent::Camp(CampStatus::Camped)))?;
-            world.exit = Some(ZoneExit::CharacterSelect);
+            world.end(ZoneExit::CharacterSelect);
         }
         Ok(())
     }
@@ -180,7 +179,7 @@ impl Feature for Camp {
             Message::LoggedOut if self.logging_out() => {
                 out.log
                     .send(ClientEvent::World(WorldEvent::Camp(CampStatus::Camped)))?;
-                world.exit = Some(ZoneExit::CharacterSelect);
+                world.end(ZoneExit::CharacterSelect);
             }
             _ => (),
         }
@@ -214,14 +213,14 @@ mod tests {
         assert_eq!(outcome.sent, [command::titanium_logout()]);
         let outcome = testing::run(|out| camp.observe(&Message::LoggedOut, &mut world, out));
         outcome.result.unwrap();
-        assert!(matches!(world.exit, Some(ZoneExit::CharacterSelect)));
+        assert!(matches!(world.exit(), Some(ZoneExit::CharacterSelect)));
     }
 
     #[test]
     fn using_a_door_abandons_the_camp_and_stands_the_player_up_first() {
         let mut camp = Camp::default();
         let mut world = World::new(5);
-        world.player = Some(testing::player(7));
+        world.player.admit(testing::player(7));
         camp.start(Instant::now());
         let click = ClientCommand::ClickDoor {
             session_id: 5,

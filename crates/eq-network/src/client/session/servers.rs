@@ -7,11 +7,7 @@
 
 use anyhow::Result;
 
-use super::{
-    feature::{Encoder, Feature},
-    motion::Motion,
-    ServerProtocol,
-};
+use super::{feature::Feature, motion::Motion, ServerProtocol};
 use crate::p99::{self, WorldCodec};
 
 /// A server type's features, each absent unless the server has it.
@@ -39,8 +35,8 @@ pub(super) trait ServerType: Sync {
 
     /// How the player moves in this server's zones: every server takes the
     /// player's moves; some take their jumps and falls too.
-    fn motion(&self, encoder: Encoder) -> Box<dyn Feature> {
-        Box::new(Motion::new(encoder, false))
+    fn motion(&self) -> Box<dyn Feature> {
+        Box::new(Motion::new(false))
     }
 }
 
@@ -149,8 +145,8 @@ impl ServerType for EqEmu {
         true
     }
 
-    fn motion(&self, encoder: Encoder) -> Box<dyn Feature> {
-        Box::new(Motion::new(encoder, true))
+    fn motion(&self) -> Box<dyn Feature> {
+        Box::new(Motion::new(true))
     }
 }
 
@@ -179,12 +175,7 @@ mod tests {
 
     /// What a server type's motion lets the player do.
     fn moves(server: &dyn ServerType) -> Vec<crate::world::Capability> {
-        server
-            .motion(Encoder::new(
-                eq_network_game::GameDialect::Titanium,
-                "Tester",
-            ))
-            .capabilities()
+        server.motion().capabilities()
     }
 
     #[test]

@@ -43,8 +43,7 @@ impl Feature for Targeting {
         else {
             return Ok(());
         };
-        let available =
-            spawn_id.is_none_or(|id| world.is_player(id) || world.spawns.visible(id).is_some());
+        let available = spawn_id.is_none_or(|id| world.visible(id));
         if !available {
             out.log
                 .send(ClientEvent::World(WorldEvent::TargetRejected {

@@ -20,6 +20,27 @@ use eq_network_game::{
 use merchant::MerchantTrades;
 use std::time::{Duration, Instant};
 
+/// The player's inventory as the session knows it. Every feature reads it;
+/// only this module changes it, so a second writer does not compile.
+#[derive(Default)]
+pub(super) struct Carried(Inventory);
+
+impl std::ops::Deref for Carried {
+    type Target = Inventory;
+
+    fn deref(&self) -> &Inventory {
+        &self.0
+    }
+}
+
+/// Lets another feature's tests start from an inventory of their choosing.
+#[cfg(test)]
+impl From<Inventory> for Carried {
+    fn from(inventory: Inventory) -> Self {
+        Self(inventory)
+    }
+}
+
 /// How long the server has to refuse a move. `EQEmu` refuses at once, by
 /// resending the move's slots, and never acknowledges a success.
 const REFUSAL_WINDOW: Duration = Duration::from_secs(2);
@@ -83,7 +104,7 @@ fn update(message: &Message) -> Option<InventoryUpdate> {
 
 /// Changes the inventory and tells the host.
 fn change(update: InventoryUpdate, world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
-    world.inventory.apply(update.clone());
+    world.inventory.0.apply(update.clone());
     out.log
         .send(ClientEvent::World(WorldEvent::Inventory(update)))
 }
@@ -120,13 +141,11 @@ impl Belongings {
         let result = actor(world)
             .context("Character equipment data is unavailable")
             .and_then(|actor| {
-                world
-                    .inventory
-                    .submit_move(request, world.session_id, actor, now, |packet| {
-                        let sent = sink.send(packet);
-                        transport_failed = sent.is_err();
-                        sent
-                    })
+                world.inventory.0.submit_move(request, actor, |packet| {
+                    let sent = sink.send(packet);
+                    transport_failed = sent.is_err();
+                    sent
+                })
             });
         // A failed send ends the admission; an uncertain move is never retried.
         if transport_failed {
@@ -185,7 +204,7 @@ impl Feature for Belongings {
     /// Item updates before admission build the inventory the admission reports.
     fn admit(&mut self, message: &Message, world: &mut World) -> Result<()> {
         if let Some(update) = update(message) {
-            world.inventory.apply(update);
+            world.inventory.0.apply(update);
         }
         Ok(())
     }
@@ -194,7 +213,7 @@ impl Feature for Belongings {
     /// this one count the same revisions.
     fn admitted(&mut self, world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
         let admission = world.inventory.admission_updates();
-        world.inventory = Inventory::default();
+        world.inventory = Carried::default();
         for update in admission {
             change(update, world, out)?;
         }
@@ -261,7 +280,9 @@ impl Feature for Belongings {
         out: &mut Out<'_, '_>,
     ) -> Result<()> {
         match message {
-            Message::Event(WorldEvent::Inventory(update)) => world.inventory.apply(update.clone()),
+            Message::Event(WorldEvent::Inventory(update)) => {
+                world.inventory.0.apply(update.clone());
+            }
             Message::Unreadable {
                 part: Part::Inventory,
                 ..
@@ -335,7 +356,7 @@ mod tests {
         ])));
         belongings.admit(&snapshot, &mut world).unwrap();
         world.own_spawn = Some(7);
-        world.player = Some(testing::player(7));
+        world.player.admit(testing::player(7));
         testing::run(|out| belongings.admitted(&mut world, out))
             .result
             .unwrap();

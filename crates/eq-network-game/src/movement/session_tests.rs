@@ -472,14 +472,18 @@ fn correction_preserves_prompt_stop_and_rejects_queued_calibration() {
 }
 
 #[test]
-fn queued_calibration_requires_fresh_valid_data_without_mutating_on_failure() {
+fn queued_calibration_requires_valid_data_from_after_the_last_reset() {
     let start = Instant::now();
     let mut session = setup(start);
     let calibration = session.calibration.unwrap();
     let now = start + Duration::from_millis(300);
-    assert!(session.calibrate_fresh(calibration, start, now).is_err());
+    let before_reset = session
+        .guard
+        .input_epoch
+        .checked_sub(Duration::from_millis(1))
+        .unwrap();
     assert!(session
-        .calibrate_fresh(calibration, now + Duration::from_millis(1), now)
+        .calibrate_fresh(calibration, before_reset, now)
         .is_err());
     for invalid in [
         MotionCalibration {

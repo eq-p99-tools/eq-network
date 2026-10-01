@@ -20,13 +20,26 @@ impl OwnPosture {
         self.0 = Some(posture);
     }
 
-    /// Notes a stance this session sent, and reports it since the server will not.
-    pub(super) fn sent(
+    /// Sits, stands or crouches the player: sends the stance, notes it and
+    /// reports it, since the server will not. Every feature that changes the
+    /// player's stance does it here.
+    ///
+    /// # Errors
+    /// Returns an error when the connection or the host's event handler fails.
+    pub(super) fn set(
         &mut self,
         spawn_id: u16,
         posture: Posture,
-        log: &mut Events<'_>,
+        out: &mut Out<'_, '_>,
     ) -> Result<()> {
+        out.send(&eq_network_game::command::titanium_posture(
+            spawn_id, posture,
+        )?)?;
+        self.sent(spawn_id, posture, out.log)
+    }
+
+    /// Notes a stance this session sent, and reports it since the server will not.
+    fn sent(&mut self, spawn_id: u16, posture: Posture, log: &mut Events<'_>) -> Result<()> {
         let posture = match posture {
             Posture::Standing => PostureState::Standing,
             Posture::Sitting => PostureState::Sitting,
@@ -52,11 +65,7 @@ impl OwnPosture {
         if !self.grounded() {
             return Ok(());
         }
-        out.send(&eq_network_game::command::titanium_posture(
-            spawn_id,
-            Posture::Standing,
-        )?)?;
-        self.sent(spawn_id, Posture::Standing, out.log)
+        self.set(spawn_id, Posture::Standing, out)
     }
 }
 

@@ -30,7 +30,7 @@ impl Features {
             Box::new(casting::Casting::new(encoder.clone())),
             Box::new(spellbook::Spellbook::default()),
             Box::new(inventory::Belongings::new(encoder.clone())),
-            server.motion(encoder.clone()),
+            server.motion(),
             Box::new(character::Character::default()),
             Box::new(entities::Entities::default()),
             Box::new(targeting::Targeting::new(encoder.clone())),
@@ -117,7 +117,7 @@ impl Features {
     fn tick(&mut self, now: Instant, world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
         for feature in &mut self.0 {
             feature.tick(now, world, out)?;
-            if world.exit.is_some() {
+            if world.ending() {
                 break;
             }
         }
@@ -134,7 +134,7 @@ impl Features {
     ) -> Result<()> {
         for feature in &mut self.0 {
             feature.observe(message, world, out)?;
-            if world.exit.is_some() {
+            if world.ending() {
                 break;
             }
         }
@@ -215,13 +215,22 @@ pub(super) fn run(
                 log: &mut *log,
             },
         )?;
-        if let Some(exit) = world.exit.take() {
+        if let Some(exit) = world.take_exit() {
             session.close()?;
             return Ok(exit);
         }
         if world.lifecycle.blocks_motion() {
             if let Some(commands) = context.commands {
-                for _ in commands.try_iter().take(64) {}
+                // Death and zone transfers hold every command; each is refused,
+                // so that whoever waits on one hears why.
+                let reason = if world.lifecycle.is_dead() {
+                    "The player is dead"
+                } else {
+                    "The player is between zones"
+                };
+                for command in commands.try_iter().take(64) {
+                    actions::refuse(&command, reason, log)?;
+                }
             }
         }
         if world.ready() && !world.lifecycle.is_dead() && world.lifecycle.pending().is_none() {
@@ -246,7 +255,7 @@ pub(super) fn run(
                             log: &mut *log,
                         },
                     )?;
-                    if let Some(exit) = world.exit.take() {
+                    if let Some(exit) = world.take_exit() {
                         session.close()?;
                         return Ok(exit);
                     }
@@ -306,7 +315,7 @@ pub(super) fn run(
             } else {
                 features.admit(&message, &mut world)?;
             }
-            if let Some(exit) = world.exit.take() {
+            if let Some(exit) = world.take_exit() {
                 session.close()?;
                 return Ok(exit);
             }
@@ -349,7 +358,7 @@ fn admit(
     match player {
         Ok(mut player) => {
             features.shape(&mut player);
-            world.player = Some(player.clone());
+            world.player.admit(player.clone());
             log.send(ClientEvent::World(crate::world::WorldEvent::Entered {
                 capabilities: features.capabilities(),
                 session_id: world.session_id,
@@ -387,6 +396,47 @@ mod tests {
         inventory::{InventoryMove, InventorySlot, ItemUse, MoveQuantity},
         movement::{MotionCalibration, MovementMode, MovementRequest},
     };
+
+    /// How many kinds of command there are.
+    const KINDS: usize = 29;
+
+    /// Which kind of command this is. A new command is a compile error here
+    /// until it has a number, and then a test failure until the list below
+    /// has one of it, so no command can go without an owner unnoticed.
+    fn kind(command: &ClientCommand) -> usize {
+        match command {
+            // The world server's, before any zone session.
+            ClientCommand::SelectCharacter { .. } => 0,
+            ClientCommand::CreateCharacter { .. } => 1,
+            ClientCommand::SwapSpell { .. } => 2,
+            ClientCommand::UseItem(_) => 3,
+            ClientCommand::ClickDoor { .. } => 4,
+            ClientCommand::PickUp { .. } => 5,
+            ClientCommand::CrossZoneLine { .. } => 6,
+            ClientCommand::ScribeSpell { .. } => 7,
+            ClientCommand::DeleteSpell { .. } => 8,
+            ClientCommand::ForgetSpell { .. } => 9,
+            ClientCommand::MemorizeSpell { .. } => 10,
+            ClientCommand::CastSpell { .. } => 11,
+            ClientCommand::SetPosture { .. } => 12,
+            ClientCommand::MoveInventory(_) => 13,
+            ClientCommand::SendChat(_) => 14,
+            ClientCommand::InspectItem { .. } => 15,
+            ClientCommand::Consider { .. } => 16,
+            ClientCommand::Camp { .. } => 17,
+            ClientCommand::Loot { .. } => 18,
+            ClientCommand::LootItem { .. } => 19,
+            ClientCommand::EndLoot { .. } => 20,
+            ClientCommand::Shop { .. } => 21,
+            ClientCommand::Buy { .. } => 22,
+            ClientCommand::Sell { .. } => 23,
+            ClientCommand::Jump { .. } => 24,
+            ClientCommand::AutoAttack { .. } => 25,
+            ClientCommand::SelectTarget { .. } => 26,
+            ClientCommand::ConfigureMotion { .. } => 27,
+            ClientCommand::Move(_) => 28,
+        }
+    }
 
     /// One of every command a zone session takes.
     #[allow(
@@ -564,19 +614,36 @@ mod tests {
     }
 
     #[test]
+    fn the_list_has_one_of_every_command_a_zone_takes() {
+        let commands = zone_commands();
+        let kinds: std::collections::BTreeSet<_> = commands.iter().map(kind).collect();
+        assert_eq!(kinds.len(), commands.len(), "one of each");
+        assert_eq!(kinds, (2..KINDS).collect());
+    }
+
+    #[test]
     fn exactly_one_feature_owns_each_command_a_zone_takes() {
+        // The server type with every feature, so that each owner can offer
+        // what its commands need.
         let features = Features::new(
-            servers::server_type(crate::client::ServerProtocol::Project1999),
+            servers::server_type(crate::client::ServerProtocol::EqEmu),
             eq_network_game::GameDialect::Titanium,
             "Tester",
         );
         for command in zone_commands() {
-            let owning = features
+            let owners: Vec<_> = features
                 .0
                 .iter()
                 .filter(|feature| feature.owns(&command))
-                .count();
-            assert_eq!(owning, 1, "{command:?}");
+                .collect();
+            assert_eq!(owners.len(), 1, "{command:?}");
+            let needed = command
+                .capability()
+                .expect("a zone command needs a capability");
+            assert!(
+                owners[0].capabilities().contains(&needed),
+                "{command:?} needs {needed:?}, which its owner does not offer"
+            );
         }
         let selection = ClientCommand::SelectCharacter {
             selection_id: 1,

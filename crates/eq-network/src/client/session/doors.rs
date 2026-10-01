@@ -147,7 +147,7 @@ mod tests {
             [ClientEvent::World(DoorAction { door_id: 1, error: Some(error), .. })]
                 if error == "player is unavailable"
         ));
-        world.player = Some(testing::player(7));
+        world.player.admit(testing::player(7));
         let outcome = testing::run(|out| doors.handle(&click, &mut world, out));
         outcome.result.unwrap();
         assert_eq!(outcome.sent.len(), 1);

@@ -84,7 +84,8 @@ impl Held {
     }
 }
 
-/// What a command needs exclusively; unlisted commands need nothing here.
+/// What a command needs exclusively. Every command is named, so a new one is
+/// a decision here.
 pub(super) fn needs(command: &ClientCommand) -> &'static [Resource] {
     use Resource::{Casting, Inventory, Spellbook};
     match command {
@@ -106,7 +107,24 @@ pub(super) fn needs(command: &ClientCommand) -> &'static [Resource] {
         | ClientCommand::PickUp { .. }
         | ClientCommand::Buy { .. }
         | ClientCommand::Sell { .. } => &[Inventory],
-        _ => &[],
+        ClientCommand::SelectCharacter { .. }
+        | ClientCommand::CreateCharacter { .. }
+        | ClientCommand::ClickDoor { .. }
+        | ClientCommand::CrossZoneLine { .. }
+        | ClientCommand::SetPosture { .. }
+        | ClientCommand::SendChat(_)
+        | ClientCommand::InspectItem { .. }
+        | ClientCommand::Consider { .. }
+        | ClientCommand::Camp { .. }
+        | ClientCommand::Loot { .. }
+        | ClientCommand::LootItem { .. }
+        | ClientCommand::EndLoot { .. }
+        | ClientCommand::Shop { .. }
+        | ClientCommand::Jump { .. }
+        | ClientCommand::AutoAttack { .. }
+        | ClientCommand::SelectTarget { .. }
+        | ClientCommand::ConfigureMotion { .. }
+        | ClientCommand::Move(_) => &[],
     }
 }
 
@@ -119,7 +137,9 @@ pub(super) fn refuse(command: &ClientCommand, reason: &str, log: &mut Events<'_>
     log.diagnostic(reason.into())
 }
 
-/// The result event that tells the host a command was refused.
+/// The result event that tells the host a command was refused; None for a
+/// command whose caller waits on no result. Every command is named, so a new
+/// one is a decision here.
 fn refusal(command: &ClientCommand, reason: &str) -> Option<WorldEvent> {
     let error = Some(reason.to_owned());
     Some(match command {
@@ -178,7 +198,20 @@ fn refusal(command: &ClientCommand, reason: &str) -> Option<WorldEvent> {
         | ClientCommand::SwapSpell { .. } => {
             WorldEvent::BookAction(BookActionStatus::Rejected(reason.into()))
         }
-        _ => return None,
+        ClientCommand::SelectCharacter { .. }
+        | ClientCommand::CreateCharacter { .. }
+        | ClientCommand::SetPosture { .. }
+        | ClientCommand::SendChat(_)
+        | ClientCommand::InspectItem { .. }
+        | ClientCommand::Consider { .. }
+        | ClientCommand::Loot { .. }
+        | ClientCommand::LootItem { .. }
+        | ClientCommand::EndLoot { .. }
+        | ClientCommand::Shop { .. }
+        | ClientCommand::Jump { .. }
+        | ClientCommand::AutoAttack { .. }
+        | ClientCommand::ConfigureMotion { .. }
+        | ClientCommand::Move(_) => return None,
     })
 }
 

@@ -313,9 +313,33 @@ pub enum Capability {
     Zoning,
 }
 
+impl Capability {
+    /// Every capability, in order: what a session offers when its server and
+    /// client generation support everything.
+    pub const ALL: [Self; 14] = [
+        Self::Casting,
+        Self::Spellbook,
+        Self::Inventory,
+        Self::Trading,
+        Self::Moving,
+        Self::Falling,
+        Self::Targeting,
+        Self::Combat,
+        Self::Looting,
+        Self::Talking,
+        Self::Camping,
+        Self::Doors,
+        Self::GroundItems,
+        Self::Zoning,
+    ];
+}
+
 /// Changes delivered to a graphical consumer, independent of its rendering engine.
+///
+/// Exhaustive on purpose: a front end should handle every kind of news, so a
+/// new variant names itself in the consumer's build instead of falling into a
+/// wildcard arm.
 #[derive(Clone, Debug, PartialEq, Serialize)]
-#[non_exhaustive]
 pub enum WorldEvent {
     /// A server spell action; icon flags do not establish an authoritative buff slot.
     SpellEffect(crate::buffs::SpellEffect),
@@ -932,6 +956,31 @@ fn float(bytes: &[u8], offset: usize) -> Result<f32> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn every_capability_is_listed_once_in_order() {
+        use super::Capability;
+        // A new capability is a compile error here until it has a place.
+        let place = |capability| match capability {
+            Capability::Casting => 0,
+            Capability::Spellbook => 1,
+            Capability::Inventory => 2,
+            Capability::Trading => 3,
+            Capability::Moving => 4,
+            Capability::Falling => 5,
+            Capability::Targeting => 6,
+            Capability::Combat => 7,
+            Capability::Looting => 8,
+            Capability::Talking => 9,
+            Capability::Camping => 10,
+            Capability::Doors => 11,
+            Capability::GroundItems => 12,
+            Capability::Zoning => 13,
+        };
+        for (index, capability) in Capability::ALL.into_iter().enumerate() {
+            assert_eq!(place(capability), index, "{capability:?}");
+        }
+    }
+
     #[test]
     fn appearance_postures_preserve_known_and_unknown_states() {
         use super::PostureState;

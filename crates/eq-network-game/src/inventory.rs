@@ -14,13 +14,42 @@ use serde::Serialize;
 use std::collections::{BTreeMap, VecDeque};
 
 /// The cursor; items pushed onto it queue behind the one shown there.
-const CURSOR: InventorySlot = InventorySlot(30);
+const CURSOR: InventorySlot = InventorySlot::CURSOR;
 
 /// A Titanium inventory address; unknown slots retain their original number.
+/// The named slots and ranges below are the one vocabulary for them.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 pub struct InventorySlot(pub i32);
 
 impl InventorySlot {
+    /// The cursor, where a picked-up item rides.
+    pub const CURSOR: Self = Self(30);
+
+    /// Worn equipment, from the charm to the ammo slot.
+    #[must_use]
+    pub const fn is_equipment(self) -> bool {
+        matches!(self.0, 0..=21)
+    }
+
+    /// One of the eight carried pack slots, which may hold a bag.
+    #[must_use]
+    pub const fn is_pack(self) -> bool {
+        matches!(self.0, 22..=29)
+    }
+
+    /// Carried in the inventory: a pack slot or what a carried bag holds.
+    /// Neither the cursor nor a bag on it is carried.
+    #[must_use]
+    pub const fn is_carried(self) -> bool {
+        matches!(self.0, 22..=29 | 251..=330)
+    }
+
+    /// What a bag on the cursor holds.
+    #[must_use]
+    pub const fn is_in_cursor_bag(self) -> bool {
+        matches!(self.0, 331..=340)
+    }
+
     /// Classic personal bank roots and their contents; shared bank is unsupported.
     #[must_use]
     pub const fn is_personal_bank(self) -> bool {
@@ -28,6 +57,8 @@ impl InventorySlot {
     }
 
     /// Parent container and zero-based index for a known bag-content address.
+    /// The carried bags' contents are 251 to 330, a cursor bag's 331 to 340,
+    /// the bank bags' 2031 to 2190 and the shared bank bags' 2531 to 2550.
     #[must_use]
     pub fn parent(self) -> Option<(Self, u8)> {
         for (start, end, parent) in [

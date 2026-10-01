@@ -29,8 +29,11 @@ impl Posture {
 ///
 /// Future movement, zoning, inventory, group, and character actions belong
 /// here so application code never needs to carry raw opcodes or packet bytes.
+///
+/// Exhaustive on purpose: a new command is a decision for every table that
+/// says what a command needs, which feature carries it out and how it is
+/// refused, and each of those names it.
 #[derive(Clone, Debug, PartialEq)]
-#[non_exhaustive]
 pub enum GameCommand {
     /// Enter one occupied slot from the current world-server character list.
     SelectCharacter {
@@ -333,6 +336,39 @@ impl GameCommand {
             | Self::SelectTarget { session_id, .. }
             | Self::ConfigureMotion { session_id, .. } => Some(*session_id),
         }
+    }
+
+    /// What the zone session must let the player do for this command; None
+    /// for the world server's commands, which come before any zone session.
+    /// A front end greys out a command whose capability the session lacks.
+    #[must_use]
+    pub const fn capability(&self) -> Option<crate::world::Capability> {
+        use crate::world::Capability;
+        Some(match self {
+            Self::SelectCharacter { .. } | Self::CreateCharacter { .. } => return None,
+            Self::SwapSpell { .. }
+            | Self::ScribeSpell { .. }
+            | Self::DeleteSpell { .. }
+            | Self::ForgetSpell { .. }
+            | Self::MemorizeSpell { .. } => Capability::Spellbook,
+            // An item's click effect is a cast.
+            Self::CastSpell { .. } | Self::UseItem(_) => Capability::Casting,
+            Self::ClickDoor { .. } => Capability::Doors,
+            Self::PickUp { .. } => Capability::GroundItems,
+            Self::CrossZoneLine { .. } => Capability::Zoning,
+            Self::SetPosture { .. } | Self::Move(_) | Self::ConfigureMotion { .. } => {
+                Capability::Moving
+            }
+            // Only a server that takes falls from the client lets the player jump.
+            Self::Jump { .. } => Capability::Falling,
+            Self::MoveInventory(_) => Capability::Inventory,
+            Self::SendChat(_) | Self::InspectItem { .. } => Capability::Talking,
+            Self::Consider { .. } | Self::AutoAttack { .. } => Capability::Combat,
+            Self::Camp { .. } => Capability::Camping,
+            Self::Loot { .. } | Self::LootItem { .. } | Self::EndLoot { .. } => Capability::Looting,
+            Self::Shop { .. } | Self::Buy { .. } | Self::Sell { .. } => Capability::Trading,
+            Self::SelectTarget { .. } => Capability::Targeting,
+        })
     }
 
     /// When the host made the command, if it says; commands that may wait,

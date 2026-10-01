@@ -2,7 +2,7 @@
 //! the host's moves, jumps, calibrations and changes of stance, and the
 //! server's corrections.
 use super::{
-    feature::{Encoder, Feature, Out, World},
+    feature::{Feature, Out, World},
     ClientCommand, ClientEvent,
 };
 use anyhow::Result;
@@ -143,14 +143,13 @@ pub(super) fn withdrawn(session_id: u64) -> WorldEvent {
 
 /// The player's movement and stance.
 pub(super) struct Motion {
-    encoder: Encoder,
     /// Whether the server lets the player fall and jump.
     falls: bool,
 }
 
 impl Motion {
-    pub(super) fn new(encoder: Encoder, falls: bool) -> Self {
-        Self { encoder, falls }
+    pub(super) const fn new(falls: bool) -> Self {
+        Self { falls }
     }
 
     /// Moves the player, standing them up first if they were sitting or
@@ -164,7 +163,7 @@ impl Motion {
         let (to, from) = (request.position, motion.position());
         if let (true, Some(player)) = (
             (to.x, to.y, to.z) != (from.x, from.y, from.z),
-            &world.player,
+            world.player.as_ref(),
         ) {
             world.posture.stand_to_move(player.spawn_id, out)?;
         }
@@ -240,12 +239,7 @@ impl Motion {
 
     /// Sits, stands or crouches; the server never echoes the player's own
     /// stance, so it is reported here.
-    fn stance(
-        &self,
-        command: &ClientCommand,
-        world: &mut World,
-        out: &mut Out<'_, '_>,
-    ) -> Result<()> {
+    fn stance(command: &ClientCommand, world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
         let ClientCommand::SetPosture {
             spawn_id, posture, ..
         } = *command
@@ -257,10 +251,7 @@ impl Motion {
                 .log
                 .diagnostic("Rejected a posture for another spawn".into());
         }
-        if self.encoder.send(command, out)? {
-            world.posture.sent(spawn_id, posture, out.log)?;
-        }
-        Ok(())
+        world.posture.set(spawn_id, posture, out)
     }
 }
 
@@ -278,7 +269,7 @@ impl Feature for Motion {
     /// the host heard of it, so a calibration the host makes on hearing it
     /// counts as fresh.
     fn admitted(&mut self, world: &mut World, _out: &mut Out<'_, '_>) -> Result<()> {
-        if let (Some(player), Some(admitted)) = (&world.player, world.admitted) {
+        if let (Some(player), Some(admitted)) = (world.player.as_ref(), world.admitted) {
             world.body.motion = Some(
                 MotionSession::new(world.session_id, player.spawn_id, player.position, admitted)?
                     .with_falls(self.falls),
@@ -307,7 +298,7 @@ impl Feature for Motion {
             ClientCommand::Move(request) => Self::step(request, world, out),
             ClientCommand::Jump { .. } => Self::jump(world, out),
             ClientCommand::ConfigureMotion { .. } => Self::calibrate(command, world, out),
-            _ => self.stance(command, world, out),
+            _ => Self::stance(command, world, out),
         }
     }
 
@@ -342,11 +333,10 @@ impl Feature for Motion {
                 world.posture.observed(*posture);
                 Ok(())
             }
-            WorldEvent::Death(death) if world.is_player(death.spawn_id) => {
-                world.body.suspend();
-                out.log
-                    .send(ClientEvent::World(withdrawn(world.session_id)))
-            }
+            // The transfers feature stops the body when the player dies.
+            WorldEvent::Death(death) if world.is_player(death.spawn_id) => out
+                .log
+                .send(ClientEvent::World(withdrawn(world.session_id))),
             _ => Ok(()),
         }
     }
@@ -356,7 +346,7 @@ impl Feature for Motion {
 mod tests {
     use super::super::feature::testing;
     use super::*;
-    use eq_network_game::{command, world::PostureState, GameDialect};
+    use eq_network_game::{command, world::PostureState};
     use std::time::Duration;
 
     fn at(x: f32) -> Position {
@@ -404,7 +394,7 @@ mod tests {
         world.admitted = Some(Instant::now());
         world.body.own(7);
         world.body.place(at(1.0));
-        let mut motion = Motion::new(Encoder::new(GameDialect::Titanium, "Tester"), false);
+        let mut motion = Motion::new(false);
         let now = Instant::now();
         let outcome = testing::run(|out| motion.tick(now, &mut world, out));
         outcome.result.unwrap();
@@ -433,7 +423,7 @@ mod tests {
         let now = Instant::now();
         let mut world = World::new(5);
         world.own_spawn = Some(7);
-        world.player = Some(testing::player(7));
+        world.player.admit(testing::player(7));
         world.admitted = now.checked_sub(Duration::from_millis(10));
         // The host calibrates before the feature has started movement.
         let configure = ClientCommand::ConfigureMotion {
@@ -448,7 +438,7 @@ mod tests {
             },
             created: now.checked_sub(Duration::from_millis(5)).unwrap(),
         };
-        let mut motion = Motion::new(Encoder::new(GameDialect::Titanium, "Tester"), false);
+        let mut motion = Motion::new(false);
         testing::run(|out| motion.admitted(&mut world, out))
             .result
             .unwrap();
@@ -467,9 +457,9 @@ mod tests {
     fn the_server_correcting_the_player_withdraws_movement_until_recalibrated() {
         let mut world = World::new(5);
         world.own_spawn = Some(7);
-        world.player = Some(testing::player(7));
+        world.player.admit(testing::player(7));
         world.admitted = Some(Instant::now());
-        let mut motion = Motion::new(Encoder::new(GameDialect::Titanium, "Tester"), false);
+        let mut motion = Motion::new(false);
         testing::run(|out| motion.admitted(&mut world, out))
             .result
             .unwrap();
@@ -505,8 +495,8 @@ mod tests {
     fn the_player_stance_goes_out_and_is_reported_since_the_server_never_echoes_it() {
         let mut world = World::new(5);
         world.own_spawn = Some(7);
-        world.player = Some(testing::player(7));
-        let mut motion = Motion::new(Encoder::new(GameDialect::Titanium, "Tester"), false);
+        world.player.admit(testing::player(7));
+        let mut motion = Motion::new(false);
         let sit = |spawn_id| ClientCommand::SetPosture {
             session_id: 5,
             spawn_id,
@@ -532,12 +522,12 @@ mod tests {
     }
 
     #[test]
-    fn the_player_dying_stops_all_movement() {
+    fn the_player_dying_withdraws_movement_and_stops_the_body() {
         let mut world = World::new(5);
         world.own_spawn = Some(7);
-        world.player = Some(testing::player(7));
+        world.player.admit(testing::player(7));
         world.admitted = Some(Instant::now());
-        let mut motion = Motion::new(Encoder::new(GameDialect::Titanium, "Tester"), false);
+        let mut motion = Motion::new(false);
         testing::run(|out| motion.admitted(&mut world, out))
             .result
             .unwrap();
@@ -556,7 +546,9 @@ mod tests {
                 ..
             })]
         ));
-        // A suspended session sends no heartbeat.
+        // The transfers feature hears the death too and stops the body; a
+        // suspended session sends no heartbeat.
+        world.died();
         let later = Instant::now() + STATIONARY_HEARTBEAT * 2;
         let outcome = testing::run(|out| motion.tick(later, &mut world, out));
         assert!(outcome.unreliable.is_empty());

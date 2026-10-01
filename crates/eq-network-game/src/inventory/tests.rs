@@ -423,7 +423,7 @@ fn item_cast_uses_current_effect_and_titanium_item_slot_without_consuming_invent
     assert_eq!(packet.as_slice(), expected);
     assert_eq!(inventory, before);
     let now = std::time::Instant::now();
-    let mut request = ItemUse {
+    let request = ItemUse {
         request_id: 1,
         session_id: 12,
         revision: inventory.revision(),
@@ -431,30 +431,10 @@ fn item_cast_uses_current_effect_and_titanium_item_slot_without_consuming_invent
         target_id: 7,
         created: now,
     };
-    let (spell_id, cast) = inventory
-        .prepare_item_cast(&request, 12, 20, true, now)
-        .unwrap();
+    let (spell_id, cast) = inventory.prepare_item_cast(&request, 20, true).unwrap();
     assert_eq!((spell_id, cast.opcode), (73, super::CAST_OPCODE));
     assert_eq!(cast.body, packet);
-    assert!(inventory
-        .prepare_item_cast(&request, 13, 20, true, now)
-        .is_err());
-    assert!(inventory
-        .prepare_item_cast(&request, 12, 20, false, now)
-        .is_err());
-    assert!(inventory
-        .prepare_item_cast(
-            &request,
-            12,
-            20,
-            true,
-            now + std::time::Duration::from_secs(1)
-        )
-        .is_err());
-    request.created = now + std::time::Duration::from_millis(1);
-    assert!(inventory
-        .prepare_item_cast(&request, 12, 20, true, now)
-        .is_err());
+    assert!(inventory.prepare_item_cast(&request, 20, false).is_err());
     assert!(inventory
         .item_cast_packet(inventory.revision(), InventorySlot(13), 19, 7)
         .is_err());
@@ -669,6 +649,31 @@ fn malformed_frames_duplicates_and_bad_container_addresses_are_rejected_atomical
     for n in 0..12 {
         assert!(decode(0x4d81, &vec![0; n]).is_err());
     }
+}
+
+#[test]
+fn the_slot_vocabulary_names_each_titanium_range() {
+    let named = |slot: i32| {
+        let slot = InventorySlot(slot);
+        (
+            slot.is_equipment(),
+            slot.is_pack(),
+            slot.is_carried(),
+            slot == InventorySlot::CURSOR,
+            slot.is_in_cursor_bag(),
+        )
+    };
+    assert_eq!(named(0), (true, false, false, false, false));
+    assert_eq!(named(21), (true, false, false, false, false));
+    assert_eq!(named(22), (false, true, true, false, false));
+    assert_eq!(named(29), (false, true, true, false, false));
+    assert_eq!(named(30), (false, false, false, true, false));
+    assert_eq!(named(251), (false, false, true, false, false));
+    assert_eq!(named(330), (false, false, true, false, false));
+    // A bag on the cursor is not carried.
+    assert_eq!(named(331), (false, false, false, false, true));
+    assert_eq!(named(340), (false, false, false, false, true));
+    assert_eq!(named(2000), (false, false, false, false, false));
 }
 
 #[test]

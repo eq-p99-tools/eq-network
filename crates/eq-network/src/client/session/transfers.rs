@@ -56,8 +56,7 @@ impl Transfers {
         out: &mut Out<'_, '_>,
     ) -> Result<()> {
         out.send(&offer.response(&self.character)?)?;
-        world.lifecycle.offer(offer.clone(), Instant::now())?;
-        world.body.suspend();
+        world.transfer_offered(offer.clone(), Instant::now())?;
         out.log
             .send(ClientEvent::World(WorldEvent::ZoneTransfer(offer)))?;
         out.log
@@ -114,21 +113,18 @@ impl Transfers {
             world.lifecycle.finish(true)?;
             out.log
                 .send(ClientEvent::Progress(ConnectionStage::ConnectingWorld))?;
-            world.exit = Some(ZoneExit::World);
+            world.end(ZoneExit::World);
             return Ok(());
         }
-        world.lifecycle.finish(false)?;
+        // The player stays, so movement resumes before anyone hears of the
+        // rewind or the refusal: a calibration sent in answer postdates it.
+        world.transfer_refused(Instant::now())?;
         let reason = match &reply {
             zoning::ZoneReply::Denied(reason) => *reason,
             zoning::ZoneReply::Rewind(_) => zoning::ZoneRejection::Cancelled,
             zoning::ZoneReply::Approved => unreachable!("approved transfer returned above"),
         };
-        // The player stays, so movement resumes before anyone hears of the
-        // rewind or the refusal: a calibration sent in answer postdates it.
         let alive = !world.lifecycle.is_dead();
-        if alive {
-            world.body.resume(Instant::now());
-        }
         if let zoning::ZoneReply::Rewind(position) = reply {
             world.correct_own(position, Instant::now())?;
             out.log.send(ClientEvent::World(WorldEvent::Position {
@@ -226,7 +222,7 @@ impl Feature for Transfers {
             } => bail!("{error}"),
             Message::ZoneAnswer(body) => self.answered(body, world, out),
             Message::Event(WorldEvent::Death(death)) if world.is_player(death.spawn_id) => {
-                world.lifecycle.mark_dead();
+                world.died();
                 out.log
                     .diagnostic("Own character died; waiting for the server bind offer".into())
             }
@@ -237,7 +233,7 @@ impl Feature for Transfers {
                 );
                 out.log
                     .send(ClientEvent::Progress(ConnectionStage::ConnectingZone))?;
-                world.exit = Some(ZoneExit::Direct(address.clone()));
+                world.end(ZoneExit::Direct(address.clone()));
                 Ok(())
             }
             _ => Ok(()),
@@ -273,7 +269,7 @@ mod tests {
         world
             .body
             .admit(MotionSession::new(5, 7, here, Instant::now()).unwrap());
-        world.player = Some(testing::player(7));
+        world.player.admit(testing::player(7));
         world.zone = (2, 0);
         world.admitted = Some(Instant::now());
         let cross = ClientCommand::CrossZoneLine {
@@ -374,7 +370,7 @@ mod tests {
         let handoff = Message::Handoff(vec![1, 2, 3]);
         let outcome = testing::run(|out| transfers.observe(&handoff, &mut world, out));
         outcome.result.unwrap();
-        assert!(matches!(&world.exit, Some(ZoneExit::Direct(address)) if address == &[1, 2, 3]));
+        assert!(matches!(world.exit(), Some(ZoneExit::Direct(address)) if address == &[1, 2, 3]));
     }
 
     #[test]

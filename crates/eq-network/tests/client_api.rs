@@ -344,3 +344,46 @@ fn rejected_credentials_close_login_and_never_enter_the_retry_loop() {
         assert!(socket.recv_from(&mut [0; 2048]).is_err());
     }
 }
+
+#[test]
+fn a_front_end_can_tell_what_the_zone_session_lets_the_player_do() {
+    use eq_network::world::{titanium_player, Capability, WorldEvent};
+    let mut spawn = vec![0; 385];
+    spawn[340..344].copy_from_slice(&7_u32.to_le_bytes());
+    let player = titanium_player(&vec![0; 19592], &spawn, 256.0).unwrap();
+    let entered = WorldEvent::Entered {
+        capabilities: vec![Capability::Moving, Capability::Talking],
+        session_id: 1,
+        zone: "qeynos".into(),
+        player: Box::new(player),
+        far_clip: None,
+    };
+    // The front end matches the event exhaustively and keeps the report.
+    let offered = match entered {
+        WorldEvent::Entered { capabilities, .. } => capabilities,
+        _ => Vec::new(),
+    };
+    let allowed = |command: &ClientCommand| {
+        command
+            .capability()
+            .is_none_or(|needed| offered.contains(&needed))
+    };
+    let say = ClientCommand::SendChat(OutboundChat::Say("Hail".into()));
+    let cast = ClientCommand::CastSpell {
+        session_id: 1,
+        gem: 0,
+        spell_id: 202,
+        target_id: 7,
+        created: Instant::now(),
+    };
+    let choose = ClientCommand::SelectCharacter {
+        selection_id: 1,
+        slot: 0,
+    };
+    assert!(allowed(&say));
+    assert!(!allowed(&cast), "casting is greyed out");
+    assert!(allowed(&choose), "the world server's commands need no zone");
+    assert!(offered
+        .iter()
+        .all(|capability| Capability::ALL.contains(capability)));
+}

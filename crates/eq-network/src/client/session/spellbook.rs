@@ -17,7 +17,7 @@ use anyhow::{bail, ensure, Context, Result};
 use consumption::ScribeConsumption;
 use edits::BookEdits;
 use eq_network_game::{
-    command::{self, EncodedCommand, Posture},
+    command::{EncodedCommand, Posture},
     inventory::{Inventory, InventoryUpdate},
     message::Message,
     spells::{self, BookActionStatus, SpellBook, SpellUpdate},
@@ -143,8 +143,7 @@ impl Spellbook {
         let Some(spawn_id) = world.player.as_ref().map(|player| player.spawn_id) else {
             return Ok(());
         };
-        out.send(&command::titanium_posture(spawn_id, Posture::Sitting)?)?;
-        world.posture.sent(spawn_id, Posture::Sitting, out.log)?;
+        world.posture.set(spawn_id, Posture::Sitting, out)?;
         self.pending = Some(pending);
         report(BookActionStatus::Preparing, out)?;
         out.log
@@ -221,11 +220,9 @@ impl Spellbook {
         let answer = self.edits.observe(update);
         self.consumption
             .observe(update, answer == Some(BookActionStatus::Confirmed));
+        // The character feature keeps the gems on the player's record.
         if let Some(book) = self.book.as_mut() {
             book.apply(update);
-        }
-        if let Some(player) = world.player.as_mut() {
-            update.apply_gems(&mut player.memorized_spells);
         }
         if let Some(status) = answer {
             report(status, out)?;
@@ -437,7 +434,7 @@ mod tests {
             )
             .unwrap();
         world.own_spawn = Some(7);
-        world.player = Some(testing::player(7));
+        world.player.admit(testing::player(7));
         (spellbook, world)
     }
 
@@ -481,7 +478,7 @@ mod tests {
         outcome.result.unwrap();
         assert_eq!(
             outcome.sent,
-            [command::titanium_posture(7, Posture::Sitting).unwrap()]
+            [eq_network_game::command::titanium_posture(7, Posture::Sitting).unwrap()]
         );
         assert_eq!(statuses(&outcome.events), [&BookActionStatus::Preparing]);
         assert_eq!(
@@ -500,7 +497,8 @@ mod tests {
             statuses(&outcome.events),
             [&BookActionStatus::AwaitingReply]
         );
-        // The server's answer fills the gem and releases the book.
+        // The server's answer releases the book; the character feature fills
+        // the gem.
         let answer = Message::Event(WorldEvent::Spell(SpellUpdate::Slot {
             slot: 2,
             spell_id: 73,
@@ -509,7 +507,6 @@ mod tests {
         let outcome = testing::run(|out| spellbook.observe(&answer, &mut world, out));
         outcome.result.unwrap();
         assert_eq!(statuses(&outcome.events), [&BookActionStatus::Confirmed]);
-        assert_eq!(world.player.as_ref().unwrap().memorized_spells[2], Some(73));
         assert!(spellbook.holds(&world, Instant::now()).is_empty());
     }
 
@@ -667,7 +664,7 @@ mod tests {
     #[test]
     fn a_scribed_scroll_holds_the_inventory_until_the_server_uses_it_up() {
         let (mut spellbook, mut world) = admitted(None);
-        world.inventory = consumption::tests::scroll_on_cursor();
+        world.inventory = consumption::tests::scroll_on_cursor().into();
         let scribe = ClientCommand::ScribeSpell {
             session_id: 5,
             revision: world.inventory.revision(),

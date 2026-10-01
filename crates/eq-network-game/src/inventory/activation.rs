@@ -2,7 +2,7 @@
 use crate::command::EncodedCommand;
 use anyhow::{ensure, Context, Result};
 use serde::Serialize;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 /// Titanium `OP_CastSpell`, which also casts an item's click effect.
 pub const CAST_OPCODE: u16 = 0x304b;
@@ -120,28 +120,18 @@ impl ItemActivation {
 
 impl super::Inventory {
     /// Validates an admitted item-use intent before encoding its current effect,
-    /// returning the effect's spell and the cast packet.
+    /// returning the effect's spell and the cast packet. The zone session has
+    /// already refused a request for an earlier admission or made too long ago.
     /// `target_available` must come from the controller's current zone spawn state.
     ///
     /// # Errors
-    /// Rejects old admissions, future/expired requests, unavailable targets and invalid inventory.
+    /// Rejects unavailable targets and invalid inventory.
     pub fn prepare_item_cast(
         &self,
         request: &ItemUse,
-        session_id: u64,
         level: u8,
         target_available: bool,
-        now: Instant,
     ) -> Result<(u32, EncodedCommand)> {
-        ensure!(
-            request.session_id == session_id,
-            "Item use belongs to an old admission"
-        );
-        ensure!(
-            now.checked_duration_since(request.created)
-                .is_some_and(|age| age < Duration::from_secs(1)),
-            "Item-use request expired or has a future timestamp"
-        );
         ensure!(target_available, "Item-use target is unavailable");
         let body =
             self.item_cast_packet(request.revision, request.slot, level, request.target_id)?;

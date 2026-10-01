@@ -545,9 +545,11 @@ pub enum ConnectionStage {
 }
 
 /// Owned output produced by the native session engine.
+///
+/// Exhaustive on purpose, as [`crate::world::WorldEvent`] is: a host should
+/// decide what to do with every kind of output.
 #[derive(Clone, Debug, Serialize)]
 #[serde(tag = "type", content = "data", rename_all = "snake_case")]
-#[non_exhaustive]
 pub enum ClientEvent {
     /// World state for graphical clients; contains no login or profile secrets.
     World(crate::world::WorldEvent),

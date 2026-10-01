@@ -13,7 +13,34 @@ use eq_network_game::{
 };
 use std::collections::BTreeMap;
 
-/// Keeps the admitted player's level, skills and appearance current, and
+/// The admitted player as the session knows them. Every feature reads it;
+/// the admission writes it whole, a correction moves it, and only this
+/// module applies the server's news to it, so a second writer of the news
+/// does not compile.
+#[derive(Default)]
+pub(super) struct PlayerRecord(Option<PlayerState>);
+
+impl std::ops::Deref for PlayerRecord {
+    type Target = Option<PlayerState>;
+
+    fn deref(&self) -> &Option<PlayerState> {
+        &self.0
+    }
+}
+
+impl PlayerRecord {
+    /// The player the zone admitted, as the features shaped them.
+    pub(super) fn admit(&mut self, player: PlayerState) {
+        self.0 = Some(player);
+    }
+
+    /// The player, for a correction of where they stand.
+    pub(super) fn corrected(&mut self) -> Option<&mut PlayerState> {
+        self.0.as_mut()
+    }
+}
+
+/// Keeps the admitted player's level, skills, gems and appearance current, and
 /// holds what arrives about them before the admission until it can be told.
 #[derive(Default)]
 pub(super) struct Character {
@@ -93,7 +120,7 @@ impl Feature for Character {
         world: &mut World,
         _out: &mut Out<'_, '_>,
     ) -> Result<()> {
-        let (Message::Event(event), Some(player)) = (message, world.player.as_mut()) else {
+        let (Message::Event(event), Some(player)) = (message, world.player.0.as_mut()) else {
             return Ok(());
         };
         match event {
@@ -102,6 +129,7 @@ impl Feature for Character {
             }
             WorldEvent::Level { current, .. } => player.level = *current,
             WorldEvent::Skill { skill_id, value } => player.apply_skill(*skill_id, *value),
+            WorldEvent::Spell(update) => update.apply_gems(&mut player.memorized_spells),
             _ => (),
         }
         Ok(())
@@ -114,10 +142,33 @@ mod tests {
     use super::*;
 
     #[test]
+    fn the_server_fills_and_clears_the_players_gems() {
+        use eq_network_game::spells::SpellUpdate;
+        let mut character = Character::default();
+        let mut world = World::new(5);
+        world.player.admit(testing::player(7));
+        let slot = |spell_id, mode| {
+            Message::Event(WorldEvent::Spell(SpellUpdate::Slot {
+                slot: 2,
+                spell_id,
+                mode,
+            }))
+        };
+        let mut gem = |message| {
+            testing::run(|out| character.observe(&message, &mut world, out))
+                .result
+                .unwrap();
+            world.player.as_ref().unwrap().memorized_spells[2]
+        };
+        assert_eq!(gem(slot(73, 1)), Some(73));
+        assert_eq!(gem(slot(0, 2)), None);
+    }
+
+    #[test]
     fn the_player_levels_and_learns() {
         let mut character = Character::default();
         let mut world = World::new(5);
-        world.player = Some(testing::player(7));
+        world.player.admit(testing::player(7));
         for event in [
             WorldEvent::Level {
                 current: 12,
@@ -180,7 +231,7 @@ mod tests {
                 .copied(),
             Some(40)
         );
-        world.player = Some(player);
+        world.player.admit(player);
         let outcome = testing::run(|out| character.admitted(&mut world, out));
         outcome.result.unwrap();
         assert!(matches!(
@@ -211,7 +262,7 @@ mod profile_tests {
         for message in eq_network_game::message::titanium(0x75df, &profile) {
             character.admit(&message, &mut world).unwrap();
         }
-        world.player = Some(testing::player(7));
+        world.player.admit(testing::player(7));
         let outcome = testing::run(|out| character.admitted(&mut world, out));
         outcome.result.unwrap();
         assert!(outcome.events.iter().any(|event| matches!(

@@ -161,10 +161,10 @@ impl Casting {
         else {
             return Ok(());
         };
-        let ready = world.player.as_ref().is_some_and(|player| {
-            player.memorized_spells.get(usize::from(*gem)) == Some(&Some(*spell_id))
-                && (*target_id == player.spawn_id || world.spawns.visible(*target_id).is_some())
-        });
+        let ready = world.visible(*target_id)
+            && world.player.as_ref().is_some_and(|player| {
+                player.memorized_spells.get(usize::from(*gem)) == Some(&Some(*spell_id))
+            });
         let refusal = if ready {
             match self.encoder.encode(command) {
                 Ok(packet) => {
@@ -190,22 +190,15 @@ impl Casting {
 
     /// Casts an item's click effect at a target the player can see.
     fn use_item(&mut self, request: &ItemUse, world: &World, out: &mut Out<'_, '_>) -> Result<()> {
-        let target_available = world.player.as_ref().is_some_and(|player| {
-            request.target_id == player.spawn_id
-                || world.spawns.visible(request.target_id).is_some()
-        });
+        let target_available = world.player.is_some() && world.visible(request.target_id);
         let prepared = world
             .player
             .as_ref()
             .context("Character level is unavailable")
             .and_then(|player| {
-                world.inventory.prepare_item_cast(
-                    request,
-                    world.session_id,
-                    player.level,
-                    target_available,
-                    Instant::now(),
-                )
+                world
+                    .inventory
+                    .prepare_item_cast(request, player.level, target_available)
             });
         let error = match prepared {
             Ok((spell_id, packet)) => {
@@ -317,9 +310,10 @@ mod tests {
             "Tester",
         ));
         let mut world = World::new(5);
+        world.own_spawn = Some(7);
         let mut player = testing::player(7);
         player.memorized_spells[0] = Some(202);
-        world.player = Some(player);
+        world.player.admit(player);
         let cast = |gem| ClientCommand::CastSpell {
             session_id: 5,
             gem,
