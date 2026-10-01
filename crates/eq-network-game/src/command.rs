@@ -266,6 +266,28 @@ pub enum GameCommand {
         /// Reject delayed actions instead of replaying them after a stall.
         created: std::time::Instant,
     },
+    /// Ask a nearby character to trade; their answer opens the window: the
+    /// give window for an NPC, the trade window for a player.
+    OfferTrade {
+        /// Current zone admission.
+        session_id: u64,
+        /// The character to trade with.
+        with_id: u16,
+        /// Reject delayed actions instead of replaying them after a stall.
+        created: std::time::Instant,
+    },
+    /// Click Give or Trade in the open window.
+    AcceptTrade {
+        /// Current zone admission.
+        session_id: u64,
+        /// Reject delayed actions instead of replaying them after a stall.
+        created: std::time::Instant,
+    },
+    /// Close the give or trade window; what it held comes back.
+    CancelTrade {
+        /// Current zone admission.
+        session_id: u64,
+    },
     /// Announce a jump the client is simulating; only sessions that accept falls
     /// send it.
     Jump {
@@ -331,6 +353,9 @@ impl GameCommand {
             | Self::Shop { session_id, .. }
             | Self::Buy { session_id, .. }
             | Self::Sell { session_id, .. }
+            | Self::OfferTrade { session_id, .. }
+            | Self::AcceptTrade { session_id, .. }
+            | Self::CancelTrade { session_id }
             | Self::Jump { session_id, .. }
             | Self::AutoAttack { session_id, .. }
             | Self::SelectTarget { session_id, .. }
@@ -367,6 +392,9 @@ impl GameCommand {
             Self::Camp { .. } => Capability::Camping,
             Self::Loot { .. } | Self::LootItem { .. } | Self::EndLoot { .. } => Capability::Looting,
             Self::Shop { .. } | Self::Buy { .. } | Self::Sell { .. } => Capability::Trading,
+            Self::OfferTrade { .. } | Self::AcceptTrade { .. } | Self::CancelTrade { .. } => {
+                Capability::Giving
+            }
             Self::SelectTarget { .. } => Capability::Targeting,
         })
     }
@@ -381,6 +409,7 @@ impl GameCommand {
             | Self::SendChat(_)
             | Self::InspectItem { .. }
             | Self::EndLoot { .. }
+            | Self::CancelTrade { .. }
             | Self::SelectTarget { .. } => None,
             Self::UseItem(request) => Some(request.created),
             Self::MoveInventory(request) => Some(request.created),
@@ -402,6 +431,8 @@ impl GameCommand {
             | Self::Shop { created, .. }
             | Self::Buy { created, .. }
             | Self::Sell { created, .. }
+            | Self::OfferTrade { created, .. }
+            | Self::AcceptTrade { created, .. }
             | Self::Jump { created, .. }
             | Self::AutoAttack { created, .. }
             | Self::ConfigureMotion { created, .. } => Some(*created),
@@ -510,11 +541,13 @@ pub fn encode(
         | GameCommand::Shop { .. }
         | GameCommand::Buy { .. }
         | GameCommand::Sell { .. } => encode_trade(dialect, command),
-        GameCommand::MoveInventory(_) => {
-            anyhow::bail!("inventory moves require the admitted session controller")
-        }
-        GameCommand::ClickDoor { .. } | GameCommand::PickUp { .. } => {
-            anyhow::bail!("doors and ground items require the admitted session controller")
+        GameCommand::MoveInventory(_)
+        | GameCommand::ClickDoor { .. }
+        | GameCommand::PickUp { .. }
+        | GameCommand::OfferTrade { .. }
+        | GameCommand::AcceptTrade { .. }
+        | GameCommand::CancelTrade { .. } => {
+            anyhow::bail!("items, doors and trades require the admitted session controller")
         }
         GameCommand::Move(_)
         | GameCommand::Jump { .. }

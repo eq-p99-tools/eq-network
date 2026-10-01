@@ -291,6 +291,8 @@ pub enum Capability {
     Inventory,
     /// Buying from and selling to merchants.
     Trading,
+    /// Handing items to NPCs and trading with other players.
+    Giving,
     /// Walking, running, sitting and standing.
     Moving,
     /// Jumping and falling, which the server takes from the client.
@@ -316,11 +318,12 @@ pub enum Capability {
 impl Capability {
     /// Every capability, in order: what a session offers when its server and
     /// client generation support everything.
-    pub const ALL: [Self; 14] = [
+    pub const ALL: [Self; 15] = [
         Self::Casting,
         Self::Spellbook,
         Self::Inventory,
         Self::Trading,
+        Self::Giving,
         Self::Moving,
         Self::Falling,
         Self::Targeting,
@@ -593,6 +596,15 @@ pub enum WorldEvent {
         /// Why nothing was bought or sold.
         reason: String,
     },
+    /// Give and trade window changes.
+    Exchange(crate::exchange::ExchangeUpdate),
+    /// A request to trade that was not sent, or that went unanswered.
+    ExchangeRefused {
+        /// Admission from the request.
+        session_id: u64,
+        /// Why no window opened.
+        reason: String,
+    },
     /// A melee, skill or spell damage record for any nearby entities.
     Damage(crate::combat::Damage),
     /// Own-character skill update; unknown skill IDs remain available to consumers.
@@ -789,8 +801,8 @@ pub fn titanium_update(opcode: u16, body: &[u8]) -> Result<Option<WorldEvent>> {
     }))
 }
 
-/// Spell actions, doors, ground objects, loot, merchant and inventory packets,
-/// each owned by its codec.
+/// Spell actions, doors, ground objects, loot, merchant, exchange and
+/// inventory packets, each owned by its codec.
 fn titanium_views(opcode: u16, body: &[u8]) -> Result<Option<WorldEvent>> {
     if opcode == 0x497c {
         return Ok(crate::buffs::titanium_spell_effect(body)?.map(WorldEvent::SpellEffect));
@@ -803,6 +815,8 @@ fn titanium_views(opcode: u16, body: &[u8]) -> Result<Option<WorldEvent>> {
         Some(WorldEvent::Loot(update))
     } else if let Some(update) = crate::merchant::decode(opcode, body)? {
         Some(WorldEvent::Merchant(update))
+    } else if let Some(update) = crate::exchange::decode(opcode, body)? {
+        Some(WorldEvent::Exchange(update))
     } else {
         crate::inventory::decode(opcode, body)?.map(WorldEvent::Inventory)
     })
@@ -965,16 +979,17 @@ mod tests {
             Capability::Spellbook => 1,
             Capability::Inventory => 2,
             Capability::Trading => 3,
-            Capability::Moving => 4,
-            Capability::Falling => 5,
-            Capability::Targeting => 6,
-            Capability::Combat => 7,
-            Capability::Looting => 8,
-            Capability::Talking => 9,
-            Capability::Camping => 10,
-            Capability::Doors => 11,
-            Capability::GroundItems => 12,
-            Capability::Zoning => 13,
+            Capability::Giving => 4,
+            Capability::Moving => 5,
+            Capability::Falling => 6,
+            Capability::Targeting => 7,
+            Capability::Combat => 8,
+            Capability::Looting => 9,
+            Capability::Talking => 10,
+            Capability::Camping => 11,
+            Capability::Doors => 12,
+            Capability::GroundItems => 13,
+            Capability::Zoning => 14,
         };
         for (index, capability) in Capability::ALL.into_iter().enumerate() {
             assert_eq!(place(capability), index, "{capability:?}");

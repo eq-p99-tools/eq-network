@@ -102,11 +102,12 @@ pub(super) fn needs(command: &ClientCommand) -> &'static [Resource] {
         ClientCommand::MoveInventory(request) if !(30..=39).contains(&request.from.0) => {
             &[Casting, Inventory]
         }
-        // A picked-up item lands on the cursor.
+        // A picked-up item lands on the cursor; Give hands the trade slots over.
         ClientCommand::MoveInventory(_)
         | ClientCommand::PickUp { .. }
         | ClientCommand::Buy { .. }
-        | ClientCommand::Sell { .. } => &[Inventory],
+        | ClientCommand::Sell { .. }
+        | ClientCommand::AcceptTrade { .. } => &[Inventory],
         ClientCommand::SelectCharacter { .. }
         | ClientCommand::CreateCharacter { .. }
         | ClientCommand::ClickDoor { .. }
@@ -120,6 +121,9 @@ pub(super) fn needs(command: &ClientCommand) -> &'static [Resource] {
         | ClientCommand::LootItem { .. }
         | ClientCommand::EndLoot { .. }
         | ClientCommand::Shop { .. }
+        // Asking holds nothing, and closing a window must always be possible.
+        | ClientCommand::OfferTrade { .. }
+        | ClientCommand::CancelTrade { .. }
         | ClientCommand::Jump { .. }
         | ClientCommand::AutoAttack { .. }
         | ClientCommand::SelectTarget { .. }
@@ -160,6 +164,11 @@ fn refusal(command: &ClientCommand, reason: &str) -> Option<WorldEvent> {
                 reason: reason.into(),
             }
         }
+        ClientCommand::OfferTrade { session_id, .. }
+        | ClientCommand::AcceptTrade { session_id, .. } => WorldEvent::ExchangeRefused {
+            session_id: *session_id,
+            reason: reason.into(),
+        },
         ClientCommand::PickUp {
             session_id,
             drop_id,
@@ -208,6 +217,7 @@ fn refusal(command: &ClientCommand, reason: &str) -> Option<WorldEvent> {
         | ClientCommand::LootItem { .. }
         | ClientCommand::EndLoot { .. }
         | ClientCommand::Shop { .. }
+        | ClientCommand::CancelTrade { .. }
         | ClientCommand::Jump { .. }
         | ClientCommand::AutoAttack { .. }
         | ClientCommand::ConfigureMotion { .. }

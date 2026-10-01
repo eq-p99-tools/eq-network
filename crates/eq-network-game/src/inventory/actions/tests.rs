@@ -41,6 +41,7 @@ fn actor() -> InventoryActor {
         class: Some(1),
         race: 1,
         level: 10,
+        trade_slots: 0,
     }
 }
 
@@ -109,6 +110,76 @@ fn bank_contents_obey_capacity_and_shared_bank_stays_unsupported() {
     assert!(inventory
         .plan_move(&request(&inventory, 30, 2031), actor())
         .is_err());
+}
+
+#[test]
+fn trade_slots_take_only_what_servers_accept_while_a_window_is_open() {
+    let giving = InventoryActor {
+        trade_slots: 4,
+        ..actor()
+    };
+    // A stack on the cursor, a bag with something in it, and a stack already
+    // handed over.
+    let mut inventory = state(vec![
+        item(30, Some(7), 0),
+        item(22, None, 2),
+        item(251, Some(3), 0),
+        item(3001, Some(2), 0),
+    ]);
+    // Nothing goes into a trade slot without an open window, or past its
+    // slots.
+    assert!(inventory
+        .plan_move(&request(&inventory, 30, 3000), actor())
+        .is_err());
+    assert!(inventory
+        .plan_move(&request(&inventory, 30, 3004), giving)
+        .is_err());
+    // Only from the cursor: EQEmu disconnects anything else.
+    assert!(inventory
+        .plan_move(&request(&inventory, 251, 3000), giving)
+        .is_err());
+    // Whole into an empty slot, merged onto the same stack, and nothing else.
+    assert!(inventory
+        .plan_move(&request(&inventory, 30, 3001), giving)
+        .is_err());
+    let mut split = request(&inventory, 30, 3000);
+    split.quantity = MoveQuantity::Count(NonZeroU32::new(2).unwrap());
+    assert!(inventory.plan_move(&split, giving).is_err());
+    let mut merge = request(&inventory, 30, 3001);
+    merge.quantity = MoveQuantity::Count(NonZeroU32::new(7).unwrap());
+    let mut merged = inventory.clone();
+    merged.apply(merged.plan_move(&merge, giving).unwrap());
+    assert_eq!(merged.items[&InventorySlot(3001)].stack_count, Some(9));
+    // What is handed over stays there until the window closes.
+    assert!(inventory
+        .plan_move(&request(&inventory, 3001, 23), giving)
+        .is_err());
+    inventory
+        .submit_move(&request(&inventory, 30, 3000), giving, |packet| {
+            assert_eq!(packet.body[4..8], 3000u32.to_le_bytes());
+            Ok(())
+        })
+        .unwrap();
+    // A bag goes over with what it holds.
+    inventory.apply(InventoryUpdate::Settled);
+    inventory
+        .submit_move(&request(&inventory, 22, 30), giving, |_| Ok(()))
+        .unwrap();
+    inventory
+        .submit_move(&request(&inventory, 30, 3002), giving, |_| Ok(()))
+        .unwrap();
+    assert_eq!(
+        inventory.items[&InventorySlot(3002).child(0).unwrap()].stack_count,
+        Some(3)
+    );
+    assert_eq!(InventorySlot(3051).parent(), Some((InventorySlot(3002), 0)));
+    // Closing the window empties every trade slot and resolves their
+    // predictions; the rest of the inventory is untouched.
+    inventory.apply(InventoryUpdate::TradeEmptied);
+    assert!(!inventory.items.keys().any(|slot| slot.is_in_trade()));
+    assert!(inventory
+        .prediction_origins()
+        .all(|(slot, _)| !slot.is_in_trade()));
 }
 
 #[test]

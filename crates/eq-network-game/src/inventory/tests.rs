@@ -93,6 +93,7 @@ fn partial_correction_blocks_moves_until_both_ends_are_authoritative() {
         dual_wield: None,
         race: 1,
         level: 1,
+        trade_slots: 0,
     };
     assert!(state.auto_store_destination(actor).is_err());
     state.apply(InventoryUpdate::Remove(InventorySlot(30)));
@@ -185,6 +186,7 @@ fn move_item(state: &mut Inventory, from: i32, to: i32) {
         dual_wield: None,
         race: 1,
         level: 1,
+        trade_slots: 0,
     };
     let update = state.plan_move(&request, actor).unwrap();
     state.apply(update);

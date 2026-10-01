@@ -3,7 +3,7 @@
 use super::{
     actions, camp, casting, character, chat, combat,
     doors::Doors,
-    ensure, entities,
+    ensure, entities, exchange,
     feature::{Encoder, Feature, Out, World},
     inventory, looting, objects, servers, spellbook, talk, targeting, transfers, CharacterSession,
     ClientCommand, ClientEvent, ConnectionStage, ConnectionState, DecodeError, Duration, Events,
@@ -36,6 +36,7 @@ impl Features {
             Box::new(targeting::Targeting::new(encoder.clone())),
             Box::new(combat::Combat::new(encoder.clone())),
             Box::new(looting::Looting::new(encoder.clone())),
+            Box::new(exchange::Exchanges),
             Box::new(talk::Talk::new(encoder)),
             Box::new(camp::Camp::default()),
             Box::new(Doors::default()),
@@ -398,7 +399,7 @@ mod tests {
     };
 
     /// How many kinds of command there are.
-    const KINDS: usize = 29;
+    const KINDS: usize = 32;
 
     /// Which kind of command this is. A new command is a compile error here
     /// until it has a number, and then a test failure until the list below
@@ -435,6 +436,9 @@ mod tests {
             ClientCommand::SelectTarget { .. } => 26,
             ClientCommand::ConfigureMotion { .. } => 27,
             ClientCommand::Move(_) => 28,
+            ClientCommand::OfferTrade { .. } => 29,
+            ClientCommand::AcceptTrade { .. } => 30,
+            ClientCommand::CancelTrade { .. } => 31,
         }
     }
 
@@ -610,6 +614,16 @@ mod tests {
                 position,
                 created,
             }),
+            ClientCommand::OfferTrade {
+                session_id,
+                with_id: 9,
+                created,
+            },
+            ClientCommand::AcceptTrade {
+                session_id,
+                created,
+            },
+            ClientCommand::CancelTrade { session_id },
         ]
     }
 
@@ -669,6 +683,7 @@ mod tests {
             Capability::Spellbook,
             Capability::Inventory,
             Capability::Trading,
+            Capability::Giving,
             Capability::Moving,
             Capability::Targeting,
             Capability::Combat,

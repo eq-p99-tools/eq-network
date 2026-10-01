@@ -6,9 +6,9 @@
 //! it. The zone loop only fans packets and commands out to the features.
 
 use super::{
-    actions::Resource, character::PlayerRecord, entities::Spawns, inventory::Carried,
-    lifecycle::ZoneLifecycle, motion::Body, posture::OwnPosture, ClientCommand, ConnectionState,
-    Events, ZoneExit,
+    actions::Resource, character::PlayerRecord, entities::Spawns, exchange::Exchanging,
+    inventory::Carried, lifecycle::ZoneLifecycle, motion::Body, posture::OwnPosture, ClientCommand,
+    ConnectionState, Events, ZoneExit,
 };
 use anyhow::{Context, Result};
 use eq_network_game::{
@@ -164,6 +164,9 @@ pub(super) struct World {
     pub(super) packets: u64,
     /// The zone's spawns, which only the entities feature changes.
     pub(super) spawns: Spawns,
+    /// The give or trade window asked for or open, which only the exchange
+    /// feature changes.
+    pub(super) exchange: Exchanging,
 }
 
 impl World {
@@ -182,6 +185,7 @@ impl World {
             admitted: None,
             packets: 0,
             spawns: Spawns::default(),
+            exchange: Exchanging::default(),
         }
     }
 
@@ -425,6 +429,33 @@ pub(super) mod testing {
             size: 6.0,
             invisible: false,
             appearance: eq_network_game::appearance::Appearance::default(),
+        }
+    }
+
+    /// A plain item in this inventory slot.
+    pub(in crate::client::session) fn item(slot: i32) -> eq_network_game::inventory::InventoryItem {
+        eq_network_game::inventory::InventoryItem {
+            activation: eq_network_game::inventory::ItemActivation::default(),
+            scroll_spell: None,
+            rules: eq_network_game::inventory::ItemPlacement::default(),
+            slot: eq_network_game::inventory::InventorySlot(slot),
+            icon: 0,
+            stack_count: None,
+            charges: 0,
+            bag_slots: 0,
+            details: eq_network_game::items::ItemDetails {
+                equipment: None,
+                bonuses: None,
+                id: 42,
+                name: "Synthetic item".into(),
+                lore: String::new(),
+                weight_tenths: 0,
+                slots: 0,
+                classes: 0,
+                races: 0,
+                flags: vec![],
+                stats: vec![],
+            },
         }
     }
 
