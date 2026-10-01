@@ -20,6 +20,8 @@ pub mod creation;
 pub mod doors;
 /// Handing items to another character: the give and trade windows.
 pub mod exchange;
+/// Food and drink: hunger, thirst, and eating and drinking.
+pub mod food;
 /// Read-only inventory packets, slots, instances, and state.
 pub mod inventory;
 /// Read-only item inspection requests and definitions.

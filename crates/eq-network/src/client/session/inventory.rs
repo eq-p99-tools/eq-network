@@ -11,6 +11,7 @@
 //! the purse holds only now and then, so the ledger keeps the coins where the
 //! player put them, changes the purse for loot and purchases kind by kind as
 //! servers do, and takes each money update as the truth about the purse.
+mod meals;
 mod merchant;
 
 use super::{
@@ -209,14 +210,17 @@ pub(super) struct Belongings {
     settlement: Settlement,
     /// A purchase or sale waiting for the merchant.
     trades: MerchantTrades,
+    /// How fed and watered the player is, which decides when to eat.
+    meals: meals::Meals,
     encoder: Encoder,
 }
 
 impl Belongings {
-    pub(super) fn new(encoder: Encoder) -> Self {
+    pub(super) fn new(encoder: Encoder, auto_eat: eq_network_game::food::AutoEat) -> Self {
         Self {
             settlement: Settlement::default(),
             trades: MerchantTrades::default(),
+            meals: meals::Meals::new(auto_eat),
             encoder,
         }
     }
@@ -348,6 +352,9 @@ impl Feature for Belongings {
         if let Some(update) = update(message) {
             world.inventory.0.apply(update);
         }
+        if let Message::Event(WorldEvent::Nourishment(nourishment)) = message {
+            self.meals.admit(*nourishment);
+        }
         coins_news(message, &mut world.coins.0);
         Ok(())
     }
@@ -394,6 +401,7 @@ impl Feature for Belongings {
                 | ClientCommand::Shop { .. }
                 | ClientCommand::Buy { .. }
                 | ClientCommand::Sell { .. }
+                | ClientCommand::Consume { .. }
         )
     }
 
@@ -407,6 +415,15 @@ impl Feature for Belongings {
             ClientCommand::MoveInventory(request) => self.move_item(request, world, out),
             ClientCommand::MoveCoins { .. } => Self::move_coins(command, world, out),
             ClientCommand::Shop { .. } => self.shop(command, world, out),
+            ClientCommand::Consume {
+                session_id, slot, ..
+            } => match self.meals.by_hand(*slot, world, out)? {
+                Some(reason) => out.log.send(ClientEvent::World(WorldEvent::ConsumeRefused {
+                    session_id: *session_id,
+                    reason: reason.into(),
+                })),
+                None => Ok(()),
+            },
             _ => self.trade(command, out),
         }
     }
@@ -459,6 +476,9 @@ impl Feature for Belongings {
             Message::Event(WorldEvent::Death(death)) if world.is_player(death.spawn_id) => {
                 self.trades.clear();
             }
+            Message::Event(WorldEvent::Nourishment(nourishment)) => {
+                self.meals.nourished(*nourishment, world, out)?;
+            }
             // The window closed: what the trade slots held was handed over, or
             // comes back as item updates.
             Message::Event(WorldEvent::Exchange(
@@ -476,6 +496,7 @@ mod tests {
     use super::*;
     use eq_network_game::GameDialect;
     use eq_network_game::{
+        food::Shortage,
         inventory::{InventorySlot, MoveQuantity, MOVE_OPCODE},
         merchant::MerchantUpdate,
     };
@@ -491,7 +512,10 @@ mod tests {
 
     /// Admitted player 7, carrying one item in slot 22.
     fn admitted() -> (Belongings, World) {
-        let mut belongings = Belongings::new(Encoder::new(GameDialect::Titanium, "Tester"));
+        let mut belongings = Belongings::new(
+            Encoder::new(GameDialect::Titanium, "Tester"),
+            eq_network_game::food::AutoEat::default(),
+        );
         let mut world = World::new(5);
         let snapshot = Message::Event(WorldEvent::Inventory(InventoryUpdate::Snapshot(vec![
             item(22),
@@ -503,6 +527,164 @@ mod tests {
             .result
             .unwrap();
         (belongings, world)
+    }
+
+    /// Admitted player 7, carrying a ration (22), a bag (23) holding a
+    /// drink, and the profile's word on how fed and watered they are.
+    fn fed(food: u32, water: u32) -> (Belongings, World) {
+        use eq_network_game::food::Nourishment;
+        let mut belongings = Belongings::new(
+            Encoder::new(GameDialect::Titanium, "Tester"),
+            eq_network_game::food::AutoEat::default(),
+        );
+        let mut world = World::new(5);
+        let typed = |slot, item_type| {
+            let mut item = item(slot);
+            item.rules.item_type = item_type;
+            item
+        };
+        let mut bag = item(23);
+        bag.bag_slots = 4;
+        let drink = InventorySlot(23).child(0).unwrap().0;
+        let snapshot = Message::Event(WorldEvent::Inventory(InventoryUpdate::Snapshot(vec![
+            typed(22, 14),
+            bag,
+            typed(drink, 15),
+            typed(24, 11),
+        ])));
+        belongings.admit(&snapshot, &mut world).unwrap();
+        belongings
+            .admit(
+                &Message::Event(WorldEvent::Nourishment(Nourishment { food, water })),
+                &mut world,
+            )
+            .unwrap();
+        world.own_spawn = Some(7);
+        world.player.admit(testing::player(7));
+        testing::run(|out| belongings.admitted(&mut world, out))
+            .result
+            .unwrap();
+        (belongings, world)
+    }
+
+    #[test]
+    fn a_hungry_or_thirsty_player_eats_and_drinks_what_they_carry() {
+        use eq_network_game::food::{consume, Meal, Nourishment};
+        let (mut belongings, mut world) = fed(6000, 6000);
+        let hungry =
+            |food, water| Message::Event(WorldEvent::Nourishment(Nourishment { food, water }));
+        // Fed and watered: nothing happens.
+        let outcome = testing::run(|out| belongings.observe(&hungry(3001, 6000), &mut world, out));
+        assert!(outcome.sent.is_empty(), "sent {:?}", outcome.sent);
+        // Both low: the ration, then the drink in the bag, each one taken.
+        let drink = InventorySlot(23).child(0).unwrap();
+        let outcome = testing::run(|out| belongings.observe(&hungry(3000, 2000), &mut world, out));
+        outcome.result.unwrap();
+        assert_eq!(
+            outcome.sent,
+            [
+                consume(InventorySlot(22), Meal::Food, false),
+                consume(drink, Meal::Drink, false)
+            ]
+        );
+        assert_eq!(
+            inventory_events(&outcome.events),
+            [
+                &InventoryUpdate::Deduct {
+                    slot: InventorySlot(22),
+                    quantity: 1
+                },
+                &InventoryUpdate::Deduct {
+                    slot: drink,
+                    quantity: 1
+                }
+            ]
+        );
+        // The answer to the bite of food still counts the drink short, and
+        // the answer to the drink comes next: neither is eaten twice.
+        for answer in [hungry(4500, 2000), hungry(4500, 3500)] {
+            let outcome = testing::run(|out| belongings.observe(&answer, &mut world, out));
+            outcome.result.unwrap();
+            assert!(outcome.sent.is_empty(), "sent {:?}", outcome.sent);
+        }
+        // With the ration gone, a hungry player hears there is nothing to eat.
+        let outcome = testing::run(|out| belongings.observe(&hungry(100, 6000), &mut world, out));
+        assert!(outcome.sent.is_empty(), "sent {:?}", outcome.sent);
+        assert!(matches!(
+            outcome.events[..],
+            [ClientEvent::World(WorldEvent::NothingToEat {
+                food: Some(Shortage::Nothing),
+                water: None
+            })]
+        ));
+    }
+
+    #[test]
+    fn food_with_modifiers_waits_for_the_player_unless_anything_goes() {
+        use eq_network_game::food::{consume, AutoEat, Meal, Nourishment};
+        let (mut belongings, mut world) = fed(6000, 6000);
+        let mut ration = item(22);
+        ration.rules.item_type = 14;
+        ration.details.stats.push(eq_network_game::items::ItemStat {
+            label: "STR".into(),
+            value: 1,
+        });
+        world.inventory.0.apply(InventoryUpdate::Set(vec![ration]));
+        let hungry = Message::Event(WorldEvent::Nourishment(Nourishment {
+            food: 2000,
+            water: 6000,
+        }));
+        let outcome = testing::run(|out| belongings.observe(&hungry, &mut world, out));
+        assert!(outcome.sent.is_empty(), "sent {:?}", outcome.sent);
+        assert!(matches!(
+            outcome.events[..],
+            [ClientEvent::World(WorldEvent::NothingToEat {
+                food: Some(Shortage::OnlyModified),
+                water: None
+            })]
+        ));
+        belongings.meals = meals::Meals::new(AutoEat::Anything);
+        let outcome = testing::run(|out| belongings.observe(&hungry, &mut world, out));
+        outcome.result.unwrap();
+        assert_eq!(
+            outcome.sent,
+            [consume(InventorySlot(22), Meal::Food, false)]
+        );
+    }
+
+    #[test]
+    fn a_bite_by_hand_counts_and_a_full_player_is_told_so() {
+        use eq_network_game::food::{consume, Meal};
+        let eat = |slot| ClientCommand::Consume {
+            session_id: 5,
+            slot: InventorySlot(slot),
+            created: Instant::now(),
+        };
+        let refusals = |events: &[ClientEvent]| -> Vec<String> {
+            events
+                .iter()
+                .filter_map(|event| match event {
+                    ClientEvent::World(WorldEvent::ConsumeRefused { reason, .. }) => {
+                        Some(reason.clone())
+                    }
+                    _ => None,
+                })
+                .collect()
+        };
+        let (mut belongings, mut world) = fed(6000, 4000);
+        let outcome = testing::run(|out| belongings.handle(&eat(22), &mut world, out));
+        assert!(outcome.sent.is_empty(), "sent {:?}", outcome.sent);
+        assert_eq!(
+            refusals(&outcome.events),
+            ["You could not possibly eat any more, you would explode!"]
+        );
+        let outcome = testing::run(|out| belongings.handle(&eat(24), &mut world, out));
+        assert_eq!(refusals(&outcome.events), ["You cannot eat or drink that"]);
+        let drink = InventorySlot(23).child(0).unwrap();
+        let outcome = testing::run(|out| belongings.handle(&eat(drink.0), &mut world, out));
+        outcome.result.unwrap();
+        assert_eq!(outcome.sent, [consume(drink, Meal::Drink, true)]);
+        assert!(!world.inventory.items().contains_key(&drink));
     }
 
     fn inventory_events(events: &[ClientEvent]) -> Vec<&InventoryUpdate> {
@@ -540,7 +722,10 @@ mod tests {
     fn the_admission_reports_the_inventory_staged_before_it() {
         let (_, world) = admitted();
         assert!(world.inventory.items().contains_key(&InventorySlot(22)));
-        let mut belongings = Belongings::new(Encoder::new(GameDialect::Titanium, "Tester"));
+        let mut belongings = Belongings::new(
+            Encoder::new(GameDialect::Titanium, "Tester"),
+            eq_network_game::food::AutoEat::default(),
+        );
         let mut world = World::new(5);
         let snapshot = Message::Event(WorldEvent::Inventory(InventoryUpdate::Snapshot(vec![
             item(22),

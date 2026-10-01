@@ -181,6 +181,9 @@ pub struct ClientConfig {
     /// Refuse login, world and zone servers outside this machine and its private
     /// network, so test tooling can never reach a public server.
     pub local_only: bool,
+    /// What the session eats and drinks on its own for a hungry or thirsty
+    /// player; by default nothing with modifiers.
+    pub auto_eat: eq_network_game::food::AutoEat,
 }
 
 impl ClientConfig {
@@ -214,6 +217,7 @@ impl ClientConfig {
             channels: None,
             reconnect_delay: Duration::from_secs(30),
             local_only: false,
+            auto_eat: eq_network_game::food::AutoEat::default(),
         }
     }
 

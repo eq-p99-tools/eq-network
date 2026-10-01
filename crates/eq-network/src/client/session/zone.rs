@@ -24,12 +24,13 @@ impl Features {
         server: &dyn servers::ServerType,
         dialect: eq_network_game::GameDialect,
         name: &str,
+        auto_eat: eq_network_game::food::AutoEat,
     ) -> Self {
         let encoder = Encoder::new(dialect, name);
         Self(vec![
             Box::new(casting::Casting::new(encoder.clone())),
             Box::new(spellbook::Spellbook::default()),
-            Box::new(inventory::Belongings::new(encoder.clone())),
+            Box::new(inventory::Belongings::new(encoder.clone(), auto_eat)),
             server.motion(),
             Box::new(character::Character::default()),
             Box::new(entities::Entities::default()),
@@ -178,7 +179,12 @@ pub(super) fn run(
     let mut progress = Instant::now();
     let session_id = rand::random();
     let mut world = World::new(session_id);
-    let mut features = Features::new(server, config.protocol.into(), &config.character);
+    let mut features = Features::new(
+        server,
+        config.protocol.into(),
+        &config.character,
+        config.auto_eat,
+    );
     loop {
         if stop.is_cancelled() || duration.is_some_and(|limit| connected.elapsed() >= limit) {
             session.close()?;
@@ -400,7 +406,7 @@ mod tests {
     };
 
     /// How many kinds of command there are.
-    const KINDS: usize = 34;
+    const KINDS: usize = 35;
 
     /// Which kind of command this is. A new command is a compile error here
     /// until it has a number, and then a test failure until the list below
@@ -442,6 +448,7 @@ mod tests {
             ClientCommand::CancelTrade { .. } => 31,
             ClientCommand::MoveCoins { .. } => 32,
             ClientCommand::UseAbility { .. } => 33,
+            ClientCommand::Consume { .. } => 34,
         }
     }
 
@@ -643,6 +650,11 @@ mod tests {
                 ability: eq_network_game::abilities::Ability::Kick,
                 created,
             },
+            ClientCommand::Consume {
+                session_id,
+                slot: InventorySlot(22),
+                created,
+            },
         ]
     }
 
@@ -662,6 +674,7 @@ mod tests {
             servers::server_type(crate::client::ServerProtocol::EqEmu),
             eq_network_game::GameDialect::Titanium,
             "Tester",
+            eq_network_game::food::AutoEat::default(),
         );
         for command in zone_commands() {
             let owners: Vec<_> = features
@@ -693,6 +706,7 @@ mod tests {
                 servers::server_type(protocol),
                 eq_network_game::GameDialect::Titanium,
                 "Tester",
+                eq_network_game::food::AutoEat::default(),
             )
             .capabilities()
         };
