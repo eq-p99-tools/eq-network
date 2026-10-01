@@ -26,6 +26,8 @@ pub mod food;
 pub mod inventory;
 /// Read-only item inspection requests and definitions.
 pub mod items;
+/// How `/who` lists a player: guild, anonymity and flags, and guild names.
+pub mod listing;
 /// Corpse looting requests, listings and acknowledgements.
 pub mod loot;
 /// Merchant windows, stock, purchases and sales.
