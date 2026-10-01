@@ -7,7 +7,7 @@ pub use actions::{InventoryActor, InventoryMove, MoveQuantity, MOVE_OPCODE};
 pub use activation::{ClickEffect, ClickKind, ItemActivation, ItemUse, CAST_OPCODE};
 pub use banking::banker_in_range;
 pub use titanium::decode;
-pub(crate) use titanium::parse as parse_items;
+pub(crate) use titanium::{parse as parse_items, parse_at};
 
 use crate::items::ItemDetails;
 use serde::Serialize;
@@ -484,4 +484,4 @@ impl Inventory {
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

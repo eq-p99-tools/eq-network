@@ -66,6 +66,21 @@ pub fn decode(opcode: u16, body: &[u8]) -> Result<Option<InventoryUpdate>> {
     }
 }
 
+/// Parses one serialized item as if it lay in `location`, so that the bag
+/// contents of a view outside the inventory (a trade partner's slot) get
+/// addresses.
+pub(crate) fn parse_at(body: &[u8], location: InventorySlot) -> Result<Vec<InventoryItem>> {
+    ensure!(body.len() <= MAX_BYTES, "inventory packet too large");
+    let text = std::str::from_utf8(body).context("inventory is not UTF-8")?;
+    let mut parser = Parser {
+        text,
+        items: Vec::new(),
+    };
+    parser.item(0, Some(location))?;
+    ensure!(parser.text.is_empty(), "more than one item in a view");
+    Ok(parser.items)
+}
+
 /// Parses serialized Titanium items, as used by inventory, loot and merchant views.
 pub(crate) fn parse(body: &[u8]) -> Result<Vec<InventoryItem>> {
     ensure!(body.len() <= MAX_BYTES, "inventory packet too large");

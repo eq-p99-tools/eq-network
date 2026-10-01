@@ -5,15 +5,22 @@
 //! takes it at once). Closing the window cancels it, and the server sends
 //! what the trade slots held back as ordinary item updates.
 //!
+//! Between players, each side sees what the other puts in (an item view per
+//! trade slot, and the coins added), and anything put in undoes both sides'
+//! Trade clicks. What the other player hands over arrives as ordinary item
+//! updates and a money update once the trade goes through.
+//!
 //! Layout reference: `EQEmu`'s Titanium `TradeRequest_Struct`,
-//! `TradeAccept_Struct`, `CancelTrade_Struct` and `TradeBusy_Struct`
-//! (`common/patches/titanium_structs.h`), and `zone/trading.cpp` for the
-//! exchange itself.
+//! `TradeAccept_Struct`, `CancelTrade_Struct`, `TradeBusy_Struct` and
+//! `TradeCoin_Struct` (`common/patches/titanium_structs.h`), and
+//! `zone/trading.cpp` and `zone/client_packet.cpp` for the exchange itself.
 use crate::{
     command::EncodedCommand,
+    inventory::{InventoryItem, InventorySlot},
+    money::Coin,
     world::{Position, SpawnState},
 };
-use anyhow::{ensure, Result};
+use anyhow::{ensure, Context, Result};
 use serde::Serialize;
 
 /// `OP_TradeRequest`: one character asks another to trade.
@@ -28,6 +35,16 @@ pub const FINISH_OPCODE: u16 = 0x6014;
 pub const CANCEL_OPCODE: u16 = 0x2dc1;
 /// `OP_TradeBusy`: the other player could not trade.
 pub const BUSY_OPCODE: u16 = 0x6839;
+/// `OP_TradeCoins`: the other player put coins in the trade.
+pub const COINS_OPCODE: u16 = 0x34c1;
+/// `OP_ItemPacket`, whose `ItemPacketTradeView` kind shows an item the other
+/// player put in the trade.
+const ITEM_OPCODE: u16 = 0x3397;
+/// `ItemPacketTradeView`.
+const TRADE_VIEW_KIND: u32 = 0x65;
+/// The official client's number for the other player's first trade slot
+/// (the skin's `TRDW_TradeSlot8`); their eight run on from it.
+pub const THEIR_FIRST_SLOT: i32 = 3008;
 
 /// `CancelTrade_Struct.action` for a closed window. Servers ignore it;
 /// `EQEmu` itself sends this value (`groupActUpdate`) when it closes a
@@ -62,7 +79,7 @@ impl Partner {
 }
 
 /// What the server says about an exchange.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 pub enum ExchangeUpdate {
     /// Another character asks the player to trade.
     Requested {
@@ -92,6 +109,30 @@ pub enum ExchangeUpdate {
         /// The busy player.
         by: u32,
     },
+    /// The player took another player's request, as the official client
+    /// does on its own: the window is open. The session says this; no
+    /// server packet does.
+    Taken {
+        /// The other player.
+        from: u32,
+    },
+    /// The other player put an item in their trade slot `index` (0 to 7).
+    /// Its slot is the official client's number for that place,
+    /// [`THEIR_FIRST_SLOT`] on; what a bag holds is not kept.
+    Offered {
+        /// Their trade slot.
+        index: u8,
+        /// The item.
+        item: Box<InventoryItem>,
+    },
+    /// The other player put coins in the trade; the server tells them
+    /// nothing else about them until the trade goes through.
+    Coins {
+        /// Their kind.
+        coin: Coin,
+        /// How many more.
+        amount: u32,
+    },
 }
 
 fn word(body: &[u8], offset: usize) -> u32 {
@@ -106,12 +147,15 @@ fn word(body: &[u8], offset: usize) -> u32 {
 /// Decodes the exchange packets; other opcodes are not this codec's.
 ///
 /// # Errors
-/// Rejects malformed lengths.
+/// Rejects malformed lengths, coin kinds and items.
 pub fn decode(opcode: u16, body: &[u8]) -> Result<Option<ExchangeUpdate>> {
+    if opcode == ITEM_OPCODE {
+        return offered(body);
+    }
     let length = match opcode {
         REQUEST_OPCODE | ACKNOWLEDGE_OPCODE | ACCEPT_OPCODE | CANCEL_OPCODE => 8,
         FINISH_OPCODE => 0,
-        BUSY_OPCODE => 12,
+        BUSY_OPCODE | COINS_OPCODE => 12,
         _ => return Ok(None),
     };
     ensure!(body.len() == length, "invalid trade packet length");
@@ -127,7 +171,40 @@ pub fn decode(opcode: u16, body: &[u8]) -> Result<Option<ExchangeUpdate>> {
         ACCEPT_OPCODE => ExchangeUpdate::Accepted { by: word(body, 0) },
         CANCEL_OPCODE => ExchangeUpdate::Cancelled { by: word(body, 0) },
         BUSY_OPCODE => ExchangeUpdate::Busy { by: word(body, 4) },
+        // `TradeCoin_Struct`: the trader, the kind (one byte) and the amount.
+        COINS_OPCODE => ExchangeUpdate::Coins {
+            coin: Coin::from_wire(u32::from(body[4])).context("unknown coin kind")?,
+            amount: word(body, 8),
+        },
         _ => ExchangeUpdate::Finished,
+    }))
+}
+
+/// An item the other player put in the trade, from its trade view; None for
+/// the other item packets. A bag arrives with its contents, which `EQEmu`
+/// then also sends one by one, numbered past the eight trade slots; those
+/// repeats are left alone.
+fn offered(body: &[u8]) -> Result<Option<ExchangeUpdate>> {
+    if body.get(..4) != Some(&TRADE_VIEW_KIND.to_le_bytes()) {
+        return Ok(None);
+    }
+    let text = &body[4..];
+    // The header's third field is the trade slot, 0 to 7.
+    let slot = std::str::from_utf8(text)
+        .ok()
+        .and_then(|text| text.split('|').nth(2))
+        .context("truncated trade view")?;
+    let Some(index) = slot.parse::<u8>().ok().filter(|index| *index < 8) else {
+        return Ok(None);
+    };
+    // Parsed where a bag's contents have addresses; only the item is kept.
+    let mut items = crate::inventory::parse_at(text, InventorySlot(22))?;
+    ensure!(!items.is_empty(), "empty trade view");
+    let mut item = items.swap_remove(0);
+    item.slot = InventorySlot(THEIR_FIRST_SLOT + i32::from(index));
+    Ok(Some(ExchangeUpdate::Offered {
+        index,
+        item: Box::new(item),
     }))
 }
 
@@ -148,6 +225,27 @@ pub fn request(own_id: u16, with: u16) -> Result<EncodedCommand> {
         "a trade needs two characters"
     );
     Ok(pair(REQUEST_OPCODE, u32::from(with), u32::from(own_id)))
+}
+
+/// The player takes another player's request: both windows open.
+///
+/// # Errors
+/// Rejects the reserved zero ID.
+pub fn acknowledge(own_id: u16, asker: u32) -> Result<EncodedCommand> {
+    ensure!(own_id != 0 && asker != 0, "a trade needs two characters");
+    Ok(pair(ACKNOWLEDGE_OPCODE, asker, u32::from(own_id)))
+}
+
+/// The player cannot trade now, as when another trade is open.
+///
+/// # Errors
+/// Rejects the reserved zero ID.
+pub fn busy(own_id: u16, asker: u32) -> Result<EncodedCommand> {
+    ensure!(own_id != 0 && asker != 0, "a trade needs two characters");
+    let mut packet = pair(BUSY_OPCODE, asker, u32::from(own_id));
+    // `TradeBusy_Struct`'s trailing bytes as `EQEmu` records them.
+    packet.body.extend_from_slice(&[1, 0xef, 0xff, 0xff]);
+    Ok(packet)
 }
 
 /// The player clicks Give or Trade.
@@ -222,6 +320,45 @@ mod tests {
     }
 
     #[test]
+    fn the_other_player_shows_what_they_put_in() {
+        use crate::inventory::tests::wire;
+        // `TradeCoin_Struct`: the receiver, the kind, filler and how many.
+        let mut coins = 7u32.to_le_bytes().to_vec();
+        coins.extend_from_slice(&[2, 0xd2, 0x4f, 0]);
+        coins.extend_from_slice(&15u32.to_le_bytes());
+        assert_eq!(
+            decode(COINS_OPCODE, &coins).unwrap(),
+            Some(ExchangeUpdate::Coins {
+                coin: Coin::Gold,
+                amount: 15,
+            })
+        );
+        coins[4] = 9;
+        assert!(decode(COINS_OPCODE, &coins).is_err(), "no such coin");
+        assert!(decode(COINS_OPCODE, &coins[..11]).is_err());
+        // A view of their third slot: a bag holding one item.
+        let view = |slot: i32| {
+            let mut body = TRADE_VIEW_KIND.to_le_bytes().to_vec();
+            body.extend(wire(slot, 100, 4, false, 0, &[(0, wire(0, 42, 0, true, 1, &[]))]).bytes());
+            body
+        };
+        let Some(ExchangeUpdate::Offered { index, item }) = decode(ITEM_OPCODE, &view(2)).unwrap()
+        else {
+            panic!("an offered item");
+        };
+        assert_eq!((index, item.slot), (2, InventorySlot(THEIR_FIRST_SLOT + 2)));
+        assert_eq!(item.bag_slots, 4);
+        // The bag's contents repeated one by one, and other item packets,
+        // are not this codec's.
+        assert_eq!(decode(ITEM_OPCODE, &view(2031)).unwrap(), None);
+        assert_eq!(decode(ITEM_OPCODE, &view(-1)).unwrap(), None);
+        let mut trade = view(2);
+        trade[0] = 0x67;
+        assert_eq!(decode(ITEM_OPCODE, &trade).unwrap(), None);
+        assert!(decode(ITEM_OPCODE, &view(2)[..40]).is_err());
+    }
+
+    #[test]
     fn the_player_asks_clicks_and_closes_in_the_servers_layout() {
         assert_eq!(
             request(7, 42).unwrap(),
@@ -246,6 +383,22 @@ mod tests {
         );
         assert!(request(7, 7).is_err());
         assert!(request(0, 42).is_err());
+        // Taking another player's request, or being too busy to.
+        assert_eq!(
+            acknowledge(7, 42).unwrap(),
+            EncodedCommand {
+                opcode: ACKNOWLEDGE_OPCODE,
+                body: vec![42, 0, 0, 0, 7, 0, 0, 0],
+            }
+        );
+        assert_eq!(
+            busy(7, 42).unwrap(),
+            EncodedCommand {
+                opcode: BUSY_OPCODE,
+                body: vec![42, 0, 0, 0, 7, 0, 0, 0, 1, 0xef, 0xff, 0xff],
+            }
+        );
+        assert!(acknowledge(7, 0).is_err() && busy(0, 42).is_err());
         assert!(accept(0).is_err());
     }
 

@@ -44,6 +44,18 @@ impl Coin {
         }
     }
 
+    /// The kind a server's number (`COINTYPE_*`) names.
+    #[must_use]
+    pub const fn from_wire(number: u32) -> Option<Self> {
+        Some(match number {
+            0 => Self::Copper,
+            1 => Self::Silver,
+            2 => Self::Gold,
+            3 => Self::Platinum,
+            _ => return None,
+        })
+    }
+
     /// The servers' number for it (`COINTYPE_*`).
     const fn wire(self) -> u32 {
         match self {

@@ -42,6 +42,7 @@ fn actor() -> InventoryActor {
         race: 1,
         level: 10,
         trade_slots: 0,
+        trade_no_drop: false,
     }
 }
 
@@ -116,6 +117,7 @@ fn bank_contents_obey_capacity_and_shared_bank_stays_unsupported() {
 fn trade_slots_take_only_what_servers_accept_while_a_window_is_open() {
     let giving = InventoryActor {
         trade_slots: 4,
+        trade_no_drop: true,
         ..actor()
     };
     // A stack on the cursor, a bag with something in it, and a stack already
@@ -180,6 +182,38 @@ fn trade_slots_take_only_what_servers_accept_while_a_window_is_open() {
     assert!(inventory
         .prediction_origins()
         .all(|(slot, _)| !slot.is_in_trade()));
+}
+
+#[test]
+fn another_player_is_offered_no_no_drop_item_or_bag_holding_one() {
+    let trading = InventoryActor {
+        trade_slots: 8,
+        trade_no_drop: false,
+        ..actor()
+    };
+    let mut cursed = item(30, None, 0);
+    cursed.details.flags = vec!["NO DROP".into()];
+    let inventory = state(vec![cursed]);
+    assert!(inventory
+        .plan_move(&request(&inventory, 30, 3000), trading)
+        .is_err());
+    // An NPC takes it.
+    let giving = InventoryActor {
+        trade_no_drop: true,
+        ..trading
+    };
+    assert!(inventory
+        .plan_move(&request(&inventory, 30, 3000), giving)
+        .is_ok());
+    // A bag on the cursor holding a NO DROP item stays with the player.
+    let mut held = item(331, None, 0);
+    held.details.flags = vec!["NO DROP".into()];
+    let inventory = state(vec![item(30, None, 2), held]);
+    assert!(inventory
+        .plan_move(&request(&inventory, 30, 3001), trading)
+        .is_err());
+    let plain = state(vec![item(30, None, 2), item(331, None, 0)]);
+    assert!(plain.plan_move(&request(&plain, 30, 3001), trading).is_ok());
 }
 
 #[test]
