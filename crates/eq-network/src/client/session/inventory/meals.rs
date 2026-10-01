@@ -4,25 +4,27 @@
 use super::{change, Out, World};
 use anyhow::Result;
 use eq_network_game::{
-    food::{self, Meal, Nourishment},
+    food::{self, AutoEat, Meal, Nourishment, Shortage},
     inventory::{Inventory, InventorySlot, InventoryUpdate},
     world::WorldEvent,
 };
 
-/// How fed and watered the player is, as the server last said.
-#[derive(Default)]
+/// How fed and watered the player is, as the server last said, and what the
+/// session may eat and drink for them.
 pub(super) struct Meals {
     last: Option<Nourishment>,
+    auto_eat: AutoEat,
 }
 
-/// The first food or drink the player carries, as the official client looks
-/// for it: each general slot in turn, then what the bag in it holds.
-fn first(inventory: &Inventory, meal: Meal) -> Option<InventorySlot> {
+/// The first food or drink the player carries that the choice takes, as the
+/// official client looks for it: each general slot in turn, then what the
+/// bag in it holds.
+fn first(inventory: &Inventory, meal: Meal, auto_eat: AutoEat) -> Option<InventorySlot> {
     let items = inventory.items();
     let is_meal = |slot: &InventorySlot| {
-        items
-            .get(slot)
-            .is_some_and(|item| Meal::of_item_type(item.rules.item_type) == Some(meal))
+        items.get(slot).is_some_and(|item| {
+            Meal::of_item_type(item.rules.item_type) == Some(meal) && auto_eat.takes(&item.details)
+        })
     };
     (22..=29).map(InventorySlot).find_map(|slot| {
         if is_meal(&slot) {
@@ -36,6 +38,13 @@ fn first(inventory: &Inventory, meal: Meal) -> Option<InventorySlot> {
 }
 
 impl Meals {
+    pub(super) const fn new(auto_eat: AutoEat) -> Self {
+        Self {
+            last: None,
+            auto_eat,
+        }
+    }
+
     /// Notes how fed and watered the profile says the player is.
     pub(super) fn admit(&mut self, nourishment: Nourishment) {
         self.last = Some(nourishment);
@@ -43,7 +52,7 @@ impl Meals {
 
     /// Follows the server's word, eating and drinking for a hungry or thirsty
     /// player from what they carry, and telling the host when there is
-    /// nothing to eat or drink.
+    /// nothing the session may eat or drink.
     pub(super) fn nourished(
         &mut self,
         nourishment: Nourishment,
@@ -51,22 +60,30 @@ impl Meals {
         out: &mut Out<'_, '_>,
     ) -> Result<()> {
         self.last = Some(nourishment);
-        let mut lacking = (false, false);
+        let (mut food, mut water) = (None, None);
         for meal in [Meal::Food, Meal::Drink] {
             if nourishment.of(meal) > food::HUNGRY {
                 continue;
             }
-            match first(&world.inventory, meal) {
-                Some(slot) => eat(slot, meal, false, world, out)?,
-                None if meal == Meal::Food => lacking.0 = true,
-                None => lacking.1 = true,
+            if let Some(slot) = first(&world.inventory, meal, self.auto_eat) {
+                eat(slot, meal, false, world, out)?;
+                continue;
+            }
+            let shortage = if first(&world.inventory, meal, AutoEat::Anything).is_some() {
+                Shortage::OnlyModified
+            } else {
+                Shortage::Nothing
+            };
+            match meal {
+                Meal::Food => food = Some(shortage),
+                Meal::Drink => water = Some(shortage),
             }
         }
-        if lacking.0 || lacking.1 {
+        if food.is_some() || water.is_some() {
             out.log
                 .send(super::ClientEvent::World(WorldEvent::NothingToEat {
-                    food: lacking.0,
-                    water: lacking.1,
+                    food,
+                    water,
                 }))?;
         }
         Ok(())

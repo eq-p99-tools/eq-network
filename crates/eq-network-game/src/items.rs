@@ -87,6 +87,28 @@ pub struct ItemDetails {
     pub stats: Vec<ItemStat>,
 }
 
+impl ItemDetails {
+    /// Whether the item changes whoever wears, eats or uses it: an
+    /// attribute, resistance, capacity, armor class, regeneration, haste or
+    /// spell effect. Level requirements and weapon properties change nothing.
+    #[must_use]
+    pub fn has_modifiers(&self) -> bool {
+        const PROPERTIES: [&str; 5] = [
+            "Required level",
+            "Recommended level",
+            "Delay",
+            "Range",
+            "Damage",
+        ];
+        self.bonuses
+            .is_some_and(|bonuses| bonuses != ItemBonuses::default())
+            || self
+                .stats
+                .iter()
+                .any(|stat| !PROPERTIES.contains(&stat.label.as_str()))
+    }
+}
+
 /// Build a 44-byte inspection request from the preserved 45-hex-digit link body.
 ///
 /// # Errors
@@ -256,6 +278,25 @@ fn bonuses(fields: &[&str]) -> Result<ItemBonuses> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn modifiers_are_what_an_item_changes_not_what_it_requires() {
+        let mut fields = vec!["0"; 159];
+        fields[1] = "Synthetic ration";
+        fields[4] = "42";
+        fields[40] = "5";
+        fields[134] = "-1";
+        let plain = definition(&fields).unwrap();
+        assert!(!plain.has_modifiers(), "{:?}", plain.stats);
+        for (index, value) in [(25, "1"), (16, "-2"), (111, "5"), (134, "7"), (117, "3")] {
+            let mut fields = fields.clone();
+            fields[index] = value;
+            assert!(
+                definition(&fields).unwrap().has_modifiers(),
+                "field {index}"
+            );
+        }
+    }
+
     #[test]
     fn equipment_metadata_distinguishes_levels_and_validates_effect_sentinels() {
         let mut fields = vec!["0"; 159];

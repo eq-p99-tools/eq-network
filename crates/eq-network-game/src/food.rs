@@ -13,7 +13,7 @@
 //! `Client::Consume` and `Client::Hungry` (`zone/client.cpp`, `zone/client.h`)
 //! and `Client::DoStaminaHungerUpdate` (`zone/client_process.cpp`) for the
 //! rules.
-use crate::{command::EncodedCommand, inventory::InventorySlot};
+use crate::{command::EncodedCommand, inventory::InventorySlot, items::ItemDetails};
 use anyhow::{ensure, Result};
 use serde::Serialize;
 
@@ -58,6 +58,38 @@ impl Meal {
             Self::Drink => 2,
         }
     }
+}
+
+/// What a client eats and drinks on its own for a hungry or thirsty player.
+/// Food and drink with modifiers can be worth more than a meal, so by
+/// default it is left for the player to eat or drink by hand.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize)]
+pub enum AutoEat {
+    /// Only food and drink without modifiers
+    /// ([`ItemDetails::has_modifiers`]).
+    #[default]
+    Plain,
+    /// The first food or drink carried, whatever it does, as the official
+    /// client eats.
+    Anything,
+}
+
+impl AutoEat {
+    /// Whether a client eats or drinks this item on its own.
+    #[must_use]
+    pub fn takes(self, item: &ItemDetails) -> bool {
+        self == Self::Anything || !item.has_modifiers()
+    }
+}
+
+/// Why a hungry or thirsty player went without.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+pub enum Shortage {
+    /// They carry nothing to eat or drink.
+    Nothing,
+    /// They carry only food or drink with modifiers, which is theirs to eat
+    /// or drink by hand ([`AutoEat::Plain`]).
+    OnlyModified,
 }
 
 /// How fed and watered the player is, as the server counts it.

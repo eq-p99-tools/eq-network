@@ -31,8 +31,12 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   inventory on its own as the official client does (each general slot,
   then the bag in it), takes the bite from the inventory as the server does
   silently, and tells the host when there is nothing to eat or drink
-  (`NothingToEat`). `Consume` eats or drinks an item by hand, refused with
-  the official client's words when the player is full (`ConsumeRefused`).
+  (`NothingToEat`). By default it leaves food and drink with modifiers
+  (`ItemDetails::has_modifiers`) for the player, and says when that is all
+  that is left (`Shortage::OnlyModified`); `ClientConfig::auto_eat` set to
+  `AutoEat::Anything` eats whatever comes first, as the official client
+  does. `Consume` eats or drinks an item by hand, refused with the official
+  client's words when the player is full (`ConsumeRefused`).
 - Abilities (`abilities`): `UseAbility` uses kick, bash, backstab, frenzy,
   the monk strikes and taunt on the target, and hide, sneak, forage, mend,
   feign death and sense heading on the player (`Capability::Abilities`). The

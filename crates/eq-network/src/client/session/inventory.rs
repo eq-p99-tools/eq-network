@@ -216,11 +216,11 @@ pub(super) struct Belongings {
 }
 
 impl Belongings {
-    pub(super) fn new(encoder: Encoder) -> Self {
+    pub(super) fn new(encoder: Encoder, auto_eat: eq_network_game::food::AutoEat) -> Self {
         Self {
             settlement: Settlement::default(),
             trades: MerchantTrades::default(),
-            meals: meals::Meals::default(),
+            meals: meals::Meals::new(auto_eat),
             encoder,
         }
     }
@@ -496,6 +496,7 @@ mod tests {
     use super::*;
     use eq_network_game::GameDialect;
     use eq_network_game::{
+        food::Shortage,
         inventory::{InventorySlot, MoveQuantity, MOVE_OPCODE},
         merchant::MerchantUpdate,
     };
@@ -511,7 +512,10 @@ mod tests {
 
     /// Admitted player 7, carrying one item in slot 22.
     fn admitted() -> (Belongings, World) {
-        let mut belongings = Belongings::new(Encoder::new(GameDialect::Titanium, "Tester"));
+        let mut belongings = Belongings::new(
+            Encoder::new(GameDialect::Titanium, "Tester"),
+            eq_network_game::food::AutoEat::default(),
+        );
         let mut world = World::new(5);
         let snapshot = Message::Event(WorldEvent::Inventory(InventoryUpdate::Snapshot(vec![
             item(22),
@@ -529,7 +533,10 @@ mod tests {
     /// drink, and the profile's word on how fed and watered they are.
     fn fed(food: u32, water: u32) -> (Belongings, World) {
         use eq_network_game::food::Nourishment;
-        let mut belongings = Belongings::new(Encoder::new(GameDialect::Titanium, "Tester"));
+        let mut belongings = Belongings::new(
+            Encoder::new(GameDialect::Titanium, "Tester"),
+            eq_network_game::food::AutoEat::default(),
+        );
         let mut world = World::new(5);
         let typed = |slot, item_type| {
             let mut item = item(slot);
@@ -599,10 +606,43 @@ mod tests {
         assert!(matches!(
             outcome.events[..],
             [ClientEvent::World(WorldEvent::NothingToEat {
-                food: true,
-                water: false
+                food: Some(Shortage::Nothing),
+                water: None
             })]
         ));
+    }
+
+    #[test]
+    fn food_with_modifiers_waits_for_the_player_unless_anything_goes() {
+        use eq_network_game::food::{consume, AutoEat, Meal, Nourishment};
+        let (mut belongings, mut world) = fed(6000, 6000);
+        let mut ration = item(22);
+        ration.rules.item_type = 14;
+        ration.details.stats.push(eq_network_game::items::ItemStat {
+            label: "STR".into(),
+            value: 1,
+        });
+        world.inventory.0.apply(InventoryUpdate::Set(vec![ration]));
+        let hungry = Message::Event(WorldEvent::Nourishment(Nourishment {
+            food: 2000,
+            water: 6000,
+        }));
+        let outcome = testing::run(|out| belongings.observe(&hungry, &mut world, out));
+        assert!(outcome.sent.is_empty(), "sent {:?}", outcome.sent);
+        assert!(matches!(
+            outcome.events[..],
+            [ClientEvent::World(WorldEvent::NothingToEat {
+                food: Some(Shortage::OnlyModified),
+                water: None
+            })]
+        ));
+        belongings.meals = meals::Meals::new(AutoEat::Anything);
+        let outcome = testing::run(|out| belongings.observe(&hungry, &mut world, out));
+        outcome.result.unwrap();
+        assert_eq!(
+            outcome.sent,
+            [consume(InventorySlot(22), Meal::Food, false)]
+        );
     }
 
     #[test]
@@ -675,7 +715,10 @@ mod tests {
     fn the_admission_reports_the_inventory_staged_before_it() {
         let (_, world) = admitted();
         assert!(world.inventory.items().contains_key(&InventorySlot(22)));
-        let mut belongings = Belongings::new(Encoder::new(GameDialect::Titanium, "Tester"));
+        let mut belongings = Belongings::new(
+            Encoder::new(GameDialect::Titanium, "Tester"),
+            eq_network_game::food::AutoEat::default(),
+        );
         let mut world = World::new(5);
         let snapshot = Message::Event(WorldEvent::Inventory(InventoryUpdate::Snapshot(vec![
             item(22),

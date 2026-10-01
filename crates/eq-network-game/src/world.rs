@@ -631,13 +631,13 @@ pub enum WorldEvent {
     /// How fed and watered the player is, from the profile and the
     /// server's updates.
     Nourishment(crate::food::Nourishment),
-    /// The player turned hungry or thirsty with nothing in the inventory to
-    /// eat or drink.
+    /// The player turned hungry or thirsty with nothing in the inventory
+    /// the session eats or drinks on its own.
     NothingToEat {
-        /// Hungry with no food.
-        food: bool,
-        /// Thirsty with no drink.
-        water: bool,
+        /// Why a hungry player went without food.
+        food: Option<crate::food::Shortage>,
+        /// Why a thirsty player went without drink.
+        water: Option<crate::food::Shortage>,
     },
     /// An item was not eaten or drunk, and why.
     ConsumeRefused {

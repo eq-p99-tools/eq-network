@@ -24,12 +24,13 @@ impl Features {
         server: &dyn servers::ServerType,
         dialect: eq_network_game::GameDialect,
         name: &str,
+        auto_eat: eq_network_game::food::AutoEat,
     ) -> Self {
         let encoder = Encoder::new(dialect, name);
         Self(vec![
             Box::new(casting::Casting::new(encoder.clone())),
             Box::new(spellbook::Spellbook::default()),
-            Box::new(inventory::Belongings::new(encoder.clone())),
+            Box::new(inventory::Belongings::new(encoder.clone(), auto_eat)),
             server.motion(),
             Box::new(character::Character::default()),
             Box::new(entities::Entities::default()),
@@ -178,7 +179,12 @@ pub(super) fn run(
     let mut progress = Instant::now();
     let session_id = rand::random();
     let mut world = World::new(session_id);
-    let mut features = Features::new(server, config.protocol.into(), &config.character);
+    let mut features = Features::new(
+        server,
+        config.protocol.into(),
+        &config.character,
+        config.auto_eat,
+    );
     loop {
         if stop.is_cancelled() || duration.is_some_and(|limit| connected.elapsed() >= limit) {
             session.close()?;
@@ -668,6 +674,7 @@ mod tests {
             servers::server_type(crate::client::ServerProtocol::EqEmu),
             eq_network_game::GameDialect::Titanium,
             "Tester",
+            eq_network_game::food::AutoEat::default(),
         );
         for command in zone_commands() {
             let owners: Vec<_> = features
@@ -699,6 +706,7 @@ mod tests {
                 servers::server_type(protocol),
                 eq_network_game::GameDialect::Titanium,
                 "Tester",
+                eq_network_game::food::AutoEat::default(),
             )
             .capabilities()
         };
