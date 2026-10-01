@@ -183,6 +183,43 @@ impl Belongings {
         Ok(())
     }
 
+    /// Moves coins. Servers answer no coin move, so nothing waits on one; a
+    /// trade window must be open for coins to go into it, and a banker near
+    /// for the bank.
+    fn move_coins(command: &ClientCommand, world: &World, out: &mut Out<'_, '_>) -> Result<()> {
+        use eq_network_game::money::CoinPlace;
+        let ClientCommand::MoveCoins {
+            session_id,
+            transfer,
+            ..
+        } = command
+        else {
+            return Ok(());
+        };
+        let touches = |place| transfer.from == place || transfer.to == place;
+        let refusal = if touches(CoinPlace::Trade)
+            && world
+                .exchange
+                .is_none_or(|exchange| exchange.trade_slots() == 0)
+        {
+            Some("No trade window is open".to_owned())
+        } else if touches(CoinPlace::Bank) && !actor(world).is_some_and(|actor| actor.bank_access) {
+            Some("Stand near a banker to use the bank".to_owned())
+        } else {
+            match transfer.encode() {
+                Ok(packet) => return out.send(&packet),
+                Err(error) => Some(error.to_string()),
+            }
+        };
+        let reason = refusal.unwrap_or_default();
+        out.log.send(ClientEvent::World(WorldEvent::CoinsRefused {
+            session_id: *session_id,
+            transfer: *transfer,
+            reason: reason.clone(),
+        }))?;
+        out.log.diagnostic(format!("Coin move refused: {reason}"))
+    }
+
     /// Opens or closes a merchant's window; only a merchant the player can
     /// see will trade.
     fn shop(&self, command: &ClientCommand, world: &World, out: &mut Out<'_, '_>) -> Result<()> {
@@ -254,6 +291,7 @@ impl Feature for Belongings {
         matches!(
             command,
             ClientCommand::MoveInventory(_)
+                | ClientCommand::MoveCoins { .. }
                 | ClientCommand::Shop { .. }
                 | ClientCommand::Buy { .. }
                 | ClientCommand::Sell { .. }
@@ -268,6 +306,7 @@ impl Feature for Belongings {
     ) -> Result<()> {
         match command {
             ClientCommand::MoveInventory(request) => self.move_item(request, world, out),
+            ClientCommand::MoveCoins { .. } => Self::move_coins(command, world, out),
             ClientCommand::Shop { .. } => self.shop(command, world, out),
             _ => self.trade(command, out),
         }
@@ -334,36 +373,10 @@ mod tests {
     use super::*;
     use eq_network_game::GameDialect;
     use eq_network_game::{
-        inventory::{InventoryItem, InventorySlot, MoveQuantity, MOVE_OPCODE},
+        inventory::{InventorySlot, MoveQuantity, MOVE_OPCODE},
         merchant::MerchantUpdate,
     };
-
-    /// A plain item in this slot.
-    fn item(slot: i32) -> InventoryItem {
-        InventoryItem {
-            activation: eq_network_game::inventory::ItemActivation::default(),
-            scroll_spell: None,
-            rules: eq_network_game::inventory::ItemPlacement::default(),
-            slot: InventorySlot(slot),
-            icon: 0,
-            stack_count: None,
-            charges: 0,
-            bag_slots: 0,
-            details: eq_network_game::items::ItemDetails {
-                equipment: None,
-                bonuses: None,
-                id: 42,
-                name: "Synthetic item".into(),
-                lore: String::new(),
-                weight_tenths: 0,
-                slots: 0,
-                classes: 0,
-                races: 0,
-                flags: vec![],
-                stats: vec![],
-            },
-        }
-    }
+    use testing::item;
 
     /// An inventory with one item moved to the cursor by an unanswered prediction.
     fn predicted() -> Inventory {
@@ -600,6 +613,74 @@ mod tests {
             .result
             .unwrap();
         assert!(world.inventory.items().is_empty());
+    }
+
+    #[test]
+    fn coins_go_into_a_trade_only_while_its_window_is_open_and_into_the_bank_only_near_a_banker() {
+        use super::super::exchange::{Exchange, Exchanging, Stage};
+        use eq_network_game::{
+            exchange::Partner,
+            money::{Coin, CoinPlace, CoinTransfer, MOVE_OPCODE as COIN_OPCODE},
+        };
+        let (mut belongings, mut world) = admitted();
+        let move_coins = |from, to| ClientCommand::MoveCoins {
+            session_id: 5,
+            transfer: CoinTransfer {
+                from,
+                to,
+                coin: Coin::Gold,
+                into: Coin::Gold,
+                amount: 2,
+            },
+            created: Instant::now(),
+        };
+        let refused = |events: &[ClientEvent]| {
+            events
+                .iter()
+                .filter_map(|event| match event {
+                    ClientEvent::World(WorldEvent::CoinsRefused { reason, .. }) => {
+                        Some(reason.clone())
+                    }
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        let outcome = testing::run(|out| {
+            belongings.handle(
+                &move_coins(CoinPlace::Purse, CoinPlace::Cursor),
+                &mut world,
+                out,
+            )
+        });
+        assert_eq!(outcome.sent.len(), 1);
+        assert_eq!(outcome.sent[0].opcode, COIN_OPCODE);
+        for (place, reason) in [
+            (CoinPlace::Trade, "No trade window is open"),
+            (CoinPlace::Bank, "Stand near a banker to use the bank"),
+        ] {
+            let outcome = testing::run(|out| {
+                belongings.handle(&move_coins(CoinPlace::Cursor, place), &mut world, out)
+            });
+            assert!(
+                outcome.sent.is_empty(),
+                "nothing sent to {place:?}, sent {:?}",
+                outcome.sent
+            );
+            assert_eq!(refused(&outcome.events), [reason]);
+        }
+        world.exchange = Exchanging::from(Exchange {
+            with: 42,
+            partner: Partner::Npc,
+            stage: Stage::Open,
+        });
+        let outcome = testing::run(|out| {
+            belongings.handle(
+                &move_coins(CoinPlace::Cursor, CoinPlace::Trade),
+                &mut world,
+                out,
+            )
+        });
+        assert_eq!(outcome.sent.len(), 1);
     }
 
     #[test]

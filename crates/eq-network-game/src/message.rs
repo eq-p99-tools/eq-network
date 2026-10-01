@@ -91,6 +91,10 @@ pub fn titanium(opcode: u16, body: &[u8]) -> Vec<Message> {
                 |error| unreadable(Part::World, &error),
                 |coins| Message::Event(WorldEvent::Coins(coins)),
             ));
+            messages.push(crate::money::titanium_elsewhere(body).map_or_else(
+                |error| unreadable(Part::World, &error),
+                |(cursor, bank)| Message::Event(WorldEvent::CoinsElsewhere { cursor, bank }),
+            ));
             spells::SpellBook::titanium_profile(body).map_or_else(
                 |error| unreadable(Part::Spells, &error),
                 |book| Message::Event(WorldEvent::SpellBook(book)),
@@ -151,12 +155,17 @@ mod tests {
             [
                 Message::Event(WorldEvent::BuffSnapshot(_)),
                 Message::Event(WorldEvent::Coins(_)),
+                Message::Event(WorldEvent::CoinsElsewhere { .. }),
                 Message::Event(WorldEvent::SpellBook(book)),
             ] if book.slots()[0] == Some(73)
         ));
         assert!(matches!(
             titanium(PROFILE_OPCODE, &[0; 8])[..],
             [
+                Message::Unreadable {
+                    part: Part::World,
+                    ..
+                },
                 Message::Unreadable {
                     part: Part::World,
                     ..

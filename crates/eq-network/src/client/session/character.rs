@@ -57,6 +57,8 @@ struct Staged {
     wear: Vec<WearChange>,
     buffs: Option<Vec<Option<Buff>>>,
     coins: Option<Coins>,
+    /// The coins on the cursor and in the bank.
+    elsewhere: Option<(Coins, Coins)>,
 }
 
 impl Feature for Character {
@@ -83,6 +85,9 @@ impl Feature for Character {
             }
             WorldEvent::BuffSnapshot(buffs) => staged.buffs = Some(buffs.clone()),
             WorldEvent::Coins(coins) => staged.coins = Some(*coins),
+            WorldEvent::CoinsElsewhere { cursor, bank } => {
+                staged.elsewhere = Some((*cursor, *bank));
+            }
             _ => (),
         }
         Ok(())
@@ -106,6 +111,9 @@ impl Feature for Character {
         let news = [
             staged.buffs.map(WorldEvent::BuffSnapshot),
             staged.coins.map(WorldEvent::Coins),
+            staged
+                .elsewhere
+                .map(|(cursor, bank)| WorldEvent::CoinsElsewhere { cursor, bank }),
             staged.experience.map(WorldEvent::Experience),
         ];
         for event in news.into_iter().flatten() {

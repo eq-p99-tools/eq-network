@@ -399,7 +399,7 @@ mod tests {
     };
 
     /// How many kinds of command there are.
-    const KINDS: usize = 32;
+    const KINDS: usize = 33;
 
     /// Which kind of command this is. A new command is a compile error here
     /// until it has a number, and then a test failure until the list below
@@ -439,6 +439,7 @@ mod tests {
             ClientCommand::OfferTrade { .. } => 29,
             ClientCommand::AcceptTrade { .. } => 30,
             ClientCommand::CancelTrade { .. } => 31,
+            ClientCommand::MoveCoins { .. } => 32,
         }
     }
 
@@ -624,6 +625,17 @@ mod tests {
                 created,
             },
             ClientCommand::CancelTrade { session_id },
+            ClientCommand::MoveCoins {
+                session_id,
+                transfer: eq_network_game::money::CoinTransfer {
+                    from: eq_network_game::money::CoinPlace::Purse,
+                    to: eq_network_game::money::CoinPlace::Cursor,
+                    coin: eq_network_game::money::Coin::Gold,
+                    into: eq_network_game::money::Coin::Gold,
+                    amount: 2,
+                },
+                created,
+            },
         ]
     }
 

@@ -26,6 +26,8 @@ pub mod items;
 pub mod loot;
 /// Merchant windows, stock, purchases and sales.
 pub mod merchant;
+/// Coins on the cursor and in the bank, and moving coins between places.
+pub mod money;
 /// Movement wire layout and session-scoped motion validation.
 pub mod movement;
 /// Items on the ground and world containers.
