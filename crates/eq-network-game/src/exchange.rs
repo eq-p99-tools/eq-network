@@ -101,7 +101,9 @@ pub enum ExchangeUpdate {
     /// A side closed the window, or the server did (at logout, the player's
     /// own ID). What the player's trade slots held comes back as item updates.
     Cancelled {
-        /// The side the server names.
+        /// The ID the server names: an NPC's own, but this player's when
+        /// another player cancelled, as `EQEmu` rewrites the forwarded
+        /// packet for its recipient.
         by: u32,
     },
     /// The other player could not trade.
