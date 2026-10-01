@@ -30,6 +30,19 @@ pub(super) fn correct_own(
     Ok(())
 }
 
+/// Takes the player's movement away until the client configures it again,
+/// after a correction, a death or a transfer.
+pub(super) fn withdrawn(session_id: u64) -> WorldEvent {
+    WorldEvent::MotionState {
+        session_id,
+        units_per_second: None,
+        strafe_units_per_second: None,
+        walk_units_per_second: None,
+        backward_units_per_second: None,
+        falls: false,
+    }
+}
+
 pub(super) fn handle(
     motion: &mut MotionSession,
     (posture, own_spawn): (&mut super::posture::OwnPosture, Option<u16>),

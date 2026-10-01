@@ -14,11 +14,11 @@ use eq_network_game::{
 use std::time::{Duration, Instant};
 
 /// `OP_Camp`, a four-byte request.
-pub(super) const CAMP_OPCODE: u16 = 0x78c1;
+const CAMP_OPCODE: u16 = 0x78c1;
 /// `OP_Logout`, an empty request sent once the camp timer completes.
-pub(super) const LOGOUT_OPCODE: u16 = 0x61ff;
+const LOGOUT_OPCODE: u16 = 0x61ff;
 /// `OP_LogoutReply`, after which the zone connection ends.
-pub(super) const LOGOUT_REPLY_OPCODE: u16 = 0x3cdc;
+const LOGOUT_REPLY_OPCODE: u16 = 0x3cdc;
 
 const CAMP_DURATION: Duration = Duration::from_secs(30);
 const REPLY_TIMEOUT: Duration = Duration::from_secs(10);
@@ -39,12 +39,12 @@ pub(super) struct Camp {
 
 impl Camp {
     /// Whether a camp or logout is in progress.
-    pub(super) fn active(&self) -> bool {
+    fn active(&self) -> bool {
         !matches!(self.phase, Phase::Idle)
     }
 
     /// Starts the timer after `OP_Camp` was handed to transport.
-    pub(super) fn start(&mut self, now: Instant) {
+    fn start(&mut self, now: Instant) {
         if matches!(self.phase, Phase::Idle) {
             self.phase = Phase::Preparing(now);
         }
@@ -52,7 +52,7 @@ impl Camp {
 
     /// Abandons preparation; returns false when nothing was being prepared.
     /// A logout already sent cannot be taken back.
-    pub(super) fn cancel(&mut self) -> bool {
+    fn cancel(&mut self) -> bool {
         if matches!(self.phase, Phase::Preparing(_)) {
             self.phase = Phase::Idle;
             true
@@ -62,13 +62,13 @@ impl Camp {
     }
 
     /// Whether the preparation time has elapsed and `OP_Logout` should be sent.
-    pub(super) fn logout_due(&self, now: Instant) -> bool {
+    fn logout_due(&self, now: Instant) -> bool {
         matches!(self.phase, Phase::Preparing(started)
             if now.saturating_duration_since(started) >= CAMP_DURATION)
     }
 
     /// Records that `OP_Logout` was sent.
-    pub(super) fn logout_sent(&mut self, now: Instant) {
+    fn logout_sent(&mut self, now: Instant) {
         self.phase = Phase::LoggingOut(now);
     }
 
@@ -78,7 +78,7 @@ impl Camp {
     }
 
     /// Whether a sent logout has waited too long for its reply.
-    pub(super) fn reply_overdue(&self, now: Instant) -> bool {
+    fn reply_overdue(&self, now: Instant) -> bool {
         matches!(self.phase, Phase::LoggingOut(sent)
             if now.saturating_duration_since(sent) >= REPLY_TIMEOUT)
     }
@@ -175,13 +175,14 @@ impl Feature for Camp {
         _body: &[u8],
         world: &mut World,
         out: &mut Out<'_, '_>,
-    ) -> Result<()> {
-        if self.logging_out() && opcode == LOGOUT_REPLY_OPCODE {
-            out.log
-                .send(ClientEvent::World(WorldEvent::Camp(CampStatus::Camped)))?;
-            world.exit = Some(ZoneExit::CharacterSelect);
+    ) -> Result<bool> {
+        if !self.logging_out() || opcode != LOGOUT_REPLY_OPCODE {
+            return Ok(false);
         }
-        Ok(())
+        out.log
+            .send(ClientEvent::World(WorldEvent::Camp(CampStatus::Camped)))?;
+        world.exit = Some(ZoneExit::CharacterSelect);
+        Ok(true)
     }
 
     /// Dying abandons a camp still being prepared.

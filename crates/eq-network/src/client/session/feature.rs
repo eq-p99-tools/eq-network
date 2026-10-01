@@ -55,6 +55,10 @@ pub(super) struct World {
     /// A spellbook action waiting for the player to sit, which moving,
     /// casting, dying or zoning cancels.
     pub(super) book_action: Option<PendingBookAction>,
+    /// Whether the zone has admitted the player.
+    pub(super) ready: bool,
+    /// Application packets received in this zone session.
+    pub(super) packets: u64,
 }
 
 impl World {
@@ -77,6 +81,8 @@ impl World {
                 .checked_sub(eq_network_game::movement::STATIONARY_HEARTBEAT)
                 .unwrap_or_else(Instant::now),
             book_action: None,
+            ready: false,
+            packets: 0,
         }
     }
 
@@ -115,18 +121,21 @@ pub(super) trait Feature {
         Ok(false)
     }
 
-    /// Takes a packet the world decoder has no event for.
+    /// Takes a packet before the zone decodes it, and says whether the packet
+    /// was the feature's alone, so that nothing else looks at it. A feature
+    /// that ends the session takes the packet that ended it.
     ///
     /// # Errors
-    /// Returns an error when the connection fails.
+    /// Returns an error when the connection fails or the packet breaks the
+    /// feature's rules.
     fn receive(
         &mut self,
         _opcode: u16,
         _body: &[u8],
         _world: &mut World,
         _out: &mut Out<'_, '_>,
-    ) -> Result<()> {
-        Ok(())
+    ) -> Result<bool> {
+        Ok(false)
     }
 
     /// Runs the feature's timers.

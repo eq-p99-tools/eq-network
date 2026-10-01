@@ -6,7 +6,7 @@ use super::{
     ensure,
     feature::{Feature, Out, World},
     inventory, le32, merchant, motion, objects, posture, put_string, scribe_consumption, servers,
-    spellbook, zoning, BTreeMap, BookActionStatus, BookIntent, CharacterSession, ClientCommand,
+    spellbook, transfers, BTreeMap, BookActionStatus, BookIntent, CharacterSession, ClientCommand,
     ClientEvent, ConnectionStage, ConnectionState, Context, DecodeError, Duration, Events, Instant,
     MotionSession, PendingBookAction, RecordEvent, Result, Session, Shield, ZoneExit,
 };
@@ -20,7 +20,6 @@ enum ZoneOpcode {
     ExperienceUpdate,
     ValidationRejected,
     LoggedOut,
-    ZoneHandoff,
     Unknown(u16),
 }
 
@@ -34,13 +33,98 @@ impl From<u16> for ZoneOpcode {
             0x0587 => Self::ExperienceUpdate,
             0x1252 => Self::ValidationRejected,
             0x3cdc => Self::LoggedOut,
-            0x61b6 => Self::ZoneHandoff,
             value => Self::Unknown(value),
         }
     }
 }
 
-/// Enter the zone, keep the character world.stationary, and collect communications.
+/// The zone's features, each offered every command, packet, timer and event.
+struct Features(Vec<Box<dyn Feature>>);
+
+impl Features {
+    /// Camping comes first, so that a command which takes the player away
+    /// abandons the camp before another feature carries it out.
+    fn new(character: &str) -> Self {
+        Self(vec![
+            Box::new(camp::Camp::default()),
+            Box::new(Doors::default()),
+            Box::new(objects::GroundObjects::default()),
+            Box::new(transfers::Transfers::new(character)),
+        ])
+    }
+
+    /// Records a server event from before the zone admitted the player.
+    fn admit(&mut self, event: &crate::world::WorldEvent) {
+        for feature in &mut self.0 {
+            feature.admit(event);
+        }
+    }
+
+    /// What the features tell the client once the zone admits the player.
+    fn admission(&self) -> Vec<crate::world::WorldEvent> {
+        self.0
+            .iter()
+            .filter_map(|feature| feature.admission())
+            .collect()
+    }
+
+    /// Offers a command to each feature until one takes it.
+    fn handle(
+        &mut self,
+        command: &ClientCommand,
+        world: &mut World,
+        out: &mut Out<'_, '_>,
+    ) -> Result<bool> {
+        for feature in &mut self.0 {
+            if feature.handle(command, world, out)? {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    /// Offers a packet to each feature until one takes it.
+    fn receive(
+        &mut self,
+        opcode: u16,
+        body: &[u8],
+        world: &mut World,
+        out: &mut Out<'_, '_>,
+    ) -> Result<bool> {
+        for feature in &mut self.0 {
+            if feature.receive(opcode, body, world, out)? {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    /// Runs the features' timers until one ends the session.
+    fn tick(&mut self, now: Instant, world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
+        for feature in &mut self.0 {
+            feature.tick(now, world, out)?;
+            if world.exit.is_some() {
+                break;
+            }
+        }
+        Ok(())
+    }
+
+    /// Shows each feature a server event once the zone has admitted the player.
+    fn observe(
+        &mut self,
+        event: &crate::world::WorldEvent,
+        world: &mut World,
+        out: &mut Out<'_, '_>,
+    ) -> Result<()> {
+        for feature in &mut self.0 {
+            feature.observe(event, world, out)?;
+        }
+        Ok(())
+    }
+}
+
+/// Enter the zone, keep the character stationary, and collect communications.
 // The linear handshake keeps packet ordering and state transitions together.
 #[allow(clippy::too_many_lines)]
 pub(super) fn run(
@@ -71,7 +155,6 @@ pub(super) fn run(
     session.send(0x7213, &entry)?;
     log.send(ClientEvent::Progress(ConnectionStage::LoadingCharacter))?;
     let connected = Instant::now();
-    let mut ready = false;
     let mut saw_spawn = false;
     let mut saw_profile = false;
     let mut saw_weather = false;
@@ -81,7 +164,6 @@ pub(super) fn run(
     let mut zone_name = String::new();
     let mut far_clip = None;
     let mut progress = Instant::now();
-    let mut packets = 0u64;
     let session_id = rand::random();
     let mut world = World::new(session_id);
     let mut initial_experience = None;
@@ -93,15 +175,12 @@ pub(super) fn run(
     let mut cast_guard = casting::CastGuard::default();
     let mut trades = merchant::MerchantTrades::default();
     let mut settlement = inventory::Settlement::default();
-    let mut camp = camp::Camp::default();
-    let mut zone_points = zoning::ZonePoints::default();
     let mut scribe_consumption = scribe_consumption::ScribeConsumption::default();
     let mut initial_spawns = BTreeMap::new();
     let mut initial_postures = BTreeMap::new();
     // Wear changes for the player that arrive before its state is built.
     let mut initial_own_wear = Vec::new();
-    let mut doors = Doors::default();
-    let mut ground = objects::GroundObjects::default();
+    let mut features = Features::new(&config.character);
     let mut profile_data = Vec::new();
     let mut spawn_data = Vec::new();
     loop {
@@ -120,7 +199,7 @@ pub(super) fn run(
         // Servers answer only a refused move, so silence settles the rest.
         if let Some(update) = settlement.due(&world.inventory, Instant::now()) {
             world.inventory.apply(update.clone());
-            if ready {
+            if world.ready {
                 log.send(ClientEvent::World(crate::world::WorldEvent::Inventory(
                     update,
                 )))?;
@@ -137,7 +216,7 @@ pub(super) fn run(
         }
         if progress.elapsed() >= Duration::from_secs(30) {
             log.status(
-                if ready
+                if world.ready
                     && world.lifecycle.pending().is_none()
                     && session.last_received_seconds() < 60
                 {
@@ -145,22 +224,18 @@ pub(super) fn run(
                 } else {
                     ConnectionState::Zoning
                 },
-                packets,
+                world.packets,
                 Some(session.last_received_seconds()),
             )?;
             log.diagnostic(format!(
-                "Zone session: {packets} application packets, {} communication records",
-                log.messages
+                "Zone session: {} application packets, {} communication records",
+                world.packets, log.messages
             ))?;
             progress = Instant::now();
         }
         ensure!(
-            ready || connected.elapsed() < Duration::from_secs(60),
+            world.ready || connected.elapsed() < Duration::from_secs(60),
             "zone admission timed out"
-        );
-        ensure!(
-            !world.lifecycle.expired(Instant::now()),
-            "zone transfer approval timed out"
         );
         // Servers refuse an edit (a spell above the character's level, another
         // class's scroll) with only a chat message, so silence means refusal.
@@ -169,7 +244,7 @@ pub(super) fn run(
                 status,
             )))?;
         }
-        camp.tick(
+        features.tick(
             Instant::now(),
             &mut world,
             &mut Out {
@@ -181,7 +256,7 @@ pub(super) fn run(
             session.close()?;
             return Ok(exit);
         }
-        if ready && !world.lifecycle.blocks_motion() {
+        if world.ready && !world.lifecycle.blocks_motion() {
             if let Some(motion) = world.motion.as_mut() {
                 motion.tick(Instant::now(), |body| session.send_unreliable(0x14cb, body))?;
             } else if world.last_position.elapsed()
@@ -198,7 +273,7 @@ pub(super) fn run(
                 for _ in commands.try_iter().take(64) {}
             }
         }
-        if ready && !world.lifecycle.is_dead() && world.lifecycle.pending().is_none() {
+        if world.ready && !world.lifecycle.is_dead() && world.lifecycle.pending().is_none() {
             if let Some(commands) = context.commands {
                 // Bound each pass so continuous producers cannot starve receive/ACK work.
                 for command in commands.try_iter().take(64) {
@@ -215,7 +290,7 @@ pub(super) fn run(
                         actions::refuse(&command, reason, log)?;
                         continue;
                     }
-                    if camp.handle(
+                    if features.handle(
                         &command,
                         &mut world,
                         &mut Out {
@@ -223,89 +298,9 @@ pub(super) fn run(
                             log: &mut *log,
                         },
                     )? {
-                        continue;
-                    }
-                    if doors.handle(
-                        &command,
-                        &mut world,
-                        &mut Out {
-                            session: &mut session,
-                            log: &mut *log,
-                        },
-                    )? {
-                        continue;
-                    }
-                    if ground.handle(
-                        &command,
-                        &mut world,
-                        &mut Out {
-                            session: &mut session,
-                            log: &mut *log,
-                        },
-                    )? {
-                        continue;
-                    }
-                    if let ClientCommand::CrossZoneLine {
-                        session_id: requested,
-                        destination,
-                        position,
-                        created,
-                    } = &command
-                    {
-                        let now = Instant::now();
-                        let request = (|| -> Result<_> {
-                            ensure!(
-                                *requested == session_id
-                                    && *created <= now
-                                    && now.duration_since(*created) < Duration::from_millis(250),
-                                "stale zone-line request"
-                            );
-                            ensure!(
-                                world
-                                    .motion
-                                    .as_ref()
-                                    .is_some_and(|m| m.position() == *position),
-                                "zone-line position is no longer current"
-                            );
-                            ensure!(world.zone.0 != 0, "zone identity is unavailable");
-                            zone_points.request(destination, *position, world.zone.0, world.zone.1)
-                        })();
-                        match request {
-                            Ok(offer) => {
-                                session.send(0x5dd8, &offer.response(&config.character)?)?;
-                                world.lifecycle.offer(offer.clone(), now)?;
-                                world.book_action = None;
-                                if let Some(motion) = world.motion.as_mut() {
-                                    motion.suspend();
-                                }
-                                log.send(ClientEvent::World(
-                                    crate::world::WorldEvent::ZoneTransfer(offer),
-                                ))?;
-                                log.send(ClientEvent::World(
-                                    crate::world::WorldEvent::MotionState {
-                                        session_id,
-                                        units_per_second: None,
-                                        strafe_units_per_second: None,
-                                        walk_units_per_second: None,
-                                        backward_units_per_second: None,
-                                        falls: false,
-                                    },
-                                ))?;
-                                log.status(
-                                    ConnectionState::Zoning,
-                                    packets,
-                                    Some(session.last_received_seconds()),
-                                )?;
-                                break;
-                            }
-                            Err(error) => {
-                                log.send(ClientEvent::World(
-                                    crate::world::WorldEvent::ZoneLineRejected {
-                                        session_id: *requested,
-                                        reason: error.to_string(),
-                                    },
-                                ))?;
-                            }
+                        // Commands wait while the player is dead or zoning.
+                        if world.lifecycle.is_dead() || world.lifecycle.pending().is_some() {
+                            break;
                         }
                         continue;
                     }
@@ -822,18 +817,18 @@ pub(super) fn run(
         let Some(mut packet) = session.receive()? else {
             continue;
         };
-        packets += 1;
+        world.packets += 1;
         if let Some(shield) = shield.as_ref() {
             shield.spawns(packet.opcode, &mut packet.body, &credentials.key)?;
         }
-        if !ready {
+        if !world.ready {
             log.diagnostic(format!(
                 "Zone received 0x{:04x} ({} bytes)",
                 packet.opcode,
                 packet.body.len()
             ))?;
         }
-        if ready {
+        if world.ready {
             match eq_network_game::spells::decode(packet.opcode, &packet.body) {
                 Ok(Some(update)) => {
                     let book_result = book_edits.observe(&update);
@@ -876,7 +871,7 @@ pub(super) fn run(
                 Ok(Some(update)) => {
                     let update = scribe_consumption.reconcile(&world.inventory, update);
                     world.inventory.apply(update.clone());
-                    if ready {
+                    if world.ready {
                         log.send(ClientEvent::World(crate::world::WorldEvent::Inventory(
                             update,
                         )))?;
@@ -887,7 +882,7 @@ pub(super) fn run(
                     log.diagnostic(format!("Inventory decode rejected: {error}"))?;
                     let update = eq_network_game::inventory::InventoryUpdate::Invalidated;
                     world.inventory.apply(update.clone());
-                    if ready {
+                    if world.ready {
                         log.send(ClientEvent::World(crate::world::WorldEvent::Inventory(
                             update,
                         )))?;
@@ -897,84 +892,7 @@ pub(super) fn run(
                 Ok(None) => (),
             }
         }
-        if packet.opcode == 0x3eba {
-            match zoning::ZonePoints::decode(&packet.body) {
-                Ok(points) => zone_points = points,
-                Err(error) => {
-                    zone_points = zoning::ZonePoints::default();
-                    log.diagnostic(format!("Zone-point table rejected: {error}"))?;
-                }
-            }
-            continue;
-        }
-        if ready && matches!(packet.opcode, 0x385e | 0x7834) {
-            let offer = zoning::offer(packet.opcode, &packet.body)?;
-            if let Some(position) = offer.local_position(world.zone) {
-                ensure!(
-                    !world.lifecycle.blocks_motion(),
-                    "same-zone relocation conflicts with death or transfer"
-                );
-                spellbook::cancel_pending(
-                    &mut world.book_action,
-                    "Server relocated character",
-                    log,
-                )?;
-                let player = world
-                    .player
-                    .as_mut()
-                    .context("relocation without admitted player")?;
-                motion::correct_own(
-                    player,
-                    world.motion.as_mut(),
-                    &mut world.stationary,
-                    world.sequence,
-                    position,
-                    Instant::now(),
-                )?;
-                log.send(ClientEvent::World(crate::world::WorldEvent::MotionState {
-                    session_id,
-                    units_per_second: None,
-                    strafe_units_per_second: None,
-                    walk_units_per_second: None,
-                    backward_units_per_second: None,
-                    falls: false,
-                }))?;
-                log.send(ClientEvent::World(crate::world::WorldEvent::Position {
-                    spawn_id: player.spawn_id,
-                    position,
-                    velocity: [0.0; 3],
-                }))?;
-                continue;
-            }
-            if let Some(pending) = world.lifecycle.pending() {
-                ensure!(pending == &offer, "conflicting zone transfer offer");
-            } else {
-                session.send(0x5dd8, &offer.response(&config.character)?)?;
-                spellbook::cancel_pending(&mut world.book_action, "Zone transfer started", log)?;
-                log.send(ClientEvent::World(crate::world::WorldEvent::ZoneTransfer(
-                    offer.clone(),
-                )))?;
-                log.status(
-                    ConnectionState::Zoning,
-                    packets,
-                    Some(session.last_received_seconds()),
-                )?;
-                world.lifecycle.offer(offer, Instant::now())?;
-                if let Some(motion) = world.motion.as_mut() {
-                    motion.suspend();
-                }
-                log.send(ClientEvent::World(crate::world::WorldEvent::MotionState {
-                    session_id,
-                    units_per_second: None,
-                    strafe_units_per_second: None,
-                    walk_units_per_second: None,
-                    backward_units_per_second: None,
-                    falls: false,
-                }))?;
-            }
-            continue;
-        }
-        camp.receive(
+        let taken = features.receive(
             packet.opcode,
             &packet.body,
             &mut world,
@@ -987,66 +905,7 @@ pub(super) fn run(
             session.close()?;
             return Ok(exit);
         }
-        if ready && packet.opcode == 0x5dd8 {
-            let pending = world
-                .lifecycle
-                .pending()
-                .context("zone approval without a pending server offer")?;
-            let heading = world
-                .motion
-                .as_ref()
-                .map_or(0.0, |motion| motion.position().heading);
-            let reply = zoning::reply(
-                &packet.body,
-                &config.character,
-                pending,
-                world.zone,
-                heading,
-            )?;
-            if reply == zoning::ZoneReply::Approved {
-                world.lifecycle.finish(true)?;
-                log.send(ClientEvent::Progress(ConnectionStage::ConnectingWorld))?;
-                session.close()?;
-                return Ok(ZoneExit::World);
-            }
-            world.lifecycle.finish(false)?;
-            let reason = match &reply {
-                zoning::ZoneReply::Denied(reason) => *reason,
-                zoning::ZoneReply::Rewind(_) => zoning::ZoneRejection::Cancelled,
-                zoning::ZoneReply::Approved => unreachable!("approved transfer returned above"),
-            };
-            if let zoning::ZoneReply::Rewind(position) = reply {
-                let player = world
-                    .player
-                    .as_mut()
-                    .context("rewind without admitted player")?;
-                motion::correct_own(
-                    player,
-                    world.motion.as_mut(),
-                    &mut world.stationary,
-                    world.sequence,
-                    position,
-                    Instant::now(),
-                )?;
-                log.send(ClientEvent::World(crate::world::WorldEvent::Position {
-                    spawn_id: u16::from_le_bytes([world.stationary[0], world.stationary[1]]),
-                    position,
-                    velocity: [0.0; 3],
-                }))?;
-            }
-            log.send(ClientEvent::World(
-                crate::world::WorldEvent::ZoneTransferRejected { session_id, reason },
-            ))?;
-            if !world.lifecycle.is_dead() {
-                if let Some(motion) = world.motion.as_mut() {
-                    motion.resume_stationary(Instant::now());
-                }
-                log.status(
-                    ConnectionState::Connected,
-                    packets,
-                    Some(session.last_received_seconds()),
-                )?;
-            }
+        if taken {
             continue;
         }
         match ZoneOpcode::from(packet.opcode) {
@@ -1099,14 +958,14 @@ pub(super) fn run(
                 spawn_data.clone_from(&packet.body);
                 saw_spawn = true;
             }
-            ZoneOpcode::ZoneDescription if !ready => {
+            ZoneOpcode::ZoneDescription if !world.ready => {
                 ensure!(packet.body.len() >= 96, "truncated zone description");
                 zone_name = String::from_utf8_lossy(cstr(&packet.body[64..96])).into_owned();
                 far_clip = crate::world::titanium_far_clip(&packet.body);
                 log.zone.clone_from(&zone_name);
                 log.status(
                     ConnectionState::Zoning,
-                    packets,
+                    world.packets,
                     Some(session.last_received_seconds()),
                 )?;
                 got_zone = true;
@@ -1115,15 +974,15 @@ pub(super) fn run(
                 session.send(0x7752, &0u32.to_le_bytes())?;
                 session.send(0x0322, &[])?;
             }
-            ZoneOpcode::ExperienceUpdate if got_zone && !ready && !replied_experience => {
+            ZoneOpcode::ExperienceUpdate if got_zone && !world.ready && !replied_experience => {
                 session.send(0x0587, &[])?;
                 replied_experience = true;
             }
-            ZoneOpcode::ExperienceUpdate if got_zone && !ready && replied_experience => {
+            ZoneOpcode::ExperienceUpdate if got_zone && !world.ready && replied_experience => {
                 session.send(0x6563, &chat::server_filters())?;
                 session.send(0x5e20, &[])?;
                 session.send(0x0c11, &1u32.to_le_bytes())?;
-                ready = true;
+                world.ready = true;
                 match crate::world::titanium_player(&profile_data, &spawn_data, revolution) {
                     Ok(mut player) => {
                         if let Some(level) = initial_level.take() {
@@ -1181,10 +1040,8 @@ pub(super) fn run(
                                 posture,
                             }))?;
                         }
-                        for feature in [&doors as &dyn Feature, &ground] {
-                            if let Some(event) = feature.admission() {
-                                log.send(ClientEvent::World(event))?;
-                            }
+                        for event in features.admission() {
+                            log.send(ClientEvent::World(event))?;
                         }
                         let admission = world.inventory.admission_updates();
                         log.send(ClientEvent::World(crate::world::WorldEvent::BuffSnapshot(
@@ -1219,22 +1076,13 @@ pub(super) fn run(
                 log.send(ClientEvent::Progress(ConnectionStage::Ready))?;
                 log.status(
                     ConnectionState::Connected,
-                    packets,
+                    world.packets,
                     Some(session.last_received_seconds()),
                 )?;
                 log.diagnostic(format!("Zone login sequence complete for {zone_name}; waiting for ongoing server traffic"))?;
             }
             ZoneOpcode::ValidationRejected => bail!("server rejected zone validation"),
             ZoneOpcode::LoggedOut => bail!("server logged the character out"),
-            ZoneOpcode::ZoneHandoff => {
-                ensure!(
-                    ready && world.lifecycle.pending().is_some(),
-                    "zone handoff without a pending transfer"
-                );
-                log.send(ClientEvent::Progress(ConnectionStage::ConnectingZone))?;
-                session.close()?;
-                return Ok(ZoneExit::Direct(packet.body));
-            }
             _ => (),
         }
         if saw_spawn && saw_profile && saw_weather && !requested {
@@ -1248,7 +1096,7 @@ pub(super) fn run(
             requested = true;
             log.send(ClientEvent::Progress(ConnectionStage::EnteringWorld))?;
         }
-        if !ready
+        if !world.ready
             && matches!(
                 packet.opcode,
                 0x4c24
@@ -1260,9 +1108,7 @@ pub(super) fn run(
         {
             match crate::world::titanium_update(packet.opcode, &packet.body) {
                 Ok(Some(event)) => {
-                    for feature in [&mut doors as &mut dyn Feature, &mut ground] {
-                        feature.admit(&event);
-                    }
+                    features.admit(&event);
                 }
                 Err(error) => {
                     log.diagnostic(format!("Initial door or object rejected: {error}"))?;
@@ -1270,7 +1116,7 @@ pub(super) fn run(
                 Ok(None) => (),
             }
         }
-        if !ready && packet.opcode == 0x6a93 {
+        if !world.ready && packet.opcode == 0x6a93 {
             match crate::world::titanium_update(packet.opcode, &packet.body) {
                 Ok(Some(crate::world::WorldEvent::Skill { skill_id, value })) if skill_id < 100 => {
                     initial_skills.insert(skill_id, value);
@@ -1279,7 +1125,7 @@ pub(super) fn run(
                 _ => (),
             }
         }
-        if !ready && matches!(packet.opcode, 0x5ecd | 0x6d44) {
+        if !world.ready && matches!(packet.opcode, 0x5ecd | 0x6d44) {
             match crate::world::titanium_update(packet.opcode, &packet.body) {
                 Ok(Some(crate::world::WorldEvent::Level {
                     current,
@@ -1296,7 +1142,7 @@ pub(super) fn run(
                 _ => (),
             }
         }
-        if !ready
+        if !world.ready
             && matches!(
                 packet.opcode,
                 0x2e78
@@ -1353,16 +1199,17 @@ pub(super) fn run(
                 _ => (),
             }
         }
-        if ready {
+        if world.ready {
             match crate::world::titanium_update(packet.opcode, &packet.body) {
                 Ok(Some(event)) => {
-                    let mut out = Out {
-                        session: &mut session,
-                        log: &mut *log,
-                    };
-                    for feature in [&mut doors as &mut dyn Feature, &mut ground, &mut camp] {
-                        feature.observe(&event, &mut world, &mut out)?;
-                    }
+                    features.observe(
+                        &event,
+                        &mut world,
+                        &mut Out {
+                            session: &mut session,
+                            log: &mut *log,
+                        },
+                    )?;
                     match &event {
                         crate::world::WorldEvent::Posture { spawn_id, posture }
                             if *spawn_id
@@ -1438,14 +1285,7 @@ pub(super) fn run(
                             if let Some(motion) = world.motion.as_mut() {
                                 motion.suspend();
                             }
-                            log.send(ClientEvent::World(crate::world::WorldEvent::MotionState {
-                                session_id,
-                                units_per_second: None,
-                                strafe_units_per_second: None,
-                                walk_units_per_second: None,
-                                backward_units_per_second: None,
-                                falls: false,
-                            }))?;
+                            log.send(ClientEvent::World(motion::withdrawn(session_id)))?;
                             log.diagnostic(
                                 "Own character died; waiting for the server bind offer".into(),
                             )?;
@@ -1502,14 +1342,7 @@ pub(super) fn run(
                                 *position,
                                 Instant::now(),
                             )?;
-                            log.send(ClientEvent::World(crate::world::WorldEvent::MotionState {
-                                session_id,
-                                units_per_second: None,
-                                strafe_units_per_second: None,
-                                walk_units_per_second: None,
-                                backward_units_per_second: None,
-                                falls: false,
-                            }))?;
+                            log.send(ClientEvent::World(motion::withdrawn(session_id)))?;
                         }
                     }
                     log.send(ClientEvent::World(event))?;
