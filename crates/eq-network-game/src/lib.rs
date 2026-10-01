@@ -14,6 +14,8 @@ pub mod chat;
 pub mod combat;
 /// Typed client actions and dialect-specific application packet encoding.
 pub mod command;
+/// Players' corpses: consent, summoning and dragging.
+pub mod corpses;
 /// Titanium character creation requests and stat rules.
 pub mod creation;
 /// Server-defined interactive doors and their movement notifications.

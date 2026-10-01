@@ -5,6 +5,7 @@ mod camp;
 mod casting;
 mod character;
 mod combat;
+mod corpses;
 mod doors;
 mod entities;
 mod exchange;
