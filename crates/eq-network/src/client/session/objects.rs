@@ -21,15 +21,16 @@ const CURSOR: InventorySlot = InventorySlot(30);
 pub(super) struct GroundObjects(Objects);
 
 impl Feature for GroundObjects {
-    fn admit(&mut self, message: &Message) -> Result<()> {
+    fn admit(&mut self, message: &Message, _world: &mut World) -> Result<()> {
         if let Message::Event(WorldEvent::Objects(update)) = message {
             self.0.apply(update);
         }
         Ok(())
     }
 
-    fn admission(&self) -> Option<WorldEvent> {
-        Some(WorldEvent::Objects(self.0.admission()))
+    fn admitted(&mut self, _world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
+        out.log
+            .send(ClientEvent::World(WorldEvent::Objects(self.0.admission())))
     }
 
     fn owns(&self, command: &ClientCommand) -> bool {
@@ -129,7 +130,9 @@ mod tests {
             position: Position::default(),
             object_type: 0,
         }));
-        objects.admit(&Message::Event(spawn)).unwrap();
+        objects
+            .admit(&Message::Event(spawn), &mut World::new(5))
+            .unwrap();
         objects
     }
 

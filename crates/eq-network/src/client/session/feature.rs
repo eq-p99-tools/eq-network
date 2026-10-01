@@ -6,8 +6,8 @@
 //! it. The zone loop only fans packets and commands out to the features.
 
 use super::{
-    lifecycle::ZoneLifecycle, posture::OwnPosture, spellbook::PendingBookAction, ClientCommand,
-    ConnectionState, Events, Session, ZoneExit,
+    entities::Spawns, lifecycle::ZoneLifecycle, posture::OwnPosture, spellbook::PendingBookAction,
+    ClientCommand, ConnectionState, Events, Session, ZoneExit,
 };
 use anyhow::Result;
 use eq_network_game::{
@@ -15,7 +15,7 @@ use eq_network_game::{
     inventory::Inventory,
     message::Message,
     movement::MotionSession,
-    world::{PlayerState, Position, WorldEvent},
+    world::{PlayerState, Position},
 };
 use std::time::Instant;
 
@@ -105,6 +105,8 @@ pub(super) struct World {
     pub(super) ready: bool,
     /// Application packets received in this zone session.
     pub(super) packets: u64,
+    /// The zone's spawns, which only the entities feature changes.
+    pub(super) spawns: Spawns,
 }
 
 impl World {
@@ -129,6 +131,7 @@ impl World {
             book_action: None,
             ready: false,
             packets: 0,
+            spawns: Spawns::default(),
         }
     }
 
@@ -152,17 +155,22 @@ impl World {
 /// One part of the game in the zone session. Each step defaults to doing
 /// nothing, so a feature implements only the steps it takes part in.
 pub(super) trait Feature {
-    /// Records a message that arrives before the zone admits the player.
+    /// Records a message that arrives before the zone admits the player; the
+    /// host hears nothing until the admission.
     ///
     /// # Errors
     /// Returns an error when the message breaks the feature's rules.
-    fn admit(&mut self, _message: &Message) -> Result<()> {
+    fn admit(&mut self, _message: &Message, _world: &mut World) -> Result<()> {
         Ok(())
     }
 
-    /// What the feature reports to the host when the zone becomes ready.
-    fn admission(&self) -> Option<WorldEvent> {
-        None
+    /// Tells the host what the feature staged, once the zone has admitted the
+    /// player.
+    ///
+    /// # Errors
+    /// Returns an error when the host's event handler fails.
+    fn admitted(&mut self, _world: &mut World, _out: &mut Out<'_, '_>) -> Result<()> {
+        Ok(())
     }
 
     /// Hears every host command before its owner carries it out, so that a

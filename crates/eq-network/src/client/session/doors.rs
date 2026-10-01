@@ -47,15 +47,17 @@ impl Doors {
 }
 
 impl Feature for Doors {
-    fn admit(&mut self, message: &Message) -> Result<()> {
+    fn admit(&mut self, message: &Message, _world: &mut World) -> Result<()> {
         if let Message::Event(WorldEvent::Doors(update)) = message {
             self.table.apply(update);
         }
         Ok(())
     }
 
-    fn admission(&self) -> Option<WorldEvent> {
-        Some(WorldEvent::Doors(self.table.admission()))
+    fn admitted(&mut self, _world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
+        out.log.send(ClientEvent::World(WorldEvent::Doors(
+            self.table.admission(),
+        )))
     }
 
     fn owns(&self, command: &ClientCommand) -> bool {
@@ -123,7 +125,9 @@ mod tests {
             parameter: 0,
             action: None,
         }]));
-        doors.admit(&Message::Event(spawn)).unwrap();
+        doors
+            .admit(&Message::Event(spawn), &mut World::new(5))
+            .unwrap();
         let mut world = World::new(5);
         let click = ClientCommand::ClickDoor {
             session_id: 5,

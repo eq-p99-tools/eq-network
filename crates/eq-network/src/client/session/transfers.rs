@@ -230,7 +230,7 @@ impl Feature for Transfers {
 
     /// The zone points arrive while the zone admits the player; the server
     /// moves no one before then.
-    fn admit(&mut self, message: &Message) -> Result<()> {
+    fn admit(&mut self, message: &Message, _world: &mut World) -> Result<()> {
         if !self.note_points(message) && matches!(message, Message::Handoff(_)) {
             bail!("zone handoff without a pending transfer");
         }

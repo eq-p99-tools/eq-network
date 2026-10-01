@@ -3,6 +3,7 @@ mod book_edits;
 mod camp;
 mod casting;
 mod doors;
+mod entities;
 mod feature;
 mod inventory;
 mod lifecycle;
@@ -35,7 +36,6 @@ use eq_network_login::{
     server_list::parse_server_list,
 };
 use std::{
-    collections::BTreeMap,
     net::IpAddr,
     sync::mpsc::Receiver,
     time::{Duration, Instant},

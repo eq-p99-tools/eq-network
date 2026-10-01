@@ -3,11 +3,11 @@
 use super::{
     actions, bail, book_edits, camp, casting, chat, command, cstr,
     doors::Doors,
-    ensure,
+    ensure, entities,
     feature::{Feature, Out, World},
-    inventory, le32, merchant, motion, objects, posture, put_string, scribe_consumption, servers,
-    spellbook, transfers, BTreeMap, BookActionStatus, BookIntent, CharacterSession, ClientCommand,
-    ClientEvent, ConnectionStage, ConnectionState, Context, DecodeError, Duration, Events, Instant,
+    inventory, le32, merchant, motion, objects, put_string, scribe_consumption, servers, spellbook,
+    transfers, BookActionStatus, BookIntent, CharacterSession, ClientCommand, ClientEvent,
+    ConnectionStage, ConnectionState, Context, DecodeError, Duration, Events, Instant,
     MotionSession, PendingBookAction, RecordEvent, Result, Session, Shield, ZoneExit,
 };
 
@@ -45,6 +45,7 @@ impl Features {
     /// Every feature a Titanium zone session has.
     fn new(character: &str) -> Self {
         Self(vec![
+            Box::new(entities::Entities::default()),
             Box::new(camp::Camp::default()),
             Box::new(Doors::default()),
             Box::new(objects::GroundObjects::default()),
@@ -54,19 +55,19 @@ impl Features {
 
     /// Lets every feature record a message from before the zone admitted the
     /// player.
-    fn admit(&mut self, message: &Message) -> Result<()> {
+    fn admit(&mut self, message: &Message, world: &mut World) -> Result<()> {
         for feature in &mut self.0 {
-            feature.admit(message)?;
+            feature.admit(message, world)?;
         }
         Ok(())
     }
 
-    /// What the features tell the client once the zone admits the player.
-    fn admission(&self) -> Vec<crate::world::WorldEvent> {
-        self.0
-            .iter()
-            .filter_map(|feature| feature.admission())
-            .collect()
+    /// Has every feature tell the host what it staged before admission.
+    fn admitted(&mut self, world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
+        for feature in &mut self.0 {
+            feature.admitted(world, out)?;
+        }
+        Ok(())
     }
 
     /// Lets every feature hear a command, then has its owner carry it out;
@@ -168,8 +169,6 @@ pub(super) fn run(
     let mut trades = merchant::MerchantTrades::default();
     let mut settlement = inventory::Settlement::default();
     let mut scribe_consumption = scribe_consumption::ScribeConsumption::default();
-    let mut initial_spawns = BTreeMap::new();
-    let mut initial_postures = BTreeMap::new();
     // Wear changes for the player that arrive before its state is built.
     let mut initial_own_wear = Vec::new();
     let mut features = Features::new(&config.character);
@@ -491,9 +490,7 @@ pub(super) fn run(
                     if let ClientCommand::UseItem(request) = &command {
                         let target_available = world.player.as_ref().is_some_and(|player| {
                             request.target_id == player.spawn_id
-                                || initial_spawns.get(&request.target_id).is_some_and(
-                                    |spawn: &crate::world::SpawnState| !spawn.invisible,
-                                )
+                                || world.spawns.visible(request.target_id).is_some()
                         });
                         let prepared = inventory_actor
                             .as_ref()
@@ -539,9 +536,7 @@ pub(super) fn run(
                         } => world.player.as_ref().is_some_and(|player| {
                             player.memorized_spells.get(usize::from(*gem)) == Some(&Some(*spell_id))
                                 && (*target_id == player.spawn_id
-                                    || initial_spawns.get(target_id).is_some_and(
-                                        |spawn: &crate::world::SpawnState| !spawn.invisible,
-                                    ))
+                                    || world.spawns.visible(*target_id).is_some())
                         }),
                         ClientCommand::SetPosture { spawn_id, .. }
                         | ClientCommand::Consider {
@@ -553,9 +548,7 @@ pub(super) fn run(
                                 .is_some_and(|player| player.spawn_id == *spawn_id)
                                 && match &command {
                                     ClientCommand::Consider { target_id, .. } => {
-                                        initial_spawns.get(target_id).is_some_and(
-                                            |spawn: &crate::world::SpawnState| !spawn.invisible,
-                                        )
+                                        world.spawns.visible(*target_id).is_some()
                                     }
                                     _ => true,
                                 }
@@ -566,20 +559,17 @@ pub(super) fn run(
                         | ClientCommand::Shop {
                             merchant_id: entity,
                             ..
-                        } => initial_spawns.get(entity).is_some_and(
-                            |spawn: &crate::world::SpawnState| {
-                                !spawn.invisible
-                                    && if matches!(command, ClientCommand::Loot { .. }) {
-                                        matches!(
-                                            spawn.kind,
-                                            crate::world::SpawnKind::NpcCorpse
-                                                | crate::world::SpawnKind::PlayerCorpse
-                                        )
-                                    } else {
-                                        spawn.kind == crate::world::SpawnKind::Npc
-                                    }
-                            },
-                        ),
+                        } => world.spawns.visible(*entity).is_some_and(|spawn| {
+                            if matches!(command, ClientCommand::Loot { .. }) {
+                                matches!(
+                                    spawn.kind,
+                                    crate::world::SpawnKind::NpcCorpse
+                                        | crate::world::SpawnKind::PlayerCorpse
+                                )
+                            } else {
+                                spawn.kind == crate::world::SpawnKind::Npc
+                            }
+                        }),
                         _ => true,
                     };
                     if !action_valid {
@@ -601,7 +591,7 @@ pub(super) fn run(
                                     .motion
                                     .as_ref()
                                     .map_or(player.position, MotionSession::position);
-                                initial_spawns.values().any(|spawn| {
+                                world.spawns.all().any(|spawn| {
                                     eq_network_game::inventory::banker_in_range(position, spawn)
                                 })
                             });
@@ -633,9 +623,7 @@ pub(super) fn run(
                                 .player
                                 .as_ref()
                                 .is_none_or(|player| player.spawn_id != id)
-                                && initial_spawns
-                                    .get(&id)
-                                    .is_none_or(|spawn: &crate::world::SpawnState| spawn.invisible)
+                                && world.spawns.visible(id).is_none()
                         }) {
                             log.send(ClientEvent::World(
                                 crate::world::WorldEvent::TargetRejected {
@@ -852,22 +840,13 @@ pub(super) fn run(
                             player: Box::new(player),
                             far_clip,
                         }))?;
-                        log.send(ClientEvent::World(crate::world::WorldEvent::Spawns(
-                            initial_spawns.values().cloned().collect(),
-                        )))?;
-                        world.posture = posture::OwnPosture::default();
-                        for (spawn_id, posture) in std::mem::take(&mut initial_postures) {
-                            if world.is_player(spawn_id) {
-                                world.posture.observed(posture);
-                            }
-                            log.send(ClientEvent::World(crate::world::WorldEvent::Posture {
-                                spawn_id,
-                                posture,
-                            }))?;
-                        }
-                        for event in features.admission() {
-                            log.send(ClientEvent::World(event))?;
-                        }
+                        features.admitted(
+                            &mut world,
+                            &mut Out {
+                                sink: &mut session,
+                                log: &mut *log,
+                            },
+                        )?;
                         let admission = world.inventory.admission_updates();
                         log.send(ClientEvent::World(crate::world::WorldEvent::BuffSnapshot(
                             eq_network_game::buffs::titanium_profile(&profile_data)?,
@@ -936,7 +915,7 @@ pub(super) fn run(
                     },
                 )?;
             } else {
-                features.admit(&message)?;
+                features.admit(&message, &mut world)?;
             }
             if let Some(exit) = world.exit.take() {
                 session.close()?;
@@ -1019,18 +998,7 @@ pub(super) fn run(
                                 )?;
                             }
                         }
-                        crate::world::WorldEvent::Visibility {
-                            spawn_id,
-                            invisible,
-                        } => {
-                            if let Some(spawn) = initial_spawns.get_mut(spawn_id) {
-                                spawn.invisible = *invisible;
-                            }
-                        }
                         crate::world::WorldEvent::WearChange(change) => {
-                            if let Some(spawn) = initial_spawns.get_mut(&change.spawn_id) {
-                                spawn.appearance.apply(change);
-                            }
                             if let Some(player) = world
                                 .player
                                 .as_mut()
@@ -1077,23 +1045,6 @@ pub(super) fn run(
                             log.diagnostic(
                                 "Own character died; waiting for the server bind offer".into(),
                             )?;
-                        }
-                        crate::world::WorldEvent::Spawns(spawns) => {
-                            for spawn in spawns {
-                                initial_spawns.insert(spawn.spawn_id, spawn.clone());
-                            }
-                        }
-                        crate::world::WorldEvent::Despawn(id) => {
-                            initial_spawns.remove(id);
-                        }
-                        // Another entity died: its corpse keeps the spawn ID.
-                        crate::world::WorldEvent::Death(death) => {
-                            if let Some(spawn) = u16::try_from(death.spawn_id)
-                                .ok()
-                                .and_then(|id| initial_spawns.get_mut(&id))
-                            {
-                                spawn.kind = spawn.kind.corpse();
-                            }
                         }
                         // A sale's echo is the only notice that the item left.
                         crate::world::WorldEvent::Merchant(update) => {
@@ -1149,44 +1100,10 @@ pub(super) fn run(
                 crate::world::WorldEvent::Experience(value) => {
                     initial_experience = Some(value);
                 }
-                crate::world::WorldEvent::WearChange(change) => {
-                    if let Some(spawn) = initial_spawns.get_mut(&change.spawn_id) {
-                        spawn.appearance.apply(&change);
-                    }
-                    if world.is_player(change.spawn_id) {
-                        initial_own_wear.push(change);
-                    }
-                }
-                crate::world::WorldEvent::Spawns(spawns) => {
-                    for spawn in spawns {
-                        initial_spawns.insert(spawn.spawn_id, spawn);
-                    }
-                    ensure!(initial_spawns.len() <= 65535, "zone entity limit exceeded");
-                }
-                crate::world::WorldEvent::Despawn(id) => {
-                    initial_spawns.remove(&id);
-                    initial_postures.remove(&id);
-                }
-                crate::world::WorldEvent::Posture { spawn_id, posture } => {
-                    initial_postures.insert(spawn_id, posture);
-                }
-                crate::world::WorldEvent::Visibility {
-                    spawn_id,
-                    invisible,
-                } => {
-                    if let Some(spawn) = initial_spawns.get_mut(&spawn_id) {
-                        spawn.invisible = invisible;
-                    }
-                }
-                crate::world::WorldEvent::Position {
-                    spawn_id,
-                    position,
-                    velocity,
-                } => {
-                    if let Some(spawn) = initial_spawns.get_mut(&spawn_id) {
-                        spawn.position = position;
-                        spawn.velocity = velocity;
-                    }
+                crate::world::WorldEvent::WearChange(change)
+                    if world.is_player(change.spawn_id) =>
+                {
+                    initial_own_wear.push(change);
                 }
                 _ => (),
             }
