@@ -6,9 +6,15 @@
 //! it. The zone loop only fans packets and commands out to the features.
 
 use super::{
-    actions::Resource, character::PlayerRecord, entities::Spawns, exchange::Exchanging,
-    inventory::Carried, lifecycle::ZoneLifecycle, motion::Body, posture::OwnPosture, ClientCommand,
-    ConnectionState, Events, ZoneExit,
+    actions::Resource,
+    character::PlayerRecord,
+    entities::Spawns,
+    exchange::Exchanging,
+    inventory::{Carried, Ledger},
+    lifecycle::ZoneLifecycle,
+    motion::Body,
+    posture::OwnPosture,
+    ClientCommand, ConnectionState, Events, ZoneExit,
 };
 use anyhow::{Context, Result};
 use eq_network_game::{
@@ -148,6 +154,8 @@ pub(super) struct World {
     pub(super) body: Body,
     /// The player's inventory, which only the inventory feature changes.
     pub(super) inventory: Carried,
+    /// The player's coins, which only the inventory feature changes.
+    pub(super) coins: Ledger,
     /// The player's spawn ID, from the zone's first spawn record for them.
     pub(super) own_spawn: Option<u16>,
     /// The player's posture as last sent or reported.
@@ -177,6 +185,7 @@ impl World {
             player: PlayerRecord::default(),
             body: Body::default(),
             inventory: Carried::default(),
+            coins: Ledger::default(),
             own_spawn: None,
             posture: OwnPosture::default(),
             exit: None,

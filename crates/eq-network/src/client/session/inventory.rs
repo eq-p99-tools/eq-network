@@ -6,6 +6,11 @@
 //! let it stand; a trade holds the inventory until the merchant echoes it.
 //! Items handed over in a give or trade window leave the trade slots when the
 //! window closes, which servers do not say item by item.
+//!
+//! The coins are this feature's too. Servers answer no coin move and say what
+//! the purse holds only now and then, so the ledger keeps the coins where the
+//! player put them, changes the purse for loot and purchases kind by kind as
+//! servers do, and takes each money update as the truth about the purse.
 mod merchant;
 
 use super::{
@@ -17,7 +22,11 @@ use anyhow::{Context, Result};
 use eq_network_game::{
     exchange::ExchangeUpdate,
     inventory::{banker_in_range, Inventory, InventoryActor, InventoryMove, InventoryUpdate},
+    loot::{LootResponse, LootUpdate},
+    merchant::MerchantUpdate,
     message::{Message, Part},
+    money::Wallet,
+    world::Coins,
     world::{SpawnKind, WorldEvent},
 };
 use merchant::MerchantTrades;
@@ -41,6 +50,84 @@ impl std::ops::Deref for Carried {
 impl From<Inventory> for Carried {
     fn from(inventory: Inventory) -> Self {
         Self(inventory)
+    }
+}
+
+/// The player's coins as the session keeps them. Every feature reads it;
+/// only this module changes it.
+#[derive(Debug, Default)]
+pub(super) struct Ledger(Wallet);
+
+impl std::ops::Deref for Ledger {
+    type Target = Wallet;
+
+    fn deref(&self) -> &Wallet {
+        &self.0
+    }
+}
+
+/// Lets another feature's tests start with coins of their choosing.
+#[cfg(test)]
+impl From<Wallet> for Ledger {
+    fn from(wallet: Wallet) -> Self {
+        Self(wallet)
+    }
+}
+
+/// Tells the host where the coins are: the purse as `Coins`, the rest as
+/// `CoinsElsewhere`.
+fn tell_coins(world: &World, purse: bool, out: &mut Out<'_, '_>) -> Result<()> {
+    let coins = &world.coins;
+    if purse {
+        if let Some(coins) = coins.purse {
+            out.log.send(ClientEvent::World(WorldEvent::Coins(coins)))?;
+        }
+    }
+    out.log.send(ClientEvent::World(WorldEvent::CoinsElsewhere {
+        cursor: coins.cursor,
+        bank: coins.bank.unwrap_or_default(),
+        given: coins.given,
+        offered: coins.offered,
+    }))
+}
+
+/// Follows what a message says about the coins; true when the purse changed
+/// without the host hearing it (loot coins, a purchase), false when only
+/// coins elsewhere changed, None when nothing did. A money update replaces
+/// the purse, and the host hears it as it is.
+fn coins_news(message: &Message, wallet: &mut Wallet) -> Option<bool> {
+    let Message::Event(event) = message else {
+        return None;
+    };
+    match event {
+        WorldEvent::Coins(coins) => {
+            wallet.purse = Some(*coins);
+            None
+        }
+        WorldEvent::CoinsElsewhere { cursor, bank, .. } => {
+            wallet.cursor = *cursor;
+            wallet.bank = Some(*bank);
+            Some(false)
+        }
+        WorldEvent::Loot(LootUpdate::Opened {
+            response: LootResponse::Normal,
+            coins,
+        }) if !coins.is_empty() => {
+            wallet.add_to_purse(*coins);
+            Some(true)
+        }
+        WorldEvent::Merchant(MerchantUpdate::Bought { price, .. }) => {
+            wallet.pay(u64::from(*price));
+            Some(true)
+        }
+        // What the window held was handed over, or comes back with the
+        // server's money update.
+        WorldEvent::Exchange(ExchangeUpdate::Finished | ExchangeUpdate::Cancelled { .. }) => {
+            wallet.given = Coins::default();
+            wallet.offered = Coins::default();
+            Some(false)
+        }
+        _ => None,
     }
 }
 
@@ -183,10 +270,11 @@ impl Belongings {
         Ok(())
     }
 
-    /// Moves coins. Servers answer no coin move, so nothing waits on one; a
-    /// trade window must be open for coins to go into it, and a banker near
-    /// for the bank.
-    fn move_coins(command: &ClientCommand, world: &World, out: &mut Out<'_, '_>) -> Result<()> {
+    /// Moves coins and keeps them where they went. Servers answer no coin
+    /// move, and log one that takes more than a place holds, so the ledger
+    /// refuses that before anything is sent; a trade window must be open for
+    /// coins to go into it, and a banker near for the bank.
+    fn move_coins(command: &ClientCommand, world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
         use eq_network_game::money::CoinPlace;
         let ClientCommand::MoveCoins {
             session_id,
@@ -206,15 +294,24 @@ impl Belongings {
         } else if touches(CoinPlace::Bank) && !actor(world).is_some_and(|actor| actor.bank_access) {
             Some("Stand near a banker to use the bank".to_owned())
         } else {
-            match transfer.encode() {
-                Ok(packet) => return out.send(&packet),
-                Err(error) => Some(error.to_string()),
+            let mut after = *world.coins;
+            match after
+                .apply(*transfer)
+                .map_err(str::to_owned)
+                .and_then(|()| transfer.encode().map_err(|error| error.to_string()))
+            {
+                Ok(packet) => {
+                    out.send(&packet)?;
+                    world.coins.0 = after;
+                    let purse = touches(CoinPlace::Purse);
+                    return tell_coins(world, purse, out);
+                }
+                Err(reason) => Some(reason),
             }
         };
         let reason = refusal.unwrap_or_default();
         out.log.send(ClientEvent::World(WorldEvent::CoinsRefused {
             session_id: *session_id,
-            transfer: *transfer,
             reason: reason.clone(),
         }))?;
         out.log.diagnostic(format!("Coin move refused: {reason}"))
@@ -245,11 +342,13 @@ impl Feature for Belongings {
         vec![Capability::Inventory, Capability::Trading]
     }
 
-    /// Item updates before admission build the inventory the admission reports.
+    /// Item updates and the profile's coins before admission build the
+    /// inventory and the ledger the admission reports.
     fn admit(&mut self, message: &Message, world: &mut World) -> Result<()> {
         if let Some(update) = update(message) {
             world.inventory.0.apply(update);
         }
+        coins_news(message, &mut world.coins.0);
         Ok(())
     }
 
@@ -261,7 +360,7 @@ impl Feature for Belongings {
         for update in admission {
             change(update, world, out)?;
         }
-        Ok(())
+        tell_coins(world, true, out)
     }
 
     /// A sold item leaves only when the merchant echoes the sale.
@@ -331,14 +430,18 @@ impl Feature for Belongings {
         Ok(())
     }
 
-    /// Item updates, and the inventory change a sale's echo stands for; the
-    /// host hears of item updates with the rest of the zone's news.
+    /// Item updates, the inventory change a sale's echo stands for, and what
+    /// the news says about the coins; the host hears of item updates and
+    /// money updates with the rest of the zone's news.
     fn observe(
         &mut self,
         message: &Message,
         world: &mut World,
         out: &mut Out<'_, '_>,
     ) -> Result<()> {
+        if let Some(purse) = coins_news(message, &mut world.coins.0) {
+            tell_coins(world, purse, out)?;
+        }
         match message {
             Message::Event(WorldEvent::Inventory(update)) => {
                 world.inventory.0.apply(update.clone());
@@ -615,14 +718,21 @@ mod tests {
         assert!(world.inventory.items().is_empty());
     }
 
-    #[test]
-    fn coins_go_into_a_trade_only_while_its_window_is_open_and_into_the_bank_only_near_a_banker() {
-        use super::super::exchange::{Exchange, Exchanging, Stage};
-        use eq_network_game::{
-            exchange::Partner,
-            money::{Coin, CoinPlace, CoinTransfer, MOVE_OPCODE as COIN_OPCODE},
-        };
+    /// An admitted player whose purse holds five gold, and a move of two gold.
+    fn with_gold() -> (
+        Belongings,
+        World,
+        impl Fn(eq_network_game::money::CoinPlace, eq_network_game::money::CoinPlace) -> ClientCommand,
+    ) {
+        use eq_network_game::money::{Coin, CoinTransfer};
         let (mut belongings, mut world) = admitted();
+        let purse = Message::Event(WorldEvent::Coins(Coins {
+            gold: 5,
+            ..Coins::default()
+        }));
+        testing::run(|out| belongings.observe(&purse, &mut world, out))
+            .result
+            .unwrap();
         let move_coins = |from, to| ClientCommand::MoveCoins {
             session_id: 5,
             transfer: CoinTransfer {
@@ -634,17 +744,24 @@ mod tests {
             },
             created: Instant::now(),
         };
-        let refused = |events: &[ClientEvent]| {
-            events
-                .iter()
-                .filter_map(|event| match event {
-                    ClientEvent::World(WorldEvent::CoinsRefused { reason, .. }) => {
-                        Some(reason.clone())
-                    }
-                    _ => None,
-                })
-                .collect::<Vec<_>>()
-        };
+        (belongings, world, move_coins)
+    }
+
+    /// The reasons the host heard for refused coin moves.
+    fn coins_refused(events: &[ClientEvent]) -> Vec<String> {
+        events
+            .iter()
+            .filter_map(|event| match event {
+                ClientEvent::World(WorldEvent::CoinsRefused { reason, .. }) => Some(reason.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_coin_move_is_sent_kept_and_told_and_goes_nowhere_a_place_is_closed() {
+        use eq_network_game::money::{CoinPlace, MOVE_OPCODE as COIN_OPCODE};
+        let (mut belongings, mut world, move_coins) = with_gold();
         let outcome = testing::run(|out| {
             belongings.handle(
                 &move_coins(CoinPlace::Purse, CoinPlace::Cursor),
@@ -654,6 +771,17 @@ mod tests {
         });
         assert_eq!(outcome.sent.len(), 1);
         assert_eq!(outcome.sent[0].opcode, COIN_OPCODE);
+        // The host hears where the coins went: the purse, then the rest.
+        assert!(matches!(
+            outcome.events[..],
+            [
+                ClientEvent::World(WorldEvent::Coins(Coins { gold: 3, .. })),
+                ClientEvent::World(WorldEvent::CoinsElsewhere {
+                    cursor: Coins { gold: 2, .. },
+                    ..
+                })
+            ]
+        ));
         for (place, reason) in [
             (CoinPlace::Trade, "No trade window is open"),
             (CoinPlace::Bank, "Stand near a banker to use the bank"),
@@ -666,21 +794,123 @@ mod tests {
                 "nothing sent to {place:?}, sent {:?}",
                 outcome.sent
             );
-            assert_eq!(refused(&outcome.events), [reason]);
+            assert_eq!(coins_refused(&outcome.events), [reason]);
         }
+    }
+
+    #[test]
+    fn coins_go_into_an_open_window_and_never_past_what_a_place_holds() {
+        use super::super::exchange::{Exchange, Exchanging, Stage};
+        use eq_network_game::{exchange::Partner, money::CoinPlace};
+        let (mut belongings, mut world, move_coins) = with_gold();
         world.exchange = Exchanging::from(Exchange {
             with: 42,
             partner: Partner::Npc,
             stage: Stage::Open,
         });
-        let outcome = testing::run(|out| {
-            belongings.handle(
-                &move_coins(CoinPlace::Cursor, CoinPlace::Trade),
+        for (from, to) in [
+            (CoinPlace::Purse, CoinPlace::Cursor),
+            (CoinPlace::Cursor, CoinPlace::Trade),
+        ] {
+            let outcome =
+                testing::run(|out| belongings.handle(&move_coins(from, to), &mut world, out));
+            assert_eq!(outcome.sent.len(), 1, "{from:?} to {to:?}");
+        }
+        assert_eq!(world.coins.given.gold, 2);
+        // Never more than a place holds: servers log that as a hack.
+        let mut greedy = move_coins(CoinPlace::Purse, CoinPlace::Cursor);
+        if let ClientCommand::MoveCoins { transfer, .. } = &mut greedy {
+            transfer.amount = 4;
+        }
+        let outcome = testing::run(|out| belongings.handle(&greedy, &mut world, out));
+        assert!(
+            outcome.sent.is_empty(),
+            "nothing sent past the purse, sent {:?}",
+            outcome.sent
+        );
+        assert_eq!(
+            coins_refused(&outcome.events),
+            ["You do not have that many coins there"]
+        );
+        // The window going through takes the given coins.
+        let finished = Message::Event(WorldEvent::Exchange(
+            eq_network_game::exchange::ExchangeUpdate::Finished,
+        ));
+        testing::run(|out| belongings.observe(&finished, &mut world, out))
+            .result
+            .unwrap();
+        assert_eq!(world.coins.given, Coins::default());
+    }
+
+    #[test]
+    fn loot_coins_and_purchases_move_the_purse_until_a_money_update_says_otherwise() {
+        use eq_network_game::{loot::LootResponse, merchant::MerchantUpdate};
+        let (mut belongings, mut world) = admitted();
+        let news = |event| Message::Event(event);
+        testing::run(|out| {
+            belongings.observe(
+                &news(WorldEvent::Coins(Coins {
+                    platinum: 1,
+                    ..Coins::default()
+                })),
+                &mut world,
+                out,
+            )
+        })
+        .result
+        .unwrap();
+        let looted = testing::run(|out| {
+            belongings.observe(
+                &news(WorldEvent::Loot(LootUpdate::Opened {
+                    response: LootResponse::Normal,
+                    coins: Coins {
+                        silver: 3,
+                        ..Coins::default()
+                    },
+                })),
                 &mut world,
                 out,
             )
         });
-        assert_eq!(outcome.sent.len(), 1);
+        assert!(matches!(
+            looted.events[..],
+            [
+                ClientEvent::World(WorldEvent::Coins(Coins {
+                    platinum: 1,
+                    silver: 3,
+                    ..
+                })),
+                ClientEvent::World(WorldEvent::CoinsElsewhere { .. })
+            ]
+        ));
+        testing::run(|out| {
+            belongings.observe(
+                &news(WorldEvent::Merchant(MerchantUpdate::Bought {
+                    slot: 1,
+                    quantity: 1,
+                    price: 25,
+                })),
+                &mut world,
+                out,
+            )
+        })
+        .result
+        .unwrap();
+        // The price came from the silver, the change back in copper.
+        assert_eq!(
+            world.coins.purse,
+            Some(Coins {
+                platinum: 1,
+                copper: 5,
+                ..Coins::default()
+            })
+        );
+        // The server's word replaces the estimate, and the host hears it as it is.
+        let update = testing::run(|out| {
+            belongings.observe(&news(WorldEvent::Coins(Coins::default())), &mut world, out)
+        });
+        assert!(update.events.is_empty());
+        assert_eq!(world.coins.purse, Some(Coins::default()));
     }
 
     #[test]

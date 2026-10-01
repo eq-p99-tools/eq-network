@@ -9,7 +9,7 @@ use eq_network_game::{
     appearance::WearChange,
     buffs::Buff,
     message::Message,
-    world::{Coins, PlayerState, WorldEvent},
+    world::{PlayerState, WorldEvent},
 };
 use std::collections::BTreeMap;
 
@@ -56,9 +56,6 @@ struct Staged {
     /// The player's own wear changes, which arrive before their state exists.
     wear: Vec<WearChange>,
     buffs: Option<Vec<Option<Buff>>>,
-    coins: Option<Coins>,
-    /// The coins on the cursor and in the bank.
-    elsewhere: Option<(Coins, Coins)>,
 }
 
 impl Feature for Character {
@@ -84,10 +81,6 @@ impl Feature for Character {
                 staged.wear.push(*change);
             }
             WorldEvent::BuffSnapshot(buffs) => staged.buffs = Some(buffs.clone()),
-            WorldEvent::Coins(coins) => staged.coins = Some(*coins),
-            WorldEvent::CoinsElsewhere { cursor, bank } => {
-                staged.elsewhere = Some((*cursor, *bank));
-            }
             _ => (),
         }
         Ok(())
@@ -110,10 +103,6 @@ impl Feature for Character {
         let staged = std::mem::take(&mut self.staged);
         let news = [
             staged.buffs.map(WorldEvent::BuffSnapshot),
-            staged.coins.map(WorldEvent::Coins),
-            staged
-                .elsewhere
-                .map(|(cursor, bank)| WorldEvent::CoinsElsewhere { cursor, bank }),
             staged.experience.map(WorldEvent::Experience),
         ];
         for event in news.into_iter().flatten() {
@@ -218,12 +207,6 @@ mod tests {
                 skill_id: 22,
                 value: 40,
             },
-            WorldEvent::Coins(Coins {
-                platinum: 1,
-                gold: 2,
-                silver: 3,
-                copper: 4,
-            }),
             WorldEvent::BuffSnapshot(Vec::new()),
         ] {
             character.admit(&Message::Event(event), &mut world).unwrap();
@@ -246,7 +229,6 @@ mod tests {
             outcome.events[..],
             [
                 ClientEvent::World(WorldEvent::BuffSnapshot(_)),
-                ClientEvent::World(WorldEvent::Coins(_)),
                 ClientEvent::World(WorldEvent::Experience(120))
             ]
         ));
@@ -265,17 +247,16 @@ mod profile_tests {
     fn the_profile_read_before_admission_is_told_after_it() {
         let mut character = Character::default();
         let mut world = World::new(5);
-        let mut profile = vec![0; 19592];
-        profile[4428..4432].copy_from_slice(&3u32.to_le_bytes());
+        let profile = vec![0; 19592];
         for message in eq_network_game::message::titanium(0x75df, &profile) {
             character.admit(&message, &mut world).unwrap();
         }
         world.player.admit(testing::player(7));
         let outcome = testing::run(|out| character.admitted(&mut world, out));
         outcome.result.unwrap();
-        assert!(outcome.events.iter().any(|event| matches!(
-            event,
-            ClientEvent::World(WorldEvent::Coins(Coins { platinum: 3, .. }))
-        )));
+        assert!(outcome
+            .events
+            .iter()
+            .any(|event| matches!(event, ClientEvent::World(WorldEvent::BuffSnapshot(_)))));
     }
 }

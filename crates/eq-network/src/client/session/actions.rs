@@ -171,13 +171,8 @@ fn refusal(command: &ClientCommand, reason: &str) -> Option<WorldEvent> {
             session_id: *session_id,
             reason: reason.into(),
         },
-        ClientCommand::MoveCoins {
-            session_id,
-            transfer,
-            ..
-        } => WorldEvent::CoinsRefused {
+        ClientCommand::MoveCoins { session_id, .. } => WorldEvent::CoinsRefused {
             session_id: *session_id,
-            transfer: *transfer,
             reason: reason.into(),
         },
         ClientCommand::PickUp {

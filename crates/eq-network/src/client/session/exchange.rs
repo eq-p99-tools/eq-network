@@ -9,6 +9,7 @@ use super::{
 use anyhow::Result;
 use eq_network_game::{
     exchange::{self, ExchangeUpdate, Partner},
+    inventory::InventorySlot,
     message::Message,
     world::{SpawnKind, WorldEvent},
 };
@@ -87,9 +88,8 @@ fn refused(session_id: u64, reason: &str, out: &mut Out<'_, '_>) -> Result<()> {
 }
 
 impl Exchanges {
-    /// Asks a visible character within reach. What the player must hold to
-    /// ask (an item or coins on the cursor) is the front end's rule, since
-    /// the session does not see the coins on the cursor.
+    /// Asks a visible character within reach, while the player holds an item
+    /// or coins on the cursor to hand over.
     fn offer(
         with_id: u16,
         session_id: u64,
@@ -113,6 +113,11 @@ impl Exchanges {
             };
             if !exchange::in_reach(position, spawn) {
                 return Err("You are too far away to trade");
+            }
+            if !world.inventory.items().contains_key(&InventorySlot::CURSOR)
+                && world.coins.cursor.is_empty()
+            {
+                return Err("Hold an item or coins on the cursor to hand them over");
             }
             Ok((own_id, partner))
         };
@@ -257,7 +262,8 @@ mod tests {
 
     const NPC: u16 = 42;
 
-    /// An admitted player (7) beside an NPC (42) and a corpse (43).
+    /// An admitted player (7) beside an NPC (42) and a corpse (43), holding a
+    /// gold coin on the cursor.
     fn beside_npc() -> World {
         let mut world = World::new(5);
         world.player.admit(testing::player(7));
@@ -272,6 +278,13 @@ mod tests {
             ..Position::default()
         };
         world.spawns.insert(far);
+        world.coins = super::super::inventory::Ledger::from(eq_network_game::money::Wallet {
+            cursor: eq_network_game::world::Coins {
+                gold: 1,
+                ..eq_network_game::world::Coins::default()
+            },
+            ..eq_network_game::money::Wallet::default()
+        });
         world
     }
 
@@ -306,6 +319,14 @@ mod tests {
             assert_eq!(refusals(&outcome.events).len(), 1, "{with_id}");
             assert!(world.exchange.is_none());
         }
+        // Nothing on the cursor, nothing to hand over.
+        let mut world = beside_npc();
+        world.coins = super::super::inventory::Ledger::default();
+        let outcome = testing::run(|out| exchanges.handle(&offer(NPC), &mut world, out));
+        assert_eq!(
+            refusals(&outcome.events),
+            ["Hold an item or coins on the cursor to hand them over"]
+        );
         let mut world = beside_npc();
         let outcome = testing::run(|out| exchanges.handle(&offer(NPC), &mut world, out));
         outcome.result.unwrap();

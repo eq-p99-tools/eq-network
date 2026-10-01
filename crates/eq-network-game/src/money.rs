@@ -1,12 +1,14 @@
-//! Coins outside the purse and moving them: the player picks coins up from
-//! the purse onto the cursor and puts them down in the purse, the bank or a
-//! give or trade window (`OP_MoveCoin`). Servers answer no move; a client
-//! keeps the coins where it put them, as the Titanium client does.
+//! The player's coins and moving them: the player picks coins up from the
+//! purse onto the cursor and puts them down in the purse, the bank or a give
+//! or trade window (`OP_MoveCoin`). Servers answer no move, and say what the
+//! purse holds only now and then, so a [`Wallet`](crate::money::Wallet)
+//! keeps the coins where the player put them, as the Titanium client does.
 //!
 //! Layout reference: `EQEmu`'s Titanium `MoveCoin_Struct`
 //! (`common/patches/titanium_structs.h`) and `Client::OPMoveCoin`
 //! (`zone/client_process.cpp`), which converts between kinds and never takes
-//! more than a place holds.
+//! more than a place holds; `Client::TakeMoneyFromPP` and
+//! `Client::AddMoneyToPP` (`zone/client.cpp`) for purchases and loot.
 use crate::{command::EncodedCommand, world::Coins};
 use anyhow::{ensure, Result};
 use serde::Serialize;
@@ -140,6 +142,115 @@ impl CoinTransfer {
     }
 }
 
+/// Where the player's coins are. Servers answer no coin move, so whoever
+/// sends the moves keeps this, as the Titanium client does; a money update
+/// replaces the purse.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize)]
+pub struct Wallet {
+    /// The purse, once admission has said what it holds.
+    pub purse: Option<Coins>,
+    /// On the cursor.
+    pub cursor: Coins,
+    /// In the bank, once admission has said.
+    pub bank: Option<Coins>,
+    /// What the player put in the open give or trade window.
+    pub given: Coins,
+    /// What the other player put in the trade.
+    pub offered: Coins,
+}
+
+impl Wallet {
+    /// The coins in a place, where they are known.
+    #[must_use]
+    pub const fn get(&self, place: CoinPlace) -> Option<Coins> {
+        match place {
+            CoinPlace::Purse => self.purse,
+            CoinPlace::Cursor => Some(self.cursor),
+            CoinPlace::Bank => self.bank,
+            CoinPlace::Trade => Some(self.given),
+        }
+    }
+
+    fn place(&mut self, place: CoinPlace) -> Option<&mut Coins> {
+        match place {
+            CoinPlace::Purse => self.purse.as_mut(),
+            CoinPlace::Cursor => Some(&mut self.cursor),
+            CoinPlace::Bank => self.bank.as_mut(),
+            CoinPlace::Trade => Some(&mut self.given),
+        }
+    }
+
+    /// Moves coins as servers count them ([`CoinTransfer::amounts`]).
+    ///
+    /// # Errors
+    /// Refuses a move that moves nothing, or whose source does not hold
+    /// what it takes or whose destination is not known yet; servers log
+    /// such a move as a possible hack.
+    pub fn apply(&mut self, transfer: CoinTransfer) -> Result<(), &'static str> {
+        let (taken, added) = transfer.amounts();
+        if taken == 0 {
+            return Err("Too few coins to change into that kind");
+        }
+        if self
+            .get(transfer.from)
+            .is_none_or(|coins| coins.of(transfer.coin) < taken)
+        {
+            return Err("You do not have that many coins there");
+        }
+        if self.get(transfer.to).is_none() {
+            return Err("Those coins are not known yet");
+        }
+        if let Some(from) = self.place(transfer.from) {
+            *from.of_mut(transfer.coin) -= taken;
+        }
+        if let Some(to) = self.place(transfer.to) {
+            *to.of_mut(transfer.into) = to.of(transfer.into).saturating_add(added);
+        }
+        Ok(())
+    }
+
+    /// Adds coins looted from a corpse to the purse kind by kind, as servers
+    /// do without a money update (`EQEmu`'s four-kind
+    /// `Client::AddMoneyToPP`).
+    pub fn add_to_purse(&mut self, coins: Coins) {
+        if let Some(purse) = self.purse.as_mut() {
+            for coin in Coin::ALL {
+                *purse.of_mut(coin) = purse.of(coin).saturating_add(coins.of(coin));
+            }
+        }
+    }
+
+    /// Takes a purchase's price from the purse as `EQEmu` does without a
+    /// money update (`Client::TakeMoneyFromPP`): copper first, then each
+    /// larger kind in turn, the coins that cover what is still owed coming
+    /// back as change in their own and smaller kinds. The kinds matter: a
+    /// coin move the server's purse cannot cover is logged as a hack. A
+    /// purse holding less than the price is emptied, as it was wrong already
+    /// and too few is safer than coins the server does not have.
+    pub fn pay(&mut self, price: u64) {
+        const SMALLEST_FIRST: [Coin; 4] = [Coin::Copper, Coin::Silver, Coin::Gold, Coin::Platinum];
+        let Some(purse) = self.purse.as_mut() else {
+            return;
+        };
+        let mut owed = price;
+        for (index, coin) in SMALLEST_FIRST.into_iter().enumerate() {
+            let pile = u64::from(purse.of(coin)) * u64::from(coin.copper());
+            *purse.of_mut(coin) = 0;
+            if pile > owed {
+                let mut change = pile - owed;
+                for smaller in SMALLEST_FIRST[..=index].iter().rev() {
+                    let worth = u64::from(smaller.copper());
+                    let count = u32::try_from(change / worth).unwrap_or(u32::MAX);
+                    *purse.of_mut(*smaller) = purse.of(*smaller).saturating_add(count);
+                    change %= worth;
+                }
+                return;
+            }
+            owed -= pile;
+        }
+    }
+}
+
 impl Coins {
     /// How many of one kind.
     #[must_use]
@@ -258,6 +369,86 @@ mod tests {
         assert_eq!(exchange(Coin::Gold, Coin::Platinum, 9), (0, 0));
         assert_eq!(exchange(Coin::Platinum, Coin::Copper, 2), (2, 2000));
         assert_eq!(exchange(Coin::Silver, Coin::Silver, 7), (7, 7));
+    }
+
+    #[test]
+    fn a_wallet_moves_only_what_a_place_holds() {
+        let mut wallet = Wallet {
+            purse: Some(Coins {
+                gold: 12,
+                ..Coins::default()
+            }),
+            bank: Some(Coins::default()),
+            ..Wallet::default()
+        };
+        let pick_up = CoinTransfer {
+            from: CoinPlace::Purse,
+            to: CoinPlace::Cursor,
+            coin: Coin::Gold,
+            into: Coin::Gold,
+            amount: 11,
+        };
+        wallet.apply(pick_up).unwrap();
+        assert_eq!(wallet.cursor.of(Coin::Gold), 11);
+        assert_eq!(wallet.purse.unwrap().of(Coin::Gold), 1);
+        assert!(wallet.apply(pick_up).is_err(), "only one gold is left");
+        // Into the bank's platinum: one platinum arrives, one gold stays.
+        wallet
+            .apply(CoinTransfer {
+                from: CoinPlace::Cursor,
+                to: CoinPlace::Bank,
+                into: Coin::Platinum,
+                ..pick_up
+            })
+            .unwrap();
+        assert_eq!(wallet.bank.unwrap().of(Coin::Platinum), 1);
+        assert_eq!(wallet.cursor.of(Coin::Gold), 1);
+        // Too few to change kind, or to a place not known yet.
+        let mut unknown = Wallet::default();
+        assert!(unknown
+            .apply(CoinTransfer {
+                amount: 1,
+                ..pick_up
+            })
+            .is_err());
+    }
+
+    #[test]
+    fn purchases_and_loot_change_the_purse_kind_by_kind_as_servers_do() {
+        let coins = |platinum, gold, silver, copper| Coins {
+            platinum,
+            gold,
+            silver,
+            copper,
+        };
+        let paid = |purse, price| {
+            let mut wallet = Wallet {
+                purse: Some(purse),
+                ..Wallet::default()
+            };
+            wallet.pay(price);
+            wallet.purse.unwrap()
+        };
+        // Copper first: the live check's purchase at a local server.
+        assert_eq!(paid(coins(0, 2, 17, 62), 10), coins(0, 2, 17, 52));
+        // Then silver, the change coming back in copper.
+        assert_eq!(paid(coins(0, 1, 3, 0), 25), coins(0, 1, 0, 5));
+        // A platinum covering the rest comes back as every smaller kind.
+        assert_eq!(paid(coins(2, 0, 0, 4), 129), coins(1, 8, 7, 5));
+        assert_eq!(paid(coins(1, 0, 0, 5), 5), coins(1, 0, 0, 0));
+        // A purse that cannot cover the price was wrong; it empties.
+        assert_eq!(paid(coins(0, 0, 9, 9), 500), Coins::default());
+        let mut wallet = Wallet {
+            purse: Some(coins(0, 2, 17, 52)),
+            ..Wallet::default()
+        };
+        wallet.add_to_purse(coins(0, 0, 12, 3));
+        assert_eq!(wallet.purse, Some(coins(0, 2, 29, 55)));
+        // Nothing is known before admission, and nothing is guessed.
+        let mut unknown = Wallet::default();
+        unknown.add_to_purse(coins(0, 1, 0, 0));
+        unknown.pay(1);
+        assert_eq!(unknown.purse, None);
     }
 
     #[test]
