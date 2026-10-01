@@ -373,36 +373,10 @@ mod tests {
     use super::*;
     use eq_network_game::GameDialect;
     use eq_network_game::{
-        inventory::{InventoryItem, InventorySlot, MoveQuantity, MOVE_OPCODE},
+        inventory::{InventorySlot, MoveQuantity, MOVE_OPCODE},
         merchant::MerchantUpdate,
     };
-
-    /// A plain item in this slot.
-    fn item(slot: i32) -> InventoryItem {
-        InventoryItem {
-            activation: eq_network_game::inventory::ItemActivation::default(),
-            scroll_spell: None,
-            rules: eq_network_game::inventory::ItemPlacement::default(),
-            slot: InventorySlot(slot),
-            icon: 0,
-            stack_count: None,
-            charges: 0,
-            bag_slots: 0,
-            details: eq_network_game::items::ItemDetails {
-                equipment: None,
-                bonuses: None,
-                id: 42,
-                name: "Synthetic item".into(),
-                lore: String::new(),
-                weight_tenths: 0,
-                slots: 0,
-                classes: 0,
-                races: 0,
-                flags: vec![],
-                stats: vec![],
-            },
-        }
-    }
+    use testing::item;
 
     /// An inventory with one item moved to the cursor by an unanswered prediction.
     fn predicted() -> Inventory {

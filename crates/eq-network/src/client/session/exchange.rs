@@ -9,7 +9,6 @@ use super::{
 use anyhow::Result;
 use eq_network_game::{
     exchange::{self, ExchangeUpdate, Partner},
-    inventory::InventorySlot,
     message::Message,
     world::{SpawnKind, WorldEvent},
 };
@@ -88,8 +87,9 @@ fn refused(session_id: u64, reason: &str, out: &mut Out<'_, '_>) -> Result<()> {
 }
 
 impl Exchanges {
-    /// Asks a visible character within reach, while the player holds an item
-    /// to hand over.
+    /// Asks a visible character within reach. What the player must hold to
+    /// ask (an item or coins on the cursor) is the front end's rule, since
+    /// the session does not see the coins on the cursor.
     fn offer(
         with_id: u16,
         session_id: u64,
@@ -113,9 +113,6 @@ impl Exchanges {
             };
             if !exchange::in_reach(position, spawn) {
                 return Err("You are too far away to trade");
-            }
-            if !world.inventory.items().contains_key(&InventorySlot::CURSOR) {
-                return Err("Hold an item on the cursor to hand it over");
             }
             Ok((own_id, partner))
         };
@@ -254,17 +251,13 @@ impl Feature for Exchanges {
 
 #[cfg(test)]
 mod tests {
-    use super::super::{feature::testing, inventory::Carried};
+    use super::super::feature::testing;
     use super::*;
-    use eq_network_game::{
-        inventory::{Inventory, InventoryUpdate},
-        world::Position,
-    };
+    use eq_network_game::world::Position;
 
     const NPC: u16 = 42;
 
-    /// An admitted player (7) beside an NPC (42) and a corpse (43), holding
-    /// an item on the cursor.
+    /// An admitted player (7) beside an NPC (42) and a corpse (43).
     fn beside_npc() -> World {
         let mut world = World::new(5);
         world.player.admit(testing::player(7));
@@ -279,9 +272,6 @@ mod tests {
             ..Position::default()
         };
         world.spawns.insert(far);
-        let mut inventory = Inventory::default();
-        inventory.apply(InventoryUpdate::Snapshot(vec![testing::item(30)]));
-        world.inventory = Carried::from(inventory);
         world
     }
 
@@ -306,7 +296,7 @@ mod tests {
     }
 
     #[test]
-    fn only_a_character_in_reach_is_asked_while_an_item_is_on_the_cursor() {
+    fn only_a_character_in_reach_is_asked() {
         let mut exchanges = Exchanges;
         for with_id in [43, 44, 45] {
             let mut world = beside_npc();
@@ -316,13 +306,6 @@ mod tests {
             assert_eq!(refusals(&outcome.events).len(), 1, "{with_id}");
             assert!(world.exchange.is_none());
         }
-        let mut world = beside_npc();
-        world.inventory = Carried::default();
-        let outcome = testing::run(|out| exchanges.handle(&offer(NPC), &mut world, out));
-        assert_eq!(
-            refusals(&outcome.events),
-            ["Hold an item on the cursor to hand it over"]
-        );
         let mut world = beside_npc();
         let outcome = testing::run(|out| exchanges.handle(&offer(NPC), &mut world, out));
         outcome.result.unwrap();
