@@ -90,6 +90,9 @@ pub(super) fn needs(command: &ClientCommand) -> &'static [Resource] {
     use Resource::{Casting, Inventory, Spellbook};
     match command {
         ClientCommand::CastSpell { .. } => &[Casting],
+        // `EQEmu` ignores a strike during a cast; bards may strike while they
+        // sing, but the session cannot tell songs apart, so they wait too.
+        ClientCommand::UseAbility { ability, .. } if ability.strikes() => &[Casting],
         ClientCommand::UseItem(_) => &[Casting, Inventory],
         ClientCommand::ScribeSpell { .. } => &[Casting, Spellbook, Inventory],
         ClientCommand::MemorizeSpell { .. }
@@ -128,6 +131,7 @@ pub(super) fn needs(command: &ClientCommand) -> &'static [Resource] {
         | ClientCommand::MoveCoins { .. }
         | ClientCommand::Jump { .. }
         | ClientCommand::AutoAttack { .. }
+        | ClientCommand::UseAbility { .. }
         | ClientCommand::SelectTarget { .. }
         | ClientCommand::ConfigureMotion { .. }
         | ClientCommand::Move(_) => &[],
@@ -172,6 +176,10 @@ fn refusal(command: &ClientCommand, reason: &str) -> Option<WorldEvent> {
             reason: reason.into(),
         },
         ClientCommand::MoveCoins { session_id, .. } => WorldEvent::CoinsRefused {
+            session_id: *session_id,
+            reason: reason.into(),
+        },
+        ClientCommand::UseAbility { session_id, .. } => WorldEvent::AbilityRefused {
             session_id: *session_id,
             reason: reason.into(),
         },

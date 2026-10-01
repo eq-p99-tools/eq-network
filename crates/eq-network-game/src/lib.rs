@@ -1,5 +1,7 @@
 //! World, zone, validation, and chat codecs for EverQuest-compatible servers.
 
+/// Abilities: kick, bash, taunt, hide, sneak, forage and the like.
+pub mod abilities;
 /// Worn gear and features in EQ's texture slots, and wear changes.
 pub mod appearance;
 /// Admission buffs and server-driven buff changes.

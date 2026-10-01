@@ -305,6 +305,16 @@ pub enum GameCommand {
         /// Reject delayed actions instead of replaying them after a stall.
         created: std::time::Instant,
     },
+    /// Use an ability: a strike or taunt at the server-side target, or one
+    /// on the player.
+    UseAbility {
+        /// Current zone admission.
+        session_id: u64,
+        /// The ability.
+        ability: crate::abilities::Ability,
+        /// Reject delayed actions instead of replaying them after a stall.
+        created: std::time::Instant,
+    },
     /// Start or stop melee auto-attack against the current server-side target.
     AutoAttack {
         /// Current zone admission.
@@ -368,6 +378,7 @@ impl GameCommand {
             | Self::MoveCoins { session_id, .. }
             | Self::Jump { session_id, .. }
             | Self::AutoAttack { session_id, .. }
+            | Self::UseAbility { session_id, .. }
             | Self::SelectTarget { session_id, .. }
             | Self::ConfigureMotion { session_id, .. } => Some(*session_id),
         }
@@ -416,6 +427,7 @@ impl GameCommand {
                 }
             }
             Self::SelectTarget { .. } => Capability::Targeting,
+            Self::UseAbility { .. } => Capability::Abilities,
         })
     }
 
@@ -456,6 +468,7 @@ impl GameCommand {
             | Self::MoveCoins { created, .. }
             | Self::Jump { created, .. }
             | Self::AutoAttack { created, .. }
+            | Self::UseAbility { created, .. }
             | Self::ConfigureMotion { created, .. } => Some(*created),
         }
     }
@@ -574,6 +587,7 @@ pub fn encode(
         | GameCommand::Jump { .. }
         | GameCommand::ConfigureMotion { .. }
         | GameCommand::CrossZoneLine { .. }
+        | GameCommand::UseAbility { .. }
         | GameCommand::Camp { .. } => {
             anyhow::bail!("this command requires the admitted session controller")
         }
