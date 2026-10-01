@@ -63,11 +63,18 @@ fn bank_moves_require_current_access_and_preserve_filled_bags() {
         ..actor()
     };
     inventory
-        .submit_move(&action, action.session_id, banker, Instant::now(), |body| {
-            assert_eq!(u32::from_le_bytes(body[..4].try_into().unwrap()), 2000);
-            assert_eq!(u32::from_le_bytes(body[4..8].try_into().unwrap()), 30);
-            Ok(())
-        })
+        .submit_move(
+            &action,
+            action.session_id,
+            banker,
+            Instant::now(),
+            |packet| {
+                let body = &packet.body[..];
+                assert_eq!(u32::from_le_bytes(body[..4].try_into().unwrap()), 2000);
+                assert_eq!(u32::from_le_bytes(body[4..8].try_into().unwrap()), 30);
+                Ok(())
+            },
+        )
         .unwrap();
     assert_eq!(inventory.items[&InventorySlot(331)].stack_count, Some(7));
     assert!(!inventory.items.contains_key(&InventorySlot(2031)));
@@ -178,7 +185,8 @@ fn merging_preserves_remainder_and_encodes_exact_quantity() {
         .is_err());
     assert_eq!(inventory, before);
     inventory
-        .submit_move(&action, 7, actor(), action.created, |body| {
+        .submit_move(&action, 7, actor(), action.created, |packet| {
+            let body = &packet.body[..];
             assert_eq!(&body[8..], &2u32.to_le_bytes());
             Ok(())
         })
@@ -248,7 +256,8 @@ fn whole_bag_move_sends_zero_count_and_relocates_contents() {
     let mut state = state(vec![item(22, None, 8), item(251, Some(7), 0)]);
     let request = request(&state, 22, 23);
     let update = state
-        .submit_move(&request, 7, actor(), request.created, |body| {
+        .submit_move(&request, 7, actor(), request.created, |packet| {
+            let body = &packet.body[..];
             assert_eq!(*body, [22, 0, 0, 0, 23, 0, 0, 0, 0, 0, 0, 0]);
             Ok(())
         })
@@ -270,7 +279,8 @@ fn cursor_swap_preserves_both_items_and_bag_children() {
     ]);
     let action = request(&inventory, 30, 22);
     inventory
-        .submit_move(&action, 7, actor(), action.created, |body| {
+        .submit_move(&action, 7, actor(), action.created, |packet| {
+            let body = &packet.body[..];
             assert_eq!(&body[8..], &[0; 4]);
             Ok(())
         })
@@ -302,7 +312,8 @@ fn split_preserves_remaining_stack_and_server_correction_overrides_prediction() 
     let mut request = request(&state, 22, 23);
     request.quantity = MoveQuantity::Count(NonZeroU32::new(1).unwrap());
     state
-        .submit_move(&request, 7, actor(), request.created, |body| {
+        .submit_move(&request, 7, actor(), request.created, |packet| {
+            let body = &packet.body[..];
             assert_eq!(*body, [22, 0, 0, 0, 23, 0, 0, 0, 1, 0, 0, 0]);
             Ok(())
         })

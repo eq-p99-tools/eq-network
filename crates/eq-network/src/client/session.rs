@@ -6,7 +6,6 @@ mod entities;
 mod feature;
 mod inventory;
 mod lifecycle;
-mod merchant;
 mod motion;
 mod objects;
 mod posture;

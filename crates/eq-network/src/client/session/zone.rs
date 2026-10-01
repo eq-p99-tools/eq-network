@@ -5,13 +5,12 @@ use super::{
     doors::Doors,
     ensure, entities,
     feature::{Feature, Out, World},
-    inventory, le32, merchant, motion, objects, put_string, servers, spellbook, transfers,
-    CharacterSession, ClientCommand, ClientEvent, ConnectionStage, ConnectionState, Context,
-    DecodeError, Duration, Events, Instant, MotionSession, RecordEvent, Result, Session, Shield,
-    ZoneExit,
+    inventory, le32, motion, objects, put_string, servers, spellbook, transfers, CharacterSession,
+    ClientCommand, ClientEvent, ConnectionStage, ConnectionState, Context, DecodeError, Duration,
+    Events, Instant, MotionSession, RecordEvent, Result, Session, Shield, ZoneExit,
 };
 
-use eq_network_game::message::{Message, Part};
+use eq_network_game::message::Message;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ZoneOpcode {
@@ -47,6 +46,7 @@ impl Features {
         Self(vec![
             Box::new(casting::Casting::new(dialect, character)),
             Box::new(spellbook::Spellbook::default()),
+            Box::new(inventory::Belongings::new(dialect, character)),
             Box::new(entities::Entities::default()),
             Box::new(camp::Camp::default()),
             Box::new(Doors::default()),
@@ -179,9 +179,6 @@ pub(super) fn run(
     let mut initial_experience = None;
     let mut initial_level = None;
     let mut initial_skills = std::collections::BTreeMap::new();
-    let mut inventory_actor: Option<eq_network_game::inventory::InventoryActor> = None;
-    let mut trades = merchant::MerchantTrades::default();
-    let mut settlement = inventory::Settlement::default();
     // Wear changes for the player that arrive before its state is built.
     let mut initial_own_wear = Vec::new();
     let mut features = Features::new(config.protocol.into(), &config.character);
@@ -192,24 +189,6 @@ pub(super) fn run(
             session.close()?;
             // The outer run reports Stopped after the session has closed.
             return Ok(ZoneExit::Stopped);
-        }
-        // Servers answer only a refused move, so silence settles the rest.
-        if let Some(update) = settlement.due(&world.inventory, Instant::now()) {
-            world.inventory.apply(update.clone());
-            if world.ready {
-                log.send(ClientEvent::World(crate::world::WorldEvent::Inventory(
-                    update,
-                )))?;
-            }
-        }
-        if trades.expire(Instant::now()) {
-            log.send(ClientEvent::World(
-                crate::world::WorldEvent::MerchantRefused {
-                    session_id,
-                    reason: "The merchant did not accept that offer.".into(),
-                },
-            ))?;
-            log.diagnostic("Merchant trade was not answered; released the inventory".into())?;
         }
         if progress.elapsed() >= Duration::from_secs(30) {
             log.status(
@@ -271,9 +250,7 @@ pub(super) fn run(
                     // flight holds, are refused here and nowhere else.
                     let now = Instant::now();
                     let refusal = actions::stale(&command, session_id, now).or_else(|| {
-                        let mut holds = features.holds(&world, now);
-                        holds.extend(actions::trade_hold(&trades));
-                        actions::Held::new(holds).conflict(&command)
+                        actions::Held::new(features.holds(&world, now)).conflict(&command)
                     });
                     if let Some(reason) = refusal {
                         actions::refuse(&command, reason, log)?;
@@ -337,28 +314,6 @@ pub(super) fn run(
                         log.diagnostic("Rejected an unavailable posture or target".into())?;
                         continue;
                     }
-                    if inventory::handle(
-                        &mut world.inventory,
-                        &mut settlement,
-                        inventory_actor.map(|mut actor| {
-                            actor.bank_access = world.player.as_ref().is_some_and(|player| {
-                                let position = world
-                                    .motion
-                                    .as_ref()
-                                    .map_or(player.position, MotionSession::position);
-                                world.spawns.all().any(|spawn| {
-                                    eq_network_game::inventory::banker_in_range(position, spawn)
-                                })
-                            });
-                            actor
-                        }),
-                        session_id,
-                        &command,
-                        &mut session,
-                        log,
-                    )? {
-                        continue;
-                    }
                     if let Some(motion) = world.motion.as_mut() {
                         let own = (
                             &mut world.posture,
@@ -394,7 +349,6 @@ pub(super) fn run(
                     match command::encode(config.protocol.into(), &command, &config.character) {
                         Ok(packet) => {
                             session.send(packet.opcode, &packet.body)?;
-                            trades.sent(&command, Instant::now());
                             if let ClientCommand::SetPosture {
                                 spawn_id, posture, ..
                             } = &command
@@ -517,18 +471,6 @@ pub(super) fn run(
                             player.apply_skill(skill, value);
                         }
                         world.player = Some(player.clone());
-                        inventory_actor = Some(eq_network_game::inventory::InventoryActor {
-                            bank_access: false,
-                            deity: player.deity,
-                            dual_wield: player
-                                .skills
-                                .as_ref()
-                                .and_then(|skills| skills.get(22))
-                                .copied(),
-                            class: player.class,
-                            race: player.race,
-                            level: player.level,
-                        });
                         world.motion = Some(
                             MotionSession::new(
                                 session_id,
@@ -551,21 +493,12 @@ pub(super) fn run(
                                 log: &mut *log,
                             },
                         )?;
-                        let admission = world.inventory.admission_updates();
                         log.send(ClientEvent::World(crate::world::WorldEvent::BuffSnapshot(
                             eq_network_game::buffs::titanium_profile(&profile_data)?,
                         )))?;
                         log.send(ClientEvent::World(crate::world::WorldEvent::Coins(
                             crate::world::titanium_coins(&profile_data)?,
                         )))?;
-                        world.inventory = eq_network_game::inventory::Inventory::default();
-                        for update in admission {
-                            world.inventory.apply(update.clone());
-                            log.send(ClientEvent::World(crate::world::WorldEvent::Inventory(
-                                update,
-                            )))?;
-                        }
-
                         if let Some(value) = initial_experience.take() {
                             log.send(ClientEvent::World(crate::world::WorldEvent::Experience(
                                 value,
@@ -627,32 +560,10 @@ pub(super) fn run(
                 !matches!(message, Message::LoggedOut),
                 "server logged the character out"
             );
-            let event = match message {
-                Message::Event(event) => event,
-                Message::Unreadable {
-                    part: Part::Inventory,
-                    ..
-                } => {
-                    let update = eq_network_game::inventory::InventoryUpdate::Invalidated;
-                    world.inventory.apply(update.clone());
-                    if world.ready {
-                        log.send(ClientEvent::World(crate::world::WorldEvent::Inventory(
-                            update,
-                        )))?;
-                    }
-                    continue;
-                }
-                _ => continue,
+            let Message::Event(event) = message else {
+                continue;
             };
             match event {
-                crate::world::WorldEvent::Inventory(update) => {
-                    world.inventory.apply(update.clone());
-                    if world.ready {
-                        log.send(ClientEvent::World(crate::world::WorldEvent::Inventory(
-                            update,
-                        )))?;
-                    }
-                }
                 event if world.ready => {
                     match &event {
                         crate::world::WorldEvent::Posture { spawn_id, posture }
@@ -673,27 +584,16 @@ pub(super) fn run(
                             if let Some(player) = world.player.as_mut() {
                                 player.level = *current;
                             }
-                            if let Some(actor) = inventory_actor.as_mut() {
-                                actor.level = *current;
-                            }
                         }
                         crate::world::WorldEvent::Skill { skill_id, value } => {
                             if let Some(player) = world.player.as_mut() {
                                 player.apply_skill(*skill_id, *value);
-                                if let Some(actor) = inventory_actor.as_mut() {
-                                    actor.dual_wield = player
-                                        .skills
-                                        .as_ref()
-                                        .and_then(|skills| skills.get(22))
-                                        .copied();
-                                }
                             }
                         }
                         crate::world::WorldEvent::Death(death)
                             if world.is_player(death.spawn_id) =>
                         {
                             world.lifecycle.mark_dead();
-                            trades.clear();
                             if let Some(motion) = world.motion.as_mut() {
                                 motion.suspend();
                             }
@@ -701,15 +601,6 @@ pub(super) fn run(
                             log.diagnostic(
                                 "Own character died; waiting for the server bind offer".into(),
                             )?;
-                        }
-                        // A sale's echo is the only notice that the item left.
-                        crate::world::WorldEvent::Merchant(update) => {
-                            if let Some(change) = trades.observe(update) {
-                                world.inventory.apply(change.clone());
-                                log.send(ClientEvent::World(crate::world::WorldEvent::Inventory(
-                                    change,
-                                )))?;
-                            }
                         }
                         _ => (),
                     }

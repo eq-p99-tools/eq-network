@@ -6,7 +6,7 @@
 //! module only turns their current state into held resources and refuses any
 //! command that needs one of them, or that was made for an earlier admission or
 //! too long ago, so these are decided in one place instead of by per-action guards.
-use super::{casting, merchant::MerchantTrades, ClientCommand, ClientEvent, Events};
+use super::{casting, ClientCommand, ClientEvent, Events};
 use anyhow::Result;
 use eq_network_game::{
     spells::BookActionStatus,
@@ -68,12 +68,10 @@ impl Held {
         Self(holds)
     }
 
-    /// The holds of a cast and a trade in flight.
+    /// The hold of a cast in flight.
     #[cfg(test)]
-    fn from_state(cast_guard: &casting::CastGuard, trades: &MerchantTrades) -> Self {
-        let mut held: Vec<_> = cast_guard.hold().into_iter().collect();
-        held.extend(trade_hold(trades));
-        Self(held)
+    fn casting(cast_guard: &casting::CastGuard) -> Self {
+        Self(cast_guard.hold().into_iter().collect())
     }
 
     /// The reason a command must wait, if it needs anything held.
@@ -84,14 +82,6 @@ impl Held {
             .find(|(resource, _)| needs.contains(resource))
             .map(|(_, reason)| *reason)
     }
-}
-
-/// What a purchase or sale waiting for the merchant holds.
-pub(super) fn trade_hold(trades: &MerchantTrades) -> Option<(Resource, &'static str)> {
-    // A sold item leaves only when the merchant echoes the sale.
-    trades
-        .active()
-        .then_some((Resource::Inventory, "Wait for the merchant to answer"))
 }
 
 /// What a command needs exclusively; unlisted commands need nothing here.
@@ -280,14 +270,13 @@ mod tests {
 
     #[test]
     fn holds_refuse_only_commands_that_need_them() {
-        let idle_trades = MerchantTrades::default();
-        let idle = Held::from_state(&CastGuard::default(), &idle_trades);
+        let idle = Held::casting(&CastGuard::default());
         assert_eq!(idle.conflict(&cast()), None);
         assert_eq!(idle.conflict(&memorize()), None);
 
         let mut guard = CastGuard::default();
         guard.submitted(42, Instant::now());
-        let casting = Held::from_state(&guard, &idle_trades);
+        let casting = Held::casting(&guard);
         assert!(casting.conflict(&cast()).is_some());
         assert!(casting.conflict(&memorize()).is_some());
         assert_eq!(
@@ -323,33 +312,11 @@ mod tests {
 
     #[test]
     fn items_move_during_a_cast_only_from_the_cursor() {
-        let trades = MerchantTrades::default();
         let mut guard = CastGuard::default();
         guard.submitted(42, Instant::now());
-        let casting = Held::from_state(&guard, &trades);
+        let casting = Held::casting(&guard);
         assert!(casting.conflict(&move_from(23)).is_some());
         assert!(casting.conflict(&move_from(251)).is_some());
         assert_eq!(casting.conflict(&move_from(30)), None);
-    }
-
-    #[test]
-    fn a_pending_trade_holds_the_inventory_but_not_casting() {
-        let sell = ClientCommand::Sell {
-            session_id: 1,
-            merchant_id: 7,
-            slot: 24,
-            quantity: 1,
-            created: Instant::now(),
-        };
-        let mut trades = MerchantTrades::default();
-        let idle = Held::from_state(&CastGuard::default(), &trades);
-        assert_eq!(idle.conflict(&sell), None);
-        trades.sent(&sell, Instant::now());
-        let trading = Held::from_state(&CastGuard::default(), &trades);
-        assert_eq!(
-            trading.conflict(&sell),
-            Some("Wait for the merchant to answer")
-        );
-        assert_eq!(trading.conflict(&cast()), None);
     }
 }

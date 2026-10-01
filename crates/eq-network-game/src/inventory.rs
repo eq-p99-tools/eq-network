@@ -3,7 +3,7 @@ mod actions;
 mod activation;
 mod banking;
 mod titanium;
-pub use actions::{InventoryActor, InventoryMove, MoveQuantity};
+pub use actions::{InventoryActor, InventoryMove, MoveQuantity, MOVE_OPCODE};
 pub use activation::{ClickEffect, ClickKind, ItemActivation, ItemUse, CAST_OPCODE};
 pub use banking::banker_in_range;
 pub use titanium::decode;

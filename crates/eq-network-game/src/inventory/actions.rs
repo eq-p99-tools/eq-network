@@ -1,5 +1,6 @@
 //! Validated carried, equipment and personal-bank moves. No destroy or trade sentinel is encoded.
 use super::{Inventory, InventoryItem, InventorySlot, InventoryUpdate};
+use crate::command::EncodedCommand;
 use anyhow::{ensure, Context, Result};
 use std::{
     num::NonZeroU32,
@@ -30,6 +31,9 @@ pub struct InventoryMove {
     /// Local enqueue time; old requests cannot replay after a stall.
     pub created: Instant,
 }
+/// `OP_MoveItem`: an item moved between slots.
+pub const MOVE_OPCODE: u16 = 0x420f;
+
 /// Known character eligibility used for equipment checks; the server remains authoritative.
 #[derive(Clone, Copy, Debug)]
 pub struct InventoryActor {
@@ -128,7 +132,7 @@ impl Inventory {
         session_id: u64,
         actor: InventoryActor,
         now: Instant,
-        send: impl FnOnce(&[u8; 12]) -> Result<()>,
+        send: impl FnOnce(&EncodedCommand) -> Result<()>,
     ) -> Result<InventoryUpdate> {
         ensure!(
             request.session_id == session_id,
@@ -147,7 +151,10 @@ impl Inventory {
             MoveQuantity::Count(n) => n.get(),
         };
         body[8..].copy_from_slice(&count.to_le_bytes());
-        send(&body)?;
+        send(&EncodedCommand {
+            opcode: MOVE_OPCODE,
+            body: body.to_vec(),
+        })?;
         self.apply(update.clone());
         Ok(update)
     }

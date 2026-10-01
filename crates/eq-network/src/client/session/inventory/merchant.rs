@@ -4,7 +4,7 @@
 //! echo is turned into that inventory change here, as the Titanium client does it.
 //! An offer the server refuses is never answered, so an unanswered trade releases
 //! after a timeout instead of holding the inventory forever.
-use super::ClientCommand;
+use crate::client::ClientCommand;
 use eq_network_game::{
     inventory::{InventorySlot, InventoryUpdate},
     merchant::MerchantUpdate,
