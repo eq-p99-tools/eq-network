@@ -325,6 +325,13 @@ pub enum GameCommand {
         /// Reject delayed actions instead of replaying them after a stall.
         created: std::time::Instant,
     },
+    /// Ask the world who is online: `/who all`.
+    WhoAll {
+        /// Current zone admission.
+        session_id: u64,
+        /// Which players to ask about.
+        filter: crate::who::WhoFilter,
+    },
     /// Start or stop melee auto-attack against the current server-side target.
     AutoAttack {
         /// Current zone admission.
@@ -390,6 +397,7 @@ impl GameCommand {
             | Self::AutoAttack { session_id, .. }
             | Self::Consume { session_id, .. }
             | Self::UseAbility { session_id, .. }
+            | Self::WhoAll { session_id, .. }
             | Self::SelectTarget { session_id, .. }
             | Self::ConfigureMotion { session_id, .. } => Some(*session_id),
         }
@@ -439,6 +447,7 @@ impl GameCommand {
             }
             Self::SelectTarget { .. } => Capability::Targeting,
             Self::UseAbility { .. } => Capability::Abilities,
+            Self::WhoAll { .. } => Capability::Who,
         })
     }
 
@@ -453,6 +462,7 @@ impl GameCommand {
             | Self::InspectItem { .. }
             | Self::EndLoot { .. }
             | Self::CancelTrade { .. }
+            | Self::WhoAll { .. }
             | Self::SelectTarget { .. } => None,
             Self::UseItem(request) => Some(request.created),
             Self::MoveInventory(request) => Some(request.created),
@@ -593,6 +603,7 @@ pub fn encode(
         | GameCommand::CrossZoneLine { .. }
         | GameCommand::Consume { .. }
         | GameCommand::UseAbility { .. }
+        | GameCommand::WhoAll { .. }
         | GameCommand::UseItem(_)
         | GameCommand::MemorizeSpell { .. }
         | GameCommand::ForgetSpell { .. }

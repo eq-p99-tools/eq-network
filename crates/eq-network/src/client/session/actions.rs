@@ -134,6 +134,7 @@ pub(super) fn needs(command: &ClientCommand) -> &'static [Resource] {
         | ClientCommand::AutoAttack { .. }
         | ClientCommand::UseAbility { .. }
         | ClientCommand::SelectTarget { .. }
+        | ClientCommand::WhoAll { .. }
         | ClientCommand::ConfigureMotion { .. }
         | ClientCommand::Move(_) => &[],
     }
@@ -239,6 +240,7 @@ fn refusal(command: &ClientCommand, reason: &str) -> Option<WorldEvent> {
         | ClientCommand::CancelTrade { .. }
         | ClientCommand::Jump { .. }
         | ClientCommand::AutoAttack { .. }
+        | ClientCommand::WhoAll { .. }
         | ClientCommand::ConfigureMotion { .. }
         | ClientCommand::Move(_) => return None,
     })
