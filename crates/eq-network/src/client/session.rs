@@ -1,15 +1,20 @@
 mod actions;
 mod camp;
 mod casting;
+mod character;
+mod combat;
 mod doors;
 mod entities;
 mod feature;
 mod inventory;
 mod lifecycle;
+mod looting;
 mod motion;
 mod objects;
 mod posture;
 mod spellbook;
+mod talk;
+mod targeting;
 mod transfers;
 mod zone;
 
@@ -24,7 +29,7 @@ use crate::{
     transport::{Application, Session},
 };
 use anyhow::{bail, ensure, Context, Result};
-use eq_network_game::{command, zoning};
+use eq_network_game::zoning;
 use eq_network_login::{
     crypto::{des_decrypt, DesKeyIv},
     login::{encrypt_login_credentials, is_bad_password_login_result},

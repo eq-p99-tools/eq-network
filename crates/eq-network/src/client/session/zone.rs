@@ -1,13 +1,14 @@
 //! The zone session: admission, the player's commands and the zone's traffic
 //! until the character leaves for another zone, the world or the character list.
 use super::{
-    actions, bail, camp, casting, chat, command, cstr,
+    actions, bail, camp, casting, character, chat, combat, cstr,
     doors::Doors,
     ensure, entities,
-    feature::{Feature, Out, World},
-    inventory, le32, motion, objects, put_string, servers, spellbook, transfers, CharacterSession,
-    ClientCommand, ClientEvent, ConnectionStage, ConnectionState, Context, DecodeError, Duration,
-    Events, Instant, RecordEvent, Result, Session, Shield, ZoneExit,
+    feature::{Encoder, Feature, Out, World},
+    inventory, le32, looting, motion, objects, put_string, servers, spellbook, talk, targeting,
+    transfers, CharacterSession, ClientCommand, ClientEvent, ConnectionStage, ConnectionState,
+    Context, DecodeError, Duration, Events, Instant, RecordEvent, Result, Session, Shield,
+    ZoneExit,
 };
 
 use eq_network_game::message::Message;
@@ -42,17 +43,23 @@ struct Features(Vec<Box<dyn Feature>>);
 
 impl Features {
     /// Every feature a Titanium zone session has.
-    fn new(dialect: eq_network_game::GameDialect, character: &str, falls: bool) -> Self {
+    fn new(dialect: eq_network_game::GameDialect, name: &str, falls: bool) -> Self {
+        let encoder = Encoder::new(dialect, name);
         Self(vec![
-            Box::new(casting::Casting::new(dialect, character)),
+            Box::new(casting::Casting::new(encoder.clone())),
             Box::new(spellbook::Spellbook::default()),
-            Box::new(inventory::Belongings::new(dialect, character)),
-            Box::new(motion::Motion::new(dialect, character, falls)),
+            Box::new(inventory::Belongings::new(encoder.clone())),
+            Box::new(motion::Motion::new(encoder.clone(), falls)),
+            Box::new(character::Character),
             Box::new(entities::Entities::default()),
+            Box::new(targeting::Targeting::new(encoder.clone())),
+            Box::new(combat::Combat::new(encoder.clone())),
+            Box::new(looting::Looting::new(encoder.clone())),
+            Box::new(talk::Talk::new(encoder)),
             Box::new(camp::Camp::default()),
             Box::new(Doors::default()),
             Box::new(objects::GroundObjects::default()),
-            Box::new(transfers::Transfers::new(character)),
+            Box::new(transfers::Transfers::new(name)),
         ])
     }
 
@@ -257,83 +264,14 @@ pub(super) fn run(
                         session.close()?;
                         return Ok(exit);
                     }
-                    if handled {
-                        // Commands wait while the player is dead or zoning.
-                        if world.lifecycle.is_dead() || world.lifecycle.pending().is_some() {
-                            break;
-                        }
-                        continue;
+                    if !handled {
+                        log.diagnostic(
+                            "Rejected a command this zone session does not take".into(),
+                        )?;
                     }
-                    let action_valid = match &command {
-                        ClientCommand::Consider {
-                            own_id, target_id, ..
-                        } => {
-                            world
-                                .player
-                                .as_ref()
-                                .is_some_and(|player| player.spawn_id == *own_id)
-                                && world.spawns.visible(*target_id).is_some()
-                        }
-                        ClientCommand::Loot {
-                            corpse_id: entity, ..
-                        }
-                        | ClientCommand::Shop {
-                            merchant_id: entity,
-                            ..
-                        } => world.spawns.visible(*entity).is_some_and(|spawn| {
-                            if matches!(command, ClientCommand::Loot { .. }) {
-                                matches!(
-                                    spawn.kind,
-                                    crate::world::SpawnKind::NpcCorpse
-                                        | crate::world::SpawnKind::PlayerCorpse
-                                )
-                            } else {
-                                spawn.kind == crate::world::SpawnKind::Npc
-                            }
-                        }),
-                        _ => true,
-                    };
-                    if !action_valid {
-                        log.diagnostic("Rejected an unavailable posture or target".into())?;
-                        continue;
-                    }
-                    if let ClientCommand::SelectTarget {
-                        session_id: requested_session,
-                        spawn_id,
-                    } = &command
-                    {
-                        if spawn_id.is_some_and(|id| {
-                            world
-                                .player
-                                .as_ref()
-                                .is_none_or(|player| player.spawn_id != id)
-                                && world.spawns.visible(id).is_none()
-                        }) {
-                            log.send(ClientEvent::World(
-                                crate::world::WorldEvent::TargetRejected {
-                                    session_id: *requested_session,
-                                    spawn_id: *spawn_id,
-                                    reason: "Target is invisible or unavailable".into(),
-                                },
-                            ))?;
-                            log.diagnostic("Rejected an unavailable target".into())?;
-                            continue;
-                        }
-                    }
-                    match command::encode(config.protocol.into(), &command, &config.character) {
-                        Ok(packet) => {
-                            session.send(packet.opcode, &packet.body)?;
-                            if let ClientCommand::SelectTarget { spawn_id, .. } = command {
-                                log.send(ClientEvent::World(
-                                    crate::world::WorldEvent::TargetSent(spawn_id),
-                                ))?;
-                            }
-                        }
-                        Err(error) => {
-                            log.diagnostic(format!(
-                                "Rejected invalid outbound client command: {error}"
-                            ))?;
-                        }
+                    // Commands wait while the player is dead or zoning.
+                    if world.lifecycle.is_dead() || world.lifecycle.pending().is_some() {
+                        break;
                     }
                 }
             }
@@ -524,31 +462,7 @@ pub(super) fn run(
                 continue;
             };
             match event {
-                event if world.ready() => {
-                    match &event {
-                        crate::world::WorldEvent::WearChange(change) => {
-                            if let Some(player) = world
-                                .player
-                                .as_mut()
-                                .filter(|player| player.spawn_id == change.spawn_id)
-                            {
-                                player.appearance.apply(change);
-                            }
-                        }
-                        crate::world::WorldEvent::Level { current, .. } => {
-                            if let Some(player) = world.player.as_mut() {
-                                player.level = *current;
-                            }
-                        }
-                        crate::world::WorldEvent::Skill { skill_id, value } => {
-                            if let Some(player) = world.player.as_mut() {
-                                player.apply_skill(*skill_id, *value);
-                            }
-                        }
-                        _ => (),
-                    }
-                    log.send(ClientEvent::World(event))?;
-                }
+                event if world.ready() => log.send(ClientEvent::World(event))?,
                 // Before admission, the player's and the zone's state is
                 // staged for the admission report.
                 crate::world::WorldEvent::Skill { skill_id, value } if skill_id < 100 => {
@@ -592,89 +506,199 @@ pub(super) fn run(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use eq_network_game::{
+        chat::OutboundChat,
+        inventory::{InventoryMove, InventorySlot, ItemUse, MoveQuantity},
+        movement::{MotionCalibration, MovementMode, MovementRequest},
+    };
+
+    /// One of every command a zone session takes.
+    #[allow(clippy::too_many_lines, reason = "one literal for each kind of command")]
+    fn zone_commands() -> Vec<ClientCommand> {
+        let (session_id, created) = (1, Instant::now());
+        let position = crate::world::Position::default();
+        vec![
+            ClientCommand::SwapSpell {
+                session_id,
+                from: 0,
+                to: 1,
+                from_spell: 202,
+                to_spell: None,
+                created,
+            },
+            ClientCommand::UseItem(ItemUse {
+                request_id: 1,
+                session_id,
+                revision: 1,
+                slot: InventorySlot(22),
+                target_id: 7,
+                created,
+            }),
+            ClientCommand::ClickDoor {
+                session_id,
+                door_id: 1,
+                created,
+            },
+            ClientCommand::PickUp {
+                session_id,
+                drop_id: 1,
+                created,
+            },
+            ClientCommand::CrossZoneLine {
+                session_id,
+                destination: eq_network_game::zoning::ZoneLineDestination::Reference(1),
+                position,
+                created,
+            },
+            ClientCommand::ScribeSpell {
+                session_id,
+                revision: 1,
+                slot: 0,
+                spell_id: 202,
+                created,
+            },
+            ClientCommand::DeleteSpell {
+                session_id,
+                slot: 0,
+                spell_id: 202,
+                created,
+            },
+            ClientCommand::ForgetSpell {
+                session_id,
+                gem: 0,
+                spell_id: 202,
+                created,
+            },
+            ClientCommand::MemorizeSpell {
+                session_id,
+                gem: 0,
+                spell_id: 202,
+                created,
+            },
+            ClientCommand::CastSpell {
+                session_id,
+                gem: 0,
+                spell_id: 202,
+                target_id: 7,
+                created,
+            },
+            ClientCommand::SetPosture {
+                session_id,
+                spawn_id: 7,
+                posture: eq_network_game::command::Posture::Sitting,
+                created,
+            },
+            ClientCommand::MoveInventory(InventoryMove {
+                session_id,
+                revision: 1,
+                from: InventorySlot(22),
+                to: InventorySlot(30),
+                quantity: MoveQuantity::Whole,
+                created,
+            }),
+            ClientCommand::SendChat(OutboundChat::Say("Hail".into())),
+            ClientCommand::InspectItem {
+                session_id,
+                link_body: String::new(),
+            },
+            ClientCommand::Consider {
+                session_id,
+                own_id: 7,
+                target_id: 8,
+                created,
+            },
+            ClientCommand::Camp {
+                session_id,
+                created,
+            },
+            ClientCommand::Loot {
+                session_id,
+                corpse_id: 8,
+                created,
+            },
+            ClientCommand::LootItem {
+                session_id,
+                corpse_id: 8,
+                own_id: 7,
+                slot: 0,
+                auto: true,
+                created,
+            },
+            ClientCommand::EndLoot {
+                session_id,
+                corpse_id: 8,
+            },
+            ClientCommand::Shop {
+                session_id,
+                merchant_id: 9,
+                own_id: 7,
+                open: true,
+                created,
+            },
+            ClientCommand::Buy {
+                session_id,
+                merchant_id: 9,
+                own_id: 7,
+                slot: 0,
+                quantity: 1,
+                created,
+            },
+            ClientCommand::Sell {
+                session_id,
+                merchant_id: 9,
+                slot: 22,
+                quantity: 1,
+                created,
+            },
+            ClientCommand::Jump {
+                session_id,
+                created,
+            },
+            ClientCommand::AutoAttack {
+                session_id,
+                enabled: true,
+                created,
+            },
+            ClientCommand::SelectTarget {
+                session_id,
+                spawn_id: None,
+            },
+            ClientCommand::ConfigureMotion {
+                session_id,
+                calibration: MotionCalibration {
+                    units_per_second: 6.0,
+                    velocity_scale: 0.05,
+                    animation: 12,
+                    backward: None,
+                    walk: None,
+                    strafe: None,
+                },
+                created,
+            },
+            ClientCommand::Move(MovementRequest {
+                mode: MovementMode::Forward,
+                session_id,
+                position,
+                created,
+            }),
+        ]
+    }
 
     #[test]
-    fn one_feature_owns_each_command_a_feature_takes() {
+    fn exactly_one_feature_owns_each_command_a_zone_takes() {
         let features = Features::new(eq_network_game::GameDialect::TitaniumP99, "Tester", false);
-        let created = Instant::now();
-        let session_id = 1;
-        for (command, owners) in [
-            (
-                ClientCommand::Camp {
-                    session_id,
-                    created,
-                },
-                1,
-            ),
-            (
-                ClientCommand::ClickDoor {
-                    session_id,
-                    door_id: 1,
-                    created,
-                },
-                1,
-            ),
-            (
-                ClientCommand::PickUp {
-                    session_id,
-                    drop_id: 1,
-                    created,
-                },
-                1,
-            ),
-            (
-                ClientCommand::CrossZoneLine {
-                    session_id,
-                    destination: eq_network_game::zoning::ZoneLineDestination::Reference(1),
-                    position: crate::world::Position::default(),
-                    created,
-                },
-                1,
-            ),
-            (
-                ClientCommand::CastSpell {
-                    session_id,
-                    gem: 0,
-                    spell_id: 202,
-                    target_id: 7,
-                    created,
-                },
-                1,
-            ),
-            (
-                ClientCommand::MemorizeSpell {
-                    session_id,
-                    gem: 0,
-                    spell_id: 202,
-                    created,
-                },
-                1,
-            ),
-            (
-                ClientCommand::SwapSpell {
-                    session_id,
-                    from: 0,
-                    to: 1,
-                    from_spell: 202,
-                    to_spell: None,
-                    created,
-                },
-                1,
-            ),
-            (
-                ClientCommand::SelectTarget {
-                    session_id,
-                    spawn_id: None,
-                },
-                0,
-            ),
-        ] {
+        for command in zone_commands() {
             let owning = features
                 .0
                 .iter()
                 .filter(|feature| feature.owns(&command))
                 .count();
-            assert_eq!(owning, owners, "{command:?}");
+            assert_eq!(owning, 1, "{command:?}");
         }
+        let selection = ClientCommand::SelectCharacter {
+            selection_id: 1,
+            slot: 0,
+        };
+        assert!(!features.0.iter().any(|feature| feature.owns(&selection)));
     }
 }

@@ -11,10 +11,11 @@ use super::{
 };
 use anyhow::{Context, Result};
 use eq_network_game::{
-    command::EncodedCommand,
+    command::{self, EncodedCommand},
     inventory::Inventory,
     message::Message,
     world::{PlayerState, Position},
+    GameDialect,
 };
 use std::time::Instant;
 
@@ -86,6 +87,51 @@ impl Out<'_, '_> {
             world.packets,
             Some(self.sink.last_received_seconds()),
         )
+    }
+}
+
+/// Encodes host commands in the server's dialect, for the commands that need
+/// nothing from the session's state.
+#[derive(Clone)]
+pub(super) struct Encoder {
+    dialect: GameDialect,
+    /// The player's name, which some packets repeat.
+    character: String,
+}
+
+impl Encoder {
+    pub(super) fn new(dialect: GameDialect, character: &str) -> Self {
+        Self {
+            dialect,
+            character: character.into(),
+        }
+    }
+
+    /// The packet for a command.
+    ///
+    /// # Errors
+    /// Rejects a command the dialect cannot represent.
+    pub(super) fn encode(&self, command: &ClientCommand) -> Result<EncodedCommand> {
+        command::encode(self.dialect, command, &self.character)
+    }
+
+    /// Sends a command; one the dialect cannot represent is only noted. True
+    /// when it went out.
+    ///
+    /// # Errors
+    /// Returns an error when the connection or the host's event handler fails.
+    pub(super) fn send(&self, command: &ClientCommand, out: &mut Out<'_, '_>) -> Result<bool> {
+        match self.encode(command) {
+            Ok(packet) => {
+                out.send(&packet)?;
+                Ok(true)
+            }
+            Err(error) => {
+                out.log
+                    .diagnostic(format!("Rejected invalid outbound client command: {error}"))?;
+                Ok(false)
+            }
+        }
     }
 }
 
@@ -281,6 +327,26 @@ pub(super) mod testing {
 
         fn last_received_seconds(&self) -> u64 {
             0
+        }
+    }
+
+    /// A visible spawn of this kind, standing at the origin.
+    pub(in crate::client::session) fn spawn(
+        spawn_id: u16,
+        kind: eq_network_game::world::SpawnKind,
+    ) -> eq_network_game::world::SpawnState {
+        eq_network_game::world::SpawnState {
+            class: None,
+            spawn_id,
+            name: format!("Spawn {spawn_id}"),
+            kind,
+            race: 1,
+            gender: 0,
+            position: eq_network_game::world::Position::default(),
+            velocity: [0.0; 3],
+            size: 6.0,
+            invisible: false,
+            appearance: eq_network_game::appearance::Appearance::default(),
         }
     }
 

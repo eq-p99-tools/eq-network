@@ -2,16 +2,14 @@
 //! the host's moves, jumps, calibrations and changes of stance, and the
 //! server's corrections.
 use super::{
-    feature::{Feature, Out, World},
+    feature::{Encoder, Feature, Out, World},
     ClientCommand, ClientEvent,
 };
 use anyhow::Result;
 use eq_network_game::{
-    command,
     message::Message,
     movement::{MotionSession, MovementRequest, PositionPacket, STATIONARY_HEARTBEAT},
     world::{PlayerState, Position, WorldEvent},
-    GameDialect,
 };
 use std::time::Instant;
 
@@ -145,19 +143,14 @@ pub(super) fn withdrawn(session_id: u64) -> WorldEvent {
 
 /// The player's movement and stance.
 pub(super) struct Motion {
-    dialect: GameDialect,
-    character: String,
+    encoder: Encoder,
     /// Whether the server lets the player fall and jump.
     falls: bool,
 }
 
 impl Motion {
-    pub(super) fn new(dialect: GameDialect, character: &str, falls: bool) -> Self {
-        Self {
-            dialect,
-            character: character.into(),
-            falls,
-        }
+    pub(super) fn new(encoder: Encoder, falls: bool) -> Self {
+        Self { encoder, falls }
     }
 
     /// Moves the player, standing them up first if they were sitting or
@@ -264,15 +257,10 @@ impl Motion {
                 .log
                 .diagnostic("Rejected a posture for another spawn".into());
         }
-        match command::encode(self.dialect, command, &self.character) {
-            Ok(packet) => {
-                out.send(&packet)?;
-                world.posture.sent(spawn_id, posture, out.log)
-            }
-            Err(error) => out
-                .log
-                .diagnostic(format!("Rejected invalid outbound client command: {error}")),
+        if self.encoder.send(command, out)? {
+            world.posture.sent(spawn_id, posture, out.log)?;
         }
+        Ok(())
     }
 }
 
@@ -359,7 +347,7 @@ impl Feature for Motion {
 mod tests {
     use super::super::feature::testing;
     use super::*;
-    use eq_network_game::world::PostureState;
+    use eq_network_game::{command, world::PostureState, GameDialect};
     use std::time::Duration;
 
     fn at(x: f32) -> Position {
@@ -407,7 +395,7 @@ mod tests {
         world.admitted = Some(Instant::now());
         world.body.own(7);
         world.body.place(at(1.0));
-        let mut motion = Motion::new(GameDialect::TitaniumP99, "Tester", false);
+        let mut motion = Motion::new(Encoder::new(GameDialect::TitaniumP99, "Tester"), false);
         let now = Instant::now();
         let outcome = testing::run(|out| motion.tick(now, &mut world, out));
         outcome.result.unwrap();
@@ -451,7 +439,7 @@ mod tests {
             },
             created: now.checked_sub(Duration::from_millis(5)).unwrap(),
         };
-        let mut motion = Motion::new(GameDialect::TitaniumP99, "Tester", false);
+        let mut motion = Motion::new(Encoder::new(GameDialect::TitaniumP99, "Tester"), false);
         testing::run(|out| motion.admitted(&mut world, out))
             .result
             .unwrap();
@@ -472,7 +460,7 @@ mod tests {
         world.own_spawn = Some(7);
         world.player = Some(testing::player(7));
         world.admitted = Some(Instant::now());
-        let mut motion = Motion::new(GameDialect::TitaniumP99, "Tester", false);
+        let mut motion = Motion::new(Encoder::new(GameDialect::TitaniumP99, "Tester"), false);
         testing::run(|out| motion.admitted(&mut world, out))
             .result
             .unwrap();
@@ -509,7 +497,7 @@ mod tests {
         let mut world = World::new(5);
         world.own_spawn = Some(7);
         world.player = Some(testing::player(7));
-        let mut motion = Motion::new(GameDialect::TitaniumP99, "Tester", false);
+        let mut motion = Motion::new(Encoder::new(GameDialect::TitaniumP99, "Tester"), false);
         let sit = |spawn_id| ClientCommand::SetPosture {
             session_id: 5,
             spawn_id,
@@ -540,7 +528,7 @@ mod tests {
         world.own_spawn = Some(7);
         world.player = Some(testing::player(7));
         world.admitted = Some(Instant::now());
-        let mut motion = Motion::new(GameDialect::TitaniumP99, "Tester", false);
+        let mut motion = Motion::new(Encoder::new(GameDialect::TitaniumP99, "Tester"), false);
         testing::run(|out| motion.admitted(&mut world, out))
             .result
             .unwrap();

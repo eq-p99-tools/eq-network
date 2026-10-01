@@ -8,16 +8,14 @@ mod merchant;
 
 use super::{
     actions::Resource,
-    feature::{Feature, Out, World},
+    feature::{Encoder, Feature, Out, World},
     ClientCommand, ClientEvent,
 };
 use anyhow::{Context, Result};
 use eq_network_game::{
-    command,
     inventory::{banker_in_range, Inventory, InventoryActor, InventoryMove, InventoryUpdate},
     message::{Message, Part},
-    world::WorldEvent,
-    GameDialect,
+    world::{SpawnKind, WorldEvent},
 };
 use merchant::MerchantTrades;
 use std::time::{Duration, Instant};
@@ -96,17 +94,15 @@ pub(super) struct Belongings {
     settlement: Settlement,
     /// A purchase or sale waiting for the merchant.
     trades: MerchantTrades,
-    dialect: GameDialect,
-    character: String,
+    encoder: Encoder,
 }
 
 impl Belongings {
-    pub(super) fn new(dialect: GameDialect, character: &str) -> Self {
+    pub(super) fn new(encoder: Encoder) -> Self {
         Self {
             settlement: Settlement::default(),
             trades: MerchantTrades::default(),
-            dialect,
-            character: character.into(),
+            encoder,
         }
     }
 
@@ -155,16 +151,28 @@ impl Belongings {
 
     /// Buys or sells; the merchant's echo settles the trade.
     fn trade(&mut self, command: &ClientCommand, out: &mut Out<'_, '_>) -> Result<()> {
-        match command::encode(self.dialect, command, &self.character) {
-            Ok(packet) => {
-                out.send(&packet)?;
-                self.trades.sent(command, Instant::now());
-                Ok(())
-            }
-            Err(error) => out
-                .log
-                .diagnostic(format!("Rejected invalid outbound client command: {error}")),
+        if self.encoder.send(command, out)? {
+            self.trades.sent(command, Instant::now());
         }
+        Ok(())
+    }
+
+    /// Opens or closes a merchant's window; only a merchant the player can
+    /// see will trade.
+    fn shop(&self, command: &ClientCommand, world: &World, out: &mut Out<'_, '_>) -> Result<()> {
+        let ClientCommand::Shop { merchant_id, .. } = command else {
+            return Ok(());
+        };
+        let merchant = world
+            .spawns
+            .visible(*merchant_id)
+            .is_some_and(|spawn| spawn.kind == SpawnKind::Npc);
+        if !merchant {
+            return out
+                .log
+                .diagnostic("Rejected an unavailable merchant".into());
+        }
+        self.encoder.send(command, out).map(drop)
     }
 }
 
@@ -201,6 +209,7 @@ impl Feature for Belongings {
         matches!(
             command,
             ClientCommand::MoveInventory(_)
+                | ClientCommand::Shop { .. }
                 | ClientCommand::Buy { .. }
                 | ClientCommand::Sell { .. }
         )
@@ -214,6 +223,7 @@ impl Feature for Belongings {
     ) -> Result<()> {
         match command {
             ClientCommand::MoveInventory(request) => self.move_item(request, world, out),
+            ClientCommand::Shop { .. } => self.shop(command, world, out),
             _ => self.trade(command, out),
         }
     }
@@ -270,6 +280,7 @@ impl Feature for Belongings {
 mod tests {
     use super::super::{actions::Held, feature::testing};
     use super::*;
+    use eq_network_game::GameDialect;
     use eq_network_game::{
         inventory::{InventoryItem, InventorySlot, MoveQuantity, MOVE_OPCODE},
         merchant::MerchantUpdate,
@@ -312,7 +323,7 @@ mod tests {
 
     /// Admitted player 7, carrying one item in slot 22.
     fn admitted() -> (Belongings, World) {
-        let mut belongings = Belongings::new(GameDialect::TitaniumP99, "Tester");
+        let mut belongings = Belongings::new(Encoder::new(GameDialect::TitaniumP99, "Tester"));
         let mut world = World::new(5);
         let snapshot = Message::Event(WorldEvent::Inventory(InventoryUpdate::Snapshot(vec![
             item(22),
@@ -361,7 +372,7 @@ mod tests {
     fn the_admission_reports_the_inventory_staged_before_it() {
         let (_, world) = admitted();
         assert!(world.inventory.items().contains_key(&InventorySlot(22)));
-        let mut belongings = Belongings::new(GameDialect::TitaniumP99, "Tester");
+        let mut belongings = Belongings::new(Encoder::new(GameDialect::TitaniumP99, "Tester"));
         let mut world = World::new(5);
         let snapshot = Message::Event(WorldEvent::Inventory(InventoryUpdate::Snapshot(vec![
             item(22),

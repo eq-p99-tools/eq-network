@@ -31,6 +31,12 @@ impl Spawns {
         self.0.values()
     }
 
+    /// Puts a spawn in the zone for a test.
+    #[cfg(test)]
+    pub(super) fn insert(&mut self, spawn: SpawnState) {
+        self.0.insert(spawn.spawn_id, spawn);
+    }
+
     /// Records what an event says about the zone's spawns.
     fn apply(&mut self, event: &WorldEvent) {
         match event {
@@ -148,23 +154,8 @@ impl Feature for Entities {
 mod tests {
     use super::super::feature::testing;
     use super::*;
-    use eq_network_game::world::{Position, SpawnKind};
-
-    fn spawn(spawn_id: u16, kind: SpawnKind) -> SpawnState {
-        SpawnState {
-            class: None,
-            spawn_id,
-            name: format!("Spawn {spawn_id}"),
-            kind,
-            race: 1,
-            gender: 0,
-            position: Position::default(),
-            velocity: [0.0; 3],
-            size: 6.0,
-            invisible: false,
-            appearance: eq_network_game::appearance::Appearance::default(),
-        }
-    }
+    use eq_network_game::world::SpawnKind;
+    use testing::spawn;
 
     fn event(event: WorldEvent) -> Message {
         Message::Event(event)
