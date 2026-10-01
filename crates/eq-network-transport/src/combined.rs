@@ -20,7 +20,8 @@ pub struct CombinedPacket {
 }
 
 impl CombinedPacket {
-    /// Parse sub-packet boundaries from a combined transport packet.
+    /// Parse sub-packet boundaries from a combined transport packet, stopping
+    /// at the first part that does not fit. Every part has a one-byte length.
     ///
     /// # Errors
     ///
@@ -36,23 +37,13 @@ impl CombinedPacket {
         }
         let mut pos = start_index + 2;
         let mut subs = Vec::new();
-        while pos < end {
-            if pos >= buf.len() {
-                break;
-            }
-            let mut sublen = buf[pos] as usize;
+        while pos < end.min(buf.len()) {
+            let sublen = usize::from(buf[pos]);
             pos += 1;
-            if sublen == 0xFF {
-                if pos + 2 > end {
-                    break;
-                }
-                sublen = u16::from_be_bytes([buf[pos], buf[pos + 1]]) as usize;
-                pos += 2;
-            }
-            if sublen == 0 || pos + sublen > end {
+            if sublen == 0 || pos + sublen > end.min(buf.len()) {
                 break;
             }
-            let op = if pos + 2 <= buf.len() {
+            let op = if sublen >= 2 {
                 u16::from_be_bytes([buf[pos], buf[pos + 1]])
             } else {
                 0
@@ -78,25 +69,16 @@ impl CombinedPacket {
 ///
 /// # Errors
 ///
-/// Returns [`ProtocolError::CombinedSubPacketTooLong`] when a sub-packet cannot
-/// be represented by the two-byte extended length field.
+/// Returns [`ProtocolError::CombinedSubPacketTooLong`] when a sub-packet is
+/// longer than the 255 bytes a one-byte length can carry.
 pub fn build_combined(sub_packets: &[&[u8]]) -> Result<Vec<u8>> {
-    let mut body = Vec::new();
+    let mut out = (TransportOp::Combined as u16).to_be_bytes().to_vec();
     for sub in sub_packets {
-        let slen = sub.len();
-        if slen >= 0xFF {
-            body.push(0xFF);
-            let length = u16::try_from(slen)
-                .map_err(|_| ProtocolError::CombinedSubPacketTooLong { len: slen })?;
-            body.extend_from_slice(&length.to_be_bytes());
-        } else {
-            body.push(slen.to_le_bytes()[0]);
-        }
-        body.extend_from_slice(sub);
+        let length = u8::try_from(sub.len())
+            .map_err(|_| ProtocolError::CombinedSubPacketTooLong { len: sub.len() })?;
+        out.push(length);
+        out.extend_from_slice(sub);
     }
-    let mut out = Vec::with_capacity(2 + body.len());
-    out.extend_from_slice(&(TransportOp::Combined as u16).to_be_bytes());
-    out.extend_from_slice(&body);
     Ok(out)
 }
 
@@ -114,6 +96,65 @@ pub fn split_combined(data: &[u8]) -> Vec<Vec<u8>> {
         .unwrap_or_default()
 }
 
+/// The parts of an `OP_Combined` body, the bytes after its opcode. Every part
+/// has a one-byte length: `EQEmu` combines only packets of up to 255 bytes
+/// (`reliable_stream_connection.cpp`, `FlushBuffer`), so 255 is a length like
+/// any other, not an escape.
+pub(crate) fn parts(mut body: &[u8]) -> Result<Vec<&[u8]>> {
+    let mut parts = Vec::new();
+    while let Some((&length, rest)) = body.split_first() {
+        let (part, rest) = take(rest, usize::from(length))?;
+        parts.push(part);
+        body = rest;
+    }
+    Ok(parts)
+}
+
+/// The parts of an `OP_AppCombined` body. A length of 255 escapes to the
+/// two-byte length after it, and three of them to a four-byte one (`EQEmu`
+/// `reliable_stream_connection.cpp`, `OP_AppCombined`).
+pub(crate) fn app_parts(mut body: &[u8]) -> Result<Vec<&[u8]>> {
+    let mut parts = Vec::new();
+    while !body.is_empty() {
+        let (length, rest) = match body {
+            [0xff, 0xff, 0xff, a, b, c, d, rest @ ..] => {
+                let length = u32::from_be_bytes([*a, *b, *c, *d]);
+                (usize::try_from(length).unwrap_or(usize::MAX), rest)
+            }
+            [0xff, 0xff, 0xff, rest @ ..] => {
+                return Err(ProtocolError::TooShort {
+                    need: 4,
+                    got: rest.len(),
+                })
+            }
+            [0xff, a, b, rest @ ..] => (usize::from(u16::from_be_bytes([*a, *b])), rest),
+            [0xff, rest @ ..] => {
+                return Err(ProtocolError::TooShort {
+                    need: 2,
+                    got: rest.len(),
+                })
+            }
+            [length, rest @ ..] => (usize::from(*length), rest),
+            [] => unreachable!("the loop stops at the end"),
+        };
+        let (part, rest) = take(rest, length)?;
+        parts.push(part);
+        body = rest;
+    }
+    Ok(parts)
+}
+
+/// Splits off a part of `length` bytes.
+fn take(bytes: &[u8], length: usize) -> Result<(&[u8], &[u8])> {
+    if length > bytes.len() {
+        return Err(ProtocolError::TooShort {
+            need: length,
+            got: bytes.len(),
+        });
+    }
+    Ok(bytes.split_at(length))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -127,5 +168,36 @@ mod tests {
         assert_eq!(transport_opcode(&combined), TransportOp::Combined as u16);
         let subs = split_combined(&combined);
         assert_eq!(subs.len(), 2);
+    }
+
+    #[test]
+    fn combined_parts_of_255_bytes_keep_a_one_byte_length() {
+        let long = [7; 255];
+        let ack = build_ack(1);
+        let combined = build_combined(&[&long, &ack]).unwrap();
+        assert_eq!(combined[2], 255);
+        assert_eq!(split_combined(&combined), [long.to_vec(), ack.to_vec()]);
+        assert_eq!(parts(&combined[2..]).unwrap(), [&long[..], &ack[..]]);
+        assert_eq!(
+            build_combined(&[&[0; 256]]),
+            Err(ProtocolError::CombinedSubPacketTooLong { len: 256 })
+        );
+        assert!(parts(&[3, 1, 2]).is_err());
+    }
+
+    #[test]
+    fn app_combined_lengths_escape_to_two_and_four_bytes() {
+        let long = vec![9; 300];
+        let mut combined = vec![2, 0x10, 0x04, 0xff, 0x01, 0x2c];
+        combined.extend_from_slice(&long);
+        combined.extend_from_slice(&[0xff, 0xff, 0xff, 0, 0, 0, 3, 1, 2, 3]);
+        assert_eq!(
+            app_parts(&combined).unwrap(),
+            [&[0x10, 0x04][..], &long[..], &[1, 2, 3][..]]
+        );
+        for truncated in [&[0xff][..], &[0xff, 1], &[0xff, 0xff, 0xff, 0, 0, 0]] {
+            assert!(app_parts(truncated).is_err());
+        }
+        assert!(app_parts(&[0xff, 0, 4, 1]).is_err());
     }
 }
