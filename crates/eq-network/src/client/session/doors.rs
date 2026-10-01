@@ -113,12 +113,7 @@ mod tests {
     #[test]
     fn clicks_need_a_fresh_request_from_this_admission_after_the_doors_last_changed() {
         let doors = Doors::default();
-        let world = World {
-            session_id: 5,
-            player: None,
-            motion: None,
-            inventory: eq_network_game::inventory::Inventory::default(),
-        };
+        let world = World::new(5);
         let click = |session_id, created| ClientCommand::ClickDoor {
             session_id,
             door_id: 1,

@@ -86,12 +86,7 @@ pub(super) fn run(
     let mut packets = 0u64;
     let mut stationary = [0u8; 36];
     let session_id = rand::random();
-    let mut world = World {
-        session_id,
-        player: None,
-        motion: None,
-        inventory: eq_network_game::inventory::Inventory::default(),
-    };
+    let mut world = World::new(session_id);
     let mut initial_experience = None;
     let mut initial_level = None;
     let mut initial_skills = std::collections::BTreeMap::new();
@@ -102,7 +97,6 @@ pub(super) fn run(
     let mut trades = merchant::MerchantTrades::default();
     let mut settlement = inventory::Settlement::default();
     let mut camp = camp::Camp::default();
-    let mut own_posture = posture::OwnPosture::default();
     let mut zone_points = zoning::ZonePoints::default();
     let mut current_zone = (0u16, 0u16);
     let mut pending_memorization: Option<PendingBookAction> = None;
@@ -182,19 +176,17 @@ pub(super) fn run(
                 status,
             )))?;
         }
-        if camp.logout_due(Instant::now()) {
-            session.send(camp::LOGOUT_OPCODE, &[])?;
-            camp.logout_sent(Instant::now());
-            log.send(ClientEvent::World(crate::world::WorldEvent::Camp(
-                crate::world::CampStatus::LoggingOut,
-            )))?;
-        }
-        if camp.reply_overdue(Instant::now()) {
-            log.send(ClientEvent::World(crate::world::WorldEvent::Camp(
-                crate::world::CampStatus::Camped,
-            )))?;
+        camp.tick(
+            Instant::now(),
+            &mut world,
+            &mut Out {
+                session: &mut session,
+                log: &mut *log,
+            },
+        )?;
+        if let Some(exit) = world.exit.take() {
             session.close()?;
-            return Ok(ZoneExit::CharacterSelect);
+            return Ok(exit);
         }
         if ready && !lifecycle.blocks_motion() {
             if let Some(motion) = world.motion.as_mut() {
@@ -228,14 +220,13 @@ pub(super) fn run(
                         actions::refuse(&command, reason, log)?;
                         continue;
                     }
-                    let own_spawn = world.player.as_ref().map(|player| player.spawn_id);
-                    if camp::handle(
-                        (&mut camp, &mut own_posture),
-                        session_id,
-                        own_spawn,
+                    if camp.handle(
                         &command,
-                        &mut session,
-                        log,
+                        &mut world,
+                        &mut Out {
+                            session: &mut session,
+                            log: &mut *log,
+                        },
                     )? {
                         continue;
                     }
@@ -383,7 +374,7 @@ pub(super) fn run(
                                         &config.character,
                                     )?;
                                     session.send(sit.opcode, &sit.body)?;
-                                    own_posture.sent(
+                                    world.posture.sent(
                                         player.spawn_id,
                                         command::Posture::Sitting,
                                         log,
@@ -507,7 +498,7 @@ pub(super) fn run(
                                         &config.character,
                                     )?;
                                     session.send(sit.opcode, &sit.body)?;
-                                    own_posture.sent(
+                                    world.posture.sent(
                                         player.spawn_id,
                                         command::Posture::Sitting,
                                         log,
@@ -726,7 +717,7 @@ pub(super) fn run(
                     }
                     if let Some(motion) = world.motion.as_mut() {
                         let own = (
-                            &mut own_posture,
+                            &mut world.posture,
                             world.player.as_ref().map(|player| player.spawn_id),
                         );
                         if motion::handle(motion, own, session_id, &command, &mut session, log)? {
@@ -773,7 +764,7 @@ pub(super) fn run(
                                 spawn_id, posture, ..
                             } = &command
                             {
-                                own_posture.sent(*spawn_id, *posture, log)?;
+                                world.posture.sent(*spawn_id, *posture, log)?;
                             }
                             if let ClientCommand::CastSpell { spell_id, .. } = &command {
                                 cast_guard.submitted(*spell_id, Instant::now());
@@ -992,12 +983,18 @@ pub(super) fn run(
             }
             continue;
         }
-        if camp.logging_out() && packet.opcode == camp::LOGOUT_REPLY_OPCODE {
-            log.send(ClientEvent::World(crate::world::WorldEvent::Camp(
-                crate::world::CampStatus::Camped,
-            )))?;
+        camp.receive(
+            packet.opcode,
+            &packet.body,
+            &mut world,
+            &mut Out {
+                session: &mut session,
+                log: &mut *log,
+            },
+        )?;
+        if let Some(exit) = world.exit.take() {
             session.close()?;
-            return Ok(ZoneExit::CharacterSelect);
+            return Ok(exit);
         }
         if ready && packet.opcode == 0x5dd8 {
             let pending = lifecycle
@@ -1106,6 +1103,7 @@ pub(super) fn run(
                 let id = u16::try_from(le32(&packet.body[340..344]))
                     .context("spawn ID exceeds Titanium position field")?;
                 stationary[..2].copy_from_slice(&id.to_le_bytes());
+                world.own_spawn = Some(id);
                 spawn_data.clone_from(&packet.body);
                 saw_spawn = true;
             }
@@ -1179,10 +1177,10 @@ pub(super) fn run(
                         log.send(ClientEvent::World(crate::world::WorldEvent::Spawns(
                             initial_spawns.values().cloned().collect(),
                         )))?;
-                        own_posture = posture::OwnPosture::default();
+                        world.posture = posture::OwnPosture::default();
                         for (spawn_id, posture) in std::mem::take(&mut initial_postures) {
                             if spawn_id == u16::from_le_bytes([stationary[0], stationary[1]]) {
-                                own_posture.observed(posture);
+                                world.posture.observed(posture);
                             }
                             log.send(ClientEvent::World(crate::world::WorldEvent::Posture {
                                 spawn_id,
@@ -1362,11 +1360,18 @@ pub(super) fn run(
         if ready {
             match crate::world::titanium_update(packet.opcode, &packet.body) {
                 Ok(Some(event)) => {
+                    let mut out = Out {
+                        session: &mut session,
+                        log: &mut *log,
+                    };
+                    for feature in [&mut doors as &mut dyn Feature, &mut ground, &mut camp] {
+                        feature.observe(&event, &mut world, &mut out)?;
+                    }
                     match &event {
                         crate::world::WorldEvent::Posture { spawn_id, posture }
                             if *spawn_id == u16::from_le_bytes([stationary[0], stationary[1]]) =>
                         {
-                            own_posture.observed(*posture);
+                            world.posture.observed(*posture);
                             if *posture != crate::world::PostureState::Sitting {
                                 spellbook::cancel_pending(
                                     &mut pending_memorization,
@@ -1393,16 +1398,6 @@ pub(super) fn run(
                                 .filter(|player| player.spawn_id == change.spawn_id)
                             {
                                 player.appearance.apply(change);
-                            }
-                        }
-                        crate::world::WorldEvent::Doors(_)
-                        | crate::world::WorldEvent::Objects(_) => {
-                            let mut out = Out {
-                                session: &mut session,
-                                log: &mut *log,
-                            };
-                            for feature in [&mut doors as &mut dyn Feature, &mut ground] {
-                                feature.observe(&event, &mut world, &mut out)?;
                             }
                         }
                         crate::world::WorldEvent::Level { current, .. } => {
@@ -1433,11 +1428,6 @@ pub(super) fn run(
                                 ])) =>
                         {
                             lifecycle.mark_dead();
-                            if camp.cancel() {
-                                log.send(ClientEvent::World(crate::world::WorldEvent::Camp(
-                                    crate::world::CampStatus::Abandoned,
-                                )))?;
-                            }
                             spellbook::cancel_pending(
                                 &mut pending_memorization,
                                 "Character died",

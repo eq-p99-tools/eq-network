@@ -5,13 +5,14 @@
 //! records what the server says about it and takes the host's commands for
 //! it. The zone loop only fans packets and commands out to the features.
 
-use super::{ClientCommand, Events, Session};
+use super::{posture::OwnPosture, ClientCommand, Events, Session, ZoneExit};
 use anyhow::Result;
 use eq_network_game::{
     inventory::Inventory,
     movement::MotionSession,
     world::{PlayerState, Position, WorldEvent},
 };
+use std::time::Instant;
 
 /// Where a feature sends packets and what it tells the host.
 pub(super) struct Out<'a, 'e> {
@@ -31,9 +32,28 @@ pub(super) struct World {
     pub(super) motion: Option<MotionSession>,
     /// The player's inventory.
     pub(super) inventory: Inventory,
+    /// The player's spawn ID, from the zone's first spawn record for them.
+    pub(super) own_spawn: Option<u16>,
+    /// The player's posture as last sent or reported.
+    pub(super) posture: OwnPosture,
+    /// Set by a feature that ends the zone session.
+    pub(super) exit: Option<ZoneExit>,
 }
 
 impl World {
+    /// The shared state of a new admission.
+    pub(super) fn new(session_id: u64) -> Self {
+        Self {
+            session_id,
+            player: None,
+            motion: None,
+            inventory: Inventory::default(),
+            own_spawn: None,
+            posture: OwnPosture::default(),
+            exit: None,
+        }
+    }
+
     /// The admitted player's spawn ID and where they are now.
     pub(super) fn player_at(&self) -> Option<(u16, Position)> {
         let player = self.player.as_ref()?;
@@ -67,6 +87,28 @@ pub(super) trait Feature {
         _out: &mut Out<'_, '_>,
     ) -> Result<bool> {
         Ok(false)
+    }
+
+    /// Takes a packet the world decoder has no event for.
+    ///
+    /// # Errors
+    /// Returns an error when the connection fails.
+    fn receive(
+        &mut self,
+        _opcode: u16,
+        _body: &[u8],
+        _world: &mut World,
+        _out: &mut Out<'_, '_>,
+    ) -> Result<()> {
+        Ok(())
+    }
+
+    /// Runs the feature's timers.
+    ///
+    /// # Errors
+    /// Returns an error when the connection fails.
+    fn tick(&mut self, _now: Instant, _world: &mut World, _out: &mut Out<'_, '_>) -> Result<()> {
+        Ok(())
     }
 
     /// Records a server event once the zone is ready.
