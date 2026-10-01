@@ -13,6 +13,7 @@ use anyhow::Result;
 use eq_network_game::{
     command::EncodedCommand,
     inventory::Inventory,
+    message::Message,
     movement::MotionSession,
     world::{PlayerState, Position, WorldEvent},
 };
@@ -151,8 +152,13 @@ impl World {
 /// One part of the game in the zone session. Each step defaults to doing
 /// nothing, so a feature implements only the steps it takes part in.
 pub(super) trait Feature {
-    /// Records a server event that arrives before the zone is ready.
-    fn admit(&mut self, _event: &WorldEvent) {}
+    /// Records a message that arrives before the zone admits the player.
+    ///
+    /// # Errors
+    /// Returns an error when the message breaks the feature's rules.
+    fn admit(&mut self, _message: &Message) -> Result<()> {
+        Ok(())
+    }
 
     /// What the feature reports to the host when the zone becomes ready.
     fn admission(&self) -> Option<WorldEvent> {
@@ -192,23 +198,6 @@ pub(super) trait Feature {
         Ok(())
     }
 
-    /// Takes a packet before the zone decodes it, and says whether the packet
-    /// was the feature's alone, so that nothing else looks at it. A feature
-    /// that ends the session takes the packet that ended it.
-    ///
-    /// # Errors
-    /// Returns an error when the connection fails or the packet breaks the
-    /// feature's rules.
-    fn receive(
-        &mut self,
-        _opcode: u16,
-        _body: &[u8],
-        _world: &mut World,
-        _out: &mut Out<'_, '_>,
-    ) -> Result<bool> {
-        Ok(false)
-    }
-
     /// Runs the feature's timers.
     ///
     /// # Errors
@@ -217,13 +206,14 @@ pub(super) trait Feature {
         Ok(())
     }
 
-    /// Records a server event once the zone is ready.
+    /// Hears a message once the zone has admitted the player.
     ///
     /// # Errors
-    /// Returns an error when the connection fails.
+    /// Returns an error when the connection fails or the message breaks the
+    /// feature's rules.
     fn observe(
         &mut self,
-        _event: &WorldEvent,
+        _message: &Message,
         _world: &mut World,
         _out: &mut Out<'_, '_>,
     ) -> Result<()> {

@@ -8,6 +8,7 @@ use anyhow::{anyhow, ensure, Result};
 use eq_network_game::{
     command::EncodedCommand,
     inventory::{Inventory, InventorySlot},
+    message::Message,
     objects::{ObjectUpdate, Objects},
     world::{Position, WorldEvent},
 };
@@ -20,10 +21,11 @@ const CURSOR: InventorySlot = InventorySlot(30);
 pub(super) struct GroundObjects(Objects);
 
 impl Feature for GroundObjects {
-    fn admit(&mut self, event: &WorldEvent) {
-        if let WorldEvent::Objects(update) = event {
+    fn admit(&mut self, message: &Message) -> Result<()> {
+        if let Message::Event(WorldEvent::Objects(update)) = message {
             self.0.apply(update);
         }
+        Ok(())
     }
 
     fn admission(&self) -> Option<WorldEvent> {
@@ -63,11 +65,11 @@ impl Feature for GroundObjects {
     /// player, so the server does not keep it in use.
     fn observe(
         &mut self,
-        event: &WorldEvent,
+        message: &Message,
         world: &mut World,
         out: &mut Out<'_, '_>,
     ) -> Result<()> {
-        let WorldEvent::Objects(update) = event else {
+        let Message::Event(WorldEvent::Objects(update)) = message else {
             return Ok(());
         };
         self.0.apply(update);
@@ -121,12 +123,13 @@ mod tests {
 
     fn table() -> GroundObjects {
         let mut objects = GroundObjects::default();
-        objects.admit(&WorldEvent::Objects(ObjectUpdate::Spawn(GroundObject {
+        let spawn = WorldEvent::Objects(ObjectUpdate::Spawn(GroundObject {
             drop_id: 71,
             model: "IT63_ACTORDEF".into(),
             position: Position::default(),
             object_type: 0,
-        })));
+        }));
+        objects.admit(&Message::Event(spawn)).unwrap();
         objects
     }
 

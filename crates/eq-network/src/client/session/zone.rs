@@ -11,6 +11,8 @@ use super::{
     MotionSession, PendingBookAction, RecordEvent, Result, Session, Shield, ZoneExit,
 };
 
+use eq_network_game::message::{Message, Part};
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ZoneOpcode {
     PlayerProfile,
@@ -19,7 +21,6 @@ enum ZoneOpcode {
     ZoneDescription,
     ExperienceUpdate,
     ValidationRejected,
-    LoggedOut,
     Unknown(u16),
 }
 
@@ -32,7 +33,6 @@ impl From<u16> for ZoneOpcode {
             0x0920 => Self::ZoneDescription,
             0x0587 => Self::ExperienceUpdate,
             0x1252 => Self::ValidationRejected,
-            0x3cdc => Self::LoggedOut,
             value => Self::Unknown(value),
         }
     }
@@ -52,11 +52,13 @@ impl Features {
         ])
     }
 
-    /// Records a server event from before the zone admitted the player.
-    fn admit(&mut self, event: &crate::world::WorldEvent) {
+    /// Lets every feature record a message from before the zone admitted the
+    /// player.
+    fn admit(&mut self, message: &Message) -> Result<()> {
         for feature in &mut self.0 {
-            feature.admit(event);
+            feature.admit(message)?;
         }
+        Ok(())
     }
 
     /// What the features tell the client once the zone admits the player.
@@ -85,22 +87,6 @@ impl Features {
         Ok(true)
     }
 
-    /// Offers a packet to each feature until one takes it.
-    fn receive(
-        &mut self,
-        opcode: u16,
-        body: &[u8],
-        world: &mut World,
-        out: &mut Out<'_, '_>,
-    ) -> Result<bool> {
-        for feature in &mut self.0 {
-            if feature.receive(opcode, body, world, out)? {
-                return Ok(true);
-            }
-        }
-        Ok(false)
-    }
-
     /// Runs the features' timers until one ends the session.
     fn tick(&mut self, now: Instant, world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
         for feature in &mut self.0 {
@@ -112,15 +98,19 @@ impl Features {
         Ok(())
     }
 
-    /// Shows each feature a server event once the zone has admitted the player.
+    /// Lets every feature hear a message once the zone has admitted the
+    /// player, until one ends the session.
     fn observe(
         &mut self,
-        event: &crate::world::WorldEvent,
+        message: &Message,
         world: &mut World,
         out: &mut Out<'_, '_>,
     ) -> Result<()> {
         for feature in &mut self.0 {
-            feature.observe(event, world, out)?;
+            feature.observe(message, world, out)?;
+            if world.exit.is_some() {
+                break;
+            }
         }
         Ok(())
     }
@@ -745,86 +735,6 @@ pub(super) fn run(
                 packet.body.len()
             ))?;
         }
-        if world.ready {
-            match eq_network_game::spells::decode(packet.opcode, &packet.body) {
-                Ok(Some(update)) => {
-                    let book_result = book_edits.observe(&update);
-                    scribe_consumption
-                        .observe(&update, book_result == Some(BookActionStatus::Confirmed));
-                    if let Some(player) = world.player.as_ref() {
-                        let pending = cast_guard.pending();
-                        cast_guard.observe(player.spawn_id, &update);
-                        if pending.is_some() && cast_guard.pending().is_none() {
-                            log.send(ClientEvent::World(crate::world::WorldEvent::CastPending {
-                                session_id,
-                                spell_id: None,
-                            }))?;
-                        }
-                        if cast_guard.active() && world.book_action.take().is_some() {
-                            log.send(ClientEvent::World(crate::world::WorldEvent::BookAction(
-                                BookActionStatus::Cancelled("Casting started".into()),
-                            )))?;
-                        }
-                    }
-                    if let Some(book) = admitted_book.as_mut() {
-                        book.apply(&update);
-                    }
-                    if let Some(player) = world.player.as_mut() {
-                        update.apply_gems(&mut player.memorized_spells);
-                    }
-                    log.send(ClientEvent::World(crate::world::WorldEvent::Spell(update)))?;
-                    if let Some(status) = book_result {
-                        log.send(ClientEvent::World(crate::world::WorldEvent::BookAction(
-                            status,
-                        )))?;
-                    }
-                }
-                Ok(None) => (),
-                Err(error) => log.diagnostic(format!("Invalid spell notification: {error}"))?,
-            }
-        }
-        if matches!(packet.opcode, 0x5394 | 0x3397 | 0x420f | 0x4d81 | 0x1c4a) {
-            match eq_network_game::inventory::decode(packet.opcode, &packet.body) {
-                Ok(Some(update)) => {
-                    let update = scribe_consumption.reconcile(&world.inventory, update);
-                    world.inventory.apply(update.clone());
-                    if world.ready {
-                        log.send(ClientEvent::World(crate::world::WorldEvent::Inventory(
-                            update,
-                        )))?;
-                    }
-                    continue;
-                }
-                Err(error) => {
-                    log.diagnostic(format!("Inventory decode rejected: {error}"))?;
-                    let update = eq_network_game::inventory::InventoryUpdate::Invalidated;
-                    world.inventory.apply(update.clone());
-                    if world.ready {
-                        log.send(ClientEvent::World(crate::world::WorldEvent::Inventory(
-                            update,
-                        )))?;
-                    }
-                    continue;
-                }
-                Ok(None) => (),
-            }
-        }
-        let taken = features.receive(
-            packet.opcode,
-            &packet.body,
-            &mut world,
-            &mut Out {
-                sink: &mut session,
-                log: &mut *log,
-            },
-        )?;
-        if let Some(exit) = world.exit.take() {
-            session.close()?;
-            return Ok(exit);
-        }
-        if taken {
-            continue;
-        }
         match ZoneOpcode::from(packet.opcode) {
             ZoneOpcode::PlayerProfile => {
                 ensure!(
@@ -997,7 +907,6 @@ pub(super) fn run(
                 log.diagnostic(format!("Zone login sequence complete for {zone_name}; waiting for ongoing server traffic"))?;
             }
             ZoneOpcode::ValidationRejected => bail!("server rejected zone validation"),
-            ZoneOpcode::LoggedOut => bail!("server logged the character out"),
             _ => (),
         }
         if saw_spawn && saw_profile && saw_weather && !requested {
@@ -1011,122 +920,92 @@ pub(super) fn run(
             requested = true;
             log.send(ClientEvent::Progress(ConnectionStage::EnteringWorld))?;
         }
-        if !world.ready
-            && matches!(
-                packet.opcode,
-                0x4c24
-                    | 0x700d
-                    | 0x77d0
-                    | eq_network_game::objects::SPAWN_OPCODE
-                    | eq_network_game::objects::CLICK_OPCODE
-            )
-        {
-            match crate::world::titanium_update(packet.opcode, &packet.body) {
-                Ok(Some(event)) => {
-                    features.admit(&event);
-                }
-                Err(error) => {
-                    log.diagnostic(format!("Initial door or object rejected: {error}"))?;
-                }
-                Ok(None) => (),
+        // Everything else is read once, the same way before and after
+        // admission, and heard by every feature.
+        for message in eq_network_game::message::titanium(packet.opcode, &packet.body) {
+            if let Message::Unreadable { part, error } = &message {
+                log.diagnostic(format!("{part} rejected: {error}"))?;
             }
-        }
-        if !world.ready && packet.opcode == 0x6a93 {
-            match crate::world::titanium_update(packet.opcode, &packet.body) {
-                Ok(Some(crate::world::WorldEvent::Skill { skill_id, value })) if skill_id < 100 => {
-                    initial_skills.insert(skill_id, value);
-                }
-                Err(error) => log.diagnostic(format!("Initial skill update rejected: {error}"))?,
-                _ => (),
+            if world.ready {
+                features.observe(
+                    &message,
+                    &mut world,
+                    &mut Out {
+                        sink: &mut session,
+                        log: &mut *log,
+                    },
+                )?;
+            } else {
+                features.admit(&message)?;
             }
-        }
-        if !world.ready && matches!(packet.opcode, 0x5ecd | 0x6d44) {
-            match crate::world::titanium_update(packet.opcode, &packet.body) {
-                Ok(Some(crate::world::WorldEvent::Level {
-                    current,
-                    experience,
+            if let Some(exit) = world.exit.take() {
+                session.close()?;
+                return Ok(exit);
+            }
+            ensure!(
+                !matches!(message, Message::LoggedOut),
+                "server logged the character out"
+            );
+            let event = match message {
+                Message::Event(event) => event,
+                Message::Unreadable {
+                    part: Part::Inventory,
                     ..
-                })) => {
-                    initial_level = Some(current);
-                    initial_experience = Some(experience);
-                }
-                Ok(Some(crate::world::WorldEvent::Experience(value))) => {
-                    initial_experience = Some(value);
-                }
-                Err(error) => log.diagnostic(format!("Initial experience rejected: {error}"))?,
-                _ => (),
-            }
-        }
-        if !world.ready
-            && matches!(
-                packet.opcode,
-                0x2e78
-                    | 0x1860
-                    | 0x55bc
-                    | 0x14cb
-                    | 0x7c32
-                    | eq_network_game::appearance::WEAR_CHANGE_OPCODE
-            )
-        {
-            match crate::world::titanium_update(packet.opcode, &packet.body) {
-                Ok(Some(crate::world::WorldEvent::WearChange(change))) => {
-                    if let Some(spawn) = initial_spawns.get_mut(&change.spawn_id) {
-                        spawn.appearance.apply(&change);
+                } => {
+                    let update = eq_network_game::inventory::InventoryUpdate::Invalidated;
+                    world.inventory.apply(update.clone());
+                    if world.ready {
+                        log.send(ClientEvent::World(crate::world::WorldEvent::Inventory(
+                            update,
+                        )))?;
                     }
-                    if world.is_player(change.spawn_id) {
-                        initial_own_wear.push(change);
+                    continue;
+                }
+                _ => continue,
+            };
+            match event {
+                crate::world::WorldEvent::Inventory(update) => {
+                    let update = scribe_consumption.reconcile(&world.inventory, update);
+                    world.inventory.apply(update.clone());
+                    if world.ready {
+                        log.send(ClientEvent::World(crate::world::WorldEvent::Inventory(
+                            update,
+                        )))?;
                     }
                 }
-                Ok(Some(crate::world::WorldEvent::Spawns(spawns))) => {
-                    for spawn in spawns {
-                        initial_spawns.insert(spawn.spawn_id, spawn);
+                crate::world::WorldEvent::Spell(update) if world.ready => {
+                    let book_result = book_edits.observe(&update);
+                    scribe_consumption
+                        .observe(&update, book_result == Some(BookActionStatus::Confirmed));
+                    if let Some(player) = world.player.as_ref() {
+                        let pending = cast_guard.pending();
+                        cast_guard.observe(player.spawn_id, &update);
+                        if pending.is_some() && cast_guard.pending().is_none() {
+                            log.send(ClientEvent::World(crate::world::WorldEvent::CastPending {
+                                session_id,
+                                spell_id: None,
+                            }))?;
+                        }
+                        if cast_guard.active() && world.book_action.take().is_some() {
+                            log.send(ClientEvent::World(crate::world::WorldEvent::BookAction(
+                                BookActionStatus::Cancelled("Casting started".into()),
+                            )))?;
+                        }
                     }
-                    ensure!(initial_spawns.len() <= 65535, "zone entity limit exceeded");
-                }
-                Ok(Some(crate::world::WorldEvent::Despawn(id))) => {
-                    initial_spawns.remove(&id);
-                    initial_postures.remove(&id);
-                }
-                Ok(Some(crate::world::WorldEvent::Posture { spawn_id, posture })) => {
-                    initial_postures.insert(spawn_id, posture);
-                }
-                Ok(Some(crate::world::WorldEvent::Visibility {
-                    spawn_id,
-                    invisible,
-                })) => {
-                    if let Some(spawn) = initial_spawns.get_mut(&spawn_id) {
-                        spawn.invisible = invisible;
+                    if let Some(book) = admitted_book.as_mut() {
+                        book.apply(&update);
+                    }
+                    if let Some(player) = world.player.as_mut() {
+                        update.apply_gems(&mut player.memorized_spells);
+                    }
+                    log.send(ClientEvent::World(crate::world::WorldEvent::Spell(update)))?;
+                    if let Some(status) = book_result {
+                        log.send(ClientEvent::World(crate::world::WorldEvent::BookAction(
+                            status,
+                        )))?;
                     }
                 }
-                Ok(Some(crate::world::WorldEvent::Position {
-                    spawn_id,
-                    position,
-                    velocity,
-                })) => {
-                    if let Some(spawn) = initial_spawns.get_mut(&spawn_id) {
-                        spawn.position = position;
-                        spawn.velocity = velocity;
-                    }
-                }
-                Err(error) => log.diagnostic(format!("Initial entity decode rejected: {error}"))?,
-                _ => (),
-            }
-        }
-        if world.ready {
-            match crate::world::titanium_update(packet.opcode, &packet.body) {
-                Ok(Some(event)) => {
-                    features.observe(
-                        &event,
-                        &mut world,
-                        &mut Out {
-                            sink: &mut session,
-                            log: &mut *log,
-                        },
-                    )?;
-                    if let Some(exit) = world.exit.take() {
-                        session.close()?;
-                        return Ok(exit);
-                    }
+                event if world.ready => {
                     match &event {
                         crate::world::WorldEvent::Posture { spawn_id, posture }
                             if world.is_player(*spawn_id) =>
@@ -1254,8 +1133,62 @@ pub(super) fn run(
                     }
                     log.send(ClientEvent::World(event))?;
                 }
-                Ok(None) => (),
-                Err(error) => log.diagnostic(format!("World-state decode rejected: {error}"))?,
+                // Before admission, the player's and the zone's state is
+                // staged for the admission report.
+                crate::world::WorldEvent::Skill { skill_id, value } if skill_id < 100 => {
+                    initial_skills.insert(skill_id, value);
+                }
+                crate::world::WorldEvent::Level {
+                    current,
+                    experience,
+                    ..
+                } => {
+                    initial_level = Some(current);
+                    initial_experience = Some(experience);
+                }
+                crate::world::WorldEvent::Experience(value) => {
+                    initial_experience = Some(value);
+                }
+                crate::world::WorldEvent::WearChange(change) => {
+                    if let Some(spawn) = initial_spawns.get_mut(&change.spawn_id) {
+                        spawn.appearance.apply(&change);
+                    }
+                    if world.is_player(change.spawn_id) {
+                        initial_own_wear.push(change);
+                    }
+                }
+                crate::world::WorldEvent::Spawns(spawns) => {
+                    for spawn in spawns {
+                        initial_spawns.insert(spawn.spawn_id, spawn);
+                    }
+                    ensure!(initial_spawns.len() <= 65535, "zone entity limit exceeded");
+                }
+                crate::world::WorldEvent::Despawn(id) => {
+                    initial_spawns.remove(&id);
+                    initial_postures.remove(&id);
+                }
+                crate::world::WorldEvent::Posture { spawn_id, posture } => {
+                    initial_postures.insert(spawn_id, posture);
+                }
+                crate::world::WorldEvent::Visibility {
+                    spawn_id,
+                    invisible,
+                } => {
+                    if let Some(spawn) = initial_spawns.get_mut(&spawn_id) {
+                        spawn.invisible = invisible;
+                    }
+                }
+                crate::world::WorldEvent::Position {
+                    spawn_id,
+                    position,
+                    velocity,
+                } => {
+                    if let Some(spawn) = initial_spawns.get_mut(&spawn_id) {
+                        spawn.position = position;
+                        spawn.velocity = velocity;
+                    }
+                }
+                _ => (),
             }
         }
         match chat::parse(packet.opcode, &packet.body, config.include_raw) {

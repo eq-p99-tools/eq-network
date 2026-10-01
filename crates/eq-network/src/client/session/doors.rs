@@ -7,6 +7,7 @@ use anyhow::{anyhow, ensure, Result};
 use eq_network_game::{
     command::EncodedCommand,
     doors::DoorUpdate,
+    message::Message,
     world::{WorldEvent, WorldEvent::DoorAction},
 };
 use std::time::Instant;
@@ -46,10 +47,11 @@ impl Doors {
 }
 
 impl Feature for Doors {
-    fn admit(&mut self, event: &WorldEvent) {
-        if let WorldEvent::Doors(update) = event {
+    fn admit(&mut self, message: &Message) -> Result<()> {
+        if let Message::Event(WorldEvent::Doors(update)) = message {
             self.table.apply(update);
         }
+        Ok(())
     }
 
     fn admission(&self) -> Option<WorldEvent> {
@@ -85,11 +87,11 @@ impl Feature for Doors {
 
     fn observe(
         &mut self,
-        event: &WorldEvent,
+        message: &Message,
         _world: &mut World,
         _out: &mut Out<'_, '_>,
     ) -> Result<()> {
-        if let WorldEvent::Doors(update) = event {
+        if let Message::Event(WorldEvent::Doors(update)) = message {
             if matches!(update, DoorUpdate::Spawn(_) | DoorUpdate::RemoveAll) {
                 self.changed_at = Instant::now();
             }
@@ -109,7 +111,7 @@ mod tests {
     #[test]
     fn a_fresh_click_on_a_door_in_reach_sends_the_click_and_reports_it() {
         let mut doors = Doors::default();
-        doors.admit(&WorldEvent::Doors(DoorUpdate::Spawn(vec![Door {
+        let spawn = WorldEvent::Doors(DoorUpdate::Spawn(vec![Door {
             id: 1,
             model: "DOOR".into(),
             position: Position::default(),
@@ -120,7 +122,8 @@ mod tests {
             invert_state: 0,
             parameter: 0,
             action: None,
-        }])));
+        }]));
+        doors.admit(&Message::Event(spawn)).unwrap();
         let mut world = World::new(5);
         let click = ClientCommand::ClickDoor {
             session_id: 5,

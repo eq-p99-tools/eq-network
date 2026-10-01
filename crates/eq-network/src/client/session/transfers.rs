@@ -5,18 +5,12 @@ use super::{
     motion, spellbook, zoning, ClientCommand, ClientEvent, ConnectionStage, ConnectionState,
     ZoneExit,
 };
-use anyhow::{ensure, Context, Result};
-use eq_network_game::world::{Position, WorldEvent};
+use anyhow::{bail, ensure, Context, Result};
+use eq_network_game::{
+    message::{Message, Part},
+    world::{Position, WorldEvent},
+};
 use std::time::Instant;
-
-/// `OP_SendZonepoints`, the zone's numbered destinations.
-const ZONE_POINTS_OPCODE: u16 = 0x3eba;
-/// `OP_ZonePlayerToBind`, the server returning the player to their bind point.
-const TO_BIND_OPCODE: u16 = 0x385e;
-/// `OP_RequestClientZoneChange`, the server moving the player.
-const MOVE_OPCODE: u16 = 0x7834;
-/// `OP_ZoneServerInfo`, the next zone's address.
-const HANDOFF_OPCODE: u16 = 0x61b6;
 
 /// The zone's zone points, and the transfers they and the server start.
 pub(super) struct Transfers {
@@ -77,16 +71,29 @@ impl Transfers {
         out.status(ConnectionState::Zoning, world)
     }
 
+    /// Keeps the zone's zone points; an unreadable table leaves none. True
+    /// when the message was about them.
+    fn note_points(&mut self, message: &Message) -> bool {
+        match message {
+            Message::ZonePoints(points) => self.points = points.clone(),
+            Message::Unreadable {
+                part: Part::ZonePoints,
+                ..
+            } => self.points = zoning::ZonePoints::default(),
+            _ => return false,
+        }
+        true
+    }
+
     /// Takes the server's offer to move the player, within the zone or out
     /// of it.
     fn offered(
         &self,
-        opcode: u16,
-        body: &[u8],
+        offer: &zoning::ZoneOffer,
         world: &mut World,
         out: &mut Out<'_, '_>,
     ) -> Result<()> {
-        let offer = zoning::offer(opcode, body)?;
+        let offer = offer.clone();
         if let Some(position) = offer.local_position(world.zone) {
             return relocate(position, world, out);
         }
@@ -216,41 +223,45 @@ impl Feature for Transfers {
         Ok(())
     }
 
+    /// The zone points arrive while the zone admits the player; the server
+    /// moves no one before then.
+    fn admit(&mut self, message: &Message) -> Result<()> {
+        if !self.note_points(message) && matches!(message, Message::Handoff(_)) {
+            bail!("zone handoff without a pending transfer");
+        }
+        Ok(())
+    }
+
     /// The zone's zone points, the server's offers and answer, and the next
-    /// zone's address. Offers and answers count only once the zone has
-    /// admitted the player.
-    fn receive(
+    /// zone's address.
+    fn observe(
         &mut self,
-        opcode: u16,
-        body: &[u8],
+        message: &Message,
         world: &mut World,
         out: &mut Out<'_, '_>,
-    ) -> Result<bool> {
-        match opcode {
-            ZONE_POINTS_OPCODE => match zoning::ZonePoints::decode(body) {
-                Ok(points) => self.points = points,
-                Err(error) => {
-                    self.points = zoning::ZonePoints::default();
-                    out.log
-                        .diagnostic(format!("Zone-point table rejected: {error}"))?;
-                }
-            },
-            TO_BIND_OPCODE | MOVE_OPCODE if world.ready => {
-                self.offered(opcode, body, world, out)?;
-            }
-            zoning::CHANGE_OPCODE if world.ready => self.answered(body, world, out)?,
-            HANDOFF_OPCODE => {
+    ) -> Result<()> {
+        if self.note_points(message) {
+            return Ok(());
+        }
+        match message {
+            Message::ZoneOffer(offer) => self.offered(offer, world, out),
+            Message::Unreadable {
+                part: Part::ZoneOffer,
+                error,
+            } => bail!("{error}"),
+            Message::ZoneAnswer(body) => self.answered(body, world, out),
+            Message::Handoff(address) => {
                 ensure!(
-                    world.ready && world.lifecycle.pending().is_some(),
+                    world.lifecycle.pending().is_some(),
                     "zone handoff without a pending transfer"
                 );
                 out.log
                     .send(ClientEvent::Progress(ConnectionStage::ConnectingZone))?;
-                world.exit = Some(ZoneExit::Direct(body.to_vec()));
+                world.exit = Some(ZoneExit::Direct(address.clone()));
+                Ok(())
             }
-            _ => return Ok(false),
+            _ => Ok(()),
         }
-        Ok(true)
     }
 
     /// Gives up on a transfer the server never answered.
@@ -310,9 +321,9 @@ mod tests {
                 ClientEvent::Status(_),
             ]
         ));
-        let outcome =
-            testing::run(|out| transfers.receive(HANDOFF_OPCODE, &[1, 2, 3], &mut world, out));
-        assert!(outcome.result.unwrap());
+        let handoff = Message::Handoff(vec![1, 2, 3]);
+        let outcome = testing::run(|out| transfers.observe(&handoff, &mut world, out));
+        outcome.result.unwrap();
         assert!(matches!(&world.exit, Some(ZoneExit::Direct(address)) if address == &[1, 2, 3]));
     }
 

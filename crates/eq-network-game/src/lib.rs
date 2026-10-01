@@ -39,6 +39,9 @@ pub mod world;
 /// Death and server-directed zone transfer codecs.
 pub mod zoning;
 
+/// What one zone packet says, read once for the whole session.
+pub mod message;
+
 use serde::{Deserialize, Serialize};
 
 /// Game packet layout used by a client generation.

@@ -11,6 +11,14 @@ pub use points::{ZoneLineDestination, ZonePoint, ZonePoints};
 
 /// `OP_ZoneChange`: the client's transfer request, and the server's answer.
 pub const CHANGE_OPCODE: u16 = 0x5dd8;
+/// `OP_SendZonepoints`: the destinations the zone numbered for its zone lines.
+pub const POINTS_OPCODE: u16 = 0x3eba;
+/// `OP_ZonePlayerToBind`: the server returning the player to their bind point.
+pub const TO_BIND_OPCODE: u16 = 0x385e;
+/// `OP_RequestClientZoneChange`: the server moving the player.
+pub const MOVE_OPCODE: u16 = 0x7834;
+/// `OP_ZoneServerInfo`: the next zone's address.
+pub const HANDOFF_OPCODE: u16 = 0x61b6;
 
 /// A pending destination selected by a server offer or local boundary.
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -99,8 +107,8 @@ pub fn death(body: &[u8]) -> Result<Death> {
 /// # Errors
 /// Rejects malformed layouts, unterminated labels, and non-finite coordinates.
 pub fn offer(opcode: u16, body: &[u8]) -> Result<ZoneOffer> {
-    let to_bind = opcode == 0x385e;
-    ensure!(to_bind || opcode == 0x7834, "not a server zone offer");
+    let to_bind = opcode == TO_BIND_OPCODE;
+    ensure!(to_bind || opcode == MOVE_OPCODE, "not a server zone offer");
     if to_bind {
         ensure!(
             body.len() >= 21 && body[20..].contains(&0),

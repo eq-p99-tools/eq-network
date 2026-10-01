@@ -30,6 +30,17 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   otherwise, so a new server type starts with every feature off. P99's V62
   protection and 256-unit saved headings, and `EQEmu`'s falls, jumps and
   post-creation start choice, moved behind it; nothing on the wire changed.
+- Zone features (`client::session`): the zone session is a set of features
+  behind one interface (doors, ground objects, camping and zone transfers so
+  far). Each hears every host command, which exactly one of them carries out,
+  and every message read from the zone; commands are checked for freshness
+  in one place.
+- `eq-network-game`: `message::titanium` reads a zone packet into `Message`s
+  once for the whole session. Encoders return whole packets
+  (`EncodedCommand`): `Doors::click_packet`, `Objects::pickup_packet`,
+  `ContainerView::close_packet`, `ZoneOffer::response`, and the new
+  `command::titanium_camp` and `titanium_logout`. `GameCommand::session_id`
+  and `created` say which admission a command names and when it was made.
 
 ### Fixed
 

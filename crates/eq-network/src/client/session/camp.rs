@@ -9,12 +9,10 @@ use super::{
 use anyhow::Result;
 use eq_network_game::{
     command::{self, Posture},
+    message::Message,
     world::{CampStatus, WorldEvent},
 };
 use std::time::{Duration, Instant};
-
-/// `OP_LogoutReply`, after which the zone connection ends.
-const LOGOUT_REPLY_OPCODE: u16 = 0x3cdc;
 
 const CAMP_DURATION: Duration = Duration::from_secs(30);
 const REPLY_TIMEOUT: Duration = Duration::from_secs(10);
@@ -159,35 +157,27 @@ impl Feature for Camp {
         Ok(())
     }
 
-    /// The logout reply ends the zone connection.
-    fn receive(
-        &mut self,
-        opcode: u16,
-        _body: &[u8],
-        world: &mut World,
-        out: &mut Out<'_, '_>,
-    ) -> Result<bool> {
-        if !self.logging_out() || opcode != LOGOUT_REPLY_OPCODE {
-            return Ok(false);
-        }
-        out.log
-            .send(ClientEvent::World(WorldEvent::Camp(CampStatus::Camped)))?;
-        world.exit = Some(ZoneExit::CharacterSelect);
-        Ok(true)
-    }
-
-    /// Dying abandons a camp still being prepared.
+    /// Dying abandons a camp still being prepared, and the logout's reply
+    /// ends the zone connection.
     fn observe(
         &mut self,
-        event: &WorldEvent,
+        message: &Message,
         world: &mut World,
         out: &mut Out<'_, '_>,
     ) -> Result<()> {
-        if let WorldEvent::Death(death) = event {
-            if world.own_spawn.map(u32::from) == Some(death.spawn_id) && self.cancel() {
+        match message {
+            Message::Event(WorldEvent::Death(death))
+                if world.is_player(death.spawn_id) && self.cancel() =>
+            {
                 out.log
                     .send(ClientEvent::World(WorldEvent::Camp(CampStatus::Abandoned)))?;
             }
+            Message::LoggedOut if self.logging_out() => {
+                out.log
+                    .send(ClientEvent::World(WorldEvent::Camp(CampStatus::Camped)))?;
+                world.exit = Some(ZoneExit::CharacterSelect);
+            }
+            _ => (),
         }
         Ok(())
     }
@@ -217,8 +207,8 @@ mod tests {
         let outcome = testing::run(|out| camp.tick(done, &mut world, out));
         outcome.result.unwrap();
         assert_eq!(outcome.sent, [command::titanium_logout()]);
-        let outcome = testing::run(|out| camp.receive(LOGOUT_REPLY_OPCODE, &[], &mut world, out));
-        assert!(outcome.result.unwrap());
+        let outcome = testing::run(|out| camp.observe(&Message::LoggedOut, &mut world, out));
+        outcome.result.unwrap();
         assert!(matches!(world.exit, Some(ZoneExit::CharacterSelect)));
     }
 
