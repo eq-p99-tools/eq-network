@@ -1663,6 +1663,14 @@ fn zone(
                 zoning::ZoneReply::Rewind(_) => zoning::ZoneRejection::Cancelled,
                 zoning::ZoneReply::Approved => unreachable!("approved transfer returned above"),
             };
+            // The player stays, so movement resumes before anyone hears of the
+            // rewind or the refusal: a calibration sent in answer postdates it.
+            let alive = !lifecycle.is_dead();
+            if alive {
+                if let Some(motion) = motion.as_mut() {
+                    motion.resume_stationary(Instant::now());
+                }
+            }
             if let zoning::ZoneReply::Rewind(position) = reply {
                 let player = admitted_player
                     .as_mut()
@@ -1684,10 +1692,7 @@ fn zone(
             log.send(ClientEvent::World(
                 crate::world::WorldEvent::ZoneTransferRejected { session_id, reason },
             ))?;
-            if !lifecycle.is_dead() {
-                if let Some(motion) = motion.as_mut() {
-                    motion.resume_stationary(Instant::now());
-                }
+            if alive {
                 log.status(
                     ConnectionState::Connected,
                     packets,
