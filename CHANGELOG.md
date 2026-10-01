@@ -41,8 +41,9 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the monk strikes and taunt on the target, and hide, sneak, forage, mend,
   feign death and sense heading on the player (`Capability::Abilities`). The
   session refuses what servers ignore without a word (an unknown skill, no
-  target, a target out of melee reach as `EQEmu`'s `CombatRange` measures
-  it) and a use whose recovery timer still runs (`AbilityRefused`), and
+  target, a strike's target out of melee reach as `EQEmu`'s `CombatRange`
+  measures it with the player's size by race, a taunt at anything but an
+  NPC) and a use whose recovery timer still runs (`AbilityRefused`), and
   tells the host when a timer starts (`AbilityUsed`). Strikes share one
   timer, as on the server, and wait for a cast to end.
 - Coins (`money`): `MoveCoins` moves coins between the purse, the cursor, the

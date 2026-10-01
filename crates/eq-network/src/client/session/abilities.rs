@@ -9,8 +9,8 @@ use super::{
 };
 use anyhow::Result;
 use eq_network_game::{
-    abilities::{in_melee_range, Ability, Body, Recovery},
-    world::{SpawnKind, WorldEvent},
+    abilities::{in_melee_range, player_size, Ability, Body, Recovery},
+    world::{PlayerState, Position, SpawnKind, WorldEvent},
 };
 use std::{collections::BTreeMap, time::Instant};
 
@@ -19,6 +19,56 @@ use std::{collections::BTreeMap, time::Instant};
 pub(super) struct Abilities {
     /// When each timer the player started runs out.
     ready: BTreeMap<Recovery, Instant>,
+}
+
+/// Why the player cannot use the ability on their target, if they cannot.
+fn target_refusal(
+    ability: Ability,
+    world: &World,
+    (own_id, position, player): (u16, Position, &PlayerState),
+) -> Option<&'static str> {
+    let Some((target_id, target)) = world
+        .target
+        .and_then(|id| world.spawns.visible(id).map(|spawn| (id, spawn)))
+    else {
+        return Some("You must first select a target for this ability!");
+    };
+    // Servers taunt only an NPC, ignoring anything else after starting the
+    // timer; a strike may also hit another player where the server allows it.
+    let fits = match target.kind {
+        SpawnKind::Npc => true,
+        SpawnKind::Player => ability.strikes(),
+        _ => false,
+    };
+    if target_id == own_id || !fits {
+        return Some("You cannot use that on your target");
+    }
+    // Taunt reaches 150 units, and the server says so itself beyond that.
+    if !ability.strikes() {
+        return None;
+    }
+    // The player's own spawn carries the size the server gave them by race,
+    // which counts for reach.
+    let size = world
+        .spawns
+        .all()
+        .find(|spawn| spawn.spawn_id == own_id)
+        .map(|spawn| spawn.size)
+        .filter(|size| *size > 0.0)
+        .unwrap_or_else(|| player_size(player.race));
+    let own = Body {
+        race: player.race,
+        size,
+        x: position.x,
+        y: position.y,
+    };
+    let theirs = Body {
+        race: target.race,
+        size: target.size,
+        x: target.position.x,
+        y: target.position.y,
+    };
+    (!in_melee_range(own, theirs)).then_some("Your target is too far away, get closer!")
 }
 
 impl Abilities {
@@ -33,29 +83,8 @@ impl Abilities {
             return Some("You do not have that ability");
         }
         if ability.at_target() {
-            let Some(target) = world
-                .target
-                .and_then(|id| world.spawns.visible(id).map(|spawn| (id, spawn)))
-            else {
-                return Some("You must first select a target for this ability!");
-            };
-            if target.0 == own_id || !matches!(target.1.kind, SpawnKind::Npc | SpawnKind::Player) {
-                return Some("You cannot use that on your target");
-            }
-            let own = Body {
-                race: player.race,
-                size: 0.0,
-                x: position.x,
-                y: position.y,
-            };
-            let theirs = Body {
-                race: target.1.race,
-                size: target.1.size,
-                x: target.1.position.x,
-                y: target.1.position.y,
-            };
-            if !in_melee_range(own, theirs) {
-                return Some("Your target is too far away, get closer!");
+            if let Some(reason) = target_refusal(ability, world, (own_id, position, player)) {
+                return Some(reason);
             }
         }
         let running = ability
@@ -201,6 +230,44 @@ mod tests {
                 ..
             })]
         ));
+    }
+
+    #[test]
+    fn reach_counts_the_players_size_and_taunt_wants_an_npc() {
+        let now = Instant::now();
+        let at = |x| Position {
+            x,
+            ..Position::default()
+        };
+        // A human counts as size 6: twelve units of reach against a size 6
+        // creature, where a gnome, counted small, has sixteen.
+        let mut world = warrior();
+        let mut near = testing::spawn(45, SpawnKind::Npc);
+        near.position = at(13.0);
+        near.size = 6.0;
+        world.spawns.insert(near);
+        world.target = super::super::targeting::Target::from(45);
+        let outcome = try_ability(&mut Abilities::default(), &world, Ability::Kick, now);
+        assert_eq!(
+            refused(&outcome.events),
+            ["Your target is too far away, get closer!"]
+        );
+        world.player.corrected().unwrap().race = 12;
+        let outcome = try_ability(&mut Abilities::default(), &world, Ability::Kick, now);
+        assert_eq!(outcome.sent, [Ability::Kick.encode(45)]);
+        // Taunt reaches past melee range, but never another player.
+        world.target = super::super::targeting::Target::from(43);
+        let outcome = try_ability(&mut Abilities::default(), &world, Ability::Taunt, now);
+        assert_eq!(outcome.sent, [Ability::Taunt.encode(43)]);
+        world.spawns.insert(testing::spawn(46, SpawnKind::Player));
+        world.target = super::super::targeting::Target::from(46);
+        let outcome = try_ability(&mut Abilities::default(), &world, Ability::Taunt, now);
+        assert_eq!(
+            refused(&outcome.events),
+            ["You cannot use that on your target"]
+        );
+        let outcome = try_ability(&mut Abilities::default(), &world, Ability::Kick, now);
+        assert_eq!(outcome.sent, [Ability::Kick.encode(46)]);
     }
 
     #[test]
