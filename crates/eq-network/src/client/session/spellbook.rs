@@ -488,7 +488,11 @@ mod tests {
         let sat = Instant::now();
         let outcome = testing::run(|out| spellbook.tick(sat, &mut world, out));
         outcome.result.unwrap();
-        assert!(outcome.sent.is_empty());
+        assert!(
+            outcome.sent.is_empty(),
+            "expected nothing sent, got {:?}",
+            outcome.sent
+        );
         let outcome = testing::run(|out| spellbook.tick(sat + SITTING, &mut world, out));
         outcome.result.unwrap();
         assert_eq!(outcome.sent.len(), 1);
@@ -507,7 +511,11 @@ mod tests {
         let outcome = testing::run(|out| spellbook.observe(&answer, &mut world, out));
         outcome.result.unwrap();
         assert_eq!(statuses(&outcome.events), [&BookActionStatus::Confirmed]);
-        assert!(spellbook.holds(&world, Instant::now()).is_empty());
+        assert!(
+            spellbook.holds(&world, Instant::now()).is_empty(),
+            "a hold remains: {:?}",
+            spellbook.holds(&world, Instant::now())
+        );
     }
 
     #[test]
@@ -515,12 +523,20 @@ mod tests {
         let (mut spellbook, mut world) = admitted(None);
         let outcome = testing::run(|out| spellbook.handle(&memorize(2), &mut world, out));
         outcome.result.unwrap();
-        assert!(outcome.sent.is_empty());
+        assert!(
+            outcome.sent.is_empty(),
+            "expected nothing sent, got {:?}",
+            outcome.sent
+        );
         assert!(matches!(
             statuses(&outcome.events)[..],
             [BookActionStatus::Rejected(_)]
         ));
-        assert!(spellbook.holds(&world, Instant::now()).is_empty());
+        assert!(
+            spellbook.holds(&world, Instant::now()).is_empty(),
+            "a hold remains: {:?}",
+            spellbook.holds(&world, Instant::now())
+        );
     }
 
     #[test]
@@ -561,7 +577,11 @@ mod tests {
             spawn_id: Some(9),
         };
         let outcome = testing::run(|out| spellbook.notice(&target, &mut world, out));
-        assert!(statuses(&outcome.events).is_empty());
+        assert!(
+            statuses(&outcome.events).is_empty(),
+            "expected no status, got {:?}",
+            statuses(&outcome.events)
+        );
     }
 
     #[test]
@@ -615,16 +635,27 @@ mod tests {
             let outcome = testing::run(|out| spellbook.observe(&message, &mut world, out));
             outcome.result.unwrap();
             assert_eq!(statuses(&outcome.events), [&cancelled(reason)], "{reason}");
-            assert!(spellbook.holds(&world, Instant::now()).is_empty());
+            assert!(
+                spellbook.holds(&world, Instant::now()).is_empty(),
+                "a hold remains for {reason}: {:?}",
+                spellbook.holds(&world, Instant::now())
+            );
         }
         // Others standing, and the player sitting, leave the request waiting.
         let (mut spellbook, mut world) = memorizing();
         for (spawn_id, posture) in [(8, PostureState::Standing), (7, PostureState::Sitting)] {
             let message = player(WorldEvent::Posture { spawn_id, posture });
             let outcome = testing::run(|out| spellbook.observe(&message, &mut world, out));
-            assert!(statuses(&outcome.events).is_empty());
+            assert!(
+                statuses(&outcome.events).is_empty(),
+                "expected no status for {posture:?}, got {:?}",
+                statuses(&outcome.events)
+            );
         }
-        assert!(!spellbook.holds(&world, Instant::now()).is_empty());
+        assert!(
+            !spellbook.holds(&world, Instant::now()).is_empty(),
+            "another spawn's posture must not release the hold"
+        );
     }
 
     #[test]
@@ -634,7 +665,11 @@ mod tests {
         world.lifecycle.mark_dead();
         let outcome = testing::run(|out| spellbook.tick(later, &mut world, out));
         outcome.result.unwrap();
-        assert!(outcome.sent.is_empty());
+        assert!(
+            outcome.sent.is_empty(),
+            "expected nothing sent, got {:?}",
+            outcome.sent
+        );
         assert_eq!(statuses(&outcome.events), [&cancelled("Character died")]);
 
         let (mut spellbook, mut world) = memorizing();
@@ -654,7 +689,11 @@ mod tests {
             .unwrap();
         let outcome = testing::run(|out| spellbook.tick(later, &mut world, out));
         outcome.result.unwrap();
-        assert!(outcome.sent.is_empty());
+        assert!(
+            outcome.sent.is_empty(),
+            "expected nothing sent, got {:?}",
+            outcome.sent
+        );
         assert_eq!(
             statuses(&outcome.events),
             [&cancelled("Zone transfer started")]
@@ -712,7 +751,11 @@ mod tests {
                 charge: false
             }))
         ));
-        assert!(spellbook.holds(&world, Instant::now()).is_empty());
+        assert!(
+            spellbook.holds(&world, Instant::now()).is_empty(),
+            "a hold remains: {:?}",
+            spellbook.holds(&world, Instant::now())
+        );
     }
 
     #[test]

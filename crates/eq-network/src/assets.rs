@@ -358,7 +358,11 @@ mod tests {
         expected.extend_from_slice(&0_u32.to_le_bytes());
         let response = assets.file_response(&request).unwrap();
         assert_eq!(response.body, expected);
-        assert!(response.unknown_files.is_empty());
+        assert!(
+            response.unknown_files.is_empty(),
+            "unknown files: {:?}",
+            response.unknown_files
+        );
         assets.files.remove("secondzone_assets.txt");
         let response = assets.file_response(&request).unwrap();
         assert_eq!(response.body, expected);

@@ -406,7 +406,10 @@ mod tests {
         belongings.admit(&snapshot, &mut world).unwrap();
         let outcome = testing::run(|out| belongings.admitted(&mut world, out));
         outcome.result.unwrap();
-        assert!(!inventory_events(&outcome.events).is_empty());
+        assert!(
+            !inventory_events(&outcome.events).is_empty(),
+            "admission should report the inventory"
+        );
         assert!(world.inventory.received());
     }
 
@@ -479,7 +482,11 @@ mod tests {
         outcome.result.unwrap();
         assert_eq!(inventory_events(&outcome.events).len(), 1);
         assert!(!world.inventory.items().contains_key(&InventorySlot(22)));
-        assert!(belongings.holds(&world, Instant::now()).is_empty());
+        assert!(
+            belongings.holds(&world, Instant::now()).is_empty(),
+            "a hold remains: {:?}",
+            belongings.holds(&world, Instant::now())
+        );
     }
 
     #[test]
@@ -506,7 +513,11 @@ mod tests {
                 ClientEvent::Diagnostic(_)
             ]
         ));
-        assert!(belongings.holds(&world, Instant::now()).is_empty());
+        assert!(
+            belongings.holds(&world, Instant::now()).is_empty(),
+            "a hold remains: {:?}",
+            belongings.holds(&world, Instant::now())
+        );
     }
 
     #[test]

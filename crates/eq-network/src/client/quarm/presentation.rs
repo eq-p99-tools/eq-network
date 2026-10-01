@@ -173,11 +173,19 @@ mod tests {
             }),
             ..Presentation::default()
         };
-        assert!(state.enter(5, "example").is_empty());
+        let presented = state.enter(5, "example");
+        assert!(
+            presented.is_empty(),
+            "nothing to present yet, got {presented:?}"
+        );
         state
             .receive(0xf540, &[0, 0, 16, 0, 7, 0, 0, 0], "Example")
             .unwrap();
-        assert!(state.enter(5, "example").is_empty());
+        let presented = state.enter(5, "example");
+        assert!(
+            presented.is_empty(),
+            "nothing to present yet, got {presented:?}"
+        );
         let position = Position {
             x: 12.0,
             y: -42.0,
@@ -257,7 +265,11 @@ mod tests {
         );
         assert_eq!(events[4], WorldEvent::Experience(165));
         assert!(state.postures.is_empty());
-        assert!(state.enter(5, "example").is_empty());
+        let again = state.enter(5, "example");
+        assert!(
+            again.is_empty(),
+            "a second entry presents nothing, got {again:?}"
+        );
         assert_eq!(
             state
                 .receive(0xf540, &[7, 0, 14, 0, 100, 0, 0, 0], "Example")

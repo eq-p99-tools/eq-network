@@ -141,7 +141,11 @@ mod tests {
         };
         let outcome = testing::run(|out| doors.handle(&click, &mut world, out));
         outcome.result.unwrap();
-        assert!(outcome.sent.is_empty());
+        assert!(
+            outcome.sent.is_empty(),
+            "expected nothing sent, got {:?}",
+            outcome.sent
+        );
         assert!(matches!(
             &outcome.events[..],
             [ClientEvent::World(DoorAction { door_id: 1, error: Some(error), .. })]
