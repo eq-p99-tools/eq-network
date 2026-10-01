@@ -1,3 +1,5 @@
+mod presentation;
+
 use super::{
     CancellationToken, ClientCommand, ClientConfig, ClientEvent, ConnectionStage, ConnectionState,
     DecodeError, Events, LoginError, RecordEvent, RunOptions,
@@ -7,7 +9,6 @@ use anyhow::{bail, ensure, Context, Result};
 use eq_network_game::command;
 use eq_network_login::crypto::{des_encrypt, DesKeyIv};
 use std::{
-    net::ToSocketAddrs,
     sync::mpsc::Receiver,
     time::{Duration, Instant},
 };
@@ -84,13 +85,6 @@ pub(super) fn run(
     )
 }
 
-fn address(host: &str, port: u16) -> Result<std::net::SocketAddr> {
-    (host, port)
-        .to_socket_addrs()?
-        .find(std::net::SocketAddr::is_ipv4)
-        .context("no IPv4 address for server")
-}
-
 fn next(
     session: &mut OldSession,
     deadline: Instant,
@@ -111,8 +105,10 @@ fn login(
     stop: &CancellationToken,
     log: &mut Events<'_>,
 ) -> Result<(Credentials, String)> {
-    let mut session =
-        OldSession::connect_cancellable(address(&config.host, config.port)?, stop.flag())?;
+    let mut session = OldSession::connect_cancellable(
+        super::endpoint(&config.host, config.port, config.local_only)?,
+        stop.flag(),
+    )?;
     session.send(LOGIN_SESSION_READY, &[])?;
     let deadline = Instant::now() + Duration::from_secs(45);
     let mut account = None;
@@ -233,45 +229,75 @@ fn world(
     commands: Option<&Receiver<ClientCommand>>,
     log: &mut Events<'_>,
 ) -> Result<()> {
-    let mut session = OldSession::connect_cancellable(address(ip, 9000)?, stop.flag())?;
+    let mut session = OldSession::connect_cancellable(
+        super::endpoint(ip, 9000, config.local_only)?,
+        stop.flag(),
+    )?;
+    let mut config = config.clone();
     session.send(WORLD_LOGIN, &*world_login(credentials)?)?;
-    let deadline = Instant::now() + Duration::from_secs(60);
+    let mut deadline = Instant::now() + Duration::from_secs(60);
     let mut entered = false;
+    let mut selection = None;
+    let mut chosen = None;
     loop {
-        let packet = next(&mut session, deadline, stop)?;
-        record_chat(config, "", &packet, log)?;
+        ensure!(!stop.is_cancelled(), "shutdown requested");
+        if !entered {
+            if let Some(choice) = selection
+                .as_ref()
+                .and_then(|list: &super::selection::Selection| list.poll(commands))
+                .and_then(super::selection::Choice::entered)
+            {
+                chosen = Some(choice);
+            }
+            if let Some(name) = chosen.take() {
+                let mut enter = [0; 64];
+                put_string(&mut enter, &name)?;
+                session.send(WORLD_ENTER, &enter)?;
+                config.character = name;
+                log.character.clone_from(&config.character);
+                entered = true;
+                deadline = Instant::now() + Duration::from_secs(60);
+                log.send(ClientEvent::Progress(ConnectionStage::ConnectingZone))?;
+            }
+        }
+        ensure!(
+            selection.is_some() && !entered || Instant::now() < deadline,
+            "world handshake timed out"
+        );
+        let Some(packet) = session.receive()? else {
+            continue;
+        };
+        record_chat(&config, "", &packet, log)?;
         log.diagnostic(format!(
             "Quarm world received 0x{:04x} ({} bytes)",
             packet.opcode,
             packet.body.len()
         ))?;
         match packet.opcode {
-            WORLD_CHARACTER_LIST if !entered => {
-                ensure!(
-                    character_exists(&packet.body, &config.character)?,
-                    "configured character is absent from character selection"
-                );
+            WORLD_CHARACTER_LIST if !entered && selection.is_none() => {
+                let entries =
+                    eq_network_game::characters::decode(config.protocol.into(), &packet.body)?;
                 log.send(ClientEvent::Progress(ConnectionStage::SelectingCharacter))?;
                 if options.world_only {
                     session.close()?;
                     return Ok(());
                 }
-                let mut enter = [0; 64];
-                put_string(&mut enter, &config.character)?;
-                session.send(WORLD_ENTER, &enter)?;
-                entered = true;
-                log.send(ClientEvent::Progress(ConnectionStage::ConnectingZone))?;
+                let (list, automatic) =
+                    super::selection::Selection::new(entries, &config.character, log)?;
+                selection = Some(list);
+                chosen = automatic;
             }
             WORLD_ZONE_SERVER if entered => {
                 let (host, port) = zone_destination(&packet.body)?;
                 session.close()?;
-                return zone(config, stop, options, commands, log, &host, port);
+                return zone(&config, stop, options, commands, log, &host, port);
             }
             _ => (),
         }
     }
 }
 
+#[cfg(test)]
 fn character_exists(body: &[u8], character: &str) -> Result<bool> {
     ensure!(body.len() >= 640, "truncated EQMac character list");
     Ok(body[..640]
@@ -315,13 +341,19 @@ fn zone(
     host: &str,
     port: u16,
 ) -> Result<()> {
-    let mut session = OldSession::connect_cancellable(address(host, port)?, stop.flag())?;
+    let mut session = OldSession::connect_cancellable(
+        super::endpoint(host, port, config.local_only)?,
+        stop.flag(),
+    )?;
     session.send(ZONE_DATA_RATE, &10.0f32.to_le_bytes())?;
     let mut entry = [0; 68];
     put_string(&mut entry[4..], &config.character)?;
     session.send(ZONE_ENTRY, &entry)?;
     log.send(ClientEvent::Progress(ConnectionStage::LoadingCharacter))?;
 
+    let mut presentation = presentation::Presentation::default();
+    let session_id = rand::random();
+    let mut rejected_layouts = std::collections::HashSet::new();
     let connected = Instant::now();
     let mut ready = false;
     let mut saw_profile = false;
@@ -433,6 +465,26 @@ fn zone(
             ZONE_LOGOUT => bail!("server logged the character out"),
             ZONE_CHANGE_REQUEST => bail!("server requested a new zone; reconnecting through world"),
             _ => (),
+        }
+        match presentation.receive(packet.opcode, &packet.body, &config.character) {
+            Ok(events) => {
+                for event in events {
+                    log.send(ClientEvent::World(event))?;
+                }
+            }
+            Err(error) if rejected_layouts.insert(packet.opcode) => {
+                log.diagnostic(format!(
+                    "Quarm world-state decode rejected 0x{:04x} ({} bytes): {error}",
+                    packet.opcode,
+                    packet.body.len()
+                ))?;
+            }
+            Err(_) => (),
+        }
+        if ready {
+            for event in presentation.enter(session_id, &zone_name) {
+                log.send(ClientEvent::World(event))?;
+            }
         }
         record_chat(config, &zone_name, &packet, log)?;
     }

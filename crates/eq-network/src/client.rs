@@ -36,6 +36,7 @@
 //! ```
 
 mod quarm;
+mod selection;
 mod session;
 
 use crate::{
@@ -72,6 +73,10 @@ pub enum ServerProtocol {
     Project1999,
     /// Project Quarm's Windows TAKP/EQMac protocol.
     Quarm,
+    /// A stock `EQEmu` server speaking the Titanium protocol, without P99's
+    /// world validation and packet encryption (for example a local `AkkStack`).
+    #[serde(alias = "eqemu")]
+    EqEmu,
 }
 
 impl ServerProtocol {
@@ -81,14 +86,21 @@ impl ServerProtocol {
         match self {
             Self::Project1999 => ("login.eqemulator.net", 5998),
             Self::Quarm => ("loginserver.takproject.net", 6000),
+            Self::EqEmu => ("127.0.0.1", 5998),
         }
+    }
+
+    /// Whether this server uses the Titanium game protocol (P99 or stock `EQEmu`).
+    #[must_use]
+    pub const fn is_titanium(self) -> bool {
+        matches!(self, Self::Project1999 | Self::EqEmu)
     }
 }
 
 impl From<ServerProtocol> for GameDialect {
     fn from(protocol: ServerProtocol) -> Self {
         match protocol {
-            ServerProtocol::Project1999 => Self::TitaniumP99,
+            ServerProtocol::Project1999 | ServerProtocol::EqEmu => Self::TitaniumP99,
             ServerProtocol::Quarm => Self::EqMac,
         }
     }
@@ -101,6 +113,7 @@ impl FromStr for ServerProtocol {
         match value.to_ascii_lowercase().as_str() {
             "p99" | "project1999" | "project_1999" => Ok(Self::Project1999),
             "quarm" => Ok(Self::Quarm),
+            "eqemu" => Ok(Self::EqEmu),
             _ => anyhow::bail!("unknown server protocol {value:?}"),
         }
     }
@@ -157,7 +170,7 @@ pub struct ClientConfig {
     pub credentials: Credentials,
     /// World-server display name selected after login.
     pub server: String,
-    /// Character selected on the world server.
+    /// Character to enter automatically; empty requests interactive selection.
     pub character: String,
     /// Whether decoded records retain raw packet representations.
     pub include_raw: bool,
@@ -165,6 +178,9 @@ pub struct ClientConfig {
     pub channels: Option<HashSet<ChannelName>>,
     /// Delay before starting a fresh session after a recoverable failure.
     pub reconnect_delay: Duration,
+    /// Refuse login, world and zone servers outside this machine and its private
+    /// network, so test tooling can never reach a public server.
+    pub local_only: bool,
 }
 
 impl ClientConfig {
@@ -197,11 +213,12 @@ impl ClientConfig {
             include_raw: false,
             channels: None,
             reconnect_delay: Duration::from_secs(30),
+            local_only: false,
         }
     }
 
     fn validate(&self) -> Result<()> {
-        for value in [&self.host, &self.server, &self.character] {
+        for value in [&self.host, &self.server] {
             ensure!(
                 !value.is_empty() && !value.contains('\0'),
                 "required connection fields must be nonempty and contain no NUL"
@@ -221,7 +238,7 @@ impl ClientConfig {
             );
         }
         ensure!(
-            self.character.len() < 64,
+            self.character.len() < 64 && !self.character.contains('\0'),
             "character name exceeds protocol field size"
         );
         ensure!(
@@ -532,6 +549,8 @@ pub enum ConnectionStage {
 #[serde(tag = "type", content = "data", rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum ClientEvent {
+    /// World state for graphical clients; contains no login or profile secrets.
+    World(crate::world::WorldEvent),
     /// Periodic health and connection status.
     Status(SessionStatus),
     /// Completed connection milestone.
@@ -636,6 +655,10 @@ impl Client {
         handler: &mut dyn FnMut(ClientEvent) -> Result<()>,
     ) -> Result<()> {
         let mut events = Events::new(&self.config, handler);
+        ensure!(
+            !self.config.character.is_empty() || commands.is_some() || options.world_only,
+            "interactive character selection requires a command receiver"
+        );
         loop {
             if cancel.is_cancelled() {
                 return events.status(ConnectionState::Stopped, 0, None);
@@ -704,6 +727,7 @@ struct Events<'a> {
     session_id: String,
     zone: String,
     messages: u64,
+    character: String,
 }
 
 impl<'a> Events<'a> {
@@ -717,6 +741,7 @@ impl<'a> Events<'a> {
             session_id: String::new(),
             zone: String::new(),
             messages: 0,
+            character: config.character.clone(),
         }
     }
 
@@ -724,6 +749,7 @@ impl<'a> Events<'a> {
         self.session_id = format!("{:016x}", rand::random::<u64>());
         self.zone.clear();
         self.messages = 0;
+        self.character.clone_from(&self.config.character);
     }
 
     fn send(&mut self, event: ClientEvent) -> Result<()> {
@@ -761,7 +787,7 @@ impl<'a> Events<'a> {
         self.send(ClientEvent::Record(Box::new(Record {
             timestamp: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
             server: self.config.server.clone(),
-            character: self.config.character.clone(),
+            character: self.character.clone(),
             zone: zone.to_owned(),
             session_id: self.session_id.clone(),
             message_id: self.messages,
@@ -770,10 +796,43 @@ impl<'a> Events<'a> {
     }
 }
 
+/// Resolves a server to the IPv4 address both client generations use, refusing
+/// one outside this machine and its private network when `local_only` is set.
+fn endpoint(host: &str, port: u16, local_only: bool) -> Result<std::net::SocketAddr> {
+    use std::net::ToSocketAddrs;
+    let address = (host, port)
+        .to_socket_addrs()?
+        .find(std::net::SocketAddr::is_ipv4)
+        .context("no IPv4 address for server")?;
+    ensure!(
+        !local_only || is_local(address.ip()),
+        "local-only session refused the non-local server {address}"
+    );
+    Ok(address)
+}
+
+/// Loopback, private (RFC 1918) and link-local addresses.
+fn is_local(ip: std::net::IpAddr) -> bool {
+    match ip {
+        std::net::IpAddr::V4(ip) => ip.is_loopback() || ip.is_private() || ip.is_link_local(),
+        std::net::IpAddr::V6(ip) => ip.is_loopback(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::chat;
+
+    #[test]
+    fn local_only_sessions_refuse_public_servers() {
+        assert!(endpoint("127.0.0.1", 5998, true).is_ok());
+        assert!(endpoint("172.19.88.182", 5998, true).is_ok());
+        assert!(endpoint("192.168.1.20", 9000, true).is_ok());
+        let public = endpoint("8.8.8.8", 5998, true).unwrap_err().to_string();
+        assert!(public.contains("local-only"), "{public}");
+        assert!(endpoint("8.8.8.8", 5998, false).is_ok());
+    }
 
     #[test]
     fn protocol_names_are_stable_and_p99_aliases_remain_readable() {

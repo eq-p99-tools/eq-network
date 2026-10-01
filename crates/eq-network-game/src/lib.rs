@@ -1,11 +1,43 @@
 //! World, zone, validation, and chat codecs for EverQuest-compatible servers.
 
+/// Worn gear and features in EQ's texture slots, and wear changes.
+pub mod appearance;
+/// Admission buffs and server-driven buff changes.
+pub mod buffs;
+/// World-server character selection lists.
+pub mod characters;
 /// Communication packet codecs and structured item-link extraction.
 pub mod chat;
+/// Consider, auto-attack and combat-damage records.
+pub mod combat;
 /// Typed client actions and dialect-specific application packet encoding.
 pub mod command;
+/// Titanium character creation requests and stat rules.
+pub mod creation;
+/// Server-defined interactive doors and their movement notifications.
+pub mod doors;
+/// Read-only inventory packets, slots, instances, and state.
+pub mod inventory;
+/// Read-only item inspection requests and definitions.
+pub mod items;
+/// Corpse looting requests, listings and acknowledgements.
+pub mod loot;
+/// Merchant windows, stock, purchases and sales.
+pub mod merchant;
+/// Movement wire layout and session-scoped motion validation.
+pub mod movement;
+/// Items on the ground and world containers.
+pub mod objects;
 /// Titanium/P99-V62 world and zone validation codec.
 pub mod p99;
+/// TAKP/EQMac player and entity presentation codecs.
+pub mod quarm;
+/// Server-driven spellbook and casting notifications.
+pub mod spells;
+/// Renderer-independent world-state packet decoding.
+pub mod world;
+/// Death and server-directed zone transfer codecs.
+pub mod zoning;
 
 use serde::{Deserialize, Serialize};
 

@@ -5,6 +5,44 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- Character-selection sessions and typed world state for graphical clients.
+- P99 movement, targeting, doors, inventory operations, spellbook editing,
+  casting, item activation, buff notifications, and zone/death handoff events.
+- Quarm admission and entity presentation for graphical clients; outbound
+  gameplay commands remain P99-only.
+- Items on the ground (`objects`): Titanium ground objects are reported, and
+  a nearby item can be picked up onto an empty cursor. World containers are
+  not supported yet; one that opens for a click is closed again.
+- Worn gear (`appearance`): spawns and the player carry their materials,
+  tints and facial features from Titanium spawn records, and wear changes
+  update them. Quarm reports none yet.
+- Synthetic regression coverage for inventory reconciliation, scribe consumption,
+  movement admission, cast state, and fresh-key world/zone handoffs.
+
+### Changed
+
+- Separate session helpers validate gameplay requests against current admission
+  state and retain server corrections rather than treating predictions as acknowledgments.
+
+### Fixed
+
+- Combined transport packets (`OP_Combined`) give every part a one-byte
+  length, as `EQEmu` does, so a part of exactly 255 bytes no longer ends the
+  session with "invalid combined length". `build_combined` refuses parts
+  longer than 255 bytes instead of writing a length servers misread, and
+  `OP_AppCombined` accepts four-byte lengths.
+
+### Known limitations
+
+- Movement still requires calibration. Airborne movement (falls and jumps) is
+  accepted only on stock EQEmu sessions, with provisional physics, until
+  official-client falls and jumps are measured; fall damage is not reported.
+  Complete server-specific buff reconciliation is not implemented.
+- Latest scribe-consumption reconciliation and fresh-key zoning changes have
+  offline regression coverage but still need fresh live verification.
+
 ## [0.1.2] - 2026-09-15
 
 ### Added
