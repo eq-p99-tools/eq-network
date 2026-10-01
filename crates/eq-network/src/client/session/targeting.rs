@@ -7,6 +7,27 @@ use super::{
 use anyhow::Result;
 use eq_network_game::world::WorldEvent;
 
+/// The spawn the server holds as the player's target: the last one sent.
+/// Every feature reads it; only the targeting feature changes it.
+#[derive(Clone, Copy, Debug, Default)]
+pub(super) struct Target(Option<u16>);
+
+impl std::ops::Deref for Target {
+    type Target = Option<u16>;
+
+    fn deref(&self) -> &Option<u16> {
+        &self.0
+    }
+}
+
+/// Lets another feature's tests start with a target.
+#[cfg(test)]
+impl From<u16> for Target {
+    fn from(spawn_id: u16) -> Self {
+        Self(Some(spawn_id))
+    }
+}
+
 /// Picks and clears the player's target.
 pub(super) struct Targeting {
     encoder: Encoder,
@@ -54,6 +75,7 @@ impl Feature for Targeting {
             return out.log.diagnostic("Rejected an unavailable target".into());
         }
         if self.encoder.send(command, out)? {
+            world.target.0 = spawn_id;
             out.log
                 .send(ClientEvent::World(WorldEvent::TargetSent(spawn_id)))?;
         }
