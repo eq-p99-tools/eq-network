@@ -252,11 +252,12 @@ pub(super) mod testing {
             .expect("a zeroed profile admits a player")
     }
 
-    /// What a step sent and told the host.
+    /// What a step sent and told the host, and when the host heard each event.
     pub(in crate::client::session) struct Outcome<R> {
         pub(in crate::client::session) result: R,
         pub(in crate::client::session) sent: Vec<EncodedCommand>,
         pub(in crate::client::session) events: Vec<ClientEvent>,
+        pub(in crate::client::session) heard: Vec<std::time::Instant>,
     }
 
     /// Runs one step of a feature with an `Out` that records.
@@ -269,9 +270,10 @@ pub(super) mod testing {
             "Test Server",
             "ExampleCharacter",
         );
-        let mut events = Vec::new();
+        let (mut events, mut heard) = (Vec::new(), Vec::new());
         let mut handler = |event| {
             events.push(event);
+            heard.push(std::time::Instant::now());
             Ok(())
         };
         let mut log = Events::new(&config, &mut handler);
@@ -285,6 +287,7 @@ pub(super) mod testing {
             result,
             sent: sink.0,
             events,
+            heard,
         }
     }
 }

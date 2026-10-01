@@ -129,6 +129,14 @@ impl Transfers {
             zoning::ZoneReply::Rewind(_) => zoning::ZoneRejection::Cancelled,
             zoning::ZoneReply::Approved => unreachable!("approved transfer returned above"),
         };
+        // The player stays, so movement resumes before anyone hears of the
+        // rewind or the refusal: a calibration sent in answer postdates it.
+        let alive = !world.lifecycle.is_dead();
+        if alive {
+            if let Some(motion) = world.motion.as_mut() {
+                motion.resume_stationary(Instant::now());
+            }
+        }
         if let zoning::ZoneReply::Rewind(position) = reply {
             let player = world
                 .player
@@ -153,10 +161,7 @@ impl Transfers {
                 session_id: world.session_id,
                 reason,
             }))?;
-        if !world.lifecycle.is_dead() {
-            if let Some(motion) = world.motion.as_mut() {
-                motion.resume_stationary(Instant::now());
-            }
+        if alive {
             out.status(ConnectionState::Connected, world)?;
         }
         Ok(())
@@ -279,6 +284,72 @@ mod tests {
     use super::super::feature::testing;
     use super::*;
     use eq_network_game::movement::MotionSession;
+
+    #[test]
+    fn movement_resumes_before_a_refused_transfer_is_reported() {
+        let mut transfers = Transfers::new("Tester");
+        let mut world = World::new(5);
+        let here = Position {
+            x: 10.0,
+            y: 20.0,
+            z: 3.0,
+            heading: 0.0,
+        };
+        world.motion = Some(MotionSession::new(5, 7, here, Instant::now()).unwrap());
+        world.player = Some(testing::player(7));
+        world.zone = (2, 0);
+        world.ready = true;
+        let cross = ClientCommand::CrossZoneLine {
+            session_id: 5,
+            destination: zoning::ZoneLineDestination::Absolute {
+                zone_id: 4,
+                position: here,
+            },
+            position: here,
+            created: Instant::now(),
+        };
+        testing::run(|out| transfers.handle(&cross, &mut world, out))
+            .result
+            .unwrap();
+        let mut answer = world
+            .lifecycle
+            .pending()
+            .unwrap()
+            .response("Tester")
+            .unwrap()
+            .body;
+        answer[84..88].copy_from_slice(&(-1i32).to_le_bytes());
+        let outcome =
+            testing::run(|out| transfers.observe(&Message::ZoneAnswer(answer), &mut world, out));
+        outcome.result.unwrap();
+        // The host calibrates movement again when it hears of the refusal.
+        let heard = outcome
+            .events
+            .iter()
+            .zip(&outcome.heard)
+            .find(|(event, _)| {
+                matches!(
+                    event,
+                    ClientEvent::World(WorldEvent::ZoneTransferRejected { .. })
+                )
+            })
+            .map(|(_, at)| *at)
+            .unwrap();
+        let calibration = eq_network_game::movement::MotionCalibration {
+            units_per_second: 6.0,
+            velocity_scale: 0.05,
+            animation: 12,
+            backward: None,
+            walk: None,
+            strafe: None,
+        };
+        world
+            .motion
+            .as_mut()
+            .unwrap()
+            .calibrate_fresh(calibration, heard, Instant::now())
+            .unwrap();
+    }
 
     #[test]
     fn a_zone_line_asks_for_the_transfer_and_the_handoff_ends_the_session() {
