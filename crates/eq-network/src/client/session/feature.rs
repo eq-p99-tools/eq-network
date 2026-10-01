@@ -237,6 +237,10 @@ pub(super) trait Feature {
         Ok(())
     }
 
+    /// Shapes the player the admission reports with what the feature staged
+    /// before it.
+    fn shape(&mut self, _player: &mut PlayerState) {}
+
     /// Tells the host what the feature staged, once the zone has admitted the
     /// player.
     ///

@@ -1,4 +1,5 @@
 mod actions;
+mod admission;
 mod camp;
 mod casting;
 mod character;

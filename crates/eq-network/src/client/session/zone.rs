@@ -1,42 +1,18 @@
 //! The zone session: admission, the player's commands and the zone's traffic
 //! until the character leaves for another zone, the world or the character list.
 use super::{
-    actions, bail, camp, casting, character, chat, combat, cstr,
+    actions, camp, casting, character, chat, combat,
     doors::Doors,
     ensure, entities,
     feature::{Encoder, Feature, Out, World},
-    inventory, le32, looting, objects, put_string, servers, spellbook, talk, targeting, transfers,
-    CharacterSession, ClientCommand, ClientEvent, ConnectionStage, ConnectionState, Context,
-    DecodeError, Duration, Events, Instant, RecordEvent, Result, Session, Shield, ZoneExit,
+    inventory, looting, objects, servers, spellbook, talk, targeting, transfers, CharacterSession,
+    ClientCommand, ClientEvent, ConnectionStage, ConnectionState, DecodeError, Duration, Events,
+    Instant, RecordEvent, Result, Session, Shield, ZoneExit,
 };
 
+use super::admission::{Admission, Zone};
 use eq_network_game::message::Message;
 use eq_network_transport::Transport;
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum ZoneOpcode {
-    PlayerProfile,
-    Weather,
-    PlayerSpawn,
-    ZoneDescription,
-    ExperienceUpdate,
-    ValidationRejected,
-    Unknown(u16),
-}
-
-impl From<u16> for ZoneOpcode {
-    fn from(value: u16) -> Self {
-        match value {
-            0x75df => Self::PlayerProfile,
-            0x254d => Self::Weather,
-            0x7213 => Self::PlayerSpawn,
-            0x0920 => Self::ZoneDescription,
-            0x0587 => Self::ExperienceUpdate,
-            0x1252 => Self::ValidationRejected,
-            value => Self::Unknown(value),
-        }
-    }
-}
 
 /// The zone's features, each offered every command, packet, timer and event.
 struct Features(Vec<Box<dyn Feature>>);
@@ -55,7 +31,7 @@ impl Features {
             Box::new(spellbook::Spellbook::default()),
             Box::new(inventory::Belongings::new(encoder.clone())),
             server.motion(encoder.clone()),
-            Box::new(character::Character),
+            Box::new(character::Character::default()),
             Box::new(entities::Entities::default()),
             Box::new(targeting::Targeting::new(encoder.clone())),
             Box::new(combat::Combat::new(encoder.clone())),
@@ -78,6 +54,13 @@ impl Features {
         capabilities.sort_unstable();
         capabilities.dedup();
         capabilities
+    }
+
+    /// Lets every feature shape the player the admission reports.
+    fn shape(&mut self, player: &mut crate::world::PlayerState) {
+        for feature in &mut self.0 {
+            feature.shape(player);
+        }
     }
 
     /// Lets every feature explain a message its own action caused.
@@ -181,36 +164,19 @@ pub(super) fn run(
         true,
         stop.flag(),
     )?);
-    session.send(0x7752, &0u32.to_le_bytes())?;
-    let mut entry = vec![0; 68];
-    put_string(&mut entry[4..], &config.character)?;
     let server = servers::server_type(config.protocol);
-    let revolution = server.profile_turn();
-    if let Some(shield) = shield.as_mut() {
-        shield.zone_entry(&entry)?;
-    }
-    session.send(0x7213, &entry)?;
-    log.send(ClientEvent::Progress(ConnectionStage::LoadingCharacter))?;
+    let mut admission = Admission::start(
+        &mut session,
+        &config.character,
+        server.profile_turn(),
+        shield,
+        log,
+    )?;
     let connected = Instant::now();
-    let mut saw_spawn = false;
-    let mut saw_profile = false;
-    let mut saw_weather = false;
-    let mut requested = false;
-    let mut got_zone = false;
-    let mut replied_experience = false;
-    let mut zone_name = String::new();
-    let mut far_clip = None;
     let mut progress = Instant::now();
     let session_id = rand::random();
     let mut world = World::new(session_id);
-    let mut initial_experience = None;
-    let mut initial_level = None;
-    let mut initial_skills = std::collections::BTreeMap::new();
-    // Wear changes for the player that arrive before its state is built.
-    let mut initial_own_wear = Vec::new();
     let mut features = Features::new(server, config.protocol.into(), &config.character);
-    let mut profile_data = Vec::new();
-    let mut spawn_data = Vec::new();
     loop {
         if stop.is_cancelled() || duration.is_some_and(|limit| connected.elapsed() >= limit) {
             session.close()?;
@@ -238,7 +204,8 @@ pub(super) fn run(
         }
         ensure!(
             world.ready() || connected.elapsed() < Duration::from_secs(60),
-            "zone admission timed out"
+            "zone admission timed out while {:?}",
+            admission.stage()
         );
         features.tick(
             Instant::now(),
@@ -309,147 +276,16 @@ pub(super) fn run(
                 packet.body.len()
             ))?;
         }
-        match ZoneOpcode::from(packet.opcode) {
-            ZoneOpcode::PlayerProfile => {
-                ensure!(
-                    packet.body.len() == 19592,
-                    "unexpected Titanium player profile size"
-                );
-                for offset in [13116, 13120, 13124, 13128] {
-                    ensure!(
-                        f32::from_le_bytes(packet.body[offset..offset + 4].try_into().unwrap())
-                            .is_finite(),
-                        "invalid player position"
-                    );
-                }
-                // The player stands where the server saved them until they
-                // can move.
-                let float = |offset: usize| {
-                    f32::from_le_bytes(packet.body[offset..offset + 4].try_into().unwrap())
-                };
-                world.body.place(crate::world::Position {
-                    x: float(13116),
-                    y: float(13120),
-                    z: float(13124),
-                    heading: crate::world::profile_heading(float(13128), revolution),
-                });
-                profile_data.clone_from(&packet.body);
-                initial_skills.clear();
-                initial_level = None;
-                world.zone = (
-                    u16::from_le_bytes(packet.body[13276..13278].try_into()?),
-                    u16::from_le_bytes(packet.body[13278..13280].try_into()?),
-                );
-                saw_profile = true;
-            }
-            ZoneOpcode::Weather => saw_weather = true,
-            ZoneOpcode::PlayerSpawn if !saw_spawn => {
-                if let Some(shield) = shield.as_mut() {
-                    shield.player_spawn(&mut packet.body, &credentials.key)?;
-                }
-                ensure!(
-                    packet.body.len() == 385
-                        && cstr(&packet.body[7..71])
-                            .eq_ignore_ascii_case(config.character.as_bytes()),
-                    "zone returned a different character spawn"
-                );
-                let id = u16::try_from(le32(&packet.body[340..344]))
-                    .context("spawn ID exceeds Titanium position field")?;
-                world.body.own(id);
-                world.own_spawn = Some(id);
-                spawn_data.clone_from(&packet.body);
-                saw_spawn = true;
-            }
-            ZoneOpcode::ZoneDescription if !world.ready() => {
-                ensure!(packet.body.len() >= 96, "truncated zone description");
-                zone_name = String::from_utf8_lossy(cstr(&packet.body[64..96])).into_owned();
-                far_clip = crate::world::titanium_far_clip(&packet.body);
-                log.zone.clone_from(&zone_name);
-                log.status(
-                    ConnectionState::Zoning,
-                    world.packets,
-                    Some(session.last_received_seconds()),
-                )?;
-                got_zone = true;
-                session.send(0x067a, &0u32.to_le_bytes())?;
-                session.send(0x5e3a, &0u32.to_le_bytes())?;
-                session.send(0x7752, &0u32.to_le_bytes())?;
-                session.send(0x0322, &[])?;
-            }
-            ZoneOpcode::ExperienceUpdate if got_zone && !world.ready() && !replied_experience => {
-                session.send(0x0587, &[])?;
-                replied_experience = true;
-            }
-            ZoneOpcode::ExperienceUpdate if got_zone && !world.ready() && replied_experience => {
-                session.send(0x6563, &chat::server_filters())?;
-                session.send(0x5e20, &[])?;
-                session.send(0x0c11, &1u32.to_le_bytes())?;
-                world.admitted = Some(Instant::now());
-                match crate::world::titanium_player(&profile_data, &spawn_data, revolution) {
-                    Ok(mut player) => {
-                        if let Some(level) = initial_level.take() {
-                            player.level = level;
-                        }
-                        for change in std::mem::take(&mut initial_own_wear) {
-                            player.appearance.apply(&change);
-                        }
-                        for (skill, value) in std::mem::take(&mut initial_skills) {
-                            player.apply_skill(skill, value);
-                        }
-                        world.player = Some(player.clone());
-                        log.send(ClientEvent::World(crate::world::WorldEvent::Entered {
-                            capabilities: features.capabilities(),
-                            session_id,
-                            zone: zone_name.clone(),
-                            player: Box::new(player),
-                            far_clip,
-                        }))?;
-                        features.admitted(
-                            &mut world,
-                            &mut Out {
-                                sink: &mut session,
-                                log: &mut *log,
-                            },
-                        )?;
-                        log.send(ClientEvent::World(crate::world::WorldEvent::BuffSnapshot(
-                            eq_network_game::buffs::titanium_profile(&profile_data)?,
-                        )))?;
-                        log.send(ClientEvent::World(crate::world::WorldEvent::Coins(
-                            crate::world::titanium_coins(&profile_data)?,
-                        )))?;
-                        if let Some(value) = initial_experience.take() {
-                            log.send(ClientEvent::World(crate::world::WorldEvent::Experience(
-                                value,
-                            )))?;
-                        }
-                    }
-                    Err(error) => {
-                        log.diagnostic(format!("Player presentation unavailable: {error}"))?;
-                    }
-                }
-                profile_data.clear();
-                spawn_data.clear();
-                log.send(ClientEvent::Progress(ConnectionStage::Ready))?;
-                log.status(
-                    ConnectionState::Connected,
-                    world.packets,
-                    Some(session.last_received_seconds()),
-                )?;
-                log.diagnostic(format!("Zone login sequence complete for {zone_name}; waiting for ongoing server traffic"))?;
-            }
-            ZoneOpcode::ValidationRejected => bail!("server rejected zone validation"),
-            _ => (),
-        }
-        if saw_spawn && saw_profile && saw_weather && !requested {
-            if let Some(shield) = shield.as_ref() {
-                shield.answer(&mut checksums)?;
-                session.send(0x1251, &checksums)?;
-            }
-            session.send(0x7ac5, &[])?;
-            session.send(0x367d, &[])?;
-            session.send(0x5966, &[])?;
-            requested = true;
-            log.send(ClientEvent::Progress(ConnectionStage::EnteringWorld))?;
+        if let Some((player, zone)) = admission.read(
+            &mut packet,
+            &mut world,
+            shield,
+            &credentials.key,
+            &mut checksums,
+            &mut session,
+            log,
+        )? {
+            admit(player, &zone, &mut features, &mut world, &mut session, log)?;
         }
         // Everything else is read once, the same way before and after
         // admission, and heard by every feature.
@@ -478,40 +314,17 @@ pub(super) fn run(
                 !matches!(message, Message::LoggedOut),
                 "server logged the character out"
             );
-            let Message::Event(event) = message else {
-                continue;
-            };
-            match event {
-                event if world.ready() => log.send(ClientEvent::World(event))?,
-                // Before admission, the player's and the zone's state is
-                // staged for the admission report.
-                crate::world::WorldEvent::Skill { skill_id, value } if skill_id < 100 => {
-                    initial_skills.insert(skill_id, value);
-                }
-                crate::world::WorldEvent::Level {
-                    current,
-                    experience,
-                    ..
-                } => {
-                    initial_level = Some(current);
-                    initial_experience = Some(experience);
-                }
-                crate::world::WorldEvent::Experience(value) => {
-                    initial_experience = Some(value);
-                }
-                crate::world::WorldEvent::WearChange(change)
-                    if world.is_player(change.spawn_id) =>
-                {
-                    initial_own_wear.push(change);
-                }
-                _ => (),
+            // Before the admission, the features staged what they need of it.
+            if let (Message::Event(event), true) = (message, world.ready()) {
+                log.send(ClientEvent::World(event))?;
             }
         }
+        let zone = log.zone.clone();
         match chat::parse(packet.opcode, &packet.body, config.include_raw) {
-            Ok(Some(event)) => log.record(&zone_name, RecordEvent::Chat(event))?,
+            Ok(Some(event)) => log.record(&zone, RecordEvent::Chat(event))?,
             Ok(None) => (),
             Err(error) => log.record(
-                &zone_name,
+                &zone,
                 RecordEvent::DecodeError(DecodeError {
                     kind: "decode_error",
                     opcode: packet.opcode,
@@ -521,6 +334,49 @@ pub(super) fn run(
             )?,
         }
     }
+}
+
+/// Tells the host the zone admitted the player, as the features shape them,
+/// and lets every feature tell what it staged.
+fn admit(
+    player: Result<crate::world::PlayerState>,
+    zone: &Zone,
+    features: &mut Features,
+    world: &mut World,
+    session: &mut Box<dyn Transport>,
+    log: &mut Events<'_>,
+) -> Result<()> {
+    match player {
+        Ok(mut player) => {
+            features.shape(&mut player);
+            world.player = Some(player.clone());
+            log.send(ClientEvent::World(crate::world::WorldEvent::Entered {
+                capabilities: features.capabilities(),
+                session_id: world.session_id,
+                zone: zone.name.clone(),
+                player: Box::new(player),
+                far_clip: zone.far_clip,
+            }))?;
+            features.admitted(
+                world,
+                &mut Out {
+                    sink: session,
+                    log: &mut *log,
+                },
+            )?;
+        }
+        Err(error) => log.diagnostic(format!("Player presentation unavailable: {error}"))?,
+    }
+    log.send(ClientEvent::Progress(ConnectionStage::Ready))?;
+    log.status(
+        ConnectionState::Connected,
+        world.packets,
+        Some(session.last_received_seconds()),
+    )?;
+    log.diagnostic(format!(
+        "Zone login sequence complete for {}; waiting for ongoing server traffic",
+        zone.name
+    ))
 }
 
 #[cfg(test)]

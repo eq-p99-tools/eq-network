@@ -62,8 +62,9 @@ impl fmt::Display for Part {
 }
 
 /// What one Titanium zone packet says. A mana update is both a spell notice
-/// and a change in resources, so one packet can say two things. Of the
-/// player's profile, only the spellbook is read here so far.
+/// and a change in resources, so one packet can say two things; the player's
+/// profile says what is in their spellbook, which buffs they wear and the
+/// coins they carry.
 #[must_use]
 pub fn titanium(opcode: u16, body: &[u8]) -> Vec<Message> {
     let mut messages = Vec::new();
@@ -81,10 +82,20 @@ pub fn titanium(opcode: u16, body: &[u8]) -> Vec<Message> {
             |error| unreadable(Part::ZoneOffer, &error),
             Message::ZoneOffer,
         ),
-        PROFILE_OPCODE => spells::SpellBook::titanium_profile(body).map_or_else(
-            |error| unreadable(Part::Spells, &error),
-            |book| Message::Event(WorldEvent::SpellBook(book)),
-        ),
+        PROFILE_OPCODE => {
+            messages.push(crate::buffs::titanium_profile(body).map_or_else(
+                |error| unreadable(Part::World, &error),
+                |buffs| Message::Event(WorldEvent::BuffSnapshot(buffs)),
+            ));
+            messages.push(crate::world::titanium_coins(body).map_or_else(
+                |error| unreadable(Part::World, &error),
+                |coins| Message::Event(WorldEvent::Coins(coins)),
+            ));
+            spells::SpellBook::titanium_profile(body).map_or_else(
+                |error| unreadable(Part::Spells, &error),
+                |book| Message::Event(WorldEvent::SpellBook(book)),
+            )
+        }
         zoning::CHANGE_OPCODE => Message::ZoneAnswer(body.to_vec()),
         zoning::HANDOFF_OPCODE => Message::Handoff(body.to_vec()),
         LOGOUT_REPLY_OPCODE => Message::LoggedOut,
@@ -137,14 +148,28 @@ mod tests {
         profile[2312..2316].copy_from_slice(&73u32.to_le_bytes());
         assert!(matches!(
             &titanium(PROFILE_OPCODE, &profile)[..],
-            [Message::Event(WorldEvent::SpellBook(book))] if book.slots()[0] == Some(73)
+            [
+                Message::Event(WorldEvent::BuffSnapshot(_)),
+                Message::Event(WorldEvent::Coins(_)),
+                Message::Event(WorldEvent::SpellBook(book)),
+            ] if book.slots()[0] == Some(73)
         ));
         assert!(matches!(
             titanium(PROFILE_OPCODE, &[0; 8])[..],
-            [Message::Unreadable {
-                part: Part::Spells,
-                ..
-            }]
+            [
+                Message::Unreadable {
+                    part: Part::World,
+                    ..
+                },
+                Message::Unreadable {
+                    part: Part::World,
+                    ..
+                },
+                Message::Unreadable {
+                    part: Part::Spells,
+                    ..
+                }
+            ]
         ));
     }
 
