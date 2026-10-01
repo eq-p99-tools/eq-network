@@ -135,6 +135,10 @@ pub(super) fn needs(command: &ClientCommand) -> &'static [Resource] {
         | ClientCommand::UseAbility { .. }
         | ClientCommand::SelectTarget { .. }
         | ClientCommand::WhoAll { .. }
+        | ClientCommand::Consent { .. }
+        | ClientCommand::SummonCorpse { .. }
+        | ClientCommand::DragCorpse { .. }
+        | ClientCommand::DropCorpse { .. }
         | ClientCommand::ConfigureMotion { .. }
         | ClientCommand::Move(_) => &[],
     }
@@ -186,6 +190,13 @@ fn refusal(command: &ClientCommand, reason: &str) -> Option<WorldEvent> {
             reason: reason.into(),
         },
         ClientCommand::UseAbility { session_id, .. } => WorldEvent::AbilityRefused {
+            session_id: *session_id,
+            reason: reason.into(),
+        },
+        ClientCommand::Consent { session_id, .. }
+        | ClientCommand::SummonCorpse { session_id, .. }
+        | ClientCommand::DragCorpse { session_id, .. }
+        | ClientCommand::DropCorpse { session_id, .. } => WorldEvent::CorpseRefused {
             session_id: *session_id,
             reason: reason.into(),
         },

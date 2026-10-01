@@ -48,6 +48,14 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   anonymity, game master, away and looking-for-group flags), kept current
   by `WorldEvent::Listing`; the world's and zones' guild lists reach the
   host as `GuildNames`.
+- Players' corpses (`corpses`): `Consent` lets a player drag the player's
+  corpses or takes it back (`/consent`, `/deny`), refused with the
+  official client's words for an empty name or the player's own; the
+  server's answer reaches the host as `WorldEvent::Consent`, for the owner
+  and the one consented. `SummonCorpse` (`/corpse`), `DragCorpse`
+  (`/corpsedrag`) and `DropCorpse` (`/corpsedrop`, one corpse or all) name
+  a player's corpse by its spawn, as servers know it
+  (`Capability::Corpses`); anything else is refused (`CorpseRefused`).
 - Abilities (`abilities`): `UseAbility` uses kick, bash, backstab, frenzy,
   the monk strikes and taunt on the target, and hide, sneak, forage, mend,
   feign death and sense heading on the player (`Capability::Abilities`). The

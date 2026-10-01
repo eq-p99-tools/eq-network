@@ -325,6 +325,37 @@ pub enum GameCommand {
         /// Reject delayed actions instead of replaying them after a stall.
         created: std::time::Instant,
     },
+    /// Let a player drag the player's corpses, or take it back: `/consent`
+    /// and `/deny`.
+    Consent {
+        /// Current zone admission.
+        session_id: u64,
+        /// The player, or `group`, `raid` or `guild`.
+        name: String,
+        /// Given, or taken back.
+        given: bool,
+    },
+    /// Summon a corpse lying close: `/corpse`.
+    SummonCorpse {
+        /// Current zone admission.
+        session_id: u64,
+        /// The corpse's spawn.
+        spawn_id: u16,
+    },
+    /// Start dragging a corpse: `/corpsedrag`.
+    DragCorpse {
+        /// Current zone admission.
+        session_id: u64,
+        /// The corpse's spawn.
+        spawn_id: u16,
+    },
+    /// Stop dragging a corpse, or every corpse: `/corpsedrop`.
+    DropCorpse {
+        /// Current zone admission.
+        session_id: u64,
+        /// The corpse's spawn; None for all of them.
+        spawn_id: Option<u16>,
+    },
     /// Ask the world who is online: `/who all`.
     WhoAll {
         /// Current zone admission.
@@ -398,6 +429,10 @@ impl GameCommand {
             | Self::Consume { session_id, .. }
             | Self::UseAbility { session_id, .. }
             | Self::WhoAll { session_id, .. }
+            | Self::Consent { session_id, .. }
+            | Self::SummonCorpse { session_id, .. }
+            | Self::DragCorpse { session_id, .. }
+            | Self::DropCorpse { session_id, .. }
             | Self::SelectTarget { session_id, .. }
             | Self::ConfigureMotion { session_id, .. } => Some(*session_id),
         }
@@ -448,6 +483,10 @@ impl GameCommand {
             Self::SelectTarget { .. } => Capability::Targeting,
             Self::UseAbility { .. } => Capability::Abilities,
             Self::WhoAll { .. } => Capability::Who,
+            Self::Consent { .. }
+            | Self::SummonCorpse { .. }
+            | Self::DragCorpse { .. }
+            | Self::DropCorpse { .. } => Capability::Corpses,
         })
     }
 
@@ -463,6 +502,10 @@ impl GameCommand {
             | Self::EndLoot { .. }
             | Self::CancelTrade { .. }
             | Self::WhoAll { .. }
+            | Self::Consent { .. }
+            | Self::SummonCorpse { .. }
+            | Self::DragCorpse { .. }
+            | Self::DropCorpse { .. }
             | Self::SelectTarget { .. } => None,
             Self::UseItem(request) => Some(request.created),
             Self::MoveInventory(request) => Some(request.created),
@@ -506,6 +549,31 @@ pub struct EncodedCommand {
     pub body: Vec<u8>,
 }
 
+/// `OP_CastSpell`: a memorized gem's spell at a target.
+fn encode_cast(
+    dialect: GameDialect,
+    gem: u8,
+    spell_id: u32,
+    target_id: u16,
+) -> Result<EncodedCommand> {
+    anyhow::ensure!(
+        dialect == GameDialect::Titanium,
+        "casting is not implemented for this dialect"
+    );
+    anyhow::ensure!(
+        gem < 8 && spell_id != 0 && spell_id != u32::MAX && target_id != 0,
+        "invalid spell cast"
+    );
+    let mut body = Vec::with_capacity(20);
+    for value in [u32::from(gem), spell_id, u32::MAX, u32::from(target_id), 0] {
+        body.extend_from_slice(&value.to_le_bytes());
+    }
+    Ok(EncodedCommand {
+        opcode: 0x304b,
+        body,
+    })
+}
+
 /// Encode a typed client action for one game dialect.
 ///
 /// `character` supplies the active character name for packet layouts that
@@ -529,30 +597,7 @@ pub fn encode(
             spell_id,
             target_id,
             ..
-        } => {
-            anyhow::ensure!(
-                dialect == GameDialect::Titanium,
-                "casting is not implemented for this dialect"
-            );
-            anyhow::ensure!(
-                *gem < 8 && *spell_id != 0 && *spell_id != u32::MAX && *target_id != 0,
-                "invalid spell cast"
-            );
-            let mut body = Vec::with_capacity(20);
-            for value in [
-                u32::from(*gem),
-                *spell_id,
-                u32::MAX,
-                u32::from(*target_id),
-                0,
-            ] {
-                body.extend_from_slice(&value.to_le_bytes());
-            }
-            Ok(EncodedCommand {
-                opcode: 0x304b,
-                body,
-            })
-        }
+        } => encode_cast(dialect, *gem, *spell_id, *target_id),
         GameCommand::SetPosture {
             spawn_id, posture, ..
         } => encode_posture(dialect, *spawn_id, *posture),
@@ -604,6 +649,10 @@ pub fn encode(
         | GameCommand::Consume { .. }
         | GameCommand::UseAbility { .. }
         | GameCommand::WhoAll { .. }
+        | GameCommand::Consent { .. }
+        | GameCommand::SummonCorpse { .. }
+        | GameCommand::DragCorpse { .. }
+        | GameCommand::DropCorpse { .. }
         | GameCommand::UseItem(_)
         | GameCommand::MemorizeSpell { .. }
         | GameCommand::ForgetSpell { .. }
