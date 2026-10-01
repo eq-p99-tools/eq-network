@@ -42,8 +42,12 @@ pub mod p99;
 pub mod quarm;
 /// Server-driven spellbook and casting notifications.
 pub mod spells;
+/// Who is online: `/who all` and the world's answer.
+pub mod who;
 /// Renderer-independent world-state packet decoding.
 pub mod world;
+/// Zone numbers and short names.
+pub mod zones;
 /// Death and server-directed zone transfer codecs.
 pub mod zoning;
 

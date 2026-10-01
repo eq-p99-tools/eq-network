@@ -315,12 +315,14 @@ pub enum Capability {
     Zoning,
     /// Using abilities: kick, bash, taunt, hide, sneak, forage and the like.
     Abilities,
+    /// Asking who is online.
+    Who,
 }
 
 impl Capability {
     /// Every capability, in order: what a session offers when its server and
     /// client generation support everything.
-    pub const ALL: [Self; 16] = [
+    pub const ALL: [Self; 17] = [
         Self::Casting,
         Self::Spellbook,
         Self::Inventory,
@@ -337,6 +339,7 @@ impl Capability {
         Self::GroundItems,
         Self::Zoning,
         Self::Abilities,
+        Self::Who,
     ];
 }
 
@@ -663,6 +666,8 @@ pub enum WorldEvent {
         /// Why not.
         reason: String,
     },
+    /// The world's answer to `/who all`.
+    WhoList(crate::who::WhoList),
     /// A melee, skill or spell damage record for any nearby entities.
     Damage(crate::combat::Damage),
     /// Own-character skill update; unknown skill IDs remain available to consumers.
@@ -811,6 +816,7 @@ pub fn titanium_update(opcode: u16, body: &[u8]) -> Result<Option<WorldEvent>> {
         crate::food::STAMINA_OPCODE => {
             WorldEvent::Nourishment(crate::food::decode(opcode, body)?.unwrap_or_default())
         }
+        crate::who::RESPONSE_OPCODE => WorldEvent::WhoList(crate::who::decode(body)?),
         0x0695 => {
             ensure!(
                 body.len() == 3 && body[2] <= 100,
@@ -1052,6 +1058,7 @@ mod tests {
             Capability::GroundItems => 13,
             Capability::Zoning => 14,
             Capability::Abilities => 15,
+            Capability::Who => 16,
         };
         for (index, capability) in Capability::ALL.into_iter().enumerate() {
             assert_eq!(place(capability), index, "{capability:?}");

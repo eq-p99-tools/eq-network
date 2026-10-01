@@ -5,9 +5,9 @@ use super::{
     doors::Doors,
     ensure, entities, exchange,
     feature::{Encoder, Feature, Out, World},
-    inventory, looting, objects, servers, spellbook, talk, targeting, transfers, CharacterSession,
-    ClientCommand, ClientEvent, ConnectionStage, ConnectionState, DecodeError, Duration, Events,
-    Instant, RecordEvent, Result, Session, Shield, ZoneExit,
+    inventory, looting, objects, servers, spellbook, talk, targeting, transfers, who,
+    CharacterSession, ClientCommand, ClientEvent, ConnectionStage, ConnectionState, DecodeError,
+    Duration, Events, Instant, RecordEvent, Result, Session, Shield, ZoneExit,
 };
 
 use super::admission::{Admission, Zone};
@@ -44,6 +44,7 @@ impl Features {
             Box::new(Doors::default()),
             Box::new(objects::GroundObjects::default()),
             Box::new(transfers::Transfers::new(name)),
+            Box::new(who::Who),
         ])
     }
 
@@ -406,7 +407,7 @@ mod tests {
     };
 
     /// How many kinds of command there are.
-    const KINDS: usize = 35;
+    const KINDS: usize = 36;
 
     /// Which kind of command this is. A new command is a compile error here
     /// until it has a number, and then a test failure until the list below
@@ -449,6 +450,7 @@ mod tests {
             ClientCommand::MoveCoins { .. } => 32,
             ClientCommand::UseAbility { .. } => 33,
             ClientCommand::Consume { .. } => 34,
+            ClientCommand::WhoAll { .. } => 35,
         }
     }
 
@@ -655,6 +657,10 @@ mod tests {
                 slot: InventorySlot(22),
                 created,
             },
+            ClientCommand::WhoAll {
+                session_id,
+                filter: eq_network_game::who::WhoFilter::default(),
+            },
         ]
     }
 
@@ -727,6 +733,7 @@ mod tests {
             Capability::GroundItems,
             Capability::Zoning,
             Capability::Abilities,
+            Capability::Who,
         ] {
             assert!(p99.contains(&capability), "{capability:?}");
         }

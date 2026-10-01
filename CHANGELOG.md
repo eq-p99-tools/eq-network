@@ -37,6 +37,12 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `AutoEat::Anything` eats whatever comes first, as the official client
   does. `Consume` eats or drinks an item by hand, refused with the official
   client's words when the player is full (`ConsumeRefused`).
+- Who is online (`who`): `WhoAll` asks the world by name, guild or zone
+  start, race, class, levels or game masters (`WhoFilter`,
+  `Capability::Who`), and the answer reaches the host as `WhoList`: the
+  string numbers that word its heading, lines and closing count, with each
+  player's name, guild, level, class, race and zone as the world shows
+  them. `zones` maps zone numbers to short names.
 - Abilities (`abilities`): `UseAbility` uses kick, bash, backstab, frenzy,
   the monk strikes and taunt on the target, and hide, sneak, forage, mend,
   feign death and sense heading on the player (`Capability::Abilities`). The

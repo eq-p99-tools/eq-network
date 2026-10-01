@@ -20,6 +20,7 @@ mod spellbook;
 mod talk;
 mod targeting;
 mod transfers;
+mod who;
 mod zone;
 
 use super::{
