@@ -1775,6 +1775,7 @@ fn zone(
                         if let Some(level) = initial_level.take() {
                             player.level = level;
                         }
+                        player.appearance.show_helm |= !server.helm_choice();
                         for change in std::mem::take(&mut initial_own_wear) {
                             player.appearance.apply(&change);
                         }
@@ -1949,7 +1950,13 @@ fn zone(
                     | eq_network_game::appearance::WEAR_CHANGE_OPCODE
             )
         {
-            match crate::world::titanium_update(packet.opcode, &packet.body) {
+            let update = crate::world::titanium_update(packet.opcode, &packet.body);
+            match update.map(|event| {
+                event.map(|mut event| {
+                    servers::show_helms(server, &mut event);
+                    event
+                })
+            }) {
                 Ok(Some(crate::world::WorldEvent::WearChange(change))) => {
                     if let Some(spawn) = initial_spawns.get_mut(&change.spawn_id) {
                         spawn.appearance.apply(&change);
@@ -1994,7 +2001,13 @@ fn zone(
             }
         }
         if ready {
-            match crate::world::titanium_update(packet.opcode, &packet.body) {
+            let update = crate::world::titanium_update(packet.opcode, &packet.body);
+            match update.map(|event| {
+                event.map(|mut event| {
+                    servers::show_helms(server, &mut event);
+                    event
+                })
+            }) {
                 Ok(Some(event)) => {
                     match &event {
                         crate::world::WorldEvent::Posture { spawn_id, posture }
