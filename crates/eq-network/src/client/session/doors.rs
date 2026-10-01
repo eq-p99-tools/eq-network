@@ -5,13 +5,11 @@ use super::{
 };
 use anyhow::{anyhow, ensure, Result};
 use eq_network_game::{
+    command::EncodedCommand,
     doors::DoorUpdate,
     world::{WorldEvent, WorldEvent::DoorAction},
 };
 use std::time::{Duration, Instant};
-
-/// Titanium's door click.
-const CLICK_OPCODE: u16 = 0x043b;
 
 /// The zone's doors in this admission.
 pub(super) struct Doors {
@@ -31,7 +29,7 @@ impl Default for Doors {
 
 impl Doors {
     /// The click packet for a fresh request on a door in reach.
-    fn click(&self, command: &ClientCommand, world: &World) -> Result<[u8; 16]> {
+    fn click(&self, command: &ClientCommand, world: &World) -> Result<EncodedCommand> {
         let ClientCommand::ClickDoor {
             session_id,
             door_id,
@@ -76,8 +74,8 @@ impl Feature for Doors {
             return Ok(false);
         };
         let error = match self.click(command, world) {
-            Ok(body) => {
-                out.session.send(CLICK_OPCODE, &body)?;
+            Ok(packet) => {
+                out.send(&packet)?;
                 None
             }
             Err(error) => Some(error.to_string()),
@@ -108,7 +106,53 @@ impl Feature for Doors {
 
 #[cfg(test)]
 mod tests {
+    use super::super::feature::testing;
     use super::*;
+    use eq_network_game::{doors::Door, world::Position};
+
+    #[test]
+    fn a_fresh_click_on_a_door_in_reach_sends_the_click_and_reports_it() {
+        let mut doors = Doors::default();
+        doors.admit(&WorldEvent::Doors(DoorUpdate::Spawn(vec![Door {
+            id: 1,
+            model: "DOOR".into(),
+            position: Position::default(),
+            incline: 0,
+            size: 100,
+            open_type: 0,
+            state_at_spawn: 0,
+            invert_state: 0,
+            parameter: 0,
+            action: None,
+        }])));
+        let mut world = World::new(5);
+        let click = ClientCommand::ClickDoor {
+            session_id: 5,
+            door_id: 1,
+            created: Instant::now(),
+        };
+        let outcome = testing::run(|out| doors.handle(&click, &mut world, out));
+        assert!(outcome.result.unwrap());
+        assert!(outcome.sent.is_empty());
+        assert!(matches!(
+            &outcome.events[..],
+            [ClientEvent::World(DoorAction { door_id: 1, error: Some(error), .. })]
+                if error == "player is unavailable"
+        ));
+        world.player = Some(testing::player(7));
+        let outcome = testing::run(|out| doors.handle(&click, &mut world, out));
+        assert!(outcome.result.unwrap());
+        assert_eq!(outcome.sent.len(), 1);
+        assert_eq!(outcome.sent[0].opcode, eq_network_game::doors::CLICK_OPCODE);
+        assert!(matches!(
+            outcome.events[..],
+            [ClientEvent::World(DoorAction {
+                door_id: 1,
+                error: None,
+                ..
+            })]
+        ));
+    }
 
     #[test]
     fn clicks_need_a_fresh_request_from_this_admission_after_the_doors_last_changed() {

@@ -1,8 +1,11 @@
 //! Titanium door definitions and server movement instructions.
-use crate::world::Position;
+use crate::{command::EncodedCommand, world::Position};
 use anyhow::{ensure, Result};
 use serde::Serialize;
 use std::collections::BTreeMap;
+
+/// `OP_ClickDoor`: the player uses a door.
+pub const CLICK_OPCODE: u16 = 0x043b;
 
 /// A server-defined door or interactive zone object; open types are not all hinged doors.
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -75,7 +78,12 @@ impl Doors {
     ///
     /// # Errors
     /// Rejects unknown doors, invalid own IDs and non-finite or distant positions.
-    pub fn click_packet(&self, id: u8, player_id: u16, position: Position) -> Result<[u8; 16]> {
+    pub fn click_packet(
+        &self,
+        id: u8,
+        player_id: u16,
+        position: Position,
+    ) -> Result<EncodedCommand> {
         let door = self
             .0
             .get(&id)
@@ -87,10 +95,13 @@ impl Doors {
             player_id != 0 && distance.is_finite() && distance <= Self::USE_DISTANCE,
             "door is out of reach or player position is unavailable"
         );
-        let mut body = [0; 16];
+        let mut body = vec![0; 16];
         body[0] = id;
         body[12..14].copy_from_slice(&player_id.to_le_bytes());
-        Ok(body)
+        Ok(EncodedCommand {
+            opcode: CLICK_OPCODE,
+            body,
+        })
     }
     /// Current server-provided definitions in stable door-ID order.
     #[must_use]
@@ -260,9 +271,10 @@ mod tests {
         assert_eq!(admitted.entries()[&7].action, Some(253));
         let position = admitted.entries()[&7].position;
         let packet = admitted.click_packet(7, 0x1234, position).unwrap();
-        assert_eq!(packet[0], 7);
-        assert_eq!(&packet[1..12], &[0; 11]);
-        assert_eq!(&packet[12..], &[0x34, 0x12, 0, 0]);
+        assert_eq!(packet.opcode, CLICK_OPCODE);
+        assert_eq!(packet.body[0], 7);
+        assert_eq!(&packet.body[1..12], &[0; 11]);
+        assert_eq!(&packet.body[12..], &[0x34, 0x12, 0, 0]);
         assert!(admitted.click_packet(7, 0, position).is_err());
         assert!(admitted.click_packet(8, 1, position).is_err());
         let mut distant = position;

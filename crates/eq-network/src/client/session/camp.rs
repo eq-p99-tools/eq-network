@@ -8,15 +8,11 @@ use super::{
 };
 use anyhow::Result;
 use eq_network_game::{
-    command::Posture,
+    command::{self, Posture},
     world::{CampStatus, WorldEvent},
 };
 use std::time::{Duration, Instant};
 
-/// `OP_Camp`, a four-byte request.
-const CAMP_OPCODE: u16 = 0x78c1;
-/// `OP_Logout`, an empty request sent once the camp timer completes.
-const LOGOUT_OPCODE: u16 = 0x61ff;
 /// `OP_LogoutReply`, after which the zone connection ends.
 const LOGOUT_REPLY_OPCODE: u16 = 0x3cdc;
 
@@ -108,7 +104,7 @@ impl Feature for Camp {
                         "Camp request expired".into(),
                     ))))?;
             } else if !self.active() {
-                out.session.send(CAMP_OPCODE, &[0; 4])?;
+                out.send(&command::titanium_camp())?;
                 self.start(now);
                 out.log
                     .send(ClientEvent::World(WorldEvent::Camp(CampStatus::Preparing)))?;
@@ -140,9 +136,7 @@ impl Feature for Camp {
             );
             let own_spawn = world.player.as_ref().map(|player| player.spawn_id);
             if let (false, Some(spawn_id)) = (standing, own_spawn) {
-                let stand =
-                    eq_network_game::command::titanium_posture(spawn_id, Posture::Standing)?;
-                out.session.send(stand.opcode, &stand.body)?;
+                out.send(&command::titanium_posture(spawn_id, Posture::Standing)?)?;
                 world.posture.sent(spawn_id, Posture::Standing, out.log)?;
             }
             out.log
@@ -155,7 +149,7 @@ impl Feature for Camp {
     /// reply that never came.
     fn tick(&mut self, now: Instant, world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
         if self.logout_due(now) {
-            out.session.send(LOGOUT_OPCODE, &[])?;
+            out.send(&command::titanium_logout())?;
             self.logout_sent(now);
             out.log
                 .send(ClientEvent::World(WorldEvent::Camp(CampStatus::LoggingOut)))?;
@@ -204,7 +198,59 @@ impl Feature for Camp {
 
 #[cfg(test)]
 mod tests {
+    use super::super::feature::testing;
     use super::*;
+
+    #[test]
+    fn camping_sends_the_request_then_the_logout_and_the_reply_ends_the_session() {
+        let mut camp = Camp::default();
+        let mut world = World::new(5);
+        let request = ClientCommand::Camp {
+            session_id: 5,
+            created: Instant::now(),
+        };
+        let outcome = testing::run(|out| camp.handle(&request, &mut world, out));
+        assert!(outcome.result.unwrap());
+        assert_eq!(outcome.sent, [command::titanium_camp()]);
+        assert!(matches!(
+            outcome.events[..],
+            [ClientEvent::World(WorldEvent::Camp(CampStatus::Preparing))]
+        ));
+        let done = Instant::now() + CAMP_DURATION;
+        let outcome = testing::run(|out| camp.tick(done, &mut world, out));
+        outcome.result.unwrap();
+        assert_eq!(outcome.sent, [command::titanium_logout()]);
+        let outcome = testing::run(|out| camp.receive(LOGOUT_REPLY_OPCODE, &[], &mut world, out));
+        assert!(outcome.result.unwrap());
+        assert!(matches!(world.exit, Some(ZoneExit::CharacterSelect)));
+    }
+
+    #[test]
+    fn using_a_door_abandons_the_camp_and_stands_the_player_up_first() {
+        let mut camp = Camp::default();
+        let mut world = World::new(5);
+        world.player = Some(testing::player(7));
+        camp.start(Instant::now());
+        let click = ClientCommand::ClickDoor {
+            session_id: 5,
+            door_id: 1,
+            created: Instant::now(),
+        };
+        let outcome = testing::run(|out| camp.handle(&click, &mut world, out));
+        assert!(!outcome.result.unwrap());
+        assert_eq!(
+            outcome.sent,
+            [command::titanium_posture(7, Posture::Standing).unwrap()]
+        );
+        assert!(matches!(
+            outcome.events[..],
+            [
+                ClientEvent::World(WorldEvent::Posture { spawn_id: 7, .. }),
+                ClientEvent::World(WorldEvent::Camp(CampStatus::Abandoned)),
+            ]
+        ));
+        assert!(!camp.active());
+    }
 
     #[test]
     fn camp_waits_thirty_seconds_and_standing_cancels_only_before_logout() {

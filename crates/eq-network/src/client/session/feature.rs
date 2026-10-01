@@ -7,22 +7,67 @@
 
 use super::{
     lifecycle::ZoneLifecycle, posture::OwnPosture, spellbook::PendingBookAction, ClientCommand,
-    Events, Session, ZoneExit,
+    ConnectionState, Events, Session, ZoneExit,
 };
 use anyhow::Result;
 use eq_network_game::{
+    command::EncodedCommand,
     inventory::Inventory,
     movement::MotionSession,
     world::{PlayerState, Position, WorldEvent},
 };
 use std::time::Instant;
 
+/// Where a feature's packets go: the zone connection, or a recording in tests.
+pub(super) trait Sink {
+    /// Sends a packet that must arrive.
+    ///
+    /// # Errors
+    /// Returns an error when the connection fails.
+    fn send(&mut self, packet: &EncodedCommand) -> Result<()>;
+
+    /// Seconds since the server last sent anything.
+    fn last_received_seconds(&self) -> u64;
+}
+
+impl Sink for Session {
+    fn send(&mut self, packet: &EncodedCommand) -> Result<()> {
+        Session::send(self, packet.opcode, &packet.body)
+    }
+
+    fn last_received_seconds(&self) -> u64 {
+        Session::last_received_seconds(self)
+    }
+}
+
 /// Where a feature sends packets and what it tells the host.
 pub(super) struct Out<'a, 'e> {
-    /// The zone connection.
-    pub(super) session: &'a mut Session,
+    /// Where packets go.
+    pub(super) sink: &'a mut dyn Sink,
     /// The host's events and diagnostics.
     pub(super) log: &'a mut Events<'e>,
+}
+
+impl Out<'_, '_> {
+    /// Sends a packet that must arrive.
+    ///
+    /// # Errors
+    /// Returns an error when the connection fails.
+    pub(super) fn send(&mut self, packet: &EncodedCommand) -> Result<()> {
+        self.sink.send(packet)
+    }
+
+    /// Tells the host the zone session's state.
+    ///
+    /// # Errors
+    /// Returns an error when the host's event handler fails.
+    pub(super) fn status(&mut self, state: ConnectionState, world: &World) -> Result<()> {
+        self.log.status(
+            state,
+            world.packets,
+            Some(self.sink.last_received_seconds()),
+        )
+    }
 }
 
 /// What the zone's features share.
@@ -84,6 +129,12 @@ impl World {
             ready: false,
             packets: 0,
         }
+    }
+
+    /// Whether a spawn is the player.
+    pub(super) fn is_player(&self, spawn_id: impl Into<u32>) -> bool {
+        let spawn_id = spawn_id.into();
+        self.own_spawn.is_some_and(|own| u32::from(own) == spawn_id)
     }
 
     /// The admitted player's spawn ID and where they are now.
@@ -157,5 +208,73 @@ pub(super) trait Feature {
         _out: &mut Out<'_, '_>,
     ) -> Result<()> {
         Ok(())
+    }
+}
+
+/// Runs features in tests against a recording instead of a connection.
+#[cfg(test)]
+pub(super) mod testing {
+    use super::{EncodedCommand, Events, Out, Result, Sink};
+    use crate::client::{ClientConfig, ClientEvent};
+
+    /// A sink that keeps what features send.
+    #[derive(Default)]
+    pub(in crate::client::session) struct Recorder(
+        pub(in crate::client::session) Vec<EncodedCommand>,
+    );
+
+    impl Sink for Recorder {
+        fn send(&mut self, packet: &EncodedCommand) -> Result<()> {
+            self.0.push(packet.clone());
+            Ok(())
+        }
+
+        fn last_received_seconds(&self) -> u64 {
+            0
+        }
+    }
+
+    /// An admitted player with this spawn ID, standing at the origin.
+    pub(in crate::client::session) fn player(spawn_id: u16) -> eq_network_game::world::PlayerState {
+        let mut spawn = vec![0; 385];
+        spawn[340..344].copy_from_slice(&u32::from(spawn_id).to_le_bytes());
+        eq_network_game::world::titanium_player(&vec![0; 19592], &spawn, 256.0)
+            .expect("a zeroed profile admits a player")
+    }
+
+    /// What a step sent and told the host.
+    pub(in crate::client::session) struct Outcome<R> {
+        pub(in crate::client::session) result: R,
+        pub(in crate::client::session) sent: Vec<EncodedCommand>,
+        pub(in crate::client::session) events: Vec<ClientEvent>,
+    }
+
+    /// Runs one step of a feature with an `Out` that records.
+    pub(in crate::client::session) fn run<R>(
+        step: impl FnOnce(&mut Out<'_, '_>) -> R,
+    ) -> Outcome<R> {
+        let config = ClientConfig::new(
+            "EXAMPLE_ACCOUNT",
+            "EXAMPLE_PASSWORD",
+            "Test Server",
+            "ExampleCharacter",
+        );
+        let mut events = Vec::new();
+        let mut handler = |event| {
+            events.push(event);
+            Ok(())
+        };
+        let mut log = Events::new(&config, &mut handler);
+        let mut sink = Recorder::default();
+        let result = step(&mut Out {
+            sink: &mut sink,
+            log: &mut log,
+        });
+        drop(log);
+        Outcome {
+            result,
+            sent: sink.0,
+            events,
+        }
     }
 }

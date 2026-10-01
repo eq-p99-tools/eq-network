@@ -15,8 +15,6 @@ const ZONE_POINTS_OPCODE: u16 = 0x3eba;
 const TO_BIND_OPCODE: u16 = 0x385e;
 /// `OP_RequestClientZoneChange`, the server moving the player.
 const MOVE_OPCODE: u16 = 0x7834;
-/// `OP_ZoneChange`, the player's transfer request and the server's answer.
-const ZONE_CHANGE_OPCODE: u16 = 0x5dd8;
 /// `OP_ZoneServerInfo`, the next zone's address.
 const HANDOFF_OPCODE: u16 = 0x61b6;
 /// How long a request to cross a zone line stays fresh.
@@ -81,8 +79,7 @@ impl Transfers {
         world: &mut World,
         out: &mut Out<'_, '_>,
     ) -> Result<()> {
-        out.session
-            .send(ZONE_CHANGE_OPCODE, &offer.response(&self.character)?)?;
+        out.send(&offer.response(&self.character)?)?;
         world.lifecycle.offer(offer.clone(), Instant::now())?;
         spellbook::cancel_pending(&mut world.book_action, "Zone transfer started", out.log)?;
         if let Some(motion) = world.motion.as_mut() {
@@ -92,12 +89,7 @@ impl Transfers {
             .send(ClientEvent::World(WorldEvent::ZoneTransfer(offer)))?;
         out.log
             .send(ClientEvent::World(motion::withdrawn(world.session_id)))?;
-        out.log.status(
-            ConnectionState::Zoning,
-            world.packets,
-            Some(out.session.last_received_seconds()),
-        )?;
-        Ok(())
+        out.status(ConnectionState::Zoning, world)
     }
 
     /// Takes the server's offer to move the player, within the zone or out
@@ -173,11 +165,7 @@ impl Transfers {
             if let Some(motion) = world.motion.as_mut() {
                 motion.resume_stationary(Instant::now());
             }
-            out.log.status(
-                ConnectionState::Connected,
-                world.packets,
-                Some(out.session.last_received_seconds()),
-            )?;
+            out.status(ConnectionState::Connected, world)?;
         }
         Ok(())
     }
@@ -261,7 +249,7 @@ impl Feature for Transfers {
             TO_BIND_OPCODE | MOVE_OPCODE if world.ready => {
                 self.offered(opcode, body, world, out)?;
             }
-            ZONE_CHANGE_OPCODE if world.ready => self.answered(body, world, out)?,
+            zoning::CHANGE_OPCODE if world.ready => self.answered(body, world, out)?,
             HANDOFF_OPCODE => {
                 ensure!(
                     world.ready && world.lifecycle.pending().is_some(),
@@ -288,8 +276,56 @@ impl Feature for Transfers {
 
 #[cfg(test)]
 mod tests {
+    use super::super::feature::testing;
     use super::*;
     use eq_network_game::movement::MotionSession;
+
+    #[test]
+    fn a_zone_line_asks_for_the_transfer_and_the_handoff_ends_the_session() {
+        let mut transfers = Transfers::new("Tester");
+        let mut world = World::new(5);
+        let here = Position {
+            x: 10.0,
+            y: 20.0,
+            z: 3.0,
+            heading: 0.0,
+        };
+        world.motion = Some(MotionSession::new(5, 7, here, Instant::now()).unwrap());
+        world.zone = (2, 0);
+        world.ready = true;
+        let cross = ClientCommand::CrossZoneLine {
+            session_id: 5,
+            destination: zoning::ZoneLineDestination::Absolute {
+                zone_id: 4,
+                position: here,
+            },
+            position: here,
+            created: Instant::now(),
+        };
+        let outcome = testing::run(|out| transfers.handle(&cross, &mut world, out));
+        assert!(outcome.result.unwrap());
+        assert_eq!(outcome.sent.len(), 1);
+        assert_eq!(outcome.sent[0].opcode, zoning::CHANGE_OPCODE);
+        assert!(world
+            .lifecycle
+            .pending()
+            .is_some_and(|offer| offer.zone_id == 4));
+        assert!(matches!(
+            outcome.events[..],
+            [
+                ClientEvent::World(WorldEvent::ZoneTransfer(_)),
+                ClientEvent::World(WorldEvent::MotionState {
+                    units_per_second: None,
+                    ..
+                }),
+                ClientEvent::Status(_),
+            ]
+        ));
+        let outcome =
+            testing::run(|out| transfers.receive(HANDOFF_OPCODE, &[1, 2, 3], &mut world, out));
+        assert!(outcome.result.unwrap());
+        assert!(matches!(&world.exit, Some(ZoneExit::Direct(address)) if address == &[1, 2, 3]));
+    }
 
     #[test]
     fn zone_lines_need_a_fresh_request_from_where_the_player_stands() {

@@ -248,7 +248,7 @@ pub(super) fn run(
             Instant::now(),
             &mut world,
             &mut Out {
-                session: &mut session,
+                sink: &mut session,
                 log: &mut *log,
             },
         )?;
@@ -290,14 +290,19 @@ pub(super) fn run(
                         actions::refuse(&command, reason, log)?;
                         continue;
                     }
-                    if features.handle(
+                    let handled = features.handle(
                         &command,
                         &mut world,
                         &mut Out {
-                            session: &mut session,
+                            sink: &mut session,
                             log: &mut *log,
                         },
-                    )? {
+                    )?;
+                    if let Some(exit) = world.exit.take() {
+                        session.close()?;
+                        return Ok(exit);
+                    }
+                    if handled {
                         // Commands wait while the player is dead or zoning.
                         if world.lifecycle.is_dead() || world.lifecycle.pending().is_some() {
                             break;
@@ -897,7 +902,7 @@ pub(super) fn run(
             &packet.body,
             &mut world,
             &mut Out {
-                session: &mut session,
+                sink: &mut session,
                 log: &mut *log,
             },
         )?;
@@ -1030,9 +1035,7 @@ pub(super) fn run(
                         )))?;
                         world.posture = posture::OwnPosture::default();
                         for (spawn_id, posture) in std::mem::take(&mut initial_postures) {
-                            if spawn_id
-                                == u16::from_le_bytes([world.stationary[0], world.stationary[1]])
-                            {
+                            if world.is_player(spawn_id) {
                                 world.posture.observed(posture);
                             }
                             log.send(ClientEvent::World(crate::world::WorldEvent::Posture {
@@ -1158,9 +1161,7 @@ pub(super) fn run(
                     if let Some(spawn) = initial_spawns.get_mut(&change.spawn_id) {
                         spawn.appearance.apply(&change);
                     }
-                    if change.spawn_id
-                        == u16::from_le_bytes([world.stationary[0], world.stationary[1]])
-                    {
+                    if world.is_player(change.spawn_id) {
                         initial_own_wear.push(change);
                     }
                 }
@@ -1206,17 +1207,17 @@ pub(super) fn run(
                         &event,
                         &mut world,
                         &mut Out {
-                            session: &mut session,
+                            sink: &mut session,
                             log: &mut *log,
                         },
                     )?;
+                    if let Some(exit) = world.exit.take() {
+                        session.close()?;
+                        return Ok(exit);
+                    }
                     match &event {
                         crate::world::WorldEvent::Posture { spawn_id, posture }
-                            if *spawn_id
-                                == u16::from_le_bytes([
-                                    world.stationary[0],
-                                    world.stationary[1],
-                                ]) =>
+                            if world.is_player(*spawn_id) =>
                         {
                             world.posture.observed(*posture);
                             if *posture != crate::world::PostureState::Sitting {
@@ -1268,11 +1269,7 @@ pub(super) fn run(
                             }
                         }
                         crate::world::WorldEvent::Death(death)
-                            if death.spawn_id
-                                == u32::from(u16::from_le_bytes([
-                                    world.stationary[0],
-                                    world.stationary[1],
-                                ])) =>
+                            if world.is_player(death.spawn_id) =>
                         {
                             world.lifecycle.mark_dead();
                             spellbook::cancel_pending(
@@ -1322,9 +1319,7 @@ pub(super) fn run(
                         spawn_id, position, ..
                     } = &event
                     {
-                        if *spawn_id
-                            == u16::from_le_bytes([world.stationary[0], world.stationary[1]])
-                        {
+                        if world.is_player(*spawn_id) {
                             spellbook::cancel_pending(
                                 &mut world.book_action,
                                 "Server corrected character position",

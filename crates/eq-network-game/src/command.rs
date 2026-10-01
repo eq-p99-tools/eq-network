@@ -424,13 +424,30 @@ pub fn encode(
     }
 }
 
-/// Titanium appearance update for the player's own stance.
 /// The Titanium appearance packet that sets the own spawn's posture.
 ///
 /// # Errors
 /// Rejects a zero spawn ID.
 pub fn titanium_posture(spawn_id: u16, posture: Posture) -> Result<EncodedCommand> {
     encode_posture(GameDialect::TitaniumP99, spawn_id, posture)
+}
+
+/// Titanium `OP_Camp`, which starts the server's own camp timer.
+#[must_use]
+pub fn titanium_camp() -> EncodedCommand {
+    EncodedCommand {
+        opcode: 0x78c1,
+        body: vec![0; 4],
+    }
+}
+
+/// Titanium `OP_Logout`, sent once the client's camp timer completes.
+#[must_use]
+pub fn titanium_logout() -> EncodedCommand {
+    EncodedCommand {
+        opcode: 0x61ff,
+        body: Vec::new(),
+    }
 }
 
 fn encode_posture(dialect: GameDialect, spawn_id: u16, posture: Posture) -> Result<EncodedCommand> {

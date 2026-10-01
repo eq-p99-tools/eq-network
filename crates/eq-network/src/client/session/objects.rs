@@ -6,8 +6,9 @@ use super::{
 };
 use anyhow::{anyhow, ensure, Result};
 use eq_network_game::{
+    command::EncodedCommand,
     inventory::{Inventory, InventorySlot},
-    objects::{ObjectUpdate, Objects, CLICK_OPCODE, CONTAINER_OPCODE},
+    objects::{ObjectUpdate, Objects},
     world::{Position, WorldEvent},
 };
 use std::time::{Duration, Instant};
@@ -59,8 +60,8 @@ impl Feature for GroundObjects {
             Instant::now(),
         );
         let error = match checked {
-            Ok(body) => {
-                out.session.send(CLICK_OPCODE, &body)?;
+            Ok(packet) => {
+                out.send(&packet)?;
                 None
             }
             Err(error) => Some(error.to_string()),
@@ -85,10 +86,9 @@ impl Feature for GroundObjects {
             return Ok(());
         };
         self.0.apply(update);
-        let own_spawn = world.player.as_ref().map(|player| player.spawn_id);
         if let ObjectUpdate::Container(view) = update {
-            if view.open && own_spawn.is_some_and(|id| u32::from(id) == view.player_id) {
-                out.session.send(CONTAINER_OPCODE, &view.close_packet())?;
+            if view.open && world.is_player(view.player_id) {
+                out.send(&view.close_packet())?;
                 out.log.diagnostic(format!(
                     "Closed world container {}: containers are not supported yet",
                     view.drop_id
@@ -110,7 +110,7 @@ impl GroundObjects {
         player: Option<(u16, Position)>,
         inventory: &Inventory,
         now: Instant,
-    ) -> Result<[u8; 8]> {
+    ) -> Result<EncodedCommand> {
         ensure!(
             request.requested == session_id
                 && request.created <= now
@@ -209,7 +209,8 @@ mod tests {
         assert_eq!(
             objects
                 .pickup(&request, 5, player, &loaded(false), now)
-                .unwrap(),
+                .unwrap()
+                .body,
             [71, 0, 0, 0, 9, 0, 0, 0]
         );
         let error = |request: &Pickup, player, inventory: &Inventory, at| {

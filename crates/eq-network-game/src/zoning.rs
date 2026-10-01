@@ -3,11 +3,14 @@
 //! Layout references: EQEmu common/patches/titanium_structs.h and
 //! common/eq_packet_structs.h. Spatial boundary detection belongs to the client;
 //! the network layer validates its request against current admission state.
-use crate::world::Position;
+use crate::{command::EncodedCommand, world::Position};
 use anyhow::{ensure, Result};
 use serde::Serialize;
 mod points;
 pub use points::{ZoneLineDestination, ZonePoint, ZonePoints};
+
+/// `OP_ZoneChange`: the client's transfer request, and the server's answer.
+pub const CHANGE_OPCODE: u16 = 0x5dd8;
 
 /// A pending destination selected by a server offer or local boundary.
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -39,13 +42,13 @@ impl ZoneOffer {
     ///
     /// # Errors
     /// Rejects names that cannot fit the NUL-terminated Titanium name field.
-    pub fn response(&self, character: &str) -> Result<[u8; 88]> {
+    pub fn response(&self, character: &str) -> Result<EncodedCommand> {
         ensure!(
             !character.is_empty() && character.len() < 64 && !character.contains('\0'),
             "invalid character name"
         );
         ensure!(finite(self.position), "invalid zone coordinates");
-        let mut body = [0; 88];
+        let mut body = vec![0; 88];
         body[..character.len()].copy_from_slice(character.as_bytes());
         body[64..66].copy_from_slice(&self.zone_id.to_le_bytes());
         body[66..68].copy_from_slice(&self.instance_id.to_le_bytes());
@@ -57,7 +60,10 @@ impl ZoneOffer {
             body[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
         }
         body[80..84].copy_from_slice(&self.reason.to_le_bytes());
-        Ok(body)
+        Ok(EncodedCommand {
+            opcode: CHANGE_OPCODE,
+            body,
+        })
     }
 }
 
@@ -261,7 +267,7 @@ mod tests {
             to_bind: false,
             solicited: false,
         };
-        let mut body = pending.response("Example").unwrap();
+        let mut body = pending.response("Example").unwrap().body;
         for code in [0_i32, -1, -2, -3, -6, -7, -12345, 42, i32::MIN] {
             body[84..88].copy_from_slice(&code.to_le_bytes());
             let rejection = ZoneRejection::Server(code);
@@ -317,7 +323,7 @@ mod tests {
             to_bind: false,
             solicited: false,
         };
-        let mut body = pending.response("Example").unwrap();
+        let mut body = pending.response("Example").unwrap().body;
         body[64..66].copy_from_slice(&7u16.to_le_bytes());
         body[68..72].copy_from_slice(&12.0f32.to_le_bytes());
         body[72..76].copy_from_slice(&(-4.0f32).to_le_bytes());
@@ -354,7 +360,7 @@ mod tests {
         offer[..2].copy_from_slice(&1u16.to_le_bytes());
         let pending = super::offer(0x7834, &offer).unwrap();
         assert!(pending.solicited);
-        let mut body = pending.response("Example").unwrap();
+        let mut body = pending.response("Example").unwrap().body;
         body[64..66].copy_from_slice(&7u16.to_le_bytes());
         body[68..80].fill(0);
         body[84..88].copy_from_slice(&1u32.to_le_bytes());
@@ -378,7 +384,9 @@ mod tests {
             (request.position.x, request.position.y, request.reason),
             (5.0, -2.0, 42)
         );
-        let mut response = request.response("Example").unwrap();
+        let response = request.response("Example").unwrap();
+        assert_eq!(response.opcode, CHANGE_OPCODE);
+        let mut response = response.body;
         assert_eq!(&response[68..72], &(-2f32).to_le_bytes());
         assert!(!approved(&response, "Example", &request).unwrap());
         response[84..].copy_from_slice(&1i32.to_le_bytes());
