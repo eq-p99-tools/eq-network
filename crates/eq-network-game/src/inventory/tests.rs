@@ -431,12 +431,11 @@ fn item_cast_uses_current_effect_and_titanium_item_slot_without_consuming_invent
         target_id: 7,
         created: now,
     };
-    assert_eq!(
-        inventory
-            .prepare_item_cast(&request, 12, 20, true, now)
-            .unwrap(),
-        (73, packet)
-    );
+    let (spell_id, cast) = inventory
+        .prepare_item_cast(&request, 12, 20, true, now)
+        .unwrap();
+    assert_eq!((spell_id, cast.opcode), (73, super::CAST_OPCODE));
+    assert_eq!(cast.body, packet);
     assert!(inventory
         .prepare_item_cast(&request, 13, 20, true, now)
         .is_err());

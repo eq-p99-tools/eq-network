@@ -8,7 +8,7 @@
 //! too long ago, so these are decided in one place instead of by per-action guards.
 use super::{
     book_edits::BookEdits,
-    casting::{self, CastGuard},
+    casting,
     merchant::MerchantTrades,
     spellbook::{BookIntent, PendingBookAction},
     ClientCommand, ClientEvent, Events,
@@ -69,36 +69,23 @@ pub(super) enum Resource {
 pub(super) struct Held(Vec<(Resource, &'static str)>);
 
 impl Held {
-    /// Derives holds from the controllers that track each action's lifetime.
-    pub(super) fn from_state(
-        cast_guard: &CastGuard,
+    /// The holds of every action in flight, the features' first.
+    pub(super) fn new(holds: Vec<(Resource, &'static str)>) -> Self {
+        Self(holds)
+    }
+
+    /// The holds the zone gathers, from the parts that track each action.
+    #[cfg(test)]
+    fn from_state(
+        cast_guard: &casting::CastGuard,
         book_edits: &BookEdits,
         pending: Option<&PendingBookAction>,
         trades: &MerchantTrades,
         scribe_awaiting_cursor: bool,
     ) -> Self {
-        let mut held = Vec::new();
-        if cast_guard.active() {
-            held.push((
-                Resource::Casting,
-                "Wait for the current cast to finish or interrupt it",
-            ));
-        }
-        if trades.active() {
-            // A sold item leaves only when the merchant echoes the sale.
-            held.push((Resource::Inventory, "Wait for the merchant to answer"));
-        }
-        let scribing = book_edits.scribing()
-            || scribe_awaiting_cursor
-            || pending.is_some_and(|pending| matches!(pending.intent, BookIntent::Scribe { .. }));
-        if scribing {
-            // The server consumes the cursor scroll when it answers; moving items
-            // meanwhile desynchronized P99's inventory and logged the character out.
-            held.push((Resource::Inventory, "Wait for scribing to finish"));
-        }
-        if scribing || pending.is_some() || book_edits.outstanding() {
-            held.push((Resource::Spellbook, "Wait for the current spellbook change"));
-        }
+        let mut held: Vec<_> = cast_guard.hold().into_iter().collect();
+        held.extend(trade_hold(trades));
+        held.extend(book_holds(book_edits, pending, scribe_awaiting_cursor));
         Self(held)
     }
 
@@ -110,6 +97,35 @@ impl Held {
             .find(|(resource, _)| needs.contains(resource))
             .map(|(_, reason)| *reason)
     }
+}
+
+/// What a purchase or sale waiting for the merchant holds.
+pub(super) fn trade_hold(trades: &MerchantTrades) -> Option<(Resource, &'static str)> {
+    // A sold item leaves only when the merchant echoes the sale.
+    trades
+        .active()
+        .then_some((Resource::Inventory, "Wait for the merchant to answer"))
+}
+
+/// What the spellbook's changes in flight hold.
+pub(super) fn book_holds(
+    book_edits: &BookEdits,
+    pending: Option<&PendingBookAction>,
+    scribe_awaiting_cursor: bool,
+) -> Vec<(Resource, &'static str)> {
+    let mut held = Vec::new();
+    let scribing = book_edits.scribing()
+        || scribe_awaiting_cursor
+        || pending.is_some_and(|pending| matches!(pending.intent, BookIntent::Scribe { .. }));
+    if scribing {
+        // The server consumes the cursor scroll when it answers; moving items
+        // meanwhile desynchronized P99's inventory and logged the character out.
+        held.push((Resource::Inventory, "Wait for scribing to finish"));
+    }
+    if scribing || pending.is_some() || book_edits.outstanding() {
+        held.push((Resource::Spellbook, "Wait for the current spellbook change"));
+    }
+    held
 }
 
 /// What a command needs exclusively; unlisted commands need nothing here.
@@ -213,6 +229,7 @@ fn refusal(command: &ClientCommand, reason: &str) -> Option<WorldEvent> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use casting::CastGuard;
 
     #[test]
     fn commands_for_an_earlier_admission_or_made_too_long_ago_are_stale() {

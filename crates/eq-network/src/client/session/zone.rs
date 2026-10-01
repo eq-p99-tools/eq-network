@@ -43,8 +43,9 @@ struct Features(Vec<Box<dyn Feature>>);
 
 impl Features {
     /// Every feature a Titanium zone session has.
-    fn new(character: &str) -> Self {
+    fn new(dialect: eq_network_game::GameDialect, character: &str) -> Self {
         Self(vec![
+            Box::new(casting::Casting::new(dialect, character)),
             Box::new(entities::Entities::default()),
             Box::new(camp::Camp::default()),
             Box::new(Doors::default()),
@@ -68,6 +69,14 @@ impl Features {
             feature.admitted(world, out)?;
         }
         Ok(())
+    }
+
+    /// What every feature's actions in flight hold.
+    fn holds(&self, world: &World, now: Instant) -> Vec<(actions::Resource, &'static str)> {
+        self.0
+            .iter()
+            .flat_map(|feature| feature.holds(world, now))
+            .collect()
     }
 
     /// Lets every feature hear a command, then has its owner carry it out;
@@ -165,13 +174,12 @@ pub(super) fn run(
     let mut inventory_actor: Option<eq_network_game::inventory::InventoryActor> = None;
     let mut admitted_book: Option<eq_network_game::spells::SpellBook> = None;
     let mut book_edits = book_edits::BookEdits::default();
-    let mut cast_guard = casting::CastGuard::default();
     let mut trades = merchant::MerchantTrades::default();
     let mut settlement = inventory::Settlement::default();
     let mut scribe_consumption = scribe_consumption::ScribeConsumption::default();
     // Wear changes for the player that arrive before its state is built.
     let mut initial_own_wear = Vec::new();
-    let mut features = Features::new(&config.character);
+    let mut features = Features::new(config.protocol.into(), &config.character);
     let mut profile_data = Vec::new();
     let mut spawn_data = Vec::new();
     loop {
@@ -179,13 +187,6 @@ pub(super) fn run(
             session.close()?;
             // The outer run reports Stopped after the session has closed.
             return Ok(ZoneExit::Stopped);
-        }
-        if cast_guard.expire(Instant::now()) {
-            log.send(ClientEvent::World(crate::world::WorldEvent::CastPending {
-                session_id,
-                spell_id: None,
-            }))?;
-            log.diagnostic("Cast acknowledgement timed out; a manual retry is available".into())?;
         }
         // Servers answer only a refused move, so silence settles the rest.
         if let Some(update) = settlement.due(&world.inventory, Instant::now()) {
@@ -272,18 +273,32 @@ pub(super) fn run(
                     // flight holds, are refused here and nowhere else.
                     let now = Instant::now();
                     let refusal = actions::stale(&command, session_id, now).or_else(|| {
-                        actions::Held::from_state(
-                            &cast_guard,
+                        let mut holds = features.holds(&world, now);
+                        holds.extend(actions::trade_hold(&trades));
+                        holds.extend(actions::book_holds(
                             &book_edits,
                             world.book_action.as_ref(),
-                            &trades,
                             scribe_consumption.awaiting_cursor(now),
-                        )
-                        .conflict(&command)
+                        ));
+                        actions::Held::new(holds).conflict(&command)
                     });
                     if let Some(reason) = refusal {
                         actions::refuse(&command, reason, log)?;
                         continue;
+                    }
+                    if matches!(
+                        &command,
+                        ClientCommand::Move(_)
+                            | ClientCommand::CastSpell { .. }
+                            | ClientCommand::UseItem(_)
+                            | ClientCommand::SetPosture { .. }
+                    ) && world.book_action.take().is_some()
+                    {
+                        log.send(ClientEvent::World(crate::world::WorldEvent::BookAction(
+                            BookActionStatus::Cancelled(
+                                "Movement, casting or posture changed".into(),
+                            ),
+                        )))?;
                     }
                     let handled = features.handle(
                         &command,
@@ -303,20 +318,6 @@ pub(super) fn run(
                             break;
                         }
                         continue;
-                    }
-                    if matches!(
-                        &command,
-                        ClientCommand::Move(_)
-                            | ClientCommand::CastSpell { .. }
-                            | ClientCommand::UseItem(_)
-                            | ClientCommand::SetPosture { .. }
-                    ) && world.book_action.take().is_some()
-                    {
-                        log.send(ClientEvent::World(crate::world::WorldEvent::BookAction(
-                            BookActionStatus::Cancelled(
-                                "Movement, casting or posture changed".into(),
-                            ),
-                        )))?;
                     }
                     if let ClientCommand::ScribeSpell {
                         revision,
@@ -487,57 +488,7 @@ pub(super) fn run(
                         }
                         continue;
                     }
-                    if let ClientCommand::UseItem(request) = &command {
-                        let target_available = world.player.as_ref().is_some_and(|player| {
-                            request.target_id == player.spawn_id
-                                || world.spawns.visible(request.target_id).is_some()
-                        });
-                        let prepared = inventory_actor
-                            .as_ref()
-                            .context("Character level is unavailable")
-                            .and_then(|actor| {
-                                world.inventory.prepare_item_cast(
-                                    request,
-                                    session_id,
-                                    actor.level,
-                                    target_available,
-                                    Instant::now(),
-                                )
-                            });
-                        let error = match prepared {
-                            Ok((spell_id, body)) => {
-                                session.send(0x304b, &body)?;
-                                cast_guard.submitted(spell_id, Instant::now());
-                                log.send(ClientEvent::World(
-                                    crate::world::WorldEvent::CastPending {
-                                        session_id,
-                                        spell_id: Some(spell_id),
-                                    },
-                                ))?;
-                                None
-                            }
-                            Err(error) => Some(error.to_string()),
-                        };
-                        log.send(ClientEvent::World(
-                            crate::world::WorldEvent::ItemUseAction {
-                                session_id: request.session_id,
-                                request_id: request.request_id,
-                                error,
-                            },
-                        ))?;
-                        continue;
-                    }
                     let action_valid = match &command {
-                        ClientCommand::CastSpell {
-                            gem,
-                            spell_id,
-                            target_id,
-                            ..
-                        } => world.player.as_ref().is_some_and(|player| {
-                            player.memorized_spells.get(usize::from(*gem)) == Some(&Some(*spell_id))
-                                && (*target_id == player.spawn_id
-                                    || world.spawns.visible(*target_id).is_some())
-                        }),
                         ClientCommand::SetPosture { spawn_id, .. }
                         | ClientCommand::Consider {
                             own_id: spawn_id, ..
@@ -573,13 +524,7 @@ pub(super) fn run(
                         _ => true,
                     };
                     if !action_valid {
-                        if let Some(event) = casting::rejected(
-                            &command,
-                            "The spell gem changed, or the target is unavailable",
-                        ) {
-                            log.send(ClientEvent::World(event))?;
-                        }
-                        log.diagnostic("Rejected an unavailable spell, posture or target".into())?;
+                        log.diagnostic("Rejected an unavailable posture or target".into())?;
                         continue;
                     }
                     if inventory::handle(
@@ -646,15 +591,6 @@ pub(super) fn run(
                             {
                                 world.posture.sent(*spawn_id, *posture, log)?;
                             }
-                            if let ClientCommand::CastSpell { spell_id, .. } = &command {
-                                cast_guard.submitted(*spell_id, Instant::now());
-                                log.send(ClientEvent::World(
-                                    crate::world::WorldEvent::CastPending {
-                                        session_id,
-                                        spell_id: Some(*spell_id),
-                                    },
-                                ))?;
-                            }
                             if let ClientCommand::SelectTarget { spawn_id, .. } = command {
                                 log.send(ClientEvent::World(
                                     crate::world::WorldEvent::TargetSent(spawn_id),
@@ -662,9 +598,6 @@ pub(super) fn run(
                             }
                         }
                         Err(error) => {
-                            if let Some(event) = casting::rejected(&command, &error.to_string()) {
-                                log.send(ClientEvent::World(event))?;
-                            }
                             log.diagnostic(format!(
                                 "Rejected invalid outbound client command: {error}"
                             ))?;
@@ -956,21 +889,6 @@ pub(super) fn run(
                     let book_result = book_edits.observe(&update);
                     scribe_consumption
                         .observe(&update, book_result == Some(BookActionStatus::Confirmed));
-                    if let Some(player) = world.player.as_ref() {
-                        let pending = cast_guard.pending();
-                        cast_guard.observe(player.spawn_id, &update);
-                        if pending.is_some() && cast_guard.pending().is_none() {
-                            log.send(ClientEvent::World(crate::world::WorldEvent::CastPending {
-                                session_id,
-                                spell_id: None,
-                            }))?;
-                        }
-                        if cast_guard.active() && world.book_action.take().is_some() {
-                            log.send(ClientEvent::World(crate::world::WorldEvent::BookAction(
-                                BookActionStatus::Cancelled("Casting started".into()),
-                            )))?;
-                        }
-                    }
                     if let Some(book) = admitted_book.as_mut() {
                         book.apply(&update);
                     }
@@ -1036,7 +954,6 @@ pub(super) fn run(
                                 "Character died",
                                 log,
                             )?;
-                            cast_guard.clear();
                             trades.clear();
                             if let Some(motion) = world.motion.as_mut() {
                                 motion.suspend();
@@ -1130,7 +1047,7 @@ mod tests {
 
     #[test]
     fn one_feature_owns_each_command_a_feature_takes() {
-        let features = Features::new("Tester");
+        let features = Features::new(eq_network_game::GameDialect::TitaniumP99, "Tester");
         let created = Instant::now();
         let session_id = 1;
         for (command, owners) in [

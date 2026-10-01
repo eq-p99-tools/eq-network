@@ -1,7 +1,11 @@
 //! Click-cast metadata from Titanium's serialized item definition.
+use crate::command::EncodedCommand;
 use anyhow::{ensure, Context, Result};
 use serde::Serialize;
 use std::time::{Duration, Instant};
+
+/// Titanium `OP_CastSpell`, which also casts an item's click effect.
+pub const CAST_OPCODE: u16 = 0x304b;
 
 /// One explicit item-use intent, bound to the selected inventory and zone admission.
 #[derive(Clone, Debug, PartialEq)]
@@ -115,7 +119,8 @@ impl ItemActivation {
 }
 
 impl super::Inventory {
-    /// Validates an admitted item-use intent before encoding its current effect.
+    /// Validates an admitted item-use intent before encoding its current effect,
+    /// returning the effect's spell and the cast packet.
     /// `target_available` must come from the controller's current zone spawn state.
     ///
     /// # Errors
@@ -127,7 +132,7 @@ impl super::Inventory {
         level: u8,
         target_available: bool,
         now: Instant,
-    ) -> Result<(u32, [u8; 20])> {
+    ) -> Result<(u32, EncodedCommand)> {
         ensure!(
             request.session_id == session_id,
             "Item use belongs to an old admission"
@@ -146,7 +151,13 @@ impl super::Inventory {
             .as_ref()
             .context("Item effect unavailable")?
             .spell_id;
-        Ok((spell_id, body))
+        Ok((
+            spell_id,
+            EncodedCommand {
+                opcode: CAST_OPCODE,
+                body: body.to_vec(),
+            },
+        ))
     }
 
     /// Builds a Titanium item cast from the current instance, without consuming charges.

@@ -6,8 +6,8 @@
 //! it. The zone loop only fans packets and commands out to the features.
 
 use super::{
-    entities::Spawns, lifecycle::ZoneLifecycle, posture::OwnPosture, spellbook::PendingBookAction,
-    ClientCommand, ConnectionState, Events, Session, ZoneExit,
+    actions::Resource, entities::Spawns, lifecycle::ZoneLifecycle, posture::OwnPosture,
+    spellbook::PendingBookAction, ClientCommand, ConnectionState, Events, Session, ZoneExit,
 };
 use anyhow::Result;
 use eq_network_game::{
@@ -171,6 +171,12 @@ pub(super) trait Feature {
     /// Returns an error when the host's event handler fails.
     fn admitted(&mut self, _world: &mut World, _out: &mut Out<'_, '_>) -> Result<()> {
         Ok(())
+    }
+
+    /// What the feature's actions in flight hold, each with the reason a
+    /// command that needs it must wait.
+    fn holds(&self, _world: &World, _now: Instant) -> Vec<(Resource, &'static str)> {
+        Vec::new()
     }
 
     /// Hears every host command before its owner carries it out, so that a

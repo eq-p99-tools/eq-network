@@ -4,7 +4,7 @@ mod activation;
 mod banking;
 mod titanium;
 pub use actions::{InventoryActor, InventoryMove, MoveQuantity};
-pub use activation::{ClickEffect, ClickKind, ItemActivation, ItemUse};
+pub use activation::{ClickEffect, ClickKind, ItemActivation, ItemUse, CAST_OPCODE};
 pub use banking::banker_in_range;
 pub use titanium::decode;
 pub(crate) use titanium::parse as parse_items;
