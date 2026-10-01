@@ -111,6 +111,9 @@ pub struct PlayerState {
     /// Worn gear and features from the own spawn record; default where the
     /// dialect does not report them.
     pub appearance: crate::appearance::Appearance,
+    /// How `/who` lists the player, from the own spawn record; default where
+    /// the dialect does not report it.
+    pub listing: crate::listing::Listing,
 }
 
 impl PlayerState {
@@ -179,6 +182,11 @@ pub struct SpawnState {
     pub invisible: bool,
     /// Worn gear and features; default where the dialect does not report them.
     pub appearance: crate::appearance::Appearance,
+    /// The level `/who` shows; zero where the dialect does not report it.
+    pub level: u8,
+    /// How `/who` lists a player; default for others and where the dialect
+    /// does not report it.
+    pub listing: crate::listing::Listing,
 }
 
 /// Decode a decrypted Titanium spawn batch, without accepting partial records.
@@ -220,6 +228,8 @@ pub fn titanium_spawns(body: &[u8]) -> Result<Vec<SpawnState>> {
                 position,
                 velocity,
                 appearance: crate::appearance::titanium_spawn(record),
+                level: record[151],
+                listing: crate::listing::titanium_spawn(record),
             })
         })
         .collect()
@@ -522,6 +532,15 @@ pub enum WorldEvent {
         /// Whether the server marks this entity invisible.
         invisible: bool,
     },
+    /// A change in how `/who` lists a player.
+    Listing {
+        /// Zone-local entity identifier.
+        spawn_id: u16,
+        /// What changed.
+        change: crate::listing::ListingChange,
+    },
+    /// Guild names by number, from the world or a guild member's zone.
+    GuildNames(Vec<(u32, String)>),
     /// Current mana on protocols without a combined endurance update.
     Mana(u32),
     /// An entity left the zone or was removed.
@@ -748,6 +767,7 @@ pub fn titanium_player(profile: &[u8], spawn: &[u8], revolution: f32) -> Result<
         run_speed,
         hp_percent: (spawn[86] <= 100).then_some(spawn[86]),
         appearance: crate::appearance::titanium_spawn(spawn),
+        listing: crate::listing::titanium_spawn(spawn),
     })
 }
 
@@ -817,6 +837,13 @@ pub fn titanium_update(opcode: u16, body: &[u8]) -> Result<Option<WorldEvent>> {
             WorldEvent::Nourishment(crate::food::decode(opcode, body)?.unwrap_or_default())
         }
         crate::who::RESPONSE_OPCODE => WorldEvent::WhoList(crate::who::decode(body)?),
+        crate::listing::LOOKING_OPCODE => {
+            let (spawn_id, change) = crate::listing::looking(body)?;
+            WorldEvent::Listing { spawn_id, change }
+        }
+        crate::listing::GUILDS_OPCODE => {
+            WorldEvent::GuildNames(crate::listing::titanium_guilds(body)?)
+        }
         0x0695 => {
             ensure!(
                 body.len() == 3 && body[2] <= 100,
@@ -905,21 +932,23 @@ fn money_update(body: &[u8]) -> Result<Coins> {
 pub(crate) fn appearance(body: &[u8]) -> Result<Option<WorldEvent>> {
     ensure!(body.len() == 8, "invalid appearance length");
     let kind = u16::from_le_bytes([body[2], body[3]]);
-    if !matches!(kind, 3 | 14) {
+    let value = word(body, 4);
+    let listing = crate::listing::appearance(kind, value);
+    if !matches!(kind, 3 | 14) && listing.is_none() {
         return Ok(None);
     }
     let spawn_id = u16::from_le_bytes([body[0], body[1]]);
     ensure!(spawn_id != 0, "invalid appearance spawn ID");
-    Ok(Some(if kind == 14 {
-        WorldEvent::Posture {
+    Ok(Some(match (kind, listing) {
+        (_, Some(change)) => WorldEvent::Listing { spawn_id, change },
+        (14, None) => WorldEvent::Posture {
             spawn_id,
-            posture: word(body, 4).into(),
-        }
-    } else {
-        WorldEvent::Visibility {
+            posture: value.into(),
+        },
+        _ => WorldEvent::Visibility {
             spawn_id,
-            invisible: word(body, 4) != 0,
-        }
+            invisible: value != 0,
+        },
     }))
 }
 
@@ -1095,6 +1124,44 @@ mod tests {
         packet[..2].fill(0);
         assert!(crate::quarm::updates(0xf540, &packet).is_err());
     }
+    #[test]
+    fn listing_news_says_how_who_lists_a_player() {
+        use crate::listing::ListingChange;
+        let mut packet = [0u8; 8];
+        packet[..2].copy_from_slice(&73u16.to_le_bytes());
+        packet[2..4].copy_from_slice(&24u16.to_le_bytes());
+        packet[4..].copy_from_slice(&1u32.to_le_bytes());
+        assert_eq!(
+            super::titanium_update(0x7c32, &packet).unwrap(),
+            Some(super::WorldEvent::Listing {
+                spawn_id: 73,
+                change: ListingChange::Away(true)
+            })
+        );
+        let mut looking = 73u32.to_le_bytes().to_vec();
+        looking.extend_from_slice(&[1, 0, 0, 0]);
+        assert_eq!(
+            super::titanium_update(crate::listing::LOOKING_OPCODE, &looking).unwrap(),
+            Some(super::WorldEvent::Listing {
+                spawn_id: 73,
+                change: ListingChange::Looking(true)
+            })
+        );
+        let mut guilds = vec![0; 64 * 3];
+        guilds[128..132].copy_from_slice(b"Riot");
+        assert_eq!(
+            super::titanium_update(crate::listing::GUILDS_OPCODE, &guilds).unwrap(),
+            Some(super::WorldEvent::GuildNames(vec![(1, "Riot".into())]))
+        );
+        let mut record = vec![0; 385];
+        record[340..344].copy_from_slice(&73u32.to_le_bytes());
+        record[151] = 42;
+        record[237] = 1;
+        let spawns = super::titanium_spawns(&record).unwrap();
+        assert_eq!(spawns[0].level, 42);
+        assert!(spawns[0].listing.away);
+    }
+
     #[test]
     fn titanium_visibility_updates_require_complete_appearance_packets() {
         let mut packet = [0u8; 8];

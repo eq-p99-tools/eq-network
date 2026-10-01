@@ -442,6 +442,8 @@ pub(super) mod testing {
             size: 6.0,
             invisible: false,
             appearance: eq_network_game::appearance::Appearance::default(),
+            level: 0,
+            listing: eq_network_game::listing::Listing::default(),
         }
     }
 
