@@ -9,8 +9,8 @@
 //!
 //! The coins are this feature's too. Servers answer no coin move and say what
 //! the purse holds only now and then, so the ledger keeps the coins where the
-//! player put them, adjusts the purse for loot and purchases as the Titanium
-//! client does, and takes each money update as the truth about the purse.
+//! player put them, changes the purse for loot and purchases kind by kind as
+//! servers do, and takes each money update as the truth about the purse.
 mod merchant;
 
 use super::{
@@ -112,12 +112,12 @@ fn coins_news(message: &Message, wallet: &mut Wallet) -> Option<bool> {
         WorldEvent::Loot(LootUpdate::Opened {
             response: LootResponse::Normal,
             coins,
-        }) if coins.total_copper() > 0 => {
-            wallet.adjust_purse(i64::try_from(coins.total_copper()).unwrap_or(i64::MAX));
+        }) if !coins.is_empty() => {
+            wallet.add_to_purse(*coins);
             Some(true)
         }
         WorldEvent::Merchant(MerchantUpdate::Bought { price, .. }) => {
-            wallet.adjust_purse(-i64::from(*price));
+            wallet.pay(u64::from(*price));
             Some(true)
         }
         // What the window held was handed over, or comes back with the
@@ -896,7 +896,15 @@ mod tests {
         })
         .result
         .unwrap();
-        assert_eq!(world.coins.purse.unwrap().total_copper(), 1005);
+        // The price came from the silver, the change back in copper.
+        assert_eq!(
+            world.coins.purse,
+            Some(Coins {
+                platinum: 1,
+                copper: 5,
+                ..Coins::default()
+            })
+        );
         // The server's word replaces the estimate, and the host hears it as it is.
         let update = testing::run(|out| {
             belongings.observe(&news(WorldEvent::Coins(Coins::default())), &mut world, out)

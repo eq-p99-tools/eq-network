@@ -29,8 +29,8 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   bank (near a banker) and an open give window, changing kind as servers do
   (`CoinTransfer::amounts`). The session keeps the coins (`Wallet`): servers
   answer no coin move, so it refuses one a place cannot cover before sending
-  (`CoinsRefused`), adjusts the purse for loot coins and purchases as the
-  Titanium client does, takes each money update as the truth about the purse,
+  (`CoinsRefused`), changes the purse for loot coins and purchases kind by
+  kind as `EQEmu` does, takes each money update as the truth about the purse,
   and tells the host every change as `Coins` (the purse) and `CoinsElsewhere`
   (the cursor, the bank and a trade window's coins). Asking to trade needs an
   item or coins on the cursor.
