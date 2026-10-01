@@ -31,6 +31,14 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   protection and 256-unit saved headings, and `EQEmu`'s falls, jumps and
   post-creation start choice, moved behind it; nothing on the wire changed.
 
+### Fixed
+
+- Combined transport packets (`OP_Combined`) give every part a one-byte
+  length, as `EQEmu` does, so a part of exactly 255 bytes no longer ends the
+  session with "invalid combined length". `build_combined` refuses parts
+  longer than 255 bytes instead of writing a length servers misread, and
+  `OP_AppCombined` accepts four-byte lengths.
+
 ### Known limitations
 
 - Movement still requires calibration. Airborne movement (falls and jumps) is
