@@ -687,6 +687,11 @@ pub enum WorldEvent {
     },
     /// The world's answer to `/who all`.
     WhoList(crate::who::WhoList),
+    /// The time of day, as a zone admits the player and whenever it is
+    /// changed; between those it runs on its own.
+    TimeOfDay(crate::clock::GameTime),
+    /// How the zone's sky and fog look, right after the admission.
+    Sky(crate::clock::ZoneSky),
     /// A melee, skill or spell damage record for any nearby entities.
     Damage(crate::combat::Damage),
     /// Own-character skill update; unknown skill IDs remain available to consumers.
@@ -837,6 +842,7 @@ pub fn titanium_update(opcode: u16, body: &[u8]) -> Result<Option<WorldEvent>> {
             WorldEvent::Nourishment(crate::food::decode(opcode, body)?.unwrap_or_default())
         }
         crate::who::RESPONSE_OPCODE => WorldEvent::WhoList(crate::who::decode(body)?),
+        crate::clock::TIME_OPCODE => WorldEvent::TimeOfDay(crate::clock::decode(body)?),
         crate::listing::LOOKING_OPCODE => {
             let (spawn_id, change) = crate::listing::looking(body)?;
             WorldEvent::Listing { spawn_id, change }

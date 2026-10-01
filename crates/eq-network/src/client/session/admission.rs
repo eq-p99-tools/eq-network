@@ -43,6 +43,8 @@ pub(super) struct Zone {
     pub(super) name: String,
     /// Its far clip distance, when the description gives one.
     pub(super) far_clip: Option<f32>,
+    /// Its sky and fog, when the description gives them.
+    pub(super) sky: Option<eq_network_game::clock::ZoneSky>,
 }
 
 /// The handshake in progress.
@@ -165,6 +167,7 @@ impl Admission {
                 self.zone = Some(Zone {
                     name,
                     far_clip: crate::world::titanium_far_clip(&packet.body),
+                    sky: eq_network_game::clock::titanium_zone_sky(&packet.body),
                 });
                 session.send(0x067a, &0u32.to_le_bytes())?;
                 session.send(0x5e3a, &0u32.to_le_bytes())?;

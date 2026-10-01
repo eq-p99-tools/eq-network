@@ -48,6 +48,12 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   anonymity, game master, away and looking-for-group flags), kept current
   by `WorldEvent::Listing`; the world's and zones' guild lists reach the
   host as `GuildNames`.
+- Time of day (`clock`): the time in Norrath reaches the host as
+  `WorldEvent::TimeOfDay` (`GameTime`, hours 0 to 23 from midnight) as the
+  zone admits the player and whenever it changes; `GameTime::after` runs it
+  on, a minute every three real seconds. Right after the admission,
+  `WorldEvent::Sky` says how the zone's sky and fog look (`ZoneSky`: sky
+  type, time type and the header's four fog colors and distances).
 - Abilities (`abilities`): `UseAbility` uses kick, bash, backstab, frenzy,
   the monk strikes and taunt on the target, and hide, sneak, forage, mend,
   feign death and sense heading on the player (`Capability::Abilities`). The
