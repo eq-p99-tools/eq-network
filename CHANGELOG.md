@@ -33,6 +33,16 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   session closes it too, since `EQEmu` returns only the canceller's items.
   NO DROP items, and bags holding one, are refused before a move that
   `EQEmu` answers by disconnecting, and coins put in a trade stay there.
+  the window closes. `Capability::Giving` reports it; trades between
+  players are not supported yet.
+- Abilities (`abilities`): `UseAbility` uses kick, bash, backstab, frenzy,
+  the monk strikes and taunt on the target, and hide, sneak, forage, mend,
+  feign death and sense heading on the player (`Capability::Abilities`). The
+  session refuses what servers ignore without a word (an unknown skill, no
+  target, a target out of melee reach as `EQEmu`'s `CombatRange` measures
+  it) and a use whose recovery timer still runs (`AbilityRefused`), and
+  tells the host when a timer starts (`AbilityUsed`). Strikes share one
+  timer, as on the server, and wait for a cast to end.
 - Coins (`money`): `MoveCoins` moves coins between the purse, the cursor, the
   bank (near a banker) and an open give window, changing kind as servers do
   (`CoinTransfer::amounts`). The session keeps the coins (`Wallet`): servers

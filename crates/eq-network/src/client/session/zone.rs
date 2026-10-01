@@ -1,7 +1,7 @@
 //! The zone session: admission, the player's commands and the zone's traffic
 //! until the character leaves for another zone, the world or the character list.
 use super::{
-    actions, camp, casting, character, chat, combat,
+    abilities, actions, camp, casting, character, chat, combat,
     doors::Doors,
     ensure, entities, exchange,
     feature::{Encoder, Feature, Out, World},
@@ -37,6 +37,7 @@ impl Features {
             Box::new(combat::Combat::new(encoder.clone())),
             Box::new(looting::Looting::new(encoder.clone())),
             Box::new(exchange::Exchanges),
+            Box::new(abilities::Abilities::default()),
             Box::new(talk::Talk::new(encoder)),
             Box::new(camp::Camp::default()),
             Box::new(Doors::default()),
@@ -399,7 +400,7 @@ mod tests {
     };
 
     /// How many kinds of command there are.
-    const KINDS: usize = 33;
+    const KINDS: usize = 34;
 
     /// Which kind of command this is. A new command is a compile error here
     /// until it has a number, and then a test failure until the list below
@@ -440,6 +441,7 @@ mod tests {
             ClientCommand::AcceptTrade { .. } => 30,
             ClientCommand::CancelTrade { .. } => 31,
             ClientCommand::MoveCoins { .. } => 32,
+            ClientCommand::UseAbility { .. } => 33,
         }
     }
 
@@ -636,6 +638,11 @@ mod tests {
                 },
                 created,
             },
+            ClientCommand::UseAbility {
+                session_id,
+                ability: eq_network_game::abilities::Ability::Kick,
+                created,
+            },
         ]
     }
 
@@ -705,6 +712,7 @@ mod tests {
             Capability::Doors,
             Capability::GroundItems,
             Capability::Zoning,
+            Capability::Abilities,
         ] {
             assert!(p99.contains(&capability), "{capability:?}");
         }
