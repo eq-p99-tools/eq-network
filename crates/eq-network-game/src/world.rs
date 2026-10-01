@@ -313,12 +313,14 @@ pub enum Capability {
     GroundItems,
     /// Crossing zone lines and being moved between zones.
     Zoning,
+    /// Using abilities: kick, bash, taunt, hide, sneak, forage and the like.
+    Abilities,
 }
 
 impl Capability {
     /// Every capability, in order: what a session offers when its server and
     /// client generation support everything.
-    pub const ALL: [Self; 15] = [
+    pub const ALL: [Self; 16] = [
         Self::Casting,
         Self::Spellbook,
         Self::Inventory,
@@ -334,6 +336,7 @@ impl Capability {
         Self::Doors,
         Self::GroundItems,
         Self::Zoning,
+        Self::Abilities,
     ];
 }
 
@@ -638,6 +641,23 @@ pub enum WorldEvent {
     },
     /// An item was not eaten or drunk, and why.
     ConsumeRefused {
+        /// Admission from the request.
+        session_id: u64,
+        /// Why not.
+        reason: String,
+    },
+    /// The player used an ability; its timer runs this long before the
+    /// server takes the next use.
+    AbilityUsed {
+        /// Admission from the request.
+        session_id: u64,
+        /// The ability.
+        ability: crate::abilities::Ability,
+        /// How long its recovery takes, at most.
+        ready_in: std::time::Duration,
+    },
+    /// An ability was not used, and why: the server would have ignored it.
+    AbilityRefused {
         /// Admission from the request.
         session_id: u64,
         /// Why not.
@@ -1031,6 +1051,7 @@ mod tests {
             Capability::Doors => 12,
             Capability::GroundItems => 13,
             Capability::Zoning => 14,
+            Capability::Abilities => 15,
         };
         for (index, capability) in Capability::ALL.into_iter().enumerate() {
             assert_eq!(place(capability), index, "{capability:?}");

@@ -175,6 +175,9 @@ pub(super) struct World {
     /// The give or trade window asked for or open, which only the exchange
     /// feature changes.
     pub(super) exchange: Exchanging,
+    /// The server's idea of the player's target, which only the targeting
+    /// feature changes.
+    pub(super) target: super::targeting::Target,
 }
 
 impl World {
@@ -195,6 +198,7 @@ impl World {
             packets: 0,
             spawns: Spawns::default(),
             exchange: Exchanging::default(),
+            target: super::targeting::Target::default(),
         }
     }
 

@@ -315,6 +315,16 @@ pub enum GameCommand {
         /// Reject delayed actions instead of replaying them after a stall.
         created: std::time::Instant,
     },
+    /// Use an ability: a strike or taunt at the server-side target, or one
+    /// on the player.
+    UseAbility {
+        /// Current zone admission.
+        session_id: u64,
+        /// The ability.
+        ability: crate::abilities::Ability,
+        /// Reject delayed actions instead of replaying them after a stall.
+        created: std::time::Instant,
+    },
     /// Start or stop melee auto-attack against the current server-side target.
     AutoAttack {
         /// Current zone admission.
@@ -379,6 +389,7 @@ impl GameCommand {
             | Self::Jump { session_id, .. }
             | Self::AutoAttack { session_id, .. }
             | Self::Consume { session_id, .. }
+            | Self::UseAbility { session_id, .. }
             | Self::SelectTarget { session_id, .. }
             | Self::ConfigureMotion { session_id, .. } => Some(*session_id),
         }
@@ -427,6 +438,7 @@ impl GameCommand {
                 }
             }
             Self::SelectTarget { .. } => Capability::Targeting,
+            Self::UseAbility { .. } => Capability::Abilities,
         })
     }
 
@@ -468,6 +480,7 @@ impl GameCommand {
             | Self::Jump { created, .. }
             | Self::AutoAttack { created, .. }
             | Self::Consume { created, .. }
+            | Self::UseAbility { created, .. }
             | Self::ConfigureMotion { created, .. } => Some(*created),
         }
     }
@@ -500,14 +513,6 @@ pub fn encode(
     match command {
         GameCommand::SelectCharacter { .. } | GameCommand::CreateCharacter { .. } => {
             anyhow::bail!("character selection requires the world controller")
-        }
-        GameCommand::UseItem(_)
-        | GameCommand::MemorizeSpell { .. }
-        | GameCommand::ForgetSpell { .. }
-        | GameCommand::DeleteSpell { .. }
-        | GameCommand::SwapSpell { .. }
-        | GameCommand::ScribeSpell { .. } => {
-            anyhow::bail!("item and spellbook actions require the admitted session controller")
         }
         GameCommand::CastSpell {
             gem,
@@ -587,6 +592,13 @@ pub fn encode(
         | GameCommand::ConfigureMotion { .. }
         | GameCommand::CrossZoneLine { .. }
         | GameCommand::Consume { .. }
+        | GameCommand::UseAbility { .. }
+        | GameCommand::UseItem(_)
+        | GameCommand::MemorizeSpell { .. }
+        | GameCommand::ForgetSpell { .. }
+        | GameCommand::DeleteSpell { .. }
+        | GameCommand::SwapSpell { .. }
+        | GameCommand::ScribeSpell { .. }
         | GameCommand::Camp { .. } => {
             anyhow::bail!("this command requires the admitted session controller")
         }
