@@ -12,6 +12,7 @@ use super::{
 };
 
 use eq_network_game::message::Message;
+use eq_network_transport::Transport;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ZoneOpcode {
@@ -157,11 +158,13 @@ pub(super) fn run(
     let credentials = context.credentials;
     let stop = context.stop;
     let duration = context.duration;
-    let mut session = Session::connect_cancellable(
+    // Titanium zones speak the modern transport; the loop needs only the
+    // interface every generation's transport offers.
+    let mut session: Box<dyn Transport> = Box::new(Session::connect_cancellable(
         crate::client::endpoint(host, port, config.local_only)?,
         true,
         stop.flag(),
-    )?;
+    )?);
     session.send(0x7752, &0u32.to_le_bytes())?;
     let mut entry = vec![0; 68];
     put_string(&mut entry[4..], &config.character)?;
@@ -513,7 +516,10 @@ mod tests {
     };
 
     /// One of every command a zone session takes.
-    #[allow(clippy::too_many_lines, reason = "one literal for each kind of command")]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "one literal for each kind of command"
+    )]
     fn zone_commands() -> Vec<ClientCommand> {
         let (session_id, created) = (1, Instant::now());
         let position = crate::world::Position::default();

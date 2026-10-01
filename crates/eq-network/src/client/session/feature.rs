@@ -7,7 +7,7 @@
 
 use super::{
     actions::Resource, entities::Spawns, lifecycle::ZoneLifecycle, motion::Body,
-    posture::OwnPosture, ClientCommand, ConnectionState, Events, Session, ZoneExit,
+    posture::OwnPosture, ClientCommand, ConnectionState, Events, ZoneExit,
 };
 use anyhow::{Context, Result};
 use eq_network_game::{
@@ -17,6 +17,7 @@ use eq_network_game::{
     world::{PlayerState, Position},
     GameDialect,
 };
+use eq_network_transport::Transport;
 use std::time::Instant;
 
 /// Where a feature's packets go: the zone connection, or a recording in tests.
@@ -38,17 +39,18 @@ pub(super) trait Sink {
     fn last_received_seconds(&self) -> u64;
 }
 
-impl Sink for Session {
+/// Any transport carries a feature's packets.
+impl<T: Transport + ?Sized> Sink for T {
     fn send(&mut self, packet: &EncodedCommand) -> Result<()> {
-        Session::send(self, packet.opcode, &packet.body)
+        Transport::send(self, packet.opcode, &packet.body)
     }
 
     fn send_unreliable(&mut self, packet: &EncodedCommand) -> Result<()> {
-        Session::send_unreliable(self, packet.opcode, &packet.body)
+        Transport::send_unreliable(self, packet.opcode, &packet.body)
     }
 
     fn last_received_seconds(&self) -> u64 {
-        Session::last_received_seconds(self)
+        Transport::last_received_seconds(self)
     }
 }
 
