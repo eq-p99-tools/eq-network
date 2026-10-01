@@ -14,7 +14,6 @@ mod scribe_consumption;
 mod spellbook;
 mod zone;
 use eq_network_game::spells::BookActionStatus;
-use lifecycle::ZoneLifecycle;
 use spellbook::{BookIntent, PendingBookAction};
 
 use super::{

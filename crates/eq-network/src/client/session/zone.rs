@@ -9,7 +9,6 @@ use super::{
     spellbook, zoning, BTreeMap, BookActionStatus, BookIntent, CharacterSession, ClientCommand,
     ClientEvent, ConnectionStage, ConnectionState, Context, DecodeError, Duration, Events, Instant,
     MotionSession, PendingBookAction, RecordEvent, Result, Session, Shield, ZoneExit,
-    ZoneLifecycle,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -41,7 +40,7 @@ impl From<u16> for ZoneOpcode {
     }
 }
 
-/// Enter the zone, keep the character stationary, and collect communications.
+/// Enter the zone, keep the character world.stationary, and collect communications.
 // The linear handshake keeps packet ordering and state transitions together.
 #[allow(clippy::too_many_lines)]
 pub(super) fn run(
@@ -73,7 +72,6 @@ pub(super) fn run(
     log.send(ClientEvent::Progress(ConnectionStage::LoadingCharacter))?;
     let connected = Instant::now();
     let mut ready = false;
-    let mut lifecycle = ZoneLifecycle::default();
     let mut saw_spawn = false;
     let mut saw_profile = false;
     let mut saw_weather = false;
@@ -84,7 +82,6 @@ pub(super) fn run(
     let mut far_clip = None;
     let mut progress = Instant::now();
     let mut packets = 0u64;
-    let mut stationary = [0u8; 36];
     let session_id = rand::random();
     let mut world = World::new(session_id);
     let mut initial_experience = None;
@@ -98,8 +95,6 @@ pub(super) fn run(
     let mut settlement = inventory::Settlement::default();
     let mut camp = camp::Camp::default();
     let mut zone_points = zoning::ZonePoints::default();
-    let mut current_zone = (0u16, 0u16);
-    let mut pending_memorization: Option<PendingBookAction> = None;
     let mut scribe_consumption = scribe_consumption::ScribeConsumption::default();
     let mut initial_spawns = BTreeMap::new();
     let mut initial_postures = BTreeMap::new();
@@ -109,11 +104,6 @@ pub(super) fn run(
     let mut ground = objects::GroundObjects::default();
     let mut profile_data = Vec::new();
     let mut spawn_data = Vec::new();
-    let mut position_sequence = 0u16;
-    // In the past, so the first stationary heartbeat goes out at once.
-    let mut last_position = Instant::now()
-        .checked_sub(eq_network_game::movement::STATIONARY_HEARTBEAT)
-        .unwrap_or_else(Instant::now);
     loop {
         if stop.is_cancelled() || duration.is_some_and(|limit| connected.elapsed() >= limit) {
             session.close()?;
@@ -147,7 +137,10 @@ pub(super) fn run(
         }
         if progress.elapsed() >= Duration::from_secs(30) {
             log.status(
-                if ready && lifecycle.pending().is_none() && session.last_received_seconds() < 60 {
+                if ready
+                    && world.lifecycle.pending().is_none()
+                    && session.last_received_seconds() < 60
+                {
                     ConnectionState::Connected
                 } else {
                     ConnectionState::Zoning
@@ -166,7 +159,7 @@ pub(super) fn run(
             "zone admission timed out"
         );
         ensure!(
-            !lifecycle.expired(Instant::now()),
+            !world.lifecycle.expired(Instant::now()),
             "zone transfer approval timed out"
         );
         // Servers refuse an edit (a spell above the character's level, another
@@ -188,22 +181,24 @@ pub(super) fn run(
             session.close()?;
             return Ok(exit);
         }
-        if ready && !lifecycle.blocks_motion() {
+        if ready && !world.lifecycle.blocks_motion() {
             if let Some(motion) = world.motion.as_mut() {
                 motion.tick(Instant::now(), |body| session.send_unreliable(0x14cb, body))?;
-            } else if last_position.elapsed() >= eq_network_game::movement::STATIONARY_HEARTBEAT {
-                stationary[2..4].copy_from_slice(&position_sequence.to_le_bytes());
-                session.send_unreliable(0x14cb, &stationary)?;
-                position_sequence = position_sequence.wrapping_add(1);
-                last_position = Instant::now();
+            } else if world.last_position.elapsed()
+                >= eq_network_game::movement::STATIONARY_HEARTBEAT
+            {
+                world.stationary[2..4].copy_from_slice(&world.sequence.to_le_bytes());
+                session.send_unreliable(0x14cb, &world.stationary)?;
+                world.sequence = world.sequence.wrapping_add(1);
+                world.last_position = Instant::now();
             }
         }
-        if lifecycle.blocks_motion() {
+        if world.lifecycle.blocks_motion() {
             if let Some(commands) = context.commands {
                 for _ in commands.try_iter().take(64) {}
             }
         }
-        if ready && !lifecycle.is_dead() && lifecycle.pending().is_none() {
+        if ready && !world.lifecycle.is_dead() && world.lifecycle.pending().is_none() {
             if let Some(commands) = context.commands {
                 // Bound each pass so continuous producers cannot starve receive/ACK work.
                 for command in commands.try_iter().take(64) {
@@ -211,7 +206,7 @@ pub(super) fn run(
                     if let Some(reason) = actions::Held::from_state(
                         &cast_guard,
                         &book_edits,
-                        pending_memorization.as_ref(),
+                        world.book_action.as_ref(),
                         &trades,
                         scribe_consumption.awaiting_cursor(Instant::now()),
                     )
@@ -272,19 +267,14 @@ pub(super) fn run(
                                     .is_some_and(|m| m.position() == *position),
                                 "zone-line position is no longer current"
                             );
-                            ensure!(current_zone.0 != 0, "zone identity is unavailable");
-                            zone_points.request(
-                                destination,
-                                *position,
-                                current_zone.0,
-                                current_zone.1,
-                            )
+                            ensure!(world.zone.0 != 0, "zone identity is unavailable");
+                            zone_points.request(destination, *position, world.zone.0, world.zone.1)
                         })();
                         match request {
                             Ok(offer) => {
                                 session.send(0x5dd8, &offer.response(&config.character)?)?;
-                                lifecycle.offer(offer.clone(), now)?;
-                                pending_memorization = None;
+                                world.lifecycle.offer(offer.clone(), now)?;
+                                world.book_action = None;
                                 if let Some(motion) = world.motion.as_mut() {
                                     motion.suspend();
                                 }
@@ -325,7 +315,7 @@ pub(super) fn run(
                             | ClientCommand::CastSpell { .. }
                             | ClientCommand::UseItem(_)
                             | ClientCommand::SetPosture { .. }
-                    ) && pending_memorization.take().is_some()
+                    ) && world.book_action.take().is_some()
                     {
                         log.send(ClientEvent::World(crate::world::WorldEvent::BookAction(
                             BookActionStatus::Cancelled(
@@ -356,7 +346,7 @@ pub(super) fn run(
                                 *requested == session_id
                                     && *created <= now
                                     && now.duration_since(*created) < Duration::from_secs(1)
-                                    && pending_memorization.is_none()
+                                    && world.book_action.is_none()
                             })
                             .context("scribing is unavailable or stale")
                             .and_then(|book| pending.packet(book, &world.inventory));
@@ -379,7 +369,7 @@ pub(super) fn run(
                                         command::Posture::Sitting,
                                         log,
                                     )?;
-                                    pending_memorization = Some(pending);
+                                    world.book_action = Some(pending);
                                     log.send(ClientEvent::World(
                                         crate::world::WorldEvent::BookAction(
                                             BookActionStatus::Preparing,
@@ -406,7 +396,7 @@ pub(super) fn run(
                         &command,
                         admitted_book.as_ref(),
                         session_id,
-                        pending_memorization.is_some(),
+                        world.book_action.is_some(),
                         Instant::now(),
                     ) {
                         let status = match packet {
@@ -448,7 +438,7 @@ pub(super) fn run(
                             });
                         match packet {
                             Ok(body) => {
-                                pending_memorization = None;
+                                world.book_action = None;
                                 session.send(0x308e, &body)?;
                                 log.send(ClientEvent::World(
                                     crate::world::WorldEvent::BookAction(
@@ -477,7 +467,7 @@ pub(super) fn run(
                         let valid = *requested == session_id
                             && *created <= Instant::now()
                             && created.elapsed() < Duration::from_secs(1)
-                            && pending_memorization.is_none();
+                            && world.book_action.is_none();
                         let packet = admitted_book
                             .as_ref()
                             .filter(|_| valid)
@@ -503,7 +493,7 @@ pub(super) fn run(
                                         command::Posture::Sitting,
                                         log,
                                     )?;
-                                    pending_memorization = Some(PendingBookAction {
+                                    world.book_action = Some(PendingBookAction {
                                         started: Instant::now(),
                                         intent: BookIntent::Memorize {
                                             gem: *gem,
@@ -793,12 +783,13 @@ pub(super) fn run(
                 }
             }
         }
-        if !lifecycle.is_dead() && lifecycle.pending().is_none() {
-            if pending_memorization
+        if !world.lifecycle.is_dead() && world.lifecycle.pending().is_none() {
+            if world
+                .book_action
                 .as_ref()
                 .is_some_and(|pending| pending.ready(Instant::now()))
             {
-                if let Some(pending) = pending_memorization.take() {
+                if let Some(pending) = world.book_action.take() {
                     let packet = admitted_book
                         .as_ref()
                         .context("spellbook unavailable")
@@ -823,7 +814,7 @@ pub(super) fn run(
             }
         } else {
             spellbook::cancel_pending(
-                &mut pending_memorization,
+                &mut world.book_action,
                 "Character died or zone transfer started",
                 log,
             )?;
@@ -857,7 +848,7 @@ pub(super) fn run(
                                 spell_id: None,
                             }))?;
                         }
-                        if cast_guard.active() && pending_memorization.take().is_some() {
+                        if cast_guard.active() && world.book_action.take().is_some() {
                             log.send(ClientEvent::World(crate::world::WorldEvent::BookAction(
                                 BookActionStatus::Cancelled("Casting started".into()),
                             )))?;
@@ -918,13 +909,13 @@ pub(super) fn run(
         }
         if ready && matches!(packet.opcode, 0x385e | 0x7834) {
             let offer = zoning::offer(packet.opcode, &packet.body)?;
-            if let Some(position) = offer.local_position(current_zone) {
+            if let Some(position) = offer.local_position(world.zone) {
                 ensure!(
-                    !lifecycle.blocks_motion(),
+                    !world.lifecycle.blocks_motion(),
                     "same-zone relocation conflicts with death or transfer"
                 );
                 spellbook::cancel_pending(
-                    &mut pending_memorization,
+                    &mut world.book_action,
                     "Server relocated character",
                     log,
                 )?;
@@ -935,8 +926,8 @@ pub(super) fn run(
                 motion::correct_own(
                     player,
                     world.motion.as_mut(),
-                    &mut stationary,
-                    position_sequence,
+                    &mut world.stationary,
+                    world.sequence,
                     position,
                     Instant::now(),
                 )?;
@@ -955,11 +946,11 @@ pub(super) fn run(
                 }))?;
                 continue;
             }
-            if let Some(pending) = lifecycle.pending() {
+            if let Some(pending) = world.lifecycle.pending() {
                 ensure!(pending == &offer, "conflicting zone transfer offer");
             } else {
                 session.send(0x5dd8, &offer.response(&config.character)?)?;
-                spellbook::cancel_pending(&mut pending_memorization, "Zone transfer started", log)?;
+                spellbook::cancel_pending(&mut world.book_action, "Zone transfer started", log)?;
                 log.send(ClientEvent::World(crate::world::WorldEvent::ZoneTransfer(
                     offer.clone(),
                 )))?;
@@ -968,7 +959,7 @@ pub(super) fn run(
                     packets,
                     Some(session.last_received_seconds()),
                 )?;
-                lifecycle.offer(offer, Instant::now())?;
+                world.lifecycle.offer(offer, Instant::now())?;
                 if let Some(motion) = world.motion.as_mut() {
                     motion.suspend();
                 }
@@ -997,7 +988,8 @@ pub(super) fn run(
             return Ok(exit);
         }
         if ready && packet.opcode == 0x5dd8 {
-            let pending = lifecycle
+            let pending = world
+                .lifecycle
                 .pending()
                 .context("zone approval without a pending server offer")?;
             let heading = world
@@ -1008,16 +1000,16 @@ pub(super) fn run(
                 &packet.body,
                 &config.character,
                 pending,
-                current_zone,
+                world.zone,
                 heading,
             )?;
             if reply == zoning::ZoneReply::Approved {
-                lifecycle.finish(true)?;
+                world.lifecycle.finish(true)?;
                 log.send(ClientEvent::Progress(ConnectionStage::ConnectingWorld))?;
                 session.close()?;
                 return Ok(ZoneExit::World);
             }
-            lifecycle.finish(false)?;
+            world.lifecycle.finish(false)?;
             let reason = match &reply {
                 zoning::ZoneReply::Denied(reason) => *reason,
                 zoning::ZoneReply::Rewind(_) => zoning::ZoneRejection::Cancelled,
@@ -1031,13 +1023,13 @@ pub(super) fn run(
                 motion::correct_own(
                     player,
                     world.motion.as_mut(),
-                    &mut stationary,
-                    position_sequence,
+                    &mut world.stationary,
+                    world.sequence,
                     position,
                     Instant::now(),
                 )?;
                 log.send(ClientEvent::World(crate::world::WorldEvent::Position {
-                    spawn_id: u16::from_le_bytes([stationary[0], stationary[1]]),
+                    spawn_id: u16::from_le_bytes([world.stationary[0], world.stationary[1]]),
                     position,
                     velocity: [0.0; 3],
                 }))?;
@@ -1045,7 +1037,7 @@ pub(super) fn run(
             log.send(ClientEvent::World(
                 crate::world::WorldEvent::ZoneTransferRejected { session_id, reason },
             ))?;
-            if !lifecycle.is_dead() {
+            if !world.lifecycle.is_dead() {
                 if let Some(motion) = world.motion.as_mut() {
                     motion.resume_stationary(Instant::now());
                 }
@@ -1072,18 +1064,18 @@ pub(super) fn run(
                 }
                 // Preserve the server's saved coordinates. Velocity and
                 // animation stay zero; this collector never navigates.
-                stationary[4..8].copy_from_slice(&packet.body[13120..13124]);
-                stationary[24..28].copy_from_slice(&packet.body[13116..13120]);
-                stationary[28..32].copy_from_slice(&packet.body[13124..13128]);
+                world.stationary[4..8].copy_from_slice(&packet.body[13120..13124]);
+                world.stationary[24..28].copy_from_slice(&packet.body[13116..13120]);
+                world.stationary[28..32].copy_from_slice(&packet.body[13124..13128]);
                 let heading = f32::from_le_bytes(packet.body[13128..13132].try_into().unwrap());
                 let heading = crate::world::profile_heading(heading, revolution) * 8.0;
                 #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
                 let heading = heading as u16;
-                stationary[32..34].copy_from_slice(&(heading & 0x0fff).to_le_bytes());
+                world.stationary[32..34].copy_from_slice(&(heading & 0x0fff).to_le_bytes());
                 profile_data.clone_from(&packet.body);
                 initial_skills.clear();
                 initial_level = None;
-                current_zone = (
+                world.zone = (
                     u16::from_le_bytes(packet.body[13276..13278].try_into()?),
                     u16::from_le_bytes(packet.body[13278..13280].try_into()?),
                 );
@@ -1102,7 +1094,7 @@ pub(super) fn run(
                 );
                 let id = u16::try_from(le32(&packet.body[340..344]))
                     .context("spawn ID exceeds Titanium position field")?;
-                stationary[..2].copy_from_slice(&id.to_le_bytes());
+                world.stationary[..2].copy_from_slice(&id.to_le_bytes());
                 world.own_spawn = Some(id);
                 spawn_data.clone_from(&packet.body);
                 saw_spawn = true;
@@ -1179,7 +1171,9 @@ pub(super) fn run(
                         )))?;
                         world.posture = posture::OwnPosture::default();
                         for (spawn_id, posture) in std::mem::take(&mut initial_postures) {
-                            if spawn_id == u16::from_le_bytes([stationary[0], stationary[1]]) {
+                            if spawn_id
+                                == u16::from_le_bytes([world.stationary[0], world.stationary[1]])
+                            {
                                 world.posture.observed(posture);
                             }
                             log.send(ClientEvent::World(crate::world::WorldEvent::Posture {
@@ -1234,7 +1228,7 @@ pub(super) fn run(
             ZoneOpcode::LoggedOut => bail!("server logged the character out"),
             ZoneOpcode::ZoneHandoff => {
                 ensure!(
-                    ready && lifecycle.pending().is_some(),
+                    ready && world.lifecycle.pending().is_some(),
                     "zone handoff without a pending transfer"
                 );
                 log.send(ClientEvent::Progress(ConnectionStage::ConnectingZone))?;
@@ -1318,7 +1312,9 @@ pub(super) fn run(
                     if let Some(spawn) = initial_spawns.get_mut(&change.spawn_id) {
                         spawn.appearance.apply(&change);
                     }
-                    if change.spawn_id == u16::from_le_bytes([stationary[0], stationary[1]]) {
+                    if change.spawn_id
+                        == u16::from_le_bytes([world.stationary[0], world.stationary[1]])
+                    {
                         initial_own_wear.push(change);
                     }
                 }
@@ -1369,12 +1365,16 @@ pub(super) fn run(
                     }
                     match &event {
                         crate::world::WorldEvent::Posture { spawn_id, posture }
-                            if *spawn_id == u16::from_le_bytes([stationary[0], stationary[1]]) =>
+                            if *spawn_id
+                                == u16::from_le_bytes([
+                                    world.stationary[0],
+                                    world.stationary[1],
+                                ]) =>
                         {
                             world.posture.observed(*posture);
                             if *posture != crate::world::PostureState::Sitting {
                                 spellbook::cancel_pending(
-                                    &mut pending_memorization,
+                                    &mut world.book_action,
                                     "Server changed character posture",
                                     log,
                                 )?;
@@ -1423,13 +1423,13 @@ pub(super) fn run(
                         crate::world::WorldEvent::Death(death)
                             if death.spawn_id
                                 == u32::from(u16::from_le_bytes([
-                                    stationary[0],
-                                    stationary[1],
+                                    world.stationary[0],
+                                    world.stationary[1],
                                 ])) =>
                         {
-                            lifecycle.mark_dead();
+                            world.lifecycle.mark_dead();
                             spellbook::cancel_pending(
-                                &mut pending_memorization,
+                                &mut world.book_action,
                                 "Character died",
                                 log,
                             )?;
@@ -1482,9 +1482,11 @@ pub(super) fn run(
                         spawn_id, position, ..
                     } = &event
                     {
-                        if *spawn_id == u16::from_le_bytes([stationary[0], stationary[1]]) {
+                        if *spawn_id
+                            == u16::from_le_bytes([world.stationary[0], world.stationary[1]])
+                        {
                             spellbook::cancel_pending(
-                                &mut pending_memorization,
+                                &mut world.book_action,
                                 "Server corrected character position",
                                 log,
                             )?;
@@ -1495,8 +1497,8 @@ pub(super) fn run(
                             motion::correct_own(
                                 player,
                                 world.motion.as_mut(),
-                                &mut stationary,
-                                position_sequence,
+                                &mut world.stationary,
+                                world.sequence,
                                 *position,
                                 Instant::now(),
                             )?;

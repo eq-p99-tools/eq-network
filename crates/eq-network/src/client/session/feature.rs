@@ -5,7 +5,10 @@
 //! records what the server says about it and takes the host's commands for
 //! it. The zone loop only fans packets and commands out to the features.
 
-use super::{posture::OwnPosture, ClientCommand, Events, Session, ZoneExit};
+use super::{
+    lifecycle::ZoneLifecycle, posture::OwnPosture, spellbook::PendingBookAction, ClientCommand,
+    Events, Session, ZoneExit,
+};
 use anyhow::Result;
 use eq_network_game::{
     inventory::Inventory,
@@ -38,6 +41,20 @@ pub(super) struct World {
     pub(super) posture: OwnPosture,
     /// Set by a feature that ends the zone session.
     pub(super) exit: Option<ZoneExit>,
+    /// Death and zone transfers, which hold the player's actions.
+    pub(super) lifecycle: ZoneLifecycle,
+    /// The zone's ID and instance, from the player's profile.
+    pub(super) zone: (u16, u16),
+    /// The player's own position packet, kept current for the stationary
+    /// heartbeat: spawn ID, sequence, coordinates and heading.
+    pub(super) stationary: [u8; 36],
+    /// The heartbeat's next sequence number.
+    pub(super) sequence: u16,
+    /// When the player's position was last sent.
+    pub(super) last_position: Instant,
+    /// A spellbook action waiting for the player to sit, which moving,
+    /// casting, dying or zoning cancels.
+    pub(super) book_action: Option<PendingBookAction>,
 }
 
 impl World {
@@ -51,6 +68,15 @@ impl World {
             own_spawn: None,
             posture: OwnPosture::default(),
             exit: None,
+            lifecycle: ZoneLifecycle::default(),
+            zone: (0, 0),
+            stationary: [0; 36],
+            sequence: 0,
+            // In the past, so the first stationary heartbeat goes out at once.
+            last_position: Instant::now()
+                .checked_sub(eq_network_game::movement::STATIONARY_HEARTBEAT)
+                .unwrap_or_else(Instant::now),
+            book_action: None,
         }
     }
 
