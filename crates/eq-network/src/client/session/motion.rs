@@ -413,7 +413,11 @@ mod tests {
             .unwrap()
         );
         let outcome = testing::run(|out| motion.tick(now, &mut world, out));
-        assert!(outcome.unreliable.is_empty());
+        assert!(
+            outcome.unreliable.is_empty(),
+            "expected no unreliable packet, got {:?}",
+            outcome.unreliable
+        );
         let outcome = testing::run(|out| motion.tick(now + STATIONARY_HEARTBEAT, &mut world, out));
         assert_eq!(&outcome.unreliable[0].body[2..4], &[1, 0]);
     }
@@ -518,7 +522,11 @@ mod tests {
         ));
         let outcome = testing::run(|out| motion.handle(&sit(8), &mut world, out));
         outcome.result.unwrap();
-        assert!(outcome.sent.is_empty());
+        assert!(
+            outcome.sent.is_empty(),
+            "expected nothing sent, got {:?}",
+            outcome.sent
+        );
     }
 
     #[test]
@@ -551,6 +559,10 @@ mod tests {
         world.died();
         let later = Instant::now() + STATIONARY_HEARTBEAT * 2;
         let outcome = testing::run(|out| motion.tick(later, &mut world, out));
-        assert!(outcome.unreliable.is_empty());
+        assert!(
+            outcome.unreliable.is_empty(),
+            "expected no unreliable packet, got {:?}",
+            outcome.unreliable
+        );
     }
 }

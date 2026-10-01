@@ -335,7 +335,11 @@ mod tests {
         // A gem that does not hold the spell sends nothing and says why.
         let outcome = testing::run(|out| casting.handle(&cast(1), &mut world, out));
         outcome.result.unwrap();
-        assert!(outcome.sent.is_empty());
+        assert!(
+            outcome.sent.is_empty(),
+            "expected nothing sent, got {:?}",
+            outcome.sent
+        );
         assert!(matches!(
             outcome.events[..],
             [

@@ -105,7 +105,10 @@ fn updates_reject_partial_batches_and_preserve_negative_positions() {
     assert!(updates(0x9f40, &batch).is_err());
     assert!(updates(0x9f40, &u32::MAX.to_le_bytes()).is_err());
     assert!(updates(0xf340, &[0; 15]).is_err());
-    assert!(updates(0x1234, &[]).unwrap().is_empty());
+    assert!(
+        updates(0x1234, &[]).unwrap().is_empty(),
+        "an unknown opcode decodes to nothing"
+    );
     assert_eq!(
         updates(0x2940, &7u16.to_le_bytes()).unwrap(),
         vec![WorldEvent::Despawn(7)]

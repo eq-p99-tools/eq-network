@@ -96,7 +96,11 @@ mod tests {
             let outcome =
                 testing::run(|out| targeting.handle(&target(Some(spawn_id)), &mut world, out));
             outcome.result.unwrap();
-            assert!(outcome.sent.is_empty());
+            assert!(
+                outcome.sent.is_empty(),
+                "expected nothing sent for spawn {spawn_id:?}, got {:?}",
+                outcome.sent
+            );
             assert!(matches!(
                 outcome.events[..],
                 [
