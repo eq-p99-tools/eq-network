@@ -177,6 +177,11 @@ impl Belongings {
 }
 
 impl Feature for Belongings {
+    fn capabilities(&self) -> Vec<crate::world::Capability> {
+        use crate::world::Capability;
+        vec![Capability::Inventory, Capability::Trading]
+    }
+
     /// Item updates before admission build the inventory the admission reports.
     fn admit(&mut self, message: &Message, world: &mut World) -> Result<()> {
         if let Some(update) = update(message) {

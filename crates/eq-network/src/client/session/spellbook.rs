@@ -247,6 +247,11 @@ impl Spellbook {
 }
 
 impl Feature for Spellbook {
+    fn capabilities(&self) -> Vec<crate::world::Capability> {
+        use crate::world::Capability;
+        vec![Capability::Spellbook]
+    }
+
     /// The book arrives with the player's profile, before the zone admits them.
     fn admit(&mut self, message: &Message, _world: &mut World) -> Result<()> {
         if let Message::Event(WorldEvent::SpellBook(book)) = message {

@@ -21,6 +21,11 @@ const CURSOR: InventorySlot = InventorySlot(30);
 pub(super) struct GroundObjects(Objects);
 
 impl Feature for GroundObjects {
+    fn capabilities(&self) -> Vec<crate::world::Capability> {
+        use crate::world::Capability;
+        vec![Capability::GroundItems]
+    }
+
     fn admit(&mut self, message: &Message, _world: &mut World) -> Result<()> {
         if let Message::Event(WorldEvent::Objects(update)) = message {
             self.0.apply(update);

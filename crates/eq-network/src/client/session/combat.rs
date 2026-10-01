@@ -17,6 +17,11 @@ impl Combat {
 }
 
 impl Feature for Combat {
+    fn capabilities(&self) -> Vec<crate::world::Capability> {
+        use crate::world::Capability;
+        vec![Capability::Combat]
+    }
+
     fn owns(&self, command: &ClientCommand) -> bool {
         matches!(
             command,

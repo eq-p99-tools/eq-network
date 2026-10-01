@@ -233,6 +233,11 @@ impl Casting {
 }
 
 impl Feature for Casting {
+    fn capabilities(&self) -> Vec<crate::world::Capability> {
+        use crate::world::Capability;
+        vec![Capability::Casting]
+    }
+
     fn holds(&self, _world: &World, _now: Instant) -> Vec<(Resource, &'static str)> {
         self.guard.hold().into_iter().collect()
     }

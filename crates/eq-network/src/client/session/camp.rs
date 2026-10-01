@@ -79,6 +79,11 @@ impl Camp {
 }
 
 impl Feature for Camp {
+    fn capabilities(&self) -> Vec<crate::world::Capability> {
+        use crate::world::Capability;
+        vec![Capability::Camping]
+    }
+
     fn owns(&self, command: &ClientCommand) -> bool {
         matches!(command, ClientCommand::Camp { .. })
     }

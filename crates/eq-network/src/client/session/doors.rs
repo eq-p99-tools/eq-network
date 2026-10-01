@@ -47,6 +47,11 @@ impl Doors {
 }
 
 impl Feature for Doors {
+    fn capabilities(&self) -> Vec<crate::world::Capability> {
+        use crate::world::Capability;
+        vec![Capability::Doors]
+    }
+
     fn admit(&mut self, message: &Message, _world: &mut World) -> Result<()> {
         if let Message::Event(WorldEvent::Doors(update)) = message {
             self.table.apply(update);

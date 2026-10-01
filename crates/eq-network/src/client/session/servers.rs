@@ -7,7 +7,11 @@
 
 use anyhow::Result;
 
-use super::ServerProtocol;
+use super::{
+    feature::{Encoder, Feature},
+    motion::Motion,
+    ServerProtocol,
+};
 use crate::p99::{self, WorldCodec};
 
 /// A server type's features, each absent unless the server has it.
@@ -33,9 +37,10 @@ pub(super) trait ServerType: Sync {
         false
     }
 
-    /// Whether the server takes jumps and falls from the client.
-    fn falls(&self) -> bool {
-        false
+    /// How the player moves in this server's zones: every server takes the
+    /// player's moves; some take their jumps and falls too.
+    fn motion(&self, encoder: Encoder) -> Box<dyn Feature> {
+        Box::new(Motion::new(encoder, false))
     }
 }
 
@@ -144,8 +149,8 @@ impl ServerType for EqEmu {
         true
     }
 
-    fn falls(&self) -> bool {
-        true
+    fn motion(&self, encoder: Encoder) -> Box<dyn Feature> {
+        Box::new(Motion::new(encoder, true))
     }
 }
 
@@ -172,16 +177,29 @@ mod tests {
 
     impl ServerType for Empty {}
 
+    /// What a server type's motion lets the player do.
+    fn moves(server: &dyn ServerType) -> Vec<crate::world::Capability> {
+        server
+            .motion(Encoder::new(
+                eq_network_game::GameDialect::Titanium,
+                "Tester",
+            ))
+            .capabilities()
+    }
+
     #[test]
     fn a_new_server_type_starts_with_every_feature_off() {
+        use crate::world::Capability;
         let empty: &dyn ServerType = &Empty;
         assert!(empty.protect(&[0; 464]).unwrap().is_none());
         assert!((empty.profile_turn() - 512.0).abs() < f32::EPSILON);
-        assert!(!empty.start_choice() && !empty.falls());
+        assert!(!empty.start_choice());
+        assert_eq!(moves(empty), [Capability::Moving]);
         // Quarm has not built any of these on the interface yet.
         let quarm = server_type(ServerProtocol::Quarm);
         assert!(quarm.protect(&[0; 464]).unwrap().is_none());
-        assert!(!quarm.start_choice() && !quarm.falls());
+        assert!(!quarm.start_choice());
+        assert_eq!(moves(quarm), [Capability::Moving]);
     }
 
     #[test]
@@ -190,11 +208,13 @@ mod tests {
         assert!(p99.protect(&[0; 464]).unwrap().is_some());
         assert!(p99.protect(&[0; 10]).is_err());
         assert!((p99.profile_turn() - 256.0).abs() < f32::EPSILON);
-        assert!(!p99.start_choice() && !p99.falls());
+        assert!(!p99.start_choice());
+        assert!(!moves(p99).contains(&crate::world::Capability::Falling));
         let eqemu = server_type(ServerProtocol::EqEmu);
         assert!(eqemu.protect(&[0; 464]).unwrap().is_none());
         assert!((eqemu.profile_turn() - 512.0).abs() < f32::EPSILON);
-        assert!(eqemu.start_choice() && eqemu.falls());
+        assert!(eqemu.start_choice());
+        assert!(moves(eqemu).contains(&crate::world::Capability::Falling));
     }
 
     #[test]

@@ -278,6 +278,41 @@ pub enum CampStatus {
     Rejected(String),
 }
 
+/// Something a zone session lets the player do. Which ones a session offers
+/// depends on the server type and on what its client generation has been
+/// built for; a front end greys out or hides the rest.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+pub enum Capability {
+    /// Casting memorized spells.
+    Casting,
+    /// Memorizing, scribing and forgetting spells.
+    Spellbook,
+    /// Moving and using items in the inventory and the bank.
+    Inventory,
+    /// Buying from and selling to merchants.
+    Trading,
+    /// Walking, running, sitting and standing.
+    Moving,
+    /// Jumping and falling, which the server takes from the client.
+    Falling,
+    /// Choosing a target.
+    Targeting,
+    /// Considering and attacking.
+    Combat,
+    /// Looting corpses.
+    Looting,
+    /// Talking on chat channels and inspecting linked items.
+    Talking,
+    /// Camping to the character list.
+    Camping,
+    /// Opening doors.
+    Doors,
+    /// Picking up items from the ground.
+    GroundItems,
+    /// Crossing zone lines and being moved between zones.
+    Zoning,
+}
+
 /// Changes delivered to a graphical consumer, independent of its rendering engine.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[non_exhaustive]
@@ -460,6 +495,9 @@ pub enum WorldEvent {
     Despawn(u16),
     /// A fully admitted zone session and its initial player state.
     Entered {
+        /// What this session lets the player do; front ends grey out or hide
+        /// the rest.
+        capabilities: Vec<Capability>,
         /// Unique connection identifier, never reused after reconnect.
         session_id: u64,
         /// Zone asset short name.

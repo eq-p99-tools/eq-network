@@ -18,6 +18,11 @@ impl Talk {
 }
 
 impl Feature for Talk {
+    fn capabilities(&self) -> Vec<crate::world::Capability> {
+        use crate::world::Capability;
+        vec![Capability::Talking]
+    }
+
     fn owns(&self, command: &ClientCommand) -> bool {
         matches!(
             command,

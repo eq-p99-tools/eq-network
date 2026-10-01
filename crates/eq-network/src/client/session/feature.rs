@@ -218,6 +218,11 @@ impl World {
 /// One part of the game in the zone session. Each step defaults to doing
 /// nothing, so a feature implements only the steps it takes part in.
 pub(super) trait Feature {
+    /// What this feature lets the player do, for the session's report.
+    fn capabilities(&self) -> Vec<crate::world::Capability> {
+        Vec::new()
+    }
+
     /// Explains a message that the feature's own action caused, before any
     /// feature hears it: the cursor scroll a scribe used up arrives as an
     /// item removed.

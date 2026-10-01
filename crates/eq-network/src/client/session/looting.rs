@@ -19,6 +19,11 @@ impl Looting {
 }
 
 impl Feature for Looting {
+    fn capabilities(&self) -> Vec<crate::world::Capability> {
+        use crate::world::Capability;
+        vec![Capability::Looting]
+    }
+
     fn owns(&self, command: &ClientCommand) -> bool {
         matches!(
             command,

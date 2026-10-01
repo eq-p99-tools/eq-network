@@ -5,10 +5,9 @@ use super::{
     doors::Doors,
     ensure, entities,
     feature::{Encoder, Feature, Out, World},
-    inventory, le32, looting, motion, objects, put_string, servers, spellbook, talk, targeting,
-    transfers, CharacterSession, ClientCommand, ClientEvent, ConnectionStage, ConnectionState,
-    Context, DecodeError, Duration, Events, Instant, RecordEvent, Result, Session, Shield,
-    ZoneExit,
+    inventory, le32, looting, objects, put_string, servers, spellbook, talk, targeting, transfers,
+    CharacterSession, ClientCommand, ClientEvent, ConnectionStage, ConnectionState, Context,
+    DecodeError, Duration, Events, Instant, RecordEvent, Result, Session, Shield, ZoneExit,
 };
 
 use eq_network_game::message::Message;
@@ -43,14 +42,19 @@ impl From<u16> for ZoneOpcode {
 struct Features(Vec<Box<dyn Feature>>);
 
 impl Features {
-    /// Every feature a Titanium zone session has.
-    fn new(dialect: eq_network_game::GameDialect, name: &str, falls: bool) -> Self {
+    /// Every feature a Titanium zone session has, with the server type's own
+    /// where servers differ.
+    fn new(
+        server: &dyn servers::ServerType,
+        dialect: eq_network_game::GameDialect,
+        name: &str,
+    ) -> Self {
         let encoder = Encoder::new(dialect, name);
         Self(vec![
             Box::new(casting::Casting::new(encoder.clone())),
             Box::new(spellbook::Spellbook::default()),
             Box::new(inventory::Belongings::new(encoder.clone())),
-            Box::new(motion::Motion::new(encoder.clone(), falls)),
+            server.motion(encoder.clone()),
             Box::new(character::Character),
             Box::new(entities::Entities::default()),
             Box::new(targeting::Targeting::new(encoder.clone())),
@@ -62,6 +66,18 @@ impl Features {
             Box::new(objects::GroundObjects::default()),
             Box::new(transfers::Transfers::new(name)),
         ])
+    }
+
+    /// What the features let the player do, each once.
+    fn capabilities(&self) -> Vec<crate::world::Capability> {
+        let mut capabilities: Vec<_> = self
+            .0
+            .iter()
+            .flat_map(|feature| feature.capabilities())
+            .collect();
+        capabilities.sort_unstable();
+        capabilities.dedup();
+        capabilities
     }
 
     /// Lets every feature explain a message its own action caused.
@@ -192,7 +208,7 @@ pub(super) fn run(
     let mut initial_skills = std::collections::BTreeMap::new();
     // Wear changes for the player that arrive before its state is built.
     let mut initial_own_wear = Vec::new();
-    let mut features = Features::new(config.protocol.into(), &config.character, server.falls());
+    let mut features = Features::new(server, config.protocol.into(), &config.character);
     let mut profile_data = Vec::new();
     let mut spawn_data = Vec::new();
     loop {
@@ -382,6 +398,7 @@ pub(super) fn run(
                         }
                         world.player = Some(player.clone());
                         log.send(ClientEvent::World(crate::world::WorldEvent::Entered {
+                            capabilities: features.capabilities(),
                             session_id,
                             zone: zone_name.clone(),
                             player: Box::new(player),
@@ -692,7 +709,11 @@ mod tests {
 
     #[test]
     fn exactly_one_feature_owns_each_command_a_zone_takes() {
-        let features = Features::new(eq_network_game::GameDialect::Titanium, "Tester", false);
+        let features = Features::new(
+            servers::server_type(crate::client::ServerProtocol::Project1999),
+            eq_network_game::GameDialect::Titanium,
+            "Tester",
+        );
         for command in zone_commands() {
             let owning = features
                 .0
@@ -706,5 +727,40 @@ mod tests {
             slot: 0,
         };
         assert!(!features.0.iter().any(|feature| feature.owns(&selection)));
+    }
+
+    #[test]
+    fn a_titanium_zone_reports_everything_its_features_offer() {
+        use crate::world::Capability;
+        let features = |protocol| {
+            Features::new(
+                servers::server_type(protocol),
+                eq_network_game::GameDialect::Titanium,
+                "Tester",
+            )
+            .capabilities()
+        };
+        let p99 = features(crate::client::ServerProtocol::Project1999);
+        for capability in [
+            Capability::Casting,
+            Capability::Spellbook,
+            Capability::Inventory,
+            Capability::Trading,
+            Capability::Moving,
+            Capability::Targeting,
+            Capability::Combat,
+            Capability::Looting,
+            Capability::Talking,
+            Capability::Camping,
+            Capability::Doors,
+            Capability::GroundItems,
+            Capability::Zoning,
+        ] {
+            assert!(p99.contains(&capability), "{capability:?}");
+        }
+        assert!(!p99.contains(&Capability::Falling));
+        let eqemu = features(crate::client::ServerProtocol::EqEmu);
+        assert!(eqemu.contains(&Capability::Falling));
+        assert_eq!(eqemu.len(), p99.len() + 1);
     }
 }

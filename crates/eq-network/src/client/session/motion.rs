@@ -265,6 +265,15 @@ impl Motion {
 }
 
 impl Feature for Motion {
+    fn capabilities(&self) -> Vec<crate::world::Capability> {
+        use crate::world::Capability;
+        if self.falls {
+            vec![Capability::Moving, Capability::Falling]
+        } else {
+            vec![Capability::Moving]
+        }
+    }
+
     /// Movement starts from the moment the zone admitted the player, before
     /// the host heard of it, so a calibration the host makes on hearing it
     /// counts as fresh.

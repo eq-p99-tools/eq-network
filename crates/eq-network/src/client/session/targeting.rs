@@ -19,6 +19,11 @@ impl Targeting {
 }
 
 impl Feature for Targeting {
+    fn capabilities(&self) -> Vec<crate::world::Capability> {
+        use crate::world::Capability;
+        vec![Capability::Targeting]
+    }
+
     fn owns(&self, command: &ClientCommand) -> bool {
         matches!(command, ClientCommand::SelectTarget { .. })
     }

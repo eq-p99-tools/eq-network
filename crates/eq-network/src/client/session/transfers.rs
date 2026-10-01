@@ -167,6 +167,11 @@ fn relocate(position: Position, world: &mut World, out: &mut Out<'_, '_>) -> Res
 }
 
 impl Feature for Transfers {
+    fn capabilities(&self) -> Vec<crate::world::Capability> {
+        use crate::world::Capability;
+        vec![Capability::Zoning]
+    }
+
     fn owns(&self, command: &ClientCommand) -> bool {
         matches!(command, ClientCommand::CrossZoneLine { .. })
     }

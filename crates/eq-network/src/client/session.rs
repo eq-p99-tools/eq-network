@@ -12,6 +12,7 @@ mod looting;
 mod motion;
 mod objects;
 mod posture;
+mod servers;
 mod spellbook;
 mod talk;
 mod targeting;
@@ -19,7 +20,6 @@ mod transfers;
 mod zone;
 
 use super::{
-    servers::{self, Shield},
     CancellationToken, ClientCommand, ClientConfig, ClientEvent, ClientIdentity, ConnectionStage,
     ConnectionState, DecodeError, Events, LoginError, RecordEvent, RunOptions, ServerProtocol,
 };
@@ -35,6 +35,7 @@ use eq_network_login::{
     login::{encrypt_login_credentials, is_bad_password_login_result},
     server_list::parse_server_list,
 };
+use servers::Shield;
 use std::{
     net::IpAddr,
     sync::mpsc::Receiver,
