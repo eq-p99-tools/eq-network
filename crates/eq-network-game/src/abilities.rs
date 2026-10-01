@@ -285,13 +285,32 @@ pub fn in_melee_range(own: Body, target: Body) -> bool {
     dx * dx + dy * dy <= reach
 }
 
+/// The size `EQEmu` gives a player of a race on entering a zone
+/// (`Client::Handle_Connect_OP_ZoneEntry`), which melee reach counts: an
+/// Ogre's 9 down to a Gnome's 3, and 0 for a race it does not list.
+#[must_use]
+pub const fn player_size(race: u32) -> f32 {
+    match race {
+        10 => 9.0,
+        9 => 8.0,
+        2 | 130 => 7.0,
+        1 | 3 | 5 | 128 | 522 => 6.0,
+        7 => 5.5,
+        4 | 6 | 330 => 5.0,
+        8 => 4.0,
+        11 => 3.5,
+        12 => 3.0,
+        _ => 0.0,
+    }
+}
+
 /// What melee reach depends on for one side: its race, its size and where
 /// it stands on the ground.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Body {
     /// Race number.
     pub race: u32,
-    /// Size as servers count it; players send none and count as small.
+    /// Size as servers count it; under 6 counts as 8.
     pub size: f32,
     /// East-west position.
     pub x: f32,
@@ -373,6 +392,18 @@ mod tests {
         // A size 10 creature: twenty units.
         assert!(in_melee_range(body(1, 0.0, 0.0), body(1, 10.0, 20.0)));
         assert!(!in_melee_range(body(1, 0.0, 0.0), body(1, 10.0, 20.5)));
+        // Against a size 6 creature a human, at size 6 too, reaches twelve
+        // units, less far than a gnome, whose 3 counts as 8.
+        let human = body(1, player_size(1), 0.0);
+        assert!(in_melee_range(human, body(1, 6.0, 12.0)));
+        assert!(!in_melee_range(human, body(1, 6.0, 12.5)));
+        assert!(in_melee_range(
+            body(12, player_size(12), 0.0),
+            body(1, 6.0, 16.0)
+        ));
+        assert_eq!(player_size(10), 9.0);
+        assert_eq!(player_size(7), 5.5);
+        assert_eq!(player_size(999), 0.0);
         // A lava dragon counts as size 60, and huge reaches are cut down.
         assert!(in_melee_range(body(1, 0.0, 0.0), body(49, 1.0, 59.9)));
         assert!(!in_melee_range(body(1, 0.0, 0.0), body(49, 1.0, 60.5)));
