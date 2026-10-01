@@ -26,15 +26,14 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the window closes. `Capability::Giving` reports it.
 - Trades between players (`exchange`): another player's request opens the
   window at once, as in the official client (`ExchangeUpdate::Taken`), or
-  hears that the player is busy while another trade is under way. Their items (`ExchangeUpdate::Offered`,
-  in slots from `THEIR_FIRST_SLOT`) and coins (`ExchangeUpdate::Coins`, kept
-  as the wallet's `offered`) reach the host; Trade may be clicked again after
-  anything put in undid it. When the other player closes the window the
-  session closes it too, since `EQEmu` returns only the canceller's items.
-  NO DROP items, and bags holding one, are refused before a move that
-  `EQEmu` answers by disconnecting, and coins put in a trade stay there.
-  the window closes. `Capability::Giving` reports it; trades between
-  players are not supported yet.
+  hears that the player is busy while another trade is under way. Their
+  items (`ExchangeUpdate::Offered`, in slots from `THEIR_FIRST_SLOT`) and
+  coins (`ExchangeUpdate::Coins`, kept as the wallet's `offered`) reach the
+  host; Trade may be clicked again after anything put in undid it. When the
+  other player closes the window the session closes it too, since `EQEmu`
+  returns only the canceller's items. NO DROP items, and bags holding one,
+  are refused before a move that `EQEmu` answers by disconnecting, and coins
+  put in a trade stay there.
 - Abilities (`abilities`): `UseAbility` uses kick, bash, backstab, frenzy,
   the monk strikes and taunt on the target, and hide, sneak, forage, mend,
   feign death and sense heading on the player (`Capability::Abilities`). The
