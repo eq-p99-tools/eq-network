@@ -30,9 +30,6 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   otherwise, so a new server type starts with every feature off. P99's V62
   protection and 256-unit saved headings, and `EQEmu`'s falls, jumps and
   post-creation start choice, moved behind it; nothing on the wire changed.
-- On P99, every helm a spawn wears is reported as shown: showing helms there
-  is the viewer's own option, not a flag each player sends. Stock `EQEmu`
-  keeps each player's choice.
 
 ### Known limitations
 

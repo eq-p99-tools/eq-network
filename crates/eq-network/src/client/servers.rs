@@ -37,25 +37,6 @@ pub(super) trait ServerType: Sync {
     fn falls(&self) -> bool {
         false
     }
-
-    /// Whether each spawn's show-helm flag decides if its helm shows, as each
-    /// player chooses on stock `EQEmu`. Without it every helm a spawn wears
-    /// shows: on P99, showing helms is the viewer's own option.
-    fn helm_choice(&self) -> bool {
-        false
-    }
-}
-
-/// Shows every helm in an update unless the server lets each spawn choose.
-pub(super) fn show_helms(server: &dyn ServerType, event: &mut crate::world::WorldEvent) {
-    if server.helm_choice() {
-        return;
-    }
-    if let crate::world::WorldEvent::Spawns(spawns) = event {
-        for spawn in spawns {
-            spawn.appearance.show_helm = true;
-        }
-    }
 }
 
 /// One protected connection's encryption and checks, keyed per world and
@@ -166,10 +147,6 @@ impl ServerType for EqEmu {
     fn falls(&self) -> bool {
         true
     }
-
-    fn helm_choice(&self) -> bool {
-        true
-    }
 }
 
 /// Project Quarm, whose features are not built on this interface yet.
@@ -200,7 +177,7 @@ mod tests {
         let empty: &dyn ServerType = &Empty;
         assert!(empty.protect(&[0; 464]).unwrap().is_none());
         assert!((empty.profile_turn() - 512.0).abs() < f32::EPSILON);
-        assert!(!empty.start_choice() && !empty.falls() && !empty.helm_choice());
+        assert!(!empty.start_choice() && !empty.falls());
         // Quarm has not built any of these on the interface yet.
         let quarm = server_type(ServerProtocol::Quarm);
         assert!(quarm.protect(&[0; 464]).unwrap().is_none());
@@ -217,35 +194,7 @@ mod tests {
         let eqemu = server_type(ServerProtocol::EqEmu);
         assert!(eqemu.protect(&[0; 464]).unwrap().is_none());
         assert!((eqemu.profile_turn() - 512.0).abs() < f32::EPSILON);
-        assert!(eqemu.start_choice() && eqemu.falls() && eqemu.helm_choice());
-        assert!(!p99.helm_choice());
-    }
-
-    #[test]
-    fn spawns_show_their_helms_unless_the_server_lets_them_choose() {
-        let spawn = crate::world::SpawnState {
-            spawn_id: 7,
-            name: "Example".into(),
-            kind: crate::world::SpawnKind::Npc,
-            class: None,
-            race: 1,
-            gender: 0,
-            position: crate::world::Position::default(),
-            velocity: [0.0; 3],
-            size: 0.0,
-            invisible: false,
-            appearance: eq_network_game::appearance::Appearance::default(),
-        };
-        let shown = |protocol| {
-            let mut event = crate::world::WorldEvent::Spawns(vec![spawn.clone()]);
-            show_helms(server_type(protocol), &mut event);
-            match event {
-                crate::world::WorldEvent::Spawns(spawns) => spawns[0].appearance.show_helm,
-                _ => unreachable!(),
-            }
-        };
-        assert!(shown(ServerProtocol::Project1999));
-        assert!(!shown(ServerProtocol::EqEmu));
+        assert!(eqemu.start_choice() && eqemu.falls());
     }
 
     #[test]
