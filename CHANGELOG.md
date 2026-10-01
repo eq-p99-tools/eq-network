@@ -25,6 +25,11 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Separate session helpers validate gameplay requests against current admission
   state and retain server corrections rather than treating predictions as acknowledgments.
+- Server types (`client::servers`): each difference between servers that speak
+  the same protocol is a feature a server type has, absent unless it says
+  otherwise, so a new server type starts with every feature off. P99's V62
+  protection and 256-unit saved headings, and `EQEmu`'s falls, jumps and
+  post-creation start choice, moved behind it; nothing on the wire changed.
 
 ### Fixed
 
