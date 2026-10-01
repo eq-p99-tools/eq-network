@@ -2,6 +2,8 @@ mod actions;
 mod book_edits;
 mod camp;
 mod casting;
+mod doors;
+mod feature;
 mod inventory;
 mod lifecycle;
 mod merchant;

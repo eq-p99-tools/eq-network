@@ -1,6 +1,9 @@
 //! Items on the ground: the zone's object table, pickups, and world containers,
 //! which are not supported yet, so one that opens for this player is closed again.
-use super::{ClientCommand, ClientEvent, Events, Session};
+use super::{
+    feature::{Feature, Out, World},
+    ClientCommand, ClientEvent,
+};
 use anyhow::{anyhow, ensure, Result};
 use eq_network_game::{
     inventory::{Inventory, InventorySlot},
@@ -16,48 +19,23 @@ const CURSOR: InventorySlot = InventorySlot(30);
 #[derive(Debug, Default)]
 pub(super) struct GroundObjects(Objects);
 
-impl GroundObjects {
-    /// Records an update received before the zone is ready.
-    pub(super) fn apply(&mut self, update: &ObjectUpdate) {
-        self.0.apply(update);
-    }
-
-    /// The table to report when the zone becomes ready.
-    pub(super) fn admission(&self) -> ObjectUpdate {
-        self.0.admission()
-    }
-
-    /// Records a server update, and closes a container that opened for this
-    /// player, so the server does not keep it in use.
-    pub(super) fn observe(
-        &mut self,
-        update: &ObjectUpdate,
-        own_spawn: Option<u16>,
-        session: &mut Session,
-        log: &mut Events<'_>,
-    ) -> Result<()> {
-        self.0.apply(update);
-        if let ObjectUpdate::Container(view) = update {
-            if view.open && own_spawn.is_some_and(|id| u32::from(id) == view.player_id) {
-                session.send(CONTAINER_OPCODE, &view.close_packet())?;
-                log.diagnostic(format!(
-                    "Closed world container {}: containers are not supported yet",
-                    view.drop_id
-                ))?;
-            }
+impl Feature for GroundObjects {
+    fn admit(&mut self, event: &WorldEvent) {
+        if let WorldEvent::Objects(update) = event {
+            self.0.apply(update);
         }
-        Ok(())
+    }
+
+    fn admission(&self) -> Option<WorldEvent> {
+        Some(WorldEvent::Objects(self.0.admission()))
     }
 
     /// Handles a pickup request; false for any other command.
-    pub(super) fn handle(
-        &self,
+    fn handle(
+        &mut self,
         command: &ClientCommand,
-        session_id: u64,
-        player: Option<(u16, Position)>,
-        inventory: &Inventory,
-        session: &mut Session,
-        log: &mut Events<'_>,
+        world: &mut World,
+        out: &mut Out<'_, '_>,
     ) -> Result<bool> {
         let ClientCommand::PickUp {
             session_id: requested,
@@ -72,21 +50,56 @@ impl GroundObjects {
             drop_id: *drop_id,
             created: *created,
         };
-        let error = match self.pickup(&pickup, session_id, player, inventory, Instant::now()) {
+        let player = world.player_at();
+        let checked = self.pickup(
+            &pickup,
+            world.session_id,
+            player,
+            &world.inventory,
+            Instant::now(),
+        );
+        let error = match checked {
             Ok(body) => {
-                session.send(CLICK_OPCODE, &body)?;
+                out.session.send(CLICK_OPCODE, &body)?;
                 None
             }
             Err(error) => Some(error.to_string()),
         };
-        log.send(ClientEvent::World(WorldEvent::ObjectAction {
-            session_id,
+        out.log.send(ClientEvent::World(WorldEvent::ObjectAction {
+            session_id: world.session_id,
             drop_id: *drop_id,
             error,
         }))?;
         Ok(true)
     }
 
+    /// Records a server update, and closes a container that opened for this
+    /// player, so the server does not keep it in use.
+    fn observe(
+        &mut self,
+        event: &WorldEvent,
+        world: &mut World,
+        out: &mut Out<'_, '_>,
+    ) -> Result<()> {
+        let WorldEvent::Objects(update) = event else {
+            return Ok(());
+        };
+        self.0.apply(update);
+        let own_spawn = world.player.as_ref().map(|player| player.spawn_id);
+        if let ObjectUpdate::Container(view) = update {
+            if view.open && own_spawn.is_some_and(|id| u32::from(id) == view.player_id) {
+                out.session.send(CONTAINER_OPCODE, &view.close_packet())?;
+                out.log.diagnostic(format!(
+                    "Closed world container {}: containers are not supported yet",
+                    view.drop_id
+                ))?;
+            }
+        }
+        Ok(())
+    }
+}
+
+impl GroundObjects {
     /// Checks a pickup against the admission, the cursor and the reach. The
     /// item arrives on the cursor, so it must be empty, and an unsettled move
     /// could still change it.
@@ -137,12 +150,12 @@ mod tests {
 
     fn table() -> GroundObjects {
         let mut objects = GroundObjects::default();
-        objects.apply(&ObjectUpdate::Spawn(GroundObject {
+        objects.admit(&WorldEvent::Objects(ObjectUpdate::Spawn(GroundObject {
             drop_id: 71,
             model: "IT63_ACTORDEF".into(),
             position: Position::default(),
             object_type: 0,
-        }));
+        })));
         objects
     }
 

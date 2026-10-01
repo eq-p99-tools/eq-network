@@ -1,10 +1,13 @@
 //! The zone session: admission, the player's commands and the zone's traffic
 //! until the character leaves for another zone, the world or the character list.
 use super::{
-    actions, bail, book_edits, camp, casting, chat, command, cstr, ensure, inventory, le32,
-    merchant, motion, objects, posture, put_string, scribe_consumption, servers, spellbook, zoning,
-    BTreeMap, BookActionStatus, BookIntent, CharacterSession, ClientCommand, ClientEvent,
-    ConnectionStage, ConnectionState, Context, DecodeError, Duration, Events, Instant,
+    actions, bail, book_edits, camp, casting, chat, command, cstr,
+    doors::Doors,
+    ensure,
+    feature::{Feature, Out, World},
+    inventory, le32, merchant, motion, objects, posture, put_string, scribe_consumption, servers,
+    spellbook, zoning, BTreeMap, BookActionStatus, BookIntent, CharacterSession, ClientCommand,
+    ClientEvent, ConnectionStage, ConnectionState, Context, DecodeError, Duration, Events, Instant,
     MotionSession, PendingBookAction, RecordEvent, Result, Session, Shield, ZoneExit,
     ZoneLifecycle,
 };
@@ -71,7 +74,6 @@ pub(super) fn run(
     let connected = Instant::now();
     let mut ready = false;
     let mut lifecycle = ZoneLifecycle::default();
-    let mut motion: Option<MotionSession> = None;
     let mut saw_spawn = false;
     let mut saw_profile = false;
     let mut saw_weather = false;
@@ -84,12 +86,16 @@ pub(super) fn run(
     let mut packets = 0u64;
     let mut stationary = [0u8; 36];
     let session_id = rand::random();
+    let mut world = World {
+        session_id,
+        player: None,
+        motion: None,
+        inventory: eq_network_game::inventory::Inventory::default(),
+    };
     let mut initial_experience = None;
     let mut initial_level = None;
     let mut initial_skills = std::collections::BTreeMap::new();
-    let mut inventory = eq_network_game::inventory::Inventory::default();
     let mut inventory_actor: Option<eq_network_game::inventory::InventoryActor> = None;
-    let mut admitted_player: Option<crate::world::PlayerState> = None;
     let mut admitted_book: Option<eq_network_game::spells::SpellBook> = None;
     let mut book_edits = book_edits::BookEdits::default();
     let mut cast_guard = casting::CastGuard::default();
@@ -105,8 +111,7 @@ pub(super) fn run(
     let mut initial_postures = BTreeMap::new();
     // Wear changes for the player that arrive before its state is built.
     let mut initial_own_wear = Vec::new();
-    let mut doors = eq_network_game::doors::Doors::default();
-    let mut doors_changed_at = Instant::now();
+    let mut doors = Doors::default();
     let mut ground = objects::GroundObjects::default();
     let mut profile_data = Vec::new();
     let mut spawn_data = Vec::new();
@@ -129,8 +134,8 @@ pub(super) fn run(
             log.diagnostic("Cast acknowledgement timed out; a manual retry is available".into())?;
         }
         // Servers answer only a refused move, so silence settles the rest.
-        if let Some(update) = settlement.due(&inventory, Instant::now()) {
-            inventory.apply(update.clone());
+        if let Some(update) = settlement.due(&world.inventory, Instant::now()) {
+            world.inventory.apply(update.clone());
             if ready {
                 log.send(ClientEvent::World(crate::world::WorldEvent::Inventory(
                     update,
@@ -192,7 +197,7 @@ pub(super) fn run(
             return Ok(ZoneExit::CharacterSelect);
         }
         if ready && !lifecycle.blocks_motion() {
-            if let Some(motion) = motion.as_mut() {
+            if let Some(motion) = world.motion.as_mut() {
                 motion.tick(Instant::now(), |body| session.send_unreliable(0x14cb, body))?;
             } else if last_position.elapsed() >= eq_network_game::movement::STATIONARY_HEARTBEAT {
                 stationary[2..4].copy_from_slice(&position_sequence.to_le_bytes());
@@ -223,7 +228,7 @@ pub(super) fn run(
                         actions::refuse(&command, reason, log)?;
                         continue;
                     }
-                    let own_spawn = admitted_player.as_ref().map(|player| player.spawn_id);
+                    let own_spawn = world.player.as_ref().map(|player| player.spawn_id);
                     if camp::handle(
                         (&mut camp, &mut own_posture),
                         session_id,
@@ -234,50 +239,24 @@ pub(super) fn run(
                     )? {
                         continue;
                     }
-                    if let ClientCommand::ClickDoor {
-                        session_id: requested,
-                        door_id,
-                        created,
-                    } = &command
-                    {
-                        let result = (|| -> Result<[u8; 16]> {
-                            let now = Instant::now();
-                            ensure!(
-                                *requested == session_id
-                                    && *created >= doors_changed_at
-                                    && *created <= now
-                                    && now.duration_since(*created) < Duration::from_secs(1),
-                                "stale door request"
-                            );
-                            let player = admitted_player
-                                .as_ref()
-                                .ok_or_else(|| anyhow::anyhow!("player is unavailable"))?;
-                            let position = motion
-                                .as_ref()
-                                .map_or(player.position, MotionSession::position);
-                            doors.click_packet(*door_id, player.spawn_id, position)
-                        })();
-                        let error = match result {
-                            Ok(body) => {
-                                session.send(0x043b, &body)?;
-                                None
-                            }
-                            Err(error) => Some(error.to_string()),
-                        };
-                        log.send(ClientEvent::World(crate::world::WorldEvent::DoorAction {
-                            session_id,
-                            door_id: *door_id,
-                            error,
-                        }))?;
+                    if doors.handle(
+                        &command,
+                        &mut world,
+                        &mut Out {
+                            session: &mut session,
+                            log: &mut *log,
+                        },
+                    )? {
                         continue;
                     }
-                    let player = admitted_player.as_ref().map(|player| {
-                        let position = motion
-                            .as_ref()
-                            .map_or(player.position, MotionSession::position);
-                        (player.spawn_id, position)
-                    });
-                    if ground.handle(&command, session_id, player, &inventory, &mut session, log)? {
+                    if ground.handle(
+                        &command,
+                        &mut world,
+                        &mut Out {
+                            session: &mut session,
+                            log: &mut *log,
+                        },
+                    )? {
                         continue;
                     }
                     if let ClientCommand::CrossZoneLine {
@@ -296,7 +275,10 @@ pub(super) fn run(
                                 "stale zone-line request"
                             );
                             ensure!(
-                                motion.as_ref().is_some_and(|m| m.position() == *position),
+                                world
+                                    .motion
+                                    .as_ref()
+                                    .is_some_and(|m| m.position() == *position),
                                 "zone-line position is no longer current"
                             );
                             ensure!(current_zone.0 != 0, "zone identity is unavailable");
@@ -312,7 +294,7 @@ pub(super) fn run(
                                 session.send(0x5dd8, &offer.response(&config.character)?)?;
                                 lifecycle.offer(offer.clone(), now)?;
                                 pending_memorization = None;
-                                if let Some(motion) = motion.as_mut() {
+                                if let Some(motion) = world.motion.as_mut() {
                                     motion.suspend();
                                 }
                                 log.send(ClientEvent::World(
@@ -386,10 +368,10 @@ pub(super) fn run(
                                     && pending_memorization.is_none()
                             })
                             .context("scribing is unavailable or stale")
-                            .and_then(|book| pending.packet(book, &inventory));
+                            .and_then(|book| pending.packet(book, &world.inventory));
                         match packet {
                             Ok(_) => {
-                                if let Some(player) = admitted_player.as_ref() {
+                                if let Some(player) = world.player.as_ref() {
                                     let sit = command::encode(
                                         config.protocol.into(),
                                         &ClientCommand::SetPosture {
@@ -457,7 +439,8 @@ pub(super) fn run(
                     } = &command
                     {
                         let now = Instant::now();
-                        let packet = admitted_player
+                        let packet = world
+                            .player
                             .as_ref()
                             .filter(|_| {
                                 *requested == session_id
@@ -511,7 +494,7 @@ pub(super) fn run(
                             .and_then(|book| book.memorize_packet(*gem, *spell_id));
                         match packet {
                             Ok(_) => {
-                                if let Some(player) = admitted_player.as_ref() {
+                                if let Some(player) = world.player.as_ref() {
                                     let sit = ClientCommand::SetPosture {
                                         session_id,
                                         spawn_id: player.spawn_id,
@@ -559,7 +542,7 @@ pub(super) fn run(
                         continue;
                     }
                     if let ClientCommand::UseItem(request) = &command {
-                        let target_available = admitted_player.as_ref().is_some_and(|player| {
+                        let target_available = world.player.as_ref().is_some_and(|player| {
                             request.target_id == player.spawn_id
                                 || initial_spawns.get(&request.target_id).is_some_and(
                                     |spawn: &crate::world::SpawnState| !spawn.invisible,
@@ -569,7 +552,7 @@ pub(super) fn run(
                             .as_ref()
                             .context("Character level is unavailable")
                             .and_then(|actor| {
-                                inventory.prepare_item_cast(
+                                world.inventory.prepare_item_cast(
                                     request,
                                     session_id,
                                     actor.level,
@@ -611,7 +594,7 @@ pub(super) fn run(
                             *requested == session_id
                                 && created.elapsed() < Duration::from_secs(1)
                                 && *created <= Instant::now()
-                                && admitted_player.as_ref().is_some_and(|player| {
+                                && world.player.as_ref().is_some_and(|player| {
                                     player.memorized_spells.get(usize::from(*gem))
                                         == Some(&Some(*spell_id))
                                         && (*target_id == player.spawn_id
@@ -635,7 +618,8 @@ pub(super) fn run(
                             *requested == session_id
                                 && created.elapsed() < Duration::from_secs(1)
                                 && *created <= Instant::now()
-                                && admitted_player
+                                && world
+                                    .player
                                     .as_ref()
                                     .is_some_and(|player| player.spawn_id == *spawn_id)
                                 && match &command {
@@ -719,11 +703,12 @@ pub(super) fn run(
                         continue;
                     }
                     if inventory::handle(
-                        &mut inventory,
+                        &mut world.inventory,
                         &mut settlement,
                         inventory_actor.map(|mut actor| {
-                            actor.bank_access = admitted_player.as_ref().is_some_and(|player| {
-                                let position = motion
+                            actor.bank_access = world.player.as_ref().is_some_and(|player| {
+                                let position = world
+                                    .motion
                                     .as_ref()
                                     .map_or(player.position, MotionSession::position);
                                 initial_spawns.values().any(|spawn| {
@@ -739,10 +724,10 @@ pub(super) fn run(
                     )? {
                         continue;
                     }
-                    if let Some(motion) = motion.as_mut() {
+                    if let Some(motion) = world.motion.as_mut() {
                         let own = (
                             &mut own_posture,
-                            admitted_player.as_ref().map(|player| player.spawn_id),
+                            world.player.as_ref().map(|player| player.spawn_id),
                         );
                         if motion::handle(motion, own, session_id, &command, &mut session, log)? {
                             continue;
@@ -760,7 +745,8 @@ pub(super) fn run(
                     {
                         if *requested_session != session_id
                             || spawn_id.is_some_and(|id| {
-                                admitted_player
+                                world
+                                    .player
                                     .as_ref()
                                     .is_none_or(|player| player.spawn_id != id)
                                     && initial_spawns.get(&id).is_none_or(
@@ -825,7 +811,7 @@ pub(super) fn run(
                     let packet = admitted_book
                         .as_ref()
                         .context("spellbook unavailable")
-                        .and_then(|book| pending.packet(book, &inventory));
+                        .and_then(|book| pending.packet(book, &world.inventory));
                     match packet {
                         Ok(body) => {
                             session.send(0x308e, &body)?;
@@ -871,7 +857,7 @@ pub(super) fn run(
                     let book_result = book_edits.observe(&update);
                     scribe_consumption
                         .observe(&update, book_result == Some(BookActionStatus::Confirmed));
-                    if let Some(player) = admitted_player.as_ref() {
+                    if let Some(player) = world.player.as_ref() {
                         let pending = cast_guard.pending();
                         cast_guard.observe(player.spawn_id, &update);
                         if pending.is_some() && cast_guard.pending().is_none() {
@@ -889,7 +875,7 @@ pub(super) fn run(
                     if let Some(book) = admitted_book.as_mut() {
                         book.apply(&update);
                     }
-                    if let Some(player) = admitted_player.as_mut() {
+                    if let Some(player) = world.player.as_mut() {
                         update.apply_gems(&mut player.memorized_spells);
                     }
                     log.send(ClientEvent::World(crate::world::WorldEvent::Spell(update)))?;
@@ -906,8 +892,8 @@ pub(super) fn run(
         if matches!(packet.opcode, 0x5394 | 0x3397 | 0x420f | 0x4d81 | 0x1c4a) {
             match eq_network_game::inventory::decode(packet.opcode, &packet.body) {
                 Ok(Some(update)) => {
-                    let update = scribe_consumption.reconcile(&inventory, update);
-                    inventory.apply(update.clone());
+                    let update = scribe_consumption.reconcile(&world.inventory, update);
+                    world.inventory.apply(update.clone());
                     if ready {
                         log.send(ClientEvent::World(crate::world::WorldEvent::Inventory(
                             update,
@@ -918,7 +904,7 @@ pub(super) fn run(
                 Err(error) => {
                     log.diagnostic(format!("Inventory decode rejected: {error}"))?;
                     let update = eq_network_game::inventory::InventoryUpdate::Invalidated;
-                    inventory.apply(update.clone());
+                    world.inventory.apply(update.clone());
                     if ready {
                         log.send(ClientEvent::World(crate::world::WorldEvent::Inventory(
                             update,
@@ -951,12 +937,13 @@ pub(super) fn run(
                     "Server relocated character",
                     log,
                 )?;
-                let player = admitted_player
+                let player = world
+                    .player
                     .as_mut()
                     .context("relocation without admitted player")?;
                 motion::correct_own(
                     player,
-                    motion.as_mut(),
+                    world.motion.as_mut(),
                     &mut stationary,
                     position_sequence,
                     position,
@@ -991,7 +978,7 @@ pub(super) fn run(
                     Some(session.last_received_seconds()),
                 )?;
                 lifecycle.offer(offer, Instant::now())?;
-                if let Some(motion) = motion.as_mut() {
+                if let Some(motion) = world.motion.as_mut() {
                     motion.suspend();
                 }
                 log.send(ClientEvent::World(crate::world::WorldEvent::MotionState {
@@ -1016,7 +1003,8 @@ pub(super) fn run(
             let pending = lifecycle
                 .pending()
                 .context("zone approval without a pending server offer")?;
-            let heading = motion
+            let heading = world
+                .motion
                 .as_ref()
                 .map_or(0.0, |motion| motion.position().heading);
             let reply = zoning::reply(
@@ -1039,12 +1027,13 @@ pub(super) fn run(
                 zoning::ZoneReply::Approved => unreachable!("approved transfer returned above"),
             };
             if let zoning::ZoneReply::Rewind(position) = reply {
-                let player = admitted_player
+                let player = world
+                    .player
                     .as_mut()
                     .context("rewind without admitted player")?;
                 motion::correct_own(
                     player,
-                    motion.as_mut(),
+                    world.motion.as_mut(),
                     &mut stationary,
                     position_sequence,
                     position,
@@ -1060,7 +1049,7 @@ pub(super) fn run(
                 crate::world::WorldEvent::ZoneTransferRejected { session_id, reason },
             ))?;
             if !lifecycle.is_dead() {
-                if let Some(motion) = motion.as_mut() {
+                if let Some(motion) = world.motion.as_mut() {
                     motion.resume_stationary(Instant::now());
                 }
                 log.status(
@@ -1157,7 +1146,7 @@ pub(super) fn run(
                         for (skill, value) in std::mem::take(&mut initial_skills) {
                             player.apply_skill(skill, value);
                         }
-                        admitted_player = Some(player.clone());
+                        world.player = Some(player.clone());
                         let spell_book =
                             eq_network_game::spells::SpellBook::titanium_profile(&profile_data)?;
                         admitted_book = Some(spell_book.clone());
@@ -1173,7 +1162,7 @@ pub(super) fn run(
                             race: player.race,
                             level: player.level,
                         });
-                        motion = Some(
+                        world.motion = Some(
                             MotionSession::new(
                                 session_id,
                                 player.spawn_id,
@@ -1201,13 +1190,12 @@ pub(super) fn run(
                                 posture,
                             }))?;
                         }
-                        log.send(ClientEvent::World(crate::world::WorldEvent::Doors(
-                            doors.admission(),
-                        )))?;
-                        log.send(ClientEvent::World(crate::world::WorldEvent::Objects(
-                            ground.admission(),
-                        )))?;
-                        let admission = inventory.admission_updates();
+                        for feature in [&doors as &dyn Feature, &ground] {
+                            if let Some(event) = feature.admission() {
+                                log.send(ClientEvent::World(event))?;
+                            }
+                        }
+                        let admission = world.inventory.admission_updates();
                         log.send(ClientEvent::World(crate::world::WorldEvent::BuffSnapshot(
                             eq_network_game::buffs::titanium_profile(&profile_data)?,
                         )))?;
@@ -1217,9 +1205,9 @@ pub(super) fn run(
                         log.send(ClientEvent::World(crate::world::WorldEvent::Coins(
                             crate::world::titanium_coins(&profile_data)?,
                         )))?;
-                        inventory = eq_network_game::inventory::Inventory::default();
+                        world.inventory = eq_network_game::inventory::Inventory::default();
                         for update in admission {
-                            inventory.apply(update.clone());
+                            world.inventory.apply(update.clone());
                             log.send(ClientEvent::World(crate::world::WorldEvent::Inventory(
                                 update,
                             )))?;
@@ -1269,22 +1257,25 @@ pub(super) fn run(
             requested = true;
             log.send(ClientEvent::Progress(ConnectionStage::EnteringWorld))?;
         }
-        if !ready && matches!(packet.opcode, 0x4c24 | 0x700d | 0x77d0) {
-            match eq_network_game::doors::decode(packet.opcode, &packet.body) {
-                Ok(Some(update)) => doors.apply(&update),
-                Err(error) => log.diagnostic(format!("Initial door update rejected: {error}"))?,
-                Ok(None) => (),
-            }
-        }
         if !ready
             && matches!(
                 packet.opcode,
-                eq_network_game::objects::SPAWN_OPCODE | eq_network_game::objects::CLICK_OPCODE
+                0x4c24
+                    | 0x700d
+                    | 0x77d0
+                    | eq_network_game::objects::SPAWN_OPCODE
+                    | eq_network_game::objects::CLICK_OPCODE
             )
         {
-            match eq_network_game::objects::decode(packet.opcode, &packet.body) {
-                Ok(Some(update)) => ground.apply(&update),
-                Err(error) => log.diagnostic(format!("Initial ground object rejected: {error}"))?,
+            match crate::world::titanium_update(packet.opcode, &packet.body) {
+                Ok(Some(event)) => {
+                    for feature in [&mut doors as &mut dyn Feature, &mut ground] {
+                        feature.admit(&event);
+                    }
+                }
+                Err(error) => {
+                    log.diagnostic(format!("Initial door or object rejected: {error}"))?;
+                }
                 Ok(None) => (),
             }
         }
@@ -1409,29 +1400,26 @@ pub(super) fn run(
                             if let Some(spawn) = initial_spawns.get_mut(&change.spawn_id) {
                                 spawn.appearance.apply(change);
                             }
-                            if let Some(player) = admitted_player
+                            if let Some(player) = world
+                                .player
                                 .as_mut()
                                 .filter(|player| player.spawn_id == change.spawn_id)
                             {
                                 player.appearance.apply(change);
                             }
                         }
-                        crate::world::WorldEvent::Doors(update) => {
-                            if matches!(
-                                update,
-                                eq_network_game::doors::DoorUpdate::Spawn(_)
-                                    | eq_network_game::doors::DoorUpdate::RemoveAll
-                            ) {
-                                doors_changed_at = Instant::now();
+                        crate::world::WorldEvent::Doors(_)
+                        | crate::world::WorldEvent::Objects(_) => {
+                            let mut out = Out {
+                                session: &mut session,
+                                log: &mut *log,
+                            };
+                            for feature in [&mut doors as &mut dyn Feature, &mut ground] {
+                                feature.observe(&event, &mut world, &mut out)?;
                             }
-                            doors.apply(update);
-                        }
-                        crate::world::WorldEvent::Objects(update) => {
-                            let own = admitted_player.as_ref().map(|player| player.spawn_id);
-                            ground.observe(update, own, &mut session, log)?;
                         }
                         crate::world::WorldEvent::Level { current, .. } => {
-                            if let Some(player) = admitted_player.as_mut() {
+                            if let Some(player) = world.player.as_mut() {
                                 player.level = *current;
                             }
                             if let Some(actor) = inventory_actor.as_mut() {
@@ -1439,7 +1427,7 @@ pub(super) fn run(
                             }
                         }
                         crate::world::WorldEvent::Skill { skill_id, value } => {
-                            if let Some(player) = admitted_player.as_mut() {
+                            if let Some(player) = world.player.as_mut() {
                                 player.apply_skill(*skill_id, *value);
                                 if let Some(actor) = inventory_actor.as_mut() {
                                     actor.dual_wield = player
@@ -1470,7 +1458,7 @@ pub(super) fn run(
                             )?;
                             cast_guard.clear();
                             trades.clear();
-                            if let Some(motion) = motion.as_mut() {
+                            if let Some(motion) = world.motion.as_mut() {
                                 motion.suspend();
                             }
                             log.send(ClientEvent::World(crate::world::WorldEvent::MotionState {
@@ -1505,7 +1493,7 @@ pub(super) fn run(
                         // A sale's echo is the only notice that the item left.
                         crate::world::WorldEvent::Merchant(update) => {
                             if let Some(change) = trades.observe(update) {
-                                inventory.apply(change.clone());
+                                world.inventory.apply(change.clone());
                                 log.send(ClientEvent::World(crate::world::WorldEvent::Inventory(
                                     change,
                                 )))?;
@@ -1523,12 +1511,13 @@ pub(super) fn run(
                                 "Server corrected character position",
                                 log,
                             )?;
-                            let player = admitted_player
+                            let player = world
+                                .player
                                 .as_mut()
                                 .context("correction without admitted player")?;
                             motion::correct_own(
                                 player,
-                                motion.as_mut(),
+                                world.motion.as_mut(),
                                 &mut stationary,
                                 position_sequence,
                                 *position,
