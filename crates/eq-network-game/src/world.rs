@@ -585,6 +585,22 @@ pub enum WorldEvent {
     Camp(CampStatus),
     /// Carried coins, from admission or a server money update.
     Coins(Coins),
+    /// The coins on the cursor and in the bank at admission, from the profile.
+    CoinsElsewhere {
+        /// On the cursor.
+        cursor: Coins,
+        /// In the bank.
+        bank: Coins,
+    },
+    /// A coin move that was not sent, and why.
+    CoinsRefused {
+        /// Admission from the request.
+        session_id: u64,
+        /// The move.
+        transfer: crate::money::CoinTransfer,
+        /// Why it was not sent.
+        reason: String,
+    },
     /// Corpse loot session changes.
     Loot(crate::loot::LootUpdate),
     /// Merchant window changes.

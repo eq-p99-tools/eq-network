@@ -288,6 +288,15 @@ pub enum GameCommand {
         /// Current zone admission.
         session_id: u64,
     },
+    /// Move coins between the purse, the cursor, the bank and a trade window.
+    MoveCoins {
+        /// Current zone admission.
+        session_id: u64,
+        /// The move.
+        transfer: crate::money::CoinTransfer,
+        /// Reject delayed actions instead of replaying them after a stall.
+        created: std::time::Instant,
+    },
     /// Announce a jump the client is simulating; only sessions that accept falls
     /// send it.
     Jump {
@@ -356,6 +365,7 @@ impl GameCommand {
             | Self::OfferTrade { session_id, .. }
             | Self::AcceptTrade { session_id, .. }
             | Self::CancelTrade { session_id }
+            | Self::MoveCoins { session_id, .. }
             | Self::Jump { session_id, .. }
             | Self::AutoAttack { session_id, .. }
             | Self::SelectTarget { session_id, .. }
@@ -395,6 +405,16 @@ impl GameCommand {
             Self::OfferTrade { .. } | Self::AcceptTrade { .. } | Self::CancelTrade { .. } => {
                 Capability::Giving
             }
+            // Coins go into a trade window only where the player can give.
+            Self::MoveCoins { transfer, .. } => {
+                if matches!(transfer.from, crate::money::CoinPlace::Trade)
+                    || matches!(transfer.to, crate::money::CoinPlace::Trade)
+                {
+                    Capability::Giving
+                } else {
+                    Capability::Inventory
+                }
+            }
             Self::SelectTarget { .. } => Capability::Targeting,
         })
     }
@@ -433,6 +453,7 @@ impl GameCommand {
             | Self::Sell { created, .. }
             | Self::OfferTrade { created, .. }
             | Self::AcceptTrade { created, .. }
+            | Self::MoveCoins { created, .. }
             | Self::Jump { created, .. }
             | Self::AutoAttack { created, .. }
             | Self::ConfigureMotion { created, .. } => Some(*created),
@@ -541,20 +562,20 @@ pub fn encode(
         | GameCommand::Shop { .. }
         | GameCommand::Buy { .. }
         | GameCommand::Sell { .. } => encode_trade(dialect, command),
+        // What these send depends on the admitted session's state.
         GameCommand::MoveInventory(_)
         | GameCommand::ClickDoor { .. }
         | GameCommand::PickUp { .. }
         | GameCommand::OfferTrade { .. }
         | GameCommand::AcceptTrade { .. }
-        | GameCommand::CancelTrade { .. } => {
-            anyhow::bail!("items, doors and trades require the admitted session controller")
-        }
-        GameCommand::Move(_)
+        | GameCommand::CancelTrade { .. }
+        | GameCommand::MoveCoins { .. }
+        | GameCommand::Move(_)
         | GameCommand::Jump { .. }
         | GameCommand::ConfigureMotion { .. }
         | GameCommand::CrossZoneLine { .. }
         | GameCommand::Camp { .. } => {
-            anyhow::bail!("movement and camping require the admitted session controller")
+            anyhow::bail!("this command requires the admitted session controller")
         }
         GameCommand::SendChat(message) => Ok(EncodedCommand {
             opcode: match dialect {

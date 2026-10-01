@@ -121,9 +121,11 @@ pub(super) fn needs(command: &ClientCommand) -> &'static [Resource] {
         | ClientCommand::LootItem { .. }
         | ClientCommand::EndLoot { .. }
         | ClientCommand::Shop { .. }
-        // Asking holds nothing, and closing a window must always be possible.
+        // Asking holds nothing, and closing a window must always be possible;
+        // coins are not items.
         | ClientCommand::OfferTrade { .. }
         | ClientCommand::CancelTrade { .. }
+        | ClientCommand::MoveCoins { .. }
         | ClientCommand::Jump { .. }
         | ClientCommand::AutoAttack { .. }
         | ClientCommand::SelectTarget { .. }
@@ -167,6 +169,15 @@ fn refusal(command: &ClientCommand, reason: &str) -> Option<WorldEvent> {
         ClientCommand::OfferTrade { session_id, .. }
         | ClientCommand::AcceptTrade { session_id, .. } => WorldEvent::ExchangeRefused {
             session_id: *session_id,
+            reason: reason.into(),
+        },
+        ClientCommand::MoveCoins {
+            session_id,
+            transfer,
+            ..
+        } => WorldEvent::CoinsRefused {
+            session_id: *session_id,
+            transfer: *transfer,
             reason: reason.into(),
         },
         ClientCommand::PickUp {

@@ -23,8 +23,13 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   window, items go into its four trade slots from the cursor, and
   `AcceptTrade` (Give) or `CancelTrade` ends it. The trade slots
   (`InventorySlot::is_trade`) take only what servers accept, and empty when
-  the window closes. `Capability::Giving` reports it; coins and trades
-  between players are not supported yet.
+  the window closes. `Capability::Giving` reports it; trades between
+  players are not supported yet.
+- Coins (`money`): `MoveCoins` moves coins between the purse, the cursor, the
+  bank (near a banker) and an open give window, changing kind as servers do
+  (`CoinTransfer::amounts`); servers answer no coin move, and a refused one is
+  reported as `CoinsRefused`. Admission reports the coins on the cursor and in
+  the bank (`CoinsElsewhere`).
 - Synthetic regression coverage for inventory reconciliation, scribe consumption,
   movement admission, cast state, and fresh-key world/zone handoffs.
 
