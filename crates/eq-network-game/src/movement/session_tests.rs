@@ -34,7 +34,8 @@ fn strafing_requires_its_own_calibration_and_preserves_heading() {
             .is_err());
         motion.position.x = direction * 0.3;
         session
-            .send_move(&motion, now, |body| {
+            .send_move(&motion, now, |packet| {
+                let body = &packet.body[..];
                 assert_eq!(word(body, 20) & 0x3ff, 8);
                 assert!((f32::from_bits(word(body, 12)) - direction * 0.3).abs() < 0.00001);
                 Ok(())
@@ -86,7 +87,8 @@ fn walking_uses_its_own_budget_and_commits_only_after_transport() {
         .is_err());
     assert_eq!(session.position(), Position::default());
     session
-        .send_move(&motion, now, |body| {
+        .send_move(&motion, now, |packet| {
+            let body = &packet.body[..];
             assert_eq!(word(body, 20) & 0x3ff, 4);
             assert!((f32::from_bits(word(body, 12)) - 0.2).abs() < 0.00001);
             Ok(())
@@ -148,7 +150,8 @@ fn backward_motion_has_its_own_budget_animation_and_transport_commit() {
         .is_err());
     assert_eq!(session.position(), Position::default());
     session
-        .send_move(&motion, now, |body| {
+        .send_move(&motion, now, |packet| {
+            let body = &packet.body[..];
             assert_eq!(word(body, 20) & 0x3ff, 1016); // signed -8
             assert!((f32::from_bits(word(body, 12)) + 0.2).abs() < 0.00001);
             assert_eq!(u16::from_le_bytes(body[2..4].try_into().unwrap()), 0);
@@ -158,7 +161,8 @@ fn backward_motion_has_its_own_budget_animation_and_transport_commit() {
     let now = now + Duration::from_millis(100);
     let forward = request(now, 0.4);
     session
-        .send_move(&forward, now, |body| {
+        .send_move(&forward, now, |packet| {
+            let body = &packet.body[..];
             assert_eq!(word(body, 20) & 0x3ff, 12);
             Ok(())
         })
@@ -208,7 +212,8 @@ fn stationary_turns_encode_rate_and_expire_to_a_zero_rate_stop() {
     let mut motion = request(now, 0.0);
     motion.position.heading = 488.0;
     session
-        .send_move(&motion, now, |body| {
+        .send_move(&motion, now, |packet| {
+            let body = &packet.body[..];
             assert_eq!(word(body, 20) & 0x3ff, 0);
             assert_eq!((word(body, 20) >> 10) & 0x3ff, 784);
             assert_eq!(word(body, 12), 0);
@@ -217,7 +222,8 @@ fn stationary_turns_encode_rate_and_expire_to_a_zero_rate_stop() {
         })
         .unwrap();
     assert!(session
-        .tick(now + Duration::from_millis(250), |body| {
+        .tick(now + Duration::from_millis(250), |packet| {
+            let body = &packet.body[..];
             assert_eq!((word(body, 20) >> 10) & 0x3ff, 0);
             Ok(())
         })
@@ -249,7 +255,8 @@ fn falls_need_permission_and_carry_the_descent_in_position_only() {
     let mut session = setup(start).with_falls(true);
     assert!(session.jump().is_ok());
     session
-        .send_move(&fall, now, |body| {
+        .send_move(&fall, now, |packet| {
+            let body = &packet.body[..];
             assert_eq!(word(body, 8), 0.0f32.to_bits());
             assert_eq!(word(body, 28), (-4.0f32).to_bits());
             assert_eq!(word(body, 20) & 0x3ff, 12);
@@ -267,7 +274,8 @@ fn grounded_height_changes_do_not_encode_airborne_velocity() {
     let mut motion = request(now, 0.5);
     motion.position.z = 0.75;
     session
-        .send_move(&motion, now, |body| {
+        .send_move(&motion, now, |packet| {
+            let body = &packet.body[..];
             assert_eq!(word(body, 8), 0.0f32.to_bits());
             assert_eq!(word(body, 28), 0.75f32.to_bits());
             assert_eq!(word(body, 20) & 0x3ff, 12);
@@ -278,7 +286,8 @@ fn grounded_height_changes_do_not_encode_airborne_velocity() {
     motion.created = later;
     motion.position.z = 1.0;
     session
-        .send_move(&motion, later, |body| {
+        .send_move(&motion, later, |packet| {
+            let body = &packet.body[..];
             assert_eq!(word(body, 8), 0.0f32.to_bits());
             assert_eq!(word(body, 20) & 0x3ff, 0);
             Ok(())
@@ -295,7 +304,8 @@ fn failed_submission_preserves_position_sequence_and_budget() {
         .send_move(&motion, now, |_| anyhow::bail!("synthetic send failure"))
         .is_err());
     session
-        .send_move(&motion, now, |body| {
+        .send_move(&motion, now, |packet| {
+            let body = &packet.body[..];
             assert_eq!(&body[..4], &[7, 0, 0, 0]);
             assert!((f32::from_bits(word(body, 12)) - 0.25).abs() < 0.0001);
             assert_eq!(word(body, 20) & 0x3ff, 12);
@@ -315,7 +325,8 @@ fn input_expiry_sends_one_stop_then_stationary_heartbeats() {
         .tick(start + Duration::from_millis(349), |_| panic!("early stop"))
         .unwrap());
     assert!(session
-        .tick(start + Duration::from_millis(350), |body| {
+        .tick(start + Duration::from_millis(350), |packet| {
+            let body = &packet.body[..];
             assert_eq!(&body[2..4], &[1, 0]);
             assert_eq!(word(body, 24), 0.5f32.to_bits());
             assert_eq!(word(body, 20) & 0x3ff, 0);
@@ -334,7 +345,8 @@ fn input_expiry_sends_one_stop_then_stationary_heartbeats() {
         ))
         .unwrap());
     assert!(session
-        .tick(start + Duration::from_millis(1350), |body| {
+        .tick(start + Duration::from_millis(1350), |packet| {
+            let body = &packet.body[..];
             assert_eq!(&body[2..4], &[2, 0]);
             Ok(())
         })
@@ -448,7 +460,8 @@ fn correction_preserves_prompt_stop_and_rejects_queued_calibration() {
         .calibrate_fresh(calibration, moving_at, corrected_at)
         .is_err());
     assert!(session
-        .tick(start + Duration::from_millis(350), |body| {
+        .tick(start + Duration::from_millis(350), |packet| {
+            let body = &packet.body[..];
             assert_eq!(word(body, 24), 0.25f32.to_bits());
             assert_eq!(word(body, 20) & 0x3ff, 0);
             assert_eq!(&body[8..20], &[0; 12]);

@@ -1,5 +1,6 @@
 //! Zone transfers: the zone lines the player crosses, the server's offers to
-//! move the player, its answer and the handoff to the next zone.
+//! move the player, its answer and the handoff to the next zone, and the
+//! player's death, which waits for the offer home.
 use super::{
     feature::{Feature, Out, World},
     motion, zoning, ClientCommand, ClientEvent, ConnectionStage, ConnectionState, ZoneExit,
@@ -38,10 +39,7 @@ impl Transfers {
             unreachable!("only zone-line crossings cross zone lines");
         };
         ensure!(
-            world
-                .motion
-                .as_ref()
-                .is_some_and(|motion| motion.position() == *position),
+            world.body.position() == Some(*position),
             "zone-line position is no longer current"
         );
         ensure!(world.zone.0 != 0, "zone identity is unavailable");
@@ -59,9 +57,7 @@ impl Transfers {
     ) -> Result<()> {
         out.send(&offer.response(&self.character)?)?;
         world.lifecycle.offer(offer.clone(), Instant::now())?;
-        if let Some(motion) = world.motion.as_mut() {
-            motion.suspend();
-        }
+        world.body.suspend();
         out.log
             .send(ClientEvent::World(WorldEvent::ZoneTransfer(offer)))?;
         out.log
@@ -110,9 +106,9 @@ impl Transfers {
             .pending()
             .context("zone approval without a pending server offer")?;
         let heading = world
-            .motion
-            .as_ref()
-            .map_or(0.0, |motion| motion.position().heading);
+            .body
+            .position()
+            .map_or(0.0, |position| position.heading);
         let reply = zoning::reply(body, &self.character, pending, world.zone, heading)?;
         if reply == zoning::ZoneReply::Approved {
             world.lifecycle.finish(true)?;
@@ -131,25 +127,12 @@ impl Transfers {
         // rewind or the refusal: a calibration sent in answer postdates it.
         let alive = !world.lifecycle.is_dead();
         if alive {
-            if let Some(motion) = world.motion.as_mut() {
-                motion.resume_stationary(Instant::now());
-            }
+            world.body.resume(Instant::now());
         }
         if let zoning::ZoneReply::Rewind(position) = reply {
-            let player = world
-                .player
-                .as_mut()
-                .context("rewind without admitted player")?;
-            motion::correct_own(
-                player,
-                world.motion.as_mut(),
-                &mut world.stationary,
-                world.sequence,
-                position,
-                Instant::now(),
-            )?;
+            world.correct_own(position, Instant::now())?;
             out.log.send(ClientEvent::World(WorldEvent::Position {
-                spawn_id: player.spawn_id,
+                spawn_id: world.player.as_ref().map_or(0, |player| player.spawn_id),
                 position,
                 velocity: [0.0; 3],
             }))?;
@@ -172,22 +155,11 @@ fn relocate(position: Position, world: &mut World, out: &mut Out<'_, '_>) -> Res
         !world.lifecycle.blocks_motion(),
         "same-zone relocation conflicts with death or transfer"
     );
-    let player = world
-        .player
-        .as_mut()
-        .context("relocation without admitted player")?;
-    motion::correct_own(
-        player,
-        world.motion.as_mut(),
-        &mut world.stationary,
-        world.sequence,
-        position,
-        Instant::now(),
-    )?;
+    world.correct_own(position, Instant::now())?;
     out.log
         .send(ClientEvent::World(motion::withdrawn(world.session_id)))?;
     out.log.send(ClientEvent::World(WorldEvent::Position {
-        spawn_id: player.spawn_id,
+        spawn_id: world.player.as_ref().map_or(0, |player| player.spawn_id),
         position,
         velocity: [0.0; 3],
     }))?;
@@ -248,6 +220,11 @@ impl Feature for Transfers {
                 error,
             } => bail!("{error}"),
             Message::ZoneAnswer(body) => self.answered(body, world, out),
+            Message::Event(WorldEvent::Death(death)) if world.is_player(death.spawn_id) => {
+                world.lifecycle.mark_dead();
+                out.log
+                    .diagnostic("Own character died; waiting for the server bind offer".into())
+            }
             Message::Handoff(address) => {
                 ensure!(
                     world.lifecycle.pending().is_some(),
@@ -288,10 +265,12 @@ mod tests {
             z: 3.0,
             heading: 0.0,
         };
-        world.motion = Some(MotionSession::new(5, 7, here, Instant::now()).unwrap());
+        world
+            .body
+            .admit(MotionSession::new(5, 7, here, Instant::now()).unwrap());
         world.player = Some(testing::player(7));
         world.zone = (2, 0);
-        world.ready = true;
+        world.admitted = Some(Instant::now());
         let cross = ClientCommand::CrossZoneLine {
             session_id: 5,
             destination: zoning::ZoneLineDestination::Absolute {
@@ -337,8 +316,8 @@ mod tests {
             strafe: None,
         };
         world
-            .motion
-            .as_mut()
+            .body
+            .motion_mut()
             .unwrap()
             .calibrate_fresh(calibration, heard, Instant::now())
             .unwrap();
@@ -354,9 +333,11 @@ mod tests {
             z: 3.0,
             heading: 0.0,
         };
-        world.motion = Some(MotionSession::new(5, 7, here, Instant::now()).unwrap());
+        world
+            .body
+            .admit(MotionSession::new(5, 7, here, Instant::now()).unwrap());
         world.zone = (2, 0);
-        world.ready = true;
+        world.admitted = Some(Instant::now());
         let cross = ClientCommand::CrossZoneLine {
             session_id: 5,
             destination: zoning::ZoneLineDestination::Absolute {
@@ -424,7 +405,9 @@ mod tests {
         };
         let moved = "zone-line position is no longer current";
         assert_eq!(error(&world, cross(5, here, now)), moved);
-        world.motion = Some(MotionSession::new(5, 7, here, now).unwrap());
+        world
+            .body
+            .admit(MotionSession::new(5, 7, here, now).unwrap());
         let elsewhere = Position { x: 11.0, ..here };
         assert_eq!(error(&world, cross(5, elsewhere, now)), moved);
         let unknown = "zone identity is unavailable";
@@ -432,5 +415,28 @@ mod tests {
         world.zone = (2, 0);
         let offer = transfers.zone_line(&cross(5, here, now), &world).unwrap();
         assert_eq!((offer.zone_id, offer.solicited), (4, false));
+    }
+
+    #[test]
+    fn the_player_dying_waits_for_the_offer_home() {
+        let mut transfers = Transfers::new("Tester");
+        let mut world = World::new(5);
+        world.own_spawn = Some(7);
+        let death = |spawn_id| {
+            Message::Event(WorldEvent::Death(zoning::Death {
+                spawn_id,
+                killer_id: 0,
+                corpse_id: 9,
+                bind_zone_id: 2,
+            }))
+        };
+        testing::run(|out| transfers.observe(&death(8), &mut world, out))
+            .result
+            .unwrap();
+        assert!(!world.lifecycle.is_dead());
+        let outcome = testing::run(|out| transfers.observe(&death(7), &mut world, out));
+        outcome.result.unwrap();
+        assert!(world.lifecycle.is_dead());
+        assert!(matches!(outcome.events[..], [ClientEvent::Diagnostic(_)]));
     }
 }

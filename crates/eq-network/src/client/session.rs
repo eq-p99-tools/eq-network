@@ -24,7 +24,7 @@ use crate::{
     transport::{Application, Session},
 };
 use anyhow::{bail, ensure, Context, Result};
-use eq_network_game::{command, movement::MotionSession, zoning};
+use eq_network_game::{command, zoning};
 use eq_network_login::{
     crypto::{des_decrypt, DesKeyIv},
     login::{encrypt_login_credentials, is_bad_password_login_result},

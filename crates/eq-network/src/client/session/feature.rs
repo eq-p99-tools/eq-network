@@ -6,15 +6,14 @@
 //! it. The zone loop only fans packets and commands out to the features.
 
 use super::{
-    actions::Resource, entities::Spawns, lifecycle::ZoneLifecycle, posture::OwnPosture,
-    ClientCommand, ConnectionState, Events, Session, ZoneExit,
+    actions::Resource, entities::Spawns, lifecycle::ZoneLifecycle, motion::Body,
+    posture::OwnPosture, ClientCommand, ConnectionState, Events, Session, ZoneExit,
 };
-use anyhow::Result;
+use anyhow::{Context, Result};
 use eq_network_game::{
     command::EncodedCommand,
     inventory::Inventory,
     message::Message,
-    movement::MotionSession,
     world::{PlayerState, Position},
 };
 use std::time::Instant;
@@ -27,6 +26,13 @@ pub(super) trait Sink {
     /// Returns an error when the connection fails.
     fn send(&mut self, packet: &EncodedCommand) -> Result<()>;
 
+    /// Sends a packet that may be lost, such as a position the next one
+    /// replaces.
+    ///
+    /// # Errors
+    /// Returns an error when the connection fails.
+    fn send_unreliable(&mut self, packet: &EncodedCommand) -> Result<()>;
+
     /// Seconds since the server last sent anything.
     fn last_received_seconds(&self) -> u64;
 }
@@ -34,6 +40,10 @@ pub(super) trait Sink {
 impl Sink for Session {
     fn send(&mut self, packet: &EncodedCommand) -> Result<()> {
         Session::send(self, packet.opcode, &packet.body)
+    }
+
+    fn send_unreliable(&mut self, packet: &EncodedCommand) -> Result<()> {
+        Session::send_unreliable(self, packet.opcode, &packet.body)
     }
 
     fn last_received_seconds(&self) -> u64 {
@@ -58,6 +68,14 @@ impl Out<'_, '_> {
         self.sink.send(packet)
     }
 
+    /// Sends a packet that may be lost.
+    ///
+    /// # Errors
+    /// Returns an error when the connection fails.
+    pub(super) fn send_unreliable(&mut self, packet: &EncodedCommand) -> Result<()> {
+        self.sink.send_unreliable(packet)
+    }
+
     /// Tells the host the zone session's state.
     ///
     /// # Errors
@@ -77,8 +95,8 @@ pub(super) struct World {
     pub(super) session_id: u64,
     /// The admitted player, once the zone is ready.
     pub(super) player: Option<PlayerState>,
-    /// The player's movement, once admitted.
-    pub(super) motion: Option<MotionSession>,
+    /// How the player's position reaches the server.
+    pub(super) body: Body,
     /// The player's inventory.
     pub(super) inventory: Inventory,
     /// The player's spawn ID, from the zone's first spawn record for them.
@@ -91,15 +109,8 @@ pub(super) struct World {
     pub(super) lifecycle: ZoneLifecycle,
     /// The zone's ID and instance, from the player's profile.
     pub(super) zone: (u16, u16),
-    /// The player's own position packet, kept current for the stationary
-    /// heartbeat: spawn ID, sequence, coordinates and heading.
-    pub(super) stationary: [u8; 36],
-    /// The heartbeat's next sequence number.
-    pub(super) sequence: u16,
-    /// When the player's position was last sent.
-    pub(super) last_position: Instant,
-    /// Whether the zone has admitted the player.
-    pub(super) ready: bool,
+    /// When the zone admitted the player, once it has.
+    pub(super) admitted: Option<Instant>,
     /// Application packets received in this zone session.
     pub(super) packets: u64,
     /// The zone's spawns, which only the entities feature changes.
@@ -112,23 +123,22 @@ impl World {
         Self {
             session_id,
             player: None,
-            motion: None,
+            body: Body::default(),
             inventory: Inventory::default(),
             own_spawn: None,
             posture: OwnPosture::default(),
             exit: None,
             lifecycle: ZoneLifecycle::default(),
             zone: (0, 0),
-            stationary: [0; 36],
-            sequence: 0,
-            // In the past, so the first stationary heartbeat goes out at once.
-            last_position: Instant::now()
-                .checked_sub(eq_network_game::movement::STATIONARY_HEARTBEAT)
-                .unwrap_or_else(Instant::now),
-            ready: false,
+            admitted: None,
             packets: 0,
             spawns: Spawns::default(),
         }
+    }
+
+    /// Whether the zone has admitted the player.
+    pub(super) const fn ready(&self) -> bool {
+        self.admitted.is_some()
     }
 
     /// Whether a spawn is the player.
@@ -140,11 +150,20 @@ impl World {
     /// The admitted player's spawn ID and where they are now.
     pub(super) fn player_at(&self) -> Option<(u16, Position)> {
         let player = self.player.as_ref()?;
-        let position = self
-            .motion
-            .as_ref()
-            .map_or(player.position, MotionSession::position);
+        let position = self.body.position().unwrap_or(player.position);
         Some((player.spawn_id, position))
+    }
+
+    /// Puts the admitted player where the server says they are.
+    ///
+    /// # Errors
+    /// Rejects an invalid position, or a correction before admission.
+    pub(super) fn correct_own(&mut self, position: Position, now: Instant) -> Result<()> {
+        let player = self
+            .player
+            .as_mut()
+            .context("correction without admitted player")?;
+        self.body.correct(player, position, now)
     }
 }
 
@@ -242,15 +261,21 @@ pub(super) mod testing {
     use super::{EncodedCommand, Events, Out, Result, Sink};
     use crate::client::{ClientConfig, ClientEvent};
 
-    /// A sink that keeps what features send.
+    /// A sink that keeps what features send, reliably or not.
     #[derive(Default)]
-    pub(in crate::client::session) struct Recorder(
-        pub(in crate::client::session) Vec<EncodedCommand>,
-    );
+    struct Recorder {
+        sent: Vec<EncodedCommand>,
+        unreliable: Vec<EncodedCommand>,
+    }
 
     impl Sink for Recorder {
         fn send(&mut self, packet: &EncodedCommand) -> Result<()> {
-            self.0.push(packet.clone());
+            self.sent.push(packet.clone());
+            Ok(())
+        }
+
+        fn send_unreliable(&mut self, packet: &EncodedCommand) -> Result<()> {
+            self.unreliable.push(packet.clone());
             Ok(())
         }
 
@@ -271,6 +296,7 @@ pub(super) mod testing {
     pub(in crate::client::session) struct Outcome<R> {
         pub(in crate::client::session) result: R,
         pub(in crate::client::session) sent: Vec<EncodedCommand>,
+        pub(in crate::client::session) unreliable: Vec<EncodedCommand>,
         pub(in crate::client::session) events: Vec<ClientEvent>,
         pub(in crate::client::session) heard: Vec<std::time::Instant>,
     }
@@ -300,7 +326,8 @@ pub(super) mod testing {
         drop(log);
         Outcome {
             result,
-            sent: sink.0,
+            sent: sink.sent,
+            unreliable: sink.unreliable,
             events,
             heard,
         }

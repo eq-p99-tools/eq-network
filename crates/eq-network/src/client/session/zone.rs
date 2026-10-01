@@ -7,7 +7,7 @@ use super::{
     feature::{Feature, Out, World},
     inventory, le32, motion, objects, put_string, servers, spellbook, transfers, CharacterSession,
     ClientCommand, ClientEvent, ConnectionStage, ConnectionState, Context, DecodeError, Duration,
-    Events, Instant, MotionSession, RecordEvent, Result, Session, Shield, ZoneExit,
+    Events, Instant, RecordEvent, Result, Session, Shield, ZoneExit,
 };
 
 use eq_network_game::message::Message;
@@ -42,11 +42,12 @@ struct Features(Vec<Box<dyn Feature>>);
 
 impl Features {
     /// Every feature a Titanium zone session has.
-    fn new(dialect: eq_network_game::GameDialect, character: &str) -> Self {
+    fn new(dialect: eq_network_game::GameDialect, character: &str, falls: bool) -> Self {
         Self(vec![
             Box::new(casting::Casting::new(dialect, character)),
             Box::new(spellbook::Spellbook::default()),
             Box::new(inventory::Belongings::new(dialect, character)),
+            Box::new(motion::Motion::new(dialect, character, falls)),
             Box::new(entities::Entities::default()),
             Box::new(camp::Camp::default()),
             Box::new(Doors::default()),
@@ -181,7 +182,7 @@ pub(super) fn run(
     let mut initial_skills = std::collections::BTreeMap::new();
     // Wear changes for the player that arrive before its state is built.
     let mut initial_own_wear = Vec::new();
-    let mut features = Features::new(config.protocol.into(), &config.character);
+    let mut features = Features::new(config.protocol.into(), &config.character, server.falls());
     let mut profile_data = Vec::new();
     let mut spawn_data = Vec::new();
     loop {
@@ -192,7 +193,7 @@ pub(super) fn run(
         }
         if progress.elapsed() >= Duration::from_secs(30) {
             log.status(
-                if world.ready
+                if world.ready()
                     && world.lifecycle.pending().is_none()
                     && session.last_received_seconds() < 60
                 {
@@ -210,7 +211,7 @@ pub(super) fn run(
             progress = Instant::now();
         }
         ensure!(
-            world.ready || connected.elapsed() < Duration::from_secs(60),
+            world.ready() || connected.elapsed() < Duration::from_secs(60),
             "zone admission timed out"
         );
         features.tick(
@@ -225,24 +226,12 @@ pub(super) fn run(
             session.close()?;
             return Ok(exit);
         }
-        if world.ready && !world.lifecycle.blocks_motion() {
-            if let Some(motion) = world.motion.as_mut() {
-                motion.tick(Instant::now(), |body| session.send_unreliable(0x14cb, body))?;
-            } else if world.last_position.elapsed()
-                >= eq_network_game::movement::STATIONARY_HEARTBEAT
-            {
-                world.stationary[2..4].copy_from_slice(&world.sequence.to_le_bytes());
-                session.send_unreliable(0x14cb, &world.stationary)?;
-                world.sequence = world.sequence.wrapping_add(1);
-                world.last_position = Instant::now();
-            }
-        }
         if world.lifecycle.blocks_motion() {
             if let Some(commands) = context.commands {
                 for _ in commands.try_iter().take(64) {}
             }
         }
-        if world.ready && !world.lifecycle.is_dead() && world.lifecycle.pending().is_none() {
+        if world.ready() && !world.lifecycle.is_dead() && world.lifecycle.pending().is_none() {
             if let Some(commands) = context.commands {
                 // Bound each pass so continuous producers cannot starve receive/ACK work.
                 for command in commands.try_iter().take(64) {
@@ -276,20 +265,14 @@ pub(super) fn run(
                         continue;
                     }
                     let action_valid = match &command {
-                        ClientCommand::SetPosture { spawn_id, .. }
-                        | ClientCommand::Consider {
-                            own_id: spawn_id, ..
+                        ClientCommand::Consider {
+                            own_id, target_id, ..
                         } => {
                             world
                                 .player
                                 .as_ref()
-                                .is_some_and(|player| player.spawn_id == *spawn_id)
-                                && match &command {
-                                    ClientCommand::Consider { target_id, .. } => {
-                                        world.spawns.visible(*target_id).is_some()
-                                    }
-                                    _ => true,
-                                }
+                                .is_some_and(|player| player.spawn_id == *own_id)
+                                && world.spawns.visible(*target_id).is_some()
                         }
                         ClientCommand::Loot {
                             corpse_id: entity, ..
@@ -313,15 +296,6 @@ pub(super) fn run(
                     if !action_valid {
                         log.diagnostic("Rejected an unavailable posture or target".into())?;
                         continue;
-                    }
-                    if let Some(motion) = world.motion.as_mut() {
-                        let own = (
-                            &mut world.posture,
-                            world.player.as_ref().map(|player| player.spawn_id),
-                        );
-                        if motion::handle(motion, own, session_id, &command, &mut session, log)? {
-                            continue;
-                        }
                     }
                     if let ClientCommand::SelectTarget {
                         session_id: requested_session,
@@ -349,12 +323,6 @@ pub(super) fn run(
                     match command::encode(config.protocol.into(), &command, &config.character) {
                         Ok(packet) => {
                             session.send(packet.opcode, &packet.body)?;
-                            if let ClientCommand::SetPosture {
-                                spawn_id, posture, ..
-                            } = &command
-                            {
-                                world.posture.sent(*spawn_id, *posture, log)?;
-                            }
                             if let ClientCommand::SelectTarget { spawn_id, .. } = command {
                                 log.send(ClientEvent::World(
                                     crate::world::WorldEvent::TargetSent(spawn_id),
@@ -377,7 +345,7 @@ pub(super) fn run(
         if let Some(shield) = shield.as_ref() {
             shield.spawns(packet.opcode, &mut packet.body, &credentials.key)?;
         }
-        if !world.ready {
+        if !world.ready() {
             log.diagnostic(format!(
                 "Zone received 0x{:04x} ({} bytes)",
                 packet.opcode,
@@ -397,16 +365,17 @@ pub(super) fn run(
                         "invalid player position"
                     );
                 }
-                // Preserve the server's saved coordinates. Velocity and
-                // animation stay zero; this collector never navigates.
-                world.stationary[4..8].copy_from_slice(&packet.body[13120..13124]);
-                world.stationary[24..28].copy_from_slice(&packet.body[13116..13120]);
-                world.stationary[28..32].copy_from_slice(&packet.body[13124..13128]);
-                let heading = f32::from_le_bytes(packet.body[13128..13132].try_into().unwrap());
-                let heading = crate::world::profile_heading(heading, revolution) * 8.0;
-                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-                let heading = heading as u16;
-                world.stationary[32..34].copy_from_slice(&(heading & 0x0fff).to_le_bytes());
+                // The player stands where the server saved them until they
+                // can move.
+                let float = |offset: usize| {
+                    f32::from_le_bytes(packet.body[offset..offset + 4].try_into().unwrap())
+                };
+                world.body.place(crate::world::Position {
+                    x: float(13116),
+                    y: float(13120),
+                    z: float(13124),
+                    heading: crate::world::profile_heading(float(13128), revolution),
+                });
                 profile_data.clone_from(&packet.body);
                 initial_skills.clear();
                 initial_level = None;
@@ -429,12 +398,12 @@ pub(super) fn run(
                 );
                 let id = u16::try_from(le32(&packet.body[340..344]))
                     .context("spawn ID exceeds Titanium position field")?;
-                world.stationary[..2].copy_from_slice(&id.to_le_bytes());
+                world.body.own(id);
                 world.own_spawn = Some(id);
                 spawn_data.clone_from(&packet.body);
                 saw_spawn = true;
             }
-            ZoneOpcode::ZoneDescription if !world.ready => {
+            ZoneOpcode::ZoneDescription if !world.ready() => {
                 ensure!(packet.body.len() >= 96, "truncated zone description");
                 zone_name = String::from_utf8_lossy(cstr(&packet.body[64..96])).into_owned();
                 far_clip = crate::world::titanium_far_clip(&packet.body);
@@ -450,15 +419,15 @@ pub(super) fn run(
                 session.send(0x7752, &0u32.to_le_bytes())?;
                 session.send(0x0322, &[])?;
             }
-            ZoneOpcode::ExperienceUpdate if got_zone && !world.ready && !replied_experience => {
+            ZoneOpcode::ExperienceUpdate if got_zone && !world.ready() && !replied_experience => {
                 session.send(0x0587, &[])?;
                 replied_experience = true;
             }
-            ZoneOpcode::ExperienceUpdate if got_zone && !world.ready && replied_experience => {
+            ZoneOpcode::ExperienceUpdate if got_zone && !world.ready() && replied_experience => {
                 session.send(0x6563, &chat::server_filters())?;
                 session.send(0x5e20, &[])?;
                 session.send(0x0c11, &1u32.to_le_bytes())?;
-                world.ready = true;
+                world.admitted = Some(Instant::now());
                 match crate::world::titanium_player(&profile_data, &spawn_data, revolution) {
                     Ok(mut player) => {
                         if let Some(level) = initial_level.take() {
@@ -471,15 +440,6 @@ pub(super) fn run(
                             player.apply_skill(skill, value);
                         }
                         world.player = Some(player.clone());
-                        world.motion = Some(
-                            MotionSession::new(
-                                session_id,
-                                player.spawn_id,
-                                player.position,
-                                Instant::now(),
-                            )?
-                            .with_falls(server.falls()),
-                        );
                         log.send(ClientEvent::World(crate::world::WorldEvent::Entered {
                             session_id,
                             zone: zone_name.clone(),
@@ -540,7 +500,7 @@ pub(super) fn run(
             if let Message::Unreadable { part, error } = &message {
                 log.diagnostic(format!("{part} rejected: {error}"))?;
             }
-            if world.ready {
+            if world.ready() {
                 features.observe(
                     &message,
                     &mut world,
@@ -564,13 +524,8 @@ pub(super) fn run(
                 continue;
             };
             match event {
-                event if world.ready => {
+                event if world.ready() => {
                     match &event {
-                        crate::world::WorldEvent::Posture { spawn_id, posture }
-                            if world.is_player(*spawn_id) =>
-                        {
-                            world.posture.observed(*posture);
-                        }
                         crate::world::WorldEvent::WearChange(change) => {
                             if let Some(player) = world
                                 .player
@@ -590,39 +545,7 @@ pub(super) fn run(
                                 player.apply_skill(*skill_id, *value);
                             }
                         }
-                        crate::world::WorldEvent::Death(death)
-                            if world.is_player(death.spawn_id) =>
-                        {
-                            world.lifecycle.mark_dead();
-                            if let Some(motion) = world.motion.as_mut() {
-                                motion.suspend();
-                            }
-                            log.send(ClientEvent::World(motion::withdrawn(session_id)))?;
-                            log.diagnostic(
-                                "Own character died; waiting for the server bind offer".into(),
-                            )?;
-                        }
                         _ => (),
-                    }
-                    if let crate::world::WorldEvent::Position {
-                        spawn_id, position, ..
-                    } = &event
-                    {
-                        if world.is_player(*spawn_id) {
-                            let player = world
-                                .player
-                                .as_mut()
-                                .context("correction without admitted player")?;
-                            motion::correct_own(
-                                player,
-                                world.motion.as_mut(),
-                                &mut world.stationary,
-                                world.sequence,
-                                *position,
-                                Instant::now(),
-                            )?;
-                            log.send(ClientEvent::World(motion::withdrawn(session_id)))?;
-                        }
                     }
                     log.send(ClientEvent::World(event))?;
                 }
@@ -672,7 +595,7 @@ mod tests {
 
     #[test]
     fn one_feature_owns_each_command_a_feature_takes() {
-        let features = Features::new(eq_network_game::GameDialect::TitaniumP99, "Tester");
+        let features = Features::new(eq_network_game::GameDialect::TitaniumP99, "Tester", false);
         let created = Instant::now();
         let session_id = 1;
         for (command, owners) in [

@@ -3,7 +3,7 @@
 //! last sent or was told, reports it to the client, and stands the character up
 //! before it moves, as the official client does; a server leaves a seated
 //! character seated while it walks.
-use super::{ClientEvent, Events, Session};
+use super::{feature::Out, ClientEvent, Events};
 use anyhow::Result;
 use eq_network_game::{
     command::Posture,
@@ -48,18 +48,15 @@ impl OwnPosture {
     }
 
     /// Stands a seated, crouched or prone character up before it moves.
-    pub(super) fn stand_to_move(
-        &mut self,
-        spawn_id: u16,
-        session: &mut Session,
-        log: &mut Events<'_>,
-    ) -> Result<()> {
+    pub(super) fn stand_to_move(&mut self, spawn_id: u16, out: &mut Out<'_, '_>) -> Result<()> {
         if !self.grounded() {
             return Ok(());
         }
-        let stand = eq_network_game::command::titanium_posture(spawn_id, Posture::Standing)?;
-        session.send(stand.opcode, &stand.body)?;
-        self.sent(spawn_id, Posture::Standing, log)
+        out.send(&eq_network_game::command::titanium_posture(
+            spawn_id,
+            Posture::Standing,
+        )?)?;
+        self.sent(spawn_id, Posture::Standing, out.log)
     }
 }
 
