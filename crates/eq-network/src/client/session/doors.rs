@@ -9,7 +9,7 @@ use eq_network_game::{
     doors::DoorUpdate,
     world::{WorldEvent, WorldEvent::DoorAction},
 };
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 /// The zone's doors in this admission.
 pub(super) struct Doors {
@@ -28,24 +28,16 @@ impl Default for Doors {
 }
 
 impl Doors {
-    /// The click packet for a fresh request on a door in reach.
+    /// The click packet for a door in reach, clicked since the door table last
+    /// changed.
     fn click(&self, command: &ClientCommand, world: &World) -> Result<EncodedCommand> {
         let ClientCommand::ClickDoor {
-            session_id,
-            door_id,
-            created,
+            door_id, created, ..
         } = command
         else {
             unreachable!("only door clicks are clicked");
         };
-        let now = Instant::now();
-        ensure!(
-            *session_id == world.session_id
-                && *created >= self.changed_at
-                && *created <= now
-                && now.duration_since(*created) < Duration::from_secs(1),
-            "stale door request"
-        );
+        ensure!(*created >= self.changed_at, "stale door request");
         let (spawn_id, position) = world
             .player_at()
             .ok_or_else(|| anyhow!("player is unavailable"))?;
@@ -112,6 +104,7 @@ mod tests {
     use super::super::feature::testing;
     use super::*;
     use eq_network_game::{doors::Door, world::Position};
+    use std::time::Duration;
 
     #[test]
     fn a_fresh_click_on_a_door_in_reach_sends_the_click_and_reports_it() {
@@ -158,7 +151,7 @@ mod tests {
     }
 
     #[test]
-    fn clicks_need_a_fresh_request_from_this_admission_after_the_doors_last_changed() {
+    fn clicks_made_before_the_doors_last_changed_are_stale() {
         let doors = Doors::default();
         let world = World::new(5);
         let click = |session_id, created| ClientCommand::ClickDoor {
@@ -172,7 +165,6 @@ mod tests {
             .checked_sub(Duration::from_millis(1))
             .unwrap();
         assert_eq!(error(&click(5, before)), "stale door request");
-        assert_eq!(error(&click(4, Instant::now())), "stale door request");
         assert_eq!(error(&click(5, Instant::now())), "player is unavailable");
     }
 }

@@ -53,19 +53,8 @@ pub(super) fn handle(
 ) -> Result<bool> {
     let now = Instant::now();
     let result = match command {
-        ClientCommand::Jump {
-            session_id: requested,
-            created,
-        } => {
-            let allowed = motion.jump().and_then(|()| {
-                anyhow::ensure!(
-                    *requested == session_id
-                        && now.saturating_duration_since(*created).as_secs() < 1,
-                    "stale jump"
-                );
-                Ok(())
-            });
-            match allowed {
+        ClientCommand::Jump { .. } => {
+            match motion.jump() {
                 // Transport failures end the admission like any other send.
                 Ok(()) => session.send(eq_network_game::movement::JUMP_OPCODE, &[])?,
                 Err(error) => log.diagnostic(format!("Rejected jump: {error}"))?,
@@ -73,27 +62,19 @@ pub(super) fn handle(
             return Ok(true);
         }
         ClientCommand::ConfigureMotion {
-            session_id: requested,
             calibration,
             created,
-        } => {
-            if *requested != session_id {
-                log.diagnostic("Rejected movement calibration from an old session".into())?;
-                return Ok(true);
-            }
-            motion
-                .calibrate_fresh(*calibration, *created, now)
-                .map(|()| WorldEvent::MotionState {
-                    session_id,
-                    units_per_second: Some(calibration.units_per_second),
-                    walk_units_per_second: calibration.walk.map(|value| value.units_per_second),
-                    strafe_units_per_second: calibration.strafe.map(|value| value.units_per_second),
-                    backward_units_per_second: calibration
-                        .backward
-                        .map(|value| value.units_per_second),
-                    falls: motion.falls(),
-                })
-        }
+            ..
+        } => motion
+            .calibrate_fresh(*calibration, *created, now)
+            .map(|()| WorldEvent::MotionState {
+                session_id,
+                units_per_second: Some(calibration.units_per_second),
+                walk_units_per_second: calibration.walk.map(|value| value.units_per_second),
+                strafe_units_per_second: calibration.strafe.map(|value| value.units_per_second),
+                backward_units_per_second: calibration.backward.map(|value| value.units_per_second),
+                falls: motion.falls(),
+            }),
         ClientCommand::Move(request) => {
             let (to, from) = (request.position, motion.position());
             if let (true, Some(spawn_id)) =

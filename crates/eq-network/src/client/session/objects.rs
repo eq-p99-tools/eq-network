@@ -11,7 +11,6 @@ use eq_network_game::{
     objects::{ObjectUpdate, Objects},
     world::{Position, WorldEvent},
 };
-use std::time::{Duration, Instant};
 
 /// Where a picked-up item arrives.
 const CURSOR: InventorySlot = InventorySlot(30);
@@ -42,27 +41,10 @@ impl Feature for GroundObjects {
         world: &mut World,
         out: &mut Out<'_, '_>,
     ) -> Result<()> {
-        let ClientCommand::PickUp {
-            session_id: requested,
-            drop_id,
-            created,
-        } = command
-        else {
+        let ClientCommand::PickUp { drop_id, .. } = command else {
             return Ok(());
         };
-        let pickup = Pickup {
-            requested: *requested,
-            drop_id: *drop_id,
-            created: *created,
-        };
-        let player = world.player_at();
-        let checked = self.pickup(
-            &pickup,
-            world.session_id,
-            player,
-            &world.inventory,
-            Instant::now(),
-        );
+        let checked = self.pickup(*drop_id, world.player_at(), &world.inventory);
         let error = match checked {
             Ok(packet) => {
                 out.send(&packet)?;
@@ -103,23 +85,15 @@ impl Feature for GroundObjects {
 }
 
 impl GroundObjects {
-    /// Checks a pickup against the admission, the cursor and the reach. The
-    /// item arrives on the cursor, so it must be empty, and an unsettled move
-    /// could still change it.
+    /// Checks a pickup against the cursor and the reach. The item arrives on
+    /// the cursor, so it must be empty, and an unsettled move could still
+    /// change it.
     fn pickup(
         &self,
-        request: &Pickup,
-        session_id: u64,
+        drop_id: u32,
         player: Option<(u16, Position)>,
         inventory: &Inventory,
-        now: Instant,
     ) -> Result<EncodedCommand> {
-        ensure!(
-            request.requested == session_id
-                && request.created <= now
-                && now.duration_since(request.created) < Duration::from_secs(1),
-            "stale pickup request"
-        );
         ensure!(
             inventory.received() && !inventory.stale(),
             "the inventory is not loaded"
@@ -133,14 +107,8 @@ impl GroundObjects {
             "put down the item on your cursor first"
         );
         let (spawn_id, position) = player.ok_or_else(|| anyhow!("player is unavailable"))?;
-        self.0.pickup_packet(request.drop_id, spawn_id, position)
+        self.0.pickup_packet(drop_id, spawn_id, position)
     }
-}
-
-struct Pickup {
-    requested: u64,
-    drop_id: u32,
-    created: Instant,
 }
 
 #[cfg(test)]
@@ -200,73 +168,38 @@ mod tests {
     }
 
     #[test]
-    fn pickups_need_a_fresh_request_a_loaded_inventory_and_an_empty_cursor() {
+    fn pickups_need_a_loaded_inventory_and_an_empty_cursor() {
         let objects = table();
-        let now = Instant::now();
         let player = Some((9, Position::default()));
-        let request = Pickup {
-            requested: 5,
-            drop_id: 71,
-            created: now,
-        };
         assert_eq!(
-            objects
-                .pickup(&request, 5, player, &loaded(false), now)
-                .unwrap()
-                .body,
+            objects.pickup(71, player, &loaded(false)).unwrap().body,
             [71, 0, 0, 0, 9, 0, 0, 0]
         );
-        let error = |request: &Pickup, player, inventory: &Inventory, at| {
+        let error = |player, inventory: &Inventory| {
             objects
-                .pickup(request, 5, player, inventory, at)
+                .pickup(71, player, inventory)
                 .unwrap_err()
                 .to_string()
         };
         assert_eq!(
-            error(&request, player, &loaded(true), now),
+            error(player, &loaded(true)),
             "put down the item on your cursor first"
         );
         assert_eq!(
-            error(&request, player, &Inventory::default(), now),
+            error(player, &Inventory::default()),
             "the inventory is not loaded"
         );
-        assert_eq!(
-            error(&request, None, &loaded(false), now),
-            "player is unavailable"
-        );
-        assert_eq!(
-            error(
-                &request,
-                player,
-                &loaded(false),
-                now + Duration::from_secs(1)
-            ),
-            "stale pickup request"
-        );
-        let other_session = Pickup {
-            requested: 4,
-            ..request
-        };
-        assert_eq!(
-            error(&other_session, player, &loaded(false), now),
-            "stale pickup request"
-        );
+        assert_eq!(error(None, &loaded(false)), "player is unavailable");
     }
 
     #[test]
     fn an_unsettled_move_holds_pickups_back() {
         let objects = table();
-        let now = Instant::now();
         let mut inventory = loaded(false);
         inventory.apply(InventoryUpdate::Prediction(vec![item(InventorySlot(23))]));
-        let request = Pickup {
-            requested: 5,
-            drop_id: 71,
-            created: now,
-        };
         assert_eq!(
             objects
-                .pickup(&request, 5, Some((9, Position::default())), &inventory, now)
+                .pickup(71, Some((9, Position::default())), &inventory)
                 .unwrap_err()
                 .to_string(),
             "wait for the last item move to settle"

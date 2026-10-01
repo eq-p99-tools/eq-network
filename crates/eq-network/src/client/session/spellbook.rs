@@ -3,37 +3,22 @@ use anyhow::Result;
 use eq_network_game::{inventory::Inventory, spells::SpellBook};
 use std::time::{Duration, Instant};
 
-/// Prepares immediate book edits against current admission and slot contents.
+/// Prepares an immediate book edit against the current book.
 pub(super) fn edit_packet(
     command: &crate::client::ClientCommand,
     book: Option<&SpellBook>,
-    session: u64,
     busy: bool,
-    now: Instant,
 ) -> Option<Result<(u16, [u8; 8])>> {
     use crate::client::ClientCommand;
     use anyhow::{ensure, Context};
-    let (requested, created) = match command {
-        ClientCommand::DeleteSpell {
-            session_id,
-            created,
-            ..
-        }
-        | ClientCommand::SwapSpell {
-            session_id,
-            created,
-            ..
-        } => (*session_id, *created),
-        _ => return None,
-    };
+    if !matches!(
+        command,
+        ClientCommand::DeleteSpell { .. } | ClientCommand::SwapSpell { .. }
+    ) {
+        return None;
+    }
     Some((|| {
-        ensure!(
-            requested == session
-                && created <= now
-                && now.duration_since(created) < Duration::from_secs(1)
-                && !busy,
-            "book edit is busy or stale"
-        );
+        ensure!(!busy, "book edit is busy");
         let book = book.context("spellbook unavailable")?;
         match command {
             ClientCommand::DeleteSpell { slot, spell_id, .. } => {
@@ -112,7 +97,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn immediate_book_edits_require_fresh_current_unbusy_admission() {
+    fn immediate_book_edits_need_an_idle_admitted_book() {
         let now = Instant::now();
         let mut book = SpellBook::default();
         book.apply(&eq_network_game::spells::SpellUpdate::Slot {
@@ -120,41 +105,25 @@ mod tests {
             spell_id: 42,
             mode: 0,
         });
-        for created in [
-            now,
-            now.checked_sub(Duration::from_secs(1)).unwrap(),
-            now + Duration::from_millis(1),
+        for command in [
+            crate::client::ClientCommand::SwapSpell {
+                session_id: 7,
+                from: 0,
+                to: 1,
+                from_spell: 42,
+                to_spell: None,
+                created: now,
+            },
+            crate::client::ClientCommand::DeleteSpell {
+                session_id: 7,
+                slot: 0,
+                spell_id: 42,
+                created: now,
+            },
         ] {
-            for command in [
-                crate::client::ClientCommand::SwapSpell {
-                    session_id: 7,
-                    from: 0,
-                    to: 1,
-                    from_spell: 42,
-                    to_spell: None,
-                    created,
-                },
-                crate::client::ClientCommand::DeleteSpell {
-                    session_id: 7,
-                    slot: 0,
-                    spell_id: 42,
-                    created,
-                },
-            ] {
-                assert_eq!(
-                    edit_packet(&command, Some(&book), 7, false, now)
-                        .unwrap()
-                        .is_ok(),
-                    created == now
-                );
-                assert!(edit_packet(&command, Some(&book), 8, false, now)
-                    .unwrap()
-                    .is_err());
-                assert!(edit_packet(&command, Some(&book), 7, true, now)
-                    .unwrap()
-                    .is_err());
-                assert!(edit_packet(&command, None, 7, false, now).unwrap().is_err());
-            }
+            assert!(edit_packet(&command, Some(&book), false).unwrap().is_ok());
+            assert!(edit_packet(&command, Some(&book), true).unwrap().is_err());
+            assert!(edit_packet(&command, None, false).unwrap().is_err());
         }
     }
 

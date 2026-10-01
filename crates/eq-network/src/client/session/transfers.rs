@@ -7,7 +7,7 @@ use super::{
 };
 use anyhow::{ensure, Context, Result};
 use eq_network_game::world::{Position, WorldEvent};
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 /// `OP_SendZonepoints`, the zone's numbered destinations.
 const ZONE_POINTS_OPCODE: u16 = 0x3eba;
@@ -17,8 +17,6 @@ const TO_BIND_OPCODE: u16 = 0x385e;
 const MOVE_OPCODE: u16 = 0x7834;
 /// `OP_ZoneServerInfo`, the next zone's address.
 const HANDOFF_OPCODE: u16 = 0x61b6;
-/// How long a request to cross a zone line stays fresh.
-const ZONE_LINE_FRESHNESS: Duration = Duration::from_millis(250);
 
 /// The zone's zone points, and the transfers they and the server start.
 pub(super) struct Transfers {
@@ -36,29 +34,16 @@ impl Transfers {
         }
     }
 
-    /// The transfer for a fresh request to cross a zone line where the player
-    /// stands.
-    fn zone_line(
-        &self,
-        command: &ClientCommand,
-        world: &World,
-        now: Instant,
-    ) -> Result<zoning::ZoneOffer> {
+    /// The transfer for crossing a zone line where the player stands.
+    fn zone_line(&self, command: &ClientCommand, world: &World) -> Result<zoning::ZoneOffer> {
         let ClientCommand::CrossZoneLine {
-            session_id,
             destination,
             position,
-            created,
+            ..
         } = command
         else {
             unreachable!("only zone-line crossings cross zone lines");
         };
-        ensure!(
-            *session_id == world.session_id
-                && *created <= now
-                && now.duration_since(*created) < ZONE_LINE_FRESHNESS,
-            "stale zone-line request"
-        );
         ensure!(
             world
                 .motion
@@ -219,7 +204,7 @@ impl Feature for Transfers {
         let ClientCommand::CrossZoneLine { session_id, .. } = command else {
             return Ok(());
         };
-        match self.zone_line(command, world, Instant::now()) {
+        match self.zone_line(command, world) {
             Ok(offer) => self.start(offer, world, out)?,
             Err(error) => out
                 .log
@@ -332,7 +317,7 @@ mod tests {
     }
 
     #[test]
-    fn zone_lines_need_a_fresh_request_from_where_the_player_stands() {
+    fn zone_lines_are_crossed_from_where_the_player_stands() {
         let transfers = Transfers::new("Tester");
         let mut world = World::new(5);
         let now = Instant::now();
@@ -358,19 +343,10 @@ mod tests {
         };
         let error = |world: &World, command| {
             transfers
-                .zone_line(&command, world, now)
+                .zone_line(&command, world)
                 .unwrap_err()
                 .to_string()
         };
-        let old = now.checked_sub(ZONE_LINE_FRESHNESS).unwrap();
-        assert_eq!(
-            error(&world, cross(5, here, old)),
-            "stale zone-line request"
-        );
-        assert_eq!(
-            error(&world, cross(4, here, now)),
-            "stale zone-line request"
-        );
         let moved = "zone-line position is no longer current";
         assert_eq!(error(&world, cross(5, here, now)), moved);
         world.motion = Some(MotionSession::new(5, 7, here, now).unwrap());
@@ -379,9 +355,7 @@ mod tests {
         let unknown = "zone identity is unavailable";
         assert_eq!(error(&world, cross(5, here, now)), unknown);
         world.zone = (2, 0);
-        let offer = transfers
-            .zone_line(&cross(5, here, now), &world, now)
-            .unwrap();
+        let offer = transfers.zone_line(&cross(5, here, now), &world).unwrap();
         assert_eq!((offer.zone_id, offer.solicited), (4, false));
     }
 }

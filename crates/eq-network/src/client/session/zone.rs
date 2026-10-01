@@ -279,16 +279,20 @@ pub(super) fn run(
             if let Some(commands) = context.commands {
                 // Bound each pass so continuous producers cannot starve receive/ACK work.
                 for command in commands.try_iter().take(64) {
-                    // One table decides which in-flight actions a command must wait for.
-                    if let Some(reason) = actions::Held::from_state(
-                        &cast_guard,
-                        &book_edits,
-                        world.book_action.as_ref(),
-                        &trades,
-                        scribe_consumption.awaiting_cursor(Instant::now()),
-                    )
-                    .conflict(&command)
-                    {
+                    // Stale commands, and commands that need what an action in
+                    // flight holds, are refused here and nowhere else.
+                    let now = Instant::now();
+                    let refusal = actions::stale(&command, session_id, now).or_else(|| {
+                        actions::Held::from_state(
+                            &cast_guard,
+                            &book_edits,
+                            world.book_action.as_ref(),
+                            &trades,
+                            scribe_consumption.awaiting_cursor(now),
+                        )
+                        .conflict(&command)
+                    });
+                    if let Some(reason) = refusal {
                         actions::refuse(&command, reason, log)?;
                         continue;
                     }
@@ -326,11 +330,10 @@ pub(super) fn run(
                         )))?;
                     }
                     if let ClientCommand::ScribeSpell {
-                        session_id: requested,
                         revision,
                         slot,
                         spell_id,
-                        created,
+                        ..
                     } = &command
                     {
                         let now = Instant::now();
@@ -344,13 +347,8 @@ pub(super) fn run(
                         };
                         let packet = admitted_book
                             .as_ref()
-                            .filter(|_| {
-                                *requested == session_id
-                                    && *created <= now
-                                    && now.duration_since(*created) < Duration::from_secs(1)
-                                    && world.book_action.is_none()
-                            })
-                            .context("scribing is unavailable or stale")
+                            .filter(|_| world.book_action.is_none())
+                            .context("scribing is unavailable")
                             .and_then(|book| pending.packet(book, &world.inventory));
                         match packet {
                             Ok(_) => {
@@ -397,9 +395,7 @@ pub(super) fn run(
                     if let Some(packet) = spellbook::edit_packet(
                         &command,
                         admitted_book.as_ref(),
-                        session_id,
                         world.book_action.is_some(),
-                        Instant::now(),
                     ) {
                         let status = match packet {
                             Ok((opcode, body)) => {
@@ -414,23 +410,11 @@ pub(super) fn run(
                         )))?;
                         continue;
                     }
-                    if let ClientCommand::ForgetSpell {
-                        session_id: requested,
-                        gem,
-                        spell_id,
-                        created,
-                    } = &command
-                    {
-                        let now = Instant::now();
+                    if let ClientCommand::ForgetSpell { gem, spell_id, .. } = &command {
                         let packet = world
                             .player
                             .as_ref()
-                            .filter(|_| {
-                                *requested == session_id
-                                    && *created <= now
-                                    && now.duration_since(*created) < Duration::from_secs(1)
-                            })
-                            .context("forget request is unavailable or stale")
+                            .context("forget request is unavailable")
                             .and_then(|player| {
                                 eq_network_game::spells::forget_packet(
                                     &player.memorized_spells,
@@ -459,21 +443,11 @@ pub(super) fn run(
                         }
                         continue;
                     }
-                    if let ClientCommand::MemorizeSpell {
-                        session_id: requested,
-                        gem,
-                        spell_id,
-                        created,
-                    } = &command
-                    {
-                        let valid = *requested == session_id
-                            && *created <= Instant::now()
-                            && created.elapsed() < Duration::from_secs(1)
-                            && world.book_action.is_none();
+                    if let ClientCommand::MemorizeSpell { gem, spell_id, .. } = &command {
                         let packet = admitted_book
                             .as_ref()
-                            .filter(|_| valid)
-                            .context("memorization is unavailable or stale")
+                            .filter(|_| world.book_action.is_none())
+                            .context("memorization is unavailable")
                             .and_then(|book| book.memorize_packet(*gem, *spell_id));
                         match packet {
                             Ok(_) => {
@@ -568,43 +542,25 @@ pub(super) fn run(
                     }
                     let action_valid = match &command {
                         ClientCommand::CastSpell {
-                            session_id: requested,
                             gem,
                             spell_id,
                             target_id,
-                            created,
-                        } => {
-                            *requested == session_id
-                                && created.elapsed() < Duration::from_secs(1)
-                                && *created <= Instant::now()
-                                && world.player.as_ref().is_some_and(|player| {
-                                    player.memorized_spells.get(usize::from(*gem))
-                                        == Some(&Some(*spell_id))
-                                        && (*target_id == player.spawn_id
-                                            || initial_spawns.get(target_id).is_some_and(
-                                                |spawn: &crate::world::SpawnState| !spawn.invisible,
-                                            ))
-                                })
-                        }
-                        ClientCommand::SetPosture {
-                            session_id: requested,
-                            spawn_id,
-                            created,
                             ..
-                        }
+                        } => world.player.as_ref().is_some_and(|player| {
+                            player.memorized_spells.get(usize::from(*gem)) == Some(&Some(*spell_id))
+                                && (*target_id == player.spawn_id
+                                    || initial_spawns.get(target_id).is_some_and(
+                                        |spawn: &crate::world::SpawnState| !spawn.invisible,
+                                    ))
+                        }),
+                        ClientCommand::SetPosture { spawn_id, .. }
                         | ClientCommand::Consider {
-                            session_id: requested,
-                            own_id: spawn_id,
-                            created,
-                            ..
+                            own_id: spawn_id, ..
                         } => {
-                            *requested == session_id
-                                && created.elapsed() < Duration::from_secs(1)
-                                && *created <= Instant::now()
-                                && world
-                                    .player
-                                    .as_ref()
-                                    .is_some_and(|player| player.spawn_id == *spawn_id)
+                            world
+                                .player
+                                .as_ref()
+                                .is_some_and(|player| player.spawn_id == *spawn_id)
                                 && match &command {
                                     ClientCommand::Consider { target_id, .. } => {
                                         initial_spawns.get(target_id).is_some_and(
@@ -614,75 +570,36 @@ pub(super) fn run(
                                     _ => true,
                                 }
                         }
-                        ClientCommand::AutoAttack {
-                            session_id: requested,
-                            created,
-                            ..
-                        }
-                        | ClientCommand::LootItem {
-                            session_id: requested,
-                            created,
-                            ..
-                        }
-                        | ClientCommand::Buy {
-                            session_id: requested,
-                            created,
-                            ..
-                        }
-                        | ClientCommand::Sell {
-                            session_id: requested,
-                            created,
-                            ..
-                        } => {
-                            *requested == session_id
-                                && created.elapsed() < Duration::from_secs(1)
-                                && *created <= Instant::now()
-                        }
-                        ClientCommand::EndLoot {
-                            session_id: requested,
-                            ..
-                        } => *requested == session_id,
                         ClientCommand::Loot {
-                            session_id: requested,
-                            corpse_id: entity,
-                            created,
+                            corpse_id: entity, ..
                         }
                         | ClientCommand::Shop {
-                            session_id: requested,
                             merchant_id: entity,
-                            created,
                             ..
-                        } => {
-                            *requested == session_id
-                                && created.elapsed() < Duration::from_secs(1)
-                                && *created <= Instant::now()
-                                && initial_spawns.get(entity).is_some_and(
-                                    |spawn: &crate::world::SpawnState| {
-                                        !spawn.invisible
-                                            && if matches!(command, ClientCommand::Loot { .. }) {
-                                                matches!(
-                                                    spawn.kind,
-                                                    crate::world::SpawnKind::NpcCorpse
-                                                        | crate::world::SpawnKind::PlayerCorpse
-                                                )
-                                            } else {
-                                                spawn.kind == crate::world::SpawnKind::Npc
-                                            }
-                                    },
-                                )
-                        }
+                        } => initial_spawns.get(entity).is_some_and(
+                            |spawn: &crate::world::SpawnState| {
+                                !spawn.invisible
+                                    && if matches!(command, ClientCommand::Loot { .. }) {
+                                        matches!(
+                                            spawn.kind,
+                                            crate::world::SpawnKind::NpcCorpse
+                                                | crate::world::SpawnKind::PlayerCorpse
+                                        )
+                                    } else {
+                                        spawn.kind == crate::world::SpawnKind::Npc
+                                    }
+                            },
+                        ),
                         _ => true,
                     };
                     if !action_valid {
                         if let Some(event) = casting::rejected(
                             &command,
-                            "Request expired, spell gem changed, or target is unavailable",
+                            "The spell gem changed, or the target is unavailable",
                         ) {
                             log.send(ClientEvent::World(event))?;
                         }
-                        log.diagnostic(
-                            "Rejected stale or unavailable spell/posture action".into(),
-                        )?;
+                        log.diagnostic("Rejected an unavailable spell, posture or target".into())?;
                         continue;
                     }
                     if inventory::handle(
@@ -716,35 +633,28 @@ pub(super) fn run(
                             continue;
                         }
                     }
-                    if matches!(&command, ClientCommand::InspectItem { session_id: requested, .. } if *requested != session_id)
-                    {
-                        log.diagnostic("Rejected item inspection from an old session".into())?;
-                        continue;
-                    }
                     if let ClientCommand::SelectTarget {
                         session_id: requested_session,
                         spawn_id,
                     } = &command
                     {
-                        if *requested_session != session_id
-                            || spawn_id.is_some_and(|id| {
-                                world
-                                    .player
-                                    .as_ref()
-                                    .is_none_or(|player| player.spawn_id != id)
-                                    && initial_spawns.get(&id).is_none_or(
-                                        |spawn: &crate::world::SpawnState| spawn.invisible,
-                                    )
-                            })
-                        {
+                        if spawn_id.is_some_and(|id| {
+                            world
+                                .player
+                                .as_ref()
+                                .is_none_or(|player| player.spawn_id != id)
+                                && initial_spawns
+                                    .get(&id)
+                                    .is_none_or(|spawn: &crate::world::SpawnState| spawn.invisible)
+                        }) {
                             log.send(ClientEvent::World(
                                 crate::world::WorldEvent::TargetRejected {
                                     session_id: *requested_session,
                                     spawn_id: *spawn_id,
-                                    reason: "Target is stale, invisible, or unavailable".into(),
+                                    reason: "Target is invisible or unavailable".into(),
                                 },
                             ))?;
-                            log.diagnostic("Rejected stale or unavailable target".into())?;
+                            log.diagnostic("Rejected an unavailable target".into())?;
                             continue;
                         }
                     }

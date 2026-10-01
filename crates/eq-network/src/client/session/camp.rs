@@ -89,32 +89,16 @@ impl Feature for Camp {
     fn handle(
         &mut self,
         command: &ClientCommand,
-        world: &mut World,
+        _world: &mut World,
         out: &mut Out<'_, '_>,
     ) -> Result<()> {
-        let ClientCommand::Camp {
-            session_id: requested,
-            created,
-        } = command
-        else {
+        if !matches!(command, ClientCommand::Camp { .. }) || self.active() {
             return Ok(());
-        };
-        let now = Instant::now();
-        if *requested != world.session_id
-            || *created > now
-            || now.duration_since(*created) >= Duration::from_secs(1)
-        {
-            out.log
-                .send(ClientEvent::World(WorldEvent::Camp(CampStatus::Rejected(
-                    "Camp request expired".into(),
-                ))))?;
-        } else if !self.active() {
-            out.send(&command::titanium_camp())?;
-            self.start(now);
-            out.log
-                .send(ClientEvent::World(WorldEvent::Camp(CampStatus::Preparing)))?;
         }
-        Ok(())
+        out.send(&command::titanium_camp())?;
+        self.start(Instant::now());
+        out.log
+            .send(ClientEvent::World(WorldEvent::Camp(CampStatus::Preparing)))
     }
 
     /// Standing up, ducking or moving abandons a camp still being prepared.

@@ -300,6 +300,79 @@ pub enum GameCommand {
     Move(crate::movement::MovementRequest),
 }
 
+impl GameCommand {
+    /// The zone admission the command was made for, if it names one.
+    #[must_use]
+    pub const fn session_id(&self) -> Option<u64> {
+        match self {
+            Self::SelectCharacter { .. } | Self::CreateCharacter { .. } | Self::SendChat(_) => None,
+            Self::UseItem(request) => Some(request.session_id),
+            Self::MoveInventory(request) => Some(request.session_id),
+            Self::Move(request) => Some(request.session_id),
+            Self::SwapSpell { session_id, .. }
+            | Self::ClickDoor { session_id, .. }
+            | Self::PickUp { session_id, .. }
+            | Self::CrossZoneLine { session_id, .. }
+            | Self::ScribeSpell { session_id, .. }
+            | Self::DeleteSpell { session_id, .. }
+            | Self::ForgetSpell { session_id, .. }
+            | Self::MemorizeSpell { session_id, .. }
+            | Self::CastSpell { session_id, .. }
+            | Self::SetPosture { session_id, .. }
+            | Self::InspectItem { session_id, .. }
+            | Self::Consider { session_id, .. }
+            | Self::Camp { session_id, .. }
+            | Self::Loot { session_id, .. }
+            | Self::LootItem { session_id, .. }
+            | Self::EndLoot { session_id, .. }
+            | Self::Shop { session_id, .. }
+            | Self::Buy { session_id, .. }
+            | Self::Sell { session_id, .. }
+            | Self::Jump { session_id, .. }
+            | Self::AutoAttack { session_id, .. }
+            | Self::SelectTarget { session_id, .. }
+            | Self::ConfigureMotion { session_id, .. } => Some(*session_id),
+        }
+    }
+
+    /// When the host made the command, if it says; commands that may wait,
+    /// such as closing a loot window, do not.
+    #[must_use]
+    pub const fn created(&self) -> Option<std::time::Instant> {
+        match self {
+            Self::SelectCharacter { .. }
+            | Self::CreateCharacter { .. }
+            | Self::SendChat(_)
+            | Self::InspectItem { .. }
+            | Self::EndLoot { .. }
+            | Self::SelectTarget { .. } => None,
+            Self::UseItem(request) => Some(request.created),
+            Self::MoveInventory(request) => Some(request.created),
+            Self::Move(request) => Some(request.created),
+            Self::SwapSpell { created, .. }
+            | Self::ClickDoor { created, .. }
+            | Self::PickUp { created, .. }
+            | Self::CrossZoneLine { created, .. }
+            | Self::ScribeSpell { created, .. }
+            | Self::DeleteSpell { created, .. }
+            | Self::ForgetSpell { created, .. }
+            | Self::MemorizeSpell { created, .. }
+            | Self::CastSpell { created, .. }
+            | Self::SetPosture { created, .. }
+            | Self::Consider { created, .. }
+            | Self::Camp { created, .. }
+            | Self::Loot { created, .. }
+            | Self::LootItem { created, .. }
+            | Self::Shop { created, .. }
+            | Self::Buy { created, .. }
+            | Self::Sell { created, .. }
+            | Self::Jump { created, .. }
+            | Self::AutoAttack { created, .. }
+            | Self::ConfigureMotion { created, .. } => Some(*created),
+        }
+    }
+}
+
 /// A command encoded as one game application packet.
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[non_exhaustive]
