@@ -101,6 +101,8 @@ fn decoded_profile(data: &[u8], character: &str) -> Result<PlayerState> {
         run_speed: 0.0,
         hp_percent: None,
         appearance: crate::appearance::Appearance::default(),
+        // EQMac /who fields are not decoded yet.
+        listing: crate::listing::Listing::default(),
     })
 }
 
@@ -184,6 +186,9 @@ pub fn spawns(body: &[u8]) -> Result<Vec<SpawnState>> {
                 },
                 // EQMac motion fields are not decoded yet.
                 velocity: [0.0; 3],
+                // Nor are its /who fields.
+                level: 0,
+                listing: crate::listing::Listing::default(),
             })
         })
         .collect()

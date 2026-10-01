@@ -157,6 +157,7 @@ enum WorldOpcode {
     CharacterList,
     ZoneHandoff,
     ApproveName,
+    Guilds,
     Unknown(u16),
 }
 
@@ -170,6 +171,7 @@ impl From<u16> for WorldOpcode {
             0x4513 => Self::CharacterList,
             0x61b6 => Self::ZoneHandoff,
             0x3ea6 => Self::ApproveName,
+            eq_network_game::listing::GUILDS_OPCODE => Self::Guilds,
             value => Self::Unknown(value),
         }
     }
@@ -619,6 +621,13 @@ fn world(
                 selection = Some(list);
                 chosen = automatic;
             }
+            // The guilds players' spawns name by number.
+            WorldOpcode::Guilds => match eq_network_game::listing::titanium_guilds(&packet.body) {
+                Ok(names) => log.send(ClientEvent::World(crate::world::WorldEvent::GuildNames(
+                    names,
+                )))?,
+                Err(error) => log.diagnostic(format!("Guild list unreadable: {error}"))?,
+            },
             WorldOpcode::ZoneHandoff => {
                 ensure!(entered, "unsolicited zone handoff");
                 let (host, port, checksums) =

@@ -42,7 +42,12 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `Capability::Who`), and the answer reaches the host as `WhoList`: the
   string numbers that word its heading, lines and closing count, with each
   player's name, guild, level, class, race and zone as the world shows
-  them. `zones` maps zone numbers to short names.
+  them. `zones` maps zone numbers to short names. For the zone's own list,
+  which Titanium clients build themselves, spawns carry their level and
+  the player and spawns their `/who` listing (`listing::Listing`: guild,
+  anonymity, game master, away and looking-for-group flags), kept current
+  by `WorldEvent::Listing`; the world's and zones' guild lists reach the
+  host as `GuildNames`.
 - Players' corpses (`corpses`): `Consent` lets a player drag the player's
   corpses or takes it back (`/consent`, `/deny`), refused with the
   official client's words for an empty name or the player's own; the

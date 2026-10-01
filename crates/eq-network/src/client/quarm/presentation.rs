@@ -170,6 +170,7 @@ mod tests {
                 run_speed: 0.0,
                 hp_percent: None,
                 appearance: eq_network_game::appearance::Appearance::default(),
+                listing: eq_network_game::listing::Listing::default(),
             }),
             ..Presentation::default()
         };
@@ -213,6 +214,8 @@ mod tests {
                     size: 6.0,
                     invisible: false,
                     appearance: eq_network_game::appearance::Appearance::default(),
+                    level: 0,
+                    listing: eq_network_game::listing::Listing::default(),
                 },
             );
         }
