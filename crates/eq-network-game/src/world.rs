@@ -625,6 +625,24 @@ pub enum WorldEvent {
         /// Why no window opened.
         reason: String,
     },
+    /// How fed and watered the player is, from the profile and the
+    /// server's updates.
+    Nourishment(crate::food::Nourishment),
+    /// The player turned hungry or thirsty with nothing in the inventory to
+    /// eat or drink.
+    NothingToEat {
+        /// Hungry with no food.
+        food: bool,
+        /// Thirsty with no drink.
+        water: bool,
+    },
+    /// An item was not eaten or drunk, and why.
+    ConsumeRefused {
+        /// Admission from the request.
+        session_id: u64,
+        /// Why not.
+        reason: String,
+    },
     /// A melee, skill or spell damage record for any nearby entities.
     Damage(crate::combat::Damage),
     /// Own-character skill update; unknown skill IDs remain available to consumers.
@@ -770,6 +788,9 @@ pub fn titanium_update(opcode: u16, body: &[u8]) -> Result<Option<WorldEvent>> {
             WorldEvent::Consideration(crate::combat::consideration(body)?)
         }
         crate::combat::DAMAGE_OPCODE => WorldEvent::Damage(crate::combat::damage(body)?),
+        crate::food::STAMINA_OPCODE => {
+            WorldEvent::Nourishment(crate::food::decode(opcode, body)?.unwrap_or_default())
+        }
         0x0695 => {
             ensure!(
                 body.len() == 3 && body[2] <= 100,

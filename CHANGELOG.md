@@ -25,6 +25,14 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   (`InventorySlot::is_trade`) take only what servers accept, and empty when
   the window closes. `Capability::Giving` reports it; trades between
   players are not supported yet.
+- Food and drink (`food`): the profile and the server's stamina updates say
+  how fed and watered the player is (`Nourishment`). At 3000 or less, as
+  `EQEmu` counts hungry and thirsty, the session eats and drinks from the
+  inventory on its own as the official client does (each general slot,
+  then the bag in it), takes the bite from the inventory as the server does
+  silently, and tells the host when there is nothing to eat or drink
+  (`NothingToEat`). `Consume` eats or drinks an item by hand, refused with
+  the official client's words when the player is full (`ConsumeRefused`).
 - Coins (`money`): `MoveCoins` moves coins between the purse, the cursor, the
   bank (near a banker) and an open give window, changing kind as servers do
   (`CoinTransfer::amounts`). The session keeps the coins (`Wallet`): servers

@@ -107,6 +107,7 @@ pub(super) fn needs(command: &ClientCommand) -> &'static [Resource] {
         | ClientCommand::PickUp { .. }
         | ClientCommand::Buy { .. }
         | ClientCommand::Sell { .. }
+        | ClientCommand::Consume { .. }
         | ClientCommand::AcceptTrade { .. } => &[Inventory],
         ClientCommand::SelectCharacter { .. }
         | ClientCommand::CreateCharacter { .. }
@@ -172,6 +173,10 @@ fn refusal(command: &ClientCommand, reason: &str) -> Option<WorldEvent> {
             reason: reason.into(),
         },
         ClientCommand::MoveCoins { session_id, .. } => WorldEvent::CoinsRefused {
+            session_id: *session_id,
+            reason: reason.into(),
+        },
+        ClientCommand::Consume { session_id, .. } => WorldEvent::ConsumeRefused {
             session_id: *session_id,
             reason: reason.into(),
         },

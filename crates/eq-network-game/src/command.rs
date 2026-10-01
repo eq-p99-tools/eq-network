@@ -305,6 +305,16 @@ pub enum GameCommand {
         /// Reject delayed actions instead of replaying them after a stall.
         created: std::time::Instant,
     },
+    /// Eat or drink the item in a slot by hand. The session eats and drinks
+    /// on its own when the player turns hungry or thirsty.
+    Consume {
+        /// Current zone admission.
+        session_id: u64,
+        /// The item's slot.
+        slot: crate::inventory::InventorySlot,
+        /// Reject delayed actions instead of replaying them after a stall.
+        created: std::time::Instant,
+    },
     /// Start or stop melee auto-attack against the current server-side target.
     AutoAttack {
         /// Current zone admission.
@@ -368,6 +378,7 @@ impl GameCommand {
             | Self::MoveCoins { session_id, .. }
             | Self::Jump { session_id, .. }
             | Self::AutoAttack { session_id, .. }
+            | Self::Consume { session_id, .. }
             | Self::SelectTarget { session_id, .. }
             | Self::ConfigureMotion { session_id, .. } => Some(*session_id),
         }
@@ -396,7 +407,7 @@ impl GameCommand {
             }
             // Only a server that takes falls from the client lets the player jump.
             Self::Jump { .. } => Capability::Falling,
-            Self::MoveInventory(_) => Capability::Inventory,
+            Self::MoveInventory(_) | Self::Consume { .. } => Capability::Inventory,
             Self::SendChat(_) | Self::InspectItem { .. } => Capability::Talking,
             Self::Consider { .. } | Self::AutoAttack { .. } => Capability::Combat,
             Self::Camp { .. } => Capability::Camping,
@@ -456,6 +467,7 @@ impl GameCommand {
             | Self::MoveCoins { created, .. }
             | Self::Jump { created, .. }
             | Self::AutoAttack { created, .. }
+            | Self::Consume { created, .. }
             | Self::ConfigureMotion { created, .. } => Some(*created),
         }
     }
@@ -574,6 +586,7 @@ pub fn encode(
         | GameCommand::Jump { .. }
         | GameCommand::ConfigureMotion { .. }
         | GameCommand::CrossZoneLine { .. }
+        | GameCommand::Consume { .. }
         | GameCommand::Camp { .. } => {
             anyhow::bail!("this command requires the admitted session controller")
         }
