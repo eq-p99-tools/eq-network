@@ -114,8 +114,10 @@ pub struct WhoPlayer {
     /// Race number; zero when hidden.
     pub race: u32,
     /// For a game master asking: the string that words the account (5003,
-    /// "(USER %1: PID %2)") and the account's name.
+    /// `(USER %1: PID %2)`) and the account's name.
     pub account: Option<(u32, String)>,
+    /// For a game master asking: the player's account status.
+    pub status: Option<u32>,
 }
 
 /// A string number, unless the answer leaves it out.
@@ -153,8 +155,7 @@ impl Reader<'_> {
         let name = self.text()?;
         let rank = string(self.number()?);
         let guild = self.text()?;
-        // A game master asking sees the player's status here.
-        self.number()?;
+        let status = Some(self.number()?).filter(|status| *status != ANY);
         let tag = string(self.number()?);
         let zone_line = self.number()?;
         let zone = self.number()?;
@@ -174,6 +175,7 @@ impl Reader<'_> {
             level,
             race,
             account: string(pid).map(|words| (words, account)),
+            status,
         })
     }
 }
@@ -260,7 +262,11 @@ mod tests {
         body.extend_from_slice(&rank.to_le_bytes());
         body.extend_from_slice(guild.as_bytes());
         body.push(0);
-        for value in [ANY, ANY, zone.0, zone.1, numbers[0], numbers[1], numbers[2]] {
+        // A game master asking sees each player's status.
+        let status = if pid == ANY { ANY } else { 255 };
+        for value in [
+            status, ANY, zone.0, zone.1, numbers[0], numbers[1], numbers[2],
+        ] {
             body.extend_from_slice(&value.to_le_bytes());
         }
         body.extend_from_slice(account.as_bytes());
@@ -330,6 +336,7 @@ mod tests {
                     level: 50,
                     race: 5,
                     account: None,
+                    status: None,
                 },
                 WhoPlayer {
                     line: 5024,
@@ -342,6 +349,7 @@ mod tests {
                     level: 0,
                     race: 0,
                     account: None,
+                    status: None,
                 },
             ]
         );
@@ -350,6 +358,7 @@ mod tests {
         let list = decode(&answer(1, &[&master], 0)).unwrap();
         assert_eq!(list.players[0].rank, Some(5015));
         assert_eq!(list.players[0].account, Some((5003, "acct".into())));
+        assert_eq!(list.players[0].status, Some(255));
         assert!(decode(&body[..63]).is_err());
         assert!(decode(&body[..body.len() - 60]).is_err());
     }
