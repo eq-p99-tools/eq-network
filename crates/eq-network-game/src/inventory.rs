@@ -56,9 +56,24 @@ impl InventorySlot {
         matches!(self.0, 2000..=2007 | 2031..=2110)
     }
 
+    /// One of the player's eight trade slots, which the give window shows the
+    /// first four of. An item enters one only from the cursor, while a give or
+    /// trade window is open.
+    #[must_use]
+    pub const fn is_trade(self) -> bool {
+        matches!(self.0, 3000..=3007)
+    }
+
+    /// A trade slot or what a bag in one holds.
+    #[must_use]
+    pub const fn is_in_trade(self) -> bool {
+        matches!(self.0, 3000..=3007 | 3031..=3110)
+    }
+
     /// Parent container and zero-based index for a known bag-content address.
     /// The carried bags' contents are 251 to 330, a cursor bag's 331 to 340,
-    /// the bank bags' 2031 to 2190 and the shared bank bags' 2531 to 2550.
+    /// the bank bags' 2031 to 2190, the shared bank bags' 2531 to 2550 and the
+    /// trade slots' bags' 3031 to 3110.
     #[must_use]
     pub fn parent(self) -> Option<(Self, u8)> {
         for (start, end, parent) in [
@@ -66,6 +81,7 @@ impl InventorySlot {
             (331, 340, 30),
             (2031, 2190, 2000),
             (2531, 2550, 2500),
+            (3031, 3110, 3000),
         ] {
             if (start..=end).contains(&self.0) {
                 let offset = self.0 - start;
@@ -86,6 +102,7 @@ impl InventorySlot {
             30 => 331,
             2000..=2015 => 2031 + (self.0 - 2000) * 10,
             2500..=2501 => 2531 + (self.0 - 2500) * 10,
+            3000..=3007 => 3031 + (self.0 - 3000) * 10,
             _ => return None,
         };
         Some(Self(base + i32::from(index)))
@@ -131,6 +148,7 @@ impl InventorySlot {
             30 => "Cursor".into(),
             2000..=2015 => format!("Bank {}", self.0 - 1999),
             2500..=2501 => format!("Shared bank {}", self.0 - 2499),
+            3000..=3007 => format!("Trade {}", self.0 - 2999),
             _ => format!("Slot {}", self.0),
         }
     }
@@ -213,6 +231,10 @@ pub enum InventoryUpdate {
     /// count as its contents. Servers such as `EQEmu` never acknowledge a
     /// successful move and answer a refused one at once, by resending its slots.
     Settled,
+    /// The give or trade window closed: what the trade slots held left them,
+    /// handed over, or on its way back as the server's item updates. Servers
+    /// empty the slots without saying so.
+    TradeEmptied,
 }
 
 /// Current inventory projection; an absent snapshot is distinct from an empty one.
@@ -389,6 +411,12 @@ impl Inventory {
                 }
             }
             InventoryUpdate::Invalidated => self.stale = true,
+            InventoryUpdate::TradeEmptied => {
+                self.items.retain(|slot, _| !slot.is_in_trade());
+                // A prediction into a trade slot is resolved: the item is gone.
+                self.unconfirmed.retain(|slot, _| !slot.is_in_trade());
+                self.resolved();
+            }
             InventoryUpdate::Settled => {
                 self.unconfirmed.clear();
                 self.resolved();

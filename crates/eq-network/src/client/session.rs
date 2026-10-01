@@ -6,6 +6,7 @@ mod character;
 mod combat;
 mod doors;
 mod entities;
+mod exchange;
 mod feature;
 mod inventory;
 mod lifecycle;

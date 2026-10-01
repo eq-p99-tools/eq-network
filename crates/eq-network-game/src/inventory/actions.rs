@@ -1,4 +1,4 @@
-//! Validated carried, equipment and personal-bank moves. No destroy or trade sentinel is encoded.
+//! Validated carried, equipment, personal-bank and trade moves. No destroy sentinel is encoded.
 use super::{Inventory, InventoryItem, InventorySlot, InventoryUpdate};
 use crate::command::EncodedCommand;
 use anyhow::{ensure, Context, Result};
@@ -46,6 +46,9 @@ pub struct InventoryActor {
     pub race: u32,
     /// Current level.
     pub level: u8,
+    /// How many trade slots the open give or trade window has; zero when none
+    /// is open.
+    pub trade_slots: u8,
 }
 
 impl Inventory {
@@ -170,6 +173,13 @@ impl Inventory {
             movable(request.from, actor) && movable(request.to, actor),
             "Slot is unsupported or personal banking requires a nearby banker"
         );
+        ensure!(
+            !request.from.is_trade(),
+            "Cancel the trade to take an item back"
+        );
+        if request.to.is_trade() {
+            check_trade(request, self.items.contains_key(&request.to))?;
+        }
         let source = self
             .items
             .get(&request.from)
@@ -466,6 +476,22 @@ fn movable(slot: InventorySlot, actor: InventoryActor) -> bool {
         || slot.is_carried()
         || slot == InventorySlot::CURSOR
         || (actor.bank_access && slot.is_personal_bank())
+        || (slot.is_trade() && slot.0 - 3000 < i32::from(actor.trade_slots))
+}
+
+/// What servers accept into a trade slot: an item from the cursor, whole into
+/// an empty slot or merged onto the same stack. `EQEmu` disconnects a client
+/// that sends anything else (`Trade::AddEntity`, `Client::SwapItem`).
+fn check_trade(request: &InventoryMove, occupied: bool) -> Result<()> {
+    ensure!(
+        request.from == InventorySlot::CURSOR,
+        "Pick the item up to hand it over"
+    );
+    match request.quantity {
+        MoveQuantity::Whole => ensure!(!occupied, "That trade slot is taken"),
+        MoveQuantity::Count(_) => ensure!(occupied, "Hand over the whole stack on the cursor"),
+    }
+    Ok(())
 }
 
 /// EQ item masks reserve bit zero for either agnostic profile identifier.

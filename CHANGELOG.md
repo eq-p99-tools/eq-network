@@ -18,6 +18,13 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Worn gear (`appearance`): spawns and the player carry their materials,
   tints and facial features from Titanium spawn records, and wear changes
   update them. Quarm reports none yet.
+- Handing items to NPCs (`exchange`): `OfferTrade` asks a character within
+  reach while the player holds an item, the NPC's answer opens the give
+  window, items go into its four trade slots from the cursor, and
+  `AcceptTrade` (Give) or `CancelTrade` ends it. The trade slots
+  (`InventorySlot::is_trade`) take only what servers accept, and empty when
+  the window closes. `Capability::Giving` reports it; coins and trades
+  between players are not supported yet.
 - Synthetic regression coverage for inventory reconciliation, scribe consumption,
   movement admission, cast state, and fresh-key world/zone handoffs.
 

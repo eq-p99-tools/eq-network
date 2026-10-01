@@ -4,6 +4,8 @@
 //!
 //! A move is predicted as soon as it is sent and settles once the server has
 //! let it stand; a trade holds the inventory until the merchant echoes it.
+//! Items handed over in a give or trade window leave the trade slots when the
+//! window closes, which servers do not say item by item.
 mod merchant;
 
 use super::{
@@ -13,6 +15,7 @@ use super::{
 };
 use anyhow::{Context, Result};
 use eq_network_game::{
+    exchange::ExchangeUpdate,
     inventory::{banker_in_range, Inventory, InventoryActor, InventoryMove, InventoryUpdate},
     message::{Message, Part},
     world::{SpawnKind, WorldEvent},
@@ -86,6 +89,10 @@ fn actor(world: &World) -> Option<InventoryActor> {
         class: player.class,
         race: player.race,
         level: player.level,
+        trade_slots: world
+            .exchange
+            .as_ref()
+            .map_or(0, super::exchange::Exchange::trade_slots),
     })
 }
 
@@ -229,6 +236,20 @@ impl Feature for Belongings {
             .collect()
     }
 
+    /// Closing a give or trade window empties the trade slots: the server
+    /// sends their items back without emptying them itself.
+    fn notice(
+        &mut self,
+        command: &ClientCommand,
+        world: &mut World,
+        out: &mut Out<'_, '_>,
+    ) -> Result<()> {
+        if matches!(command, ClientCommand::CancelTrade { .. }) && world.exchange.is_some() {
+            change(InventoryUpdate::TradeEmptied, world, out)?;
+        }
+        Ok(())
+    }
+
     fn owns(&self, command: &ClientCommand) -> bool {
         matches!(
             command,
@@ -296,6 +317,11 @@ impl Feature for Belongings {
             Message::Event(WorldEvent::Death(death)) if world.is_player(death.spawn_id) => {
                 self.trades.clear();
             }
+            // The window closed: what the trade slots held was handed over, or
+            // comes back as item updates.
+            Message::Event(WorldEvent::Exchange(
+                ExchangeUpdate::Finished | ExchangeUpdate::Cancelled { .. },
+            )) => change(InventoryUpdate::TradeEmptied, world, out)?,
             _ => (),
         }
         Ok(())
@@ -518,6 +544,62 @@ mod tests {
             "a hold remains: {:?}",
             belongings.holds(&world, Instant::now())
         );
+    }
+
+    #[test]
+    fn handing_over_fills_only_an_open_windows_slots_and_its_closing_empties_them() {
+        use super::super::exchange::{Exchange, Exchanging, Stage};
+        use eq_network_game::exchange::{ExchangeUpdate, Partner};
+        let (mut belongings, mut world) = admitted();
+        let pick_up = |world: &World, from, to| {
+            ClientCommand::MoveInventory(InventoryMove {
+                session_id: 5,
+                revision: world.inventory.revision(),
+                from: InventorySlot(from),
+                to: InventorySlot(to),
+                quantity: MoveQuantity::Whole,
+                created: Instant::now(),
+            })
+        };
+        testing::run(|out| belongings.handle(&pick_up(&world, 22, 30), &mut world, out))
+            .result
+            .unwrap();
+        // No window, no trade slots.
+        let outcome =
+            testing::run(|out| belongings.handle(&pick_up(&world, 30, 3000), &mut world, out));
+        assert!(
+            outcome.sent.is_empty(),
+            "no trade slots without a window, sent {:?}",
+            outcome.sent
+        );
+        world.exchange = Exchanging::from(Exchange {
+            with: 42,
+            partner: Partner::Npc,
+            stage: Stage::Open,
+        });
+        let outcome =
+            testing::run(|out| belongings.handle(&pick_up(&world, 30, 3000), &mut world, out));
+        assert_eq!(outcome.sent.len(), 1);
+        assert!(world.inventory.items().contains_key(&InventorySlot(3000)));
+        // Closing the window empties the slots; the server sends the item back.
+        let close = ClientCommand::CancelTrade { session_id: 5 };
+        let outcome = testing::run(|out| belongings.notice(&close, &mut world, out));
+        assert_eq!(
+            inventory_events(&outcome.events),
+            [&InventoryUpdate::TradeEmptied]
+        );
+        assert!(world.inventory.items().is_empty());
+        // So does the exchange going through.
+        world.inventory = Carried::from({
+            let mut inventory = Inventory::default();
+            inventory.apply(InventoryUpdate::Snapshot(vec![item(3001)]));
+            inventory
+        });
+        let finished = Message::Event(WorldEvent::Exchange(ExchangeUpdate::Finished));
+        testing::run(|out| belongings.observe(&finished, &mut world, out))
+            .result
+            .unwrap();
+        assert!(world.inventory.items().is_empty());
     }
 
     #[test]

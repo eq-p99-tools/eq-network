@@ -16,6 +16,8 @@ pub mod command;
 pub mod creation;
 /// Server-defined interactive doors and their movement notifications.
 pub mod doors;
+/// Handing items to another character: the give and trade windows.
+pub mod exchange;
 /// Read-only inventory packets, slots, instances, and state.
 pub mod inventory;
 /// Read-only item inspection requests and definitions.
