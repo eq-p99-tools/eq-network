@@ -15,13 +15,13 @@ use lifecycle::ZoneLifecycle;
 use spellbook::{BookIntent, PendingBookAction};
 
 use super::{
+    servers::{self, Shield},
     CancellationToken, ClientCommand, ClientConfig, ClientEvent, ClientIdentity, ConnectionStage,
     ConnectionState, DecodeError, Events, LoginError, RecordEvent, RunOptions, ServerProtocol,
 };
 use crate::{
     assets::Assets,
     chat,
-    p99::{self, WorldCodec},
     transport::{Application, Session},
 };
 use anyhow::{bail, ensure, Context, Result};
@@ -87,7 +87,7 @@ fn run_p99(
         context.config.character.clone_from(&next_zone.character);
         match zone(
             &context,
-            &mut next_zone.codec,
+            &mut next_zone.shield,
             &next_zone.host,
             next_zone.port,
             next_zone.checksums,
@@ -104,12 +104,12 @@ fn run_p99(
             }
             ZoneExit::Direct(packet) => {
                 let (host, port, checksums) =
-                    decode_destination(&next_zone.codec, &packet, assets, log)?;
+                    decode_destination(next_zone.shield.as_deref(), &packet, assets, log)?;
                 destination = Some(ZoneDestination {
                     host,
                     port,
                     checksums,
-                    codec: next_zone.codec,
+                    shield: next_zone.shield,
                     character: context.config.character.clone(),
                 });
             }
@@ -337,7 +337,7 @@ fn crc1(
             body[86..90].copy_from_slice(&ip.octets());
         }
     }
-    p99::session_xor(&mut body[..2048], key)?;
+    crate::p99::session_xor(&mut body[..2048], key)?;
     Ok(body)
 }
 
@@ -367,7 +367,8 @@ struct ZoneDestination {
     host: String,
     port: u16,
     checksums: Vec<u8>,
-    codec: WorldCodec,
+    /// The protection the world connection started, kept across zones.
+    shield: Option<Box<dyn Shield>>,
 }
 
 enum ZoneExit {
@@ -377,9 +378,10 @@ enum ZoneExit {
     CharacterSelect,
 }
 
-/// Decode the endpoint and V62 manifest before rekeying for destination admission.
+/// Decode the endpoint and, behind protection, the file manifest before
+/// rekeying for destination admission.
 fn decode_destination(
-    codec: &WorldCodec,
+    shield: Option<&dyn Shield>,
     packet: &[u8],
     assets: &Assets,
     log: &mut Events<'_>,
@@ -389,19 +391,21 @@ fn decode_destination(
     let port = u16::from_le_bytes(packet[128..130].try_into()?);
     ensure!(!host.is_empty() && port != 0, "invalid zone endpoint");
     // Stock EQEmu hands off only the endpoint; P99 appends an encrypted manifest.
-    if packet.len() == 130 {
+    let Some(shield) = shield.filter(|_| packet.len() > 130) else {
         return Ok((host, port, Vec::new()));
-    }
-    let manifest = codec.zone_manifest(packet)?;
+    };
+    let manifest = shield.zone_manifest(packet)?;
     Ok((host, port, file_response(assets, &manifest, log)?))
 }
 
-/// Initializes the world codec from the exact login body sent to the server.
+/// Logs in to the world with the exact login body and starts the server's
+/// protection, if it has any, from that body.
 fn open_world(
     session: &mut Session,
+    server: &dyn servers::ServerType,
     credentials: &Credentials,
     zoning: bool,
-) -> Result<WorldCodec> {
+) -> Result<Option<Box<dyn Shield>>> {
     let mut login_info = Zeroizing::new(vec![0; 464]);
     login_info[192] = 0xcc;
     login_info[188] = u8::from(zoning);
@@ -409,9 +413,9 @@ fn open_world(
     login_info[..account.len()].copy_from_slice(account.as_bytes());
     login_info[account.len() + 1..account.len() + 1 + credentials.key.len()]
         .copy_from_slice(&credentials.key);
-    let codec = WorldCodec::new(&login_info)?;
+    let shield = server.protect(&login_info)?;
     session.send(0x4dd0, &login_info)?;
-    Ok(codec)
+    Ok(shield)
 }
 
 /// Sends the selected server name and starts the zone-handoff deadline.
@@ -443,7 +447,8 @@ fn world(
         true,
         stop.flag(),
     )?;
-    let mut codec = open_world(&mut session, credentials, zoning)?;
+    let server = servers::server_type(config.protocol);
+    let mut shield = open_world(&mut session, server, credentials, zoning)?;
     let mut deadline = Instant::now() + Duration::from_secs(60);
     let mut accepted = false;
     let mut entered = false;
@@ -520,10 +525,11 @@ fn world(
                     log.diagnostic(format!("World short name unavailable: {error}"))?;
                 }
             },
-            // Stock EQEmu's ApproveWorld is informational; only P99 expects an answer.
-            WorldOpcode::ApprovalChallenge if config.protocol == ServerProtocol::EqEmu => {}
+            // Only protected servers expect an answer; stock EQEmu's is informational.
             WorldOpcode::ApprovalChallenge => {
-                session.send(0x3c25, &codec.approve(&packet.body)?)?;
+                if let Some(shield) = shield.as_mut() {
+                    session.send(0x3c25, &shield.approve(&packet.body)?)?;
+                }
             }
             // Captured Titanium zoning sessions receive an empty notification here,
             // with no world checksum response. The official client then repeats
@@ -551,9 +557,13 @@ fn world(
                 }
             }
             WorldOpcode::FileManifest => {
-                codec.manifest(&mut packet.body)?;
+                if let Some(shield) = shield.as_mut() {
+                    shield.manifest(&mut packet.body)?;
+                }
                 let mut response = file_response(assets, &packet.body, log)?;
-                codec.file_response(&mut response)?;
+                if let Some(shield) = shield.as_ref() {
+                    shield.answer(&mut response)?;
+                }
                 session.send(
                     0x5072,
                     &crc1(
@@ -603,7 +613,7 @@ fn world(
                 if accepted && !entered && creating.as_ref().is_some_and(|(_, sent)| *sent) =>
             {
                 if let Some((character, _)) = creating.take() {
-                    tutorial_pending |= config.protocol == ServerProtocol::EqEmu;
+                    tutorial_pending |= server.start_choice();
                     log.send(ClientEvent::World(
                         crate::world::WorldEvent::CharacterCreation {
                             name: character.name,
@@ -632,7 +642,7 @@ fn world(
             WorldOpcode::ZoneHandoff => {
                 ensure!(entered, "unsolicited zone handoff");
                 let (host, port, checksums) =
-                    decode_destination(&codec, &packet.body, assets, log)?;
+                    decode_destination(shield.as_deref(), &packet.body, assets, log)?;
                 session.send(0x509d, &[])?;
                 session.close()?;
                 return Ok(Some(ZoneDestination {
@@ -640,7 +650,7 @@ fn world(
                     host,
                     port,
                     checksums,
-                    codec,
+                    shield,
                 }));
             }
             _ => (),
@@ -658,7 +668,7 @@ fn world(
 #[allow(clippy::too_many_lines)]
 fn zone(
     context: &CharacterSession<'_>,
-    codec: &mut WorldCodec,
+    shield: &mut Option<Box<dyn Shield>>,
     host: &str,
     port: u16,
     mut checksums: Vec<u8>,
@@ -676,11 +686,10 @@ fn zone(
     session.send(0x7752, &0u32.to_le_bytes())?;
     let mut entry = vec![0; 68];
     put_string(&mut entry[4..], &config.character)?;
-    let stock = config.protocol == ServerProtocol::EqEmu;
-    // Saved profile headings: P99 uses a 256-unit revolution, stock EQEmu 512.
-    let revolution = if stock { 512.0 } else { 256.0 };
-    if !stock {
-        codec.zone_entry(&entry)?;
+    let server = servers::server_type(config.protocol);
+    let revolution = server.profile_turn();
+    if let Some(shield) = shield.as_mut() {
+        shield.zone_entry(&entry)?;
     }
     session.send(0x7213, &entry)?;
     log.send(ClientEvent::Progress(ConnectionStage::LoadingCharacter))?;
@@ -1471,9 +1480,8 @@ fn zone(
             continue;
         };
         packets += 1;
-        if !stock && matches!(packet.opcode, 0x2e78 | 0x1860) {
-            // V62 XOR runs continuously over the full batch, not per spawn.
-            p99::session_xor(&mut packet.body, &credentials.key)?;
+        if let Some(shield) = shield.as_ref() {
+            shield.spawns(packet.opcode, &mut packet.body, &credentials.key)?;
         }
         if !ready {
             log.diagnostic(format!(
@@ -1722,8 +1730,8 @@ fn zone(
             }
             ZoneOpcode::Weather => saw_weather = true,
             ZoneOpcode::PlayerSpawn if !saw_spawn => {
-                if !stock {
-                    p99::session_xor(&mut packet.body, &credentials.key)?;
+                if let Some(shield) = shield.as_mut() {
+                    shield.player_spawn(&mut packet.body, &credentials.key)?;
                 }
                 ensure!(
                     packet.body.len() == 385
@@ -1731,9 +1739,6 @@ fn zone(
                             .eq_ignore_ascii_case(config.character.as_bytes()),
                     "zone returned a different character spawn"
                 );
-                if !stock {
-                    codec.zone_spawn(&packet.body)?;
-                }
                 let id = u16::try_from(le32(&packet.body[340..344]))
                     .context("spawn ID exceeds Titanium position field")?;
                 stationary[..2].copy_from_slice(&id.to_le_bytes());
@@ -1799,7 +1804,7 @@ fn zone(
                                 player.position,
                                 Instant::now(),
                             )?
-                            .with_falls(stock),
+                            .with_falls(server.falls()),
                         );
                         log.send(ClientEvent::World(crate::world::WorldEvent::Entered {
                             session_id,
@@ -1878,8 +1883,8 @@ fn zone(
             _ => (),
         }
         if saw_spawn && saw_profile && saw_weather && !requested {
-            if !stock {
-                codec.file_response(&mut checksums)?;
+            if let Some(shield) = shield.as_ref() {
+                shield.answer(&mut checksums)?;
                 session.send(0x1251, &checksums)?;
             }
             session.send(0x7ac5, &[])?;
@@ -2191,6 +2196,7 @@ fn le32(bytes: &[u8]) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::p99::{self, WorldCodec};
 
     #[test]
     fn zoning_handoff_uses_fresh_login_key_without_world_manifest_state() {
@@ -2218,7 +2224,7 @@ mod tests {
             p99::encode(&mut encoded, &md5::compute(login).0, &seed);
             handoff[130..].copy_from_slice(&encoded);
             let (host, port, mut checksums) =
-                decode_destination(&codec, &handoff, &assets, &mut log).unwrap();
+                decode_destination(Some(&codec), &handoff, &assets, &mut log).unwrap();
             assert_eq!((host.as_str(), port), ("192.0.2.1", 7000));
             assert_eq!(checksums, expected);
 
