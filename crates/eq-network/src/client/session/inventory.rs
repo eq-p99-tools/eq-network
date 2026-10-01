@@ -323,7 +323,7 @@ mod tests {
 
     /// Admitted player 7, carrying one item in slot 22.
     fn admitted() -> (Belongings, World) {
-        let mut belongings = Belongings::new(Encoder::new(GameDialect::TitaniumP99, "Tester"));
+        let mut belongings = Belongings::new(Encoder::new(GameDialect::Titanium, "Tester"));
         let mut world = World::new(5);
         let snapshot = Message::Event(WorldEvent::Inventory(InventoryUpdate::Snapshot(vec![
             item(22),
@@ -372,7 +372,7 @@ mod tests {
     fn the_admission_reports_the_inventory_staged_before_it() {
         let (_, world) = admitted();
         assert!(world.inventory.items().contains_key(&InventorySlot(22)));
-        let mut belongings = Belongings::new(Encoder::new(GameDialect::TitaniumP99, "Tester"));
+        let mut belongings = Belongings::new(Encoder::new(GameDialect::Titanium, "Tester"));
         let mut world = World::new(5);
         let snapshot = Message::Event(WorldEvent::Inventory(InventoryUpdate::Snapshot(vec![
             item(22),

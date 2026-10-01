@@ -45,7 +45,7 @@ mod tests {
 
     #[test]
     fn chat_goes_out_in_the_dialect() {
-        let mut talk = Talk::new(Encoder::new(GameDialect::TitaniumP99, "Tester"));
+        let mut talk = Talk::new(Encoder::new(GameDialect::Titanium, "Tester"));
         let mut world = World::new(5);
         let say = ClientCommand::SendChat(OutboundChat::Say("Hail".into()));
         let outcome = testing::run(|out| talk.handle(&say, &mut world, out));

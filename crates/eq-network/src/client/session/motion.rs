@@ -395,7 +395,7 @@ mod tests {
         world.admitted = Some(Instant::now());
         world.body.own(7);
         world.body.place(at(1.0));
-        let mut motion = Motion::new(Encoder::new(GameDialect::TitaniumP99, "Tester"), false);
+        let mut motion = Motion::new(Encoder::new(GameDialect::Titanium, "Tester"), false);
         let now = Instant::now();
         let outcome = testing::run(|out| motion.tick(now, &mut world, out));
         outcome.result.unwrap();
@@ -439,7 +439,7 @@ mod tests {
             },
             created: now.checked_sub(Duration::from_millis(5)).unwrap(),
         };
-        let mut motion = Motion::new(Encoder::new(GameDialect::TitaniumP99, "Tester"), false);
+        let mut motion = Motion::new(Encoder::new(GameDialect::Titanium, "Tester"), false);
         testing::run(|out| motion.admitted(&mut world, out))
             .result
             .unwrap();
@@ -460,7 +460,7 @@ mod tests {
         world.own_spawn = Some(7);
         world.player = Some(testing::player(7));
         world.admitted = Some(Instant::now());
-        let mut motion = Motion::new(Encoder::new(GameDialect::TitaniumP99, "Tester"), false);
+        let mut motion = Motion::new(Encoder::new(GameDialect::Titanium, "Tester"), false);
         testing::run(|out| motion.admitted(&mut world, out))
             .result
             .unwrap();
@@ -497,7 +497,7 @@ mod tests {
         let mut world = World::new(5);
         world.own_spawn = Some(7);
         world.player = Some(testing::player(7));
-        let mut motion = Motion::new(Encoder::new(GameDialect::TitaniumP99, "Tester"), false);
+        let mut motion = Motion::new(Encoder::new(GameDialect::Titanium, "Tester"), false);
         let sit = |spawn_id| ClientCommand::SetPosture {
             session_id: 5,
             spawn_id,
@@ -528,7 +528,7 @@ mod tests {
         world.own_spawn = Some(7);
         world.player = Some(testing::player(7));
         world.admitted = Some(Instant::now());
-        let mut motion = Motion::new(Encoder::new(GameDialect::TitaniumP99, "Tester"), false);
+        let mut motion = Motion::new(Encoder::new(GameDialect::Titanium, "Tester"), false);
         testing::run(|out| motion.admitted(&mut world, out))
             .result
             .unwrap();

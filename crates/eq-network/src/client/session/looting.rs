@@ -58,7 +58,7 @@ mod tests {
 
     #[test]
     fn only_a_corpse_the_player_can_see_is_opened() {
-        let mut looting = Looting::new(Encoder::new(GameDialect::TitaniumP99, "Tester"));
+        let mut looting = Looting::new(Encoder::new(GameDialect::Titanium, "Tester"));
         let mut world = World::new(5);
         world.spawns.insert(testing::spawn(8, SpawnKind::NpcCorpse));
         world.spawns.insert(testing::spawn(9, SpawnKind::Npc));

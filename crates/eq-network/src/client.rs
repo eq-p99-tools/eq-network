@@ -101,7 +101,7 @@ impl ServerProtocol {
 impl From<ServerProtocol> for GameDialect {
     fn from(protocol: ServerProtocol) -> Self {
         match protocol {
-            ServerProtocol::Project1999 | ServerProtocol::EqEmu => Self::TitaniumP99,
+            ServerProtocol::Project1999 | ServerProtocol::EqEmu => Self::Titanium,
             ServerProtocol::Quarm => Self::EqMac,
         }
     }

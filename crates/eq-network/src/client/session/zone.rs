@@ -692,7 +692,7 @@ mod tests {
 
     #[test]
     fn exactly_one_feature_owns_each_command_a_zone_takes() {
-        let features = Features::new(eq_network_game::GameDialect::TitaniumP99, "Tester", false);
+        let features = Features::new(eq_network_game::GameDialect::Titanium, "Tester", false);
         for command in zone_commands() {
             let owning = features
                 .0

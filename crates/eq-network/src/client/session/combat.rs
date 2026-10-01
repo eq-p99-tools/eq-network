@@ -55,7 +55,7 @@ mod tests {
 
     #[test]
     fn the_player_considers_only_a_spawn_they_can_see() {
-        let mut combat = Combat::new(Encoder::new(GameDialect::TitaniumP99, "Tester"));
+        let mut combat = Combat::new(Encoder::new(GameDialect::Titanium, "Tester"));
         let mut world = World::new(5);
         world.own_spawn = Some(7);
         world.spawns.insert(testing::spawn(8, SpawnKind::Npc));

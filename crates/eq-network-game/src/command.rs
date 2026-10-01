@@ -416,7 +416,7 @@ pub fn encode(
             ..
         } => {
             anyhow::ensure!(
-                dialect == GameDialect::TitaniumP99,
+                dialect == GameDialect::Titanium,
                 "casting is not implemented for this dialect"
             );
             anyhow::ensure!(
@@ -443,7 +443,7 @@ pub fn encode(
         } => encode_posture(dialect, *spawn_id, *posture),
         GameCommand::InspectItem { link_body, .. } => {
             anyhow::ensure!(
-                dialect == GameDialect::TitaniumP99,
+                dialect == GameDialect::Titanium,
                 "item inspection is not implemented for this dialect"
             );
             Ok(EncodedCommand {
@@ -453,7 +453,7 @@ pub fn encode(
         }
         GameCommand::SelectTarget { spawn_id, .. } => {
             anyhow::ensure!(
-                dialect == GameDialect::TitaniumP99,
+                dialect == GameDialect::Titanium,
                 "targeting is not implemented for this dialect"
             );
             anyhow::ensure!(
@@ -489,7 +489,7 @@ pub fn encode(
         }
         GameCommand::SendChat(message) => Ok(EncodedCommand {
             opcode: match dialect {
-                GameDialect::TitaniumP99 => 0x1004,
+                GameDialect::Titanium => 0x1004,
                 GameDialect::EqMac => 0x0741,
             },
             body: chat::encode_outbound_for(dialect, message, character)?,
@@ -502,7 +502,7 @@ pub fn encode(
 /// # Errors
 /// Rejects a zero spawn ID.
 pub fn titanium_posture(spawn_id: u16, posture: Posture) -> Result<EncodedCommand> {
-    encode_posture(GameDialect::TitaniumP99, spawn_id, posture)
+    encode_posture(GameDialect::Titanium, spawn_id, posture)
 }
 
 /// Titanium `OP_Camp`, which starts the server's own camp timer.
@@ -525,7 +525,7 @@ pub fn titanium_logout() -> EncodedCommand {
 
 fn encode_posture(dialect: GameDialect, spawn_id: u16, posture: Posture) -> Result<EncodedCommand> {
     anyhow::ensure!(
-        dialect == GameDialect::TitaniumP99,
+        dialect == GameDialect::Titanium,
         "posture is not implemented for this dialect"
     );
     anyhow::ensure!(spawn_id != 0, "posture requires an own-spawn ID");
@@ -541,7 +541,7 @@ fn encode_posture(dialect: GameDialect, spawn_id: u16, posture: Posture) -> Resu
 /// Titanium-only corpse and merchant requests.
 fn encode_trade(dialect: GameDialect, command: &GameCommand) -> Result<EncodedCommand> {
     anyhow::ensure!(
-        dialect == GameDialect::TitaniumP99,
+        dialect == GameDialect::Titanium,
         "looting and merchants are not implemented for this dialect"
     );
     let (opcode, body) = match command {
@@ -607,7 +607,7 @@ fn encode_trade(dialect: GameDialect, command: &GameCommand) -> Result<EncodedCo
 /// Titanium-only consider and auto-attack requests.
 fn encode_combat(dialect: GameDialect, command: &GameCommand) -> Result<EncodedCommand> {
     anyhow::ensure!(
-        dialect == GameDialect::TitaniumP99,
+        dialect == GameDialect::Titanium,
         "combat actions are not implemented for this dialect"
     );
     match command {
@@ -638,7 +638,7 @@ mod tests {
             target_id: 19,
             created: std::time::Instant::now(),
         };
-        let packet = encode(GameDialect::TitaniumP99, &cast, "Example").unwrap();
+        let packet = encode(GameDialect::Titanium, &cast, "Example").unwrap();
         assert_eq!(packet.opcode, 0x304b);
         assert_eq!(packet.body.len(), 20);
         assert_eq!(&packet.body[8..12], &[255; 4]);
@@ -647,7 +647,7 @@ mod tests {
         if let GameCommand::CastSpell { gem, .. } = &mut cast {
             *gem = 8;
         }
-        assert!(encode(GameDialect::TitaniumP99, &cast, "Example").is_err());
+        assert!(encode(GameDialect::Titanium, &cast, "Example").is_err());
     }
 
     #[test]
@@ -663,7 +663,7 @@ mod tests {
                 posture,
                 created: std::time::Instant::now(),
             };
-            let packet = encode(GameDialect::TitaniumP99, &command, "Example").unwrap();
+            let packet = encode(GameDialect::Titanium, &command, "Example").unwrap();
             assert_eq!(packet.opcode, 0x7c32);
             assert_eq!(&packet.body[..4], &[19, 0, 14, 0]);
             assert_eq!(&packet.body[4..], &value.to_le_bytes());
@@ -677,7 +677,7 @@ mod tests {
             session_id: 9,
             spawn_id: Some(513),
         };
-        let packet = encode(GameDialect::TitaniumP99, &command, "Example").unwrap();
+        let packet = encode(GameDialect::Titanium, &command, "Example").unwrap();
         assert_eq!(packet.opcode, 0x6c47);
         assert_eq!(packet.body, vec![1, 2, 0, 0]);
         assert!(encode(GameDialect::EqMac, &command, "Example").is_err());
@@ -686,7 +686,7 @@ mod tests {
             spawn_id: None,
         };
         assert_eq!(
-            encode(GameDialect::TitaniumP99, &clear, "Example")
+            encode(GameDialect::Titanium, &clear, "Example")
                 .unwrap()
                 .body,
             vec![0; 4]
@@ -702,7 +702,7 @@ mod tests {
             target_id: 9,
             created,
         };
-        let packet = encode(GameDialect::TitaniumP99, &consider, "Example").unwrap();
+        let packet = encode(GameDialect::Titanium, &consider, "Example").unwrap();
         assert_eq!((packet.opcode, packet.body.len()), (0x65ca, 28));
         assert_eq!(&packet.body[4..8], &[9, 0, 0, 0]);
         assert!(encode(GameDialect::EqMac, &consider, "Example").is_err());
@@ -711,7 +711,7 @@ mod tests {
             enabled: true,
             created,
         };
-        let packet = encode(GameDialect::TitaniumP99, &attack, "Example").unwrap();
+        let packet = encode(GameDialect::Titanium, &attack, "Example").unwrap();
         assert_eq!((packet.opcode, packet.body), (0x5e55, vec![1, 0, 0, 0]));
         assert!(encode(GameDialect::EqMac, &attack, "Example").is_err());
     }
@@ -795,7 +795,7 @@ mod tests {
                 16,
             ),
         ] {
-            let packet = encode(GameDialect::TitaniumP99, &command, "Example").unwrap();
+            let packet = encode(GameDialect::Titanium, &command, "Example").unwrap();
             assert_eq!((packet.opcode, packet.body.len()), (opcode, length));
             assert!(encode(GameDialect::EqMac, &command, "Example").is_err());
         }
@@ -804,7 +804,7 @@ mod tests {
     #[test]
     fn chat_command_selects_each_dialects_opcode_and_layout() {
         let command = GameCommand::SendChat(OutboundChat::Say("ok".into()));
-        let titanium = encode(GameDialect::TitaniumP99, &command, "Example").unwrap();
+        let titanium = encode(GameDialect::Titanium, &command, "Example").unwrap();
         let eqmac = encode(GameDialect::EqMac, &command, "Example").unwrap();
 
         assert_eq!(titanium.opcode, 0x1004);

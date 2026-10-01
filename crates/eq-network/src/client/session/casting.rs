@@ -308,7 +308,7 @@ mod tests {
     #[test]
     fn a_memorized_spell_goes_out_and_holds_casting_until_answered() {
         let mut casting = Casting::new(Encoder::new(
-            eq_network_game::GameDialect::TitaniumP99,
+            eq_network_game::GameDialect::Titanium,
             "Tester",
         ));
         let mut world = World::new(5);
