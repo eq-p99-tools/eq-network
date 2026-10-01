@@ -1,3 +1,4 @@
+use crate::combined;
 use anyhow::{bail, ensure, Result};
 use std::{
     cell::Cell,
@@ -394,12 +395,12 @@ impl Session {
         }
         match opcode {
             3 => {
-                for part in split_combined(body)? {
+                for part in combined::parts(body)? {
                     self.process(part, true, depth + 1)?;
                 }
             }
             0x19 => {
-                for part in split_combined(body)? {
+                for part in combined::app_parts(body)? {
                     self.application(part, depth + 1)?;
                 }
             }
@@ -521,7 +522,7 @@ impl Session {
             "invalid nested application packet"
         );
         if bytes[..2] == [0, 0x19] {
-            for part in split_combined(&bytes[2..])? {
+            for part in combined::app_parts(&bytes[2..])? {
                 self.application(part, depth + 1)?;
             }
             return Ok(());
@@ -571,26 +572,6 @@ fn checksum(seed: u32, packet: &[u8]) -> u32 {
     hash.update(&seed.to_le_bytes());
     hash.update(packet);
     hash.finalize()
-}
-
-fn split_combined(mut bytes: &[u8]) -> Result<Vec<&[u8]>> {
-    let mut result = Vec::new();
-    while !bytes.is_empty() {
-        let mut length = bytes[0] as usize;
-        bytes = &bytes[1..];
-        if length == 255 {
-            ensure!(bytes.len() >= 2, "truncated combined length");
-            length = u16::from_be_bytes(bytes[..2].try_into().unwrap()) as usize;
-            bytes = &bytes[2..];
-        }
-        ensure!(
-            length > 0 && length <= bytes.len(),
-            "invalid combined length"
-        );
-        result.push(&bytes[..length]);
-        bytes = &bytes[length..];
-    }
-    Ok(result)
 }
 
 #[cfg(test)]
@@ -738,5 +719,22 @@ mod tests {
         let n = peer.recv(&mut wire).unwrap();
         assert_eq!(&wire[..n], session.datagram(0x15, &199u16.to_be_bytes()));
         assert!(!session.ack_pending);
+    }
+
+    #[test]
+    fn a_combined_reliable_packet_of_255_bytes_is_delivered() {
+        let (mut session, _peer) = session();
+        // A reliable packet: OP_Packet, sequence 0, then an application packet.
+        let mut reliable = vec![0, 9, 0, 0, 0x04, 0x10];
+        reliable.resize(255, b'x');
+        let mut combined = vec![255];
+        combined.extend_from_slice(&reliable);
+        combined.extend_from_slice(&[4, 0, 0x15, 0, 0]);
+        let frame = session.datagram(3, &combined);
+        session
+            .process(&frame[..frame.len() - 2], false, 0)
+            .unwrap();
+        let chat = session.applications.pop_front().unwrap();
+        assert_eq!((chat.opcode, chat.body.len()), (0x1004, 249));
     }
 }
