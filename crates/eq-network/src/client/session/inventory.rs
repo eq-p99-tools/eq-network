@@ -600,6 +600,13 @@ mod tests {
                 }
             ]
         );
+        // The answer to the bite of food still counts the drink short, and
+        // the answer to the drink comes next: neither is eaten twice.
+        for answer in [hungry(4500, 2000), hungry(4500, 3500)] {
+            let outcome = testing::run(|out| belongings.observe(&answer, &mut world, out));
+            outcome.result.unwrap();
+            assert!(outcome.sent.is_empty(), "sent {:?}", outcome.sent);
+        }
         // With the ration gone, a hungry player hears there is nothing to eat.
         let outcome = testing::run(|out| belongings.observe(&hungry(100, 6000), &mut world, out));
         assert!(outcome.sent.is_empty(), "sent {:?}", outcome.sent);

@@ -1,6 +1,12 @@
 //! Eating and drinking: on the session's own when the player turns hungry or
 //! thirsty, as the official client does, and by hand. Servers report no item
 //! eaten, so the bite comes out of the inventory here.
+//!
+//! `EQEmu` answers every bite with one stamina report
+//! (`Client::Handle_OP_Consume`), besides the report every 46 seconds. A
+//! report sent before the server took every bite in flight counts too
+//! little; eating on it would eat twice, so the session waits for the
+//! report after the answers.
 use super::{change, Out, World};
 use anyhow::Result;
 use eq_network_game::{
@@ -14,6 +20,8 @@ use eq_network_game::{
 pub(super) struct Meals {
     last: Option<Nourishment>,
     auto_eat: AutoEat,
+    /// Bites sent whose answers have not come.
+    bites: u32,
 }
 
 /// The first food or drink the player carries that the choice takes, as the
@@ -42,6 +50,7 @@ impl Meals {
         Self {
             last: None,
             auto_eat,
+            bites: 0,
         }
     }
 
@@ -60,13 +69,17 @@ impl Meals {
         out: &mut Out<'_, '_>,
     ) -> Result<()> {
         self.last = Some(nourishment);
+        if self.bites > 0 {
+            self.bites -= 1;
+            return Ok(());
+        }
         let (mut food, mut water) = (None, None);
         for meal in [Meal::Food, Meal::Drink] {
             if nourishment.of(meal) > food::HUNGRY {
                 continue;
             }
             if let Some(slot) = first(&world.inventory, meal, self.auto_eat) {
-                eat(slot, meal, false, world, out)?;
+                self.eat(slot, meal, false, world, out)?;
                 continue;
             }
             let shortage = if first(&world.inventory, meal, AutoEat::Anything).is_some() {
@@ -91,7 +104,7 @@ impl Meals {
 
     /// Eats or drinks the item in a slot by hand, or says why not.
     pub(super) fn by_hand(
-        &self,
+        &mut self,
         slot: InventorySlot,
         world: &mut World,
         out: &mut Out<'_, '_>,
@@ -111,20 +124,22 @@ impl Meals {
                 Meal::Drink => "You could not possibly drink any more, you would explode!",
             }));
         }
-        eat(slot, meal, true, world, out)?;
+        self.eat(slot, meal, true, world, out)?;
         Ok(None)
     }
-}
 
-/// Sends the bite and takes it from the inventory, as the server does
-/// without saying so.
-fn eat(
-    slot: InventorySlot,
-    meal: Meal,
-    by_hand: bool,
-    world: &mut World,
-    out: &mut Out<'_, '_>,
-) -> Result<()> {
-    out.send(&food::consume(slot, meal, by_hand))?;
-    change(InventoryUpdate::Deduct { slot, quantity: 1 }, world, out)
+    /// Sends the bite and takes it from the inventory, as the server does
+    /// without saying so.
+    fn eat(
+        &mut self,
+        slot: InventorySlot,
+        meal: Meal,
+        by_hand: bool,
+        world: &mut World,
+        out: &mut Out<'_, '_>,
+    ) -> Result<()> {
+        out.send(&food::consume(slot, meal, by_hand))?;
+        self.bites += 1;
+        change(InventoryUpdate::Deduct { slot, quantity: 1 }, world, out)
+    }
 }
