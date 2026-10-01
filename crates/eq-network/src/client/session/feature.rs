@@ -159,7 +159,27 @@ pub(super) trait Feature {
         None
     }
 
-    /// Takes a host command; true when this feature handled it.
+    /// Hears every host command before its owner carries it out, so that a
+    /// feature can react to what the player does: moving abandons a camp.
+    ///
+    /// # Errors
+    /// Returns an error when the connection fails.
+    fn notice(
+        &mut self,
+        _command: &ClientCommand,
+        _world: &mut World,
+        _out: &mut Out<'_, '_>,
+    ) -> Result<()> {
+        Ok(())
+    }
+
+    /// Whether this feature carries out a command. One feature owns each kind
+    /// of command.
+    fn owns(&self, _command: &ClientCommand) -> bool {
+        false
+    }
+
+    /// Carries out a command this feature owns.
     ///
     /// # Errors
     /// Returns an error when the connection fails.
@@ -168,8 +188,8 @@ pub(super) trait Feature {
         _command: &ClientCommand,
         _world: &mut World,
         _out: &mut Out<'_, '_>,
-    ) -> Result<bool> {
-        Ok(false)
+    ) -> Result<()> {
+        Ok(())
     }
 
     /// Takes a packet before the zone decodes it, and says whether the packet

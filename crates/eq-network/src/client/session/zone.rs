@@ -42,8 +42,7 @@ impl From<u16> for ZoneOpcode {
 struct Features(Vec<Box<dyn Feature>>);
 
 impl Features {
-    /// Camping comes first, so that a command which takes the player away
-    /// abandons the camp before another feature carries it out.
+    /// Every feature a Titanium zone session has.
     fn new(character: &str) -> Self {
         Self(vec![
             Box::new(camp::Camp::default()),
@@ -68,7 +67,8 @@ impl Features {
             .collect()
     }
 
-    /// Offers a command to each feature until one takes it.
+    /// Lets every feature hear a command, then has its owner carry it out;
+    /// true when a feature owns it.
     fn handle(
         &mut self,
         command: &ClientCommand,
@@ -76,11 +76,13 @@ impl Features {
         out: &mut Out<'_, '_>,
     ) -> Result<bool> {
         for feature in &mut self.0 {
-            if feature.handle(command, world, out)? {
-                return Ok(true);
-            }
+            feature.notice(command, world, out)?;
         }
-        Ok(false)
+        let Some(owner) = self.0.iter_mut().find(|feature| feature.owns(command)) else {
+            return Ok(false);
+        };
+        owner.handle(command, world, out)?;
+        Ok(true)
     }
 
     /// Offers a packet to each feature until one takes it.
@@ -1358,6 +1360,66 @@ pub(super) fn run(
                     error: error.to_string(),
                 }),
             )?,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn one_feature_owns_each_command_a_feature_takes() {
+        let features = Features::new("Tester");
+        let created = Instant::now();
+        let session_id = 1;
+        for (command, owners) in [
+            (
+                ClientCommand::Camp {
+                    session_id,
+                    created,
+                },
+                1,
+            ),
+            (
+                ClientCommand::ClickDoor {
+                    session_id,
+                    door_id: 1,
+                    created,
+                },
+                1,
+            ),
+            (
+                ClientCommand::PickUp {
+                    session_id,
+                    drop_id: 1,
+                    created,
+                },
+                1,
+            ),
+            (
+                ClientCommand::CrossZoneLine {
+                    session_id,
+                    destination: eq_network_game::zoning::ZoneLineDestination::Reference(1),
+                    position: crate::world::Position::default(),
+                    created,
+                },
+                1,
+            ),
+            (
+                ClientCommand::SelectTarget {
+                    session_id,
+                    spawn_id: None,
+                },
+                0,
+            ),
+        ] {
+            let owning = features
+                .0
+                .iter()
+                .filter(|feature| feature.owns(&command))
+                .count();
+            assert_eq!(owning, owners, "{command:?}");
         }
     }
 }

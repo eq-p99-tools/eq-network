@@ -64,14 +64,18 @@ impl Feature for Doors {
         Some(WorldEvent::Doors(self.table.admission()))
     }
 
+    fn owns(&self, command: &ClientCommand) -> bool {
+        matches!(command, ClientCommand::ClickDoor { .. })
+    }
+
     fn handle(
         &mut self,
         command: &ClientCommand,
         world: &mut World,
         out: &mut Out<'_, '_>,
-    ) -> Result<bool> {
+    ) -> Result<()> {
         let ClientCommand::ClickDoor { door_id, .. } = command else {
-            return Ok(false);
+            return Ok(());
         };
         let error = match self.click(command, world) {
             Ok(packet) => {
@@ -84,8 +88,7 @@ impl Feature for Doors {
             session_id: world.session_id,
             door_id: *door_id,
             error,
-        }))?;
-        Ok(true)
+        }))
     }
 
     fn observe(
@@ -132,7 +135,7 @@ mod tests {
             created: Instant::now(),
         };
         let outcome = testing::run(|out| doors.handle(&click, &mut world, out));
-        assert!(outcome.result.unwrap());
+        outcome.result.unwrap();
         assert!(outcome.sent.is_empty());
         assert!(matches!(
             &outcome.events[..],
@@ -141,7 +144,7 @@ mod tests {
         ));
         world.player = Some(testing::player(7));
         let outcome = testing::run(|out| doors.handle(&click, &mut world, out));
-        assert!(outcome.result.unwrap());
+        outcome.result.unwrap();
         assert_eq!(outcome.sent.len(), 1);
         assert_eq!(outcome.sent[0].opcode, eq_network_game::doors::CLICK_OPCODE);
         assert!(matches!(

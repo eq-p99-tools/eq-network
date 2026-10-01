@@ -81,36 +81,49 @@ impl Camp {
 }
 
 impl Feature for Camp {
-    /// Starts camping, or abandons preparation when the character stands or
-    /// moves. Only a camp request is fully handled here.
+    fn owns(&self, command: &ClientCommand) -> bool {
+        matches!(command, ClientCommand::Camp { .. })
+    }
+
+    /// Starts camping.
     fn handle(
         &mut self,
         command: &ClientCommand,
         world: &mut World,
         out: &mut Out<'_, '_>,
-    ) -> Result<bool> {
-        if let ClientCommand::Camp {
+    ) -> Result<()> {
+        let ClientCommand::Camp {
             session_id: requested,
             created,
         } = command
+        else {
+            return Ok(());
+        };
+        let now = Instant::now();
+        if *requested != world.session_id
+            || *created > now
+            || now.duration_since(*created) >= Duration::from_secs(1)
         {
-            let now = Instant::now();
-            if *requested != world.session_id
-                || *created > now
-                || now.duration_since(*created) >= Duration::from_secs(1)
-            {
-                out.log
-                    .send(ClientEvent::World(WorldEvent::Camp(CampStatus::Rejected(
-                        "Camp request expired".into(),
-                    ))))?;
-            } else if !self.active() {
-                out.send(&command::titanium_camp())?;
-                self.start(now);
-                out.log
-                    .send(ClientEvent::World(WorldEvent::Camp(CampStatus::Preparing)))?;
-            }
-            return Ok(true);
+            out.log
+                .send(ClientEvent::World(WorldEvent::Camp(CampStatus::Rejected(
+                    "Camp request expired".into(),
+                ))))?;
+        } else if !self.active() {
+            out.send(&command::titanium_camp())?;
+            self.start(now);
+            out.log
+                .send(ClientEvent::World(WorldEvent::Camp(CampStatus::Preparing)))?;
         }
+        Ok(())
+    }
+
+    /// Standing up, ducking or moving abandons a camp still being prepared.
+    fn notice(
+        &mut self,
+        command: &ClientCommand,
+        world: &mut World,
+        out: &mut Out<'_, '_>,
+    ) -> Result<()> {
         let abandons = matches!(
             command,
             ClientCommand::SetPosture {
@@ -142,7 +155,7 @@ impl Feature for Camp {
             out.log
                 .send(ClientEvent::World(WorldEvent::Camp(CampStatus::Abandoned)))?;
         }
-        Ok(false)
+        Ok(())
     }
 
     /// Sends the logout once the camp timer completes, and gives up on a
@@ -210,7 +223,7 @@ mod tests {
             created: Instant::now(),
         };
         let outcome = testing::run(|out| camp.handle(&request, &mut world, out));
-        assert!(outcome.result.unwrap());
+        outcome.result.unwrap();
         assert_eq!(outcome.sent, [command::titanium_camp()]);
         assert!(matches!(
             outcome.events[..],
@@ -236,8 +249,8 @@ mod tests {
             door_id: 1,
             created: Instant::now(),
         };
-        let outcome = testing::run(|out| camp.handle(&click, &mut world, out));
-        assert!(!outcome.result.unwrap());
+        let outcome = testing::run(|out| camp.notice(&click, &mut world, out));
+        outcome.result.unwrap();
         assert_eq!(
             outcome.sent,
             [command::titanium_posture(7, Posture::Standing).unwrap()]

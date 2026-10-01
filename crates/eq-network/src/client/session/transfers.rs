@@ -205,15 +205,19 @@ fn relocate(position: Position, world: &mut World, out: &mut Out<'_, '_>) -> Res
 }
 
 impl Feature for Transfers {
+    fn owns(&self, command: &ClientCommand) -> bool {
+        matches!(command, ClientCommand::CrossZoneLine { .. })
+    }
+
     /// Crosses the zone line the client found the player on.
     fn handle(
         &mut self,
         command: &ClientCommand,
         world: &mut World,
         out: &mut Out<'_, '_>,
-    ) -> Result<bool> {
+    ) -> Result<()> {
         let ClientCommand::CrossZoneLine { session_id, .. } = command else {
-            return Ok(false);
+            return Ok(());
         };
         match self.zone_line(command, world, Instant::now()) {
             Ok(offer) => self.start(offer, world, out)?,
@@ -224,7 +228,7 @@ impl Feature for Transfers {
                     reason: error.to_string(),
                 }))?,
         }
-        Ok(true)
+        Ok(())
     }
 
     /// The zone's zone points, the server's offers and answer, and the next
@@ -303,7 +307,7 @@ mod tests {
             created: Instant::now(),
         };
         let outcome = testing::run(|out| transfers.handle(&cross, &mut world, out));
-        assert!(outcome.result.unwrap());
+        outcome.result.unwrap();
         assert_eq!(outcome.sent.len(), 1);
         assert_eq!(outcome.sent[0].opcode, zoning::CHANGE_OPCODE);
         assert!(world

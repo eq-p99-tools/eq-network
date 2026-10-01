@@ -31,20 +31,24 @@ impl Feature for GroundObjects {
         Some(WorldEvent::Objects(self.0.admission()))
     }
 
-    /// Handles a pickup request; false for any other command.
+    fn owns(&self, command: &ClientCommand) -> bool {
+        matches!(command, ClientCommand::PickUp { .. })
+    }
+
+    /// Picks up an item from the ground.
     fn handle(
         &mut self,
         command: &ClientCommand,
         world: &mut World,
         out: &mut Out<'_, '_>,
-    ) -> Result<bool> {
+    ) -> Result<()> {
         let ClientCommand::PickUp {
             session_id: requested,
             drop_id,
             created,
         } = command
         else {
-            return Ok(false);
+            return Ok(());
         };
         let pickup = Pickup {
             requested: *requested,
@@ -70,8 +74,7 @@ impl Feature for GroundObjects {
             session_id: world.session_id,
             drop_id: *drop_id,
             error,
-        }))?;
-        Ok(true)
+        }))
     }
 
     /// Records a server update, and closes a container that opened for this
