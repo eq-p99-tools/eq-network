@@ -585,19 +585,23 @@ pub enum WorldEvent {
     Camp(CampStatus),
     /// Carried coins, from admission or a server money update.
     Coins(Coins),
-    /// The coins on the cursor and in the bank at admission, from the profile.
+    /// The coins outside the purse: from the profile at admission, and after
+    /// every change the session makes or hears of (the purse's own changes
+    /// come as [`WorldEvent::Coins`]).
     CoinsElsewhere {
         /// On the cursor.
         cursor: Coins,
         /// In the bank.
         bank: Coins,
+        /// In the open give or trade window, put there by the player.
+        given: Coins,
+        /// In the trade, put there by the other player.
+        offered: Coins,
     },
     /// A coin move that was not sent, and why.
     CoinsRefused {
         /// Admission from the request.
         session_id: u64,
-        /// The move.
-        transfer: crate::money::CoinTransfer,
         /// Why it was not sent.
         reason: String,
     },

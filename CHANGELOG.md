@@ -27,9 +27,13 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   players are not supported yet.
 - Coins (`money`): `MoveCoins` moves coins between the purse, the cursor, the
   bank (near a banker) and an open give window, changing kind as servers do
-  (`CoinTransfer::amounts`); servers answer no coin move, and a refused one is
-  reported as `CoinsRefused`. Admission reports the coins on the cursor and in
-  the bank (`CoinsElsewhere`).
+  (`CoinTransfer::amounts`). The session keeps the coins (`Wallet`): servers
+  answer no coin move, so it refuses one a place cannot cover before sending
+  (`CoinsRefused`), adjusts the purse for loot coins and purchases as the
+  Titanium client does, takes each money update as the truth about the purse,
+  and tells the host every change as `Coins` (the purse) and `CoinsElsewhere`
+  (the cursor, the bank and a trade window's coins). Asking to trade needs an
+  item or coins on the cursor.
 - Synthetic regression coverage for inventory reconciliation, scribe consumption,
   movement admission, cast state, and fresh-key world/zone handoffs.
 

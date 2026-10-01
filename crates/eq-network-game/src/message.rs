@@ -93,7 +93,14 @@ pub fn titanium(opcode: u16, body: &[u8]) -> Vec<Message> {
             ));
             messages.push(crate::money::titanium_elsewhere(body).map_or_else(
                 |error| unreadable(Part::World, &error),
-                |(cursor, bank)| Message::Event(WorldEvent::CoinsElsewhere { cursor, bank }),
+                |(cursor, bank)| {
+                    Message::Event(WorldEvent::CoinsElsewhere {
+                        cursor,
+                        bank,
+                        given: crate::world::Coins::default(),
+                        offered: crate::world::Coins::default(),
+                    })
+                },
             ));
             spells::SpellBook::titanium_profile(body).map_or_else(
                 |error| unreadable(Part::Spells, &error),

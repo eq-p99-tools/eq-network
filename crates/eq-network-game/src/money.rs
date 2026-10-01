@@ -1,7 +1,8 @@
-//! Coins outside the purse and moving them: the player picks coins up from
-//! the purse onto the cursor and puts them down in the purse, the bank or a
-//! give or trade window (`OP_MoveCoin`). Servers answer no move; a client
-//! keeps the coins where it put them, as the Titanium client does.
+//! The player's coins and moving them: the player picks coins up from the
+//! purse onto the cursor and puts them down in the purse, the bank or a give
+//! or trade window (`OP_MoveCoin`). Servers answer no move, and say what the
+//! purse holds only now and then, so a [`Wallet`] keeps the coins where the
+//! player put them, as the Titanium client does.
 //!
 //! Layout reference: `EQEmu`'s Titanium `MoveCoin_Struct`
 //! (`common/patches/titanium_structs.h`) and `Client::OPMoveCoin`
@@ -140,6 +141,91 @@ impl CoinTransfer {
     }
 }
 
+/// Where the player's coins are. Servers answer no coin move, so whoever
+/// sends the moves keeps this, as the Titanium client does; a money update
+/// replaces the purse.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize)]
+pub struct Wallet {
+    /// The purse, once admission has said what it holds.
+    pub purse: Option<Coins>,
+    /// On the cursor.
+    pub cursor: Coins,
+    /// In the bank, once admission has said.
+    pub bank: Option<Coins>,
+    /// What the player put in the open give or trade window.
+    pub given: Coins,
+    /// What the other player put in the trade.
+    pub offered: Coins,
+}
+
+impl Wallet {
+    /// The coins in a place, where they are known.
+    #[must_use]
+    pub const fn get(&self, place: CoinPlace) -> Option<Coins> {
+        match place {
+            CoinPlace::Purse => self.purse,
+            CoinPlace::Cursor => Some(self.cursor),
+            CoinPlace::Bank => self.bank,
+            CoinPlace::Trade => Some(self.given),
+        }
+    }
+
+    fn place(&mut self, place: CoinPlace) -> Option<&mut Coins> {
+        match place {
+            CoinPlace::Purse => self.purse.as_mut(),
+            CoinPlace::Cursor => Some(&mut self.cursor),
+            CoinPlace::Bank => self.bank.as_mut(),
+            CoinPlace::Trade => Some(&mut self.given),
+        }
+    }
+
+    /// Moves coins as servers count them ([`CoinTransfer::amounts`]).
+    ///
+    /// # Errors
+    /// Refuses a move that moves nothing, or whose source does not hold
+    /// what it takes or whose destination is not known yet; servers log
+    /// such a move as a possible hack.
+    pub fn apply(&mut self, transfer: CoinTransfer) -> Result<(), &'static str> {
+        let (taken, added) = transfer.amounts();
+        if taken == 0 {
+            return Err("Too few coins to change into that kind");
+        }
+        if self
+            .get(transfer.from)
+            .is_none_or(|coins| coins.of(transfer.coin) < taken)
+        {
+            return Err("You do not have that many coins there");
+        }
+        if self.get(transfer.to).is_none() {
+            return Err("Those coins are not known yet");
+        }
+        if let Some(from) = self.place(transfer.from) {
+            *from.of_mut(transfer.coin) -= taken;
+        }
+        if let Some(to) = self.place(transfer.to) {
+            *to.of_mut(transfer.into) = to.of(transfer.into).saturating_add(added);
+        }
+        Ok(())
+    }
+
+    /// Applies a change to the purse that servers report without a money
+    /// update, as the Titanium client does (loot coins, a purchase). Only the
+    /// total is exact; the next money update restores the denominations.
+    pub fn adjust_purse(&mut self, copper: i64) {
+        if let Some(purse) = self.purse.as_mut() {
+            let total = i64::try_from(purse.total_copper()).unwrap_or(i64::MAX);
+            let total = u64::try_from(total.saturating_add(copper).max(0)).unwrap_or(0);
+            let count = |value: u64| u32::try_from(value).unwrap_or(u32::MAX);
+            *purse = Coins {
+                platinum: count(total / 1000),
+                gold: count(total / 100 % 10),
+                silver: count(total / 10 % 10),
+                copper: count(total % 10),
+            };
+        }
+    }
+}
+
 impl Coins {
     /// How many of one kind.
     #[must_use]
@@ -258,6 +344,53 @@ mod tests {
         assert_eq!(exchange(Coin::Gold, Coin::Platinum, 9), (0, 0));
         assert_eq!(exchange(Coin::Platinum, Coin::Copper, 2), (2, 2000));
         assert_eq!(exchange(Coin::Silver, Coin::Silver, 7), (7, 7));
+    }
+
+    #[test]
+    fn a_wallet_moves_only_what_a_place_holds() {
+        let mut wallet = Wallet {
+            purse: Some(Coins {
+                gold: 12,
+                ..Coins::default()
+            }),
+            bank: Some(Coins::default()),
+            ..Wallet::default()
+        };
+        let pick_up = CoinTransfer {
+            from: CoinPlace::Purse,
+            to: CoinPlace::Cursor,
+            coin: Coin::Gold,
+            into: Coin::Gold,
+            amount: 11,
+        };
+        wallet.apply(pick_up).unwrap();
+        assert_eq!(wallet.cursor.of(Coin::Gold), 11);
+        assert_eq!(wallet.purse.unwrap().of(Coin::Gold), 1);
+        assert!(wallet.apply(pick_up).is_err(), "only one gold is left");
+        // Into the bank's platinum: one platinum arrives, one gold stays.
+        wallet
+            .apply(CoinTransfer {
+                from: CoinPlace::Cursor,
+                to: CoinPlace::Bank,
+                into: Coin::Platinum,
+                ..pick_up
+            })
+            .unwrap();
+        assert_eq!(wallet.bank.unwrap().of(Coin::Platinum), 1);
+        assert_eq!(wallet.cursor.of(Coin::Gold), 1);
+        // Too few to change kind, or to a place not known yet.
+        let mut unknown = Wallet::default();
+        assert!(unknown
+            .apply(CoinTransfer {
+                amount: 1,
+                ..pick_up
+            })
+            .is_err());
+        // A loot or a purchase moves only the purse's total.
+        wallet.adjust_purse(-50);
+        assert_eq!(wallet.purse.unwrap().total_copper(), 50);
+        wallet.adjust_purse(-500);
+        assert_eq!(wallet.purse.unwrap().total_copper(), 0);
     }
 
     #[test]
