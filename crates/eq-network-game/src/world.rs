@@ -114,6 +114,9 @@ pub struct PlayerState {
     /// How `/who` lists the player, from the own spawn record; default where
     /// the dialect does not report it.
     pub listing: crate::listing::Listing,
+    /// The player's title, last name and suffix, from the own spawn record;
+    /// empty where the dialect does not report them.
+    pub name_parts: crate::names::NameParts,
 }
 
 impl PlayerState {
@@ -193,6 +196,9 @@ pub struct SpawnState {
     /// Health in percent when the record was sent; None where the record's
     /// value is out of range or the dialect does not report it.
     pub hp_percent: Option<u8>,
+    /// The spawn's title, last name and suffix; empty where the dialect does
+    /// not report them.
+    pub name_parts: crate::names::NameParts,
 }
 
 /// Decode a decrypted Titanium spawn batch, without accepting partial records.
@@ -238,6 +244,7 @@ pub fn titanium_spawns(body: &[u8]) -> Result<Vec<SpawnState>> {
                 listing: crate::listing::titanium_spawn(record),
                 pet_owner: crate::pets::titanium_owner(record),
                 hp_percent: (record[86] <= 100).then_some(record[86]),
+                name_parts: crate::names::titanium_spawn(record),
             })
         })
         .collect()
@@ -556,6 +563,13 @@ pub enum WorldEvent {
     },
     /// Guild names by number, from the world or a guild member's zone.
     GuildNames(Vec<(u32, String)>),
+    /// A character's last name changed.
+    LastName {
+        /// The character, by the name they spawned with.
+        name: String,
+        /// The new last name; empty when it was taken away.
+        last_name: String,
+    },
     /// Current mana on protocols without a combined endurance update.
     Mana(u32),
     /// An entity left the zone or was removed.
@@ -815,6 +829,7 @@ pub fn titanium_player(profile: &[u8], spawn: &[u8], revolution: f32) -> Result<
         hp_percent: (spawn[86] <= 100).then_some(spawn[86]),
         appearance: crate::appearance::titanium_spawn(spawn),
         listing: crate::listing::titanium_spawn(spawn),
+        name_parts: crate::names::titanium_spawn(spawn),
     })
 }
 
@@ -895,6 +910,10 @@ pub fn titanium_update(opcode: u16, body: &[u8]) -> Result<Option<WorldEvent>> {
         }
         crate::listing::GUILDS_OPCODE => {
             WorldEvent::GuildNames(crate::listing::titanium_guilds(body)?)
+        }
+        crate::names::LAST_NAME_OPCODE => {
+            let (name, last_name) = crate::names::last_name(body)?;
+            WorldEvent::LastName { name, last_name }
         }
         0x0695 => {
             ensure!(
@@ -1101,7 +1120,7 @@ fn p99_compact_position(body: &[u8]) -> Result<WorldEvent> {
 fn signed_position(value: u32) -> f32 {
     (((value & 0x7ffff) << 13) as i32 >> 13) as f32 / 8.0
 }
-fn until_nul(bytes: &[u8]) -> &[u8] {
+pub(crate) fn until_nul(bytes: &[u8]) -> &[u8] {
     &bytes[..bytes
         .iter()
         .position(|&byte| byte == 0)

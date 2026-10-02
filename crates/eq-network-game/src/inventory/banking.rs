@@ -39,6 +39,7 @@ mod tests {
             appearance: crate::appearance::Appearance::default(),
             level: 0,
             listing: crate::listing::Listing::default(),
+            name_parts: crate::names::NameParts::default(),
             pet_owner: None,
             hp_percent: None,
         };

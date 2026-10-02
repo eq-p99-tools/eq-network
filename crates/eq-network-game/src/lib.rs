@@ -40,6 +40,8 @@ pub mod merchant;
 pub mod money;
 /// Movement wire layout and session-scoped motion validation.
 pub mod movement;
+/// Titles, last names and suffixes: the parts of a name around the first.
+pub mod names;
 /// Items on the ground and world containers.
 pub mod objects;
 /// Titanium/P99-V62 world and zone validation codec.
