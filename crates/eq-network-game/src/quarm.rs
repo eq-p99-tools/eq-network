@@ -189,6 +189,7 @@ pub fn spawns(body: &[u8]) -> Result<Vec<SpawnState>> {
                 // Nor are its /who fields.
                 level: 0,
                 listing: crate::listing::Listing::default(),
+                pet_owner: None,
             })
         })
         .collect()

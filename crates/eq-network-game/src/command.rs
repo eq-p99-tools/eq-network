@@ -356,6 +356,15 @@ pub enum GameCommand {
         /// The corpse's spawn; None for all of them.
         spawn_id: Option<u16>,
     },
+    /// Command the player's pet: `/pet`, or the pet window's buttons.
+    Pet {
+        /// Current zone admission.
+        session_id: u64,
+        /// The command.
+        command: crate::pets::PetCommand,
+        /// The player's target, which an attack aims at.
+        target: Option<u16>,
+    },
     /// Ask the world who is online: `/who all`.
     WhoAll {
         /// Current zone admission.
@@ -429,6 +438,7 @@ impl GameCommand {
             | Self::Consume { session_id, .. }
             | Self::UseAbility { session_id, .. }
             | Self::WhoAll { session_id, .. }
+            | Self::Pet { session_id, .. }
             | Self::Consent { session_id, .. }
             | Self::SummonCorpse { session_id, .. }
             | Self::DragCorpse { session_id, .. }
@@ -483,6 +493,7 @@ impl GameCommand {
             Self::SelectTarget { .. } => Capability::Targeting,
             Self::UseAbility { .. } => Capability::Abilities,
             Self::WhoAll { .. } => Capability::Who,
+            Self::Pet { .. } => Capability::Pets,
             Self::Consent { .. }
             | Self::SummonCorpse { .. }
             | Self::DragCorpse { .. }
@@ -502,6 +513,7 @@ impl GameCommand {
             | Self::EndLoot { .. }
             | Self::CancelTrade { .. }
             | Self::WhoAll { .. }
+            | Self::Pet { .. }
             | Self::Consent { .. }
             | Self::SummonCorpse { .. }
             | Self::DragCorpse { .. }
@@ -649,6 +661,7 @@ pub fn encode(
         | GameCommand::Consume { .. }
         | GameCommand::UseAbility { .. }
         | GameCommand::WhoAll { .. }
+        | GameCommand::Pet { .. }
         | GameCommand::Consent { .. }
         | GameCommand::SummonCorpse { .. }
         | GameCommand::DragCorpse { .. }

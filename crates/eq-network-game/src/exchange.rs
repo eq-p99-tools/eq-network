@@ -265,6 +265,7 @@ mod tests {
             appearance: crate::appearance::Appearance::default(),
             level: 0,
             listing: crate::listing::Listing::default(),
+            pet_owner: None,
         };
         let origin = Position::default();
         npc.position.x = REACH;

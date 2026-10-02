@@ -42,6 +42,8 @@ pub mod movement;
 pub mod objects;
 /// Titanium/P99-V62 world and zone validation codec.
 pub mod p99;
+/// Pets: commands, owners and buffs.
+pub mod pets;
 /// TAKP/EQMac player and entity presentation codecs.
 pub mod quarm;
 /// Server-driven spellbook and casting notifications.

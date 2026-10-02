@@ -187,6 +187,9 @@ pub struct SpawnState {
     /// How `/who` lists a player; default for others and where the dialect
     /// does not report it.
     pub listing: crate::listing::Listing,
+    /// Whose pet the spawn is; None for no one's, or where the dialect does
+    /// not report it.
+    pub pet_owner: Option<u16>,
 }
 
 /// Decode a decrypted Titanium spawn batch, without accepting partial records.
@@ -230,6 +233,7 @@ pub fn titanium_spawns(body: &[u8]) -> Result<Vec<SpawnState>> {
                 appearance: crate::appearance::titanium_spawn(record),
                 level: record[151],
                 listing: crate::listing::titanium_spawn(record),
+                pet_owner: crate::pets::titanium_owner(record),
             })
         })
         .collect()
@@ -330,12 +334,14 @@ pub enum Capability {
     /// Consenting others to players' corpses, and summoning and dragging
     /// them.
     Corpses,
+    /// Commanding a pet.
+    Pets,
 }
 
 impl Capability {
     /// Every capability, in order: what a session offers when its server and
     /// client generation support everything.
-    pub const ALL: [Self; 18] = [
+    pub const ALL: [Self; 19] = [
         Self::Casting,
         Self::Spellbook,
         Self::Inventory,
@@ -354,6 +360,7 @@ impl Capability {
         Self::Abilities,
         Self::Who,
         Self::Corpses,
+        Self::Pets,
     ];
 }
 
@@ -701,6 +708,23 @@ pub enum WorldEvent {
         /// Why not.
         reason: String,
     },
+    /// A spawn became someone's pet, as a charm takes hold, or no one's, as
+    /// it breaks.
+    PetOwner {
+        /// The spawn.
+        spawn_id: u16,
+        /// Its new owner's spawn, if any.
+        owner: Option<u16>,
+    },
+    /// The player's pet's buffs.
+    PetBuffs(crate::pets::PetBuffs),
+    /// A command to the pet was not sent, and why.
+    PetRefused {
+        /// Admission from the request.
+        session_id: u64,
+        /// Why not.
+        reason: String,
+    },
     /// A melee, skill or spell damage record for any nearby entities.
     Damage(crate::combat::Damage),
     /// Own-character skill update; unknown skill IDs remain available to consumers.
@@ -854,6 +878,7 @@ pub fn titanium_update(opcode: u16, body: &[u8]) -> Result<Option<WorldEvent>> {
         crate::corpses::CONSENT_RESPONSE_OPCODE => {
             WorldEvent::Consent(crate::corpses::decode_consent(body)?)
         }
+        crate::pets::BUFFS_OPCODE => WorldEvent::PetBuffs(crate::pets::decode_buffs(body)?),
         crate::listing::LOOKING_OPCODE => {
             let (spawn_id, change) = crate::listing::looking(body)?;
             WorldEvent::Listing { spawn_id, change }
@@ -951,13 +976,17 @@ pub(crate) fn appearance(body: &[u8]) -> Result<Option<WorldEvent>> {
     let kind = u16::from_le_bytes([body[2], body[3]]);
     let value = word(body, 4);
     let listing = crate::listing::appearance(kind, value);
-    if !matches!(kind, 3 | 14) && listing.is_none() {
+    if !matches!(kind, 3 | 14 | crate::pets::PET_APPEARANCE) && listing.is_none() {
         return Ok(None);
     }
     let spawn_id = u16::from_le_bytes([body[0], body[1]]);
     ensure!(spawn_id != 0, "invalid appearance spawn ID");
     Ok(Some(match (kind, listing) {
         (_, Some(change)) => WorldEvent::Listing { spawn_id, change },
+        (crate::pets::PET_APPEARANCE, None) => WorldEvent::PetOwner {
+            spawn_id,
+            owner: u16::try_from(value).ok().filter(|owner| *owner != 0),
+        },
         (14, None) => WorldEvent::Posture {
             spawn_id,
             posture: value.into(),
@@ -1106,6 +1135,7 @@ mod tests {
             Capability::Abilities => 15,
             Capability::Who => 16,
             Capability::Corpses => 17,
+            Capability::Pets => 18,
         };
         for (index, capability) in Capability::ALL.into_iter().enumerate() {
             assert_eq!(place(capability), index, "{capability:?}");
