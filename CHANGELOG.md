@@ -13,8 +13,8 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Quarm admission and entity presentation for graphical clients; outbound
   gameplay commands remain P99-only.
 - Items on the ground (`objects`): Titanium ground objects are reported, and
-  a nearby item can be picked up onto an empty cursor. World containers are
-  not supported yet; one that opens for a click is closed again.
+  a nearby item can be picked up onto an empty cursor. A world container that
+  opens for a click the session did not ask for is closed again.
 - Worn gear (`appearance`): spawns and the player carry their materials,
   tints and facial features from Titanium spawn records, and wear changes
   update them. Quarm reports none yet.
@@ -128,7 +128,15 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   refused (`CombineRefused`), and so is a combine while the cursor holds an
   item or coins, as the official client refuses it; the refusal names the
   official client's string for that (`CombineRefused::string_id`). World
-  containers are not supported yet.
+  containers such as forges and ovens open within reach (`OpenContainer`,
+  answered as `ObjectUpdate::Container`, or in use by someone else), hold
+  what the player puts in their ten slots (`InventorySlot::is_world`, items
+  in from the cursor and out whole onto an empty cursor), combine
+  (`tradeskills::WORLD_CONTAINER`) and close (`CloseContainer`), when the
+  server puts what they still hold back in the inventory
+  (`InventoryUpdate::WorldEmptied`). `tradeskills::type_name` names a
+  container type's string in the installed client, for a container whose
+  server sends no name.
 - Synthetic regression coverage for inventory reconciliation, scribe consumption,
   movement admission, cast state, and fresh-key world/zone handoffs.
 

@@ -19,6 +19,10 @@ use serde::Serialize;
 /// `OP_TradeSkillCombine`, both ways.
 pub const COMBINE_OPCODE: u16 = 0x0b40;
 
+/// The slot a combine names for the world container open for the player,
+/// such as a forge (`SLOT_TRADESKILL_EXPERIMENT_COMBINE`).
+pub const WORLD_CONTAINER: InventorySlot = InventorySlot(1000);
+
 /// The official client's string (`eqstr_us.txt`) refusing a combine while
 /// the cursor holds an item or coins: a combine's product lands there.
 pub const HANDS_FULL: u32 = 12024;
@@ -46,6 +50,39 @@ pub enum CombineUpdate {
 #[must_use]
 pub const fn combines(bag_type: u8) -> bool {
     matches!(bag_type, 9..=57) && bag_type != 51
+}
+
+/// The installed client's string (`eqstr_us.txt`) naming a container
+/// type, such as an oven's, as `EQEmu`'s `BagType` lists them; None for a
+/// type it has no name for. A world container whose server sends no name
+/// can show this one.
+#[must_use]
+pub const fn type_name(bag_type: u8) -> Option<u32> {
+    let bag_type = bag_type as u32;
+    Some(match bag_type {
+        0..=7 => 3400 + bag_type,
+        9..=27 => 3399 + bag_type,
+        30..=36 => 3397 + bag_type,
+        38..=40 => 3396 + bag_type,
+        41 => 3439,
+        42 => 3438,
+        43 => 3440,
+        44 => 3441,
+        45 => 3437,
+        46 => 3442,
+        47 => 3443,
+        48 => 3445,
+        49 => 3444,
+        50 => 3446,
+        52 => 5785,
+        53 => 3359,
+        55 => 6325,
+        56 => 6340,
+        57 => 5400,
+        58 => 7684,
+        59 => 7692,
+        _ => return None,
+    })
 }
 
 /// Whether the player can combine in this item: a tradeskill container
@@ -100,6 +137,28 @@ mod tests {
         assert_eq!(decode(0x0b40, &[]).unwrap(), Some(CombineUpdate::Answered));
         assert!(decode(0x0b40, &[1]).is_err());
         assert_eq!(decode(0x1496, &[]).unwrap(), None);
+    }
+
+    #[test]
+    fn container_types_name_their_strings() {
+        // A small bag, a medicine bag, an oven, a forge, the Always Works
+        // container, Freeport's forge, Halfling tailoring, a tackle box, and
+        // a bandolier, which has none.
+        let names = [0, 9, 15, 17, 30, 39, 41, 46, 8].map(type_name);
+        assert_eq!(
+            names,
+            [
+                Some(3400),
+                Some(3408),
+                Some(3414),
+                Some(3416),
+                Some(3427),
+                Some(3435),
+                Some(3439),
+                Some(3442),
+                None
+            ]
+        );
     }
 
     #[test]

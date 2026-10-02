@@ -43,6 +43,14 @@ pub struct GroundObject {
 }
 
 impl GroundObject {
+    /// Whether this is a world container to combine in, such as a forge or
+    /// an oven: a fixture of a tradeskill container's type.
+    #[must_use]
+    pub fn is_tradeskill_container(&self) -> bool {
+        self.kind() == ObjectKind::Fixture
+            && u8::try_from(self.object_type).is_ok_and(crate::tradeskills::combines)
+    }
+
     /// Whether this is an item to pick up or a fixture.
     #[must_use]
     pub fn kind(&self) -> ObjectKind {
@@ -83,8 +91,9 @@ pub enum ObjectUpdate {
         /// Spawn ID of the player who clicked.
         player_id: u32,
     },
-    /// A world container answered a click. Containers are not supported yet,
-    /// so sessions close one that opens for them at once.
+    /// A world container answered a click: open for the player, or in use
+    /// by someone else. Sessions that do not open containers close one that
+    /// opens for them at once.
     Container(ContainerView),
 }
 
@@ -203,6 +212,32 @@ impl Objects {
         Ok(titanium_pickup(drop_id, player_id))
     }
 
+    /// Checks opening a world container against the table and the player's
+    /// reach, which is the same as for picking an item up.
+    ///
+    /// # Errors
+    /// Rejects unknown objects, anything but a tradeskill container, invalid
+    /// own IDs and non-finite or distant positions.
+    pub fn check_open(&self, drop_id: u32, player_id: u16, position: Position) -> Result<()> {
+        let object = self
+            .0
+            .get(&drop_id)
+            .ok_or_else(|| anyhow!("that is no longer there"))?;
+        ensure!(
+            object.is_tradeskill_container(),
+            "that is not a tradeskill container"
+        );
+        ensure!(player_id != 0, "player is unavailable");
+        let distance = (position.x - object.position.x)
+            .hypot(position.y - object.position.y)
+            .hypot(position.z - object.position.z);
+        ensure!(
+            distance.is_finite() && distance <= Self::USE_DISTANCE,
+            "too far away to use that"
+        );
+        Ok(())
+    }
+
     /// Checks picking an item up against the table and the player's reach.
     ///
     /// # Errors
@@ -215,7 +250,7 @@ impl Objects {
             .ok_or_else(|| anyhow!("that is no longer there"))?;
         ensure!(
             object.kind() == ObjectKind::Item,
-            "tradeskill containers are not supported yet"
+            "that cannot be picked up"
         );
         ensure!(player_id != 0, "player is unavailable");
         let distance = (position.x - object.position.x)
@@ -348,6 +383,29 @@ mod tests {
             panic!("spawn")
         };
         object
+    }
+
+    #[test]
+    fn tradeskill_fixtures_open_within_reach() {
+        let mut objects = Objects::default();
+        let fixture = |drop_id, object_type| GroundObject {
+            drop_id,
+            model: "FORGE".into(),
+            position: Position::default(),
+            object_type,
+        };
+        // A forge, and a fixture that is not a container.
+        objects.apply(&ObjectUpdate::Snapshot(vec![fixture(5, 17), fixture(6, 0)]));
+        assert!(objects.entries()[&5].is_tradeskill_container());
+        assert!(!objects.entries()[&6].is_tradeskill_container());
+        assert!(objects.check_open(5, 9, Position::default()).is_ok());
+        assert!(objects.check_open(6, 9, Position::default()).is_err());
+        assert!(objects.check_open(7, 9, Position::default()).is_err());
+        let far = Position {
+            x: Objects::USE_DISTANCE + 1.0,
+            ..Position::default()
+        };
+        assert!(objects.check_open(5, 9, far).is_err());
     }
 
     #[test]

@@ -142,6 +142,10 @@ pub(super) fn needs(command: &ClientCommand) -> &'static [Resource] {
         | ClientCommand::Training { .. }
         | ClientCommand::AnswerResurrection { .. }
         | ClientCommand::ReadItem { .. }
+        // Opening a container holds nothing, and closing one must always be
+        // possible.
+        | ClientCommand::OpenContainer { .. }
+        | ClientCommand::CloseContainer { .. }
         | ClientCommand::Consent { .. }
         | ClientCommand::SummonCorpse { .. }
         | ClientCommand::DragCorpse { .. }
@@ -201,6 +205,11 @@ fn refusal(command: &ClientCommand, reason: &str) -> Option<WorldEvent> {
             session_id,
             drop_id,
             ..
+        }
+        | ClientCommand::OpenContainer {
+            session_id,
+            drop_id,
+            ..
         } => WorldEvent::ObjectAction {
             session_id: *session_id,
             drop_id: *drop_id,
@@ -247,6 +256,7 @@ fn refusal(command: &ClientCommand, reason: &str) -> Option<WorldEvent> {
         | ClientCommand::WhoAll { .. }
         | ClientCommand::ConfigureMotion { .. }
         | ClientCommand::AutoEat { .. }
+        | ClientCommand::CloseContainer { .. }
         | ClientCommand::Move(_) => return None,
     })
 }
