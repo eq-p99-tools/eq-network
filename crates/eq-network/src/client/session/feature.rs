@@ -160,7 +160,7 @@ impl Out<'_, '_> {
 }
 
 /// What the zone's features share.
-pub(super) struct World {
+pub(in crate::client) struct World {
     /// This admission's session, which host commands must name.
     pub(super) session_id: u64,
     /// The admitted player, once the zone is ready; see [`PlayerRecord`] for
@@ -185,7 +185,7 @@ pub(super) struct World {
     /// When the zone admitted the player, once it has.
     pub(super) admitted: Option<Instant>,
     /// Application packets received in this zone session.
-    pub(super) packets: u64,
+    pub(in crate::client) packets: u64,
     /// The zone's spawns, which only the entities feature changes.
     pub(super) spawns: Spawns,
     /// The give or trade window asked for or open, which only the exchange
@@ -198,7 +198,7 @@ pub(super) struct World {
 
 impl World {
     /// The shared state of a new admission.
-    pub(super) fn new(session_id: u64) -> Self {
+    pub(in crate::client) fn new(session_id: u64) -> Self {
         Self {
             session_id,
             player: PlayerRecord::default(),

@@ -11,7 +11,7 @@ use crate::world::{PlayerState, Position};
 use eq_network_transport::{Application, Transport};
 
 mod eqmac;
-pub(super) use eqmac::EqMacAdmission;
+pub(in crate::client) use eqmac::EqMacAdmission;
 
 const PROFILE_OPCODE: u16 = 0x75df;
 const WEATHER_OPCODE: u16 = 0x254d;
@@ -26,21 +26,21 @@ const SAVED_POSITION: [usize; 4] = [13116, 13120, 13124, 13128];
 
 /// What a zone handshake works with besides the world: the connection, the
 /// world's protection and file checksums, and the host's events.
-pub(super) struct Handshake<'a, 'e> {
+pub(in crate::client) struct Handshake<'a, 'e> {
     /// The zone connection.
-    pub(super) session: &'a mut dyn Transport,
+    pub(in crate::client) session: &'a mut dyn Transport,
     /// The world's protection, on servers that have one.
-    pub(super) shield: &'a mut Option<Box<dyn Shield>>,
+    pub(in crate::client) shield: &'a mut Option<Box<dyn Shield>>,
     /// The login session's key, which the protection decrypts with.
-    pub(super) key: &'a [u8],
+    pub(in crate::client) key: &'a [u8],
     /// The file checksums the protection answers with.
-    pub(super) checksums: &'a mut [u8],
+    pub(in crate::client) checksums: &'a mut [u8],
     /// The host's events.
-    pub(super) log: &'a mut Events<'e>,
+    pub(in crate::client) log: &'a mut Events<'e>,
 }
 
 /// One client generation's zone handshake in progress.
-pub(super) trait Admission {
+pub(in crate::client) trait Admission {
     /// How far the handshake has come, for the host's diagnostics.
     fn stage(&self) -> &'static str;
 
@@ -76,9 +76,9 @@ pub(super) enum Stage {
 }
 
 /// The zone the player was admitted to.
-pub(super) struct Zone {
+pub(in crate::client) struct Zone {
     /// Its short name.
-    pub(super) name: String,
+    pub(in crate::client) name: String,
     /// Its far clip distance, when the description gives one.
     pub(super) far_clip: Option<f32>,
     /// Its sky and fog, when the description gives them.
@@ -368,6 +368,105 @@ mod tests {
         assert!(world.admitted.is_some());
         // Once admitted, the handshake takes nothing more.
         assert!(read(&mut admission, &mut world, EXPERIENCE_OPCODE, Vec::new()).is_none());
+        drop(read);
+        // Titanium's answers, in the order the client sends them.
+        assert_eq!(
+            wire.0,
+            [
+                0x7752,
+                SPAWN_OPCODE,
+                0x7ac5,
+                0x367d,
+                0x5966,
+                0x067a,
+                0x5e3a,
+                0x7752,
+                0x0322,
+                EXPERIENCE_OPCODE,
+                0x6563,
+                0x5e20,
+                0x0c11,
+            ]
+        );
+    }
+
+    /// A protection that notes what it was asked to do.
+    #[derive(Default)]
+    struct Noted(std::rc::Rc<std::cell::RefCell<Vec<&'static str>>>);
+
+    impl Shield for Noted {
+        fn approve(&mut self, _challenge: &[u8]) -> Result<Vec<u8>> {
+            Ok(Vec::new())
+        }
+
+        fn manifest(&mut self, _body: &mut [u8]) -> Result<()> {
+            Ok(())
+        }
+
+        fn answer(&self, _body: &mut [u8]) -> Result<()> {
+            self.0.borrow_mut().push("answer");
+            Ok(())
+        }
+
+        fn zone_manifest(&self, _handoff: &[u8]) -> Result<Vec<u8>> {
+            Ok(Vec::new())
+        }
+
+        fn zone_entry(&mut self, entry: &[u8]) -> Result<()> {
+            assert_eq!(&entry[4..10], b"Tester");
+            self.0.borrow_mut().push("zone entry");
+            Ok(())
+        }
+
+        fn player_spawn(&mut self, body: &mut [u8], session_key: &[u8]) -> Result<()> {
+            assert_eq!(session_key, b"0123456789");
+            assert_eq!(body.len(), 385);
+            self.0.borrow_mut().push("player spawn");
+            Ok(())
+        }
+
+        fn spawns(&self, _opcode: u16, _body: &mut [u8], _session_key: &[u8]) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn p99s_protection_wraps_the_entry_the_own_spawn_and_the_checksums() {
+        let config = ClientConfig::new("ACCOUNT", "PASSWORD", "Test Server", "Tester");
+        let mut handler = |_| Ok(());
+        let mut log = Events::new(&config, &mut handler);
+        let mut wire = Wire::default();
+        let mut world = World::new(5);
+        let noted = Noted::default();
+        let calls = std::rc::Rc::clone(&noted.0);
+        let mut shield: Option<Box<dyn Shield>> = Some(Box::new(noted));
+        let mut checksums = [0; 4];
+        let mut handshake = Handshake {
+            session: &mut wire,
+            shield: &mut shield,
+            key: b"0123456789",
+            checksums: &mut checksums,
+            log: &mut log,
+        };
+        let mut admission = TitaniumAdmission::start("Tester", 256.0, &mut handshake).unwrap();
+        let mut spawn = vec![0; 385];
+        spawn[7..13].copy_from_slice(b"Tester");
+        spawn[340..344].copy_from_slice(&9u32.to_le_bytes());
+        for (opcode, body) in [
+            (SPAWN_OPCODE, spawn),
+            (PROFILE_OPCODE, vec![0; PROFILE_LENGTH]),
+            (WEATHER_OPCODE, Vec::new()),
+        ] {
+            admission
+                .read(&mut packet(opcode, body), &mut world, &mut handshake)
+                .unwrap();
+        }
+        assert_eq!(*calls.borrow(), ["zone entry", "player spawn", "answer"]);
+        // The protected client answers the zone's checksum request.
+        assert_eq!(
+            wire.0,
+            [0x7752, SPAWN_OPCODE, 0x1251, 0x7ac5, 0x367d, 0x5966]
+        );
     }
 
     #[test]

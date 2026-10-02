@@ -751,6 +751,51 @@ mod tests {
     }
 
     #[test]
+    fn each_zone_hands_the_wire_the_players_new_spawn() {
+        use crate::client::session::feature::testing;
+        use eq_network_game::{
+            command::{titanium_posture, Posture},
+            request::Request,
+        };
+        let zone = super::super::admission::Zone {
+            name: "qeynos".into(),
+            far_clip: None,
+            sky: None,
+        };
+        // The player zones twice, and each zone gives them a different spawn.
+        for spawn_id in [7u16, 9] {
+            let mut world = World::new(5);
+            let mut features = Features::new(
+                servers::server_type(crate::client::ServerProtocol::EqEmu),
+                "Tester",
+                eq_network_game::food::AutoEat::default(),
+            );
+            let outcome = testing::run(|out| {
+                // Before admission the session speaks for no spawn.
+                out.sender = sender("Tester", &world);
+                assert_eq!(out.sender.spawn_id, None);
+                admit(
+                    Ok(testing::player(spawn_id)),
+                    &zone,
+                    &mut features,
+                    &mut world,
+                    out,
+                )?;
+                // The admission turn itself, and every turn built after it,
+                // speak for the spawn this zone gave the player.
+                assert_eq!(out.sender.spawn_id, Some(spawn_id));
+                assert_eq!(sender("Tester", &world).spawn_id, Some(spawn_id));
+                out.request(&Request::Posture(Posture::Sitting))
+            });
+            outcome.result.unwrap();
+            assert_eq!(
+                outcome.sent.last(),
+                Some(&titanium_posture(spawn_id, Posture::Sitting).unwrap())
+            );
+        }
+    }
+
+    #[test]
     fn a_command_no_feature_takes_is_refused_as_unavailable() {
         use crate::client::session::feature::testing;
         // Quarm provides no feature on the shared session yet.

@@ -1,5 +1,9 @@
 mod presentation;
 
+use super::session::{
+    admission::{Admission, EqMacAdmission, Handshake},
+    feature::World,
+};
 use super::{
     CancellationToken, ClientCommand, ClientConfig, ClientEvent, ConnectionStage, ConnectionState,
     DecodeError, Events, LoginError, RecordEvent, RunOptions,
@@ -8,12 +12,7 @@ use crate::{chat, old_transport::OldSession, transport::Application};
 use anyhow::{bail, ensure, Context, Result};
 use eq_network_game::{
     command,
-    quarm::{
-        dll_version_message, dll_version_reply, server_filters, ZONE_AVATAR_READY,
-        ZONE_CHANGE_REQUEST, ZONE_CLIENT_UPDATE, ZONE_DATA_RATE, ZONE_ENTRY, ZONE_EXPERIENCE_READY,
-        ZONE_LOGOUT, ZONE_NEW, ZONE_PLAYER_PROFILE, ZONE_REQUEST_NEW, ZONE_REQUEST_SPAWNS,
-        ZONE_SERVER_FILTER, ZONE_SPAWN_APPEARANCE, ZONE_WEATHER,
-    },
+    quarm::{dll_version_reply, ZONE_CHANGE_REQUEST, ZONE_LOGOUT, ZONE_SPAWN_APPEARANCE},
 };
 use eq_network_login::crypto::{des_encrypt, DesKeyIv};
 use std::{
@@ -332,22 +331,26 @@ fn zone(
         super::endpoint(host, port, config.local_only)?,
         stop.flag(),
     )?;
-    session.send(ZONE_DATA_RATE, &10.0f32.to_le_bytes())?;
-    let mut entry = [0; 68];
-    put_string(&mut entry[4..], &config.character)?;
-    session.send(ZONE_ENTRY, &entry)?;
-    log.send(ClientEvent::Progress(ConnectionStage::LoadingCharacter))?;
+    let session_id = rand::random();
+    // The shared session's EQMac handshake, which this loop runs until Quarm
+    // moves onto that session; its world only serves the handshake.
+    let mut world = World::new(session_id);
+    let mut shield = None;
+    let mut admission = EqMacAdmission::start(
+        &config.character,
+        &mut Handshake {
+            session: &mut session,
+            shield: &mut shield,
+            key: &[],
+            checksums: &mut [],
+            log: &mut *log,
+        },
+    )?;
 
     let mut presentation = presentation::Presentation::default();
-    let session_id = rand::random();
     let mut rejected_layouts = std::collections::HashSet::new();
     let connected = Instant::now();
     let mut ready = false;
-    let mut saw_profile = false;
-    let mut requested_zone = false;
-    let mut requested_spawns = false;
-    let mut replied_experience = false;
-    let mut sent_ready = false;
     let mut zone_name = String::new();
     let mut packets = 0u64;
     let mut progress = Instant::now();
@@ -362,7 +365,8 @@ fn zone(
         }
         ensure!(
             ready || connected.elapsed() < Duration::from_secs(60),
-            "zone admission timed out"
+            "zone admission timed out while {}",
+            admission.stage()
         );
         if progress.elapsed() >= Duration::from_secs(30) {
             log.status(
@@ -392,10 +396,11 @@ fn zone(
                 }
             }
         }
-        let Some(packet) = session.receive()? else {
+        let Some(mut packet) = session.receive()? else {
             continue;
         };
         packets += 1;
+        world.packets = packets;
         if !ready {
             log.diagnostic(format!(
                 "Quarm zone received 0x{:04x} ({} bytes)",
@@ -403,55 +408,41 @@ fn zone(
                 packet.body.len()
             ))?;
         }
-        match packet.opcode {
-            ZONE_PLAYER_PROFILE => saw_profile = true,
-            ZONE_WEATHER if !requested_zone => {
-                session.send(ZONE_REQUEST_NEW, &[])?;
-                requested_zone = true;
-            }
-            ZONE_NEW if !requested_spawns => {
-                ensure!(packet.body.len() >= 96, "truncated EQMac zone description");
-                zone_name = String::from_utf8_lossy(cstr(&packet.body[64..96])).into_owned();
-                log.zone.clone_from(&zone_name);
-                log.status(
-                    ConnectionState::Zoning,
-                    packets,
-                    Some(session.last_received_seconds()),
-                )?;
-                session.send(ZONE_REQUEST_SPAWNS, &[])?;
-                requested_spawns = true;
-            }
-            ZONE_EXPERIENCE_READY if requested_spawns && !replied_experience => {
-                session.send(ZONE_EXPERIENCE_READY, &[])?;
-                replied_experience = true;
-            }
-            ZONE_AVATAR_READY if replied_experience && !sent_ready => {
-                ensure!(saw_profile, "zone became ready before player profile");
-                session.send(ZONE_SERVER_FILTER, &server_filters())?;
-                // ClientUpdate completes admission and triggers the server's version check.
-                session.send(ZONE_SPAWN_APPEARANCE, &dll_version_message(false))?;
-                session.send(ZONE_CLIENT_UPDATE, &[0; 15])?;
-                sent_ready = true;
-                ready = true;
-                log.send(ClientEvent::Progress(ConnectionStage::EnteringWorld))?;
-                log.send(ClientEvent::Progress(ConnectionStage::Ready))?;
-                log.status(
-                    ConnectionState::Connected,
-                    packets,
-                    Some(session.last_received_seconds()),
-                )?;
-                log.diagnostic(format!(
-                    "Quarm zone login sequence complete for {zone_name}; waiting for ongoing server traffic"
-                ))?;
-            }
-            ZONE_SPAWN_APPEARANCE => {
-                if let Some(response) = dll_version_reply(&packet.body) {
-                    session.send(ZONE_SPAWN_APPEARANCE, &response)?;
+        if ready {
+            match packet.opcode {
+                ZONE_SPAWN_APPEARANCE => {
+                    if let Some(response) = dll_version_reply(&packet.body) {
+                        session.send(ZONE_SPAWN_APPEARANCE, &response)?;
+                    }
                 }
+                ZONE_LOGOUT => bail!("server logged the character out"),
+                ZONE_CHANGE_REQUEST => {
+                    bail!("server requested a new zone; reconnecting through world")
+                }
+                _ => (),
             }
-            ZONE_LOGOUT => bail!("server logged the character out"),
-            ZONE_CHANGE_REQUEST => bail!("server requested a new zone; reconnecting through world"),
-            _ => (),
+        } else if let Some((_, zone)) = admission.read(
+            &mut packet,
+            &mut world,
+            &mut Handshake {
+                session: &mut session,
+                shield: &mut shield,
+                key: &[],
+                checksums: &mut [],
+                log: &mut *log,
+            },
+        )? {
+            zone_name = zone.name;
+            ready = true;
+            log.send(ClientEvent::Progress(ConnectionStage::Ready))?;
+            log.status(
+                ConnectionState::Connected,
+                packets,
+                Some(session.last_received_seconds()),
+            )?;
+            log.diagnostic(format!(
+                "Quarm zone login sequence complete for {zone_name}; waiting for ongoing server traffic"
+            ))?;
         }
         match presentation.receive(packet.opcode, &packet.body, &config.character) {
             Ok(events) => {

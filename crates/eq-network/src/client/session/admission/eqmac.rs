@@ -36,7 +36,7 @@ enum Step {
 }
 
 /// The `EQMac` handshake in progress.
-pub(in crate::client::session) struct EqMacAdmission {
+pub(in crate::client) struct EqMacAdmission {
     character: String,
     profile: Option<Vec<u8>>,
     own_spawn: Option<quarm::OwnSpawn>,
@@ -51,7 +51,7 @@ impl EqMacAdmission {
     ///
     /// # Errors
     /// Returns an error when the entry cannot be sent.
-    pub(in crate::client::session) fn start(
+    pub(in crate::client) fn start(
         character: &str,
         handshake: &mut Handshake<'_, '_>,
     ) -> Result<Self> {
