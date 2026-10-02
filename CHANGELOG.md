@@ -104,6 +104,14 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   it, and the session counts practice points itself (`PracticePoints`), from
   the profile's (`PlayerState::practice_points`) plus five for each level
   past the highest reached in the zone.
+- Resurrection (`resurrection`), on `EQEmu` for now
+  (`Capability::Resurrection`): an offer to resurrect the player
+  (`OP_RezzRequest`) reaches the host as `WorldEvent::Resurrection`, with the
+  caster, the corpse, the spell and where the corpse lies, and
+  `AnswerResurrection` accepts or declines it, repeating the offer as the
+  server expects (`OP_RezzAnswer`). An answer with no offer waiting is
+  refused (`ResurrectionRefused`). On acceptance the server moves the player
+  to the corpse as it moves them anywhere.
 - Synthetic regression coverage for inventory reconciliation, scribe consumption,
   movement admission, cast state, and fresh-key world/zone handoffs.
 

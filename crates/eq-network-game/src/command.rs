@@ -383,6 +383,13 @@ pub enum GameCommand {
         /// Reject delayed actions instead of replaying them after a stall.
         created: std::time::Instant,
     },
+    /// Accept or decline the resurrection offered last.
+    AnswerResurrection {
+        /// Current zone admission.
+        session_id: u64,
+        /// True accepts.
+        accept: bool,
+    },
     /// Ask the world who is online: `/who all`.
     WhoAll {
         /// Current zone admission.
@@ -459,6 +466,7 @@ impl GameCommand {
             | Self::WhoAll { session_id, .. }
             | Self::Pet { session_id, .. }
             | Self::Training { session_id, .. }
+            | Self::AnswerResurrection { session_id, .. }
             | Self::Consent { session_id, .. }
             | Self::SummonCorpse { session_id, .. }
             | Self::DragCorpse { session_id, .. }
@@ -517,6 +525,7 @@ impl GameCommand {
             Self::WhoAll { .. } => Capability::Who,
             Self::Pet { .. } => Capability::Pets,
             Self::Training { .. } => Capability::Training,
+            Self::AnswerResurrection { .. } => Capability::Resurrection,
             Self::Consent { .. }
             | Self::SummonCorpse { .. }
             | Self::DragCorpse { .. }
@@ -538,6 +547,7 @@ impl GameCommand {
             | Self::AutoEat { .. }
             | Self::WhoAll { .. }
             | Self::Pet { .. }
+            | Self::AnswerResurrection { .. }
             | Self::Consent { .. }
             | Self::SummonCorpse { .. }
             | Self::DragCorpse { .. }
@@ -689,6 +699,7 @@ pub fn encode(
         | GameCommand::WhoAll { .. }
         | GameCommand::Pet { .. }
         | GameCommand::Training { .. }
+        | GameCommand::AnswerResurrection { .. }
         | GameCommand::Consent { .. }
         | GameCommand::SummonCorpse { .. }
         | GameCommand::DragCorpse { .. }

@@ -19,6 +19,7 @@ mod motion;
 mod objects;
 mod pets;
 mod posture;
+mod resurrection;
 mod servers;
 mod spellbook;
 mod talk;

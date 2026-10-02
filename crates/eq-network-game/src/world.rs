@@ -352,12 +352,14 @@ pub enum Capability {
     Pets,
     /// Training skills at a guildmaster.
     Training,
+    /// Accepting or declining a resurrection.
+    Resurrection,
 }
 
 impl Capability {
     /// Every capability, in order: what a session offers when its server and
     /// client generation support everything.
-    pub const ALL: [Self; 20] = [
+    pub const ALL: [Self; 21] = [
         Self::Casting,
         Self::Spellbook,
         Self::Inventory,
@@ -378,6 +380,7 @@ impl Capability {
         Self::Corpses,
         Self::Pets,
         Self::Training,
+        Self::Resurrection,
     ];
 }
 
@@ -765,6 +768,16 @@ pub enum WorldEvent {
     },
     /// How many practice points the player has left.
     PracticePoints(u32),
+    /// A resurrection was cast on the player's corpse; the player may accept
+    /// or decline it.
+    Resurrection(crate::resurrection::ResurrectionOffer),
+    /// An answer to a resurrection was not sent, and why.
+    ResurrectionRefused {
+        /// Admission from the request.
+        session_id: u64,
+        /// Why not.
+        reason: String,
+    },
     /// A melee, skill or spell damage record for any nearby entities.
     Damage(crate::combat::Damage),
     /// Own-character skill update; unknown skill IDs remain available to consumers.
@@ -1002,6 +1015,8 @@ fn titanium_views(opcode: u16, body: &[u8]) -> Result<Option<WorldEvent>> {
         Some(WorldEvent::Exchange(update))
     } else if let Some(update) = crate::training::decode(opcode, body)? {
         Some(WorldEvent::Training(update))
+    } else if let Some(offer) = crate::resurrection::decode(opcode, body)? {
+        Some(WorldEvent::Resurrection(offer))
     } else {
         crate::inventory::decode(opcode, body)?.map(WorldEvent::Inventory)
     })
@@ -1186,6 +1201,7 @@ mod tests {
             Capability::Corpses => 17,
             Capability::Pets => 18,
             Capability::Training => 19,
+            Capability::Resurrection => 20,
         };
         for (index, capability) in Capability::ALL.into_iter().enumerate() {
             assert_eq!(place(capability), index, "{capability:?}");

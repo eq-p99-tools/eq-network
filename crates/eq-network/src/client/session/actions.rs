@@ -137,6 +137,7 @@ pub(super) fn needs(command: &ClientCommand) -> &'static [Resource] {
         | ClientCommand::WhoAll { .. }
         | ClientCommand::Pet { .. }
         | ClientCommand::Training { .. }
+        | ClientCommand::AnswerResurrection { .. }
         | ClientCommand::Consent { .. }
         | ClientCommand::SummonCorpse { .. }
         | ClientCommand::DragCorpse { .. }
@@ -182,6 +183,7 @@ fn refusal(command: &ClientCommand, reason: &str) -> Option<WorldEvent> {
         | ClientCommand::UseAbility { session_id, .. }
         | ClientCommand::Pet { session_id, .. }
         | ClientCommand::Training { session_id, .. }
+        | ClientCommand::AnswerResurrection { session_id, .. }
         | ClientCommand::Consent { session_id, .. }
         | ClientCommand::SummonCorpse { session_id, .. }
         | ClientCommand::DragCorpse { session_id, .. }
@@ -259,6 +261,9 @@ fn reasoned(command: &ClientCommand, session_id: u64, reason: String) -> Option<
         ClientCommand::UseAbility { .. } => WorldEvent::AbilityRefused { session_id, reason },
         ClientCommand::Pet { .. } => WorldEvent::PetRefused { session_id, reason },
         ClientCommand::Training { .. } => WorldEvent::TrainingRefused { session_id, reason },
+        ClientCommand::AnswerResurrection { .. } => {
+            WorldEvent::ResurrectionRefused { session_id, reason }
+        }
         ClientCommand::Consent { .. }
         | ClientCommand::SummonCorpse { .. }
         | ClientCommand::DragCorpse { .. }

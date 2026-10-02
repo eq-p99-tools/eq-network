@@ -50,6 +50,8 @@ pub mod p99;
 pub mod pets;
 /// TAKP/EQMac player and entity presentation codecs.
 pub mod quarm;
+/// Being resurrected: the offer and the player's answer.
+pub mod resurrection;
 /// Server-driven spellbook and casting notifications.
 pub mod spells;
 /// Training skills at a guildmaster.
