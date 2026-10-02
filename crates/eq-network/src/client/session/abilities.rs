@@ -112,7 +112,7 @@ impl Abilities {
         }
         out.request(&Request::Ability {
             ability,
-            target: world.target.unwrap_or(0),
+            target: *world.target,
         })?;
         if let Some(recovery) = ability.recovery() {
             self.ready.insert(recovery, now + ability.reuse());

@@ -110,23 +110,41 @@ impl ContainerView {
     /// cleared, which `EQEmu` answers by closing it (`Object::Close`).
     #[must_use]
     pub fn close_packet(&self) -> EncodedCommand {
-        let mut body = vec![0; CONTAINER_LENGTH];
-        for (offset, value) in [
-            (0, self.player_id),
-            (4, self.drop_id),
-            (12, self.object_type),
-            (16, 0x0a),
-            (20, self.icon),
-        ] {
-            body[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
-        }
-        let name = self.name.as_bytes();
-        let length = name.len().min(63);
-        body[28..28 + length].copy_from_slice(&name[..length]);
-        EncodedCommand {
-            opcode: CONTAINER_OPCODE,
-            body,
-        }
+        titanium_close(
+            self.player_id,
+            self.drop_id,
+            (self.object_type, self.icon),
+            &self.name,
+        )
+    }
+}
+
+/// Titanium's `OP_ClickObjectAction` closing a world container: the
+/// container's own record with `open` cleared, which `EQEmu` answers by
+/// closing it (`Object::Close`).
+#[must_use]
+pub fn titanium_close(
+    player_id: u32,
+    drop_id: u32,
+    (object_type, icon): (u32, u32),
+    name: &str,
+) -> EncodedCommand {
+    let mut body = vec![0; CONTAINER_LENGTH];
+    for (offset, value) in [
+        (0, player_id),
+        (4, drop_id),
+        (12, object_type),
+        (16, 0x0a),
+        (20, icon),
+    ] {
+        body[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+    }
+    let name = name.as_bytes();
+    let length = name.len().min(63);
+    body[28..28 + length].copy_from_slice(&name[..length]);
+    EncodedCommand {
+        opcode: CONTAINER_OPCODE,
+        body,
     }
 }
 

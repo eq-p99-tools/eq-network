@@ -2,7 +2,7 @@
 //! until the server answers it.
 use super::{
     actions::Resource,
-    feature::{Encoder, Feature, Out, World},
+    feature::{Feature, Out, World},
     ClientCommand, ClientEvent,
 };
 use anyhow::{Context, Result};
@@ -132,19 +132,12 @@ impl CastGuard {
 }
 
 /// Casts spells and item effects for the player, one at a time.
+#[derive(Default)]
 pub(super) struct Casting {
     guard: CastGuard,
-    encoder: Encoder,
 }
 
 impl Casting {
-    pub(super) fn new(encoder: Encoder) -> Self {
-        Self {
-            guard: CastGuard::default(),
-            encoder,
-        }
-    }
-
     /// Casts a memorized spell at a target the player can see.
     fn cast(
         &mut self,
@@ -166,7 +159,7 @@ impl Casting {
                 player.memorized_spells.get(usize::from(*gem)) == Some(&Some(*spell_id))
             });
         let refusal = if ready {
-            match self.encoder.encode(command, out) {
+            match out.encode_command(command) {
                 Ok(packet) => {
                     out.send(&packet)?;
                     return self.submitted(*spell_id, world, out);
@@ -313,7 +306,7 @@ mod tests {
 
     #[test]
     fn a_memorized_spell_goes_out_and_holds_casting_until_answered() {
-        let mut casting = Casting::new(Encoder::new("Tester"));
+        let mut casting = Casting::default();
         let mut world = World::new(5);
         world.own_spawn = Some(7);
         let mut player = testing::player(7);

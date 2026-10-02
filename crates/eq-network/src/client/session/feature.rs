@@ -20,7 +20,7 @@ use anyhow::{Context, Result};
 use eq_network_game::{
     command::EncodedCommand,
     message::Message,
-    request::Request,
+    request::{Request, Sender},
     world::{PlayerState, Position},
 };
 use eq_network_transport::Transport;
@@ -68,6 +68,8 @@ pub(super) struct Out<'a, 'e> {
     pub(super) log: &'a mut Events<'e>,
     /// The server's client generation, which turns requests into packets.
     pub(super) wire: &'static dyn super::wire::Wire,
+    /// Who the session speaks for.
+    pub(super) sender: Sender<'a>,
 }
 
 impl Out<'_, '_> {
@@ -76,7 +78,7 @@ impl Out<'_, '_> {
     /// # Errors
     /// Refuses a request the generation cannot carry.
     pub(super) fn encode(&self, request: &Request) -> Result<EncodedCommand> {
-        self.wire.encode(request)
+        self.wire.encode(request, self.sender)
     }
 
     /// Asks the server for something, in the server's client generation.
@@ -116,6 +118,34 @@ impl Out<'_, '_> {
         self.sink.send_unreliable(packet)
     }
 
+    /// The packet for a host command that needs nothing from the session's
+    /// state, in the server's client generation.
+    ///
+    /// # Errors
+    /// Rejects a command the generation cannot represent.
+    pub(super) fn encode_command(&self, command: &ClientCommand) -> Result<EncodedCommand> {
+        self.encode(&Request::Command(command.clone()))
+    }
+
+    /// Sends a host command that needs nothing from the session's state; one
+    /// the generation cannot represent is only noted. True when it went out.
+    ///
+    /// # Errors
+    /// Returns an error when the connection or the host's event handler fails.
+    pub(super) fn command(&mut self, command: &ClientCommand) -> Result<bool> {
+        match self.encode_command(command) {
+            Ok(packet) => {
+                self.send(&packet)?;
+                Ok(true)
+            }
+            Err(error) => {
+                self.log
+                    .diagnostic(format!("Rejected invalid outbound client command: {error}"))?;
+                Ok(false)
+            }
+        }
+    }
+
     /// Tells the host the zone session's state.
     ///
     /// # Errors
@@ -126,56 +156,6 @@ impl Out<'_, '_> {
             world.packets,
             Some(self.sink.last_received_seconds()),
         )
-    }
-}
-
-/// Sends host commands that need nothing from the session's state, as the
-/// server's client generation encodes them.
-#[derive(Clone)]
-pub(super) struct Encoder {
-    /// The player's name, which some packets repeat.
-    character: String,
-}
-
-impl Encoder {
-    pub(super) fn new(character: &str) -> Self {
-        Self {
-            character: character.into(),
-        }
-    }
-
-    /// The packet for a command, in the server's client generation.
-    ///
-    /// # Errors
-    /// Rejects a command the generation cannot represent.
-    pub(super) fn encode(
-        &self,
-        command: &ClientCommand,
-        out: &Out<'_, '_>,
-    ) -> Result<EncodedCommand> {
-        out.encode(&Request::Command {
-            command: command.clone(),
-            character: self.character.clone(),
-        })
-    }
-
-    /// Sends a command; one the dialect cannot represent is only noted. True
-    /// when it went out.
-    ///
-    /// # Errors
-    /// Returns an error when the connection or the host's event handler fails.
-    pub(super) fn send(&self, command: &ClientCommand, out: &mut Out<'_, '_>) -> Result<bool> {
-        match self.encode(command, out) {
-            Ok(packet) => {
-                out.send(&packet)?;
-                Ok(true)
-            }
-            Err(error) => {
-                out.log
-                    .diagnostic(format!("Rejected invalid outbound client command: {error}"))?;
-                Ok(false)
-            }
-        }
     }
 }
 
@@ -552,6 +532,11 @@ pub(super) mod testing {
             sink: &mut sink,
             log: &mut log,
             wire: &super::super::wire::Titanium,
+            // Every test admits the player as spawn 7 named Tester.
+            sender: eq_network_game::request::Sender {
+                name: "Tester",
+                spawn_id: Some(7),
+            },
         });
         drop(log);
         Outcome {

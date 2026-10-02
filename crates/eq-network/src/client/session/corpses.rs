@@ -42,14 +42,8 @@ fn request(command: &ClientCommand, world: &World) -> Result<Request, String> {
             name: name.trim().into(),
             given: *given,
         },
-        ClientCommand::SummonCorpse { spawn_id, .. } => Request::SummonCorpse {
-            corpse: corpse(*spawn_id)?,
-            player: player.name.clone(),
-        },
-        ClientCommand::DragCorpse { spawn_id, .. } => Request::DragCorpse {
-            corpse: corpse(*spawn_id)?,
-            dragger: player.name.clone(),
-        },
+        ClientCommand::SummonCorpse { spawn_id, .. } => Request::SummonCorpse(corpse(*spawn_id)?),
+        ClientCommand::DragCorpse { spawn_id, .. } => Request::DragCorpse(corpse(*spawn_id)?),
         ClientCommand::DropCorpse { spawn_id, .. } => Request::DropCorpse {
             corpse: spawn_id.map(corpse).transpose()?,
         },

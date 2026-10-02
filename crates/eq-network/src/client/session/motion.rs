@@ -171,11 +171,11 @@ impl Motion {
             world.posture.stand_to_move(player.spawn_id, out)?;
         }
         let mut transport_failed = false;
-        let (wire, sink) = (out.wire, &mut *out.sink);
+        let (wire, sender, sink) = (out.wire, out.sender, &mut *out.sink);
         let result = motion.send_move_sample(request, Instant::now(), |sample| {
             // A sample the generation cannot carry is refused like any other;
             // only a failed send ends the admission.
-            let packet = wire.encode(&Request::Position(*sample))?;
+            let packet = wire.encode(&Request::Position(*sample), sender)?;
             let sent = sink.send_unreliable(&packet);
             transport_failed = sent.is_err();
             sent

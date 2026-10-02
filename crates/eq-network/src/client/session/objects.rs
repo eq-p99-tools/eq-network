@@ -81,7 +81,12 @@ impl Feature for GroundObjects {
         self.0.apply(update);
         if let ObjectUpdate::Container(view) = update {
             if view.open && world.is_player(view.player_id) {
-                out.request(&Request::CloseContainer(view.clone()))?;
+                out.request(&Request::CloseContainer {
+                    drop_id: view.drop_id,
+                    object_type: view.object_type,
+                    icon: view.icon,
+                    name: view.name.clone(),
+                })?;
                 out.log.diagnostic(format!(
                     "Closed world container {}: containers are not supported yet",
                     view.drop_id
@@ -116,10 +121,7 @@ impl GroundObjects {
         );
         let (spawn_id, position) = player.ok_or_else(|| anyhow!("player is unavailable"))?;
         self.0.check_pickup(drop_id, spawn_id, position)?;
-        Ok(Request::PickUp {
-            drop_id,
-            player_id: spawn_id,
-        })
+        Ok(Request::PickUp(drop_id))
     }
 }
 
@@ -188,10 +190,7 @@ mod tests {
         let player = Some((9, Position::default()));
         assert_eq!(
             objects.pickup(71, player, &loaded(false)).unwrap(),
-            Request::PickUp {
-                drop_id: 71,
-                player_id: 9
-            }
+            Request::PickUp(71)
         );
         let error = |player, inventory: &Inventory| {
             objects

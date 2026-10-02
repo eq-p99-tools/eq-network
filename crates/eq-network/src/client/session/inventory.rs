@@ -16,7 +16,7 @@ mod merchant;
 
 use super::{
     actions::Resource,
-    feature::{Encoder, Feature, Out, World},
+    feature::{Feature, Out, World},
     ClientCommand, ClientEvent,
 };
 use anyhow::{Context, Result};
@@ -213,16 +213,14 @@ pub(super) struct Belongings {
     trades: MerchantTrades,
     /// How fed and watered the player is, which decides when to eat.
     meals: meals::Meals,
-    encoder: Encoder,
 }
 
 impl Belongings {
-    pub(super) fn new(encoder: Encoder, auto_eat: eq_network_game::food::AutoEat) -> Self {
+    pub(super) fn new(auto_eat: eq_network_game::food::AutoEat) -> Self {
         Self {
             settlement: Settlement::default(),
             trades: MerchantTrades::default(),
             meals: meals::Meals::new(auto_eat),
-            encoder,
         }
     }
 
@@ -275,7 +273,7 @@ impl Belongings {
 
     /// Buys or sells; the merchant's echo settles the trade.
     fn trade(&mut self, command: &ClientCommand, out: &mut Out<'_, '_>) -> Result<()> {
-        if self.encoder.send(command, out)? {
+        if out.command(command)? {
             self.trades.sent(command, Instant::now());
         }
         Ok(())
@@ -332,7 +330,7 @@ impl Belongings {
 
     /// Opens or closes a merchant's window; only a merchant the player can
     /// see will trade.
-    fn shop(&self, command: &ClientCommand, world: &World, out: &mut Out<'_, '_>) -> Result<()> {
+    fn shop(command: &ClientCommand, world: &World, out: &mut Out<'_, '_>) -> Result<()> {
         let ClientCommand::Shop { merchant_id, .. } = command else {
             return Ok(());
         };
@@ -345,7 +343,7 @@ impl Belongings {
                 .log
                 .diagnostic("Rejected an unavailable merchant".into());
         }
-        self.encoder.send(command, out).map(drop)
+        out.command(command).map(drop)
     }
 }
 
@@ -424,7 +422,7 @@ impl Feature for Belongings {
         match command {
             ClientCommand::MoveInventory(request) => self.move_item(request, world, out),
             ClientCommand::MoveCoins { .. } => Self::move_coins(command, world, out),
-            ClientCommand::Shop { .. } => self.shop(command, world, out),
+            ClientCommand::Shop { .. } => Self::shop(command, world, out),
             ClientCommand::AutoEat { auto_eat, .. } => {
                 self.meals.choose(*auto_eat);
                 Ok(())
@@ -525,10 +523,7 @@ mod tests {
 
     /// Admitted player 7, carrying one item in slot 22.
     fn admitted() -> (Belongings, World) {
-        let mut belongings = Belongings::new(
-            Encoder::new("Tester"),
-            eq_network_game::food::AutoEat::default(),
-        );
+        let mut belongings = Belongings::new(eq_network_game::food::AutoEat::default());
         let mut world = World::new(5);
         let snapshot = Message::Event(WorldEvent::Inventory(InventoryUpdate::Snapshot(vec![
             item(22),
@@ -546,10 +541,7 @@ mod tests {
     /// drink, and the profile's word on how fed and watered they are.
     fn fed(food: u32, water: u32) -> (Belongings, World) {
         use eq_network_game::food::Nourishment;
-        let mut belongings = Belongings::new(
-            Encoder::new("Tester"),
-            eq_network_game::food::AutoEat::default(),
-        );
+        let mut belongings = Belongings::new(eq_network_game::food::AutoEat::default());
         let mut world = World::new(5);
         let typed = |slot, item_type| {
             let mut item = item(slot);
@@ -743,10 +735,7 @@ mod tests {
     fn the_admission_reports_the_inventory_staged_before_it() {
         let (_, world) = admitted();
         assert!(world.inventory.items().contains_key(&InventorySlot(22)));
-        let mut belongings = Belongings::new(
-            Encoder::new("Tester"),
-            eq_network_game::food::AutoEat::default(),
-        );
+        let mut belongings = Belongings::new(eq_network_game::food::AutoEat::default());
         let mut world = World::new(5);
         let snapshot = Message::Event(WorldEvent::Inventory(InventoryUpdate::Snapshot(vec![
             item(22),
