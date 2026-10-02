@@ -67,7 +67,8 @@ impl Camp {
         self.phase = Phase::LoggingOut(now);
     }
 
-    /// Whether the logout reply should end the zone connection.
+    /// Whether a logout was sent, so the camp can no longer be abandoned.
+    #[cfg(test)]
     fn logging_out(&self) -> bool {
         matches!(self.phase, Phase::LoggingOut(_))
     }
@@ -163,7 +164,8 @@ impl Feature for Camp {
     }
 
     /// Dying abandons a camp still being prepared, and the logout's reply
-    /// ends the zone connection.
+    /// ends the zone connection. A server may log a camping character out
+    /// before the timer ends: `EQEmu` camps a GM at once.
     fn observe(
         &mut self,
         message: &Message,
@@ -177,7 +179,7 @@ impl Feature for Camp {
                 out.log
                     .send(ClientEvent::World(WorldEvent::Camp(CampStatus::Abandoned)))?;
             }
-            Message::LoggedOut if self.logging_out() => {
+            Message::LoggedOut if self.active() => {
                 out.log
                     .send(ClientEvent::World(WorldEvent::Camp(CampStatus::Camped)))?;
                 world.end(ZoneExit::CharacterSelect);
@@ -215,6 +217,25 @@ mod tests {
         assert_eq!(outcome.sent, [command::titanium_logout()]);
         let outcome = testing::run(|out| camp.observe(&Message::LoggedOut, &mut world, out));
         outcome.result.unwrap();
+        assert!(matches!(world.exit(), Some(ZoneExit::CharacterSelect)));
+    }
+
+    #[test]
+    fn a_logout_before_the_timer_ends_the_camp_at_once() {
+        let mut camp = Camp::default();
+        let mut world = World::new(5);
+        // Not camping, a logout is no camp of the player's.
+        let outcome = testing::run(|out| camp.observe(&Message::LoggedOut, &mut world, out));
+        outcome.result.unwrap();
+        assert!(world.exit().is_none() && outcome.events.is_empty());
+        // EQEmu camps a GM at once, without waiting for the logout.
+        camp.start(Instant::now());
+        let outcome = testing::run(|out| camp.observe(&Message::LoggedOut, &mut world, out));
+        outcome.result.unwrap();
+        assert!(matches!(
+            outcome.events[..],
+            [ClientEvent::World(WorldEvent::Camp(CampStatus::Camped))]
+        ));
         assert!(matches!(world.exit(), Some(ZoneExit::CharacterSelect)));
     }
 
