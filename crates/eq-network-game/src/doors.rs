@@ -84,6 +84,16 @@ impl Doors {
         player_id: u16,
         position: Position,
     ) -> Result<EncodedCommand> {
+        self.check_click(id, player_id, position)?;
+        Ok(titanium_click(id, player_id))
+    }
+
+    /// Checks a click on a door against the current door table and the
+    /// player's position: the door must still be there and within reach.
+    ///
+    /// # Errors
+    /// Rejects unknown doors, invalid own IDs and non-finite or distant positions.
+    pub fn check_click(&self, id: u8, player_id: u16, position: Position) -> Result<()> {
         let door = self
             .0
             .get(&id)
@@ -95,13 +105,7 @@ impl Doors {
             player_id != 0 && distance.is_finite() && distance <= Self::USE_DISTANCE,
             "door is out of reach or player position is unavailable"
         );
-        let mut body = vec![0; 16];
-        body[0] = id;
-        body[12..14].copy_from_slice(&player_id.to_le_bytes());
-        Ok(EncodedCommand {
-            opcode: CLICK_OPCODE,
-            body,
-        })
+        Ok(())
     }
     /// Current server-provided definitions in stable door-ID order.
     #[must_use]
@@ -130,6 +134,18 @@ impl Doors {
     #[must_use]
     pub fn admission(&self) -> DoorUpdate {
         DoorUpdate::Spawn(self.0.values().cloned().collect())
+    }
+}
+
+/// Titanium's `OP_ClickDoor` for the player using a door, already checked.
+#[must_use]
+pub fn titanium_click(id: u8, player_id: u16) -> EncodedCommand {
+    let mut body = vec![0; 16];
+    body[0] = id;
+    body[12..14].copy_from_slice(&player_id.to_le_bytes());
+    EncodedCommand {
+        opcode: CLICK_OPCODE,
+        body,
     }
 }
 

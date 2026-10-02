@@ -6,10 +6,10 @@ use super::{
 };
 use anyhow::{anyhow, ensure, Result};
 use eq_network_game::{
-    command::EncodedCommand,
     inventory::{Inventory, InventorySlot},
     message::Message,
     objects::{ObjectUpdate, Objects},
+    request::Request,
     world::{Position, WorldEvent},
 };
 
@@ -54,8 +54,8 @@ impl Feature for GroundObjects {
         };
         let checked = self.pickup(*drop_id, world.player_at(), &world.inventory);
         let error = match checked {
-            Ok(packet) => {
-                out.send(&packet)?;
+            Ok(request) => {
+                out.request(&request)?;
                 None
             }
             Err(error) => Some(error.to_string()),
@@ -81,7 +81,7 @@ impl Feature for GroundObjects {
         self.0.apply(update);
         if let ObjectUpdate::Container(view) = update {
             if view.open && world.is_player(view.player_id) {
-                out.send(&view.close_packet())?;
+                out.request(&Request::CloseContainer(view.clone()))?;
                 out.log.diagnostic(format!(
                     "Closed world container {}: containers are not supported yet",
                     view.drop_id
@@ -101,7 +101,7 @@ impl GroundObjects {
         drop_id: u32,
         player: Option<(u16, Position)>,
         inventory: &Inventory,
-    ) -> Result<EncodedCommand> {
+    ) -> Result<Request> {
         ensure!(
             inventory.received() && !inventory.stale(),
             "the inventory is not loaded"
@@ -115,7 +115,11 @@ impl GroundObjects {
             "put down the item on your cursor first"
         );
         let (spawn_id, position) = player.ok_or_else(|| anyhow!("player is unavailable"))?;
-        self.0.pickup_packet(drop_id, spawn_id, position)
+        self.0.check_pickup(drop_id, spawn_id, position)?;
+        Ok(Request::PickUp {
+            drop_id,
+            player_id: spawn_id,
+        })
     }
 }
 
@@ -183,8 +187,11 @@ mod tests {
         let objects = table();
         let player = Some((9, Position::default()));
         assert_eq!(
-            objects.pickup(71, player, &loaded(false)).unwrap().body,
-            [71, 0, 0, 0, 9, 0, 0, 0]
+            objects.pickup(71, player, &loaded(false)).unwrap(),
+            Request::PickUp {
+                drop_id: 71,
+                player_id: 9
+            }
         );
         let error = |player, inventory: &Inventory| {
             objects

@@ -181,6 +181,16 @@ impl Objects {
         player_id: u16,
         position: Position,
     ) -> Result<EncodedCommand> {
+        self.check_pickup(drop_id, player_id, position)?;
+        Ok(titanium_pickup(drop_id, player_id))
+    }
+
+    /// Checks picking an item up against the table and the player's reach.
+    ///
+    /// # Errors
+    /// Rejects unknown objects, fixtures, invalid own IDs and non-finite or
+    /// distant positions.
+    pub fn check_pickup(&self, drop_id: u32, player_id: u16, position: Position) -> Result<()> {
         let object = self
             .0
             .get(&drop_id)
@@ -197,13 +207,19 @@ impl Objects {
             distance.is_finite() && distance <= Self::USE_DISTANCE,
             "too far away to pick that up"
         );
-        let mut body = vec![0; 8];
-        body[..4].copy_from_slice(&drop_id.to_le_bytes());
-        body[4..].copy_from_slice(&u32::from(player_id).to_le_bytes());
-        Ok(EncodedCommand {
-            opcode: CLICK_OPCODE,
-            body,
-        })
+        Ok(())
+    }
+}
+
+/// Titanium's `OP_ClickObject` picking an item up, already checked.
+#[must_use]
+pub fn titanium_pickup(drop_id: u32, player_id: u16) -> EncodedCommand {
+    let mut body = vec![0; 8];
+    body[..4].copy_from_slice(&drop_id.to_le_bytes());
+    body[4..].copy_from_slice(&u32::from(player_id).to_le_bytes());
+    EncodedCommand {
+        opcode: CLICK_OPCODE,
+        body,
     }
 }
 
