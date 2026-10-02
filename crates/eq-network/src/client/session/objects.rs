@@ -151,6 +151,7 @@ mod tests {
         InventoryItem {
             activation: eq_network_game::inventory::ItemActivation::default(),
             scroll_spell: None,
+            book: None,
             rules: eq_network_game::inventory::ItemPlacement::default(),
             slot,
             icon: 0,

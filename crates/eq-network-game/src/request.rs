@@ -6,6 +6,7 @@
 //! that repeat the player's name or spawn.
 use crate::{
     abilities::Ability,
+    books::{self, Book},
     command::{self, EncodedCommand, GameCommand, Posture},
     corpses, doors, exchange,
     food::{self, Meal},
@@ -85,6 +86,8 @@ pub enum Request {
     },
     /// Leave training with a guildmaster.
     EndTraining(u16),
+    /// Ask for a book's or note's text.
+    ReadBook(Book),
     /// Accept or decline a resurrection offer.
     AnswerResurrection {
         /// The offer, which the answer repeats.
@@ -226,6 +229,7 @@ pub fn titanium(request: &Request, sender: Sender<'_>) -> Result<EncodedCommand>
         Request::AnswerResurrection { offer, accept } => {
             resurrection::titanium_answer(offer, *accept)
         }
+        Request::ReadBook(book) => books::titanium_request(book)?,
         Request::Trade(with) => exchange::request(sender.spawn(), *with)?,
         Request::AcceptTrade => exchange::accept(sender.spawn())?,
         Request::CancelTrade => exchange::cancel(sender.spawn())?,

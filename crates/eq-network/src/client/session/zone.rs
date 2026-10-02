@@ -422,7 +422,7 @@ mod tests {
     };
 
     /// How many kinds of command there are.
-    const KINDS: usize = 44;
+    const KINDS: usize = 45;
 
     /// Which kind of command this is. A new command is a compile error here
     /// until it has a number, and then a test failure until the list below
@@ -474,6 +474,7 @@ mod tests {
             ClientCommand::AutoEat { .. } => 41,
             ClientCommand::Training { .. } => 42,
             ClientCommand::AnswerResurrection { .. } => 43,
+            ClientCommand::ReadItem { .. } => 44,
         }
     }
 
@@ -719,6 +720,10 @@ mod tests {
                 session_id,
                 accept: true,
             },
+            ClientCommand::ReadItem {
+                session_id,
+                slot: InventorySlot(23),
+            },
         ]
     }
 
@@ -877,6 +882,7 @@ mod tests {
         assert!(eqemu.contains(&Capability::Falling));
         assert!(eqemu.contains(&Capability::Training));
         assert!(eqemu.contains(&Capability::Resurrection));
-        assert_eq!(eqemu.len(), p99.len() + 3);
+        assert!(eqemu.contains(&Capability::Reading));
+        assert_eq!(eqemu.len(), p99.len() + 4);
     }
 }

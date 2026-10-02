@@ -180,6 +180,8 @@ pub struct InventoryItem {
     pub activation: ItemActivation,
     /// Spell taught by a scroll, when supplied by the server item definition.
     pub scroll_spell: Option<u32>,
+    /// What the item reads as, when it is a book or a note.
+    pub book: Option<crate::books::Book>,
     /// Server definition constraints used when placing an item.
     pub rules: ItemPlacement,
     /// Exact inventory location.

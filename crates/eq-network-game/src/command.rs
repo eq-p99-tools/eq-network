@@ -383,6 +383,13 @@ pub enum GameCommand {
         /// Reject delayed actions instead of replaying them after a stall.
         created: std::time::Instant,
     },
+    /// Read the book or note in an inventory slot.
+    ReadItem {
+        /// Current zone admission.
+        session_id: u64,
+        /// Where the item is carried.
+        slot: crate::inventory::InventorySlot,
+    },
     /// Accept or decline the resurrection offered last.
     AnswerResurrection {
         /// Current zone admission.
@@ -467,6 +474,7 @@ impl GameCommand {
             | Self::Pet { session_id, .. }
             | Self::Training { session_id, .. }
             | Self::AnswerResurrection { session_id, .. }
+            | Self::ReadItem { session_id, .. }
             | Self::Consent { session_id, .. }
             | Self::SummonCorpse { session_id, .. }
             | Self::DragCorpse { session_id, .. }
@@ -526,6 +534,7 @@ impl GameCommand {
             Self::Pet { .. } => Capability::Pets,
             Self::Training { .. } => Capability::Training,
             Self::AnswerResurrection { .. } => Capability::Resurrection,
+            Self::ReadItem { .. } => Capability::Reading,
             Self::Consent { .. }
             | Self::SummonCorpse { .. }
             | Self::DragCorpse { .. }
@@ -548,6 +557,7 @@ impl GameCommand {
             | Self::WhoAll { .. }
             | Self::Pet { .. }
             | Self::AnswerResurrection { .. }
+            | Self::ReadItem { .. }
             | Self::Consent { .. }
             | Self::SummonCorpse { .. }
             | Self::DragCorpse { .. }
@@ -700,6 +710,7 @@ pub fn encode(
         | GameCommand::Pet { .. }
         | GameCommand::Training { .. }
         | GameCommand::AnswerResurrection { .. }
+        | GameCommand::ReadItem { .. }
         | GameCommand::Consent { .. }
         | GameCommand::SummonCorpse { .. }
         | GameCommand::DragCorpse { .. }
