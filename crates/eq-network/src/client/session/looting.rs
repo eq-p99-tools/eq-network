@@ -58,12 +58,11 @@ impl Feature for Looting {
 mod tests {
     use super::super::feature::testing;
     use super::*;
-    use eq_network_game::GameDialect;
     use std::time::Instant;
 
     #[test]
     fn only_a_corpse_the_player_can_see_is_opened() {
-        let mut looting = Looting::new(Encoder::new(GameDialect::Titanium, "Tester"));
+        let mut looting = Looting::new(Encoder::new("Tester"));
         let mut world = World::new(5);
         world.spawns.insert(testing::spawn(8, SpawnKind::NpcCorpse));
         world.spawns.insert(testing::spawn(9, SpawnKind::Npc));

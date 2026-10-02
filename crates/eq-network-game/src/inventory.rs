@@ -3,8 +3,10 @@ mod actions;
 mod activation;
 mod banking;
 mod titanium;
-pub use actions::{InventoryActor, InventoryMove, MoveQuantity, MOVE_OPCODE};
-pub use activation::{ClickEffect, ClickKind, ItemActivation, ItemUse, CAST_OPCODE};
+pub use actions::{titanium_move, InventoryActor, InventoryMove, MoveQuantity, MOVE_OPCODE};
+pub use activation::{
+    titanium_item_cast, ClickEffect, ClickKind, ItemActivation, ItemUse, CAST_OPCODE,
+};
 pub use banking::banker_in_range;
 pub use titanium::decode;
 pub(crate) use titanium::parse as parse_items;

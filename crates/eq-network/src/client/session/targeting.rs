@@ -87,7 +87,7 @@ impl Feature for Targeting {
 mod tests {
     use super::super::feature::testing;
     use super::*;
-    use eq_network_game::{world::SpawnKind, GameDialect};
+    use eq_network_game::world::SpawnKind;
 
     fn target(spawn_id: Option<u16>) -> ClientCommand {
         ClientCommand::SelectTarget {
@@ -98,7 +98,7 @@ mod tests {
 
     #[test]
     fn only_the_player_or_a_spawn_they_can_see_is_targeted() {
-        let mut targeting = Targeting::new(Encoder::new(GameDialect::Titanium, "Tester"));
+        let mut targeting = Targeting::new(Encoder::new("Tester"));
         let mut world = World::new(5);
         world.own_spawn = Some(7);
         world.spawns.insert(testing::spawn(8, SpawnKind::Npc));

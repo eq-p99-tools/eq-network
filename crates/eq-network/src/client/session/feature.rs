@@ -18,11 +18,10 @@ use super::{
 };
 use anyhow::{Context, Result};
 use eq_network_game::{
-    command::{self, EncodedCommand},
+    command::EncodedCommand,
     message::Message,
     request::Request,
     world::{PlayerState, Position},
-    GameDialect,
 };
 use eq_network_transport::Transport;
 use std::time::Instant;
@@ -90,6 +89,17 @@ impl Out<'_, '_> {
         self.send(&packet)
     }
 
+    /// Asks the server for something that may be lost, such as a position
+    /// the next one replaces.
+    ///
+    /// # Errors
+    /// Returns an error when the generation cannot carry the request or the
+    /// connection fails.
+    pub(super) fn request_unreliable(&mut self, request: &Request) -> Result<()> {
+        let packet = self.encode(request)?;
+        self.send_unreliable(&packet)
+    }
+
     /// Sends a packet that must arrive.
     ///
     /// # Errors
@@ -119,29 +129,34 @@ impl Out<'_, '_> {
     }
 }
 
-/// Encodes host commands in the server's dialect, for the commands that need
-/// nothing from the session's state.
+/// Sends host commands that need nothing from the session's state, as the
+/// server's client generation encodes them.
 #[derive(Clone)]
 pub(super) struct Encoder {
-    dialect: GameDialect,
     /// The player's name, which some packets repeat.
     character: String,
 }
 
 impl Encoder {
-    pub(super) fn new(dialect: GameDialect, character: &str) -> Self {
+    pub(super) fn new(character: &str) -> Self {
         Self {
-            dialect,
             character: character.into(),
         }
     }
 
-    /// The packet for a command.
+    /// The packet for a command, in the server's client generation.
     ///
     /// # Errors
-    /// Rejects a command the dialect cannot represent.
-    pub(super) fn encode(&self, command: &ClientCommand) -> Result<EncodedCommand> {
-        command::encode(self.dialect, command, &self.character)
+    /// Rejects a command the generation cannot represent.
+    pub(super) fn encode(
+        &self,
+        command: &ClientCommand,
+        out: &Out<'_, '_>,
+    ) -> Result<EncodedCommand> {
+        out.encode(&Request::Command {
+            command: command.clone(),
+            character: self.character.clone(),
+        })
     }
 
     /// Sends a command; one the dialect cannot represent is only noted. True
@@ -150,7 +165,7 @@ impl Encoder {
     /// # Errors
     /// Returns an error when the connection or the host's event handler fails.
     pub(super) fn send(&self, command: &ClientCommand, out: &mut Out<'_, '_>) -> Result<bool> {
-        match self.encode(command) {
+        match self.encode(command, out) {
             Ok(packet) => {
                 out.send(&packet)?;
                 Ok(true)

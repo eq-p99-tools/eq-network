@@ -12,6 +12,7 @@ use anyhow::Result;
 use eq_network_game::{
     food::{self, AutoEat, Meal, Nourishment, Shortage},
     inventory::{Inventory, InventorySlot, InventoryUpdate},
+    request::Request,
     world::WorldEvent,
 };
 
@@ -143,7 +144,11 @@ impl Meals {
         world: &mut World,
         out: &mut Out<'_, '_>,
     ) -> Result<()> {
-        out.send(&food::consume(slot, meal, by_hand))?;
+        out.request(&Request::Consume {
+            slot,
+            meal,
+            by_hand,
+        })?;
         self.bites += 1;
         change(InventoryUpdate::Deduct { slot, quantity: 1 }, world, out)
     }
