@@ -125,7 +125,10 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the session holds the inventory until the server answers
   (`WorldEvent::Combine`). The components leaving and what was made arriving
   are ordinary inventory news. A bag that is not a tradeskill container is
-  refused (`CombineRefused`). World containers are not supported yet.
+  refused (`CombineRefused`), and so is a combine while the cursor holds an
+  item or coins, as the official client refuses it; the refusal names the
+  official client's string for that (`CombineRefused::string_id`). World
+  containers are not supported yet.
 - Synthetic regression coverage for inventory reconciliation, scribe consumption,
   movement admission, cast state, and fresh-key world/zone handoffs.
 

@@ -19,6 +19,10 @@ use serde::Serialize;
 /// `OP_TradeSkillCombine`, both ways.
 pub const COMBINE_OPCODE: u16 = 0x0b40;
 
+/// The official client's string (`eqstr_us.txt`) refusing a combine while
+/// the cursor holds an item or coins: a combine's product lands there.
+pub const HANDS_FULL: u32 = 12024;
+
 /// The guild tribute slot a combine names when there is none. `EQEmu` only
 /// logs it; what the official client sends here is unrecorded.
 const NO_TRIBUTE_SLOT: i16 = -1;
