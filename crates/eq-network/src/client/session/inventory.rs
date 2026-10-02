@@ -28,6 +28,7 @@ use eq_network_game::{
     message::{Message, Part},
     money::Wallet,
     request::Request,
+    training::TrainingUpdate,
     world::Coins,
     world::{SpawnKind, WorldEvent},
 };
@@ -122,6 +123,11 @@ fn coins_news(message: &Message, wallet: &mut Wallet) -> Option<bool> {
             wallet.pay(u64::from(*price));
             Some(true)
         }
+        // The server takes a practice's cost without saying so.
+        WorldEvent::Training(TrainingUpdate::Trained { cost, .. }) if *cost > 0 => {
+            wallet.pay(*cost);
+            Some(true)
+        }
         // What the window held was handed over, or comes back with the
         // server's money update.
         WorldEvent::Exchange(ExchangeUpdate::Finished | ExchangeUpdate::Cancelled { .. }) => {
@@ -182,6 +188,7 @@ fn actor(world: &World) -> Option<InventoryActor> {
             .exchange
             .as_ref()
             .map_or(0, super::exchange::Exchange::trade_slots),
+        world_container: world.container.is_open(),
     })
 }
 

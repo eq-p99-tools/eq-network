@@ -9,6 +9,7 @@ use eq_network_game::{
     appearance::WearChange,
     buffs::Buff,
     message::Message,
+    training::TrainingUpdate,
     world::{PlayerState, WorldEvent},
 };
 use std::collections::BTreeMap;
@@ -126,6 +127,10 @@ impl Feature for Character {
             }
             WorldEvent::Level { current, .. } => player.level = *current,
             WorldEvent::Skill { skill_id, value } => player.apply_skill(*skill_id, *value),
+            // A practice at a guildmaster is a skill's new value too.
+            WorldEvent::Training(TrainingUpdate::Trained { skill, value, .. }) => {
+                player.apply_skill(*skill, *value);
+            }
             WorldEvent::Spell(update) => update.apply_gems(&mut player.memorized_spells),
             _ => (),
         }

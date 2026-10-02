@@ -13,8 +13,8 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Quarm admission and entity presentation for graphical clients; outbound
   gameplay commands remain P99-only.
 - Items on the ground (`objects`): Titanium ground objects are reported, and
-  a nearby item can be picked up onto an empty cursor. World containers are
-  not supported yet; one that opens for a click is closed again.
+  a nearby item can be picked up onto an empty cursor. A world container that
+  opens for a click the session did not ask for is closed again.
 - Worn gear (`appearance`): spawns and the player carry their materials,
   tints and facial features from Titanium spawn records, and wear changes
   update them. Quarm reports none yet.
@@ -74,13 +74,18 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   sent (`SpawnState::hp_percent`), since the server reports a pet's health
   only when it changes.
 - Abilities (`abilities`): `UseAbility` uses kick, bash, backstab, frenzy,
-  the monk strikes and taunt on the target, and hide, sneak, forage, mend,
-  feign death and sense heading on the player (`Capability::Abilities`). The
+  the monk strikes and taunt on the target, and hide, sneak, forage,
+  fishing (`OP_Fishing`, which anyone can try; the server checks the pole,
+  the bait and the water), mend, feign death and sense heading on the
+  player (`Capability::Abilities`). The
   session refuses what servers ignore without a word (an unknown skill, no
   target, a strike's target out of melee reach as `EQEmu`'s `CombatRange`
   measures it with the player's size by race, a taunt at anything but an
   NPC) and a use whose recovery timer still runs (`AbilityRefused`), and
-  tells the host when a timer starts (`AbilityUsed`). Strikes share one
+  tells the host when a timer starts (`AbilityUsed`). Each server type lists
+  the abilities it offers (`AbilitiesOffered`, at admission): `EQEmu` all of
+  them, P99 every one but fishing until it is checked there; the session
+  refuses the rest ("Not available on this server"). Strikes share one
   timer, as on the server, and wait for a cast to end.
 - Coins (`money`): `MoveCoins` moves coins between the purse, the cursor, the
   bank (near a banker) and an open give window, changing kind as servers do
@@ -91,6 +96,56 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   and tells the host every change as `Coins` (the purse) and `CoinsElsewhere`
   (the cursor, the bank and a trade window's coins). Asking to trade needs an
   item or coins on the cursor.
+- Training at a guildmaster (`training`), on `EQEmu` for now
+  (`Capability::Training`): `Training` opens training with a guildmaster of
+  the player's class within 200 units, practices a skill and leaves
+  (`TrainingRequest`). The guildmaster's answer reaches the host as
+  `TrainingUpdate::Offered`, with how far each skill can be trained. The
+  session refuses a practice the server would ignore silently
+  (`TrainingRefused`): no training open, a skill the guildmaster does not
+  teach or one at its cap, no practice point left or too few coins. Servers
+  answer a practice only with the skill's new value, which the session turns
+  into `TrainingUpdate::Trained` with the practice's cost; the coins pay for
+  it, and the session counts practice points itself (`PracticePoints`), from
+  the profile's (`PlayerState::practice_points`) plus five for each level
+  past the highest reached in the zone.
+- Resurrection (`resurrection`), on `EQEmu` for now
+  (`Capability::Resurrection`): an offer to resurrect the player
+  (`OP_RezzRequest`) reaches the host as `WorldEvent::Resurrection`, with the
+  caster, the corpse, the spell and where the corpse lies, and
+  `AnswerResurrection` accepts or declines it, repeating the offer as the
+  server expects (`OP_RezzAnswer`). An answer with no offer waiting is
+  refused (`ResurrectionRefused`). On acceptance the server moves the player
+  to the corpse as it moves them anywhere.
+- Reading (`books`), on `EQEmu` for now (`Capability::Reading`): carried
+  items say what they read as (`InventoryItem::book`: a Titanium item of the
+  readable class with a text name, in the book window when flagged as a
+  book and the note window otherwise), `ReadItem` asks for a book's or
+  note's text (`OP_ReadBook`), and the text reaches the host as
+  `WorldEvent::BookText` with the kind of window it is for. An item that is
+  not readable is refused (`ReadRefused`).
+- Tradeskill combines (`tradeskills`), on `EQEmu` for now
+  (`Capability::Tradeskills`): `Combine` asks the server to combine what a
+  tradeskill container in a pack slot holds (`OP_TradeSkillCombine`), and
+  the session holds the inventory until the server answers
+  (`WorldEvent::Combine`). The components leaving and what was made arriving
+  are ordinary inventory news. A bag that is not a tradeskill container is
+  refused (`CombineRefused`), and so is a combine while the cursor holds an
+  item or coins, as the official client refuses it; the refusal names the
+  official client's string for that (`CombineRefused::string_id`). World
+  containers such as forges and ovens open within reach (`OpenContainer`,
+  answered as `ObjectUpdate::Container`, or in use by someone else), hold
+  what the player puts in their ten slots (`InventorySlot::is_world`, items
+  in from the cursor and out whole onto an empty cursor), combine
+  (`tradeskills::WORLD_CONTAINER`) and close (`CloseContainer`), when the
+  server puts what they still hold back in the inventory
+  (`InventoryUpdate::WorldEmptied`). `tradeskills::type_name` names a
+  container type's string in the installed client, for a container whose
+  server sends no name.
+- The in-game map (`Capability::Map`), on `EQEmu` for now: a front end draws
+  it from the installation's map files and the player's position, so the
+  session sends nothing for it; the server type decides whether it is
+  offered.
 - TAKP servers (`ServerProtocol::Takp`, `takp`): a stock `EQMacEmu` server,
   such as a local test server, speaking the same `EQMac` protocol as Project
   Quarm. `ServerProtocol::is_stock` tells stock emulator servers (`EQEmu` and

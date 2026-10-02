@@ -1,5 +1,7 @@
-//! Items on the ground: the zone's object table, pickups, and world containers,
-//! which are not supported yet, so one that opens for this player is closed again.
+//! Items on the ground: the zone's object table, which every feature reads,
+//! and pickups. A world container such as a forge is the tradeskills
+//! feature's to open and close; one that opens for this player without being
+//! asked for is closed again, so the server does not keep it in use.
 use super::{
     feature::{Feature, Out, World},
     ClientCommand, ClientEvent,
@@ -8,7 +10,7 @@ use anyhow::{anyhow, ensure, Result};
 use eq_network_game::{
     inventory::{Inventory, InventorySlot},
     message::Message,
-    objects::{ObjectUpdate, Objects},
+    objects::{ContainerView, ObjectUpdate, Objects},
     request::Request,
     world::{Position, WorldEvent},
 };
@@ -16,9 +18,30 @@ use eq_network_game::{
 /// Where a picked-up item arrives.
 const CURSOR: InventorySlot = InventorySlot(30);
 
-/// The zone's objects in this admission.
+/// Keeps the zone's object table and picks items up.
 #[derive(Debug, Default)]
-pub(super) struct GroundObjects(Objects);
+pub(super) struct GroundObjects;
+
+/// The zone's objects in this admission. Every feature reads it; only this
+/// module changes it.
+#[derive(Debug, Default)]
+pub(super) struct ZoneObjects(Objects);
+
+impl std::ops::Deref for ZoneObjects {
+    type Target = Objects;
+
+    fn deref(&self) -> &Objects {
+        &self.0
+    }
+}
+
+/// Lets another feature's tests start with objects in the zone.
+#[cfg(test)]
+impl From<Objects> for ZoneObjects {
+    fn from(objects: Objects) -> Self {
+        Self(objects)
+    }
+}
 
 impl Feature for GroundObjects {
     fn capabilities(&self) -> Vec<crate::world::Capability> {
@@ -26,16 +49,17 @@ impl Feature for GroundObjects {
         vec![Capability::GroundItems]
     }
 
-    fn admit(&mut self, message: &Message, _world: &mut World) -> Result<()> {
+    fn admit(&mut self, message: &Message, world: &mut World) -> Result<()> {
         if let Message::Event(WorldEvent::Objects(update)) = message {
-            self.0.apply(update);
+            world.objects.0.apply(update);
         }
         Ok(())
     }
 
-    fn admitted(&mut self, _world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
-        out.log
-            .send(ClientEvent::World(WorldEvent::Objects(self.0.admission())))
+    fn admitted(&mut self, world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
+        out.log.send(ClientEvent::World(WorldEvent::Objects(
+            world.objects.admission(),
+        )))
     }
 
     fn owns(&self, command: &ClientCommand) -> bool {
@@ -52,7 +76,12 @@ impl Feature for GroundObjects {
         let ClientCommand::PickUp { drop_id, .. } = command else {
             return Ok(());
         };
-        let checked = self.pickup(*drop_id, world.player_at(), &world.inventory);
+        let checked = pickup(
+            &world.objects,
+            *drop_id,
+            world.player_at(),
+            &world.inventory,
+        );
         let error = match checked {
             Ok(request) => {
                 out.request(&request)?;
@@ -68,7 +97,7 @@ impl Feature for GroundObjects {
     }
 
     /// Records a server update, and closes a container that opened for this
-    /// player, so the server does not keep it in use.
+    /// player unasked, so the server does not keep it in use.
     fn observe(
         &mut self,
         message: &Message,
@@ -78,51 +107,54 @@ impl Feature for GroundObjects {
         let Message::Event(WorldEvent::Objects(update)) = message else {
             return Ok(());
         };
-        self.0.apply(update);
-        if let ObjectUpdate::Container(view) = update {
-            if view.open && world.is_player(view.player_id) {
-                out.request(&Request::CloseContainer {
-                    drop_id: view.drop_id,
-                    object_type: view.object_type,
-                    icon: view.icon,
-                    name: view.name.clone(),
-                })?;
-                out.log.diagnostic(format!(
-                    "Closed world container {}: containers are not supported yet",
-                    view.drop_id
-                ))?;
-            }
+        world.objects.0.apply(update);
+        let ObjectUpdate::Container(view) = update else {
+            return Ok(());
+        };
+        if view.open && world.is_player(view.player_id) && !world.container.expects(view.drop_id) {
+            out.request(&close_request(view))?;
+            out.log.diagnostic(format!(
+                "Closed world container {}, which opened unasked",
+                view.drop_id
+            ))?;
         }
         Ok(())
     }
 }
 
-impl GroundObjects {
-    /// Checks a pickup against the cursor and the reach. The item arrives on
-    /// the cursor, so it must be empty, and an unsettled move could still
-    /// change it.
-    fn pickup(
-        &self,
-        drop_id: u32,
-        player: Option<(u16, Position)>,
-        inventory: &Inventory,
-    ) -> Result<Request> {
-        ensure!(
-            inventory.received() && !inventory.stale(),
-            "the inventory is not loaded"
-        );
-        ensure!(
-            !inventory.predicted(),
-            "wait for the last item move to settle"
-        );
-        ensure!(
-            !inventory.items().contains_key(&CURSOR),
-            "put down the item on your cursor first"
-        );
-        let (spawn_id, position) = player.ok_or_else(|| anyhow!("player is unavailable"))?;
-        self.0.check_pickup(drop_id, spawn_id, position)?;
-        Ok(Request::PickUp(drop_id))
+/// `OP_ClickObjectAction` closing a container: its own record, repeated.
+pub(super) fn close_request(view: &ContainerView) -> Request {
+    Request::CloseContainer {
+        drop_id: view.drop_id,
+        object_type: view.object_type,
+        icon: view.icon,
+        name: view.name.clone(),
     }
+}
+
+/// Checks a pickup against the cursor and the reach. The item arrives on the
+/// cursor, so it must be empty, and an unsettled move could still change it.
+fn pickup(
+    objects: &Objects,
+    drop_id: u32,
+    player: Option<(u16, Position)>,
+    inventory: &Inventory,
+) -> Result<Request> {
+    ensure!(
+        inventory.received() && !inventory.stale(),
+        "the inventory is not loaded"
+    );
+    ensure!(
+        !inventory.predicted(),
+        "wait for the last item move to settle"
+    );
+    ensure!(
+        !inventory.items().contains_key(&CURSOR),
+        "put down the item on your cursor first"
+    );
+    let (spawn_id, position) = player.ok_or_else(|| anyhow!("player is unavailable"))?;
+    objects.check_pickup(drop_id, spawn_id, position)?;
+    Ok(Request::PickUp(drop_id))
 }
 
 #[cfg(test)]
@@ -133,24 +165,25 @@ mod tests {
         objects::GroundObject,
     };
 
-    fn table() -> GroundObjects {
-        let mut objects = GroundObjects::default();
+    fn table() -> Objects {
+        let mut world = World::new(5);
         let spawn = WorldEvent::Objects(ObjectUpdate::Spawn(GroundObject {
             drop_id: 71,
             model: "IT63_ACTORDEF".into(),
             position: Position::default(),
             object_type: 0,
         }));
-        objects
-            .admit(&Message::Event(spawn), &mut World::new(5))
+        GroundObjects
+            .admit(&Message::Event(spawn), &mut world)
             .unwrap();
-        objects
+        world.objects.0
     }
 
     fn item(slot: InventorySlot) -> InventoryItem {
         InventoryItem {
             activation: eq_network_game::inventory::ItemActivation::default(),
             scroll_spell: None,
+            book: None,
             rules: eq_network_game::inventory::ItemPlacement::default(),
             slot,
             icon: 0,
@@ -189,12 +222,11 @@ mod tests {
         let objects = table();
         let player = Some((9, Position::default()));
         assert_eq!(
-            objects.pickup(71, player, &loaded(false)).unwrap(),
+            pickup(&objects, 71, player, &loaded(false)).unwrap(),
             Request::PickUp(71)
         );
         let error = |player, inventory: &Inventory| {
-            objects
-                .pickup(71, player, inventory)
+            pickup(&objects, 71, player, inventory)
                 .unwrap_err()
                 .to_string()
         };
@@ -215,8 +247,7 @@ mod tests {
         let mut inventory = loaded(false);
         inventory.apply(InventoryUpdate::Prediction(vec![item(InventorySlot(23))]));
         assert_eq!(
-            objects
-                .pickup(71, Some((9, Position::default())), &inventory)
+            pickup(&objects, 71, Some((9, Position::default())), &inventory)
                 .unwrap_err()
                 .to_string(),
             "wait for the last item move to settle"

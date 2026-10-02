@@ -73,6 +73,9 @@ pub struct InventoryActor {
     /// How many trade slots the open give or trade window has; zero when none
     /// is open.
     pub trade_slots: u8,
+    /// Whether a world container is open for the player, whose ten slots
+    /// items may then go into and come out of.
+    pub world_container: bool,
 }
 
 impl Inventory {
@@ -192,6 +195,9 @@ impl Inventory {
         );
         if request.to.is_trade() {
             check_trade(request, self.items.contains_key(&request.to))?;
+        }
+        if request.from.is_world() || request.to.is_world() {
+            check_world(request, self.items.contains_key(&request.to))?;
         }
         let source = self
             .items
@@ -412,6 +418,12 @@ impl Inventory {
                 "This specialized container is not supported yet"
             );
         }
+        if slot.is_world() {
+            ensure!(
+                item.bag_slots == 0,
+                "Containers cannot be placed inside containers"
+            );
+        }
         if slot.is_equipment() {
             let bit = u32::try_from(slot.0)?;
             ensure!(
@@ -490,6 +502,27 @@ fn movable(slot: InventorySlot, actor: InventoryActor) -> bool {
         || slot == InventorySlot::CURSOR
         || (actor.bank_access && slot.is_personal_bank())
         || (slot.is_trade() && slot.0 - 3000 < i32::from(actor.trade_slots))
+        || (actor.world_container && slot.is_world())
+}
+
+/// What `EQEmu` handles in a world container's slots (`Client::SwapItem`):
+/// an item from the cursor goes in, onto the same stack or in place of what
+/// was there, and an item comes out whole onto an empty cursor.
+fn check_world(request: &InventoryMove, occupied: bool) -> Result<()> {
+    if request.from.is_world() {
+        ensure!(
+            request.to == InventorySlot::CURSOR
+                && request.quantity == MoveQuantity::Whole
+                && !occupied,
+            "Pick the item up onto an empty cursor"
+        );
+    } else {
+        ensure!(
+            request.from == InventorySlot::CURSOR,
+            "Pick the item up to put it in the container"
+        );
+    }
+    Ok(())
 }
 
 /// What servers accept into a trade slot: an item from the cursor, whole into
