@@ -1,7 +1,7 @@
 //! The zone session: admission, the player's commands and the zone's traffic
 //! until the character leaves for another zone, the world or the character list.
 use super::{
-    abilities, actions, camp, casting, character, chat, combat, corpses,
+    abilities, actions, camp, casting, character, chat, clock, combat, corpses,
     doors::Doors,
     ensure, entities, exchange,
     feature::{Encoder, Feature, Out, World},
@@ -44,6 +44,7 @@ impl Features {
             Box::new(Doors::default()),
             Box::new(objects::GroundObjects::default()),
             Box::new(transfers::Transfers::new(name)),
+            Box::new(clock::Clock::default()),
             Box::new(who::Who),
             Box::new(corpses::Corpses),
         ])
@@ -376,6 +377,9 @@ fn admit(
                 player: Box::new(player),
                 far_clip: zone.far_clip,
             }))?;
+            if let Some(sky) = zone.sky {
+                log.send(ClientEvent::World(crate::world::WorldEvent::Sky(sky)))?;
+            }
             features.admitted(
                 world,
                 &mut Out {

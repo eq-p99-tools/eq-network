@@ -691,6 +691,11 @@ pub enum WorldEvent {
     },
     /// The world's answer to `/who all`.
     WhoList(crate::who::WhoList),
+    /// The time of day, as a zone admits the player and whenever it is
+    /// changed; between those it runs on its own.
+    TimeOfDay(crate::clock::GameTime),
+    /// How the zone's sky and fog look, right after the admission.
+    Sky(crate::clock::ZoneSky),
     /// A consent to drag a player's corpses given or taken back, told to
     /// the owner and to the one consented.
     Consent(crate::corpses::Consent),
@@ -851,6 +856,7 @@ pub fn titanium_update(opcode: u16, body: &[u8]) -> Result<Option<WorldEvent>> {
             WorldEvent::Nourishment(crate::food::decode(opcode, body)?.unwrap_or_default())
         }
         crate::who::RESPONSE_OPCODE => WorldEvent::WhoList(crate::who::decode(body)?),
+        crate::clock::TIME_OPCODE => WorldEvent::TimeOfDay(crate::clock::decode(body)?),
         crate::corpses::CONSENT_RESPONSE_OPCODE => {
             WorldEvent::Consent(crate::corpses::decode_consent(body)?)
         }

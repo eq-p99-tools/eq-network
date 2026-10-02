@@ -4,6 +4,7 @@ mod admission;
 mod camp;
 mod casting;
 mod character;
+mod clock;
 mod combat;
 mod corpses;
 mod doors;
