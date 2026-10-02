@@ -94,6 +94,7 @@ fn partial_correction_blocks_moves_until_both_ends_are_authoritative() {
         race: 1,
         level: 1,
         trade_slots: 0,
+        trade_no_drop: false,
         world_container: false,
     };
     assert!(state.auto_store_destination(actor).is_err());
@@ -188,6 +189,7 @@ fn move_item(state: &mut Inventory, from: i32, to: i32) {
         race: 1,
         level: 1,
         trade_slots: 0,
+        trade_no_drop: false,
         world_container: false,
     };
     let update = state.plan_move(&request, actor).unwrap();
@@ -374,7 +376,8 @@ fn admission_replays_the_cursor_queue_in_order() {
     assert_eq!(cursor_id(&replayed), None);
 }
 
-fn wire(
+/// A serialized Titanium item in `slot`, with `children` in its bag.
+pub(crate) fn wire(
     slot: i32,
     id: u32,
     bag: u8,

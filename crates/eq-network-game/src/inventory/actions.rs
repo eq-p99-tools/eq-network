@@ -73,6 +73,9 @@ pub struct InventoryActor {
     /// How many trade slots the open give or trade window has; zero when none
     /// is open.
     pub trade_slots: u8,
+    /// Whether the open window's partner may take NO DROP items: an NPC may,
+    /// another player never.
+    pub trade_no_drop: bool,
     /// Whether a world container is open for the player, whose ten slots
     /// items may then go into and come out of.
     pub world_container: bool,
@@ -195,6 +198,17 @@ impl Inventory {
         );
         if request.to.is_trade() {
             check_trade(request, self.items.contains_key(&request.to))?;
+            // `EQEmu` disconnects a client that offers another player a NO
+            // DROP item, or a bag holding one.
+            ensure!(
+                actor.trade_no_drop
+                    || !self.items.iter().any(|(slot, item)| {
+                        (*slot == request.from
+                            || slot.parent().is_some_and(|(bag, _)| bag == request.from))
+                            && item.details.flags.iter().any(|flag| flag == "NO DROP")
+                    }),
+                "NO DROP items cannot be traded"
+            );
         }
         if request.from.is_world() || request.to.is_world() {
             check_world(request, self.items.contains_key(&request.to))?;

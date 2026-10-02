@@ -106,6 +106,14 @@ pub enum Request {
     },
     /// Ask another character, or an NPC, to trade, by their spawn.
     Trade(u16),
+    /// Take another player's request to trade, by the asker's spawn, or
+    /// answer that another trade keeps the player busy.
+    AnswerTrade {
+        /// The one who asked.
+        asker: u32,
+        /// Whether the player is busy with another trade.
+        busy: bool,
+    },
     /// Accept the open trade.
     AcceptTrade,
     /// Close the open trade, or withdraw a request.
@@ -236,6 +244,10 @@ pub fn titanium(request: &Request, sender: Sender<'_>) -> Result<EncodedCommand>
         Request::ReadBook(book) => books::titanium_request(book)?,
         Request::Combine(container) => tradeskills::titanium_combine(*container)?,
         Request::Trade(with) => exchange::request(sender.spawn(), *with)?,
+        Request::AnswerTrade { asker, busy: false } => {
+            exchange::acknowledge(sender.spawn(), *asker)?
+        }
+        Request::AnswerTrade { asker, busy: true } => exchange::busy(sender.spawn(), *asker)?,
         Request::AcceptTrade => exchange::accept(sender.spawn())?,
         Request::CancelTrade => exchange::cancel(sender.spawn())?,
         Request::ClickDoor(door_id) => doors::titanium_click(*door_id, sender.spawn()),
@@ -375,5 +387,16 @@ mod tests {
             ..PLAYER
         };
         assert!(titanium(&Request::AcceptTrade, unspawned).is_err());
+        // Another player's request is taken, or answered as busy.
+        let answer = |busy| Request::AnswerTrade { asker: 50, busy };
+        assert_eq!(
+            titanium(&answer(false), PLAYER).unwrap(),
+            exchange::acknowledge(7, 50).unwrap()
+        );
+        assert_eq!(
+            titanium(&answer(true), PLAYER).unwrap(),
+            exchange::busy(7, 50).unwrap()
+        );
+        assert!(eqmac(&answer(false), PLAYER).is_err());
     }
 }
