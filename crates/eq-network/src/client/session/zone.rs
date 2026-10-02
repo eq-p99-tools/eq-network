@@ -193,6 +193,7 @@ pub(super) fn run(
             &mut Out {
                 sink: &mut session,
                 log: &mut *log,
+                wire: server.wire(),
             },
         )?;
         if let Some(exit) = world.take_exit() {
@@ -233,6 +234,7 @@ pub(super) fn run(
                         &mut Out {
                             sink: &mut session,
                             log: &mut *log,
+                            wire: server.wire(),
                         },
                     )?;
                     if let Some(exit) = world.take_exit() {
@@ -274,7 +276,14 @@ pub(super) fn run(
             &mut session,
             log,
         )? {
-            admit(player, &zone, &mut features, &mut world, &mut session, log)?;
+            admit(
+                player,
+                &zone,
+                &mut features,
+                &mut world,
+                (&mut session, server.wire()),
+                log,
+            )?;
         }
         // Everything else is read once, in the server's client generation, the
         // same way before and after admission, and heard by every feature.
@@ -290,6 +299,7 @@ pub(super) fn run(
                     &mut Out {
                         sink: &mut session,
                         log: &mut *log,
+                        wire: server.wire(),
                     },
                 )?;
             } else {
@@ -335,7 +345,7 @@ fn admit(
     zone: &Zone,
     features: &mut Features,
     world: &mut World,
-    session: &mut Box<dyn Transport>,
+    (session, wire): (&mut Box<dyn Transport>, &'static dyn super::wire::Wire),
     log: &mut Events<'_>,
 ) -> Result<()> {
     match player {
@@ -357,6 +367,7 @@ fn admit(
                 &mut Out {
                     sink: session,
                     log: &mut *log,
+                    wire,
                 },
             )?;
         }

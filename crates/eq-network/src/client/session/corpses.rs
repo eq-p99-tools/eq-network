@@ -9,28 +9,28 @@ use super::{
     ClientCommand,
 };
 use anyhow::Result;
-use eq_network_game::{command::EncodedCommand, corpses, world::SpawnKind};
+use eq_network_game::{request::Request, world::SpawnKind};
 
 /// Consents, summons and drags the player's and others' corpses.
 pub(super) struct Corpses;
 
 /// The request a command makes, or why it is not sent.
-fn request(command: &ClientCommand, world: &World) -> Result<EncodedCommand, String> {
+fn request(command: &ClientCommand, world: &World) -> Result<Request, String> {
     let player = world.player.as_ref().ok_or("Not in the zone yet")?;
     // Servers ignore anything but a player's corpse.
-    let corpse = |spawn_id: u16| -> Result<&str, String> {
+    let corpse = |spawn_id: u16| -> Result<String, String> {
         let spawn = world
             .spawns
             .all()
             .find(|spawn| spawn.spawn_id == spawn_id)
             .ok_or("That corpse is not here")?;
         if spawn.kind == SpawnKind::PlayerCorpse {
-            Ok(&spawn.name)
+            Ok(spawn.name.clone())
         } else {
             Err("That is not a player's corpse".into())
         }
     };
-    let encoded = match command {
+    Ok(match command {
         // The official client's words for a name it will not send.
         ClientCommand::Consent { name, .. } if name.trim().is_empty() => {
             return Err("Not a valid consent name.".into());
@@ -38,19 +38,23 @@ fn request(command: &ClientCommand, world: &World) -> Result<EncodedCommand, Str
         ClientCommand::Consent { name, .. } if name.eq_ignore_ascii_case(&player.name) => {
             return Err("You cannot consent yourself.".into());
         }
-        ClientCommand::Consent { name, given, .. } => corpses::consent(name.trim(), *given),
-        ClientCommand::SummonCorpse { spawn_id, .. } => {
-            corpses::summon(corpse(*spawn_id)?, &player.name)
-        }
-        ClientCommand::DragCorpse { spawn_id, .. } => {
-            corpses::drag(corpse(*spawn_id)?, &player.name)
-        }
-        ClientCommand::DropCorpse { spawn_id, .. } => {
-            corpses::release(spawn_id.map(corpse).transpose()?)
-        }
+        ClientCommand::Consent { name, given, .. } => Request::Consent {
+            name: name.trim().into(),
+            given: *given,
+        },
+        ClientCommand::SummonCorpse { spawn_id, .. } => Request::SummonCorpse {
+            corpse: corpse(*spawn_id)?,
+            player: player.name.clone(),
+        },
+        ClientCommand::DragCorpse { spawn_id, .. } => Request::DragCorpse {
+            corpse: corpse(*spawn_id)?,
+            dragger: player.name.clone(),
+        },
+        ClientCommand::DropCorpse { spawn_id, .. } => Request::DropCorpse {
+            corpse: spawn_id.map(corpse).transpose()?,
+        },
         _ => return Err("Not a corpse command".into()),
-    };
-    encoded.map_err(|error| error.to_string())
+    })
 }
 
 impl Feature for Corpses {
@@ -74,7 +78,11 @@ impl Feature for Corpses {
         world: &mut World,
         out: &mut Out<'_, '_>,
     ) -> Result<()> {
-        match request(command, world) {
+        // A name the packet cannot carry is refused as the feature's own
+        // reasons are.
+        let packet = request(command, world)
+            .and_then(|request| out.encode(&request).map_err(|error| error.to_string()));
+        match packet {
             Ok(packet) => out.send(&packet),
             Err(reason) => actions::refuse(command, &reason, out.log),
         }
@@ -85,6 +93,7 @@ impl Feature for Corpses {
 mod tests {
     use super::super::feature::testing;
     use super::*;
+    use eq_network_game::corpses;
     use eq_network_game::world::WorldEvent;
 
     fn refusals(events: &[super::super::ClientEvent]) -> Vec<String> {

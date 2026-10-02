@@ -6,7 +6,7 @@ use super::{
     ClientCommand,
 };
 use anyhow::Result;
-use eq_network_game::who;
+use eq_network_game::request::Request;
 
 /// Asks the world who is online.
 pub(super) struct Who;
@@ -29,7 +29,7 @@ impl Feature for Who {
         let ClientCommand::WhoAll { filter, .. } = command else {
             return Ok(());
         };
-        match who::request(filter) {
+        match out.encode(&Request::Who(filter.clone())) {
             Ok(request) => out.send(&request),
             // The host checks the text first; a request it let through
             // anyway is not worth the session.
@@ -42,6 +42,7 @@ impl Feature for Who {
 mod tests {
     use super::super::feature::testing;
     use super::*;
+    use eq_network_game::who;
 
     #[test]
     fn who_all_asks_the_world_with_the_filter() {

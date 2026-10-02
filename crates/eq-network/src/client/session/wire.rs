@@ -7,8 +7,13 @@
 //! [`ServerType`](super::servers::ServerType) feature.
 
 use crate::chat::{self, ChatEvent};
-use anyhow::Result;
-use eq_network_game::{message::Message, GameDialect};
+use anyhow::{bail, Result};
+use eq_network_game::{
+    command::EncodedCommand,
+    message::Message,
+    request::{self, Request},
+    GameDialect,
+};
 
 /// One client generation's zone packets.
 pub(super) trait Wire: Sync {
@@ -28,6 +33,15 @@ pub(super) trait Wire: Sync {
     fn chat(&self, _opcode: u16, _body: &[u8], _include_raw: bool) -> Result<Option<ChatEvent>> {
         Ok(None)
     }
+
+    /// The packet that asks the server for what the session wants.
+    ///
+    /// # Errors
+    /// Refuses a request the generation has not been built for, and one
+    /// whose values its packet cannot carry.
+    fn encode(&self, request: &Request) -> Result<EncodedCommand> {
+        bail!("this client generation cannot send {request:?} yet")
+    }
 }
 
 /// The Titanium client's packets, which P99 and `EQEmu` speak.
@@ -44,6 +58,10 @@ impl Wire for Titanium {
 
     fn chat(&self, opcode: u16, body: &[u8], include_raw: bool) -> Result<Option<ChatEvent>> {
         chat::parse(opcode, body, include_raw)
+    }
+
+    fn encode(&self, request: &Request) -> Result<EncodedCommand> {
+        request::titanium(request)
     }
 }
 
@@ -72,6 +90,15 @@ mod tests {
         let read = Titanium.messages(0x3cdc, &[]);
         assert!(matches!(read.as_slice(), [Message::LoggedOut]), "{read:?}");
         assert_eq!(Titanium.dialect(), GameDialect::Titanium);
+    }
+
+    #[test]
+    fn titanium_sends_what_the_titanium_codecs_build_and_eqmac_nothing_yet() {
+        assert_eq!(
+            Titanium.encode(&Request::Camp).unwrap(),
+            eq_network_game::command::titanium_camp()
+        );
+        assert!(EqMac.encode(&Request::Camp).is_err());
     }
 
     #[test]
