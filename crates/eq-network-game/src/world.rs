@@ -356,12 +356,14 @@ pub enum Capability {
     Resurrection,
     /// Reading books and notes.
     Reading,
+    /// Combining in the player's own tradeskill containers.
+    Tradeskills,
 }
 
 impl Capability {
     /// Every capability, in order: what a session offers when its server and
     /// client generation support everything.
-    pub const ALL: [Self; 22] = [
+    pub const ALL: [Self; 23] = [
         Self::Casting,
         Self::Spellbook,
         Self::Inventory,
@@ -384,6 +386,7 @@ impl Capability {
         Self::Training,
         Self::Resurrection,
         Self::Reading,
+        Self::Tradeskills,
     ];
 }
 
@@ -790,6 +793,15 @@ pub enum WorldEvent {
         /// Why not.
         reason: String,
     },
+    /// A tradeskill combine started, or the server judged it.
+    Combine(crate::tradeskills::CombineUpdate),
+    /// A combine was not sent, and why.
+    CombineRefused {
+        /// Admission from the request.
+        session_id: u64,
+        /// Why not.
+        reason: String,
+    },
     /// A melee, skill or spell damage record for any nearby entities.
     Damage(crate::combat::Damage),
     /// Own-character skill update; unknown skill IDs remain available to consumers.
@@ -1031,6 +1043,8 @@ fn titanium_views(opcode: u16, body: &[u8]) -> Result<Option<WorldEvent>> {
         Some(WorldEvent::Resurrection(offer))
     } else if let Some(text) = crate::books::decode(opcode, body)? {
         Some(WorldEvent::BookText(text))
+    } else if let Some(update) = crate::tradeskills::decode(opcode, body)? {
+        Some(WorldEvent::Combine(update))
     } else {
         crate::inventory::decode(opcode, body)?.map(WorldEvent::Inventory)
     })
@@ -1217,6 +1231,7 @@ mod tests {
             Capability::Training => 19,
             Capability::Resurrection => 20,
             Capability::Reading => 21,
+            Capability::Tradeskills => 22,
         };
         for (index, capability) in Capability::ALL.into_iter().enumerate() {
             assert_eq!(place(capability), index, "{capability:?}");

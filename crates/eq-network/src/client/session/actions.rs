@@ -111,7 +111,10 @@ pub(super) fn needs(command: &ClientCommand) -> &'static [Resource] {
         | ClientCommand::Buy { .. }
         | ClientCommand::Sell { .. }
         | ClientCommand::Consume { .. }
-        | ClientCommand::AcceptTrade { .. } => &[Inventory],
+        | ClientCommand::AcceptTrade { .. }
+        // A combine takes the container's contents and puts what was made
+        // on the cursor.
+        | ClientCommand::Combine { .. } => &[Inventory],
         ClientCommand::SelectCharacter { .. }
         | ClientCommand::CreateCharacter { .. }
         | ClientCommand::ClickDoor { .. }
@@ -186,6 +189,7 @@ fn refusal(command: &ClientCommand, reason: &str) -> Option<WorldEvent> {
         | ClientCommand::Training { session_id, .. }
         | ClientCommand::AnswerResurrection { session_id, .. }
         | ClientCommand::ReadItem { session_id, .. }
+        | ClientCommand::Combine { session_id, .. }
         | ClientCommand::Consent { session_id, .. }
         | ClientCommand::SummonCorpse { session_id, .. }
         | ClientCommand::DragCorpse { session_id, .. }
@@ -267,6 +271,7 @@ fn reasoned(command: &ClientCommand, session_id: u64, reason: String) -> Option<
             WorldEvent::ResurrectionRefused { session_id, reason }
         }
         ClientCommand::ReadItem { .. } => WorldEvent::ReadRefused { session_id, reason },
+        ClientCommand::Combine { .. } => WorldEvent::CombineRefused { session_id, reason },
         ClientCommand::Consent { .. }
         | ClientCommand::SummonCorpse { .. }
         | ClientCommand::DragCorpse { .. }

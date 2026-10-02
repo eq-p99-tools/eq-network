@@ -25,6 +25,7 @@ mod servers;
 mod spellbook;
 mod talk;
 mod targeting;
+mod tradeskills;
 mod training;
 mod transfers;
 mod who;

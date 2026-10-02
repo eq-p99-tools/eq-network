@@ -390,6 +390,15 @@ pub enum GameCommand {
         /// Where the item is carried.
         slot: crate::inventory::InventorySlot,
     },
+    /// Combine what a carried tradeskill container holds.
+    Combine {
+        /// Current zone admission.
+        session_id: u64,
+        /// The pack slot the container is in.
+        container: crate::inventory::InventorySlot,
+        /// Reject delayed actions instead of replaying them after a stall.
+        created: std::time::Instant,
+    },
     /// Accept or decline the resurrection offered last.
     AnswerResurrection {
         /// Current zone admission.
@@ -475,6 +484,7 @@ impl GameCommand {
             | Self::Training { session_id, .. }
             | Self::AnswerResurrection { session_id, .. }
             | Self::ReadItem { session_id, .. }
+            | Self::Combine { session_id, .. }
             | Self::Consent { session_id, .. }
             | Self::SummonCorpse { session_id, .. }
             | Self::DragCorpse { session_id, .. }
@@ -535,6 +545,7 @@ impl GameCommand {
             Self::Training { .. } => Capability::Training,
             Self::AnswerResurrection { .. } => Capability::Resurrection,
             Self::ReadItem { .. } => Capability::Reading,
+            Self::Combine { .. } => Capability::Tradeskills,
             Self::Consent { .. }
             | Self::SummonCorpse { .. }
             | Self::DragCorpse { .. }
@@ -591,6 +602,7 @@ impl GameCommand {
             | Self::Consume { created, .. }
             | Self::UseAbility { created, .. }
             | Self::Training { created, .. }
+            | Self::Combine { created, .. }
             | Self::ConfigureMotion { created, .. } => Some(*created),
         }
     }
@@ -711,6 +723,7 @@ pub fn encode(
         | GameCommand::Training { .. }
         | GameCommand::AnswerResurrection { .. }
         | GameCommand::ReadItem { .. }
+        | GameCommand::Combine { .. }
         | GameCommand::Consent { .. }
         | GameCommand::SummonCorpse { .. }
         | GameCommand::DragCorpse { .. }

@@ -16,7 +16,7 @@ use crate::{
     objects,
     pets::{self, PetCommand},
     resurrection::{self, ResurrectionOffer},
-    spells, training,
+    spells, tradeskills, training,
     who::{self, WhoFilter},
     world::Position,
     zoning, GameDialect,
@@ -88,6 +88,8 @@ pub enum Request {
     EndTraining(u16),
     /// Ask for a book's or note's text.
     ReadBook(Book),
+    /// Combine what the tradeskill container in a pack slot holds.
+    Combine(InventorySlot),
     /// Accept or decline a resurrection offer.
     AnswerResurrection {
         /// The offer, which the answer repeats.
@@ -230,6 +232,7 @@ pub fn titanium(request: &Request, sender: Sender<'_>) -> Result<EncodedCommand>
             resurrection::titanium_answer(offer, *accept)
         }
         Request::ReadBook(book) => books::titanium_request(book)?,
+        Request::Combine(container) => tradeskills::titanium_combine(*container)?,
         Request::Trade(with) => exchange::request(sender.spawn(), *with)?,
         Request::AcceptTrade => exchange::accept(sender.spawn())?,
         Request::CancelTrade => exchange::cancel(sender.spawn())?,
