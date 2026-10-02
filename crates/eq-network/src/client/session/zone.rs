@@ -413,7 +413,7 @@ mod tests {
     };
 
     /// How many kinds of command there are.
-    const KINDS: usize = 41;
+    const KINDS: usize = 42;
 
     /// Which kind of command this is. A new command is a compile error here
     /// until it has a number, and then a test failure until the list below
@@ -462,6 +462,7 @@ mod tests {
             ClientCommand::DragCorpse { .. } => 38,
             ClientCommand::DropCorpse { .. } => 39,
             ClientCommand::Pet { .. } => 40,
+            ClientCommand::AutoEat { .. } => 41,
         }
     }
 
@@ -667,6 +668,10 @@ mod tests {
                 session_id,
                 slot: InventorySlot(22),
                 created,
+            },
+            ClientCommand::AutoEat {
+                session_id,
+                auto_eat: eq_network_game::food::AutoEat::Anything,
             },
             ClientCommand::WhoAll {
                 session_id,
