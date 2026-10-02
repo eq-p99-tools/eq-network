@@ -10,6 +10,8 @@ pub mod buffs;
 pub mod characters;
 /// Communication packet codecs and structured item-link extraction.
 pub mod chat;
+/// The time of day in Norrath, and how a zone's sky and fog look.
+pub mod clock;
 /// Consider, auto-attack and combat-damage records.
 pub mod combat;
 /// Typed client actions and dialect-specific application packet encoding.
