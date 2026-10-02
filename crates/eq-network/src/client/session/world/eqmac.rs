@@ -1,18 +1,20 @@
 //! `EQMac`'s world stage, as the `MacPC` world server runs it: the client logs
 //! in with the account's session key, the world lists the characters, the
-//! client enters one, and the world hands it off to its zone. The world sends
-//! no file manifest and has no protection.
+//! client creates or enters one, and the world hands it off to its zone. The
+//! world sends no file manifest and has no protection.
 use crate::{
     client::{
         selection::{Choice, Selection},
         session::{
-            cstr, login::Credentials, put_string, record_chat, CharacterSession, ZoneDestination,
+            creation::Creating, cstr, login::Credentials, put_string, record_chat, servers,
+            CharacterSession, ZoneDestination,
         },
         ClientEvent, ConnectionStage, Events,
     },
     old_transport::OldSession,
 };
 use anyhow::{ensure, Context, Result};
+use eq_network_game::creation::EQMAC_APPROVE_NAME_OPCODE;
 use std::time::{Duration, Instant};
 use zeroize::Zeroizing;
 
@@ -36,21 +38,27 @@ pub(in crate::client::session) fn world(
         stop.flag(),
     )?;
     session.send(WORLD_LOGIN, &*world_login(context.credentials)?)?;
+    let server = servers::server_type(config.protocol);
     let mut deadline = Instant::now() + Duration::from_secs(60);
     let mut entered = false;
     let mut selection = None;
     let mut chosen = None;
+    // A creation awaiting the world's approval of its name, or its new list.
+    let mut creating: Option<Creating> = None;
     loop {
         ensure!(!stop.is_cancelled(), "shutdown requested");
         if !entered {
-            if let Some(choice) = selection
+            match selection
                 .as_ref()
                 .and_then(|list: &Selection| list.poll(context.commands))
-                .and_then(Choice::entered)
             {
-                chosen = Some(choice);
+                Some(Choice::Enter(name)) => chosen = Some(name),
+                Some(Choice::Create(character)) if creating.is_none() => {
+                    creating = Creating::start(server.creation(), character, &mut session, log)?;
+                }
+                _ => (),
             }
-            if let Some(name) = chosen.take().filter(|_| !entered) {
+            if let Some(name) = chosen.take() {
                 let mut enter = [0; 64];
                 put_string(&mut enter, &name)?;
                 session.send(WORLD_ENTER, &enter)?;
@@ -75,13 +83,28 @@ pub(in crate::client::session) fn world(
             packet.body.len()
         ))?;
         match packet.opcode {
-            WORLD_CHARACTER_LIST if !entered && selection.is_none() => {
+            // Name approved: send the creation; any refusal ends this attempt.
+            EQMAC_APPROVE_NAME_OPCODE => {
+                if let Some(attempt) = creating.take() {
+                    creating = attempt.answered(&packet.body, &mut session, log)?;
+                }
+            }
+            // The first list, or the one with a character just created.
+            WORLD_CHARACTER_LIST
+                if !entered
+                    && (selection.is_none()
+                        || creating.as_ref().is_some_and(Creating::requested)) =>
+            {
                 let entries =
                     eq_network_game::characters::decode(config.protocol.into(), &packet.body)?;
-                log.send(ClientEvent::Progress(ConnectionStage::SelectingCharacter))?;
-                if world_only {
-                    session.close()?;
-                    return Ok(None);
+                if let Some(attempt) = creating.take() {
+                    attempt.created(log)?;
+                } else {
+                    log.send(ClientEvent::Progress(ConnectionStage::SelectingCharacter))?;
+                    if world_only {
+                        session.close()?;
+                        return Ok(None);
+                    }
                 }
                 let (list, automatic) = Selection::new(entries, &config.character, log)?;
                 selection = Some(list);
