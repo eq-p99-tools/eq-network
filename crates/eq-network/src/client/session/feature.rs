@@ -13,7 +13,9 @@ use super::{
     inventory::{Carried, Ledger},
     lifecycle::ZoneLifecycle,
     motion::Body,
+    objects::ZoneObjects,
     posture::OwnPosture,
+    tradeskills::OpenContainer,
     ClientCommand, ConnectionState, Events, ZoneExit,
 };
 use anyhow::{Context, Result};
@@ -194,6 +196,11 @@ pub(in crate::client) struct World {
     /// The server's idea of the player's target, which only the targeting
     /// feature changes.
     pub(super) target: super::targeting::Target,
+    /// The zone's objects, which only the ground objects feature changes.
+    pub(super) objects: ZoneObjects,
+    /// The world container asked for or open, which only the tradeskills
+    /// feature changes.
+    pub(super) container: OpenContainer,
 }
 
 impl World {
@@ -215,6 +222,8 @@ impl World {
             spawns: Spawns::default(),
             exchange: Exchanging::default(),
             target: super::targeting::Target::default(),
+            objects: ZoneObjects::default(),
+            container: OpenContainer::default(),
         }
     }
 
@@ -471,6 +480,7 @@ pub(super) mod testing {
         eq_network_game::inventory::InventoryItem {
             activation: eq_network_game::inventory::ItemActivation::default(),
             scroll_spell: None,
+            book: None,
             rules: eq_network_game::inventory::ItemPlacement::default(),
             slot: eq_network_game::inventory::InventorySlot(slot),
             icon: 0,

@@ -111,7 +111,10 @@ pub(super) fn needs(command: &ClientCommand) -> &'static [Resource] {
         | ClientCommand::Buy { .. }
         | ClientCommand::Sell { .. }
         | ClientCommand::Consume { .. }
-        | ClientCommand::AcceptTrade { .. } => &[Inventory],
+        | ClientCommand::AcceptTrade { .. }
+        // A combine takes the container's contents and puts what was made
+        // on the cursor.
+        | ClientCommand::Combine { .. } => &[Inventory],
         ClientCommand::SelectCharacter { .. }
         | ClientCommand::CreateCharacter { .. }
         | ClientCommand::ClickDoor { .. }
@@ -136,6 +139,13 @@ pub(super) fn needs(command: &ClientCommand) -> &'static [Resource] {
         | ClientCommand::SelectTarget { .. }
         | ClientCommand::WhoAll { .. }
         | ClientCommand::Pet { .. }
+        | ClientCommand::Training { .. }
+        | ClientCommand::AnswerResurrection { .. }
+        | ClientCommand::ReadItem { .. }
+        // Opening a container holds nothing, and closing one must always be
+        // possible.
+        | ClientCommand::OpenContainer { .. }
+        | ClientCommand::CloseContainer { .. }
         | ClientCommand::Consent { .. }
         | ClientCommand::SummonCorpse { .. }
         | ClientCommand::DragCorpse { .. }
@@ -180,6 +190,10 @@ fn refusal(command: &ClientCommand, reason: &str) -> Option<WorldEvent> {
         | ClientCommand::Consume { session_id, .. }
         | ClientCommand::UseAbility { session_id, .. }
         | ClientCommand::Pet { session_id, .. }
+        | ClientCommand::Training { session_id, .. }
+        | ClientCommand::AnswerResurrection { session_id, .. }
+        | ClientCommand::ReadItem { session_id, .. }
+        | ClientCommand::Combine { session_id, .. }
         | ClientCommand::Consent { session_id, .. }
         | ClientCommand::SummonCorpse { session_id, .. }
         | ClientCommand::DragCorpse { session_id, .. }
@@ -188,6 +202,11 @@ fn refusal(command: &ClientCommand, reason: &str) -> Option<WorldEvent> {
             return reasoned(command, *session_id, reason.into());
         }
         ClientCommand::PickUp {
+            session_id,
+            drop_id,
+            ..
+        }
+        | ClientCommand::OpenContainer {
             session_id,
             drop_id,
             ..
@@ -237,13 +256,14 @@ fn refusal(command: &ClientCommand, reason: &str) -> Option<WorldEvent> {
         | ClientCommand::WhoAll { .. }
         | ClientCommand::ConfigureMotion { .. }
         | ClientCommand::AutoEat { .. }
+        | ClientCommand::CloseContainer { .. }
         | ClientCommand::Move(_) => return None,
     })
 }
 
 /// The refusal that is only a reason, for the admission that asked: what a
-/// merchant, a trade, coins, food, an ability, a pet, a corpse or a zone
-/// line would not do.
+/// merchant, a trade, coins, food, an ability, a pet, a guildmaster, a
+/// corpse or a zone line would not do.
 fn reasoned(command: &ClientCommand, session_id: u64, reason: String) -> Option<WorldEvent> {
     Some(match command {
         ClientCommand::Buy { .. } | ClientCommand::Sell { .. } => {
@@ -254,8 +274,23 @@ fn reasoned(command: &ClientCommand, session_id: u64, reason: String) -> Option<
         }
         ClientCommand::MoveCoins { .. } => WorldEvent::CoinsRefused { session_id, reason },
         ClientCommand::Consume { .. } => WorldEvent::ConsumeRefused { session_id, reason },
-        ClientCommand::UseAbility { .. } => WorldEvent::AbilityRefused { session_id, reason },
+        ClientCommand::UseAbility { .. } => WorldEvent::AbilityRefused {
+            session_id,
+            reason,
+            string_id: None,
+            arguments: Vec::new(),
+        },
         ClientCommand::Pet { .. } => WorldEvent::PetRefused { session_id, reason },
+        ClientCommand::Training { .. } => WorldEvent::TrainingRefused { session_id, reason },
+        ClientCommand::AnswerResurrection { .. } => {
+            WorldEvent::ResurrectionRefused { session_id, reason }
+        }
+        ClientCommand::ReadItem { .. } => WorldEvent::ReadRefused { session_id, reason },
+        ClientCommand::Combine { .. } => WorldEvent::CombineRefused {
+            session_id,
+            reason,
+            string_id: None,
+        },
         ClientCommand::Consent { .. }
         | ClientCommand::SummonCorpse { .. }
         | ClientCommand::DragCorpse { .. }

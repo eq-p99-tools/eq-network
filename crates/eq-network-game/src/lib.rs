@@ -4,6 +4,10 @@
 pub mod abilities;
 /// Worn gear and features in EQ's texture slots, and wear changes.
 pub mod appearance;
+/// Binding wounds with bandages.
+pub mod bind_wound;
+/// Reading books and notes.
+pub mod books;
 /// Admission buffs and server-driven buff changes.
 pub mod buffs;
 /// World-server character selection lists.
@@ -50,8 +54,14 @@ pub mod p99;
 pub mod pets;
 /// TAKP/EQMac player and entity presentation codecs.
 pub mod quarm;
+/// Being resurrected: the offer and the player's answer.
+pub mod resurrection;
 /// Server-driven spellbook and casting notifications.
 pub mod spells;
+/// Tradeskill combines in the player's own containers.
+pub mod tradeskills;
+/// Training skills at a guildmaster.
+pub mod training;
 /// Who is online: `/who all` and the world's answer.
 pub mod who;
 /// Renderer-independent world-state packet decoding.

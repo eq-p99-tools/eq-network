@@ -84,6 +84,22 @@ pub enum GameCommand {
         /// Requests expire rather than surviving stalls or reconnects.
         created: std::time::Instant,
     },
+    /// Open a world container within reach, such as a forge; the server
+    /// answers with what it holds, or that someone else is using it.
+    OpenContainer {
+        /// Current zone admission.
+        session_id: u64,
+        /// Object from this zone's server-provided table.
+        drop_id: u32,
+        /// Requests expire rather than surviving stalls or reconnects.
+        created: std::time::Instant,
+    },
+    /// Close the world container open for the player; the server puts what
+    /// it still holds back in the inventory.
+    CloseContainer {
+        /// Current zone admission.
+        session_id: u64,
+    },
     /// Request a transfer after entering a boundary in the local zone assets.
     CrossZoneLine {
         /// Current zone admission.
@@ -374,6 +390,38 @@ pub enum GameCommand {
         /// The player's target, which an attack aims at.
         target: Option<u16>,
     },
+    /// Open training with a guildmaster, practice a skill there, or leave.
+    Training {
+        /// Current zone admission.
+        session_id: u64,
+        /// What the player asks.
+        request: crate::training::TrainingRequest,
+        /// Reject delayed actions instead of replaying them after a stall.
+        created: std::time::Instant,
+    },
+    /// Read the book or note in an inventory slot.
+    ReadItem {
+        /// Current zone admission.
+        session_id: u64,
+        /// Where the item is carried.
+        slot: crate::inventory::InventorySlot,
+    },
+    /// Combine what a carried tradeskill container holds.
+    Combine {
+        /// Current zone admission.
+        session_id: u64,
+        /// The pack slot the container is in.
+        container: crate::inventory::InventorySlot,
+        /// Reject delayed actions instead of replaying them after a stall.
+        created: std::time::Instant,
+    },
+    /// Accept or decline the resurrection offered last.
+    AnswerResurrection {
+        /// Current zone admission.
+        session_id: u64,
+        /// True accepts.
+        accept: bool,
+    },
     /// Ask the world who is online: `/who all`.
     WhoAll {
         /// Current zone admission.
@@ -422,6 +470,8 @@ impl GameCommand {
             Self::SwapSpell { session_id, .. }
             | Self::ClickDoor { session_id, .. }
             | Self::PickUp { session_id, .. }
+            | Self::OpenContainer { session_id, .. }
+            | Self::CloseContainer { session_id }
             | Self::CrossZoneLine { session_id, .. }
             | Self::ScribeSpell { session_id, .. }
             | Self::DeleteSpell { session_id, .. }
@@ -449,6 +499,10 @@ impl GameCommand {
             | Self::UseAbility { session_id, .. }
             | Self::WhoAll { session_id, .. }
             | Self::Pet { session_id, .. }
+            | Self::Training { session_id, .. }
+            | Self::AnswerResurrection { session_id, .. }
+            | Self::ReadItem { session_id, .. }
+            | Self::Combine { session_id, .. }
             | Self::Consent { session_id, .. }
             | Self::SummonCorpse { session_id, .. }
             | Self::DragCorpse { session_id, .. }
@@ -506,6 +560,12 @@ impl GameCommand {
             Self::UseAbility { .. } => Capability::Abilities,
             Self::WhoAll { .. } => Capability::Who,
             Self::Pet { .. } => Capability::Pets,
+            Self::Training { .. } => Capability::Training,
+            Self::AnswerResurrection { .. } => Capability::Resurrection,
+            Self::ReadItem { .. } => Capability::Reading,
+            Self::Combine { .. } | Self::OpenContainer { .. } | Self::CloseContainer { .. } => {
+                Capability::Tradeskills
+            }
             Self::Consent { .. }
             | Self::SummonCorpse { .. }
             | Self::DragCorpse { .. }
@@ -527,6 +587,9 @@ impl GameCommand {
             | Self::AutoEat { .. }
             | Self::WhoAll { .. }
             | Self::Pet { .. }
+            | Self::AnswerResurrection { .. }
+            | Self::ReadItem { .. }
+            | Self::CloseContainer { .. }
             | Self::Consent { .. }
             | Self::SummonCorpse { .. }
             | Self::DragCorpse { .. }
@@ -538,6 +601,7 @@ impl GameCommand {
             Self::SwapSpell { created, .. }
             | Self::ClickDoor { created, .. }
             | Self::PickUp { created, .. }
+            | Self::OpenContainer { created, .. }
             | Self::CrossZoneLine { created, .. }
             | Self::ScribeSpell { created, .. }
             | Self::DeleteSpell { created, .. }
@@ -559,6 +623,8 @@ impl GameCommand {
             | Self::AutoAttack { created, .. }
             | Self::Consume { created, .. }
             | Self::UseAbility { created, .. }
+            | Self::Training { created, .. }
+            | Self::Combine { created, .. }
             | Self::ConfigureMotion { created, .. } => Some(*created),
         }
     }
@@ -663,6 +729,8 @@ pub fn encode(
         GameCommand::MoveInventory(_)
         | GameCommand::ClickDoor { .. }
         | GameCommand::PickUp { .. }
+        | GameCommand::OpenContainer { .. }
+        | GameCommand::CloseContainer { .. }
         | GameCommand::OfferTrade { .. }
         | GameCommand::AcceptTrade { .. }
         | GameCommand::CancelTrade { .. }
@@ -676,6 +744,10 @@ pub fn encode(
         | GameCommand::UseAbility { .. }
         | GameCommand::WhoAll { .. }
         | GameCommand::Pet { .. }
+        | GameCommand::Training { .. }
+        | GameCommand::AnswerResurrection { .. }
+        | GameCommand::ReadItem { .. }
+        | GameCommand::Combine { .. }
         | GameCommand::Consent { .. }
         | GameCommand::SummonCorpse { .. }
         | GameCommand::DragCorpse { .. }

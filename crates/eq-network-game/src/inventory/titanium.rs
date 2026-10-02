@@ -16,11 +16,20 @@ pub fn decode(opcode: u16, body: &[u8]) -> Result<Option<InventoryUpdate>> {
         0x3397 => {
             ensure!(body.len() >= 4, "truncated item packet");
             let kind = u32::from_le_bytes(body[..4].try_into()?);
-            if !matches!(kind, 0x67 | 0x69 | 0x6a) {
+            if !matches!(kind, 0x67 | 0x69 | 0x6a | 0x6b) {
                 return Ok(None);
             }
-            let items = parse(&body[4..])?;
+            let mut items = parse(&body[4..])?;
             ensure!(!items.is_empty(), "empty item update");
+            if kind == 0x6b {
+                // What an opened world container holds: Titanium numbers its
+                // ten places 0 to 9 here, and 4000 to 4009 in moves.
+                let index = items[0].slot.0;
+                ensure!((0..=9).contains(&index), "invalid world container place");
+                items.truncate(1);
+                items[0].slot = InventorySlot(4000 + index);
+                return Ok(Some(InventoryUpdate::Set(items)));
+            }
             // One root item and optional bag contents, not another bulk snapshot.
             let root = items[0].slot;
             ensure!(
@@ -40,6 +49,11 @@ pub fn decode(opcode: u16, body: &[u8]) -> Result<Option<InventoryUpdate>> {
                 return Ok(Some(InventoryUpdate::Cursor(items)));
             }
             Ok(Some(InventoryUpdate::Set(items)))
+        }
+        // `OP_ClearObject`: the open world container emptied.
+        0x21ed => {
+            ensure!(body.len() == 8, "invalid world container clear length");
+            Ok(Some(InventoryUpdate::WorldEmptied))
         }
         0x420f | 0x4d81 | 0x1c4a => {
             ensure!(body.len() == 12, "invalid inventory mutation length");
@@ -140,6 +154,7 @@ impl<'a> Parser<'a> {
                     .ok()
                     .filter(|id| !matches!(*id, 0 | 0xffff | u32::MAX))
             },
+            book: crate::books::Book::from_item(fields[0], fields[100], fields[102]),
             rules: ItemPlacement {
                 stack_size: number(131)?,
                 size: u8::try_from(number(8)?)?,

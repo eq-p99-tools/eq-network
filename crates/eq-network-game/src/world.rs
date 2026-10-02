@@ -85,6 +85,9 @@ pub struct PlayerState {
     pub deity: Option<u32>,
     /// Indexed profile skill values, when decoded; IDs retain the protocol's numbering.
     pub skills: Option<Vec<u32>>,
+    /// Unspent practice points, which training at a guildmaster spends, when
+    /// decoded.
+    pub practice_points: Option<u32>,
     /// Numeric gender identifier.
     pub gender: u32,
     /// Current level.
@@ -347,12 +350,23 @@ pub enum Capability {
     Corpses,
     /// Commanding a pet.
     Pets,
+    /// Training skills at a guildmaster.
+    Training,
+    /// Accepting or declining a resurrection.
+    Resurrection,
+    /// Reading books and notes.
+    Reading,
+    /// Combining in the player's own tradeskill containers.
+    Tradeskills,
+    /// Opening the in-game map, which a front end draws from the
+    /// installation's map files.
+    Map,
 }
 
 impl Capability {
     /// Every capability, in order: what a session offers when its server and
     /// client generation support everything.
-    pub const ALL: [Self; 19] = [
+    pub const ALL: [Self; 24] = [
         Self::Casting,
         Self::Spellbook,
         Self::Inventory,
@@ -372,6 +386,11 @@ impl Capability {
         Self::Who,
         Self::Corpses,
         Self::Pets,
+        Self::Training,
+        Self::Resurrection,
+        Self::Reading,
+        Self::Tradeskills,
+        Self::Map,
     ];
 }
 
@@ -707,13 +726,25 @@ pub enum WorldEvent {
         /// How long its recovery takes, at most.
         ready_in: std::time::Duration,
     },
+    /// The abilities this server type offers, as the zone admits the player;
+    /// a host greys the rest, which the session refuses.
+    AbilitiesOffered(Vec<crate::abilities::Ability>),
     /// An ability was not used, and why: the server would have ignored it.
     AbilityRefused {
         /// Admission from the request.
         session_id: u64,
         /// Why not.
         reason: String,
+        /// The official client's own words for this refusal, as an
+        /// `eqstr_us.txt` string ID, for a host with the installed strings;
+        /// `reason` says the same in this library's words.
+        string_id: Option<u32>,
+        /// What the official words name, in order, such as the player too
+        /// far away to bandage.
+        arguments: Vec<String>,
     },
+    /// A bandaging started or ended.
+    BindWound(crate::bind_wound::BindWoundUpdate),
     /// The world's answer to `/who all`.
     WhoList(crate::who::WhoList),
     /// The time of day, as a zone admits the player and whenever it is
@@ -747,6 +778,49 @@ pub enum WorldEvent {
         session_id: u64,
         /// Why not.
         reason: String,
+    },
+    /// Training at a guildmaster opened, took a practice or ended.
+    Training(crate::training::TrainingUpdate),
+    /// A training request was not sent, and why.
+    TrainingRefused {
+        /// Admission from the request.
+        session_id: u64,
+        /// Why not.
+        reason: String,
+    },
+    /// How many practice points the player has left.
+    PracticePoints(u32),
+    /// A resurrection was cast on the player's corpse; the player may accept
+    /// or decline it.
+    Resurrection(crate::resurrection::ResurrectionOffer),
+    /// An answer to a resurrection was not sent, and why.
+    ResurrectionRefused {
+        /// Admission from the request.
+        session_id: u64,
+        /// Why not.
+        reason: String,
+    },
+    /// A book's or note's text, to read.
+    BookText(crate::books::BookText),
+    /// A request to read was not sent, and why.
+    ReadRefused {
+        /// Admission from the request.
+        session_id: u64,
+        /// Why not.
+        reason: String,
+    },
+    /// A tradeskill combine started, or the server judged it.
+    Combine(crate::tradeskills::CombineUpdate),
+    /// A combine was not sent, and why.
+    CombineRefused {
+        /// Admission from the request.
+        session_id: u64,
+        /// Why not.
+        reason: String,
+        /// The official client's own words for this refusal, as an
+        /// `eqstr_us.txt` string ID, for a host with the installed strings;
+        /// `reason` says the same in this library's words.
+        string_id: Option<u32>,
     },
     /// A melee, skill or spell damage record for any nearby entities.
     Damage(crate::combat::Damage),
@@ -813,6 +887,7 @@ pub fn titanium_player(profile: &[u8], spawn: &[u8], revolution: f32) -> Result<
                 .map(|index| word(profile, 4460 + index * 4))
                 .collect(),
         ),
+        practice_points: Some(word(profile, 2224)),
         gender: word(profile, 4),
         level: profile[20],
         position,
@@ -966,8 +1041,9 @@ pub fn titanium_update(opcode: u16, body: &[u8]) -> Result<Option<WorldEvent>> {
     }))
 }
 
-/// Spell actions, doors, ground objects, loot, merchant, exchange and
-/// inventory packets, each owned by its codec.
+/// Spell actions, doors, ground objects, loot, merchant, exchange,
+/// training, resurrection, book, combine, bandaging and inventory packets,
+/// each owned by its codec.
 fn titanium_views(opcode: u16, body: &[u8]) -> Result<Option<WorldEvent>> {
     if opcode == 0x497c {
         return Ok(crate::buffs::titanium_spell_effect(body)?.map(WorldEvent::SpellEffect));
@@ -982,6 +1058,16 @@ fn titanium_views(opcode: u16, body: &[u8]) -> Result<Option<WorldEvent>> {
         Some(WorldEvent::Merchant(update))
     } else if let Some(update) = crate::exchange::decode(opcode, body)? {
         Some(WorldEvent::Exchange(update))
+    } else if let Some(update) = crate::training::decode(opcode, body)? {
+        Some(WorldEvent::Training(update))
+    } else if let Some(offer) = crate::resurrection::decode(opcode, body)? {
+        Some(WorldEvent::Resurrection(offer))
+    } else if let Some(text) = crate::books::decode(opcode, body)? {
+        Some(WorldEvent::BookText(text))
+    } else if let Some(update) = crate::tradeskills::decode(opcode, body)? {
+        Some(WorldEvent::Combine(update))
+    } else if let Some(update) = crate::bind_wound::decode(opcode, body)? {
+        Some(WorldEvent::BindWound(update))
     } else {
         crate::inventory::decode(opcode, body)?.map(WorldEvent::Inventory)
     })
@@ -1165,6 +1251,11 @@ mod tests {
             Capability::Who => 16,
             Capability::Corpses => 17,
             Capability::Pets => 18,
+            Capability::Training => 19,
+            Capability::Resurrection => 20,
+            Capability::Reading => 21,
+            Capability::Tradeskills => 22,
+            Capability::Map => 23,
         };
         for (index, capability) in Capability::ALL.into_iter().enumerate() {
             assert_eq!(place(capability), index, "{capability:?}");

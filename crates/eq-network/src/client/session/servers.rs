@@ -26,18 +26,24 @@ use super::{
     feature::Feature,
     inventory::Belongings,
     looting::Looting,
+    map::Map,
     motion::Motion,
     objects::GroundObjects,
     pets::Pets,
+    reading::Reading,
+    resurrection::Resurrection,
     spellbook::Spellbook,
     talk::Talk,
     targeting::Targeting,
+    tradeskills::Tradeskills,
+    training::Training,
     transfers::Transfers,
     who::Who,
     wire::{EqMac, Titanium, Wire},
     CharacterSession, Events, ServerProtocol, ZoneExit,
 };
 use crate::p99::{self, WorldCodec};
+use eq_network_game::abilities::Ability;
 
 /// What a zone session builds its features with.
 pub(super) struct Setup<'a> {
@@ -212,6 +218,31 @@ pub(super) trait ServerType: Sync {
         None
     }
 
+    /// Training skills at a guildmaster.
+    fn training(&self, _setup: &Setup<'_>) -> Provided {
+        None
+    }
+
+    /// Accepting or declining a resurrection.
+    fn resurrection(&self, _setup: &Setup<'_>) -> Provided {
+        None
+    }
+
+    /// Reading books and notes.
+    fn reading(&self, _setup: &Setup<'_>) -> Provided {
+        None
+    }
+
+    /// Combining in the player's own tradeskill containers.
+    fn tradeskills(&self, _setup: &Setup<'_>) -> Provided {
+        None
+    }
+
+    /// The in-game map.
+    fn map(&self, _setup: &Setup<'_>) -> Provided {
+        None
+    }
+
     /// Every feature the server type provides, in the order the zone session
     /// offers them each command, packet and timer.
     fn features(&self, setup: &Setup<'_>) -> Vec<Box<dyn Feature>> {
@@ -236,6 +267,11 @@ pub(super) trait ServerType: Sync {
             self.who(setup),
             self.corpses(setup),
             self.pets(setup),
+            self.training(setup),
+            self.resurrection(setup),
+            self.reading(setup),
+            self.tradeskills(setup),
+            self.map(setup),
         ]
         .into_iter()
         .flatten()
@@ -331,9 +367,9 @@ impl Shield for WorldCodec {
 /// types that speak it; each server type still lists the ones it provides.
 mod titanium {
     use super::{
-        Abilities, Belongings, Camp, Casting, Character, Clock, Combat, Corpses, Doors, Entities,
-        Exchanges, Feature, GroundObjects, Looting, Motion, Pets, Setup, Spellbook, Talk,
-        Targeting, Transfers, Who,
+        Abilities, Ability, Belongings, Camp, Casting, Character, Clock, Combat, Corpses, Doors,
+        Entities, Exchanges, Feature, GroundObjects, Looting, Map, Motion, Pets, Reading,
+        Resurrection, Setup, Spellbook, Talk, Targeting, Tradeskills, Training, Transfers, Who,
     };
 
     pub(super) fn casting() -> Box<dyn Feature> {
@@ -377,8 +413,8 @@ mod titanium {
         Box::new(Exchanges)
     }
 
-    pub(super) fn abilities() -> Box<dyn Feature> {
-        Box::<Abilities>::default()
+    pub(super) fn abilities(listed: &'static [Ability]) -> Box<dyn Feature> {
+        Box::new(Abilities::new(listed))
     }
 
     pub(super) fn talk() -> Box<dyn Feature> {
@@ -416,7 +452,48 @@ mod titanium {
     pub(super) fn pets() -> Box<dyn Feature> {
         Box::new(Pets)
     }
+
+    pub(super) fn training() -> Box<dyn Feature> {
+        Box::<Training>::default()
+    }
+
+    pub(super) fn resurrection() -> Box<dyn Feature> {
+        Box::<Resurrection>::default()
+    }
+
+    pub(super) fn reading() -> Box<dyn Feature> {
+        Box::new(Reading)
+    }
+
+    pub(super) fn tradeskills() -> Box<dyn Feature> {
+        Box::<Tradeskills>::default()
+    }
+
+    pub(super) fn map() -> Box<dyn Feature> {
+        Box::new(Map)
+    }
 }
+
+/// The abilities checked on P99: every one but fishing, which came later,
+/// and binding wounds, not yet checked there.
+const P99_ABILITIES: [Ability; 16] = [
+    Ability::Kick,
+    Ability::Bash,
+    Ability::Backstab,
+    Ability::Frenzy,
+    Ability::FlyingKick,
+    Ability::RoundKick,
+    Ability::TigerClaw,
+    Ability::EagleStrike,
+    Ability::DragonPunch,
+    Ability::Taunt,
+    Ability::Hide,
+    Ability::Sneak,
+    Ability::Forage,
+    Ability::Mend,
+    Ability::FeignDeath,
+    Ability::SenseHeading,
+];
 
 /// Project 1999: Titanium with V62 protection and 256-unit saved headings.
 /// Jumps and falls wait until they are measured on P99.
@@ -480,7 +557,7 @@ impl ServerType for Project1999 {
     }
 
     fn abilities(&self, _setup: &Setup<'_>) -> Provided {
-        Some(titanium::abilities())
+        Some(titanium::abilities(&P99_ABILITIES))
     }
 
     fn talk(&self, _setup: &Setup<'_>) -> Provided {
@@ -578,7 +655,7 @@ impl ServerType for EqEmu {
     }
 
     fn abilities(&self, _setup: &Setup<'_>) -> Provided {
-        Some(titanium::abilities())
+        Some(titanium::abilities(&Ability::ALL))
     }
 
     fn talk(&self, _setup: &Setup<'_>) -> Provided {
@@ -615,6 +692,26 @@ impl ServerType for EqEmu {
 
     fn pets(&self, _setup: &Setup<'_>) -> Provided {
         Some(titanium::pets())
+    }
+
+    fn training(&self, _setup: &Setup<'_>) -> Provided {
+        Some(titanium::training())
+    }
+
+    fn resurrection(&self, _setup: &Setup<'_>) -> Provided {
+        Some(titanium::resurrection())
+    }
+
+    fn reading(&self, _setup: &Setup<'_>) -> Provided {
+        Some(titanium::reading())
+    }
+
+    fn tradeskills(&self, _setup: &Setup<'_>) -> Provided {
+        Some(titanium::tradeskills())
+    }
+
+    fn map(&self, _setup: &Setup<'_>) -> Provided {
+        Some(titanium::map())
     }
 }
 
@@ -789,11 +886,33 @@ mod tests {
     }
 
     #[test]
+    fn p99_lists_every_ability_but_fishing_and_binding_wounds() {
+        assert!(!P99_ABILITIES.contains(&Ability::Fishing));
+        assert!(!P99_ABILITIES.contains(&Ability::BindWound));
+        assert_eq!(P99_ABILITIES.len(), Ability::ALL.len() - 2);
+    }
+
+    #[test]
     fn p99_and_eqemu_provide_every_feature_one_each() {
-        for protocol in [ServerProtocol::Project1999, ServerProtocol::EqEmu] {
+        // Training, resurrection, reading, tradeskills and the map are
+        // checked on EQEmu alone so far.
+        for (protocol, count) in [
+            (ServerProtocol::Project1999, 20),
+            (ServerProtocol::EqEmu, 25),
+        ] {
             let server = server_type(protocol);
             let setup = Setup::new("Tester", AutoEat::default());
-            assert_eq!(server.features(&setup).len(), 20, "{protocol:?}");
+            assert_eq!(server.features(&setup).len(), count, "{protocol:?}");
+        }
+        for capability in [
+            Capability::Training,
+            Capability::Resurrection,
+            Capability::Reading,
+            Capability::Tradeskills,
+            Capability::Map,
+        ] {
+            assert!(!offers(server_type(ServerProtocol::Project1999)).contains(&capability));
+            assert!(offers(server_type(ServerProtocol::EqEmu)).contains(&capability));
         }
     }
 

@@ -6,6 +6,7 @@
 //! that repeat the player's name or spawn.
 use crate::{
     abilities::Ability,
+    books::{self, Book},
     command::{self, EncodedCommand, GameCommand, Posture},
     corpses, doors, exchange,
     food::{self, Meal},
@@ -14,7 +15,8 @@ use crate::{
     movement::{self, PositionPacket},
     objects,
     pets::{self, PetCommand},
-    spells,
+    resurrection::{self, ResurrectionOffer},
+    spells, tradeskills, training,
     who::{self, WhoFilter},
     world::Position,
     zoning, GameDialect,
@@ -73,6 +75,28 @@ pub enum Request {
         /// The spawn it acts on, for commands that take one.
         target: Option<u16>,
     },
+    /// Ask a guildmaster to train.
+    OpenTraining(u16),
+    /// Practice a skill once with a guildmaster.
+    Train {
+        /// The guildmaster's spawn.
+        trainer: u16,
+        /// The skill's number.
+        skill: u32,
+    },
+    /// Leave training with a guildmaster.
+    EndTraining(u16),
+    /// Ask for a book's or note's text.
+    ReadBook(Book),
+    /// Combine what the tradeskill container in a pack slot holds.
+    Combine(InventorySlot),
+    /// Accept or decline a resurrection offer.
+    AnswerResurrection {
+        /// The offer, which the answer repeats.
+        offer: ResurrectionOffer,
+        /// True accepts.
+        accept: bool,
+    },
     /// Use a skill on the server's idea of the target.
     Ability {
         /// The skill.
@@ -90,6 +114,8 @@ pub enum Request {
     ClickDoor(u8),
     /// Pick an item up from the ground, by its drop.
     PickUp(u32),
+    /// Open a world container, by its drop.
+    OpenContainer(u32),
     /// Close a world container the server opened for the player, repeating
     /// the record the server sent for it.
     CloseContainer {
@@ -201,11 +227,22 @@ pub fn titanium(request: &Request, sender: Sender<'_>) -> Result<EncodedCommand>
         Request::DropCorpse { corpse } => corpses::release(corpse.as_deref())?,
         Request::Pet { command, target } => pets::command(*command, *target),
         Request::Ability { ability, target } => ability.encode(target.unwrap_or(0)),
+        Request::OpenTraining(trainer) => training::titanium_open(*trainer, sender.spawn()),
+        Request::Train { trainer, skill } => training::titanium_train(*trainer, *skill)?,
+        Request::EndTraining(trainer) => training::titanium_end(*trainer, sender.spawn()),
+        Request::AnswerResurrection { offer, accept } => {
+            resurrection::titanium_answer(offer, *accept)
+        }
+        Request::ReadBook(book) => books::titanium_request(book)?,
+        Request::Combine(container) => tradeskills::titanium_combine(*container)?,
         Request::Trade(with) => exchange::request(sender.spawn(), *with)?,
         Request::AcceptTrade => exchange::accept(sender.spawn())?,
         Request::CancelTrade => exchange::cancel(sender.spawn())?,
         Request::ClickDoor(door_id) => doors::titanium_click(*door_id, sender.spawn()),
-        Request::PickUp(drop_id) => objects::titanium_pickup(*drop_id, sender.spawn()),
+        // A click opens a world container as it picks an item up.
+        Request::PickUp(drop_id) | Request::OpenContainer(drop_id) => {
+            objects::titanium_pickup(*drop_id, sender.spawn())
+        }
         Request::CloseContainer {
             drop_id,
             object_type,
@@ -294,6 +331,26 @@ mod tests {
         assert_eq!(
             titanium(&Request::DropCorpse { corpse: None }, PLAYER).unwrap(),
             corpses::release(None).unwrap()
+        );
+        // Training names the guildmaster, and opening and leaving the player.
+        assert_eq!(
+            titanium(&Request::OpenTraining(42), PLAYER).unwrap(),
+            training::titanium_open(42, 7)
+        );
+        assert_eq!(
+            titanium(
+                &Request::Train {
+                    trainer: 42,
+                    skill: 30
+                },
+                PLAYER
+            )
+            .unwrap(),
+            training::titanium_train(42, 30).unwrap()
+        );
+        assert_eq!(
+            titanium(&Request::EndTraining(42), PLAYER).unwrap(),
+            training::titanium_end(42, 7)
         );
         // What a packet cannot carry is refused, as the codec refuses it.
         assert!(titanium(&Request::Trade(7), PLAYER).is_err());
