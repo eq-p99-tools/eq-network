@@ -40,7 +40,8 @@ impl Feature for Pets {
             .is_some_and(|own| world.spawns.all().any(|spawn| spawn.pet_owner == Some(own)));
         // Asking whose pet the target is needs no pet of the player's own.
         if !has_pet && *order != pets::PetCommand::Leader {
-            return actions::refuse(command, "You don't have a pet to command!", out.log);
+            // The official client says so in its own words (eqstr 13091).
+            return actions::refuse_officially(command, ("You have no pet", Some(13091)), out.log);
         }
         if *order == pets::PetCommand::Attack && target.is_none() {
             return actions::refuse(
@@ -95,10 +96,7 @@ mod tests {
             testing::run(|out| Pets.handle(&order(PetCommand::Follow, None), &mut world, out));
         outcome.result.unwrap();
         assert!(outcome.sent.is_empty(), "sent {:?}", outcome.sent);
-        assert_eq!(
-            refusals(&outcome.events),
-            ["You don't have a pet to command!"]
-        );
+        assert_eq!(refusals(&outcome.events), ["You have no pet"]);
         let outcome =
             testing::run(|out| Pets.handle(&order(PetCommand::Leader, Some(9)), &mut world, out));
         assert_eq!(outcome.sent, [pets::command(PetCommand::Leader, Some(9))]);
