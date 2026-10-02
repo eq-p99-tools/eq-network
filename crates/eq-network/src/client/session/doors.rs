@@ -43,10 +43,7 @@ impl Doors {
             .player_at()
             .ok_or_else(|| anyhow!("player is unavailable"))?;
         self.table.check_click(*door_id, spawn_id, position)?;
-        Ok(Request::ClickDoor {
-            door_id: *door_id,
-            player_id: spawn_id,
-        })
+        Ok(Request::ClickDoor(*door_id))
     }
 }
 

@@ -187,6 +187,7 @@ pub(super) fn run(
             "zone admission timed out while {:?}",
             admission.stage()
         );
+        let speaker = sender(&config.character, &world);
         features.tick(
             Instant::now(),
             &mut world,
@@ -194,6 +195,7 @@ pub(super) fn run(
                 sink: &mut session,
                 log: &mut *log,
                 wire: server.wire(),
+                sender: speaker,
             },
         )?;
         if let Some(exit) = world.take_exit() {
@@ -228,6 +230,7 @@ pub(super) fn run(
                         actions::refuse(&command, reason, log)?;
                         continue;
                     }
+                    let speaker = sender(&config.character, &world);
                     let handled = features.handle(
                         &command,
                         &mut world,
@@ -235,6 +238,7 @@ pub(super) fn run(
                             sink: &mut session,
                             log: &mut *log,
                             wire: server.wire(),
+                            sender: speaker,
                         },
                     )?;
                     if let Some(exit) = world.take_exit() {
@@ -274,6 +278,7 @@ pub(super) fn run(
             &mut session,
             log,
         )? {
+            let speaker = sender(&config.character, &world);
             admit(
                 player,
                 &zone,
@@ -283,6 +288,7 @@ pub(super) fn run(
                     sink: &mut session,
                     log: &mut *log,
                     wire: server.wire(),
+                    sender: speaker,
                 },
             )?;
         }
@@ -294,6 +300,7 @@ pub(super) fn run(
                 log.diagnostic(format!("{part} rejected: {error}"))?;
             }
             if world.ready() {
+                let speaker = sender(&config.character, &world);
                 features.observe(
                     &message,
                     &mut world,
@@ -301,6 +308,7 @@ pub(super) fn run(
                         sink: &mut session,
                         log: &mut *log,
                         wire: server.wire(),
+                        sender: speaker,
                     },
                 )?;
             } else {
@@ -339,6 +347,15 @@ pub(super) fn run(
     }
 }
 
+/// Who the session speaks for: the character it logged in as, and their
+/// spawn once the zone has admitted them.
+fn sender<'a>(name: &'a str, world: &World) -> eq_network_game::request::Sender<'a> {
+    eq_network_game::request::Sender {
+        name,
+        spawn_id: world.player.as_ref().map(|player| player.spawn_id),
+    }
+}
+
 /// Why a command is refused when no feature of the server type takes it:
 /// the words the client greys out such a control with.
 const UNOFFERED: &str = "Not available on this server";
@@ -361,6 +378,7 @@ fn admit(
     match player {
         Ok(mut player) => {
             features.shape(&mut player);
+            out.sender.spawn_id = Some(player.spawn_id);
             world.player.admit(player.clone());
             out.log
                 .send(ClientEvent::World(crate::world::WorldEvent::Entered {

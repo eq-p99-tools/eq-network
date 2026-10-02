@@ -1,21 +1,13 @@
 //! What the player says, in any channel, and the item links they read in
 //! chat and ask the server to describe.
 use super::{
-    feature::{Encoder, Feature, Out, World},
+    feature::{Feature, Out, World},
     ClientCommand,
 };
 use anyhow::Result;
 
 /// Sends chat and item-link inspections.
-pub(super) struct Talk {
-    encoder: Encoder,
-}
-
-impl Talk {
-    pub(super) fn new(encoder: Encoder) -> Self {
-        Self { encoder }
-    }
-}
+pub(super) struct Talk;
 
 impl Feature for Talk {
     fn capabilities(&self) -> Vec<crate::world::Capability> {
@@ -38,7 +30,7 @@ impl Feature for Talk {
         _world: &mut World,
         out: &mut Out<'_, '_>,
     ) -> Result<()> {
-        self.encoder.send(command, out).map(drop)
+        out.command(command).map(drop)
     }
 }
 
@@ -50,7 +42,7 @@ mod tests {
 
     #[test]
     fn chat_goes_out_in_the_dialect() {
-        let mut talk = Talk::new(Encoder::new("Tester"));
+        let mut talk = Talk;
         let mut world = World::new(5);
         let say = ClientCommand::SendChat(OutboundChat::Say("Hail".into()));
         let outcome = testing::run(|out| talk.handle(&say, &mut world, out));

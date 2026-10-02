@@ -22,7 +22,7 @@ use super::{
     doors::Doors,
     entities::Entities,
     exchange::Exchanges,
-    feature::{Encoder, Feature},
+    feature::Feature,
     inventory::Belongings,
     looting::Looting,
     motion::Motion,
@@ -44,9 +44,6 @@ pub(super) struct Setup<'a> {
     pub(super) character: &'a str,
     /// What the session may eat and drink on its own.
     pub(super) auto_eat: eq_network_game::food::AutoEat,
-    /// Encodes the commands that need nothing from the session's state, in
-    /// the server's client generation.
-    pub(super) encoder: Encoder,
 }
 
 impl<'a> Setup<'a> {
@@ -55,7 +52,6 @@ impl<'a> Setup<'a> {
         Self {
             character,
             auto_eat,
-            encoder: Encoder::new(character),
         }
     }
 }
@@ -316,8 +312,8 @@ mod titanium {
         Targeting, Transfers, Who,
     };
 
-    pub(super) fn casting(setup: &Setup<'_>) -> Box<dyn Feature> {
-        Box::new(Casting::new(setup.encoder.clone()))
+    pub(super) fn casting() -> Box<dyn Feature> {
+        Box::<Casting>::default()
     }
 
     pub(super) fn spellbook() -> Box<dyn Feature> {
@@ -325,7 +321,7 @@ mod titanium {
     }
 
     pub(super) fn inventory(setup: &Setup<'_>) -> Box<dyn Feature> {
-        Box::new(Belongings::new(setup.encoder.clone(), setup.auto_eat))
+        Box::new(Belongings::new(setup.auto_eat))
     }
 
     /// Moving, with or without the jumps and falls the server takes.
@@ -341,16 +337,16 @@ mod titanium {
         Box::<Entities>::default()
     }
 
-    pub(super) fn targeting(setup: &Setup<'_>) -> Box<dyn Feature> {
-        Box::new(Targeting::new(setup.encoder.clone()))
+    pub(super) fn targeting() -> Box<dyn Feature> {
+        Box::new(Targeting)
     }
 
-    pub(super) fn combat(setup: &Setup<'_>) -> Box<dyn Feature> {
-        Box::new(Combat::new(setup.encoder.clone()))
+    pub(super) fn combat() -> Box<dyn Feature> {
+        Box::new(Combat)
     }
 
-    pub(super) fn looting(setup: &Setup<'_>) -> Box<dyn Feature> {
-        Box::new(Looting::new(setup.encoder.clone()))
+    pub(super) fn looting() -> Box<dyn Feature> {
+        Box::new(Looting)
     }
 
     pub(super) fn exchange() -> Box<dyn Feature> {
@@ -361,8 +357,8 @@ mod titanium {
         Box::<Abilities>::default()
     }
 
-    pub(super) fn talk(setup: &Setup<'_>) -> Box<dyn Feature> {
-        Box::new(Talk::new(setup.encoder.clone()))
+    pub(super) fn talk() -> Box<dyn Feature> {
+        Box::new(Talk)
     }
 
     pub(super) fn camp() -> Box<dyn Feature> {
@@ -415,8 +411,8 @@ impl ServerType for Project1999 {
         256.0
     }
 
-    fn casting(&self, setup: &Setup<'_>) -> Provided {
-        Some(titanium::casting(setup))
+    fn casting(&self, _setup: &Setup<'_>) -> Provided {
+        Some(titanium::casting())
     }
 
     fn spellbook(&self, _setup: &Setup<'_>) -> Provided {
@@ -439,16 +435,16 @@ impl ServerType for Project1999 {
         Some(titanium::entities())
     }
 
-    fn targeting(&self, setup: &Setup<'_>) -> Provided {
-        Some(titanium::targeting(setup))
+    fn targeting(&self, _setup: &Setup<'_>) -> Provided {
+        Some(titanium::targeting())
     }
 
-    fn combat(&self, setup: &Setup<'_>) -> Provided {
-        Some(titanium::combat(setup))
+    fn combat(&self, _setup: &Setup<'_>) -> Provided {
+        Some(titanium::combat())
     }
 
-    fn looting(&self, setup: &Setup<'_>) -> Provided {
-        Some(titanium::looting(setup))
+    fn looting(&self, _setup: &Setup<'_>) -> Provided {
+        Some(titanium::looting())
     }
 
     fn exchange(&self, _setup: &Setup<'_>) -> Provided {
@@ -459,8 +455,8 @@ impl ServerType for Project1999 {
         Some(titanium::abilities())
     }
 
-    fn talk(&self, setup: &Setup<'_>) -> Provided {
-        Some(titanium::talk(setup))
+    fn talk(&self, _setup: &Setup<'_>) -> Provided {
+        Some(titanium::talk())
     }
 
     fn camp(&self, _setup: &Setup<'_>) -> Provided {
@@ -509,8 +505,8 @@ impl ServerType for EqEmu {
         true
     }
 
-    fn casting(&self, setup: &Setup<'_>) -> Provided {
-        Some(titanium::casting(setup))
+    fn casting(&self, _setup: &Setup<'_>) -> Provided {
+        Some(titanium::casting())
     }
 
     fn spellbook(&self, _setup: &Setup<'_>) -> Provided {
@@ -533,16 +529,16 @@ impl ServerType for EqEmu {
         Some(titanium::entities())
     }
 
-    fn targeting(&self, setup: &Setup<'_>) -> Provided {
-        Some(titanium::targeting(setup))
+    fn targeting(&self, _setup: &Setup<'_>) -> Provided {
+        Some(titanium::targeting())
     }
 
-    fn combat(&self, setup: &Setup<'_>) -> Provided {
-        Some(titanium::combat(setup))
+    fn combat(&self, _setup: &Setup<'_>) -> Provided {
+        Some(titanium::combat())
     }
 
-    fn looting(&self, setup: &Setup<'_>) -> Provided {
-        Some(titanium::looting(setup))
+    fn looting(&self, _setup: &Setup<'_>) -> Provided {
+        Some(titanium::looting())
     }
 
     fn exchange(&self, _setup: &Setup<'_>) -> Provided {
@@ -553,8 +549,8 @@ impl ServerType for EqEmu {
         Some(titanium::abilities())
     }
 
-    fn talk(&self, setup: &Setup<'_>) -> Provided {
-        Some(titanium::talk(setup))
+    fn talk(&self, _setup: &Setup<'_>) -> Provided {
+        Some(titanium::talk())
     }
 
     fn camp(&self, _setup: &Setup<'_>) -> Provided {
@@ -614,7 +610,17 @@ pub(super) fn server_type(protocol: ServerProtocol) -> &'static dyn ServerType {
 mod tests {
     use super::*;
     use crate::world::Capability;
-    use eq_network_game::{command::titanium_camp, food::AutoEat, request::Request};
+    use eq_network_game::{
+        command::titanium_camp,
+        food::AutoEat,
+        request::{Request, Sender},
+    };
+
+    /// A player with a spawn.
+    const SENDER: Sender<'static> = Sender {
+        name: "Tester",
+        spawn_id: Some(7),
+    };
 
     /// A server type that implements nothing but the wire it speaks.
     struct Empty;
@@ -648,7 +654,7 @@ mod tests {
         assert!(!empty.start_choice());
         // Quarm speaks EQMac and has built none of them on the interface yet.
         let quarm = server_type(ServerProtocol::Quarm);
-        assert!(quarm.wire().encode(&Request::Camp).is_err());
+        assert!(quarm.wire().encode(&Request::Camp, SENDER).is_err());
         let setup = Setup::new("Tester", AutoEat::default());
         assert!(quarm.features(&setup).is_empty());
         assert!(quarm.protect(&[0; 464]).unwrap().is_none());
@@ -658,7 +664,10 @@ mod tests {
     #[test]
     fn p99_protects_and_halves_saved_headings_while_eqemu_takes_falls() {
         let p99 = server_type(ServerProtocol::Project1999);
-        assert_eq!(p99.wire().encode(&Request::Camp).unwrap(), titanium_camp());
+        assert_eq!(
+            p99.wire().encode(&Request::Camp, SENDER).unwrap(),
+            titanium_camp()
+        );
         assert!(p99.protect(&[0; 464]).unwrap().is_some());
         assert!(p99.protect(&[0; 10]).is_err());
         assert!((p99.profile_turn() - 256.0).abs() < f32::EPSILON);
@@ -666,7 +675,7 @@ mod tests {
         assert!(!offers(p99).contains(&Capability::Falling));
         let eqemu = server_type(ServerProtocol::EqEmu);
         assert_eq!(
-            eqemu.wire().encode(&Request::Camp).unwrap(),
+            eqemu.wire().encode(&Request::Camp, SENDER).unwrap(),
             titanium_camp()
         );
         assert!(eqemu.protect(&[0; 464]).unwrap().is_none());

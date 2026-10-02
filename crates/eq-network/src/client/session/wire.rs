@@ -11,7 +11,7 @@ use anyhow::{bail, Result};
 use eq_network_game::{
     command::EncodedCommand,
     message::Message,
-    request::{self, Request},
+    request::{self, Request, Sender},
     GameDialect,
 };
 
@@ -36,7 +36,7 @@ pub(super) trait Wire: Sync {
     /// # Errors
     /// Refuses a request the generation has not been built for, and one
     /// whose values its packet cannot carry.
-    fn encode(&self, request: &Request) -> Result<EncodedCommand> {
+    fn encode(&self, request: &Request, _sender: Sender<'_>) -> Result<EncodedCommand> {
         bail!("this client generation cannot send {request:?} yet")
     }
 }
@@ -53,8 +53,8 @@ impl Wire for Titanium {
         chat::parse(opcode, body, include_raw)
     }
 
-    fn encode(&self, request: &Request) -> Result<EncodedCommand> {
-        request::titanium(request)
+    fn encode(&self, request: &Request, sender: Sender<'_>) -> Result<EncodedCommand> {
+        request::titanium(request, sender)
     }
 }
 
@@ -68,14 +68,20 @@ impl Wire for EqMac {
         chat::parse_for(GameDialect::EqMac, opcode, body, include_raw)
     }
 
-    fn encode(&self, request: &Request) -> Result<EncodedCommand> {
-        request::eqmac(request)
+    fn encode(&self, request: &Request, sender: Sender<'_>) -> Result<EncodedCommand> {
+        request::eqmac(request, sender)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A player with a spawn.
+    const PLAYER: Sender<'static> = Sender {
+        name: "Tester",
+        spawn_id: Some(7),
+    };
 
     #[test]
     fn titanium_reads_what_the_titanium_decoders_read() {
@@ -87,23 +93,20 @@ mod tests {
     #[test]
     fn titanium_sends_what_the_titanium_codecs_build_and_eqmac_nothing_yet() {
         assert_eq!(
-            Titanium.encode(&Request::Camp).unwrap(),
+            Titanium.encode(&Request::Camp, PLAYER).unwrap(),
             eq_network_game::command::titanium_camp()
         );
-        assert!(EqMac.encode(&Request::Camp).is_err());
+        assert!(EqMac.encode(&Request::Camp, PLAYER).is_err());
     }
 
     #[test]
     fn each_generation_sends_chat_its_own_way() {
         use eq_network_game::chat::OutboundChat;
-        let say = Request::Command {
-            command: eq_network_game::command::GameCommand::SendChat(OutboundChat::Say(
-                "Hail".into(),
-            )),
-            character: "Tester".into(),
-        };
-        assert_eq!(Titanium.encode(&say).unwrap().opcode, 0x1004);
-        assert_eq!(EqMac.encode(&say).unwrap().opcode, 0x0741);
+        let say = Request::Command(eq_network_game::command::GameCommand::SendChat(
+            OutboundChat::Say("Hail".into()),
+        ));
+        assert_eq!(Titanium.encode(&say, PLAYER).unwrap().opcode, 0x1004);
+        assert_eq!(EqMac.encode(&say, PLAYER).unwrap().opcode, 0x0741);
     }
 
     #[test]

@@ -33,7 +33,7 @@ impl OwnPosture {
         posture: Posture,
         out: &mut Out<'_, '_>,
     ) -> Result<()> {
-        out.request(&Request::Posture { spawn_id, posture })?;
+        out.request(&Request::Posture(posture))?;
         self.sent(spawn_id, posture, out.log)
     }
 

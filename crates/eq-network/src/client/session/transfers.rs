@@ -50,15 +50,12 @@ impl Transfers {
 
     /// Asks for a transfer: the player stops, and every later command waits
     /// for the server's answer.
-    fn start(
-        &self,
-        offer: zoning::ZoneOffer,
-        world: &mut World,
-        out: &mut Out<'_, '_>,
-    ) -> Result<()> {
+    fn start(offer: zoning::ZoneOffer, world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
         out.request(&Request::AnswerZoneOffer {
-            offer: offer.clone(),
-            character: self.character.clone(),
+            zone_id: offer.zone_id,
+            instance_id: offer.instance_id,
+            position: offer.position,
+            reason: offer.reason,
         })?;
         world.transfer_offered(offer.clone(), Instant::now())?;
         out.log
@@ -84,12 +81,7 @@ impl Transfers {
 
     /// Takes the server's offer to move the player, within the zone or out
     /// of it.
-    fn offered(
-        &self,
-        offer: &zoning::ZoneOffer,
-        world: &mut World,
-        out: &mut Out<'_, '_>,
-    ) -> Result<()> {
+    fn offered(offer: &zoning::ZoneOffer, world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
         let offer = offer.clone();
         if let Some(position) = offer.local_position(world.zone) {
             return relocate(position, world, out);
@@ -98,7 +90,7 @@ impl Transfers {
             ensure!(pending == &offer, "conflicting zone transfer offer");
             return Ok(());
         }
-        self.start(offer, world, out)
+        Self::start(offer, world, out)
     }
 
     /// Takes the server's answer to a transfer request: the player leaves
@@ -187,7 +179,7 @@ impl Feature for Transfers {
             return Ok(());
         };
         match self.zone_line(command, world) {
-            Ok(offer) => self.start(offer, world, out)?,
+            Ok(offer) => Self::start(offer, world, out)?,
             Err(error) => out
                 .log
                 .send(ClientEvent::World(WorldEvent::ZoneLineRejected {
@@ -219,7 +211,7 @@ impl Feature for Transfers {
             return Ok(());
         }
         match message {
-            Message::ZoneOffer(offer) => self.offered(offer, world, out),
+            Message::ZoneOffer(offer) => Self::offered(offer, world, out),
             Message::Unreadable {
                 part: Part::ZoneOffer,
                 error,

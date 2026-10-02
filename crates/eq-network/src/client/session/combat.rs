@@ -1,20 +1,12 @@
 //! Combat: sizing up a spawn the player can see, and attacking.
 use super::{
-    feature::{Encoder, Feature, Out, World},
+    feature::{Feature, Out, World},
     ClientCommand,
 };
 use anyhow::Result;
 
 /// Considers spawns and turns auto attack on and off.
-pub(super) struct Combat {
-    encoder: Encoder,
-}
-
-impl Combat {
-    pub(super) fn new(encoder: Encoder) -> Self {
-        Self { encoder }
-    }
-}
+pub(super) struct Combat;
 
 impl Feature for Combat {
     fn capabilities(&self) -> Vec<crate::world::Capability> {
@@ -47,7 +39,7 @@ impl Feature for Combat {
                     .diagnostic("Rejected considering an unavailable spawn".into());
             }
         }
-        self.encoder.send(command, out).map(drop)
+        out.command(command).map(drop)
     }
 }
 
@@ -60,7 +52,7 @@ mod tests {
 
     #[test]
     fn the_player_considers_only_a_spawn_they_can_see() {
-        let mut combat = Combat::new(Encoder::new("Tester"));
+        let mut combat = Combat;
         let mut world = World::new(5);
         world.own_spawn = Some(7);
         world.spawns.insert(testing::spawn(8, SpawnKind::Npc));

@@ -98,11 +98,11 @@ impl Exchanges {
         out: &mut Out<'_, '_>,
         now: Instant,
     ) -> Result<()> {
-        let check = || -> std::result::Result<(u16, Partner), &'static str> {
+        let check = || -> std::result::Result<Partner, &'static str> {
             if world.exchange.is_some() {
                 return Err("Close the open trade first");
             }
-            let (own_id, position) = world.player_at().ok_or("Not in the zone yet")?;
+            let (_, position) = world.player_at().ok_or("Not in the zone yet")?;
             let spawn = world
                 .spawns
                 .visible(with_id)
@@ -120,16 +120,13 @@ impl Exchanges {
             {
                 return Err("Hold an item or coins on the cursor to hand them over");
             }
-            Ok((own_id, partner))
+            Ok(partner)
         };
-        let (own_id, partner) = match check() {
+        let partner = match check() {
             Ok(checked) => checked,
             Err(reason) => return refused(session_id, reason, out),
         };
-        out.request(&Request::Trade {
-            own_id,
-            with: with_id,
-        })?;
+        out.request(&Request::Trade(with_id))?;
         world.exchange.0 = Some(Exchange {
             with: with_id,
             partner,
@@ -140,16 +137,16 @@ impl Exchanges {
 
     /// Clicks Give or Trade in the open window.
     fn accept(session_id: u64, world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
-        let own_id = world.player.as_ref().map(|player| player.spawn_id);
+        let admitted = world.player.as_ref().is_some();
         let open = world
             .exchange
             .0
             .as_mut()
             .filter(|exchange| exchange.stage == Stage::Open);
-        let (Some(exchange), Some(own_id)) = (open, own_id) else {
+        let (Some(exchange), true) = (open, admitted) else {
             return refused(session_id, "No trade window is open", out);
         };
-        out.request(&Request::AcceptTrade { own_id })?;
+        out.request(&Request::AcceptTrade)?;
         exchange.stage = Stage::Accepted;
         Ok(())
     }
@@ -157,9 +154,9 @@ impl Exchanges {
     /// Closes the window, or withdraws a request not yet answered; what the
     /// trade slots held comes back from the server.
     fn cancel(world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
-        let own = world.player.as_ref().map(|player| player.spawn_id);
-        if let (Some(_), Some(own_id)) = (world.exchange.0.take(), own) {
-            out.request(&Request::CancelTrade { own_id })?;
+        let admitted = world.player.as_ref().is_some();
+        if let (Some(_), true) = (world.exchange.0.take(), admitted) {
+            out.request(&Request::CancelTrade)?;
         }
         Ok(())
     }

@@ -1,7 +1,9 @@
 //! What the zone session asks of the server, in no client generation's
 //! terms, and the Titanium client's packet for each request: the outgoing
 //! side of [`crate::message`]. Each generation encodes requests its own way,
-//! and one it has not built yet is refused.
+//! and one it has not built yet is refused. A request says only what the
+//! player wants; who asks comes with it as the [`Sender`](crate::request::Sender), for the packets
+//! that repeat the player's name or spawn.
 use crate::{
     abilities::Ability,
     command::{self, EncodedCommand, GameCommand, Posture},
@@ -10,14 +12,32 @@ use crate::{
     inventory::{self, InventorySlot, MoveQuantity},
     money::CoinTransfer,
     movement::{self, PositionPacket},
-    objects::{self, ContainerView},
+    objects,
     pets::{self, PetCommand},
     spells,
     who::{self, WhoFilter},
-    zoning::ZoneOffer,
-    GameDialect,
+    world::Position,
+    zoning, GameDialect,
 };
 use anyhow::Result;
+
+/// Who the session speaks for. Some packets repeat the player's name or
+/// spawn, so the wire takes them from here rather than every request
+/// carrying them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Sender<'a> {
+    /// The player's name.
+    pub name: &'a str,
+    /// The player's spawn, once the zone has spawned them.
+    pub spawn_id: Option<u16>,
+}
+
+impl Sender<'_> {
+    /// The player's spawn, or zero, which every packet's own check refuses.
+    fn spawn(self) -> u16 {
+        self.spawn_id.unwrap_or(0)
+    }
+}
 
 /// What the zone session asks of the server.
 #[derive(Clone, Debug, PartialEq)]
@@ -27,12 +47,7 @@ pub enum Request {
     /// Log the camped character out.
     Logout,
     /// Sit, stand or crouch the player.
-    Posture {
-        /// The player's spawn.
-        spawn_id: u16,
-        /// The stance to take.
-        posture: Posture,
-    },
+    Posture(Posture),
     /// Ask the world who is online.
     Who(WhoFilter),
     /// Let a player drag the player's corpses, or take that back.
@@ -42,20 +57,10 @@ pub enum Request {
         /// Whether consent is given or taken back.
         given: bool,
     },
-    /// Summon one of the player's corpses to them.
-    SummonCorpse {
-        /// The corpse, by its name.
-        corpse: String,
-        /// The player's name.
-        player: String,
-    },
-    /// Start dragging a corpse.
-    DragCorpse {
-        /// The corpse, by its name.
-        corpse: String,
-        /// The player's name.
-        dragger: String,
-    },
+    /// Summon one of the player's corpses to them, by the corpse's name.
+    SummonCorpse(String),
+    /// Start dragging a corpse, by its name.
+    DragCorpse(String),
     /// Let go of one dragged corpse, or of every one.
     DropCorpse {
         /// The corpse, by its name; every dragged corpse when absent.
@@ -72,48 +77,41 @@ pub enum Request {
     Ability {
         /// The skill.
         ability: Ability,
-        /// The target the server has for the player; zero for none.
-        target: u16,
+        /// The target the server has for the player, if any.
+        target: Option<u16>,
     },
-    /// Ask another character, or an NPC, to trade.
-    Trade {
-        /// The player's spawn.
-        own_id: u16,
-        /// The other character's spawn.
-        with: u16,
-    },
+    /// Ask another character, or an NPC, to trade, by their spawn.
+    Trade(u16),
     /// Accept the open trade.
-    AcceptTrade {
-        /// The player's spawn.
-        own_id: u16,
-    },
+    AcceptTrade,
     /// Close the open trade, or withdraw a request.
-    CancelTrade {
-        /// The player's spawn.
-        own_id: u16,
-    },
+    CancelTrade,
     /// Use a door within reach.
-    ClickDoor {
-        /// The door.
-        door_id: u8,
-        /// The player's spawn.
-        player_id: u16,
-    },
-    /// Pick an item up from the ground.
-    PickUp {
-        /// The item on the ground.
+    ClickDoor(u8),
+    /// Pick an item up from the ground, by its drop.
+    PickUp(u32),
+    /// Close a world container the server opened for the player, repeating
+    /// the record the server sent for it.
+    CloseContainer {
+        /// The container.
         drop_id: u32,
-        /// The player's spawn.
-        player_id: u16,
+        /// Its tradeskill kind.
+        object_type: u32,
+        /// The icon its window showed.
+        icon: u32,
+        /// The name its window showed.
+        name: String,
     },
-    /// Close a world container the server opened for the player.
-    CloseContainer(ContainerView),
     /// Take a transfer the server offered or a zone line asked for.
     AnswerZoneOffer {
-        /// Where to, as offered.
-        offer: ZoneOffer,
-        /// The player's name, which the answer repeats.
-        character: String,
+        /// The zone, or zero for the bind point the server resolves.
+        zone_id: u16,
+        /// The zone's instance.
+        instance_id: u16,
+        /// Where in it.
+        position: Position,
+        /// The offer's reason, echoed back.
+        reason: u32,
     },
     /// Memorize a scribed spell into a gem.
     Memorize {
@@ -150,12 +148,7 @@ pub enum Request {
     },
     /// A host command that needs nothing from the session's state, as the
     /// generation encodes it.
-    Command {
-        /// The command.
-        command: GameCommand,
-        /// The player's name, which some packets repeat.
-        character: String,
-    },
+    Command(GameCommand),
     /// Cast an item's click effect.
     CastItem {
         /// The effect's spell.
@@ -191,38 +184,51 @@ pub enum Request {
     Jump,
 }
 
-/// The Titanium client's packet for a request.
+/// The Titanium client's packet for a request from this sender.
 ///
 /// # Errors
 /// Rejects a request whose values the packet cannot carry, such as a name
-/// too long for its field.
-pub fn titanium(request: &Request) -> Result<EncodedCommand> {
+/// too long for its field, and one that needs a spawn the player lacks.
+pub fn titanium(request: &Request, sender: Sender<'_>) -> Result<EncodedCommand> {
     Ok(match request {
         Request::Camp => command::titanium_camp(),
         Request::Logout => command::titanium_logout(),
-        Request::Posture { spawn_id, posture } => command::titanium_posture(*spawn_id, *posture)?,
+        Request::Posture(posture) => command::titanium_posture(sender.spawn(), *posture)?,
         Request::Who(filter) => who::request(filter)?,
         Request::Consent { name, given } => corpses::consent(name, *given)?,
-        Request::SummonCorpse { corpse, player } => corpses::summon(corpse, player)?,
-        Request::DragCorpse { corpse, dragger } => corpses::drag(corpse, dragger)?,
+        Request::SummonCorpse(corpse) => corpses::summon(corpse, sender.name)?,
+        Request::DragCorpse(corpse) => corpses::drag(corpse, sender.name)?,
         Request::DropCorpse { corpse } => corpses::release(corpse.as_deref())?,
         Request::Pet { command, target } => pets::command(*command, *target),
-        Request::Ability { ability, target } => ability.encode(*target),
-        Request::Trade { own_id, with } => exchange::request(*own_id, *with)?,
-        Request::AcceptTrade { own_id } => exchange::accept(*own_id)?,
-        Request::CancelTrade { own_id } => exchange::cancel(*own_id)?,
-        Request::ClickDoor { door_id, player_id } => doors::titanium_click(*door_id, *player_id),
-        Request::PickUp { drop_id, player_id } => objects::titanium_pickup(*drop_id, *player_id),
-        Request::CloseContainer(view) => view.close_packet(),
-        Request::AnswerZoneOffer { offer, character } => offer.response(character)?,
+        Request::Ability { ability, target } => ability.encode(target.unwrap_or(0)),
+        Request::Trade(with) => exchange::request(sender.spawn(), *with)?,
+        Request::AcceptTrade => exchange::accept(sender.spawn())?,
+        Request::CancelTrade => exchange::cancel(sender.spawn())?,
+        Request::ClickDoor(door_id) => doors::titanium_click(*door_id, sender.spawn()),
+        Request::PickUp(drop_id) => objects::titanium_pickup(*drop_id, sender.spawn()),
+        Request::CloseContainer {
+            drop_id,
+            object_type,
+            icon,
+            name,
+        } => objects::titanium_close(
+            u32::from(sender.spawn()),
+            *drop_id,
+            (*object_type, *icon),
+            name,
+        ),
+        Request::AnswerZoneOffer {
+            zone_id,
+            instance_id,
+            position,
+            reason,
+        } => zoning::titanium_answer(sender.name, (*zone_id, *instance_id), *position, *reason)?,
         Request::Memorize { gem, spell_id } => spells::titanium_memorize(*gem, *spell_id),
         Request::Forget { gem, spell_id } => spells::titanium_forget(*gem, *spell_id),
         Request::Scribe { slot, spell_id } => spells::titanium_scribe(*slot, *spell_id),
         Request::DeleteSpell { slot } => spells::titanium_delete(*slot),
         Request::SwapSpells { from, to } => spells::titanium_swap(*from, *to),
-        Request::Command { command, character } => {
-            command::encode(GameDialect::Titanium, command, character)?
-        }
+        Request::Command(command) => command::encode(GameDialect::Titanium, command, sender.name)?,
         Request::CastItem {
             spell_id,
             slot,
@@ -242,16 +248,14 @@ pub fn titanium(request: &Request) -> Result<EncodedCommand> {
     })
 }
 
-/// The `EQMac` client's packet for a request: only the host commands its
-/// generation encodes so far, which is chat.
+/// The `EQMac` client's packet for a request from this sender: only the
+/// host commands its generation encodes so far, which is chat.
 ///
 /// # Errors
 /// Refuses every other request, and a command the generation cannot carry.
-pub fn eqmac(request: &Request) -> Result<EncodedCommand> {
+pub fn eqmac(request: &Request, sender: Sender<'_>) -> Result<EncodedCommand> {
     match request {
-        Request::Command { command, character } => {
-            command::encode(GameDialect::EqMac, command, character)
-        }
+        Request::Command(command) => command::encode(GameDialect::EqMac, command, sender.name),
         _ => anyhow::bail!("the EQMac client cannot send {request:?} yet"),
     }
 }
@@ -260,30 +264,54 @@ pub fn eqmac(request: &Request) -> Result<EncodedCommand> {
 mod tests {
     use super::*;
 
+    /// A player with a spawn.
+    const PLAYER: Sender<'static> = Sender {
+        name: "Tester",
+        spawn_id: Some(7),
+    };
+
     #[test]
     fn titanium_requests_are_the_packets_the_codecs_build() {
-        assert_eq!(titanium(&Request::Camp).unwrap(), command::titanium_camp());
         assert_eq!(
-            titanium(&Request::Posture {
-                spawn_id: 7,
-                posture: Posture::Sitting,
-            })
-            .unwrap(),
+            titanium(&Request::Camp, PLAYER).unwrap(),
+            command::titanium_camp()
+        );
+        assert_eq!(
+            titanium(&Request::Posture(Posture::Sitting), PLAYER).unwrap(),
             command::titanium_posture(7, Posture::Sitting).unwrap()
         );
         assert_eq!(
-            titanium(&Request::Pet {
-                command: PetCommand::Attack,
-                target: Some(9),
-            })
+            titanium(
+                &Request::Pet {
+                    command: PetCommand::Attack,
+                    target: Some(9),
+                },
+                PLAYER
+            )
             .unwrap(),
             pets::command(PetCommand::Attack, Some(9))
         );
         assert_eq!(
-            titanium(&Request::DropCorpse { corpse: None }).unwrap(),
+            titanium(&Request::DropCorpse { corpse: None }, PLAYER).unwrap(),
             corpses::release(None).unwrap()
         );
         // What a packet cannot carry is refused, as the codec refuses it.
-        assert!(titanium(&Request::Trade { own_id: 7, with: 7 }).is_err());
+        assert!(titanium(&Request::Trade(7), PLAYER).is_err());
+        // A packet repeating the sender takes their name and spawn.
+        assert_eq!(
+            titanium(&Request::ClickDoor(3), PLAYER).unwrap(),
+            doors::titanium_click(3, 7)
+        );
+        assert_eq!(
+            titanium(&Request::SummonCorpse("Tester's corpse4".into()), PLAYER).unwrap(),
+            corpses::summon("Tester's corpse4", "Tester").unwrap()
+        );
+        // Without a spawn, those packets are refused as their codecs refuse
+        // a zero spawn.
+        let unspawned = Sender {
+            spawn_id: None,
+            ..PLAYER
+        };
+        assert!(titanium(&Request::AcceptTrade, unspawned).is_err());
     }
 }
