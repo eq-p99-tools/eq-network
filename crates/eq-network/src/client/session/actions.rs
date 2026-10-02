@@ -136,6 +136,7 @@ pub(super) fn needs(command: &ClientCommand) -> &'static [Resource] {
         | ClientCommand::SelectTarget { .. }
         | ClientCommand::WhoAll { .. }
         | ClientCommand::Pet { .. }
+        | ClientCommand::Training { .. }
         | ClientCommand::Consent { .. }
         | ClientCommand::SummonCorpse { .. }
         | ClientCommand::DragCorpse { .. }
@@ -180,6 +181,7 @@ fn refusal(command: &ClientCommand, reason: &str) -> Option<WorldEvent> {
         | ClientCommand::Consume { session_id, .. }
         | ClientCommand::UseAbility { session_id, .. }
         | ClientCommand::Pet { session_id, .. }
+        | ClientCommand::Training { session_id, .. }
         | ClientCommand::Consent { session_id, .. }
         | ClientCommand::SummonCorpse { session_id, .. }
         | ClientCommand::DragCorpse { session_id, .. }
@@ -242,8 +244,8 @@ fn refusal(command: &ClientCommand, reason: &str) -> Option<WorldEvent> {
 }
 
 /// The refusal that is only a reason, for the admission that asked: what a
-/// merchant, a trade, coins, food, an ability, a pet, a corpse or a zone
-/// line would not do.
+/// merchant, a trade, coins, food, an ability, a pet, a guildmaster, a
+/// corpse or a zone line would not do.
 fn reasoned(command: &ClientCommand, session_id: u64, reason: String) -> Option<WorldEvent> {
     Some(match command {
         ClientCommand::Buy { .. } | ClientCommand::Sell { .. } => {
@@ -256,6 +258,7 @@ fn reasoned(command: &ClientCommand, session_id: u64, reason: String) -> Option<
         ClientCommand::Consume { .. } => WorldEvent::ConsumeRefused { session_id, reason },
         ClientCommand::UseAbility { .. } => WorldEvent::AbilityRefused { session_id, reason },
         ClientCommand::Pet { .. } => WorldEvent::PetRefused { session_id, reason },
+        ClientCommand::Training { .. } => WorldEvent::TrainingRefused { session_id, reason },
         ClientCommand::Consent { .. }
         | ClientCommand::SummonCorpse { .. }
         | ClientCommand::DragCorpse { .. }

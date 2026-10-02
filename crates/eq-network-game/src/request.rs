@@ -14,7 +14,7 @@ use crate::{
     movement::{self, PositionPacket},
     objects,
     pets::{self, PetCommand},
-    spells,
+    spells, training,
     who::{self, WhoFilter},
     world::Position,
     zoning, GameDialect,
@@ -73,6 +73,17 @@ pub enum Request {
         /// The spawn it acts on, for commands that take one.
         target: Option<u16>,
     },
+    /// Ask a guildmaster to train.
+    OpenTraining(u16),
+    /// Practice a skill once with a guildmaster.
+    Train {
+        /// The guildmaster's spawn.
+        trainer: u16,
+        /// The skill's number.
+        skill: u32,
+    },
+    /// Leave training with a guildmaster.
+    EndTraining(u16),
     /// Use a skill on the server's idea of the target.
     Ability {
         /// The skill.
@@ -201,6 +212,9 @@ pub fn titanium(request: &Request, sender: Sender<'_>) -> Result<EncodedCommand>
         Request::DropCorpse { corpse } => corpses::release(corpse.as_deref())?,
         Request::Pet { command, target } => pets::command(*command, *target),
         Request::Ability { ability, target } => ability.encode(target.unwrap_or(0)),
+        Request::OpenTraining(trainer) => training::titanium_open(*trainer, sender.spawn()),
+        Request::Train { trainer, skill } => training::titanium_train(*trainer, *skill)?,
+        Request::EndTraining(trainer) => training::titanium_end(*trainer, sender.spawn()),
         Request::Trade(with) => exchange::request(sender.spawn(), *with)?,
         Request::AcceptTrade => exchange::accept(sender.spawn())?,
         Request::CancelTrade => exchange::cancel(sender.spawn())?,
@@ -294,6 +308,26 @@ mod tests {
         assert_eq!(
             titanium(&Request::DropCorpse { corpse: None }, PLAYER).unwrap(),
             corpses::release(None).unwrap()
+        );
+        // Training names the guildmaster, and opening and leaving the player.
+        assert_eq!(
+            titanium(&Request::OpenTraining(42), PLAYER).unwrap(),
+            training::titanium_open(42, 7)
+        );
+        assert_eq!(
+            titanium(
+                &Request::Train {
+                    trainer: 42,
+                    skill: 30
+                },
+                PLAYER
+            )
+            .unwrap(),
+            training::titanium_train(42, 30).unwrap()
+        );
+        assert_eq!(
+            titanium(&Request::EndTraining(42), PLAYER).unwrap(),
+            training::titanium_end(42, 7)
         );
         // What a packet cannot carry is refused, as the codec refuses it.
         assert!(titanium(&Request::Trade(7), PLAYER).is_err());

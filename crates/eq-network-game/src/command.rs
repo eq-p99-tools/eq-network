@@ -374,6 +374,15 @@ pub enum GameCommand {
         /// The player's target, which an attack aims at.
         target: Option<u16>,
     },
+    /// Open training with a guildmaster, practice a skill there, or leave.
+    Training {
+        /// Current zone admission.
+        session_id: u64,
+        /// What the player asks.
+        request: crate::training::TrainingRequest,
+        /// Reject delayed actions instead of replaying them after a stall.
+        created: std::time::Instant,
+    },
     /// Ask the world who is online: `/who all`.
     WhoAll {
         /// Current zone admission.
@@ -449,6 +458,7 @@ impl GameCommand {
             | Self::UseAbility { session_id, .. }
             | Self::WhoAll { session_id, .. }
             | Self::Pet { session_id, .. }
+            | Self::Training { session_id, .. }
             | Self::Consent { session_id, .. }
             | Self::SummonCorpse { session_id, .. }
             | Self::DragCorpse { session_id, .. }
@@ -506,6 +516,7 @@ impl GameCommand {
             Self::UseAbility { .. } => Capability::Abilities,
             Self::WhoAll { .. } => Capability::Who,
             Self::Pet { .. } => Capability::Pets,
+            Self::Training { .. } => Capability::Training,
             Self::Consent { .. }
             | Self::SummonCorpse { .. }
             | Self::DragCorpse { .. }
@@ -559,6 +570,7 @@ impl GameCommand {
             | Self::AutoAttack { created, .. }
             | Self::Consume { created, .. }
             | Self::UseAbility { created, .. }
+            | Self::Training { created, .. }
             | Self::ConfigureMotion { created, .. } => Some(*created),
         }
     }
@@ -676,6 +688,7 @@ pub fn encode(
         | GameCommand::UseAbility { .. }
         | GameCommand::WhoAll { .. }
         | GameCommand::Pet { .. }
+        | GameCommand::Training { .. }
         | GameCommand::Consent { .. }
         | GameCommand::SummonCorpse { .. }
         | GameCommand::DragCorpse { .. }

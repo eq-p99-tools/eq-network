@@ -85,6 +85,9 @@ pub struct PlayerState {
     pub deity: Option<u32>,
     /// Indexed profile skill values, when decoded; IDs retain the protocol's numbering.
     pub skills: Option<Vec<u32>>,
+    /// Unspent practice points, which training at a guildmaster spends, when
+    /// decoded.
+    pub practice_points: Option<u32>,
     /// Numeric gender identifier.
     pub gender: u32,
     /// Current level.
@@ -347,12 +350,14 @@ pub enum Capability {
     Corpses,
     /// Commanding a pet.
     Pets,
+    /// Training skills at a guildmaster.
+    Training,
 }
 
 impl Capability {
     /// Every capability, in order: what a session offers when its server and
     /// client generation support everything.
-    pub const ALL: [Self; 19] = [
+    pub const ALL: [Self; 20] = [
         Self::Casting,
         Self::Spellbook,
         Self::Inventory,
@@ -372,6 +377,7 @@ impl Capability {
         Self::Who,
         Self::Corpses,
         Self::Pets,
+        Self::Training,
     ];
 }
 
@@ -748,6 +754,17 @@ pub enum WorldEvent {
         /// Why not.
         reason: String,
     },
+    /// Training at a guildmaster opened, took a practice or ended.
+    Training(crate::training::TrainingUpdate),
+    /// A training request was not sent, and why.
+    TrainingRefused {
+        /// Admission from the request.
+        session_id: u64,
+        /// Why not.
+        reason: String,
+    },
+    /// How many practice points the player has left.
+    PracticePoints(u32),
     /// A melee, skill or spell damage record for any nearby entities.
     Damage(crate::combat::Damage),
     /// Own-character skill update; unknown skill IDs remain available to consumers.
@@ -813,6 +830,7 @@ pub fn titanium_player(profile: &[u8], spawn: &[u8], revolution: f32) -> Result<
                 .map(|index| word(profile, 4460 + index * 4))
                 .collect(),
         ),
+        practice_points: Some(word(profile, 2224)),
         gender: word(profile, 4),
         level: profile[20],
         position,
@@ -982,6 +1000,8 @@ fn titanium_views(opcode: u16, body: &[u8]) -> Result<Option<WorldEvent>> {
         Some(WorldEvent::Merchant(update))
     } else if let Some(update) = crate::exchange::decode(opcode, body)? {
         Some(WorldEvent::Exchange(update))
+    } else if let Some(update) = crate::training::decode(opcode, body)? {
+        Some(WorldEvent::Training(update))
     } else {
         crate::inventory::decode(opcode, body)?.map(WorldEvent::Inventory)
     })
@@ -1165,6 +1185,7 @@ mod tests {
             Capability::Who => 16,
             Capability::Corpses => 17,
             Capability::Pets => 18,
+            Capability::Training => 19,
         };
         for (index, capability) in Capability::ALL.into_iter().enumerate() {
             assert_eq!(place(capability), index, "{capability:?}");

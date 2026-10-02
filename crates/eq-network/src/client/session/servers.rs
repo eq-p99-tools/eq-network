@@ -31,6 +31,7 @@ use super::{
     spellbook::Spellbook,
     talk::Talk,
     targeting::Targeting,
+    training::Training,
     transfers::Transfers,
     who::Who,
     wire::{EqMac, Titanium, Wire},
@@ -205,6 +206,11 @@ pub(super) trait ServerType: Sync {
         None
     }
 
+    /// Training skills at a guildmaster.
+    fn training(&self, _setup: &Setup<'_>) -> Provided {
+        None
+    }
+
     /// Every feature the server type provides, in the order the zone session
     /// offers them each command, packet and timer.
     fn features(&self, setup: &Setup<'_>) -> Vec<Box<dyn Feature>> {
@@ -229,6 +235,7 @@ pub(super) trait ServerType: Sync {
             self.who(setup),
             self.corpses(setup),
             self.pets(setup),
+            self.training(setup),
         ]
         .into_iter()
         .flatten()
@@ -326,7 +333,7 @@ mod titanium {
     use super::{
         Abilities, Belongings, Camp, Casting, Character, Clock, Combat, Corpses, Doors, Entities,
         Exchanges, Feature, GroundObjects, Looting, Motion, Pets, Setup, Spellbook, Talk,
-        Targeting, Transfers, Who,
+        Targeting, Training, Transfers, Who,
     };
 
     pub(super) fn casting() -> Box<dyn Feature> {
@@ -408,6 +415,10 @@ mod titanium {
 
     pub(super) fn pets() -> Box<dyn Feature> {
         Box::new(Pets)
+    }
+
+    pub(super) fn training() -> Box<dyn Feature> {
+        Box::<Training>::default()
     }
 }
 
@@ -601,6 +612,10 @@ impl ServerType for EqEmu {
     fn pets(&self, _setup: &Setup<'_>) -> Provided {
         Some(titanium::pets())
     }
+
+    fn training(&self, _setup: &Setup<'_>) -> Provided {
+        Some(titanium::training())
+    }
 }
 
 /// Project Quarm, which speaks `EQMac` and provides no feature on this
@@ -716,11 +731,17 @@ mod tests {
 
     #[test]
     fn p99_and_eqemu_provide_every_feature_one_each() {
-        for protocol in [ServerProtocol::Project1999, ServerProtocol::EqEmu] {
+        // Training is checked on EQEmu alone so far.
+        for (protocol, count) in [
+            (ServerProtocol::Project1999, 20),
+            (ServerProtocol::EqEmu, 21),
+        ] {
             let server = server_type(protocol);
             let setup = Setup::new("Tester", AutoEat::default());
-            assert_eq!(server.features(&setup).len(), 20, "{protocol:?}");
+            assert_eq!(server.features(&setup).len(), count, "{protocol:?}");
         }
+        assert!(!offers(server_type(ServerProtocol::Project1999)).contains(&Capability::Training));
+        assert!(offers(server_type(ServerProtocol::EqEmu)).contains(&Capability::Training));
     }
 
     #[test]
