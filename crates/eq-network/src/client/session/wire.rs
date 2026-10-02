@@ -6,8 +6,12 @@
 //! generation does not read yet is simply absent, as with every
 //! [`ServerType`](super::servers::ServerType) feature.
 
-use super::admission::{Admission, EqMacAdmission, Handshake, TitaniumAdmission};
+use super::{
+    admission::{Admission, EqMacAdmission, Handshake, TitaniumAdmission},
+    login::{self, Credentials},
+};
 use crate::chat::{self, ChatEvent};
+use crate::client::{CancellationToken, ClientConfig, Events};
 use anyhow::{bail, Result};
 use eq_network_game::{
     command::EncodedCommand,
@@ -41,6 +45,21 @@ pub(super) trait Wire: Sync {
     /// whose values its packet cannot carry.
     fn encode(&self, request: &Request, _sender: Sender<'_>) -> Result<EncodedCommand> {
         bail!("this client generation cannot send {request:?} yet")
+    }
+
+    /// Logs in the way the generation's client does: the session's
+    /// credentials and the world server's address.
+    ///
+    /// # Errors
+    /// Returns an error when the login server refuses the account or the
+    /// configured server, or the generation has no login yet.
+    fn login(
+        &self,
+        _config: &ClientConfig,
+        _stop: &CancellationToken,
+        _log: &mut Events<'_>,
+    ) -> Result<(Credentials, String)> {
+        bail!("this client generation cannot log in yet")
     }
 
     /// Connects to a zone server the way the generation's client does.
@@ -84,6 +103,15 @@ impl Wire for Titanium {
         request::titanium(request, sender)
     }
 
+    fn login(
+        &self,
+        config: &ClientConfig,
+        stop: &CancellationToken,
+        log: &mut Events<'_>,
+    ) -> Result<(Credentials, String)> {
+        login::titanium(config, stop, log)
+    }
+
     /// Titanium zones speak the modern transport, answering session
     /// requests.
     fn connect_zone(&self, address: SocketAddr, stop: &AtomicBool) -> Result<Box<dyn Transport>> {
@@ -116,6 +144,15 @@ impl Wire for EqMac {
 
     fn encode(&self, request: &Request, sender: Sender<'_>) -> Result<EncodedCommand> {
         request::eqmac(request, sender)
+    }
+
+    fn login(
+        &self,
+        config: &ClientConfig,
+        stop: &CancellationToken,
+        log: &mut Events<'_>,
+    ) -> Result<(Credentials, String)> {
+        login::eqmac::login(config, stop, log)
     }
 
     /// `EQMac` zones speak the legacy transport.

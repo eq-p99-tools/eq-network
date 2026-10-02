@@ -13,6 +13,7 @@ mod exchange;
 pub(super) mod feature;
 mod inventory;
 mod lifecycle;
+pub(super) mod login;
 mod looting;
 mod motion;
 mod objects;
@@ -29,7 +30,7 @@ mod zone;
 
 use super::{
     CancellationToken, ClientCommand, ClientConfig, ClientEvent, ClientIdentity, ConnectionStage,
-    ConnectionState, DecodeError, Events, LoginError, RecordEvent, RunOptions, ServerProtocol,
+    ConnectionState, DecodeError, Events, RecordEvent, RunOptions, ServerProtocol,
 };
 use crate::{
     assets::Assets,
@@ -38,23 +39,30 @@ use crate::{
 };
 use anyhow::{bail, ensure, Context, Result};
 use eq_network_game::zoning;
-use eq_network_login::{
-    crypto::{des_decrypt, DesKeyIv},
-    login::{encrypt_login_credentials, is_bad_password_login_result},
-    server_list::parse_server_list,
-};
 use servers::Shield;
 use std::{
     net::IpAddr,
     sync::mpsc::Receiver,
     time::{Duration, Instant},
 };
-use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
+use zeroize::Zeroizing;
 
-#[derive(Zeroize, ZeroizeOnDrop)]
-struct Credentials {
-    account: u32,
-    key: [u8; 10],
+use login::Credentials;
+
+/// Logs in the way the configured server's client generation does: the
+/// session's credentials and the world server's address.
+///
+/// # Errors
+/// Returns an error when the login server refuses the account, the server
+/// is unavailable, or the generation has no login yet.
+pub(super) fn login(
+    config: &ClientConfig,
+    stop: &CancellationToken,
+    log: &mut Events<'_>,
+) -> Result<(Credentials, String)> {
+    servers::server_type(config.protocol)
+        .wire()
+        .login(config, stop, log)
 }
 
 /// Run one complete login/world/zone attempt with fresh session credentials.
@@ -131,27 +139,6 @@ fn run_p99(
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum LoginOpcode {
-    Ready,
-    Accepted,
-    ServerList,
-    PlayResponse,
-    Unknown(u16),
-}
-
-impl From<u16> for LoginOpcode {
-    fn from(value: u16) -> Self {
-        match value {
-            0x16 => Self::Ready,
-            0x17 => Self::Accepted,
-            0x18 => Self::ServerList,
-            0x21 => Self::PlayResponse,
-            value => Self::Unknown(value),
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum WorldOpcode {
     LogServer,
     ApprovalChallenge,
@@ -181,7 +168,11 @@ impl From<u16> for WorldOpcode {
 }
 
 /// Wait for one application packet while enforcing shutdown and a deadline.
-fn next(session: &mut Session, deadline: Instant, stop: &CancellationToken) -> Result<Application> {
+fn next(
+    session: &mut dyn eq_network_transport::Transport,
+    deadline: Instant,
+    stop: &CancellationToken,
+) -> Result<Application> {
     loop {
         ensure!(!stop.is_cancelled(), "shutdown requested");
         ensure!(Instant::now() < deadline, "application handshake timed out");
@@ -189,113 +180,6 @@ fn next(session: &mut Session, deadline: Instant, stop: &CancellationToken) -> R
             return Ok(packet);
         }
     }
-}
-
-/// Authenticate, select the configured server, and return its world endpoint.
-fn login(
-    config: &ClientConfig,
-    stop: &CancellationToken,
-    log: &mut Events<'_>,
-) -> Result<(Credentials, String)> {
-    let mut session = Session::connect_cancellable(
-        super::endpoint(&config.host, config.port, config.local_only)?,
-        false,
-        stop.flag(),
-    )?;
-    let mut ready = vec![0; 12];
-    ready[0] = 2;
-    ready[9] = 8;
-    session.send(1, &ready)?;
-    let deadline = Instant::now() + Duration::from_secs(45);
-    let mut credentials = None;
-    let mut selected = None;
-    let mut sent_credentials = false;
-    loop {
-        let packet = next(&mut session, deadline, stop)?;
-        match LoginOpcode::from(packet.opcode) {
-            LoginOpcode::Ready if !sent_credentials => {
-                log.send(ClientEvent::Progress(ConnectionStage::Authenticating))?;
-                let mut body = vec![0; 10];
-                body[0] = 3;
-                body[5] = 2;
-                body.extend(encrypt_login_credentials(
-                    config.credentials.account(),
-                    config.credentials.password(),
-                    DesKeyIv::default(),
-                ));
-                session.send(2, &body)?;
-                sent_credentials = true;
-            }
-            LoginOpcode::Accepted => {
-                credentials = Some(login_credentials(&packet.body)?);
-                log.send(ClientEvent::Progress(ConnectionStage::SelectingServer))?;
-                let mut request = vec![0; 10];
-                request[0] = 4;
-                session.send(4, &request)?;
-                log.diagnostic("Login server authenticated the account".into())?;
-            }
-            LoginOpcode::ServerList => {
-                ensure!(packet.body.len() >= 20, "truncated server list");
-                let mut body = 0x18u16.to_le_bytes().to_vec();
-                body.extend(packet.body);
-                let (servers, _) = parse_server_list(&body).context("invalid server list")?;
-                let server = servers
-                    .into_iter()
-                    .find(|server| server.name.eq_ignore_ascii_case(&config.server))
-                    .context("configured server name was not found in the server list")?;
-                ensure!(
-                    matches!(server.status, 0 | 2),
-                    "configured server is unavailable or locked"
-                );
-                let mut request = vec![0; 14];
-                request[0] = 5;
-                request[10..14].copy_from_slice(&server.runtime_id.to_le_bytes());
-                session.send(0x0d, &request)?;
-                selected = Some(server.ip);
-            }
-            LoginOpcode::PlayResponse => {
-                ensure!(packet.body.len() >= 20, "truncated world-entry response");
-                ensure!(
-                    packet.body[10] > 0,
-                    "login server denied world entry (message {})",
-                    le32(&packet.body[11..15])
-                );
-                session.close()?;
-                let selection = (
-                    credentials.context("play response before authentication")?,
-                    selected.context("play response before selection")?,
-                );
-                log.send(ClientEvent::Progress(ConnectionStage::ConnectingWorld))?;
-                return Ok(selection);
-            }
-            _ => (),
-        }
-    }
-}
-
-/// Use the SSO crate's failure signature before parsing the successful session key.
-fn login_credentials(body: &[u8]) -> Result<Credentials> {
-    let mut application = 0x17u16.to_le_bytes().to_vec();
-    application.extend_from_slice(body);
-    if is_bad_password_login_result(&application, DesKeyIv::default()) {
-        return Err(LoginError::InvalidCredentials.into());
-    }
-    ensure!(body.len() >= 34, "invalid login response");
-    let ciphertext = &body[10..];
-    let clear = Zeroizing::new(des_decrypt(
-        &ciphertext[..ciphertext.len() / 8 * 8],
-        DesKeyIv::default(),
-    )?);
-    ensure!(clear.len() >= 23, "invalid login response");
-    let account = le32(&clear[8..12]);
-    ensure!(
-        account != 0 && account != u32::MAX && clear[0] == 1,
-        "login was rejected"
-    );
-    let key = cstr(&clear[12..23])
-        .try_into()
-        .context("invalid login session key")?;
-    Ok(Credentials { account, key })
 }
 
 /// Build the current P99 CRC1 client-validation response.
@@ -394,7 +278,7 @@ fn open_world(
     let mut login_info = Zeroizing::new(vec![0; 464]);
     login_info[192] = 0xcc;
     login_info[188] = u8::from(zoning);
-    let account = credentials.account.to_string();
+    let account = &credentials.account;
     login_info[..account.len()].copy_from_slice(account.as_bytes());
     login_info[account.len() + 1..account.len() + 1 + credentials.key.len()]
         .copy_from_slice(&credentials.key);
@@ -771,30 +655,5 @@ mod tests {
         assert_eq!(cstr(&second[50..66]), b"TEST-DEVICE");
         assert_eq!(cstr(&second[66..82]), b"test-user");
         assert_eq!(&second[82..90], &[127, 0, 0, 1, 192, 0, 2, 10]);
-    }
-}
-
-#[cfg(test)]
-mod login_tests {
-    use super::*;
-    use eq_network_login::crypto::des_encrypt;
-
-    #[test]
-    fn valid_session_keys_and_malformed_responses_are_not_bad_passwords() {
-        let mut clear = vec![0; 32];
-        clear[0] = 1;
-        clear[8..12].copy_from_slice(&12345u32.to_le_bytes());
-        clear[12..22].copy_from_slice(b"EXAMPLEKEY");
-        let mut body = vec![0; 10];
-        body[0] = 3;
-        body[5] = 2;
-        body.extend(des_encrypt(&clear, DesKeyIv::default()));
-        let credentials = login_credentials(&body).unwrap();
-        assert_eq!(credentials.account, 12345);
-        assert_eq!(&credentials.key, b"EXAMPLEKEY");
-        for length in [0, 10, 18, 26] {
-            let error = login_credentials(&body[..length]).err().unwrap();
-            assert!(!error.is::<LoginError>());
-        }
     }
 }
