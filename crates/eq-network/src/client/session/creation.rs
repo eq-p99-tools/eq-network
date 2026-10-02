@@ -211,7 +211,7 @@ mod tests {
         let sent: Vec<(u16, usize)> = kept.0.iter().map(|(op, body)| (*op, body.len())).collect();
         assert_eq!(
             sent,
-            [(EQMAC_APPROVE_NAME_OPCODE, 78), (EQMAC_CREATE_OPCODE, 8452)]
+            [(EQMAC_APPROVE_NAME_OPCODE, 76), (EQMAC_CREATE_OPCODE, 8452)]
         );
         assert_eq!(outcomes(&events), [("Testcleric".into(), true)]);
     }
