@@ -7,6 +7,11 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Tell echoes (`ChannelName::TellEcho`): on the Titanium wire, the server's
+  echo of a tell the player sent (channel 14) has a channel of its own, with
+  the player as its sender and the one told as its target, so a front end
+  can say whom the player told. The `EQMac` generation keeps channel 14
+  unknown until it is checked there.
 - Character-selection sessions and typed world state for graphical clients.
 - P99 movement, targeting, doors, inventory operations, spellbook editing,
   casting, item activation, buff notifications, and zone/death handoff events.

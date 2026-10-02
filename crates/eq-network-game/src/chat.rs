@@ -50,6 +50,9 @@ pub enum ChannelName {
     Broadcast,
     /// Direct tell.
     Tell,
+    /// The server's echo of a tell the player sent: its sender is the
+    /// player and its target the one told.
+    TellEcho,
     /// Local say chat.
     Say,
     /// Game-master say message.
@@ -275,6 +278,11 @@ impl CommunicationOpcode {
         }
     }
 }
+
+/// The channel the Titanium wire echoes a tell the player sent on, as
+/// `EQEmu` sends it. The `EQMac` generation's number for the echo is not
+/// checked yet, so there it stays unknown.
+const TITANIUM_TELL_ECHO: u32 = 14;
 
 /// Map a wire channel ID to its stable JSON name while preserving unknown IDs.
 #[must_use]
@@ -554,7 +562,11 @@ pub fn parse_for(
                 GameDialect::Titanium => u32_at(body, 132),
                 GameDialect::EqMac => u32::from(u16::from_le_bytes([body[130], body[131]])),
             };
-            let mut event = ChatEvent::new(opcode, body, channel_name(channel), include_raw)
+            let name = match (protocol, channel) {
+                (GameDialect::Titanium, TITANIUM_TELL_ECHO) => ChannelName::TellEcho,
+                _ => channel_name(channel),
+            };
+            let mut event = ChatEvent::new(opcode, body, name, include_raw)
                 .with_message(message_for(protocol, &body[header..], include_raw));
             event.channel = Some(channel);
             event.sender = Some(text(&body[64..128]));
@@ -665,6 +677,31 @@ mod tests {
             }
         }
         assert!(parse(0xffff, &[], false).unwrap().is_none());
+    }
+
+    #[test]
+    fn a_tell_the_player_sent_comes_back_as_its_echo() {
+        let mut body = vec![0; 148];
+        body[..7].copy_from_slice(b"Example");
+        body[64..72].copy_from_slice(b"Examplar");
+        body[132..136].copy_from_slice(&u32::to_le_bytes(14));
+        body.extend_from_slice(b"inc\0");
+        let event = parse(0x1004, &body, false).unwrap().unwrap();
+        assert_eq!(event.channel_name, ChannelName::TellEcho);
+        assert_eq!(event.sender.as_deref(), Some("Examplar"));
+        assert_eq!(event.target.as_deref(), Some("Example"));
+        assert_eq!(
+            serde_json::to_value(ChannelName::TellEcho).unwrap(),
+            "tell_echo"
+        );
+        // The EQMac generation's channel 14 is not checked yet.
+        let mut body = vec![0; MAC_CHANNEL_MESSAGE_HEADER];
+        body[130..132].copy_from_slice(&14u16.to_le_bytes());
+        body.extend_from_slice(b"inc\0");
+        let event = parse_for(GameDialect::EqMac, 0x0741, &body, false)
+            .unwrap()
+            .unwrap();
+        assert_eq!(event.channel_name, ChannelName::Unknown);
     }
 
     #[test]
