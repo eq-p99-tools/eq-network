@@ -761,6 +761,10 @@ impl ServerType for Takp {
     fn talk(&self, _setup: &Setup<'_>) -> Provided {
         Some(shared::talk())
     }
+
+    fn camp(&self, _setup: &Setup<'_>) -> Provided {
+        Some(shared::camp())
+    }
 }
 
 /// The server type of a server protocol.
@@ -825,13 +829,20 @@ mod tests {
     #[test]
     fn eqmac_servers_provide_the_features_built_for_them() {
         // Quarm and TAKP speak EQMac: they see the zone's spawns, keep the
-        // player's record and talk, and send nothing else yet.
-        for protocol in [ServerProtocol::Quarm, ServerProtocol::Takp] {
-            let server = server_type(protocol);
-            assert!(server.wire().encode(&Request::Camp, SENDER).is_err());
-            let setup = Setup::new("Tester", AutoEat::default());
-            assert_eq!(server.features(&setup).len(), 3, "{protocol:?}");
-            assert_eq!(offers(server), [Capability::Talking]);
+        // player's record and talk. TAKP also camps; Quarm will once that is
+        // checked there.
+        let setup = Setup::new("Tester", AutoEat::default());
+        let quarm = server_type(ServerProtocol::Quarm);
+        assert_eq!(quarm.features(&setup).len(), 3);
+        assert_eq!(offers(quarm), [Capability::Talking]);
+        let takp = server_type(ServerProtocol::Takp);
+        assert_eq!(takp.features(&setup).len(), 4);
+        assert_eq!(offers(takp), [Capability::Talking, Capability::Camping]);
+        for server in [quarm, takp] {
+            assert_eq!(
+                server.wire().encode(&Request::Camp, SENDER).unwrap(),
+                eq_network_game::quarm::camp()
+            );
             assert!(server.protect(&[0; 464]).unwrap().is_none());
             assert!(!server.start_choice());
         }

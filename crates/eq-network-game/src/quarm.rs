@@ -39,8 +39,14 @@ pub const ZONE_SERVER_FILTER: u16 = 0xff41;
 pub const ZONE_CLIENT_UPDATE: u16 = 0xf340;
 /// A spawn appearance: the own spawn's ID, and the DLL version check.
 pub const ZONE_SPAWN_APPEARANCE: u16 = 0xf540;
-/// The server logging the character out.
+/// The client's logout once its camp timer completes, which the server
+/// also sends to log the character out.
 pub const ZONE_LOGOUT: u16 = 0x5041;
+/// The client starting to camp (`OP_Camp`).
+pub const ZONE_CAMP: u16 = 0x0742;
+/// The server's answer to a logout (`OP_LogoutReply`), which ends the zone
+/// connection.
+pub const ZONE_LOGOUT_REPLY: u16 = 0x5941;
 /// The server asking the client to change zones.
 pub const ZONE_CHANGE_REQUEST: u16 = 0x4d41;
 
@@ -112,6 +118,41 @@ pub fn zone_request(body: &[u8]) -> Result<ZoneOffer> {
         reason: word(body, 20),
         to_bind: false,
         solicited: true,
+    })
+}
+
+/// The client starting to camp. TAKP reads nothing in it; the official
+/// client's body is unrecorded.
+#[must_use]
+pub fn camp() -> EncodedCommand {
+    EncodedCommand {
+        opcode: ZONE_CAMP,
+        body: Vec::new(),
+    }
+}
+
+/// The client's logout once its camp timer completes.
+#[must_use]
+pub fn logout() -> EncodedCommand {
+    EncodedCommand {
+        opcode: ZONE_LOGOUT,
+        body: Vec::new(),
+    }
+}
+
+/// The player's stance, as Titanium's: an appearance of the player's own
+/// spawn, of type 14 (animation), with the stance's value.
+///
+/// # Errors
+/// Refuses a stance for no spawn.
+pub fn posture(spawn_id: u16, posture: crate::command::Posture) -> Result<EncodedCommand> {
+    ensure!(spawn_id != 0, "a stance needs the player's own spawn");
+    let mut body = spawn_id.to_le_bytes().to_vec();
+    body.extend_from_slice(&14u16.to_le_bytes());
+    body.extend_from_slice(&posture.appearance().to_le_bytes());
+    Ok(EncodedCommand {
+        opcode: ZONE_SPAWN_APPEARANCE,
+        body,
     })
 }
 

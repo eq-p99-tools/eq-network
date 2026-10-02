@@ -134,7 +134,7 @@ pub fn titanium(opcode: u16, body: &[u8]) -> Vec<Message> {
 #[must_use]
 pub fn eqmac(opcode: u16, body: &[u8]) -> Vec<Message> {
     match opcode {
-        crate::quarm::ZONE_LOGOUT => vec![Message::LoggedOut],
+        crate::quarm::ZONE_LOGOUT | crate::quarm::ZONE_LOGOUT_REPLY => vec![Message::LoggedOut],
         crate::quarm::ZONE_CHANGE_REQUEST => vec![crate::quarm::zone_request(body).map_or_else(
             |error| unreadable(Part::ZoneOffer, &error),
             Message::ZoneOffer,
@@ -245,8 +245,12 @@ mod tests {
 
     #[test]
     fn eqmac_packets_say_the_same_things_in_their_own_layouts() {
-        use crate::quarm::{ZONE_CHANGE_REQUEST, ZONE_LOGOUT};
+        use crate::quarm::{ZONE_CHANGE_REQUEST, ZONE_LOGOUT, ZONE_LOGOUT_REPLY};
         assert!(matches!(eqmac(ZONE_LOGOUT, &[])[..], [Message::LoggedOut]));
+        assert!(matches!(
+            eqmac(ZONE_LOGOUT_REPLY, &[])[..],
+            [Message::LoggedOut]
+        ));
         // A despawn, then a health update that says two things.
         assert!(matches!(
             eqmac(0x2940, &[9, 0])[..],

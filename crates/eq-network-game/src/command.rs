@@ -15,8 +15,9 @@ pub enum Posture {
 }
 
 impl Posture {
-    /// Titanium appearance parameter for this persistent stance.
-    const fn titanium_value(self) -> u32 {
+    /// The appearance parameter for this persistent stance, the same in
+    /// Titanium and `EQMac`.
+    pub(crate) const fn appearance(self) -> u32 {
         match self {
             Self::Standing => 100,
             Self::Sitting => 110,
@@ -805,7 +806,7 @@ fn encode_posture(dialect: GameDialect, spawn_id: u16, posture: Posture) -> Resu
     anyhow::ensure!(spawn_id != 0, "posture requires an own-spawn ID");
     let mut body = spawn_id.to_le_bytes().to_vec();
     body.extend_from_slice(&14u16.to_le_bytes());
-    body.extend_from_slice(&posture.titanium_value().to_le_bytes());
+    body.extend_from_slice(&posture.appearance().to_le_bytes());
     Ok(EncodedCommand {
         opcode: 0x7c32,
         body,
