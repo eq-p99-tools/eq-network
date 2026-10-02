@@ -10,6 +10,9 @@ use super::{
 use crate::world::{PlayerState, Position};
 use eq_network_transport::{Application, Transport};
 
+mod eqmac;
+pub(super) use eqmac::EqMacAdmission;
+
 const PROFILE_OPCODE: u16 = 0x75df;
 const WEATHER_OPCODE: u16 = 0x254d;
 const SPAWN_OPCODE: u16 = 0x7213;

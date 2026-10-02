@@ -6,7 +6,15 @@ use super::{
 };
 use crate::{chat, old_transport::OldSession, transport::Application};
 use anyhow::{bail, ensure, Context, Result};
-use eq_network_game::command;
+use eq_network_game::{
+    command,
+    quarm::{
+        dll_version_message, dll_version_reply, server_filters, ZONE_AVATAR_READY,
+        ZONE_CHANGE_REQUEST, ZONE_CLIENT_UPDATE, ZONE_DATA_RATE, ZONE_ENTRY, ZONE_EXPERIENCE_READY,
+        ZONE_LOGOUT, ZONE_NEW, ZONE_PLAYER_PROFILE, ZONE_REQUEST_NEW, ZONE_REQUEST_SPAWNS,
+        ZONE_SERVER_FILTER, ZONE_SPAWN_APPEARANCE, ZONE_WEATHER,
+    },
+};
 use eq_network_login::crypto::{des_encrypt, DesKeyIv};
 use std::{
     sync::mpsc::Receiver,
@@ -31,27 +39,6 @@ const WORLD_LOGIN: u16 = 0x5818;
 const WORLD_CHARACTER_LIST: u16 = 0x4740;
 const WORLD_ENTER: u16 = 0x0180;
 const WORLD_ZONE_SERVER: u16 = 0x0480;
-
-const ZONE_DATA_RATE: u16 = 0xe841;
-const ZONE_ENTRY: u16 = 0x2840;
-const ZONE_PLAYER_PROFILE: u16 = 0x3640;
-const ZONE_WEATHER: u16 = 0x3641;
-const ZONE_REQUEST_NEW: u16 = 0x5d40;
-const ZONE_NEW: u16 = 0x5b40;
-const ZONE_REQUEST_SPAWNS: u16 = 0x0a40;
-const ZONE_EXPERIENCE_READY: u16 = 0xd840;
-const ZONE_AVATAR_READY: u16 = 0x6f40;
-const ZONE_SERVER_FILTER: u16 = 0xff41;
-const ZONE_CLIENT_UPDATE: u16 = 0xf340;
-const ZONE_SPAWN_APPEARANCE: u16 = 0xf540;
-const ZONE_LOGOUT: u16 = 0x5041;
-const ZONE_CHANGE_REQUEST: u16 = 0x4d41;
-
-// akplus-dll af2bd327, eqgame.cpp: DLL_VERSION and DLL_VERSION_MESSAGE_ID.
-// This announcement is independent of the optional gameplay feature handshakes.
-const DLL_VERSION: u16 = 7;
-const DLL_MESSAGE_TYPE: u16 = 256;
-const DLL_VERSION_FEATURE: u16 = 4;
 
 #[derive(Zeroize, ZeroizeOnDrop)]
 struct Credentials {
@@ -490,30 +477,6 @@ fn zone(
     }
 }
 
-/// Encode the DLL version announcement, or a reply with the response bit set.
-fn dll_version_message(response: bool) -> [u8; 8] {
-    let mut body = [0; 8]; // Custom DLL messages use spawn ID zero.
-    body[2..4].copy_from_slice(&DLL_MESSAGE_TYPE.to_le_bytes());
-    let parameter = (u32::from(response) << 31)
-        | (u32::from(DLL_VERSION_FEATURE) << 16)
-        | u32::from(DLL_VERSION);
-    body[4..].copy_from_slice(&parameter.to_le_bytes());
-    body
-}
-
-/// Answer only well-formed DLL version requests, during admission or normal play.
-fn dll_version_reply(body: &[u8]) -> Option<[u8; 8]> {
-    let body: &[u8; 8] = body.try_into().ok()?;
-    let spawn_id = u16::from_le_bytes(body[..2].try_into().unwrap());
-    let appearance = u16::from_le_bytes(body[2..4].try_into().unwrap());
-    let parameter = u32::from_le_bytes(body[4..].try_into().unwrap());
-    // Comparing the full high word also excludes responses (bit 31), preventing loops.
-    (spawn_id == 0
-        && appearance == DLL_MESSAGE_TYPE
-        && parameter >> 16 == u32::from(DLL_VERSION_FEATURE))
-    .then(|| dll_version_message(true))
-}
-
 fn record_chat(
     config: &ClientConfig,
     zone: &str,
@@ -538,14 +501,6 @@ fn record_chat(
             }),
         ),
     }
-}
-
-fn server_filters() -> [u8; 68] {
-    let mut filters = [0; 68];
-    for index in 5..=14 {
-        filters[index * 4] = 1;
-    }
-    filters
 }
 
 fn put_string(destination: &mut [u8], value: &str) -> Result<()> {
@@ -580,38 +535,6 @@ mod tests {
             "The Project Quarm Server",
             "ExampleCharacter",
         )
-    }
-
-    #[test]
-    fn dll_version_ignores_other_features_responses_and_malformed_messages() {
-        let request = [0, 0, 0, 1, 0, 0, 4, 0];
-        for length in 0..8 {
-            assert!(dll_version_reply(&request[..length]).is_none());
-        }
-        let mut oversized = request.to_vec();
-        oversized.push(0);
-        assert!(dll_version_reply(&oversized).is_none());
-        for (offset, value) in [
-            (0, 1),
-            (2, 1),
-            (3, 0),
-            (6, 2),
-            (6, 3),
-            (6, 5),
-            (6, 7),
-            (6, 255),
-            (7, 128),
-        ] {
-            let mut other = request;
-            other[offset] = value;
-            assert!(dll_version_reply(&other).is_none());
-        }
-        let mut arbitrary_value = request;
-        arbitrary_value[4..6].fill(255);
-        assert_eq!(
-            dll_version_reply(&arbitrary_value),
-            Some([0, 0, 0, 1, 7, 0, 4, 128])
-        );
     }
 
     #[test]
@@ -681,14 +604,5 @@ mod tests {
         assert!(character_exists(&body, "examplecharacter").unwrap());
         assert!(!character_exists(&body, "MissingCharacter").unwrap());
         assert!(character_exists(&body[..639], "ExampleCharacter").is_err());
-    }
-
-    #[test]
-    fn mac_filters_enable_every_chat_and_combat_category() {
-        let filters = server_filters();
-        for index in 0..17 {
-            let value = u32::from_le_bytes(filters[index * 4..index * 4 + 4].try_into().unwrap());
-            assert_eq!(value, u32::from((5..=14).contains(&index)));
-        }
     }
 }

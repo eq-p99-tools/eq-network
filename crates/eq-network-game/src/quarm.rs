@@ -11,6 +11,79 @@ use zeroize::Zeroizing;
 const PROFILE_SIZE: usize = 8460;
 const SPAWN_SIZE: usize = 224;
 
+/// The client's data rate, the first thing it sends a zone.
+pub const ZONE_DATA_RATE: u16 = 0xe841;
+/// The client's zone entry, and the zone's answer: the player's own spawn.
+pub const ZONE_ENTRY: u16 = 0x2840;
+/// The player's profile.
+pub const ZONE_PLAYER_PROFILE: u16 = 0x3640;
+/// The zone's weather, after which the client asks for the zone.
+pub const ZONE_WEATHER: u16 = 0x3641;
+/// The client asking for the zone's description.
+pub const ZONE_REQUEST_NEW: u16 = 0x5d40;
+/// The zone's description.
+pub const ZONE_NEW: u16 = 0x5b40;
+/// The client asking for the zone's spawns.
+pub const ZONE_REQUEST_SPAWNS: u16 = 0x0a40;
+/// The zone's experience report, which the client echoes.
+pub const ZONE_EXPERIENCE_READY: u16 = 0xd840;
+/// The zone saying the player's avatar is ready.
+pub const ZONE_AVATAR_READY: u16 = 0x6f40;
+/// The client's chat and combat filters.
+pub const ZONE_SERVER_FILTER: u16 = 0xff41;
+/// A position update; the client's first completes the zone entry.
+pub const ZONE_CLIENT_UPDATE: u16 = 0xf340;
+/// A spawn appearance: the own spawn's ID, and the DLL version check.
+pub const ZONE_SPAWN_APPEARANCE: u16 = 0xf540;
+/// The server logging the character out.
+pub const ZONE_LOGOUT: u16 = 0x5041;
+/// The server asking the client to change zones.
+pub const ZONE_CHANGE_REQUEST: u16 = 0x4d41;
+
+// akplus-dll af2bd327, eqgame.cpp: DLL_VERSION and DLL_VERSION_MESSAGE_ID.
+// This announcement is independent of the optional gameplay feature handshakes.
+const DLL_VERSION: u16 = 7;
+const DLL_MESSAGE_TYPE: u16 = 256;
+const DLL_VERSION_FEATURE: u16 = 4;
+
+/// The client's DLL version announcement, or a reply with the response bit
+/// set; custom DLL messages use spawn ID zero.
+#[must_use]
+pub fn dll_version_message(response: bool) -> [u8; 8] {
+    let mut body = [0; 8];
+    body[2..4].copy_from_slice(&DLL_MESSAGE_TYPE.to_le_bytes());
+    let parameter = (u32::from(response) << 31)
+        | (u32::from(DLL_VERSION_FEATURE) << 16)
+        | u32::from(DLL_VERSION);
+    body[4..].copy_from_slice(&parameter.to_le_bytes());
+    body
+}
+
+/// The reply to a well-formed DLL version request, during admission or
+/// normal play; none for anything else.
+#[must_use]
+pub fn dll_version_reply(body: &[u8]) -> Option<[u8; 8]> {
+    let body: &[u8; 8] = body.try_into().ok()?;
+    let spawn_id = u16::from_le_bytes([body[0], body[1]]);
+    let appearance = u16::from_le_bytes([body[2], body[3]]);
+    let parameter = u32::from_le_bytes([body[4], body[5], body[6], body[7]]);
+    // Comparing the full high word also excludes responses (bit 31), preventing loops.
+    (spawn_id == 0
+        && appearance == DLL_MESSAGE_TYPE
+        && parameter >> 16 == u32::from(DLL_VERSION_FEATURE))
+    .then(|| dll_version_message(true))
+}
+
+/// The client's filters: every chat and combat category on.
+#[must_use]
+pub fn server_filters() -> [u8; 68] {
+    let mut filters = [0; 68];
+    for index in 5..=14 {
+        filters[index * 4] = 1;
+    }
+    filters
+}
+
 /// Decrypt the full 64-bit words, preserve the tail, then inflate with a strict limit.
 fn unpack(body: &[u8], profile: bool) -> Result<Zeroizing<Vec<u8>>> {
     ensure!(

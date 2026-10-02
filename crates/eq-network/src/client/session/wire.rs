@@ -6,7 +6,7 @@
 //! generation does not read yet is simply absent, as with every
 //! [`ServerType`](super::servers::ServerType) feature.
 
-use super::admission::{Admission, Handshake, TitaniumAdmission};
+use super::admission::{Admission, EqMacAdmission, Handshake, TitaniumAdmission};
 use crate::chat::{self, ChatEvent};
 use anyhow::{bail, Result};
 use eq_network_game::{
@@ -123,6 +123,17 @@ impl Wire for EqMac {
         Ok(Box::new(
             crate::old_transport::OldSession::connect_cancellable(address, stop)?,
         ))
+    }
+
+    /// `EQMac`'s handshake; the player stands where their own spawn puts
+    /// them, so the profile's turn goes unused.
+    fn admit(
+        &self,
+        character: &str,
+        _revolution: f32,
+        handshake: &mut Handshake<'_, '_>,
+    ) -> Result<Box<dyn Admission>> {
+        Ok(Box::new(EqMacAdmission::start(character, handshake)?))
     }
 }
 
