@@ -327,12 +327,15 @@ pub enum Capability {
     Abilities,
     /// Asking who is online.
     Who,
+    /// Consenting others to players' corpses, and summoning and dragging
+    /// them.
+    Corpses,
 }
 
 impl Capability {
     /// Every capability, in order: what a session offers when its server and
     /// client generation support everything.
-    pub const ALL: [Self; 17] = [
+    pub const ALL: [Self; 18] = [
         Self::Casting,
         Self::Spellbook,
         Self::Inventory,
@@ -350,6 +353,7 @@ impl Capability {
         Self::Zoning,
         Self::Abilities,
         Self::Who,
+        Self::Corpses,
     ];
 }
 
@@ -692,6 +696,16 @@ pub enum WorldEvent {
     TimeOfDay(crate::clock::GameTime),
     /// How the zone's sky and fog look, right after the admission.
     Sky(crate::clock::ZoneSky),
+    /// A consent to drag a player's corpses given or taken back, told to
+    /// the owner and to the one consented.
+    Consent(crate::corpses::Consent),
+    /// A consent, summon or drag was not sent, and why.
+    CorpseRefused {
+        /// Admission from the request.
+        session_id: u64,
+        /// Why not.
+        reason: String,
+    },
     /// A melee, skill or spell damage record for any nearby entities.
     Damage(crate::combat::Damage),
     /// Own-character skill update; unknown skill IDs remain available to consumers.
@@ -843,6 +857,9 @@ pub fn titanium_update(opcode: u16, body: &[u8]) -> Result<Option<WorldEvent>> {
         }
         crate::who::RESPONSE_OPCODE => WorldEvent::WhoList(crate::who::decode(body)?),
         crate::clock::TIME_OPCODE => WorldEvent::TimeOfDay(crate::clock::decode(body)?),
+        crate::corpses::CONSENT_RESPONSE_OPCODE => {
+            WorldEvent::Consent(crate::corpses::decode_consent(body)?)
+        }
         crate::listing::LOOKING_OPCODE => {
             let (spawn_id, change) = crate::listing::looking(body)?;
             WorldEvent::Listing { spawn_id, change }
@@ -1094,6 +1111,7 @@ mod tests {
             Capability::Zoning => 14,
             Capability::Abilities => 15,
             Capability::Who => 16,
+            Capability::Corpses => 17,
         };
         for (index, capability) in Capability::ALL.into_iter().enumerate() {
             assert_eq!(place(capability), index, "{capability:?}");

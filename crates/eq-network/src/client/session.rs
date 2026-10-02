@@ -6,6 +6,7 @@ mod casting;
 mod character;
 mod clock;
 mod combat;
+mod corpses;
 mod doors;
 mod entities;
 mod exchange;

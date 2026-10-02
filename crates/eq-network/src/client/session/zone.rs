@@ -1,7 +1,7 @@
 //! The zone session: admission, the player's commands and the zone's traffic
 //! until the character leaves for another zone, the world or the character list.
 use super::{
-    abilities, actions, camp, casting, character, chat, clock, combat,
+    abilities, actions, camp, casting, character, chat, clock, combat, corpses,
     doors::Doors,
     ensure, entities, exchange,
     feature::{Encoder, Feature, Out, World},
@@ -46,6 +46,7 @@ impl Features {
             Box::new(transfers::Transfers::new(name)),
             Box::new(clock::Clock::default()),
             Box::new(who::Who),
+            Box::new(corpses::Corpses),
         ])
     }
 
@@ -411,7 +412,7 @@ mod tests {
     };
 
     /// How many kinds of command there are.
-    const KINDS: usize = 36;
+    const KINDS: usize = 40;
 
     /// Which kind of command this is. A new command is a compile error here
     /// until it has a number, and then a test failure until the list below
@@ -455,6 +456,10 @@ mod tests {
             ClientCommand::UseAbility { .. } => 33,
             ClientCommand::Consume { .. } => 34,
             ClientCommand::WhoAll { .. } => 35,
+            ClientCommand::Consent { .. } => 36,
+            ClientCommand::SummonCorpse { .. } => 37,
+            ClientCommand::DragCorpse { .. } => 38,
+            ClientCommand::DropCorpse { .. } => 39,
         }
     }
 
@@ -665,6 +670,23 @@ mod tests {
                 session_id,
                 filter: eq_network_game::who::WhoFilter::default(),
             },
+            ClientCommand::Consent {
+                session_id,
+                name: "Helper".into(),
+                given: true,
+            },
+            ClientCommand::SummonCorpse {
+                session_id,
+                spawn_id: 4,
+            },
+            ClientCommand::DragCorpse {
+                session_id,
+                spawn_id: 4,
+            },
+            ClientCommand::DropCorpse {
+                session_id,
+                spawn_id: None,
+            },
         ]
     }
 
@@ -738,6 +760,7 @@ mod tests {
             Capability::Zoning,
             Capability::Abilities,
             Capability::Who,
+            Capability::Corpses,
         ] {
             assert!(p99.contains(&capability), "{capability:?}");
         }
