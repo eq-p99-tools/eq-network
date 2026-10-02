@@ -24,6 +24,7 @@ mod talk;
 mod targeting;
 mod transfers;
 mod who;
+mod wire;
 mod zone;
 
 use super::{
