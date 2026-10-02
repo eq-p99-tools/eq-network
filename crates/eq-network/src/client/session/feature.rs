@@ -444,6 +444,7 @@ pub(super) mod testing {
             appearance: eq_network_game::appearance::Appearance::default(),
             level: 0,
             listing: eq_network_game::listing::Listing::default(),
+            name_parts: eq_network_game::names::NameParts::default(),
             pet_owner: None,
             hp_percent: None,
         }

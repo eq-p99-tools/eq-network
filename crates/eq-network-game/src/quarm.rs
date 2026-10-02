@@ -103,6 +103,7 @@ fn decoded_profile(data: &[u8], character: &str) -> Result<PlayerState> {
         appearance: crate::appearance::Appearance::default(),
         // EQMac /who fields are not decoded yet.
         listing: crate::listing::Listing::default(),
+        name_parts: crate::names::NameParts::default(),
     })
 }
 
@@ -189,6 +190,7 @@ pub fn spawns(body: &[u8]) -> Result<Vec<SpawnState>> {
                 // Nor are its /who fields.
                 level: 0,
                 listing: crate::listing::Listing::default(),
+                name_parts: crate::names::NameParts::default(),
                 pet_owner: None,
                 hp_percent: None,
             })
