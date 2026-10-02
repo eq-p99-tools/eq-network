@@ -190,6 +190,9 @@ pub struct SpawnState {
     /// Whose pet the spawn is; None for no one's, or where the dialect does
     /// not report it.
     pub pet_owner: Option<u16>,
+    /// Health in percent when the record was sent; None where the record's
+    /// value is out of range or the dialect does not report it.
+    pub hp_percent: Option<u8>,
 }
 
 /// Decode a decrypted Titanium spawn batch, without accepting partial records.
@@ -234,6 +237,7 @@ pub fn titanium_spawns(body: &[u8]) -> Result<Vec<SpawnState>> {
                 level: record[151],
                 listing: crate::listing::titanium_spawn(record),
                 pet_owner: crate::pets::titanium_owner(record),
+                hp_percent: (record[86] <= 100).then_some(record[86]),
             })
         })
         .collect()
@@ -1517,6 +1521,7 @@ mod tests {
         for (index, record) in body.as_chunks_mut::<385>().0.iter_mut().enumerate() {
             record[7..14].copy_from_slice(b"Fixture");
             record[83] = if index == 0 { 1 } else { 3 };
+            record[86] = if index == 0 { 64 } else { 200 };
             record[331] = if index == 0 { 40 } else { 255 };
             record[75..79].copy_from_slice(&6f32.to_le_bytes());
             record[284..288].copy_from_slice(&42u32.to_le_bytes());
@@ -1541,6 +1546,11 @@ mod tests {
         assert_eq!(spawns[1].class, Some(255));
         assert_eq!(spawns[1].kind, SpawnKind::NpcCorpse);
         assert_eq!(spawns[1].spawn_id, 11);
+        // Health out of range is no health at all.
+        assert_eq!(
+            (spawns[0].hp_percent, spawns[1].hp_percent),
+            (Some(64), None)
+        );
         assert!((spawns[0].position.x + 1.0).abs() < 0.001);
         assert!((spawns[0].position.heading - 256.0).abs() < 0.001);
         assert!(titanium_spawns(&body[..769]).is_err());

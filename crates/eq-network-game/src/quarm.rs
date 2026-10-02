@@ -190,6 +190,7 @@ pub fn spawns(body: &[u8]) -> Result<Vec<SpawnState>> {
                 level: 0,
                 listing: crate::listing::Listing::default(),
                 pet_owner: None,
+                hp_percent: None,
             })
         })
         .collect()
