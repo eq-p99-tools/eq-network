@@ -14,6 +14,7 @@ use crate::{
     movement::{self, PositionPacket},
     objects,
     pets::{self, PetCommand},
+    resurrection::{self, ResurrectionOffer},
     spells, training,
     who::{self, WhoFilter},
     world::Position,
@@ -84,6 +85,13 @@ pub enum Request {
     },
     /// Leave training with a guildmaster.
     EndTraining(u16),
+    /// Accept or decline a resurrection offer.
+    AnswerResurrection {
+        /// The offer, which the answer repeats.
+        offer: ResurrectionOffer,
+        /// True accepts.
+        accept: bool,
+    },
     /// Use a skill on the server's idea of the target.
     Ability {
         /// The skill.
@@ -215,6 +223,9 @@ pub fn titanium(request: &Request, sender: Sender<'_>) -> Result<EncodedCommand>
         Request::OpenTraining(trainer) => training::titanium_open(*trainer, sender.spawn()),
         Request::Train { trainer, skill } => training::titanium_train(*trainer, *skill)?,
         Request::EndTraining(trainer) => training::titanium_end(*trainer, sender.spawn()),
+        Request::AnswerResurrection { offer, accept } => {
+            resurrection::titanium_answer(offer, *accept)
+        }
         Request::Trade(with) => exchange::request(sender.spawn(), *with)?,
         Request::AcceptTrade => exchange::accept(sender.spawn())?,
         Request::CancelTrade => exchange::cancel(sender.spawn())?,
