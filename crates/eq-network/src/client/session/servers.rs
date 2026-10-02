@@ -363,9 +363,9 @@ impl Shield for WorldCodec {
     }
 }
 
-/// The features every Titanium server offers today, shared by the server
-/// types that speak it; each server type still lists the ones it provides.
-mod titanium {
+/// The features as built today, shared by the server types that provide
+/// them; each server type still lists the ones it provides.
+mod shared {
     use super::{
         Abilities, Ability, Belongings, Camp, Casting, Character, Clock, Combat, Corpses, Doors,
         Entities, Exchanges, Feature, GroundObjects, Looting, Map, Motion, Pets, Reading,
@@ -517,83 +517,83 @@ impl ServerType for Project1999 {
     }
 
     fn casting(&self, _setup: &Setup<'_>) -> Provided {
-        Some(titanium::casting())
+        Some(shared::casting())
     }
 
     fn spellbook(&self, _setup: &Setup<'_>) -> Provided {
-        Some(titanium::spellbook())
+        Some(shared::spellbook())
     }
 
     fn inventory(&self, setup: &Setup<'_>) -> Provided {
-        Some(titanium::inventory(setup))
+        Some(shared::inventory(setup))
     }
 
     fn motion(&self, _setup: &Setup<'_>) -> Provided {
-        Some(titanium::motion(false))
+        Some(shared::motion(false))
     }
 
     fn character(&self, _setup: &Setup<'_>) -> Provided {
-        Some(titanium::character())
+        Some(shared::character())
     }
 
     fn entities(&self, _setup: &Setup<'_>) -> Provided {
-        Some(titanium::entities())
+        Some(shared::entities())
     }
 
     fn targeting(&self, _setup: &Setup<'_>) -> Provided {
-        Some(titanium::targeting())
+        Some(shared::targeting())
     }
 
     fn combat(&self, _setup: &Setup<'_>) -> Provided {
-        Some(titanium::combat())
+        Some(shared::combat())
     }
 
     fn looting(&self, _setup: &Setup<'_>) -> Provided {
-        Some(titanium::looting())
+        Some(shared::looting())
     }
 
     fn exchange(&self, _setup: &Setup<'_>) -> Provided {
-        Some(titanium::exchange())
+        Some(shared::exchange())
     }
 
     fn abilities(&self, _setup: &Setup<'_>) -> Provided {
-        Some(titanium::abilities(&P99_ABILITIES))
+        Some(shared::abilities(&P99_ABILITIES))
     }
 
     fn talk(&self, _setup: &Setup<'_>) -> Provided {
-        Some(titanium::talk())
+        Some(shared::talk())
     }
 
     fn camp(&self, _setup: &Setup<'_>) -> Provided {
-        Some(titanium::camp())
+        Some(shared::camp())
     }
 
     fn doors(&self, _setup: &Setup<'_>) -> Provided {
-        Some(titanium::doors())
+        Some(shared::doors())
     }
 
     fn ground_items(&self, _setup: &Setup<'_>) -> Provided {
-        Some(titanium::ground_items())
+        Some(shared::ground_items())
     }
 
     fn transfers(&self, setup: &Setup<'_>) -> Provided {
-        Some(titanium::transfers(setup))
+        Some(shared::transfers(setup))
     }
 
     fn clock(&self, _setup: &Setup<'_>) -> Provided {
-        Some(titanium::clock())
+        Some(shared::clock())
     }
 
     fn who(&self, _setup: &Setup<'_>) -> Provided {
-        Some(titanium::who())
+        Some(shared::who())
     }
 
     fn corpses(&self, _setup: &Setup<'_>) -> Provided {
-        Some(titanium::corpses())
+        Some(shared::corpses())
     }
 
     fn pets(&self, _setup: &Setup<'_>) -> Provided {
-        Some(titanium::pets())
+        Some(shared::pets())
     }
 }
 
@@ -615,110 +615,108 @@ impl ServerType for EqEmu {
     }
 
     fn casting(&self, _setup: &Setup<'_>) -> Provided {
-        Some(titanium::casting())
+        Some(shared::casting())
     }
 
     fn spellbook(&self, _setup: &Setup<'_>) -> Provided {
-        Some(titanium::spellbook())
+        Some(shared::spellbook())
     }
 
     fn inventory(&self, setup: &Setup<'_>) -> Provided {
-        Some(titanium::inventory(setup))
+        Some(shared::inventory(setup))
     }
 
     fn motion(&self, _setup: &Setup<'_>) -> Provided {
-        Some(titanium::motion(true))
+        Some(shared::motion(true))
     }
 
     fn character(&self, _setup: &Setup<'_>) -> Provided {
-        Some(titanium::character())
+        Some(shared::character())
     }
 
     fn entities(&self, _setup: &Setup<'_>) -> Provided {
-        Some(titanium::entities())
+        Some(shared::entities())
     }
 
     fn targeting(&self, _setup: &Setup<'_>) -> Provided {
-        Some(titanium::targeting())
+        Some(shared::targeting())
     }
 
     fn combat(&self, _setup: &Setup<'_>) -> Provided {
-        Some(titanium::combat())
+        Some(shared::combat())
     }
 
     fn looting(&self, _setup: &Setup<'_>) -> Provided {
-        Some(titanium::looting())
+        Some(shared::looting())
     }
 
     fn exchange(&self, _setup: &Setup<'_>) -> Provided {
-        Some(titanium::exchange())
+        Some(shared::exchange())
     }
 
     fn abilities(&self, _setup: &Setup<'_>) -> Provided {
-        Some(titanium::abilities(&Ability::ALL))
+        Some(shared::abilities(&Ability::ALL))
     }
 
     fn talk(&self, _setup: &Setup<'_>) -> Provided {
-        Some(titanium::talk())
+        Some(shared::talk())
     }
 
     fn camp(&self, _setup: &Setup<'_>) -> Provided {
-        Some(titanium::camp())
+        Some(shared::camp())
     }
 
     fn doors(&self, _setup: &Setup<'_>) -> Provided {
-        Some(titanium::doors())
+        Some(shared::doors())
     }
 
     fn ground_items(&self, _setup: &Setup<'_>) -> Provided {
-        Some(titanium::ground_items())
+        Some(shared::ground_items())
     }
 
     fn transfers(&self, setup: &Setup<'_>) -> Provided {
-        Some(titanium::transfers(setup))
+        Some(shared::transfers(setup))
     }
 
     fn clock(&self, _setup: &Setup<'_>) -> Provided {
-        Some(titanium::clock())
+        Some(shared::clock())
     }
 
     fn who(&self, _setup: &Setup<'_>) -> Provided {
-        Some(titanium::who())
+        Some(shared::who())
     }
 
     fn corpses(&self, _setup: &Setup<'_>) -> Provided {
-        Some(titanium::corpses())
+        Some(shared::corpses())
     }
 
     fn pets(&self, _setup: &Setup<'_>) -> Provided {
-        Some(titanium::pets())
+        Some(shared::pets())
     }
 
     fn training(&self, _setup: &Setup<'_>) -> Provided {
-        Some(titanium::training())
+        Some(shared::training())
     }
 
     fn resurrection(&self, _setup: &Setup<'_>) -> Provided {
-        Some(titanium::resurrection())
+        Some(shared::resurrection())
     }
 
     fn reading(&self, _setup: &Setup<'_>) -> Provided {
-        Some(titanium::reading())
+        Some(shared::reading())
     }
 
     fn tradeskills(&self, _setup: &Setup<'_>) -> Provided {
-        Some(titanium::tradeskills())
+        Some(shared::tradeskills())
     }
 
     fn map(&self, _setup: &Setup<'_>) -> Provided {
-        Some(titanium::map())
+        Some(shared::map())
     }
 }
 
-/// Project Quarm, which speaks `EQMac` and provides no feature on this
-/// interface yet: its own zone loop runs it until it moves onto the shared
-/// session. Its features come once they are checked on Quarm, starting
-/// with those checked on TAKP.
+/// Project Quarm, which speaks `EQMac`. Its features come as they are
+/// checked, first on TAKP and then on Quarm.
 struct Quarm;
 
 impl ServerType for Quarm {
@@ -726,23 +724,21 @@ impl ServerType for Quarm {
         &EqMac
     }
 
-    /// Quarm's own zone loop, until Quarm moves onto the shared session.
-    fn zone(
-        &self,
-        context: &CharacterSession<'_>,
-        _shield: &mut Option<Box<dyn Shield>>,
-        (host, port): (&str, u16),
-        _checksums: Vec<u8>,
-        log: &mut Events<'_>,
-    ) -> Result<ZoneExit> {
-        crate::client::quarm::zone(context, log, host, port)?;
-        Ok(ZoneExit::Stopped)
+    fn character(&self, _setup: &Setup<'_>) -> Provided {
+        Some(shared::character())
+    }
+
+    fn entities(&self, _setup: &Setup<'_>) -> Provided {
+        Some(shared::entities())
+    }
+
+    fn talk(&self, _setup: &Setup<'_>) -> Provided {
+        Some(shared::talk())
     }
 }
 
 /// A stock TAKP (`EQMacEmu`) server speaking `EQMac`, where the `EQMac`
-/// features are checked first. It creates characters; Quarm's zone loop
-/// runs its zones until both move onto the shared session.
+/// features are checked first.
 struct Takp;
 
 impl ServerType for Takp {
@@ -754,17 +750,16 @@ impl ServerType for Takp {
         Some(&creation::EqMac)
     }
 
-    /// Quarm's own zone loop, until TAKP moves onto the shared session.
-    fn zone(
-        &self,
-        context: &CharacterSession<'_>,
-        _shield: &mut Option<Box<dyn Shield>>,
-        (host, port): (&str, u16),
-        _checksums: Vec<u8>,
-        log: &mut Events<'_>,
-    ) -> Result<ZoneExit> {
-        crate::client::quarm::zone(context, log, host, port)?;
-        Ok(ZoneExit::Stopped)
+    fn character(&self, _setup: &Setup<'_>) -> Provided {
+        Some(shared::character())
+    }
+
+    fn entities(&self, _setup: &Setup<'_>) -> Provided {
+        Some(shared::entities())
+    }
+
+    fn talk(&self, _setup: &Setup<'_>) -> Provided {
+        Some(shared::talk())
     }
 }
 
@@ -825,13 +820,18 @@ mod tests {
         assert!((empty.profile_turn() - 512.0).abs() < f32::EPSILON);
         assert!(!empty.start_choice());
         assert!(empty.creation().is_none());
-        // Quarm and TAKP speak EQMac and have built none of them on the
-        // interface yet.
+    }
+
+    #[test]
+    fn eqmac_servers_provide_the_features_built_for_them() {
+        // Quarm and TAKP speak EQMac: they see the zone's spawns, keep the
+        // player's record and talk, and send nothing else yet.
         for protocol in [ServerProtocol::Quarm, ServerProtocol::Takp] {
             let server = server_type(protocol);
             assert!(server.wire().encode(&Request::Camp, SENDER).is_err());
             let setup = Setup::new("Tester", AutoEat::default());
-            assert!(server.features(&setup).is_empty());
+            assert_eq!(server.features(&setup).len(), 3, "{protocol:?}");
+            assert_eq!(offers(server), [Capability::Talking]);
             assert!(server.protect(&[0; 464]).unwrap().is_none());
             assert!(!server.start_choice());
         }

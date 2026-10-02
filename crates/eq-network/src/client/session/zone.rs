@@ -160,6 +160,9 @@ pub(super) fn run(
     let session_id = rand::random();
     let mut world = World::new(session_id);
     let mut features = Features::new(server, &config.character, config.auto_eat);
+    let follows_zones = features
+        .capabilities()
+        .contains(&crate::world::Capability::Zoning);
     loop {
         if stop.is_cancelled() || duration.is_some_and(|limit| connected.elapsed() >= limit) {
             session.close()?;
@@ -265,6 +268,10 @@ pub(super) fn run(
         if let Some(shield) = shield.as_ref() {
             shield.spawns(packet.opcode, &mut packet.body, &credentials.key)?;
         }
+        // What the generation's client answers by itself, at any time.
+        if let Some(reply) = server.wire().answer(packet.opcode, &packet.body) {
+            session.send(reply.opcode, &reply.body)?;
+        }
         if !world.ready() {
             log.diagnostic(format!(
                 "Zone received 0x{:04x} ({} bytes)",
@@ -326,6 +333,12 @@ pub(super) fn run(
             ensure!(
                 !matches!(message, Message::LoggedOut),
                 "server logged the character out"
+            );
+            // The server moving the player where no feature follows ends the
+            // session.
+            ensure!(
+                follows_zones || !matches!(message, Message::ZoneOffer(_)),
+                "server requested a new zone, which this server type cannot follow yet"
             );
             // Before the admission, the features staged what they need of it.
             if let (Message::Event(event), true) = (message, world.ready()) {
@@ -828,7 +841,7 @@ mod tests {
     #[test]
     fn a_command_no_feature_takes_is_refused_as_unavailable() {
         use crate::client::session::feature::testing;
-        // Quarm provides no feature on the shared session yet.
+        // Quarm opens no doors yet.
         let mut features = Features::new(
             servers::server_type(crate::client::ServerProtocol::Quarm),
             "Tester",
@@ -900,5 +913,15 @@ mod tests {
         assert!(eqemu.contains(&Capability::Tradeskills));
         assert!(eqemu.contains(&Capability::Map));
         assert_eq!(eqemu.len(), p99.len() + 6);
+        // EQMac servers talk, and follow no zone change yet.
+        for protocol in [
+            crate::client::ServerProtocol::Quarm,
+            crate::client::ServerProtocol::Takp,
+        ] {
+            assert_eq!(features(protocol), [Capability::Talking]);
+        }
     }
 }
+
+#[cfg(test)]
+mod eqmac_tests;

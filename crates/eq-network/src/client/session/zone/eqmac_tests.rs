@@ -1,6 +1,9 @@
-//! Synthetic zone peer: no login service, accounts, or captured packets.
+//! The `EQMac` zone handshake on the shared session, against a synthetic
+//! zone peer: no login service, accounts, or captured packets.
 use super::*;
-use crate::client::CancellationToken;
+use crate::client::{
+    session::login::Credentials, CancellationToken, ClientConfig, ClientIdentity, ServerProtocol,
+};
 use std::{net::UdpSocket, panic::AssertUnwindSafe, thread};
 
 struct ZonePeer {
@@ -86,11 +89,17 @@ fn dll_version_precedes_zone_ready_and_answers_requests() {
         let stop = CancellationToken::default();
         let worker_stop = stop.clone();
         let worker = thread::spawn(move || {
-            let config = super::tests::config();
+            let config = ClientConfig::for_protocol(
+                ServerProtocol::Quarm,
+                "EXAMPLE_ACCOUNT",
+                "EXAMPLE_PASSWORD",
+                "The Project Quarm Server",
+                "ExampleCharacter",
+            );
             let mut handler = |_| Ok(());
             let mut events = Events::new(&config, &mut handler);
-            let identity = super::super::ClientIdentity::new("example-device", "example-user");
-            let credentials = super::super::session::login::Credentials {
+            let identity = ClientIdentity::new("example-device", "example-user");
+            let credentials = Credentials {
                 account: "LS#1".into(),
                 key: *b"0123456789",
             };
@@ -102,7 +111,14 @@ fn dll_version_precedes_zone_ready_and_answers_requests() {
                 duration: None,
                 commands: None,
             };
-            zone(&context, &mut events, "127.0.0.1", port)
+            run(
+                &context,
+                &mut None,
+                "127.0.0.1",
+                port,
+                Vec::new(),
+                &mut events,
+            )
         });
         let outcome = std::panic::catch_unwind(AssertUnwindSafe(|| {
             peer.expect([0xe8, 0x41], &10.0f32.to_le_bytes());

@@ -5,7 +5,8 @@
 //! the zone says the avatar is ready, the client sends its filters, announces
 //! its DLL version and sends its first position. The zone names the player's
 //! spawn in an appearance of its own, and the player is admitted once that,
-//! the own spawn and the ready avatar are all in.
+//! the own spawn and the ready avatar are all in. Quarm's version checks, at
+//! any time, are the wire's to answer.
 use super::{Admission, Handshake, Zone};
 use crate::client::session::{feature::World, put_string, ClientEvent, ConnectionStage};
 use crate::world::PlayerState;
@@ -118,9 +119,6 @@ impl Admission for EqMacAdmission {
                 self.own_spawn = Some(spawn);
             }
             ZONE_SPAWN_APPEARANCE => {
-                if let Some(reply) = quarm::dll_version_reply(&packet.body) {
-                    handshake.session.send(ZONE_SPAWN_APPEARANCE, &reply)?;
-                }
                 // Other appearances, malformed ones too, are the features' news.
                 if let Ok(Some(id)) = quarm::assigned_id(&packet.body) {
                     world.body.own(id);
@@ -261,7 +259,7 @@ mod tests {
         own[80..84].copy_from_slice(&42.0f32.to_le_bytes());
         let mut description = [0; 96];
         description[64..71].copy_from_slice(b"example");
-        // A version check during the entry is answered at once.
+        // A version check during the entry is the wire's to answer.
         assert!(read(
             &mut admission,
             &mut world,
@@ -307,7 +305,6 @@ mod tests {
             [
                 ZONE_DATA_RATE,
                 ZONE_ENTRY,
-                ZONE_SPAWN_APPEARANCE,
                 ZONE_REQUEST_NEW,
                 ZONE_REQUEST_SPAWNS,
                 ZONE_EXPERIENCE_READY,
@@ -316,8 +313,7 @@ mod tests {
                 ZONE_CLIENT_UPDATE,
             ]
         );
-        assert_eq!(wire.0[2].1, quarm::dll_version_message(true));
-        assert_eq!(wire.0[7].1, quarm::dll_version_message(false));
+        assert_eq!(wire.0[6].1, quarm::dll_version_message(false));
     }
 
     #[test]
