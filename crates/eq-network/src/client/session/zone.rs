@@ -1,13 +1,10 @@
 //! The zone session: admission, the player's commands and the zone's traffic
 //! until the character leaves for another zone, the world or the character list.
 use super::{
-    abilities, actions, camp, casting, character, chat, clock, combat, corpses,
-    doors::Doors,
-    ensure, entities, exchange,
-    feature::{Encoder, Feature, Out, World},
-    inventory, looting, objects, pets, servers, spellbook, talk, targeting, transfers, who,
-    CharacterSession, ClientCommand, ClientEvent, ConnectionStage, ConnectionState, DecodeError,
-    Duration, Events, Instant, RecordEvent, Result, Session, Shield, ZoneExit,
+    actions, ensure,
+    feature::{Feature, Out, World},
+    servers, CharacterSession, ClientCommand, ClientEvent, ConnectionStage, ConnectionState,
+    DecodeError, Duration, Events, Instant, RecordEvent, Result, Session, Shield, ZoneExit,
 };
 
 use super::admission::{Admission, Zone};
@@ -18,37 +15,13 @@ use eq_network_transport::Transport;
 struct Features(Vec<Box<dyn Feature>>);
 
 impl Features {
-    /// Every feature a Titanium zone session has, with the server type's own
-    /// where servers differ.
+    /// The features the server type provides.
     fn new(
         server: &dyn servers::ServerType,
-        dialect: eq_network_game::GameDialect,
         name: &str,
         auto_eat: eq_network_game::food::AutoEat,
     ) -> Self {
-        let encoder = Encoder::new(dialect, name);
-        Self(vec![
-            Box::new(casting::Casting::new(encoder.clone())),
-            Box::new(spellbook::Spellbook::default()),
-            Box::new(inventory::Belongings::new(encoder.clone(), auto_eat)),
-            server.motion(),
-            Box::new(character::Character::default()),
-            Box::new(entities::Entities::default()),
-            Box::new(targeting::Targeting::new(encoder.clone())),
-            Box::new(combat::Combat::new(encoder.clone())),
-            Box::new(looting::Looting::new(encoder.clone())),
-            Box::new(exchange::Exchanges),
-            Box::new(abilities::Abilities::default()),
-            Box::new(talk::Talk::new(encoder)),
-            Box::new(camp::Camp::default()),
-            Box::new(Doors::default()),
-            Box::new(objects::GroundObjects::default()),
-            Box::new(transfers::Transfers::new(name)),
-            Box::new(clock::Clock::default()),
-            Box::new(who::Who),
-            Box::new(corpses::Corpses),
-            Box::new(pets::Pets),
-        ])
+        Self(server.features(&servers::Setup::new(server, name, auto_eat)))
     }
 
     /// What the features let the player do, each once.
@@ -183,12 +156,7 @@ pub(super) fn run(
     let mut progress = Instant::now();
     let session_id = rand::random();
     let mut world = World::new(session_id);
-    let mut features = Features::new(
-        server,
-        config.protocol.into(),
-        &config.character,
-        config.auto_eat,
-    );
+    let mut features = Features::new(server, &config.character, config.auto_eat);
     loop {
         if stop.is_cancelled() || duration.is_some_and(|limit| connected.elapsed() >= limit) {
             session.close()?;
@@ -308,9 +276,9 @@ pub(super) fn run(
         )? {
             admit(player, &zone, &mut features, &mut world, &mut session, log)?;
         }
-        // Everything else is read once, the same way before and after
-        // admission, and heard by every feature.
-        for mut message in eq_network_game::message::titanium(packet.opcode, &packet.body) {
+        // Everything else is read once, in the server's client generation, the
+        // same way before and after admission, and heard by every feature.
+        for mut message in server.wire().messages(packet.opcode, &packet.body) {
             features.explain(&mut message, &world);
             if let Message::Unreadable { part, error } = &message {
                 log.diagnostic(format!("{part} rejected: {error}"))?;
@@ -341,7 +309,10 @@ pub(super) fn run(
             }
         }
         let zone = log.zone.clone();
-        match chat::parse(packet.opcode, &packet.body, config.include_raw) {
+        match server
+            .wire()
+            .chat(packet.opcode, &packet.body, config.include_raw)
+        {
             Ok(Some(event)) => log.record(&zone, RecordEvent::Chat(event))?,
             Ok(None) => (),
             Err(error) => log.record(
@@ -716,7 +687,6 @@ mod tests {
         // what its commands need.
         let features = Features::new(
             servers::server_type(crate::client::ServerProtocol::EqEmu),
-            eq_network_game::GameDialect::Titanium,
             "Tester",
             eq_network_game::food::AutoEat::default(),
         );
@@ -748,7 +718,6 @@ mod tests {
         let features = |protocol| {
             Features::new(
                 servers::server_type(protocol),
-                eq_network_game::GameDialect::Titanium,
                 "Tester",
                 eq_network_game::food::AutoEat::default(),
             )
