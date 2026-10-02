@@ -1,8 +1,9 @@
-//! Using abilities: the session refuses, with the reason, what servers
-//! would ignore without a word (an unknown skill, no target, a target out
-//! of reach) and what they would answer only with a complaint (a timer still
-//! running), and sends the rest. It keeps each recovery timer, as long as the
-//! server's at most, and tells the host when one starts.
+//! Using abilities: the session refuses, with the reason, an ability its
+//! server type does not list, what servers would ignore without a word (an
+//! unknown skill, no target, a target out of reach) and what they would
+//! answer only with a complaint (a timer still running), and sends the rest.
+//! It keeps each recovery timer, as long as the server's at most, and tells
+//! the host which abilities are offered and when a timer starts.
 use super::{
     feature::{Feature, Out, World},
     ClientCommand, ClientEvent,
@@ -16,10 +17,18 @@ use eq_network_game::{
 use std::{collections::BTreeMap, time::Instant};
 
 /// Uses abilities and keeps their recovery timers.
-#[derive(Default)]
 pub(super) struct Abilities {
+    /// The abilities the server type lists; the rest are refused.
+    listed: &'static [Ability],
     /// When each timer the player started runs out.
     ready: BTreeMap<Recovery, Instant>,
+}
+
+impl Default for Abilities {
+    /// Every ability listed.
+    fn default() -> Self {
+        Self::new(&Ability::ALL)
+    }
 }
 
 /// Why the player cannot use the ability on their target, if they cannot.
@@ -73,8 +82,19 @@ fn target_refusal(
 }
 
 impl Abilities {
+    /// The abilities a server type lists.
+    pub(super) fn new(listed: &'static [Ability]) -> Self {
+        Self {
+            listed,
+            ready: BTreeMap::new(),
+        }
+    }
+
     /// Why the player cannot use the ability now, if they cannot.
     fn refusal(&self, ability: Ability, world: &World, now: Instant) -> Option<&'static str> {
+        if !self.listed.contains(&ability) {
+            return Some("Not available on this server");
+        }
         let Some(((own_id, position), player)) = world.player_at().zip(world.player.as_ref())
         else {
             return Some("Not in the zone yet");
@@ -128,6 +148,14 @@ impl Abilities {
 impl Feature for Abilities {
     fn capabilities(&self) -> Vec<crate::world::Capability> {
         vec![crate::world::Capability::Abilities]
+    }
+
+    /// Tells the host which abilities this server type offers.
+    fn admitted(&mut self, _world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
+        out.log
+            .send(ClientEvent::World(WorldEvent::AbilitiesOffered(
+                self.listed.to_vec(),
+            )))
     }
 
     fn owns(&self, command: &ClientCommand) -> bool {
@@ -199,6 +227,22 @@ mod tests {
         now: Instant,
     ) -> testing::Outcome<Result<()>> {
         testing::run(|out| abilities.use_ability((5, ability), world, out, now))
+    }
+
+    #[test]
+    fn an_ability_the_server_type_does_not_list_is_refused_and_the_host_hears_the_list() {
+        const LISTED: [Ability; 2] = [Ability::Kick, Ability::Taunt];
+        let mut abilities = Abilities::new(&LISTED);
+        let mut world = warrior();
+        let outcome = testing::run(|out| abilities.admitted(&mut world, out));
+        assert!(matches!(
+            &outcome.events[..],
+            [ClientEvent::World(WorldEvent::AbilitiesOffered(offered))] if offered == &LISTED
+        ));
+        // Anyone could fish, but this server type does not list it.
+        let outcome = try_ability(&mut abilities, &world, Ability::Fishing, Instant::now());
+        assert!(outcome.sent.is_empty(), "sent {:?}", outcome.sent);
+        assert_eq!(refused(&outcome.events), ["Not available on this server"]);
     }
 
     #[test]

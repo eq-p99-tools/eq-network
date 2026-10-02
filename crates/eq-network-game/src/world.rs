@@ -726,6 +726,9 @@ pub enum WorldEvent {
         /// How long its recovery takes, at most.
         ready_in: std::time::Duration,
     },
+    /// The abilities this server type offers, as the zone admits the player;
+    /// a host greys the rest, which the session refuses.
+    AbilitiesOffered(Vec<crate::abilities::Ability>),
     /// An ability was not used, and why: the server would have ignored it.
     AbilityRefused {
         /// Admission from the request.
