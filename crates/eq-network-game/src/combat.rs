@@ -10,6 +10,12 @@ use serde::Serialize;
 pub const CONSIDER_OPCODE: u16 = 0x65ca;
 /// `OP_AutoAttack`: a four-byte toggle whose first byte is 1 (on) or 0 (off).
 pub const AUTO_ATTACK_OPCODE: u16 = 0x5e55;
+/// `EQMac`'s `OP_Consider`: the request and its answer share TAKP's 24-byte
+/// `Consider_Struct`.
+pub const EQMAC_CONSIDER_OPCODE: u16 = 0x3741;
+/// `EQMac`'s `OP_AutoAttack`, the same four-byte toggle as Titanium's.
+pub const EQMAC_AUTO_ATTACK_OPCODE: u16 = 0x5141;
+
 /// `OP_Damage`: one melee, skill or spell damage record.
 pub const DAMAGE_OPCODE: u16 = 0x5c78;
 
@@ -133,6 +139,41 @@ pub fn consider_request(own_id: u16, target_id: u16) -> Result<[u8; 28]> {
     Ok(body)
 }
 
+/// Encodes `EQMac`'s consider request: the player's and the target's spawns
+/// as 16-bit IDs, then room for the answer.
+///
+/// # Errors
+/// Rejects a request without both entities.
+pub fn eqmac_consider_request(own_id: u16, target_id: u16) -> Result<[u8; 24]> {
+    ensure!(
+        own_id != 0 && target_id != 0,
+        "consider requires two entities"
+    );
+    let mut body = [0; 24];
+    body[..2].copy_from_slice(&own_id.to_le_bytes());
+    body[2..4].copy_from_slice(&target_id.to_le_bytes());
+    Ok(body)
+}
+
+/// Decodes `EQMac`'s answer to a consider request: the target, the faction
+/// standing, the con level and its hit points.
+///
+/// # Errors
+/// Rejects a malformed answer, and one without a target.
+pub fn eqmac_consideration(body: &[u8]) -> Result<Consideration> {
+    ensure!(body.len() == 24, "invalid EQMac consider length");
+    let target_id = u16::from_le_bytes([body[2], body[3]]);
+    ensure!(target_id != 0, "consider response without a target");
+    let current = i32::from_le_bytes(word(body, 12)?.to_le_bytes());
+    let maximum = i32::from_le_bytes(word(body, 16)?.to_le_bytes());
+    Ok(Consideration {
+        target_id,
+        faction: word(body, 4)?,
+        color: word(body, 8)?.into(),
+        hit_points: (maximum > 0).then_some((current, maximum)),
+    })
+}
+
 /// Encodes the auto-attack toggle.
 #[must_use]
 pub const fn auto_attack(enabled: bool) -> [u8; 4] {
@@ -214,6 +255,29 @@ mod tests {
         assert_eq!(unknown.hit_points, None);
         assert_eq!(unknown.color, ConColor::Other(77));
         assert!(consideration(&response[..27]).is_err());
+    }
+
+    #[test]
+    fn eqmac_considerations_read_takps_24_byte_answer() {
+        let mut answer = [0; 24];
+        answer[..4].copy_from_slice(&[7, 0, 9, 0]);
+        answer[4..8].copy_from_slice(&4u32.to_le_bytes());
+        answer[8..12].copy_from_slice(&2u32.to_le_bytes());
+        answer[12..16].copy_from_slice(&50i32.to_le_bytes());
+        answer[16..20].copy_from_slice(&100i32.to_le_bytes());
+        let considered = eqmac_consideration(&answer).unwrap();
+        assert_eq!(
+            (
+                considered.target_id,
+                considered.faction,
+                considered.hit_points
+            ),
+            (9, 4, Some((50, 100)))
+        );
+        assert_eq!(considered.color, 2u32.into());
+        assert!(eqmac_consideration(&answer[..23]).is_err());
+        assert!(eqmac_consider_request(0, 9).is_err());
+        assert_eq!(&eqmac_consider_request(7, 9).unwrap()[..4], &[7, 0, 9, 0]);
     }
 
     #[test]
