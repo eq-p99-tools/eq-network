@@ -1,5 +1,6 @@
 //! Synthetic zone peer: no login service, accounts, or captured packets.
 use super::*;
+use crate::client::CancellationToken;
 use std::{net::UdpSocket, panic::AssertUnwindSafe, thread};
 
 struct ZonePeer {
@@ -88,15 +89,20 @@ fn dll_version_precedes_zone_ready_and_answers_requests() {
             let config = super::tests::config();
             let mut handler = |_| Ok(());
             let mut events = Events::new(&config, &mut handler);
-            zone(
-                &config,
-                &worker_stop,
-                &RunOptions::default(),
-                None,
-                &mut events,
-                "127.0.0.1",
-                port,
-            )
+            let identity = super::super::ClientIdentity::new("example-device", "example-user");
+            let credentials = super::super::session::login::Credentials {
+                account: "LS#1".into(),
+                key: *b"0123456789",
+            };
+            let context = CharacterSession {
+                config: config.clone(),
+                identity: &identity,
+                credentials: &credentials,
+                stop: &worker_stop,
+                duration: None,
+                commands: None,
+            };
+            zone(&context, &mut events, "127.0.0.1", port)
         });
         let outcome = std::panic::catch_unwind(AssertUnwindSafe(|| {
             peer.expect([0xe8, 0x41], &10.0f32.to_le_bytes());

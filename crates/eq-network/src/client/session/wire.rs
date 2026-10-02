@@ -6,8 +6,17 @@
 //! generation does not read yet is simply absent, as with every
 //! [`ServerType`](super::servers::ServerType) feature.
 
-use super::admission::{Admission, EqMacAdmission, Handshake, TitaniumAdmission};
+use super::{
+    admission::{Admission, EqMacAdmission, Handshake, TitaniumAdmission},
+    login::{self, Credentials},
+    servers::Shield,
+    world, CharacterSession, ZoneDestination,
+};
 use crate::chat::{self, ChatEvent};
+use crate::{
+    assets::Assets,
+    client::{CancellationToken, ClientConfig, Events},
+};
 use anyhow::{bail, Result};
 use eq_network_game::{
     command::EncodedCommand,
@@ -41,6 +50,56 @@ pub(super) trait Wire: Sync {
     /// whose values its packet cannot carry.
     fn encode(&self, request: &Request, _sender: Sender<'_>) -> Result<EncodedCommand> {
         bail!("this client generation cannot send {request:?} yet")
+    }
+
+    /// Logs in the way the generation's client does: the session's
+    /// credentials and the world server's address.
+    ///
+    /// # Errors
+    /// Returns an error when the login server refuses the account or the
+    /// configured server, or the generation has no login yet.
+    fn login(
+        &self,
+        _config: &ClientConfig,
+        _stop: &CancellationToken,
+        _log: &mut Events<'_>,
+    ) -> Result<(Credentials, String)> {
+        bail!("this client generation cannot log in yet")
+    }
+
+    /// Enters the world the way the generation's client does: validation,
+    /// the character list, and the handoff to the chosen character's zone.
+    /// `world_only` stops at the list; `zoning` re-enters the world between
+    /// zones. None when the session ends at the list.
+    ///
+    /// # Errors
+    /// Returns an error when the world refuses the client or the character,
+    /// or the generation has no world stage yet.
+    fn world(
+        &self,
+        _context: &CharacterSession<'_>,
+        _assets: &Assets,
+        _ip: &str,
+        _flags: (bool, bool),
+        _log: &mut Events<'_>,
+    ) -> Result<Option<ZoneDestination>> {
+        bail!("this client generation cannot enter the world yet")
+    }
+
+    /// Reads a zone server's handoff of the player straight to another zone:
+    /// its address, and the file checksums the protection answers with.
+    ///
+    /// # Errors
+    /// Returns an error when the handoff is malformed, or the generation has
+    /// no direct handoff.
+    fn handoff(
+        &self,
+        _shield: Option<&dyn Shield>,
+        _packet: &[u8],
+        _assets: &Assets,
+        _log: &mut Events<'_>,
+    ) -> Result<(String, u16, Vec<u8>)> {
+        bail!("this client generation cannot hand off between zones yet")
     }
 
     /// Connects to a zone server the way the generation's client does.
@@ -84,6 +143,36 @@ impl Wire for Titanium {
         request::titanium(request, sender)
     }
 
+    fn login(
+        &self,
+        config: &ClientConfig,
+        stop: &CancellationToken,
+        log: &mut Events<'_>,
+    ) -> Result<(Credentials, String)> {
+        login::titanium(config, stop, log)
+    }
+
+    fn world(
+        &self,
+        context: &CharacterSession<'_>,
+        assets: &Assets,
+        ip: &str,
+        flags: (bool, bool),
+        log: &mut Events<'_>,
+    ) -> Result<Option<ZoneDestination>> {
+        world::titanium(context, assets, ip, flags, log)
+    }
+
+    fn handoff(
+        &self,
+        shield: Option<&dyn Shield>,
+        packet: &[u8],
+        assets: &Assets,
+        log: &mut Events<'_>,
+    ) -> Result<(String, u16, Vec<u8>)> {
+        world::decode_destination(shield, packet, assets, log)
+    }
+
     /// Titanium zones speak the modern transport, answering session
     /// requests.
     fn connect_zone(&self, address: SocketAddr, stop: &AtomicBool) -> Result<Box<dyn Transport>> {
@@ -116,6 +205,38 @@ impl Wire for EqMac {
 
     fn encode(&self, request: &Request, sender: Sender<'_>) -> Result<EncodedCommand> {
         request::eqmac(request, sender)
+    }
+
+    fn login(
+        &self,
+        config: &ClientConfig,
+        stop: &CancellationToken,
+        log: &mut Events<'_>,
+    ) -> Result<(Credentials, String)> {
+        login::eqmac::login(config, stop, log)
+    }
+
+    /// `EQMac`'s world sends no manifest and stays the same between zones.
+    fn world(
+        &self,
+        context: &CharacterSession<'_>,
+        _assets: &Assets,
+        ip: &str,
+        (world_only, _zoning): (bool, bool),
+        log: &mut Events<'_>,
+    ) -> Result<Option<ZoneDestination>> {
+        world::eqmac::world(context, ip, world_only, log)
+    }
+
+    fn handoff(
+        &self,
+        _shield: Option<&dyn Shield>,
+        packet: &[u8],
+        _assets: &Assets,
+        _log: &mut Events<'_>,
+    ) -> Result<(String, u16, Vec<u8>)> {
+        let (host, port) = world::eqmac::zone_destination(packet)?;
+        Ok((host, port, Vec::new()))
     }
 
     /// `EQMac` zones speak the legacy transport.

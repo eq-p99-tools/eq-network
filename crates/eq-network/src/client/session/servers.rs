@@ -34,7 +34,7 @@ use super::{
     transfers::Transfers,
     who::Who,
     wire::{EqMac, Titanium, Wire},
-    ServerProtocol,
+    CharacterSession, Events, ServerProtocol, ZoneExit,
 };
 use crate::p99::{self, WorldCodec};
 
@@ -86,6 +86,22 @@ pub(super) trait ServerType: Sync {
     /// character is created, before the character enters.
     fn start_choice(&self) -> bool {
         false
+    }
+
+    /// Runs the character's stay in a zone: the shared zone session, with
+    /// the features this server type provides.
+    ///
+    /// # Errors
+    /// Returns an error when the zone connection or admission fails.
+    fn zone(
+        &self,
+        context: &CharacterSession<'_>,
+        shield: &mut Option<Box<dyn Shield>>,
+        (host, port): (&str, u16),
+        checksums: Vec<u8>,
+        log: &mut Events<'_>,
+    ) -> Result<ZoneExit> {
+        super::zone::run(context, shield, host, port, checksums, log)
     }
 
     /// Casting memorized spells and using items' effects.
@@ -595,6 +611,19 @@ struct Quarm;
 impl ServerType for Quarm {
     fn wire(&self) -> &'static dyn Wire {
         &EqMac
+    }
+
+    /// Quarm's own zone loop, until Quarm moves onto the shared session.
+    fn zone(
+        &self,
+        context: &CharacterSession<'_>,
+        _shield: &mut Option<Box<dyn Shield>>,
+        (host, port): (&str, u16),
+        _checksums: Vec<u8>,
+        log: &mut Events<'_>,
+    ) -> Result<ZoneExit> {
+        crate::client::quarm::zone(context, log, host, port)?;
+        Ok(ZoneExit::Stopped)
     }
 }
 
