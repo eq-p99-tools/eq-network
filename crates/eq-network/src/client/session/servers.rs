@@ -42,6 +42,7 @@ use super::{
     CharacterSession, Events, ServerProtocol, ZoneExit,
 };
 use crate::p99::{self, WorldCodec};
+use eq_network_game::abilities::Ability;
 
 /// What a zone session builds its features with.
 pub(super) struct Setup<'a> {
@@ -359,9 +360,9 @@ impl Shield for WorldCodec {
 /// types that speak it; each server type still lists the ones it provides.
 mod titanium {
     use super::{
-        Abilities, Belongings, Camp, Casting, Character, Clock, Combat, Corpses, Doors, Entities,
-        Exchanges, Feature, GroundObjects, Looting, Map, Motion, Pets, Reading, Resurrection,
-        Setup, Spellbook, Talk, Targeting, Tradeskills, Training, Transfers, Who,
+        Abilities, Ability, Belongings, Camp, Casting, Character, Clock, Combat, Corpses, Doors,
+        Entities, Exchanges, Feature, GroundObjects, Looting, Map, Motion, Pets, Reading,
+        Resurrection, Setup, Spellbook, Talk, Targeting, Tradeskills, Training, Transfers, Who,
     };
 
     pub(super) fn casting() -> Box<dyn Feature> {
@@ -405,8 +406,8 @@ mod titanium {
         Box::new(Exchanges)
     }
 
-    pub(super) fn abilities() -> Box<dyn Feature> {
-        Box::<Abilities>::default()
+    pub(super) fn abilities(listed: &'static [Ability]) -> Box<dyn Feature> {
+        Box::new(Abilities::new(listed))
     }
 
     pub(super) fn talk() -> Box<dyn Feature> {
@@ -466,6 +467,26 @@ mod titanium {
     }
 }
 
+/// The abilities checked on P99: every one but fishing, which came later.
+const P99_ABILITIES: [Ability; 16] = [
+    Ability::Kick,
+    Ability::Bash,
+    Ability::Backstab,
+    Ability::Frenzy,
+    Ability::FlyingKick,
+    Ability::RoundKick,
+    Ability::TigerClaw,
+    Ability::EagleStrike,
+    Ability::DragonPunch,
+    Ability::Taunt,
+    Ability::Hide,
+    Ability::Sneak,
+    Ability::Forage,
+    Ability::Mend,
+    Ability::FeignDeath,
+    Ability::SenseHeading,
+];
+
 /// Project 1999: Titanium with V62 protection and 256-unit saved headings.
 /// Jumps and falls wait until they are measured on P99.
 struct Project1999;
@@ -524,7 +545,7 @@ impl ServerType for Project1999 {
     }
 
     fn abilities(&self, _setup: &Setup<'_>) -> Provided {
-        Some(titanium::abilities())
+        Some(titanium::abilities(&P99_ABILITIES))
     }
 
     fn talk(&self, _setup: &Setup<'_>) -> Provided {
@@ -618,7 +639,7 @@ impl ServerType for EqEmu {
     }
 
     fn abilities(&self, _setup: &Setup<'_>) -> Provided {
-        Some(titanium::abilities())
+        Some(titanium::abilities(&Ability::ALL))
     }
 
     fn talk(&self, _setup: &Setup<'_>) -> Provided {
@@ -787,6 +808,12 @@ mod tests {
         assert!((eqemu.profile_turn() - 512.0).abs() < f32::EPSILON);
         assert!(eqemu.start_choice());
         assert!(offers(eqemu).contains(&Capability::Falling));
+    }
+
+    #[test]
+    fn p99_lists_every_ability_but_fishing() {
+        assert!(!P99_ABILITIES.contains(&Ability::Fishing));
+        assert_eq!(P99_ABILITIES.len(), Ability::ALL.len() - 1);
     }
 
     #[test]

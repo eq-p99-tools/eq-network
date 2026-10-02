@@ -82,7 +82,10 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   target, a strike's target out of melee reach as `EQEmu`'s `CombatRange`
   measures it with the player's size by race, a taunt at anything but an
   NPC) and a use whose recovery timer still runs (`AbilityRefused`), and
-  tells the host when a timer starts (`AbilityUsed`). Strikes share one
+  tells the host when a timer starts (`AbilityUsed`). Each server type lists
+  the abilities it offers (`AbilitiesOffered`, at admission): `EQEmu` all of
+  them, P99 every one but fishing until it is checked there; the session
+  refuses the rest ("Not available on this server"). Strikes share one
   timer, as on the server, and wait for a cast to end.
 - Coins (`money`): `MoveCoins` moves coins between the purse, the cursor, the
   bank (near a banker) and an open give window, changing kind as servers do
