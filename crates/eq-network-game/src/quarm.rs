@@ -164,6 +164,7 @@ fn decoded_profile(data: &[u8], character: &str) -> Result<PlayerState> {
         // EQMac uses fatigue, not Titanium endurance; no equivalent value is supplied.
         endurance: None,
         skills: None,
+        practice_points: None,
         spell_refresh_ms: None,
         memorized_spells: std::array::from_fn(|i| {
             let id = short(data, 2870 + i * 2);

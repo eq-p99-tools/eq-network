@@ -91,6 +91,19 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   and tells the host every change as `Coins` (the purse) and `CoinsElsewhere`
   (the cursor, the bank and a trade window's coins). Asking to trade needs an
   item or coins on the cursor.
+- Training at a guildmaster (`training`), on `EQEmu` for now
+  (`Capability::Training`): `Training` opens training with a guildmaster of
+  the player's class within 200 units, practices a skill and leaves
+  (`TrainingRequest`). The guildmaster's answer reaches the host as
+  `TrainingUpdate::Offered`, with how far each skill can be trained. The
+  session refuses a practice the server would ignore silently
+  (`TrainingRefused`): no training open, a skill the guildmaster does not
+  teach or one at its cap, no practice point left or too few coins. Servers
+  answer a practice only with the skill's new value, which the session turns
+  into `TrainingUpdate::Trained` with the practice's cost; the coins pay for
+  it, and the session counts practice points itself (`PracticePoints`), from
+  the profile's (`PlayerState::practice_points`) plus five for each level
+  past the highest reached in the zone.
 - Synthetic regression coverage for inventory reconciliation, scribe consumption,
   movement admission, cast state, and fresh-key world/zone handoffs.
 

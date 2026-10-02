@@ -23,6 +23,7 @@ mod servers;
 mod spellbook;
 mod talk;
 mod targeting;
+mod training;
 mod transfers;
 mod who;
 mod wire;

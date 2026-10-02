@@ -52,6 +52,8 @@ pub mod pets;
 pub mod quarm;
 /// Server-driven spellbook and casting notifications.
 pub mod spells;
+/// Training skills at a guildmaster.
+pub mod training;
 /// Who is online: `/who all` and the world's answer.
 pub mod who;
 /// Renderer-independent world-state packet decoding.

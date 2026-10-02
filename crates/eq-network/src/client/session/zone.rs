@@ -422,7 +422,7 @@ mod tests {
     };
 
     /// How many kinds of command there are.
-    const KINDS: usize = 42;
+    const KINDS: usize = 43;
 
     /// Which kind of command this is. A new command is a compile error here
     /// until it has a number, and then a test failure until the list below
@@ -472,6 +472,7 @@ mod tests {
             ClientCommand::DropCorpse { .. } => 39,
             ClientCommand::Pet { .. } => 40,
             ClientCommand::AutoEat { .. } => 41,
+            ClientCommand::Training { .. } => 42,
         }
     }
 
@@ -708,6 +709,11 @@ mod tests {
                 command: eq_network_game::pets::PetCommand::Follow,
                 target: None,
             },
+            ClientCommand::Training {
+                session_id,
+                request: eq_network_game::training::TrainingRequest::End,
+                created,
+            },
         ]
     }
 
@@ -861,8 +867,10 @@ mod tests {
             assert!(p99.contains(&capability), "{capability:?}");
         }
         assert!(!p99.contains(&Capability::Falling));
+        assert!(!p99.contains(&Capability::Training));
         let eqemu = features(crate::client::ServerProtocol::EqEmu);
         assert!(eqemu.contains(&Capability::Falling));
-        assert_eq!(eqemu.len(), p99.len() + 1);
+        assert!(eqemu.contains(&Capability::Training));
+        assert_eq!(eqemu.len(), p99.len() + 2);
     }
 }

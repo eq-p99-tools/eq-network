@@ -28,6 +28,7 @@ use eq_network_game::{
     message::{Message, Part},
     money::Wallet,
     request::Request,
+    training::TrainingUpdate,
     world::Coins,
     world::{SpawnKind, WorldEvent},
 };
@@ -120,6 +121,11 @@ fn coins_news(message: &Message, wallet: &mut Wallet) -> Option<bool> {
         }
         WorldEvent::Merchant(MerchantUpdate::Bought { price, .. }) => {
             wallet.pay(u64::from(*price));
+            Some(true)
+        }
+        // The server takes a practice's cost without saying so.
+        WorldEvent::Training(TrainingUpdate::Trained { cost, .. }) if *cost > 0 => {
+            wallet.pay(*cost);
             Some(true)
         }
         // What the window held was handed over, or comes back with the
