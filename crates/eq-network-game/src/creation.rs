@@ -1,7 +1,10 @@
-//! Titanium character creation: name approval, then the creation request.
+//! Character creation: name approval, then the creation request, in the
+//! Titanium and `EQMac` clients' layouts.
 //!
 //! Stat rules mirror `EQEmu`'s `CheckCharCreateInfoTitanium`: every stat starts at
 //! its race plus class base, and the class's bonus points must all be spent.
+//! TAKP's `CheckCharCreateInfo` takes the same bases and points.
+use crate::command::EncodedCommand;
 use anyhow::{ensure, Context, Result};
 use serde::Serialize;
 
@@ -9,6 +12,16 @@ use serde::Serialize;
 pub const APPROVE_NAME_OPCODE: u16 = 0x3ea6;
 /// `OP_CharacterCreate`: the 80-byte creation request for the approved name.
 pub const CREATE_OPCODE: u16 = 0x10b2;
+/// `EQMac`'s `OP_ApproveName`: the requested name, race and class; answered
+/// with one byte on the same opcode.
+pub const EQMAC_APPROVE_NAME_OPCODE: u16 = 0x8b40;
+/// `EQMac`'s `OP_CharacterCreate`: the whole 8452-byte character record the
+/// client fills in for the approved name.
+pub const EQMAC_CREATE_OPCODE: u16 = 0x4940;
+/// The size of `EQMac`'s name approval request.
+const EQMAC_APPROVAL_SIZE: usize = 78;
+/// The size of `EQMac`'s creation request, TAKP's `CharCreate_Struct`.
+const EQMAC_CREATE_SIZE: usize = 8452;
 
 /// A character to create; stats are in STR, STA, AGI, DEX, WIS, INT, CHA order.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -23,7 +36,11 @@ pub struct NewCharacter {
     pub gender: u32,
     /// Deity ID (for example 207 Karana, 212 Rodcet Nife, 396 agnostic).
     pub deity: u32,
-    /// Titanium start-zone choice (1 Qeynos, 4 Freeport, ...).
+    /// Where the character starts, in the client generation's terms:
+    /// Titanium's start-zone choice (1 Qeynos, 4 Freeport, ...), or the
+    /// `EQMac` start zone's ID (1 South Qeynos, 2 North Qeynos, 9 West
+    /// Freeport, ...), which the server checks against the race, class and
+    /// deity.
     pub start_zone: u32,
     /// Final stats including the spent bonus points.
     pub stats: [u32; 7],
@@ -174,6 +191,116 @@ impl NewCharacter {
         }
         Ok(body)
     }
+
+    /// Checks the name and stats as [`validate`](Self::validate) does, and
+    /// that the classic `EQMac` client offers the race and class.
+    fn validate_eqmac(&self) -> Result<()> {
+        self.validate()?;
+        ensure!(
+            matches!(self.race, 1..=12 | 128 | 130) && (1..=15).contains(&self.class),
+            "the EQMac client offers no such race or class"
+        );
+        Ok(())
+    }
+
+    /// Encodes `EQMac`'s 78-byte name approval request: the name, then the
+    /// race and class as 16-bit values.
+    ///
+    /// # Errors
+    /// Rejects invalid characters.
+    pub fn eqmac_name_approval(&self) -> Result<[u8; EQMAC_APPROVAL_SIZE]> {
+        self.validate_eqmac()?;
+        let mut body = [0; EQMAC_APPROVAL_SIZE];
+        body[..self.name.len()].copy_from_slice(self.name.as_bytes());
+        body[64..66].copy_from_slice(&u16::try_from(self.race)?.to_le_bytes());
+        body[68..70].copy_from_slice(&u16::try_from(self.class)?.to_le_bytes());
+        Ok(body)
+    }
+
+    /// Encodes `EQMac`'s 8452-byte creation request. The client places the
+    /// character itself; this one asks for the start zone's safe point,
+    /// which TAKP's zones use for a position of -1 on every axis, and leaves
+    /// the face, hair and bind points at their defaults.
+    ///
+    /// # Errors
+    /// Rejects invalid characters.
+    pub fn eqmac_create_request(&self) -> Result<Vec<u8>> {
+        self.validate_eqmac()?;
+        let mut body = vec![0; EQMAC_CREATE_SIZE];
+        let mut put = |offset: usize, bytes: &[u8]| {
+            body[offset..offset + bytes.len()].copy_from_slice(bytes);
+        };
+        // Offsets are TAKP's CharCreate_Struct (common/eq_packet_structs.h).
+        put(2, self.name.as_bytes());
+        put(136, &[u8::try_from(self.gender)?]);
+        put(138, &u16::try_from(self.race)?.to_le_bytes());
+        put(140, &u16::try_from(self.class)?.to_le_bytes());
+        put(144, &[1]);
+        // The record keeps STR, STA, CHA, DEX, INT, AGI and WIS in that
+        // order; this one's stats run STR, STA, AGI, DEX, WIS, INT, CHA.
+        for (offset, stat) in [
+            (160, 0),
+            (162, 1),
+            (164, 6),
+            (166, 3),
+            (168, 5),
+            (170, 2),
+            (172, 4),
+        ] {
+            put(offset, &u16::try_from(self.stats[stat])?.to_le_bytes());
+        }
+        // y, x and z; the heading after them stays 0.
+        for offset in [2900, 2904, 2908] {
+            put(offset, &(-1.0f32).to_le_bytes());
+        }
+        put(3440, &self.start_zone.to_le_bytes());
+        put(4940, &u16::try_from(self.deity)?.to_le_bytes());
+        Ok(body)
+    }
+}
+
+/// Titanium's name approval request for a new character.
+///
+/// # Errors
+/// Rejects invalid characters.
+pub fn titanium_approval(character: &NewCharacter) -> Result<EncodedCommand> {
+    Ok(EncodedCommand {
+        opcode: APPROVE_NAME_OPCODE,
+        body: character.name_approval()?.to_vec(),
+    })
+}
+
+/// Titanium's creation request for a character whose name was approved.
+///
+/// # Errors
+/// Rejects invalid characters.
+pub fn titanium_request(character: &NewCharacter) -> Result<EncodedCommand> {
+    Ok(EncodedCommand {
+        opcode: CREATE_OPCODE,
+        body: character.create_request()?.to_vec(),
+    })
+}
+
+/// `EQMac`'s name approval request for a new character.
+///
+/// # Errors
+/// Rejects invalid characters.
+pub fn eqmac_approval(character: &NewCharacter) -> Result<EncodedCommand> {
+    Ok(EncodedCommand {
+        opcode: EQMAC_APPROVE_NAME_OPCODE,
+        body: character.eqmac_name_approval()?.to_vec(),
+    })
+}
+
+/// `EQMac`'s creation request for a character whose name was approved.
+///
+/// # Errors
+/// Rejects invalid characters.
+pub fn eqmac_request(character: &NewCharacter) -> Result<EncodedCommand> {
+    Ok(EncodedCommand {
+        opcode: EQMAC_CREATE_OPCODE,
+        body: character.eqmac_create_request()?,
+    })
 }
 
 #[cfg(test)]
@@ -201,5 +328,46 @@ mod tests {
         assert!(cheat.create_request().is_err());
         assert!(base_stats(99, 2).is_none() && base_stats(1, 17).is_none());
         assert_eq!(base_stats(128, 1).unwrap().1, 25);
+    }
+
+    #[test]
+    fn eqmac_layouts_put_each_field_where_takp_reads_it() {
+        // A human cleric of Rodcet Nife starting in North Qeynos, every free
+        // point in wisdom.
+        let cleric = NewCharacter::with_points_in("Testcleric", (1, 2, 1), (212, 2), 4).unwrap();
+        let approval = cleric.eqmac_name_approval().unwrap();
+        assert_eq!(approval.len(), 78);
+        assert_eq!(&approval[..11], b"Testcleric\0");
+        assert_eq!(&approval[64..70], &[1, 0, 0, 0, 2, 0]);
+        let create = cleric.eqmac_create_request().unwrap();
+        assert_eq!(create.len(), 8452);
+        assert_eq!(&create[2..12], b"Testcleric");
+        assert_eq!(create[136], 1);
+        assert_eq!(&create[138..142], &[1, 0, 2, 0]);
+        assert_eq!(create[144], 1);
+        let stat = |offset: usize| u16::from_le_bytes([create[offset], create[offset + 1]]);
+        // STR, STA, CHA, DEX, INT, AGI, WIS.
+        assert_eq!(
+            [160, 162, 164, 166, 168, 170, 172].map(stat),
+            [80, 80, 75, 75, 75, 75, 115]
+        );
+        for offset in [2900, 2904, 2908] {
+            assert_eq!(&create[offset..offset + 4], &(-1.0f32).to_le_bytes());
+        }
+        assert_eq!(&create[2912..2916], &[0; 4]);
+        assert_eq!(&create[3440..3444], &2u32.to_le_bytes());
+        assert_eq!(&create[4940..4942], &212u16.to_le_bytes());
+    }
+
+    #[test]
+    fn eqmac_refuses_races_and_classes_its_client_never_offered() {
+        let froglok = NewCharacter::with_points_in("Testfrog", (330, 1, 0), (215, 49), 0).unwrap();
+        assert!(froglok.validate().is_ok());
+        assert!(froglok.eqmac_name_approval().is_err());
+        assert!(froglok.eqmac_create_request().is_err());
+        let berserker = NewCharacter::with_points_in("Testzerk", (2, 16, 0), (396, 29), 0).unwrap();
+        assert!(berserker.eqmac_create_request().is_err());
+        let vah_shir = NewCharacter::with_points_in("Testcat", (130, 1, 0), (396, 155), 0).unwrap();
+        assert!(vah_shir.eqmac_create_request().is_ok());
     }
 }

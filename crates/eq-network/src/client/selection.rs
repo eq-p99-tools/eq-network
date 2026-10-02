@@ -13,9 +13,10 @@ pub(super) enum Choice {
     Create(eq_network_game::creation::NewCharacter),
 }
 
+#[cfg(test)]
 impl Choice {
     /// The character to enter, ignoring creation requests.
-    pub(super) fn entered(self) -> Option<String> {
+    fn entered(self) -> Option<String> {
         match self {
             Self::Enter(name) => Some(name),
             Self::Create(_) => None,

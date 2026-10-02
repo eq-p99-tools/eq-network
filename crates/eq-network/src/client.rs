@@ -77,6 +77,9 @@ pub enum ServerProtocol {
     /// world validation and packet encryption (for example a local `AkkStack`).
     #[serde(alias = "eqemu")]
     EqEmu,
+    /// A stock TAKP (`EQMacEmu`) server speaking the Windows TAKP/EQMac
+    /// protocol, without Quarm's own rules (for example a local test server).
+    Takp,
 }
 
 impl ServerProtocol {
@@ -87,6 +90,7 @@ impl ServerProtocol {
             Self::Project1999 => ("login.eqemulator.net", 5998),
             Self::Quarm => ("loginserver.takproject.net", 6000),
             Self::EqEmu => ("127.0.0.1", 5998),
+            Self::Takp => ("127.0.0.1", 6000),
         }
     }
 
@@ -95,13 +99,21 @@ impl ServerProtocol {
     pub const fn is_titanium(self) -> bool {
         matches!(self, Self::Project1999 | Self::EqEmu)
     }
+
+    /// Whether this is a stock emulator server (`EQEmu` or TAKP) rather than
+    /// a public server with rules of its own, such as one run locally for
+    /// testing.
+    #[must_use]
+    pub const fn is_stock(self) -> bool {
+        matches!(self, Self::EqEmu | Self::Takp)
+    }
 }
 
 impl From<ServerProtocol> for GameDialect {
     fn from(protocol: ServerProtocol) -> Self {
         match protocol {
             ServerProtocol::Project1999 | ServerProtocol::EqEmu => Self::Titanium,
-            ServerProtocol::Quarm => Self::EqMac,
+            ServerProtocol::Quarm | ServerProtocol::Takp => Self::EqMac,
         }
     }
 }
@@ -114,6 +126,7 @@ impl FromStr for ServerProtocol {
             "p99" | "project1999" | "project_1999" => Ok(Self::Project1999),
             "quarm" => Ok(Self::Quarm),
             "eqemu" => Ok(Self::EqEmu),
+            "takp" => Ok(Self::Takp),
             _ => anyhow::bail!("unknown server protocol {value:?}"),
         }
     }

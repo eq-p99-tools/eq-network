@@ -19,6 +19,7 @@ use super::{
     clock::Clock,
     combat::Combat,
     corpses::Corpses,
+    creation::{self, Creation},
     doors::Doors,
     entities::Entities,
     exchange::Exchanges,
@@ -86,6 +87,12 @@ pub(super) trait ServerType: Sync {
     /// character is created, before the character enters.
     fn start_choice(&self) -> bool {
         false
+    }
+
+    /// How the world creates characters, if it creates them for this
+    /// server type.
+    fn creation(&self) -> Option<&'static dyn Creation> {
+        None
     }
 
     /// Runs the character's stay in a zone: the shared zone session, with
@@ -428,6 +435,10 @@ impl ServerType for Project1999 {
         256.0
     }
 
+    fn creation(&self) -> Option<&'static dyn Creation> {
+        Some(&creation::Titanium)
+    }
+
     fn casting(&self, _setup: &Setup<'_>) -> Provided {
         Some(titanium::casting())
     }
@@ -522,6 +533,10 @@ impl ServerType for EqEmu {
         true
     }
 
+    fn creation(&self) -> Option<&'static dyn Creation> {
+        Some(&creation::Titanium)
+    }
+
     fn casting(&self, _setup: &Setup<'_>) -> Provided {
         Some(titanium::casting())
     }
@@ -605,7 +620,8 @@ impl ServerType for EqEmu {
 
 /// Project Quarm, which speaks `EQMac` and provides no feature on this
 /// interface yet: its own zone loop runs it until it moves onto the shared
-/// session.
+/// session. Its features come once they are checked on Quarm, starting
+/// with those checked on TAKP.
 struct Quarm;
 
 impl ServerType for Quarm {
@@ -627,12 +643,41 @@ impl ServerType for Quarm {
     }
 }
 
+/// A stock TAKP (`EQMacEmu`) server speaking `EQMac`, where the `EQMac`
+/// features are checked first. It creates characters; Quarm's zone loop
+/// runs its zones until both move onto the shared session.
+struct Takp;
+
+impl ServerType for Takp {
+    fn wire(&self) -> &'static dyn Wire {
+        &EqMac
+    }
+
+    fn creation(&self) -> Option<&'static dyn Creation> {
+        Some(&creation::EqMac)
+    }
+
+    /// Quarm's own zone loop, until TAKP moves onto the shared session.
+    fn zone(
+        &self,
+        context: &CharacterSession<'_>,
+        _shield: &mut Option<Box<dyn Shield>>,
+        (host, port): (&str, u16),
+        _checksums: Vec<u8>,
+        log: &mut Events<'_>,
+    ) -> Result<ZoneExit> {
+        crate::client::quarm::zone(context, log, host, port)?;
+        Ok(ZoneExit::Stopped)
+    }
+}
+
 /// The server type of a server protocol.
 pub(super) fn server_type(protocol: ServerProtocol) -> &'static dyn ServerType {
     match protocol {
         ServerProtocol::Project1999 => &Project1999,
         ServerProtocol::EqEmu => &EqEmu,
         ServerProtocol::Quarm => &Quarm,
+        ServerProtocol::Takp => &Takp,
     }
 }
 
@@ -682,13 +727,42 @@ mod tests {
         assert!(empty.protect(&[0; 464]).unwrap().is_none());
         assert!((empty.profile_turn() - 512.0).abs() < f32::EPSILON);
         assert!(!empty.start_choice());
-        // Quarm speaks EQMac and has built none of them on the interface yet.
-        let quarm = server_type(ServerProtocol::Quarm);
-        assert!(quarm.wire().encode(&Request::Camp, SENDER).is_err());
-        let setup = Setup::new("Tester", AutoEat::default());
-        assert!(quarm.features(&setup).is_empty());
-        assert!(quarm.protect(&[0; 464]).unwrap().is_none());
-        assert!(!quarm.start_choice());
+        assert!(empty.creation().is_none());
+        // Quarm and TAKP speak EQMac and have built none of them on the
+        // interface yet.
+        for protocol in [ServerProtocol::Quarm, ServerProtocol::Takp] {
+            let server = server_type(protocol);
+            assert!(server.wire().encode(&Request::Camp, SENDER).is_err());
+            let setup = Setup::new("Tester", AutoEat::default());
+            assert!(server.features(&setup).is_empty());
+            assert!(server.protect(&[0; 464]).unwrap().is_none());
+            assert!(!server.start_choice());
+        }
+    }
+
+    #[test]
+    fn each_server_type_creates_characters_in_its_generation_or_not_at_all() {
+        let character = eq_network_game::creation::NewCharacter::with_points_in(
+            "Testcleric",
+            (1, 2, 0),
+            (212, 2),
+            4,
+        )
+        .unwrap();
+        let approval = |protocol| {
+            server_type(protocol)
+                .creation()
+                .map(|creation| creation.approval(&character).unwrap().opcode)
+        };
+        let titanium = Some(eq_network_game::creation::APPROVE_NAME_OPCODE);
+        assert_eq!(approval(ServerProtocol::Project1999), titanium);
+        assert_eq!(approval(ServerProtocol::EqEmu), titanium);
+        assert_eq!(
+            approval(ServerProtocol::Takp),
+            Some(eq_network_game::creation::EQMAC_APPROVE_NAME_OPCODE)
+        );
+        // Not yet checked on Quarm.
+        assert_eq!(approval(ServerProtocol::Quarm), None);
     }
 
     #[test]

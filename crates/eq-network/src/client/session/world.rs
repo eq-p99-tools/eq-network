@@ -3,8 +3,8 @@
 //! generation runs it its own way: Titanium's is here, `EQMac`'s in
 //! [`eqmac`].
 use super::{
-    cstr, login::Credentials, put_string, servers, servers::Shield, CharacterSession,
-    ZoneDestination,
+    creation::Creating, cstr, login::Credentials, put_string, servers, servers::Shield,
+    CharacterSession, ZoneDestination,
 };
 use crate::{
     assets::Assets,
@@ -172,8 +172,8 @@ pub(super) fn titanium(
     // After camping, the world sends the list once, before its empty file notice.
     let mut early_list: Option<Vec<u8>> = None;
     let mut chosen = None;
-    // A creation request awaiting name approval (false) or its new list (true).
-    let mut creating: Option<(eq_network_game::creation::NewCharacter, bool)> = None;
+    // A creation awaiting the world's approval of its name, or its new list.
+    let mut creating: Option<Creating> = None;
     // Stock EQEmu marks a world session that created a character as bound for the
     // tutorial until the client sends OP_World_Client_CRC1 (world/client.cpp).
     let mut tutorial_pending = false;
@@ -186,21 +186,7 @@ pub(super) fn titanium(
             {
                 Some(crate::client::selection::Choice::Enter(name)) => chosen = Some(name),
                 Some(crate::client::selection::Choice::Create(character)) if creating.is_none() => {
-                    match character.name_approval() {
-                        Ok(body) => {
-                            session.send(eq_network_game::creation::APPROVE_NAME_OPCODE, &body)?;
-                            creating = Some((character, false));
-                        }
-                        Err(error) => {
-                            log.diagnostic(format!("Rejected character creation: {error}"))?;
-                            log.send(ClientEvent::World(
-                                crate::world::WorldEvent::CharacterCreation {
-                                    name: character.name,
-                                    accepted: false,
-                                },
-                            ))?;
-                        }
-                    }
+                    creating = Creating::start(server.creation(), character, &mut session, log)?;
                 }
                 _ => (),
             }
@@ -307,38 +293,17 @@ pub(super) fn titanium(
                 session.send(0x5e99, &[])?;
             }
             // Name approved: send the creation; any refusal ends this attempt.
-            WorldOpcode::ApproveName if creating.is_some() => {
-                let approved = packet.body.first() == Some(&1);
-                match creating.take() {
-                    Some((character, false)) if approved => {
-                        session.send(
-                            eq_network_game::creation::CREATE_OPCODE,
-                            &character.create_request()?,
-                        )?;
-                        creating = Some((character, true));
-                    }
-                    Some((character, _)) => {
-                        log.send(ClientEvent::World(
-                            crate::world::WorldEvent::CharacterCreation {
-                                name: character.name,
-                                accepted: false,
-                            },
-                        ))?;
-                    }
-                    None => (),
+            WorldOpcode::ApproveName => {
+                if let Some(attempt) = creating.take() {
+                    creating = attempt.answered(&packet.body, &mut session, log)?;
                 }
             }
             WorldOpcode::CharacterList
-                if accepted && !entered && creating.as_ref().is_some_and(|(_, sent)| *sent) =>
+                if accepted && !entered && creating.as_ref().is_some_and(Creating::requested) =>
             {
-                if let Some((character, _)) = creating.take() {
+                if let Some(attempt) = creating.take() {
                     tutorial_pending |= server.start_choice();
-                    log.send(ClientEvent::World(
-                        crate::world::WorldEvent::CharacterCreation {
-                            name: character.name,
-                            accepted: true,
-                        },
-                    ))?;
+                    attempt.created(log)?;
                 }
                 let entries =
                     eq_network_game::characters::decode(config.protocol.into(), &packet.body)?;

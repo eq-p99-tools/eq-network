@@ -91,6 +91,14 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   and tells the host every change as `Coins` (the purse) and `CoinsElsewhere`
   (the cursor, the bank and a trade window's coins). Asking to trade needs an
   item or coins on the cursor.
+- TAKP servers (`ServerProtocol::Takp`, `takp`): a stock `EQMacEmu` server,
+  such as a local test server, speaking the same `EQMac` protocol as Project
+  Quarm. `ServerProtocol::is_stock` tells stock emulator servers (`EQEmu` and
+  TAKP) from public ones. TAKP creates characters with the `EQMac` client's
+  packets (`creation::eqmac_approval`, `creation::eqmac_request`); the
+  `EQMac` creation asks for the start zone's safe point. Quarm does not create
+  characters yet, and refuses `CreateCharacter` with `CharacterCreation`
+  instead of ignoring it.
 - Synthetic regression coverage for inventory reconciliation, scribe consumption,
   movement admission, cast state, and fresh-key world/zone handoffs.
 
