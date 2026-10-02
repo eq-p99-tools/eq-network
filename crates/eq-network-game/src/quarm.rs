@@ -156,6 +156,48 @@ pub fn posture(spawn_id: u16, posture: crate::command::Posture) -> Result<Encode
     })
 }
 
+/// The player's position (`OP_ClientUpdate`, TAKP's 15-byte
+/// `SpawnPositionUpdate_Struct`): the spawn, its speed, its heading in
+/// halves (0 to 255), its turn, where it stands as whole units (z in tenths,
+/// cut toward zero as the client cuts them), and its velocity packed as the
+/// client packs it: sixteenths, x in 10 bits, z and y in 11.
+///
+/// # Errors
+/// Refuses a sample [`PositionPacket::check`] refuses.
+///
+/// [`PositionPacket::check`]: crate::movement::PositionPacket::check
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)] // Clamped and masked first.
+pub fn client_update(sample: &crate::movement::PositionPacket) -> Result<EncodedCommand> {
+    sample.check()?;
+    let whole = |value: f32| {
+        value
+            .trunc()
+            .clamp(f32::from(i16::MIN), f32::from(i16::MAX)) as i16
+    };
+    let small = |value: i16| value.clamp(i16::from(i8::MIN), i16::from(i8::MAX)) as i8;
+    let packed = |value: f32, low: f32, high: f32, mask: u32| {
+        (((value.clamp(low, high) * 16.0) as i32) as u32) & mask
+    };
+    let position = sample.position;
+    let mut body = Vec::with_capacity(15);
+    body.extend_from_slice(&sample.spawn_id.to_le_bytes());
+    body.extend_from_slice(&small(sample.animation).to_le_bytes());
+    body.push((position.heading.rem_euclid(512.0) / 2.0) as u8);
+    body.extend_from_slice(&small(sample.delta_heading).to_le_bytes());
+    for value in [position.y, position.x, position.z * 10.0] {
+        body.extend_from_slice(&whole(value).to_le_bytes());
+    }
+    let [x, y, z] = sample.delta;
+    let velocity = (packed(x, -32.0, 31.0, 0x3ff) << 22)
+        | (packed(z, -64.0, 63.0, 0x7ff) << 11)
+        | packed(y, -64.0, 63.0, 0x7ff);
+    body.extend_from_slice(&velocity.to_le_bytes());
+    Ok(EncodedCommand {
+        opcode: ZONE_CLIENT_UPDATE,
+        body,
+    })
+}
+
 /// The client's filters: every chat and combat category on.
 #[must_use]
 pub fn server_filters() -> [u8; 68] {

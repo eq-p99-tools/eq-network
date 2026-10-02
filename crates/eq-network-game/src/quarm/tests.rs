@@ -236,6 +236,60 @@ fn camping_logging_out_and_a_stance_are_eqmacs_own_packets() {
 }
 
 #[test]
+fn a_position_update_lays_out_what_takp_reads() {
+    use crate::movement::PositionPacket;
+    let sample = PositionPacket {
+        spawn_id: 7,
+        sequence: 3,
+        position: Position {
+            x: -12.6,
+            y: 456.9,
+            z: 3.75,
+            heading: 300.0,
+        },
+        delta: [-1.5, 2.25, -0.5],
+        animation: 24,
+        delta_heading: -2,
+    };
+    let packet = client_update(&sample).unwrap();
+    assert_eq!(packet.opcode, ZONE_CLIENT_UPDATE);
+    let body = packet.body;
+    assert_eq!(body.len(), 15);
+    assert_eq!(&body[..5], &[7, 0, 24, 150, 0xfe]);
+    // y, x and z in tenths, each cut toward zero.
+    assert_eq!(i16::from_le_bytes([body[5], body[6]]), 456);
+    assert_eq!(i16::from_le_bytes([body[7], body[8]]), -12);
+    assert_eq!(i16::from_le_bytes([body[9], body[10]]), 37);
+    // TAKP unpacks the velocity: x from bits 22 to 31, z from 11 to 21 and
+    // y from 0 to 10, each a signed count of sixteenths.
+    let value = u32::from_le_bytes(body[11..15].try_into().unwrap());
+    let signed = |bits: u32, width: u32| {
+        let value = i32::try_from(bits).unwrap();
+        let value = if bits & (1 << (width - 1)) == 0 {
+            value
+        } else {
+            value - (1 << width)
+        };
+        f32::from(i16::try_from(value).unwrap()) / 16.0
+    };
+    assert!((signed(value >> 22, 10) + 1.5).abs() < f32::EPSILON);
+    assert!((signed((value >> 11) & 0x7ff, 11) + 0.5).abs() < f32::EPSILON);
+    assert!((signed(value & 0x7ff, 11) - 2.25).abs() < f32::EPSILON);
+    // A turn and speed beyond a byte are held at its ends.
+    let fast = PositionPacket {
+        animation: 300,
+        delta_heading: -300,
+        ..sample
+    };
+    assert_eq!(&client_update(&fast).unwrap().body[2..5], &[127, 150, 0x80]);
+    assert!(client_update(&PositionPacket {
+        spawn_id: 0,
+        ..sample
+    })
+    .is_err());
+}
+
+#[test]
 fn the_client_answers_only_version_checks_by_itself() {
     let request = [0, 0, 0, 1, 0, 0, 4, 0];
     let reply = answer(ZONE_SPAWN_APPEARANCE, &request).unwrap();

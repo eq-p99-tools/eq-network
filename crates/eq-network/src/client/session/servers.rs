@@ -765,6 +765,11 @@ impl ServerType for Takp {
     fn camp(&self, _setup: &Setup<'_>) -> Provided {
         Some(shared::camp())
     }
+
+    /// TAKP takes no falls from the client, as P99 does not.
+    fn motion(&self, _setup: &Setup<'_>) -> Provided {
+        Some(shared::motion(false))
+    }
 }
 
 /// The server type of a server protocol.
@@ -836,8 +841,11 @@ mod tests {
         assert_eq!(quarm.features(&setup).len(), 3);
         assert_eq!(offers(quarm), [Capability::Talking]);
         let takp = server_type(ServerProtocol::Takp);
-        assert_eq!(takp.features(&setup).len(), 4);
-        assert_eq!(offers(takp), [Capability::Talking, Capability::Camping]);
+        assert_eq!(takp.features(&setup).len(), 5);
+        assert_eq!(
+            offers(takp),
+            [Capability::Moving, Capability::Talking, Capability::Camping]
+        );
         for server in [quarm, takp] {
             assert_eq!(
                 server.wire().encode(&Request::Camp, SENDER).unwrap(),
