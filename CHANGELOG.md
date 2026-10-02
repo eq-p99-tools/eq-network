@@ -35,8 +35,10 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   (`ItemDetails::has_modifiers`) for the player, and says when that is all
   that is left (`Shortage::OnlyModified`); `ClientConfig::auto_eat` set to
   `AutoEat::Anything` eats whatever comes first, as the official client
-  does. `Consume` eats or drinks an item by hand, refused with the official
-  client's words when the player is full (`ConsumeRefused`).
+  does. `AutoEat` changes that while a zone session runs; each one starts
+  with the configured choice. `Consume` eats or drinks an item by hand,
+  refused with the official client's words when the player is full
+  (`ConsumeRefused`).
 - Who is online (`who`): `WhoAll` asks the world by name, guild or zone
   start, race, class, levels or game masters (`WhoFilter`,
   `Capability::Who`), and the answer reaches the host as `WhoList`: the

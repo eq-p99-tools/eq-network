@@ -315,6 +315,15 @@ pub enum GameCommand {
         /// Reject delayed actions instead of replaying them after a stall.
         created: std::time::Instant,
     },
+    /// What the session may eat and drink on its own from now on. Each zone
+    /// session starts with the client's configured choice, so a host that
+    /// lets the player change it says so again after each admission.
+    AutoEat {
+        /// Current zone admission.
+        session_id: u64,
+        /// What the session may eat and drink on its own.
+        auto_eat: crate::food::AutoEat,
+    },
     /// Use an ability: a strike or taunt at the server-side target, or one
     /// on the player.
     UseAbility {
@@ -427,6 +436,7 @@ impl GameCommand {
             | Self::Jump { session_id, .. }
             | Self::AutoAttack { session_id, .. }
             | Self::Consume { session_id, .. }
+            | Self::AutoEat { session_id, .. }
             | Self::UseAbility { session_id, .. }
             | Self::WhoAll { session_id, .. }
             | Self::Consent { session_id, .. }
@@ -461,7 +471,9 @@ impl GameCommand {
             }
             // Only a server that takes falls from the client lets the player jump.
             Self::Jump { .. } => Capability::Falling,
-            Self::MoveInventory(_) | Self::Consume { .. } => Capability::Inventory,
+            Self::MoveInventory(_) | Self::Consume { .. } | Self::AutoEat { .. } => {
+                Capability::Inventory
+            }
             Self::SendChat(_) | Self::InspectItem { .. } => Capability::Talking,
             Self::Consider { .. } | Self::AutoAttack { .. } => Capability::Combat,
             Self::Camp { .. } => Capability::Camping,
@@ -501,6 +513,7 @@ impl GameCommand {
             | Self::InspectItem { .. }
             | Self::EndLoot { .. }
             | Self::CancelTrade { .. }
+            | Self::AutoEat { .. }
             | Self::WhoAll { .. }
             | Self::Consent { .. }
             | Self::SummonCorpse { .. }
@@ -647,6 +660,7 @@ pub fn encode(
         | GameCommand::ConfigureMotion { .. }
         | GameCommand::CrossZoneLine { .. }
         | GameCommand::Consume { .. }
+        | GameCommand::AutoEat { .. }
         | GameCommand::UseAbility { .. }
         | GameCommand::WhoAll { .. }
         | GameCommand::Consent { .. }

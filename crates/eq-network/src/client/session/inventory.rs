@@ -402,6 +402,7 @@ impl Feature for Belongings {
                 | ClientCommand::Buy { .. }
                 | ClientCommand::Sell { .. }
                 | ClientCommand::Consume { .. }
+                | ClientCommand::AutoEat { .. }
         )
     }
 
@@ -415,6 +416,10 @@ impl Feature for Belongings {
             ClientCommand::MoveInventory(request) => self.move_item(request, world, out),
             ClientCommand::MoveCoins { .. } => Self::move_coins(command, world, out),
             ClientCommand::Shop { .. } => self.shop(command, world, out),
+            ClientCommand::AutoEat { auto_eat, .. } => {
+                self.meals.choose(*auto_eat);
+                Ok(())
+            }
             ClientCommand::Consume {
                 session_id, slot, ..
             } => match self.meals.by_hand(*slot, world, out)? {
@@ -643,7 +648,15 @@ mod tests {
                 water: None
             })]
         ));
-        belongings.meals = meals::Meals::new(AutoEat::Anything);
+        // The host lets anything go.
+        let anything = ClientCommand::AutoEat {
+            session_id: 5,
+            auto_eat: AutoEat::Anything,
+        };
+        assert!(belongings.owns(&anything));
+        testing::run(|out| belongings.handle(&anything, &mut world, out))
+            .result
+            .unwrap();
         let outcome = testing::run(|out| belongings.observe(&hungry, &mut world, out));
         outcome.result.unwrap();
         assert_eq!(

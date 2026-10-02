@@ -54,6 +54,11 @@ impl Meals {
         }
     }
 
+    /// What the session may eat and drink on its own from now on.
+    pub(super) const fn choose(&mut self, auto_eat: AutoEat) {
+        self.auto_eat = auto_eat;
+    }
+
     /// Notes how fed and watered the profile says the player is.
     pub(super) fn admit(&mut self, nourishment: Nourishment) {
         self.last = Some(nourishment);
