@@ -271,7 +271,11 @@ fn reasoned(command: &ClientCommand, session_id: u64, reason: String) -> Option<
             WorldEvent::ResurrectionRefused { session_id, reason }
         }
         ClientCommand::ReadItem { .. } => WorldEvent::ReadRefused { session_id, reason },
-        ClientCommand::Combine { .. } => WorldEvent::CombineRefused { session_id, reason },
+        ClientCommand::Combine { .. } => WorldEvent::CombineRefused {
+            session_id,
+            reason,
+            string_id: None,
+        },
         ClientCommand::Consent { .. }
         | ClientCommand::SummonCorpse { .. }
         | ClientCommand::DragCorpse { .. }

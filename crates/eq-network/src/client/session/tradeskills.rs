@@ -2,7 +2,9 @@
 //! container carried in a pack slot, and holds the inventory until the
 //! server answers: the components leave and what was made arrives only after
 //! that answer, so a move or a second combine in between would act on what
-//! the server is about to change.
+//! the server is about to change. As the official client does, it refuses a
+//! combine while the cursor holds an item or coins, where what was made
+//! would land, and names the official client's own words for that.
 use super::{
     actions::{self, Resource},
     feature::{Feature, Out, World},
@@ -13,7 +15,7 @@ use eq_network_game::{
     inventory::InventorySlot,
     message::Message,
     request::Request,
-    tradeskills::{self, CombineUpdate},
+    tradeskills::{self, CombineUpdate, HANDS_FULL},
     world::WorldEvent,
 };
 use std::time::Instant;
@@ -47,7 +49,12 @@ impl Feature for Tradeskills {
         world: &mut World,
         out: &mut Out<'_, '_>,
     ) -> Result<()> {
-        let ClientCommand::Combine { container, .. } = *command else {
+        let ClientCommand::Combine {
+            session_id,
+            container,
+            ..
+        } = *command
+        else {
             return Ok(());
         };
         let combines = world
@@ -57,6 +64,18 @@ impl Feature for Tradeskills {
             .is_some_and(tradeskills::can_combine_in);
         if !combines {
             return actions::refuse(command, "That is not a tradeskill container.", out.log);
+        }
+        if world.inventory.items().contains_key(&InventorySlot::CURSOR)
+            || !world.coins.cursor.is_empty()
+        {
+            let reason = "Your cursor must be empty to combine.";
+            out.log
+                .send(ClientEvent::World(WorldEvent::CombineRefused {
+                    session_id,
+                    reason: reason.into(),
+                    string_id: Some(HANDS_FULL),
+                }))?;
+            return out.log.diagnostic(reason.into());
         }
         out.request(&Request::Combine(container))?;
         self.combining = Some(container);
@@ -144,6 +163,41 @@ mod tests {
         .result
         .unwrap();
         assert_eq!(tradeskills.holds(&world, now), []);
+    }
+
+    #[test]
+    fn a_full_cursor_refuses_the_combine() {
+        let mut tradeskills = Tradeskills::default();
+        let mut on_cursor = world();
+        let mut inventory = Inventory::default();
+        let mut kit = testing::item(23);
+        kit.bag_slots = 10;
+        kit.rules.bag_type = 16;
+        inventory.apply(InventoryUpdate::Snapshot(vec![
+            kit,
+            testing::item(InventorySlot::CURSOR.0),
+        ]));
+        on_cursor.inventory = inventory.into();
+        let mut coins = world();
+        coins.coins = eq_network_game::money::Wallet {
+            cursor: eq_network_game::world::Coins {
+                copper: 3,
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+        .into();
+        for mut world in [on_cursor, coins] {
+            let outcome = testing::run(|out| tradeskills.handle(&combine(23), &mut world, out));
+            assert!(outcome.sent.is_empty(), "sent {:?}", outcome.sent);
+            assert!(outcome.events.iter().any(|event| matches!(
+                event,
+                ClientEvent::World(WorldEvent::CombineRefused {
+                    string_id: Some(HANDS_FULL),
+                    ..
+                })
+            )));
+        }
     }
 
     #[test]
