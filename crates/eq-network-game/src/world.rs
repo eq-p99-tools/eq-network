@@ -358,12 +358,15 @@ pub enum Capability {
     Reading,
     /// Combining in the player's own tradeskill containers.
     Tradeskills,
+    /// Opening the in-game map, which a front end draws from the
+    /// installation's map files.
+    Map,
 }
 
 impl Capability {
     /// Every capability, in order: what a session offers when its server and
     /// client generation support everything.
-    pub const ALL: [Self; 23] = [
+    pub const ALL: [Self; 24] = [
         Self::Casting,
         Self::Spellbook,
         Self::Inventory,
@@ -387,6 +390,7 @@ impl Capability {
         Self::Resurrection,
         Self::Reading,
         Self::Tradeskills,
+        Self::Map,
     ];
 }
 
@@ -1236,6 +1240,7 @@ mod tests {
             Capability::Resurrection => 20,
             Capability::Reading => 21,
             Capability::Tradeskills => 22,
+            Capability::Map => 23,
         };
         for (index, capability) in Capability::ALL.into_iter().enumerate() {
             assert_eq!(place(capability), index, "{capability:?}");

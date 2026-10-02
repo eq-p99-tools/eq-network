@@ -15,6 +15,7 @@ mod inventory;
 mod lifecycle;
 pub(super) mod login;
 mod looting;
+mod map;
 mod motion;
 mod objects;
 mod pets;
