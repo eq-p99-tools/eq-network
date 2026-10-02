@@ -224,6 +224,44 @@ fn dll_version_ignores_other_features_responses_and_malformed_messages() {
 }
 
 #[test]
+fn the_client_answers_only_version_checks_by_itself() {
+    let request = [0, 0, 0, 1, 0, 0, 4, 0];
+    let reply = answer(ZONE_SPAWN_APPEARANCE, &request).unwrap();
+    assert_eq!(reply.opcode, ZONE_SPAWN_APPEARANCE);
+    assert_eq!(reply.body, dll_version_message(true));
+    // Its own reply, another appearance or another opcode needs no answer.
+    assert!(answer(ZONE_SPAWN_APPEARANCE, &dll_version_message(true)).is_none());
+    assert!(answer(ZONE_SPAWN_APPEARANCE, &[7, 0, 16, 0, 7, 0, 0, 0]).is_none());
+    assert!(answer(ZONE_WEATHER, &request).is_none());
+}
+
+#[test]
+fn a_zone_request_names_the_zone_place_and_reason() {
+    let mut body = [0; 24];
+    body[..4].copy_from_slice(&2u32.to_le_bytes());
+    body[4..8].copy_from_slice(&(-162.0f32).to_le_bytes());
+    body[8..12].copy_from_slice(&(-259.0f32).to_le_bytes());
+    body[12..16].copy_from_slice(&3.75f32.to_le_bytes());
+    body[16..20].copy_from_slice(&64.0f32.to_le_bytes());
+    body[20..].copy_from_slice(&11u32.to_le_bytes());
+    let offer = zone_request(&body).unwrap();
+    assert_eq!((offer.zone_id, offer.instance_id, offer.reason), (2, 0, 11));
+    assert_eq!(
+        offer.position,
+        Position {
+            x: -259.0,
+            y: -162.0,
+            z: 3.75,
+            heading: 64.0
+        }
+    );
+    assert!(offer.solicited && !offer.to_bind);
+    assert!(zone_request(&body[..23]).is_err());
+    body[..4].copy_from_slice(&70_000u32.to_le_bytes());
+    assert!(zone_request(&body).is_err());
+}
+
+#[test]
 fn mac_filters_enable_every_chat_and_combat_category() {
     let filters = server_filters();
     for index in 0..17 {

@@ -35,7 +35,6 @@
 //! # }
 //! ```
 
-mod quarm;
 mod selection;
 mod session;
 

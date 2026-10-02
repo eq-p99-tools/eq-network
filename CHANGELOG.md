@@ -134,6 +134,13 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   far). Each hears every host command, which exactly one of them carries out,
   and every message read from the zone; commands are checked for freshness
   in one place.
+- Quarm and TAKP zones run on the shared zone session instead of Quarm's own
+  loop: `message::eqmac` reads their zone packets, `quarm::answer` answers
+  Quarm's DLL version checks at any time, and they provide the spawns, the
+  player's record and talk as features. A command none of their features
+  takes is refused as unavailable instead of being dropped with a
+  diagnostic, and a server request to change zones (`quarm::zone_request`)
+  ends the session, as it did before, until zoning is built for them.
 - `eq-network-game`: `message::titanium` reads a zone packet into `Message`s
   once for the whole session. Encoders return whole packets
   (`EncodedCommand`): `Doors::click_packet`, `Objects::pickup_packet`,

@@ -128,6 +128,24 @@ pub fn titanium(opcode: u16, body: &[u8]) -> Vec<Message> {
     messages
 }
 
+/// What one `EQMac` zone packet says: the spawns and the player's news that
+/// [`crate::quarm::updates`] reads, the server logging the character out,
+/// and its request that the client move.
+#[must_use]
+pub fn eqmac(opcode: u16, body: &[u8]) -> Vec<Message> {
+    match opcode {
+        crate::quarm::ZONE_LOGOUT => vec![Message::LoggedOut],
+        crate::quarm::ZONE_CHANGE_REQUEST => vec![crate::quarm::zone_request(body).map_or_else(
+            |error| unreadable(Part::ZoneOffer, &error),
+            Message::ZoneOffer,
+        )],
+        _ => crate::quarm::updates(opcode, body).map_or_else(
+            |error| vec![unreadable(Part::World, &error)],
+            |events| events.into_iter().map(Message::Event).collect(),
+        ),
+    }
+}
+
 fn unreadable(part: Part, error: &anyhow::Error) -> Message {
     Message::Unreadable {
         part,
@@ -223,5 +241,51 @@ mod tests {
             }]
         ));
         assert!(titanium(0xffff, &[]).is_empty());
+    }
+
+    #[test]
+    fn eqmac_packets_say_the_same_things_in_their_own_layouts() {
+        use crate::quarm::{ZONE_CHANGE_REQUEST, ZONE_LOGOUT};
+        assert!(matches!(eqmac(ZONE_LOGOUT, &[])[..], [Message::LoggedOut]));
+        // A despawn, then a health update that says two things.
+        assert!(matches!(
+            eqmac(0x2940, &[9, 0])[..],
+            [Message::Event(WorldEvent::Despawn(9))]
+        ));
+        let mut health = [0; 12];
+        health[..4].copy_from_slice(&7u32.to_le_bytes());
+        health[4..8].copy_from_slice(&50i32.to_le_bytes());
+        health[8..].copy_from_slice(&100i32.to_le_bytes());
+        assert!(matches!(
+            eqmac(0xb240, &health)[..],
+            [
+                Message::Event(WorldEvent::HitPoints { spawn_id: 7, .. }),
+                Message::Event(WorldEvent::HealthPercent {
+                    spawn_id: 7,
+                    percent: 50
+                })
+            ]
+        ));
+        let mut request = [0; 24];
+        request[..4].copy_from_slice(&2u32.to_le_bytes());
+        assert!(matches!(
+            &eqmac(ZONE_CHANGE_REQUEST, &request)[..],
+            [Message::ZoneOffer(offer)] if offer.zone_id == 2 && offer.solicited
+        ));
+        assert!(matches!(
+            eqmac(ZONE_CHANGE_REQUEST, &[0; 3])[..],
+            [Message::Unreadable {
+                part: Part::ZoneOffer,
+                ..
+            }]
+        ));
+        assert!(matches!(
+            eqmac(0x2940, &[9])[..],
+            [Message::Unreadable {
+                part: Part::World,
+                ..
+            }]
+        ));
+        assert!(eqmac(0xffff, &[]).is_empty());
     }
 }

@@ -4,7 +4,11 @@
 //! `mac.cpp`, `common/eq_packet_structs.h`, and `common/packet_functions.cpp`.
 //! Decoders retain only presentation fields, never the full character profile.
 
-use crate::world::{BaseAttributes, PlayerState, Position, SpawnKind, SpawnState, WorldEvent};
+use crate::{
+    command::EncodedCommand,
+    world::{BaseAttributes, PlayerState, Position, SpawnKind, SpawnState, WorldEvent},
+    zoning::ZoneOffer,
+};
 use anyhow::{ensure, Context, Result};
 use zeroize::Zeroizing;
 
@@ -72,6 +76,43 @@ pub fn dll_version_reply(body: &[u8]) -> Option<[u8; 8]> {
         && appearance == DLL_MESSAGE_TYPE
         && parameter >> 16 == u32::from(DLL_VERSION_FEATURE))
     .then(|| dll_version_message(true))
+}
+
+/// What the `EQMac` client answers by itself whenever it arrives, during
+/// admission or normal play: Quarm's DLL version check.
+#[must_use]
+pub fn answer(opcode: u16, body: &[u8]) -> Option<EncodedCommand> {
+    if opcode != ZONE_SPAWN_APPEARANCE {
+        return None;
+    }
+    dll_version_reply(body).map(|reply| EncodedCommand {
+        opcode: ZONE_SPAWN_APPEARANCE,
+        body: reply.to_vec(),
+    })
+}
+
+/// The server asking the client to move (`RequestClientZoneChange`): the
+/// zone as a 32-bit ID where Titanium's request has a zone and an instance,
+/// then where to and the reason the client echoes. The client keeps its
+/// own coordinates for 999999.
+///
+/// # Errors
+/// Rejects malformed requests and zone IDs beyond 16 bits.
+pub fn zone_request(body: &[u8]) -> Result<ZoneOffer> {
+    ensure!(body.len() == 24, "invalid EQMac zone request length");
+    Ok(ZoneOffer {
+        zone_id: u16::try_from(word(body, 0)).context("EQMac zone ID out of range")?,
+        instance_id: 0,
+        position: Position {
+            x: float(body, 8)?,
+            y: float(body, 4)?,
+            z: float(body, 12)?,
+            heading: float(body, 16)?,
+        },
+        reason: word(body, 20),
+        to_bind: false,
+        solicited: true,
+    })
 }
 
 /// The client's filters: every chat and combat category on.

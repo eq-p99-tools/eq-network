@@ -35,6 +35,12 @@ pub(super) trait Wire: Sync {
         Vec::new()
     }
 
+    /// What the generation's client answers by itself whenever a packet
+    /// arrives, during admission or normal play; nothing for most packets.
+    fn answer(&self, _opcode: u16, _body: &[u8]) -> Option<EncodedCommand> {
+        None
+    }
+
     /// The communication a zone packet carries, if it carries any.
     ///
     /// # Errors
@@ -193,12 +199,19 @@ impl Wire for Titanium {
     }
 }
 
-/// The `EQMac` client's packets, which Project Quarm speaks. Only its
-/// communication is read through this interface so far; Quarm's own zone
-/// loop reads the rest until it runs on the shared session.
+/// The `EQMac` client's packets, which Project Quarm and TAKP speak.
 pub(super) struct EqMac;
 
 impl Wire for EqMac {
+    fn messages(&self, opcode: u16, body: &[u8]) -> Vec<Message> {
+        eq_network_game::message::eqmac(opcode, body)
+    }
+
+    /// Quarm's DLL version checks.
+    fn answer(&self, opcode: u16, body: &[u8]) -> Option<EncodedCommand> {
+        eq_network_game::quarm::answer(opcode, body)
+    }
+
     fn chat(&self, opcode: u16, body: &[u8], include_raw: bool) -> Result<Option<ChatEvent>> {
         chat::parse_for(GameDialect::EqMac, opcode, body, include_raw)
     }
@@ -295,10 +308,27 @@ mod tests {
     }
 
     #[test]
-    fn eqmac_reads_only_its_communication_so_far() {
+    fn each_generation_reads_its_own_layouts() {
+        use eq_network_game::quarm::ZONE_LOGOUT;
+        // Titanium's logout reply means nothing to EQMac, and EQMac's logout
+        // nothing to Titanium.
         assert!(EqMac.messages(0x3cdc, &[]).is_empty());
+        assert!(matches!(
+            EqMac.messages(ZONE_LOGOUT, &[])[..],
+            [Message::LoggedOut]
+        ));
+        assert!(Titanium.messages(ZONE_LOGOUT, &[]).is_empty());
         // An opcode that carries no communication in either generation.
         assert!(EqMac.chat(0x0001, &[], false).unwrap().is_none());
         assert!(Titanium.chat(0x0001, &[], false).unwrap().is_none());
+    }
+
+    #[test]
+    fn only_eqmac_answers_version_checks_by_itself() {
+        use eq_network_game::quarm::{dll_version_message, ZONE_SPAWN_APPEARANCE};
+        let check = [0, 0, 0, 1, 0, 0, 4, 0];
+        let reply = EqMac.answer(ZONE_SPAWN_APPEARANCE, &check).unwrap();
+        assert_eq!(reply.body, dll_version_message(true));
+        assert!(Titanium.answer(ZONE_SPAWN_APPEARANCE, &check).is_none());
     }
 }
