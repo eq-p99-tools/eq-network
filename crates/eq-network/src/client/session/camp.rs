@@ -8,8 +8,9 @@ use super::{
 };
 use anyhow::Result;
 use eq_network_game::{
-    command::{self, Posture},
+    command::Posture,
     message::Message,
+    request::Request,
     world::{CampStatus, WorldEvent},
 };
 use std::time::{Duration, Instant};
@@ -98,7 +99,7 @@ impl Feature for Camp {
         if !matches!(command, ClientCommand::Camp { .. }) || self.active() {
             return Ok(());
         }
-        out.send(&command::titanium_camp())?;
+        out.request(&Request::Camp)?;
         self.start(Instant::now());
         out.log
             .send(ClientEvent::World(WorldEvent::Camp(CampStatus::Preparing)))
@@ -148,7 +149,7 @@ impl Feature for Camp {
     /// reply that never came.
     fn tick(&mut self, now: Instant, world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
         if self.logout_due(now) {
-            out.send(&command::titanium_logout())?;
+            out.request(&Request::Logout)?;
             self.logout_sent(now);
             out.log
                 .send(ClientEvent::World(WorldEvent::Camp(CampStatus::LoggingOut)))?;
@@ -191,6 +192,7 @@ impl Feature for Camp {
 mod tests {
     use super::super::feature::testing;
     use super::*;
+    use eq_network_game::command;
 
     #[test]
     fn camping_sends_the_request_then_the_logout_and_the_reply_ends_the_session() {

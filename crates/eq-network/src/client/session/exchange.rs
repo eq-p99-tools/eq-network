@@ -11,6 +11,7 @@ use eq_network_game::{
     exchange::{self, ExchangeUpdate, Partner},
     inventory::InventorySlot,
     message::Message,
+    request::Request,
     world::{SpawnKind, WorldEvent},
 };
 use std::time::{Duration, Instant};
@@ -125,7 +126,10 @@ impl Exchanges {
             Ok(checked) => checked,
             Err(reason) => return refused(session_id, reason, out),
         };
-        out.send(&exchange::request(own_id, with_id)?)?;
+        out.request(&Request::Trade {
+            own_id,
+            with: with_id,
+        })?;
         world.exchange.0 = Some(Exchange {
             with: with_id,
             partner,
@@ -145,7 +149,7 @@ impl Exchanges {
         let (Some(exchange), Some(own_id)) = (open, own_id) else {
             return refused(session_id, "No trade window is open", out);
         };
-        out.send(&exchange::accept(own_id)?)?;
+        out.request(&Request::AcceptTrade { own_id })?;
         exchange.stage = Stage::Accepted;
         Ok(())
     }
@@ -155,7 +159,7 @@ impl Exchanges {
     fn cancel(world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
         let own = world.player.as_ref().map(|player| player.spawn_id);
         if let (Some(_), Some(own_id)) = (world.exchange.0.take(), own) {
-            out.send(&exchange::cancel(own_id)?)?;
+            out.request(&Request::CancelTrade { own_id })?;
         }
         Ok(())
     }

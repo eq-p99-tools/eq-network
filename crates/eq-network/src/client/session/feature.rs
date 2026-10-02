@@ -20,6 +20,7 @@ use anyhow::{Context, Result};
 use eq_network_game::{
     command::{self, EncodedCommand},
     message::Message,
+    request::Request,
     world::{PlayerState, Position},
     GameDialect,
 };
@@ -66,9 +67,29 @@ pub(super) struct Out<'a, 'e> {
     pub(super) sink: &'a mut dyn Sink,
     /// The host's events and diagnostics.
     pub(super) log: &'a mut Events<'e>,
+    /// The server's client generation, which turns requests into packets.
+    pub(super) wire: &'static dyn super::wire::Wire,
 }
 
 impl Out<'_, '_> {
+    /// The packet for a request, in the server's client generation.
+    ///
+    /// # Errors
+    /// Refuses a request the generation cannot carry.
+    pub(super) fn encode(&self, request: &Request) -> Result<EncodedCommand> {
+        self.wire.encode(request)
+    }
+
+    /// Asks the server for something, in the server's client generation.
+    ///
+    /// # Errors
+    /// Returns an error when the generation cannot carry the request or the
+    /// connection fails.
+    pub(super) fn request(&mut self, request: &Request) -> Result<()> {
+        let packet = self.encode(request)?;
+        self.send(&packet)
+    }
+
     /// Sends a packet that must arrive.
     ///
     /// # Errors
@@ -515,6 +536,7 @@ pub(super) mod testing {
         let result = step(&mut Out {
             sink: &mut sink,
             log: &mut log,
+            wire: &super::super::wire::Titanium,
         });
         drop(log);
         Outcome {

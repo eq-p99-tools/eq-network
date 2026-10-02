@@ -10,6 +10,7 @@ use super::{
 use anyhow::Result;
 use eq_network_game::{
     abilities::{in_melee_range, player_size, Ability, Body, Recovery},
+    request::Request,
     world::{PlayerState, Position, SpawnKind, WorldEvent},
 };
 use std::{collections::BTreeMap, time::Instant};
@@ -109,7 +110,10 @@ impl Abilities {
                 }))?;
             return out.log.diagnostic(format!("{ability:?} refused: {reason}"));
         }
-        out.send(&ability.encode(world.target.unwrap_or(0)))?;
+        out.request(&Request::Ability {
+            ability,
+            target: world.target.unwrap_or(0),
+        })?;
         if let Some(recovery) = ability.recovery() {
             self.ready.insert(recovery, now + ability.reuse());
         }

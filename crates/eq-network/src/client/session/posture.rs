@@ -7,6 +7,7 @@ use super::{feature::Out, ClientEvent, Events};
 use anyhow::Result;
 use eq_network_game::{
     command::Posture,
+    request::Request,
     world::{PostureState, WorldEvent},
 };
 
@@ -32,9 +33,7 @@ impl OwnPosture {
         posture: Posture,
         out: &mut Out<'_, '_>,
     ) -> Result<()> {
-        out.send(&eq_network_game::command::titanium_posture(
-            spawn_id, posture,
-        )?)?;
+        out.request(&Request::Posture { spawn_id, posture })?;
         self.sent(spawn_id, posture, out.log)
     }
 

@@ -63,6 +63,8 @@ pub mod zoning;
 
 /// What one zone packet says, read once for the whole session.
 pub mod message;
+/// What the zone session asks of the server, and the Titanium packet for it.
+pub mod request;
 
 use serde::{Deserialize, Serialize};
 

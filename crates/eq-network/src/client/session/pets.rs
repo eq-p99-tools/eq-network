@@ -7,7 +7,7 @@ use super::{
     ClientCommand,
 };
 use anyhow::Result;
-use eq_network_game::pets;
+use eq_network_game::{pets, request::Request};
 
 /// Sends the player's commands to their pet.
 pub(super) struct Pets;
@@ -50,7 +50,10 @@ impl Feature for Pets {
             );
         }
         let target = target.filter(|_| order.names_target());
-        out.send(&pets::command(*order, target))
+        out.request(&Request::Pet {
+            command: *order,
+            target,
+        })
     }
 }
 
