@@ -6,6 +6,7 @@
 //! generation does not read yet is simply absent, as with every
 //! [`ServerType`](super::servers::ServerType) feature.
 
+use super::admission::{Admission, Handshake, TitaniumAdmission};
 use crate::chat::{self, ChatEvent};
 use anyhow::{bail, Result};
 use eq_network_game::{
@@ -14,6 +15,8 @@ use eq_network_game::{
     request::{self, Request, Sender},
     GameDialect,
 };
+use eq_network_transport::Transport;
+use std::{net::SocketAddr, sync::atomic::AtomicBool};
 
 /// One client generation's zone packets.
 pub(super) trait Wire: Sync {
@@ -39,6 +42,30 @@ pub(super) trait Wire: Sync {
     fn encode(&self, request: &Request, _sender: Sender<'_>) -> Result<EncodedCommand> {
         bail!("this client generation cannot send {request:?} yet")
     }
+
+    /// Connects to a zone server the way the generation's client does.
+    ///
+    /// # Errors
+    /// Returns an error when the connection fails or the generation has no
+    /// zone connection yet.
+    fn connect_zone(&self, _address: SocketAddr, _stop: &AtomicBool) -> Result<Box<dyn Transport>> {
+        bail!("this client generation cannot connect to a zone yet")
+    }
+
+    /// Asks the zone to admit the character, starting the generation's
+    /// handshake.
+    ///
+    /// # Errors
+    /// Returns an error when the entry cannot be sent, or the generation has
+    /// no handshake yet.
+    fn admit(
+        &self,
+        _character: &str,
+        _revolution: f32,
+        _handshake: &mut Handshake<'_, '_>,
+    ) -> Result<Box<dyn Admission>> {
+        bail!("this client generation cannot enter a zone yet")
+    }
 }
 
 /// The Titanium client's packets, which P99 and `EQEmu` speak.
@@ -56,6 +83,25 @@ impl Wire for Titanium {
     fn encode(&self, request: &Request, sender: Sender<'_>) -> Result<EncodedCommand> {
         request::titanium(request, sender)
     }
+
+    /// Titanium zones speak the modern transport, answering session
+    /// requests.
+    fn connect_zone(&self, address: SocketAddr, stop: &AtomicBool) -> Result<Box<dyn Transport>> {
+        Ok(Box::new(crate::transport::Session::connect_cancellable(
+            address, true, stop,
+        )?))
+    }
+
+    fn admit(
+        &self,
+        character: &str,
+        revolution: f32,
+        handshake: &mut Handshake<'_, '_>,
+    ) -> Result<Box<dyn Admission>> {
+        Ok(Box::new(TitaniumAdmission::start(
+            character, revolution, handshake,
+        )?))
+    }
 }
 
 /// The `EQMac` client's packets, which Project Quarm speaks. Only its
@@ -70,6 +116,13 @@ impl Wire for EqMac {
 
     fn encode(&self, request: &Request, sender: Sender<'_>) -> Result<EncodedCommand> {
         request::eqmac(request, sender)
+    }
+
+    /// `EQMac` zones speak the legacy transport.
+    fn connect_zone(&self, address: SocketAddr, stop: &AtomicBool) -> Result<Box<dyn Transport>> {
+        Ok(Box::new(
+            crate::old_transport::OldSession::connect_cancellable(address, stop)?,
+        ))
     }
 }
 

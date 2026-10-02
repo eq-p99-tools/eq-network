@@ -1,7 +1,8 @@
-//! The Titanium zone handshake: the entry the client sends, what the zone
-//! sends before the player can act, the client's answers, and the player it
-//! admits. Everything else the zone says meanwhile goes to the features,
-//! which stage it for the admission.
+//! The zone handshake: the entry the client sends, what the zone sends
+//! before the player can act, the client's answers, and the player it
+//! admits. Each client generation has its own, behind [`Admission`];
+//! Titanium's is here. Everything else the zone says meanwhile goes to the
+//! features, which stage it for the admission.
 use super::{
     bail, chat, cstr, ensure, feature::World, le32, put_string, servers::Shield, ClientEvent,
     ConnectionStage, ConnectionState, Context, Events, Instant, Result,
@@ -20,7 +21,41 @@ const PROFILE_LENGTH: usize = 19592;
 /// Where the profile keeps the player's saved position and heading.
 const SAVED_POSITION: [usize; 4] = [13116, 13120, 13124, 13128];
 
-/// How far the handshake has come.
+/// What a zone handshake works with besides the world: the connection, the
+/// world's protection and file checksums, and the host's events.
+pub(super) struct Handshake<'a, 'e> {
+    /// The zone connection.
+    pub(super) session: &'a mut dyn Transport,
+    /// The world's protection, on servers that have one.
+    pub(super) shield: &'a mut Option<Box<dyn Shield>>,
+    /// The login session's key, which the protection decrypts with.
+    pub(super) key: &'a [u8],
+    /// The file checksums the protection answers with.
+    pub(super) checksums: &'a mut [u8],
+    /// The host's events.
+    pub(super) log: &'a mut Events<'e>,
+}
+
+/// One client generation's zone handshake in progress.
+pub(super) trait Admission {
+    /// How far the handshake has come, for the host's diagnostics.
+    fn stage(&self) -> &'static str;
+
+    /// Takes one packet of the handshake, answering it as the client must.
+    /// When it admits the player, returns them and their zone.
+    ///
+    /// # Errors
+    /// Returns an error when the zone refuses the character or sends a
+    /// malformed part of the handshake.
+    fn read(
+        &mut self,
+        packet: &mut Application,
+        world: &mut World,
+        handshake: &mut Handshake<'_, '_>,
+    ) -> Result<Option<(Result<PlayerState>, Zone)>>;
+}
+
+/// How far Titanium's handshake has come.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum Stage {
     /// The entry was sent; the profile, the player's spawn and the weather
@@ -47,8 +82,8 @@ pub(super) struct Zone {
     pub(super) sky: Option<eq_network_game::clock::ZoneSky>,
 }
 
-/// The handshake in progress.
-pub(super) struct Admission {
+/// Titanium's handshake in progress.
+pub(super) struct TitaniumAdmission {
     character: String,
     /// A full turn in the headings a saved profile carries.
     revolution: f32,
@@ -70,27 +105,27 @@ enum Reports {
     Admitted,
 }
 
-impl Admission {
+impl TitaniumAdmission {
     /// Asks the zone to admit the character.
     ///
     /// # Errors
     /// Returns an error when the entry cannot be sent or the protection
     /// refuses it.
     pub(super) fn start(
-        session: &mut dyn Transport,
         character: &str,
         revolution: f32,
-        shield: &mut Option<Box<dyn Shield>>,
-        log: &mut Events<'_>,
+        handshake: &mut Handshake<'_, '_>,
     ) -> Result<Self> {
-        session.send(0x7752, &0u32.to_le_bytes())?;
+        handshake.session.send(0x7752, &0u32.to_le_bytes())?;
         let mut entry = vec![0; 68];
         put_string(&mut entry[4..], character)?;
-        if let Some(shield) = shield.as_mut() {
+        if let Some(shield) = handshake.shield.as_mut() {
             shield.zone_entry(&entry)?;
         }
-        session.send(SPAWN_OPCODE, &entry)?;
-        log.send(ClientEvent::Progress(ConnectionStage::LoadingCharacter))?;
+        handshake.session.send(SPAWN_OPCODE, &entry)?;
+        handshake
+            .log
+            .send(ClientEvent::Progress(ConnectionStage::LoadingCharacter))?;
         Ok(Self {
             character: character.to_owned(),
             revolution,
@@ -104,7 +139,7 @@ impl Admission {
     }
 
     /// How far the handshake has come.
-    pub(super) const fn stage(&self) -> Stage {
+    pub(super) const fn progress(&self) -> Stage {
         match self.reports {
             Reports::Admitted => Stage::Admitted,
             Reports::Answered => Stage::Answered,
@@ -112,100 +147,6 @@ impl Admission {
             Reports::Awaited if self.requested => Stage::Requested,
             Reports::Awaited => Stage::Entering,
         }
-    }
-
-    /// Takes one packet of the handshake, answering it as the client must.
-    /// When it admits the player, returns them, built from their profile and
-    /// spawn, and their zone.
-    ///
-    /// # Errors
-    /// Returns an error when the zone refuses the character or sends a
-    /// malformed profile, spawn or description.
-    #[allow(clippy::too_many_arguments)]
-    pub(super) fn read(
-        &mut self,
-        packet: &mut Application,
-        world: &mut World,
-        shield: &mut Option<Box<dyn Shield>>,
-        key: &[u8],
-        checksums: &mut [u8],
-        session: &mut dyn Transport,
-        log: &mut Events<'_>,
-    ) -> Result<Option<(Result<PlayerState>, Zone)>> {
-        if self.reports == Reports::Admitted {
-            return Ok(None);
-        }
-        let mut admitted = None;
-        match packet.opcode {
-            PROFILE_OPCODE => self.profile(&packet.body, world)?,
-            WEATHER_OPCODE => self.weather = true,
-            SPAWN_OPCODE if self.spawn.is_none() => {
-                if let Some(shield) = shield.as_mut() {
-                    shield.player_spawn(&mut packet.body, key)?;
-                }
-                ensure!(
-                    packet.body.len() == 385
-                        && cstr(&packet.body[7..71])
-                            .eq_ignore_ascii_case(self.character.as_bytes()),
-                    "zone returned a different character spawn"
-                );
-                let id = u16::try_from(le32(&packet.body[340..344]))
-                    .context("spawn ID exceeds Titanium position field")?;
-                world.body.own(id);
-                world.own_spawn = Some(id);
-                self.spawn = Some(packet.body.clone());
-            }
-            DESCRIPTION_OPCODE => {
-                ensure!(packet.body.len() >= 96, "truncated zone description");
-                let name = String::from_utf8_lossy(cstr(&packet.body[64..96])).into_owned();
-                log.zone.clone_from(&name);
-                log.status(
-                    ConnectionState::Zoning,
-                    world.packets,
-                    Some(session.last_received_seconds()),
-                )?;
-                self.zone = Some(Zone {
-                    name,
-                    far_clip: crate::world::titanium_far_clip(&packet.body),
-                    sky: eq_network_game::clock::titanium_zone_sky(&packet.body),
-                });
-                session.send(0x067a, &0u32.to_le_bytes())?;
-                session.send(0x5e3a, &0u32.to_le_bytes())?;
-                session.send(0x7752, &0u32.to_le_bytes())?;
-                session.send(0x0322, &[])?;
-            }
-            EXPERIENCE_OPCODE if self.zone.is_some() && self.reports == Reports::Awaited => {
-                session.send(EXPERIENCE_OPCODE, &[])?;
-                self.reports = Reports::Answered;
-            }
-            EXPERIENCE_OPCODE if self.zone.is_some() => {
-                session.send(0x6563, &chat::server_filters())?;
-                session.send(0x5e20, &[])?;
-                session.send(0x0c11, &1u32.to_le_bytes())?;
-                world.admitted = Some(Instant::now());
-                self.reports = Reports::Admitted;
-                let player = crate::world::titanium_player(
-                    self.profile.as_deref().unwrap_or_default(),
-                    self.spawn.as_deref().unwrap_or_default(),
-                    self.revolution,
-                );
-                admitted = self.zone.take().map(|zone| (player, zone));
-            }
-            REJECTED_OPCODE => bail!("server rejected zone validation"),
-            _ => (),
-        }
-        if self.profile.is_some() && self.spawn.is_some() && self.weather && !self.requested {
-            if let Some(shield) = shield.as_ref() {
-                shield.answer(checksums)?;
-                session.send(0x1251, checksums)?;
-            }
-            session.send(0x7ac5, &[])?;
-            session.send(0x367d, &[])?;
-            session.send(0x5966, &[])?;
-            self.requested = true;
-            log.send(ClientEvent::Progress(ConnectionStage::EnteringWorld))?;
-        }
-        Ok(admitted)
     }
 
     /// The player's profile: where the server saved them, and their zone.
@@ -236,6 +177,105 @@ impl Admission {
         );
         self.profile = Some(body.to_vec());
         Ok(())
+    }
+}
+
+impl Admission for TitaniumAdmission {
+    fn stage(&self) -> &'static str {
+        match self.progress() {
+            Stage::Entering => "Entering",
+            Stage::Requested => "Requested",
+            Stage::Described => "Described",
+            Stage::Answered => "Answered",
+            Stage::Admitted => "Admitted",
+        }
+    }
+
+    /// Takes one packet of the handshake, answering it as the client must.
+    /// When it admits the player, returns them, built from their profile and
+    /// spawn, and their zone.
+    fn read(
+        &mut self,
+        packet: &mut Application,
+        world: &mut World,
+        handshake: &mut Handshake<'_, '_>,
+    ) -> Result<Option<(Result<PlayerState>, Zone)>> {
+        if self.reports == Reports::Admitted {
+            return Ok(None);
+        }
+        let mut admitted = None;
+        match packet.opcode {
+            PROFILE_OPCODE => self.profile(&packet.body, world)?,
+            WEATHER_OPCODE => self.weather = true,
+            SPAWN_OPCODE if self.spawn.is_none() => {
+                if let Some(shield) = handshake.shield.as_mut() {
+                    shield.player_spawn(&mut packet.body, handshake.key)?;
+                }
+                ensure!(
+                    packet.body.len() == 385
+                        && cstr(&packet.body[7..71])
+                            .eq_ignore_ascii_case(self.character.as_bytes()),
+                    "zone returned a different character spawn"
+                );
+                let id = u16::try_from(le32(&packet.body[340..344]))
+                    .context("spawn ID exceeds Titanium position field")?;
+                world.body.own(id);
+                world.own_spawn = Some(id);
+                self.spawn = Some(packet.body.clone());
+            }
+            DESCRIPTION_OPCODE => {
+                ensure!(packet.body.len() >= 96, "truncated zone description");
+                let name = String::from_utf8_lossy(cstr(&packet.body[64..96])).into_owned();
+                handshake.log.zone.clone_from(&name);
+                handshake.log.status(
+                    ConnectionState::Zoning,
+                    world.packets,
+                    Some(handshake.session.last_received_seconds()),
+                )?;
+                self.zone = Some(Zone {
+                    name,
+                    far_clip: crate::world::titanium_far_clip(&packet.body),
+                    sky: eq_network_game::clock::titanium_zone_sky(&packet.body),
+                });
+                handshake.session.send(0x067a, &0u32.to_le_bytes())?;
+                handshake.session.send(0x5e3a, &0u32.to_le_bytes())?;
+                handshake.session.send(0x7752, &0u32.to_le_bytes())?;
+                handshake.session.send(0x0322, &[])?;
+            }
+            EXPERIENCE_OPCODE if self.zone.is_some() && self.reports == Reports::Awaited => {
+                handshake.session.send(EXPERIENCE_OPCODE, &[])?;
+                self.reports = Reports::Answered;
+            }
+            EXPERIENCE_OPCODE if self.zone.is_some() => {
+                handshake.session.send(0x6563, &chat::server_filters())?;
+                handshake.session.send(0x5e20, &[])?;
+                handshake.session.send(0x0c11, &1u32.to_le_bytes())?;
+                world.admitted = Some(Instant::now());
+                self.reports = Reports::Admitted;
+                let player = crate::world::titanium_player(
+                    self.profile.as_deref().unwrap_or_default(),
+                    self.spawn.as_deref().unwrap_or_default(),
+                    self.revolution,
+                );
+                admitted = self.zone.take().map(|zone| (player, zone));
+            }
+            REJECTED_OPCODE => bail!("server rejected zone validation"),
+            _ => (),
+        }
+        if self.profile.is_some() && self.spawn.is_some() && self.weather && !self.requested {
+            if let Some(shield) = handshake.shield.as_ref() {
+                shield.answer(handshake.checksums)?;
+                handshake.session.send(0x1251, handshake.checksums)?;
+            }
+            handshake.session.send(0x7ac5, &[])?;
+            handshake.session.send(0x367d, &[])?;
+            handshake.session.send(0x5966, &[])?;
+            self.requested = true;
+            handshake
+                .log
+                .send(ClientEvent::Progress(ConnectionStage::EnteringWorld))?;
+        }
+        Ok(admitted)
     }
 }
 
@@ -279,25 +319,23 @@ mod tests {
         let mut wire = Wire::default();
         let mut world = World::new(5);
         let mut shield = None;
-        let mut admission =
-            Admission::start(&mut wire, "Tester", 512.0, &mut shield, &mut log).unwrap();
-        assert_eq!(wire.0, [0x7752, SPAWN_OPCODE]);
+        let mut checksums = [];
+        let mut handshake = Handshake {
+            session: &mut wire,
+            shield: &mut shield,
+            key: &[],
+            checksums: &mut checksums,
+            log: &mut log,
+        };
+        let mut admission = TitaniumAdmission::start("Tester", 512.0, &mut handshake).unwrap();
         let mut spawn = vec![0; 385];
         spawn[7..13].copy_from_slice(b"Tester");
         spawn[340..344].copy_from_slice(&9u32.to_le_bytes());
         let mut description = vec![0; 96];
         description[64..72].copy_from_slice(b"qeytoqrg");
-        let mut read = |admission: &mut Admission, world: &mut World, opcode, body| {
+        let mut read = |admission: &mut TitaniumAdmission, world: &mut World, opcode, body| {
             admission
-                .read(
-                    &mut packet(opcode, body),
-                    world,
-                    &mut shield,
-                    &[],
-                    &mut [],
-                    &mut wire,
-                    &mut log,
-                )
+                .read(&mut packet(opcode, body), world, &mut handshake)
                 .unwrap()
                 .map(|(_, zone)| zone.name)
         };
@@ -305,25 +343,25 @@ mod tests {
         assert!(read(&mut admission, &mut world, WEATHER_OPCODE, Vec::new()).is_none());
         assert!(read(&mut admission, &mut world, SPAWN_OPCODE, spawn).is_none());
         assert_eq!(world.own_spawn, Some(9));
-        assert_eq!(admission.stage(), Stage::Entering);
+        assert_eq!(admission.progress(), Stage::Entering);
         read(
             &mut admission,
             &mut world,
             PROFILE_OPCODE,
             vec![0; PROFILE_LENGTH],
         );
-        assert_eq!(admission.stage(), Stage::Requested);
+        assert_eq!(admission.progress(), Stage::Requested);
         // A report before the description is not one of the two.
         read(&mut admission, &mut world, EXPERIENCE_OPCODE, Vec::new());
-        assert_eq!(admission.stage(), Stage::Requested);
+        assert_eq!(admission.progress(), Stage::Requested);
         read(&mut admission, &mut world, DESCRIPTION_OPCODE, description);
-        assert_eq!(admission.stage(), Stage::Described);
+        assert_eq!(admission.progress(), Stage::Described);
         read(&mut admission, &mut world, EXPERIENCE_OPCODE, Vec::new());
-        assert_eq!(admission.stage(), Stage::Answered);
+        assert_eq!(admission.progress(), Stage::Answered);
         assert!(world.admitted.is_none());
         let zone = read(&mut admission, &mut world, EXPERIENCE_OPCODE, Vec::new());
         assert_eq!(zone.as_deref(), Some("qeytoqrg"));
-        assert_eq!(admission.stage(), Stage::Admitted);
+        assert_eq!(admission.progress(), Stage::Admitted);
         assert!(world.admitted.is_some());
         // Once admitted, the handshake takes nothing more.
         assert!(read(&mut admission, &mut world, EXPERIENCE_OPCODE, Vec::new()).is_none());
@@ -337,21 +375,20 @@ mod tests {
         let mut wire = Wire::default();
         let mut world = World::new(5);
         let mut shield = None;
-        let mut admission =
-            Admission::start(&mut wire, "Tester", 512.0, &mut shield, &mut log).unwrap();
+        let mut checksums = [];
+        let mut handshake = Handshake {
+            session: &mut wire,
+            shield: &mut shield,
+            key: &[],
+            checksums: &mut checksums,
+            log: &mut log,
+        };
+        let mut admission = TitaniumAdmission::start("Tester", 512.0, &mut handshake).unwrap();
         let mut other = vec![0; 385];
         other[7..12].copy_from_slice(b"Other");
         for (opcode, body) in [(SPAWN_OPCODE, other), (REJECTED_OPCODE, Vec::new())] {
             assert!(admission
-                .read(
-                    &mut packet(opcode, body),
-                    &mut world,
-                    &mut shield,
-                    &[],
-                    &mut [],
-                    &mut wire,
-                    &mut log,
-                )
+                .read(&mut packet(opcode, body), &mut world, &mut handshake)
                 .is_err());
         }
     }

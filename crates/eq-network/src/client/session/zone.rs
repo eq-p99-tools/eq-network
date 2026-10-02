@@ -4,10 +4,10 @@ use super::{
     actions, ensure,
     feature::{Feature, Out, World},
     servers, CharacterSession, ClientCommand, ClientEvent, ConnectionStage, ConnectionState,
-    DecodeError, Duration, Events, Instant, RecordEvent, Result, Session, Shield, ZoneExit,
+    DecodeError, Duration, Events, Instant, RecordEvent, Result, Shield, ZoneExit,
 };
 
-use super::admission::{Admission, Zone};
+use super::admission::{Handshake, Zone};
 use eq_network_game::message::Message;
 use eq_network_transport::Transport;
 
@@ -137,20 +137,23 @@ pub(super) fn run(
     let credentials = context.credentials;
     let stop = context.stop;
     let duration = context.duration;
-    // Titanium zones speak the modern transport; the loop needs only the
-    // interface every generation's transport offers.
-    let mut session: Box<dyn Transport> = Box::new(Session::connect_cancellable(
-        crate::client::endpoint(host, port, config.local_only)?,
-        true,
-        stop.flag(),
-    )?);
+    // Each generation connects to its zones its own way; the loop needs only
+    // the interface every generation's transport offers.
     let server = servers::server_type(config.protocol);
-    let mut admission = Admission::start(
-        &mut session,
+    let mut session = server.wire().connect_zone(
+        crate::client::endpoint(host, port, config.local_only)?,
+        stop.flag(),
+    )?;
+    let mut admission = server.wire().admit(
         &config.character,
         server.profile_turn(),
-        shield,
-        log,
+        &mut Handshake {
+            session: &mut *session,
+            shield,
+            key: &credentials.key,
+            checksums: &mut checksums,
+            log: &mut *log,
+        },
     )?;
     let connected = Instant::now();
     let mut progress = Instant::now();
@@ -184,7 +187,7 @@ pub(super) fn run(
         }
         ensure!(
             world.ready() || connected.elapsed() < Duration::from_secs(60),
-            "zone admission timed out while {:?}",
+            "zone admission timed out while {}",
             admission.stage()
         );
         let speaker = sender(&config.character, &world);
@@ -272,11 +275,13 @@ pub(super) fn run(
         if let Some((player, zone)) = admission.read(
             &mut packet,
             &mut world,
-            shield,
-            &credentials.key,
-            &mut checksums,
-            &mut session,
-            log,
+            &mut Handshake {
+                session: &mut *session,
+                shield,
+                key: &credentials.key,
+                checksums: &mut checksums,
+                log: &mut *log,
+            },
         )? {
             let speaker = sender(&config.character, &world);
             admit(
