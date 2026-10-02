@@ -18,8 +18,13 @@ pub const EQMAC_APPROVE_NAME_OPCODE: u16 = 0x8b40;
 /// `EQMac`'s `OP_CharacterCreate`: the whole 8452-byte character record the
 /// client fills in for the approved name.
 pub const EQMAC_CREATE_OPCODE: u16 = 0x4940;
-/// The size of `EQMac`'s name approval request.
-const EQMAC_APPROVAL_SIZE: usize = 78;
+/// The size of `EQMac`'s name approval request. TAKP's `NameApproval_Struct`
+/// is 78 bytes, but its handler compares that with the packet's size
+/// counting the two-byte opcode (`HandleNameApprovalPacket`,
+/// `world/client.cpp`), so the body the official client sends, and the one
+/// TAKP accepts, is two bytes shorter: a 78-byte body is refused and the
+/// world closes the connection, as a live check showed.
+const EQMAC_APPROVAL_SIZE: usize = 76;
 /// The size of `EQMac`'s creation request, TAKP's `CharCreate_Struct`.
 const EQMAC_CREATE_SIZE: usize = 8452;
 
@@ -203,7 +208,7 @@ impl NewCharacter {
         Ok(())
     }
 
-    /// Encodes `EQMac`'s 78-byte name approval request: the name, then the
+    /// Encodes `EQMac`'s 76-byte name approval request: the name, then the
     /// race and class as 16-bit values.
     ///
     /// # Errors
@@ -336,7 +341,7 @@ mod tests {
         // point in wisdom.
         let cleric = NewCharacter::with_points_in("Testcleric", (1, 2, 1), (212, 2), 4).unwrap();
         let approval = cleric.eqmac_name_approval().unwrap();
-        assert_eq!(approval.len(), 78);
+        assert_eq!(approval.len(), 76);
         assert_eq!(&approval[..11], b"Testcleric\0");
         assert_eq!(&approval[64..70], &[1, 0, 0, 0, 2, 0]);
         let create = cleric.eqmac_create_request().unwrap();
