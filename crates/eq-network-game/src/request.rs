@@ -114,6 +114,8 @@ pub enum Request {
     ClickDoor(u8),
     /// Pick an item up from the ground, by its drop.
     PickUp(u32),
+    /// Open a world container, by its drop.
+    OpenContainer(u32),
     /// Close a world container the server opened for the player, repeating
     /// the record the server sent for it.
     CloseContainer {
@@ -237,7 +239,10 @@ pub fn titanium(request: &Request, sender: Sender<'_>) -> Result<EncodedCommand>
         Request::AcceptTrade => exchange::accept(sender.spawn())?,
         Request::CancelTrade => exchange::cancel(sender.spawn())?,
         Request::ClickDoor(door_id) => doors::titanium_click(*door_id, sender.spawn()),
-        Request::PickUp(drop_id) => objects::titanium_pickup(*drop_id, sender.spawn()),
+        // A click opens a world container as it picks an item up.
+        Request::PickUp(drop_id) | Request::OpenContainer(drop_id) => {
+            objects::titanium_pickup(*drop_id, sender.spawn())
+        }
         Request::CloseContainer {
             drop_id,
             object_type,

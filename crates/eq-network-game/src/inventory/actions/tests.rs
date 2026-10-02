@@ -43,6 +43,7 @@ fn actor() -> InventoryActor {
         race: 1,
         level: 10,
         trade_slots: 0,
+        world_container: false,
     }
 }
 
@@ -111,6 +112,46 @@ fn bank_contents_obey_capacity_and_shared_bank_stays_unsupported() {
     assert!(inventory
         .plan_move(&request(&inventory, 30, 2031), actor())
         .is_err());
+}
+
+#[test]
+fn a_world_container_takes_from_the_cursor_and_gives_back_whole_while_open() {
+    let open = InventoryActor {
+        world_container: true,
+        ..actor()
+    };
+    // A stack on the cursor, a bag in a pack slot and a stack already in the
+    // container.
+    let inventory = state(vec![
+        item(30, Some(7), 0),
+        item(22, None, 2),
+        item(4001, Some(2), 0),
+    ]);
+    // Nothing goes in while no container is open.
+    assert!(inventory
+        .plan_move(&request(&inventory, 30, 4000), actor())
+        .is_err());
+    // In from the cursor only.
+    assert!(inventory
+        .plan_move(&request(&inventory, 30, 4000), open)
+        .is_ok());
+    assert!(inventory
+        .plan_move(&request(&inventory, 22, 4000), open)
+        .is_err());
+    // Out whole, onto an empty cursor.
+    assert!(inventory
+        .plan_move(&request(&inventory, 4001, 30), open)
+        .is_err());
+    let emptied = state(vec![item(4001, Some(2), 0)]);
+    assert!(emptied
+        .plan_move(&request(&emptied, 4001, 30), open)
+        .is_ok());
+    assert!(emptied
+        .plan_move(&request(&emptied, 4001, 22), open)
+        .is_err());
+    // A bag never goes in.
+    let bag = state(vec![item(30, None, 2)]);
+    assert!(bag.plan_move(&request(&bag, 30, 4000), open).is_err());
 }
 
 #[test]

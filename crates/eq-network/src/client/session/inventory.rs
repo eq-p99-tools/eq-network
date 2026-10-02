@@ -188,6 +188,7 @@ fn actor(world: &World) -> Option<InventoryActor> {
             .exchange
             .as_ref()
             .map_or(0, super::exchange::Exchange::trade_slots),
+        world_container: world.container.is_open(),
     })
 }
 

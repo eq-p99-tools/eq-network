@@ -19,6 +19,10 @@ use serde::Serialize;
 /// `OP_TradeSkillCombine`, both ways.
 pub const COMBINE_OPCODE: u16 = 0x0b40;
 
+/// The slot a combine names for the world container open for the player,
+/// such as a forge (`SLOT_TRADESKILL_EXPERIMENT_COMBINE`).
+pub const WORLD_CONTAINER: InventorySlot = InventorySlot(1000);
+
 /// The official client's string (`eqstr_us.txt`) refusing a combine while
 /// the cursor holds an item or coins: a combine's product lands there.
 pub const HANDS_FULL: u32 = 12024;

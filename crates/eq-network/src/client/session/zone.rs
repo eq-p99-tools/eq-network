@@ -422,7 +422,7 @@ mod tests {
     };
 
     /// How many kinds of command there are.
-    const KINDS: usize = 46;
+    const KINDS: usize = 48;
 
     /// Which kind of command this is. A new command is a compile error here
     /// until it has a number, and then a test failure until the list below
@@ -476,6 +476,8 @@ mod tests {
             ClientCommand::AnswerResurrection { .. } => 43,
             ClientCommand::ReadItem { .. } => 44,
             ClientCommand::Combine { .. } => 45,
+            ClientCommand::OpenContainer { .. } => 46,
+            ClientCommand::CloseContainer { .. } => 47,
         }
     }
 
@@ -730,6 +732,12 @@ mod tests {
                 container: InventorySlot(23),
                 created,
             },
+            ClientCommand::OpenContainer {
+                session_id,
+                drop_id: 9,
+                created,
+            },
+            ClientCommand::CloseContainer { session_id },
         ]
     }
 

@@ -84,6 +84,22 @@ pub enum GameCommand {
         /// Requests expire rather than surviving stalls or reconnects.
         created: std::time::Instant,
     },
+    /// Open a world container within reach, such as a forge; the server
+    /// answers with what it holds, or that someone else is using it.
+    OpenContainer {
+        /// Current zone admission.
+        session_id: u64,
+        /// Object from this zone's server-provided table.
+        drop_id: u32,
+        /// Requests expire rather than surviving stalls or reconnects.
+        created: std::time::Instant,
+    },
+    /// Close the world container open for the player; the server puts what
+    /// it still holds back in the inventory.
+    CloseContainer {
+        /// Current zone admission.
+        session_id: u64,
+    },
     /// Request a transfer after entering a boundary in the local zone assets.
     CrossZoneLine {
         /// Current zone admission.
@@ -454,6 +470,8 @@ impl GameCommand {
             Self::SwapSpell { session_id, .. }
             | Self::ClickDoor { session_id, .. }
             | Self::PickUp { session_id, .. }
+            | Self::OpenContainer { session_id, .. }
+            | Self::CloseContainer { session_id }
             | Self::CrossZoneLine { session_id, .. }
             | Self::ScribeSpell { session_id, .. }
             | Self::DeleteSpell { session_id, .. }
@@ -545,7 +563,9 @@ impl GameCommand {
             Self::Training { .. } => Capability::Training,
             Self::AnswerResurrection { .. } => Capability::Resurrection,
             Self::ReadItem { .. } => Capability::Reading,
-            Self::Combine { .. } => Capability::Tradeskills,
+            Self::Combine { .. } | Self::OpenContainer { .. } | Self::CloseContainer { .. } => {
+                Capability::Tradeskills
+            }
             Self::Consent { .. }
             | Self::SummonCorpse { .. }
             | Self::DragCorpse { .. }
@@ -569,6 +589,7 @@ impl GameCommand {
             | Self::Pet { .. }
             | Self::AnswerResurrection { .. }
             | Self::ReadItem { .. }
+            | Self::CloseContainer { .. }
             | Self::Consent { .. }
             | Self::SummonCorpse { .. }
             | Self::DragCorpse { .. }
@@ -580,6 +601,7 @@ impl GameCommand {
             Self::SwapSpell { created, .. }
             | Self::ClickDoor { created, .. }
             | Self::PickUp { created, .. }
+            | Self::OpenContainer { created, .. }
             | Self::CrossZoneLine { created, .. }
             | Self::ScribeSpell { created, .. }
             | Self::DeleteSpell { created, .. }
@@ -707,6 +729,8 @@ pub fn encode(
         GameCommand::MoveInventory(_)
         | GameCommand::ClickDoor { .. }
         | GameCommand::PickUp { .. }
+        | GameCommand::OpenContainer { .. }
+        | GameCommand::CloseContainer { .. }
         | GameCommand::OfferTrade { .. }
         | GameCommand::AcceptTrade { .. }
         | GameCommand::CancelTrade { .. }

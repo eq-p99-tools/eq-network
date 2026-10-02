@@ -52,6 +52,13 @@ impl InventorySlot {
         matches!(self.0, 331..=340)
     }
 
+    /// One of the ten slots of the world container open for the player, such
+    /// as a forge: 4000 to 4009.
+    #[must_use]
+    pub const fn is_world(self) -> bool {
+        matches!(self.0, 4000..=4009)
+    }
+
     /// Classic personal bank roots and their contents; shared bank is unsupported.
     #[must_use]
     pub const fn is_personal_bank(self) -> bool {
@@ -239,6 +246,10 @@ pub enum InventoryUpdate {
     /// handed over, or on its way back as the server's item updates. Servers
     /// empty the slots without saying so.
     TradeEmptied,
+    /// The world container open for the player emptied: a combine used what
+    /// it held, or it closed and the server put what was left back in the
+    /// inventory, as its item updates say (`OP_ClearObject`).
+    WorldEmptied,
 }
 
 /// Current inventory projection; an absent snapshot is distinct from an empty one.
@@ -419,6 +430,11 @@ impl Inventory {
                 self.items.retain(|slot, _| !slot.is_in_trade());
                 // A prediction into a trade slot is resolved: the item is gone.
                 self.unconfirmed.retain(|slot, _| !slot.is_in_trade());
+                self.resolved();
+            }
+            InventoryUpdate::WorldEmptied => {
+                self.items.retain(|slot, _| !slot.is_world());
+                self.unconfirmed.retain(|slot, _| !slot.is_world());
                 self.resolved();
             }
             InventoryUpdate::Settled => {
