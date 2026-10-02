@@ -1,9 +1,11 @@
 //! Using a skill as the official client's ability buttons do: the combat
 //! abilities (kick, bash, backstab, frenzy and the monk strikes) and taunt
-//! at the target, and hiding, sneaking, foraging, fishing, mending, feigning
-//! death and sensing heading on the player. Servers answer in chat, in the combat
-//! stream or with an item on the cursor, and keep a recovery timer for each;
-//! the combat abilities share one.
+//! at the target, binding wounds on the player or another player, and
+//! hiding, sneaking, foraging, fishing, mending, feigning death and sensing
+//! heading on the player. Servers answer in chat, in the combat stream, with
+//! an item on the cursor or, for a bandaging, with its own packet (see
+//! [`crate::bind_wound`]), and keep a recovery timer for each; the combat
+//! abilities share one.
 //!
 //! Layout reference: `EQEmu`'s `CombatAbility_Struct` and
 //! `ClientTarget_Struct` (`common/eq_packet_structs.h`) and the Titanium
@@ -60,6 +62,8 @@ pub enum Ability {
     Forage,
     /// Fishing, with a fishing pole in the primary hand and bait carried.
     Fishing,
+    /// Bind Wound, with a bandage carried, on the player or another player.
+    BindWound,
     /// Mend.
     Mend,
     /// Feign Death.
@@ -84,6 +88,8 @@ pub enum Recovery {
     Forage,
     /// Fishing.
     Fishing,
+    /// A bandaging under way.
+    BindWound,
     /// Mend.
     Mend,
     /// Feign Death.
@@ -91,8 +97,9 @@ pub enum Recovery {
 }
 
 impl Ability {
-    /// Every ability, strikes first and fishing, which anyone has, last.
-    pub const ALL: [Self; 17] = [
+    /// Every ability, strikes first and those anyone has, binding wounds and
+    /// fishing, last.
+    pub const ALL: [Self; 18] = [
         Self::Kick,
         Self::Bash,
         Self::Backstab,
@@ -109,6 +116,7 @@ impl Ability {
         Self::Mend,
         Self::FeignDeath,
         Self::SenseHeading,
+        Self::BindWound,
         Self::Fishing,
     ];
 
@@ -118,6 +126,7 @@ impl Ability {
     pub const fn skill(self) -> u32 {
         match self {
             Self::Backstab => 8,
+            Self::BindWound => 9,
             Self::Bash => 10,
             Self::DragonPunch => 21,
             Self::EagleStrike => 23,
@@ -140,11 +149,12 @@ impl Ability {
     /// Whether a character with these skill values (by skill number) and
     /// this race has it: a skill above zero, as servers require, or the
     /// slam a Barbarian, Troll or Ogre bashes with. Anyone can fish, as a
-    /// tradeskill is used from nothing; the server checks the pole and bait.
+    /// tradeskill is used from nothing, and anyone can bandage; the server
+    /// checks the pole and bait, and the session the bandage.
     #[must_use]
     pub fn known(self, skills: &[u32], race: u32) -> bool {
         let skill = usize::try_from(self.skill()).unwrap_or(usize::MAX);
-        self == Self::Fishing
+        matches!(self, Self::Fishing | Self::BindWound)
             || skills.get(skill).is_some_and(|value| *value > 0)
             || (self == Self::Bash && SLAMMERS.contains(&race))
     }
@@ -175,6 +185,7 @@ impl Ability {
             Self::Sneak => "Sneak",
             Self::Forage => "Forage",
             Self::Fishing => "Fishing",
+            Self::BindWound => "Bind Wound",
             Self::Mend => "Mend",
             Self::FeignDeath => "Feign Death",
             Self::SenseHeading => "Sense Heading",
@@ -212,6 +223,7 @@ impl Ability {
             Self::Sneak => Recovery::Sneak,
             Self::Forage => Recovery::Forage,
             Self::Fishing => Recovery::Fishing,
+            Self::BindWound => Recovery::BindWound,
             Self::Mend => Recovery::Mend,
             Self::FeignDeath => Recovery::FeignDeath,
             Self::SenseHeading => return None,
@@ -221,7 +233,8 @@ impl Ability {
     /// How long `EQEmu` makes its timer wait when nothing shortens it: its
     /// `features.h` time less the second its handlers take off. Haste
     /// shortens a strike's, and skill reuse focus any of them, so this is
-    /// the longest the server waits.
+    /// the longest the server waits. A bandaging holds the next until it
+    /// ends, which takes this long unless it fails first.
     #[must_use]
     pub const fn reuse(self) -> Duration {
         Duration::from_secs(match self {
@@ -231,7 +244,7 @@ impl Ability {
             Self::Hide => 7,
             Self::Backstab | Self::RoundKick | Self::FeignDeath => 8,
             Self::Frenzy => 9,
-            Self::Fishing => 10,
+            Self::Fishing | Self::BindWound => 10,
             Self::Forage => 49,
             Self::Mend => 360,
             Self::SenseHeading => 0,
@@ -239,9 +252,12 @@ impl Ability {
     }
 
     /// The packet that uses it; a strike or taunt names the target, which
-    /// must be the server's target too.
+    /// must be the server's target too, and a bandaging the one bandaged.
     #[must_use]
     pub fn encode(self, target: u16) -> EncodedCommand {
+        if self == Self::BindWound {
+            return crate::bind_wound::encode(target);
+        }
         let word = |value: u32| value.to_le_bytes();
         let (opcode, body) = match self {
             Self::Taunt => (TAUNT_OPCODE, word(u32::from(target)).to_vec()),
@@ -395,6 +411,10 @@ mod tests {
         // Anyone fishes, and waits ten seconds between casts.
         assert!(Ability::Fishing.known(&[], 1));
         assert_eq!(Ability::Fishing.reuse(), Duration::from_secs(10));
+        // Anyone bandages, which takes as long as the server's bandaging.
+        assert!(Ability::BindWound.known(&[], 1) && !Ability::BindWound.at_target());
+        assert_eq!(Ability::BindWound.reuse(), crate::bind_wound::DURATION);
+        assert_eq!(Ability::BindWound.encode(7), crate::bind_wound::encode(7));
     }
 
     #[test]

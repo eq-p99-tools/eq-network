@@ -467,7 +467,8 @@ mod titanium {
     }
 }
 
-/// The abilities checked on P99: every one but fishing, which came later.
+/// The abilities checked on P99: every one but fishing, which came later,
+/// and binding wounds, not yet checked there.
 const P99_ABILITIES: [Ability; 16] = [
     Ability::Kick,
     Ability::Bash,
@@ -811,9 +812,10 @@ mod tests {
     }
 
     #[test]
-    fn p99_lists_every_ability_but_fishing() {
+    fn p99_lists_every_ability_but_fishing_and_binding_wounds() {
         assert!(!P99_ABILITIES.contains(&Ability::Fishing));
-        assert_eq!(P99_ABILITIES.len(), Ability::ALL.len() - 1);
+        assert!(!P99_ABILITIES.contains(&Ability::BindWound));
+        assert_eq!(P99_ABILITIES.len(), Ability::ALL.len() - 2);
     }
 
     #[test]

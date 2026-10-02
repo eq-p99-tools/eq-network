@@ -735,7 +735,16 @@ pub enum WorldEvent {
         session_id: u64,
         /// Why not.
         reason: String,
+        /// The official client's own words for this refusal, as an
+        /// `eqstr_us.txt` string ID, for a host with the installed strings;
+        /// `reason` says the same in this library's words.
+        string_id: Option<u32>,
+        /// What the official words name, in order, such as the player too
+        /// far away to bandage.
+        arguments: Vec<String>,
     },
+    /// A bandaging started or ended.
+    BindWound(crate::bind_wound::BindWoundUpdate),
     /// The world's answer to `/who all`.
     WhoList(crate::who::WhoList),
     /// The time of day, as a zone admits the player and whenever it is
@@ -1032,8 +1041,9 @@ pub fn titanium_update(opcode: u16, body: &[u8]) -> Result<Option<WorldEvent>> {
     }))
 }
 
-/// Spell actions, doors, ground objects, loot, merchant, exchange and
-/// inventory packets, each owned by its codec.
+/// Spell actions, doors, ground objects, loot, merchant, exchange,
+/// training, resurrection, book, combine, bandaging and inventory packets,
+/// each owned by its codec.
 fn titanium_views(opcode: u16, body: &[u8]) -> Result<Option<WorldEvent>> {
     if opcode == 0x497c {
         return Ok(crate::buffs::titanium_spell_effect(body)?.map(WorldEvent::SpellEffect));
@@ -1056,6 +1066,8 @@ fn titanium_views(opcode: u16, body: &[u8]) -> Result<Option<WorldEvent>> {
         Some(WorldEvent::BookText(text))
     } else if let Some(update) = crate::tradeskills::decode(opcode, body)? {
         Some(WorldEvent::Combine(update))
+    } else if let Some(update) = crate::bind_wound::decode(opcode, body)? {
+        Some(WorldEvent::BindWound(update))
     } else {
         crate::inventory::decode(opcode, body)?.map(WorldEvent::Inventory)
     })
