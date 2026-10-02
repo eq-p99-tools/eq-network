@@ -913,13 +913,16 @@ mod tests {
         assert!(eqemu.contains(&Capability::Tradeskills));
         assert!(eqemu.contains(&Capability::Map));
         assert_eq!(eqemu.len(), p99.len() + 6);
-        // EQMac servers talk, and follow no zone change yet.
-        for protocol in [
-            crate::client::ServerProtocol::Quarm,
-            crate::client::ServerProtocol::Takp,
-        ] {
-            assert_eq!(features(protocol), [Capability::Talking]);
-        }
+        // EQMac servers talk, TAKP camps too, and neither follows a zone
+        // change yet.
+        assert_eq!(
+            features(crate::client::ServerProtocol::Quarm),
+            [Capability::Talking]
+        );
+        assert_eq!(
+            features(crate::client::ServerProtocol::Takp),
+            [Capability::Talking, Capability::Camping]
+        );
     }
 }
 

@@ -289,12 +289,16 @@ mod tests {
     }
 
     #[test]
-    fn titanium_sends_what_the_titanium_codecs_build_and_eqmac_nothing_yet() {
+    fn each_generation_sends_its_own_camp_and_eqmac_nothing_it_has_not_built() {
         assert_eq!(
             Titanium.encode(&Request::Camp, PLAYER).unwrap(),
             eq_network_game::command::titanium_camp()
         );
-        assert!(EqMac.encode(&Request::Camp, PLAYER).is_err());
+        assert_eq!(
+            EqMac.encode(&Request::Camp, PLAYER).unwrap(),
+            eq_network_game::quarm::camp()
+        );
+        assert!(EqMac.encode(&Request::Jump, PLAYER).is_err());
     }
 
     #[test]

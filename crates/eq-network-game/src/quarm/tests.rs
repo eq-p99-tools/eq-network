@@ -224,6 +224,18 @@ fn dll_version_ignores_other_features_responses_and_malformed_messages() {
 }
 
 #[test]
+fn camping_logging_out_and_a_stance_are_eqmacs_own_packets() {
+    use crate::command::Posture;
+    assert_eq!(camp().opcode, 0x0742);
+    assert_eq!(camp().body.len(), 0);
+    assert_eq!((logout().opcode, logout().body.len()), (ZONE_LOGOUT, 0));
+    let sitting = posture(7, Posture::Sitting).unwrap();
+    assert_eq!(sitting.opcode, ZONE_SPAWN_APPEARANCE);
+    assert_eq!(sitting.body, [7, 0, 14, 0, 110, 0, 0, 0]);
+    assert!(posture(0, Posture::Standing).is_err());
+}
+
+#[test]
 fn the_client_answers_only_version_checks_by_itself() {
     let request = [0, 0, 0, 1, 0, 0, 4, 0];
     let reply = answer(ZONE_SPAWN_APPEARANCE, &request).unwrap();
