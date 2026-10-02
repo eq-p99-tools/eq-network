@@ -471,6 +471,7 @@ pub(super) mod testing {
         eq_network_game::inventory::InventoryItem {
             activation: eq_network_game::inventory::ItemActivation::default(),
             scroll_spell: None,
+            book: None,
             rules: eq_network_game::inventory::ItemPlacement::default(),
             slot: eq_network_game::inventory::InventorySlot(slot),
             icon: 0,

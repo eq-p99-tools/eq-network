@@ -6,6 +6,7 @@ fn item(slot: i32, count: Option<u32>, bag: u8) -> InventoryItem {
     InventoryItem {
         activation: crate::inventory::ItemActivation::default(),
         scroll_spell: None,
+        book: None,
         slot: InventorySlot(slot),
         icon: 0,
         stack_count: count,

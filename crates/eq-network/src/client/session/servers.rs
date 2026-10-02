@@ -28,6 +28,7 @@ use super::{
     motion::Motion,
     objects::GroundObjects,
     pets::Pets,
+    reading::Reading,
     resurrection::Resurrection,
     spellbook::Spellbook,
     talk::Talk,
@@ -217,6 +218,11 @@ pub(super) trait ServerType: Sync {
         None
     }
 
+    /// Reading books and notes.
+    fn reading(&self, _setup: &Setup<'_>) -> Provided {
+        None
+    }
+
     /// Every feature the server type provides, in the order the zone session
     /// offers them each command, packet and timer.
     fn features(&self, setup: &Setup<'_>) -> Vec<Box<dyn Feature>> {
@@ -243,6 +249,7 @@ pub(super) trait ServerType: Sync {
             self.pets(setup),
             self.training(setup),
             self.resurrection(setup),
+            self.reading(setup),
         ]
         .into_iter()
         .flatten()
@@ -339,8 +346,8 @@ impl Shield for WorldCodec {
 mod titanium {
     use super::{
         Abilities, Belongings, Camp, Casting, Character, Clock, Combat, Corpses, Doors, Entities,
-        Exchanges, Feature, GroundObjects, Looting, Motion, Pets, Resurrection, Setup, Spellbook,
-        Talk, Targeting, Training, Transfers, Who,
+        Exchanges, Feature, GroundObjects, Looting, Motion, Pets, Reading, Resurrection, Setup,
+        Spellbook, Talk, Targeting, Training, Transfers, Who,
     };
 
     pub(super) fn casting() -> Box<dyn Feature> {
@@ -430,6 +437,10 @@ mod titanium {
 
     pub(super) fn resurrection() -> Box<dyn Feature> {
         Box::<Resurrection>::default()
+    }
+
+    pub(super) fn reading() -> Box<dyn Feature> {
+        Box::new(Reading)
     }
 }
 
@@ -631,6 +642,10 @@ impl ServerType for EqEmu {
     fn resurrection(&self, _setup: &Setup<'_>) -> Provided {
         Some(titanium::resurrection())
     }
+
+    fn reading(&self, _setup: &Setup<'_>) -> Provided {
+        Some(titanium::reading())
+    }
 }
 
 /// Project Quarm, which speaks `EQMac` and provides no feature on this
@@ -746,16 +761,20 @@ mod tests {
 
     #[test]
     fn p99_and_eqemu_provide_every_feature_one_each() {
-        // Training and resurrection are checked on EQEmu alone so far.
+        // Training, resurrection and reading are checked on EQEmu alone so far.
         for (protocol, count) in [
             (ServerProtocol::Project1999, 20),
-            (ServerProtocol::EqEmu, 22),
+            (ServerProtocol::EqEmu, 23),
         ] {
             let server = server_type(protocol);
             let setup = Setup::new("Tester", AutoEat::default());
             assert_eq!(server.features(&setup).len(), count, "{protocol:?}");
         }
-        for capability in [Capability::Training, Capability::Resurrection] {
+        for capability in [
+            Capability::Training,
+            Capability::Resurrection,
+            Capability::Reading,
+        ] {
             assert!(!offers(server_type(ServerProtocol::Project1999)).contains(&capability));
             assert!(offers(server_type(ServerProtocol::EqEmu)).contains(&capability));
         }

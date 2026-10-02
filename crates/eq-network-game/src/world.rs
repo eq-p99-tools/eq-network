@@ -354,12 +354,14 @@ pub enum Capability {
     Training,
     /// Accepting or declining a resurrection.
     Resurrection,
+    /// Reading books and notes.
+    Reading,
 }
 
 impl Capability {
     /// Every capability, in order: what a session offers when its server and
     /// client generation support everything.
-    pub const ALL: [Self; 21] = [
+    pub const ALL: [Self; 22] = [
         Self::Casting,
         Self::Spellbook,
         Self::Inventory,
@@ -381,6 +383,7 @@ impl Capability {
         Self::Pets,
         Self::Training,
         Self::Resurrection,
+        Self::Reading,
     ];
 }
 
@@ -778,6 +781,15 @@ pub enum WorldEvent {
         /// Why not.
         reason: String,
     },
+    /// A book's or note's text, to read.
+    BookText(crate::books::BookText),
+    /// A request to read was not sent, and why.
+    ReadRefused {
+        /// Admission from the request.
+        session_id: u64,
+        /// Why not.
+        reason: String,
+    },
     /// A melee, skill or spell damage record for any nearby entities.
     Damage(crate::combat::Damage),
     /// Own-character skill update; unknown skill IDs remain available to consumers.
@@ -1017,6 +1029,8 @@ fn titanium_views(opcode: u16, body: &[u8]) -> Result<Option<WorldEvent>> {
         Some(WorldEvent::Training(update))
     } else if let Some(offer) = crate::resurrection::decode(opcode, body)? {
         Some(WorldEvent::Resurrection(offer))
+    } else if let Some(text) = crate::books::decode(opcode, body)? {
+        Some(WorldEvent::BookText(text))
     } else {
         crate::inventory::decode(opcode, body)?.map(WorldEvent::Inventory)
     })
@@ -1202,6 +1216,7 @@ mod tests {
             Capability::Pets => 18,
             Capability::Training => 19,
             Capability::Resurrection => 20,
+            Capability::Reading => 21,
         };
         for (index, capability) in Capability::ALL.into_iter().enumerate() {
             assert_eq!(place(capability), index, "{capability:?}");

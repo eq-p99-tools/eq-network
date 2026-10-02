@@ -112,6 +112,13 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   server expects (`OP_RezzAnswer`). An answer with no offer waiting is
   refused (`ResurrectionRefused`). On acceptance the server moves the player
   to the corpse as it moves them anywhere.
+- Reading (`books`), on `EQEmu` for now (`Capability::Reading`): carried
+  items say what they read as (`InventoryItem::book`: a Titanium item of the
+  readable class with a text name, in the book window when flagged as a
+  book and the note window otherwise), `ReadItem` asks for a book's or
+  note's text (`OP_ReadBook`), and the text reaches the host as
+  `WorldEvent::BookText` with the kind of window it is for. An item that is
+  not readable is refused (`ReadRefused`).
 - Synthetic regression coverage for inventory reconciliation, scribe consumption,
   movement admission, cast state, and fresh-key world/zone handoffs.
 

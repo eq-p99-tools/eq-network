@@ -4,6 +4,8 @@
 pub mod abilities;
 /// Worn gear and features in EQ's texture slots, and wear changes.
 pub mod appearance;
+/// Reading books and notes.
+pub mod books;
 /// Admission buffs and server-driven buff changes.
 pub mod buffs;
 /// World-server character selection lists.

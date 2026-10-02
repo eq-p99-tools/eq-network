@@ -140,6 +140,7 @@ impl<'a> Parser<'a> {
                     .ok()
                     .filter(|id| !matches!(*id, 0 | 0xffff | u32::MAX))
             },
+            book: crate::books::Book::from_item(fields[0], fields[100], fields[102]),
             rules: ItemPlacement {
                 stack_size: number(131)?,
                 size: u8::try_from(number(8)?)?,
