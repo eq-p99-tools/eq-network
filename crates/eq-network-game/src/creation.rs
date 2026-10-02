@@ -18,12 +18,13 @@ pub const EQMAC_APPROVE_NAME_OPCODE: u16 = 0x8b40;
 /// `EQMac`'s `OP_CharacterCreate`: the whole 8452-byte character record the
 /// client fills in for the approved name.
 pub const EQMAC_CREATE_OPCODE: u16 = 0x4940;
-/// The size of `EQMac`'s name approval request. TAKP's `NameApproval_Struct`
-/// is 78 bytes, but its handler compares that with the packet's size
-/// counting the two-byte opcode (`HandleNameApprovalPacket`,
-/// `world/client.cpp`), so the body the official client sends, and the one
-/// TAKP accepts, is two bytes shorter: a 78-byte body is refused and the
-/// world closes the connection, as a live check showed.
+/// The size of `EQMac`'s name approval request. `EQMacEmu`'s
+/// `NameApproval_Struct` is 78 bytes, but its handler compares that with the
+/// packet's size counting the two-byte opcode (`HandleNameApprovalPacket`,
+/// `world/client.cpp`), and Project Quarm's fork checks it the same way, so
+/// the body the official client sends, and the one both accept, is two bytes
+/// shorter: a 78-byte body is refused and the world closes the connection,
+/// as a live check on TAKP showed.
 const EQMAC_APPROVAL_SIZE: usize = 76;
 /// The size of `EQMac`'s creation request, TAKP's `CharCreate_Struct`.
 const EQMAC_CREATE_SIZE: usize = 8452;
