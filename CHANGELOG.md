@@ -62,6 +62,15 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   (`/corpsedrag`) and `DropCorpse` (`/corpsedrop`, one corpse or all) name
   a player's corpse by its spawn, as servers know it
   (`Capability::Corpses`); anything else is refused (`CorpseRefused`).
+- Pets (`pets`): `Pet` sends a command to the player's pet (`PetCommand`,
+  numbered as the Titanium client sends them), naming the player's target
+  for an attack, under `Capability::Pets`; without a pet the session refuses
+  it in the official client's words (`PetRefused`). Spawns carry whose pet
+  they are (`SpawnState::pet_owner`), charm's appearance updates move it
+  (`WorldEvent::PetOwner`), and the pet's buffs reach the host as
+  `WorldEvent::PetBuffs`. Spawns also carry their health when the record was
+  sent (`SpawnState::hp_percent`), since the server reports a pet's health
+  only when it changes.
 - Abilities (`abilities`): `UseAbility` uses kick, bash, backstab, frenzy,
   the monk strikes and taunt on the target, and hide, sneak, forage, mend,
   feign death and sense heading on the player (`Capability::Abilities`). The

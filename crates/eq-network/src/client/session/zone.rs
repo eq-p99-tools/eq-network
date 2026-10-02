@@ -5,7 +5,7 @@ use super::{
     doors::Doors,
     ensure, entities, exchange,
     feature::{Encoder, Feature, Out, World},
-    inventory, looting, objects, servers, spellbook, talk, targeting, transfers, who,
+    inventory, looting, objects, pets, servers, spellbook, talk, targeting, transfers, who,
     CharacterSession, ClientCommand, ClientEvent, ConnectionStage, ConnectionState, DecodeError,
     Duration, Events, Instant, RecordEvent, Result, Session, Shield, ZoneExit,
 };
@@ -47,6 +47,7 @@ impl Features {
             Box::new(clock::Clock::default()),
             Box::new(who::Who),
             Box::new(corpses::Corpses),
+            Box::new(pets::Pets),
         ])
     }
 
@@ -412,7 +413,7 @@ mod tests {
     };
 
     /// How many kinds of command there are.
-    const KINDS: usize = 40;
+    const KINDS: usize = 41;
 
     /// Which kind of command this is. A new command is a compile error here
     /// until it has a number, and then a test failure until the list below
@@ -460,6 +461,7 @@ mod tests {
             ClientCommand::SummonCorpse { .. } => 37,
             ClientCommand::DragCorpse { .. } => 38,
             ClientCommand::DropCorpse { .. } => 39,
+            ClientCommand::Pet { .. } => 40,
         }
     }
 
@@ -687,6 +689,11 @@ mod tests {
                 session_id,
                 spawn_id: None,
             },
+            ClientCommand::Pet {
+                session_id,
+                command: eq_network_game::pets::PetCommand::Follow,
+                target: None,
+            },
         ]
     }
 
@@ -761,6 +768,7 @@ mod tests {
             Capability::Abilities,
             Capability::Who,
             Capability::Corpses,
+            Capability::Pets,
         ] {
             assert!(p99.contains(&capability), "{capability:?}");
         }

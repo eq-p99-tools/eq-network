@@ -16,6 +16,7 @@ mod lifecycle;
 mod looting;
 mod motion;
 mod objects;
+mod pets;
 mod posture;
 mod servers;
 mod spellbook;
