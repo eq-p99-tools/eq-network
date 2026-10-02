@@ -1,7 +1,7 @@
 //! Using a skill as the official client's ability buttons do: the combat
 //! abilities (kick, bash, backstab, frenzy and the monk strikes) and taunt
-//! at the target, and hiding, sneaking, foraging, mending, feigning death
-//! and sensing heading on the player. Servers answer in chat, in the combat
+//! at the target, and hiding, sneaking, foraging, fishing, mending, feigning
+//! death and sensing heading on the player. Servers answer in chat, in the combat
 //! stream or with an item on the cursor, and keep a recovery timer for each;
 //! the combat abilities share one.
 //!
@@ -21,6 +21,9 @@ pub const TAUNT_OPCODE: u16 = 0x5e48;
 /// `CombatAbility_Struct.m_atk` for a melee strike; `EQEmu` handles ranged
 /// attacks through the same packet with the range slot instead.
 const MELEE_STRIKE: u32 = 100;
+
+/// `OP_Fishing`, which carries nothing.
+pub const FISHING_OPCODE: u16 = 0x0b36;
 
 /// Races that bash without the skill or a shield (`EQEmu`'s "slam"):
 /// Barbarian, Troll and Ogre.
@@ -55,6 +58,8 @@ pub enum Ability {
     Sneak,
     /// Forage.
     Forage,
+    /// Fishing, with a fishing pole in the primary hand and bait carried.
+    Fishing,
     /// Mend.
     Mend,
     /// Feign Death.
@@ -77,6 +82,8 @@ pub enum Recovery {
     Sneak,
     /// Forage.
     Forage,
+    /// Fishing.
+    Fishing,
     /// Mend.
     Mend,
     /// Feign Death.
@@ -84,8 +91,8 @@ pub enum Recovery {
 }
 
 impl Ability {
-    /// Every ability, strikes first.
-    pub const ALL: [Self; 16] = [
+    /// Every ability, strikes first and fishing, which anyone has, last.
+    pub const ALL: [Self; 17] = [
         Self::Kick,
         Self::Bash,
         Self::Backstab,
@@ -102,6 +109,7 @@ impl Ability {
         Self::Mend,
         Self::FeignDeath,
         Self::SenseHeading,
+        Self::Fishing,
     ];
 
     /// The servers' number for its skill (`EQ::skills::SkillType`), which
@@ -123,6 +131,7 @@ impl Ability {
             Self::SenseHeading => 40,
             Self::Sneak => 42,
             Self::TigerClaw => 52,
+            Self::Fishing => 55,
             Self::Taunt => 73,
             Self::Frenzy => 74,
         }
@@ -130,11 +139,13 @@ impl Ability {
 
     /// Whether a character with these skill values (by skill number) and
     /// this race has it: a skill above zero, as servers require, or the
-    /// slam a Barbarian, Troll or Ogre bashes with.
+    /// slam a Barbarian, Troll or Ogre bashes with. Anyone can fish, as a
+    /// tradeskill is used from nothing; the server checks the pole and bait.
     #[must_use]
     pub fn known(self, skills: &[u32], race: u32) -> bool {
         let skill = usize::try_from(self.skill()).unwrap_or(usize::MAX);
-        skills.get(skill).is_some_and(|value| *value > 0)
+        self == Self::Fishing
+            || skills.get(skill).is_some_and(|value| *value > 0)
             || (self == Self::Bash && SLAMMERS.contains(&race))
     }
 
@@ -163,6 +174,7 @@ impl Ability {
             Self::Hide => "Hide",
             Self::Sneak => "Sneak",
             Self::Forage => "Forage",
+            Self::Fishing => "Fishing",
             Self::Mend => "Mend",
             Self::FeignDeath => "Feign Death",
             Self::SenseHeading => "Sense Heading",
@@ -199,6 +211,7 @@ impl Ability {
             Self::Hide => Recovery::Hide,
             Self::Sneak => Recovery::Sneak,
             Self::Forage => Recovery::Forage,
+            Self::Fishing => Recovery::Fishing,
             Self::Mend => Recovery::Mend,
             Self::FeignDeath => Recovery::FeignDeath,
             Self::SenseHeading => return None,
@@ -218,6 +231,7 @@ impl Ability {
             Self::Hide => 7,
             Self::Backstab | Self::RoundKick | Self::FeignDeath => 8,
             Self::Frenzy => 9,
+            Self::Fishing => 10,
             Self::Forage => 49,
             Self::Mend => 360,
             Self::SenseHeading => 0,
@@ -241,10 +255,11 @@ impl Ability {
                 .concat(),
             ),
             // The rest carry no body: `OP_Hide`, `OP_Sneak`, `OP_Forage`,
-            // `OP_Mend`, `OP_FeignDeath` and `OP_SenseHeading`.
+            // `OP_Fishing`, `OP_Mend`, `OP_FeignDeath` and `OP_SenseHeading`.
             Self::Hide => (0x4312, Vec::new()),
             Self::Sneak => (0x74e1, Vec::new()),
             Self::Forage => (0x4796, Vec::new()),
+            Self::Fishing => (FISHING_OPCODE, Vec::new()),
             Self::Mend => (0x14ef, Vec::new()),
             Self::FeignDeath => (0x7489, Vec::new()),
             _ => (0x05ac, Vec::new()),
@@ -343,6 +358,7 @@ mod tests {
             (Ability::Hide, 0x4312),
             (Ability::Sneak, 0x74e1),
             (Ability::Forage, 0x4796),
+            (Ability::Fishing, 0x0b36),
             (Ability::Mend, 0x14ef),
             (Ability::FeignDeath, 0x7489),
             (Ability::SenseHeading, 0x05ac),
@@ -376,6 +392,9 @@ mod tests {
         assert!(Ability::Bash.known(&skills, 10), "an Ogre slams");
         assert!(!Ability::Kick.known(&[], 1));
         assert_eq!(Ability::Mend.reuse(), Duration::from_secs(360));
+        // Anyone fishes, and waits ten seconds between casts.
+        assert!(Ability::Fishing.known(&[], 1));
+        assert_eq!(Ability::Fishing.reuse(), Duration::from_secs(10));
     }
 
     #[test]
