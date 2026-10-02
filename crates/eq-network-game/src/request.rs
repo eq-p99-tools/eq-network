@@ -4,13 +4,18 @@
 //! and one it has not built yet is refused.
 use crate::{
     abilities::Ability,
-    command::{self, EncodedCommand, Posture},
+    command::{self, EncodedCommand, GameCommand, Posture},
     corpses, doors, exchange,
+    food::{self, Meal},
+    inventory::{self, InventorySlot, MoveQuantity},
+    money::CoinTransfer,
+    movement::{self, PositionPacket},
     objects::{self, ContainerView},
     pets::{self, PetCommand},
     spells,
     who::{self, WhoFilter},
     zoning::ZoneOffer,
+    GameDialect,
 };
 use anyhow::Result;
 
@@ -143,6 +148,47 @@ pub enum Request {
         /// The other.
         to: u16,
     },
+    /// A host command that needs nothing from the session's state, as the
+    /// generation encodes it.
+    Command {
+        /// The command.
+        command: GameCommand,
+        /// The player's name, which some packets repeat.
+        character: String,
+    },
+    /// Cast an item's click effect.
+    CastItem {
+        /// The effect's spell.
+        spell_id: u32,
+        /// Where the item is.
+        slot: InventorySlot,
+        /// The spawn it is cast on.
+        target_id: u16,
+    },
+    /// Move an item between slots.
+    MoveItem {
+        /// Where it is.
+        from: InventorySlot,
+        /// Where it goes.
+        to: InventorySlot,
+        /// The whole item, or part of a stack.
+        quantity: MoveQuantity,
+    },
+    /// Move coins between places, or change them into another coin.
+    MoveCoins(CoinTransfer),
+    /// Eat or drink.
+    Consume {
+        /// Where the food or drink is.
+        slot: InventorySlot,
+        /// Which it is.
+        meal: Meal,
+        /// Whether the player chose it, rather than hunger or thirst.
+        by_hand: bool,
+    },
+    /// Where the player is: a position sample.
+    Position(PositionPacket),
+    /// The player jumped.
+    Jump,
 }
 
 /// The Titanium client's packet for a request.
@@ -174,7 +220,40 @@ pub fn titanium(request: &Request) -> Result<EncodedCommand> {
         Request::Scribe { slot, spell_id } => spells::titanium_scribe(*slot, *spell_id),
         Request::DeleteSpell { slot } => spells::titanium_delete(*slot),
         Request::SwapSpells { from, to } => spells::titanium_swap(*from, *to),
+        Request::Command { command, character } => {
+            command::encode(GameDialect::Titanium, command, character)?
+        }
+        Request::CastItem {
+            spell_id,
+            slot,
+            target_id,
+        } => inventory::titanium_item_cast(*spell_id, *slot, *target_id)?,
+        Request::MoveItem { from, to, quantity } => {
+            inventory::titanium_move(*from, *to, *quantity)?
+        }
+        Request::MoveCoins(transfer) => transfer.encode()?,
+        Request::Consume {
+            slot,
+            meal,
+            by_hand,
+        } => food::consume(*slot, *meal, *by_hand),
+        Request::Position(sample) => sample.packet()?,
+        Request::Jump => movement::titanium_jump(),
     })
+}
+
+/// The `EQMac` client's packet for a request: only the host commands its
+/// generation encodes so far, which is chat.
+///
+/// # Errors
+/// Refuses every other request, and a command the generation cannot carry.
+pub fn eqmac(request: &Request) -> Result<EncodedCommand> {
+    match request {
+        Request::Command { command, character } => {
+            command::encode(GameDialect::EqMac, command, character)
+        }
+        _ => anyhow::bail!("the EQMac client cannot send {request:?} yet"),
+    }
 }
 
 #[cfg(test)]

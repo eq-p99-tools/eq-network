@@ -27,6 +27,7 @@ use eq_network_game::{
     merchant::MerchantUpdate,
     message::{Message, Part},
     money::Wallet,
+    request::Request,
     world::Coins,
     world::{SpawnKind, WorldEvent},
 };
@@ -234,21 +235,27 @@ impl Belongings {
         out: &mut Out<'_, '_>,
     ) -> Result<()> {
         let now = Instant::now();
-        let mut transport_failed = false;
-        let sink = &mut *out.sink;
-        let result = actor(world)
+        let planned = actor(world)
             .context("Character equipment data is unavailable")
-            .and_then(|actor| {
-                world.inventory.0.submit_move(request, actor, |packet| {
-                    let sent = sink.send(packet);
-                    transport_failed = sent.is_err();
-                    sent
-                })
+            .and_then(|actor| world.inventory.0.plan_move(request, actor))
+            .and_then(|update| {
+                let packet = out.encode(&Request::MoveItem {
+                    from: request.from,
+                    to: request.to,
+                    quantity: request.quantity,
+                })?;
+                Ok((update, packet))
             });
-        // A failed send ends the admission; an uncertain move is never retried.
-        if transport_failed {
-            return result.map(drop);
-        }
+        let result = match planned {
+            Ok((update, packet)) => {
+                // A failed send ends the admission; an uncertain move is
+                // never retried.
+                out.send(&packet)?;
+                world.inventory.0.apply(update.clone());
+                Ok(update)
+            }
+            Err(error) => Err(error),
+        };
         let error = match result {
             Ok(update) => {
                 self.settlement.sent(now);
@@ -302,8 +309,10 @@ impl Belongings {
             match after
                 .apply(*transfer)
                 .map_err(str::to_owned)
-                .and_then(|()| transfer.encode().map_err(|error| error.to_string()))
-            {
+                .and_then(|()| {
+                    out.encode(&Request::MoveCoins(*transfer))
+                        .map_err(|error| error.to_string())
+                }) {
                 Ok(packet) => {
                     out.send(&packet)?;
                     world.coins.0 = after;
@@ -499,7 +508,6 @@ impl Feature for Belongings {
 mod tests {
     use super::super::{actions::Held, feature::testing};
     use super::*;
-    use eq_network_game::GameDialect;
     use eq_network_game::{
         food::Shortage,
         inventory::{InventorySlot, MoveQuantity, MOVE_OPCODE},
@@ -518,7 +526,7 @@ mod tests {
     /// Admitted player 7, carrying one item in slot 22.
     fn admitted() -> (Belongings, World) {
         let mut belongings = Belongings::new(
-            Encoder::new(GameDialect::Titanium, "Tester"),
+            Encoder::new("Tester"),
             eq_network_game::food::AutoEat::default(),
         );
         let mut world = World::new(5);
@@ -539,7 +547,7 @@ mod tests {
     fn fed(food: u32, water: u32) -> (Belongings, World) {
         use eq_network_game::food::Nourishment;
         let mut belongings = Belongings::new(
-            Encoder::new(GameDialect::Titanium, "Tester"),
+            Encoder::new("Tester"),
             eq_network_game::food::AutoEat::default(),
         );
         let mut world = World::new(5);
@@ -736,7 +744,7 @@ mod tests {
         let (_, world) = admitted();
         assert!(world.inventory.items().contains_key(&InventorySlot(22)));
         let mut belongings = Belongings::new(
-            Encoder::new(GameDialect::Titanium, "Tester"),
+            Encoder::new("Tester"),
             eq_network_game::food::AutoEat::default(),
         );
         let mut world = World::new(5);

@@ -17,9 +17,6 @@ use eq_network_game::{
 
 /// One client generation's zone packets.
 pub(super) trait Wire: Sync {
-    /// The packet layouts commands are encoded in.
-    fn dialect(&self) -> GameDialect;
-
     /// What a zone packet says; nothing where the generation does not read
     /// the packet yet.
     fn messages(&self, _opcode: u16, _body: &[u8]) -> Vec<Message> {
@@ -48,10 +45,6 @@ pub(super) trait Wire: Sync {
 pub(super) struct Titanium;
 
 impl Wire for Titanium {
-    fn dialect(&self) -> GameDialect {
-        GameDialect::Titanium
-    }
-
     fn messages(&self, opcode: u16, body: &[u8]) -> Vec<Message> {
         eq_network_game::message::titanium(opcode, body)
     }
@@ -71,12 +64,12 @@ impl Wire for Titanium {
 pub(super) struct EqMac;
 
 impl Wire for EqMac {
-    fn dialect(&self) -> GameDialect {
-        GameDialect::EqMac
-    }
-
     fn chat(&self, opcode: u16, body: &[u8], include_raw: bool) -> Result<Option<ChatEvent>> {
         chat::parse_for(GameDialect::EqMac, opcode, body, include_raw)
+    }
+
+    fn encode(&self, request: &Request) -> Result<EncodedCommand> {
+        request::eqmac(request)
     }
 }
 
@@ -89,7 +82,6 @@ mod tests {
         // A logout reply: the server ends the session.
         let read = Titanium.messages(0x3cdc, &[]);
         assert!(matches!(read.as_slice(), [Message::LoggedOut]), "{read:?}");
-        assert_eq!(Titanium.dialect(), GameDialect::Titanium);
     }
 
     #[test]
@@ -102,9 +94,21 @@ mod tests {
     }
 
     #[test]
+    fn each_generation_sends_chat_its_own_way() {
+        use eq_network_game::chat::OutboundChat;
+        let say = Request::Command {
+            command: eq_network_game::command::GameCommand::SendChat(OutboundChat::Say(
+                "Hail".into(),
+            )),
+            character: "Tester".into(),
+        };
+        assert_eq!(Titanium.encode(&say).unwrap().opcode, 0x1004);
+        assert_eq!(EqMac.encode(&say).unwrap().opcode, 0x0741);
+    }
+
+    #[test]
     fn eqmac_reads_only_its_communication_so_far() {
         assert!(EqMac.messages(0x3cdc, &[]).is_empty());
-        assert_eq!(EqMac.dialect(), GameDialect::EqMac);
         // An opcode that carries no communication in either generation.
         assert!(EqMac.chat(0x0001, &[], false).unwrap().is_none());
         assert!(Titanium.chat(0x0001, &[], false).unwrap().is_none());

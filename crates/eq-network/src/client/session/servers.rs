@@ -50,16 +50,12 @@ pub(super) struct Setup<'a> {
 }
 
 impl<'a> Setup<'a> {
-    /// The setup for a server type's zone session.
-    pub(super) fn new(
-        server: &dyn ServerType,
-        character: &'a str,
-        auto_eat: eq_network_game::food::AutoEat,
-    ) -> Self {
+    /// The setup for a zone session of this character.
+    pub(super) fn new(character: &'a str, auto_eat: eq_network_game::food::AutoEat) -> Self {
         Self {
             character,
             auto_eat,
-            encoder: Encoder::new(server.wire().dialect(), character),
+            encoder: Encoder::new(character),
         }
     }
 }
@@ -618,7 +614,7 @@ pub(super) fn server_type(protocol: ServerProtocol) -> &'static dyn ServerType {
 mod tests {
     use super::*;
     use crate::world::Capability;
-    use eq_network_game::{food::AutoEat, GameDialect};
+    use eq_network_game::{command::titanium_camp, food::AutoEat, request::Request};
 
     /// A server type that implements nothing but the wire it speaks.
     struct Empty;
@@ -631,7 +627,7 @@ mod tests {
 
     /// What a server type's features let the player do, each once.
     fn offers(server: &dyn ServerType) -> Vec<Capability> {
-        let setup = Setup::new(server, "Tester", AutoEat::default());
+        let setup = Setup::new("Tester", AutoEat::default());
         let mut capabilities: Vec<_> = server
             .features(&setup)
             .iter()
@@ -645,15 +641,15 @@ mod tests {
     #[test]
     fn a_new_server_type_starts_with_every_feature_off() {
         let empty: &dyn ServerType = &Empty;
-        let setup = Setup::new(empty, "Tester", AutoEat::default());
+        let setup = Setup::new("Tester", AutoEat::default());
         assert!(empty.features(&setup).is_empty());
         assert!(empty.protect(&[0; 464]).unwrap().is_none());
         assert!((empty.profile_turn() - 512.0).abs() < f32::EPSILON);
         assert!(!empty.start_choice());
         // Quarm speaks EQMac and has built none of them on the interface yet.
         let quarm = server_type(ServerProtocol::Quarm);
-        assert_eq!(quarm.wire().dialect(), GameDialect::EqMac);
-        let setup = Setup::new(quarm, "Tester", AutoEat::default());
+        assert!(quarm.wire().encode(&Request::Camp).is_err());
+        let setup = Setup::new("Tester", AutoEat::default());
         assert!(quarm.features(&setup).is_empty());
         assert!(quarm.protect(&[0; 464]).unwrap().is_none());
         assert!(!quarm.start_choice());
@@ -662,14 +658,17 @@ mod tests {
     #[test]
     fn p99_protects_and_halves_saved_headings_while_eqemu_takes_falls() {
         let p99 = server_type(ServerProtocol::Project1999);
-        assert_eq!(p99.wire().dialect(), GameDialect::Titanium);
+        assert_eq!(p99.wire().encode(&Request::Camp).unwrap(), titanium_camp());
         assert!(p99.protect(&[0; 464]).unwrap().is_some());
         assert!(p99.protect(&[0; 10]).is_err());
         assert!((p99.profile_turn() - 256.0).abs() < f32::EPSILON);
         assert!(!p99.start_choice());
         assert!(!offers(p99).contains(&Capability::Falling));
         let eqemu = server_type(ServerProtocol::EqEmu);
-        assert_eq!(eqemu.wire().dialect(), GameDialect::Titanium);
+        assert_eq!(
+            eqemu.wire().encode(&Request::Camp).unwrap(),
+            titanium_camp()
+        );
         assert!(eqemu.protect(&[0; 464]).unwrap().is_none());
         assert!((eqemu.profile_turn() - 512.0).abs() < f32::EPSILON);
         assert!(eqemu.start_choice());
@@ -680,7 +679,7 @@ mod tests {
     fn p99_and_eqemu_provide_every_feature_one_each() {
         for protocol in [ServerProtocol::Project1999, ServerProtocol::EqEmu] {
             let server = server_type(protocol);
-            let setup = Setup::new(server, "Tester", AutoEat::default());
+            let setup = Setup::new("Tester", AutoEat::default());
             assert_eq!(server.features(&setup).len(), 20, "{protocol:?}");
         }
     }

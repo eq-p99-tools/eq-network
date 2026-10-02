@@ -4,6 +4,15 @@ use crate::{command::EncodedCommand, world::Position};
 use anyhow::{ensure, Result};
 use std::time::{Duration, Instant};
 
+/// Titanium's notice that the character jumped, already checked.
+#[must_use]
+pub fn titanium_jump() -> EncodedCommand {
+    EncodedCommand {
+        opcode: JUMP_OPCODE,
+        body: Vec::new(),
+    }
+}
+
 /// Independently measured motion values for the current character and effects.
 #[derive(Clone, Copy, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
 #[serde(deny_unknown_fields)]
@@ -146,11 +155,18 @@ impl MotionSession {
     /// # Errors
     /// Rejects jumps on sessions without falls.
     pub fn jump(&self) -> Result<EncodedCommand> {
+        self.check_jump()?;
+        Ok(titanium_jump())
+    }
+
+    /// Checks that the character may jump: only sessions that accept falls
+    /// allow it.
+    ///
+    /// # Errors
+    /// Rejects jumps on sessions without falls.
+    pub fn check_jump(&self) -> Result<()> {
         ensure!(self.falls, "jumping is not enabled for this server");
-        Ok(EncodedCommand {
-            opcode: JUMP_OPCODE,
-            body: Vec::new(),
-        })
+        Ok(())
     }
 
     /// Starts stationary, without assuming any effective movement speed.
@@ -238,6 +254,21 @@ impl MotionSession {
         now: Instant,
         send: impl FnOnce(&EncodedCommand) -> Result<()>,
     ) -> Result<()> {
+        self.send_move_sample(request, now, |sample| send(&sample.packet()?))
+    }
+
+    /// As [`Self::send_move`], handing the checked sample to `send` for a
+    /// client generation to encode; state commits only after `send` succeeds.
+    ///
+    /// # Errors
+    /// Rejects stale, uncalibrated, suspended, excessive or invalid motion,
+    /// and propagates whatever `send` returns.
+    pub fn send_move_sample(
+        &mut self,
+        request: &MovementRequest,
+        now: Instant,
+        send: impl FnOnce(&PositionPacket) -> Result<()>,
+    ) -> Result<()> {
         ensure!(!self.suspended, "movement session is suspended");
         ensure!(
             request.mode != MovementMode::Fall || self.falls,
@@ -298,16 +329,16 @@ impl MotionSession {
         ];
         let moving = displacement[..2].iter().any(|d| d.abs() > f32::EPSILON);
         let turn = heading_velocity(self.position.heading, request.position.heading, elapsed)?;
-        let packet = PositionPacket {
+        let sample = PositionPacket {
             spawn_id: self.spawn_id,
             sequence: self.sequence,
             position: request.position,
             delta,
             animation: if moving { animation } else { 0 },
             delta_heading: turn,
-        }
-        .packet()?;
-        send(&packet)?;
+        };
+        sample.check()?;
+        send(&sample)?;
         self.guard = guard;
         self.position = request.position;
         self.last_sample = now;
@@ -327,6 +358,19 @@ impl MotionSession {
         now: Instant,
         send: impl FnOnce(&EncodedCommand) -> Result<()>,
     ) -> Result<bool> {
+        self.tick_sample(now, |sample| send(&sample.packet()?))
+    }
+
+    /// As [`Self::tick`], handing the checked sample to `send` for a client
+    /// generation to encode.
+    ///
+    /// # Errors
+    /// Propagates check and send failures without advancing state.
+    pub fn tick_sample(
+        &mut self,
+        now: Instant,
+        send: impl FnOnce(&PositionPacket) -> Result<()>,
+    ) -> Result<bool> {
         let interval = if self.moving {
             Duration::from_millis(250)
         } else {
@@ -335,16 +379,16 @@ impl MotionSession {
         if self.suspended || now.saturating_duration_since(self.last_sent) < interval {
             return Ok(false);
         }
-        let packet = PositionPacket {
+        let sample = PositionPacket {
             spawn_id: self.spawn_id,
             sequence: self.sequence,
             position: self.position,
             delta: [0.0; 3],
             animation: 0,
             delta_heading: 0,
-        }
-        .packet()?;
-        send(&packet)?;
+        };
+        sample.check()?;
+        send(&sample)?;
         self.sequence = self.sequence.wrapping_add(1);
         self.last_sent = now;
         self.moving = false;
@@ -364,7 +408,7 @@ impl MotionSession {
             animation: 0,
             delta_heading: 0,
         }
-        .encode()?;
+        .check()?;
         self.position = position;
         self.guard.correct(position, now);
         self.calibration = None;

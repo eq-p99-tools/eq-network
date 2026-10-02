@@ -31,6 +31,30 @@ pub struct InventoryMove {
 /// `OP_MoveItem`: an item moved between slots.
 pub const MOVE_OPCODE: u16 = 0x420f;
 
+/// Titanium's `OP_MoveItem` for a move already planned; a whole item moves
+/// with a count of zero.
+///
+/// # Errors
+/// Rejects slots the packet cannot carry.
+pub fn titanium_move(
+    from: InventorySlot,
+    to: InventorySlot,
+    quantity: MoveQuantity,
+) -> Result<EncodedCommand> {
+    let mut body = [0; 12];
+    body[..4].copy_from_slice(&u32::try_from(from.0)?.to_le_bytes());
+    body[4..8].copy_from_slice(&u32::try_from(to.0)?.to_le_bytes());
+    let count = match quantity {
+        MoveQuantity::Whole => 0,
+        MoveQuantity::Count(n) => n.get(),
+    };
+    body[8..].copy_from_slice(&count.to_le_bytes());
+    Ok(EncodedCommand {
+        opcode: MOVE_OPCODE,
+        body: body.to_vec(),
+    })
+}
+
 /// Known character eligibility used for equipment checks; the server remains authoritative.
 #[derive(Clone, Copy, Debug)]
 pub struct InventoryActor {
@@ -135,18 +159,7 @@ impl Inventory {
         send: impl FnOnce(&EncodedCommand) -> Result<()>,
     ) -> Result<InventoryUpdate> {
         let update = self.plan_move(request, actor)?;
-        let mut body = [0; 12];
-        body[..4].copy_from_slice(&u32::try_from(request.from.0)?.to_le_bytes());
-        body[4..8].copy_from_slice(&u32::try_from(request.to.0)?.to_le_bytes());
-        let count = match request.quantity {
-            MoveQuantity::Whole => 0,
-            MoveQuantity::Count(n) => n.get(),
-        };
-        body[8..].copy_from_slice(&count.to_le_bytes());
-        send(&EncodedCommand {
-            opcode: MOVE_OPCODE,
-            body: body.to_vec(),
-        })?;
+        send(&titanium_move(request.from, request.to, request.quantity)?)?;
         self.apply(update.clone());
         Ok(update)
     }

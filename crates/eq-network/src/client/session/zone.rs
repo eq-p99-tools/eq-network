@@ -21,7 +21,7 @@ impl Features {
         name: &str,
         auto_eat: eq_network_game::food::AutoEat,
     ) -> Self {
-        Self(server.features(&servers::Setup::new(server, name, auto_eat)))
+        Self(server.features(&servers::Setup::new(name, auto_eat)))
     }
 
     /// What the features let the player do, each once.

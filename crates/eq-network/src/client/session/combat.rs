@@ -55,12 +55,12 @@ impl Feature for Combat {
 mod tests {
     use super::super::feature::testing;
     use super::*;
-    use eq_network_game::{world::SpawnKind, GameDialect};
+    use eq_network_game::world::SpawnKind;
     use std::time::Instant;
 
     #[test]
     fn the_player_considers_only_a_spawn_they_can_see() {
-        let mut combat = Combat::new(Encoder::new(GameDialect::Titanium, "Tester"));
+        let mut combat = Combat::new(Encoder::new("Tester"));
         let mut world = World::new(5);
         world.own_spawn = Some(7);
         world.spawns.insert(testing::spawn(8, SpawnKind::Npc));

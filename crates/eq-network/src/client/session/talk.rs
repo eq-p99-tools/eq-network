@@ -46,11 +46,11 @@ impl Feature for Talk {
 mod tests {
     use super::super::feature::testing;
     use super::*;
-    use eq_network_game::{chat::OutboundChat, GameDialect};
+    use eq_network_game::chat::OutboundChat;
 
     #[test]
     fn chat_goes_out_in_the_dialect() {
-        let mut talk = Talk::new(Encoder::new(GameDialect::Titanium, "Tester"));
+        let mut talk = Talk::new(Encoder::new("Tester"));
         let mut world = World::new(5);
         let say = ClientCommand::SendChat(OutboundChat::Say("Hail".into()));
         let outcome = testing::run(|out| talk.handle(&say, &mut world, out));
