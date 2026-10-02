@@ -898,6 +898,7 @@ mod tests {
         assert!(eqemu.contains(&Capability::Resurrection));
         assert!(eqemu.contains(&Capability::Reading));
         assert!(eqemu.contains(&Capability::Tradeskills));
-        assert_eq!(eqemu.len(), p99.len() + 5);
+        assert!(eqemu.contains(&Capability::Map));
+        assert_eq!(eqemu.len(), p99.len() + 6);
     }
 }

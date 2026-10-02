@@ -25,6 +25,7 @@ use super::{
     feature::Feature,
     inventory::Belongings,
     looting::Looting,
+    map::Map,
     motion::Motion,
     objects::GroundObjects,
     pets::Pets,
@@ -229,6 +230,11 @@ pub(super) trait ServerType: Sync {
         None
     }
 
+    /// The in-game map.
+    fn map(&self, _setup: &Setup<'_>) -> Provided {
+        None
+    }
+
     /// Every feature the server type provides, in the order the zone session
     /// offers them each command, packet and timer.
     fn features(&self, setup: &Setup<'_>) -> Vec<Box<dyn Feature>> {
@@ -257,6 +263,7 @@ pub(super) trait ServerType: Sync {
             self.resurrection(setup),
             self.reading(setup),
             self.tradeskills(setup),
+            self.map(setup),
         ]
         .into_iter()
         .flatten()
@@ -353,8 +360,8 @@ impl Shield for WorldCodec {
 mod titanium {
     use super::{
         Abilities, Belongings, Camp, Casting, Character, Clock, Combat, Corpses, Doors, Entities,
-        Exchanges, Feature, GroundObjects, Looting, Motion, Pets, Reading, Resurrection, Setup,
-        Spellbook, Talk, Targeting, Tradeskills, Training, Transfers, Who,
+        Exchanges, Feature, GroundObjects, Looting, Map, Motion, Pets, Reading, Resurrection,
+        Setup, Spellbook, Talk, Targeting, Tradeskills, Training, Transfers, Who,
     };
 
     pub(super) fn casting() -> Box<dyn Feature> {
@@ -452,6 +459,10 @@ mod titanium {
 
     pub(super) fn tradeskills() -> Box<dyn Feature> {
         Box::<Tradeskills>::default()
+    }
+
+    pub(super) fn map() -> Box<dyn Feature> {
+        Box::new(Map)
     }
 }
 
@@ -661,6 +672,10 @@ impl ServerType for EqEmu {
     fn tradeskills(&self, _setup: &Setup<'_>) -> Provided {
         Some(titanium::tradeskills())
     }
+
+    fn map(&self, _setup: &Setup<'_>) -> Provided {
+        Some(titanium::map())
+    }
 }
 
 /// Project Quarm, which speaks `EQMac` and provides no feature on this
@@ -776,11 +791,11 @@ mod tests {
 
     #[test]
     fn p99_and_eqemu_provide_every_feature_one_each() {
-        // Training, resurrection, reading and tradeskills are checked on
-        // EQEmu alone so far.
+        // Training, resurrection, reading, tradeskills and the map are
+        // checked on EQEmu alone so far.
         for (protocol, count) in [
             (ServerProtocol::Project1999, 20),
-            (ServerProtocol::EqEmu, 24),
+            (ServerProtocol::EqEmu, 25),
         ] {
             let server = server_type(protocol);
             let setup = Setup::new("Tester", AutoEat::default());
@@ -791,6 +806,7 @@ mod tests {
             Capability::Resurrection,
             Capability::Reading,
             Capability::Tradeskills,
+            Capability::Map,
         ] {
             assert!(!offers(server_type(ServerProtocol::Project1999)).contains(&capability));
             assert!(offers(server_type(ServerProtocol::EqEmu)).contains(&capability));

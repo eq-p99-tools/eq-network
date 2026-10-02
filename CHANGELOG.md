@@ -139,6 +139,10 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   (`InventoryUpdate::WorldEmptied`). `tradeskills::type_name` names a
   container type's string in the installed client, for a container whose
   server sends no name.
+- The in-game map (`Capability::Map`), on `EQEmu` for now: a front end draws
+  it from the installation's map files and the player's position, so the
+  session sends nothing for it; the server type decides whether it is
+  offered.
 - Synthetic regression coverage for inventory reconciliation, scribe consumption,
   movement admission, cast state, and fresh-key world/zone handoffs.
 
