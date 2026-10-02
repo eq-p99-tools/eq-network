@@ -33,6 +33,7 @@ use super::{
     spellbook::Spellbook,
     talk::Talk,
     targeting::Targeting,
+    tradeskills::Tradeskills,
     training::Training,
     transfers::Transfers,
     who::Who,
@@ -223,6 +224,11 @@ pub(super) trait ServerType: Sync {
         None
     }
 
+    /// Combining in the player's own tradeskill containers.
+    fn tradeskills(&self, _setup: &Setup<'_>) -> Provided {
+        None
+    }
+
     /// Every feature the server type provides, in the order the zone session
     /// offers them each command, packet and timer.
     fn features(&self, setup: &Setup<'_>) -> Vec<Box<dyn Feature>> {
@@ -250,6 +256,7 @@ pub(super) trait ServerType: Sync {
             self.training(setup),
             self.resurrection(setup),
             self.reading(setup),
+            self.tradeskills(setup),
         ]
         .into_iter()
         .flatten()
@@ -347,7 +354,7 @@ mod titanium {
     use super::{
         Abilities, Belongings, Camp, Casting, Character, Clock, Combat, Corpses, Doors, Entities,
         Exchanges, Feature, GroundObjects, Looting, Motion, Pets, Reading, Resurrection, Setup,
-        Spellbook, Talk, Targeting, Training, Transfers, Who,
+        Spellbook, Talk, Targeting, Tradeskills, Training, Transfers, Who,
     };
 
     pub(super) fn casting() -> Box<dyn Feature> {
@@ -441,6 +448,10 @@ mod titanium {
 
     pub(super) fn reading() -> Box<dyn Feature> {
         Box::new(Reading)
+    }
+
+    pub(super) fn tradeskills() -> Box<dyn Feature> {
+        Box::<Tradeskills>::default()
     }
 }
 
@@ -646,6 +657,10 @@ impl ServerType for EqEmu {
     fn reading(&self, _setup: &Setup<'_>) -> Provided {
         Some(titanium::reading())
     }
+
+    fn tradeskills(&self, _setup: &Setup<'_>) -> Provided {
+        Some(titanium::tradeskills())
+    }
 }
 
 /// Project Quarm, which speaks `EQMac` and provides no feature on this
@@ -761,10 +776,11 @@ mod tests {
 
     #[test]
     fn p99_and_eqemu_provide_every_feature_one_each() {
-        // Training, resurrection and reading are checked on EQEmu alone so far.
+        // Training, resurrection, reading and tradeskills are checked on
+        // EQEmu alone so far.
         for (protocol, count) in [
             (ServerProtocol::Project1999, 20),
-            (ServerProtocol::EqEmu, 23),
+            (ServerProtocol::EqEmu, 24),
         ] {
             let server = server_type(protocol);
             let setup = Setup::new("Tester", AutoEat::default());
@@ -774,6 +790,7 @@ mod tests {
             Capability::Training,
             Capability::Resurrection,
             Capability::Reading,
+            Capability::Tradeskills,
         ] {
             assert!(!offers(server_type(ServerProtocol::Project1999)).contains(&capability));
             assert!(offers(server_type(ServerProtocol::EqEmu)).contains(&capability));

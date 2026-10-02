@@ -119,6 +119,13 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   note's text (`OP_ReadBook`), and the text reaches the host as
   `WorldEvent::BookText` with the kind of window it is for. An item that is
   not readable is refused (`ReadRefused`).
+- Tradeskill combines (`tradeskills`), on `EQEmu` for now
+  (`Capability::Tradeskills`): `Combine` asks the server to combine what a
+  tradeskill container in a pack slot holds (`OP_TradeSkillCombine`), and
+  the session holds the inventory until the server answers
+  (`WorldEvent::Combine`). The components leaving and what was made arriving
+  are ordinary inventory news. A bag that is not a tradeskill container is
+  refused (`CombineRefused`). World containers are not supported yet.
 - Synthetic regression coverage for inventory reconciliation, scribe consumption,
   movement admission, cast state, and fresh-key world/zone handoffs.
 

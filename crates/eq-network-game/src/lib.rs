@@ -56,6 +56,8 @@ pub mod quarm;
 pub mod resurrection;
 /// Server-driven spellbook and casting notifications.
 pub mod spells;
+/// Tradeskill combines in the player's own containers.
+pub mod tradeskills;
 /// Training skills at a guildmaster.
 pub mod training;
 /// Who is online: `/who all` and the world's answer.
