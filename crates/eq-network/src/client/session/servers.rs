@@ -40,7 +40,8 @@ use crate::p99::{self, WorldCodec};
 
 /// What a zone session builds its features with.
 pub(super) struct Setup<'a> {
-    /// The player's name, which some packets repeat.
+    /// The player's name, which the transfers feature reads the server's
+    /// answers by.
     pub(super) character: &'a str,
     /// What the session may eat and drink on its own.
     pub(super) auto_eat: eq_network_game::food::AutoEat,
@@ -221,7 +222,7 @@ pub(super) trait ServerType: Sync {
 
 /// One protected connection's encryption and checks, keyed per world and
 /// rekeyed per zone.
-pub(super) trait Shield {
+pub(in crate::client) trait Shield {
     /// Answers the world's approval challenge.
     ///
     /// # Errors

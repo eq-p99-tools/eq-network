@@ -4,10 +4,10 @@ use super::{
     actions, ensure,
     feature::{Feature, Out, World},
     servers, CharacterSession, ClientCommand, ClientEvent, ConnectionStage, ConnectionState,
-    DecodeError, Duration, Events, Instant, RecordEvent, Result, Session, Shield, ZoneExit,
+    DecodeError, Duration, Events, Instant, RecordEvent, Result, Shield, ZoneExit,
 };
 
-use super::admission::{Admission, Zone};
+use super::admission::{Handshake, Zone};
 use eq_network_game::message::Message;
 use eq_network_transport::Transport;
 
@@ -137,20 +137,23 @@ pub(super) fn run(
     let credentials = context.credentials;
     let stop = context.stop;
     let duration = context.duration;
-    // Titanium zones speak the modern transport; the loop needs only the
-    // interface every generation's transport offers.
-    let mut session: Box<dyn Transport> = Box::new(Session::connect_cancellable(
-        crate::client::endpoint(host, port, config.local_only)?,
-        true,
-        stop.flag(),
-    )?);
+    // Each generation connects to its zones its own way; the loop needs only
+    // the interface every generation's transport offers.
     let server = servers::server_type(config.protocol);
-    let mut admission = Admission::start(
-        &mut session,
+    let mut session = server.wire().connect_zone(
+        crate::client::endpoint(host, port, config.local_only)?,
+        stop.flag(),
+    )?;
+    let mut admission = server.wire().admit(
         &config.character,
         server.profile_turn(),
-        shield,
-        log,
+        &mut Handshake {
+            session: &mut *session,
+            shield,
+            key: &credentials.key,
+            checksums: &mut checksums,
+            log: &mut *log,
+        },
     )?;
     let connected = Instant::now();
     let mut progress = Instant::now();
@@ -184,7 +187,7 @@ pub(super) fn run(
         }
         ensure!(
             world.ready() || connected.elapsed() < Duration::from_secs(60),
-            "zone admission timed out while {:?}",
+            "zone admission timed out while {}",
             admission.stage()
         );
         let speaker = sender(&config.character, &world);
@@ -272,11 +275,13 @@ pub(super) fn run(
         if let Some((player, zone)) = admission.read(
             &mut packet,
             &mut world,
-            shield,
-            &credentials.key,
-            &mut checksums,
-            &mut session,
-            log,
+            &mut Handshake {
+                session: &mut *session,
+                shield,
+                key: &credentials.key,
+                checksums: &mut checksums,
+                log: &mut *log,
+            },
         )? {
             let speaker = sender(&config.character, &world);
             admit(
@@ -743,6 +748,51 @@ mod tests {
             slot: 0,
         };
         assert!(!features.0.iter().any(|feature| feature.owns(&selection)));
+    }
+
+    #[test]
+    fn each_zone_hands_the_wire_the_players_new_spawn() {
+        use crate::client::session::feature::testing;
+        use eq_network_game::{
+            command::{titanium_posture, Posture},
+            request::Request,
+        };
+        let zone = super::super::admission::Zone {
+            name: "qeynos".into(),
+            far_clip: None,
+            sky: None,
+        };
+        // The player zones twice, and each zone gives them a different spawn.
+        for spawn_id in [7u16, 9] {
+            let mut world = World::new(5);
+            let mut features = Features::new(
+                servers::server_type(crate::client::ServerProtocol::EqEmu),
+                "Tester",
+                eq_network_game::food::AutoEat::default(),
+            );
+            let outcome = testing::run(|out| {
+                // Before admission the session speaks for no spawn.
+                out.sender = sender("Tester", &world);
+                assert_eq!(out.sender.spawn_id, None);
+                admit(
+                    Ok(testing::player(spawn_id)),
+                    &zone,
+                    &mut features,
+                    &mut world,
+                    out,
+                )?;
+                // The admission turn itself, and every turn built after it,
+                // speak for the spawn this zone gave the player.
+                assert_eq!(out.sender.spawn_id, Some(spawn_id));
+                assert_eq!(sender("Tester", &world).spawn_id, Some(spawn_id));
+                out.request(&Request::Posture(Posture::Sitting))
+            });
+            outcome.result.unwrap();
+            assert_eq!(
+                outcome.sent.last(),
+                Some(&titanium_posture(spawn_id, Posture::Sitting).unwrap())
+            );
+        }
     }
 
     #[test]

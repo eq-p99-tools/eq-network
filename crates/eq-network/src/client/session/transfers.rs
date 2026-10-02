@@ -17,7 +17,7 @@ use std::time::Instant;
 pub(super) struct Transfers {
     /// The destinations the server numbered for the zone's zone lines.
     points: zoning::ZonePoints,
-    /// The player's name, which every transfer request carries.
+    /// The player's name, which the server's answer to a transfer names.
     character: String,
 }
 

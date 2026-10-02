@@ -190,3 +190,44 @@ fn visibility_and_mana_use_eqmac_fields_without_inventing_endurance() {
         .endurance
         .is_none());
 }
+
+#[test]
+fn dll_version_ignores_other_features_responses_and_malformed_messages() {
+    let request = [0, 0, 0, 1, 0, 0, 4, 0];
+    for length in 0..8 {
+        assert!(dll_version_reply(&request[..length]).is_none());
+    }
+    let mut oversized = request.to_vec();
+    oversized.push(0);
+    assert!(dll_version_reply(&oversized).is_none());
+    for (offset, value) in [
+        (0, 1),
+        (2, 1),
+        (3, 0),
+        (6, 2),
+        (6, 3),
+        (6, 5),
+        (6, 7),
+        (6, 255),
+        (7, 128),
+    ] {
+        let mut other = request;
+        other[offset] = value;
+        assert!(dll_version_reply(&other).is_none());
+    }
+    let mut arbitrary_value = request;
+    arbitrary_value[4..6].fill(255);
+    assert_eq!(
+        dll_version_reply(&arbitrary_value),
+        Some([0, 0, 0, 1, 7, 0, 4, 128])
+    );
+}
+
+#[test]
+fn mac_filters_enable_every_chat_and_combat_category() {
+    let filters = server_filters();
+    for index in 0..17 {
+        let value = u32::from_le_bytes(filters[index * 4..index * 4 + 4].try_into().unwrap());
+        assert_eq!(value, u32::from((5..=14).contains(&index)));
+    }
+}

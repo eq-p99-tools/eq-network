@@ -1,6 +1,6 @@
 mod abilities;
 mod actions;
-mod admission;
+pub(super) mod admission;
 mod camp;
 mod casting;
 mod character;
@@ -10,7 +10,7 @@ mod corpses;
 mod doors;
 mod entities;
 mod exchange;
-mod feature;
+pub(super) mod feature;
 mod inventory;
 mod lifecycle;
 mod looting;
