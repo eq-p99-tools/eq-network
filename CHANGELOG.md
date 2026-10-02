@@ -134,7 +134,9 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   in from the cursor and out whole onto an empty cursor), combine
   (`tradeskills::WORLD_CONTAINER`) and close (`CloseContainer`), when the
   server puts what they still hold back in the inventory
-  (`InventoryUpdate::WorldEmptied`).
+  (`InventoryUpdate::WorldEmptied`). `tradeskills::type_name` names a
+  container type's string in the installed client, for a container whose
+  server sends no name.
 - Synthetic regression coverage for inventory reconciliation, scribe consumption,
   movement admission, cast state, and fresh-key world/zone handoffs.
 
