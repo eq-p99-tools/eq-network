@@ -74,8 +74,10 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   sent (`SpawnState::hp_percent`), since the server reports a pet's health
   only when it changes.
 - Abilities (`abilities`): `UseAbility` uses kick, bash, backstab, frenzy,
-  the monk strikes and taunt on the target, and hide, sneak, forage, mend,
-  feign death and sense heading on the player (`Capability::Abilities`). The
+  the monk strikes and taunt on the target, and hide, sneak, forage,
+  fishing (`OP_Fishing`, which anyone can try; the server checks the pole,
+  the bait and the water), mend, feign death and sense heading on the
+  player (`Capability::Abilities`). The
   session refuses what servers ignore without a word (an unknown skill, no
   target, a strike's target out of melee reach as `EQEmu`'s `CombatRange`
   measures it with the player's size by race, a taunt at anything but an
