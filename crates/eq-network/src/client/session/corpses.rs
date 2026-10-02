@@ -14,11 +14,27 @@ use eq_network_game::{request::Request, world::SpawnKind};
 /// Consents, summons and drags the player's and others' corpses.
 pub(super) struct Corpses;
 
+/// The official client's string (`eqstr_us.txt`) refusing a consent to no
+/// name.
+const INVALID_NAME: u32 = 397;
+/// Its string refusing a consent to the player themselves.
+const YOURSELF: u32 = 399;
+
+/// Why a command is not sent: this library's words, and the official
+/// client's string where it refuses in its own.
+struct Refused(String, Option<u32>);
+
+impl From<&str> for Refused {
+    fn from(reason: &str) -> Self {
+        Self(reason.into(), None)
+    }
+}
+
 /// The request a command makes, or why it is not sent.
-fn request(command: &ClientCommand, world: &World) -> Result<Request, String> {
+fn request(command: &ClientCommand, world: &World) -> Result<Request, Refused> {
     let player = world.player.as_ref().ok_or("Not in the zone yet")?;
     // Servers ignore anything but a player's corpse.
-    let corpse = |spawn_id: u16| -> Result<String, String> {
+    let corpse = |spawn_id: u16| -> Result<String, Refused> {
         let spawn = world
             .spawns
             .all()
@@ -31,12 +47,19 @@ fn request(command: &ClientCommand, world: &World) -> Result<Request, String> {
         }
     };
     Ok(match command {
-        // The official client's words for a name it will not send.
+        // Names the official client will not send, which it refuses in its
+        // own words (eqstr 397 and 399).
         ClientCommand::Consent { name, .. } if name.trim().is_empty() => {
-            return Err("Not a valid consent name.".into());
+            return Err(Refused(
+                "That is not a name you can consent".into(),
+                Some(INVALID_NAME),
+            ));
         }
         ClientCommand::Consent { name, .. } if name.eq_ignore_ascii_case(&player.name) => {
-            return Err("You cannot consent yourself.".into());
+            return Err(Refused(
+                "You do not need to consent yourself".into(),
+                Some(YOURSELF),
+            ));
         }
         ClientCommand::Consent { name, given, .. } => Request::Consent {
             name: name.trim().into(),
@@ -74,11 +97,15 @@ impl Feature for Corpses {
     ) -> Result<()> {
         // A name the packet cannot carry is refused as the feature's own
         // reasons are.
-        let packet = request(command, world)
-            .and_then(|request| out.encode(&request).map_err(|error| error.to_string()));
+        let packet = request(command, world).and_then(|request| {
+            out.encode(&request)
+                .map_err(|error| Refused(error.to_string(), None))
+        });
         match packet {
             Ok(packet) => out.send(&packet),
-            Err(reason) => actions::refuse(command, &reason, out.log),
+            Err(Refused(reason, official)) => {
+                actions::refuse_officially(command, (&reason, official), out.log)
+            }
         }
     }
 }
@@ -97,6 +124,18 @@ mod tests {
                 super::super::ClientEvent::World(WorldEvent::CorpseRefused { reason, .. }) => {
                     Some(reason.clone())
                 }
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn official(events: &[super::super::ClientEvent]) -> Vec<Option<u32>> {
+        events
+            .iter()
+            .filter_map(|event| match event {
+                super::super::ClientEvent::World(WorldEvent::CorpseRefused {
+                    string_id, ..
+                }) => Some(*string_id),
                 _ => None,
             })
             .collect()
@@ -130,14 +169,15 @@ mod tests {
         let outcome =
             testing::run(|out| Corpses.handle(&consent("Helper", false), &mut world, out));
         assert_eq!(outcome.sent, [corpses::consent("Helper", false).unwrap()]);
-        for (name, reason) in [
-            ("  ", "Not a valid consent name."),
-            ("tester", "You cannot consent yourself."),
+        for (name, reason, string_id) in [
+            ("  ", "That is not a name you can consent", INVALID_NAME),
+            ("tester", "You do not need to consent yourself", YOURSELF),
         ] {
             let outcome = testing::run(|out| Corpses.handle(&consent(name, true), &mut world, out));
             outcome.result.unwrap();
             assert!(outcome.sent.is_empty(), "sent {:?}", outcome.sent);
             assert_eq!(refusals(&outcome.events), [reason]);
+            assert_eq!(official(&outcome.events), [Some(string_id)]);
         }
     }
 

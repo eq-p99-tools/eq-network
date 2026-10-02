@@ -715,6 +715,10 @@ pub enum WorldEvent {
         session_id: u64,
         /// Why not.
         reason: String,
+        /// The official client's own words for this refusal, as an
+        /// `eqstr_us.txt` string ID, for a host with the installed strings;
+        /// `reason` says the same in this library's words.
+        string_id: Option<u32>,
     },
     /// The player used an ability; its timer runs this long before the
     /// server takes the next use.
@@ -761,6 +765,10 @@ pub enum WorldEvent {
         session_id: u64,
         /// Why not.
         reason: String,
+        /// The official client's own words for this refusal, as an
+        /// `eqstr_us.txt` string ID, for a host with the installed strings;
+        /// `reason` says the same in this library's words.
+        string_id: Option<u32>,
     },
     /// A spawn became someone's pet, as a charm takes hold, or no one's, as
     /// it breaks.
@@ -778,6 +786,10 @@ pub enum WorldEvent {
         session_id: u64,
         /// Why not.
         reason: String,
+        /// The official client's own words for this refusal, as an
+        /// `eqstr_us.txt` string ID, for a host with the installed strings;
+        /// `reason` says the same in this library's words.
+        string_id: Option<u32>,
     },
     /// Training at a guildmaster opened, took a practice or ended.
     Training(crate::training::TrainingUpdate),

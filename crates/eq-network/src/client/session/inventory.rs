@@ -437,10 +437,13 @@ impl Feature for Belongings {
             ClientCommand::Consume {
                 session_id, slot, ..
             } => match self.meals.by_hand(*slot, world, out)? {
-                Some(reason) => out.log.send(ClientEvent::World(WorldEvent::ConsumeRefused {
-                    session_id: *session_id,
-                    reason: reason.into(),
-                })),
+                Some((reason, string_id)) => {
+                    out.log.send(ClientEvent::World(WorldEvent::ConsumeRefused {
+                        session_id: *session_id,
+                        reason: reason.into(),
+                        string_id,
+                    }))
+                }
                 None => Ok(()),
             },
             _ => self.trade(command, out),
@@ -694,10 +697,7 @@ mod tests {
         let (mut belongings, mut world) = fed(6000, 4000);
         let outcome = testing::run(|out| belongings.handle(&eat(22), &mut world, out));
         assert!(outcome.sent.is_empty(), "sent {:?}", outcome.sent);
-        assert_eq!(
-            refusals(&outcome.events),
-            ["You could not possibly eat any more, you would explode!"]
-        );
+        assert_eq!(refusals(&outcome.events), ["You are too full to eat more"]);
         let outcome = testing::run(|out| belongings.handle(&eat(24), &mut world, out));
         assert_eq!(refusals(&outcome.events), ["You cannot eat or drink that"]);
         let drink = InventorySlot(23).child(0).unwrap();

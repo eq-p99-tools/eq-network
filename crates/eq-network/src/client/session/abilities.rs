@@ -84,17 +84,28 @@ fn refuse(
     out.log.diagnostic(diagnostic)
 }
 
+/// The official client's string (`eqstr_us.txt`) refusing an ability with
+/// no target.
+const SELECT_A_TARGET: u32 = 5825;
+/// Its string refusing a target out of melee reach.
+const OUT_OF_REACH: u32 = 124;
+
 /// Why the player cannot use the ability on their target, if they cannot.
 fn target_refusal(
     ability: Ability,
     world: &World,
     (own_id, position, player): (u16, Position, &PlayerState),
-) -> Option<&'static str> {
+) -> Option<Refusal> {
     let Some((target_id, target)) = world
         .target
         .and_then(|id| world.spawns.visible(id).map(|spawn| (id, spawn)))
     else {
-        return Some("You must first select a target for this ability!");
+        // The official client says so in its own words (eqstr 5825).
+        return Some(Refusal::official(
+            "Select a target for that first",
+            SELECT_A_TARGET,
+            Vec::new(),
+        ));
     };
     // Servers taunt only an NPC, ignoring anything else after starting the
     // timer; a strike may also hit another player where the server allows it.
@@ -104,7 +115,7 @@ fn target_refusal(
         _ => false,
     };
     if target_id == own_id || !fits {
-        return Some("You cannot use that on your target");
+        return Some("You cannot use that on your target".into());
     }
     // Taunt reaches 150 units, and the server says so itself beyond that.
     if !ability.strikes() {
@@ -131,7 +142,9 @@ fn target_refusal(
         x: target.position.x,
         y: target.position.y,
     };
-    (!in_melee_range(own, theirs)).then_some("Your target is too far away, get closer!")
+    // The official client's own words for this are eqstr 124.
+    (!in_melee_range(own, theirs))
+        .then(|| Refusal::official("Your target is out of reach", OUT_OF_REACH, Vec::new()))
 }
 
 impl Abilities {
@@ -176,8 +189,8 @@ impl Abilities {
     fn aim(&self, ability: Ability, world: &World, now: Instant) -> Result<Option<u16>, Refusal> {
         let ((own_id, position), player) = self.usable(ability, world)?;
         if ability.at_target() {
-            if let Some(reason) = target_refusal(ability, world, (own_id, position, player)) {
-                return Err(reason.into());
+            if let Some(refusal) = target_refusal(ability, world, (own_id, position, player)) {
+                return Err(refusal);
             }
         }
         if self.waiting(ability, now) {
@@ -446,16 +459,10 @@ mod tests {
             "no target, sent {:?}",
             outcome.sent
         );
-        assert_eq!(
-            refused(&outcome.events),
-            ["You must first select a target for this ability!"]
-        );
+        assert_eq!(refused(&outcome.events), ["Select a target for that first"]);
         world.target = super::super::targeting::Target::from(43);
         let outcome = try_ability(&mut abilities, &world, Ability::Kick, now);
-        assert_eq!(
-            refused(&outcome.events),
-            ["Your target is too far away, get closer!"]
-        );
+        assert_eq!(refused(&outcome.events), ["Your target is out of reach"]);
         let outcome = try_ability(&mut abilities, &world, Ability::Bash, now);
         assert_eq!(refused(&outcome.events), ["You do not have that ability"]);
         world.target = super::super::targeting::Target::from(42);
@@ -486,10 +493,7 @@ mod tests {
         world.spawns.insert(near);
         world.target = super::super::targeting::Target::from(45);
         let outcome = try_ability(&mut Abilities::default(), &world, Ability::Kick, now);
-        assert_eq!(
-            refused(&outcome.events),
-            ["Your target is too far away, get closer!"]
-        );
+        assert_eq!(refused(&outcome.events), ["Your target is out of reach"]);
         world.player.corrected().unwrap().race = 12;
         let outcome = try_ability(&mut Abilities::default(), &world, Ability::Kick, now);
         assert_eq!(outcome.sent, [Ability::Kick.encode(45)]);
