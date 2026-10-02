@@ -1,7 +1,7 @@
 //! The player's target: the spawn the player picks, which must be the player
 //! or someone they can see.
 use super::{
-    feature::{Encoder, Feature, Out, World},
+    feature::{Feature, Out, World},
     ClientCommand, ClientEvent,
 };
 use anyhow::Result;
@@ -29,15 +29,7 @@ impl From<u16> for Target {
 }
 
 /// Picks and clears the player's target.
-pub(super) struct Targeting {
-    encoder: Encoder,
-}
-
-impl Targeting {
-    pub(super) fn new(encoder: Encoder) -> Self {
-        Self { encoder }
-    }
-}
+pub(super) struct Targeting;
 
 impl Feature for Targeting {
     fn capabilities(&self) -> Vec<crate::world::Capability> {
@@ -74,7 +66,7 @@ impl Feature for Targeting {
                 }))?;
             return out.log.diagnostic("Rejected an unavailable target".into());
         }
-        if self.encoder.send(command, out)? {
+        if out.command(command)? {
             world.target.0 = spawn_id;
             out.log
                 .send(ClientEvent::World(WorldEvent::TargetSent(spawn_id)))?;
@@ -87,7 +79,7 @@ impl Feature for Targeting {
 mod tests {
     use super::super::feature::testing;
     use super::*;
-    use eq_network_game::{world::SpawnKind, GameDialect};
+    use eq_network_game::world::SpawnKind;
 
     fn target(spawn_id: Option<u16>) -> ClientCommand {
         ClientCommand::SelectTarget {
@@ -98,7 +90,7 @@ mod tests {
 
     #[test]
     fn only_the_player_or_a_spawn_they_can_see_is_targeted() {
-        let mut targeting = Targeting::new(Encoder::new(GameDialect::Titanium, "Tester"));
+        let mut targeting = Targeting;
         let mut world = World::new(5);
         world.own_spawn = Some(7);
         world.spawns.insert(testing::spawn(8, SpawnKind::Npc));

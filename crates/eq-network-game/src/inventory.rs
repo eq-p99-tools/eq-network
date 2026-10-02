@@ -3,8 +3,10 @@ mod actions;
 mod activation;
 mod banking;
 mod titanium;
-pub use actions::{InventoryActor, InventoryMove, MoveQuantity, MOVE_OPCODE};
-pub use activation::{ClickEffect, ClickKind, ItemActivation, ItemUse, CAST_OPCODE};
+pub use actions::{titanium_move, InventoryActor, InventoryMove, MoveQuantity, MOVE_OPCODE};
+pub use activation::{
+    titanium_item_cast, ClickEffect, ClickKind, ItemActivation, ItemUse, CAST_OPCODE,
+};
 pub use banking::banker_in_range;
 pub use titanium::decode;
 pub(crate) use titanium::{parse as parse_items, parse_at};
@@ -48,6 +50,13 @@ impl InventorySlot {
     #[must_use]
     pub const fn is_in_cursor_bag(self) -> bool {
         matches!(self.0, 331..=340)
+    }
+
+    /// One of the ten slots of the world container open for the player, such
+    /// as a forge: 4000 to 4009.
+    #[must_use]
+    pub const fn is_world(self) -> bool {
+        matches!(self.0, 4000..=4009)
     }
 
     /// Classic personal bank roots and their contents; shared bank is unsupported.
@@ -178,6 +187,8 @@ pub struct InventoryItem {
     pub activation: ItemActivation,
     /// Spell taught by a scroll, when supplied by the server item definition.
     pub scroll_spell: Option<u32>,
+    /// What the item reads as, when it is a book or a note.
+    pub book: Option<crate::books::Book>,
     /// Server definition constraints used when placing an item.
     pub rules: ItemPlacement,
     /// Exact inventory location.
@@ -235,6 +246,10 @@ pub enum InventoryUpdate {
     /// handed over, or on its way back as the server's item updates. Servers
     /// empty the slots without saying so.
     TradeEmptied,
+    /// The world container open for the player emptied: a combine used what
+    /// it held, or it closed and the server put what was left back in the
+    /// inventory, as its item updates say (`OP_ClearObject`).
+    WorldEmptied,
 }
 
 /// Current inventory projection; an absent snapshot is distinct from an empty one.
@@ -415,6 +430,11 @@ impl Inventory {
                 self.items.retain(|slot, _| !slot.is_in_trade());
                 // A prediction into a trade slot is resolved: the item is gone.
                 self.unconfirmed.retain(|slot, _| !slot.is_in_trade());
+                self.resolved();
+            }
+            InventoryUpdate::WorldEmptied => {
+                self.items.retain(|slot, _| !slot.is_world());
+                self.unconfirmed.retain(|slot, _| !slot.is_world());
                 self.resolved();
             }
             InventoryUpdate::Settled => {

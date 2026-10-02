@@ -1,16 +1,13 @@
 //! The zone session: admission, the player's commands and the zone's traffic
 //! until the character leaves for another zone, the world or the character list.
 use super::{
-    abilities, actions, camp, casting, character, chat, combat,
-    doors::Doors,
-    ensure, entities, exchange,
-    feature::{Encoder, Feature, Out, World},
-    inventory, looting, objects, servers, spellbook, talk, targeting, transfers, CharacterSession,
-    ClientCommand, ClientEvent, ConnectionStage, ConnectionState, DecodeError, Duration, Events,
-    Instant, RecordEvent, Result, Session, Shield, ZoneExit,
+    actions, ensure,
+    feature::{Feature, Out, World},
+    servers, CharacterSession, ClientCommand, ClientEvent, ConnectionStage, ConnectionState,
+    DecodeError, Duration, Events, Instant, RecordEvent, Result, Shield, ZoneExit,
 };
 
-use super::admission::{Admission, Zone};
+use super::admission::{Handshake, Zone};
 use eq_network_game::message::Message;
 use eq_network_transport::Transport;
 
@@ -18,32 +15,13 @@ use eq_network_transport::Transport;
 struct Features(Vec<Box<dyn Feature>>);
 
 impl Features {
-    /// Every feature a Titanium zone session has, with the server type's own
-    /// where servers differ.
+    /// The features the server type provides.
     fn new(
         server: &dyn servers::ServerType,
-        dialect: eq_network_game::GameDialect,
         name: &str,
+        auto_eat: eq_network_game::food::AutoEat,
     ) -> Self {
-        let encoder = Encoder::new(dialect, name);
-        Self(vec![
-            Box::new(casting::Casting::new(encoder.clone())),
-            Box::new(spellbook::Spellbook::default()),
-            Box::new(inventory::Belongings::new(encoder.clone())),
-            server.motion(),
-            Box::new(character::Character::default()),
-            Box::new(entities::Entities::default()),
-            Box::new(targeting::Targeting::new(encoder.clone())),
-            Box::new(combat::Combat::new(encoder.clone())),
-            Box::new(looting::Looting::new(encoder.clone())),
-            Box::new(exchange::Exchanges),
-            Box::new(abilities::Abilities::default()),
-            Box::new(talk::Talk::new(encoder)),
-            Box::new(camp::Camp::default()),
-            Box::new(Doors::default()),
-            Box::new(objects::GroundObjects::default()),
-            Box::new(transfers::Transfers::new(name)),
-        ])
+        Self(server.features(&servers::Setup::new(name, auto_eat)))
     }
 
     /// What the features let the player do, each once.
@@ -159,26 +137,32 @@ pub(super) fn run(
     let credentials = context.credentials;
     let stop = context.stop;
     let duration = context.duration;
-    // Titanium zones speak the modern transport; the loop needs only the
-    // interface every generation's transport offers.
-    let mut session: Box<dyn Transport> = Box::new(Session::connect_cancellable(
-        crate::client::endpoint(host, port, config.local_only)?,
-        true,
-        stop.flag(),
-    )?);
+    // Each generation connects to its zones its own way; the loop needs only
+    // the interface every generation's transport offers.
     let server = servers::server_type(config.protocol);
-    let mut admission = Admission::start(
-        &mut session,
+    let mut session = server.wire().connect_zone(
+        crate::client::endpoint(host, port, config.local_only)?,
+        stop.flag(),
+    )?;
+    let mut admission = server.wire().admit(
         &config.character,
         server.profile_turn(),
-        shield,
-        log,
+        &mut Handshake {
+            session: &mut *session,
+            shield,
+            key: &credentials.key,
+            checksums: &mut checksums,
+            log: &mut *log,
+        },
     )?;
     let connected = Instant::now();
     let mut progress = Instant::now();
     let session_id = rand::random();
     let mut world = World::new(session_id);
-    let mut features = Features::new(server, config.protocol.into(), &config.character);
+    let mut features = Features::new(server, &config.character, config.auto_eat);
+    let follows_zones = features
+        .capabilities()
+        .contains(&crate::world::Capability::Zoning);
     loop {
         if stop.is_cancelled() || duration.is_some_and(|limit| connected.elapsed() >= limit) {
             session.close()?;
@@ -206,15 +190,18 @@ pub(super) fn run(
         }
         ensure!(
             world.ready() || connected.elapsed() < Duration::from_secs(60),
-            "zone admission timed out while {:?}",
+            "zone admission timed out while {}",
             admission.stage()
         );
+        let speaker = sender(&config.character, &world);
         features.tick(
             Instant::now(),
             &mut world,
             &mut Out {
                 sink: &mut session,
                 log: &mut *log,
+                wire: server.wire(),
+                sender: speaker,
             },
         )?;
         if let Some(exit) = world.take_exit() {
@@ -249,12 +236,15 @@ pub(super) fn run(
                         actions::refuse(&command, reason, log)?;
                         continue;
                     }
+                    let speaker = sender(&config.character, &world);
                     let handled = features.handle(
                         &command,
                         &mut world,
                         &mut Out {
                             sink: &mut session,
                             log: &mut *log,
+                            wire: server.wire(),
+                            sender: speaker,
                         },
                     )?;
                     if let Some(exit) = world.take_exit() {
@@ -262,9 +252,7 @@ pub(super) fn run(
                         return Ok(exit);
                     }
                     if !handled {
-                        log.diagnostic(
-                            "Rejected a command this zone session does not take".into(),
-                        )?;
+                        unoffered(&command, log)?;
                     }
                     // Commands wait while the player is dead or zoning.
                     if world.lifecycle.is_dead() || world.lifecycle.pending().is_some() {
@@ -280,6 +268,10 @@ pub(super) fn run(
         if let Some(shield) = shield.as_ref() {
             shield.spawns(packet.opcode, &mut packet.body, &credentials.key)?;
         }
+        // What the generation's client answers by itself, at any time.
+        if let Some(reply) = server.wire().answer(packet.opcode, &packet.body) {
+            session.send(reply.opcode, &reply.body)?;
+        }
         if !world.ready() {
             log.diagnostic(format!(
                 "Zone received 0x{:04x} ({} bytes)",
@@ -290,28 +282,45 @@ pub(super) fn run(
         if let Some((player, zone)) = admission.read(
             &mut packet,
             &mut world,
-            shield,
-            &credentials.key,
-            &mut checksums,
-            &mut session,
-            log,
+            &mut Handshake {
+                session: &mut *session,
+                shield,
+                key: &credentials.key,
+                checksums: &mut checksums,
+                log: &mut *log,
+            },
         )? {
-            admit(player, &zone, &mut features, &mut world, &mut session, log)?;
+            let speaker = sender(&config.character, &world);
+            admit(
+                player,
+                &zone,
+                &mut features,
+                &mut world,
+                &mut Out {
+                    sink: &mut session,
+                    log: &mut *log,
+                    wire: server.wire(),
+                    sender: speaker,
+                },
+            )?;
         }
-        // Everything else is read once, the same way before and after
-        // admission, and heard by every feature.
-        for mut message in eq_network_game::message::titanium(packet.opcode, &packet.body) {
+        // Everything else is read once, in the server's client generation, the
+        // same way before and after admission, and heard by every feature.
+        for mut message in server.wire().messages(packet.opcode, &packet.body) {
             features.explain(&mut message, &world);
             if let Message::Unreadable { part, error } = &message {
                 log.diagnostic(format!("{part} rejected: {error}"))?;
             }
             if world.ready() {
+                let speaker = sender(&config.character, &world);
                 features.observe(
                     &message,
                     &mut world,
                     &mut Out {
                         sink: &mut session,
                         log: &mut *log,
+                        wire: server.wire(),
+                        sender: speaker,
                     },
                 )?;
             } else {
@@ -325,13 +334,22 @@ pub(super) fn run(
                 !matches!(message, Message::LoggedOut),
                 "server logged the character out"
             );
+            // The server moving the player where no feature follows ends the
+            // session.
+            ensure!(
+                follows_zones || !matches!(message, Message::ZoneOffer(_)),
+                "server requested a new zone, which this server type cannot follow yet"
+            );
             // Before the admission, the features staged what they need of it.
             if let (Message::Event(event), true) = (message, world.ready()) {
                 log.send(ClientEvent::World(event))?;
             }
         }
         let zone = log.zone.clone();
-        match chat::parse(packet.opcode, &packet.body, config.include_raw) {
+        match server
+            .wire()
+            .chat(packet.opcode, &packet.body, config.include_raw)
+        {
             Ok(Some(event)) => log.record(&zone, RecordEvent::Chat(event))?,
             Ok(None) => (),
             Err(error) => log.record(
@@ -347,6 +365,25 @@ pub(super) fn run(
     }
 }
 
+/// Who the session speaks for: the character it logged in as, and their
+/// spawn once the zone has admitted them.
+fn sender<'a>(name: &'a str, world: &World) -> eq_network_game::request::Sender<'a> {
+    eq_network_game::request::Sender {
+        name,
+        spawn_id: world.player.as_ref().map(|player| player.spawn_id),
+    }
+}
+
+/// Why a command is refused when no feature of the server type takes it:
+/// the words the client greys out such a control with.
+const UNOFFERED: &str = "Not available on this server";
+
+/// Refuses a command no feature of the server type takes, through the event
+/// its caller waits for, so the player hears why instead of nothing.
+fn unoffered(command: &ClientCommand, log: &mut Events<'_>) -> Result<()> {
+    actions::refuse(command, UNOFFERED, log)
+}
+
 /// Tells the host the zone admitted the player, as the features shape them,
 /// and lets every feature tell what it staged.
 fn admit(
@@ -354,37 +391,35 @@ fn admit(
     zone: &Zone,
     features: &mut Features,
     world: &mut World,
-    session: &mut Box<dyn Transport>,
-    log: &mut Events<'_>,
+    out: &mut Out<'_, '_>,
 ) -> Result<()> {
     match player {
         Ok(mut player) => {
             features.shape(&mut player);
+            out.sender.spawn_id = Some(player.spawn_id);
             world.player.admit(player.clone());
-            log.send(ClientEvent::World(crate::world::WorldEvent::Entered {
-                capabilities: features.capabilities(),
-                session_id: world.session_id,
-                zone: zone.name.clone(),
-                player: Box::new(player),
-                far_clip: zone.far_clip,
-            }))?;
-            features.admitted(
-                world,
-                &mut Out {
-                    sink: session,
-                    log: &mut *log,
-                },
-            )?;
+            out.log
+                .send(ClientEvent::World(crate::world::WorldEvent::Entered {
+                    capabilities: features.capabilities(),
+                    session_id: world.session_id,
+                    zone: zone.name.clone(),
+                    player: Box::new(player),
+                    far_clip: zone.far_clip,
+                }))?;
+            if let Some(sky) = zone.sky {
+                out.log
+                    .send(ClientEvent::World(crate::world::WorldEvent::Sky(sky)))?;
+            }
+            features.admitted(world, out)?;
         }
-        Err(error) => log.diagnostic(format!("Player presentation unavailable: {error}"))?,
+        Err(error) => out
+            .log
+            .diagnostic(format!("Player presentation unavailable: {error}"))?,
     }
-    log.send(ClientEvent::Progress(ConnectionStage::Ready))?;
-    log.status(
-        ConnectionState::Connected,
-        world.packets,
-        Some(session.last_received_seconds()),
-    )?;
-    log.diagnostic(format!(
+    out.log
+        .send(ClientEvent::Progress(ConnectionStage::Ready))?;
+    out.status(ConnectionState::Connected, world)?;
+    out.log.diagnostic(format!(
         "Zone login sequence complete for {}; waiting for ongoing server traffic",
         zone.name
     ))
@@ -400,7 +435,7 @@ mod tests {
     };
 
     /// How many kinds of command there are.
-    const KINDS: usize = 34;
+    const KINDS: usize = 48;
 
     /// Which kind of command this is. A new command is a compile error here
     /// until it has a number, and then a test failure until the list below
@@ -442,6 +477,20 @@ mod tests {
             ClientCommand::CancelTrade { .. } => 31,
             ClientCommand::MoveCoins { .. } => 32,
             ClientCommand::UseAbility { .. } => 33,
+            ClientCommand::Consume { .. } => 34,
+            ClientCommand::WhoAll { .. } => 35,
+            ClientCommand::Consent { .. } => 36,
+            ClientCommand::SummonCorpse { .. } => 37,
+            ClientCommand::DragCorpse { .. } => 38,
+            ClientCommand::DropCorpse { .. } => 39,
+            ClientCommand::Pet { .. } => 40,
+            ClientCommand::AutoEat { .. } => 41,
+            ClientCommand::Training { .. } => 42,
+            ClientCommand::AnswerResurrection { .. } => 43,
+            ClientCommand::ReadItem { .. } => 44,
+            ClientCommand::Combine { .. } => 45,
+            ClientCommand::OpenContainer { .. } => 46,
+            ClientCommand::CloseContainer { .. } => 47,
         }
     }
 
@@ -643,6 +692,65 @@ mod tests {
                 ability: eq_network_game::abilities::Ability::Kick,
                 created,
             },
+            ClientCommand::Consume {
+                session_id,
+                slot: InventorySlot(22),
+                created,
+            },
+            ClientCommand::AutoEat {
+                session_id,
+                auto_eat: eq_network_game::food::AutoEat::Anything,
+            },
+            ClientCommand::WhoAll {
+                session_id,
+                filter: eq_network_game::who::WhoFilter::default(),
+            },
+            ClientCommand::Consent {
+                session_id,
+                name: "Helper".into(),
+                given: true,
+            },
+            ClientCommand::SummonCorpse {
+                session_id,
+                spawn_id: 4,
+            },
+            ClientCommand::DragCorpse {
+                session_id,
+                spawn_id: 4,
+            },
+            ClientCommand::DropCorpse {
+                session_id,
+                spawn_id: None,
+            },
+            ClientCommand::Pet {
+                session_id,
+                command: eq_network_game::pets::PetCommand::Follow,
+                target: None,
+            },
+            ClientCommand::Training {
+                session_id,
+                request: eq_network_game::training::TrainingRequest::End,
+                created,
+            },
+            ClientCommand::AnswerResurrection {
+                session_id,
+                accept: true,
+            },
+            ClientCommand::ReadItem {
+                session_id,
+                slot: InventorySlot(23),
+            },
+            ClientCommand::Combine {
+                session_id,
+                container: InventorySlot(23),
+                created,
+            },
+            ClientCommand::OpenContainer {
+                session_id,
+                drop_id: 9,
+                created,
+            },
+            ClientCommand::CloseContainer { session_id },
         ]
     }
 
@@ -660,8 +768,8 @@ mod tests {
         // what its commands need.
         let features = Features::new(
             servers::server_type(crate::client::ServerProtocol::EqEmu),
-            eq_network_game::GameDialect::Titanium,
             "Tester",
+            eq_network_game::food::AutoEat::default(),
         );
         for command in zone_commands() {
             let owners: Vec<_> = features
@@ -686,13 +794,89 @@ mod tests {
     }
 
     #[test]
+    fn each_zone_hands_the_wire_the_players_new_spawn() {
+        use crate::client::session::feature::testing;
+        use eq_network_game::{
+            command::{titanium_posture, Posture},
+            request::Request,
+        };
+        let zone = super::super::admission::Zone {
+            name: "qeynos".into(),
+            far_clip: None,
+            sky: None,
+        };
+        // The player zones twice, and each zone gives them a different spawn.
+        for spawn_id in [7u16, 9] {
+            let mut world = World::new(5);
+            let mut features = Features::new(
+                servers::server_type(crate::client::ServerProtocol::EqEmu),
+                "Tester",
+                eq_network_game::food::AutoEat::default(),
+            );
+            let outcome = testing::run(|out| {
+                // Before admission the session speaks for no spawn.
+                out.sender = sender("Tester", &world);
+                assert_eq!(out.sender.spawn_id, None);
+                admit(
+                    Ok(testing::player(spawn_id)),
+                    &zone,
+                    &mut features,
+                    &mut world,
+                    out,
+                )?;
+                // The admission turn itself, and every turn built after it,
+                // speak for the spawn this zone gave the player.
+                assert_eq!(out.sender.spawn_id, Some(spawn_id));
+                assert_eq!(sender("Tester", &world).spawn_id, Some(spawn_id));
+                out.request(&Request::Posture(Posture::Sitting))
+            });
+            outcome.result.unwrap();
+            assert_eq!(
+                outcome.sent.last(),
+                Some(&titanium_posture(spawn_id, Posture::Sitting).unwrap())
+            );
+        }
+    }
+
+    #[test]
+    fn a_command_no_feature_takes_is_refused_as_unavailable() {
+        use crate::client::session::feature::testing;
+        // Quarm opens no doors yet.
+        let mut features = Features::new(
+            servers::server_type(crate::client::ServerProtocol::Quarm),
+            "Tester",
+            eq_network_game::food::AutoEat::default(),
+        );
+        let click = ClientCommand::ClickDoor {
+            session_id: 5,
+            door_id: 3,
+            created: Instant::now(),
+        };
+        let mut world = World::new(5);
+        let outcome = testing::run(|out| {
+            let handled = features.handle(&click, &mut world, out)?;
+            assert!(!handled);
+            unoffered(&click, out.log)
+        });
+        outcome.result.unwrap();
+        assert!(matches!(
+            &outcome.events[..],
+            [ClientEvent::World(crate::world::WorldEvent::DoorAction {
+                session_id: 5,
+                door_id: 3,
+                error: Some(reason),
+            }), ..] if reason == UNOFFERED
+        ));
+    }
+
+    #[test]
     fn a_titanium_zone_reports_everything_its_features_offer() {
         use crate::world::Capability;
         let features = |protocol| {
             Features::new(
                 servers::server_type(protocol),
-                eq_network_game::GameDialect::Titanium,
                 "Tester",
+                eq_network_game::food::AutoEat::default(),
             )
             .capabilities()
         };
@@ -713,12 +897,34 @@ mod tests {
             Capability::GroundItems,
             Capability::Zoning,
             Capability::Abilities,
+            Capability::Who,
+            Capability::Corpses,
+            Capability::Pets,
         ] {
             assert!(p99.contains(&capability), "{capability:?}");
         }
         assert!(!p99.contains(&Capability::Falling));
+        assert!(!p99.contains(&Capability::Training));
         let eqemu = features(crate::client::ServerProtocol::EqEmu);
         assert!(eqemu.contains(&Capability::Falling));
-        assert_eq!(eqemu.len(), p99.len() + 1);
+        assert!(eqemu.contains(&Capability::Training));
+        assert!(eqemu.contains(&Capability::Resurrection));
+        assert!(eqemu.contains(&Capability::Reading));
+        assert!(eqemu.contains(&Capability::Tradeskills));
+        assert!(eqemu.contains(&Capability::Map));
+        assert_eq!(eqemu.len(), p99.len() + 6);
+        // EQMac servers talk, TAKP camps too, and neither follows a zone
+        // change yet.
+        assert_eq!(
+            features(crate::client::ServerProtocol::Quarm),
+            [Capability::Talking]
+        );
+        assert_eq!(
+            features(crate::client::ServerProtocol::Takp),
+            [Capability::Moving, Capability::Talking, Capability::Camping]
+        );
     }
 }
+
+#[cfg(test)]
+mod eqmac_tests;

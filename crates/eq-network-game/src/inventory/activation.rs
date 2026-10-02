@@ -132,22 +132,26 @@ impl super::Inventory {
         level: u8,
         target_available: bool,
     ) -> Result<(u32, EncodedCommand)> {
-        ensure!(target_available, "Item-use target is unavailable");
-        let body =
-            self.item_cast_packet(request.revision, request.slot, level, request.target_id)?;
-        let spell_id = self.items[&request.slot]
-            .activation
-            .effect
-            .as_ref()
-            .context("Item effect unavailable")?
-            .spell_id;
+        let spell_id = self.check_item_use(request, level, target_available)?;
         Ok((
             spell_id,
-            EncodedCommand {
-                opcode: CAST_OPCODE,
-                body: body.to_vec(),
-            },
+            titanium_item_cast(spell_id, request.slot, request.target_id)?,
         ))
+    }
+
+    /// Checks an admitted item-use intent against the current inventory, as
+    /// [`Self::prepare_item_cast`] does, and returns the effect's spell.
+    ///
+    /// # Errors
+    /// Rejects unavailable targets and invalid inventory.
+    pub fn check_item_use(
+        &self,
+        request: &ItemUse,
+        level: u8,
+        target_available: bool,
+    ) -> Result<u32> {
+        ensure!(target_available, "Item-use target is unavailable");
+        self.check_item_cast(request.revision, request.slot, level, request.target_id)
     }
 
     /// Builds a Titanium item cast from the current instance, without consuming charges.
@@ -162,6 +166,22 @@ impl super::Inventory {
         level: u8,
         target_id: u16,
     ) -> Result<[u8; 20]> {
+        let spell_id = self.check_item_cast(revision, slot, level, target_id)?;
+        titanium_item_cast_body(spell_id, slot, target_id)
+    }
+
+    /// Checks casting an item's click effect from the current instance, and
+    /// returns the effect's spell.
+    ///
+    /// # Errors
+    /// Rejects stale state, unsupported slots/categories, insufficient level or depleted charges.
+    pub fn check_item_cast(
+        &self,
+        revision: u64,
+        slot: super::InventorySlot,
+        level: u8,
+        target_id: u16,
+    ) -> Result<u32> {
         ensure!(
             self.received && !self.stale(),
             "Wait for current inventory contents"
@@ -208,18 +228,43 @@ impl super::Inventory {
             effect.kind != ClickKind::Expendable || item.stack_count.is_some() || item.charges != 0,
             "The expendable item has no charges remaining"
         );
-        let mut body = [0; 20];
-        for (bytes, value) in body.as_chunks_mut::<4>().0.iter_mut().zip([
-            10,
-            effect.spell_id,
-            u32::try_from(slot.0)?,
-            u32::from(target_id),
-            0,
-        ]) {
-            bytes.copy_from_slice(&value.to_le_bytes());
-        }
-        Ok(body)
+        Ok(effect.spell_id)
     }
+}
+
+/// The body of Titanium's `OP_CastSpell` for an item's click effect: the
+/// item-click gem (10), the spell, the item's slot and the target.
+fn titanium_item_cast_body(
+    spell_id: u32,
+    slot: super::InventorySlot,
+    target_id: u16,
+) -> Result<[u8; 20]> {
+    let mut body = [0; 20];
+    for (bytes, value) in body.as_chunks_mut::<4>().0.iter_mut().zip([
+        10,
+        spell_id,
+        u32::try_from(slot.0)?,
+        u32::from(target_id),
+        0,
+    ]) {
+        bytes.copy_from_slice(&value.to_le_bytes());
+    }
+    Ok(body)
+}
+
+/// Titanium's `OP_CastSpell` casting an item's click effect, already checked.
+///
+/// # Errors
+/// Rejects a slot the packet cannot carry.
+pub fn titanium_item_cast(
+    spell_id: u32,
+    slot: super::InventorySlot,
+    target_id: u16,
+) -> Result<EncodedCommand> {
+    Ok(EncodedCommand {
+        opcode: CAST_OPCODE,
+        body: titanium_item_cast_body(spell_id, slot, target_id)?.to_vec(),
+    })
 }
 
 #[cfg(test)]

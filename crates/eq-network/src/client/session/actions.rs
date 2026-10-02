@@ -110,7 +110,11 @@ pub(super) fn needs(command: &ClientCommand) -> &'static [Resource] {
         | ClientCommand::PickUp { .. }
         | ClientCommand::Buy { .. }
         | ClientCommand::Sell { .. }
-        | ClientCommand::AcceptTrade { .. } => &[Inventory],
+        | ClientCommand::Consume { .. }
+        | ClientCommand::AcceptTrade { .. }
+        // A combine takes the container's contents and puts what was made
+        // on the cursor.
+        | ClientCommand::Combine { .. } => &[Inventory],
         ClientCommand::SelectCharacter { .. }
         | ClientCommand::CreateCharacter { .. }
         | ClientCommand::ClickDoor { .. }
@@ -133,7 +137,21 @@ pub(super) fn needs(command: &ClientCommand) -> &'static [Resource] {
         | ClientCommand::AutoAttack { .. }
         | ClientCommand::UseAbility { .. }
         | ClientCommand::SelectTarget { .. }
+        | ClientCommand::WhoAll { .. }
+        | ClientCommand::Pet { .. }
+        | ClientCommand::Training { .. }
+        | ClientCommand::AnswerResurrection { .. }
+        | ClientCommand::ReadItem { .. }
+        // Opening a container holds nothing, and closing one must always be
+        // possible.
+        | ClientCommand::OpenContainer { .. }
+        | ClientCommand::CloseContainer { .. }
+        | ClientCommand::Consent { .. }
+        | ClientCommand::SummonCorpse { .. }
+        | ClientCommand::DragCorpse { .. }
+        | ClientCommand::DropCorpse { .. }
         | ClientCommand::ConfigureMotion { .. }
+        | ClientCommand::AutoEat { .. }
         | ClientCommand::Move(_) => &[],
     }
 }
@@ -141,7 +159,25 @@ pub(super) fn needs(command: &ClientCommand) -> &'static [Resource] {
 /// Reports a refused command through the result event its caller waits for;
 /// a command nobody waits on is only noted.
 pub(super) fn refuse(command: &ClientCommand, reason: &str, log: &mut Events<'_>) -> Result<()> {
-    if let Some(event) = refusal(command, reason) {
+    refuse_officially(command, (reason, None), log)
+}
+
+/// Reports a refused command as [`refuse`] does, naming the official
+/// client's string (`eqstr_us.txt`) for it where its result event has room.
+pub(super) fn refuse_officially(
+    command: &ClientCommand,
+    (reason, official): (&str, Option<u32>),
+    log: &mut Events<'_>,
+) -> Result<()> {
+    if let Some(mut event) = refusal(command, reason) {
+        if let WorldEvent::ConsumeRefused { string_id, .. }
+        | WorldEvent::CorpseRefused { string_id, .. }
+        | WorldEvent::PetRefused { string_id, .. }
+        | WorldEvent::CombineRefused { string_id, .. }
+        | WorldEvent::AbilityRefused { string_id, .. } = &mut event
+        {
+            *string_id = official;
+        }
         log.send(ClientEvent::World(event))?;
     }
     log.diagnostic(reason.into())
@@ -164,26 +200,31 @@ fn refusal(command: &ClientCommand, reason: &str) -> Option<WorldEvent> {
             revision: request.revision,
             error,
         },
-        ClientCommand::Buy { session_id, .. } | ClientCommand::Sell { session_id, .. } => {
-            WorldEvent::MerchantRefused {
-                session_id: *session_id,
-                reason: reason.into(),
-            }
+        ClientCommand::Buy { session_id, .. }
+        | ClientCommand::Sell { session_id, .. }
+        | ClientCommand::OfferTrade { session_id, .. }
+        | ClientCommand::AcceptTrade { session_id, .. }
+        | ClientCommand::MoveCoins { session_id, .. }
+        | ClientCommand::Consume { session_id, .. }
+        | ClientCommand::UseAbility { session_id, .. }
+        | ClientCommand::Pet { session_id, .. }
+        | ClientCommand::Training { session_id, .. }
+        | ClientCommand::AnswerResurrection { session_id, .. }
+        | ClientCommand::ReadItem { session_id, .. }
+        | ClientCommand::Combine { session_id, .. }
+        | ClientCommand::Consent { session_id, .. }
+        | ClientCommand::SummonCorpse { session_id, .. }
+        | ClientCommand::DragCorpse { session_id, .. }
+        | ClientCommand::DropCorpse { session_id, .. }
+        | ClientCommand::CrossZoneLine { session_id, .. } => {
+            return reasoned(command, *session_id, reason.into());
         }
-        ClientCommand::OfferTrade { session_id, .. }
-        | ClientCommand::AcceptTrade { session_id, .. } => WorldEvent::ExchangeRefused {
-            session_id: *session_id,
-            reason: reason.into(),
-        },
-        ClientCommand::MoveCoins { session_id, .. } => WorldEvent::CoinsRefused {
-            session_id: *session_id,
-            reason: reason.into(),
-        },
-        ClientCommand::UseAbility { session_id, .. } => WorldEvent::AbilityRefused {
-            session_id: *session_id,
-            reason: reason.into(),
-        },
         ClientCommand::PickUp {
+            session_id,
+            drop_id,
+            ..
+        }
+        | ClientCommand::OpenContainer {
             session_id,
             drop_id,
             ..
@@ -202,10 +243,6 @@ fn refusal(command: &ClientCommand, reason: &str) -> Option<WorldEvent> {
             error,
         },
         ClientCommand::Camp { .. } => WorldEvent::Camp(CampStatus::Rejected(reason.into())),
-        ClientCommand::CrossZoneLine { session_id, .. } => WorldEvent::ZoneLineRejected {
-            session_id: *session_id,
-            reason: reason.into(),
-        },
         ClientCommand::SelectTarget {
             session_id,
             spawn_id,
@@ -234,8 +271,62 @@ fn refusal(command: &ClientCommand, reason: &str) -> Option<WorldEvent> {
         | ClientCommand::CancelTrade { .. }
         | ClientCommand::Jump { .. }
         | ClientCommand::AutoAttack { .. }
+        | ClientCommand::WhoAll { .. }
         | ClientCommand::ConfigureMotion { .. }
+        | ClientCommand::AutoEat { .. }
+        | ClientCommand::CloseContainer { .. }
         | ClientCommand::Move(_) => return None,
+    })
+}
+
+/// The refusal that is only a reason, for the admission that asked: what a
+/// merchant, a trade, coins, food, an ability, a pet, a guildmaster, a
+/// corpse or a zone line would not do.
+fn reasoned(command: &ClientCommand, session_id: u64, reason: String) -> Option<WorldEvent> {
+    Some(match command {
+        ClientCommand::Buy { .. } | ClientCommand::Sell { .. } => {
+            WorldEvent::MerchantRefused { session_id, reason }
+        }
+        ClientCommand::OfferTrade { .. } | ClientCommand::AcceptTrade { .. } => {
+            WorldEvent::ExchangeRefused { session_id, reason }
+        }
+        ClientCommand::MoveCoins { .. } => WorldEvent::CoinsRefused { session_id, reason },
+        ClientCommand::Consume { .. } => WorldEvent::ConsumeRefused {
+            session_id,
+            reason,
+            string_id: None,
+        },
+        ClientCommand::UseAbility { .. } => WorldEvent::AbilityRefused {
+            session_id,
+            reason,
+            string_id: None,
+            arguments: Vec::new(),
+        },
+        ClientCommand::Pet { .. } => WorldEvent::PetRefused {
+            session_id,
+            reason,
+            string_id: None,
+        },
+        ClientCommand::Training { .. } => WorldEvent::TrainingRefused { session_id, reason },
+        ClientCommand::AnswerResurrection { .. } => {
+            WorldEvent::ResurrectionRefused { session_id, reason }
+        }
+        ClientCommand::ReadItem { .. } => WorldEvent::ReadRefused { session_id, reason },
+        ClientCommand::Combine { .. } => WorldEvent::CombineRefused {
+            session_id,
+            reason,
+            string_id: None,
+        },
+        ClientCommand::Consent { .. }
+        | ClientCommand::SummonCorpse { .. }
+        | ClientCommand::DragCorpse { .. }
+        | ClientCommand::DropCorpse { .. } => WorldEvent::CorpseRefused {
+            session_id,
+            reason,
+            string_id: None,
+        },
+        ClientCommand::CrossZoneLine { .. } => WorldEvent::ZoneLineRejected { session_id, reason },
+        _ => return None,
     })
 }
 

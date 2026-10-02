@@ -31,6 +31,30 @@ pub struct InventoryMove {
 /// `OP_MoveItem`: an item moved between slots.
 pub const MOVE_OPCODE: u16 = 0x420f;
 
+/// Titanium's `OP_MoveItem` for a move already planned; a whole item moves
+/// with a count of zero.
+///
+/// # Errors
+/// Rejects slots the packet cannot carry.
+pub fn titanium_move(
+    from: InventorySlot,
+    to: InventorySlot,
+    quantity: MoveQuantity,
+) -> Result<EncodedCommand> {
+    let mut body = [0; 12];
+    body[..4].copy_from_slice(&u32::try_from(from.0)?.to_le_bytes());
+    body[4..8].copy_from_slice(&u32::try_from(to.0)?.to_le_bytes());
+    let count = match quantity {
+        MoveQuantity::Whole => 0,
+        MoveQuantity::Count(n) => n.get(),
+    };
+    body[8..].copy_from_slice(&count.to_le_bytes());
+    Ok(EncodedCommand {
+        opcode: MOVE_OPCODE,
+        body: body.to_vec(),
+    })
+}
+
 /// Known character eligibility used for equipment checks; the server remains authoritative.
 #[derive(Clone, Copy, Debug)]
 pub struct InventoryActor {
@@ -52,6 +76,9 @@ pub struct InventoryActor {
     /// Whether the open window's partner may take NO DROP items: an NPC may,
     /// another player never.
     pub trade_no_drop: bool,
+    /// Whether a world container is open for the player, whose ten slots
+    /// items may then go into and come out of.
+    pub world_container: bool,
 }
 
 impl Inventory {
@@ -138,18 +165,7 @@ impl Inventory {
         send: impl FnOnce(&EncodedCommand) -> Result<()>,
     ) -> Result<InventoryUpdate> {
         let update = self.plan_move(request, actor)?;
-        let mut body = [0; 12];
-        body[..4].copy_from_slice(&u32::try_from(request.from.0)?.to_le_bytes());
-        body[4..8].copy_from_slice(&u32::try_from(request.to.0)?.to_le_bytes());
-        let count = match request.quantity {
-            MoveQuantity::Whole => 0,
-            MoveQuantity::Count(n) => n.get(),
-        };
-        body[8..].copy_from_slice(&count.to_le_bytes());
-        send(&EncodedCommand {
-            opcode: MOVE_OPCODE,
-            body: body.to_vec(),
-        })?;
+        send(&titanium_move(request.from, request.to, request.quantity)?)?;
         self.apply(update.clone());
         Ok(update)
     }
@@ -193,6 +209,9 @@ impl Inventory {
                     }),
                 "NO DROP items cannot be traded"
             );
+        }
+        if request.from.is_world() || request.to.is_world() {
+            check_world(request, self.items.contains_key(&request.to))?;
         }
         let source = self
             .items
@@ -413,6 +432,12 @@ impl Inventory {
                 "This specialized container is not supported yet"
             );
         }
+        if slot.is_world() {
+            ensure!(
+                item.bag_slots == 0,
+                "Containers cannot be placed inside containers"
+            );
+        }
         if slot.is_equipment() {
             let bit = u32::try_from(slot.0)?;
             ensure!(
@@ -491,6 +516,27 @@ fn movable(slot: InventorySlot, actor: InventoryActor) -> bool {
         || slot == InventorySlot::CURSOR
         || (actor.bank_access && slot.is_personal_bank())
         || (slot.is_trade() && slot.0 - 3000 < i32::from(actor.trade_slots))
+        || (actor.world_container && slot.is_world())
+}
+
+/// What `EQEmu` handles in a world container's slots (`Client::SwapItem`):
+/// an item from the cursor goes in, onto the same stack or in place of what
+/// was there, and an item comes out whole onto an empty cursor.
+fn check_world(request: &InventoryMove, occupied: bool) -> Result<()> {
+    if request.from.is_world() {
+        ensure!(
+            request.to == InventorySlot::CURSOR
+                && request.quantity == MoveQuantity::Whole
+                && !occupied,
+            "Pick the item up onto an empty cursor"
+        );
+    } else {
+        ensure!(
+            request.from == InventorySlot::CURSOR,
+            "Pick the item up to put it in the container"
+        );
+    }
+    Ok(())
 }
 
 /// What servers accept into a trade slot: an item from the cursor, whole into

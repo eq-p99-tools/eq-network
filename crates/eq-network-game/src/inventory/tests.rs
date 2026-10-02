@@ -95,6 +95,7 @@ fn partial_correction_blocks_moves_until_both_ends_are_authoritative() {
         level: 1,
         trade_slots: 0,
         trade_no_drop: false,
+        world_container: false,
     };
     assert!(state.auto_store_destination(actor).is_err());
     state.apply(InventoryUpdate::Remove(InventorySlot(30)));
@@ -189,6 +190,7 @@ fn move_item(state: &mut Inventory, from: i32, to: i32) {
         level: 1,
         trade_slots: 0,
         trade_no_drop: false,
+        world_container: false,
     };
     let update = state.plan_move(&request, actor).unwrap();
     state.apply(update);
@@ -273,6 +275,31 @@ fn a_refused_move_blocks_moves_only_until_the_others_settle() {
         state.items.keys().copied().collect::<Vec<_>>(),
         vec![InventorySlot(22), InventorySlot(26)]
     );
+}
+
+#[test]
+fn a_world_container_shows_what_it_holds_until_the_server_empties_it() {
+    let mut state = Inventory::default();
+    state.apply(InventoryUpdate::Snapshot(Vec::new()));
+    // Titanium numbers a world container's places 0 to 9 in what it holds.
+    let mut body = 0x6bu32.to_le_bytes().to_vec();
+    body.extend(wire(3, 42, 0, false, 0, &[]).bytes());
+    let held = decode(0x3397, &body).unwrap().unwrap();
+    let InventoryUpdate::Set(items) = &held else {
+        panic!("{held:?}");
+    };
+    assert_eq!(items[0].slot, InventorySlot(4003));
+    state.apply(held);
+    assert!(state.items.contains_key(&InventorySlot(4003)));
+    let mut far = 0x6bu32.to_le_bytes().to_vec();
+    far.extend(wire(12, 42, 0, false, 0, &[]).bytes());
+    assert!(decode(0x3397, &far).is_err());
+    // `OP_ClearObject` empties it.
+    let emptied = decode(0x21ed, &[1, 0, 0, 0, 0, 0, 0, 0]).unwrap().unwrap();
+    assert_eq!(emptied, InventoryUpdate::WorldEmptied);
+    state.apply(emptied);
+    assert!(!state.items.contains_key(&InventorySlot(4003)));
+    assert!(decode(0x21ed, &[1]).is_err());
 }
 
 fn limbo_packet(id: u32, children: &[(usize, String)], bag: u8) -> InventoryUpdate {
@@ -601,7 +628,9 @@ fn snapshot_decodes_equipment_bags_stack_quantities_and_unlimited_charges() {
 
 #[test]
 fn link_merchant_and_loot_views_never_become_inventory() {
-    for kind in [0u32, 0x64, 0x65, 0x66, 0x6b, 0xdead_beef] {
+    // A world container's contents (0x6b) are the player's to move; see
+    // `a_world_container_shows_what_it_holds_until_the_server_empties_it`.
+    for kind in [0u32, 0x64, 0x65, 0x66, 0xdead_beef] {
         let mut packet = kind.to_le_bytes().to_vec();
         packet.extend(wire(22, 42, 0, false, 0, &[]).bytes());
         assert!(decode(0x3397, &packet).unwrap().is_none());

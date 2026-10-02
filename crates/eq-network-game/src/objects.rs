@@ -43,6 +43,14 @@ pub struct GroundObject {
 }
 
 impl GroundObject {
+    /// Whether this is a world container to combine in, such as a forge or
+    /// an oven: a fixture of a tradeskill container's type.
+    #[must_use]
+    pub fn is_tradeskill_container(&self) -> bool {
+        self.kind() == ObjectKind::Fixture
+            && u8::try_from(self.object_type).is_ok_and(crate::tradeskills::combines)
+    }
+
     /// Whether this is an item to pick up or a fixture.
     #[must_use]
     pub fn kind(&self) -> ObjectKind {
@@ -83,8 +91,9 @@ pub enum ObjectUpdate {
         /// Spawn ID of the player who clicked.
         player_id: u32,
     },
-    /// A world container answered a click. Containers are not supported yet,
-    /// so sessions close one that opens for them at once.
+    /// A world container answered a click: open for the player, or in use
+    /// by someone else. Sessions that do not open containers close one that
+    /// opens for them at once.
     Container(ContainerView),
 }
 
@@ -110,23 +119,41 @@ impl ContainerView {
     /// cleared, which `EQEmu` answers by closing it (`Object::Close`).
     #[must_use]
     pub fn close_packet(&self) -> EncodedCommand {
-        let mut body = vec![0; CONTAINER_LENGTH];
-        for (offset, value) in [
-            (0, self.player_id),
-            (4, self.drop_id),
-            (12, self.object_type),
-            (16, 0x0a),
-            (20, self.icon),
-        ] {
-            body[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
-        }
-        let name = self.name.as_bytes();
-        let length = name.len().min(63);
-        body[28..28 + length].copy_from_slice(&name[..length]);
-        EncodedCommand {
-            opcode: CONTAINER_OPCODE,
-            body,
-        }
+        titanium_close(
+            self.player_id,
+            self.drop_id,
+            (self.object_type, self.icon),
+            &self.name,
+        )
+    }
+}
+
+/// Titanium's `OP_ClickObjectAction` closing a world container: the
+/// container's own record with `open` cleared, which `EQEmu` answers by
+/// closing it (`Object::Close`).
+#[must_use]
+pub fn titanium_close(
+    player_id: u32,
+    drop_id: u32,
+    (object_type, icon): (u32, u32),
+    name: &str,
+) -> EncodedCommand {
+    let mut body = vec![0; CONTAINER_LENGTH];
+    for (offset, value) in [
+        (0, player_id),
+        (4, drop_id),
+        (12, object_type),
+        (16, 0x0a),
+        (20, icon),
+    ] {
+        body[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+    }
+    let name = name.as_bytes();
+    let length = name.len().min(63);
+    body[28..28 + length].copy_from_slice(&name[..length]);
+    EncodedCommand {
+        opcode: CONTAINER_OPCODE,
+        body,
     }
 }
 
@@ -181,13 +208,49 @@ impl Objects {
         player_id: u16,
         position: Position,
     ) -> Result<EncodedCommand> {
+        self.check_pickup(drop_id, player_id, position)?;
+        Ok(titanium_pickup(drop_id, player_id))
+    }
+
+    /// Checks opening a world container against the table and the player's
+    /// reach, which is the same as for picking an item up.
+    ///
+    /// # Errors
+    /// Rejects unknown objects, anything but a tradeskill container, invalid
+    /// own IDs and non-finite or distant positions.
+    pub fn check_open(&self, drop_id: u32, player_id: u16, position: Position) -> Result<()> {
+        let object = self
+            .0
+            .get(&drop_id)
+            .ok_or_else(|| anyhow!("that is no longer there"))?;
+        ensure!(
+            object.is_tradeskill_container(),
+            "that is not a tradeskill container"
+        );
+        ensure!(player_id != 0, "player is unavailable");
+        let distance = (position.x - object.position.x)
+            .hypot(position.y - object.position.y)
+            .hypot(position.z - object.position.z);
+        ensure!(
+            distance.is_finite() && distance <= Self::USE_DISTANCE,
+            "too far away to use that"
+        );
+        Ok(())
+    }
+
+    /// Checks picking an item up against the table and the player's reach.
+    ///
+    /// # Errors
+    /// Rejects unknown objects, fixtures, invalid own IDs and non-finite or
+    /// distant positions.
+    pub fn check_pickup(&self, drop_id: u32, player_id: u16, position: Position) -> Result<()> {
         let object = self
             .0
             .get(&drop_id)
             .ok_or_else(|| anyhow!("that is no longer there"))?;
         ensure!(
             object.kind() == ObjectKind::Item,
-            "tradeskill containers are not supported yet"
+            "that cannot be picked up"
         );
         ensure!(player_id != 0, "player is unavailable");
         let distance = (position.x - object.position.x)
@@ -197,13 +260,19 @@ impl Objects {
             distance.is_finite() && distance <= Self::USE_DISTANCE,
             "too far away to pick that up"
         );
-        let mut body = vec![0; 8];
-        body[..4].copy_from_slice(&drop_id.to_le_bytes());
-        body[4..].copy_from_slice(&u32::from(player_id).to_le_bytes());
-        Ok(EncodedCommand {
-            opcode: CLICK_OPCODE,
-            body,
-        })
+        Ok(())
+    }
+}
+
+/// Titanium's `OP_ClickObject` picking an item up, already checked.
+#[must_use]
+pub fn titanium_pickup(drop_id: u32, player_id: u16) -> EncodedCommand {
+    let mut body = vec![0; 8];
+    body[..4].copy_from_slice(&drop_id.to_le_bytes());
+    body[4..].copy_from_slice(&u32::from(player_id).to_le_bytes());
+    EncodedCommand {
+        opcode: CLICK_OPCODE,
+        body,
     }
 }
 
@@ -314,6 +383,29 @@ mod tests {
             panic!("spawn")
         };
         object
+    }
+
+    #[test]
+    fn tradeskill_fixtures_open_within_reach() {
+        let mut objects = Objects::default();
+        let fixture = |drop_id, object_type| GroundObject {
+            drop_id,
+            model: "FORGE".into(),
+            position: Position::default(),
+            object_type,
+        };
+        // A forge, and a fixture that is not a container.
+        objects.apply(&ObjectUpdate::Snapshot(vec![fixture(5, 17), fixture(6, 0)]));
+        assert!(objects.entries()[&5].is_tradeskill_container());
+        assert!(!objects.entries()[&6].is_tradeskill_container());
+        assert!(objects.check_open(5, 9, Position::default()).is_ok());
+        assert!(objects.check_open(6, 9, Position::default()).is_err());
+        assert!(objects.check_open(7, 9, Position::default()).is_err());
+        let far = Position {
+            x: Objects::USE_DISTANCE + 1.0,
+            ..Position::default()
+        };
+        assert!(objects.check_open(5, 9, far).is_err());
     }
 
     #[test]

@@ -13,6 +13,7 @@ use eq_network_game::{
     exchange::{self, ExchangeUpdate, Partner},
     inventory::InventorySlot,
     message::Message,
+    request::Request,
     world::{SpawnKind, WorldEvent},
 };
 use std::time::{Duration, Instant};
@@ -103,11 +104,11 @@ impl Exchanges {
         out: &mut Out<'_, '_>,
         now: Instant,
     ) -> Result<()> {
-        let check = || -> std::result::Result<(u16, Partner), &'static str> {
+        let check = || -> std::result::Result<Partner, &'static str> {
             if world.exchange.is_some() {
                 return Err("Close the open trade first");
             }
-            let (own_id, position) = world.player_at().ok_or("Not in the zone yet")?;
+            let (_, position) = world.player_at().ok_or("Not in the zone yet")?;
             let spawn = world
                 .spawns
                 .visible(with_id)
@@ -125,13 +126,13 @@ impl Exchanges {
             {
                 return Err("Hold an item or coins on the cursor to hand them over");
             }
-            Ok((own_id, partner))
+            Ok(partner)
         };
-        let (own_id, partner) = match check() {
+        let partner = match check() {
             Ok(checked) => checked,
             Err(reason) => return refused(session_id, reason, out),
         };
-        out.send(&exchange::request(own_id, with_id)?)?;
+        out.request(&Request::Trade(with_id))?;
         world.exchange.0 = Some(Exchange {
             with: with_id,
             partner,
@@ -143,16 +144,16 @@ impl Exchanges {
     /// Clicks Give or Trade in the open window: again after anything put in
     /// undid the click, as servers undo both sides' clicks then.
     fn accept(session_id: u64, world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
-        let own_id = world.player.as_ref().map(|player| player.spawn_id);
+        let admitted = world.player.as_ref().is_some();
         let open = world
             .exchange
             .0
             .as_mut()
             .filter(|exchange| matches!(exchange.stage, Stage::Open | Stage::Accepted));
-        let (Some(exchange), Some(own_id)) = (open, own_id) else {
+        let (Some(exchange), true) = (open, admitted) else {
             return refused(session_id, "No trade window is open", out);
         };
-        out.send(&exchange::accept(own_id)?)?;
+        out.request(&Request::AcceptTrade)?;
         exchange.stage = Stage::Accepted;
         Ok(())
     }
@@ -160,9 +161,9 @@ impl Exchanges {
     /// Closes the window, or withdraws a request not yet answered; what the
     /// trade slots held comes back from the server.
     fn cancel(world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
-        let own = world.player.as_ref().map(|player| player.spawn_id);
-        if let (Some(_), Some(own_id)) = (world.exchange.0.take(), own) {
-            out.send(&exchange::cancel(own_id)?)?;
+        let admitted = world.player.as_ref().is_some();
+        if let (Some(_), true) = (world.exchange.0.take(), admitted) {
+            out.request(&Request::CancelTrade)?;
         }
         Ok(())
     }
@@ -171,21 +172,24 @@ impl Exchanges {
     /// that this side's did ([`ExchangeUpdate::Taken`]). While another exchange is under way the player is busy,
     /// and the asker hears that instead.
     fn requested(from: u32, world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
-        let (Some(own_id), Ok(with)) = (
-            world.player.as_ref().map(|player| player.spawn_id),
-            u16::try_from(from),
-        ) else {
+        let (true, Ok(with)) = (world.player.is_some(), u16::try_from(from)) else {
             return out
                 .log
                 .diagnostic(format!("Spawn {from} asked to trade before admission"));
         };
         if world.exchange.is_some() {
-            out.send(&exchange::busy(own_id, from)?)?;
+            out.request(&Request::AnswerTrade {
+                asker: from,
+                busy: true,
+            })?;
             return out.log.diagnostic(format!(
                 "Spawn {from} asked to trade while another trade was under way"
             ));
         }
-        out.send(&exchange::acknowledge(own_id, from)?)?;
+        out.request(&Request::AnswerTrade {
+            asker: from,
+            busy: false,
+        })?;
         world.exchange.0 = Some(Exchange {
             with,
             partner: Partner::Player,
@@ -200,13 +204,13 @@ impl Exchanges {
     /// canceller's trade slots, so when another player closes the window this
     /// side closes it too, to get back what it put in.
     fn cancelled(world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
-        let own = world.player.as_ref().map(|player| player.spawn_id);
+        let admitted = world.player.is_some();
         let Some(exchange) = world.exchange.0.take() else {
             return Ok(());
         };
-        match (exchange.partner, exchange.stage, own) {
-            (Partner::Player, Stage::Open | Stage::Accepted, Some(own_id)) => {
-                out.send(&exchange::cancel(own_id)?)
+        match (exchange.partner, exchange.stage, admitted) {
+            (Partner::Player, Stage::Open | Stage::Accepted, true) => {
+                out.request(&Request::CancelTrade)
             }
             _ => Ok(()),
         }

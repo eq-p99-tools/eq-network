@@ -2,7 +2,8 @@
 
 mod session;
 pub use session::{
-    BackwardCalibration, MotionCalibration, MotionSession, StrafeCalibration, WalkCalibration,
+    titanium_jump, BackwardCalibration, MotionCalibration, MotionSession, StrafeCalibration,
+    WalkCalibration,
 };
 
 use crate::{command::EncodedCommand, world::Position};
@@ -86,19 +87,7 @@ impl PositionPacket {
     /// Rejects invalid IDs, non-finite coordinates, and out-of-range animation.
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)] // Explicit masks and bounded heading.
     pub fn encode(self) -> Result<[u8; 36]> {
-        ensure!(self.spawn_id != 0, "movement requires an own-spawn ID");
-        ensure!(
-            valid_position(self.position) && self.delta.iter().all(|v| v.is_finite()),
-            "non-finite movement"
-        );
-        ensure!(
-            (-512..=511).contains(&self.animation),
-            "movement animation exceeds signed 10-bit range"
-        );
-        ensure!(
-            (-512..=511).contains(&self.delta_heading),
-            "turn rate exceeds signed 10-bit range"
-        );
+        self.check()?;
         let mut body = [0; 36];
         body[..2].copy_from_slice(&self.spawn_id.to_le_bytes());
         body[2..4].copy_from_slice(&self.sequence.to_le_bytes());
@@ -120,6 +109,28 @@ impl PositionPacket {
         let heading = (self.position.heading.rem_euclid(512.0) * 4.0) as u16;
         body[32..34].copy_from_slice(&(heading & 0x0fff).to_le_bytes());
         Ok(body)
+    }
+
+    /// Checks that the sample can be sent: an own spawn, finite values, and
+    /// animation and turn rate within their signed 10-bit fields.
+    ///
+    /// # Errors
+    /// Rejects invalid IDs, non-finite coordinates, and out-of-range animation.
+    pub fn check(self) -> Result<()> {
+        ensure!(self.spawn_id != 0, "movement requires an own-spawn ID");
+        ensure!(
+            valid_position(self.position) && self.delta.iter().all(|v| v.is_finite()),
+            "non-finite movement"
+        );
+        ensure!(
+            (-512..=511).contains(&self.animation),
+            "movement animation exceeds signed 10-bit range"
+        );
+        ensure!(
+            (-512..=511).contains(&self.delta_heading),
+            "turn rate exceeds signed 10-bit range"
+        );
+        Ok(())
     }
 
     /// The position update carrying this sample.

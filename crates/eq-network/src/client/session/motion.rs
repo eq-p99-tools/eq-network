@@ -9,6 +9,7 @@ use anyhow::Result;
 use eq_network_game::{
     message::Message,
     movement::{MotionSession, MovementRequest, PositionPacket, STATIONARY_HEARTBEAT},
+    request::Request,
     world::{PlayerState, Position, WorldEvent},
 };
 use std::time::Instant;
@@ -102,7 +103,7 @@ impl Body {
             position,
             ..self.stationary
         };
-        stationary.encode()?;
+        stationary.check()?;
         if let Some(motion) = self.motion.as_mut() {
             motion.correct(position, now)?;
         }
@@ -115,13 +116,15 @@ impl Body {
     /// session's own updates, or the stationary heartbeat without one.
     fn heartbeat(&mut self, now: Instant, out: &mut Out<'_, '_>) -> Result<()> {
         if let Some(motion) = self.motion.as_mut() {
-            motion.tick(now, |packet| out.send_unreliable(packet))?;
+            motion.tick_sample(now, |sample| {
+                out.request_unreliable(&Request::Position(*sample))
+            })?;
             return Ok(());
         }
         if now.saturating_duration_since(self.last_sent) < STATIONARY_HEARTBEAT {
             return Ok(());
         }
-        out.send_unreliable(&self.stationary.packet()?)?;
+        out.request_unreliable(&Request::Position(self.stationary))?;
         self.stationary.sequence = self.stationary.sequence.wrapping_add(1);
         self.last_sent = now;
         Ok(())
@@ -168,9 +171,12 @@ impl Motion {
             world.posture.stand_to_move(player.spawn_id, out)?;
         }
         let mut transport_failed = false;
-        let sink = &mut *out.sink;
-        let result = motion.send_move(request, Instant::now(), |packet| {
-            let sent = sink.send_unreliable(packet);
+        let (wire, sender, sink) = (out.wire, out.sender, &mut *out.sink);
+        let result = motion.send_move_sample(request, Instant::now(), |sample| {
+            // A sample the generation cannot carry is refused like any other;
+            // only a failed send ends the admission.
+            let packet = wire.encode(&Request::Position(*sample), sender)?;
+            let sent = sink.send_unreliable(&packet);
             transport_failed = sent.is_err();
             sent
         });
@@ -229,7 +235,8 @@ impl Motion {
             .motion
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("the player cannot move yet"))
-            .and_then(MotionSession::jump);
+            .and_then(MotionSession::check_jump)
+            .and_then(|()| out.encode(&Request::Jump));
         match jump {
             // A failed send ends the admission like any other.
             Ok(packet) => out.send(&packet),

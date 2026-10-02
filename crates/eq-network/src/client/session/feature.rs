@@ -13,15 +13,17 @@ use super::{
     inventory::{Carried, Ledger},
     lifecycle::ZoneLifecycle,
     motion::Body,
+    objects::ZoneObjects,
     posture::OwnPosture,
+    tradeskills::OpenContainer,
     ClientCommand, ConnectionState, Events, ZoneExit,
 };
 use anyhow::{Context, Result};
 use eq_network_game::{
-    command::{self, EncodedCommand},
+    command::EncodedCommand,
     message::Message,
+    request::{Request, Sender},
     world::{PlayerState, Position},
-    GameDialect,
 };
 use eq_network_transport::Transport;
 use std::time::Instant;
@@ -66,9 +68,42 @@ pub(super) struct Out<'a, 'e> {
     pub(super) sink: &'a mut dyn Sink,
     /// The host's events and diagnostics.
     pub(super) log: &'a mut Events<'e>,
+    /// The server's client generation, which turns requests into packets.
+    pub(super) wire: &'static dyn super::wire::Wire,
+    /// Who the session speaks for.
+    pub(super) sender: Sender<'a>,
 }
 
 impl Out<'_, '_> {
+    /// The packet for a request, in the server's client generation.
+    ///
+    /// # Errors
+    /// Refuses a request the generation cannot carry.
+    pub(super) fn encode(&self, request: &Request) -> Result<EncodedCommand> {
+        self.wire.encode(request, self.sender)
+    }
+
+    /// Asks the server for something, in the server's client generation.
+    ///
+    /// # Errors
+    /// Returns an error when the generation cannot carry the request or the
+    /// connection fails.
+    pub(super) fn request(&mut self, request: &Request) -> Result<()> {
+        let packet = self.encode(request)?;
+        self.send(&packet)
+    }
+
+    /// Asks the server for something that may be lost, such as a position
+    /// the next one replaces.
+    ///
+    /// # Errors
+    /// Returns an error when the generation cannot carry the request or the
+    /// connection fails.
+    pub(super) fn request_unreliable(&mut self, request: &Request) -> Result<()> {
+        let packet = self.encode(request)?;
+        self.send_unreliable(&packet)
+    }
+
     /// Sends a packet that must arrive.
     ///
     /// # Errors
@@ -85,6 +120,34 @@ impl Out<'_, '_> {
         self.sink.send_unreliable(packet)
     }
 
+    /// The packet for a host command that needs nothing from the session's
+    /// state, in the server's client generation.
+    ///
+    /// # Errors
+    /// Rejects a command the generation cannot represent.
+    pub(super) fn encode_command(&self, command: &ClientCommand) -> Result<EncodedCommand> {
+        self.encode(&Request::Command(command.clone()))
+    }
+
+    /// Sends a host command that needs nothing from the session's state; one
+    /// the generation cannot represent is only noted. True when it went out.
+    ///
+    /// # Errors
+    /// Returns an error when the connection or the host's event handler fails.
+    pub(super) fn command(&mut self, command: &ClientCommand) -> Result<bool> {
+        match self.encode_command(command) {
+            Ok(packet) => {
+                self.send(&packet)?;
+                Ok(true)
+            }
+            Err(error) => {
+                self.log
+                    .diagnostic(format!("Rejected invalid outbound client command: {error}"))?;
+                Ok(false)
+            }
+        }
+    }
+
     /// Tells the host the zone session's state.
     ///
     /// # Errors
@@ -98,53 +161,8 @@ impl Out<'_, '_> {
     }
 }
 
-/// Encodes host commands in the server's dialect, for the commands that need
-/// nothing from the session's state.
-#[derive(Clone)]
-pub(super) struct Encoder {
-    dialect: GameDialect,
-    /// The player's name, which some packets repeat.
-    character: String,
-}
-
-impl Encoder {
-    pub(super) fn new(dialect: GameDialect, character: &str) -> Self {
-        Self {
-            dialect,
-            character: character.into(),
-        }
-    }
-
-    /// The packet for a command.
-    ///
-    /// # Errors
-    /// Rejects a command the dialect cannot represent.
-    pub(super) fn encode(&self, command: &ClientCommand) -> Result<EncodedCommand> {
-        command::encode(self.dialect, command, &self.character)
-    }
-
-    /// Sends a command; one the dialect cannot represent is only noted. True
-    /// when it went out.
-    ///
-    /// # Errors
-    /// Returns an error when the connection or the host's event handler fails.
-    pub(super) fn send(&self, command: &ClientCommand, out: &mut Out<'_, '_>) -> Result<bool> {
-        match self.encode(command) {
-            Ok(packet) => {
-                out.send(&packet)?;
-                Ok(true)
-            }
-            Err(error) => {
-                out.log
-                    .diagnostic(format!("Rejected invalid outbound client command: {error}"))?;
-                Ok(false)
-            }
-        }
-    }
-}
-
 /// What the zone's features share.
-pub(super) struct World {
+pub(in crate::client) struct World {
     /// This admission's session, which host commands must name.
     pub(super) session_id: u64,
     /// The admitted player, once the zone is ready; see [`PlayerRecord`] for
@@ -169,7 +187,7 @@ pub(super) struct World {
     /// When the zone admitted the player, once it has.
     pub(super) admitted: Option<Instant>,
     /// Application packets received in this zone session.
-    pub(super) packets: u64,
+    pub(in crate::client) packets: u64,
     /// The zone's spawns, which only the entities feature changes.
     pub(super) spawns: Spawns,
     /// The give or trade window asked for or open, which only the exchange
@@ -178,11 +196,16 @@ pub(super) struct World {
     /// The server's idea of the player's target, which only the targeting
     /// feature changes.
     pub(super) target: super::targeting::Target,
+    /// The zone's objects, which only the ground objects feature changes.
+    pub(super) objects: ZoneObjects,
+    /// The world container asked for or open, which only the tradeskills
+    /// feature changes.
+    pub(super) container: OpenContainer,
 }
 
 impl World {
     /// The shared state of a new admission.
-    pub(super) fn new(session_id: u64) -> Self {
+    pub(in crate::client) fn new(session_id: u64) -> Self {
         Self {
             session_id,
             player: PlayerRecord::default(),
@@ -199,6 +222,8 @@ impl World {
             spawns: Spawns::default(),
             exchange: Exchanging::default(),
             target: super::targeting::Target::default(),
+            objects: ZoneObjects::default(),
+            container: OpenContainer::default(),
         }
     }
 
@@ -442,6 +467,11 @@ pub(super) mod testing {
             size: 6.0,
             invisible: false,
             appearance: eq_network_game::appearance::Appearance::default(),
+            level: 0,
+            listing: eq_network_game::listing::Listing::default(),
+            name_parts: eq_network_game::names::NameParts::default(),
+            pet_owner: None,
+            hp_percent: None,
         }
     }
 
@@ -450,6 +480,7 @@ pub(super) mod testing {
         eq_network_game::inventory::InventoryItem {
             activation: eq_network_game::inventory::ItemActivation::default(),
             scroll_spell: None,
+            book: None,
             rules: eq_network_game::inventory::ItemPlacement::default(),
             slot: eq_network_game::inventory::InventorySlot(slot),
             icon: 0,
@@ -510,6 +541,12 @@ pub(super) mod testing {
         let result = step(&mut Out {
             sink: &mut sink,
             log: &mut log,
+            wire: &super::super::wire::Titanium,
+            // Every test admits the player as spawn 7 named Tester.
+            sender: eq_network_game::request::Sender {
+                name: "Tester",
+                spawn_id: Some(7),
+            },
         });
         drop(log);
         Outcome {

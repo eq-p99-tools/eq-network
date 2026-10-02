@@ -85,6 +85,9 @@ pub struct PlayerState {
     pub deity: Option<u32>,
     /// Indexed profile skill values, when decoded; IDs retain the protocol's numbering.
     pub skills: Option<Vec<u32>>,
+    /// Unspent practice points, which training at a guildmaster spends, when
+    /// decoded.
+    pub practice_points: Option<u32>,
     /// Numeric gender identifier.
     pub gender: u32,
     /// Current level.
@@ -111,6 +114,12 @@ pub struct PlayerState {
     /// Worn gear and features from the own spawn record; default where the
     /// dialect does not report them.
     pub appearance: crate::appearance::Appearance,
+    /// How `/who` lists the player, from the own spawn record; default where
+    /// the dialect does not report it.
+    pub listing: crate::listing::Listing,
+    /// The player's title, last name and suffix, from the own spawn record;
+    /// empty where the dialect does not report them.
+    pub name_parts: crate::names::NameParts,
 }
 
 impl PlayerState {
@@ -179,6 +188,20 @@ pub struct SpawnState {
     pub invisible: bool,
     /// Worn gear and features; default where the dialect does not report them.
     pub appearance: crate::appearance::Appearance,
+    /// The level `/who` shows; zero where the dialect does not report it.
+    pub level: u8,
+    /// How `/who` lists a player; default for others and where the dialect
+    /// does not report it.
+    pub listing: crate::listing::Listing,
+    /// Whose pet the spawn is; None for no one's, or where the dialect does
+    /// not report it.
+    pub pet_owner: Option<u16>,
+    /// Health in percent when the record was sent; None where the record's
+    /// value is out of range or the dialect does not report it.
+    pub hp_percent: Option<u8>,
+    /// The spawn's title, last name and suffix; empty where the dialect does
+    /// not report them.
+    pub name_parts: crate::names::NameParts,
 }
 
 /// Decode a decrypted Titanium spawn batch, without accepting partial records.
@@ -220,6 +243,11 @@ pub fn titanium_spawns(body: &[u8]) -> Result<Vec<SpawnState>> {
                 position,
                 velocity,
                 appearance: crate::appearance::titanium_spawn(record),
+                level: record[151],
+                listing: crate::listing::titanium_spawn(record),
+                pet_owner: crate::pets::titanium_owner(record),
+                hp_percent: (record[86] <= 100).then_some(record[86]),
+                name_parts: crate::names::titanium_spawn(record),
             })
         })
         .collect()
@@ -315,12 +343,30 @@ pub enum Capability {
     Zoning,
     /// Using abilities: kick, bash, taunt, hide, sneak, forage and the like.
     Abilities,
+    /// Asking who is online.
+    Who,
+    /// Consenting others to players' corpses, and summoning and dragging
+    /// them.
+    Corpses,
+    /// Commanding a pet.
+    Pets,
+    /// Training skills at a guildmaster.
+    Training,
+    /// Accepting or declining a resurrection.
+    Resurrection,
+    /// Reading books and notes.
+    Reading,
+    /// Combining in the player's own tradeskill containers.
+    Tradeskills,
+    /// Opening the in-game map, which a front end draws from the
+    /// installation's map files.
+    Map,
 }
 
 impl Capability {
     /// Every capability, in order: what a session offers when its server and
     /// client generation support everything.
-    pub const ALL: [Self; 16] = [
+    pub const ALL: [Self; 24] = [
         Self::Casting,
         Self::Spellbook,
         Self::Inventory,
@@ -337,6 +383,14 @@ impl Capability {
         Self::GroundItems,
         Self::Zoning,
         Self::Abilities,
+        Self::Who,
+        Self::Corpses,
+        Self::Pets,
+        Self::Training,
+        Self::Resurrection,
+        Self::Reading,
+        Self::Tradeskills,
+        Self::Map,
     ];
 }
 
@@ -519,6 +573,22 @@ pub enum WorldEvent {
         /// Whether the server marks this entity invisible.
         invisible: bool,
     },
+    /// A change in how `/who` lists a player.
+    Listing {
+        /// Zone-local entity identifier.
+        spawn_id: u16,
+        /// What changed.
+        change: crate::listing::ListingChange,
+    },
+    /// Guild names by number, from the world or a guild member's zone.
+    GuildNames(Vec<(u32, String)>),
+    /// A character's last name changed.
+    LastName {
+        /// The character, by the name they spawned with.
+        name: String,
+        /// The new last name; empty when it was taken away.
+        last_name: String,
+    },
     /// Current mana on protocols without a combined endurance update.
     Mana(u32),
     /// An entity left the zone or was removed.
@@ -628,6 +698,28 @@ pub enum WorldEvent {
         /// Why no window opened.
         reason: String,
     },
+    /// How fed and watered the player is, from the profile and the
+    /// server's updates.
+    Nourishment(crate::food::Nourishment),
+    /// The player turned hungry or thirsty with nothing in the inventory
+    /// the session eats or drinks on its own.
+    NothingToEat {
+        /// Why a hungry player went without food.
+        food: Option<crate::food::Shortage>,
+        /// Why a thirsty player went without drink.
+        water: Option<crate::food::Shortage>,
+    },
+    /// An item was not eaten or drunk, and why.
+    ConsumeRefused {
+        /// Admission from the request.
+        session_id: u64,
+        /// Why not.
+        reason: String,
+        /// The official client's own words for this refusal, as an
+        /// `eqstr_us.txt` string ID, for a host with the installed strings;
+        /// `reason` says the same in this library's words.
+        string_id: Option<u32>,
+    },
     /// The player used an ability; its timer runs this long before the
     /// server takes the next use.
     AbilityUsed {
@@ -638,12 +730,109 @@ pub enum WorldEvent {
         /// How long its recovery takes, at most.
         ready_in: std::time::Duration,
     },
+    /// The abilities this server type offers, as the zone admits the player;
+    /// a host greys the rest, which the session refuses.
+    AbilitiesOffered(Vec<crate::abilities::Ability>),
     /// An ability was not used, and why: the server would have ignored it.
     AbilityRefused {
         /// Admission from the request.
         session_id: u64,
         /// Why not.
         reason: String,
+        /// The official client's own words for this refusal, as an
+        /// `eqstr_us.txt` string ID, for a host with the installed strings;
+        /// `reason` says the same in this library's words.
+        string_id: Option<u32>,
+        /// What the official words name, in order, such as the player too
+        /// far away to bandage.
+        arguments: Vec<String>,
+    },
+    /// A bandaging started or ended.
+    BindWound(crate::bind_wound::BindWoundUpdate),
+    /// The world's answer to `/who all`.
+    WhoList(crate::who::WhoList),
+    /// The time of day, as a zone admits the player and whenever it is
+    /// changed; between those it runs on its own.
+    TimeOfDay(crate::clock::GameTime),
+    /// How the zone's sky and fog look, right after the admission.
+    Sky(crate::clock::ZoneSky),
+    /// A consent to drag a player's corpses given or taken back, told to
+    /// the owner and to the one consented.
+    Consent(crate::corpses::Consent),
+    /// A consent, summon or drag was not sent, and why.
+    CorpseRefused {
+        /// Admission from the request.
+        session_id: u64,
+        /// Why not.
+        reason: String,
+        /// The official client's own words for this refusal, as an
+        /// `eqstr_us.txt` string ID, for a host with the installed strings;
+        /// `reason` says the same in this library's words.
+        string_id: Option<u32>,
+    },
+    /// A spawn became someone's pet, as a charm takes hold, or no one's, as
+    /// it breaks.
+    PetOwner {
+        /// The spawn.
+        spawn_id: u16,
+        /// Its new owner's spawn, if any.
+        owner: Option<u16>,
+    },
+    /// The player's pet's buffs.
+    PetBuffs(crate::pets::PetBuffs),
+    /// A command to the pet was not sent, and why.
+    PetRefused {
+        /// Admission from the request.
+        session_id: u64,
+        /// Why not.
+        reason: String,
+        /// The official client's own words for this refusal, as an
+        /// `eqstr_us.txt` string ID, for a host with the installed strings;
+        /// `reason` says the same in this library's words.
+        string_id: Option<u32>,
+    },
+    /// Training at a guildmaster opened, took a practice or ended.
+    Training(crate::training::TrainingUpdate),
+    /// A training request was not sent, and why.
+    TrainingRefused {
+        /// Admission from the request.
+        session_id: u64,
+        /// Why not.
+        reason: String,
+    },
+    /// How many practice points the player has left.
+    PracticePoints(u32),
+    /// A resurrection was cast on the player's corpse; the player may accept
+    /// or decline it.
+    Resurrection(crate::resurrection::ResurrectionOffer),
+    /// An answer to a resurrection was not sent, and why.
+    ResurrectionRefused {
+        /// Admission from the request.
+        session_id: u64,
+        /// Why not.
+        reason: String,
+    },
+    /// A book's or note's text, to read.
+    BookText(crate::books::BookText),
+    /// A request to read was not sent, and why.
+    ReadRefused {
+        /// Admission from the request.
+        session_id: u64,
+        /// Why not.
+        reason: String,
+    },
+    /// A tradeskill combine started, or the server judged it.
+    Combine(crate::tradeskills::CombineUpdate),
+    /// A combine was not sent, and why.
+    CombineRefused {
+        /// Admission from the request.
+        session_id: u64,
+        /// Why not.
+        reason: String,
+        /// The official client's own words for this refusal, as an
+        /// `eqstr_us.txt` string ID, for a host with the installed strings;
+        /// `reason` says the same in this library's words.
+        string_id: Option<u32>,
     },
     /// A melee, skill or spell damage record for any nearby entities.
     Damage(crate::combat::Damage),
@@ -710,6 +899,7 @@ pub fn titanium_player(profile: &[u8], spawn: &[u8], revolution: f32) -> Result<
                 .map(|index| word(profile, 4460 + index * 4))
                 .collect(),
         ),
+        practice_points: Some(word(profile, 2224)),
         gender: word(profile, 4),
         level: profile[20],
         position,
@@ -725,6 +915,8 @@ pub fn titanium_player(profile: &[u8], spawn: &[u8], revolution: f32) -> Result<
         run_speed,
         hp_percent: (spawn[86] <= 100).then_some(spawn[86]),
         appearance: crate::appearance::titanium_spawn(spawn),
+        listing: crate::listing::titanium_spawn(spawn),
+        name_parts: crate::names::titanium_spawn(spawn),
     })
 }
 
@@ -790,6 +982,26 @@ pub fn titanium_update(opcode: u16, body: &[u8]) -> Result<Option<WorldEvent>> {
             WorldEvent::Consideration(crate::combat::consideration(body)?)
         }
         crate::combat::DAMAGE_OPCODE => WorldEvent::Damage(crate::combat::damage(body)?),
+        crate::food::STAMINA_OPCODE => {
+            WorldEvent::Nourishment(crate::food::decode(opcode, body)?.unwrap_or_default())
+        }
+        crate::who::RESPONSE_OPCODE => WorldEvent::WhoList(crate::who::decode(body)?),
+        crate::clock::TIME_OPCODE => WorldEvent::TimeOfDay(crate::clock::decode(body)?),
+        crate::corpses::CONSENT_RESPONSE_OPCODE => {
+            WorldEvent::Consent(crate::corpses::decode_consent(body)?)
+        }
+        crate::pets::BUFFS_OPCODE => WorldEvent::PetBuffs(crate::pets::decode_buffs(body)?),
+        crate::listing::LOOKING_OPCODE => {
+            let (spawn_id, change) = crate::listing::looking(body)?;
+            WorldEvent::Listing { spawn_id, change }
+        }
+        crate::listing::GUILDS_OPCODE => {
+            WorldEvent::GuildNames(crate::listing::titanium_guilds(body)?)
+        }
+        crate::names::LAST_NAME_OPCODE => {
+            let (name, last_name) = crate::names::last_name(body)?;
+            WorldEvent::LastName { name, last_name }
+        }
         0x0695 => {
             ensure!(
                 body.len() == 3 && body[2] <= 100,
@@ -841,8 +1053,9 @@ pub fn titanium_update(opcode: u16, body: &[u8]) -> Result<Option<WorldEvent>> {
     }))
 }
 
-/// Spell actions, doors, ground objects, loot, merchant, exchange and
-/// inventory packets, each owned by its codec.
+/// Spell actions, doors, ground objects, loot, merchant, exchange,
+/// training, resurrection, book, combine, bandaging and inventory packets,
+/// each owned by its codec.
 fn titanium_views(opcode: u16, body: &[u8]) -> Result<Option<WorldEvent>> {
     if opcode == 0x497c {
         return Ok(crate::buffs::titanium_spell_effect(body)?.map(WorldEvent::SpellEffect));
@@ -857,6 +1070,16 @@ fn titanium_views(opcode: u16, body: &[u8]) -> Result<Option<WorldEvent>> {
         Some(WorldEvent::Merchant(update))
     } else if let Some(update) = crate::exchange::decode(opcode, body)? {
         Some(WorldEvent::Exchange(update))
+    } else if let Some(update) = crate::training::decode(opcode, body)? {
+        Some(WorldEvent::Training(update))
+    } else if let Some(offer) = crate::resurrection::decode(opcode, body)? {
+        Some(WorldEvent::Resurrection(offer))
+    } else if let Some(text) = crate::books::decode(opcode, body)? {
+        Some(WorldEvent::BookText(text))
+    } else if let Some(update) = crate::tradeskills::decode(opcode, body)? {
+        Some(WorldEvent::Combine(update))
+    } else if let Some(update) = crate::bind_wound::decode(opcode, body)? {
+        Some(WorldEvent::BindWound(update))
     } else {
         crate::inventory::decode(opcode, body)?.map(WorldEvent::Inventory)
     })
@@ -878,21 +1101,27 @@ fn money_update(body: &[u8]) -> Result<Coins> {
 pub(crate) fn appearance(body: &[u8]) -> Result<Option<WorldEvent>> {
     ensure!(body.len() == 8, "invalid appearance length");
     let kind = u16::from_le_bytes([body[2], body[3]]);
-    if !matches!(kind, 3 | 14) {
+    let value = word(body, 4);
+    let listing = crate::listing::appearance(kind, value);
+    if !matches!(kind, 3 | 14 | crate::pets::PET_APPEARANCE) && listing.is_none() {
         return Ok(None);
     }
     let spawn_id = u16::from_le_bytes([body[0], body[1]]);
     ensure!(spawn_id != 0, "invalid appearance spawn ID");
-    Ok(Some(if kind == 14 {
-        WorldEvent::Posture {
+    Ok(Some(match (kind, listing) {
+        (_, Some(change)) => WorldEvent::Listing { spawn_id, change },
+        (crate::pets::PET_APPEARANCE, None) => WorldEvent::PetOwner {
             spawn_id,
-            posture: word(body, 4).into(),
-        }
-    } else {
-        WorldEvent::Visibility {
+            owner: u16::try_from(value).ok().filter(|owner| *owner != 0),
+        },
+        (14, None) => WorldEvent::Posture {
             spawn_id,
-            invisible: word(body, 4) != 0,
-        }
+            posture: value.into(),
+        },
+        _ => WorldEvent::Visibility {
+            spawn_id,
+            invisible: value != 0,
+        },
     }))
 }
 
@@ -989,7 +1218,7 @@ fn p99_compact_position(body: &[u8]) -> Result<WorldEvent> {
 fn signed_position(value: u32) -> f32 {
     (((value & 0x7ffff) << 13) as i32 >> 13) as f32 / 8.0
 }
-fn until_nul(bytes: &[u8]) -> &[u8] {
+pub(crate) fn until_nul(bytes: &[u8]) -> &[u8] {
     &bytes[..bytes
         .iter()
         .position(|&byte| byte == 0)
@@ -1031,6 +1260,14 @@ mod tests {
             Capability::GroundItems => 13,
             Capability::Zoning => 14,
             Capability::Abilities => 15,
+            Capability::Who => 16,
+            Capability::Corpses => 17,
+            Capability::Pets => 18,
+            Capability::Training => 19,
+            Capability::Resurrection => 20,
+            Capability::Reading => 21,
+            Capability::Tradeskills => 22,
+            Capability::Map => 23,
         };
         for (index, capability) in Capability::ALL.into_iter().enumerate() {
             assert_eq!(place(capability), index, "{capability:?}");
@@ -1067,6 +1304,44 @@ mod tests {
         packet[..2].fill(0);
         assert!(crate::quarm::updates(0xf540, &packet).is_err());
     }
+    #[test]
+    fn listing_news_says_how_who_lists_a_player() {
+        use crate::listing::ListingChange;
+        let mut packet = [0u8; 8];
+        packet[..2].copy_from_slice(&73u16.to_le_bytes());
+        packet[2..4].copy_from_slice(&24u16.to_le_bytes());
+        packet[4..].copy_from_slice(&1u32.to_le_bytes());
+        assert_eq!(
+            super::titanium_update(0x7c32, &packet).unwrap(),
+            Some(super::WorldEvent::Listing {
+                spawn_id: 73,
+                change: ListingChange::Away(true)
+            })
+        );
+        let mut looking = 73u32.to_le_bytes().to_vec();
+        looking.extend_from_slice(&[1, 0, 0, 0]);
+        assert_eq!(
+            super::titanium_update(crate::listing::LOOKING_OPCODE, &looking).unwrap(),
+            Some(super::WorldEvent::Listing {
+                spawn_id: 73,
+                change: ListingChange::Looking(true)
+            })
+        );
+        let mut guilds = vec![0; 64 * 3];
+        guilds[128..132].copy_from_slice(b"Riot");
+        assert_eq!(
+            super::titanium_update(crate::listing::GUILDS_OPCODE, &guilds).unwrap(),
+            Some(super::WorldEvent::GuildNames(vec![(1, "Riot".into())]))
+        );
+        let mut record = vec![0; 385];
+        record[340..344].copy_from_slice(&73u32.to_le_bytes());
+        record[151] = 42;
+        record[237] = 1;
+        let spawns = super::titanium_spawns(&record).unwrap();
+        assert_eq!(spawns[0].level, 42);
+        assert!(spawns[0].listing.away);
+    }
+
     #[test]
     fn titanium_visibility_updates_require_complete_appearance_packets() {
         let mut packet = [0u8; 8];
@@ -1368,6 +1643,7 @@ mod tests {
         for (index, record) in body.as_chunks_mut::<385>().0.iter_mut().enumerate() {
             record[7..14].copy_from_slice(b"Fixture");
             record[83] = if index == 0 { 1 } else { 3 };
+            record[86] = if index == 0 { 64 } else { 200 };
             record[331] = if index == 0 { 40 } else { 255 };
             record[75..79].copy_from_slice(&6f32.to_le_bytes());
             record[284..288].copy_from_slice(&42u32.to_le_bytes());
@@ -1392,6 +1668,11 @@ mod tests {
         assert_eq!(spawns[1].class, Some(255));
         assert_eq!(spawns[1].kind, SpawnKind::NpcCorpse);
         assert_eq!(spawns[1].spawn_id, 11);
+        // Health out of range is no health at all.
+        assert_eq!(
+            (spawns[0].hp_percent, spawns[1].hp_percent),
+            (Some(64), None)
+        );
         assert!((spawns[0].position.x + 1.0).abs() < 0.001);
         assert!((spawns[0].position.heading - 256.0).abs() < 0.001);
         assert!(titanium_spawns(&body[..769]).is_err());

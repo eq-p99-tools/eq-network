@@ -190,3 +190,148 @@ fn visibility_and_mana_use_eqmac_fields_without_inventing_endurance() {
         .endurance
         .is_none());
 }
+
+#[test]
+fn dll_version_ignores_other_features_responses_and_malformed_messages() {
+    let request = [0, 0, 0, 1, 0, 0, 4, 0];
+    for length in 0..8 {
+        assert!(dll_version_reply(&request[..length]).is_none());
+    }
+    let mut oversized = request.to_vec();
+    oversized.push(0);
+    assert!(dll_version_reply(&oversized).is_none());
+    for (offset, value) in [
+        (0, 1),
+        (2, 1),
+        (3, 0),
+        (6, 2),
+        (6, 3),
+        (6, 5),
+        (6, 7),
+        (6, 255),
+        (7, 128),
+    ] {
+        let mut other = request;
+        other[offset] = value;
+        assert!(dll_version_reply(&other).is_none());
+    }
+    let mut arbitrary_value = request;
+    arbitrary_value[4..6].fill(255);
+    assert_eq!(
+        dll_version_reply(&arbitrary_value),
+        Some([0, 0, 0, 1, 7, 0, 4, 128])
+    );
+}
+
+#[test]
+fn camping_logging_out_and_a_stance_are_eqmacs_own_packets() {
+    use crate::command::Posture;
+    assert_eq!(camp().opcode, 0x0742);
+    assert_eq!(camp().body.len(), 0);
+    assert_eq!((logout().opcode, logout().body.len()), (ZONE_LOGOUT, 0));
+    let sitting = posture(7, Posture::Sitting).unwrap();
+    assert_eq!(sitting.opcode, ZONE_SPAWN_APPEARANCE);
+    assert_eq!(sitting.body, [7, 0, 14, 0, 110, 0, 0, 0]);
+    assert!(posture(0, Posture::Standing).is_err());
+}
+
+#[test]
+fn a_position_update_lays_out_what_takp_reads() {
+    use crate::movement::PositionPacket;
+    let sample = PositionPacket {
+        spawn_id: 7,
+        sequence: 3,
+        position: Position {
+            x: -12.6,
+            y: 456.9,
+            z: 3.75,
+            heading: 300.0,
+        },
+        delta: [-1.5, 2.25, -0.5],
+        animation: 24,
+        delta_heading: -2,
+    };
+    let packet = client_update(&sample).unwrap();
+    assert_eq!(packet.opcode, ZONE_CLIENT_UPDATE);
+    let body = packet.body;
+    assert_eq!(body.len(), 15);
+    assert_eq!(&body[..5], &[7, 0, 24, 150, 0xfe]);
+    // y, x and z in tenths, each cut toward zero.
+    assert_eq!(i16::from_le_bytes([body[5], body[6]]), 456);
+    assert_eq!(i16::from_le_bytes([body[7], body[8]]), -12);
+    assert_eq!(i16::from_le_bytes([body[9], body[10]]), 37);
+    // TAKP unpacks the velocity: x from bits 22 to 31, z from 11 to 21 and
+    // y from 0 to 10, each a signed count of sixteenths.
+    let value = u32::from_le_bytes(body[11..15].try_into().unwrap());
+    let signed = |bits: u32, width: u32| {
+        let value = i32::try_from(bits).unwrap();
+        let value = if bits & (1 << (width - 1)) == 0 {
+            value
+        } else {
+            value - (1 << width)
+        };
+        f32::from(i16::try_from(value).unwrap()) / 16.0
+    };
+    assert!((signed(value >> 22, 10) + 1.5).abs() < f32::EPSILON);
+    assert!((signed((value >> 11) & 0x7ff, 11) + 0.5).abs() < f32::EPSILON);
+    assert!((signed(value & 0x7ff, 11) - 2.25).abs() < f32::EPSILON);
+    // A turn and speed beyond a byte are held at its ends.
+    let fast = PositionPacket {
+        animation: 300,
+        delta_heading: -300,
+        ..sample
+    };
+    assert_eq!(&client_update(&fast).unwrap().body[2..5], &[127, 150, 0x80]);
+    assert!(client_update(&PositionPacket {
+        spawn_id: 0,
+        ..sample
+    })
+    .is_err());
+}
+
+#[test]
+fn the_client_answers_only_version_checks_by_itself() {
+    let request = [0, 0, 0, 1, 0, 0, 4, 0];
+    let reply = answer(ZONE_SPAWN_APPEARANCE, &request).unwrap();
+    assert_eq!(reply.opcode, ZONE_SPAWN_APPEARANCE);
+    assert_eq!(reply.body, dll_version_message(true));
+    // Its own reply, another appearance or another opcode needs no answer.
+    assert!(answer(ZONE_SPAWN_APPEARANCE, &dll_version_message(true)).is_none());
+    assert!(answer(ZONE_SPAWN_APPEARANCE, &[7, 0, 16, 0, 7, 0, 0, 0]).is_none());
+    assert!(answer(ZONE_WEATHER, &request).is_none());
+}
+
+#[test]
+fn a_zone_request_names_the_zone_place_and_reason() {
+    let mut body = [0; 24];
+    body[..4].copy_from_slice(&2u32.to_le_bytes());
+    body[4..8].copy_from_slice(&(-162.0f32).to_le_bytes());
+    body[8..12].copy_from_slice(&(-259.0f32).to_le_bytes());
+    body[12..16].copy_from_slice(&3.75f32.to_le_bytes());
+    body[16..20].copy_from_slice(&64.0f32.to_le_bytes());
+    body[20..].copy_from_slice(&11u32.to_le_bytes());
+    let offer = zone_request(&body).unwrap();
+    assert_eq!((offer.zone_id, offer.instance_id, offer.reason), (2, 0, 11));
+    assert_eq!(
+        offer.position,
+        Position {
+            x: -259.0,
+            y: -162.0,
+            z: 3.75,
+            heading: 64.0
+        }
+    );
+    assert!(offer.solicited && !offer.to_bind);
+    assert!(zone_request(&body[..23]).is_err());
+    body[..4].copy_from_slice(&70_000u32.to_le_bytes());
+    assert!(zone_request(&body).is_err());
+}
+
+#[test]
+fn mac_filters_enable_every_chat_and_combat_category() {
+    let filters = server_filters();
+    for index in 0..17 {
+        let value = u32::from_le_bytes(filters[index * 4..index * 4 + 4].try_into().unwrap());
+        assert_eq!(value, u32::from((5..=14).contains(&index)));
+    }
+}

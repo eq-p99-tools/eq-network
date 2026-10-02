@@ -4,12 +4,209 @@
 //! `mac.cpp`, `common/eq_packet_structs.h`, and `common/packet_functions.cpp`.
 //! Decoders retain only presentation fields, never the full character profile.
 
-use crate::world::{BaseAttributes, PlayerState, Position, SpawnKind, SpawnState, WorldEvent};
+use crate::{
+    command::EncodedCommand,
+    world::{BaseAttributes, PlayerState, Position, SpawnKind, SpawnState, WorldEvent},
+    zoning::ZoneOffer,
+};
 use anyhow::{ensure, Context, Result};
 use zeroize::Zeroizing;
 
 const PROFILE_SIZE: usize = 8460;
 const SPAWN_SIZE: usize = 224;
+
+/// The client's data rate, the first thing it sends a zone.
+pub const ZONE_DATA_RATE: u16 = 0xe841;
+/// The client's zone entry, and the zone's answer: the player's own spawn.
+pub const ZONE_ENTRY: u16 = 0x2840;
+/// The player's profile.
+pub const ZONE_PLAYER_PROFILE: u16 = 0x3640;
+/// The zone's weather, after which the client asks for the zone.
+pub const ZONE_WEATHER: u16 = 0x3641;
+/// The client asking for the zone's description.
+pub const ZONE_REQUEST_NEW: u16 = 0x5d40;
+/// The zone's description.
+pub const ZONE_NEW: u16 = 0x5b40;
+/// The client asking for the zone's spawns.
+pub const ZONE_REQUEST_SPAWNS: u16 = 0x0a40;
+/// The zone's experience report, which the client echoes.
+pub const ZONE_EXPERIENCE_READY: u16 = 0xd840;
+/// The zone saying the player's avatar is ready.
+pub const ZONE_AVATAR_READY: u16 = 0x6f40;
+/// The client's chat and combat filters.
+pub const ZONE_SERVER_FILTER: u16 = 0xff41;
+/// A position update; the client's first completes the zone entry.
+pub const ZONE_CLIENT_UPDATE: u16 = 0xf340;
+/// A spawn appearance: the own spawn's ID, and the DLL version check.
+pub const ZONE_SPAWN_APPEARANCE: u16 = 0xf540;
+/// The client's logout once its camp timer completes, which the server
+/// also sends to log the character out.
+pub const ZONE_LOGOUT: u16 = 0x5041;
+/// The client starting to camp (`OP_Camp`).
+pub const ZONE_CAMP: u16 = 0x0742;
+/// The server's answer to a logout (`OP_LogoutReply`), which ends the zone
+/// connection.
+pub const ZONE_LOGOUT_REPLY: u16 = 0x5941;
+/// The server asking the client to change zones.
+pub const ZONE_CHANGE_REQUEST: u16 = 0x4d41;
+
+// akplus-dll af2bd327, eqgame.cpp: DLL_VERSION and DLL_VERSION_MESSAGE_ID.
+// This announcement is independent of the optional gameplay feature handshakes.
+const DLL_VERSION: u16 = 7;
+const DLL_MESSAGE_TYPE: u16 = 256;
+const DLL_VERSION_FEATURE: u16 = 4;
+
+/// The client's DLL version announcement, or a reply with the response bit
+/// set; custom DLL messages use spawn ID zero.
+#[must_use]
+pub fn dll_version_message(response: bool) -> [u8; 8] {
+    let mut body = [0; 8];
+    body[2..4].copy_from_slice(&DLL_MESSAGE_TYPE.to_le_bytes());
+    let parameter = (u32::from(response) << 31)
+        | (u32::from(DLL_VERSION_FEATURE) << 16)
+        | u32::from(DLL_VERSION);
+    body[4..].copy_from_slice(&parameter.to_le_bytes());
+    body
+}
+
+/// The reply to a well-formed DLL version request, during admission or
+/// normal play; none for anything else.
+#[must_use]
+pub fn dll_version_reply(body: &[u8]) -> Option<[u8; 8]> {
+    let body: &[u8; 8] = body.try_into().ok()?;
+    let spawn_id = u16::from_le_bytes([body[0], body[1]]);
+    let appearance = u16::from_le_bytes([body[2], body[3]]);
+    let parameter = u32::from_le_bytes([body[4], body[5], body[6], body[7]]);
+    // Comparing the full high word also excludes responses (bit 31), preventing loops.
+    (spawn_id == 0
+        && appearance == DLL_MESSAGE_TYPE
+        && parameter >> 16 == u32::from(DLL_VERSION_FEATURE))
+    .then(|| dll_version_message(true))
+}
+
+/// What the `EQMac` client answers by itself whenever it arrives, during
+/// admission or normal play: Quarm's DLL version check.
+#[must_use]
+pub fn answer(opcode: u16, body: &[u8]) -> Option<EncodedCommand> {
+    if opcode != ZONE_SPAWN_APPEARANCE {
+        return None;
+    }
+    dll_version_reply(body).map(|reply| EncodedCommand {
+        opcode: ZONE_SPAWN_APPEARANCE,
+        body: reply.to_vec(),
+    })
+}
+
+/// The server asking the client to move (`RequestClientZoneChange`): the
+/// zone as a 32-bit ID where Titanium's request has a zone and an instance,
+/// then where to and the reason the client echoes. The client keeps its
+/// own coordinates for 999999.
+///
+/// # Errors
+/// Rejects malformed requests and zone IDs beyond 16 bits.
+pub fn zone_request(body: &[u8]) -> Result<ZoneOffer> {
+    ensure!(body.len() == 24, "invalid EQMac zone request length");
+    Ok(ZoneOffer {
+        zone_id: u16::try_from(word(body, 0)).context("EQMac zone ID out of range")?,
+        instance_id: 0,
+        position: Position {
+            x: float(body, 8)?,
+            y: float(body, 4)?,
+            z: float(body, 12)?,
+            heading: float(body, 16)?,
+        },
+        reason: word(body, 20),
+        to_bind: false,
+        solicited: true,
+    })
+}
+
+/// The client starting to camp. TAKP reads nothing in it; the official
+/// client's body is unrecorded.
+#[must_use]
+pub fn camp() -> EncodedCommand {
+    EncodedCommand {
+        opcode: ZONE_CAMP,
+        body: Vec::new(),
+    }
+}
+
+/// The client's logout once its camp timer completes.
+#[must_use]
+pub fn logout() -> EncodedCommand {
+    EncodedCommand {
+        opcode: ZONE_LOGOUT,
+        body: Vec::new(),
+    }
+}
+
+/// The player's stance, as Titanium's: an appearance of the player's own
+/// spawn, of type 14 (animation), with the stance's value.
+///
+/// # Errors
+/// Refuses a stance for no spawn.
+pub fn posture(spawn_id: u16, posture: crate::command::Posture) -> Result<EncodedCommand> {
+    ensure!(spawn_id != 0, "a stance needs the player's own spawn");
+    let mut body = spawn_id.to_le_bytes().to_vec();
+    body.extend_from_slice(&14u16.to_le_bytes());
+    body.extend_from_slice(&posture.appearance().to_le_bytes());
+    Ok(EncodedCommand {
+        opcode: ZONE_SPAWN_APPEARANCE,
+        body,
+    })
+}
+
+/// The player's position (`OP_ClientUpdate`, TAKP's 15-byte
+/// `SpawnPositionUpdate_Struct`): the spawn, its speed, its heading in
+/// halves (0 to 255), its turn, where it stands as whole units (z in tenths,
+/// cut toward zero as the client cuts them), and its velocity packed as the
+/// client packs it: sixteenths, x in 10 bits, z and y in 11.
+///
+/// # Errors
+/// Refuses a sample [`PositionPacket::check`] refuses.
+///
+/// [`PositionPacket::check`]: crate::movement::PositionPacket::check
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)] // Clamped and masked first.
+pub fn client_update(sample: &crate::movement::PositionPacket) -> Result<EncodedCommand> {
+    sample.check()?;
+    let whole = |value: f32| {
+        value
+            .trunc()
+            .clamp(f32::from(i16::MIN), f32::from(i16::MAX)) as i16
+    };
+    let small = |value: i16| value.clamp(i16::from(i8::MIN), i16::from(i8::MAX)) as i8;
+    let packed = |value: f32, low: f32, high: f32, mask: u32| {
+        (((value.clamp(low, high) * 16.0) as i32) as u32) & mask
+    };
+    let position = sample.position;
+    let mut body = Vec::with_capacity(15);
+    body.extend_from_slice(&sample.spawn_id.to_le_bytes());
+    body.extend_from_slice(&small(sample.animation).to_le_bytes());
+    body.push((position.heading.rem_euclid(512.0) / 2.0) as u8);
+    body.extend_from_slice(&small(sample.delta_heading).to_le_bytes());
+    for value in [position.y, position.x, position.z * 10.0] {
+        body.extend_from_slice(&whole(value).to_le_bytes());
+    }
+    let [x, y, z] = sample.delta;
+    let velocity = (packed(x, -32.0, 31.0, 0x3ff) << 22)
+        | (packed(z, -64.0, 63.0, 0x7ff) << 11)
+        | packed(y, -64.0, 63.0, 0x7ff);
+    body.extend_from_slice(&velocity.to_le_bytes());
+    Ok(EncodedCommand {
+        opcode: ZONE_CLIENT_UPDATE,
+        body,
+    })
+}
+
+/// The client's filters: every chat and combat category on.
+#[must_use]
+pub fn server_filters() -> [u8; 68] {
+    let mut filters = [0; 68];
+    for index in 5..=14 {
+        filters[index * 4] = 1;
+    }
+    filters
+}
 
 /// Decrypt the full 64-bit words, preserve the tail, then inflate with a strict limit.
 fn unpack(body: &[u8], profile: bool) -> Result<Zeroizing<Vec<u8>>> {
@@ -91,6 +288,7 @@ fn decoded_profile(data: &[u8], character: &str) -> Result<PlayerState> {
         // EQMac uses fatigue, not Titanium endurance; no equivalent value is supplied.
         endurance: None,
         skills: None,
+        practice_points: None,
         spell_refresh_ms: None,
         memorized_spells: std::array::from_fn(|i| {
             let id = short(data, 2870 + i * 2);
@@ -101,6 +299,9 @@ fn decoded_profile(data: &[u8], character: &str) -> Result<PlayerState> {
         run_speed: 0.0,
         hp_percent: None,
         appearance: crate::appearance::Appearance::default(),
+        // EQMac /who fields are not decoded yet.
+        listing: crate::listing::Listing::default(),
+        name_parts: crate::names::NameParts::default(),
     })
 }
 
@@ -184,6 +385,12 @@ pub fn spawns(body: &[u8]) -> Result<Vec<SpawnState>> {
                 },
                 // EQMac motion fields are not decoded yet.
                 velocity: [0.0; 3],
+                // Nor are its /who fields.
+                level: 0,
+                listing: crate::listing::Listing::default(),
+                name_parts: crate::names::NameParts::default(),
+                pet_owner: None,
+                hp_percent: None,
             })
         })
         .collect()

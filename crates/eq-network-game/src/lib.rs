@@ -4,26 +4,38 @@
 pub mod abilities;
 /// Worn gear and features in EQ's texture slots, and wear changes.
 pub mod appearance;
+/// Binding wounds with bandages.
+pub mod bind_wound;
+/// Reading books and notes.
+pub mod books;
 /// Admission buffs and server-driven buff changes.
 pub mod buffs;
 /// World-server character selection lists.
 pub mod characters;
 /// Communication packet codecs and structured item-link extraction.
 pub mod chat;
+/// The time of day in Norrath, and how a zone's sky and fog look.
+pub mod clock;
 /// Consider, auto-attack and combat-damage records.
 pub mod combat;
 /// Typed client actions and dialect-specific application packet encoding.
 pub mod command;
+/// Players' corpses: consent, summoning and dragging.
+pub mod corpses;
 /// Titanium character creation requests and stat rules.
 pub mod creation;
 /// Server-defined interactive doors and their movement notifications.
 pub mod doors;
 /// Handing items to another character: the give and trade windows.
 pub mod exchange;
+/// Food and drink: hunger, thirst, and eating and drinking.
+pub mod food;
 /// Read-only inventory packets, slots, instances, and state.
 pub mod inventory;
 /// Read-only item inspection requests and definitions.
 pub mod items;
+/// How `/who` lists a player: guild, anonymity and flags, and guild names.
+pub mod listing;
 /// Corpse looting requests, listings and acknowledgements.
 pub mod loot;
 /// Merchant windows, stock, purchases and sales.
@@ -32,21 +44,37 @@ pub mod merchant;
 pub mod money;
 /// Movement wire layout and session-scoped motion validation.
 pub mod movement;
+/// Titles, last names and suffixes: the parts of a name around the first.
+pub mod names;
 /// Items on the ground and world containers.
 pub mod objects;
 /// Titanium/P99-V62 world and zone validation codec.
 pub mod p99;
+/// Pets: commands, owners and buffs.
+pub mod pets;
 /// TAKP/EQMac player and entity presentation codecs.
 pub mod quarm;
+/// Being resurrected: the offer and the player's answer.
+pub mod resurrection;
 /// Server-driven spellbook and casting notifications.
 pub mod spells;
+/// Tradeskill combines in the player's own containers.
+pub mod tradeskills;
+/// Training skills at a guildmaster.
+pub mod training;
+/// Who is online: `/who all` and the world's answer.
+pub mod who;
 /// Renderer-independent world-state packet decoding.
 pub mod world;
+/// Zone numbers and short names.
+pub mod zones;
 /// Death and server-directed zone transfer codecs.
 pub mod zoning;
 
 /// What one zone packet says, read once for the whole session.
 pub mod message;
+/// What the zone session asks of the server, and the Titanium packet for it.
+pub mod request;
 
 use serde::{Deserialize, Serialize};
 

@@ -15,8 +15,9 @@ pub enum Posture {
 }
 
 impl Posture {
-    /// Titanium appearance parameter for this persistent stance.
-    const fn titanium_value(self) -> u32 {
+    /// The appearance parameter for this persistent stance, the same in
+    /// Titanium and `EQMac`.
+    pub(crate) const fn appearance(self) -> u32 {
         match self {
             Self::Standing => 100,
             Self::Sitting => 110,
@@ -83,6 +84,22 @@ pub enum GameCommand {
         drop_id: u32,
         /// Requests expire rather than surviving stalls or reconnects.
         created: std::time::Instant,
+    },
+    /// Open a world container within reach, such as a forge; the server
+    /// answers with what it holds, or that someone else is using it.
+    OpenContainer {
+        /// Current zone admission.
+        session_id: u64,
+        /// Object from this zone's server-provided table.
+        drop_id: u32,
+        /// Requests expire rather than surviving stalls or reconnects.
+        created: std::time::Instant,
+    },
+    /// Close the world container open for the player; the server puts what
+    /// it still holds back in the inventory.
+    CloseContainer {
+        /// Current zone admission.
+        session_id: u64,
     },
     /// Request a transfer after entering a boundary in the local zone assets.
     CrossZoneLine {
@@ -305,6 +322,25 @@ pub enum GameCommand {
         /// Reject delayed actions instead of replaying them after a stall.
         created: std::time::Instant,
     },
+    /// Eat or drink the item in a slot by hand. The session eats and drinks
+    /// on its own when the player turns hungry or thirsty.
+    Consume {
+        /// Current zone admission.
+        session_id: u64,
+        /// The item's slot.
+        slot: crate::inventory::InventorySlot,
+        /// Reject delayed actions instead of replaying them after a stall.
+        created: std::time::Instant,
+    },
+    /// What the session may eat and drink on its own from now on. Each zone
+    /// session starts with the client's configured choice, so a host that
+    /// lets the player change it says so again after each admission.
+    AutoEat {
+        /// Current zone admission.
+        session_id: u64,
+        /// What the session may eat and drink on its own.
+        auto_eat: crate::food::AutoEat,
+    },
     /// Use an ability: a strike or taunt at the server-side target, or one
     /// on the player.
     UseAbility {
@@ -314,6 +350,85 @@ pub enum GameCommand {
         ability: crate::abilities::Ability,
         /// Reject delayed actions instead of replaying them after a stall.
         created: std::time::Instant,
+    },
+    /// Let a player drag the player's corpses, or take it back: `/consent`
+    /// and `/deny`.
+    Consent {
+        /// Current zone admission.
+        session_id: u64,
+        /// The player, or `group`, `raid` or `guild`.
+        name: String,
+        /// Given, or taken back.
+        given: bool,
+    },
+    /// Summon a corpse lying close: `/corpse`.
+    SummonCorpse {
+        /// Current zone admission.
+        session_id: u64,
+        /// The corpse's spawn.
+        spawn_id: u16,
+    },
+    /// Start dragging a corpse: `/corpsedrag`.
+    DragCorpse {
+        /// Current zone admission.
+        session_id: u64,
+        /// The corpse's spawn.
+        spawn_id: u16,
+    },
+    /// Stop dragging a corpse, or every corpse: `/corpsedrop`.
+    DropCorpse {
+        /// Current zone admission.
+        session_id: u64,
+        /// The corpse's spawn; None for all of them.
+        spawn_id: Option<u16>,
+    },
+    /// Command the player's pet: `/pet`, or the pet window's buttons.
+    Pet {
+        /// Current zone admission.
+        session_id: u64,
+        /// The command.
+        command: crate::pets::PetCommand,
+        /// The player's target, which an attack aims at.
+        target: Option<u16>,
+    },
+    /// Open training with a guildmaster, practice a skill there, or leave.
+    Training {
+        /// Current zone admission.
+        session_id: u64,
+        /// What the player asks.
+        request: crate::training::TrainingRequest,
+        /// Reject delayed actions instead of replaying them after a stall.
+        created: std::time::Instant,
+    },
+    /// Read the book or note in an inventory slot.
+    ReadItem {
+        /// Current zone admission.
+        session_id: u64,
+        /// Where the item is carried.
+        slot: crate::inventory::InventorySlot,
+    },
+    /// Combine what a carried tradeskill container holds.
+    Combine {
+        /// Current zone admission.
+        session_id: u64,
+        /// The pack slot the container is in.
+        container: crate::inventory::InventorySlot,
+        /// Reject delayed actions instead of replaying them after a stall.
+        created: std::time::Instant,
+    },
+    /// Accept or decline the resurrection offered last.
+    AnswerResurrection {
+        /// Current zone admission.
+        session_id: u64,
+        /// True accepts.
+        accept: bool,
+    },
+    /// Ask the world who is online: `/who all`.
+    WhoAll {
+        /// Current zone admission.
+        session_id: u64,
+        /// Which players to ask about.
+        filter: crate::who::WhoFilter,
     },
     /// Start or stop melee auto-attack against the current server-side target.
     AutoAttack {
@@ -356,6 +471,8 @@ impl GameCommand {
             Self::SwapSpell { session_id, .. }
             | Self::ClickDoor { session_id, .. }
             | Self::PickUp { session_id, .. }
+            | Self::OpenContainer { session_id, .. }
+            | Self::CloseContainer { session_id }
             | Self::CrossZoneLine { session_id, .. }
             | Self::ScribeSpell { session_id, .. }
             | Self::DeleteSpell { session_id, .. }
@@ -378,7 +495,19 @@ impl GameCommand {
             | Self::MoveCoins { session_id, .. }
             | Self::Jump { session_id, .. }
             | Self::AutoAttack { session_id, .. }
+            | Self::Consume { session_id, .. }
+            | Self::AutoEat { session_id, .. }
             | Self::UseAbility { session_id, .. }
+            | Self::WhoAll { session_id, .. }
+            | Self::Pet { session_id, .. }
+            | Self::Training { session_id, .. }
+            | Self::AnswerResurrection { session_id, .. }
+            | Self::ReadItem { session_id, .. }
+            | Self::Combine { session_id, .. }
+            | Self::Consent { session_id, .. }
+            | Self::SummonCorpse { session_id, .. }
+            | Self::DragCorpse { session_id, .. }
+            | Self::DropCorpse { session_id, .. }
             | Self::SelectTarget { session_id, .. }
             | Self::ConfigureMotion { session_id, .. } => Some(*session_id),
         }
@@ -407,7 +536,9 @@ impl GameCommand {
             }
             // Only a server that takes falls from the client lets the player jump.
             Self::Jump { .. } => Capability::Falling,
-            Self::MoveInventory(_) => Capability::Inventory,
+            Self::MoveInventory(_) | Self::Consume { .. } | Self::AutoEat { .. } => {
+                Capability::Inventory
+            }
             Self::SendChat(_) | Self::InspectItem { .. } => Capability::Talking,
             Self::Consider { .. } | Self::AutoAttack { .. } => Capability::Combat,
             Self::Camp { .. } => Capability::Camping,
@@ -428,6 +559,18 @@ impl GameCommand {
             }
             Self::SelectTarget { .. } => Capability::Targeting,
             Self::UseAbility { .. } => Capability::Abilities,
+            Self::WhoAll { .. } => Capability::Who,
+            Self::Pet { .. } => Capability::Pets,
+            Self::Training { .. } => Capability::Training,
+            Self::AnswerResurrection { .. } => Capability::Resurrection,
+            Self::ReadItem { .. } => Capability::Reading,
+            Self::Combine { .. } | Self::OpenContainer { .. } | Self::CloseContainer { .. } => {
+                Capability::Tradeskills
+            }
+            Self::Consent { .. }
+            | Self::SummonCorpse { .. }
+            | Self::DragCorpse { .. }
+            | Self::DropCorpse { .. } => Capability::Corpses,
         })
     }
 
@@ -442,6 +585,16 @@ impl GameCommand {
             | Self::InspectItem { .. }
             | Self::EndLoot { .. }
             | Self::CancelTrade { .. }
+            | Self::AutoEat { .. }
+            | Self::WhoAll { .. }
+            | Self::Pet { .. }
+            | Self::AnswerResurrection { .. }
+            | Self::ReadItem { .. }
+            | Self::CloseContainer { .. }
+            | Self::Consent { .. }
+            | Self::SummonCorpse { .. }
+            | Self::DragCorpse { .. }
+            | Self::DropCorpse { .. }
             | Self::SelectTarget { .. } => None,
             Self::UseItem(request) => Some(request.created),
             Self::MoveInventory(request) => Some(request.created),
@@ -449,6 +602,7 @@ impl GameCommand {
             Self::SwapSpell { created, .. }
             | Self::ClickDoor { created, .. }
             | Self::PickUp { created, .. }
+            | Self::OpenContainer { created, .. }
             | Self::CrossZoneLine { created, .. }
             | Self::ScribeSpell { created, .. }
             | Self::DeleteSpell { created, .. }
@@ -468,7 +622,10 @@ impl GameCommand {
             | Self::MoveCoins { created, .. }
             | Self::Jump { created, .. }
             | Self::AutoAttack { created, .. }
+            | Self::Consume { created, .. }
             | Self::UseAbility { created, .. }
+            | Self::Training { created, .. }
+            | Self::Combine { created, .. }
             | Self::ConfigureMotion { created, .. } => Some(*created),
         }
     }
@@ -482,6 +639,31 @@ pub struct EncodedCommand {
     pub opcode: u16,
     /// Application body without the opcode or reliable-UDP framing.
     pub body: Vec<u8>,
+}
+
+/// `OP_CastSpell`: a memorized gem's spell at a target.
+fn encode_cast(
+    dialect: GameDialect,
+    gem: u8,
+    spell_id: u32,
+    target_id: u16,
+) -> Result<EncodedCommand> {
+    anyhow::ensure!(
+        dialect == GameDialect::Titanium,
+        "casting is not implemented for this dialect"
+    );
+    anyhow::ensure!(
+        gem < 8 && spell_id != 0 && spell_id != u32::MAX && target_id != 0,
+        "invalid spell cast"
+    );
+    let mut body = Vec::with_capacity(20);
+    for value in [u32::from(gem), spell_id, u32::MAX, u32::from(target_id), 0] {
+        body.extend_from_slice(&value.to_le_bytes());
+    }
+    Ok(EncodedCommand {
+        opcode: 0x304b,
+        body,
+    })
 }
 
 /// Encode a typed client action for one game dialect.
@@ -502,43 +684,12 @@ pub fn encode(
         GameCommand::SelectCharacter { .. } | GameCommand::CreateCharacter { .. } => {
             anyhow::bail!("character selection requires the world controller")
         }
-        GameCommand::UseItem(_)
-        | GameCommand::MemorizeSpell { .. }
-        | GameCommand::ForgetSpell { .. }
-        | GameCommand::DeleteSpell { .. }
-        | GameCommand::SwapSpell { .. }
-        | GameCommand::ScribeSpell { .. } => {
-            anyhow::bail!("item and spellbook actions require the admitted session controller")
-        }
         GameCommand::CastSpell {
             gem,
             spell_id,
             target_id,
             ..
-        } => {
-            anyhow::ensure!(
-                dialect == GameDialect::Titanium,
-                "casting is not implemented for this dialect"
-            );
-            anyhow::ensure!(
-                *gem < 8 && *spell_id != 0 && *spell_id != u32::MAX && *target_id != 0,
-                "invalid spell cast"
-            );
-            let mut body = Vec::with_capacity(20);
-            for value in [
-                u32::from(*gem),
-                *spell_id,
-                u32::MAX,
-                u32::from(*target_id),
-                0,
-            ] {
-                body.extend_from_slice(&value.to_le_bytes());
-            }
-            Ok(EncodedCommand {
-                opcode: 0x304b,
-                body,
-            })
-        }
+        } => encode_cast(dialect, *gem, *spell_id, *target_id),
         GameCommand::SetPosture {
             spawn_id, posture, ..
         } => encode_posture(dialect, *spawn_id, *posture),
@@ -579,6 +730,8 @@ pub fn encode(
         GameCommand::MoveInventory(_)
         | GameCommand::ClickDoor { .. }
         | GameCommand::PickUp { .. }
+        | GameCommand::OpenContainer { .. }
+        | GameCommand::CloseContainer { .. }
         | GameCommand::OfferTrade { .. }
         | GameCommand::AcceptTrade { .. }
         | GameCommand::CancelTrade { .. }
@@ -587,7 +740,25 @@ pub fn encode(
         | GameCommand::Jump { .. }
         | GameCommand::ConfigureMotion { .. }
         | GameCommand::CrossZoneLine { .. }
+        | GameCommand::Consume { .. }
+        | GameCommand::AutoEat { .. }
         | GameCommand::UseAbility { .. }
+        | GameCommand::WhoAll { .. }
+        | GameCommand::Pet { .. }
+        | GameCommand::Training { .. }
+        | GameCommand::AnswerResurrection { .. }
+        | GameCommand::ReadItem { .. }
+        | GameCommand::Combine { .. }
+        | GameCommand::Consent { .. }
+        | GameCommand::SummonCorpse { .. }
+        | GameCommand::DragCorpse { .. }
+        | GameCommand::DropCorpse { .. }
+        | GameCommand::UseItem(_)
+        | GameCommand::MemorizeSpell { .. }
+        | GameCommand::ForgetSpell { .. }
+        | GameCommand::DeleteSpell { .. }
+        | GameCommand::SwapSpell { .. }
+        | GameCommand::ScribeSpell { .. }
         | GameCommand::Camp { .. } => {
             anyhow::bail!("this command requires the admitted session controller")
         }
@@ -635,7 +806,7 @@ fn encode_posture(dialect: GameDialect, spawn_id: u16, posture: Posture) -> Resu
     anyhow::ensure!(spawn_id != 0, "posture requires an own-spawn ID");
     let mut body = spawn_id.to_le_bytes().to_vec();
     body.extend_from_slice(&14u16.to_le_bytes());
-    body.extend_from_slice(&posture.titanium_value().to_le_bytes());
+    body.extend_from_slice(&posture.appearance().to_le_bytes());
     Ok(EncodedCommand {
         opcode: 0x7c32,
         body,

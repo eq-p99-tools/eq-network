@@ -38,6 +38,37 @@ pub struct ZoneOffer {
     pub solicited: bool,
 }
 
+/// Titanium's answer taking a transfer: the character's name, the zone and
+/// instance, where to, and the offer's reason echoed back.
+///
+/// # Errors
+/// Rejects names that cannot fit the NUL-terminated Titanium name field, and
+/// non-finite coordinates.
+pub fn titanium_answer(
+    character: &str,
+    (zone_id, instance_id): (u16, u16),
+    position: Position,
+    reason: u32,
+) -> Result<EncodedCommand> {
+    ensure!(
+        !character.is_empty() && character.len() < 64 && !character.contains('\0'),
+        "invalid character name"
+    );
+    ensure!(finite(position), "invalid zone coordinates");
+    let mut body = vec![0; 88];
+    body[..character.len()].copy_from_slice(character.as_bytes());
+    body[64..66].copy_from_slice(&zone_id.to_le_bytes());
+    body[66..68].copy_from_slice(&instance_id.to_le_bytes());
+    for (offset, value) in [(68, position.y), (72, position.x), (76, position.z)] {
+        body[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+    }
+    body[80..84].copy_from_slice(&reason.to_le_bytes());
+    Ok(EncodedCommand {
+        opcode: CHANGE_OPCODE,
+        body,
+    })
+}
+
 impl ZoneOffer {
     /// A non-bind offer to this exact zone/instance relocates without a zone-change reply.
     #[must_use]
@@ -51,27 +82,12 @@ impl ZoneOffer {
     /// # Errors
     /// Rejects names that cannot fit the NUL-terminated Titanium name field.
     pub fn response(&self, character: &str) -> Result<EncodedCommand> {
-        ensure!(
-            !character.is_empty() && character.len() < 64 && !character.contains('\0'),
-            "invalid character name"
-        );
-        ensure!(finite(self.position), "invalid zone coordinates");
-        let mut body = vec![0; 88];
-        body[..character.len()].copy_from_slice(character.as_bytes());
-        body[64..66].copy_from_slice(&self.zone_id.to_le_bytes());
-        body[66..68].copy_from_slice(&self.instance_id.to_le_bytes());
-        for (offset, value) in [
-            (68, self.position.y),
-            (72, self.position.x),
-            (76, self.position.z),
-        ] {
-            body[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
-        }
-        body[80..84].copy_from_slice(&self.reason.to_le_bytes());
-        Ok(EncodedCommand {
-            opcode: CHANGE_OPCODE,
-            body,
-        })
+        titanium_answer(
+            character,
+            (self.zone_id, self.instance_id),
+            self.position,
+            self.reason,
+        )
     }
 }
 

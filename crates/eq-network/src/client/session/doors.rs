@@ -5,9 +5,9 @@ use super::{
 };
 use anyhow::{anyhow, ensure, Result};
 use eq_network_game::{
-    command::EncodedCommand,
     doors::DoorUpdate,
     message::Message,
+    request::Request,
     world::{WorldEvent, WorldEvent::DoorAction},
 };
 use std::time::Instant;
@@ -29,9 +29,9 @@ impl Default for Doors {
 }
 
 impl Doors {
-    /// The click packet for a door in reach, clicked since the door table last
+    /// The request for a door in reach, clicked since the door table last
     /// changed.
-    fn click(&self, command: &ClientCommand, world: &World) -> Result<EncodedCommand> {
+    fn click(&self, command: &ClientCommand, world: &World) -> Result<Request> {
         let ClientCommand::ClickDoor {
             door_id, created, ..
         } = command
@@ -42,7 +42,8 @@ impl Doors {
         let (spawn_id, position) = world
             .player_at()
             .ok_or_else(|| anyhow!("player is unavailable"))?;
-        self.table.click_packet(*door_id, spawn_id, position)
+        self.table.check_click(*door_id, spawn_id, position)?;
+        Ok(Request::ClickDoor(*door_id))
     }
 }
 
@@ -79,8 +80,8 @@ impl Feature for Doors {
             return Ok(());
         };
         let error = match self.click(command, world) {
-            Ok(packet) => {
-                out.send(&packet)?;
+            Ok(request) => {
+                out.request(&request)?;
                 None
             }
             Err(error) => Some(error.to_string()),

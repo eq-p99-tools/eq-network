@@ -97,6 +97,7 @@ pub(super) mod tests {
         let mut scroll = InventoryItem {
             activation: eq_network_game::inventory::ItemActivation::default(),
             scroll_spell: Some(73),
+            book: None,
             rules: eq_network_game::inventory::ItemPlacement::default(),
             slot: InventorySlot(22),
             icon: 0,

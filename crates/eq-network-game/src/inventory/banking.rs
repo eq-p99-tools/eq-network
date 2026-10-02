@@ -37,6 +37,11 @@ mod tests {
             size: 6.0,
             invisible: false,
             appearance: crate::appearance::Appearance::default(),
+            level: 0,
+            listing: crate::listing::Listing::default(),
+            name_parts: crate::names::NameParts::default(),
+            pet_owner: None,
+            hp_percent: None,
         };
         let origin = Position::default();
         assert!(banker_in_range(origin, &banker));

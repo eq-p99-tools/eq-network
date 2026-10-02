@@ -1,22 +1,14 @@
 //! Looting: opening a corpse the player can see, taking its items and
 //! closing it. Taken items arrive as item updates for the inventory.
 use super::{
-    feature::{Encoder, Feature, Out, World},
+    feature::{Feature, Out, World},
     ClientCommand,
 };
 use anyhow::Result;
 use eq_network_game::world::SpawnKind;
 
 /// Loots corpses.
-pub(super) struct Looting {
-    encoder: Encoder,
-}
-
-impl Looting {
-    pub(super) fn new(encoder: Encoder) -> Self {
-        Self { encoder }
-    }
-}
+pub(super) struct Looting;
 
 impl Feature for Looting {
     fn capabilities(&self) -> Vec<crate::world::Capability> {
@@ -50,7 +42,7 @@ impl Feature for Looting {
                     .diagnostic("Rejected looting an unavailable corpse".into());
             }
         }
-        self.encoder.send(command, out).map(drop)
+        out.command(command).map(drop)
     }
 }
 
@@ -58,12 +50,11 @@ impl Feature for Looting {
 mod tests {
     use super::super::feature::testing;
     use super::*;
-    use eq_network_game::GameDialect;
     use std::time::Instant;
 
     #[test]
     fn only_a_corpse_the_player_can_see_is_opened() {
-        let mut looting = Looting::new(Encoder::new(GameDialect::Titanium, "Tester"));
+        let mut looting = Looting;
         let mut world = World::new(5);
         world.spawns.insert(testing::spawn(8, SpawnKind::NpcCorpse));
         world.spawns.insert(testing::spawn(9, SpawnKind::Npc));

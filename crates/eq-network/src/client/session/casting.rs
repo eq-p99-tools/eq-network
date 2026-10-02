@@ -2,12 +2,12 @@
 //! until the server answers it.
 use super::{
     actions::Resource,
-    feature::{Encoder, Feature, Out, World},
+    feature::{Feature, Out, World},
     ClientCommand, ClientEvent,
 };
 use anyhow::{Context, Result};
 use eq_network_game::{
-    inventory::ItemUse, message::Message, spells::SpellUpdate, world::WorldEvent,
+    inventory::ItemUse, message::Message, request::Request, spells::SpellUpdate, world::WorldEvent,
 };
 use std::time::{Duration, Instant};
 
@@ -132,19 +132,12 @@ impl CastGuard {
 }
 
 /// Casts spells and item effects for the player, one at a time.
+#[derive(Default)]
 pub(super) struct Casting {
     guard: CastGuard,
-    encoder: Encoder,
 }
 
 impl Casting {
-    pub(super) fn new(encoder: Encoder) -> Self {
-        Self {
-            guard: CastGuard::default(),
-            encoder,
-        }
-    }
-
     /// Casts a memorized spell at a target the player can see.
     fn cast(
         &mut self,
@@ -166,7 +159,7 @@ impl Casting {
                 player.memorized_spells.get(usize::from(*gem)) == Some(&Some(*spell_id))
             });
         let refusal = if ready {
-            match self.encoder.encode(command) {
+            match out.encode_command(command) {
                 Ok(packet) => {
                     out.send(&packet)?;
                     return self.submitted(*spell_id, world, out);
@@ -198,7 +191,15 @@ impl Casting {
             .and_then(|player| {
                 world
                     .inventory
-                    .prepare_item_cast(request, player.level, target_available)
+                    .check_item_use(request, player.level, target_available)
+            })
+            .and_then(|spell_id| {
+                let packet = out.encode(&Request::CastItem {
+                    spell_id,
+                    slot: request.slot,
+                    target_id: request.target_id,
+                })?;
+                Ok((spell_id, packet))
             });
         let error = match prepared {
             Ok((spell_id, packet)) => {
@@ -305,10 +306,7 @@ mod tests {
 
     #[test]
     fn a_memorized_spell_goes_out_and_holds_casting_until_answered() {
-        let mut casting = Casting::new(Encoder::new(
-            eq_network_game::GameDialect::Titanium,
-            "Tester",
-        ));
+        let mut casting = Casting::default();
         let mut world = World::new(5);
         world.own_spawn = Some(7);
         let mut player = testing::player(7);
