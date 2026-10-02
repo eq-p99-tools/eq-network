@@ -286,8 +286,8 @@ pub fn titanium(request: &Request, sender: Sender<'_>) -> Result<EncodedCommand>
 }
 
 /// The `EQMac` client's packet for a request from this sender: camping,
-/// logging out, its stance, and the host commands its generation encodes
-/// so far, which is chat.
+/// logging out, its stance and position, and the host commands its
+/// generation encodes so far, which is chat.
 ///
 /// # Errors
 /// Refuses every other request, and a command the generation cannot carry.
@@ -296,6 +296,7 @@ pub fn eqmac(request: &Request, sender: Sender<'_>) -> Result<EncodedCommand> {
         Request::Camp => Ok(crate::quarm::camp()),
         Request::Logout => Ok(crate::quarm::logout()),
         Request::Posture(posture) => crate::quarm::posture(sender.spawn(), *posture),
+        Request::Position(sample) => crate::quarm::client_update(sample),
         Request::Command(command) => command::encode(GameDialect::EqMac, command, sender.name),
         _ => anyhow::bail!("the EQMac client cannot send {request:?} yet"),
     }
