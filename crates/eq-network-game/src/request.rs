@@ -5,9 +5,12 @@
 use crate::{
     abilities::Ability,
     command::{self, EncodedCommand, Posture},
-    corpses, exchange,
+    corpses, doors, exchange,
+    objects::{self, ContainerView},
     pets::{self, PetCommand},
+    spells,
     who::{self, WhoFilter},
+    zoning::ZoneOffer,
 };
 use anyhow::Result;
 
@@ -84,6 +87,62 @@ pub enum Request {
         /// The player's spawn.
         own_id: u16,
     },
+    /// Use a door within reach.
+    ClickDoor {
+        /// The door.
+        door_id: u8,
+        /// The player's spawn.
+        player_id: u16,
+    },
+    /// Pick an item up from the ground.
+    PickUp {
+        /// The item on the ground.
+        drop_id: u32,
+        /// The player's spawn.
+        player_id: u16,
+    },
+    /// Close a world container the server opened for the player.
+    CloseContainer(ContainerView),
+    /// Take a transfer the server offered or a zone line asked for.
+    AnswerZoneOffer {
+        /// Where to, as offered.
+        offer: ZoneOffer,
+        /// The player's name, which the answer repeats.
+        character: String,
+    },
+    /// Memorize a scribed spell into a gem.
+    Memorize {
+        /// The gem.
+        gem: u8,
+        /// The spell.
+        spell_id: u32,
+    },
+    /// Forget a gem's spell, keeping it in the book.
+    Forget {
+        /// The gem.
+        gem: u8,
+        /// The spell it holds.
+        spell_id: u32,
+    },
+    /// Scribe the cursor's scroll into an empty book slot.
+    Scribe {
+        /// The book slot.
+        slot: u16,
+        /// The scroll's spell.
+        spell_id: u32,
+    },
+    /// Delete a book entry.
+    DeleteSpell {
+        /// The book slot.
+        slot: u16,
+    },
+    /// Exchange two book entries.
+    SwapSpells {
+        /// One book slot.
+        from: u16,
+        /// The other.
+        to: u16,
+    },
 }
 
 /// The Titanium client's packet for a request.
@@ -106,6 +165,15 @@ pub fn titanium(request: &Request) -> Result<EncodedCommand> {
         Request::Trade { own_id, with } => exchange::request(*own_id, *with)?,
         Request::AcceptTrade { own_id } => exchange::accept(*own_id)?,
         Request::CancelTrade { own_id } => exchange::cancel(*own_id)?,
+        Request::ClickDoor { door_id, player_id } => doors::titanium_click(*door_id, *player_id),
+        Request::PickUp { drop_id, player_id } => objects::titanium_pickup(*drop_id, *player_id),
+        Request::CloseContainer(view) => view.close_packet(),
+        Request::AnswerZoneOffer { offer, character } => offer.response(character)?,
+        Request::Memorize { gem, spell_id } => spells::titanium_memorize(*gem, *spell_id),
+        Request::Forget { gem, spell_id } => spells::titanium_forget(*gem, *spell_id),
+        Request::Scribe { slot, spell_id } => spells::titanium_scribe(*slot, *spell_id),
+        Request::DeleteSpell { slot } => spells::titanium_delete(*slot),
+        Request::SwapSpells { from, to } => spells::titanium_swap(*from, *to),
     })
 }
 

@@ -8,6 +8,7 @@ use super::{
 use anyhow::{bail, ensure, Context, Result};
 use eq_network_game::{
     message::{Message, Part},
+    request::Request,
     world::{Position, WorldEvent},
 };
 use std::time::Instant;
@@ -55,7 +56,10 @@ impl Transfers {
         world: &mut World,
         out: &mut Out<'_, '_>,
     ) -> Result<()> {
-        out.send(&offer.response(&self.character)?)?;
+        out.request(&Request::AnswerZoneOffer {
+            offer: offer.clone(),
+            character: self.character.clone(),
+        })?;
         world.transfer_offered(offer.clone(), Instant::now())?;
         out.log
             .send(ClientEvent::World(WorldEvent::ZoneTransfer(offer)))?;

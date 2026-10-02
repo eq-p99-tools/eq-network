@@ -17,9 +17,10 @@ use anyhow::{bail, ensure, Context, Result};
 use consumption::ScribeConsumption;
 use edits::BookEdits;
 use eq_network_game::{
-    command::{EncodedCommand, Posture},
+    command::Posture,
     inventory::{Inventory, InventoryUpdate},
     message::Message,
+    request::Request,
     spells::{self, BookActionStatus, SpellBook, SpellUpdate},
     world::{PostureState, WorldEvent},
 };
@@ -57,37 +58,45 @@ impl PendingBookAction {
 
     /// The request, checked against the book and cursor as they are now
     /// rather than as they were when the player asked.
-    fn packet(&self, book: &SpellBook, inventory: &Inventory) -> Result<EncodedCommand> {
-        match self.intent {
-            BookIntent::Memorize { gem, spell_id } => book.memorize_packet(gem, spell_id),
+    fn request(&self, book: &SpellBook, inventory: &Inventory) -> Result<Request> {
+        Ok(match self.intent {
+            BookIntent::Memorize { gem, spell_id } => {
+                book.check_memorize(gem, spell_id)?;
+                Request::Memorize { gem, spell_id }
+            }
             BookIntent::Scribe {
                 revision,
                 slot,
                 spell_id,
-            } => book.scribe_packet(inventory, revision, slot, spell_id),
-        }
+            } => {
+                book.check_scribe(inventory, revision, slot, spell_id)?;
+                Request::Scribe { slot, spell_id }
+            }
+        })
     }
 }
 
 /// A book entry deleted, or two swapped, checked against the book as it is.
-fn edit_packet(
-    command: &ClientCommand,
-    book: Option<&SpellBook>,
-    busy: bool,
-) -> Result<EncodedCommand> {
+fn edit_request(command: &ClientCommand, book: Option<&SpellBook>, busy: bool) -> Result<Request> {
     ensure!(!busy, "book edit is busy");
     let book = book.context("spellbook unavailable")?;
-    match *command {
-        ClientCommand::DeleteSpell { slot, spell_id, .. } => book.delete_packet(slot, spell_id),
+    Ok(match *command {
+        ClientCommand::DeleteSpell { slot, spell_id, .. } => {
+            book.check_delete(slot, spell_id)?;
+            Request::DeleteSpell { slot }
+        }
         ClientCommand::SwapSpell {
             from,
             to,
             from_spell,
             to_spell,
             ..
-        } => book.swap_packet(from, to, from_spell, to_spell),
+        } => {
+            book.check_swap(from, to, from_spell, to_spell)?;
+            Request::SwapSpells { from, to }
+        }
         _ => bail!("not a spellbook edit"),
-    }
+    })
 }
 
 /// Tells the host how a spellbook change stands.
@@ -135,7 +144,7 @@ impl Spellbook {
             .as_ref()
             .filter(|_| self.pending.is_none())
             .context(unavailable)
-            .and_then(|book| pending.packet(book, &world.inventory));
+            .and_then(|book| pending.request(book, &world.inventory));
         if let Err(error) = checked {
             report(BookActionStatus::Rejected(error.to_string()), out)?;
             return out.log.diagnostic(format!("Rejected {refused}: {error}"));
@@ -152,9 +161,9 @@ impl Spellbook {
 
     /// Deletes or swaps book entries at once.
     fn edit(&mut self, command: &ClientCommand, out: &mut Out<'_, '_>) -> Result<()> {
-        let status = match edit_packet(command, self.book.as_ref(), self.pending.is_some()) {
-            Ok(packet) => {
-                out.send(&packet)?;
+        let status = match edit_request(command, self.book.as_ref(), self.pending.is_some()) {
+            Ok(request) => {
+                out.request(&request)?;
                 self.edits.sent(command, Instant::now());
                 BookActionStatus::AwaitingReply
             }
@@ -165,14 +174,14 @@ impl Spellbook {
 
     /// Forgets a memorized spell; nothing waits for the server's answer.
     fn forget(gem: u8, spell_id: u32, world: &World, out: &mut Out<'_, '_>) -> Result<()> {
-        let packet = world
+        let checked = world
             .player
             .as_ref()
             .context("forget request is unavailable")
-            .and_then(|player| spells::forget_packet(&player.memorized_spells, gem, spell_id));
-        match packet {
-            Ok(packet) => {
-                out.send(&packet)?;
+            .and_then(|player| spells::check_forget(&player.memorized_spells, gem, spell_id));
+        match checked {
+            Ok(()) => {
+                out.request(&Request::Forget { gem, spell_id })?;
                 report(BookActionStatus::Submitted, out)
             }
             Err(error) => {
@@ -188,14 +197,14 @@ impl Spellbook {
         let Some(pending) = self.pending.take_if(|pending| pending.ready(now)) else {
             return Ok(());
         };
-        let packet = self
+        let request = self
             .book
             .as_ref()
             .context("spellbook unavailable")
-            .and_then(|book| pending.packet(book, &world.inventory));
-        match packet {
-            Ok(packet) => {
-                out.send(&packet)?;
+            .and_then(|book| pending.request(book, &world.inventory));
+        match request {
+            Ok(request) => {
+                out.request(&request)?;
                 self.edits.prepared_sent(&pending.intent, now);
                 self.consumption.sent(&pending.intent);
                 report(BookActionStatus::AwaitingReply, out)
@@ -778,9 +787,9 @@ mod tests {
                 created: now,
             },
         ] {
-            assert!(edit_packet(&command, Some(&book), false).is_ok());
-            assert!(edit_packet(&command, Some(&book), true).is_err());
-            assert!(edit_packet(&command, None, false).is_err());
+            assert!(edit_request(&command, Some(&book), false).is_ok());
+            assert!(edit_request(&command, Some(&book), true).is_err());
+            assert!(edit_request(&command, None, false).is_err());
         }
     }
 
@@ -800,12 +809,18 @@ mod tests {
         assert!(!pending.ready(now.checked_sub(Duration::from_secs(1)).unwrap()));
         let mut book = book(Some(73));
         let inventory = Inventory::default();
-        assert!(pending.packet(&book, &inventory).is_ok());
+        assert_eq!(
+            pending.request(&book, &inventory).unwrap(),
+            Request::Memorize {
+                gem: 2,
+                spell_id: 73
+            }
+        );
         book.apply(&SpellUpdate::Slot {
             slot: 0,
             spell_id: 0xffff,
             mode: 0,
         });
-        assert!(pending.packet(&book, &inventory).is_err());
+        assert!(pending.request(&book, &inventory).is_err());
     }
 }

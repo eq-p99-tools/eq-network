@@ -40,16 +40,69 @@ pub enum BookActionStatus {
 /// # Errors
 /// Rejects invalid gems, empty slots, and stale spell identifiers.
 pub fn forget_packet(gems: &[Option<u32>; 8], gem: u8, spell_id: u32) -> Result<EncodedCommand> {
+    check_forget(gems, gem, spell_id)?;
+    Ok(titanium_forget(gem, spell_id))
+}
+
+/// Checks forgetting a gem's spell: the gem must still hold it.
+///
+/// # Errors
+/// Rejects invalid gems, empty slots, and stale spell identifiers.
+pub fn check_forget(gems: &[Option<u32>; 8], gem: u8, spell_id: u32) -> Result<()> {
     ensure!(
         !matches!(spell_id, 0 | 0xffff | u32::MAX)
             && gems.get(usize::from(gem)) == Some(&Some(spell_id)),
         "gem is empty, invalid, or changed"
     );
+    Ok(())
+}
+
+/// Titanium's `OP_MemorizeSpell` for a gem, by mode: scribing is 0,
+/// memorizing 1 and forgetting 2.
+fn titanium_gem(slot: u32, spell_id: u32, mode: u32) -> EncodedCommand {
     let mut body = [0; 16];
-    body[..4].copy_from_slice(&u32::from(gem).to_le_bytes());
+    body[..4].copy_from_slice(&slot.to_le_bytes());
     body[4..8].copy_from_slice(&spell_id.to_le_bytes());
-    body[8..12].copy_from_slice(&2u32.to_le_bytes());
-    Ok(packet(MEMORIZE_OPCODE, &body))
+    body[8..12].copy_from_slice(&mode.to_le_bytes());
+    packet(MEMORIZE_OPCODE, &body)
+}
+
+/// Titanium's packet forgetting a gem's spell, already checked.
+#[must_use]
+pub fn titanium_forget(gem: u8, spell_id: u32) -> EncodedCommand {
+    titanium_gem(u32::from(gem), spell_id, 2)
+}
+
+/// Titanium's packet memorizing a spell into a gem, already checked. No reuse
+/// reduction is requested: the capture's nonzero trailing value is not copied
+/// because its client-side provenance is unverified.
+#[must_use]
+pub fn titanium_memorize(gem: u8, spell_id: u32) -> EncodedCommand {
+    titanium_gem(u32::from(gem), spell_id, 1)
+}
+
+/// Titanium's packet scribing the cursor's scroll into a book slot, already
+/// checked.
+#[must_use]
+pub fn titanium_scribe(slot: u16, spell_id: u32) -> EncodedCommand {
+    titanium_gem(u32::from(slot), spell_id, 0)
+}
+
+/// Titanium's `OP_DeleteSpell` for a book slot, already checked.
+#[must_use]
+pub fn titanium_delete(slot: u16) -> EncodedCommand {
+    let mut body = [0; 8];
+    body[..2].copy_from_slice(&slot.to_le_bytes());
+    packet(DELETE_OPCODE, &body)
+}
+
+/// Titanium's `OP_SwapSpell` exchanging two book slots, already checked.
+#[must_use]
+pub fn titanium_swap(from: u16, to: u16) -> EncodedCommand {
+    let mut body = [0; 8];
+    body[..4].copy_from_slice(&u32::from(from).to_le_bytes());
+    body[4..].copy_from_slice(&u32::from(to).to_le_bytes());
+    packet(SWAP_OPCODE, &body)
 }
 
 /// Spellbook slots from the admitted profile; empty slots retain their indexes.
@@ -79,6 +132,21 @@ impl SpellBook {
         from_spell: u32,
         to_spell: Option<u32>,
     ) -> Result<EncodedCommand> {
+        self.check_swap(from, to, from_spell, to_spell)?;
+        Ok(titanium_swap(from, to))
+    }
+
+    /// Checks a swap: both slots must still hold what the player saw.
+    ///
+    /// # Errors
+    /// Rejects equal, invalid, empty-source, or changed slots.
+    pub fn check_swap(
+        &self,
+        from: u16,
+        to: u16,
+        from_spell: u32,
+        to_spell: Option<u32>,
+    ) -> Result<()> {
         ensure!(
             from != to && !matches!(from_spell, 0 | 0xffff | u32::MAX),
             "invalid spell swap"
@@ -88,10 +156,7 @@ impl SpellBook {
                 && self.slots.get(usize::from(to)) == Some(&to_spell),
             "book slots changed or are invalid"
         );
-        let mut body = [0; 8];
-        body[..4].copy_from_slice(&u32::from(from).to_le_bytes());
-        body[4..].copy_from_slice(&u32::from(to).to_le_bytes());
-        Ok(packet(SWAP_OPCODE, &body))
+        Ok(())
     }
 
     /// Encodes deletion only when the expected spell still occupies the selected book slot.
@@ -100,14 +165,21 @@ impl SpellBook {
     /// # Errors
     /// Rejects invalid, empty, or replaced slots and sentinel spell identifiers.
     pub fn delete_packet(&self, slot: u16, spell_id: u32) -> Result<EncodedCommand> {
+        self.check_delete(slot, spell_id)?;
+        Ok(titanium_delete(slot))
+    }
+
+    /// Checks a deletion: the slot must still hold the spell.
+    ///
+    /// # Errors
+    /// Rejects invalid, empty, or replaced slots and sentinel spell identifiers.
+    pub fn check_delete(&self, slot: u16, spell_id: u32) -> Result<()> {
         ensure!(
             !matches!(spell_id, 0 | 0xffff | u32::MAX)
                 && self.slots.get(usize::from(slot)) == Some(&Some(spell_id)),
             "book slot is empty, invalid, or changed"
         );
-        let mut body = [0; 8];
-        body[..2].copy_from_slice(&slot.to_le_bytes());
-        Ok(packet(DELETE_OPCODE, &body))
+        Ok(())
     }
 
     /// Encodes scribing only for a current cursor scroll and an empty book slot.
@@ -122,6 +194,22 @@ impl SpellBook {
         slot: u16,
         spell_id: u32,
     ) -> Result<EncodedCommand> {
+        self.check_scribe(inventory, revision, slot, spell_id)?;
+        Ok(titanium_scribe(slot, spell_id))
+    }
+
+    /// Checks scribing: the cursor must still hold the scroll for the
+    /// spell, the book slot must be empty, and the spell not yet scribed.
+    ///
+    /// # Errors
+    /// Rejects stale inventory, changed scrolls, duplicate spells and occupied book slots.
+    pub fn check_scribe(
+        &self,
+        inventory: &crate::inventory::Inventory,
+        revision: u64,
+        slot: u16,
+        spell_id: u32,
+    ) -> Result<()> {
         use anyhow::Context;
         ensure!(
             inventory.received() && !inventory.stale() && inventory.revision() == revision,
@@ -143,10 +231,7 @@ impl SpellBook {
             !self.slots.contains(&Some(spell_id)),
             "spell is already scribed"
         );
-        let mut body = [0; 16];
-        body[..4].copy_from_slice(&u32::from(slot).to_le_bytes());
-        body[4..8].copy_from_slice(&spell_id.to_le_bytes());
-        Ok(packet(MEMORIZE_OPCODE, &body))
+        Ok(())
     }
     /// Reads the 400 Titanium book slots from an exact-sized player profile.
     ///
@@ -177,17 +262,20 @@ impl SpellBook {
     /// # Errors
     /// Rejects invalid gems and spells that have not been scribed.
     pub fn memorize_packet(&self, gem: u8, spell_id: u32) -> Result<EncodedCommand> {
+        self.check_memorize(gem, spell_id)?;
+        Ok(titanium_memorize(gem, spell_id))
+    }
+
+    /// Checks memorizing: the gem must exist and the spell be in the book.
+    ///
+    /// # Errors
+    /// Rejects invalid gems and spells that have not been scribed.
+    pub fn check_memorize(&self, gem: u8, spell_id: u32) -> Result<()> {
         ensure!(
             gem < 8 && self.slots.contains(&Some(spell_id)),
             "spell is not scribed or gem is invalid"
         );
-        let mut body = [0; 16];
-        body[..4].copy_from_slice(&u32::from(gem).to_le_bytes());
-        body[4..8].copy_from_slice(&spell_id.to_le_bytes());
-        body[8..12].copy_from_slice(&1u32.to_le_bytes());
-        // No reuse reduction is requested. The capture's nonzero trailing value
-        // is not copied because its client-side provenance is unverified.
-        Ok(packet(MEMORIZE_OPCODE, &body))
+        Ok(())
     }
 
     /// Applies confirmed book changes without changing memorized slots.

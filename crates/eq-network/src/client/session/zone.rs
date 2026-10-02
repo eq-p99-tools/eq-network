@@ -242,9 +242,7 @@ pub(super) fn run(
                         return Ok(exit);
                     }
                     if !handled {
-                        log.diagnostic(
-                            "Rejected a command this zone session does not take".into(),
-                        )?;
+                        unoffered(&command, log)?;
                     }
                     // Commands wait while the player is dead or zoning.
                     if world.lifecycle.is_dead() || world.lifecycle.pending().is_some() {
@@ -281,8 +279,11 @@ pub(super) fn run(
                 &zone,
                 &mut features,
                 &mut world,
-                (&mut session, server.wire()),
-                log,
+                &mut Out {
+                    sink: &mut session,
+                    log: &mut *log,
+                    wire: server.wire(),
+                },
             )?;
         }
         // Everything else is read once, in the server's client generation, the
@@ -338,6 +339,16 @@ pub(super) fn run(
     }
 }
 
+/// Why a command is refused when no feature of the server type takes it:
+/// the words the client greys out such a control with.
+const UNOFFERED: &str = "Not available on this server";
+
+/// Refuses a command no feature of the server type takes, through the event
+/// its caller waits for, so the player hears why instead of nothing.
+fn unoffered(command: &ClientCommand, log: &mut Events<'_>) -> Result<()> {
+    actions::refuse(command, UNOFFERED, log)
+}
+
 /// Tells the host the zone admitted the player, as the features shape them,
 /// and lets every feature tell what it staged.
 fn admit(
@@ -345,41 +356,34 @@ fn admit(
     zone: &Zone,
     features: &mut Features,
     world: &mut World,
-    (session, wire): (&mut Box<dyn Transport>, &'static dyn super::wire::Wire),
-    log: &mut Events<'_>,
+    out: &mut Out<'_, '_>,
 ) -> Result<()> {
     match player {
         Ok(mut player) => {
             features.shape(&mut player);
             world.player.admit(player.clone());
-            log.send(ClientEvent::World(crate::world::WorldEvent::Entered {
-                capabilities: features.capabilities(),
-                session_id: world.session_id,
-                zone: zone.name.clone(),
-                player: Box::new(player),
-                far_clip: zone.far_clip,
-            }))?;
+            out.log
+                .send(ClientEvent::World(crate::world::WorldEvent::Entered {
+                    capabilities: features.capabilities(),
+                    session_id: world.session_id,
+                    zone: zone.name.clone(),
+                    player: Box::new(player),
+                    far_clip: zone.far_clip,
+                }))?;
             if let Some(sky) = zone.sky {
-                log.send(ClientEvent::World(crate::world::WorldEvent::Sky(sky)))?;
+                out.log
+                    .send(ClientEvent::World(crate::world::WorldEvent::Sky(sky)))?;
             }
-            features.admitted(
-                world,
-                &mut Out {
-                    sink: session,
-                    log: &mut *log,
-                    wire,
-                },
-            )?;
+            features.admitted(world, out)?;
         }
-        Err(error) => log.diagnostic(format!("Player presentation unavailable: {error}"))?,
+        Err(error) => out
+            .log
+            .diagnostic(format!("Player presentation unavailable: {error}"))?,
     }
-    log.send(ClientEvent::Progress(ConnectionStage::Ready))?;
-    log.status(
-        ConnectionState::Connected,
-        world.packets,
-        Some(session.last_received_seconds()),
-    )?;
-    log.diagnostic(format!(
+    out.log
+        .send(ClientEvent::Progress(ConnectionStage::Ready))?;
+    out.status(ConnectionState::Connected, world)?;
+    out.log.diagnostic(format!(
         "Zone login sequence complete for {}; waiting for ongoing server traffic",
         zone.name
     ))
@@ -721,6 +725,37 @@ mod tests {
             slot: 0,
         };
         assert!(!features.0.iter().any(|feature| feature.owns(&selection)));
+    }
+
+    #[test]
+    fn a_command_no_feature_takes_is_refused_as_unavailable() {
+        use crate::client::session::feature::testing;
+        // Quarm provides no feature on the shared session yet.
+        let mut features = Features::new(
+            servers::server_type(crate::client::ServerProtocol::Quarm),
+            "Tester",
+            eq_network_game::food::AutoEat::default(),
+        );
+        let click = ClientCommand::ClickDoor {
+            session_id: 5,
+            door_id: 3,
+            created: Instant::now(),
+        };
+        let mut world = World::new(5);
+        let outcome = testing::run(|out| {
+            let handled = features.handle(&click, &mut world, out)?;
+            assert!(!handled);
+            unoffered(&click, out.log)
+        });
+        outcome.result.unwrap();
+        assert!(matches!(
+            &outcome.events[..],
+            [ClientEvent::World(crate::world::WorldEvent::DoorAction {
+                session_id: 5,
+                door_id: 3,
+                error: Some(reason),
+            }), ..] if reason == UNOFFERED
+        ));
     }
 
     #[test]
