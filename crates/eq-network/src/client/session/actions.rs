@@ -274,7 +274,12 @@ fn reasoned(command: &ClientCommand, session_id: u64, reason: String) -> Option<
         }
         ClientCommand::MoveCoins { .. } => WorldEvent::CoinsRefused { session_id, reason },
         ClientCommand::Consume { .. } => WorldEvent::ConsumeRefused { session_id, reason },
-        ClientCommand::UseAbility { .. } => WorldEvent::AbilityRefused { session_id, reason },
+        ClientCommand::UseAbility { .. } => WorldEvent::AbilityRefused {
+            session_id,
+            reason,
+            string_id: None,
+            arguments: Vec::new(),
+        },
         ClientCommand::Pet { .. } => WorldEvent::PetRefused { session_id, reason },
         ClientCommand::Training { .. } => WorldEvent::TrainingRefused { session_id, reason },
         ClientCommand::AnswerResurrection { .. } => {
