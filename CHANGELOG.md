@@ -9,10 +9,12 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - `Capability::MerchantOffers`: a front end may show what a merchant pays
   for an item sold to them, worked out from the item's `price` and the
-  merchant's `rate` by the server type's rule. `EqEmu` offers it, checked
-  live: the price times how many are sold (a charged item counts as one),
-  over the rate, rounded to the nearest copper. Other server types wait for
-  a check.
+  merchant's `rate` by the server type's rule. `EqEmu` offers it: the price
+  times how many are sold (a charged item counts as one), times the
+  merchant's modifier (one at neutral standing; 1 / (0.95 x the rate it
+  opened with)), then times 0.95, each product cut to whole copper and never
+  rounded up; three sales checked at a neutral merchant. Other server types
+  wait for a check.
 
 - A special message (`OP_SpecialMesg`) on the Titanium wire says how its
   speaker speaks: `ChatEvent::speak_mode` (`SpeakMode`: `Raw` for a plain

@@ -731,9 +731,12 @@ impl ServerType for EqEmu {
         Some(shared::map())
     }
 
-    /// Checked live on `EQEmu`: a merchant pays an item's price times how
-    /// many are sold (a charged item counts as one), over the rate it
-    /// opened with, rounded to the nearest copper.
+    /// `EQEmu`'s merchants pay the price times how many are sold (a charged
+    /// item counts as one), times the merchant's modifier (one at neutral
+    /// standing; 1 / (0.95 x the rate it opened with)), then times 0.95,
+    /// each product cut to whole copper and never rounded up, as its
+    /// `Handle_OP_ShopPlayerSell` stores each into a whole number. Three
+    /// sales were checked at a neutral merchant.
     fn merchant_offers(&self, _setup: &Setup<'_>) -> Provided {
         Some(shared::merchant_offers())
     }
