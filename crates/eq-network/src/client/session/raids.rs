@@ -36,7 +36,8 @@
 //! list holds health updates. So the session counts every member added
 //! after a raid's creation as listed ([`RaidUpdate::Listed`]) until a moment
 //! passes without a raid update; a member added later joined. The raid the
-//! player forms by inviting lists nothing: the one added with them joined.
+//! player forms by inviting lists nothing: the one added with them joined
+//! (inferred: what the official client tells the inviter is not checked).
 use super::{
     actions,
     feature::{Feature, Out, World},
@@ -68,12 +69,17 @@ const NOT_IN_RAID: u32 = 5082;
 /// How many members a raid group holds (`EQEmu`'s move checks for fewer).
 const GROUP_SIZE: usize = 6;
 
-/// How long a removal waits for the message that would show it to be a
-/// move: the server sends a move's packets together.
+// The two waits stand in for the burst of packets one server call sends,
+// which no packet ends: a move's removal and add, a re-listing's end and
+// creation, and a list of the raid each come in one call, and joins in
+// later ones. Neither changes what the session knows of the raid, only
+// how it tells the host: a member listed or added is in the raid alike.
+
+/// How long a held removal, or end of the raid, waits for the message that
+/// would show what it was.
 const HOLD: Duration = Duration::from_millis(300);
 
-/// How long a list of the raid lasts without a raid update: the server sends
-/// each list in one burst, and joins come later.
+/// How long a list of the raid lasts without a raid update.
 const LIST_GAP: Duration = Duration::from_secs(1);
 
 /// The player's raid, as the server described it.
@@ -965,6 +971,47 @@ mod tests {
             hear(&mut raids, &mut world, added("Friend")),
             [added("Friend")]
         );
+    }
+
+    #[test]
+    fn a_list_leaves_the_same_raid_however_long_it_pauses() {
+        // As EQEmu lists the raid to the last of a group whose leader left
+        // it: the player taken out, the raid created, the leader, the
+        // player, then the rest.
+        let order = || {
+            [
+                removed("Tester"),
+                RaidUpdate::Created {
+                    leader: "Leader".into(),
+                },
+                RaidUpdate::Leader {
+                    name: "Leader".into(),
+                },
+                RaidUpdate::Added(member("Tester", Some(0))),
+                RaidUpdate::Added(member("Leader", None)),
+                RaidUpdate::Added(member("Other", Some(2))),
+            ]
+        };
+        let roster = |gap: Option<usize>| {
+            let mut raids = Raids::default();
+            let mut world = World::new(5);
+            led_raid(&mut raids, &mut world);
+            let start = Instant::now();
+            for (index, update) in order().into_iter().enumerate() {
+                if gap == Some(index) {
+                    for now in [start, start + Duration::from_secs(2)] {
+                        testing::run(|out| raids.tick(now, &mut world, out))
+                            .result
+                            .unwrap();
+                    }
+                }
+                hear(&mut raids, &mut world, update);
+            }
+            raids.raid.map(|raid| raid.members).expect("in a raid")
+        };
+        // A pause in the middle of the list tells the rest as joins, which
+        // leaves the raid as it is.
+        assert_eq!(roster(None), roster(Some(4)));
     }
 
     #[test]

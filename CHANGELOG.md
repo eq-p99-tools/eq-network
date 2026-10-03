@@ -19,7 +19,8 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   end (the leader comes last in some orders and early in others, and the
   join's list holds health updates), so the session counts every member
   added after a creation as listed until a second passes without a raid
-  update. The raid the player forms by inviting lists nothing. The session
+  update. The raid the player forms by inviting lists nothing (inferred:
+  what the official client tells the inviter is not checked). The session
   also holds a `Disbanded` as it holds a removal: the raid's end, the
   player's removal and the raid listed again, as `EQEmu` tells a member
   moved in another zone, is nothing; anything else tells them in order.
