@@ -925,7 +925,13 @@ mod tests {
         );
         assert_eq!(
             features(crate::client::ServerProtocol::Takp),
-            [Capability::Moving, Capability::Talking, Capability::Camping]
+            [
+                Capability::Moving,
+                Capability::Targeting,
+                Capability::Combat,
+                Capability::Talking,
+                Capability::Camping
+            ]
         );
     }
 }
