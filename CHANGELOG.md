@@ -7,6 +7,13 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- `WorldEvent::Entered` gains `choices`: what the session leaves to the
+  player, none of it among `capabilities`. A server type may leave any
+  feature it provides to the player where its own client keeps it off; a
+  front end then offers what the feature lets the player do only once the
+  player turns it on. P99 leaves the in-game map (`Capability::Map`) to the
+  player this way, as its own client keeps the map off.
+
 - P99 offers `Capability::MovingSpells`: moving a spell in the book works
   there as on `EQEmu`, checked with the official client. Deleting one does
   not, so `DeletingSpells` stays off on P99.

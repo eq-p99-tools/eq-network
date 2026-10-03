@@ -8,6 +8,12 @@
 //! server type also names the client generation's [`Wire`] it speaks, which
 //! its features sit on: P99 and `EQEmu` share Titanium's yet differ in their
 //! features.
+//!
+//! A server type offers each feature it provides, or leaves it to the
+//! player where its own client keeps the feature off ([`leave_to_player`]):
+//! the session then lists what the feature lets the player do among the
+//! player's choices, and a front end offers it only once the player turns it
+//! on.
 
 use anyhow::Result;
 
@@ -70,7 +76,36 @@ impl<'a> Setup<'a> {
 }
 
 /// A feature as a server type provides it, ready for the zone session.
-pub(super) type Provided = Option<Box<dyn Feature>>;
+pub(super) type Provided = Option<Provision>;
+
+/// A feature a server type provides, and how the session lists it.
+pub(super) struct Provision {
+    /// The feature.
+    pub(super) feature: Box<dyn Feature>,
+    /// Whether the server type leaves it to the player rather than offering
+    /// it.
+    pub(super) choice: bool,
+}
+
+/// A feature the server type offers.
+#[allow(clippy::unnecessary_wraps)] // As a server type's accessors return it.
+fn offer(feature: Box<dyn Feature>) -> Provided {
+    Some(Provision {
+        feature,
+        choice: false,
+    })
+}
+
+/// A feature the server type leaves to the player, as its own client keeps
+/// it off: the session lists what it lets the player do among the player's
+/// choices, and runs it all the same.
+#[allow(clippy::unnecessary_wraps)] // As a server type's accessors return it.
+fn leave_to_player(feature: Box<dyn Feature>) -> Provided {
+    Some(Provision {
+        feature,
+        choice: true,
+    })
+}
 
 /// A server type: the client generation it speaks, what differs from other
 /// servers that speak it, and the features it offers, each absent unless it
@@ -276,7 +311,7 @@ pub(super) trait ServerType: Sync {
 
     /// Every feature the server type provides, in the order the zone session
     /// offers them each command, packet and timer.
-    fn features(&self, setup: &Setup<'_>) -> Vec<Box<dyn Feature>> {
+    fn features(&self, setup: &Setup<'_>) -> Vec<Provision> {
         [
             self.casting(setup),
             self.spellbook(setup),
@@ -574,89 +609,95 @@ impl ServerType for Project1999 {
     }
 
     fn casting(&self, _setup: &Setup<'_>) -> Provided {
-        Some(shared::casting())
+        offer(shared::casting())
     }
 
     /// Moving the book's spells works on P99 as on `EQEmu` (checked with the
     /// official client, 2026-10-03); deleting one does not there, so it
     /// stays off.
     fn spellbook(&self, _setup: &Setup<'_>) -> Provided {
-        Some(shared::spellbook(Edits {
+        offer(shared::spellbook(Edits {
             deleting: false,
             moving: true,
         }))
     }
 
     fn inventory(&self, setup: &Setup<'_>) -> Provided {
-        Some(shared::inventory(setup))
+        offer(shared::inventory(setup))
     }
 
     fn motion(&self, _setup: &Setup<'_>) -> Provided {
-        Some(shared::motion(false))
+        offer(shared::motion(false))
     }
 
     fn character(&self, _setup: &Setup<'_>) -> Provided {
-        Some(shared::character())
+        offer(shared::character())
     }
 
     fn entities(&self, _setup: &Setup<'_>) -> Provided {
-        Some(shared::entities(GameDialect::Titanium))
+        offer(shared::entities(GameDialect::Titanium))
     }
 
     fn targeting(&self, _setup: &Setup<'_>) -> Provided {
-        Some(shared::targeting())
+        offer(shared::targeting())
     }
 
     fn combat(&self, _setup: &Setup<'_>) -> Provided {
-        Some(shared::combat())
+        offer(shared::combat())
     }
 
     fn looting(&self, _setup: &Setup<'_>) -> Provided {
-        Some(shared::looting())
+        offer(shared::looting())
     }
 
     fn exchange(&self, _setup: &Setup<'_>) -> Provided {
-        Some(shared::exchange())
+        offer(shared::exchange())
     }
 
     fn abilities(&self, _setup: &Setup<'_>) -> Provided {
-        Some(shared::abilities(&P99_ABILITIES))
+        offer(shared::abilities(&P99_ABILITIES))
     }
 
     fn talk(&self, _setup: &Setup<'_>) -> Provided {
-        Some(shared::talk())
+        offer(shared::talk())
     }
 
     fn camp(&self, _setup: &Setup<'_>) -> Provided {
-        Some(shared::camp())
+        offer(shared::camp())
     }
 
     fn doors(&self, _setup: &Setup<'_>) -> Provided {
-        Some(shared::doors())
+        offer(shared::doors())
     }
 
     fn ground_items(&self, _setup: &Setup<'_>) -> Provided {
-        Some(shared::ground_items())
+        offer(shared::ground_items())
     }
 
     fn transfers(&self, setup: &Setup<'_>) -> Provided {
-        Some(shared::transfers(setup))
+        offer(shared::transfers(setup))
     }
 
     fn clock(&self, _setup: &Setup<'_>) -> Provided {
-        Some(shared::clock())
+        offer(shared::clock())
     }
 
     fn who(&self, _setup: &Setup<'_>) -> Provided {
-        Some(shared::who())
+        offer(shared::who())
     }
 
     fn corpses(&self, _setup: &Setup<'_>) -> Provided {
-        Some(shared::corpses())
+        offer(shared::corpses())
     }
 
     fn pets(&self, _setup: &Setup<'_>) -> Provided {
-        Some(shared::pets())
+        offer(shared::pets())
+    }
+
+    /// P99's own client keeps the in-game map off, which is right for P99;
+    /// the player may still turn it on (Adam, 2026-10-02).
+    fn map(&self, _setup: &Setup<'_>) -> Provided {
+        leave_to_player(shared::map())
     }
 }
 
@@ -678,106 +719,106 @@ impl ServerType for EqEmu {
     }
 
     fn casting(&self, _setup: &Setup<'_>) -> Provided {
-        Some(shared::casting())
+        offer(shared::casting())
     }
 
     fn spellbook(&self, _setup: &Setup<'_>) -> Provided {
-        Some(shared::spellbook(Edits {
+        offer(shared::spellbook(Edits {
             deleting: true,
             moving: true,
         }))
     }
 
     fn inventory(&self, setup: &Setup<'_>) -> Provided {
-        Some(shared::inventory(setup))
+        offer(shared::inventory(setup))
     }
 
     fn motion(&self, _setup: &Setup<'_>) -> Provided {
-        Some(shared::motion(true))
+        offer(shared::motion(true))
     }
 
     fn character(&self, _setup: &Setup<'_>) -> Provided {
-        Some(shared::character())
+        offer(shared::character())
     }
 
     fn entities(&self, _setup: &Setup<'_>) -> Provided {
-        Some(shared::entities(GameDialect::Titanium))
+        offer(shared::entities(GameDialect::Titanium))
     }
 
     fn targeting(&self, _setup: &Setup<'_>) -> Provided {
-        Some(shared::targeting())
+        offer(shared::targeting())
     }
 
     fn combat(&self, _setup: &Setup<'_>) -> Provided {
-        Some(shared::combat())
+        offer(shared::combat())
     }
 
     fn looting(&self, _setup: &Setup<'_>) -> Provided {
-        Some(shared::looting())
+        offer(shared::looting())
     }
 
     fn exchange(&self, _setup: &Setup<'_>) -> Provided {
-        Some(shared::exchange())
+        offer(shared::exchange())
     }
 
     fn abilities(&self, _setup: &Setup<'_>) -> Provided {
-        Some(shared::abilities(&Ability::ALL))
+        offer(shared::abilities(&Ability::ALL))
     }
 
     fn talk(&self, _setup: &Setup<'_>) -> Provided {
-        Some(shared::talk())
+        offer(shared::talk())
     }
 
     fn camp(&self, _setup: &Setup<'_>) -> Provided {
-        Some(shared::camp())
+        offer(shared::camp())
     }
 
     fn doors(&self, _setup: &Setup<'_>) -> Provided {
-        Some(shared::doors())
+        offer(shared::doors())
     }
 
     fn ground_items(&self, _setup: &Setup<'_>) -> Provided {
-        Some(shared::ground_items())
+        offer(shared::ground_items())
     }
 
     fn transfers(&self, setup: &Setup<'_>) -> Provided {
-        Some(shared::transfers(setup))
+        offer(shared::transfers(setup))
     }
 
     fn clock(&self, _setup: &Setup<'_>) -> Provided {
-        Some(shared::clock())
+        offer(shared::clock())
     }
 
     fn who(&self, _setup: &Setup<'_>) -> Provided {
-        Some(shared::who())
+        offer(shared::who())
     }
 
     fn corpses(&self, _setup: &Setup<'_>) -> Provided {
-        Some(shared::corpses())
+        offer(shared::corpses())
     }
 
     fn pets(&self, _setup: &Setup<'_>) -> Provided {
-        Some(shared::pets())
+        offer(shared::pets())
     }
 
     fn training(&self, _setup: &Setup<'_>) -> Provided {
-        Some(shared::training())
+        offer(shared::training())
     }
 
     fn resurrection(&self, _setup: &Setup<'_>) -> Provided {
-        Some(shared::resurrection())
+        offer(shared::resurrection())
     }
 
     fn reading(&self, _setup: &Setup<'_>) -> Provided {
-        Some(shared::reading())
+        offer(shared::reading())
     }
 
     fn tradeskills(&self, _setup: &Setup<'_>) -> Provided {
-        Some(shared::tradeskills())
+        offer(shared::tradeskills())
     }
 
     fn map(&self, _setup: &Setup<'_>) -> Provided {
-        Some(shared::map())
+        offer(shared::map())
     }
 
     /// `EQEmu`'s merchants pay the price times how many are sold (a charged
@@ -787,27 +828,27 @@ impl ServerType for EqEmu {
     /// `Handle_OP_ShopPlayerSell` stores each into a whole number. Three
     /// sales were checked at a neutral merchant.
     fn merchant_offers(&self, _setup: &Setup<'_>) -> Provided {
-        Some(shared::merchant_offers())
+        offer(shared::merchant_offers())
     }
 
     /// Checked live on `EQEmu` with two characters.
     fn groups(&self, _setup: &Setup<'_>) -> Provided {
-        Some(shared::groups())
+        offer(shared::groups())
     }
 
     /// Checked live on `EQEmu` with two characters.
     fn listing(&self, _setup: &Setup<'_>) -> Provided {
-        Some(shared::listing())
+        offer(shared::listing())
     }
 
     /// Checked live on `EQEmu` with two characters.
     fn socials(&self, _setup: &Setup<'_>) -> Provided {
-        Some(shared::socials())
+        offer(shared::socials())
     }
 
     /// Checked live on `EQEmu` with two characters.
     fn raids(&self, _setup: &Setup<'_>) -> Provided {
-        Some(shared::raids())
+        offer(shared::raids())
     }
 }
 
@@ -821,15 +862,15 @@ impl ServerType for Quarm {
     }
 
     fn character(&self, _setup: &Setup<'_>) -> Provided {
-        Some(shared::character())
+        offer(shared::character())
     }
 
     fn entities(&self, _setup: &Setup<'_>) -> Provided {
-        Some(shared::entities(GameDialect::EqMac))
+        offer(shared::entities(GameDialect::EqMac))
     }
 
     fn talk(&self, _setup: &Setup<'_>) -> Provided {
-        Some(shared::talk())
+        offer(shared::talk())
     }
 }
 
@@ -847,24 +888,24 @@ impl ServerType for Takp {
     }
 
     fn character(&self, _setup: &Setup<'_>) -> Provided {
-        Some(shared::character())
+        offer(shared::character())
     }
 
     fn entities(&self, _setup: &Setup<'_>) -> Provided {
-        Some(shared::entities(GameDialect::EqMac))
+        offer(shared::entities(GameDialect::EqMac))
     }
 
     fn talk(&self, _setup: &Setup<'_>) -> Provided {
-        Some(shared::talk())
+        offer(shared::talk())
     }
 
     fn camp(&self, _setup: &Setup<'_>) -> Provided {
-        Some(shared::camp())
+        offer(shared::camp())
     }
 
     /// TAKP takes no falls from the client, as P99 does not.
     fn motion(&self, _setup: &Setup<'_>) -> Provided {
-        Some(shared::motion(false))
+        offer(shared::motion(false))
     }
 }
 
@@ -903,17 +944,24 @@ mod tests {
         }
     }
 
-    /// What a server type's features let the player do, each once.
-    fn offers(server: &dyn ServerType) -> Vec<Capability> {
+    /// What a server type's features let the player do, each once: what it
+    /// offers, or else what it leaves to the player.
+    fn listed(server: &dyn ServerType, choices: bool) -> Vec<Capability> {
         let setup = Setup::new("Tester", AutoEat::default());
         let mut capabilities: Vec<_> = server
             .features(&setup)
             .iter()
-            .flat_map(|feature| feature.capabilities())
+            .filter(|provided| provided.choice == choices)
+            .flat_map(|provided| provided.feature.capabilities())
             .collect();
         capabilities.sort_unstable();
         capabilities.dedup();
         capabilities
+    }
+
+    /// What a server type offers, each once.
+    fn offers(server: &dyn ServerType) -> Vec<Capability> {
+        listed(server, false)
     }
 
     #[test]
@@ -1013,7 +1061,7 @@ mod tests {
         // spells, merchants' offers, groups, the player's listing, dice,
         // emotes, assisting and raids are checked on EQEmu alone so far.
         for (protocol, count) in [
-            (ServerProtocol::Project1999, 20),
+            (ServerProtocol::Project1999, 21),
             (ServerProtocol::EqEmu, 30),
         ] {
             let server = server_type(protocol);
@@ -1041,6 +1089,24 @@ mod tests {
         // Moving the book's spells is checked on both.
         for protocol in [ServerProtocol::Project1999, ServerProtocol::EqEmu] {
             assert!(offers(server_type(protocol)).contains(&Capability::MovingSpells));
+        }
+    }
+
+    #[test]
+    fn p99_leaves_the_map_to_the_player_where_eqemu_offers_it() {
+        let p99 = server_type(ServerProtocol::Project1999);
+        assert_eq!(listed(p99, true), [Capability::Map]);
+        assert!(!offers(p99).contains(&Capability::Map));
+        let eqemu = server_type(ServerProtocol::EqEmu);
+        assert!(offers(eqemu).contains(&Capability::Map));
+        // Every other server type leaves nothing to the player.
+        for server in [
+            eqemu,
+            server_type(ServerProtocol::Quarm),
+            server_type(ServerProtocol::Takp),
+            &Empty,
+        ] {
+            assert_eq!(listed(server, true), Vec::<Capability>::new());
         }
     }
 

@@ -340,7 +340,10 @@ pub enum CampStatus {
 
 /// Something a zone session lets the player do. Which ones a session offers
 /// depends on the server type and on what its client generation has been
-/// built for; a front end greys out or hides the rest.
+/// built for; a front end greys out or hides the rest. A server type may
+/// instead leave one to the player, where its own client keeps it off: the
+/// session lists it among the player's choices, and a front end offers it
+/// only once the player turns it on.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 pub enum Capability {
     /// Casting memorized spells.
@@ -669,6 +672,10 @@ pub enum WorldEvent {
         /// What this session lets the player do; front ends grey out or hide
         /// the rest.
         capabilities: Vec<Capability>,
+        /// What this session leaves to the player, none of it among
+        /// `capabilities`: the server's own client keeps it off, so a front
+        /// end offers it only once the player turns it on.
+        choices: Vec<Capability>,
         /// Unique connection identifier, never reused after reconnect.
         session_id: u64,
         /// Zone asset short name.
