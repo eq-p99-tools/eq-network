@@ -13,10 +13,15 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the targeted member or disband, as the server decides by its idea of the
   target; with an invitation waiting, decline it). The server's word arrives
   as `WorldEvent::Group(GroupUpdate)`: an invitation, the invitee's
-  acceptance or refusal, a member joining or leaving, the full member list
-  with its leader, a new leader, and the group's end; a refused request as
-  `WorldEvent::GroupRefused`. The Titanium codec (`group`) reads `EQEmu`'s
-  group structs, which arrive longer than the Titanium client's own.
+  acceptance or refusal, the player forming a group, a member joining or
+  leaving, the full member list with its leader, a new leader, and the
+  group's end. The session says what it sent the same way (`Inviting`,
+  `Following`, `Declining`), since the server does not answer it, and
+  refuses as `WorldEvent::GroupRefused`, naming the official client's
+  string where it has one: an invitation that names no one, one from a
+  member who is not the leader, and one to a full group. The Titanium codec
+  (`group`) reads `EQEmu`'s group structs, which arrive longer than the
+  Titanium client's own.
 
 - `Capability::MerchantOffers`: a front end may show what a merchant pays
   for an item sold to them, worked out from the item's `price` and the

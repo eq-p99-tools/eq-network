@@ -860,9 +860,9 @@ pub enum WorldEvent {
         /// Why not.
         reason: String,
     },
-    /// The server's word on groups: an invitation, an answer to the
+    /// News of groups: the server's word (an invitation, an answer to the
     /// player's, who joined or left, the group's members and leader, or its
-    /// end.
+    /// end) and the requests the session sent for the player.
     Group(crate::group::GroupUpdate),
     /// A group request was not sent, and why.
     GroupRefused {
@@ -870,6 +870,10 @@ pub enum WorldEvent {
         session_id: u64,
         /// Why not.
         reason: String,
+        /// The official client's own words for this refusal, as an
+        /// `eqstr_us.txt` string ID, for a host with the installed strings;
+        /// `reason` says the same in this library's words.
+        string_id: Option<u32>,
     },
     /// A book's or note's text, to read.
     BookText(crate::books::BookText),

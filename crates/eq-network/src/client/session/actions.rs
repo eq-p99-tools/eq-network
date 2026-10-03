@@ -178,6 +178,7 @@ pub(super) fn refuse_officially(
         | WorldEvent::CorpseRefused { string_id, .. }
         | WorldEvent::PetRefused { string_id, .. }
         | WorldEvent::CombineRefused { string_id, .. }
+        | WorldEvent::GroupRefused { string_id, .. }
         | WorldEvent::AbilityRefused { string_id, .. } = &mut event
         {
             *string_id = official;
@@ -322,7 +323,11 @@ fn reasoned(command: &ClientCommand, session_id: u64, reason: String) -> Option<
         ClientCommand::InviteToGroup { .. }
         | ClientCommand::FollowGroup { .. }
         | ClientCommand::DeclineGroup { .. }
-        | ClientCommand::Disband { .. } => WorldEvent::GroupRefused { session_id, reason },
+        | ClientCommand::Disband { .. } => WorldEvent::GroupRefused {
+            session_id,
+            reason,
+            string_id: None,
+        },
         ClientCommand::ReadItem { .. } => WorldEvent::ReadRefused { session_id, reason },
         ClientCommand::Combine { .. } => WorldEvent::CombineRefused {
             session_id,

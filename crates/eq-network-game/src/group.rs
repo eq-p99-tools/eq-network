@@ -49,14 +49,33 @@ const UPDATED: u32 = 7;
 const NEW_LEADER: u32 = 8;
 const FIRST_INVITE: u32 = 9;
 
-/// The server's word on groups.
+/// News of groups: the server's word, and what the session sent for the
+/// player, which the server does not answer.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub enum GroupUpdate {
+    /// The session invited a player to the player's group.
+    Inviting {
+        /// Who was invited.
+        player: String,
+    },
+    /// The session joined the inviter's group for the player.
+    Following {
+        /// Who invited the player.
+        inviter: String,
+    },
+    /// The session declined the inviter's invitation for the player.
+    Declining {
+        /// Who invited the player.
+        inviter: String,
+    },
     /// Someone invited the player to their group.
     Invited {
         /// Who invited them.
         inviter: String,
     },
+    /// The one the player invited joined, and with them the player formed a
+    /// group, which the player leads.
+    Formed,
     /// The one the player invited joined.
     Accepted {
         /// Who joined.
@@ -215,7 +234,10 @@ fn update(body: &[u8]) -> Result<Option<GroupUpdate>> {
             name: name(body, MEMBER),
         }),
         DISBANDED => Some(GroupUpdate::Disbanded),
-        UPDATED | FIRST_INVITE => {
+        // Sent to the inviter alone, naming them as the member: the first
+        // to join formed the group with them.
+        FIRST_INVITE => Some(GroupUpdate::Formed),
+        UPDATED => {
             ensure!(body.len() >= LEADER + NAME, "truncated group list");
             Some(GroupUpdate::Members {
                 leader: name(body, LEADER),
@@ -315,6 +337,8 @@ mod tests {
             })
         );
         assert_eq!(change(DISBANDED), Some(GroupUpdate::Disbanded));
+        // The first to join forms the group with the inviter.
+        assert_eq!(change(FIRST_INVITE), Some(GroupUpdate::Formed));
         // The leader's leadership abilities are not read.
         assert_eq!(change(10), None);
         // A full list: the leader and the other members.
