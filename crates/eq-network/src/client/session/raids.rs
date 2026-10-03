@@ -9,7 +9,9 @@
 //! group): one that names no one, one to
 //! the player themself, which `EQEmu` would turn into a broken raid, one to
 //! a member, one from a member who is not the leader, and one while the
-//! raid is locked. The server does not pass the player's own raid chat back
+//! raid is locked (in this library's words: the official string about a
+//! locked raid, 8870, announces the leader locking it rather than refusing
+//! anything). The server does not pass the player's own raid chat back
 //! to them, so the session records it as the others hear it, as the official
 //! client shows it (inferred).
 //!
@@ -45,13 +47,11 @@ use std::time::{Duration, Instant};
 
 /// The official client's strings for the invitations it refuses: one that
 /// names no one, one from a member who is not the leader, one to the player
-/// themself, one to a member, and one while the raid is locked
-/// (`eqstr_us.txt`).
+/// themself and one to a member (`eqstr_us.txt`).
 const NO_ONE_NAMED: u32 = 5074;
 const NOT_THE_LEADER: u32 = 5073;
 const ONESELF: u32 = 5076;
 const ALREADY_IN: u32 = 5077;
-const LOCKED: u32 = 8870;
 /// Its string for one who is not in the player's raid, naming them.
 const NOT_IN_RAID: u32 = 5082;
 
@@ -147,7 +147,7 @@ impl Raids {
             return Some(("Only the raid's leader may invite.", Some(NOT_THE_LEADER)));
         }
         raid.locked
-            .then_some(("The raid is locked; unlock it to invite.", Some(LOCKED)))
+            .then_some(("The raid is locked; unlock it to invite.", None))
     }
 
     /// The player's raid, if they lead it; else why a leader's command is
@@ -653,10 +653,7 @@ mod tests {
                 by: "Tester".into(),
             },
         );
-        assert_eq!(
-            refused(&mut raids, &mut world, &invite("Friend")),
-            Some(LOCKED)
-        );
+        assert_eq!(refused(&mut raids, &mut world, &invite("Friend")), None);
         // Leaving sends the player's own name twice; out of a raid, it is
         // refused.
         let leave = ClientCommand::RaidLeave { session_id: 5 };
