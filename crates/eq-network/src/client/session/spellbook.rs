@@ -108,17 +108,38 @@ fn report(status: BookActionStatus, out: &mut Out<'_, '_>) -> Result<()> {
 /// The player's spellbook and the changes to it in flight.
 #[derive(Default)]
 pub(super) struct Spellbook {
+    /// What the server type lets the player do to the book's entries, as
+    /// checked on that kind of server.
+    edits: Edits,
     /// The book as the server last described it.
     book: Option<SpellBook>,
     /// A scribe or memorization waiting for the player to sit.
     pending: Option<PendingBookAction>,
     /// The change waiting for the server's answer.
-    edits: BookEdits,
+    answers: BookEdits,
     /// A scribe whose scroll the server takes from the cursor.
     consumption: ScribeConsumption,
 }
 
+/// What a server type lets the player do to the spellbook's entries
+/// besides scribing them: each only once it has been checked on that kind
+/// of server.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) struct Edits {
+    /// Deleting a spell from the book.
+    pub(super) deleting: bool,
+    /// Moving a spell to another place in the book.
+    pub(super) moving: bool,
+}
+
 impl Spellbook {
+    pub(super) fn new(edits: Edits) -> Self {
+        Self {
+            edits,
+            ..Self::default()
+        }
+    }
+
     /// Sits the player to scribe or memorize, once the request holds against
     /// the book (and, for a scroll, the cursor) as they are now.
     fn prepare(
@@ -164,7 +185,7 @@ impl Spellbook {
         let status = match edit_request(command, self.book.as_ref(), self.pending.is_some()) {
             Ok(request) => {
                 out.request(&request)?;
-                self.edits.sent(command, Instant::now());
+                self.answers.sent(command, Instant::now());
                 BookActionStatus::AwaitingReply
             }
             Err(error) => BookActionStatus::Rejected(error.to_string()),
@@ -205,7 +226,7 @@ impl Spellbook {
         match request {
             Ok(request) => {
                 out.request(&request)?;
-                self.edits.prepared_sent(&pending.intent, now);
+                self.answers.prepared_sent(&pending.intent, now);
                 self.consumption.sent(&pending.intent);
                 report(BookActionStatus::AwaitingReply, out)
             }
@@ -226,7 +247,7 @@ impl Spellbook {
         world: &mut World,
         out: &mut Out<'_, '_>,
     ) -> Result<()> {
-        let answer = self.edits.observe(update);
+        let answer = self.answers.observe(update);
         self.consumption
             .observe(update, answer == Some(BookActionStatus::Confirmed));
         // The character feature keeps the gems on the player's record.
@@ -255,7 +276,14 @@ impl Spellbook {
 impl Feature for Spellbook {
     fn capabilities(&self) -> Vec<crate::world::Capability> {
         use crate::world::Capability;
-        vec![Capability::Spellbook]
+        let mut offered = vec![Capability::Spellbook];
+        if self.edits.deleting {
+            offered.push(Capability::DeletingSpells);
+        }
+        if self.edits.moving {
+            offered.push(Capability::MovingSpells);
+        }
+        offered
     }
 
     /// The book arrives with the player's profile, before the zone admits them.
@@ -279,7 +307,7 @@ impl Feature for Spellbook {
     /// from the cursor when it answers; any change in flight holds the book.
     fn holds(&self, _world: &World, now: Instant) -> Vec<(Resource, &'static str)> {
         let mut held = Vec::new();
-        let scribing = self.edits.scribing()
+        let scribing = self.answers.scribing()
             || self.consumption.awaiting_cursor(now)
             || self
                 .pending
@@ -290,7 +318,7 @@ impl Feature for Spellbook {
             // logged the character out.
             held.push((Resource::Inventory, "Wait for scribing to finish"));
         }
-        if scribing || self.pending.is_some() || self.edits.outstanding() {
+        if scribing || self.pending.is_some() || self.answers.outstanding() {
             held.push((Resource::Spellbook, "Wait for the current spellbook change"));
         }
         held
@@ -316,15 +344,17 @@ impl Feature for Spellbook {
         Ok(())
     }
 
+    /// Deleting and moving a book's spells only where the server type has
+    /// them checked; the zone session refuses them elsewhere.
     fn owns(&self, command: &ClientCommand) -> bool {
-        matches!(
-            command,
+        match command {
             ClientCommand::ScribeSpell { .. }
-                | ClientCommand::MemorizeSpell { .. }
-                | ClientCommand::ForgetSpell { .. }
-                | ClientCommand::DeleteSpell { .. }
-                | ClientCommand::SwapSpell { .. }
-        )
+            | ClientCommand::MemorizeSpell { .. }
+            | ClientCommand::ForgetSpell { .. } => true,
+            ClientCommand::DeleteSpell { .. } => self.edits.deleting,
+            ClientCommand::SwapSpell { .. } => self.edits.moving,
+            _ => false,
+        }
     }
 
     fn handle(
@@ -364,7 +394,7 @@ impl Feature for Spellbook {
     fn tick(&mut self, now: Instant, world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
         // Servers refuse an edit (a spell above the character's level, another
         // class's scroll) with only a chat message, so silence means refusal.
-        if let Some(status) = self.edits.expire(now) {
+        if let Some(status) = self.answers.expire(now) {
             report(status, out)?;
         }
         if world.lifecycle.is_dead() {
@@ -478,6 +508,52 @@ mod tests {
 
     fn cancelled(reason: &str) -> BookActionStatus {
         BookActionStatus::Cancelled(reason.into())
+    }
+
+    #[test]
+    fn deleting_and_moving_are_taken_and_offered_only_where_the_server_type_has_them() {
+        use crate::world::Capability;
+        let delete = ClientCommand::DeleteSpell {
+            session_id: 1,
+            slot: 0,
+            spell_id: 73,
+            created: Instant::now(),
+        };
+        let swap = ClientCommand::SwapSpell {
+            session_id: 1,
+            from: 0,
+            to: 1,
+            from_spell: 73,
+            to_spell: None,
+            created: Instant::now(),
+        };
+        let unchecked = Spellbook::new(Edits::default());
+        assert!(!unchecked.owns(&delete));
+        assert!(!unchecked.owns(&swap));
+        assert_eq!(unchecked.capabilities(), [Capability::Spellbook]);
+        let deleting = Spellbook::new(Edits {
+            deleting: true,
+            moving: false,
+        });
+        assert!(deleting.owns(&delete));
+        assert!(!deleting.owns(&swap));
+        assert_eq!(
+            deleting.capabilities(),
+            [Capability::Spellbook, Capability::DeletingSpells]
+        );
+        let both = Spellbook::new(Edits {
+            deleting: true,
+            moving: true,
+        });
+        assert!(both.owns(&delete) && both.owns(&swap));
+        assert_eq!(
+            both.capabilities(),
+            [
+                Capability::Spellbook,
+                Capability::DeletingSpells,
+                Capability::MovingSpells
+            ]
+        );
     }
 
     #[test]

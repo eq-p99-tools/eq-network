@@ -521,11 +521,11 @@ impl GameCommand {
         use crate::world::Capability;
         Some(match self {
             Self::SelectCharacter { .. } | Self::CreateCharacter { .. } => return None,
-            Self::SwapSpell { .. }
-            | Self::ScribeSpell { .. }
-            | Self::DeleteSpell { .. }
-            | Self::ForgetSpell { .. }
-            | Self::MemorizeSpell { .. } => Capability::Spellbook,
+            Self::ScribeSpell { .. } | Self::ForgetSpell { .. } | Self::MemorizeSpell { .. } => {
+                Capability::Spellbook
+            }
+            Self::DeleteSpell { .. } => Capability::DeletingSpells,
+            Self::SwapSpell { .. } => Capability::MovingSpells,
             // An item's click effect is a cast.
             Self::CastSpell { .. } | Self::UseItem(_) => Capability::Casting,
             Self::ClickDoor { .. } => Capability::Doors,

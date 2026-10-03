@@ -173,6 +173,12 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- Deleting a spell from the spellbook (`DeleteSpell`) and moving one to
+  another place in it (`SwapSpell`) each have a capability of their own,
+  `Capability::DeletingSpells` and `Capability::MovingSpells`, instead of
+  riding `Capability::Spellbook`. A server type offers each only once it has
+  been checked there: `EqEmu` offers both, and `Project1999` waits for a
+  check, so its sessions refuse both as unavailable.
 - `WorldEvent`, `GameCommand` and `ClientEvent` are exhaustive, so a front end
   handles every kind of news and command instead of ignoring new ones in a
   wildcard arm. `GameCommand::capability` names what each command needs of the
