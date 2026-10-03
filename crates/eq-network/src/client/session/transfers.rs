@@ -1,6 +1,15 @@
 //! Zone transfers: the zone lines the player crosses, the server's offers to
 //! move the player, its answer and the handoff to the next zone, and the
 //! player's death, which waits for the offer home.
+//!
+//! Once a zone approves a transfer, the player departs as the official client
+//! does: it asks the zone to save the player and takes its own spawn out
+//! (`OP_SaveOnZoneReq`, then `OP_DeleteSpawn`), and goes on to the world
+//! server when the zone answers with a logout, the connection ends or a
+//! moment passes, whichever comes first. `EQEmu` saves, drops the spawn and
+//! closes the connection on them (`zone/client_packet.cpp` `Handle_OP_SaveOnZoneReq`,
+//! `Handle_OP_DeleteSpawn`); TAKP holds the move until the spawn leaves
+//! (`zone/zoning.cpp` `HandleZoneTransferResponse`).
 use super::{
     feature::{Feature, Out, World},
     motion, zoning, ClientCommand, ClientEvent, ConnectionStage, ConnectionState, ZoneExit,
@@ -11,7 +20,11 @@ use eq_network_game::{
     request::Request,
     world::{Position, WorldEvent},
 };
-use std::time::Instant;
+use std::time::{Duration, Instant};
+
+/// How long the player's departure waits for the zone's answer: the zone
+/// answers at once, or closes the connection.
+const DEPARTURE: Duration = Duration::from_secs(2);
 
 /// The zone's zone points, and the transfers they and the server start.
 pub(super) struct Transfers {
@@ -51,12 +64,16 @@ impl Transfers {
     /// Asks for a transfer: the player stops, and every later command waits
     /// for the server's answer.
     fn start(offer: zoning::ZoneOffer, world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
-        out.request(&Request::AnswerZoneOffer {
-            zone_id: offer.zone_id,
-            instance_id: offer.instance_id,
-            position: offer.position,
-            reason: offer.reason,
-        })?;
+        noted(
+            out,
+            &Request::AnswerZoneOffer {
+                zone_id: offer.zone_id,
+                instance_id: offer.instance_id,
+                position: offer.position,
+                reason: offer.reason,
+            },
+            "the zone change",
+        )?;
         world.transfer_offered(offer.clone(), Instant::now())?;
         out.log
             .send(ClientEvent::World(WorldEvent::ZoneTransfer(offer)))?;
@@ -93,9 +110,14 @@ impl Transfers {
         Self::start(offer, world, out)
     }
 
-    /// Takes the server's answer to a transfer request: the player leaves
-    /// through the world server, or stays, perhaps back where they were.
-    fn answered(&self, body: &[u8], world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
+    /// Takes the server's answer to a transfer request: the player departs
+    /// for the world server, or stays, perhaps back where they were.
+    fn answered(
+        &self,
+        answer: &zoning::ZoneAnswer,
+        world: &mut World,
+        out: &mut Out<'_, '_>,
+    ) -> Result<()> {
         let pending = world
             .lifecycle
             .pending()
@@ -104,12 +126,13 @@ impl Transfers {
             .body
             .position()
             .map_or(0.0, |position| position.heading);
-        let reply = zoning::reply(body, &self.character, pending, world.zone, heading)?;
+        let reply = zoning::reply(answer, &self.character, pending, world.zone, heading)?;
         if reply == zoning::ZoneReply::Approved {
-            world.lifecycle.finish(true)?;
+            world.lifecycle.finish(true, Instant::now())?;
+            noted(out, &Request::SaveOnZone, "the save before leaving")?;
+            noted(out, &Request::Depart, "the departure")?;
             out.log
                 .send(ClientEvent::Progress(ConnectionStage::ConnectingWorld))?;
-            world.end(ZoneExit::World);
             return Ok(());
         }
         // The player stays, so movement resumes before anyone hears of the
@@ -139,6 +162,18 @@ impl Transfers {
         }
         Ok(())
     }
+}
+
+/// Sends a request and says so: zoning's few packets are worth reading back
+/// in the session's diagnostics.
+fn noted(out: &mut Out<'_, '_>, request: &Request, what: &str) -> Result<()> {
+    let packet = out.encode(request)?;
+    out.send(&packet)?;
+    out.log.diagnostic(format!(
+        "Zoning: sent {what} (0x{:04x}, {} bytes)",
+        packet.opcode,
+        packet.body.len()
+    ))
 }
 
 /// Moves the player within the zone, as the server asked.
@@ -213,10 +248,16 @@ impl Feature for Transfers {
         match message {
             Message::ZoneOffer(offer) => Self::offered(offer, world, out),
             Message::Unreadable {
-                part: Part::ZoneOffer,
+                part: Part::ZoneOffer | Part::ZoneAnswer,
                 error,
             } => bail!("{error}"),
-            Message::ZoneAnswer(body) => self.answered(body, world, out),
+            Message::ZoneAnswer(answer) => self.answered(answer, world, out),
+            // The zone's answer to the player's departure.
+            Message::LoggedOut if world.lifecycle.departing() => {
+                world.end(ZoneExit::World);
+                out.log
+                    .diagnostic("Zoning: the zone answered the departure".into())
+            }
             Message::Event(WorldEvent::Death(death)) if world.is_player(death.spawn_id) => {
                 world.died();
                 out.log
@@ -236,13 +277,27 @@ impl Feature for Transfers {
         }
     }
 
-    /// Gives up on a transfer the server never answered.
-    fn tick(&mut self, now: Instant, world: &mut World, _out: &mut Out<'_, '_>) -> Result<()> {
+    /// Gives up on a transfer the server never answered, and goes on to the
+    /// world server once a departure has waited long enough.
+    fn tick(&mut self, now: Instant, world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
         ensure!(
             !world.lifecycle.expired(now),
             "zone transfer approval timed out"
         );
+        if world.lifecycle.departed(now, DEPARTURE) {
+            world.end(ZoneExit::World);
+            return out
+                .log
+                .diagnostic("Zoning: the zone did not answer the departure".into());
+        }
         Ok(())
+    }
+
+    /// A zone closing the connection on the departing player lets them go.
+    fn connection_ended(&mut self, world: &mut World) {
+        if world.lifecycle.departing() {
+            world.end(ZoneExit::World);
+        }
     }
 }
 
@@ -288,6 +343,7 @@ mod tests {
             .unwrap()
             .body;
         answer[84..88].copy_from_slice(&(-1i32).to_le_bytes());
+        let answer = zoning::ZoneAnswer::titanium(&answer).unwrap();
         let outcome =
             testing::run(|out| transfers.observe(&Message::ZoneAnswer(answer), &mut world, out));
         outcome.result.unwrap();
@@ -355,6 +411,7 @@ mod tests {
         assert!(matches!(
             outcome.events[..],
             [
+                ClientEvent::Diagnostic(_),
                 ClientEvent::World(WorldEvent::ZoneTransfer(_)),
                 ClientEvent::World(WorldEvent::MotionState {
                     units_per_second: None,
@@ -367,6 +424,99 @@ mod tests {
         let outcome = testing::run(|out| transfers.observe(&handoff, &mut world, out));
         outcome.result.unwrap();
         assert!(matches!(world.exit(), Some(ZoneExit::Direct(address)) if address == &[1, 2, 3]));
+    }
+
+    /// A world whose zone approved a crossing to zone 4: the player's spawn
+    /// 7 is departing.
+    fn approved(transfers: &mut Transfers) -> (World, testing::Outcome<Result<()>>) {
+        let mut world = World::new(5);
+        let here = Position {
+            x: 10.0,
+            y: 20.0,
+            z: 3.0,
+            heading: 0.0,
+        };
+        world
+            .body
+            .admit(MotionSession::new(5, 7, here, Instant::now()).unwrap());
+        world.player.admit(testing::player(7));
+        world.zone = (2, 0);
+        world.admitted = Some(Instant::now());
+        let cross = ClientCommand::CrossZoneLine {
+            session_id: 5,
+            destination: zoning::ZoneLineDestination::Absolute {
+                zone_id: 4,
+                position: here,
+            },
+            position: here,
+            created: Instant::now(),
+        };
+        testing::run(|out| transfers.handle(&cross, &mut world, out))
+            .result
+            .unwrap();
+        let mut answer = world
+            .lifecycle
+            .pending()
+            .unwrap()
+            .response("Tester")
+            .unwrap()
+            .body;
+        answer[84..88].copy_from_slice(&1i32.to_le_bytes());
+        let answer = zoning::ZoneAnswer::titanium(&answer).unwrap();
+        let outcome =
+            testing::run(|out| transfers.observe(&Message::ZoneAnswer(answer), &mut world, out));
+        (world, outcome)
+    }
+
+    #[test]
+    fn an_approved_transfer_saves_and_departs_before_the_world() {
+        let mut transfers = Transfers::new("Tester");
+        let (mut world, outcome) = approved(&mut transfers);
+        outcome.result.unwrap();
+        // The save and the departure go out, in the official client's order,
+        // and the player waits for the zone.
+        assert_eq!(
+            outcome.sent,
+            [zoning::titanium_save_on_zone(), zoning::titanium_depart(7)]
+        );
+        assert!(world.exit().is_none() && world.lifecycle.departing());
+        // Commands and other news still wait; the zone's logout lets the
+        // player go.
+        let outcome = testing::run(|out| transfers.observe(&Message::LoggedOut, &mut world, out));
+        outcome.result.unwrap();
+        assert!(matches!(world.exit(), Some(ZoneExit::World)));
+    }
+
+    #[test]
+    fn a_departure_goes_on_once_the_wait_runs_out() {
+        let mut transfers = Transfers::new("Tester");
+        let (mut world, _) = approved(&mut transfers);
+        let now = Instant::now();
+        testing::run(|out| transfers.tick(now, &mut world, out))
+            .result
+            .unwrap();
+        assert!(world.exit().is_none());
+        testing::run(|out| transfers.tick(now + DEPARTURE, &mut world, out))
+            .result
+            .unwrap();
+        assert!(matches!(world.exit(), Some(ZoneExit::World)));
+    }
+
+    #[test]
+    fn a_departure_goes_on_when_the_zone_closes_the_connection() {
+        let mut transfers = Transfers::new("Tester");
+        let (mut world, _) = approved(&mut transfers);
+        transfers.connection_ended(&mut world);
+        assert!(matches!(world.exit(), Some(ZoneExit::World)));
+        // A connection ending at any other time is not the player's to take.
+        let mut transfers = Transfers::new("Tester");
+        let mut quiet = World::new(5);
+        transfers.connection_ended(&mut quiet);
+        assert!(quiet.exit().is_none());
+        // Nor is a logout without a departure.
+        let outcome = testing::run(|out| transfers.observe(&Message::LoggedOut, &mut quiet, out));
+        outcome.result.unwrap();
+        assert!(quiet.exit().is_none());
     }
 
     #[test]
