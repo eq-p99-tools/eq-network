@@ -916,7 +916,9 @@ mod tests {
         assert!(eqemu.contains(&Capability::MovingSpells));
         assert!(!p99.contains(&Capability::DeletingSpells));
         assert!(!p99.contains(&Capability::MovingSpells));
-        assert_eq!(eqemu.len(), p99.len() + 8);
+        assert!(eqemu.contains(&Capability::MerchantOffers));
+        assert!(!p99.contains(&Capability::MerchantOffers));
+        assert_eq!(eqemu.len(), p99.len() + 9);
         // EQMac servers talk, TAKP camps too, and neither follows a zone
         // change yet.
         assert_eq!(

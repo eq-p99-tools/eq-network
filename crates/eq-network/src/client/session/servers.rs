@@ -29,6 +29,7 @@ use super::{
     map::Map,
     motion::Motion,
     objects::GroundObjects,
+    offers::MerchantOffers,
     pets::Pets,
     reading::Reading,
     resurrection::Resurrection,
@@ -243,6 +244,12 @@ pub(super) trait ServerType: Sync {
         None
     }
 
+    /// What a merchant pays for an item sold to them, offered where the
+    /// server type's rule for it has been checked against the purse.
+    fn merchant_offers(&self, _setup: &Setup<'_>) -> Provided {
+        None
+    }
+
     /// Every feature the server type provides, in the order the zone session
     /// offers them each command, packet and timer.
     fn features(&self, setup: &Setup<'_>) -> Vec<Box<dyn Feature>> {
@@ -272,6 +279,7 @@ pub(super) trait ServerType: Sync {
             self.reading(setup),
             self.tradeskills(setup),
             self.map(setup),
+            self.merchant_offers(setup),
         ]
         .into_iter()
         .flatten()
@@ -368,9 +376,9 @@ impl Shield for WorldCodec {
 mod shared {
     use super::{
         Abilities, Ability, Belongings, Camp, Casting, Character, Clock, Combat, Corpses, Doors,
-        Edits, Entities, Exchanges, Feature, GameDialect, GroundObjects, Looting, Map, Motion,
-        Pets, Reading, Resurrection, Setup, Spellbook, Talk, Targeting, Tradeskills, Training,
-        Transfers, Who,
+        Edits, Entities, Exchanges, Feature, GameDialect, GroundObjects, Looting, Map,
+        MerchantOffers, Motion, Pets, Reading, Resurrection, Setup, Spellbook, Talk, Targeting,
+        Tradeskills, Training, Transfers, Who,
     };
 
     pub(super) fn casting() -> Box<dyn Feature> {
@@ -472,6 +480,10 @@ mod shared {
 
     pub(super) fn map() -> Box<dyn Feature> {
         Box::new(Map)
+    }
+
+    pub(super) fn merchant_offers() -> Box<dyn Feature> {
+        Box::new(MerchantOffers)
     }
 }
 
@@ -718,6 +730,16 @@ impl ServerType for EqEmu {
     fn map(&self, _setup: &Setup<'_>) -> Provided {
         Some(shared::map())
     }
+
+    /// `EQEmu`'s merchants pay the price times how many are sold (a charged
+    /// item counts as one), times the merchant's modifier (one at neutral
+    /// standing; 1 / (0.95 x the rate it opened with)), then times 0.95,
+    /// each product cut to whole copper and never rounded up, as its
+    /// `Handle_OP_ShopPlayerSell` stores each into a whole number. Three
+    /// sales were checked at a neutral merchant.
+    fn merchant_offers(&self, _setup: &Setup<'_>) -> Provided {
+        Some(shared::merchant_offers())
+    }
 }
 
 /// Project Quarm, which speaks `EQMac`. Its features come as they are
@@ -918,11 +940,11 @@ mod tests {
 
     #[test]
     fn p99_and_eqemu_provide_every_feature_one_each() {
-        // Training, resurrection, reading, tradeskills and the map are
-        // checked on EQEmu alone so far.
+        // Training, resurrection, reading, tradeskills, the map and
+        // merchants' offers are checked on EQEmu alone so far.
         for (protocol, count) in [
             (ServerProtocol::Project1999, 20),
-            (ServerProtocol::EqEmu, 25),
+            (ServerProtocol::EqEmu, 26),
         ] {
             let server = server_type(protocol);
             let setup = Setup::new("Tester", AutoEat::default());
@@ -936,6 +958,7 @@ mod tests {
             Capability::Map,
             Capability::DeletingSpells,
             Capability::MovingSpells,
+            Capability::MerchantOffers,
         ] {
             assert!(!offers(server_type(ServerProtocol::Project1999)).contains(&capability));
             assert!(offers(server_type(ServerProtocol::EqEmu)).contains(&capability));
