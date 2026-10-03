@@ -20,6 +20,18 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- The server's regeneration tick (`Capability::ServerTicks`, `EqEmu` only):
+  `WorldEvent::ServerTick` tells a front end that the tick landed just
+  now, with its `ticks::Cadence` (period and slip), so that it can count
+  down to the next one. No packet names a tick. `EQEmu` regenerates the
+  player's HP, mana and endurance on one six-second timer, restarted from
+  the pass of its 32 ms zone loop that it fires on and started afresh in
+  each zone, and reports each value only when it changed. So the session
+  takes a rise in any of them for a possible tick, and a rise that lands a
+  whole number of ticks after another for a tick, passing over heals at
+  other moments; nothing shows at full, and the next zone starts with
+  nothing known. The session sends nothing for it.
+
 - `RaidUpdate::Listed`: a member the server lists as the player joins,
   enters a zone or moves, told apart from one who joins. `EQEmu` sends each
   list in one burst after the raid's creation, with no packet marking its

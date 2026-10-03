@@ -65,6 +65,8 @@ pub mod resurrection;
 pub mod socials;
 /// Server-driven spellbook and casting notifications.
 pub mod spells;
+/// The server's regeneration tick and how often it comes.
+pub mod ticks;
 /// Tradeskill combines in the player's own containers.
 pub mod tradeskills;
 /// Training skills at a guildmaster.

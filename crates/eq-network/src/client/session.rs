@@ -32,6 +32,7 @@ mod socials;
 mod spellbook;
 mod talk;
 mod targeting;
+mod ticks;
 mod tradeskills;
 mod training;
 mod transfers;
