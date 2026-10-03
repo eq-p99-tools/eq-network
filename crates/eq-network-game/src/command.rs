@@ -507,6 +507,39 @@ pub enum GameCommand {
         /// Current zone admission.
         session_id: u64,
     },
+    /// Lock the player's raid, so that its leader may move members between
+    /// raid groups, or unlock it: the Raid window's Lock and Unlock.
+    RaidLock {
+        /// Current zone admission.
+        session_id: u64,
+        /// Lock (true) or unlock.
+        locked: bool,
+    },
+    /// Move a member of the player's raid into a raid group, 0 to 11, or
+    /// out of every group: the Raid window's group buttons.
+    RaidMove {
+        /// Current zone admission.
+        session_id: u64,
+        /// Who moves.
+        name: String,
+        /// Where to: a raid group, or none.
+        group: Option<u8>,
+    },
+    /// Hand the lead of the player's raid to a member: `/makeraidleader`.
+    RaidMakeLeader {
+        /// Current zone admission.
+        session_id: u64,
+        /// The new leader.
+        name: String,
+    },
+    /// Remove a member from the player's raid: the Raid window's Disband
+    /// with a member chosen.
+    RaidRemove {
+        /// Current zone admission.
+        session_id: u64,
+        /// Who is removed; the player themself leaves.
+        name: String,
+    },
     /// Ask the world who is online: `/who all`.
     WhoAll {
         /// Current zone admission.
@@ -600,6 +633,10 @@ impl GameCommand {
             | Self::RaidAccept { session_id }
             | Self::RaidDecline { session_id }
             | Self::RaidLeave { session_id }
+            | Self::RaidLock { session_id, .. }
+            | Self::RaidMove { session_id, .. }
+            | Self::RaidMakeLeader { session_id, .. }
+            | Self::RaidRemove { session_id, .. }
             | Self::ReadItem { session_id, .. }
             | Self::Combine { session_id, .. }
             | Self::Consent { session_id, .. }
@@ -674,7 +711,11 @@ impl GameCommand {
             Self::RaidInvite { .. }
             | Self::RaidAccept { .. }
             | Self::RaidDecline { .. }
-            | Self::RaidLeave { .. } => Capability::Raiding,
+            | Self::RaidLeave { .. }
+            | Self::RaidLock { .. }
+            | Self::RaidMove { .. }
+            | Self::RaidMakeLeader { .. }
+            | Self::RaidRemove { .. } => Capability::Raiding,
             Self::ReadItem { .. } => Capability::Reading,
             Self::Combine { .. } | Self::OpenContainer { .. } | Self::CloseContainer { .. } => {
                 Capability::Tradeskills
@@ -715,6 +756,10 @@ impl GameCommand {
             | Self::RaidAccept { .. }
             | Self::RaidDecline { .. }
             | Self::RaidLeave { .. }
+            | Self::RaidLock { .. }
+            | Self::RaidMove { .. }
+            | Self::RaidMakeLeader { .. }
+            | Self::RaidRemove { .. }
             | Self::ReadItem { .. }
             | Self::CloseContainer { .. }
             | Self::Consent { .. }
@@ -874,6 +919,10 @@ pub fn encode(
         | GameCommand::RaidAccept { .. }
         | GameCommand::RaidDecline { .. }
         | GameCommand::RaidLeave { .. }
+        | GameCommand::RaidLock { .. }
+        | GameCommand::RaidMove { .. }
+        | GameCommand::RaidMakeLeader { .. }
+        | GameCommand::RaidRemove { .. }
         | GameCommand::ReadItem { .. }
         | GameCommand::Combine { .. }
         | GameCommand::Consent { .. }

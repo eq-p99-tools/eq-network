@@ -7,6 +7,32 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- The raid leader's commands (`Capability::Raiding`, `EqEmu` only):
+  `GameCommand::RaidLock` (lock or unlock), `RaidMove` (into a raid group,
+  0 to 11, or out of every group), `RaidMakeLeader` (`/makeraidleader`)
+  and `RaidRemove` (removing oneself leaves), with the codec's `lock`,
+  `move_member` and `make_leader`. The server's lock updates arrive as
+  `RaidUpdate::Locked`, with the name the update gives: the leader's as
+  they lock or unlock the raid, the member's own as they join it or enter
+  a zone while it is locked; the session says `RaidUpdate::Locking` as it
+  asks, so that the leader's own answer reads apart from the one they get
+  on entering a zone. `EQEmu` moves a member by taking them out and
+  adding them back, so the session holds each `Removed` until the next
+  message and reports `RaidUpdate::Moved` when the same member is added
+  back; the raid listed again to the player taken out drops the removal,
+  and anything else, or 300 ms with no message, reports it after all,
+  before that message. `Message::Withheld` stands for a message a feature
+  holds back. `EQEmu` checks only that the one handing on the lead leads
+  the raid; the session refuses all four commands from a member who does
+  not lead it, a move while the raid is unlocked, into the member's own
+  group or into a full one, and a member it does not know, the last as
+  string 5082 naming them (`RaidRefused` gains `arguments`). It also
+  refuses an invitation while the raid is locked, as string 8870. That the
+  official client refuses these is inferred from its raid notes, its Raid
+  window's tips and its strings. `Capability::RaidGroupLeaders`, taking a
+  raid group leader's mark from a member, is offered by no server type:
+  `EQEmu` has no handler for it.
+
 - Raids (`Capability::Raiding`, `EqEmu` only): `GameCommand::RaidInvite`
   (`/raidinvite`, by name), `RaidAccept`, `RaidDecline` and `RaidLeave`
   (`/raiddisband` for the player), with the codec `raid`. The server's word

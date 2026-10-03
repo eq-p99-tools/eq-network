@@ -435,7 +435,7 @@ mod tests {
     };
 
     /// How many kinds of command there are.
-    const KINDS: usize = 62;
+    const KINDS: usize = 66;
 
     /// Which kind of command this is. A new command is a compile error here
     /// until it has a number, and then a test failure until the list below
@@ -505,6 +505,10 @@ mod tests {
             ClientCommand::RaidAccept { .. } => 59,
             ClientCommand::RaidDecline { .. } => 60,
             ClientCommand::RaidLeave { .. } => 61,
+            ClientCommand::RaidLock { .. } => 62,
+            ClientCommand::RaidMove { .. } => 63,
+            ClientCommand::RaidMakeLeader { .. } => 64,
+            ClientCommand::RaidRemove { .. } => 65,
         }
     }
 
@@ -780,6 +784,23 @@ mod tests {
             ClientCommand::RaidAccept { session_id },
             ClientCommand::RaidDecline { session_id },
             ClientCommand::RaidLeave { session_id },
+            ClientCommand::RaidLock {
+                session_id,
+                locked: true,
+            },
+            ClientCommand::RaidMove {
+                session_id,
+                name: "Friend".into(),
+                group: Some(0),
+            },
+            ClientCommand::RaidMakeLeader {
+                session_id,
+                name: "Friend".into(),
+            },
+            ClientCommand::RaidRemove {
+                session_id,
+                name: "Friend".into(),
+            },
             ClientCommand::ReadItem {
                 session_id,
                 slot: InventorySlot(23),
