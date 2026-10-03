@@ -13,6 +13,17 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- The raid's message of the day and its members' notes
+  (`Capability::RaidNotes`, `EqEmu` only): `GameCommand::RaidSetMotd` and
+  `RaidSetNote`, with the codec's `set_motd` and `set_note`, and the
+  server's `RaidUpdate::Motd` and `RaidUpdate::Note` as the player joins or
+  enters a zone and as the leader sets them. `EQEmu` carries the message in
+  a 1024-byte field and a note in a 64-byte one, each with its closing NUL;
+  it checks no leader and ignores an empty message or note rather than
+  clearing it. The session refuses either from a member who does not lead
+  the raid (inferred from the Raid window's tips), empty or longer than the
+  field, and a note for a member it does not know, as string 5082.
+
 - `RaidUpdate::Listed`: a member the server lists as the player joins,
   enters a zone or moves, told apart from one who joins. `EQEmu` sends each
   list in one burst after the raid's creation, with no packet marking its
