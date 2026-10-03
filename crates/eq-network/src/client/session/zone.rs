@@ -605,7 +605,7 @@ mod tests {
                 session_id,
                 corpse_id: 8,
                 own_id: 7,
-                slot: 0,
+                place: 0,
                 auto: true,
                 created,
             },

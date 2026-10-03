@@ -173,6 +173,12 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- A corpse's items are addressed by their place on it, from 0, rather than by
+  the server's slot: `LootUpdate::Item { place, item }`,
+  `LootUpdate::Taken { place, .. }` and `GameCommand::LootItem { place, .. }`.
+  The Titanium wire's first corpse slot (`EQEmu`'s `CORPSE_BEGIN`, 22) is
+  applied in the loot encoding and decoding, so a front end knows nothing of
+  it.
 - Deleting a spell from the spellbook (`DeleteSpell`) and moving one to
   another place in it (`SwapSpell`) each have a capability of their own,
   `Capability::DeletingSpells` and `Capability::MovingSpells`, instead of
