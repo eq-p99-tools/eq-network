@@ -20,9 +20,11 @@ pub const END_OPCODE: u16 = 0x2316;
 pub const COMPLETE_OPCODE: u16 = 0x0a94;
 /// `ItemPacketLoot` inside `OP_ItemPacket`.
 pub const ITEM_PACKET_KIND: u32 = 0x66;
-/// The server's slot for a corpse's first place on the Titanium wire:
-/// `EQEmu`'s `CORPSE_BEGIN`. That the official client's loot window shows it
-/// first is inferred from that numbering and every live loot so far.
+/// The Titanium wire's slot for a corpse's first place. The Titanium patch
+/// numbers a corpse's items from its own `CORPSE_BEGIN`, the first carried
+/// slot, through 52 as one run, so a place is its slot less 22 for all 31.
+/// That the official client's loot window shows them in that order is
+/// inferred from that numbering and every live loot so far.
 const FIRST_CORPSE_SLOT: u16 = 22;
 
 /// Why a corpse can or cannot be looted.

@@ -176,9 +176,9 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - A corpse's items are addressed by their place on it, from 0, rather than by
   the server's slot: `LootUpdate::Item { place, item }`,
   `LootUpdate::Taken { place, .. }` and `GameCommand::LootItem { place, .. }`.
-  The Titanium wire's first corpse slot (`EQEmu`'s `CORPSE_BEGIN`, 22) is
-  applied in the loot encoding and decoding, so a front end knows nothing of
-  it.
+  The Titanium wire numbers a corpse's items from 22 through 52 as one run
+  (the Titanium patch's own `CORPSE_BEGIN`, the first carried slot), and the
+  loot encoding and decoding apply it, so a front end knows nothing of it.
 - `ChatEvent::message_type` keeps the message type the server gives a
   formatted, simple or special message on the Titanium wire (EQEmu's `MT_*`
   numbers, by which the official client colours the line); None for channel
