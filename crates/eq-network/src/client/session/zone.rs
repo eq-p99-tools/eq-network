@@ -435,7 +435,7 @@ mod tests {
     };
 
     /// How many kinds of command there are.
-    const KINDS: usize = 52;
+    const KINDS: usize = 55;
 
     /// Which kind of command this is. A new command is a compile error here
     /// until it has a number, and then a test failure until the list below
@@ -495,6 +495,9 @@ mod tests {
             ClientCommand::FollowGroup { .. } => 49,
             ClientCommand::DeclineGroup { .. } => 50,
             ClientCommand::Disband { .. } => 51,
+            ClientCommand::ToggleAway { .. } => 52,
+            ClientCommand::ToggleAnonymous { .. } => 53,
+            ClientCommand::ToggleRoleplay { .. } => 54,
         }
     }
 
@@ -747,6 +750,9 @@ mod tests {
             ClientCommand::FollowGroup { session_id },
             ClientCommand::DeclineGroup { session_id },
             ClientCommand::Disband { session_id },
+            ClientCommand::ToggleAway { session_id },
+            ClientCommand::ToggleAnonymous { session_id },
+            ClientCommand::ToggleRoleplay { session_id },
             ClientCommand::ReadItem {
                 session_id,
                 slot: InventorySlot(23),
@@ -931,7 +937,9 @@ mod tests {
         assert!(!p99.contains(&Capability::MerchantOffers));
         assert!(eqemu.contains(&Capability::Grouping));
         assert!(!p99.contains(&Capability::Grouping));
-        assert_eq!(eqemu.len(), p99.len() + 10);
+        assert!(eqemu.contains(&Capability::Listing));
+        assert!(!p99.contains(&Capability::Listing));
+        assert_eq!(eqemu.len(), p99.len() + 11);
         // EQMac servers talk, TAKP camps too, and neither follows a zone
         // change yet.
         assert_eq!(

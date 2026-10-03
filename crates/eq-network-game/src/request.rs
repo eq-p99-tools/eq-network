@@ -12,6 +12,7 @@ use crate::{
     food::{self, Meal},
     group,
     inventory::{self, InventorySlot, MoveQuantity},
+    listing::{self, Anonymity},
     money::CoinTransfer,
     movement::{self, PositionPacket},
     objects,
@@ -107,6 +108,10 @@ pub enum Request {
     /// Leave or disband the group, as the server decides by its idea of the
     /// player's target.
     Disband,
+    /// Say the player is away from the keyboard (true), or back.
+    SetAway(bool),
+    /// Say how the player hides from `/who`.
+    SetAnonymity(Anonymity),
     /// Use a skill on the server's idea of the target.
     Ability {
         /// The skill.
@@ -255,6 +260,10 @@ pub fn titanium(request: &Request, sender: Sender<'_>) -> Result<EncodedCommand>
         Request::FollowGroup(inviter) => group::follow(inviter, sender.name)?,
         Request::DeclineGroup(inviter) => group::decline(inviter, sender.name)?,
         Request::Disband => group::disband(sender.name)?,
+        Request::SetAway(away) => listing::titanium_away(sender.spawn(), *away)?,
+        Request::SetAnonymity(anonymity) => {
+            listing::titanium_anonymity(sender.spawn(), *anonymity)?
+        }
         Request::ReadBook(book) => books::titanium_request(book)?,
         Request::Combine(container) => tradeskills::titanium_combine(*container)?,
         Request::Trade(with) => exchange::request(sender.spawn(), *with)?,

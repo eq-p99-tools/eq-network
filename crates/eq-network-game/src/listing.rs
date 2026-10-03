@@ -6,11 +6,22 @@
 //! Guild numbers name guilds from the guild list (`OP_GuildsList`), which the
 //! world sends on entry and a zone sends a guild's members.
 //!
-//! Layout reference: `EQEmu`'s Titanium `Spawn_Struct`, `GuildsList_Struct`
-//! and `LFG_Appearance_Struct` (`common/patches/titanium_structs.h`), and its
-//! `AppearanceType` numbers (`common/eq_constants.h`).
+//! The player says they are away, anonymous or roleplaying with the same
+//! appearance update.
+//!
+//! Layout reference: `EQEmu`'s Titanium `Spawn_Struct`, `GuildsList_Struct`,
+//! `LFG_Appearance_Struct` and `SpawnAppearance_Struct`
+//! (`common/patches/titanium_structs.h`), and its `AppearanceType` numbers
+//! (`common/eq_constants.h`).
+use crate::command::EncodedCommand;
 use anyhow::{ensure, Result};
 use serde::Serialize;
+
+/// `OP_SpawnAppearance`: a spawn's appearance update.
+pub const APPEARANCE_OPCODE: u16 = 0x7c32;
+/// The appearance updates that say how `/who` lists a player.
+const ANONYMITY: u16 = 21;
+const AWAY: u16 = 24;
 
 /// `OP_LFGAppearance`: a player started or stopped looking for a group.
 pub const LOOKING_OPCODE: u16 = 0x1a85;
@@ -40,6 +51,46 @@ impl Anonymity {
             _ => Self::Open,
         }
     }
+
+    /// Its number on the wire, as [`Anonymity::from_wire`] reads it.
+    const fn wire(self) -> u32 {
+        match self {
+            Self::Open => 0,
+            Self::Anonymous => 1,
+            Self::Roleplaying => 2,
+        }
+    }
+}
+
+/// The player's own appearance update of a kind, to a value.
+fn update(spawn_id: u16, kind: u16, value: u32) -> Result<EncodedCommand> {
+    ensure!(
+        spawn_id != 0,
+        "an appearance update needs the player's spawn ID"
+    );
+    let mut body = spawn_id.to_le_bytes().to_vec();
+    body.extend_from_slice(&kind.to_le_bytes());
+    body.extend_from_slice(&value.to_le_bytes());
+    Ok(EncodedCommand {
+        opcode: APPEARANCE_OPCODE,
+        body,
+    })
+}
+
+/// Says the player is away from the keyboard, or back.
+///
+/// # Errors
+/// Rejects a zero spawn ID.
+pub fn titanium_away(spawn_id: u16, away: bool) -> Result<EncodedCommand> {
+    update(spawn_id, AWAY, u32::from(away))
+}
+
+/// Says how the player hides from `/who`.
+///
+/// # Errors
+/// Rejects a zero spawn ID.
+pub fn titanium_anonymity(spawn_id: u16, anonymity: Anonymity) -> Result<EncodedCommand> {
+    update(spawn_id, ANONYMITY, anonymity.wire())
 }
 
 /// How `/who` lists a player beyond their name, level, class and race.
@@ -190,6 +241,25 @@ mod tests {
         body.extend_from_slice(&[1, 0, 0, 0]);
         assert_eq!(looking(&body).unwrap(), (12, ListingChange::Looking(true)));
         assert!(looking(&body[..7]).is_err());
+    }
+
+    #[test]
+    fn the_player_says_how_who_lists_them_as_others_read_it() {
+        let away = titanium_away(7, true).unwrap();
+        assert_eq!(away.opcode, APPEARANCE_OPCODE);
+        assert_eq!(away.body, [7, 0, 24, 0, 1, 0, 0, 0]);
+        for anonymity in [
+            Anonymity::Open,
+            Anonymity::Anonymous,
+            Anonymity::Roleplaying,
+        ] {
+            let sent = titanium_anonymity(7, anonymity).unwrap();
+            assert_eq!(
+                appearance(21, word(&sent.body, 4)),
+                Some(ListingChange::Anonymity(anonymity))
+            );
+        }
+        assert!(titanium_away(0, false).is_err());
     }
 
     #[test]

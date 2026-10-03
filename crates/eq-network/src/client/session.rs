@@ -15,6 +15,7 @@ pub(super) mod feature;
 mod groups;
 mod inventory;
 mod lifecycle;
+mod listing;
 pub(super) mod login;
 mod looting;
 mod map;

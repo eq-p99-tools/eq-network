@@ -145,6 +145,9 @@ pub(super) fn needs(command: &ClientCommand) -> &'static [Resource] {
         | ClientCommand::FollowGroup { .. }
         | ClientCommand::DeclineGroup { .. }
         | ClientCommand::Disband { .. }
+        | ClientCommand::ToggleAway { .. }
+        | ClientCommand::ToggleAnonymous { .. }
+        | ClientCommand::ToggleRoleplay { .. }
         | ClientCommand::ReadItem { .. }
         // Opening a container holds nothing, and closing one must always be
         // possible.
@@ -179,6 +182,7 @@ pub(super) fn refuse_officially(
         | WorldEvent::PetRefused { string_id, .. }
         | WorldEvent::CombineRefused { string_id, .. }
         | WorldEvent::GroupRefused { string_id, .. }
+        | WorldEvent::ListingRefused { string_id, .. }
         | WorldEvent::AbilityRefused { string_id, .. } = &mut event
         {
             *string_id = official;
@@ -219,6 +223,9 @@ fn refusal(command: &ClientCommand, reason: &str) -> Option<WorldEvent> {
         | ClientCommand::FollowGroup { session_id }
         | ClientCommand::DeclineGroup { session_id }
         | ClientCommand::Disband { session_id }
+        | ClientCommand::ToggleAway { session_id }
+        | ClientCommand::ToggleAnonymous { session_id }
+        | ClientCommand::ToggleRoleplay { session_id }
         | ClientCommand::ReadItem { session_id, .. }
         | ClientCommand::Combine { session_id, .. }
         | ClientCommand::Consent { session_id, .. }
@@ -324,6 +331,13 @@ fn reasoned(command: &ClientCommand, session_id: u64, reason: String) -> Option<
         | ClientCommand::FollowGroup { .. }
         | ClientCommand::DeclineGroup { .. }
         | ClientCommand::Disband { .. } => WorldEvent::GroupRefused {
+            session_id,
+            reason,
+            string_id: None,
+        },
+        ClientCommand::ToggleAway { .. }
+        | ClientCommand::ToggleAnonymous { .. }
+        | ClientCommand::ToggleRoleplay { .. } => WorldEvent::ListingRefused {
             session_id,
             reason,
             string_id: None,
