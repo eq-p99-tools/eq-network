@@ -462,6 +462,29 @@ pub enum GameCommand {
         /// Current zone admission.
         session_id: u64,
     },
+    /// Roll a die from the lowest to the highest number: `/random`.
+    Random {
+        /// Current zone admission.
+        session_id: u64,
+        /// The lowest number.
+        low: u32,
+        /// The highest.
+        high: u32,
+    },
+    /// Emote, in the player's own words: `/emote`.
+    Emote {
+        /// Current zone admission.
+        session_id: u64,
+        /// What the player does, after their name.
+        text: String,
+    },
+    /// Take the target of this spawn: `/assist`.
+    Assist {
+        /// Current zone admission.
+        session_id: u64,
+        /// Whose target to take.
+        spawn_id: u16,
+    },
     /// Ask the world who is online: `/who all`.
     WhoAll {
         /// Current zone admission.
@@ -548,6 +571,9 @@ impl GameCommand {
             | Self::ToggleAway { session_id }
             | Self::ToggleAnonymous { session_id }
             | Self::ToggleRoleplay { session_id }
+            | Self::Random { session_id, .. }
+            | Self::Emote { session_id, .. }
+            | Self::Assist { session_id, .. }
             | Self::ReadItem { session_id, .. }
             | Self::Combine { session_id, .. }
             | Self::Consent { session_id, .. }
@@ -616,6 +642,9 @@ impl GameCommand {
             Self::ToggleAway { .. }
             | Self::ToggleAnonymous { .. }
             | Self::ToggleRoleplay { .. } => Capability::Listing,
+            Self::Random { .. } => Capability::Rolling,
+            Self::Emote { .. } => Capability::Emoting,
+            Self::Assist { .. } => Capability::Assisting,
             Self::ReadItem { .. } => Capability::Reading,
             Self::Combine { .. } | Self::OpenContainer { .. } | Self::CloseContainer { .. } => {
                 Capability::Tradeskills
@@ -649,6 +678,9 @@ impl GameCommand {
             | Self::ToggleAway { .. }
             | Self::ToggleAnonymous { .. }
             | Self::ToggleRoleplay { .. }
+            | Self::Random { .. }
+            | Self::Emote { .. }
+            | Self::Assist { .. }
             | Self::ReadItem { .. }
             | Self::CloseContainer { .. }
             | Self::Consent { .. }
@@ -814,6 +846,9 @@ pub fn encode(
         | GameCommand::ToggleAway { .. }
         | GameCommand::ToggleAnonymous { .. }
         | GameCommand::ToggleRoleplay { .. }
+        | GameCommand::Random { .. }
+        | GameCommand::Emote { .. }
+        | GameCommand::Assist { .. }
         | GameCommand::ReadItem { .. }
         | GameCommand::Combine { .. }
         | GameCommand::Consent { .. }

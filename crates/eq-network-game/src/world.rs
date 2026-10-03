@@ -408,12 +408,18 @@ pub enum Capability {
     /// Turning away from the keyboard, anonymous or roleplaying: how `/who`
     /// lists the player.
     Listing,
+    /// Rolling dice: `/random`.
+    Rolling,
+    /// Emoting: `/emote`.
+    Emoting,
+    /// Taking another's target: `/assist`.
+    Assisting,
 }
 
 impl Capability {
     /// Every capability, in order: what a session offers when its server and
     /// client generation support everything.
-    pub const ALL: [Self; 29] = [
+    pub const ALL: [Self; 32] = [
         Self::Casting,
         Self::Spellbook,
         Self::Inventory,
@@ -443,6 +449,9 @@ impl Capability {
         Self::MerchantOffers,
         Self::Grouping,
         Self::Listing,
+        Self::Rolling,
+        Self::Emoting,
+        Self::Assisting,
     ];
 }
 
@@ -898,6 +907,22 @@ pub enum WorldEvent {
         /// `reason` says the same in this library's words.
         string_id: Option<u32>,
     },
+    /// A die the server rolled for a player near the player, the player
+    /// among them.
+    Roll(crate::socials::Roll),
+    /// The server's answer to the player's assist: the target to take.
+    Assisted(crate::socials::Assisted),
+    /// A roll, emote or assist was not sent, and why.
+    SocialRefused {
+        /// Admission from the request.
+        session_id: u64,
+        /// Why not.
+        reason: String,
+        /// The official client's own words for this refusal, as an
+        /// `eqstr_us.txt` string ID, for a host with the installed strings;
+        /// `reason` says the same in this library's words.
+        string_id: Option<u32>,
+    },
     /// A book's or note's text, to read.
     BookText(crate::books::BookText),
     /// A request to read was not sent, and why.
@@ -1140,8 +1165,8 @@ pub fn titanium_update(opcode: u16, body: &[u8]) -> Result<Option<WorldEvent>> {
 }
 
 /// Spell actions, doors, ground objects, loot, merchant, exchange,
-/// training, resurrection, group, book, combine, bandaging and inventory
-/// packets, each owned by its codec.
+/// training, resurrection, group, dice, assist, book, combine, bandaging and
+/// inventory packets, each owned by its codec.
 fn titanium_views(opcode: u16, body: &[u8]) -> Result<Option<WorldEvent>> {
     if opcode == 0x497c {
         return Ok(crate::buffs::titanium_spell_effect(body)?.map(WorldEvent::SpellEffect));
@@ -1162,6 +1187,10 @@ fn titanium_views(opcode: u16, body: &[u8]) -> Result<Option<WorldEvent>> {
         Some(WorldEvent::Resurrection(offer))
     } else if let Some(update) = crate::group::decode(opcode, body)? {
         Some(WorldEvent::Group(update))
+    } else if let Some(roll) = crate::socials::decode_roll(opcode, body)? {
+        Some(WorldEvent::Roll(roll))
+    } else if let Some(answer) = crate::socials::decode_assist(opcode, body)? {
+        Some(WorldEvent::Assisted(answer))
     } else if let Some(text) = crate::books::decode(opcode, body)? {
         Some(WorldEvent::BookText(text))
     } else if let Some(update) = crate::tradeskills::decode(opcode, body)? {
@@ -1361,6 +1390,9 @@ mod tests {
             Capability::MerchantOffers => 26,
             Capability::Grouping => 27,
             Capability::Listing => 28,
+            Capability::Rolling => 29,
+            Capability::Emoting => 30,
+            Capability::Assisting => 31,
         };
         for (index, capability) in Capability::ALL.into_iter().enumerate() {
             assert_eq!(place(capability), index, "{capability:?}");
