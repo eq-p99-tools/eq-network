@@ -180,7 +180,6 @@ impl<'a> Parser<'a> {
             },
             slot,
             details,
-            icon: number(11)?,
             stack_count: match number(133)? {
                 0 => None,
                 1 => Some(header[0].parse().context("invalid stack quantity")?),

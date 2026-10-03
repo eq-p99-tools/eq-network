@@ -193,10 +193,9 @@ pub struct InventoryItem {
     pub rules: ItemPlacement,
     /// Exact inventory location.
     pub slot: InventorySlot,
-    /// Item definition delivered with the instance, suitable for local inspection.
+    /// Item definition delivered with the instance, suitable for local
+    /// inspection, with the item's picture.
     pub details: ItemDetails,
-    /// Icon number in the user's installed UI atlas.
-    pub icon: u32,
     /// Stack quantity, only for items marked stackable by the server.
     pub stack_count: Option<u32>,
     /// Remaining instance charges; negative sentinel values are preserved.

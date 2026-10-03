@@ -483,7 +483,6 @@ pub(super) mod testing {
             book: None,
             rules: eq_network_game::inventory::ItemPlacement::default(),
             slot: eq_network_game::inventory::InventorySlot(slot),
-            icon: 0,
             stack_count: None,
             charges: 0,
             bag_slots: 0,
@@ -499,6 +498,8 @@ pub(super) mod testing {
                 races: 0,
                 flags: vec![],
                 stats: vec![],
+                price: None,
+                icon: None,
             },
         }
     }
