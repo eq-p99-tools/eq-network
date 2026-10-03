@@ -88,7 +88,10 @@ pub(super) struct Provision {
 }
 
 /// A feature the server type offers.
-#[allow(clippy::unnecessary_wraps)] // As a server type's accessors return it.
+#[allow(
+    clippy::unnecessary_wraps,
+    reason = "a server type's accessors return it as it is"
+)]
 fn offer(feature: Box<dyn Feature>) -> Provided {
     Some(Provision {
         feature,
@@ -99,7 +102,14 @@ fn offer(feature: Box<dyn Feature>) -> Provided {
 /// A feature the server type leaves to the player, as its own client keeps
 /// it off: the session lists what it lets the player do among the player's
 /// choices, and runs it all the same.
-#[allow(clippy::unnecessary_wraps)] // As a server type's accessors return it.
+///
+/// Only for a feature that sends and hears nothing, such as the map: the
+/// session never hears whether the player turned it on, so it would take a
+/// left feature's commands either way (eq-network#86).
+#[allow(
+    clippy::unnecessary_wraps,
+    reason = "a server type's accessors return it as it is"
+)]
 fn leave_to_player(feature: Box<dyn Feature>) -> Provided {
     Some(Provision {
         feature,
