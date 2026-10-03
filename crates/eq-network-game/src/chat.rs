@@ -303,6 +303,27 @@ pub const fn channel_name(id: u32) -> ChannelName {
     }
 }
 
+/// A Titanium special message: the speak mode, the journal mode and the
+/// language, the message type, the spawn it is meant for, the speaker's name
+/// (empty on a plain server line), twelve unused bytes, then the text.
+fn titanium_special(opcode: u16, body: &[u8], include_raw: bool) -> Result<ChatEvent> {
+    ensure!(body.len() >= 24, "truncated SpecialMesg");
+    let sender = cstr(&body[11..]);
+    let offset = 11 + sender.len() + 1 + 12;
+    ensure!(offset < body.len(), "truncated SpecialMesg text");
+    let mut event = ChatEvent::new(opcode, body, ChannelName::System, include_raw).with_message(
+        message_for(GameDialect::Titanium, &body[offset..], include_raw),
+    );
+    // A plain server line names no speaker.
+    event.sender = (!sender.is_empty()).then(|| String::from_utf8_lossy(sender).into_owned());
+    event.speak_mode = Some(SpeakMode::from_byte(body[0]));
+    event.journal_mode = Some(body[1]);
+    event.language = Some(body[2]);
+    event.message_type = Some(u32_at(body, 3));
+    event.target_spawn_id = Some(u32_at(body, 7));
+    Ok(event)
+}
+
 fn u32_at(body: &[u8], offset: usize) -> u32 {
     u32::from_le_bytes(body[offset..offset + 4].try_into().unwrap())
 }
@@ -416,6 +437,45 @@ pub struct Message {
     pub item_links: Vec<ItemLink>,
 }
 
+/// What the speaker of a special message does, by which the official client
+/// shows the line, as `EQEmu`'s `Journal::SpeakMode` numbers it on the
+/// Titanium wire: a plain server line is `Raw`, and an NPC's quest dialogue
+/// is `Say` by default. How the official client words each mode is inferred
+/// from `EQEmu`'s notes, not checked.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+pub enum SpeakMode {
+    /// The text as it is.
+    Raw,
+    /// The speaker says it.
+    Say,
+    /// The speaker shouts it.
+    Shout,
+    /// An emote shown as its text alone.
+    EmoteAlt,
+    /// An emote by the speaker.
+    Emote,
+    /// The speaker tells the group.
+    Group,
+    /// A mode this crate does not know, as sent.
+    Other(u8),
+}
+
+impl SpeakMode {
+    /// The mode a special message's first byte names.
+    #[must_use]
+    pub const fn from_byte(byte: u8) -> Self {
+        match byte {
+            0 => Self::Raw,
+            1 => Self::Say,
+            2 => Self::Shout,
+            3 => Self::EmoteAlt,
+            4 => Self::Emote,
+            5 => Self::Group,
+            other => Self::Other(other),
+        }
+    }
+}
+
 /// One decoded communication packet suitable for serialization or presentation.
 #[derive(Clone, Debug, Serialize)]
 pub struct ChatEvent {
@@ -453,6 +513,23 @@ pub struct ChatEvent {
     /// generation's layout is not checked.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub message_type: Option<u32>,
+    /// What a special message's speaker does, by which the official client
+    /// shows it; None for every other message and where a generation's
+    /// layout is not checked.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub speak_mode: Option<SpeakMode>,
+    /// A special message's journal mode, as sent (`EQEmu`'s `Journal::Mode`:
+    /// 0 none, 1 and 2 journalled); None elsewhere.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub journal_mode: Option<u8>,
+    /// The language a special message is spoken in, by the server's number
+    /// for it (0 the common tongue); None elsewhere.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub language: Option<u8>,
+    /// The spawn a special message is meant for, such as the player who
+    /// hailed a quest NPC, or 0 for none; None elsewhere.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target_spawn_id: Option<u32>,
 }
 
 impl ChatEvent {
@@ -469,6 +546,10 @@ impl ChatEvent {
             string_id: None,
             arguments: None,
             message_type: None,
+            speak_mode: None,
+            journal_mode: None,
+            language: None,
+            target_spawn_id: None,
         }
     }
 
@@ -599,16 +680,7 @@ pub fn parse_for(
                 ChatEvent::new(opcode, body, ChannelName::System, include_raw)
                     .with_message(message_for(protocol, &body[4..], include_raw))
             } else {
-                ensure!(body.len() >= 24, "truncated SpecialMesg");
-                let sender = cstr(&body[11..]);
-                let offset = 11 + sender.len() + 1 + 12;
-                ensure!(offset < body.len(), "truncated SpecialMesg text");
-                let mut event = ChatEvent::new(opcode, body, ChannelName::System, include_raw)
-                    .with_message(message_for(protocol, &body[offset..], include_raw));
-                event.sender = Some(String::from_utf8_lossy(sender).into_owned());
-                // After the speak mode, the journal mode and the language.
-                event.message_type = Some(u32_at(body, 3));
-                event
+                titanium_special(opcode, body, include_raw)?
             }
         }
         CommunicationOpcode::FormattedMessage => {
@@ -877,6 +949,56 @@ mod tests {
     }
 
     #[test]
+    fn titanium_special_messages_say_how_their_speaker_speaks() {
+        let special = |header: [u8; 3], kind: u32, target: u32, sayer: &[u8], text: &[u8]| {
+            let mut body = header.to_vec();
+            body.extend_from_slice(&kind.to_le_bytes());
+            body.extend_from_slice(&target.to_le_bytes());
+            body.extend_from_slice(sayer);
+            body.push(0);
+            body.extend_from_slice(&[0; 12]);
+            body.extend_from_slice(text);
+            body.push(0);
+            parse_for(GameDialect::Titanium, 0x2372, &body, false)
+                .unwrap()
+                .unwrap()
+        };
+        // A quest NPC's journalled say to the player who hailed it, in an
+        // unusual tongue.
+        let said = special([1, 2, 4], 10, 77, b"Quest giver", b"Welcome, traveler.");
+        assert_eq!(
+            (
+                said.speak_mode,
+                said.journal_mode,
+                said.language,
+                said.target_spawn_id,
+                said.message_type
+            ),
+            (Some(SpeakMode::Say), Some(2), Some(4), Some(77), Some(10))
+        );
+        assert_eq!(said.sender.as_deref(), Some("Quest giver"));
+        assert_eq!(said.message.unwrap().text, "Welcome, traveler.");
+        // A plain server line names no speaker.
+        let plain = special([0, 0, 0], 15, 0, b"", b"You feel refreshed.");
+        assert_eq!(plain.speak_mode, Some(SpeakMode::Raw));
+        assert_eq!(plain.sender, None);
+        assert_eq!(plain.message.unwrap().text, "You feel refreshed.");
+        // Every mode keeps its number, a new one too.
+        assert_eq!(
+            [0, 1, 2, 3, 4, 5, 9].map(SpeakMode::from_byte),
+            [
+                SpeakMode::Raw,
+                SpeakMode::Say,
+                SpeakMode::Shout,
+                SpeakMode::EmoteAlt,
+                SpeakMode::Emote,
+                SpeakMode::Group,
+                SpeakMode::Other(9)
+            ]
+        );
+    }
+
+    #[test]
     fn quarm_communication_structs_use_eqmac_offsets() {
         let mut formatted = vec![0; 6];
         formatted[2..4].copy_from_slice(&1234u16.to_le_bytes());
@@ -896,6 +1018,8 @@ mod tests {
             .unwrap();
         assert_eq!(event.message.unwrap().text, "System text");
         assert_eq!(event.sender, None);
+        // Its header waits for a check on TAKP.
+        assert_eq!(event.speak_mode, None);
 
         let mut motd = vec![0; 68];
         motd[..6].copy_from_slice(b"Leader");

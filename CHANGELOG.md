@@ -7,6 +7,14 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- A special message (`OP_SpecialMesg`) on the Titanium wire says how its
+  speaker speaks: `ChatEvent::speak_mode` (`SpeakMode`: `Raw` for a plain
+  server line, `Say`, `Shout`, `EmoteAlt`, `Emote` or `Group`, as `EQEmu`'s
+  `Journal::SpeakMode` numbers them, and `Other` for a new one),
+  `journal_mode`, `language` and `target_spawn_id`, so a front end can word
+  an NPC's quest dialogue as the official client shows it. They are None for
+  every other message and for the `EQMac` layout until it is checked on TAKP.
+
 - Tell echoes (`ChannelName::TellEcho`): on the Titanium wire, the server's
   echo of a tell the player sent (channel 14) has a channel of its own, with
   the player as its sender and the one told as its target, so a front end
@@ -173,6 +181,8 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- A special message with no speaker, as every plain server line comes,
+  has no `sender` rather than an empty one, so a sender always names someone.
 - `Death` carries `corpse_name`: the name the server gives the corpse of a
   spawn that dies in view, which the session adds from the spawn table by the
   client generation's rule (`world::corpse_name`: on Titanium servers
