@@ -1,7 +1,7 @@
 //! The in-game map. A front end draws it from the installation's own map
 //! files and the player's position, so the session sends and hears nothing
-//! for it; offering it is the server type's choice, since a server may keep
-//! the official client's map turned off.
+//! for it. A server type offers it, or leaves it to the player where its own
+//! client keeps the map off, as P99's does.
 use super::feature::Feature;
 
 /// Lets the player open the in-game map.

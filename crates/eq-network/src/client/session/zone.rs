@@ -11,8 +11,10 @@ use super::admission::{Handshake, Zone};
 use eq_network_game::message::Message;
 use eq_network_transport::Transport;
 
-/// The zone's features, each offered every command, packet, timer and event.
-struct Features(Vec<Box<dyn Feature>>);
+/// The zone's features, each offered every command, packet, timer and
+/// event, and what the server type leaves to the player of what they let
+/// the player do.
+struct Features(Vec<Box<dyn Feature>>, Vec<crate::world::Capability>);
 
 impl Features {
     /// The features the server type provides.
@@ -21,19 +23,42 @@ impl Features {
         name: &str,
         auto_eat: eq_network_game::food::AutoEat,
     ) -> Self {
-        Self(server.features(&servers::Setup::new(name, auto_eat)))
+        let mut features = Vec::new();
+        let (mut offered, mut choices) = (Vec::new(), Vec::new());
+        for provided in server.features(&servers::Setup::new(name, auto_eat)) {
+            let listed = provided.feature.capabilities();
+            if provided.choice {
+                choices.extend(listed);
+            } else {
+                offered.extend(listed);
+            }
+            features.push(provided.feature);
+        }
+        // What one feature offers is offered, whatever another leaves to the
+        // player.
+        choices.retain(|capability| !offered.contains(capability));
+        choices.sort_unstable();
+        choices.dedup();
+        Self(features, choices)
     }
 
-    /// What the features let the player do, each once.
+    /// What the features let the player do, each once, but what the server
+    /// type leaves to the player.
     fn capabilities(&self) -> Vec<crate::world::Capability> {
         let mut capabilities: Vec<_> = self
             .0
             .iter()
             .flat_map(|feature| feature.capabilities())
+            .filter(|capability| !self.1.contains(capability))
             .collect();
         capabilities.sort_unstable();
         capabilities.dedup();
         capabilities
+    }
+
+    /// What the server type leaves to the player, each once.
+    fn choices(&self) -> Vec<crate::world::Capability> {
+        self.1.clone()
     }
 
     /// Lets every feature shape the player the admission reports.
@@ -401,6 +426,7 @@ fn admit(
             out.log
                 .send(ClientEvent::World(crate::world::WorldEvent::Entered {
                     capabilities: features.capabilities(),
+                    choices: features.choices(),
                     session_id: world.session_id,
                     zone: zone.name.clone(),
                     player: Box::new(player),
@@ -946,6 +972,15 @@ mod tests {
             .capabilities()
         };
         let p99 = features(crate::client::ServerProtocol::Project1999);
+        // P99 leaves the map to the player, which is not offered until then.
+        let p99_choices = Features::new(
+            servers::server_type(crate::client::ServerProtocol::Project1999),
+            "Tester",
+            eq_network_game::food::AutoEat::default(),
+        )
+        .choices();
+        assert_eq!(p99_choices, [Capability::Map]);
+        assert!(!p99.contains(&Capability::Map));
         for capability in [
             Capability::Casting,
             Capability::Spellbook,
