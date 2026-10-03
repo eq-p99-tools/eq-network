@@ -13,7 +13,8 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   roll for any player nearby arrives as `WorldEvent::Roll` and its answer to
   an assist as `WorldEvent::Assisted`, the target to take. The server passes
   an emote on to everyone near but the one who made it, so the session
-  records the player's own emote as the others hear it. It refuses as
+  records the player's own emote as the others hear it, as the official
+  client shows it (inferred). It refuses as
   `WorldEvent::SocialRefused` an empty or overlong emote and assisting the
   player themself, naming the official client's string for the last (that
   the official client refuses it is inferred; `EQEmu` answers with the
