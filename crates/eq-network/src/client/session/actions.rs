@@ -151,6 +151,10 @@ pub(super) fn needs(command: &ClientCommand) -> &'static [Resource] {
         | ClientCommand::Random { .. }
         | ClientCommand::Emote { .. }
         | ClientCommand::Assist { .. }
+        | ClientCommand::RaidInvite { .. }
+        | ClientCommand::RaidAccept { .. }
+        | ClientCommand::RaidDecline { .. }
+        | ClientCommand::RaidLeave { .. }
         | ClientCommand::ReadItem { .. }
         // Opening a container holds nothing, and closing one must always be
         // possible.
@@ -187,6 +191,7 @@ pub(super) fn refuse_officially(
         | WorldEvent::GroupRefused { string_id, .. }
         | WorldEvent::ListingRefused { string_id, .. }
         | WorldEvent::SocialRefused { string_id, .. }
+        | WorldEvent::RaidRefused { string_id, .. }
         | WorldEvent::AbilityRefused { string_id, .. } = &mut event
         {
             *string_id = official;
@@ -199,6 +204,10 @@ pub(super) fn refuse_officially(
 /// The result event that tells the host a command was refused; None for a
 /// command whose caller waits on no result. Every command is named, so a new
 /// one is a decision here.
+#[allow(
+    clippy::too_many_lines,
+    reason = "every kind of command named, so that a new one is a decision here"
+)]
 fn refusal(command: &ClientCommand, reason: &str) -> Option<WorldEvent> {
     let error = Some(reason.to_owned());
     Some(match command {
@@ -233,6 +242,10 @@ fn refusal(command: &ClientCommand, reason: &str) -> Option<WorldEvent> {
         | ClientCommand::Random { session_id, .. }
         | ClientCommand::Emote { session_id, .. }
         | ClientCommand::Assist { session_id, .. }
+        | ClientCommand::RaidInvite { session_id, .. }
+        | ClientCommand::RaidAccept { session_id }
+        | ClientCommand::RaidDecline { session_id }
+        | ClientCommand::RaidLeave { session_id }
         | ClientCommand::ReadItem { session_id, .. }
         | ClientCommand::Combine { session_id, .. }
         | ClientCommand::Consent { session_id, .. }
@@ -352,6 +365,14 @@ fn reasoned(command: &ClientCommand, session_id: u64, reason: String) -> Option<
         ClientCommand::Random { .. }
         | ClientCommand::Emote { .. }
         | ClientCommand::Assist { .. } => WorldEvent::SocialRefused {
+            session_id,
+            reason,
+            string_id: None,
+        },
+        ClientCommand::RaidInvite { .. }
+        | ClientCommand::RaidAccept { .. }
+        | ClientCommand::RaidDecline { .. }
+        | ClientCommand::RaidLeave { .. } => WorldEvent::RaidRefused {
             session_id,
             reason,
             string_id: None,

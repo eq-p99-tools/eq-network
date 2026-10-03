@@ -24,6 +24,7 @@ mod objects;
 mod offers;
 mod pets;
 mod posture;
+mod raids;
 mod reading;
 mod resurrection;
 mod servers;
