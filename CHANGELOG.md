@@ -173,6 +173,11 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- `Death` carries `corpse_name`: the name the server gives the corpse of a
+  spawn that dies in view, which the session adds from the spawn table by the
+  client generation's rule (`world::corpse_name`: on Titanium servers
+  `EQEmu`'s `CalcCorpseName` form; None for `EQMac` until it is checked on
+  TAKP), so a front end need not rename the corpse itself.
 - `ItemDetails` carries the item's `price` (its base value in copper, from
   which merchants price it) and its `icon`, decoded from the Titanium item
   record, so an item opened from a link has its picture too; None where a

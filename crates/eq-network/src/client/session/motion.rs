@@ -551,6 +551,7 @@ mod tests {
             killer_id: 0,
             corpse_id: 9,
             bind_zone_id: 2,
+            corpse_name: None,
         }));
         let outcome = testing::run(|out| motion.observe(&death, &mut world, out));
         outcome.result.unwrap();

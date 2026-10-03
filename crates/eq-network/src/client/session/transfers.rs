@@ -425,6 +425,7 @@ mod tests {
                 killer_id: 0,
                 corpse_id: 9,
                 bind_zone_id: 2,
+                corpse_name: None,
             }))
         };
         testing::run(|out| transfers.observe(&death(8), &mut world, out))
