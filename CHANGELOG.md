@@ -26,7 +26,8 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   echo it, so the session keeps the player's listing (the admission's, then
   each change, its own or the server's), reports each change it sends as
   `WorldEvent::ListingSet`, and refuses as `WorldEvent::ListingRefused` a
-  second change of a kind within 250 ms (`EQEmu` drops it), `/anonymous`
+  second change of a kind within 500 ms (`EQEmu` drops one within 250 ms
+  of its last receipt, which jitter can shorten), `/anonymous`
   while roleplaying and `/roleplay` while anonymous, naming the official
   client's string for the last two. That the official client refuses those
   itself is inferred from its having the strings; `EQEmu` takes either.

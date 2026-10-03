@@ -4,8 +4,10 @@
 //! it to everyone else), so the session keeps the listing the admission gave
 //! and each change since, its own or the server's, and reports each change
 //! it sends. `EQEmu` drops a second change of either kind within 250 ms of
-//! the last (`anon_toggle_timer`, `afk_toggle_timer`), so the session
-//! refuses one sooner. The official client refuses `/anonymous` while
+//! the last (`anon_toggle_timer`, `afk_toggle_timer`), measured between its
+//! own receipts, so the session refuses one within twice that of its own
+//! last send: jitter on the way cannot then make the server drop a change
+//! the session reported as made. The official client refuses `/anonymous` while
 //! roleplaying and `/roleplay` while anonymous (inferred from its having
 //! strings for them); `EQEmu` takes either.
 use super::{
@@ -27,8 +29,9 @@ use std::time::{Duration, Instant};
 const ANONYMOUS_WHILE_ROLEPLAYING: u32 = 13235;
 const ROLEPLAYING_WHILE_ANONYMOUS: u32 = 8873;
 
-/// How soon after a change of a kind the server takes another.
-const SETTLING: Duration = Duration::from_millis(250);
+/// How soon after a change of a kind the session sends another: twice the
+/// 250 ms the server waits between its receipts.
+const SETTLING: Duration = Duration::from_millis(500);
 
 /// Away, anonymous and roleplaying, as the player turns them.
 #[derive(Default)]
