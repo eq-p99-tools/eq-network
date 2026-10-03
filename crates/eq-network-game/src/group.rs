@@ -9,8 +9,11 @@
 //! they arrive longer than the Titanium client's own); the rules are
 //! `Client::Handle_OP_GroupInvite2`, `Handle_OP_GroupFollow2`,
 //! `Handle_OP_GroupCancelInvite` and `Handle_OP_GroupDisband`
-//! (`zone/client_packet.cpp`) and `Group::AddMember`, `DelMember`,
-//! `DisbandGroup` and `SendUpdate` (`zone/groups.cpp`).
+//! (`zone/client_packet.cpp`), `Client::GroupFollow` (`zone/client.cpp`),
+//! which tells the inviter they formed the group, `Group::AddMember`,
+//! `DelMember`, `ChangeLeader` and `DisbandGroup` (`zone/groups.cpp`), and
+//! `ZoneDatabase::RefreshGroupFromDB` (`zone/zonedb.cpp`), which sends the
+//! full list.
 use crate::command::EncodedCommand;
 use anyhow::{ensure, Result};
 use serde::Serialize;
@@ -337,8 +340,17 @@ mod tests {
             })
         );
         assert_eq!(change(DISBANDED), Some(GroupUpdate::Disbanded));
-        // The first to join forms the group with the inviter.
-        assert_eq!(change(FIRST_INVITE), Some(GroupUpdate::Formed));
+        // The first to join forms the group with the inviter: a join naming
+        // the inviter twice, with their leadership ranks after the names.
+        let mut formed = vec![0; 452];
+        formed[..4].copy_from_slice(&FIRST_INVITE.to_le_bytes());
+        put(&mut formed, 4, "Tester");
+        put(&mut formed, MEMBER, "Tester");
+        formed[132] = 1;
+        assert_eq!(
+            decode(UPDATE_OPCODE, &formed).unwrap(),
+            Some(GroupUpdate::Formed)
+        );
         // The leader's leadership abilities are not read.
         assert_eq!(change(10), None);
         // A full list: the leader and the other members.
