@@ -13,6 +13,17 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `RaidUpdate::Listed`: a member the server lists as the player joins,
+  enters a zone or moves, told apart from one who joins. `EQEmu` sends each
+  list in one burst after the raid's creation, with no packet marking its
+  end (the leader comes last in some orders and early in others, and the
+  join's list holds health updates), so the session counts every member
+  added after a creation as listed until a second passes without a raid
+  update. The raid the player forms by inviting lists nothing. The session
+  also holds a `Disbanded` as it holds a removal: the raid's end, the
+  player's removal and the raid listed again, as `EQEmu` tells a member
+  moved in another zone, is nothing; anything else tells them in order.
+
 - The raid leader's commands (`Capability::Raiding`, `EqEmu` only):
   `GameCommand::RaidLock` (lock or unlock), `RaidMove` (into a raid group,
   0 to 11, or out of every group), `RaidMakeLeader` (`/makeraidleader`)

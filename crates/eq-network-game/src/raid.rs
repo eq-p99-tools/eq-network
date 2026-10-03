@@ -110,6 +110,10 @@ pub enum RaidUpdate {
     /// Someone is in the player's raid: one who joined, or one already in
     /// it as the player joins or enters a zone.
     Added(RaidMember),
+    /// Someone is in the player's raid as the server lists it, on the
+    /// player's joining, entering a zone or moving: the session tells these
+    /// from members who join, as only the moment sets them apart.
+    Listed(RaidMember),
     /// Someone left the player's raid or was removed, the player among them.
     Removed {
         /// Who.
