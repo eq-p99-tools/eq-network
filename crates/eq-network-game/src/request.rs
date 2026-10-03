@@ -18,7 +18,7 @@ use crate::{
     objects,
     pets::{self, PetCommand},
     resurrection::{self, ResurrectionOffer},
-    spells, tradeskills, training,
+    socials, spells, tradeskills, training,
     who::{self, WhoFilter},
     world::Position,
     zoning, GameDialect,
@@ -112,6 +112,17 @@ pub enum Request {
     SetAway(bool),
     /// Say how the player hides from `/who`.
     SetAnonymity(Anonymity),
+    /// Roll a die from the lowest to the highest number.
+    Random {
+        /// The lowest number.
+        low: u32,
+        /// The highest.
+        high: u32,
+    },
+    /// Emote, in the player's own words.
+    Emote(String),
+    /// Take the target of this spawn.
+    Assist(u16),
     /// Use a skill on the server's idea of the target.
     Ability {
         /// The skill.
@@ -264,6 +275,9 @@ pub fn titanium(request: &Request, sender: Sender<'_>) -> Result<EncodedCommand>
         Request::SetAnonymity(anonymity) => {
             listing::titanium_anonymity(sender.spawn(), *anonymity)?
         }
+        Request::Random { low, high } => socials::random(*low, *high),
+        Request::Emote(text) => socials::emote(text)?,
+        Request::Assist(spawn_id) => socials::assist(*spawn_id),
         Request::ReadBook(book) => books::titanium_request(book)?,
         Request::Combine(container) => tradeskills::titanium_combine(*container)?,
         Request::Trade(with) => exchange::request(sender.spawn(), *with)?,

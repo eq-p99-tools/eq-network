@@ -435,7 +435,7 @@ mod tests {
     };
 
     /// How many kinds of command there are.
-    const KINDS: usize = 55;
+    const KINDS: usize = 58;
 
     /// Which kind of command this is. A new command is a compile error here
     /// until it has a number, and then a test failure until the list below
@@ -498,6 +498,9 @@ mod tests {
             ClientCommand::ToggleAway { .. } => 52,
             ClientCommand::ToggleAnonymous { .. } => 53,
             ClientCommand::ToggleRoleplay { .. } => 54,
+            ClientCommand::Random { .. } => 55,
+            ClientCommand::Emote { .. } => 56,
+            ClientCommand::Assist { .. } => 57,
         }
     }
 
@@ -753,6 +756,19 @@ mod tests {
             ClientCommand::ToggleAway { session_id },
             ClientCommand::ToggleAnonymous { session_id },
             ClientCommand::ToggleRoleplay { session_id },
+            ClientCommand::Random {
+                session_id,
+                low: 1,
+                high: 6,
+            },
+            ClientCommand::Emote {
+                session_id,
+                text: "waves.".into(),
+            },
+            ClientCommand::Assist {
+                session_id,
+                spawn_id: 300,
+            },
             ClientCommand::ReadItem {
                 session_id,
                 slot: InventorySlot(23),
@@ -939,7 +955,15 @@ mod tests {
         assert!(!p99.contains(&Capability::Grouping));
         assert!(eqemu.contains(&Capability::Listing));
         assert!(!p99.contains(&Capability::Listing));
-        assert_eq!(eqemu.len(), p99.len() + 11);
+        for capability in [
+            Capability::Rolling,
+            Capability::Emoting,
+            Capability::Assisting,
+        ] {
+            assert!(eqemu.contains(&capability));
+            assert!(!p99.contains(&capability));
+        }
+        assert_eq!(eqemu.len(), p99.len() + 14);
         // EQMac servers talk, TAKP camps too, and neither follows a zone
         // change yet.
         assert_eq!(

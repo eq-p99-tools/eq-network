@@ -59,6 +59,8 @@ pub mod pets;
 pub mod quarm;
 /// Being resurrected: the offer and the player's answer.
 pub mod resurrection;
+/// Rolling dice, emoting and assisting.
+pub mod socials;
 /// Server-driven spellbook and casting notifications.
 pub mod spells;
 /// Tradeskill combines in the player's own containers.

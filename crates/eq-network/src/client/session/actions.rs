@@ -148,6 +148,9 @@ pub(super) fn needs(command: &ClientCommand) -> &'static [Resource] {
         | ClientCommand::ToggleAway { .. }
         | ClientCommand::ToggleAnonymous { .. }
         | ClientCommand::ToggleRoleplay { .. }
+        | ClientCommand::Random { .. }
+        | ClientCommand::Emote { .. }
+        | ClientCommand::Assist { .. }
         | ClientCommand::ReadItem { .. }
         // Opening a container holds nothing, and closing one must always be
         // possible.
@@ -183,6 +186,7 @@ pub(super) fn refuse_officially(
         | WorldEvent::CombineRefused { string_id, .. }
         | WorldEvent::GroupRefused { string_id, .. }
         | WorldEvent::ListingRefused { string_id, .. }
+        | WorldEvent::SocialRefused { string_id, .. }
         | WorldEvent::AbilityRefused { string_id, .. } = &mut event
         {
             *string_id = official;
@@ -226,6 +230,9 @@ fn refusal(command: &ClientCommand, reason: &str) -> Option<WorldEvent> {
         | ClientCommand::ToggleAway { session_id }
         | ClientCommand::ToggleAnonymous { session_id }
         | ClientCommand::ToggleRoleplay { session_id }
+        | ClientCommand::Random { session_id, .. }
+        | ClientCommand::Emote { session_id, .. }
+        | ClientCommand::Assist { session_id, .. }
         | ClientCommand::ReadItem { session_id, .. }
         | ClientCommand::Combine { session_id, .. }
         | ClientCommand::Consent { session_id, .. }
@@ -338,6 +345,13 @@ fn reasoned(command: &ClientCommand, session_id: u64, reason: String) -> Option<
         ClientCommand::ToggleAway { .. }
         | ClientCommand::ToggleAnonymous { .. }
         | ClientCommand::ToggleRoleplay { .. } => WorldEvent::ListingRefused {
+            session_id,
+            reason,
+            string_id: None,
+        },
+        ClientCommand::Random { .. }
+        | ClientCommand::Emote { .. }
+        | ClientCommand::Assist { .. } => WorldEvent::SocialRefused {
             session_id,
             reason,
             string_id: None,

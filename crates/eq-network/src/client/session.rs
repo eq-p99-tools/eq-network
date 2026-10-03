@@ -27,6 +27,7 @@ mod posture;
 mod reading;
 mod resurrection;
 mod servers;
+mod socials;
 mod spellbook;
 mod talk;
 mod targeting;
