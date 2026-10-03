@@ -577,9 +577,14 @@ impl ServerType for Project1999 {
         Some(shared::casting())
     }
 
-    /// Deleting and moving the book's spells wait to be checked on P99.
+    /// Moving the book's spells works on P99 as on `EQEmu` (checked with the
+    /// official client, 2026-10-03); deleting one does not there, so it
+    /// stays off.
     fn spellbook(&self, _setup: &Setup<'_>) -> Provided {
-        Some(shared::spellbook(Edits::default()))
+        Some(shared::spellbook(Edits {
+            deleting: false,
+            moving: true,
+        }))
     }
 
     fn inventory(&self, setup: &Setup<'_>) -> Provided {
@@ -1004,9 +1009,9 @@ mod tests {
 
     #[test]
     fn p99_and_eqemu_provide_every_feature_one_each() {
-        // Training, resurrection, reading, tradeskills, the map,
-        // merchants' offers, groups, the player's listing, dice, emotes,
-        // assisting and raids are checked on EQEmu alone so far.
+        // Training, resurrection, reading, tradeskills, the map, deleting
+        // spells, merchants' offers, groups, the player's listing, dice,
+        // emotes, assisting and raids are checked on EQEmu alone so far.
         for (protocol, count) in [
             (ServerProtocol::Project1999, 20),
             (ServerProtocol::EqEmu, 30),
@@ -1022,7 +1027,6 @@ mod tests {
             Capability::Tradeskills,
             Capability::Map,
             Capability::DeletingSpells,
-            Capability::MovingSpells,
             Capability::MerchantOffers,
             Capability::Grouping,
             Capability::Listing,
@@ -1033,6 +1037,10 @@ mod tests {
         ] {
             assert!(!offers(server_type(ServerProtocol::Project1999)).contains(&capability));
             assert!(offers(server_type(ServerProtocol::EqEmu)).contains(&capability));
+        }
+        // Moving the book's spells is checked on both.
+        for protocol in [ServerProtocol::Project1999, ServerProtocol::EqEmu] {
+            assert!(offers(server_type(protocol)).contains(&Capability::MovingSpells));
         }
     }
 
