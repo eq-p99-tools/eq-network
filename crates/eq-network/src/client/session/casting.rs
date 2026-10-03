@@ -398,6 +398,7 @@ mod tests {
             &SpellUpdate::Interrupted {
                 caster_id: 7,
                 message_id: 1,
+                caster_name: None,
             },
         );
         assert!(!guard.blocks(&request));
@@ -434,6 +435,7 @@ mod tests {
             &SpellUpdate::Interrupted {
                 caster_id: 12,
                 message_id: 1,
+                caster_name: None,
             },
         );
         assert!(!guard.active());
@@ -471,6 +473,7 @@ mod tests {
             SpellUpdate::Interrupted {
                 caster_id: 13,
                 message_id: 1,
+                caster_name: None,
             },
             SpellUpdate::Mana {
                 spell_id: 73,
@@ -511,6 +514,7 @@ mod tests {
             SpellUpdate::Interrupted {
                 caster_id: 12,
                 message_id: 1,
+                caster_name: None,
             },
             SpellUpdate::BarRefresh {
                 slot: 0,
@@ -584,6 +588,7 @@ mod tests {
             &SpellUpdate::Interrupted {
                 caster_id: 12,
                 message_id: 1,
+                caster_name: None,
             },
         );
         assert!(commands.iter().all(|command| !guard.blocks(command)));

@@ -173,6 +173,10 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- `SpellUpdate::Interrupted` carries `caster_name`: the name the server
+  sends to those near another caster whose spell stopped (Titanium
+  `InterruptCast_Struct`'s label), so a front end can say whose it was;
+  None on the caster's own notice.
 - Deleting a spell from the spellbook (`DeleteSpell`) and moving one to
   another place in it (`SwapSpell`) each have a capability of their own,
   `Capability::DeletingSpells` and `Capability::MovingSpells`, instead of
