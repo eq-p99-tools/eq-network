@@ -540,6 +540,22 @@ pub enum GameCommand {
         /// Who is removed; the player themself leaves.
         name: String,
     },
+    /// Set the raid's message of the day: the Raid window's Notes page.
+    RaidSetMotd {
+        /// Current zone admission.
+        session_id: u64,
+        /// Its words.
+        text: String,
+    },
+    /// Set a member's note in the raid: the Raid window's Notes page.
+    RaidSetNote {
+        /// Current zone admission.
+        session_id: u64,
+        /// Whose note.
+        name: String,
+        /// Its words.
+        note: String,
+    },
     /// Ask the world who is online: `/who all`.
     WhoAll {
         /// Current zone admission.
@@ -637,6 +653,8 @@ impl GameCommand {
             | Self::RaidMove { session_id, .. }
             | Self::RaidMakeLeader { session_id, .. }
             | Self::RaidRemove { session_id, .. }
+            | Self::RaidSetMotd { session_id, .. }
+            | Self::RaidSetNote { session_id, .. }
             | Self::ReadItem { session_id, .. }
             | Self::Combine { session_id, .. }
             | Self::Consent { session_id, .. }
@@ -716,6 +734,7 @@ impl GameCommand {
             | Self::RaidMove { .. }
             | Self::RaidMakeLeader { .. }
             | Self::RaidRemove { .. } => Capability::Raiding,
+            Self::RaidSetMotd { .. } | Self::RaidSetNote { .. } => Capability::RaidNotes,
             Self::ReadItem { .. } => Capability::Reading,
             Self::Combine { .. } | Self::OpenContainer { .. } | Self::CloseContainer { .. } => {
                 Capability::Tradeskills
@@ -760,6 +779,8 @@ impl GameCommand {
             | Self::RaidMove { .. }
             | Self::RaidMakeLeader { .. }
             | Self::RaidRemove { .. }
+            | Self::RaidSetMotd { .. }
+            | Self::RaidSetNote { .. }
             | Self::ReadItem { .. }
             | Self::CloseContainer { .. }
             | Self::Consent { .. }
@@ -923,6 +944,8 @@ pub fn encode(
         | GameCommand::RaidMove { .. }
         | GameCommand::RaidMakeLeader { .. }
         | GameCommand::RaidRemove { .. }
+        | GameCommand::RaidSetMotd { .. }
+        | GameCommand::RaidSetNote { .. }
         | GameCommand::ReadItem { .. }
         | GameCommand::Combine { .. }
         | GameCommand::Consent { .. }

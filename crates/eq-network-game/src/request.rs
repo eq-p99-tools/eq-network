@@ -146,6 +146,15 @@ pub enum Request {
     /// Remove a member from the player's raid, by the name the server gave
     /// them.
     RaidRemove(String),
+    /// Set the raid's message of the day.
+    RaidSetMotd(String),
+    /// Set a member's note in the raid, by the name the server gave them.
+    RaidSetNote {
+        /// Whose note.
+        member: String,
+        /// Its words.
+        note: String,
+    },
     /// Use a skill on the server's idea of the target.
     Ability {
         /// The skill.
@@ -308,6 +317,8 @@ pub fn titanium(request: &Request, sender: Sender<'_>) -> Result<EncodedCommand>
         Request::RaidMove { member, group } => raid::move_member(sender.name, member, *group)?,
         Request::RaidMakeLeader(member) => raid::make_leader(sender.name, member)?,
         Request::RaidRemove(member) => raid::remove(sender.name, member)?,
+        Request::RaidSetMotd(text) => raid::set_motd(sender.name, text)?,
+        Request::RaidSetNote { member, note } => raid::set_note(sender.name, member, note)?,
         Request::ReadBook(book) => books::titanium_request(book)?,
         Request::Combine(container) => tradeskills::titanium_combine(*container)?,
         Request::Trade(with) => exchange::request(sender.spawn(), *with)?,

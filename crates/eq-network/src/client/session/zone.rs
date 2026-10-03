@@ -435,7 +435,7 @@ mod tests {
     };
 
     /// How many kinds of command there are.
-    const KINDS: usize = 66;
+    const KINDS: usize = 68;
 
     /// Which kind of command this is. A new command is a compile error here
     /// until it has a number, and then a test failure until the list below
@@ -509,6 +509,8 @@ mod tests {
             ClientCommand::RaidMove { .. } => 63,
             ClientCommand::RaidMakeLeader { .. } => 64,
             ClientCommand::RaidRemove { .. } => 65,
+            ClientCommand::RaidSetMotd { .. } => 66,
+            ClientCommand::RaidSetNote { .. } => 67,
         }
     }
 
@@ -801,6 +803,15 @@ mod tests {
                 session_id,
                 name: "Friend".into(),
             },
+            ClientCommand::RaidSetMotd {
+                session_id,
+                text: "Meet at the gate".into(),
+            },
+            ClientCommand::RaidSetNote {
+                session_id,
+                name: "Friend".into(),
+                note: "Pulls".into(),
+            },
             ClientCommand::ReadItem {
                 session_id,
                 slot: InventorySlot(23),
@@ -992,11 +1003,12 @@ mod tests {
             Capability::Emoting,
             Capability::Assisting,
             Capability::Raiding,
+            Capability::RaidNotes,
         ] {
             assert!(eqemu.contains(&capability));
             assert!(!p99.contains(&capability));
         }
-        assert_eq!(eqemu.len(), p99.len() + 14);
+        assert_eq!(eqemu.len(), p99.len() + 15);
         // EQMac servers talk, TAKP camps too, and neither follows a zone
         // change yet.
         assert_eq!(

@@ -422,12 +422,15 @@ pub enum Capability {
     /// the Raid window does. No server type offers it yet: `EQEmu` has no
     /// handler for it.
     RaidGroupLeaders,
+    /// Setting the raid's message of the day and its members' notes, as its
+    /// leader.
+    RaidNotes,
 }
 
 impl Capability {
     /// Every capability, in order: what a session offers when its server and
     /// client generation support everything.
-    pub const ALL: [Self; 34] = [
+    pub const ALL: [Self; 35] = [
         Self::Casting,
         Self::Spellbook,
         Self::Inventory,
@@ -462,6 +465,7 @@ impl Capability {
         Self::Assisting,
         Self::Raiding,
         Self::RaidGroupLeaders,
+        Self::RaidNotes,
     ];
 }
 
@@ -1424,6 +1428,7 @@ mod tests {
             Capability::Assisting => 31,
             Capability::Raiding => 32,
             Capability::RaidGroupLeaders => 33,
+            Capability::RaidNotes => 34,
         };
         for (index, capability) in Capability::ALL.into_iter().enumerate() {
             assert_eq!(place(capability), index, "{capability:?}");

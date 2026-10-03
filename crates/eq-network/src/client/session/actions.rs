@@ -159,6 +159,8 @@ pub(super) fn needs(command: &ClientCommand) -> &'static [Resource] {
         | ClientCommand::RaidMove { .. }
         | ClientCommand::RaidMakeLeader { .. }
         | ClientCommand::RaidRemove { .. }
+        | ClientCommand::RaidSetMotd { .. }
+        | ClientCommand::RaidSetNote { .. }
         | ClientCommand::ReadItem { .. }
         // Opening a container holds nothing, and closing one must always be
         // possible.
@@ -269,6 +271,8 @@ fn refusal(command: &ClientCommand, reason: &str) -> Option<WorldEvent> {
         | ClientCommand::RaidMove { session_id, .. }
         | ClientCommand::RaidMakeLeader { session_id, .. }
         | ClientCommand::RaidRemove { session_id, .. }
+        | ClientCommand::RaidSetMotd { session_id, .. }
+        | ClientCommand::RaidSetNote { session_id, .. }
         | ClientCommand::ReadItem { session_id, .. }
         | ClientCommand::Combine { session_id, .. }
         | ClientCommand::Consent { session_id, .. }
@@ -399,7 +403,9 @@ fn reasoned(command: &ClientCommand, session_id: u64, reason: String) -> Option<
         | ClientCommand::RaidLock { .. }
         | ClientCommand::RaidMove { .. }
         | ClientCommand::RaidMakeLeader { .. }
-        | ClientCommand::RaidRemove { .. } => WorldEvent::RaidRefused {
+        | ClientCommand::RaidRemove { .. }
+        | ClientCommand::RaidSetMotd { .. }
+        | ClientCommand::RaidSetNote { .. } => WorldEvent::RaidRefused {
             session_id,
             reason,
             string_id: None,

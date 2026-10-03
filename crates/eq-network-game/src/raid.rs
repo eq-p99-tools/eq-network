@@ -1,6 +1,7 @@
 //! Raids: inviting a player, accepting or declining an invitation, leaving,
 //! the raid leader's commands (locking the raid, moving members between raid
-//! groups, handing on the lead, removing a member), and the server's word on
+//! groups, handing on the lead, removing a member, setting the raid's
+//! message of the day and its members' notes), and the server's word on
 //! who is in the player's raid.
 //!
 //! Layout reference: the Titanium opcodes (`utils/patches/patch_Titanium.conf`),
@@ -48,9 +49,17 @@ const LOCKED: u32 = 17;
 const UNLOCKED: u32 = 18;
 const INVITED: u32 = 20;
 const MAKE_LEADER: u32 = 30;
+const MOTD: u32 = 35;
+const NOTE: u32 = 36;
 
 /// A move's parameter for no raid group: out of every group.
 const NO_GROUP: u32 = u32::MAX;
+
+/// The message of the day's field after a command's fields, and the most it
+/// holds with its closing NUL (`RaidMOTD_Struct`).
+const MOTD_FIELD: usize = 1024;
+/// A note's field after a command's fields (`RaidNote_Struct`).
+const NOTE_FIELD: usize = 64;
 
 /// A member of the player's raid, as the server added them.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -140,6 +149,20 @@ pub enum RaidUpdate {
     /// server takes them out of the raid and adds them back in their new
     /// place, which the session reads as this one move.
     Moved(RaidMember),
+    /// The raid's message of the day, as the player joins or enters a zone
+    /// and as the leader sets it.
+    Motd {
+        /// Its words.
+        text: String,
+    },
+    /// A member's note in the raid, as the player joins or enters a zone and
+    /// as the leader sets one.
+    Note {
+        /// Whose note.
+        member: String,
+        /// Its words.
+        note: String,
+    },
 }
 
 /// The text of a name field: its bytes up to the first NUL.
@@ -239,9 +262,55 @@ pub fn make_leader(player: &str, member: &str) -> Result<EncodedCommand> {
     command(MAKE_LEADER, player, member)
 }
 
+/// A command's fields, then words in a field of this size after them.
+fn with_words(
+    (action, player, member): (u32, &str, &str),
+    words: &str,
+    field: usize,
+) -> Result<EncodedCommand> {
+    ensure!(
+        !words.is_empty() && words.len() < field,
+        "a raid command's words must be 1 to {} bytes",
+        field - 1
+    );
+    let mut packet = command(action, player, member)?;
+    let mut text = vec![0; field];
+    text[..words.len()].copy_from_slice(words.as_bytes());
+    packet.body.extend_from_slice(&text);
+    Ok(packet)
+}
+
+/// Sets the raid's message of the day.
+///
+/// # Errors
+/// Rejects a name its field cannot hold, and words empty or past 1023 bytes.
+pub fn set_motd(player: &str, text: &str) -> Result<EncodedCommand> {
+    with_words((MOTD, player, player), text, MOTD_FIELD)
+}
+
+/// Sets a member's note in the raid. The server finds the member by the
+/// exact name it gave them.
+///
+/// # Errors
+/// Rejects a name its field cannot hold, and a note empty or past 63 bytes.
+pub fn set_note(player: &str, member: &str, note: &str) -> Result<EncodedCommand> {
+    with_words((NOTE, player, member), note, NOTE_FIELD)
+}
+
+/// The text of a field of words after a command's fields: its bytes up to
+/// the first NUL.
+fn words(body: &[u8], field: usize) -> String {
+    let field = &body[GENERAL..GENERAL + field];
+    let end = field
+        .iter()
+        .position(|byte| *byte == 0)
+        .unwrap_or(field.len());
+    String::from_utf8_lossy(&field[..end]).into_owned()
+}
+
 /// Decodes a Titanium raid update; None for any other opcode, and for an
-/// update this crate does not read (the zone-in marker, leadership
-/// abilities, notes and the message of the day).
+/// update this crate does not read (the zone-in marker and leadership
+/// abilities).
 ///
 /// # Errors
 /// Rejects an update too short for its fields.
@@ -301,6 +370,23 @@ pub fn decode(opcode: u16, body: &[u8]) -> Result<Option<RaidUpdate>> {
                 by: name(body, PLAYER),
             })
         }
+        MOTD => {
+            ensure!(
+                body.len() >= GENERAL + MOTD_FIELD,
+                "truncated raid message of the day"
+            );
+            Some(RaidUpdate::Motd {
+                text: words(body, MOTD_FIELD),
+            })
+        }
+        // The note's member is in the leader's field, as the server fills it.
+        NOTE => {
+            ensure!(body.len() >= GENERAL + NOTE_FIELD, "truncated raid note");
+            Some(RaidUpdate::Note {
+                member: name(body, LEADER),
+                note: words(body, NOTE_FIELD),
+            })
+        }
         _ => None,
     })
 }
@@ -358,6 +444,22 @@ mod tests {
         assert_eq!(&led.body[68..74], b"Friend");
         let removed = remove("Tester", "Friend").unwrap();
         assert_eq!(&removed.body[68..74], b"Friend");
+        let motd = set_motd("Tester", "Meet at the gate").unwrap();
+        assert_eq!(
+            (motd.body.len(), motd.body[..4].to_vec()),
+            (1160, 35u32.to_le_bytes().to_vec())
+        );
+        assert_eq!(&motd.body[136..152], b"Meet at the gate");
+        assert_eq!(motd.body[152], 0);
+        let note = set_note("Tester", "Friend", "Pulls").unwrap();
+        assert_eq!(
+            (note.body.len(), note.body[..4].to_vec()),
+            (200, 36u32.to_le_bytes().to_vec())
+        );
+        assert_eq!(&note.body[68..74], b"Friend");
+        assert_eq!(&note.body[136..141], b"Pulls");
+        assert!(set_motd("Tester", "").is_err());
+        assert!(set_note("Tester", "Friend", &"x".repeat(64)).is_err());
     }
 
     #[test]
@@ -431,6 +533,24 @@ mod tests {
                 by: "Tester".into()
             })
         );
+        let mut motd = update(35, 1160, "Leader", "Tester");
+        put(&mut motd, 136, "Meet at the gate");
+        assert_eq!(
+            decode(UPDATE_OPCODE, &motd).unwrap(),
+            Some(RaidUpdate::Motd {
+                text: "Meet at the gate".into()
+            })
+        );
+        let mut note = update(36, 200, "Leader", "Friend");
+        put(&mut note, 136, "Pulls");
+        assert_eq!(
+            decode(UPDATE_OPCODE, &note).unwrap(),
+            Some(RaidUpdate::Note {
+                member: "Friend".into(),
+                note: "Pulls".into()
+            })
+        );
+        assert!(decode(UPDATE_OPCODE, &note[..150]).is_err());
         // The zone-in marker and the leadership abilities are not read.
         assert_eq!(
             decode(UPDATE_OPCODE, &update(10, 136, "Tester", "Tester")).unwrap(),

@@ -1034,6 +1034,7 @@ mod tests {
             Capability::Emoting,
             Capability::Assisting,
             Capability::Raiding,
+            Capability::RaidNotes,
         ] {
             assert!(!offers(server_type(ServerProtocol::Project1999)).contains(&capability));
             assert!(offers(server_type(ServerProtocol::EqEmu)).contains(&capability));

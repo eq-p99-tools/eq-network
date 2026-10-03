@@ -16,7 +16,9 @@
 //! client shows it (inferred).
 //!
 //! The raid's leader locks and unlocks it, moves members between raid
-//! groups, hands on the lead and removes members. `EQEmu` checks only that
+//! groups, hands on the lead, removes members, and sets the raid's message
+//! of the day and its members' notes, as the Raid window's tips say only
+//! the leader does (inferred for the session's refusals). `EQEmu` checks only that
 //! the one handing on the lead leads the raid; the session allows all of
 //! them to the leader alone, moves only while the raid is locked and into a
 //! group with room, as the official client's notes on raids and its Raid
@@ -68,6 +70,11 @@ const NOT_IN_RAID: u32 = 5082;
 
 /// How many members a raid group holds (`EQEmu`'s move checks for fewer).
 const GROUP_SIZE: usize = 6;
+
+/// The longest message of the day and note, in bytes, that the server's
+/// fields hold with their closing NUL.
+const MOTD_LONGEST: usize = 1023;
+const NOTE_LONGEST: usize = 63;
 
 // The two waits stand in for the burst of packets one server call sends,
 // which no packet ends: a move's removal and add, a re-listing's end and
@@ -156,7 +163,10 @@ pub(super) struct Raids {
     /// The list the server is sending, until it pauses.
     listing: Option<Quiet>,
     /// The player invited someone out of a raid, so the next raid created
-    /// for them is the one they formed, which lists nothing.
+    /// for them is the one they formed, which lists nothing. An invitation
+    /// declined tells the inviter nothing, so this stays until that raid,
+    /// or the next zone, whose session starts afresh; the leader's name on
+    /// the raid created keeps another raid from counting.
     forming: bool,
 }
 
@@ -238,7 +248,9 @@ impl Raids {
             | RaidUpdate::Accepting { .. }
             | RaidUpdate::Declining { .. }
             | RaidUpdate::Leaving
-            | RaidUpdate::Locking { .. } => {}
+            | RaidUpdate::Locking { .. }
+            | RaidUpdate::Motd { .. }
+            | RaidUpdate::Note { .. } => {}
         }
         // Being in a raid answers any invitation.
         if self.raid.is_some() {
@@ -337,7 +349,8 @@ impl Raids {
         let player = out.sender.name;
         if let ClientCommand::RaidMove { name, .. }
         | ClientCommand::RaidMakeLeader { name, .. }
-        | ClientCommand::RaidRemove { name, .. } = command
+        | ClientCommand::RaidRemove { name, .. }
+        | ClientCommand::RaidSetNote { name, .. } = command
         {
             if name.trim().is_empty() {
                 return actions::refuse(command, "Choose a member of your raid first.", out.log);
@@ -377,6 +390,27 @@ impl Raids {
                     Err(refusal) => Err(refusal),
                 }
             }
+            ClientCommand::RaidSetMotd { text, .. } => self
+                .led(
+                    player,
+                    "Only the raid's leader may set its message of the day.",
+                )
+                .and_then(|_| written(text, MOTD_LONGEST))
+                .map(Request::RaidSetMotd),
+            ClientCommand::RaidSetNote { name, note, .. } => {
+                match self.led(player, "Only the raid's leader may set notes.") {
+                    Ok(raid) => match raid.member(name) {
+                        None => return not_in_raid(command, name, out),
+                        Some(member) => {
+                            written(note, NOTE_LONGEST).map(|note| Request::RaidSetNote {
+                                member: member.name.clone(),
+                                note,
+                            })
+                        }
+                    },
+                    Err(refusal) => Err(refusal),
+                }
+            }
             _ => return Ok(()),
         };
         match request {
@@ -390,6 +424,20 @@ impl Raids {
             Err(refusal) => actions::refuse_officially(command, refusal, out.log),
         }
     }
+}
+
+/// Words for the message of the day or a note, trimmed; refused when empty,
+/// which `EQEmu` ignores rather than clearing anything, or longer than the
+/// server's field holds.
+fn written(words: &str, longest: usize) -> Result<String, Refusal> {
+    let words = words.trim();
+    if words.is_empty() {
+        return Err(("Write something first.", None));
+    }
+    if words.len() > longest {
+        return Err(("That is too long.", None));
+    }
+    Ok(words.to_owned())
 }
 
 /// A move of this member into a raid group, or out of every group; refused
@@ -428,7 +476,10 @@ fn said(update: RaidUpdate, out: &mut Out<'_, '_>) -> Result<()> {
 
 impl Feature for Raids {
     fn capabilities(&self) -> Vec<crate::world::Capability> {
-        vec![crate::world::Capability::Raiding]
+        vec![
+            crate::world::Capability::Raiding,
+            crate::world::Capability::RaidNotes,
+        ]
     }
 
     /// Holds a removal, or the raid's end, until the next message says what
@@ -466,6 +517,8 @@ impl Feature for Raids {
                 | ClientCommand::RaidMove { .. }
                 | ClientCommand::RaidMakeLeader { .. }
                 | ClientCommand::RaidRemove { .. }
+                | ClientCommand::RaidSetMotd { .. }
+                | ClientCommand::RaidSetNote { .. }
         )
     }
 
@@ -870,6 +923,55 @@ mod tests {
                 "{command:?}"
             );
         }
+    }
+
+    #[test]
+    fn the_leader_sets_the_message_of_the_day_and_notes() {
+        let mut raids = Raids::default();
+        let mut world = World::new(5);
+        led_raid(&mut raids, &mut world);
+        let motd = |text: &str| ClientCommand::RaidSetMotd {
+            session_id: 5,
+            text: text.into(),
+        };
+        let note = |name: &str, note: &str| ClientCommand::RaidSetNote {
+            session_id: 5,
+            name: name.into(),
+            note: note.into(),
+        };
+        assert_eq!(
+            sent(&mut raids, &mut world, &motd(" Meet at the gate ")),
+            [raid::set_motd("Tester", "Meet at the gate").unwrap()]
+        );
+        // The server finds the member by the name it gave them.
+        assert_eq!(
+            sent(&mut raids, &mut world, &note("friend", "Pulls")),
+            [raid::set_note("Tester", "Friend", "Pulls").unwrap()]
+        );
+        // Nothing to write, too much, or no one known, is refused.
+        assert_eq!(refused(&mut raids, &mut world, &motd("  ")), None);
+        assert_eq!(
+            refused(&mut raids, &mut world, &note("Friend", &"x".repeat(64))),
+            None
+        );
+        assert_eq!(
+            refused_naming(&mut raids, &mut world, &note("Stranger", "Pulls")),
+            (Some(NOT_IN_RAID), vec!["Stranger".to_owned()])
+        );
+        assert_eq!(refused(&mut raids, &mut world, &note("", "Pulls")), None);
+        // A member who does not lead sets neither.
+        hear(
+            &mut raids,
+            &mut world,
+            RaidUpdate::Leader {
+                name: "Friend".into(),
+            },
+        );
+        assert_eq!(refused(&mut raids, &mut world, &motd("Meet")), None);
+        assert_eq!(
+            refused(&mut raids, &mut world, &note("Other", "Pulls")),
+            None
+        );
     }
 
     #[test]
