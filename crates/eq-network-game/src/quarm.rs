@@ -47,6 +47,18 @@ pub const ZONE_CAMP: u16 = 0x0742;
 /// The server's answer to a logout (`OP_LogoutReply`), which ends the zone
 /// connection.
 pub const ZONE_LOGOUT_REPLY: u16 = 0x5941;
+/// `OP_ZoneChange`: the client asking whether it may enter a zone, and the
+/// server's answer (TAKP `utils/patches/patch_Mac.conf` lists 0x40a3, its
+/// bytes swapped).
+pub const ZONE_CHANGE: u16 = 0xa340;
+/// `OP_SendZonepoints`: the zone's numbered destinations (0x40b4 swapped).
+pub const ZONE_POINTS: u16 = 0xb440;
+/// `OP_SaveOnZoneReq`: the client asking the zone it is leaving to save the
+/// player (0x4155 swapped).
+pub const ZONE_SAVE_ON_ZONE: u16 = 0x5541;
+/// `OP_DeleteSpawn`: the client taking its own spawn out of the zone it is
+/// leaving (0x4029 swapped).
+pub const ZONE_DEPART: u16 = 0x2940;
 /// The server asking the client to change zones.
 pub const ZONE_CHANGE_REQUEST: u16 = 0x4d41;
 
@@ -119,6 +131,69 @@ pub fn zone_request(body: &[u8]) -> Result<ZoneOffer> {
         to_bind: false,
         solicited: true,
     })
+}
+
+/// The client asking whether it may enter a zone (`ZoneChange_Struct`, 76
+/// bytes: the name, the zone as 32 bits, the reason the server's request
+/// gave, and a zero outcome). `EQMac`'s request carries no position: TAKP
+/// finds the destination itself (`zone/zoning.cpp` `Handle_OP_ZoneChange`).
+///
+/// # Errors
+/// Rejects a name its field cannot hold.
+pub fn zone_change(character: &str, zone_id: u16, reason: u32) -> Result<EncodedCommand> {
+    ensure!(
+        !character.is_empty() && character.len() < 64 && !character.contains('\0'),
+        "invalid character name"
+    );
+    let mut body = vec![0; 76];
+    body[..character.len()].copy_from_slice(character.as_bytes());
+    body[64..68].copy_from_slice(&u32::from(zone_id).to_le_bytes());
+    body[68..72].copy_from_slice(&reason.to_le_bytes());
+    Ok(EncodedCommand {
+        opcode: ZONE_CHANGE,
+        body,
+    })
+}
+
+/// The server's answer to the client's request (`ZoneChange_Struct`): the
+/// name, the zone, and the outcome, one for a success; no instance and no
+/// position.
+///
+/// # Errors
+/// Rejects another length, an unterminated name and a zone beyond 16 bits.
+pub fn zone_answer(body: &[u8]) -> Result<crate::zoning::ZoneAnswer> {
+    ensure!(body.len() == 76, "invalid EQMac zone answer length");
+    Ok(crate::zoning::ZoneAnswer {
+        character: crate::zoning::name(&body[..64])?,
+        zone_id: u16::try_from(word(body, 64)).context("EQMac zone ID out of range")?,
+        instance_id: 0,
+        position: None,
+        success: i32::from_le_bytes(body[72..76].try_into()?),
+    })
+}
+
+/// The client asking the zone it is leaving to save the player. TAKP reads
+/// nothing in it (`zone/client_packet.cpp` `Handle_OP_Save`, whose comment
+/// says the payload is 192 bytes), so its 192 bytes stay zero (inferred:
+/// the official `EQMac` client's own body is unrecorded).
+#[must_use]
+pub fn save_on_zone() -> EncodedCommand {
+    EncodedCommand {
+        opcode: ZONE_SAVE_ON_ZONE,
+        body: vec![0; 192],
+    }
+}
+
+/// The client taking its own spawn out of the zone it is leaving, which
+/// TAKP waits for once the world approves the move (`zone/zoning.cpp`
+/// `HandleZoneTransferResponse`, then `Handle_OP_DeleteSpawn`): the spawn
+/// as 16 bits (`DeleteSpawn_Struct`).
+#[must_use]
+pub fn depart(spawn_id: u16) -> EncodedCommand {
+    EncodedCommand {
+        opcode: ZONE_DEPART,
+        body: spawn_id.to_le_bytes().to_vec(),
+    }
 }
 
 /// The client starting to camp. TAKP reads nothing in it; the official

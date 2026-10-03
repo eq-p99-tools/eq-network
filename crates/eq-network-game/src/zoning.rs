@@ -1,7 +1,7 @@
 //! Titanium death, boundary destinations and zone-transfer layouts.
 //!
 //! Layout references: EQEmu common/patches/titanium_structs.h and
-//! common/eq_packet_structs.h. Spatial boundary detection belongs to the client;
+//! `common/eq_packet_structs.h`. Spatial boundary detection belongs to the client;
 //! the network layer validates its request against current admission state.
 use crate::{command::EncodedCommand, world::Position};
 use anyhow::{ensure, Result};
@@ -19,6 +19,12 @@ pub const TO_BIND_OPCODE: u16 = 0x385e;
 pub const MOVE_OPCODE: u16 = 0x7834;
 /// `OP_ZoneServerInfo`: the next zone's address.
 pub const HANDOFF_OPCODE: u16 = 0x61b6;
+/// `OP_SaveOnZoneReq`: the client asking the zone it is leaving to save the
+/// player (`EQEmu` `utils/patches/patch_Titanium.conf`).
+pub const SAVE_ON_ZONE_OPCODE: u16 = 0x1540;
+/// `OP_DeleteSpawn`: the client taking its own spawn out of the zone it is
+/// leaving; the server's copy tells the zone a spawn left.
+pub const DEPART_OPCODE: u16 = 0x55bc;
 
 /// A pending destination selected by a server offer or local boundary.
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -67,6 +73,73 @@ pub fn titanium_answer(
         opcode: CHANGE_OPCODE,
         body,
     })
+}
+
+/// Titanium's request that the zone save the player before they leave it.
+/// `EQEmu` reads nothing in its 192 bytes (`Handle_OP_SaveOnZoneReq` calls
+/// `Handle_OP_Save`), so they stay zero (inferred: what the official client
+/// writes there is not read).
+#[must_use]
+pub fn titanium_save_on_zone() -> EncodedCommand {
+    EncodedCommand {
+        opcode: SAVE_ON_ZONE_OPCODE,
+        body: vec![0; 192],
+    }
+}
+
+/// Titanium's departure: the player's own spawn, as a 32-bit ID.
+#[must_use]
+pub fn titanium_depart(spawn_id: u16) -> EncodedCommand {
+    EncodedCommand {
+        opcode: DEPART_OPCODE,
+        body: u32::from(spawn_id).to_le_bytes().to_vec(),
+    }
+}
+
+/// The zone's answer to a transfer request, as a client generation reads it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ZoneAnswer {
+    /// The character it names.
+    pub character: String,
+    /// The zone it answers for.
+    pub zone_id: u16,
+    /// The zone's instance; zero where the generation has none.
+    pub instance_id: u16,
+    /// Where in the zone, as x, y and z: Titanium's answer carries it, and
+    /// `EQMac`'s does not.
+    pub position: Option<(f32, f32, f32)>,
+    /// One for a success, else the server's own code.
+    pub success: i32,
+}
+
+impl ZoneAnswer {
+    /// Titanium's 88-byte answer: the name, the zone and instance, where in
+    /// it, and the outcome.
+    ///
+    /// # Errors
+    /// Rejects another length and an unterminated name.
+    pub fn titanium(body: &[u8]) -> Result<Self> {
+        ensure!(body.len() == 88, "invalid zone response length");
+        Ok(Self {
+            character: name(&body[..64])?,
+            zone_id: half(body, 64),
+            instance_id: half(body, 66),
+            position: Some((float(body, 72), float(body, 68), float(body, 76))),
+            success: i32::from_le_bytes(body[84..88].try_into()?),
+        })
+    }
+}
+
+/// A NUL-terminated name in a fixed field.
+///
+/// # Errors
+/// Rejects a name without its NUL.
+pub(crate) fn name(field: &[u8]) -> Result<String> {
+    let end = field
+        .iter()
+        .position(|v| *v == 0)
+        .ok_or_else(|| anyhow::anyhow!("unterminated zone response name"))?;
+    Ok(String::from_utf8_lossy(&field[..end]).into_owned())
 }
 
 impl ZoneOffer {
@@ -158,24 +231,18 @@ pub fn offer(opcode: u16, body: &[u8]) -> Result<ZoneOffer> {
 /// Verify a zone response belongs to the pending request and active character.
 ///
 /// # Errors
-/// Rejects malformed responses, another character, or a mismatched destination.
-pub fn approved(body: &[u8], character: &str, pending: &ZoneOffer) -> Result<bool> {
-    ensure!(body.len() == 88, "invalid zone response length");
-    let end = body[..64]
-        .iter()
-        .position(|v| *v == 0)
-        .ok_or_else(|| anyhow::anyhow!("unterminated zone response name"))?;
+/// Rejects another character, or a mismatched destination.
+pub fn approved(answer: &ZoneAnswer, character: &str, pending: &ZoneOffer) -> Result<bool> {
     ensure!(
-        body[..end].eq_ignore_ascii_case(character.as_bytes()),
+        answer.character.eq_ignore_ascii_case(character),
         "zone response is for another character"
     );
-    let success = i32::from_le_bytes(body[84..88].try_into()?);
-    if success != 1 {
+    if answer.success != 1 {
         return Ok(false);
     }
     ensure!(
-        (pending.zone_id == 0 || half(body, 64) == pending.zone_id)
-            && half(body, 66) == pending.instance_id,
+        (pending.zone_id == 0 || answer.zone_id == pending.zone_id)
+            && answer.instance_id == pending.instance_id,
         "zone approval changed destination"
     );
     Ok(true)
@@ -221,52 +288,48 @@ pub enum ZoneReply {
 }
 
 /// Interprets a zone-change response. A success naming the current zone instead
-/// of the requested one means two things in `EQEmu` (zone/zoning.cpp): for a zone
+/// of the requested one means two things in `EQEmu` (`zone/zoning.cpp`): for a zone
 /// line the client crossed, the server cancelled and supplies rewind coordinates
 /// (`SendZoneCancel`); for a transfer the server asked for, such as an evacuation
 /// or succor within the zone (offered with a stand-in zone), the server moved the
 /// character and expects it to zone back in through world (`DoZoneSuccess`).
+/// An answer without coordinates, as `EQMac`'s, cancels without a rewind.
 ///
 /// # Errors
-/// Rejects malformed replies, unexpected destinations and invalid rewind coordinates.
+/// Rejects unexpected destinations and invalid rewind coordinates.
 pub fn reply(
-    body: &[u8],
+    answer: &ZoneAnswer,
     character: &str,
     pending: &ZoneOffer,
     current_zone: (u16, u16),
     heading: f32,
 ) -> Result<ZoneReply> {
-    ensure!(body.len() == 88, "invalid zone response length");
-    let returned = (half(body, 64), half(body, 66));
+    let returned = (answer.zone_id, answer.instance_id);
     if pending.zone_id != 0
         && returned == current_zone
         && returned != (pending.zone_id, pending.instance_id)
-        && word(body, 84) == 1
+        && answer.success == 1
     {
         let current = ZoneOffer {
             zone_id: current_zone.0,
             instance_id: current_zone.1,
             ..pending.clone()
         };
-        approved(body, character, &current)?;
+        approved(answer, character, &current)?;
         if pending.solicited {
             return Ok(ZoneReply::Approved);
         }
-        let position = Position {
-            x: float(body, 72),
-            y: float(body, 68),
-            z: float(body, 76),
-            heading,
+        let Some((x, y, z)) = answer.position else {
+            return Ok(ZoneReply::Denied(ZoneRejection::Cancelled));
         };
+        let position = Position { x, y, z, heading };
         ensure!(finite(position), "invalid zone cancellation position");
         return Ok(ZoneReply::Rewind(position));
     }
-    Ok(if approved(body, character, pending)? {
+    Ok(if approved(answer, character, pending)? {
         ZoneReply::Approved
     } else {
-        ZoneReply::Denied(ZoneRejection::Server(i32::from_le_bytes(
-            body[84..88].try_into()?,
-        )))
+        ZoneReply::Denied(ZoneRejection::Server(answer.success))
     })
 }
 
@@ -297,24 +360,25 @@ mod tests {
             solicited: false,
         };
         let mut body = pending.response("Example").unwrap().body;
+        let read = |body: &[u8]| ZoneAnswer::titanium(body).unwrap();
         for code in [0_i32, -1, -2, -3, -6, -7, -12345, 42, i32::MIN] {
             body[84..88].copy_from_slice(&code.to_le_bytes());
             let rejection = ZoneRejection::Server(code);
             assert_eq!(
-                reply(&body, "Example", &pending, (7, 0), 0.0).unwrap(),
+                reply(&read(&body), "Example", &pending, (7, 0), 0.0).unwrap(),
                 ZoneReply::Denied(rejection)
             );
             assert!(rejection
                 .to_string()
                 .contains(&format!("server code {code}")));
-            assert!(reply(&body, "Other", &pending, (7, 0), 0.0).is_err());
+            assert!(reply(&read(&body), "Other", &pending, (7, 0), 0.0).is_err());
         }
         body[84..88].copy_from_slice(&1_i32.to_le_bytes());
         assert_eq!(
-            reply(&body, "Example", &pending, (7, 0), 0.0).unwrap(),
+            reply(&read(&body), "Example", &pending, (7, 0), 0.0).unwrap(),
             ZoneReply::Approved
         );
-        assert!(reply(&body[..87], "Example", &pending, (7, 0), 0.0).is_err());
+        assert!(ZoneAnswer::titanium(&body[..87]).is_err());
     }
     #[test]
     fn same_zone_offer_is_local_but_bind_and_instance_changes_require_transfer() {
@@ -357,8 +421,9 @@ mod tests {
         body[68..72].copy_from_slice(&12.0f32.to_le_bytes());
         body[72..76].copy_from_slice(&(-4.0f32).to_le_bytes());
         body[84..88].copy_from_slice(&1u32.to_le_bytes());
+        let answer = ZoneAnswer::titanium(&body).unwrap();
         assert_eq!(
-            reply(&body, "Example", &pending, (7, 0), 64.0).unwrap(),
+            reply(&answer, "Example", &pending, (7, 0), 64.0).unwrap(),
             ZoneReply::Rewind(Position {
                 x: -4.0,
                 y: 12.0,
@@ -366,19 +431,29 @@ mod tests {
                 heading: 64.0
             })
         );
-        assert!(reply(&body, "Other", &pending, (7, 0), 64.0).is_err());
-        assert!(reply(&body, "Example", &pending, (8, 0), 64.0).is_err());
+        assert!(reply(&answer, "Other", &pending, (7, 0), 64.0).is_err());
+        assert!(reply(&answer, "Example", &pending, (8, 0), 64.0).is_err());
         let bind = ZoneOffer {
             zone_id: 0,
             to_bind: true,
             ..pending.clone()
         };
         assert_eq!(
-            reply(&body, "Example", &bind, (7, 0), 64.0).unwrap(),
+            reply(&answer, "Example", &bind, (7, 0), 64.0).unwrap(),
             ZoneReply::Approved
         );
+        // An answer without coordinates cancels where the player stands.
+        let unplaced = ZoneAnswer {
+            position: None,
+            ..answer.clone()
+        };
+        assert_eq!(
+            reply(&unplaced, "Example", &pending, (7, 0), 64.0).unwrap(),
+            ZoneReply::Denied(ZoneRejection::Cancelled)
+        );
         body[72..76].copy_from_slice(&f32::NAN.to_le_bytes());
-        assert!(reply(&body, "Example", &pending, (7, 0), 64.0).is_err());
+        let answer = ZoneAnswer::titanium(&body).unwrap();
+        assert!(reply(&answer, "Example", &pending, (7, 0), 64.0).is_err());
     }
 
     #[test]
@@ -393,11 +468,12 @@ mod tests {
         body[64..66].copy_from_slice(&7u16.to_le_bytes());
         body[68..80].fill(0);
         body[84..88].copy_from_slice(&1u32.to_le_bytes());
+        let answer = ZoneAnswer::titanium(&body).unwrap();
         assert_eq!(
-            reply(&body, "Example", &pending, (7, 0), 64.0).unwrap(),
+            reply(&answer, "Example", &pending, (7, 0), 64.0).unwrap(),
             ZoneReply::Approved
         );
-        assert!(reply(&body, "Example", &pending, (8, 0), 64.0).is_err());
+        assert!(reply(&answer, "Example", &pending, (8, 0), 64.0).is_err());
     }
     #[test]
     fn server_offers_preserve_axes_reason_and_instance() {
@@ -417,12 +493,13 @@ mod tests {
         assert_eq!(response.opcode, CHANGE_OPCODE);
         let mut response = response.body;
         assert_eq!(&response[68..72], &(-2f32).to_le_bytes());
-        assert!(!approved(&response, "Example", &request).unwrap());
+        let read = |body: &[u8]| ZoneAnswer::titanium(body).unwrap();
+        assert!(!approved(&read(&response), "Example", &request).unwrap());
         response[84..].copy_from_slice(&1i32.to_le_bytes());
-        assert!(approved(&response, "Example", &request).unwrap());
-        assert!(approved(&response, "Other", &request).is_err());
+        assert!(approved(&read(&response), "Example", &request).unwrap());
+        assert!(approved(&read(&response), "Other", &request).is_err());
         response[64] = 10;
-        assert!(approved(&response, "Example", &request).is_err());
+        assert!(approved(&read(&response), "Example", &request).is_err());
         body[20..].fill(0);
         let bind = offer(0x385e, &body).unwrap();
         assert_eq!(
@@ -432,6 +509,21 @@ mod tests {
         body[4..8].copy_from_slice(&f32::NAN.to_le_bytes());
         assert!(offer(0x385e, &body).is_err());
     }
+    #[test]
+    fn titanium_departs_with_a_save_and_its_own_spawn() {
+        assert_eq!(
+            (titanium_save_on_zone().opcode, titanium_save_on_zone().body),
+            (0x1540, vec![0; 192])
+        );
+        assert_eq!(
+            titanium_depart(7),
+            EncodedCommand {
+                opcode: 0x55bc,
+                body: vec![7, 0, 0, 0],
+            }
+        );
+    }
+
     #[test]
     fn truncation_never_becomes_an_offer_or_death() {
         for len in 0..24 {

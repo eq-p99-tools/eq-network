@@ -335,3 +335,64 @@ fn mac_filters_enable_every_chat_and_combat_category() {
         assert_eq!(value, u32::from((5..=14).contains(&index)));
     }
 }
+
+#[test]
+fn zoning_asks_with_the_76_byte_request_and_reads_the_answer() {
+    let request = zone_change("Example", 2, 0).unwrap();
+    assert_eq!((request.opcode, request.body.len()), (ZONE_CHANGE, 76));
+    assert_eq!(&request.body[..8], b"Example\0");
+    assert_eq!(request.body[64..68], 2u32.to_le_bytes());
+    assert_eq!(request.body[68..76], [0; 8]);
+    assert!(zone_change("", 2, 0).is_err());
+    let mut answer = request.body;
+    answer[72..76].copy_from_slice(&1i32.to_le_bytes());
+    let read = zone_answer(&answer).unwrap();
+    assert_eq!(
+        (read.character.as_str(), read.zone_id, read.instance_id),
+        ("Example", 2, 0)
+    );
+    assert_eq!((read.position, read.success), (None, 1));
+    assert!(zone_answer(&answer[..75]).is_err());
+    answer[64..68].copy_from_slice(&70_000u32.to_le_bytes());
+    assert!(zone_answer(&answer).is_err());
+}
+
+#[test]
+fn departing_saves_in_192_bytes_and_names_the_spawn_in_16_bits() {
+    assert_eq!(
+        (save_on_zone().opcode, save_on_zone().body),
+        (ZONE_SAVE_ON_ZONE, vec![0; 192])
+    );
+    assert_eq!(
+        (depart(0x0107).opcode, depart(0x0107).body),
+        (ZONE_DEPART, vec![7, 1])
+    );
+}
+
+#[test]
+fn the_zone_points_and_answer_are_read_as_messages() {
+    use crate::message::{eqmac, Message};
+    // One destination, then TAKP's unused final record; the unused field
+    // is no instance.
+    let mut points = vec![0; 4 + 2 * 24];
+    points[..4].copy_from_slice(&1u32.to_le_bytes());
+    points[4..8].copy_from_slice(&3u32.to_le_bytes());
+    points[24..26].copy_from_slice(&4u16.to_le_bytes());
+    points[26..28].copy_from_slice(&9u16.to_le_bytes());
+    let read = eqmac(ZONE_POINTS, &points);
+    let [Message::ZonePoints(table)] = read.as_slice() else {
+        panic!("{read:?}");
+    };
+    let point = table.get(3).unwrap();
+    assert_eq!((point.zone_id, point.instance_id), (4, 0));
+    let mut answer = zone_change("Example", 4, 0).unwrap().body;
+    answer[72..76].copy_from_slice(&(-1i32).to_le_bytes());
+    assert!(matches!(
+        eqmac(ZONE_CHANGE, &answer).as_slice(),
+        [Message::ZoneAnswer(read)] if read.success == -1
+    ));
+    assert!(matches!(
+        eqmac(ZONE_CHANGE, &answer[..10]).as_slice(),
+        [Message::Unreadable { .. }]
+    ));
+}
