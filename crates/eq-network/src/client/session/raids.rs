@@ -4,11 +4,13 @@
 //! it, and declining sends nothing, as there is nothing to tell. The session
 //! keeps the player's raid as the server describes it, to refuse an
 //! invitation as the official client does (inferred from its having strings
-//! for them, since `EQEmu` checks none of it): one that names no one, one to
+//! for them, since `EQEmu` checks none of the inviter's side; it does refuse
+//! an invitee already in a raid, and a grouped one who does not lead their
+//! group): one that names no one, one to
 //! the player themself, which `EQEmu` would turn into a broken raid, one to
 //! a member, and one from a member who is not the leader. The server does
 //! not pass the player's own raid chat back to them, so the session records
-//! it as the others hear it.
+//! it as the others hear it, as the official client shows it (inferred).
 use super::{
     actions,
     feature::{Feature, Out, World},
