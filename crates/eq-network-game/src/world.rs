@@ -405,12 +405,15 @@ pub enum Capability {
     /// Inviting players into a group, joining or declining an invitation,
     /// leaving and disbanding.
     Grouping,
+    /// Turning away from the keyboard, anonymous or roleplaying: how `/who`
+    /// lists the player.
+    Listing,
 }
 
 impl Capability {
     /// Every capability, in order: what a session offers when its server and
     /// client generation support everything.
-    pub const ALL: [Self; 28] = [
+    pub const ALL: [Self; 29] = [
         Self::Casting,
         Self::Spellbook,
         Self::Inventory,
@@ -439,6 +442,7 @@ impl Capability {
         Self::MovingSpells,
         Self::MerchantOffers,
         Self::Grouping,
+        Self::Listing,
     ];
 }
 
@@ -866,6 +870,25 @@ pub enum WorldEvent {
     Group(crate::group::GroupUpdate),
     /// A group request was not sent, and why.
     GroupRefused {
+        /// Admission from the request.
+        session_id: u64,
+        /// Why not.
+        reason: String,
+        /// The official client's own words for this refusal, as an
+        /// `eqstr_us.txt` string ID, for a host with the installed strings;
+        /// `reason` says the same in this library's words.
+        string_id: Option<u32>,
+    },
+    /// The session changed how `/who` lists the player, which the server
+    /// does not echo.
+    ListingSet {
+        /// Admission from the request.
+        session_id: u64,
+        /// What changed.
+        change: crate::listing::ListingChange,
+    },
+    /// A listing change was not sent, and why.
+    ListingRefused {
         /// Admission from the request.
         session_id: u64,
         /// Why not.
@@ -1337,6 +1360,7 @@ mod tests {
             Capability::MovingSpells => 25,
             Capability::MerchantOffers => 26,
             Capability::Grouping => 27,
+            Capability::Listing => 28,
         };
         for (index, capability) in Capability::ALL.into_iter().enumerate() {
             assert_eq!(place(capability), index, "{capability:?}");

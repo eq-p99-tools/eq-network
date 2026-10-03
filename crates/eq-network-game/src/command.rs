@@ -447,6 +447,21 @@ pub enum GameCommand {
         /// Current zone admission.
         session_id: u64,
     },
+    /// Turn away from the keyboard, or back: `/afk`.
+    ToggleAway {
+        /// Current zone admission.
+        session_id: u64,
+    },
+    /// Turn anonymous, or open again: `/anonymous`.
+    ToggleAnonymous {
+        /// Current zone admission.
+        session_id: u64,
+    },
+    /// Turn roleplaying, or open again: `/roleplay`.
+    ToggleRoleplay {
+        /// Current zone admission.
+        session_id: u64,
+    },
     /// Ask the world who is online: `/who all`.
     WhoAll {
         /// Current zone admission.
@@ -530,6 +545,9 @@ impl GameCommand {
             | Self::FollowGroup { session_id }
             | Self::DeclineGroup { session_id }
             | Self::Disband { session_id }
+            | Self::ToggleAway { session_id }
+            | Self::ToggleAnonymous { session_id }
+            | Self::ToggleRoleplay { session_id }
             | Self::ReadItem { session_id, .. }
             | Self::Combine { session_id, .. }
             | Self::Consent { session_id, .. }
@@ -595,6 +613,9 @@ impl GameCommand {
             | Self::FollowGroup { .. }
             | Self::DeclineGroup { .. }
             | Self::Disband { .. } => Capability::Grouping,
+            Self::ToggleAway { .. }
+            | Self::ToggleAnonymous { .. }
+            | Self::ToggleRoleplay { .. } => Capability::Listing,
             Self::ReadItem { .. } => Capability::Reading,
             Self::Combine { .. } | Self::OpenContainer { .. } | Self::CloseContainer { .. } => {
                 Capability::Tradeskills
@@ -625,6 +646,9 @@ impl GameCommand {
             | Self::FollowGroup { .. }
             | Self::DeclineGroup { .. }
             | Self::Disband { .. }
+            | Self::ToggleAway { .. }
+            | Self::ToggleAnonymous { .. }
+            | Self::ToggleRoleplay { .. }
             | Self::ReadItem { .. }
             | Self::CloseContainer { .. }
             | Self::Consent { .. }
@@ -787,6 +811,9 @@ pub fn encode(
         | GameCommand::FollowGroup { .. }
         | GameCommand::DeclineGroup { .. }
         | GameCommand::Disband { .. }
+        | GameCommand::ToggleAway { .. }
+        | GameCommand::ToggleAnonymous { .. }
+        | GameCommand::ToggleRoleplay { .. }
         | GameCommand::ReadItem { .. }
         | GameCommand::Combine { .. }
         | GameCommand::Consent { .. }

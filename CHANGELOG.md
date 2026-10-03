@@ -7,6 +7,18 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- The player's listing (`Capability::Listing`, `EqEmu` only):
+  `GameCommand::ToggleAway` (`/afk`), `ToggleAnonymous` (`/anonymous`) and
+  `ToggleRoleplay` (`/roleplay`), sent as the player's own appearance
+  update (`listing::titanium_away`, `titanium_anonymity`). Servers do not
+  echo it, so the session keeps the player's listing (the admission's, then
+  each change, its own or the server's), reports each change it sends as
+  `WorldEvent::ListingSet`, and refuses as `WorldEvent::ListingRefused` a
+  second change of a kind within 250 ms (`EQEmu` drops it), `/anonymous`
+  while roleplaying and `/roleplay` while anonymous, naming the official
+  client's string for the last two. That the official client refuses those
+  itself is inferred from its having the strings; `EQEmu` takes either.
+
 - Groups (`Capability::Grouping`, `EqEmu` only): `GameCommand::InviteToGroup`
   (`/invite`, by name), `FollowGroup` (join the group of whoever invited the
   player last), `DeclineGroup`, and `Disband` (leave, or as the leader remove
