@@ -45,7 +45,8 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   not lead it, a move while the raid is unlocked, into the member's own
   group or into a full one, and a member it does not know, the last as
   string 5082 naming them (`RaidRefused` gains `arguments`). It also
-  refuses an invitation while the raid is locked, as string 8870. That the
+  refuses an invitation while the raid is locked, in this library's words
+  (string 8870 announces the leader locking the raid). That the
   official client refuses these is inferred from its raid notes, its Raid
   window's tips and its strings. `Capability::RaidGroupLeaders`, taking a
   raid group leader's mark from a member, is offered by no server type:
