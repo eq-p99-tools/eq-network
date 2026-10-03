@@ -18,11 +18,13 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   waiting, says what it sent or answered (`Inviting`, `Accepting`,
   `Declining`, `Leaving`; declining sends nothing), and records the player's
   own raid chat as the others hear it, since the server does not pass it
-  back. It refuses as `WorldEvent::RaidRefused` an invitation that names
+  back, as the official client shows it (inferred). It refuses as `WorldEvent::RaidRefused` an invitation that names
   no one, one to the player themself (which `EQEmu` would turn into a
   broken raid), one to a member and one from a member who is not the
   leader, naming the official client's string for each (that it refuses
-  them itself is inferred; `EQEmu` checks none of them), and an answer or
+  them itself is inferred; `EQEmu` checks none of the inviter's side, though
+  it refuses an invitee already in a raid and a grouped one who does not
+  lead their group), and an answer or
   a leave with nothing to answer or leave.
 
 - Dice, emotes and assisting (`Capability::Rolling`, `Emoting` and
