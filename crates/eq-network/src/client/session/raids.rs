@@ -228,6 +228,14 @@ impl Raids {
     /// lead or removing.
     fn lead(&self, command: &ClientCommand, out: &mut Out<'_, '_>) -> Result<()> {
         let player = out.sender.name;
+        if let ClientCommand::RaidMove { name, .. }
+        | ClientCommand::RaidMakeLeader { name, .. }
+        | ClientCommand::RaidRemove { name, .. } = command
+        {
+            if name.trim().is_empty() {
+                return actions::refuse(command, "Choose a member of your raid first.", out.log);
+            }
+        }
         let request = match command {
             ClientCommand::RaidLock { locked, .. } => self
                 .led(player, "Only the raid's leader may lock or unlock it.")
@@ -694,6 +702,8 @@ mod tests {
             refused_naming(&mut raids, &mut world, &shift("Stranger", Some(0))),
             (Some(NOT_IN_RAID), vec!["Stranger".to_owned()])
         );
+        // With no member chosen, a move names no one.
+        assert_eq!(refused(&mut raids, &mut world, &shift("", Some(0))), None);
         // Into the group they are in, or a full one, is refused.
         assert_eq!(
             refused(&mut raids, &mut world, &shift("Friend", None)),
