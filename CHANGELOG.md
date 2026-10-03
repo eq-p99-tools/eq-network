@@ -178,6 +178,20 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   record, so an item opened from a link has its picture too; None where a
   generation's record is not checked. `InventoryItem::icon` is gone: the
   picture's one source is `details.icon`.
+- A corpse's items are addressed by their place on it, from 0, rather than by
+  the server's slot: `LootUpdate::Item { place, item }`,
+  `LootUpdate::Taken { place, .. }` and `GameCommand::LootItem { place, .. }`.
+  The Titanium wire numbers a corpse's items from 22 through 52 as one run
+  (the Titanium patch's own `CORPSE_BEGIN`, the first carried slot), and the
+  loot encoding and decoding apply it, so a front end knows nothing of it.
+- `ChatEvent::message_type` keeps the message type the server gives a
+  formatted, simple or special message on the Titanium wire (EQEmu's `MT_*`
+  numbers, by which the official client colours the line); None for channel
+  messages and for the `EQMac` layouts until they are checked on TAKP.
+- `SpellUpdate::Interrupted` carries `caster_name`: the name the server
+  sends to those near another caster whose spell stopped (Titanium
+  `InterruptCast_Struct`'s label), so a front end can say whose it was;
+  None on the caster's own notice.
 - Deleting a spell from the spellbook (`DeleteSpell`) and moving one to
   another place in it (`SwapSpell`) each have a capability of their own,
   `Capability::DeletingSpells` and `Capability::MovingSpells`, instead of

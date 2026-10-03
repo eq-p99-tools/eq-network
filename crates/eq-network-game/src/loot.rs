@@ -20,6 +20,12 @@ pub const END_OPCODE: u16 = 0x2316;
 pub const COMPLETE_OPCODE: u16 = 0x0a94;
 /// `ItemPacketLoot` inside `OP_ItemPacket`.
 pub const ITEM_PACKET_KIND: u32 = 0x66;
+/// The Titanium wire's slot for a corpse's first place. The Titanium patch
+/// numbers a corpse's items from its own `CORPSE_BEGIN`, the first carried
+/// slot, through 52 as one run, so a place is its slot less 22 for all 31.
+/// That the official client's loot window shows them in that order is
+/// inferred from that numbering and every live loot so far.
+const FIRST_CORPSE_SLOT: u16 = 22;
 
 /// Why a corpse can or cannot be looted.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
@@ -61,8 +67,13 @@ pub enum LootUpdate {
         /// Coins moved from the corpse to the looter.
         coins: Coins,
     },
-    /// One item on the corpse, addressed by its corpse slot.
-    Item(Box<InventoryItem>),
+    /// One item on the corpse, at its place there, from 0.
+    Item {
+        /// The item's place on the corpse, from 0.
+        place: u16,
+        /// The item, with the server's slot for it.
+        item: Box<InventoryItem>,
+    },
     /// Every item has been listed for this corpse.
     Listed {
         /// Corpse being looted.
@@ -70,8 +81,8 @@ pub enum LootUpdate {
     },
     /// Acknowledgement of one item request.
     Taken {
-        /// Corpse slot that was requested.
-        slot: u16,
+        /// The corpse's place that was requested, from 0.
+        place: u16,
         /// False when the server refused the item.
         accepted: bool,
     },
@@ -88,15 +99,19 @@ pub fn request(corpse_id: u16) -> Result<[u8; 4]> {
     Ok(u32::from(corpse_id).to_le_bytes())
 }
 
-/// Encodes a request for one corpse slot; `auto` places it in the inventory directly.
+/// Encodes a request for the item at one place on the corpse, from 0;
+/// `auto` places it in the inventory directly.
 ///
 /// # Errors
-/// Rejects reserved zero IDs.
-pub fn item_request(corpse_id: u16, looter_id: u16, slot: u16, auto: bool) -> Result<[u8; 16]> {
+/// Rejects reserved zero IDs and places past the wire's slots.
+pub fn item_request(corpse_id: u16, looter_id: u16, place: u16, auto: bool) -> Result<[u8; 16]> {
     ensure!(
         corpse_id != 0 && looter_id != 0,
         "loot requires two entities"
     );
+    let slot = FIRST_CORPSE_SLOT
+        .checked_add(place)
+        .ok_or_else(|| anyhow::anyhow!("no such place on a corpse"))?;
     let mut body = [0; 16];
     body[..4].copy_from_slice(&u32::from(corpse_id).to_le_bytes());
     body[4..8].copy_from_slice(&u32::from(looter_id).to_le_bytes());
@@ -148,7 +163,7 @@ pub fn decode(opcode: u16, body: &[u8]) -> Result<Option<LootUpdate>> {
         ITEM_OPCODE => {
             ensure!(body.len() == 16, "invalid loot item acknowledgement length");
             LootUpdate::Taken {
-                slot: u16::from_le_bytes([body[8], body[9]]),
+                place: place(u16::from_le_bytes([body[8], body[9]]))?,
                 accepted: i32::from_le_bytes([body[12], body[13], body[14], body[15]]) >= 0,
             }
         }
@@ -156,10 +171,20 @@ pub fn decode(opcode: u16, body: &[u8]) -> Result<Option<LootUpdate>> {
         0x3397 if body.get(..4) == Some(&ITEM_PACKET_KIND.to_le_bytes()) => {
             let mut items = crate::inventory::parse_items(&body[4..])?;
             ensure!(items.len() == 1, "loot view must hold one item");
-            LootUpdate::Item(Box::new(items.remove(0)))
+            let item = items.remove(0);
+            LootUpdate::Item {
+                place: place(u16::try_from(item.slot.0)?)?,
+                item: Box::new(item),
+            }
         }
         _ => return Ok(None),
     }))
+}
+
+/// A corpse's place, from 0, for the server's slot for it.
+fn place(slot: u16) -> Result<u16> {
+    slot.checked_sub(FIRST_CORPSE_SLOT)
+        .ok_or_else(|| anyhow::anyhow!("corpse slot {slot} lies before the first place"))
 }
 
 #[cfg(test)]
@@ -170,11 +195,13 @@ mod tests {
     fn loot_requests_use_titanium_layouts() {
         assert_eq!(request(513).unwrap(), [1, 2, 0, 0]);
         assert!(request(0).is_err());
-        let item = item_request(513, 7, 23, true).unwrap();
+        // The second place on the corpse is the server's slot 23.
+        let item = item_request(513, 7, 1, true).unwrap();
         assert_eq!(&item[..10], &[1, 2, 0, 0, 7, 0, 0, 0, 23, 0]);
         assert_eq!(&item[12..], &[1, 0, 0, 0]);
-        assert_eq!(&item_request(513, 7, 23, false).unwrap()[12..], &[0; 4]);
-        assert!(item_request(513, 0, 23, true).is_err());
+        assert_eq!(&item_request(513, 7, 1, false).unwrap()[12..], &[0; 4]);
+        assert!(item_request(513, 0, 1, true).is_err());
+        assert!(item_request(513, 7, u16::MAX, true).is_err());
     }
 
     #[test]
@@ -209,11 +236,11 @@ mod tests {
             decode(REQUEST_OPCODE, &[1, 2, 0, 0]).unwrap(),
             Some(LootUpdate::Listed { corpse_id: 513 })
         );
-        let mut refused = item_request(513, 7, 23, true).unwrap();
+        let mut refused = item_request(513, 7, 1, true).unwrap();
         assert_eq!(
             decode(ITEM_OPCODE, &refused).unwrap(),
             Some(LootUpdate::Taken {
-                slot: 23,
+                place: 1,
                 accepted: true
             })
         );
@@ -221,10 +248,13 @@ mod tests {
         assert_eq!(
             decode(ITEM_OPCODE, &refused).unwrap(),
             Some(LootUpdate::Taken {
-                slot: 23,
+                place: 1,
                 accepted: false
             })
         );
+        // A slot before the corpse's first is no place on it.
+        refused[8..10].copy_from_slice(&21u16.to_le_bytes());
+        assert!(decode(ITEM_OPCODE, &refused).is_err());
         assert_eq!(
             decode(COMPLETE_OPCODE, &[]).unwrap(),
             Some(LootUpdate::Closed)
