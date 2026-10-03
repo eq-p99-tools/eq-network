@@ -3,8 +3,9 @@
 //! waiting; `/disband` with an invitation waiting declines it, as it does in
 //! the official client (inferred). It keeps the player's group as the
 //! server describes it, to refuse an invitation as the official client does
-//! (inferred from its strings for them): one that names no one, one from a
-//! member who is not the leader, and one to a full group. Who leaves, is
+//! (inferred from its having strings for them, since `EQEmu` takes them):
+//! one that names no one, one from a member who is not the leader, and one
+//! to a full group. Who leaves, is
 //! removed or disbands the group is the server's to decide, by its idea of
 //! the player's target. The server does not answer what the session sends,
 //! so the session says what it sent.
@@ -89,9 +90,10 @@ impl Groups {
                         .retain(|name| !name.eq_ignore_ascii_case(member));
                 }
             }
+            // A list without a leader's name leaves the leader unknown.
             GroupUpdate::Members { leader, members } => {
                 self.group = Some(Group {
-                    leader: Some(leader.clone()),
+                    leader: (!leader.is_empty()).then(|| leader.clone()),
                     members: members.clone(),
                 });
             }
@@ -331,6 +333,16 @@ mod tests {
             refused(&mut groups, &mut world, &invite),
             Some(NOT_THE_LEADER)
         );
+        // A list naming no leader leaves it unknown, so the server decides.
+        hear(
+            &mut groups,
+            &mut world,
+            GroupUpdate::Members {
+                leader: String::new(),
+                members: vec!["Other".into()],
+            },
+        );
+        assert_eq!(sent(&mut groups, &mut world, &invite).len(), 1);
         // Made the leader, they may.
         hear(
             &mut groups,

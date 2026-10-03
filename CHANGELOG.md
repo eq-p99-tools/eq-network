@@ -17,9 +17,12 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   leaving, the full member list with its leader, a new leader, and the
   group's end. The session says what it sent the same way (`Inviting`,
   `Following`, `Declining`), since the server does not answer it, and
-  refuses as `WorldEvent::GroupRefused`, naming the official client's
-  string where it has one: an invitation that names no one, one from a
-  member who is not the leader, and one to a full group. The Titanium codec
+  refuses as `WorldEvent::GroupRefused` an invitation that names no one,
+  one from a member who is not the leader, and one to a full group, with the
+  official client's string for each. That the official client refuses these
+  itself is inferred from its having the strings; `EQEmu` lets a member who
+  is not the leader invite, and an invitation to a full group through to a
+  failed follow. The Titanium codec
   (`group`) reads `EQEmu`'s group structs, which arrive longer than the
   Titanium client's own.
 
