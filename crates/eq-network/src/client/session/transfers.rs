@@ -251,6 +251,11 @@ impl Feature for Transfers {
                 part: Part::ZoneOffer | Part::ZoneAnswer,
                 error,
             } => bail!("{error}"),
+            // EQEmu answers a move to another zone twice, as the world's
+            // reply reaches the zone twice; the player has already departed.
+            Message::ZoneAnswer(_) if world.lifecycle.departing() => out
+                .log
+                .diagnostic("Zoning: the zone answered again while the player departs".into()),
             Message::ZoneAnswer(answer) => self.answered(answer, world, out),
             // The zone's answer to the player's departure.
             Message::LoggedOut if world.lifecycle.departing() => {
@@ -480,8 +485,18 @@ mod tests {
             [zoning::titanium_save_on_zone(), zoning::titanium_depart(7)]
         );
         assert!(world.exit().is_none() && world.lifecycle.departing());
-        // Commands and other news still wait; the zone's logout lets the
-        // player go.
+        // EQEmu's second answer changes nothing.
+        let mut again = zoning::titanium_answer("Tester", (4, 0), Position::default(), 0)
+            .unwrap()
+            .body;
+        again[84..88].copy_from_slice(&1i32.to_le_bytes());
+        let again = zoning::ZoneAnswer::titanium(&again).unwrap();
+        let outcome =
+            testing::run(|out| transfers.observe(&Message::ZoneAnswer(again), &mut world, out));
+        outcome.result.unwrap();
+        assert_eq!(outcome.sent.len(), 0);
+        assert!(world.exit().is_none() && world.lifecycle.departing());
+        // The zone's logout lets the player go.
         let outcome = testing::run(|out| transfers.observe(&Message::LoggedOut, &mut world, out));
         outcome.result.unwrap();
         assert!(matches!(world.exit(), Some(ZoneExit::World)));
