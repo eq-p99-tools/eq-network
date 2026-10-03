@@ -43,7 +43,7 @@ use super::{
     CharacterSession, Events, ServerProtocol, ZoneExit,
 };
 use crate::p99::{self, WorldCodec};
-use eq_network_game::abilities::Ability;
+use eq_network_game::{abilities::Ability, GameDialect};
 
 /// What a zone session builds its features with.
 pub(super) struct Setup<'a> {
@@ -368,8 +368,9 @@ impl Shield for WorldCodec {
 mod shared {
     use super::{
         Abilities, Ability, Belongings, Camp, Casting, Character, Clock, Combat, Corpses, Doors,
-        Edits, Entities, Exchanges, Feature, GroundObjects, Looting, Map, Motion, Pets, Reading,
-        Resurrection, Setup, Spellbook, Talk, Targeting, Tradeskills, Training, Transfers, Who,
+        Edits, Entities, Exchanges, Feature, GameDialect, GroundObjects, Looting, Map, Motion,
+        Pets, Reading, Resurrection, Setup, Spellbook, Talk, Targeting, Tradeskills, Training,
+        Transfers, Who,
     };
 
     pub(super) fn casting() -> Box<dyn Feature> {
@@ -393,8 +394,8 @@ mod shared {
         Box::<Character>::default()
     }
 
-    pub(super) fn entities() -> Box<dyn Feature> {
-        Box::<Entities>::default()
+    pub(super) fn entities(dialect: GameDialect) -> Box<dyn Feature> {
+        Box::new(Entities::new(dialect))
     }
 
     pub(super) fn targeting() -> Box<dyn Feature> {
@@ -538,7 +539,7 @@ impl ServerType for Project1999 {
     }
 
     fn entities(&self, _setup: &Setup<'_>) -> Provided {
-        Some(shared::entities())
+        Some(shared::entities(GameDialect::Titanium))
     }
 
     fn targeting(&self, _setup: &Setup<'_>) -> Provided {
@@ -639,7 +640,7 @@ impl ServerType for EqEmu {
     }
 
     fn entities(&self, _setup: &Setup<'_>) -> Provided {
-        Some(shared::entities())
+        Some(shared::entities(GameDialect::Titanium))
     }
 
     fn targeting(&self, _setup: &Setup<'_>) -> Provided {
@@ -733,7 +734,7 @@ impl ServerType for Quarm {
     }
 
     fn entities(&self, _setup: &Setup<'_>) -> Provided {
-        Some(shared::entities())
+        Some(shared::entities(GameDialect::EqMac))
     }
 
     fn talk(&self, _setup: &Setup<'_>) -> Provided {
@@ -759,7 +760,7 @@ impl ServerType for Takp {
     }
 
     fn entities(&self, _setup: &Setup<'_>) -> Provided {
-        Some(shared::entities())
+        Some(shared::entities(GameDialect::EqMac))
     }
 
     fn talk(&self, _setup: &Setup<'_>) -> Provided {

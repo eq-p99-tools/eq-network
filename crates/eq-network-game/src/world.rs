@@ -162,6 +162,38 @@ impl SpawnKind {
     }
 }
 
+/// The name a server gives the corpse of a spawn that dies in view, by the
+/// client generation's rule. On Titanium servers it is `EQEmu`'s
+/// `Corpse::CalcCorpseName` form: the living name without its digits, then
+/// `'s corpse` for a player's or `` `s_corpse `` for anything else's, then the
+/// spawn ID, within 63 characters. That the official client shows the same
+/// name is inferred. None where a generation's rule is not checked: `EqMac`
+/// until it is seen on TAKP.
+#[must_use]
+pub fn corpse_name(
+    dialect: crate::GameDialect,
+    living: &str,
+    kind: SpawnKind,
+    spawn_id: u16,
+) -> Option<String> {
+    match dialect {
+        crate::GameDialect::Titanium => {
+            let suffix = if matches!(kind, SpawnKind::Player | SpawnKind::PlayerCorpse) {
+                format!("'s corpse{spawn_id}")
+            } else {
+                format!("`s_corpse{spawn_id}")
+            };
+            let base: String = living
+                .chars()
+                .filter(|c| !c.is_ascii_digit())
+                .take(63usize.saturating_sub(suffix.len()))
+                .collect();
+            Some(base + &suffix)
+        }
+        _ => None,
+    }
+}
+
 /// A zone entity. Asset selection stays outside the protocol layer.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct SpawnState {

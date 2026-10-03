@@ -102,6 +102,10 @@ pub struct Death {
     pub corpse_id: u32,
     /// Bind destination reported by the server; not an instruction to zone yet.
     pub bind_zone_id: u32,
+    /// The corpse's name, which the session gives it from the spawn that
+    /// died, by the client generation's rule ([`crate::world::corpse_name`]);
+    /// None where the rule is not checked or the spawn was not seen.
+    pub corpse_name: Option<String>,
 }
 
 /// Decode a Titanium death notification without interpreting NPC death as player death.
@@ -115,6 +119,7 @@ pub fn death(body: &[u8]) -> Result<Death> {
         killer_id: word(body, 4),
         corpse_id: word(body, 8),
         bind_zone_id: word(body, 20),
+        corpse_name: None,
     })
 }
 

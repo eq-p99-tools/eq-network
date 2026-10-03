@@ -702,6 +702,7 @@ mod tests {
                     killer_id: 0,
                     corpse_id: 8,
                     bind_zone_id: 2,
+                    corpse_name: None,
                 })),
                 "Character died",
             ),

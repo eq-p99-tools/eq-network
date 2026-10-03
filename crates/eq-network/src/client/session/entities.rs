@@ -9,6 +9,7 @@ use anyhow::{ensure, Result};
 use eq_network_game::{
     message::Message,
     world::{PostureState, SpawnState, WorldEvent},
+    GameDialect,
 };
 use std::collections::BTreeMap;
 
@@ -81,9 +82,39 @@ impl Spawns {
 #[derive(Debug, Default)]
 pub(super) struct Entities {
     postures: BTreeMap<u16, PostureState>,
+    /// The client generation, whose rule names a corpse.
+    dialect: GameDialect,
+}
+
+impl Entities {
+    pub(super) fn new(dialect: GameDialect) -> Self {
+        Self {
+            dialect,
+            ..Self::default()
+        }
+    }
 }
 
 impl Feature for Entities {
+    /// Names the corpse a death leaves, from the spawn that died, by the
+    /// client generation's rule, before any feature or the host hears it.
+    fn explain(&mut self, message: &mut Message, world: &World) {
+        let Message::Event(WorldEvent::Death(death)) = message else {
+            return;
+        };
+        let spawn = u16::try_from(death.spawn_id)
+            .ok()
+            .and_then(|id| world.spawns.0.get(&id));
+        death.corpse_name = spawn.and_then(|spawn| {
+            eq_network_game::world::corpse_name(
+                self.dialect,
+                &spawn.name,
+                spawn.kind,
+                spawn.spawn_id,
+            )
+        });
+    }
+
     fn admit(&mut self, message: &Message, world: &mut World) -> Result<()> {
         let Message::Event(event) = message else {
             return Ok(());
@@ -197,6 +228,41 @@ mod tests {
     }
 
     #[test]
+    fn a_death_names_its_corpse_by_the_generations_rule() {
+        let mut world = World::new(5);
+        world.spawns.0.insert(8, spawn(8, SpawnKind::Npc));
+        world.spawns.0.get_mut(&8).unwrap().name = "a_rat001".into();
+        world.spawns.0.insert(9, spawn(9, SpawnKind::Player));
+        world.spawns.0.get_mut(&9).unwrap().name = "Synthetic".into();
+        let named = |dialect, spawn_id| {
+            let mut death = event(WorldEvent::Death(eq_network_game::zoning::Death {
+                spawn_id,
+                killer_id: 0,
+                corpse_id: 0,
+                bind_zone_id: 0,
+                corpse_name: None,
+            }));
+            Entities::new(dialect).explain(&mut death, &world);
+            match death {
+                Message::Event(WorldEvent::Death(death)) => death.corpse_name,
+                _ => unreachable!("a death stays a death"),
+            }
+        };
+        assert_eq!(
+            named(GameDialect::Titanium, 8).as_deref(),
+            Some("a_rat`s_corpse8")
+        );
+        assert_eq!(
+            named(GameDialect::Titanium, 9).as_deref(),
+            Some("Synthetic's corpse9")
+        );
+        // An unseen spawn, and a generation whose rule is not checked, name
+        // no corpse.
+        assert_eq!(named(GameDialect::Titanium, 10), None);
+        assert_eq!(named(GameDialect::EqMac, 8), None);
+    }
+
+    #[test]
     fn another_spawn_dying_leaves_a_corpse_under_the_same_id() {
         let mut entities = Entities::default();
         let mut world = World::new(5);
@@ -211,6 +277,7 @@ mod tests {
                 killer_id: 0,
                 corpse_id: 0,
                 bind_zone_id: 0,
+                corpse_name: None,
             }))
         };
         for spawn_id in [7, 8] {

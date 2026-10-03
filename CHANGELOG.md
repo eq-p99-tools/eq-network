@@ -173,6 +173,11 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- `Death` carries `corpse_name`: the name the server gives the corpse of a
+  spawn that dies in view, which the session adds from the spawn table by the
+  client generation's rule (`world::corpse_name`: on Titanium servers
+  `EQEmu`'s `CalcCorpseName` form; None for `EQMac` until it is checked on
+  TAKP), so a front end need not rename the corpse itself.
 - Deleting a spell from the spellbook (`DeleteSpell`) and moving one to
   another place in it (`SwapSpell`) each have a capability of their own,
   `Capability::DeletingSpells` and `Capability::MovingSpells`, instead of
