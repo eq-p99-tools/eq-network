@@ -30,6 +30,9 @@ pub mod doors;
 pub mod exchange;
 /// Food and drink: hunger, thirst, and eating and drinking.
 pub mod food;
+/// Groups: invitations, joining, leaving and disbanding, and who is in the
+/// player's group.
+pub mod group;
 /// Read-only inventory packets, slots, instances, and state.
 pub mod inventory;
 /// Read-only item inspection requests and definitions.

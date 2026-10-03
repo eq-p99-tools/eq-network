@@ -12,6 +12,7 @@ mod doors;
 mod entities;
 mod exchange;
 pub(super) mod feature;
+mod groups;
 mod inventory;
 mod lifecycle;
 pub(super) mod login;

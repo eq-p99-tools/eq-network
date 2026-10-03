@@ -423,6 +423,30 @@ pub enum GameCommand {
         /// True accepts.
         accept: bool,
     },
+    /// Invite a player into the player's group, by name: `/invite`.
+    InviteToGroup {
+        /// Current zone admission.
+        session_id: u64,
+        /// Who is invited.
+        name: String,
+    },
+    /// Join the group of whoever invited the player last: `/follow`.
+    FollowGroup {
+        /// Current zone admission.
+        session_id: u64,
+    },
+    /// Decline the invitation waiting for an answer.
+    DeclineGroup {
+        /// Current zone admission.
+        session_id: u64,
+    },
+    /// Leave the group, or, as its leader, remove the targeted member or
+    /// disband it, as the server decides; with an invitation waiting,
+    /// decline it: `/disband`.
+    Disband {
+        /// Current zone admission.
+        session_id: u64,
+    },
     /// Ask the world who is online: `/who all`.
     WhoAll {
         /// Current zone admission.
@@ -502,6 +526,10 @@ impl GameCommand {
             | Self::Pet { session_id, .. }
             | Self::Training { session_id, .. }
             | Self::AnswerResurrection { session_id, .. }
+            | Self::InviteToGroup { session_id, .. }
+            | Self::FollowGroup { session_id }
+            | Self::DeclineGroup { session_id }
+            | Self::Disband { session_id }
             | Self::ReadItem { session_id, .. }
             | Self::Combine { session_id, .. }
             | Self::Consent { session_id, .. }
@@ -563,6 +591,10 @@ impl GameCommand {
             Self::Pet { .. } => Capability::Pets,
             Self::Training { .. } => Capability::Training,
             Self::AnswerResurrection { .. } => Capability::Resurrection,
+            Self::InviteToGroup { .. }
+            | Self::FollowGroup { .. }
+            | Self::DeclineGroup { .. }
+            | Self::Disband { .. } => Capability::Grouping,
             Self::ReadItem { .. } => Capability::Reading,
             Self::Combine { .. } | Self::OpenContainer { .. } | Self::CloseContainer { .. } => {
                 Capability::Tradeskills
@@ -589,6 +621,10 @@ impl GameCommand {
             | Self::WhoAll { .. }
             | Self::Pet { .. }
             | Self::AnswerResurrection { .. }
+            | Self::InviteToGroup { .. }
+            | Self::FollowGroup { .. }
+            | Self::DeclineGroup { .. }
+            | Self::Disband { .. }
             | Self::ReadItem { .. }
             | Self::CloseContainer { .. }
             | Self::Consent { .. }
@@ -747,6 +783,10 @@ pub fn encode(
         | GameCommand::Pet { .. }
         | GameCommand::Training { .. }
         | GameCommand::AnswerResurrection { .. }
+        | GameCommand::InviteToGroup { .. }
+        | GameCommand::FollowGroup { .. }
+        | GameCommand::DeclineGroup { .. }
+        | GameCommand::Disband { .. }
         | GameCommand::ReadItem { .. }
         | GameCommand::Combine { .. }
         | GameCommand::Consent { .. }

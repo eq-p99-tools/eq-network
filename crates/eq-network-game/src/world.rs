@@ -402,12 +402,15 @@ pub enum Capability {
     /// from the item's price and the rate the merchant opened with, by the
     /// server type's rule.
     MerchantOffers,
+    /// Inviting players into a group, joining or declining an invitation,
+    /// leaving and disbanding.
+    Grouping,
 }
 
 impl Capability {
     /// Every capability, in order: what a session offers when its server and
     /// client generation support everything.
-    pub const ALL: [Self; 27] = [
+    pub const ALL: [Self; 28] = [
         Self::Casting,
         Self::Spellbook,
         Self::Inventory,
@@ -435,6 +438,7 @@ impl Capability {
         Self::DeletingSpells,
         Self::MovingSpells,
         Self::MerchantOffers,
+        Self::Grouping,
     ];
 }
 
@@ -856,6 +860,17 @@ pub enum WorldEvent {
         /// Why not.
         reason: String,
     },
+    /// The server's word on groups: an invitation, an answer to the
+    /// player's, who joined or left, the group's members and leader, or its
+    /// end.
+    Group(crate::group::GroupUpdate),
+    /// A group request was not sent, and why.
+    GroupRefused {
+        /// Admission from the request.
+        session_id: u64,
+        /// Why not.
+        reason: String,
+    },
     /// A book's or note's text, to read.
     BookText(crate::books::BookText),
     /// A request to read was not sent, and why.
@@ -1098,8 +1113,8 @@ pub fn titanium_update(opcode: u16, body: &[u8]) -> Result<Option<WorldEvent>> {
 }
 
 /// Spell actions, doors, ground objects, loot, merchant, exchange,
-/// training, resurrection, book, combine, bandaging and inventory packets,
-/// each owned by its codec.
+/// training, resurrection, group, book, combine, bandaging and inventory
+/// packets, each owned by its codec.
 fn titanium_views(opcode: u16, body: &[u8]) -> Result<Option<WorldEvent>> {
     if opcode == 0x497c {
         return Ok(crate::buffs::titanium_spell_effect(body)?.map(WorldEvent::SpellEffect));
@@ -1118,6 +1133,8 @@ fn titanium_views(opcode: u16, body: &[u8]) -> Result<Option<WorldEvent>> {
         Some(WorldEvent::Training(update))
     } else if let Some(offer) = crate::resurrection::decode(opcode, body)? {
         Some(WorldEvent::Resurrection(offer))
+    } else if let Some(update) = crate::group::decode(opcode, body)? {
+        Some(WorldEvent::Group(update))
     } else if let Some(text) = crate::books::decode(opcode, body)? {
         Some(WorldEvent::BookText(text))
     } else if let Some(update) = crate::tradeskills::decode(opcode, body)? {
@@ -1315,6 +1332,7 @@ mod tests {
             Capability::DeletingSpells => 24,
             Capability::MovingSpells => 25,
             Capability::MerchantOffers => 26,
+            Capability::Grouping => 27,
         };
         for (index, capability) in Capability::ALL.into_iter().enumerate() {
             assert_eq!(place(capability), index, "{capability:?}");

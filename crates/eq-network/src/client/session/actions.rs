@@ -141,6 +141,10 @@ pub(super) fn needs(command: &ClientCommand) -> &'static [Resource] {
         | ClientCommand::Pet { .. }
         | ClientCommand::Training { .. }
         | ClientCommand::AnswerResurrection { .. }
+        | ClientCommand::InviteToGroup { .. }
+        | ClientCommand::FollowGroup { .. }
+        | ClientCommand::DeclineGroup { .. }
+        | ClientCommand::Disband { .. }
         | ClientCommand::ReadItem { .. }
         // Opening a container holds nothing, and closing one must always be
         // possible.
@@ -210,6 +214,10 @@ fn refusal(command: &ClientCommand, reason: &str) -> Option<WorldEvent> {
         | ClientCommand::Pet { session_id, .. }
         | ClientCommand::Training { session_id, .. }
         | ClientCommand::AnswerResurrection { session_id, .. }
+        | ClientCommand::InviteToGroup { session_id, .. }
+        | ClientCommand::FollowGroup { session_id }
+        | ClientCommand::DeclineGroup { session_id }
+        | ClientCommand::Disband { session_id }
         | ClientCommand::ReadItem { session_id, .. }
         | ClientCommand::Combine { session_id, .. }
         | ClientCommand::Consent { session_id, .. }
@@ -311,6 +319,10 @@ fn reasoned(command: &ClientCommand, session_id: u64, reason: String) -> Option<
         ClientCommand::AnswerResurrection { .. } => {
             WorldEvent::ResurrectionRefused { session_id, reason }
         }
+        ClientCommand::InviteToGroup { .. }
+        | ClientCommand::FollowGroup { .. }
+        | ClientCommand::DeclineGroup { .. }
+        | ClientCommand::Disband { .. } => WorldEvent::GroupRefused { session_id, reason },
         ClientCommand::ReadItem { .. } => WorldEvent::ReadRefused { session_id, reason },
         ClientCommand::Combine { .. } => WorldEvent::CombineRefused {
             session_id,
