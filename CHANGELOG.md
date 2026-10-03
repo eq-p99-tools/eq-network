@@ -7,6 +7,25 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Groups (`Capability::Grouping`, `EqEmu` only): `GameCommand::InviteToGroup`
+  (`/invite`, by name), `FollowGroup` (join the group of whoever invited the
+  player last), `DeclineGroup`, and `Disband` (leave, or as the leader remove
+  the targeted member or disband, as the server decides by its idea of the
+  target; with an invitation waiting, decline it). The server's word arrives
+  as `WorldEvent::Group(GroupUpdate)`: an invitation, the invitee's
+  acceptance or refusal, the player forming a group, a member joining or
+  leaving, the full member list with its leader, a new leader, and the
+  group's end. The session says what it sent the same way (`Inviting`,
+  `Following`, `Declining`), since the server does not answer it, and
+  refuses as `WorldEvent::GroupRefused` an invitation that names no one,
+  one from a member who is not the leader, and one to a full group, with the
+  official client's string for each. That the official client refuses these
+  itself is inferred from its having the strings; `EQEmu` lets a member who
+  is not the leader invite, and an invitation to a full group through to a
+  failed follow. The Titanium codec
+  (`group`) reads `EQEmu`'s group structs, which arrive longer than the
+  Titanium client's own.
+
 - `Capability::MerchantOffers`: a front end may show what a merchant pays
   for an item sold to them, worked out from the item's `price` and the
   merchant's `rate` by the server type's rule. `EqEmu` offers it: the price

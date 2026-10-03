@@ -10,6 +10,7 @@ use crate::{
     command::{self, EncodedCommand, GameCommand, Posture},
     corpses, doors, exchange,
     food::{self, Meal},
+    group,
     inventory::{self, InventorySlot, MoveQuantity},
     money::CoinTransfer,
     movement::{self, PositionPacket},
@@ -97,6 +98,15 @@ pub enum Request {
         /// True accepts.
         accept: bool,
     },
+    /// Invite a player into the player's group, by name.
+    InviteToGroup(String),
+    /// Join the group of the one who invited the player, by their name.
+    FollowGroup(String),
+    /// Decline an invitation, by the inviter's name.
+    DeclineGroup(String),
+    /// Leave or disband the group, as the server decides by its idea of the
+    /// player's target.
+    Disband,
     /// Use a skill on the server's idea of the target.
     Ability {
         /// The skill.
@@ -241,6 +251,10 @@ pub fn titanium(request: &Request, sender: Sender<'_>) -> Result<EncodedCommand>
         Request::AnswerResurrection { offer, accept } => {
             resurrection::titanium_answer(offer, *accept)
         }
+        Request::InviteToGroup(name) => group::invite(name, sender.name)?,
+        Request::FollowGroup(inviter) => group::follow(inviter, sender.name)?,
+        Request::DeclineGroup(inviter) => group::decline(inviter, sender.name)?,
+        Request::Disband => group::disband(sender.name)?,
         Request::ReadBook(book) => books::titanium_request(book)?,
         Request::Combine(container) => tradeskills::titanium_combine(*container)?,
         Request::Trade(with) => exchange::request(sender.spawn(), *with)?,
