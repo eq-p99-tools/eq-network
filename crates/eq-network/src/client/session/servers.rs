@@ -32,7 +32,7 @@ use super::{
     pets::Pets,
     reading::Reading,
     resurrection::Resurrection,
-    spellbook::Spellbook,
+    spellbook::{Edits, Spellbook},
     talk::Talk,
     targeting::Targeting,
     tradeskills::Tradeskills,
@@ -368,7 +368,7 @@ impl Shield for WorldCodec {
 mod shared {
     use super::{
         Abilities, Ability, Belongings, Camp, Casting, Character, Clock, Combat, Corpses, Doors,
-        Entities, Exchanges, Feature, GroundObjects, Looting, Map, Motion, Pets, Reading,
+        Edits, Entities, Exchanges, Feature, GroundObjects, Looting, Map, Motion, Pets, Reading,
         Resurrection, Setup, Spellbook, Talk, Targeting, Tradeskills, Training, Transfers, Who,
     };
 
@@ -376,8 +376,8 @@ mod shared {
         Box::<Casting>::default()
     }
 
-    pub(super) fn spellbook() -> Box<dyn Feature> {
-        Box::<Spellbook>::default()
+    pub(super) fn spellbook(edits: Edits) -> Box<dyn Feature> {
+        Box::new(Spellbook::new(edits))
     }
 
     pub(super) fn inventory(setup: &Setup<'_>) -> Box<dyn Feature> {
@@ -520,8 +520,9 @@ impl ServerType for Project1999 {
         Some(shared::casting())
     }
 
+    /// Deleting and moving the book's spells wait to be checked on P99.
     fn spellbook(&self, _setup: &Setup<'_>) -> Provided {
-        Some(shared::spellbook())
+        Some(shared::spellbook(Edits::default()))
     }
 
     fn inventory(&self, setup: &Setup<'_>) -> Provided {
@@ -619,7 +620,10 @@ impl ServerType for EqEmu {
     }
 
     fn spellbook(&self, _setup: &Setup<'_>) -> Provided {
-        Some(shared::spellbook())
+        Some(shared::spellbook(Edits {
+            deleting: true,
+            moving: true,
+        }))
     }
 
     fn inventory(&self, setup: &Setup<'_>) -> Provided {
@@ -929,6 +933,8 @@ mod tests {
             Capability::Reading,
             Capability::Tradeskills,
             Capability::Map,
+            Capability::DeletingSpells,
+            Capability::MovingSpells,
         ] {
             assert!(!offers(server_type(ServerProtocol::Project1999)).contains(&capability));
             assert!(offers(server_type(ServerProtocol::EqEmu)).contains(&capability));
