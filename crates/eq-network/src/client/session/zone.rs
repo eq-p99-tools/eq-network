@@ -1027,11 +1027,12 @@ mod tests {
             Capability::Emoting,
             Capability::Assisting,
             Capability::Raiding,
+            Capability::ServerTicks,
         ] {
             assert!(eqemu.contains(&capability));
             assert!(!p99.contains(&capability));
         }
-        assert_eq!(eqemu.len(), p99.len() + 14);
+        assert_eq!(eqemu.len(), p99.len() + 15);
         // EQMac servers talk, TAKP camps too, and neither follows a zone
         // change yet.
         assert_eq!(

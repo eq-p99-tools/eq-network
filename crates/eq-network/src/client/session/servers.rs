@@ -46,6 +46,7 @@ use super::{
     spellbook::{Edits, Spellbook},
     talk::Talk,
     targeting::Targeting,
+    ticks::{Marks, Regeneration, Ticks},
     tradeskills::Tradeskills,
     training::Training,
     transfers::Transfers,
@@ -319,6 +320,12 @@ pub(super) trait ServerType: Sync {
         None
     }
 
+    /// The server's regeneration tick, learned from the packets the server
+    /// sends at it, for a front end to show.
+    fn ticks(&self, _setup: &Setup<'_>) -> Provided {
+        None
+    }
+
     /// Every feature the server type provides, in the order the zone session
     /// offers them each command, packet and timer.
     fn features(&self, setup: &Setup<'_>) -> Vec<Provision> {
@@ -353,6 +360,7 @@ pub(super) trait ServerType: Sync {
             self.listing(setup),
             self.socials(setup),
             self.raids(setup),
+            self.ticks(setup),
         ]
         .into_iter()
         .flatten()
@@ -450,8 +458,8 @@ mod shared {
     use super::{
         Abilities, Ability, Belongings, Camp, Casting, Character, Clock, Combat, Corpses, Doors,
         Edits, Entities, Exchanges, Feature, GameDialect, GroundObjects, Groups, Listing, Looting,
-        Map, MerchantOffers, Motion, Pets, Raids, Reading, Resurrection, Setup, Socials, Spellbook,
-        Talk, Targeting, Tradeskills, Training, Transfers, Who,
+        Map, Marks, MerchantOffers, Motion, Pets, Raids, Reading, Resurrection, Setup, Socials,
+        Spellbook, Talk, Targeting, Ticks, Tradeskills, Training, Transfers, Who,
     };
 
     pub(super) fn casting() -> Box<dyn Feature> {
@@ -573,6 +581,11 @@ mod shared {
 
     pub(super) fn raids() -> Box<dyn Feature> {
         Box::<Raids>::default()
+    }
+
+    /// The tick, as the server type's marks show it.
+    pub(super) fn ticks(marks: Box<dyn Marks>) -> Box<dyn Feature> {
+        Box::new(Ticks::new(marks))
     }
 }
 
@@ -860,6 +873,13 @@ impl ServerType for EqEmu {
     fn raids(&self, _setup: &Setup<'_>) -> Provided {
         offer(shared::raids())
     }
+
+    /// `EQEmu` regenerates the player's HP, mana and endurance on the tick
+    /// and reports each as it changes, so the tick shows while any of them
+    /// regenerates.
+    fn ticks(&self, _setup: &Setup<'_>) -> Provided {
+        offer(shared::ticks(Box::<Regeneration>::default()))
+    }
 }
 
 /// Project Quarm, which speaks `EQMac`. Its features come as they are
@@ -1069,10 +1089,11 @@ mod tests {
     fn p99_and_eqemu_provide_every_feature_one_each() {
         // Training, resurrection, reading, tradeskills, the map, deleting
         // spells, merchants' offers, groups, the player's listing, dice,
-        // emotes, assisting and raids are checked on EQEmu alone so far.
+        // emotes, assisting, raids and the server's tick are checked on
+        // EQEmu alone so far.
         for (protocol, count) in [
             (ServerProtocol::Project1999, 21),
-            (ServerProtocol::EqEmu, 30),
+            (ServerProtocol::EqEmu, 31),
         ] {
             let server = server_type(protocol);
             let setup = Setup::new("Tester", AutoEat::default());
@@ -1092,6 +1113,7 @@ mod tests {
             Capability::Emoting,
             Capability::Assisting,
             Capability::Raiding,
+            Capability::ServerTicks,
         ] {
             assert!(!offers(server_type(ServerProtocol::Project1999)).contains(&capability));
             assert!(offers(server_type(ServerProtocol::EqEmu)).contains(&capability));

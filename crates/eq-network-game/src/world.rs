@@ -425,12 +425,16 @@ pub enum Capability {
     /// the Raid window does. No server type offers it yet: `EQEmu` has no
     /// handler for it.
     RaidGroupLeaders,
+    /// Showing when the server's regeneration tick lands, learned from the
+    /// packets the server sends at it ([`WorldEvent::ServerTick`]). The
+    /// session sends nothing for it.
+    ServerTicks,
 }
 
 impl Capability {
     /// Every capability, in order: what a session offers when its server and
     /// client generation support everything.
-    pub const ALL: [Self; 34] = [
+    pub const ALL: [Self; 35] = [
         Self::Casting,
         Self::Spellbook,
         Self::Inventory,
@@ -465,6 +469,7 @@ impl Capability {
         Self::Assisting,
         Self::Raiding,
         Self::RaidGroupLeaders,
+        Self::ServerTicks,
     ];
 }
 
@@ -834,6 +839,11 @@ pub enum WorldEvent {
     TimeOfDay(crate::clock::GameTime),
     /// How the zone's sky and fog look, right after the admission.
     Sky(crate::clock::ZoneSky),
+    /// The server's regeneration tick landed just now, as the packets it
+    /// sends at the tick show; the next lands one period after it, and up
+    /// to the slip later. Nothing is known of the tick in a new zone until
+    /// the first, as the server starts it again there.
+    ServerTick(crate::ticks::Cadence),
     /// A consent to drag a player's corpses given or taken back, told to
     /// the owner and to the one consented.
     Consent(crate::corpses::Consent),
@@ -1431,6 +1441,7 @@ mod tests {
             Capability::Assisting => 31,
             Capability::Raiding => 32,
             Capability::RaidGroupLeaders => 33,
+            Capability::ServerTicks => 34,
         };
         for (index, capability) in Capability::ALL.into_iter().enumerate() {
             assert_eq!(place(capability), index, "{capability:?}");
