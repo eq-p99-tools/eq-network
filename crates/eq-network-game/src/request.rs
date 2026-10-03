@@ -17,6 +17,7 @@ use crate::{
     movement::{self, PositionPacket},
     objects,
     pets::{self, PetCommand},
+    raid,
     resurrection::{self, ResurrectionOffer},
     socials, spells, tradeskills, training,
     who::{self, WhoFilter},
@@ -123,6 +124,12 @@ pub enum Request {
     Emote(String),
     /// Take the target of this spawn.
     Assist(u16),
+    /// Invite a player into the player's raid, by name.
+    RaidInvite(String),
+    /// Join the raid of the one who invited the player, by their name.
+    RaidAccept(String),
+    /// Leave the player's raid.
+    RaidLeave,
     /// Use a skill on the server's idea of the target.
     Ability {
         /// The skill.
@@ -278,6 +285,9 @@ pub fn titanium(request: &Request, sender: Sender<'_>) -> Result<EncodedCommand>
         Request::Random { low, high } => socials::random(*low, *high),
         Request::Emote(text) => socials::emote(text)?,
         Request::Assist(spawn_id) => socials::assist(*spawn_id),
+        Request::RaidInvite(name) => raid::invite(name, sender.name)?,
+        Request::RaidAccept(inviter) => raid::accept(inviter, sender.name)?,
+        Request::RaidLeave => raid::remove(sender.name, sender.name)?,
         Request::ReadBook(book) => books::titanium_request(book)?,
         Request::Combine(container) => tradeskills::titanium_combine(*container)?,
         Request::Trade(with) => exchange::request(sender.spawn(), *with)?,

@@ -485,6 +485,28 @@ pub enum GameCommand {
         /// Whose target to take.
         spawn_id: u16,
     },
+    /// Invite a player into the player's raid, by name: `/raidinvite`.
+    RaidInvite {
+        /// Current zone admission.
+        session_id: u64,
+        /// Who is invited.
+        name: String,
+    },
+    /// Join the raid of whoever invited the player last: `/raidaccept`.
+    RaidAccept {
+        /// Current zone admission.
+        session_id: u64,
+    },
+    /// Decline the raid invitation waiting for an answer: `/raiddecline`.
+    RaidDecline {
+        /// Current zone admission.
+        session_id: u64,
+    },
+    /// Leave the player's raid: `/raiddisband`.
+    RaidLeave {
+        /// Current zone admission.
+        session_id: u64,
+    },
     /// Ask the world who is online: `/who all`.
     WhoAll {
         /// Current zone admission.
@@ -574,6 +596,10 @@ impl GameCommand {
             | Self::Random { session_id, .. }
             | Self::Emote { session_id, .. }
             | Self::Assist { session_id, .. }
+            | Self::RaidInvite { session_id, .. }
+            | Self::RaidAccept { session_id }
+            | Self::RaidDecline { session_id }
+            | Self::RaidLeave { session_id }
             | Self::ReadItem { session_id, .. }
             | Self::Combine { session_id, .. }
             | Self::Consent { session_id, .. }
@@ -645,6 +671,10 @@ impl GameCommand {
             Self::Random { .. } => Capability::Rolling,
             Self::Emote { .. } => Capability::Emoting,
             Self::Assist { .. } => Capability::Assisting,
+            Self::RaidInvite { .. }
+            | Self::RaidAccept { .. }
+            | Self::RaidDecline { .. }
+            | Self::RaidLeave { .. } => Capability::Raiding,
             Self::ReadItem { .. } => Capability::Reading,
             Self::Combine { .. } | Self::OpenContainer { .. } | Self::CloseContainer { .. } => {
                 Capability::Tradeskills
@@ -681,6 +711,10 @@ impl GameCommand {
             | Self::Random { .. }
             | Self::Emote { .. }
             | Self::Assist { .. }
+            | Self::RaidInvite { .. }
+            | Self::RaidAccept { .. }
+            | Self::RaidDecline { .. }
+            | Self::RaidLeave { .. }
             | Self::ReadItem { .. }
             | Self::CloseContainer { .. }
             | Self::Consent { .. }
@@ -795,20 +829,7 @@ pub fn encode(
                 body: crate::items::request(link_body)?.to_vec(),
             })
         }
-        GameCommand::SelectTarget { spawn_id, .. } => {
-            anyhow::ensure!(
-                dialect == GameDialect::Titanium,
-                "targeting is not implemented for this dialect"
-            );
-            anyhow::ensure!(
-                *spawn_id != Some(0),
-                "zero is reserved for clearing a target"
-            );
-            Ok(EncodedCommand {
-                opcode: 0x6c47,
-                body: u32::from(spawn_id.unwrap_or(0)).to_le_bytes().to_vec(),
-            })
-        }
+        GameCommand::SelectTarget { spawn_id, .. } => encode_target(dialect, *spawn_id),
         GameCommand::Consider { .. } | GameCommand::AutoAttack { .. } => {
             encode_combat(dialect, command)
         }
@@ -849,6 +870,10 @@ pub fn encode(
         | GameCommand::Random { .. }
         | GameCommand::Emote { .. }
         | GameCommand::Assist { .. }
+        | GameCommand::RaidInvite { .. }
+        | GameCommand::RaidAccept { .. }
+        | GameCommand::RaidDecline { .. }
+        | GameCommand::RaidLeave { .. }
         | GameCommand::ReadItem { .. }
         | GameCommand::Combine { .. }
         | GameCommand::Consent { .. }
@@ -872,6 +897,22 @@ pub fn encode(
             body: chat::encode_outbound_for(dialect, message, character)?,
         }),
     }
+}
+
+/// Titanium `OP_TargetMouse`: the player's target, or none.
+fn encode_target(dialect: GameDialect, spawn_id: Option<u16>) -> Result<EncodedCommand> {
+    anyhow::ensure!(
+        dialect == GameDialect::Titanium,
+        "targeting is not implemented for this dialect"
+    );
+    anyhow::ensure!(
+        spawn_id != Some(0),
+        "zero is reserved for clearing a target"
+    );
+    Ok(EncodedCommand {
+        opcode: 0x6c47,
+        body: u32::from(spawn_id.unwrap_or(0)).to_le_bytes().to_vec(),
+    })
 }
 
 /// The Titanium appearance packet that sets the own spawn's posture.

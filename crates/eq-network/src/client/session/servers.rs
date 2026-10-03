@@ -33,6 +33,7 @@ use super::{
     objects::GroundObjects,
     offers::MerchantOffers,
     pets::Pets,
+    raids::Raids,
     reading::Reading,
     resurrection::Resurrection,
     socials::Socials,
@@ -268,6 +269,11 @@ pub(super) trait ServerType: Sync {
         None
     }
 
+    /// Raids: invitations, joining, declining and leaving.
+    fn raids(&self, _setup: &Setup<'_>) -> Provided {
+        None
+    }
+
     /// Every feature the server type provides, in the order the zone session
     /// offers them each command, packet and timer.
     fn features(&self, setup: &Setup<'_>) -> Vec<Box<dyn Feature>> {
@@ -301,6 +307,7 @@ pub(super) trait ServerType: Sync {
             self.groups(setup),
             self.listing(setup),
             self.socials(setup),
+            self.raids(setup),
         ]
         .into_iter()
         .flatten()
@@ -398,8 +405,8 @@ mod shared {
     use super::{
         Abilities, Ability, Belongings, Camp, Casting, Character, Clock, Combat, Corpses, Doors,
         Edits, Entities, Exchanges, Feature, GameDialect, GroundObjects, Groups, Listing, Looting,
-        Map, MerchantOffers, Motion, Pets, Reading, Resurrection, Setup, Socials, Spellbook, Talk,
-        Targeting, Tradeskills, Training, Transfers, Who,
+        Map, MerchantOffers, Motion, Pets, Raids, Reading, Resurrection, Setup, Socials, Spellbook,
+        Talk, Targeting, Tradeskills, Training, Transfers, Who,
     };
 
     pub(super) fn casting() -> Box<dyn Feature> {
@@ -517,6 +524,10 @@ mod shared {
 
     pub(super) fn socials() -> Box<dyn Feature> {
         Box::new(Socials)
+    }
+
+    pub(super) fn raids() -> Box<dyn Feature> {
+        Box::<Raids>::default()
     }
 }
 
@@ -788,6 +799,11 @@ impl ServerType for EqEmu {
     fn socials(&self, _setup: &Setup<'_>) -> Provided {
         Some(shared::socials())
     }
+
+    /// Checked live on `EQEmu` with two characters.
+    fn raids(&self, _setup: &Setup<'_>) -> Provided {
+        Some(shared::raids())
+    }
 }
 
 /// Project Quarm, which speaks `EQMac`. Its features come as they are
@@ -989,11 +1005,11 @@ mod tests {
     #[test]
     fn p99_and_eqemu_provide_every_feature_one_each() {
         // Training, resurrection, reading, tradeskills, the map,
-        // merchants' offers, groups, the player's listing, dice, emotes and
-        // assisting are checked on EQEmu alone so far.
+        // merchants' offers, groups, the player's listing, dice, emotes,
+        // assisting and raids are checked on EQEmu alone so far.
         for (protocol, count) in [
             (ServerProtocol::Project1999, 20),
-            (ServerProtocol::EqEmu, 29),
+            (ServerProtocol::EqEmu, 30),
         ] {
             let server = server_type(protocol);
             let setup = Setup::new("Tester", AutoEat::default());
@@ -1013,6 +1029,7 @@ mod tests {
             Capability::Rolling,
             Capability::Emoting,
             Capability::Assisting,
+            Capability::Raiding,
         ] {
             assert!(!offers(server_type(ServerProtocol::Project1999)).contains(&capability));
             assert!(offers(server_type(ServerProtocol::EqEmu)).contains(&capability));

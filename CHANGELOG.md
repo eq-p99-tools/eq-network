@@ -7,6 +7,24 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Raids (`Capability::Raiding`, `EqEmu` only): `GameCommand::RaidInvite`
+  (`/raidinvite`, by name), `RaidAccept`, `RaidDecline` and `RaidLeave`
+  (`/raiddisband` for the player), with the codec `raid`. The server's word
+  arrives as `WorldEvent::Raid(RaidUpdate)`: an invitation, the raid's
+  leader on joining or entering a zone (`Created`), each member with their
+  raid group, class and level (`Added`), someone leaving (`Removed`), the
+  player's end in the raid (`Disbanded`) and a new leader. The server keeps
+  no invitations and answers none of these, so the session keeps the one
+  waiting, says what it sent or answered (`Inviting`, `Accepting`,
+  `Declining`, `Leaving`; declining sends nothing), and records the player's
+  own raid chat as the others hear it, since the server does not pass it
+  back. It refuses as `WorldEvent::RaidRefused` an invitation that names
+  no one, one to the player themself (which `EQEmu` would turn into a
+  broken raid), one to a member and one from a member who is not the
+  leader, naming the official client's string for each (that it refuses
+  them itself is inferred; `EQEmu` checks none of them), and an answer or
+  a leave with nothing to answer or leave.
+
 - Dice, emotes and assisting (`Capability::Rolling`, `Emoting` and
   `Assisting`, `EqEmu` only): `GameCommand::Random` (`/random`), `Emote`
   (`/emote`) and `Assist` (`/assist`), with the codec `socials`. The server's
