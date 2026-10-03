@@ -200,7 +200,8 @@ impl Raids {
             RaidUpdate::Inviting { .. }
             | RaidUpdate::Accepting { .. }
             | RaidUpdate::Declining { .. }
-            | RaidUpdate::Leaving => {}
+            | RaidUpdate::Leaving
+            | RaidUpdate::Locking { .. } => {}
         }
         // Being in a raid answers any invitation.
         if self.raid.is_some() {
@@ -273,7 +274,13 @@ impl Raids {
             _ => return Ok(()),
         };
         match request {
-            Ok(request) => out.request(&request),
+            Ok(request) => {
+                out.request(&request)?;
+                match request {
+                    Request::RaidLock(locked) => said(RaidUpdate::Locking { locked }, out),
+                    _ => Ok(()),
+                }
+            }
             Err(refusal) => actions::refuse_officially(command, refusal, out.log),
         }
     }
@@ -681,10 +688,12 @@ mod tests {
             refused(&mut raids, &mut world, &shift("friend", Some(0))),
             None
         );
-        assert_eq!(
-            sent(&mut raids, &mut world, &lock(true)),
-            [raid::lock("Tester", true).unwrap()]
-        );
+        let locking = testing::run(|out| raids.handle(&lock(true), &mut world, out));
+        assert_eq!(locking.sent, [raid::lock("Tester", true).unwrap()]);
+        assert!(locking.events.iter().any(|event| matches!(
+            event,
+            ClientEvent::World(WorldEvent::Raid(RaidUpdate::Locking { locked: true }))
+        )));
         hear(
             &mut raids,
             &mut world,

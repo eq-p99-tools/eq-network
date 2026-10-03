@@ -14,7 +14,9 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `move_member` and `make_leader`. The server's lock updates arrive as
   `RaidUpdate::Locked`, with the name the update gives: the leader's as
   they lock or unlock the raid, the member's own as they join it or enter
-  a zone while it is locked. `EQEmu` moves a member by taking them out and
+  a zone while it is locked; the session says `RaidUpdate::Locking` as it
+  asks, so that the leader's own answer reads apart from the one they get
+  on entering a zone. `EQEmu` moves a member by taking them out and
   adding them back, so the session holds each `Removed` until the next
   message and reports `RaidUpdate::Moved` when the same member is added
   back; the raid listed again to the player taken out drops the removal,

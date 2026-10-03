@@ -89,6 +89,14 @@ pub enum RaidUpdate {
     },
     /// The session asked the server to take the player out of their raid.
     Leaving,
+    /// The session asked the server to lock the player's raid (true) or
+    /// unlock it, which the server answers with [`RaidUpdate::Locked`]
+    /// under the leader's name, as it tells a member joining or entering a
+    /// zone while the raid is locked.
+    Locking {
+        /// Lock (true) or unlock.
+        locked: bool,
+    },
     /// Someone invited the player to their raid.
     Invited {
         /// Who invited them.
