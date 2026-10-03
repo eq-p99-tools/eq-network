@@ -228,8 +228,8 @@ pub enum GameCommand {
         corpse_id: u16,
         /// Own spawn identifier from this admission.
         own_id: u16,
-        /// Corpse slot listed by the server.
-        slot: u16,
+        /// The item's place on the corpse, from 0, as the loot listed it.
+        place: u16,
         /// Place directly into the inventory instead of on the cursor.
         auto: bool,
         /// Reject delayed actions instead of replaying them after a stall.
@@ -827,12 +827,12 @@ fn encode_trade(dialect: GameDialect, command: &GameCommand) -> Result<EncodedCo
         GameCommand::LootItem {
             corpse_id,
             own_id,
-            slot,
+            place,
             auto,
             ..
         } => (
             crate::loot::ITEM_OPCODE,
-            crate::loot::item_request(*corpse_id, *own_id, *slot, *auto)?.to_vec(),
+            crate::loot::item_request(*corpse_id, *own_id, *place, *auto)?.to_vec(),
         ),
         GameCommand::EndLoot { corpse_id, .. } => (
             crate::loot::END_OPCODE,
@@ -1009,7 +1009,7 @@ mod tests {
                     session_id: 1,
                     corpse_id: 9,
                     own_id: 7,
-                    slot: 22,
+                    place: 0,
                     auto: true,
                     created,
                 },
