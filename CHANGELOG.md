@@ -5,6 +5,12 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- P99 offers `Capability::MovingSpells`: moving a spell in the book works
+  there as on `EQEmu`, checked with the official client. Deleting one does
+  not, so `DeletingSpells` stays off on P99.
+
 ### Added
 
 - The raid leader's commands (`Capability::Raiding`, `EqEmu` only):
