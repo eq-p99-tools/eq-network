@@ -186,7 +186,6 @@ mod tests {
             book: None,
             rules: eq_network_game::inventory::ItemPlacement::default(),
             slot,
-            icon: 0,
             stack_count: None,
             charges: 0,
             bag_slots: 0,
@@ -202,6 +201,8 @@ mod tests {
                 races: 0,
                 flags: vec![],
                 stats: vec![],
+                price: None,
+                icon: None,
             },
         }
     }

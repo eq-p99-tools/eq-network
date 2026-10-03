@@ -173,6 +173,11 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- `ItemDetails` carries the item's `price` (its base value in copper, from
+  which merchants price it) and its `icon`, decoded from the Titanium item
+  record, so an item opened from a link has its picture too; None where a
+  generation's record is not checked. `InventoryItem::icon` is gone: the
+  picture's one source is `details.icon`.
 - A corpse's items are addressed by their place on it, from 0, rather than by
   the server's slot: `LootUpdate::Item { place, item }`,
   `LootUpdate::Taken { place, .. }` and `GameCommand::LootItem { place, .. }`.

@@ -8,7 +8,6 @@ fn item(slot: i32, count: Option<u32>, bag: u8) -> InventoryItem {
         scroll_spell: None,
         book: None,
         slot: InventorySlot(slot),
-        icon: 0,
         stack_count: count,
         charges: 3,
         bag_slots: bag,
@@ -31,6 +30,8 @@ fn item(slot: i32, count: Option<u32>, bag: u8) -> InventoryItem {
             races: 1,
             flags: Vec::new(),
             stats: Vec::new(),
+            price: None,
+            icon: None,
         },
     }
 }

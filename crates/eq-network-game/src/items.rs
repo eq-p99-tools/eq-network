@@ -85,6 +85,12 @@ pub struct ItemDetails {
     pub flags: Vec<String>,
     /// Nonzero supported statistics and effect IDs.
     pub stats: Vec<ItemStat>,
+    /// The item's base value in copper, from which merchants price it; None
+    /// where a generation's record is not checked.
+    pub price: Option<u32>,
+    /// The item's picture in the installed UI's item sheets; None where a
+    /// generation's record is not checked.
+    pub icon: Option<u32>,
 }
 
 impl ItemDetails {
@@ -226,6 +232,8 @@ pub(crate) fn definition(fields: &[&str]) -> Result<ItemDetails> {
         races: uint(53)?,
         flags,
         stats,
+        price: Some(uint(10)?),
+        icon: Some(uint(11)?),
     })
 }
 
@@ -395,6 +403,8 @@ mod tests {
         fields[1] = "Synthetic blade".into();
         fields[4] = "42".into();
         fields[5] = "25".into();
+        fields[10] = "1250".into();
+        fields[11] = "640".into();
         fields[21] = "-3".into();
         fields[50] = "9".into();
         let mut body = vec![0; 4];
@@ -402,6 +412,8 @@ mod tests {
         let item = response(&body).unwrap();
         assert_eq!(item.id, 42);
         assert!(item.stats.iter().any(|s| s.label == "STR" && s.value == -3));
+        // A linked item carries its price and its picture too.
+        assert_eq!((item.price, item.icon), (Some(1250), Some(640)));
         assert!(response(&body[..40]).is_err());
         body[0] = 0x69;
         assert!(response(&body).is_err());

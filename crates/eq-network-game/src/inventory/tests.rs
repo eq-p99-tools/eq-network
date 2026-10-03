@@ -9,6 +9,8 @@ fn zero_quantity_removal_clears_cursor_but_does_not_confirm_other_predictions() 
             .unwrap(),
     );
     let mut scroll = state.items[&InventorySlot(22)].clone();
+    // The item's picture comes with its definition.
+    assert_eq!(scroll.details.icon, Some(500));
     scroll.slot = InventorySlot(30);
     state.apply(InventoryUpdate::Prediction(vec![scroll]));
     let mutation = |opcode, count: u32| {
