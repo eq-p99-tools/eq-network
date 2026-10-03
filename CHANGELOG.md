@@ -173,6 +173,11 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- `ItemDetails` carries the item's `price` (its base value in copper, from
+  which merchants price it) and its `icon`, decoded from the Titanium item
+  record, so an item opened from a link has its picture too; None where a
+  generation's record is not checked. `InventoryItem::icon` is gone: the
+  picture's one source is `details.icon`.
 - Deleting a spell from the spellbook (`DeleteSpell`) and moving one to
   another place in it (`SwapSpell`) each have a capability of their own,
   `Capability::DeletingSpells` and `Capability::MovingSpells`, instead of

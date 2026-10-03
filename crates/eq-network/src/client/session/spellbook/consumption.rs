@@ -100,7 +100,6 @@ pub(super) mod tests {
             book: None,
             rules: eq_network_game::inventory::ItemPlacement::default(),
             slot: InventorySlot(22),
-            icon: 0,
             stack_count: None,
             charges: 0,
             bag_slots: 0,
@@ -116,6 +115,8 @@ pub(super) mod tests {
                 races: 0,
                 flags: vec![],
                 stats: vec![],
+                price: None,
+                icon: None,
             },
         };
         let mut inventory = Inventory::default();
