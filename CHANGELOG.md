@@ -177,6 +177,10 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   formatted, simple or special message on the Titanium wire (EQEmu's `MT_*`
   numbers, by which the official client colours the line); None for channel
   messages and for the `EQMac` layouts until they are checked on TAKP.
+- `SpellUpdate::Interrupted` carries `caster_name`: the name the server
+  sends to those near another caster whose spell stopped (Titanium
+  `InterruptCast_Struct`'s label), so a front end can say whose it was;
+  None on the caster's own notice.
 - Deleting a spell from the spellbook (`DeleteSpell`) and moving one to
   another place in it (`SwapSpell`) each have a capability of their own,
   `Capability::DeletingSpells` and `Capability::MovingSpells`, instead of
