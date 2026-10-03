@@ -173,6 +173,10 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- `ChatEvent::message_type` keeps the message type the server gives a
+  formatted, simple or special message on the Titanium wire (EQEmu's `MT_*`
+  numbers, by which the official client colours the line); None for channel
+  messages and for the `EQMac` layouts until they are checked on TAKP.
 - Deleting a spell from the spellbook (`DeleteSpell`) and moving one to
   another place in it (`SwapSpell`) each have a capability of their own,
   `Capability::DeletingSpells` and `Capability::MovingSpells`, instead of

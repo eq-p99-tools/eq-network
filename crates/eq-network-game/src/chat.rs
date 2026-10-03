@@ -446,6 +446,13 @@ pub struct ChatEvent {
     /// Arguments supplied to a formatted string-table message.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub arguments: Option<Vec<Message>>,
+    /// The message type the server gave a formatted, simple or special
+    /// message (256 say, 257 tell, ... 335 system, as `EQEmu`'s `MT_*`
+    /// numbers them), by which the official client colours the line; None
+    /// for a channel message, whose channel says it, and where a
+    /// generation's layout is not checked.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message_type: Option<u32>,
 }
 
 impl ChatEvent {
@@ -461,6 +468,7 @@ impl ChatEvent {
             target: None,
             string_id: None,
             arguments: None,
+            message_type: None,
         }
     }
 
@@ -598,6 +606,8 @@ pub fn parse_for(
                 let mut event = ChatEvent::new(opcode, body, ChannelName::System, include_raw)
                     .with_message(message_for(protocol, &body[offset..], include_raw));
                 event.sender = Some(String::from_utf8_lossy(sender).into_owned());
+                // After the speak mode, the journal mode and the language.
+                event.message_type = Some(u32_at(body, 3));
                 event
             }
         }
@@ -617,6 +627,8 @@ pub fn parse_for(
                 GameDialect::Titanium => u32_at(body, 4),
                 GameDialect::EqMac => u32::from(u16_at(body, 2)),
             });
+            // EqMac's layout is left until it is checked on TAKP.
+            event.message_type = (protocol == GameDialect::Titanium).then(|| u32_at(body, 8));
             event.arguments = Some(arguments);
             event
         }
@@ -624,6 +636,7 @@ pub fn parse_for(
             ensure!(body.len() >= 12, "truncated SimpleMessage");
             let mut event = ChatEvent::new(opcode, body, ChannelName::System, include_raw);
             event.string_id = Some(u32_at(body, 0));
+            event.message_type = Some(u32_at(body, 4));
             event
         }
         CommunicationOpcode::GuildMotd => {
@@ -821,6 +834,49 @@ mod tests {
     }
 
     #[test]
+    fn titanium_server_messages_keep_their_message_type() {
+        // FormattedMessage: unknown, string id, type, then the arguments.
+        let mut formatted = Vec::new();
+        for word in [0u32, 1234, 289] {
+            formatted.extend_from_slice(&word.to_le_bytes());
+        }
+        formatted.extend_from_slice(b"Sword  ");
+        let event = parse_for(GameDialect::Titanium, 0x5a48, &formatted, false)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            (event.string_id, event.message_type),
+            (Some(1234), Some(289))
+        );
+        // SimpleMessage: string id, type, unknown.
+        let mut simple = Vec::new();
+        for word in [5678u32, 335, 0] {
+            simple.extend_from_slice(&word.to_le_bytes());
+        }
+        let event = parse_for(GameDialect::Titanium, 0x673c, &simple, false)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            (event.string_id, event.message_type),
+            (Some(5678), Some(335))
+        );
+        // SpecialMesg: speak mode, journal mode, language, type, target,
+        // then the sender, twelve bytes and the text.
+        let mut special = vec![0, 0, 0];
+        special.extend_from_slice(&256u32.to_le_bytes());
+        special.extend_from_slice(&0u32.to_le_bytes());
+        special.extend_from_slice(b"Synthetic sayer ");
+        special.extend_from_slice(&[0; 12]);
+        special.extend_from_slice(b"Hello there ");
+        let event = parse_for(GameDialect::Titanium, 0x2372, &special, false)
+            .unwrap()
+            .unwrap();
+        assert_eq!(event.message_type, Some(256));
+        assert_eq!(event.sender.as_deref(), Some("Synthetic sayer"));
+        assert_eq!(event.message.unwrap().text, "Hello there");
+    }
+
+    #[test]
     fn quarm_communication_structs_use_eqmac_offsets() {
         let mut formatted = vec![0; 6];
         formatted[2..4].copy_from_slice(&1234u16.to_le_bytes());
@@ -830,6 +886,8 @@ mod tests {
             .unwrap();
         assert_eq!(event.string_id, Some(1234));
         assert_eq!(event.arguments.unwrap()[0].text, "Sword");
+        // The type waits for a check on TAKP.
+        assert_eq!(event.message_type, None);
 
         let mut special = 7u32.to_le_bytes().to_vec();
         special.extend_from_slice(b"System text\0");
