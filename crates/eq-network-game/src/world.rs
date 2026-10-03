@@ -415,14 +415,19 @@ pub enum Capability {
     /// Taking another's target: `/assist`.
     Assisting,
     /// Inviting players into a raid, accepting or declining an invitation,
-    /// and leaving.
+    /// and leaving; and as the raid's leader, locking it, moving members
+    /// between raid groups, handing on the lead and removing members.
     Raiding,
+    /// Taking the mark of a raid group's leader from a member, as a button of
+    /// the Raid window does. No server type offers it yet: `EQEmu` has no
+    /// handler for it.
+    RaidGroupLeaders,
 }
 
 impl Capability {
     /// Every capability, in order: what a session offers when its server and
     /// client generation support everything.
-    pub const ALL: [Self; 33] = [
+    pub const ALL: [Self; 34] = [
         Self::Casting,
         Self::Spellbook,
         Self::Inventory,
@@ -456,6 +461,7 @@ impl Capability {
         Self::Emoting,
         Self::Assisting,
         Self::Raiding,
+        Self::RaidGroupLeaders,
     ];
 }
 
@@ -930,6 +936,8 @@ pub enum WorldEvent {
         /// `eqstr_us.txt` string ID, for a host with the installed strings;
         /// `reason` says the same in this library's words.
         string_id: Option<u32>,
+        /// What the official string names, in its order: a member's name.
+        arguments: Vec<String>,
     },
     /// A roll, emote or assist was not sent, and why.
     SocialRefused {
@@ -1415,6 +1423,7 @@ mod tests {
             Capability::Emoting => 30,
             Capability::Assisting => 31,
             Capability::Raiding => 32,
+            Capability::RaidGroupLeaders => 33,
         };
         for (index, capability) in Capability::ALL.into_iter().enumerate() {
             assert_eq!(place(capability), index, "{capability:?}");

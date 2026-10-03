@@ -1,5 +1,7 @@
 //! Raids: inviting a player, accepting or declining an invitation, leaving,
-//! and the server's word on who is in the player's raid.
+//! the raid leader's commands (locking the raid, moving members between raid
+//! groups, handing on the lead, removing a member), and the server's word on
+//! who is in the player's raid.
 //!
 //! Layout reference: the Titanium opcodes (`utils/patches/patch_Titanium.conf`),
 //! `EQEmu`'s `RaidGeneral_Struct`, `RaidAddMember_Struct`, `RaidCreate_Struct`
@@ -7,8 +9,9 @@
 //! the Titanium patch writes them (`ENCODE(OP_RaidUpdate)`,
 //! `common/patches/titanium.cpp`), and the action numbers in `common/raid.h`;
 //! the rules are `Client::Handle_OP_RaidCommand` (`zone/client_packet.cpp`)
-//! and `Raid::AddMember`, `RemoveMember`, `SendRaidCreate`,
-//! `SendMakeLeaderPacketTo` and `SendRaidDisband` (`zone/raids.cpp`). Every
+//! and `Raid::AddMember`, `RemoveMember`, `MoveMember`, `LockRaid`,
+//! `SendRaidCreate`, `SendMakeLeaderPacketTo` and `SendRaidDisband`
+//! (`zone/raids.cpp`). Every
 //! command goes on one opcode and every answer on another, told apart by the
 //! action at the start.
 use crate::command::EncodedCommand;
@@ -37,9 +40,17 @@ const ACCEPT: u32 = 1;
 const REMOVE: u32 = 1;
 const INVITE: u32 = 3;
 const DISBAND: u32 = 5;
+const MOVE: u32 = 6;
 const CREATE: u32 = 8;
+const LOCK: u32 = 8;
+const UNLOCK: u32 = 9;
+const LOCKED: u32 = 17;
+const UNLOCKED: u32 = 18;
 const INVITED: u32 = 20;
 const MAKE_LEADER: u32 = 30;
+
+/// A move's parameter for no raid group: out of every group.
+const NO_GROUP: u32 = u32::MAX;
 
 /// A member of the player's raid, as the server added them.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -103,6 +114,20 @@ pub enum RaidUpdate {
         /// The leader.
         name: String,
     },
+    /// The raid is locked, so that its leader may move members between
+    /// raid groups, or unlocked. The server says so to every member as the
+    /// leader locks or unlocks it, naming the leader, and again to one
+    /// member, naming them, as they join or enter a zone while it is locked.
+    Locked {
+        /// Whether it is locked.
+        locked: bool,
+        /// The name the update gives.
+        by: String,
+    },
+    /// A member moved to another raid group, or out of every group. The
+    /// server takes them out of the raid and adds them back in their new
+    /// place, which the session reads as this one move.
+    Moved(RaidMember),
 }
 
 /// The text of a name field: its bytes up to the first NUL.
@@ -118,8 +143,19 @@ fn word(body: &[u8], at: usize) -> u32 {
 
 /// A command: its action, then the two names.
 fn command(action: u32, player: &str, leader: &str) -> Result<EncodedCommand> {
+    with_parameter(action, player, leader, 0)
+}
+
+/// A command with its parameter.
+fn with_parameter(
+    action: u32,
+    player: &str,
+    leader: &str,
+    parameter: u32,
+) -> Result<EncodedCommand> {
     let mut body = vec![0; GENERAL];
     body[..4].copy_from_slice(&action.to_le_bytes());
+    body[PARAMETER..].copy_from_slice(&parameter.to_le_bytes());
     for (at, text) in [(PLAYER, player), (LEADER, leader)] {
         ensure!(
             !text.is_empty() && text.len() < NAME,
@@ -159,9 +195,41 @@ pub fn remove(player: &str, member: &str) -> Result<EncodedCommand> {
     command(DISBAND, player, member)
 }
 
+/// Locks the player's raid, or unlocks it.
+///
+/// # Errors
+/// Rejects a name its field cannot hold.
+pub fn lock(player: &str, locked: bool) -> Result<EncodedCommand> {
+    command(if locked { LOCK } else { UNLOCK }, player, player)
+}
+
+/// Moves a member into a raid group, 0 to 11, or out of every group. The
+/// server finds the member by the exact name it gave them.
+///
+/// # Errors
+/// Rejects a name its field cannot hold, and a group past the twelfth.
+pub fn move_member(player: &str, member: &str, group: Option<u8>) -> Result<EncodedCommand> {
+    let parameter = match group {
+        Some(group) => {
+            ensure!(group < 12, "a raid has twelve groups");
+            u32::from(group)
+        }
+        None => NO_GROUP,
+    };
+    with_parameter(MOVE, player, member, parameter)
+}
+
+/// Hands the lead of the player's raid to a member.
+///
+/// # Errors
+/// Rejects a name its field cannot hold.
+pub fn make_leader(player: &str, member: &str) -> Result<EncodedCommand> {
+    command(MAKE_LEADER, player, member)
+}
+
 /// Decodes a Titanium raid update; None for any other opcode, and for an
 /// update this crate does not read (the zone-in marker, leadership
-/// abilities, locks, notes and the message of the day).
+/// abilities, notes and the message of the day).
 ///
 /// # Errors
 /// Rejects an update too short for its fields.
@@ -214,6 +282,13 @@ pub fn decode(opcode: u16, body: &[u8]) -> Result<Option<RaidUpdate>> {
                 name: name(body, PLAYER),
             })
         }
+        LOCKED | UNLOCKED => {
+            general()?;
+            Some(RaidUpdate::Locked {
+                locked: word(body, 0) == LOCKED,
+                by: name(body, PLAYER),
+            })
+        }
         _ => None,
     })
 }
@@ -250,6 +325,27 @@ mod tests {
         let left = remove("Tester", "Tester").unwrap();
         assert_eq!(left.body[..4], 5u32.to_le_bytes());
         assert!(invite("", "Tester").is_err());
+    }
+
+    #[test]
+    fn the_leaders_commands_name_the_member_and_the_group() {
+        let locked = lock("Tester", true).unwrap();
+        assert_eq!(locked.body[..4], 8u32.to_le_bytes());
+        assert_eq!(&locked.body[68..74], b"Tester");
+        assert_eq!(lock("Tester", false).unwrap().body[..4], 9u32.to_le_bytes());
+        let moved = move_member("Tester", "Friend", Some(3)).unwrap();
+        assert_eq!(moved.body[..4], 6u32.to_le_bytes());
+        assert_eq!(&moved.body[4..10], b"Tester");
+        assert_eq!(&moved.body[68..74], b"Friend");
+        assert_eq!(moved.body[132..136], 3u32.to_le_bytes());
+        let ungrouped = move_member("Tester", "Friend", None).unwrap();
+        assert_eq!(ungrouped.body[132..136], u32::MAX.to_le_bytes());
+        assert!(move_member("Tester", "Friend", Some(12)).is_err());
+        let led = make_leader("Tester", "Friend").unwrap();
+        assert_eq!(led.body[..4], 30u32.to_le_bytes());
+        assert_eq!(&led.body[68..74], b"Friend");
+        let removed = remove("Tester", "Friend").unwrap();
+        assert_eq!(&removed.body[68..74], b"Friend");
     }
 
     #[test]
@@ -307,6 +403,20 @@ mod tests {
             decode(UPDATE_OPCODE, &update(30, 388, "Leader", "Leader")).unwrap(),
             Some(RaidUpdate::Leader {
                 name: "Leader".into()
+            })
+        );
+        assert_eq!(
+            decode(UPDATE_OPCODE, &update(17, 136, "Leader", "Leader")).unwrap(),
+            Some(RaidUpdate::Locked {
+                locked: true,
+                by: "Leader".into()
+            })
+        );
+        assert_eq!(
+            decode(UPDATE_OPCODE, &update(18, 136, "Tester", "Tester")).unwrap(),
+            Some(RaidUpdate::Locked {
+                locked: false,
+                by: "Tester".into()
             })
         );
         // The zone-in marker and the leadership abilities are not read.

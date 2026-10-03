@@ -130,6 +130,22 @@ pub enum Request {
     RaidAccept(String),
     /// Leave the player's raid.
     RaidLeave,
+    /// Lock the player's raid (true) or unlock it.
+    RaidLock(bool),
+    /// Move a member of the player's raid, by the name the server gave them,
+    /// into a raid group or out of every group.
+    RaidMove {
+        /// Who moves.
+        member: String,
+        /// Where to: a raid group, 0 to 11, or none.
+        group: Option<u8>,
+    },
+    /// Hand the lead of the player's raid to a member, by the name the
+    /// server gave them.
+    RaidMakeLeader(String),
+    /// Remove a member from the player's raid, by the name the server gave
+    /// them.
+    RaidRemove(String),
     /// Use a skill on the server's idea of the target.
     Ability {
         /// The skill.
@@ -288,6 +304,10 @@ pub fn titanium(request: &Request, sender: Sender<'_>) -> Result<EncodedCommand>
         Request::RaidInvite(name) => raid::invite(name, sender.name)?,
         Request::RaidAccept(inviter) => raid::accept(inviter, sender.name)?,
         Request::RaidLeave => raid::remove(sender.name, sender.name)?,
+        Request::RaidLock(locked) => raid::lock(sender.name, *locked)?,
+        Request::RaidMove { member, group } => raid::move_member(sender.name, member, *group)?,
+        Request::RaidMakeLeader(member) => raid::make_leader(sender.name, member)?,
+        Request::RaidRemove(member) => raid::remove(sender.name, member)?,
         Request::ReadBook(book) => books::titanium_request(book)?,
         Request::Combine(container) => tradeskills::titanium_combine(*container)?,
         Request::Trade(with) => exchange::request(sender.spawn(), *with)?,

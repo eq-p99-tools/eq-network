@@ -155,6 +155,10 @@ pub(super) fn needs(command: &ClientCommand) -> &'static [Resource] {
         | ClientCommand::RaidAccept { .. }
         | ClientCommand::RaidDecline { .. }
         | ClientCommand::RaidLeave { .. }
+        | ClientCommand::RaidLock { .. }
+        | ClientCommand::RaidMove { .. }
+        | ClientCommand::RaidMakeLeader { .. }
+        | ClientCommand::RaidRemove { .. }
         | ClientCommand::ReadItem { .. }
         // Opening a container holds nothing, and closing one must always be
         // possible.
@@ -180,10 +184,25 @@ pub(super) fn refuse(command: &ClientCommand, reason: &str, log: &mut Events<'_>
 /// client's string (`eqstr_us.txt`) for it where its result event has room.
 pub(super) fn refuse_officially(
     command: &ClientCommand,
+    official: (&str, Option<u32>),
+    log: &mut Events<'_>,
+) -> Result<()> {
+    refuse_naming(command, official, &[], log)
+}
+
+/// Reports a refused command as [`refuse_officially`] does, with what the
+/// official string names, in its order, where its result event has room
+/// for that too.
+pub(super) fn refuse_naming(
+    command: &ClientCommand,
     (reason, official): (&str, Option<u32>),
+    names: &[String],
     log: &mut Events<'_>,
 ) -> Result<()> {
     if let Some(mut event) = refusal(command, reason) {
+        if let WorldEvent::RaidRefused { arguments, .. } = &mut event {
+            arguments.extend_from_slice(names);
+        }
         if let WorldEvent::ConsumeRefused { string_id, .. }
         | WorldEvent::CorpseRefused { string_id, .. }
         | WorldEvent::PetRefused { string_id, .. }
@@ -246,6 +265,10 @@ fn refusal(command: &ClientCommand, reason: &str) -> Option<WorldEvent> {
         | ClientCommand::RaidAccept { session_id }
         | ClientCommand::RaidDecline { session_id }
         | ClientCommand::RaidLeave { session_id }
+        | ClientCommand::RaidLock { session_id, .. }
+        | ClientCommand::RaidMove { session_id, .. }
+        | ClientCommand::RaidMakeLeader { session_id, .. }
+        | ClientCommand::RaidRemove { session_id, .. }
         | ClientCommand::ReadItem { session_id, .. }
         | ClientCommand::Combine { session_id, .. }
         | ClientCommand::Consent { session_id, .. }
@@ -372,10 +395,15 @@ fn reasoned(command: &ClientCommand, session_id: u64, reason: String) -> Option<
         ClientCommand::RaidInvite { .. }
         | ClientCommand::RaidAccept { .. }
         | ClientCommand::RaidDecline { .. }
-        | ClientCommand::RaidLeave { .. } => WorldEvent::RaidRefused {
+        | ClientCommand::RaidLeave { .. }
+        | ClientCommand::RaidLock { .. }
+        | ClientCommand::RaidMove { .. }
+        | ClientCommand::RaidMakeLeader { .. }
+        | ClientCommand::RaidRemove { .. } => WorldEvent::RaidRefused {
             session_id,
             reason,
             string_id: None,
+            arguments: Vec::new(),
         },
         ClientCommand::ReadItem { .. } => WorldEvent::ReadRefused { session_id, reason },
         ClientCommand::Combine { .. } => WorldEvent::CombineRefused {
