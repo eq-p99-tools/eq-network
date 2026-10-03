@@ -398,12 +398,16 @@ pub enum Capability {
     /// Moving a spell to another place in the spellbook, swapping it with
     /// any spell there.
     MovingSpells,
+    /// Showing what a merchant pays for an item sold to them, worked out
+    /// from the item's price and the rate the merchant opened with, by the
+    /// server type's rule.
+    MerchantOffers,
 }
 
 impl Capability {
     /// Every capability, in order: what a session offers when its server and
     /// client generation support everything.
-    pub const ALL: [Self; 26] = [
+    pub const ALL: [Self; 27] = [
         Self::Casting,
         Self::Spellbook,
         Self::Inventory,
@@ -430,6 +434,7 @@ impl Capability {
         Self::Map,
         Self::DeletingSpells,
         Self::MovingSpells,
+        Self::MerchantOffers,
     ];
 }
 
@@ -1309,6 +1314,7 @@ mod tests {
             Capability::Map => 23,
             Capability::DeletingSpells => 24,
             Capability::MovingSpells => 25,
+            Capability::MerchantOffers => 26,
         };
         for (index, capability) in Capability::ALL.into_iter().enumerate() {
             assert_eq!(place(capability), index, "{capability:?}");

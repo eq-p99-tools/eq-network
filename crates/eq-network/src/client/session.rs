@@ -19,6 +19,7 @@ mod looting;
 mod map;
 mod motion;
 mod objects;
+mod offers;
 mod pets;
 mod posture;
 mod reading;

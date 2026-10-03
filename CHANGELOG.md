@@ -7,6 +7,13 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `Capability::MerchantOffers`: a front end may show what a merchant pays
+  for an item sold to them, worked out from the item's `price` and the
+  merchant's `rate` by the server type's rule. `EqEmu` offers it, checked
+  live: the price times how many are sold (a charged item counts as one),
+  over the rate, rounded to the nearest copper. Other server types wait for
+  a check.
+
 - A special message (`OP_SpecialMesg`) on the Titanium wire says how its
   speaker speaks: `ChatEvent::speak_mode` (`SpeakMode`: `Raw` for a plain
   server line, `Say`, `Shout`, `EmoteAlt`, `Emote` or `Group`, as `EQEmu`'s
