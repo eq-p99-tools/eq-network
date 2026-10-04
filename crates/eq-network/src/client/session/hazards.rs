@@ -91,7 +91,7 @@ mod tests {
             outcome.sent,
             [hazards::titanium_damage(7, Hazard::Falling, 160).unwrap()]
         );
-        assert!(outcome.unreliable.is_empty());
+        assert_eq!(outcome.unreliable, []);
         assert!(matches!(
             &outcome.events[..],
             [ClientEvent::Diagnostic(line)] if line.contains("160")
