@@ -48,7 +48,7 @@ use super::{
     targeting::Targeting,
     tradeskills::Tradeskills,
     training::Training,
-    transfers::Transfers,
+    transfers::{Home, Transfers},
     who::Who,
     wire::{EqMac, Titanium, Wire},
     CharacterSession, Events, ServerProtocol, ZoneExit,
@@ -449,9 +449,9 @@ impl Shield for WorldCodec {
 mod shared {
     use super::{
         Abilities, Ability, Belongings, Camp, Casting, Character, Clock, Combat, Corpses, Doors,
-        Edits, Entities, Exchanges, Feature, GameDialect, GroundObjects, Groups, Listing, Looting,
-        Map, MerchantOffers, Motion, Pets, Raids, Reading, Resurrection, Setup, Socials, Spellbook,
-        Talk, Targeting, Tradeskills, Training, Transfers, Who,
+        Edits, Entities, Exchanges, Feature, GameDialect, GroundObjects, Groups, Home, Listing,
+        Looting, Map, MerchantOffers, Motion, Pets, Raids, Reading, Resurrection, Setup, Socials,
+        Spellbook, Talk, Targeting, Tradeskills, Training, Transfers, Who,
     };
 
     pub(super) fn casting() -> Box<dyn Feature> {
@@ -515,8 +515,8 @@ mod shared {
         Box::<GroundObjects>::default()
     }
 
-    pub(super) fn transfers(setup: &Setup<'_>) -> Box<dyn Feature> {
-        Box::new(Transfers::new(setup.character))
+    pub(super) fn transfers(setup: &Setup<'_>, home: Home) -> Box<dyn Feature> {
+        Box::new(Transfers::new(setup.character, home))
     }
 
     pub(super) fn clock() -> Box<dyn Feature> {
@@ -685,7 +685,7 @@ impl ServerType for Project1999 {
     }
 
     fn transfers(&self, setup: &Setup<'_>) -> Provided {
-        offer(shared::transfers(setup))
+        offer(shared::transfers(setup, Home::Offered))
     }
 
     fn clock(&self, _setup: &Setup<'_>) -> Provided {
@@ -792,7 +792,7 @@ impl ServerType for EqEmu {
     }
 
     fn transfers(&self, setup: &Setup<'_>) -> Provided {
-        offer(shared::transfers(setup))
+        offer(shared::transfers(setup, Home::Offered))
     }
 
     fn clock(&self, _setup: &Setup<'_>) -> Provided {
@@ -919,9 +919,10 @@ impl ServerType for Takp {
     }
 
     /// Zone lines and the server's moves, with `EQMac`'s zone change and the
-    /// world's re-entry between zones.
+    /// world's re-entry between zones; a dead player asks for their bind
+    /// point, as TAKP waits for.
     fn transfers(&self, setup: &Setup<'_>) -> Provided {
-        offer(shared::transfers(setup))
+        offer(shared::transfers(setup, Home::Asked))
     }
 }
 

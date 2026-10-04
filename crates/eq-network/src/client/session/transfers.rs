@@ -29,19 +29,38 @@ use std::time::{Duration, Instant};
 /// `EQMacEmu` says the official `EQMac` client ignores it.
 const DEPARTURE: Duration = Duration::from_secs(2);
 
+/// How the player goes home once they die.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Home {
+    /// The server offers the move to the bind point
+    /// (`OP_ZonePlayerToBind`), as Titanium's servers do.
+    Offered,
+    /// The client asks for its bind point itself, as `EQMac`'s does: TAKP
+    /// holds the move home until the client asks (`zone/zoning.cpp`
+    /// `GoToDeath`, `Handle_OP_ZoneChange`), and removes a dead client that
+    /// never does.
+    Asked,
+}
+
 /// The zone's zone points, and the transfers they and the server start.
 pub(super) struct Transfers {
     /// The destinations the server numbered for the zone's zone lines.
     points: zoning::ZonePoints,
     /// The player's name, which the server's answer to a transfer names.
     character: String,
+    /// How the player goes home once they die.
+    home: Home,
+    /// Where home is, once the zone says.
+    bind: Option<zoning::BindPoint>,
 }
 
 impl Transfers {
-    pub(super) fn new(character: &str) -> Self {
+    pub(super) fn new(character: &str, home: Home) -> Self {
         Self {
             points: zoning::ZonePoints::default(),
             character: character.into(),
+            home,
+            bind: None,
         }
     }
 
@@ -85,11 +104,12 @@ impl Transfers {
         out.status(ConnectionState::Zoning, world)
     }
 
-    /// Keeps the zone's zone points; an unreadable table leaves none. True
-    /// when the message was about them.
+    /// Keeps the zone's zone points, an unreadable table leaving none, and
+    /// the player's bind point. True when the message was about them.
     fn note_points(&mut self, message: &Message) -> bool {
         match message {
             Message::ZonePoints(points) => self.points = points.clone(),
+            Message::Bind(bind) => self.bind = Some(*bind),
             Message::Unreadable {
                 part: Part::ZonePoints,
                 ..
@@ -270,8 +290,16 @@ impl Feature for Transfers {
             }
             Message::Event(WorldEvent::Death(death)) if world.is_player(death.spawn_id) => {
                 world.died();
-                out.log
-                    .diagnostic("Own character died; waiting for the server bind offer".into())
+                match (self.home, self.bind) {
+                    (Home::Asked, Some(bind)) => Self::start(bind.offer(), world, out),
+                    (Home::Asked, None) => out.log.diagnostic(
+                        "Own character died, and the zone never said where its bind point is"
+                            .into(),
+                    ),
+                    (Home::Offered, _) => out
+                        .log
+                        .diagnostic("Own character died; waiting for the server bind offer".into()),
+                }
             }
             Message::Handoff(address) => {
                 ensure!(
@@ -319,7 +347,7 @@ mod tests {
 
     #[test]
     fn movement_resumes_before_a_refused_transfer_is_reported() {
-        let mut transfers = Transfers::new("Tester");
+        let mut transfers = Transfers::new("Tester", Home::Offered);
         let mut world = World::new(5);
         let here = Position {
             x: 10.0,
@@ -388,7 +416,7 @@ mod tests {
 
     #[test]
     fn a_zone_line_asks_for_the_transfer_and_the_handoff_ends_the_session() {
-        let mut transfers = Transfers::new("Tester");
+        let mut transfers = Transfers::new("Tester", Home::Offered);
         let mut world = World::new(5);
         let here = Position {
             x: 10.0,
@@ -480,7 +508,7 @@ mod tests {
 
     #[test]
     fn an_approved_transfer_saves_and_departs_before_the_world() {
-        let mut transfers = Transfers::new("Tester");
+        let mut transfers = Transfers::new("Tester", Home::Offered);
         let (mut world, outcome) = approved(&mut transfers);
         outcome.result.unwrap();
         // The save and the departure go out, in the official client's order,
@@ -509,7 +537,7 @@ mod tests {
 
     #[test]
     fn a_departure_goes_on_once_the_wait_runs_out() {
-        let mut transfers = Transfers::new("Tester");
+        let mut transfers = Transfers::new("Tester", Home::Offered);
         let (mut world, _) = approved(&mut transfers);
         let now = Instant::now();
         testing::run(|out| transfers.tick(now, &mut world, out))
@@ -524,12 +552,12 @@ mod tests {
 
     #[test]
     fn a_departure_goes_on_when_the_zone_closes_the_connection() {
-        let mut transfers = Transfers::new("Tester");
+        let mut transfers = Transfers::new("Tester", Home::Offered);
         let (mut world, _) = approved(&mut transfers);
         transfers.connection_ended(&mut world);
         assert!(matches!(world.exit(), Some(ZoneExit::World)));
         // A connection ending at any other time is not the player's to take.
-        let mut transfers = Transfers::new("Tester");
+        let mut transfers = Transfers::new("Tester", Home::Offered);
         let mut quiet = World::new(5);
         transfers.connection_ended(&mut quiet);
         assert!(quiet.exit().is_none());
@@ -541,7 +569,7 @@ mod tests {
 
     #[test]
     fn zone_lines_are_crossed_from_where_the_player_stands() {
-        let transfers = Transfers::new("Tester");
+        let transfers = Transfers::new("Tester", Home::Offered);
         let mut world = World::new(5);
         let now = Instant::now();
         let here = Position {
@@ -585,8 +613,53 @@ mod tests {
     }
 
     #[test]
+    fn a_client_that_asks_its_way_home_asks_for_its_bind_point_on_dying() {
+        let mut transfers = Transfers::new("Tester", Home::Asked);
+        let mut world = World::new(5);
+        world.player.admit(testing::player(7));
+        world.own_spawn = Some(7);
+        world.zone = (2, 0);
+        world.admitted = Some(Instant::now());
+        let bind = zoning::BindPoint {
+            zone_id: 2,
+            position: Position {
+                x: -74.0,
+                y: 428.0,
+                z: 3.75,
+                heading: 0.0,
+            },
+        };
+        testing::run(|out| transfers.observe(&Message::Bind(bind), &mut world, out))
+            .result
+            .unwrap();
+        let died = Message::Event(WorldEvent::Death(zoning::Death {
+            spawn_id: 7,
+            killer_id: 9,
+            corpse_id: 7,
+            bind_zone_id: 0,
+            corpse_name: None,
+        }));
+        let outcome = testing::run(|out| transfers.observe(&died, &mut world, out));
+        outcome.result.unwrap();
+        // The request goes out at once, for the bind point's zone.
+        assert_eq!(outcome.sent.len(), 1);
+        assert_eq!(outcome.sent[0].opcode, zoning::CHANGE_OPCODE);
+        assert_eq!(world.lifecycle.pending(), Some(&bind.offer()));
+        assert!(world.lifecycle.is_dead());
+        // Without a bind point there is nothing to ask for.
+        let mut lost = Transfers::new("Tester", Home::Asked);
+        let mut world = World::new(5);
+        world.player.admit(testing::player(7));
+        world.own_spawn = Some(7);
+        let outcome = testing::run(|out| lost.observe(&died, &mut world, out));
+        outcome.result.unwrap();
+        assert_eq!(outcome.sent.len(), 0);
+        assert!(world.lifecycle.pending().is_none() && world.lifecycle.is_dead());
+    }
+
+    #[test]
     fn the_player_dying_waits_for_the_offer_home() {
-        let mut transfers = Transfers::new("Tester");
+        let mut transfers = Transfers::new("Tester", Home::Offered);
         let mut world = World::new(5);
         world.own_spawn = Some(7);
         let death = |spawn_id| {

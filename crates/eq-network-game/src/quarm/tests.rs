@@ -396,3 +396,48 @@ fn the_zone_points_and_answer_are_read_as_messages() {
         [Message::Unreadable { .. }]
     ));
 }
+
+#[test]
+fn a_death_names_who_died_their_killer_and_corpse() {
+    let mut body = vec![0; 20];
+    body[..2].copy_from_slice(&7u16.to_le_bytes());
+    body[2..4].copy_from_slice(&9u16.to_le_bytes());
+    body[4..6].copy_from_slice(&7u16.to_le_bytes());
+    let read = death(&body).unwrap();
+    assert_eq!((read.spawn_id, read.killer_id, read.corpse_id), (7, 9, 7));
+    assert_eq!(read.bind_zone_id, 0);
+    assert!(matches!(
+        updates(ZONE_DEATH, &body).unwrap().as_slice(),
+        [WorldEvent::Death(_)]
+    ));
+    assert!(death(&body[..19]).is_err());
+    body[..2].fill(0);
+    assert!(death(&body).is_err());
+}
+
+#[test]
+fn the_profile_names_the_first_bind_point() {
+    let mut data = vec![0; PROFILE_SIZE];
+    data[3784..3788].copy_from_slice(&2u32.to_le_bytes());
+    // A second bind point, which is not the one the player goes home to.
+    data[3788..3792].copy_from_slice(&4u32.to_le_bytes());
+    for (offset, value) in [(3804, 428.0f32), (3824, -74.0), (3844, 3.75), (3864, 128.0)] {
+        data[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+    }
+    let bind = decoded_bind(&data).unwrap();
+    assert_eq!(bind.zone_id, 2);
+    assert_eq!(
+        (
+            bind.position.x,
+            bind.position.y,
+            bind.position.z,
+            bind.position.heading
+        ),
+        (-74.0, 428.0, 3.75, 128.0)
+    );
+    let home = bind.offer();
+    assert_eq!((home.zone_id, home.reason, home.to_bind), (2, 10, true));
+    data[3784..3788].copy_from_slice(&70_000u32.to_le_bytes());
+    assert!(decoded_bind(&data).is_err());
+    assert!(decoded_bind(&data[1..]).is_err());
+}

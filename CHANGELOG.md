@@ -21,6 +21,12 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   answer, the zone points, the save and the departure, and the world
   stage's re-entry between zones (the login's zoning flag, then entering
   the character the world names).
+- `EQMac` deaths: `OP_Death` (20 bytes) is read as `WorldEvent::Death`,
+  and the profile's first bind point as the new `Message::Bind`. A dead
+  player on TAKP asks for their bind point at once (the zone change for the
+  bind zone, with reason 10, `ZC_RepopToHomeAtDeath`), since TAKP holds
+  the move home until the client asks and removes a dead client that never
+  does; Titanium's servers still offer it (`transfers::Home`).
 
 - `WorldEvent::Entered` gains `choices`: what the session leaves to the
   player, none of it among `capabilities`. A server type may leave any
