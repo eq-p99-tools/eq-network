@@ -468,6 +468,22 @@ impl Capability {
     ];
 }
 
+/// Which values of a hit-point report leave out the HP equipped items add,
+/// which the client adds back itself.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+pub enum ItemHitPoints {
+    /// Both values count them.
+    Counted,
+    /// Both leave them out: Titanium's own update, where `EQEmu` subtracts
+    /// `itembonuses.HP` from each (zone/mob.cpp `Mob::SendHPUpdate`).
+    LeftOut,
+    /// The current leaves them out and the maximum counts them: `EQMac`'s
+    /// own update, where TAKP subtracts `itembonuses.HP` from the current
+    /// alone and sends the full maximum, which the official client ignores
+    /// for its own HP (zone/mob.cpp `Mob::SendHPUpdate`).
+    LeftOutOfCurrent,
+}
+
 /// Changes delivered to a graphical consumer, independent of its rendering engine.
 ///
 /// Exhaustive on purpose: a front end should handle every kind of news, so a
@@ -707,10 +723,8 @@ pub enum WorldEvent {
         current: i32,
         /// Maximum HP, never negative.
         maximum: i32,
-        /// Both values leave out the HP equipped items add, which the client adds
-        /// back itself: Titanium's own update, where `EQEmu` subtracts
-        /// `itembonuses.HP` (zone/mob.cpp `Mob::SendHPUpdate`).
-        without_items: bool,
+        /// Which values leave out the HP equipped items add.
+        items: ItemHitPoints,
     },
     /// Current mana and endurance; maxima remain unknown.
     Resources {
@@ -1179,7 +1193,7 @@ pub fn titanium_update(opcode: u16, body: &[u8]) -> Result<Option<WorldEvent>> {
                 current,
                 maximum,
                 spawn_id: u16::from_le_bytes([body[8], body[9]]),
-                without_items: true,
+                items: ItemHitPoints::LeftOut,
             }
         }
         0x4839 => {
@@ -1771,7 +1785,7 @@ mod tests {
                 spawn_id: 7,
                 current: 27,
                 maximum: 40,
-                without_items: true,
+                items: ItemHitPoints::LeftOut,
             })
         );
         // Negative HP, dying or below the equipped item bonus, stays negative.
@@ -1782,7 +1796,7 @@ mod tests {
                 spawn_id: 7,
                 current: -2,
                 maximum: 40,
-                without_items: true,
+                items: ItemHitPoints::LeftOut,
             })
         );
         hp[4..8].copy_from_slice(&(-1i32).to_le_bytes());

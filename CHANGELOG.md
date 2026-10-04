@@ -7,6 +7,16 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- `WorldEvent::HitPoints` says which values leave out the HP equipped items
+  add with `items: ItemHitPoints`, in place of `without_items`. Titanium's
+  own update leaves them out of both (`LeftOut`). `EQMac`'s, as TAKP sends
+  it, leaves them out of the current alone and counts them in the maximum
+  (`LeftOutOfCurrent`), so a host adds item HP back to the current only.
+  It was read as counting them in both, which showed the player's HP low
+  whenever gear adds HP. The health percent that `EQMac`'s update also
+  gives is right for others, but for the player it leaves item HP out, so
+  a host should take the player's health from the hit points.
+
 - `WorldEvent::Entered` gains `choices`: what the session leaves to the
   player, none of it among `capabilities`. A server type may leave any
   feature it provides to the player where its own client keeps it off; a
