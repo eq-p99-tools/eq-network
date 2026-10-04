@@ -30,6 +30,14 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Targeting, considering and attacking on TAKP (`Capability::Targeting`
+  and `Capability::Combat`), in `EQMac`'s own packets: the target as a
+  16-bit spawn, TAKP's 24-byte consider request and answer
+  (`combat::eqmac_consider_request`, `eqmac_consideration`), the
+  auto-attack toggle, and its 24-byte damage records
+  (`combat::eqmac_damage`), whose types are Titanium's. Attacking is not
+  yet checked live there.
+
 - `RaidUpdate::Listed`: a member the server lists as the player joins,
   enters a zone or moves, told apart from one who joins. `EQEmu` sends each
   list in one burst after the raid's creation, with no packet marking its
