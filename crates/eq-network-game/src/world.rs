@@ -472,8 +472,6 @@ impl Capability {
 /// which the client adds back itself.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 pub enum ItemHitPoints {
-    /// Both values count them.
-    Counted,
     /// Both leave them out: Titanium's own update, where `EQEmu` subtracts
     /// `itembonuses.HP` from each (zone/mob.cpp `Mob::SendHPUpdate`).
     LeftOut,
