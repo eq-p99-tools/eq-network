@@ -463,6 +463,9 @@ pub fn updates(opcode: u16, body: &[u8]) -> Result<Vec<WorldEvent>> {
             vec![WorldEvent::Mana(u32::from(short(body, 0)))]
         }
         0xf540 => crate::world::appearance(body)?.into_iter().collect(),
+        crate::combat::EQMAC_DAMAGE_OPCODE => {
+            vec![WorldEvent::Damage(crate::combat::eqmac_damage(body)?)]
+        }
         0x9941 => {
             ensure!(
                 body.len() == 4 && word(body, 0) <= 330,

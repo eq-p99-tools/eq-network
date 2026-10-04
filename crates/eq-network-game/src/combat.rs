@@ -10,6 +10,15 @@ use serde::Serialize;
 pub const CONSIDER_OPCODE: u16 = 0x65ca;
 /// `OP_AutoAttack`: a four-byte toggle whose first byte is 1 (on) or 0 (off).
 pub const AUTO_ATTACK_OPCODE: u16 = 0x5e55;
+/// `EQMac`'s `OP_Consider`: the request and its answer share TAKP's 24-byte
+/// `Consider_Struct`.
+pub const EQMAC_CONSIDER_OPCODE: u16 = 0x3741;
+/// `EQMac`'s `OP_AutoAttack`, the same four-byte toggle as Titanium's.
+pub const EQMAC_AUTO_ATTACK_OPCODE: u16 = 0x5141;
+/// `EQMac`'s `OP_Damage`: TAKP's 24-byte `Damage_Struct`, with the type and
+/// the spell as 16-bit fields.
+pub const EQMAC_DAMAGE_OPCODE: u16 = 0x5840;
+
 /// `OP_Damage`: one melee, skill or spell damage record.
 pub const DAMAGE_OPCODE: u16 = 0x5c78;
 
@@ -133,6 +142,41 @@ pub fn consider_request(own_id: u16, target_id: u16) -> Result<[u8; 28]> {
     Ok(body)
 }
 
+/// Encodes `EQMac`'s consider request: the player's and the target's spawns
+/// as 16-bit IDs, then room for the answer.
+///
+/// # Errors
+/// Rejects a request without both entities.
+pub fn eqmac_consider_request(own_id: u16, target_id: u16) -> Result<[u8; 24]> {
+    ensure!(
+        own_id != 0 && target_id != 0,
+        "consider requires two entities"
+    );
+    let mut body = [0; 24];
+    body[..2].copy_from_slice(&own_id.to_le_bytes());
+    body[2..4].copy_from_slice(&target_id.to_le_bytes());
+    Ok(body)
+}
+
+/// Decodes `EQMac`'s answer to a consider request: the target, the faction
+/// standing, the con level and its hit points.
+///
+/// # Errors
+/// Rejects a malformed answer, and one without a target.
+pub fn eqmac_consideration(body: &[u8]) -> Result<Consideration> {
+    ensure!(body.len() == 24, "invalid EQMac consider length");
+    let target_id = u16::from_le_bytes([body[2], body[3]]);
+    ensure!(target_id != 0, "consider response without a target");
+    let current = i32::from_le_bytes(word(body, 12)?.to_le_bytes());
+    let maximum = i32::from_le_bytes(word(body, 16)?.to_le_bytes());
+    Ok(Consideration {
+        target_id,
+        faction: word(body, 4)?,
+        color: word(body, 8)?.into(),
+        hit_points: (maximum > 0).then_some((current, maximum)),
+    })
+}
+
 /// Encodes the auto-attack toggle.
 #[must_use]
 pub const fn auto_attack(enabled: bool) -> [u8; 4] {
@@ -166,6 +210,28 @@ pub fn damage(body: &[u8]) -> Result<Damage> {
     let kind = body[4];
     let spell_id = u16::from_le_bytes([body[5], body[6]]);
     let raw = i32::from_le_bytes(word(body, 7)?.to_le_bytes());
+    Ok(Damage {
+        target_id: u16::from_le_bytes([body[0], body[1]]),
+        source_id: u16::from_le_bytes([body[2], body[3]]),
+        kind,
+        spell_id: (kind == SPELL_DAMAGE_KIND && !matches!(spell_id, 0 | u16::MAX))
+            .then_some(spell_id),
+        outcome: raw.into(),
+    })
+}
+
+/// Decodes `EQMac`'s damage record: Titanium's fields, the type and the
+/// spell 16 bits wide, then the damage at 8 (TAKP `Damage_Struct`, whose
+/// types are Titanium's: `SkillDamageTypes`, and 231 for spells).
+///
+/// # Errors
+/// Rejects a malformed record, and a type beyond any skill's.
+pub fn eqmac_damage(body: &[u8]) -> Result<Damage> {
+    ensure!(body.len() == 24, "invalid EQMac damage length");
+    let kind = u8::try_from(u16::from_le_bytes([body[4], body[5]]))
+        .map_err(|_| anyhow::anyhow!("EQMac damage type beyond any skill's"))?;
+    let spell_id = u16::from_le_bytes([body[6], body[7]]);
+    let raw = i32::from_le_bytes(word(body, 8)?.to_le_bytes());
     Ok(Damage {
         target_id: u16::from_le_bytes([body[0], body[1]]),
         source_id: u16::from_le_bytes([body[2], body[3]]),
@@ -214,6 +280,58 @@ mod tests {
         assert_eq!(unknown.hit_points, None);
         assert_eq!(unknown.color, ConColor::Other(77));
         assert!(consideration(&response[..27]).is_err());
+    }
+
+    #[test]
+    fn eqmac_considerations_read_takps_24_byte_answer() {
+        let mut answer = [0; 24];
+        answer[..4].copy_from_slice(&[7, 0, 9, 0]);
+        answer[4..8].copy_from_slice(&4u32.to_le_bytes());
+        answer[8..12].copy_from_slice(&2u32.to_le_bytes());
+        answer[12..16].copy_from_slice(&50i32.to_le_bytes());
+        answer[16..20].copy_from_slice(&100i32.to_le_bytes());
+        let considered = eqmac_consideration(&answer).unwrap();
+        assert_eq!(
+            (
+                considered.target_id,
+                considered.faction,
+                considered.hit_points
+            ),
+            (9, 4, Some((50, 100)))
+        );
+        assert_eq!(considered.color, 2u32.into());
+        assert!(eqmac_consideration(&answer[..23]).is_err());
+        assert!(eqmac_consider_request(0, 9).is_err());
+        assert_eq!(&eqmac_consider_request(7, 9).unwrap()[..4], &[7, 0, 9, 0]);
+    }
+
+    #[test]
+    fn eqmac_damage_reads_takps_24_byte_record() {
+        let mut record = [0u8; 24];
+        record[..4].copy_from_slice(&[9, 0, 7, 0]);
+        record[4..6].copy_from_slice(&231u16.to_le_bytes());
+        record[6..8].copy_from_slice(&202u16.to_le_bytes());
+        record[8..12].copy_from_slice(&15i32.to_le_bytes());
+        let spell = eqmac_damage(&record).unwrap();
+        assert_eq!(
+            (spell.target_id, spell.source_id, spell.kind, spell.spell_id),
+            (9, 7, SPELL_DAMAGE_KIND, Some(202))
+        );
+        assert_eq!(spell.outcome, damage(&titanium_record(15)).unwrap().outcome);
+        // A melee hit names no spell, whatever the field holds.
+        record[4..6].copy_from_slice(&1u16.to_le_bytes());
+        record[6..8].copy_from_slice(&u16::MAX.to_le_bytes());
+        assert_eq!(eqmac_damage(&record).unwrap().spell_id, None);
+        record[4..6].copy_from_slice(&256u16.to_le_bytes());
+        assert!(eqmac_damage(&record).is_err());
+        assert!(eqmac_damage(&record[..23]).is_err());
+    }
+
+    /// A Titanium damage record with only the damage set.
+    fn titanium_record(raw: i32) -> [u8; 23] {
+        let mut body = [0u8; 23];
+        body[7..11].copy_from_slice(&raw.to_le_bytes());
+        body
     }
 
     #[test]
