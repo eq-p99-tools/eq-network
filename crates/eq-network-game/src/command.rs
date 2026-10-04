@@ -964,19 +964,23 @@ pub fn encode(
     }
 }
 
-/// Titanium `OP_TargetMouse`: the player's target, or none.
+/// `OP_TargetMouse`: the player's target, or none.
 fn encode_target(dialect: GameDialect, spawn_id: Option<u16>) -> Result<EncodedCommand> {
-    anyhow::ensure!(
-        dialect == GameDialect::Titanium,
-        "targeting is not implemented for this dialect"
-    );
     anyhow::ensure!(
         spawn_id != Some(0),
         "zero is reserved for clearing a target"
     );
-    Ok(EncodedCommand {
-        opcode: 0x6c47,
-        body: u32::from(spawn_id.unwrap_or(0)).to_le_bytes().to_vec(),
+    let target = spawn_id.unwrap_or(0);
+    Ok(match dialect {
+        GameDialect::Titanium => EncodedCommand {
+            opcode: 0x6c47,
+            body: u32::from(target).to_le_bytes().to_vec(),
+        },
+        // TAKP's ClientTarget_Struct holds a 16-bit spawn ID.
+        GameDialect::EqMac => EncodedCommand {
+            opcode: 0x6241,
+            body: target.to_le_bytes().to_vec(),
+        },
     })
 }
 
@@ -1087,22 +1091,34 @@ fn encode_trade(dialect: GameDialect, command: &GameCommand) -> Result<EncodedCo
     Ok(EncodedCommand { opcode, body })
 }
 
-/// Titanium-only consider and auto-attack requests.
+/// Consider and auto-attack requests, in each generation's layout.
 fn encode_combat(dialect: GameDialect, command: &GameCommand) -> Result<EncodedCommand> {
-    anyhow::ensure!(
-        dialect == GameDialect::Titanium,
-        "combat actions are not implemented for this dialect"
-    );
-    match command {
-        GameCommand::Consider {
-            own_id, target_id, ..
-        } => Ok(EncodedCommand {
-            opcode: crate::combat::CONSIDER_OPCODE,
-            body: crate::combat::consider_request(*own_id, *target_id)?.to_vec(),
+    use crate::combat;
+    match (dialect, command) {
+        (
+            GameDialect::Titanium,
+            GameCommand::Consider {
+                own_id, target_id, ..
+            },
+        ) => Ok(EncodedCommand {
+            opcode: combat::CONSIDER_OPCODE,
+            body: combat::consider_request(*own_id, *target_id)?.to_vec(),
         }),
-        GameCommand::AutoAttack { enabled, .. } => Ok(EncodedCommand {
-            opcode: crate::combat::AUTO_ATTACK_OPCODE,
-            body: crate::combat::auto_attack(*enabled).to_vec(),
+        (
+            GameDialect::EqMac,
+            GameCommand::Consider {
+                own_id, target_id, ..
+            },
+        ) => Ok(EncodedCommand {
+            opcode: combat::EQMAC_CONSIDER_OPCODE,
+            body: combat::eqmac_consider_request(*own_id, *target_id)?.to_vec(),
+        }),
+        (dialect, GameCommand::AutoAttack { enabled, .. }) => Ok(EncodedCommand {
+            opcode: match dialect {
+                GameDialect::Titanium => combat::AUTO_ATTACK_OPCODE,
+                GameDialect::EqMac => combat::EQMAC_AUTO_ATTACK_OPCODE,
+            },
+            body: combat::auto_attack(*enabled).to_vec(),
         }),
         _ => anyhow::bail!("not a combat action"),
     }
@@ -1155,7 +1171,7 @@ mod tests {
     }
 
     #[test]
-    fn targeting_uses_only_the_mouse_target_opcode_and_four_byte_id() {
+    fn targeting_uses_each_generations_mouse_target_and_id_width() {
         let command = GameCommand::SelectTarget {
             session_id: 9,
             spawn_id: Some(513),
@@ -1163,7 +1179,8 @@ mod tests {
         let packet = encode(GameDialect::Titanium, &command, "Example").unwrap();
         assert_eq!(packet.opcode, 0x6c47);
         assert_eq!(packet.body, vec![1, 2, 0, 0]);
-        assert!(encode(GameDialect::EqMac, &command, "Example").is_err());
+        let packet = encode(GameDialect::EqMac, &command, "Example").unwrap();
+        assert_eq!((packet.opcode, packet.body), (0x6241, vec![1, 2]));
         let clear = GameCommand::SelectTarget {
             session_id: 9,
             spawn_id: None,
@@ -1177,7 +1194,7 @@ mod tests {
     }
 
     #[test]
-    fn consider_and_auto_attack_use_titanium_combat_opcodes_only() {
+    fn consider_and_auto_attack_use_each_generations_combat_packets() {
         let created = std::time::Instant::now();
         let consider = GameCommand::Consider {
             session_id: 1,
@@ -1188,7 +1205,9 @@ mod tests {
         let packet = encode(GameDialect::Titanium, &consider, "Example").unwrap();
         assert_eq!((packet.opcode, packet.body.len()), (0x65ca, 28));
         assert_eq!(&packet.body[4..8], &[9, 0, 0, 0]);
-        assert!(encode(GameDialect::EqMac, &consider, "Example").is_err());
+        let packet = encode(GameDialect::EqMac, &consider, "Example").unwrap();
+        assert_eq!((packet.opcode, packet.body.len()), (0x3741, 24));
+        assert_eq!(&packet.body[..4], &[7, 0, 9, 0]);
         let attack = GameCommand::AutoAttack {
             session_id: 1,
             enabled: true,
@@ -1196,7 +1215,8 @@ mod tests {
         };
         let packet = encode(GameDialect::Titanium, &attack, "Example").unwrap();
         assert_eq!((packet.opcode, packet.body), (0x5e55, vec![1, 0, 0, 0]));
-        assert!(encode(GameDialect::EqMac, &attack, "Example").is_err());
+        let packet = encode(GameDialect::EqMac, &attack, "Example").unwrap();
+        assert_eq!((packet.opcode, packet.body), (0x5141, vec![1, 0, 0, 0]));
     }
 
     #[test]

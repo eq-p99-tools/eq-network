@@ -28,12 +28,20 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `EQMac`'s 24-byte `OP_Damage` (`hazards::eqmac_damage`). The server takes
   the amount as it is and applies its own reductions, such as `EQEmu`'s
   fall damage reductions from spells, items and AAs, so a host leaves
-  those out. Each server type lists the
-  hazards it takes from the client and the session refuses the rest:
-  `EQEmu` takes falls, while drowning, lava and freezing wait until the
-  official client's reports of them are recorded. What the official
-  clients put in the fields neither server reads is unrecorded (inferred:
-  the player's spawn, zeros, and Titanium's constant 0xFFFF).
+  those out. Each server type lists the hazards it takes from the client
+  and the session refuses the rest: `EQEmu` takes falls, while drowning,
+  lava and freezing wait until the official client's reports of them are
+  recorded. What the official clients put in the fields neither server
+  reads is unrecorded (inferred: the player's spawn, zeros, and
+  Titanium's constant 0xFFFF).
+
+- Targeting, considering and attacking on TAKP (`Capability::Targeting`
+  and `Capability::Combat`), in `EQMac`'s own packets: the target as a
+  16-bit spawn, TAKP's 24-byte consider request and answer
+  (`combat::eqmac_consider_request`, `eqmac_consideration`), the
+  auto-attack toggle, and its 24-byte damage records
+  (`combat::eqmac_damage`), whose types are Titanium's. Attacking is not
+  yet checked live there.
 
 - `RaidUpdate::Listed`: a member the server lists as the player joins,
   enters a zone or moves, told apart from one who joins. `EQEmu` sends each

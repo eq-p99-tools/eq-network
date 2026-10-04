@@ -941,6 +941,14 @@ impl ServerType for Takp {
     fn motion(&self, _setup: &Setup<'_>) -> Provided {
         offer(shared::motion(false))
     }
+
+    fn targeting(&self, _setup: &Setup<'_>) -> Provided {
+        offer(shared::targeting())
+    }
+
+    fn combat(&self, _setup: &Setup<'_>) -> Provided {
+        offer(shared::combat())
+    }
 }
 
 /// The server type of a server protocol.
@@ -1019,10 +1027,16 @@ mod tests {
         assert_eq!(quarm.features(&setup).len(), 3);
         assert_eq!(offers(quarm), [Capability::Talking]);
         let takp = server_type(ServerProtocol::Takp);
-        assert_eq!(takp.features(&setup).len(), 5);
+        assert_eq!(takp.features(&setup).len(), 7);
         assert_eq!(
             offers(takp),
-            [Capability::Moving, Capability::Talking, Capability::Camping]
+            [
+                Capability::Moving,
+                Capability::Targeting,
+                Capability::Combat,
+                Capability::Talking,
+                Capability::Camping
+            ]
         );
         for server in [quarm, takp] {
             assert_eq!(

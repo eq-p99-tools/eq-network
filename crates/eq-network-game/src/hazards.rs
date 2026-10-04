@@ -10,16 +10,15 @@
 //! clients put in the fields neither server reads is unrecorded, so these
 //! packets name the player's spawn where a field names a spawn and leave
 //! the rest at zero (inferred).
-use crate::command::EncodedCommand;
+//!
+//! `EQMac` reports the world's damage in the packet its server sends damage
+//! records in, [`EQMAC_DAMAGE_OPCODE`](crate::combat::EQMAC_DAMAGE_OPCODE).
+use crate::{combat::EQMAC_DAMAGE_OPCODE, command::EncodedCommand};
 use anyhow::{ensure, Result};
 
 /// `OP_EnvDamage`: damage the world did to the player, in Titanium's
 /// 31-byte `EnvDamage2_Struct`.
 pub const ENV_DAMAGE_OPCODE: u16 = 0x31b3;
-/// `EQMac`'s `OP_Damage` (0x4058 in `EQMacEmu`'s patch file, which writes
-/// the bytes the other way round): the 24-byte `Damage_Struct`, which the
-/// client sends for the world's damage.
-pub const EQMAC_DAMAGE_OPCODE: u16 = 0x5840;
 
 /// Titanium's `EnvDamage2_Struct`.
 const TITANIUM_SIZE: usize = 31;
