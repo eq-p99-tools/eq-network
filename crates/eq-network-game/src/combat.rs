@@ -15,6 +15,9 @@ pub const AUTO_ATTACK_OPCODE: u16 = 0x5e55;
 pub const EQMAC_CONSIDER_OPCODE: u16 = 0x3741;
 /// `EQMac`'s `OP_AutoAttack`, the same four-byte toggle as Titanium's.
 pub const EQMAC_AUTO_ATTACK_OPCODE: u16 = 0x5141;
+/// `EQMac`'s `OP_Damage`: TAKP's 24-byte `Damage_Struct`, with the type and
+/// the spell as 16-bit fields.
+pub const EQMAC_DAMAGE_OPCODE: u16 = 0x5840;
 
 /// `OP_Damage`: one melee, skill or spell damage record.
 pub const DAMAGE_OPCODE: u16 = 0x5c78;
@@ -217,6 +220,28 @@ pub fn damage(body: &[u8]) -> Result<Damage> {
     })
 }
 
+/// Decodes `EQMac`'s damage record: Titanium's fields, the type and the
+/// spell 16 bits wide, then the damage at 8 (TAKP `Damage_Struct`, whose
+/// types are Titanium's: `SkillDamageTypes`, and 231 for spells).
+///
+/// # Errors
+/// Rejects a malformed record, and a type beyond any skill's.
+pub fn eqmac_damage(body: &[u8]) -> Result<Damage> {
+    ensure!(body.len() == 24, "invalid EQMac damage length");
+    let kind = u8::try_from(u16::from_le_bytes([body[4], body[5]]))
+        .map_err(|_| anyhow::anyhow!("EQMac damage type beyond any skill's"))?;
+    let spell_id = u16::from_le_bytes([body[6], body[7]]);
+    let raw = i32::from_le_bytes(word(body, 8)?.to_le_bytes());
+    Ok(Damage {
+        target_id: u16::from_le_bytes([body[0], body[1]]),
+        source_id: u16::from_le_bytes([body[2], body[3]]),
+        kind,
+        spell_id: (kind == SPELL_DAMAGE_KIND && !matches!(spell_id, 0 | u16::MAX))
+            .then_some(spell_id),
+        outcome: raw.into(),
+    })
+}
+
 fn word(body: &[u8], offset: usize) -> Result<u32> {
     let bytes = body
         .get(offset..offset + 4)
@@ -278,6 +303,35 @@ mod tests {
         assert!(eqmac_consideration(&answer[..23]).is_err());
         assert!(eqmac_consider_request(0, 9).is_err());
         assert_eq!(&eqmac_consider_request(7, 9).unwrap()[..4], &[7, 0, 9, 0]);
+    }
+
+    #[test]
+    fn eqmac_damage_reads_takps_24_byte_record() {
+        let mut record = [0u8; 24];
+        record[..4].copy_from_slice(&[9, 0, 7, 0]);
+        record[4..6].copy_from_slice(&231u16.to_le_bytes());
+        record[6..8].copy_from_slice(&202u16.to_le_bytes());
+        record[8..12].copy_from_slice(&15i32.to_le_bytes());
+        let spell = eqmac_damage(&record).unwrap();
+        assert_eq!(
+            (spell.target_id, spell.source_id, spell.kind, spell.spell_id),
+            (9, 7, SPELL_DAMAGE_KIND, Some(202))
+        );
+        assert_eq!(spell.outcome, damage(&titanium_record(15)).unwrap().outcome);
+        // A melee hit names no spell, whatever the field holds.
+        record[4..6].copy_from_slice(&1u16.to_le_bytes());
+        record[6..8].copy_from_slice(&u16::MAX.to_le_bytes());
+        assert_eq!(eqmac_damage(&record).unwrap().spell_id, None);
+        record[4..6].copy_from_slice(&256u16.to_le_bytes());
+        assert!(eqmac_damage(&record).is_err());
+        assert!(eqmac_damage(&record[..23]).is_err());
+    }
+
+    /// A Titanium damage record with only the damage set.
+    fn titanium_record(raw: i32) -> [u8; 23] {
+        let mut body = [0u8; 23];
+        body[7..11].copy_from_slice(&raw.to_le_bytes());
+        body
     }
 
     #[test]
