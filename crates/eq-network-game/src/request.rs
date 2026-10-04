@@ -377,6 +377,10 @@ pub fn eqmac(request: &Request, sender: Sender<'_>) -> Result<EncodedCommand> {
         Request::Posture(posture) => crate::quarm::posture(sender.spawn(), *posture),
         Request::Position(sample) => crate::quarm::client_update(sample),
         Request::Command(command) => command::encode(GameDialect::EqMac, command, sender.name),
+        Request::InviteToGroup(name) => group::eqmac_invite(name, sender.name),
+        Request::FollowGroup(inviter) => group::eqmac_follow(inviter, sender.name),
+        Request::DeclineGroup(inviter) => group::eqmac_decline(inviter, sender.name),
+        Request::Disband => group::eqmac_disband(sender.name),
         _ => anyhow::bail!("the EQMac client cannot send {request:?} yet"),
     }
 }

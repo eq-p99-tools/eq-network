@@ -917,6 +917,13 @@ impl ServerType for Takp {
     fn motion(&self, _setup: &Setup<'_>) -> Provided {
         offer(shared::motion(false))
     }
+
+    /// Groups, with `EQMac`'s opcodes for Titanium's layouts (TAKP
+    /// `zone/client_packet.cpp` `Handle_OP_GroupInvite2`, `GroupFollow`,
+    /// `GroupCancelInvite`, `GroupDisband`); not yet checked live there.
+    fn groups(&self, _setup: &Setup<'_>) -> Provided {
+        offer(shared::groups())
+    }
 }
 
 /// The server type of a server protocol.
@@ -995,10 +1002,15 @@ mod tests {
         assert_eq!(quarm.features(&setup).len(), 3);
         assert_eq!(offers(quarm), [Capability::Talking]);
         let takp = server_type(ServerProtocol::Takp);
-        assert_eq!(takp.features(&setup).len(), 5);
+        assert_eq!(takp.features(&setup).len(), 6);
         assert_eq!(
             offers(takp),
-            [Capability::Moving, Capability::Talking, Capability::Camping]
+            [
+                Capability::Moving,
+                Capability::Talking,
+                Capability::Camping,
+                Capability::Grouping
+            ]
         );
         for server in [quarm, takp] {
             assert_eq!(

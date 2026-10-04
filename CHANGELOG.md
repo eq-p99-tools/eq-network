@@ -20,6 +20,17 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Groups on TAKP (`Capability::Grouping`), read from EQMacEmu's source and
+  not yet checked live. The `EQMac` client's group packets have Titanium's
+  layouts with their own opcodes (`group::eqmac_invite`, `eqmac_follow`,
+  `eqmac_decline`, `eqmac_disband` and `decode_eqmac`); its invitation is
+  193 bytes, the names and 65 more (zero, inferred). TAKP also has its own
+  ways: it removes a player from a group with a quiet update naming them,
+  read as `GroupUpdate::Left`, and lists the player's group in the profile
+  (`quarm::profile_group`) as each zone admits them, with the leader named
+  afterwards. The session tells the host a group listed before the
+  admission once the zone admits the player.
+
 - `RaidUpdate::Listed`: a member the server lists as the player joins,
   enters a zone or moves, told apart from one who joins. `EQEmu` sends each
   list in one burst after the raid's creation, with no packet marking its

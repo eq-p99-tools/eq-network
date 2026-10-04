@@ -27,6 +27,29 @@ fn profile_attributes_preserve_signed_width_and_field_order() {
     );
     assert!(decoded_profile(&data[..177], "Example").is_err());
 }
+
+#[test]
+fn the_profile_lists_the_players_group_without_its_leader() {
+    let mut data = vec![0; PROFILE_SIZE];
+    data[6..13].copy_from_slice(b"Example");
+    assert_eq!(decoded_group(&data).unwrap(), None);
+    // Six places from 5012, the player's own among them.
+    data[5012..5019].copy_from_slice(b"Example");
+    assert_eq!(decoded_group(&data).unwrap(), None);
+    data[5076..5082].copy_from_slice(b"Friend");
+    data[5332..5337].copy_from_slice(b"Other");
+    assert_eq!(
+        decoded_group(&data).unwrap(),
+        Some(crate::group::GroupUpdate::Members {
+            leader: String::new(),
+            members: vec!["Friend".into(), "Other".into()],
+        })
+    );
+    assert!(decoded_group(&data[..5396]).is_err());
+    // The synthetic profile is in no group.
+    assert_eq!(profile_group(&hex::decode(PROFILE).unwrap()).unwrap(), None);
+    assert!(profile_group(&[0; 4]).is_err());
+}
 const PROFILE: &str = "ae05f5a6083907c71a8fa0b9df18601d2fadb4d6b80a3099d83162b5c95015d3bd8bd662ad969f16538260e8249c5a9d1c78803e51a3f8d3d48f5ca3fb28b2bff7a48403366d5c880b3422059ae86574971744def74907496b270882";
 const SPAWNS: &str = "28e67b5d096069468c09009a236b6b8bace06fcd5ad543cb0f2173178769ee91ddec0b81713d9ef952c724020b109b20e8bbf4f4b5b2e79e";
 
