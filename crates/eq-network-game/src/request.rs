@@ -11,6 +11,7 @@ use crate::{
     corpses, doors, exchange,
     food::{self, Meal},
     group,
+    hazards::{self, Hazard},
     inventory::{self, InventorySlot, MoveQuantity},
     listing::{self, Anonymity},
     money::CoinTransfer,
@@ -265,6 +266,13 @@ pub enum Request {
     Position(PositionPacket),
     /// The player jumped.
     Jump,
+    /// The world hurt the player: the damage the client worked out.
+    EnvironmentalDamage {
+        /// What did it.
+        hazard: Hazard,
+        /// How much, before the server's own reductions.
+        amount: u32,
+    },
 }
 
 /// The Titanium client's packet for a request from this sender.
@@ -361,12 +369,15 @@ pub fn titanium(request: &Request, sender: Sender<'_>) -> Result<EncodedCommand>
         } => food::consume(*slot, *meal, *by_hand),
         Request::Position(sample) => sample.packet()?,
         Request::Jump => movement::titanium_jump(),
+        Request::EnvironmentalDamage { hazard, amount } => {
+            hazards::titanium_damage(sender.spawn(), *hazard, *amount)?
+        }
     })
 }
 
 /// The `EQMac` client's packet for a request from this sender: camping,
-/// logging out, its stance and position, and the host commands its
-/// generation encodes so far, which is chat.
+/// logging out, its stance and position, the world's damage, and the host
+/// commands its generation encodes so far, which is chat.
 ///
 /// # Errors
 /// Refuses every other request, and a command the generation cannot carry.
@@ -376,6 +387,9 @@ pub fn eqmac(request: &Request, sender: Sender<'_>) -> Result<EncodedCommand> {
         Request::Logout => Ok(crate::quarm::logout()),
         Request::Posture(posture) => crate::quarm::posture(sender.spawn(), *posture),
         Request::Position(sample) => crate::quarm::client_update(sample),
+        Request::EnvironmentalDamage { hazard, amount } => {
+            hazards::eqmac_damage(sender.spawn(), *hazard, *amount)
+        }
         Request::Command(command) => command::encode(GameDialect::EqMac, command, sender.name),
         _ => anyhow::bail!("the EQMac client cannot send {request:?} yet"),
     }
@@ -465,5 +479,27 @@ mod tests {
             exchange::busy(7, 50).unwrap()
         );
         assert!(eqmac(&answer(false), PLAYER).is_err());
+    }
+
+    #[test]
+    fn each_generation_reports_the_worlds_damage_in_its_own_packet() {
+        let fall = Request::EnvironmentalDamage {
+            hazard: Hazard::Falling,
+            amount: 160,
+        };
+        assert_eq!(
+            titanium(&fall, PLAYER).unwrap(),
+            hazards::titanium_damage(7, Hazard::Falling, 160).unwrap()
+        );
+        assert_eq!(
+            eqmac(&fall, PLAYER).unwrap(),
+            hazards::eqmac_damage(7, Hazard::Falling, 160).unwrap()
+        );
+        let unspawned = Sender {
+            spawn_id: None,
+            ..PLAYER
+        };
+        assert!(titanium(&fall, unspawned).is_err());
+        assert!(eqmac(&fall, unspawned).is_err());
     }
 }
