@@ -228,8 +228,8 @@ pub enum GameCommand {
         corpse_id: u16,
         /// Own spawn identifier from this admission.
         own_id: u16,
-        /// Corpse slot listed by the server.
-        slot: u16,
+        /// The item's place on the corpse, from 0, as the loot listed it.
+        place: u16,
         /// Place directly into the inventory instead of on the cursor.
         auto: bool,
         /// Reject delayed actions instead of replaying them after a stall.
@@ -423,6 +423,123 @@ pub enum GameCommand {
         /// True accepts.
         accept: bool,
     },
+    /// Invite a player into the player's group, by name: `/invite`.
+    InviteToGroup {
+        /// Current zone admission.
+        session_id: u64,
+        /// Who is invited.
+        name: String,
+    },
+    /// Join the group of whoever invited the player last: `/follow`.
+    FollowGroup {
+        /// Current zone admission.
+        session_id: u64,
+    },
+    /// Decline the invitation waiting for an answer.
+    DeclineGroup {
+        /// Current zone admission.
+        session_id: u64,
+    },
+    /// Leave the group, or, as its leader, remove the targeted member or
+    /// disband it, as the server decides; with an invitation waiting,
+    /// decline it: `/disband`.
+    Disband {
+        /// Current zone admission.
+        session_id: u64,
+    },
+    /// Turn away from the keyboard, or back: `/afk`.
+    ToggleAway {
+        /// Current zone admission.
+        session_id: u64,
+    },
+    /// Turn anonymous, or open again: `/anonymous`.
+    ToggleAnonymous {
+        /// Current zone admission.
+        session_id: u64,
+    },
+    /// Turn roleplaying, or open again: `/roleplay`.
+    ToggleRoleplay {
+        /// Current zone admission.
+        session_id: u64,
+    },
+    /// Roll a die from the lowest to the highest number: `/random`.
+    Random {
+        /// Current zone admission.
+        session_id: u64,
+        /// The lowest number.
+        low: u32,
+        /// The highest.
+        high: u32,
+    },
+    /// Emote, in the player's own words: `/emote`.
+    Emote {
+        /// Current zone admission.
+        session_id: u64,
+        /// What the player does, after their name.
+        text: String,
+    },
+    /// Take the target of this spawn: `/assist`.
+    Assist {
+        /// Current zone admission.
+        session_id: u64,
+        /// Whose target to take.
+        spawn_id: u16,
+    },
+    /// Invite a player into the player's raid, by name: `/raidinvite`.
+    RaidInvite {
+        /// Current zone admission.
+        session_id: u64,
+        /// Who is invited.
+        name: String,
+    },
+    /// Join the raid of whoever invited the player last: `/raidaccept`.
+    RaidAccept {
+        /// Current zone admission.
+        session_id: u64,
+    },
+    /// Decline the raid invitation waiting for an answer: `/raiddecline`.
+    RaidDecline {
+        /// Current zone admission.
+        session_id: u64,
+    },
+    /// Leave the player's raid: `/raiddisband`.
+    RaidLeave {
+        /// Current zone admission.
+        session_id: u64,
+    },
+    /// Lock the player's raid, so that its leader may move members between
+    /// raid groups, or unlock it: the Raid window's Lock and Unlock.
+    RaidLock {
+        /// Current zone admission.
+        session_id: u64,
+        /// Lock (true) or unlock.
+        locked: bool,
+    },
+    /// Move a member of the player's raid into a raid group, 0 to 11, or
+    /// out of every group: the Raid window's group buttons.
+    RaidMove {
+        /// Current zone admission.
+        session_id: u64,
+        /// Who moves.
+        name: String,
+        /// Where to: a raid group, or none.
+        group: Option<u8>,
+    },
+    /// Hand the lead of the player's raid to a member: `/makeraidleader`.
+    RaidMakeLeader {
+        /// Current zone admission.
+        session_id: u64,
+        /// The new leader.
+        name: String,
+    },
+    /// Remove a member from the player's raid: the Raid window's Disband
+    /// with a member chosen.
+    RaidRemove {
+        /// Current zone admission.
+        session_id: u64,
+        /// Who is removed; the player themself leaves.
+        name: String,
+    },
     /// Ask the world who is online: `/who all`.
     WhoAll {
         /// Current zone admission.
@@ -502,6 +619,24 @@ impl GameCommand {
             | Self::Pet { session_id, .. }
             | Self::Training { session_id, .. }
             | Self::AnswerResurrection { session_id, .. }
+            | Self::InviteToGroup { session_id, .. }
+            | Self::FollowGroup { session_id }
+            | Self::DeclineGroup { session_id }
+            | Self::Disband { session_id }
+            | Self::ToggleAway { session_id }
+            | Self::ToggleAnonymous { session_id }
+            | Self::ToggleRoleplay { session_id }
+            | Self::Random { session_id, .. }
+            | Self::Emote { session_id, .. }
+            | Self::Assist { session_id, .. }
+            | Self::RaidInvite { session_id, .. }
+            | Self::RaidAccept { session_id }
+            | Self::RaidDecline { session_id }
+            | Self::RaidLeave { session_id }
+            | Self::RaidLock { session_id, .. }
+            | Self::RaidMove { session_id, .. }
+            | Self::RaidMakeLeader { session_id, .. }
+            | Self::RaidRemove { session_id, .. }
             | Self::ReadItem { session_id, .. }
             | Self::Combine { session_id, .. }
             | Self::Consent { session_id, .. }
@@ -521,11 +656,11 @@ impl GameCommand {
         use crate::world::Capability;
         Some(match self {
             Self::SelectCharacter { .. } | Self::CreateCharacter { .. } => return None,
-            Self::SwapSpell { .. }
-            | Self::ScribeSpell { .. }
-            | Self::DeleteSpell { .. }
-            | Self::ForgetSpell { .. }
-            | Self::MemorizeSpell { .. } => Capability::Spellbook,
+            Self::ScribeSpell { .. } | Self::ForgetSpell { .. } | Self::MemorizeSpell { .. } => {
+                Capability::Spellbook
+            }
+            Self::DeleteSpell { .. } => Capability::DeletingSpells,
+            Self::SwapSpell { .. } => Capability::MovingSpells,
             // An item's click effect is a cast.
             Self::CastSpell { .. } | Self::UseItem(_) => Capability::Casting,
             Self::ClickDoor { .. } => Capability::Doors,
@@ -563,6 +698,24 @@ impl GameCommand {
             Self::Pet { .. } => Capability::Pets,
             Self::Training { .. } => Capability::Training,
             Self::AnswerResurrection { .. } => Capability::Resurrection,
+            Self::InviteToGroup { .. }
+            | Self::FollowGroup { .. }
+            | Self::DeclineGroup { .. }
+            | Self::Disband { .. } => Capability::Grouping,
+            Self::ToggleAway { .. }
+            | Self::ToggleAnonymous { .. }
+            | Self::ToggleRoleplay { .. } => Capability::Listing,
+            Self::Random { .. } => Capability::Rolling,
+            Self::Emote { .. } => Capability::Emoting,
+            Self::Assist { .. } => Capability::Assisting,
+            Self::RaidInvite { .. }
+            | Self::RaidAccept { .. }
+            | Self::RaidDecline { .. }
+            | Self::RaidLeave { .. }
+            | Self::RaidLock { .. }
+            | Self::RaidMove { .. }
+            | Self::RaidMakeLeader { .. }
+            | Self::RaidRemove { .. } => Capability::Raiding,
             Self::ReadItem { .. } => Capability::Reading,
             Self::Combine { .. } | Self::OpenContainer { .. } | Self::CloseContainer { .. } => {
                 Capability::Tradeskills
@@ -589,6 +742,24 @@ impl GameCommand {
             | Self::WhoAll { .. }
             | Self::Pet { .. }
             | Self::AnswerResurrection { .. }
+            | Self::InviteToGroup { .. }
+            | Self::FollowGroup { .. }
+            | Self::DeclineGroup { .. }
+            | Self::Disband { .. }
+            | Self::ToggleAway { .. }
+            | Self::ToggleAnonymous { .. }
+            | Self::ToggleRoleplay { .. }
+            | Self::Random { .. }
+            | Self::Emote { .. }
+            | Self::Assist { .. }
+            | Self::RaidInvite { .. }
+            | Self::RaidAccept { .. }
+            | Self::RaidDecline { .. }
+            | Self::RaidLeave { .. }
+            | Self::RaidLock { .. }
+            | Self::RaidMove { .. }
+            | Self::RaidMakeLeader { .. }
+            | Self::RaidRemove { .. }
             | Self::ReadItem { .. }
             | Self::CloseContainer { .. }
             | Self::Consent { .. }
@@ -703,24 +874,7 @@ pub fn encode(
                 body: crate::items::request(link_body)?.to_vec(),
             })
         }
-        GameCommand::SelectTarget { spawn_id, .. } => {
-            anyhow::ensure!(
-                *spawn_id != Some(0),
-                "zero is reserved for clearing a target"
-            );
-            let target = spawn_id.unwrap_or(0);
-            Ok(match dialect {
-                GameDialect::Titanium => EncodedCommand {
-                    opcode: 0x6c47,
-                    body: u32::from(target).to_le_bytes().to_vec(),
-                },
-                // TAKP's ClientTarget_Struct holds a 16-bit spawn ID.
-                GameDialect::EqMac => EncodedCommand {
-                    opcode: 0x6241,
-                    body: target.to_le_bytes().to_vec(),
-                },
-            })
-        }
+        GameCommand::SelectTarget { spawn_id, .. } => encode_target(dialect, *spawn_id),
         GameCommand::Consider { .. } | GameCommand::AutoAttack { .. } => {
             encode_combat(dialect, command)
         }
@@ -751,6 +905,24 @@ pub fn encode(
         | GameCommand::Pet { .. }
         | GameCommand::Training { .. }
         | GameCommand::AnswerResurrection { .. }
+        | GameCommand::InviteToGroup { .. }
+        | GameCommand::FollowGroup { .. }
+        | GameCommand::DeclineGroup { .. }
+        | GameCommand::Disband { .. }
+        | GameCommand::ToggleAway { .. }
+        | GameCommand::ToggleAnonymous { .. }
+        | GameCommand::ToggleRoleplay { .. }
+        | GameCommand::Random { .. }
+        | GameCommand::Emote { .. }
+        | GameCommand::Assist { .. }
+        | GameCommand::RaidInvite { .. }
+        | GameCommand::RaidAccept { .. }
+        | GameCommand::RaidDecline { .. }
+        | GameCommand::RaidLeave { .. }
+        | GameCommand::RaidLock { .. }
+        | GameCommand::RaidMove { .. }
+        | GameCommand::RaidMakeLeader { .. }
+        | GameCommand::RaidRemove { .. }
         | GameCommand::ReadItem { .. }
         | GameCommand::Combine { .. }
         | GameCommand::Consent { .. }
@@ -774,6 +946,26 @@ pub fn encode(
             body: chat::encode_outbound_for(dialect, message, character)?,
         }),
     }
+}
+
+/// `OP_TargetMouse`: the player's target, or none.
+fn encode_target(dialect: GameDialect, spawn_id: Option<u16>) -> Result<EncodedCommand> {
+    anyhow::ensure!(
+        spawn_id != Some(0),
+        "zero is reserved for clearing a target"
+    );
+    let target = spawn_id.unwrap_or(0);
+    Ok(match dialect {
+        GameDialect::Titanium => EncodedCommand {
+            opcode: 0x6c47,
+            body: u32::from(target).to_le_bytes().to_vec(),
+        },
+        // TAKP's ClientTarget_Struct holds a 16-bit spawn ID.
+        GameDialect::EqMac => EncodedCommand {
+            opcode: 0x6241,
+            body: target.to_le_bytes().to_vec(),
+        },
+    })
 }
 
 /// The Titanium appearance packet that sets the own spawn's posture.
@@ -831,12 +1023,12 @@ fn encode_trade(dialect: GameDialect, command: &GameCommand) -> Result<EncodedCo
         GameCommand::LootItem {
             corpse_id,
             own_id,
-            slot,
+            place,
             auto,
             ..
         } => (
             crate::loot::ITEM_OPCODE,
-            crate::loot::item_request(*corpse_id, *own_id, *slot, *auto)?.to_vec(),
+            crate::loot::item_request(*corpse_id, *own_id, *place, *auto)?.to_vec(),
         ),
         GameCommand::EndLoot { corpse_id, .. } => (
             crate::loot::END_OPCODE,
@@ -1029,7 +1221,7 @@ mod tests {
                     session_id: 1,
                     corpse_id: 9,
                     own_id: 7,
-                    slot: 22,
+                    place: 0,
                     auto: true,
                     created,
                 },

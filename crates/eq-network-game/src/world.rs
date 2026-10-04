@@ -162,6 +162,38 @@ impl SpawnKind {
     }
 }
 
+/// The name a server gives the corpse of a spawn that dies in view, by the
+/// client generation's rule. On Titanium servers it is `EQEmu`'s
+/// `Corpse::CalcCorpseName` form: the living name without its digits, then
+/// `'s corpse` for a player's or `` `s_corpse `` for anything else's, then the
+/// spawn ID, within 63 characters. That the official client shows the same
+/// name is inferred. None where a generation's rule is not checked: `EqMac`
+/// until it is seen on TAKP.
+#[must_use]
+pub fn corpse_name(
+    dialect: crate::GameDialect,
+    living: &str,
+    kind: SpawnKind,
+    spawn_id: u16,
+) -> Option<String> {
+    match dialect {
+        crate::GameDialect::Titanium => {
+            let suffix = if matches!(kind, SpawnKind::Player | SpawnKind::PlayerCorpse) {
+                format!("'s corpse{spawn_id}")
+            } else {
+                format!("`s_corpse{spawn_id}")
+            };
+            let base: String = living
+                .chars()
+                .filter(|c| !c.is_ascii_digit())
+                .take(63usize.saturating_sub(suffix.len()))
+                .collect();
+            Some(base + &suffix)
+        }
+        _ => None,
+    }
+}
+
 /// A zone entity. Asset selection stays outside the protocol layer.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct SpawnState {
@@ -308,7 +340,10 @@ pub enum CampStatus {
 
 /// Something a zone session lets the player do. Which ones a session offers
 /// depends on the server type and on what its client generation has been
-/// built for; a front end greys out or hides the rest.
+/// built for; a front end greys out or hides the rest. A server type may
+/// instead leave one to the player, where its own client keeps it off: the
+/// session lists it among the player's choices, and a front end offers it
+/// only once the player turns it on.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 pub enum Capability {
     /// Casting memorized spells.
@@ -361,12 +396,41 @@ pub enum Capability {
     /// Opening the in-game map, which a front end draws from the
     /// installation's map files.
     Map,
+    /// Deleting a spell from the spellbook.
+    DeletingSpells,
+    /// Moving a spell to another place in the spellbook, swapping it with
+    /// any spell there.
+    MovingSpells,
+    /// Showing what a merchant pays for an item sold to them, worked out
+    /// from the item's price and the rate the merchant opened with, by the
+    /// server type's rule.
+    MerchantOffers,
+    /// Inviting players into a group, joining or declining an invitation,
+    /// leaving and disbanding.
+    Grouping,
+    /// Turning away from the keyboard, anonymous or roleplaying: how `/who`
+    /// lists the player.
+    Listing,
+    /// Rolling dice: `/random`.
+    Rolling,
+    /// Emoting: `/emote`.
+    Emoting,
+    /// Taking another's target: `/assist`.
+    Assisting,
+    /// Inviting players into a raid, accepting or declining an invitation,
+    /// and leaving; and as the raid's leader, locking it, moving members
+    /// between raid groups, handing on the lead and removing members.
+    Raiding,
+    /// Taking the mark of a raid group's leader from a member, as a button of
+    /// the Raid window does. No server type offers it yet: `EQEmu` has no
+    /// handler for it.
+    RaidGroupLeaders,
 }
 
 impl Capability {
     /// Every capability, in order: what a session offers when its server and
     /// client generation support everything.
-    pub const ALL: [Self; 24] = [
+    pub const ALL: [Self; 34] = [
         Self::Casting,
         Self::Spellbook,
         Self::Inventory,
@@ -391,6 +455,16 @@ impl Capability {
         Self::Reading,
         Self::Tradeskills,
         Self::Map,
+        Self::DeletingSpells,
+        Self::MovingSpells,
+        Self::MerchantOffers,
+        Self::Grouping,
+        Self::Listing,
+        Self::Rolling,
+        Self::Emoting,
+        Self::Assisting,
+        Self::Raiding,
+        Self::RaidGroupLeaders,
     ];
 }
 
@@ -598,6 +672,10 @@ pub enum WorldEvent {
         /// What this session lets the player do; front ends grey out or hide
         /// the rest.
         capabilities: Vec<Capability>,
+        /// What this session leaves to the player, none of it among
+        /// `capabilities`: the server's own client keeps it off, so a front
+        /// end offers it only once the player turns it on.
+        choices: Vec<Capability>,
         /// Unique connection identifier, never reused after reconnect.
         session_id: u64,
         /// Zone asset short name.
@@ -715,6 +793,10 @@ pub enum WorldEvent {
         session_id: u64,
         /// Why not.
         reason: String,
+        /// The official client's own words for this refusal, as an
+        /// `eqstr_us.txt` string ID, for a host with the installed strings;
+        /// `reason` says the same in this library's words.
+        string_id: Option<u32>,
     },
     /// The player used an ability; its timer runs this long before the
     /// server takes the next use.
@@ -761,6 +843,10 @@ pub enum WorldEvent {
         session_id: u64,
         /// Why not.
         reason: String,
+        /// The official client's own words for this refusal, as an
+        /// `eqstr_us.txt` string ID, for a host with the installed strings;
+        /// `reason` says the same in this library's words.
+        string_id: Option<u32>,
     },
     /// A spawn became someone's pet, as a charm takes hold, or no one's, as
     /// it breaks.
@@ -778,6 +864,10 @@ pub enum WorldEvent {
         session_id: u64,
         /// Why not.
         reason: String,
+        /// The official client's own words for this refusal, as an
+        /// `eqstr_us.txt` string ID, for a host with the installed strings;
+        /// `reason` says the same in this library's words.
+        string_id: Option<u32>,
     },
     /// Training at a guildmaster opened, took a practice or ended.
     Training(crate::training::TrainingUpdate),
@@ -799,6 +889,73 @@ pub enum WorldEvent {
         session_id: u64,
         /// Why not.
         reason: String,
+    },
+    /// News of groups: the server's word (an invitation, an answer to the
+    /// player's, who joined or left, the group's members and leader, or its
+    /// end) and the requests the session sent for the player.
+    Group(crate::group::GroupUpdate),
+    /// A group request was not sent, and why.
+    GroupRefused {
+        /// Admission from the request.
+        session_id: u64,
+        /// Why not.
+        reason: String,
+        /// The official client's own words for this refusal, as an
+        /// `eqstr_us.txt` string ID, for a host with the installed strings;
+        /// `reason` says the same in this library's words.
+        string_id: Option<u32>,
+    },
+    /// The session changed how `/who` lists the player, which the server
+    /// does not echo.
+    ListingSet {
+        /// Admission from the request.
+        session_id: u64,
+        /// What changed.
+        change: crate::listing::ListingChange,
+    },
+    /// A listing change was not sent, and why.
+    ListingRefused {
+        /// Admission from the request.
+        session_id: u64,
+        /// Why not.
+        reason: String,
+        /// The official client's own words for this refusal, as an
+        /// `eqstr_us.txt` string ID, for a host with the installed strings;
+        /// `reason` says the same in this library's words.
+        string_id: Option<u32>,
+    },
+    /// A die the server rolled for a player near the player, the player
+    /// among them.
+    Roll(crate::socials::Roll),
+    /// The server's answer to the player's assist: the target to take.
+    Assisted(crate::socials::Assisted),
+    /// News of raids: the server's word (an invitation, the raid's leader
+    /// and members, who left, the player's end in it) and the requests the
+    /// session sent or answered for the player.
+    Raid(crate::raid::RaidUpdate),
+    /// A raid request was not sent, and why.
+    RaidRefused {
+        /// Admission from the request.
+        session_id: u64,
+        /// Why not.
+        reason: String,
+        /// The official client's own words for this refusal, as an
+        /// `eqstr_us.txt` string ID, for a host with the installed strings;
+        /// `reason` says the same in this library's words.
+        string_id: Option<u32>,
+        /// What the official string names, in its order: a member's name.
+        arguments: Vec<String>,
+    },
+    /// A roll, emote or assist was not sent, and why.
+    SocialRefused {
+        /// Admission from the request.
+        session_id: u64,
+        /// Why not.
+        reason: String,
+        /// The official client's own words for this refusal, as an
+        /// `eqstr_us.txt` string ID, for a host with the installed strings;
+        /// `reason` says the same in this library's words.
+        string_id: Option<u32>,
     },
     /// A book's or note's text, to read.
     BookText(crate::books::BookText),
@@ -1042,8 +1199,8 @@ pub fn titanium_update(opcode: u16, body: &[u8]) -> Result<Option<WorldEvent>> {
 }
 
 /// Spell actions, doors, ground objects, loot, merchant, exchange,
-/// training, resurrection, book, combine, bandaging and inventory packets,
-/// each owned by its codec.
+/// training, resurrection, group, dice, assist, raid, book, combine,
+/// bandaging and inventory packets, each owned by its codec.
 fn titanium_views(opcode: u16, body: &[u8]) -> Result<Option<WorldEvent>> {
     if opcode == 0x497c {
         return Ok(crate::buffs::titanium_spell_effect(body)?.map(WorldEvent::SpellEffect));
@@ -1062,6 +1219,14 @@ fn titanium_views(opcode: u16, body: &[u8]) -> Result<Option<WorldEvent>> {
         Some(WorldEvent::Training(update))
     } else if let Some(offer) = crate::resurrection::decode(opcode, body)? {
         Some(WorldEvent::Resurrection(offer))
+    } else if let Some(update) = crate::group::decode(opcode, body)? {
+        Some(WorldEvent::Group(update))
+    } else if let Some(roll) = crate::socials::decode_roll(opcode, body)? {
+        Some(WorldEvent::Roll(roll))
+    } else if let Some(answer) = crate::socials::decode_assist(opcode, body)? {
+        Some(WorldEvent::Assisted(answer))
+    } else if let Some(update) = crate::raid::decode(opcode, body)? {
+        Some(WorldEvent::Raid(update))
     } else if let Some(text) = crate::books::decode(opcode, body)? {
         Some(WorldEvent::BookText(text))
     } else if let Some(update) = crate::tradeskills::decode(opcode, body)? {
@@ -1256,6 +1421,16 @@ mod tests {
             Capability::Reading => 21,
             Capability::Tradeskills => 22,
             Capability::Map => 23,
+            Capability::DeletingSpells => 24,
+            Capability::MovingSpells => 25,
+            Capability::MerchantOffers => 26,
+            Capability::Grouping => 27,
+            Capability::Listing => 28,
+            Capability::Rolling => 29,
+            Capability::Emoting => 30,
+            Capability::Assisting => 31,
+            Capability::Raiding => 32,
+            Capability::RaidGroupLeaders => 33,
         };
         for (index, capability) in Capability::ALL.into_iter().enumerate() {
             assert_eq!(place(capability), index, "{capability:?}");

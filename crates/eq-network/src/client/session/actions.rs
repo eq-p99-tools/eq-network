@@ -141,6 +141,24 @@ pub(super) fn needs(command: &ClientCommand) -> &'static [Resource] {
         | ClientCommand::Pet { .. }
         | ClientCommand::Training { .. }
         | ClientCommand::AnswerResurrection { .. }
+        | ClientCommand::InviteToGroup { .. }
+        | ClientCommand::FollowGroup { .. }
+        | ClientCommand::DeclineGroup { .. }
+        | ClientCommand::Disband { .. }
+        | ClientCommand::ToggleAway { .. }
+        | ClientCommand::ToggleAnonymous { .. }
+        | ClientCommand::ToggleRoleplay { .. }
+        | ClientCommand::Random { .. }
+        | ClientCommand::Emote { .. }
+        | ClientCommand::Assist { .. }
+        | ClientCommand::RaidInvite { .. }
+        | ClientCommand::RaidAccept { .. }
+        | ClientCommand::RaidDecline { .. }
+        | ClientCommand::RaidLeave { .. }
+        | ClientCommand::RaidLock { .. }
+        | ClientCommand::RaidMove { .. }
+        | ClientCommand::RaidMakeLeader { .. }
+        | ClientCommand::RaidRemove { .. }
         | ClientCommand::ReadItem { .. }
         // Opening a container holds nothing, and closing one must always be
         // possible.
@@ -159,7 +177,44 @@ pub(super) fn needs(command: &ClientCommand) -> &'static [Resource] {
 /// Reports a refused command through the result event its caller waits for;
 /// a command nobody waits on is only noted.
 pub(super) fn refuse(command: &ClientCommand, reason: &str, log: &mut Events<'_>) -> Result<()> {
-    if let Some(event) = refusal(command, reason) {
+    refuse_officially(command, (reason, None), log)
+}
+
+/// Reports a refused command as [`refuse`] does, naming the official
+/// client's string (`eqstr_us.txt`) for it where its result event has room.
+pub(super) fn refuse_officially(
+    command: &ClientCommand,
+    official: (&str, Option<u32>),
+    log: &mut Events<'_>,
+) -> Result<()> {
+    refuse_naming(command, official, &[], log)
+}
+
+/// Reports a refused command as [`refuse_officially`] does, with what the
+/// official string names, in its order, where its result event has room
+/// for that too.
+pub(super) fn refuse_naming(
+    command: &ClientCommand,
+    (reason, official): (&str, Option<u32>),
+    names: &[String],
+    log: &mut Events<'_>,
+) -> Result<()> {
+    if let Some(mut event) = refusal(command, reason) {
+        if let WorldEvent::RaidRefused { arguments, .. } = &mut event {
+            arguments.extend_from_slice(names);
+        }
+        if let WorldEvent::ConsumeRefused { string_id, .. }
+        | WorldEvent::CorpseRefused { string_id, .. }
+        | WorldEvent::PetRefused { string_id, .. }
+        | WorldEvent::CombineRefused { string_id, .. }
+        | WorldEvent::GroupRefused { string_id, .. }
+        | WorldEvent::ListingRefused { string_id, .. }
+        | WorldEvent::SocialRefused { string_id, .. }
+        | WorldEvent::RaidRefused { string_id, .. }
+        | WorldEvent::AbilityRefused { string_id, .. } = &mut event
+        {
+            *string_id = official;
+        }
         log.send(ClientEvent::World(event))?;
     }
     log.diagnostic(reason.into())
@@ -168,6 +223,10 @@ pub(super) fn refuse(command: &ClientCommand, reason: &str, log: &mut Events<'_>
 /// The result event that tells the host a command was refused; None for a
 /// command whose caller waits on no result. Every command is named, so a new
 /// one is a decision here.
+#[allow(
+    clippy::too_many_lines,
+    reason = "every kind of command named, so that a new one is a decision here"
+)]
 fn refusal(command: &ClientCommand, reason: &str) -> Option<WorldEvent> {
     let error = Some(reason.to_owned());
     Some(match command {
@@ -192,6 +251,24 @@ fn refusal(command: &ClientCommand, reason: &str) -> Option<WorldEvent> {
         | ClientCommand::Pet { session_id, .. }
         | ClientCommand::Training { session_id, .. }
         | ClientCommand::AnswerResurrection { session_id, .. }
+        | ClientCommand::InviteToGroup { session_id, .. }
+        | ClientCommand::FollowGroup { session_id }
+        | ClientCommand::DeclineGroup { session_id }
+        | ClientCommand::Disband { session_id }
+        | ClientCommand::ToggleAway { session_id }
+        | ClientCommand::ToggleAnonymous { session_id }
+        | ClientCommand::ToggleRoleplay { session_id }
+        | ClientCommand::Random { session_id, .. }
+        | ClientCommand::Emote { session_id, .. }
+        | ClientCommand::Assist { session_id, .. }
+        | ClientCommand::RaidInvite { session_id, .. }
+        | ClientCommand::RaidAccept { session_id }
+        | ClientCommand::RaidDecline { session_id }
+        | ClientCommand::RaidLeave { session_id }
+        | ClientCommand::RaidLock { session_id, .. }
+        | ClientCommand::RaidMove { session_id, .. }
+        | ClientCommand::RaidMakeLeader { session_id, .. }
+        | ClientCommand::RaidRemove { session_id, .. }
         | ClientCommand::ReadItem { session_id, .. }
         | ClientCommand::Combine { session_id, .. }
         | ClientCommand::Consent { session_id, .. }
@@ -273,18 +350,61 @@ fn reasoned(command: &ClientCommand, session_id: u64, reason: String) -> Option<
             WorldEvent::ExchangeRefused { session_id, reason }
         }
         ClientCommand::MoveCoins { .. } => WorldEvent::CoinsRefused { session_id, reason },
-        ClientCommand::Consume { .. } => WorldEvent::ConsumeRefused { session_id, reason },
+        ClientCommand::Consume { .. } => WorldEvent::ConsumeRefused {
+            session_id,
+            reason,
+            string_id: None,
+        },
         ClientCommand::UseAbility { .. } => WorldEvent::AbilityRefused {
             session_id,
             reason,
             string_id: None,
             arguments: Vec::new(),
         },
-        ClientCommand::Pet { .. } => WorldEvent::PetRefused { session_id, reason },
+        ClientCommand::Pet { .. } => WorldEvent::PetRefused {
+            session_id,
+            reason,
+            string_id: None,
+        },
         ClientCommand::Training { .. } => WorldEvent::TrainingRefused { session_id, reason },
         ClientCommand::AnswerResurrection { .. } => {
             WorldEvent::ResurrectionRefused { session_id, reason }
         }
+        ClientCommand::InviteToGroup { .. }
+        | ClientCommand::FollowGroup { .. }
+        | ClientCommand::DeclineGroup { .. }
+        | ClientCommand::Disband { .. } => WorldEvent::GroupRefused {
+            session_id,
+            reason,
+            string_id: None,
+        },
+        ClientCommand::ToggleAway { .. }
+        | ClientCommand::ToggleAnonymous { .. }
+        | ClientCommand::ToggleRoleplay { .. } => WorldEvent::ListingRefused {
+            session_id,
+            reason,
+            string_id: None,
+        },
+        ClientCommand::Random { .. }
+        | ClientCommand::Emote { .. }
+        | ClientCommand::Assist { .. } => WorldEvent::SocialRefused {
+            session_id,
+            reason,
+            string_id: None,
+        },
+        ClientCommand::RaidInvite { .. }
+        | ClientCommand::RaidAccept { .. }
+        | ClientCommand::RaidDecline { .. }
+        | ClientCommand::RaidLeave { .. }
+        | ClientCommand::RaidLock { .. }
+        | ClientCommand::RaidMove { .. }
+        | ClientCommand::RaidMakeLeader { .. }
+        | ClientCommand::RaidRemove { .. } => WorldEvent::RaidRefused {
+            session_id,
+            reason,
+            string_id: None,
+            arguments: Vec::new(),
+        },
         ClientCommand::ReadItem { .. } => WorldEvent::ReadRefused { session_id, reason },
         ClientCommand::Combine { .. } => WorldEvent::CombineRefused {
             session_id,
@@ -294,7 +414,11 @@ fn reasoned(command: &ClientCommand, session_id: u64, reason: String) -> Option<
         ClientCommand::Consent { .. }
         | ClientCommand::SummonCorpse { .. }
         | ClientCommand::DragCorpse { .. }
-        | ClientCommand::DropCorpse { .. } => WorldEvent::CorpseRefused { session_id, reason },
+        | ClientCommand::DropCorpse { .. } => WorldEvent::CorpseRefused {
+            session_id,
+            reason,
+            string_id: None,
+        },
         ClientCommand::CrossZoneLine { .. } => WorldEvent::ZoneLineRejected { session_id, reason },
         _ => return None,
     })

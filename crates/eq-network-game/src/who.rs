@@ -75,12 +75,13 @@ pub fn request(filter: &WhoFilter) -> Result<EncodedCommand> {
 /// The world's answer to `/who all`, in string numbers the client words.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct WhoList {
-    /// The heading's string, such as 5001 (`Players in EverQuest:`).
+    /// The heading's string, such as 5001, which introduces the list of
+    /// players across the world.
     pub heading: u32,
     /// The line under the heading, as the world wrote it.
     pub rule: String,
-    /// The closing line's string, such as 5036 (`There are %1 players in
-    /// EverQuest.`) or 5033 when the world cut the list short.
+    /// The closing line's string, such as 5036, which gives the number of
+    /// players found, or 5033 when the world cut the list short.
     pub closing: u32,
     /// The number the closing line gives.
     pub count: u32,
@@ -102,10 +103,11 @@ pub struct WhoPlayer {
     pub rank: Option<u32>,
     /// The guild, in angle brackets as the world writes it; empty for none.
     pub guild: String,
-    /// The string after the line, such as ` <LINKDEAD>` (12313).
+    /// The string after the line, such as 12313, which marks a player whose
+    /// connection dropped.
     pub tag: Option<u32>,
-    /// The zone, when shown: the string that words it ("ZONE: %1", 5006) and
-    /// the zone number.
+    /// The zone, when shown: the string that words it (5006, which names the
+    /// zone) and the zone number.
     pub zone: Option<(u32, u32)>,
     /// Class number; zero when hidden.
     pub class: u32,

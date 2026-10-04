@@ -5,8 +5,147 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- `WorldEvent::Entered` gains `choices`: what the session leaves to the
+  player, none of it among `capabilities`. A server type may leave any
+  feature it provides to the player where its own client keeps it off; a
+  front end then offers what the feature lets the player do only once the
+  player turns it on. P99 leaves the in-game map (`Capability::Map`) to the
+  player this way, as its own client keeps the map off.
+
+- P99 offers `Capability::MovingSpells`: moving a spell in the book works
+  there as on `EQEmu`, checked with the official client. Deleting one does
+  not, so `DeletingSpells` stays off on P99.
+
 ### Added
 
+- `RaidUpdate::Listed`: a member the server lists as the player joins,
+  enters a zone or moves, told apart from one who joins. `EQEmu` sends each
+  list in one burst after the raid's creation, with no packet marking its
+  end (the leader comes last in some orders and early in others, and the
+  join's list holds health updates), so the session counts every member
+  added after a creation as listed until a second passes without a raid
+  update. The raid the player forms by inviting lists nothing (inferred:
+  what the official client tells the inviter is not checked). The session
+  also holds a `Disbanded` as it holds a removal: the raid's end, the
+  player's removal and the raid listed again, as `EQEmu` tells a member
+  moved in another zone, is nothing; anything else tells them in order.
+
+- The raid leader's commands (`Capability::Raiding`, `EqEmu` only):
+  `GameCommand::RaidLock` (lock or unlock), `RaidMove` (into a raid group,
+  0 to 11, or out of every group), `RaidMakeLeader` (`/makeraidleader`)
+  and `RaidRemove` (removing oneself leaves), with the codec's `lock`,
+  `move_member` and `make_leader`. The server's lock updates arrive as
+  `RaidUpdate::Locked`, with the name the update gives: the leader's as
+  they lock or unlock the raid, the member's own as they join it or enter
+  a zone while it is locked; the session says `RaidUpdate::Locking` as it
+  asks, so that the leader's own answer reads apart from the one they get
+  on entering a zone. `EQEmu` moves a member by taking them out and
+  adding them back, so the session holds each `Removed` until the next
+  message and reports `RaidUpdate::Moved` when the same member is added
+  back; the raid listed again to the player taken out drops the removal,
+  and anything else, or 300 ms with no message, reports it after all,
+  before that message. `Message::Withheld` stands for a message a feature
+  holds back. `EQEmu` checks only that the one handing on the lead leads
+  the raid; the session refuses all four commands from a member who does
+  not lead it, a move while the raid is unlocked, into the member's own
+  group or into a full one, and a member it does not know, the last as
+  string 5082 naming them (`RaidRefused` gains `arguments`). It also
+  refuses an invitation while the raid is locked, in this library's words
+  (string 8870 announces the leader locking the raid). That the
+  official client refuses these is inferred from its raid notes, its Raid
+  window's tips and its strings. `Capability::RaidGroupLeaders`, taking a
+  raid group leader's mark from a member, is offered by no server type:
+  `EQEmu` has no handler for it.
+
+- Raids (`Capability::Raiding`, `EqEmu` only): `GameCommand::RaidInvite`
+  (`/raidinvite`, by name), `RaidAccept`, `RaidDecline` and `RaidLeave`
+  (`/raiddisband` for the player), with the codec `raid`. The server's word
+  arrives as `WorldEvent::Raid(RaidUpdate)`: an invitation, the raid's
+  leader on joining or entering a zone (`Created`), each member with their
+  raid group, class and level (`Added`), someone leaving (`Removed`), the
+  player's end in the raid (`Disbanded`) and a new leader. The server keeps
+  no invitations and answers none of these, so the session keeps the one
+  waiting, says what it sent or answered (`Inviting`, `Accepting`,
+  `Declining`, `Leaving`; declining sends nothing), and records the player's
+  own raid chat as the others hear it, since the server does not pass it
+  back, as the official client shows it (inferred). It refuses as `WorldEvent::RaidRefused` an invitation that names
+  no one, one to the player themself (which `EQEmu` would turn into a
+  broken raid), one to a member and one from a member who is not the
+  leader, naming the official client's string for each (that it refuses
+  them itself is inferred; `EQEmu` checks none of the inviter's side, though
+  it refuses an invitee already in a raid and a grouped one who does not
+  lead their group), and an answer or
+  a leave with nothing to answer or leave.
+
+- Dice, emotes and assisting (`Capability::Rolling`, `Emoting` and
+  `Assisting`, `EqEmu` only): `GameCommand::Random` (`/random`), `Emote`
+  (`/emote`) and `Assist` (`/assist`), with the codec `socials`. The server's
+  roll for any player nearby arrives as `WorldEvent::Roll` and its answer to
+  an assist as `WorldEvent::Assisted`, the target to take. The server passes
+  an emote on to everyone near but the one who made it, so the session
+  records the player's own emote as the others hear it, as the official
+  client shows it (inferred). It refuses as
+  `WorldEvent::SocialRefused` an empty or overlong emote and assisting the
+  player themself, naming the official client's string for the last (that
+  the official client refuses it is inferred; `EQEmu` answers with the
+  player's own target).
+
+- The player's listing (`Capability::Listing`, `EqEmu` only):
+  `GameCommand::ToggleAway` (`/afk`), `ToggleAnonymous` (`/anonymous`) and
+  `ToggleRoleplay` (`/roleplay`), sent as the player's own appearance
+  update (`listing::titanium_away`, `titanium_anonymity`). Servers do not
+  echo it, so the session keeps the player's listing (the admission's, then
+  each change, its own or the server's), reports each change it sends as
+  `WorldEvent::ListingSet`, and refuses as `WorldEvent::ListingRefused` a
+  second change of a kind within 500 ms (`EQEmu` drops one within 250 ms
+  of its last receipt, which jitter can shorten), `/anonymous`
+  while roleplaying and `/roleplay` while anonymous, naming the official
+  client's string for the last two. That the official client refuses those
+  itself is inferred from its having the strings; `EQEmu` takes either.
+
+- Groups (`Capability::Grouping`, `EqEmu` only): `GameCommand::InviteToGroup`
+  (`/invite`, by name), `FollowGroup` (join the group of whoever invited the
+  player last), `DeclineGroup`, and `Disband` (leave, or as the leader remove
+  the targeted member or disband, as the server decides by its idea of the
+  target; with an invitation waiting, decline it). The server's word arrives
+  as `WorldEvent::Group(GroupUpdate)`: an invitation, the invitee's
+  acceptance or refusal, the player forming a group, a member joining or
+  leaving, the full member list with its leader, a new leader, and the
+  group's end. The session says what it sent the same way (`Inviting`,
+  `Following`, `Declining`), since the server does not answer it, and
+  refuses as `WorldEvent::GroupRefused` an invitation that names no one,
+  one from a member who is not the leader, and one to a full group, with the
+  official client's string for each. That the official client refuses these
+  itself is inferred from its having the strings; `EQEmu` lets a member who
+  is not the leader invite, and an invitation to a full group through to a
+  failed follow. The Titanium codec
+  (`group`) reads `EQEmu`'s group structs, which arrive longer than the
+  Titanium client's own.
+
+- `Capability::MerchantOffers`: a front end may show what a merchant pays
+  for an item sold to them, worked out from the item's `price` and the
+  merchant's `rate` by the server type's rule. `EqEmu` offers it: the price
+  times how many are sold (a charged item counts as one), times the
+  merchant's modifier (one at neutral standing; 1 / (0.95 x the rate it
+  opened with)), then times 0.95, each product cut to whole copper and never
+  rounded up; three sales checked at a neutral merchant. Other server types
+  wait for a check.
+
+- A special message (`OP_SpecialMesg`) on the Titanium wire says how its
+  speaker speaks: `ChatEvent::speak_mode` (`SpeakMode`: `Raw` for a plain
+  server line, `Say`, `Shout`, `EmoteAlt`, `Emote` or `Group`, as `EQEmu`'s
+  `Journal::SpeakMode` numbers them, and `Other` for a new one),
+  `journal_mode`, `language` and `target_spawn_id`, so a front end can word
+  an NPC's quest dialogue as the official client shows it. They are None for
+  every other message and for the `EQMac` layout until it is checked on TAKP.
+
+- Tell echoes (`ChannelName::TellEcho`): on the Titanium wire, the server's
+  echo of a tell the player sent (channel 14) has a channel of its own, with
+  the player as its sender and the one told as its target, so a front end
+  can say whom the player told. The `EQMac` generation keeps channel 14
+  unknown until it is checked there.
 - Character-selection sessions and typed world state for graphical clients.
 - P99 movement, targeting, doors, inventory operations, spellbook editing,
   casting, item activation, buff notifications, and zone/death handoff events.
@@ -23,8 +162,17 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   window, items go into its four trade slots from the cursor, and
   `AcceptTrade` (Give) or `CancelTrade` ends it. The trade slots
   (`InventorySlot::is_trade`) take only what servers accept, and empty when
-  the window closes. `Capability::Giving` reports it; trades between
-  players are not supported yet.
+  the window closes. `Capability::Giving` reports it.
+- Trades between players (`exchange`): another player's request opens the
+  window at once, as in the official client (`ExchangeUpdate::Taken`), or
+  hears that the player is busy while another trade is under way. Their
+  items (`ExchangeUpdate::Offered`, in slots from `THEIR_FIRST_SLOT`) and
+  coins (`ExchangeUpdate::Coins`, kept as the wallet's `offered`) reach the
+  host; Trade may be clicked again after anything put in undid it. When the
+  other player closes the window the session closes it too, since `EQEmu`
+  returns only the canceller's items. NO DROP items, and bags holding one,
+  are refused before a move that `EQEmu` answers by disconnecting, and coins
+  put in a trade stay there.
 - Food and drink (`food`): the profile and the server's stamina updates say
   how fed and watered the player is (`Nourishment`). At 3000 or less, as
   `EQEmu` counts hungry and thirsty, the session eats and drinks from the
@@ -159,6 +307,38 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- A special message with no speaker, as every plain server line comes,
+  has no `sender` rather than an empty one, so a sender always names someone.
+- `Death` carries `corpse_name`: the name the server gives the corpse of a
+  spawn that dies in view, which the session adds from the spawn table by the
+  client generation's rule (`world::corpse_name`: on Titanium servers
+  `EQEmu`'s `CalcCorpseName` form; None for `EQMac` until it is checked on
+  TAKP), so a front end need not rename the corpse itself.
+- `ItemDetails` carries the item's `price` (its base value in copper, from
+  which merchants price it) and its `icon`, decoded from the Titanium item
+  record, so an item opened from a link has its picture too; None where a
+  generation's record is not checked. `InventoryItem::icon` is gone: the
+  picture's one source is `details.icon`.
+- A corpse's items are addressed by their place on it, from 0, rather than by
+  the server's slot: `LootUpdate::Item { place, item }`,
+  `LootUpdate::Taken { place, .. }` and `GameCommand::LootItem { place, .. }`.
+  The Titanium wire numbers a corpse's items from 22 through 52 as one run
+  (the Titanium patch's own `CORPSE_BEGIN`, the first carried slot), and the
+  loot encoding and decoding apply it, so a front end knows nothing of it.
+- `ChatEvent::message_type` keeps the message type the server gives a
+  formatted, simple or special message on the Titanium wire (EQEmu's `MT_*`
+  numbers, by which the official client colours the line); None for channel
+  messages and for the `EQMac` layouts until they are checked on TAKP.
+- `SpellUpdate::Interrupted` carries `caster_name`: the name the server
+  sends to those near another caster whose spell stopped (Titanium
+  `InterruptCast_Struct`'s label), so a front end can say whose it was;
+  None on the caster's own notice.
+- Deleting a spell from the spellbook (`DeleteSpell`) and moving one to
+  another place in it (`SwapSpell`) each have a capability of their own,
+  `Capability::DeletingSpells` and `Capability::MovingSpells`, instead of
+  riding `Capability::Spellbook`. A server type offers each only once it has
+  been checked there: `EqEmu` offers both, and `Project1999` waits for a
+  check, so its sessions refuse both as unavailable.
 - `WorldEvent`, `GameCommand` and `ClientEvent` are exhaustive, so a front end
   handles every kind of news and command instead of ignoring new ones in a
   wildcard arm. `GameCommand::capability` names what each command needs of the

@@ -343,6 +343,9 @@ pub enum SpellUpdate {
         caster_id: u32,
         /// Server string-table identifier, retained without guessing its meaning.
         message_id: u32,
+        /// The caster's name, which servers send to those nearby so the
+        /// string can name them; None on the caster's own notice.
+        caster_name: Option<String>,
     },
     /// Casting started; duration alone does not prove success.
     Began {
@@ -429,14 +432,21 @@ pub fn decode(opcode: u16, body: &[u8]) -> Result<Option<SpellUpdate>> {
             }
         }
         0x0b97 => {
-            // Titanium InterruptCast_Struct has two words and an optional NUL-terminated label.
+            // Titanium InterruptCast_Struct has two words and an optional
+            // NUL-terminated label: the caster's name, sent to those nearby.
             ensure!(
                 body.len() >= 8 && (body.len() == 8 || body.last() == Some(&0)),
                 "invalid cast-interruption length or label"
             );
+            let label = body
+                .get(8..body.len().saturating_sub(1))
+                .unwrap_or_default();
+            ensure!(label.is_ascii(), "cast-interruption label is not ASCII");
             SpellUpdate::Interrupted {
                 caster_id: word(0),
                 message_id: word(4),
+                caster_name: (!label.is_empty())
+                    .then(|| String::from_utf8_lossy(label).into_owned()),
             }
         }
         0x3990 => {
@@ -576,20 +586,30 @@ mod tests {
     }
 
     #[test]
-    fn interruption_preserves_caster_and_reason_without_exposing_optional_label() {
+    fn interruption_keeps_caster_reason_and_the_name_sent_to_those_nearby() {
         let mut body = Vec::from([7, 0, 0, 0, 42, 0, 0, 0]);
-        let expected = Some(SpellUpdate::Interrupted {
-            caster_id: 7,
-            message_id: 42,
-        });
-        assert_eq!(decode(0x0b97, &body).unwrap(), expected);
+        let interrupted = |caster_name: Option<&str>| {
+            Some(SpellUpdate::Interrupted {
+                caster_id: 7,
+                message_id: 42,
+                caster_name: caster_name.map(str::to_owned),
+            })
+        };
+        // The caster's own notice has no name.
+        assert_eq!(decode(0x0b97, &body).unwrap(), interrupted(None));
         for length in 0..8 {
             assert!(decode(0x0b97, &body[..length]).is_err());
         }
         body.extend_from_slice(b"Synthetic caster");
         assert!(decode(0x0b97, &body).is_err());
         body.push(0);
-        assert_eq!(decode(0x0b97, &body).unwrap(), expected);
+        assert_eq!(
+            decode(0x0b97, &body).unwrap(),
+            interrupted(Some("Synthetic caster"))
+        );
+        // An empty label names no one.
+        let empty = [7, 0, 0, 0, 42, 0, 0, 0, 0];
+        assert_eq!(decode(0x0b97, &empty).unwrap(), interrupted(None));
     }
     #[test]
     fn forgetting_checks_current_gem_and_preserves_book() {

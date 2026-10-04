@@ -1,7 +1,9 @@
-//! Handing items to another character: asking an NPC (or a player) to trade,
-//! the window their answer opens, and clicking Give or closing it. The trade
-//! slots are the inventory's; this feature says whether a window is open and
-//! how many of them it has, and only it changes that.
+//! Handing items to another character: asking an NPC or a player to trade,
+//! the window their answer opens, and clicking Give or Trade or closing it.
+//! Another player's request is taken at once, as the official client does,
+//! unless a trade is already under way. The trade slots are the inventory's;
+//! this feature says whether a window is open and how many of them it has,
+//! and only it changes that.
 use super::{
     feature::{Feature, Out, World},
     ClientCommand, ClientEvent,
@@ -16,9 +18,13 @@ use eq_network_game::{
 };
 use std::time::{Duration, Instant};
 
-/// How long the other side has to take a request. An NPC that is fighting
-/// never answers: `EQEmu` sends no acknowledgement while it is engaged.
+/// How long an NPC has to take a request. One that is fighting never
+/// answers: `EQEmu` sends no acknowledgement while it is engaged.
 const ANSWER_WINDOW: Duration = Duration::from_secs(3);
+
+/// How long another player has: their client answers on its own, but the
+/// request and the answer each pass through the server.
+const PLAYER_ANSWER_WINDOW: Duration = Duration::from_secs(10);
 
 /// How far an exchange has come.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -135,14 +141,15 @@ impl Exchanges {
         Ok(())
     }
 
-    /// Clicks Give or Trade in the open window.
+    /// Clicks Give or Trade in the open window: again after anything put in
+    /// undid the click, as servers undo both sides' clicks then.
     fn accept(session_id: u64, world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
         let admitted = world.player.as_ref().is_some();
         let open = world
             .exchange
             .0
             .as_mut()
-            .filter(|exchange| exchange.stage == Stage::Open);
+            .filter(|exchange| matches!(exchange.stage, Stage::Open | Stage::Accepted));
         let (Some(exchange), true) = (open, admitted) else {
             return refused(session_id, "No trade window is open", out);
         };
@@ -159,6 +166,54 @@ impl Exchanges {
             out.request(&Request::CancelTrade)?;
         }
         Ok(())
+    }
+
+    /// Takes another player's request: both windows open, and the host hears
+    /// that this side's did ([`ExchangeUpdate::Taken`]). While another exchange is under way the player is busy,
+    /// and the asker hears that instead.
+    fn requested(from: u32, world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
+        let (true, Ok(with)) = (world.player.is_some(), u16::try_from(from)) else {
+            return out
+                .log
+                .diagnostic(format!("Spawn {from} asked to trade before admission"));
+        };
+        if world.exchange.is_some() {
+            out.request(&Request::AnswerTrade {
+                asker: from,
+                busy: true,
+            })?;
+            return out.log.diagnostic(format!(
+                "Spawn {from} asked to trade while another trade was under way"
+            ));
+        }
+        out.request(&Request::AnswerTrade {
+            asker: from,
+            busy: false,
+        })?;
+        world.exchange.0 = Some(Exchange {
+            with,
+            partner: Partner::Player,
+            stage: Stage::Open,
+        });
+        out.log.send(ClientEvent::World(WorldEvent::Exchange(
+            ExchangeUpdate::Taken { from },
+        )))
+    }
+
+    /// Ends the exchange the server cancelled. `EQEmu` returns only the
+    /// canceller's trade slots, so when another player closes the window this
+    /// side closes it too, to get back what it put in.
+    fn cancelled(world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
+        let admitted = world.player.is_some();
+        let Some(exchange) = world.exchange.0.take() else {
+            return Ok(());
+        };
+        match (exchange.partner, exchange.stage, admitted) {
+            (Partner::Player, Stage::Open | Stage::Accepted, true) => {
+                out.request(&Request::CancelTrade)
+            }
+            _ => Ok(()),
+        }
     }
 }
 
@@ -197,7 +252,11 @@ impl Feature for Exchanges {
     /// Withdraws a request nobody answered.
     fn tick(&mut self, now: Instant, world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
         let unanswered = world.exchange.is_some_and(|exchange| {
-            matches!(exchange.stage, Stage::Asked(at) if now.saturating_duration_since(at) >= ANSWER_WINDOW)
+            let window = match exchange.partner {
+                Partner::Npc => ANSWER_WINDOW,
+                Partner::Player => PLAYER_ANSWER_WINDOW,
+            };
+            matches!(exchange.stage, Stage::Asked(at) if now.saturating_duration_since(at) >= window)
         });
         if unanswered {
             world.exchange.0 = None;
@@ -210,8 +269,7 @@ impl Feature for Exchanges {
         Ok(())
     }
 
-    /// Follows the other side's answers. A window this player did not ask
-    /// for (another player's request) waits for player trades.
+    /// Follows the other side's answers, and takes another player's request.
     fn observe(
         &mut self,
         message: &Message,
@@ -229,9 +287,8 @@ impl Feature for Exchanges {
                     exchange.stage = Stage::Open;
                 }
             }
-            WorldEvent::Exchange(ExchangeUpdate::Finished | ExchangeUpdate::Cancelled { .. }) => {
-                world.exchange.0 = None;
-            }
+            WorldEvent::Exchange(ExchangeUpdate::Finished) => world.exchange.0 = None,
+            WorldEvent::Exchange(ExchangeUpdate::Cancelled { .. }) => Self::cancelled(world, out)?,
             WorldEvent::Exchange(ExchangeUpdate::Busy { by }) => {
                 if world
                     .exchange
@@ -242,9 +299,7 @@ impl Feature for Exchanges {
                 }
             }
             WorldEvent::Exchange(ExchangeUpdate::Requested { from }) => {
-                out.log.diagnostic(format!(
-                    "Spawn {from} asked to trade; trades between players are not supported yet"
-                ))?;
+                Self::requested(*from, world, out)?;
             }
             WorldEvent::Death(death) if world.is_player(death.spawn_id) => {
                 world.exchange.0 = None;
@@ -262,14 +317,18 @@ mod tests {
     use eq_network_game::world::Position;
 
     const NPC: u16 = 42;
+    const PLAYER: u16 = 50;
 
-    /// An admitted player (7) beside an NPC (42) and a corpse (43), holding a
-    /// gold coin on the cursor.
+    /// An admitted player (7) beside an NPC (42), a corpse (43) and another
+    /// player (50), holding a gold coin on the cursor.
     fn beside_npc() -> World {
         let mut world = World::new(5);
         world.player.admit(testing::player(7));
         world.own_spawn = Some(7);
         world.spawns.insert(testing::spawn(NPC, SpawnKind::Npc));
+        world
+            .spawns
+            .insert(testing::spawn(PLAYER, SpawnKind::Player));
         world
             .spawns
             .insert(testing::spawn(43, SpawnKind::NpcCorpse));
@@ -398,6 +457,100 @@ mod tests {
         );
     }
 
+    fn news(update: ExchangeUpdate) -> Message {
+        Message::Event(WorldEvent::Exchange(update))
+    }
+
+    #[test]
+    fn another_players_request_opens_the_window_unless_a_trade_is_under_way() {
+        let mut exchanges = Exchanges;
+        let mut world = beside_npc();
+        let asked = |from| news(ExchangeUpdate::Requested { from });
+        let outcome =
+            testing::run(|out| exchanges.observe(&asked(u32::from(PLAYER)), &mut world, out));
+        outcome.result.unwrap();
+        assert_eq!(outcome.sent, [exchange::acknowledge(7, 50).unwrap()]);
+        assert!(matches!(
+            outcome.events[..],
+            [ClientEvent::World(WorldEvent::Exchange(
+                ExchangeUpdate::Taken { from: 50 }
+            ))]
+        ));
+        let exchange = world.exchange.unwrap();
+        assert_eq!((exchange.with, exchange.partner), (PLAYER, Partner::Player));
+        assert_eq!(exchange.trade_slots(), 8);
+        // A second request while this one is open hears that the player is busy.
+        let outcome = testing::run(|out| exchanges.observe(&asked(51), &mut world, out));
+        assert_eq!(outcome.sent, [exchange::busy(7, 51).unwrap()]);
+        assert_eq!(world.exchange.unwrap().with, PLAYER);
+        // Trade may be clicked again once something put in undid the click.
+        let trade = ClientCommand::AcceptTrade {
+            session_id: 5,
+            created: Instant::now(),
+        };
+        for _ in 0..2 {
+            let outcome = testing::run(|out| exchanges.handle(&trade, &mut world, out));
+            assert_eq!(outcome.sent, [exchange::accept(7).unwrap()]);
+        }
+    }
+
+    #[test]
+    fn a_player_who_closes_the_window_gets_their_items_back_and_so_does_this_side() {
+        let mut exchanges = Exchanges;
+        let mut world = beside_npc();
+        testing::run(|out| {
+            exchanges.observe(
+                &news(ExchangeUpdate::Requested {
+                    from: u32::from(PLAYER),
+                }),
+                &mut world,
+                out,
+            )
+        })
+        .result
+        .unwrap();
+        // `EQEmu` forwards the other player's cancel with this player's ID.
+        let cancelled = news(ExchangeUpdate::Cancelled { by: 7 });
+        let outcome = testing::run(|out| exchanges.observe(&cancelled, &mut world, out));
+        assert_eq!(outcome.sent, [exchange::cancel(7).unwrap()]);
+        assert!(world.exchange.is_none());
+        // The cancel that comes back for that one asks nothing more.
+        let outcome = testing::run(|out| exchanges.observe(&cancelled, &mut world, out));
+        assert!(
+            outcome.sent.is_empty(),
+            "nothing to close, sent {:?}",
+            outcome.sent
+        );
+        // An NPC's echo of the player's own cancel needs no answer either.
+        testing::run(|out| exchanges.handle(&offer(NPC), &mut world, out))
+            .result
+            .unwrap();
+        testing::run(|out| {
+            exchanges.observe(
+                &news(ExchangeUpdate::Opened {
+                    with: u32::from(NPC),
+                }),
+                &mut world,
+                out,
+            )
+        })
+        .result
+        .unwrap();
+        let outcome = testing::run(|out| {
+            exchanges.observe(
+                &news(ExchangeUpdate::Cancelled { by: u32::from(NPC) }),
+                &mut world,
+                out,
+            )
+        });
+        assert!(
+            outcome.sent.is_empty(),
+            "the NPC returned the items, sent {:?}",
+            outcome.sent
+        );
+        assert!(world.exchange.is_none());
+    }
+
     #[test]
     fn an_unanswered_request_is_withdrawn() {
         let mut exchanges = Exchanges;
@@ -419,6 +572,24 @@ mod tests {
             refusals(&outcome.events),
             ["Nobody answered the request to trade"]
         );
+        assert!(world.exchange.is_none());
+        // Another player's client answers through the server, so it has longer.
+        testing::run(|out| exchanges.handle(&offer(PLAYER), &mut world, out))
+            .result
+            .unwrap();
+        let Some(Exchange {
+            stage: Stage::Asked(at),
+            partner: Partner::Player,
+            ..
+        }) = *world.exchange
+        else {
+            panic!("asked a player");
+        };
+        let outcome = testing::run(|out| exchanges.tick(at + ANSWER_WINDOW, &mut world, out));
+        assert!(outcome.events.is_empty());
+        testing::run(|out| exchanges.tick(at + PLAYER_ANSWER_WINDOW, &mut world, out))
+            .result
+            .unwrap();
         assert!(world.exchange.is_none());
     }
 }

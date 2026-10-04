@@ -114,20 +114,21 @@ impl Meals {
         slot: InventorySlot,
         world: &mut World,
         out: &mut Out<'_, '_>,
-    ) -> Result<Option<&'static str>> {
+    ) -> Result<Option<(&'static str, Option<u32>)>> {
         let Some(meal) = world
             .inventory
             .items()
             .get(&slot)
             .and_then(|item| Meal::of_item_type(item.rules.item_type))
         else {
-            return Ok(Some("You cannot eat or drink that"));
+            return Ok(Some(("You cannot eat or drink that", None)));
         };
-        // Servers turn down a bite past full; the official client says so first.
+        // Servers turn down a bite past full; the official client says so
+        // first, in its own words (eqstr 12074 and 12077).
         if self.last.is_some_and(|last| last.of(meal) >= food::FULL) {
             return Ok(Some(match meal {
-                Meal::Food => "You could not possibly eat any more, you would explode!",
-                Meal::Drink => "You could not possibly drink any more, you would explode!",
+                Meal::Food => ("You are too full to eat more", Some(12074)),
+                Meal::Drink => ("You are too full to drink more", Some(12077)),
             }));
         }
         self.eat(slot, meal, true, world, out)?;

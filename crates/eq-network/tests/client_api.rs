@@ -353,16 +353,25 @@ fn a_front_end_can_tell_what_the_zone_session_lets_the_player_do() {
     let player = titanium_player(&vec![0; 19592], &spawn, 256.0).unwrap();
     let entered = WorldEvent::Entered {
         capabilities: vec![Capability::Moving, Capability::Talking],
+        choices: vec![Capability::Map],
         session_id: 1,
         zone: "qeynos".into(),
         player: Box::new(player),
         far_clip: None,
     };
     // The front end matches the event exhaustively and keeps the report.
-    let offered = match entered {
-        WorldEvent::Entered { capabilities, .. } => capabilities,
-        _ => Vec::new(),
+    let (offered, choices) = match entered {
+        WorldEvent::Entered {
+            capabilities,
+            choices,
+            ..
+        } => (capabilities, choices),
+        _ => (Vec::new(), Vec::new()),
     };
+    // What the session leaves to the player is not offered until the front
+    // end's player turns it on.
+    assert_eq!(choices, [Capability::Map]);
+    assert!(!offered.contains(&Capability::Map));
     let allowed = |command: &ClientCommand| {
         command
             .capability()

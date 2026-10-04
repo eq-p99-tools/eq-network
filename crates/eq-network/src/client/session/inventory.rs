@@ -123,6 +123,12 @@ fn coins_news(message: &Message, wallet: &mut Wallet) -> Option<bool> {
             wallet.pay(u64::from(*price));
             Some(true)
         }
+        // The other player's coins, which the server reports as added.
+        WorldEvent::Exchange(ExchangeUpdate::Coins { coin, amount }) => {
+            let offered = wallet.offered.of_mut(*coin);
+            *offered = offered.saturating_add(*amount);
+            Some(false)
+        }
         // The server takes a practice's cost without saying so.
         WorldEvent::Training(TrainingUpdate::Trained { cost, .. }) if *cost > 0 => {
             wallet.pay(*cost);
@@ -188,6 +194,10 @@ fn actor(world: &World) -> Option<InventoryActor> {
             .exchange
             .as_ref()
             .map_or(0, super::exchange::Exchange::trade_slots),
+        trade_no_drop: world
+            .exchange
+            .as_ref()
+            .is_none_or(|exchange| exchange.partner == eq_network_game::exchange::Partner::Npc),
         world_container: world.container.is_open(),
     })
 }
@@ -307,6 +317,10 @@ impl Belongings {
                 .is_none_or(|exchange| exchange.trade_slots() == 0)
         {
             Some("No trade window is open".to_owned())
+        } else if transfer.from == CoinPlace::Trade {
+            // `EQEmu` ignores such a move, which would part the ledger from
+            // the server's count.
+            Some("Coins in a trade stay there until it closes".to_owned())
         } else if touches(CoinPlace::Bank) && !actor(world).is_some_and(|actor| actor.bank_access) {
             Some("Stand near a banker to use the bank".to_owned())
         } else {
@@ -437,10 +451,13 @@ impl Feature for Belongings {
             ClientCommand::Consume {
                 session_id, slot, ..
             } => match self.meals.by_hand(*slot, world, out)? {
-                Some(reason) => out.log.send(ClientEvent::World(WorldEvent::ConsumeRefused {
-                    session_id: *session_id,
-                    reason: reason.into(),
-                })),
+                Some((reason, string_id)) => {
+                    out.log.send(ClientEvent::World(WorldEvent::ConsumeRefused {
+                        session_id: *session_id,
+                        reason: reason.into(),
+                        string_id,
+                    }))
+                }
                 None => Ok(()),
             },
             _ => self.trade(command, out),
@@ -694,10 +711,7 @@ mod tests {
         let (mut belongings, mut world) = fed(6000, 4000);
         let outcome = testing::run(|out| belongings.handle(&eat(22), &mut world, out));
         assert!(outcome.sent.is_empty(), "sent {:?}", outcome.sent);
-        assert_eq!(
-            refusals(&outcome.events),
-            ["You could not possibly eat any more, you would explode!"]
-        );
+        assert_eq!(refusals(&outcome.events), ["You are too full to eat more"]);
         let outcome = testing::run(|out| belongings.handle(&eat(24), &mut world, out));
         assert_eq!(refusals(&outcome.events), ["You cannot eat or drink that"]);
         let drink = InventorySlot(23).child(0).unwrap();
@@ -1042,6 +1056,65 @@ mod tests {
             .result
             .unwrap();
         assert_eq!(world.coins.given, Coins::default());
+    }
+
+    #[test]
+    fn another_players_coins_are_told_and_coins_put_in_stay_there() {
+        use super::super::exchange::{Exchange, Exchanging, Stage};
+        use eq_network_game::{
+            exchange::{ExchangeUpdate, Partner},
+            money::{Coin, CoinPlace},
+        };
+        let (mut belongings, mut world, move_coins) = with_gold();
+        world.exchange = Exchanging::from(Exchange {
+            with: 50,
+            partner: Partner::Player,
+            stage: Stage::Open,
+        });
+        // The server reports each addition, which the ledger sums.
+        let added = Message::Event(WorldEvent::Exchange(ExchangeUpdate::Coins {
+            coin: Coin::Gold,
+            amount: 3,
+        }));
+        for _ in 0..2 {
+            testing::run(|out| belongings.observe(&added, &mut world, out))
+                .result
+                .unwrap();
+        }
+        let outcome = testing::run(|out| belongings.observe(&added, &mut world, out));
+        assert!(matches!(
+            outcome.events[..],
+            [ClientEvent::World(WorldEvent::CoinsElsewhere {
+                offered: Coins { gold: 9, .. },
+                ..
+            })]
+        ));
+        // `EQEmu` ignores a move out of the trade, so none is sent.
+        for (from, to) in [
+            (CoinPlace::Purse, CoinPlace::Cursor),
+            (CoinPlace::Cursor, CoinPlace::Trade),
+        ] {
+            testing::run(|out| belongings.handle(&move_coins(from, to), &mut world, out))
+                .result
+                .unwrap();
+        }
+        let outcome = testing::run(|out| {
+            belongings.handle(
+                &move_coins(CoinPlace::Trade, CoinPlace::Cursor),
+                &mut world,
+                out,
+            )
+        });
+        assert!(
+            outcome.sent.is_empty(),
+            "coins stay in the trade, sent {:?}",
+            outcome.sent
+        );
+        assert_eq!(
+            coins_refused(&outcome.events),
+            ["Coins in a trade stay there until it closes"]
+        );
+        assert_eq!(world.coins.given.gold, 2);
     }
 
     #[test]

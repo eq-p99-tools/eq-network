@@ -10,13 +10,16 @@ use crate::{
     command::{self, EncodedCommand, GameCommand, Posture},
     corpses, doors, exchange,
     food::{self, Meal},
+    group,
     inventory::{self, InventorySlot, MoveQuantity},
+    listing::{self, Anonymity},
     money::CoinTransfer,
     movement::{self, PositionPacket},
     objects,
     pets::{self, PetCommand},
+    raid,
     resurrection::{self, ResurrectionOffer},
-    spells, tradeskills, training,
+    socials, spells, tradeskills, training,
     who::{self, WhoFilter},
     world::Position,
     zoning, GameDialect,
@@ -97,6 +100,52 @@ pub enum Request {
         /// True accepts.
         accept: bool,
     },
+    /// Invite a player into the player's group, by name.
+    InviteToGroup(String),
+    /// Join the group of the one who invited the player, by their name.
+    FollowGroup(String),
+    /// Decline an invitation, by the inviter's name.
+    DeclineGroup(String),
+    /// Leave or disband the group, as the server decides by its idea of the
+    /// player's target.
+    Disband,
+    /// Say the player is away from the keyboard (true), or back.
+    SetAway(bool),
+    /// Say how the player hides from `/who`.
+    SetAnonymity(Anonymity),
+    /// Roll a die from the lowest to the highest number.
+    Random {
+        /// The lowest number.
+        low: u32,
+        /// The highest.
+        high: u32,
+    },
+    /// Emote, in the player's own words.
+    Emote(String),
+    /// Take the target of this spawn.
+    Assist(u16),
+    /// Invite a player into the player's raid, by name.
+    RaidInvite(String),
+    /// Join the raid of the one who invited the player, by their name.
+    RaidAccept(String),
+    /// Leave the player's raid.
+    RaidLeave,
+    /// Lock the player's raid (true) or unlock it.
+    RaidLock(bool),
+    /// Move a member of the player's raid, by the name the server gave them,
+    /// into a raid group or out of every group.
+    RaidMove {
+        /// Who moves.
+        member: String,
+        /// Where to: a raid group, 0 to 11, or none.
+        group: Option<u8>,
+    },
+    /// Hand the lead of the player's raid to a member, by the name the
+    /// server gave them.
+    RaidMakeLeader(String),
+    /// Remove a member from the player's raid, by the name the server gave
+    /// them.
+    RaidRemove(String),
     /// Use a skill on the server's idea of the target.
     Ability {
         /// The skill.
@@ -106,6 +155,14 @@ pub enum Request {
     },
     /// Ask another character, or an NPC, to trade, by their spawn.
     Trade(u16),
+    /// Take another player's request to trade, by the asker's spawn, or
+    /// answer that another trade keeps the player busy.
+    AnswerTrade {
+        /// The one who asked.
+        asker: u32,
+        /// Whether the player is busy with another trade.
+        busy: bool,
+    },
     /// Accept the open trade.
     AcceptTrade,
     /// Close the open trade, or withdraw a request.
@@ -233,9 +290,31 @@ pub fn titanium(request: &Request, sender: Sender<'_>) -> Result<EncodedCommand>
         Request::AnswerResurrection { offer, accept } => {
             resurrection::titanium_answer(offer, *accept)
         }
+        Request::InviteToGroup(name) => group::invite(name, sender.name)?,
+        Request::FollowGroup(inviter) => group::follow(inviter, sender.name)?,
+        Request::DeclineGroup(inviter) => group::decline(inviter, sender.name)?,
+        Request::Disband => group::disband(sender.name)?,
+        Request::SetAway(away) => listing::titanium_away(sender.spawn(), *away)?,
+        Request::SetAnonymity(anonymity) => {
+            listing::titanium_anonymity(sender.spawn(), *anonymity)?
+        }
+        Request::Random { low, high } => socials::random(*low, *high),
+        Request::Emote(text) => socials::emote(text)?,
+        Request::Assist(spawn_id) => socials::assist(*spawn_id),
+        Request::RaidInvite(name) => raid::invite(name, sender.name)?,
+        Request::RaidAccept(inviter) => raid::accept(inviter, sender.name)?,
+        Request::RaidLeave => raid::remove(sender.name, sender.name)?,
+        Request::RaidLock(locked) => raid::lock(sender.name, *locked)?,
+        Request::RaidMove { member, group } => raid::move_member(sender.name, member, *group)?,
+        Request::RaidMakeLeader(member) => raid::make_leader(sender.name, member)?,
+        Request::RaidRemove(member) => raid::remove(sender.name, member)?,
         Request::ReadBook(book) => books::titanium_request(book)?,
         Request::Combine(container) => tradeskills::titanium_combine(*container)?,
         Request::Trade(with) => exchange::request(sender.spawn(), *with)?,
+        Request::AnswerTrade { asker, busy: false } => {
+            exchange::acknowledge(sender.spawn(), *asker)?
+        }
+        Request::AnswerTrade { asker, busy: true } => exchange::busy(sender.spawn(), *asker)?,
         Request::AcceptTrade => exchange::accept(sender.spawn())?,
         Request::CancelTrade => exchange::cancel(sender.spawn())?,
         Request::ClickDoor(door_id) => doors::titanium_click(*door_id, sender.spawn()),
@@ -375,5 +454,16 @@ mod tests {
             ..PLAYER
         };
         assert!(titanium(&Request::AcceptTrade, unspawned).is_err());
+        // Another player's request is taken, or answered as busy.
+        let answer = |busy| Request::AnswerTrade { asker: 50, busy };
+        assert_eq!(
+            titanium(&answer(false), PLAYER).unwrap(),
+            exchange::acknowledge(7, 50).unwrap()
+        );
+        assert_eq!(
+            titanium(&answer(true), PLAYER).unwrap(),
+            exchange::busy(7, 50).unwrap()
+        );
+        assert!(eqmac(&answer(false), PLAYER).is_err());
     }
 }

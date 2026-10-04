@@ -25,6 +25,10 @@ pub enum Message {
     Handoff(Vec<u8>),
     /// The server logging the character out.
     LoggedOut,
+    /// A message a session feature withholds, to pass on later as it was or
+    /// as what the next one shows it to be; no other feature hears it, and
+    /// the host hears nothing of it.
+    Withheld,
     /// A packet that could not be read.
     Unreadable {
         /// What the packet was about.

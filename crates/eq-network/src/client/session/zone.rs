@@ -11,8 +11,10 @@ use super::admission::{Handshake, Zone};
 use eq_network_game::message::Message;
 use eq_network_transport::Transport;
 
-/// The zone's features, each offered every command, packet, timer and event.
-struct Features(Vec<Box<dyn Feature>>);
+/// The zone's features, each offered every command, packet, timer and
+/// event, and what the server type leaves to the player of what they let
+/// the player do.
+struct Features(Vec<Box<dyn Feature>>, Vec<crate::world::Capability>);
 
 impl Features {
     /// The features the server type provides.
@@ -21,19 +23,42 @@ impl Features {
         name: &str,
         auto_eat: eq_network_game::food::AutoEat,
     ) -> Self {
-        Self(server.features(&servers::Setup::new(name, auto_eat)))
+        let mut features = Vec::new();
+        let (mut offered, mut choices) = (Vec::new(), Vec::new());
+        for provided in server.features(&servers::Setup::new(name, auto_eat)) {
+            let listed = provided.feature.capabilities();
+            if provided.choice {
+                choices.extend(listed);
+            } else {
+                offered.extend(listed);
+            }
+            features.push(provided.feature);
+        }
+        // What one feature offers is offered, whatever another leaves to the
+        // player.
+        choices.retain(|capability| !offered.contains(capability));
+        choices.sort_unstable();
+        choices.dedup();
+        Self(features, choices)
     }
 
-    /// What the features let the player do, each once.
+    /// What the features let the player do, each once, but what the server
+    /// type leaves to the player.
     fn capabilities(&self) -> Vec<crate::world::Capability> {
         let mut capabilities: Vec<_> = self
             .0
             .iter()
             .flat_map(|feature| feature.capabilities())
+            .filter(|capability| !self.1.contains(capability))
             .collect();
         capabilities.sort_unstable();
         capabilities.dedup();
         capabilities
+    }
+
+    /// What the server type leaves to the player, each once.
+    fn choices(&self) -> Vec<crate::world::Capability> {
+        self.1.clone()
     }
 
     /// Lets every feature shape the player the admission reports.
@@ -401,6 +426,7 @@ fn admit(
             out.log
                 .send(ClientEvent::World(crate::world::WorldEvent::Entered {
                     capabilities: features.capabilities(),
+                    choices: features.choices(),
                     session_id: world.session_id,
                     zone: zone.name.clone(),
                     player: Box::new(player),
@@ -435,7 +461,7 @@ mod tests {
     };
 
     /// How many kinds of command there are.
-    const KINDS: usize = 48;
+    const KINDS: usize = 66;
 
     /// Which kind of command this is. A new command is a compile error here
     /// until it has a number, and then a test failure until the list below
@@ -491,6 +517,24 @@ mod tests {
             ClientCommand::Combine { .. } => 45,
             ClientCommand::OpenContainer { .. } => 46,
             ClientCommand::CloseContainer { .. } => 47,
+            ClientCommand::InviteToGroup { .. } => 48,
+            ClientCommand::FollowGroup { .. } => 49,
+            ClientCommand::DeclineGroup { .. } => 50,
+            ClientCommand::Disband { .. } => 51,
+            ClientCommand::ToggleAway { .. } => 52,
+            ClientCommand::ToggleAnonymous { .. } => 53,
+            ClientCommand::ToggleRoleplay { .. } => 54,
+            ClientCommand::Random { .. } => 55,
+            ClientCommand::Emote { .. } => 56,
+            ClientCommand::Assist { .. } => 57,
+            ClientCommand::RaidInvite { .. } => 58,
+            ClientCommand::RaidAccept { .. } => 59,
+            ClientCommand::RaidDecline { .. } => 60,
+            ClientCommand::RaidLeave { .. } => 61,
+            ClientCommand::RaidLock { .. } => 62,
+            ClientCommand::RaidMove { .. } => 63,
+            ClientCommand::RaidMakeLeader { .. } => 64,
+            ClientCommand::RaidRemove { .. } => 65,
         }
     }
 
@@ -605,7 +649,7 @@ mod tests {
                 session_id,
                 corpse_id: 8,
                 own_id: 7,
-                slot: 0,
+                place: 0,
                 auto: true,
                 created,
             },
@@ -735,6 +779,53 @@ mod tests {
             ClientCommand::AnswerResurrection {
                 session_id,
                 accept: true,
+            },
+            ClientCommand::InviteToGroup {
+                session_id,
+                name: "Friend".into(),
+            },
+            ClientCommand::FollowGroup { session_id },
+            ClientCommand::DeclineGroup { session_id },
+            ClientCommand::Disband { session_id },
+            ClientCommand::ToggleAway { session_id },
+            ClientCommand::ToggleAnonymous { session_id },
+            ClientCommand::ToggleRoleplay { session_id },
+            ClientCommand::Random {
+                session_id,
+                low: 1,
+                high: 6,
+            },
+            ClientCommand::Emote {
+                session_id,
+                text: "waves.".into(),
+            },
+            ClientCommand::Assist {
+                session_id,
+                spawn_id: 300,
+            },
+            ClientCommand::RaidInvite {
+                session_id,
+                name: "Friend".into(),
+            },
+            ClientCommand::RaidAccept { session_id },
+            ClientCommand::RaidDecline { session_id },
+            ClientCommand::RaidLeave { session_id },
+            ClientCommand::RaidLock {
+                session_id,
+                locked: true,
+            },
+            ClientCommand::RaidMove {
+                session_id,
+                name: "Friend".into(),
+                group: Some(0),
+            },
+            ClientCommand::RaidMakeLeader {
+                session_id,
+                name: "Friend".into(),
+            },
+            ClientCommand::RaidRemove {
+                session_id,
+                name: "Friend".into(),
             },
             ClientCommand::ReadItem {
                 session_id,
@@ -881,6 +972,15 @@ mod tests {
             .capabilities()
         };
         let p99 = features(crate::client::ServerProtocol::Project1999);
+        // P99 leaves the map to the player, which is not offered until then.
+        let p99_choices = Features::new(
+            servers::server_type(crate::client::ServerProtocol::Project1999),
+            "Tester",
+            eq_network_game::food::AutoEat::default(),
+        )
+        .choices();
+        assert_eq!(p99_choices, [Capability::Map]);
+        assert!(!p99.contains(&Capability::Map));
         for capability in [
             Capability::Casting,
             Capability::Spellbook,
@@ -912,7 +1012,26 @@ mod tests {
         assert!(eqemu.contains(&Capability::Reading));
         assert!(eqemu.contains(&Capability::Tradeskills));
         assert!(eqemu.contains(&Capability::Map));
-        assert_eq!(eqemu.len(), p99.len() + 6);
+        assert!(eqemu.contains(&Capability::DeletingSpells));
+        assert!(eqemu.contains(&Capability::MovingSpells));
+        assert!(!p99.contains(&Capability::DeletingSpells));
+        assert!(p99.contains(&Capability::MovingSpells));
+        assert!(eqemu.contains(&Capability::MerchantOffers));
+        assert!(!p99.contains(&Capability::MerchantOffers));
+        assert!(eqemu.contains(&Capability::Grouping));
+        assert!(!p99.contains(&Capability::Grouping));
+        assert!(eqemu.contains(&Capability::Listing));
+        assert!(!p99.contains(&Capability::Listing));
+        for capability in [
+            Capability::Rolling,
+            Capability::Emoting,
+            Capability::Assisting,
+            Capability::Raiding,
+        ] {
+            assert!(eqemu.contains(&capability));
+            assert!(!p99.contains(&capability));
+        }
+        assert_eq!(eqemu.len(), p99.len() + 14);
         // EQMac servers talk, TAKP camps too, and neither follows a zone
         // change yet.
         assert_eq!(

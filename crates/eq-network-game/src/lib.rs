@@ -30,6 +30,9 @@ pub mod doors;
 pub mod exchange;
 /// Food and drink: hunger, thirst, and eating and drinking.
 pub mod food;
+/// Groups: invitations, joining, leaving and disbanding, and who is in the
+/// player's group.
+pub mod group;
 /// Read-only inventory packets, slots, instances, and state.
 pub mod inventory;
 /// Read-only item inspection requests and definitions.
@@ -54,8 +57,12 @@ pub mod p99;
 pub mod pets;
 /// TAKP/EQMac player and entity presentation codecs.
 pub mod quarm;
+/// Raids: invitations, joining, leaving, and the server's word on the raid.
+pub mod raid;
 /// Being resurrected: the offer and the player's answer.
 pub mod resurrection;
+/// Rolling dice, emoting and assisting.
+pub mod socials;
 /// Server-driven spellbook and casting notifications.
 pub mod spells;
 /// Tradeskill combines in the player's own containers.
