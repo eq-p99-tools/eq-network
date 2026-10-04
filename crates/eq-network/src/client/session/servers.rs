@@ -917,6 +917,12 @@ impl ServerType for Takp {
     fn motion(&self, _setup: &Setup<'_>) -> Provided {
         offer(shared::motion(false))
     }
+
+    /// The time of day, which TAKP sends as the zone admits the player
+    /// (`zone/client_packet.cpp`) and whenever it changes.
+    fn clock(&self, _setup: &Setup<'_>) -> Provided {
+        offer(shared::clock())
+    }
 }
 
 /// The server type of a server protocol.
@@ -988,14 +994,14 @@ mod tests {
     #[test]
     fn eqmac_servers_provide_the_features_built_for_them() {
         // Quarm and TAKP speak EQMac: they see the zone's spawns, keep the
-        // player's record and talk. TAKP also camps; Quarm will once that is
-        // checked there.
+        // player's record and talk. TAKP also camps and keeps the time of
+        // day; Quarm will once each is checked there.
         let setup = Setup::new("Tester", AutoEat::default());
         let quarm = server_type(ServerProtocol::Quarm);
         assert_eq!(quarm.features(&setup).len(), 3);
         assert_eq!(offers(quarm), [Capability::Talking]);
         let takp = server_type(ServerProtocol::Takp);
-        assert_eq!(takp.features(&setup).len(), 5);
+        assert_eq!(takp.features(&setup).len(), 6);
         assert_eq!(
             offers(takp),
             [Capability::Moving, Capability::Talking, Capability::Camping]

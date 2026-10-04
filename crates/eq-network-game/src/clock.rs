@@ -62,13 +62,35 @@ impl GameTime {
 /// Rejects a malformed length.
 pub fn decode(body: &[u8]) -> Result<GameTime> {
     ensure!(body.len() == 8, "invalid time of day length");
-    Ok(GameTime {
+    Ok(read(
+        body,
+        u32::from_le_bytes([body[4], body[5], body[6], body[7]]),
+    ))
+}
+
+/// Decodes `EQMac`'s `OP_TimeOfDay`, which keeps the year in 16 bits (TAKP
+/// `common/eq_packet_structs.h` `TimeOfDay_Struct`, 6 bytes); its hours
+/// also run from 1 to 24 (`common/eqtime.cpp`).
+///
+/// # Errors
+/// Rejects a malformed length.
+pub fn decode_eqmac(body: &[u8]) -> Result<GameTime> {
+    ensure!(body.len() == 6, "invalid EQMac time of day length");
+    Ok(read(
+        body,
+        u32::from(u16::from_le_bytes([body[4], body[5]])),
+    ))
+}
+
+/// The hour, minute, day and month that open both layouts, and the year.
+fn read(body: &[u8], year: u32) -> GameTime {
+    GameTime {
         hour: (body[0] % 24 + 23) % 24,
         minute: body[1] % 60,
         day: body[2].clamp(1, 28),
         month: body[3].clamp(1, 12),
-        year: u32::from_le_bytes([body[4], body[5], body[6], body[7]]),
-    })
+        year,
+    }
 }
 
 /// One of a zone's fog settings.
@@ -130,6 +152,25 @@ pub fn titanium_zone_sky(new_zone: &[u8]) -> Option<ZoneSky> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn eqmac_keeps_the_year_in_16_bits() {
+        let mut body = vec![1, 30, 5, 3];
+        body.extend_from_slice(&3100u16.to_le_bytes());
+        assert_eq!(
+            decode_eqmac(&body).unwrap(),
+            GameTime {
+                hour: 0,
+                minute: 30,
+                day: 5,
+                month: 3,
+                year: 3100,
+            }
+        );
+        assert!(decode_eqmac(&body[..5]).is_err());
+        // Titanium's eight bytes are not EQMac's six.
+        assert!(decode(&body).is_err());
+    }
 
     #[test]
     fn the_clock_reads_from_the_wire_and_runs_on() {
