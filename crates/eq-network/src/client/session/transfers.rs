@@ -22,8 +22,11 @@ use eq_network_game::{
 };
 use std::time::{Duration, Instant};
 
-/// How long the player's departure waits for the zone's answer: the zone
-/// answers at once, or closes the connection.
+/// How long the player's departure waits for the zone's answer (inferred).
+/// In Adam's P99 recording the zone answered 23 and 30 ms after the
+/// departure, and the official client reached the world server 0.5 and
+/// 0.9 s after it; whether it waits for the answer is unrecorded, and
+/// `EQMacEmu` says the official `EQMac` client ignores it.
 const DEPARTURE: Duration = Duration::from_secs(2);
 
 /// The zone's zone points, and the transfers they and the server start.
@@ -252,7 +255,9 @@ impl Feature for Transfers {
                 error,
             } => bail!("{error}"),
             // EQEmu answers a move to another zone twice, as the world's
-            // reply reaches the zone twice; the player has already departed.
+            // reply reaches the zone twice (`zone/worldserver.cpp`), and
+            // TAKP answers any repeat of the request again (`zone/zoning.cpp`
+            // `Handle_OP_ZoneChange`); the player has already departed.
             Message::ZoneAnswer(_) if world.lifecycle.departing() => out
                 .log
                 .diagnostic("Zoning: the zone answered again while the player departs".into()),

@@ -77,8 +77,10 @@ pub fn titanium_answer(
 
 /// Titanium's request that the zone save the player before they leave it.
 /// `EQEmu` reads nothing in its 192 bytes (`Handle_OP_SaveOnZoneReq` calls
-/// `Handle_OP_Save`), so they stay zero (inferred: what the official client
-/// writes there is not read).
+/// `Handle_OP_Save`), so they stay zero (inferred). The official client's
+/// are not zero: in Adam's P99 recording about 56 of them are set, in short
+/// runs, none holding the player's position; what they mean, and whether
+/// P99 reads them, is unrecorded.
 #[must_use]
 pub fn titanium_save_on_zone() -> EncodedCommand {
     EncodedCommand {
