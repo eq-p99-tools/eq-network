@@ -7,6 +7,10 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- A tell's echo on channel 14 is `ChannelName::TellEcho` on the `EQMac`
+  wire too: TAKP echoes a delivered tell to its sender on
+  `ChatChannel_TellEcho` (14), as `EQEmu` does on Titanium's.
+
 - `WorldEvent::Entered` gains `choices`: what the session leaves to the
   player, none of it among `capabilities`. A server type may leave any
   feature it provides to the player where its own client keeps it off; a
