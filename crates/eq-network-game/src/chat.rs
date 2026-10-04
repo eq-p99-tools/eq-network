@@ -279,10 +279,12 @@ impl CommunicationOpcode {
     }
 }
 
-/// The channel the Titanium wire echoes a tell the player sent on, as
-/// `EQEmu` sends it. The `EQMac` generation's number for the echo is not
-/// checked yet, so there it stays unknown.
-const TITANIUM_TELL_ECHO: u32 = 14;
+/// The channel a server echoes a tell the player sent on, so that it shows
+/// on their own client: `EQEmu` on the Titanium wire, and TAKP on the
+/// `EQMac` wire (`ChatChannel_TellEcho` in TAKP's `common/eq_constants.h`,
+/// sent back through `ChannelMessageSend` in its `zone/worldserver.cpp`
+/// once the tell is delivered).
+const TELL_ECHO: u32 = 14;
 
 /// Map a wire channel ID to its stable JSON name while preserving unknown IDs.
 #[must_use]
@@ -651,8 +653,8 @@ pub fn parse_for(
                 GameDialect::Titanium => u32_at(body, 132),
                 GameDialect::EqMac => u32::from(u16::from_le_bytes([body[130], body[131]])),
             };
-            let name = match (protocol, channel) {
-                (GameDialect::Titanium, TITANIUM_TELL_ECHO) => ChannelName::TellEcho,
+            let name = match channel {
+                TELL_ECHO => ChannelName::TellEcho,
                 _ => channel_name(channel),
             };
             let mut event = ChatEvent::new(opcode, body, name, include_raw)
@@ -779,14 +781,18 @@ mod tests {
             serde_json::to_value(ChannelName::TellEcho).unwrap(),
             "tell_echo"
         );
-        // The EQMac generation's channel 14 is not checked yet.
+        // TAKP echoes a tell on the same channel of the EQMac wire.
         let mut body = vec![0; MAC_CHANNEL_MESSAGE_HEADER];
+        body[..7].copy_from_slice(b"Example");
+        body[64..72].copy_from_slice(b"Examplar");
         body[130..132].copy_from_slice(&14u16.to_le_bytes());
         body.extend_from_slice(b"inc\0");
         let event = parse_for(GameDialect::EqMac, 0x0741, &body, false)
             .unwrap()
             .unwrap();
-        assert_eq!(event.channel_name, ChannelName::Unknown);
+        assert_eq!(event.channel_name, ChannelName::TellEcho);
+        assert_eq!(event.sender.as_deref(), Some("Examplar"));
+        assert_eq!(event.target.as_deref(), Some("Example"));
     }
 
     #[test]
