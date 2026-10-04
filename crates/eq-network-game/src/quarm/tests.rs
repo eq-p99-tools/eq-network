@@ -335,3 +335,14 @@ fn mac_filters_enable_every_chat_and_combat_category() {
         assert_eq!(value, u32::from((5..=14).contains(&index)));
     }
 }
+
+#[test]
+fn the_time_of_day_is_news() {
+    let mut body = vec![13, 0, 1, 1];
+    body.extend_from_slice(&3100u16.to_le_bytes());
+    assert!(matches!(
+        updates(ZONE_TIME_OF_DAY, &body).unwrap().as_slice(),
+        [WorldEvent::TimeOfDay(time)] if time.hour == 12
+    ));
+    assert!(updates(ZONE_TIME_OF_DAY, &body[..4]).is_err());
+}

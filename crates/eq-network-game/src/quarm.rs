@@ -47,6 +47,9 @@ pub const ZONE_CAMP: u16 = 0x0742;
 /// The server's answer to a logout (`OP_LogoutReply`), which ends the zone
 /// connection.
 pub const ZONE_LOGOUT_REPLY: u16 = 0x5941;
+/// `OP_TimeOfDay`: the time in Norrath (TAKP `utils/patches/patch_Mac.conf`
+/// lists 0x40f2, its bytes swapped).
+pub const ZONE_TIME_OF_DAY: u16 = 0xf240;
 /// The server asking the client to change zones.
 pub const ZONE_CHANGE_REQUEST: u16 = 0x4d41;
 
@@ -463,6 +466,7 @@ pub fn updates(opcode: u16, body: &[u8]) -> Result<Vec<WorldEvent>> {
             vec![WorldEvent::Mana(u32::from(short(body, 0)))]
         }
         0xf540 => crate::world::appearance(body)?.into_iter().collect(),
+        ZONE_TIME_OF_DAY => vec![WorldEvent::TimeOfDay(crate::clock::decode_eqmac(body)?)],
         0x9941 => {
             ensure!(
                 body.len() == 4 && word(body, 0) <= 330,
