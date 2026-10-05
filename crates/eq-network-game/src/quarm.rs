@@ -6,7 +6,9 @@
 
 use crate::{
     command::EncodedCommand,
-    world::{BaseAttributes, PlayerState, Position, SpawnKind, SpawnState, WorldEvent},
+    world::{
+        BaseAttributes, ItemHitPoints, PlayerState, Position, SpawnKind, SpawnState, WorldEvent,
+    },
     zoning::ZoneOffer,
 };
 use anyhow::{ensure, Context, Result};
@@ -573,13 +575,18 @@ pub fn updates(opcode: u16, body: &[u8]) -> Result<Vec<WorldEvent>> {
                 maximum > 0 && current <= maximum,
                 "invalid EQMac health values"
             );
+            // Right for others; the player's own update leaves out what
+            // items add, so the host takes the player's health from the hit
+            // points instead.
             let percent = u8::try_from(i64::from(current.max(0)) * 100 / i64::from(maximum))?;
             vec![
                 WorldEvent::HitPoints {
                     spawn_id,
                     current,
                     maximum,
-                    without_items: false,
+                    // Read as the player's own update, the only one with
+                    // real values: others' carry a percent over 100.
+                    items: ItemHitPoints::LeftOutOfCurrent,
                 },
                 WorldEvent::HealthPercent { spawn_id, percent },
             ]
@@ -589,6 +596,9 @@ pub fn updates(opcode: u16, body: &[u8]) -> Result<Vec<WorldEvent>> {
             vec![WorldEvent::Mana(u32::from(short(body, 0)))]
         }
         0xf540 => crate::world::appearance(body)?.into_iter().collect(),
+        crate::combat::EQMAC_DAMAGE_OPCODE => {
+            vec![WorldEvent::Damage(crate::combat::eqmac_damage(body)?)]
+        }
         0x9941 => {
             ensure!(
                 body.len() == 4 && word(body, 0) <= 330,
