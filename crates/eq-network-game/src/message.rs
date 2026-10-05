@@ -19,6 +19,10 @@ pub enum Message {
     /// feature keeping the merchant window tells the host the places that
     /// left and each item listed.
     MerchantList(Vec<crate::merchant::MerchantItem>),
+    /// Coins the server added to the player's purse without saying what the
+    /// purse holds, as `EQMac`'s money notices do one kind at a time; the
+    /// feature keeping the purse adds them, and the host hears the purse.
+    PurseAdded(crate::world::Coins),
     /// The destinations the zone numbered for its zone lines.
     ZonePoints(zoning::ZonePoints),
     /// The server's offer to move the player, to another zone or within this one.
@@ -163,6 +167,9 @@ pub fn eqmac(opcode: u16, body: &[u8]) -> Vec<Message> {
             |error| unreadable(Part::ZonePoints, &error),
             Message::ZonePoints,
         )],
+        crate::quarm::ZONE_PLAYER_PROFILE => eqmac_profile(body),
+        crate::money::EQMAC_PURSE_OPCODE => vec![crate::money::eqmac_purse_addition(body)
+            .map_or_else(|error| unreadable(Part::World, &error), Message::PurseAdded)],
         crate::combat::EQMAC_CONSIDER_OPCODE => {
             vec![crate::combat::eqmac_consideration(body).map_or_else(
                 |error| unreadable(Part::World, &error),
@@ -182,6 +189,22 @@ pub fn eqmac(opcode: u16, body: &[u8]) -> Vec<Message> {
             ),
         },
     }
+}
+
+/// What the `EQMac` profile says beside what the admission reads of it: the
+/// player's buffs and spellbook, and their coins.
+fn eqmac_profile(body: &[u8]) -> Vec<Message> {
+    let mut messages = events(Part::Spells, crate::quarm::profile_spells(body));
+    messages.extend(events(Part::World, crate::quarm::profile_coins(body)));
+    messages
+}
+
+/// The events a reading gives, or why it could not be read.
+fn events(part: Part, read: anyhow::Result<Vec<WorldEvent>>) -> Vec<Message> {
+    read.map_or_else(
+        |error| vec![unreadable(part, &error)],
+        |events| events.into_iter().map(Message::Event).collect(),
+    )
 }
 
 fn unreadable(part: Part, error: &anyhow::Error) -> Message {
@@ -357,5 +380,51 @@ mod tests {
             }]
         ));
         assert!(eqmac(0xffff, &[]).is_empty());
+    }
+
+    #[test]
+    fn takps_money_notice_adds_to_the_purse_and_names_no_one_else() {
+        let mut notice = [0, 0, 2, 0, 0, 0, 0, 0];
+        notice[4..].copy_from_slice(&5i32.to_le_bytes());
+        assert!(matches!(
+            eqmac(crate::money::EQMAC_PURSE_OPCODE, &notice)[..],
+            [Message::PurseAdded(crate::world::Coins { gold: 5, .. })]
+        ));
+        notice[0] = 7;
+        assert!(matches!(
+            eqmac(crate::money::EQMAC_PURSE_OPCODE, &notice)[..],
+            [Message::Unreadable {
+                part: Part::World,
+                ..
+            }]
+        ));
+    }
+
+    #[test]
+    fn an_eqmac_cast_ending_is_a_spell_notice_and_a_change_in_mana() {
+        assert!(matches!(
+            eqmac(0x7f41, &[120, 0, 42, 0])[..],
+            [
+                Message::Event(WorldEvent::Spell(spells::SpellUpdate::Mana {
+                    spell_id: 42,
+                    keep_casting: false
+                })),
+                Message::Event(WorldEvent::Mana(120))
+            ]
+        ));
+        // A profile that cannot be read leaves the spells and coins unknown.
+        assert!(matches!(
+            eqmac(crate::quarm::ZONE_PLAYER_PROFILE, &[0; 7])[..],
+            [
+                Message::Unreadable {
+                    part: Part::Spells,
+                    ..
+                },
+                Message::Unreadable {
+                    part: Part::World,
+                    ..
+                }
+            ]
+        ));
     }
 }

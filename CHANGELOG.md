@@ -34,7 +34,9 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   answers no trade, leaves the inventory untrusted
   (`InventoryUpdate::Invalidated`) instead of removing what the slot holds
   now, and a purchase's echo releases only its own purchase.
-
+- `Message` gains `PurseAdded`: coins the server added to the player's
+  purse without saying what the purse holds, as TAKP's money notices do.
+  The feature keeping the purse applies it, and a host hears the purse.
 - `WorldEvent::HitPoints` says which values leave out the HP equipped items
   add with `items: ItemHitPoints`, in place of `without_items`. Titanium's
   own update leaves them out of both (`LeftOut`). `EQMac`'s, as TAKP sends
@@ -143,6 +145,33 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   without spell data, and an item above the player's required level, which
   TAKP counts only for an account of status 80 or more.
 
+- TAKP's spell state, read from the `EQMac` wire as the events Titanium's
+  packets give (Quarm sends the same packets, unchecked there). The
+  profile gives the buffs (`buffs::eqmac_profile`), the 256-slot
+  spellbook (`SpellBook::eqmac_profile`) and each gem's reuse time left
+  (`PlayerState::spell_refresh_ms`). `spells::decode_eqmac` reads a cast
+  beginning, with its base cast time, which the player's focus effects can
+  shorten; an interruption; a gem's refresh, with no reuse adjustment; and
+  the spellbook's replies. `buffs::eqmac_spell_effect` reads a spell taking
+  hold and `buffs::eqmac_update` a buff's fade or corrected duration.
+  `OP_ManaChange`, which TAKP sends only as the spell bar comes back, ends
+  the cast (`SpellUpdate::Mana`, `keep_casting: false`) besides giving the
+  mana, and `OP_ManaUpdate` gives the player's mana between casts. TAKP's
+  server sends an interruption and a fade to the player alone without
+  naming anyone, so the session names the player in them. A fade names no
+  slot either (`buffs::UNKNOWN_SLOT`): a host finds the buff by its spell.
+  The book reaches a host once TAKP offers the spellbook.
+- TAKP's coins from the profile: those the player carries
+  (`money::eqmac_coins`, `WorldEvent::Coins`) and those on the cursor and
+  in the bank (`money::eqmac_elsewhere`, `WorldEvent::CoinsElsewhere`),
+  signed 32-bit counts where a negative one is refused. `EQMac` has no
+  shared bank. TAKP's money notice (`OP_TradeMoneyUpdate` from trader 0,
+  `money::eqmac_purse_addition`) says what it added to the purse, one kind
+  at a time; the session adds it (`Message::PurseAdded`) and tells the
+  purse it makes. TAKP never announces what it takes, and a notice naming
+  another trader is refused. All of it reaches a host through the
+  inventory feature, once TAKP offers it; loot coins and merchants come
+  with those features.
 - The world's damage to the player (`Capability::EnvironmentalDamage`,
   `EqEmu` only, and there falls alone): `GameCommand::EnvironmentalDamage`
   reports the damage a host worked out, by its `hazards::Hazard` (falling,
