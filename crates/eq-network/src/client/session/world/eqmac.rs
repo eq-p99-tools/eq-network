@@ -2,6 +2,11 @@
 //! in with the account's session key, the world lists the characters, the
 //! client creates or enters one, and the world hands it off to its zone. The
 //! world sends no file manifest and has no protection.
+//!
+//! Between zones the client logs in again saying it is zoning: the world
+//! skips the list and names the character in play (`OP_EnterWorld`), the
+//! client enters it again, and the world hands it off to its new zone (TAKP
+//! `world/client.cpp` `HandleSendLoginInfoPacket`, `SendEnterWorld`).
 use crate::{
     client::{
         selection::{Choice, Selection},
@@ -28,7 +33,7 @@ const WORLD_ZONE_SERVER: u16 = 0x0480;
 pub(in crate::client::session) fn world(
     context: &CharacterSession<'_>,
     ip: &str,
-    world_only: bool,
+    (world_only, zoning): (bool, bool),
     log: &mut Events<'_>,
 ) -> Result<Option<ZoneDestination>> {
     let config = &context.config;
@@ -37,7 +42,7 @@ pub(in crate::client::session) fn world(
         crate::client::endpoint(ip, 9000, config.local_only)?,
         stop.flag(),
     )?;
-    session.send(WORLD_LOGIN, &*world_login(context.credentials)?)?;
+    session.send(WORLD_LOGIN, &*world_login(context.credentials, zoning)?)?;
     let server = servers::server_type(config.protocol);
     let mut deadline = Instant::now() + Duration::from_secs(60);
     let mut entered = false;
@@ -83,6 +88,13 @@ pub(in crate::client::session) fn world(
             packet.body.len()
         ))?;
         match packet.opcode {
+            // Between zones, the world names the character in play, which the
+            // client enters again.
+            WORLD_ENTER if zoning && !entered => {
+                chosen = Some(reenter(&mut session, &packet.body, log)?);
+                entered = true;
+                deadline = Instant::now() + Duration::from_secs(60);
+            }
             // Name approved: send the creation; any refusal ends this attempt.
             EQMAC_APPROVE_NAME_OPCODE => {
                 if let Some(attempt) = creating.take() {
@@ -137,8 +149,26 @@ fn character_exists(body: &[u8], character: &str) -> Result<bool> {
         .any(|name| cstr(name).eq_ignore_ascii_case(character.as_bytes())))
 }
 
-fn world_login(credentials: &Credentials) -> Result<Zeroizing<[u8; 200]>> {
+/// Enters the character in play again, as the world names it between zones.
+fn reenter(session: &mut OldSession, named: &[u8], log: &mut Events<'_>) -> Result<String> {
+    let name = log.character.clone();
+    ensure!(
+        cstr(named).eq_ignore_ascii_case(name.as_bytes()),
+        "the world named another character between zones"
+    );
+    let mut enter = [0; 64];
+    put_string(&mut enter, &name)?;
+    session.send(WORLD_ENTER, &enter)?;
+    log.send(ClientEvent::Progress(ConnectionStage::ConnectingZone))?;
+    Ok(name)
+}
+
+/// The 200-byte login of the Windows and Intel Mac clients: the account and
+/// session key, and whether the client is zoning (TAKP
+/// `common/patches/mac_structs.h` `LoginInfo_Struct`, the flag at 192).
+fn world_login(credentials: &Credentials, zoning: bool) -> Result<Zeroizing<[u8; 200]>> {
     let mut body = Zeroizing::new([0; 200]);
+    body[192] = u8::from(zoning);
     put_string(&mut body[..127], &credentials.account)?;
     let key_start = credentials.account.len() + 1;
     ensure!(
@@ -169,16 +199,21 @@ mod tests {
             account: "LS#12345".into(),
             key: *b"ABCDEFGHIJ",
         };
-        let body = world_login(&credentials).unwrap();
+        let body = world_login(&credentials, false).unwrap();
         assert_eq!(body.len(), 200);
         assert_eq!(cstr(&body[..127]), b"LS#12345");
         assert_eq!(&body[9..19], b"ABCDEFGHIJ");
         assert!(body[19..].iter().all(|&byte| byte == 0));
+        // Between zones it says so, at 192, and only there.
+        let zoning = world_login(&credentials, true).unwrap();
+        assert_eq!(zoning[192], 1);
+        assert_eq!(zoning[..192], body[..192]);
+        assert_eq!(zoning[193..], body[193..]);
     }
 
     #[test]
     fn zone_handoff_uses_network_byte_order_for_the_port() {
-        // EQMacEmu world/client.cpp serializes ntohs(GetCPort()) in this field.
+        // EQMacEmu `world/client.cpp` serializes ntohs(GetCPort()) in this field.
         let mut body = [0; 130];
         put_string(&mut body[..128], "203.0.113.20").unwrap();
         body[128..].copy_from_slice(&7000u16.to_be_bytes());
