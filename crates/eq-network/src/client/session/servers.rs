@@ -487,18 +487,14 @@ mod shared {
 
     /// The inventory, whose items the player moves under the server type's
     /// rules, with what else it allows, and merchant packets priced as
-    /// `quotes` says.
+    /// `quotes` says; the session eats as the player chose.
     pub(super) fn inventory_under(
         rules: MoveRules,
         quotes: Quotes,
         allows: Allowances,
+        setup: &Setup<'_>,
     ) -> Box<dyn Feature> {
-        Box::new(Belongings::under(
-            rules,
-            quotes,
-            allows,
-            eq_network_game::food::AutoEat::default(),
-        ))
+        Box::new(Belongings::under(rules, quotes, allows, setup.auto_eat))
     }
 
     /// Moving, with or without the jumps and falls the server takes.
@@ -984,17 +980,15 @@ impl ServerType for Takp {
 
     /// What TAKP's item packets say the player holds, item moves under
     /// TAKP's rules, which disconnect a player whose move they refuse, coin
-    /// moves, which TAKP answers no more than `EQEmu` does, and merchants,
-    /// whose lists TAKP quotes before their rate. Meals wait.
-    fn inventory(&self, _setup: &Setup<'_>) -> Provided {
+    /// moves, which TAKP answers no more than `EQEmu` does, merchants, whose
+    /// lists TAKP quotes before their rate, and eating and drinking when
+    /// TAKP's own client would.
+    fn inventory(&self, setup: &Setup<'_>) -> Provided {
         offer(shared::inventory_under(
             MoveRules::Takp,
             Quotes::of(GameDialect::EqMac),
-            Allowances {
-                coins: true,
-                merchants: true,
-                ..Allowances::default()
-            },
+            Allowances::ALL,
+            setup,
         ))
     }
 

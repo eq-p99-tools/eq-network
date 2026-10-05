@@ -14,7 +14,7 @@
 //! and `Client::DoStaminaHungerUpdate` (`zone/client_process.cpp`) for the
 //! rules.
 use crate::{command::EncodedCommand, inventory::InventorySlot, items::ItemDetails};
-use anyhow::{ensure, Result};
+use anyhow::{ensure, Context, Result};
 use serde::Serialize;
 
 /// `OP_Stamina`: how fed and watered the player is.
@@ -24,6 +24,15 @@ pub const CONSUME_OPCODE: u16 = 0x77d6;
 /// At or below this much food or drink, servers count the player hungry or
 /// thirsty, and the official client eats or drinks.
 pub const HUNGRY: u32 = 3000;
+/// TAKP's own: its client eats or drinks below 3000, so at 2999 or less
+/// (inferred from TAKP's `Client::Hungry`, `zone/client.h`, whose comment
+/// calls 3000 the auto-consume threshold; the client's own is unrecorded).
+pub const TAKP_HUNGRY: u32 = 2999;
+/// `OP_Stamina` on the `EQMac` wire (TAKP `patch_Mac.conf` 0x4157, its bytes
+/// swapped).
+pub const EQMAC_STAMINA_OPCODE: u16 = 0x5741;
+/// `OP_Consume` on the `EQMac` wire (0x4156 swapped).
+pub const EQMAC_CONSUME_OPCODE: u16 = 0x5641;
 /// The most servers report; one who has this much can eat or drink no more.
 pub const FULL: u32 = 6000;
 /// `Consume_Struct.auto_consumed` for what the client eats on its own.
@@ -136,6 +145,24 @@ pub fn decode(opcode: u16, body: &[u8]) -> Result<Option<Nourishment>> {
     }))
 }
 
+/// How fed and watered TAKP says the player is (`Stamina_Struct`, packed:
+/// food and water as 16 bits each, from 0 to 32000, then a fatigue byte this
+/// leaves out; `Client::SendStaminaUpdate`, `zone/client.cpp`). TAKP sends it
+/// as food and water go down, as fatigue changes, and after every bite.
+///
+/// # Errors
+/// Rejects a malformed length.
+pub fn eqmac_nourishment(body: &[u8]) -> Result<Nourishment> {
+    let [food_low, food_high, water_low, water_high, _fatigue] = *body else {
+        anyhow::bail!("invalid EQMac stamina length");
+    };
+    let amount = |low, high| u32::try_from(i16::from_le_bytes([low, high]).max(0)).unwrap_or(0);
+    Ok(Nourishment {
+        food: amount(food_low, food_high),
+        water: amount(water_low, water_high),
+    })
+}
+
 /// How fed and watered the Titanium profile says the player is.
 ///
 /// # Errors
@@ -166,9 +193,65 @@ pub fn consume(slot: InventorySlot, meal: Meal, by_hand: bool) -> EncodedCommand
     }
 }
 
+/// The player eats or drinks the item in a slot on the `EQMac` wire
+/// (`Consume_Struct`, which TAKP reads as it comes): the slot in `EQMac`'s
+/// numbers, on the client's own or by hand, then -1, as its struct says the
+/// official client sends there, then food or drink as 32 bits.
+///
+/// # Errors
+/// Rejects a slot `EQMac` has no number for.
+pub fn eqmac_consume(slot: InventorySlot, meal: Meal, by_hand: bool) -> Result<EncodedCommand> {
+    let slot = slot
+        .to_eqmac()
+        .and_then(|slot| u32::try_from(slot).ok())
+        .context("no EQMac inventory slot")?;
+    let mut body = Vec::with_capacity(16);
+    body.extend_from_slice(&slot.to_le_bytes());
+    body.extend_from_slice(&(if by_hand { BY_HAND } else { ON_ITS_OWN }).to_le_bytes());
+    body.extend_from_slice(&u32::MAX.to_le_bytes());
+    body.extend_from_slice(&u32::from(meal.wire()).to_le_bytes());
+    Ok(EncodedCommand {
+        opcode: EQMAC_CONSUME_OPCODE,
+        body,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn takp_reports_food_and_drink_in_16_bits_and_takes_bites_in_its_numbers() {
+        let mut body = 2500i16.to_le_bytes().to_vec();
+        body.extend_from_slice(&32_000i16.to_le_bytes());
+        body.push(40);
+        assert_eq!(
+            eqmac_nourishment(&body).unwrap(),
+            Nourishment {
+                food: 2500,
+                water: 32_000
+            }
+        );
+        // A negative count reads as none; other lengths are refused.
+        body[..2].copy_from_slice(&(-5i16).to_le_bytes());
+        assert_eq!(eqmac_nourishment(&body).unwrap().food, 0);
+        assert!(eqmac_nourishment(&body[..4]).is_err());
+        // A ration in the first place of the second pack's bag, by hand.
+        let bite = eqmac_consume(InventorySlot(23).child(0).unwrap(), Meal::Food, true).unwrap();
+        assert_eq!(bite.opcode, EQMAC_CONSUME_OPCODE);
+        let words: Vec<u32> = bite
+            .body
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|word| u32::from_le_bytes(*word))
+            .collect();
+        assert_eq!(words, [260, 999, u32::MAX, 1]);
+        let sip = eqmac_consume(InventorySlot(22), Meal::Drink, false).unwrap();
+        assert_eq!(&sip.body[4..8], &u32::MAX.to_le_bytes());
+        assert_eq!(&sip.body[12..], &2u32.to_le_bytes());
+        assert!(eqmac_consume(InventorySlot(0), Meal::Food, true).is_err());
+    }
 
     #[test]
     fn the_server_reports_food_and_drink_and_the_client_eats_by_slot() {
