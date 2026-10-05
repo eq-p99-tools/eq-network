@@ -58,6 +58,9 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `EQMac` spawns say their class and level (TAKP's `Spawn_Struct` at 87
+  and 89), so a TAKP banker (class 40) is known as one, and a front end
+  can show levels.
 - The world's damage to the player (`Capability::EnvironmentalDamage`,
   `EqEmu` only, and there falls alone): `GameCommand::EnvironmentalDamage`
   reports the damage a host worked out, by its `hazards::Hazard` (falling,
