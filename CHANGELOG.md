@@ -68,7 +68,8 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   (`GameCommand::CastSpell` on the `EQMac` wire, `spells::eqmac_cast`) and
   an item's click effect from a worn or general slot
   (`Request::CastItem`, `spells::eqmac_item_cast`), in TAKP's 12-byte
-  `OP_CastSpell` with 16-bit fields and a CRC of 0, which TAKP never reads.
+  `OP_CastSpell` with 16-bit fields and a CRC of 0 (inferred: TAKP never
+  reads it, and the official client's is unrecorded).
   The cast is held, as on the other servers, until the spell bar comes back
   or the cast is interrupted. A hold now also ends on a result for the
   spell asked for when the server began a different one: TAKP begins a

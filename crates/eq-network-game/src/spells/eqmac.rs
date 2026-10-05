@@ -100,8 +100,8 @@ pub fn eqmac_item_cast(
 
 /// TAKP's `CastSpell_Struct` (12 bytes, packed): the casting slot, the
 /// spell, the item's slot and the target as 16 bits each, then a CRC TAKP
-/// never reads (`Client::Handle_OP_CastSpell`), sent as 0: the official
-/// client's is unrecorded.
+/// never reads (`Client::Handle_OP_CastSpell`), sent as 0 (inferred: the
+/// official client's is unrecorded).
 fn cast(slot: u16, spell_id: u32, item: u16, target_id: u16) -> Result<EncodedCommand> {
     let spell = u16::try_from(spell_id)
         .ok()
