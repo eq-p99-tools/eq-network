@@ -16,9 +16,11 @@
 //!
 //! TAKP's report leaves out what the player's items add, so a living
 //! player in HP gear can show the threshold, and TAKP kills whoever the
-//! client names. So the session refuses a report until it can count what
+//! client names. So the session takes a report only once it can count what
 //! the items add, on the server type's own rule ([`ItemCount`]), and that
-//! count with the server's report is at or below the threshold.
+//! count with the server's report is at or below the threshold. Until a
+//! server type has a count, the session refuses every report and names no
+//! threshold, so a host asks for none.
 use super::{
     actions,
     feature::{Feature, Out, World},
@@ -36,32 +38,22 @@ use eq_network_game::{
 /// cannot. Only called once the player's items are known.
 pub(super) type ItemCount = fn(&World) -> Result<i32, &'static str>;
 
-/// The count of a server type whose rule the session does not have yet,
-/// so it takes no report. TAKP adds more than the items' own HP: their
-/// worn effects, the first food the player carries, and for a GM the items
-/// below the level they ask for (`zone/bonuses.cpp`
-/// `Client::CalcItemBonuses`, `AddItemBonuses`, `CalcEdibleBonuses`). Its
-/// count comes with the `EQMac` inventory, which brings the player's items
-/// to the session; knowing the items alone opens nothing.
-pub(super) fn uncounted(_world: &World) -> Result<i32, &'static str> {
-    Err("The session cannot count the HP the player's items add on this server yet")
-}
-
 /// Reporting that the player bled out, at the HP the server type takes as
 /// death.
 pub(super) struct BleedingOut {
     /// The HP at or below which the server leaves the player's death to the
     /// client.
     threshold: i32,
-    /// How the server type counts the HP the player's items add.
-    items: ItemCount,
+    /// How the server type counts the HP the player's items add; None
+    /// until the session has its rule, which holds every report back.
+    items: Option<ItemCount>,
     /// The player's current HP in the server's last report for them, which
     /// leaves out what equipped items add.
     reported: Option<i32>,
 }
 
 impl BleedingOut {
-    pub(super) const fn new(threshold: i32, items: ItemCount) -> Self {
+    pub(super) const fn new(threshold: i32, items: Option<ItemCount>) -> Self {
         Self {
             threshold,
             items,
@@ -87,13 +79,18 @@ impl BleedingOut {
         if world.lifecycle.is_dead() {
             return Err("The player is already dead");
         }
+        let Some(count) = self.items else {
+            return Err(
+                "The session cannot count the HP the player's items add on this server yet",
+            );
+        };
         let Some(reported) = self.reported else {
             return Err("No HP report yet, so the player cannot have bled out");
         };
         if !world.inventory.received() || world.inventory.stale() {
             return Err("The player's items are not known, so their HP cannot be counted");
         }
-        let current = reported.saturating_add((self.items)(world)?);
+        let current = reported.saturating_add(count(world)?);
         if current > self.threshold {
             return Err("The player's HP, with what their items add, is above the death threshold");
         }
@@ -111,8 +108,13 @@ impl Feature for BleedingOut {
         Ok(())
     }
 
-    /// Tells the host the HP the server type takes as death.
+    /// Tells the host the HP the server type takes as death, once the
+    /// session can count what the player's items add there: a host asks
+    /// for nothing it would refuse.
     fn admitted(&mut self, _world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
+        if self.items.is_none() {
+            return Ok(());
+        }
         out.log.send(ClientEvent::World(WorldEvent::DeathThreshold(
             self.threshold,
         )))
@@ -242,7 +244,7 @@ mod tests {
 
     #[test]
     fn the_host_hears_the_threshold_as_the_zone_admits_the_player() {
-        let mut bleeding = BleedingOut::new(-11, adding::<0>);
+        let mut bleeding = BleedingOut::new(-11, Some(adding::<0>));
         let mut world = world();
         let outcome = testing::run(|out| bleeding.admitted(&mut world, out));
         outcome.result.unwrap();
@@ -256,7 +258,7 @@ mod tests {
 
     #[test]
     fn a_report_goes_out_only_at_the_threshold_with_what_the_items_add() {
-        let mut bleeding = BleedingOut::new(-11, adding::<25>);
+        let mut bleeding = BleedingOut::new(-11, Some(adding::<25>));
         let mut world = world();
         // No report yet: nothing goes out.
         let (sent, said) = ask(&mut bleeding, &mut world);
@@ -289,7 +291,7 @@ mod tests {
     fn no_report_goes_out_while_the_players_items_are_unknown() {
         // A living player in HP gear: the server's -11 leaves their items'
         // HP out.
-        let mut bleeding = BleedingOut::new(-11, adding::<0>);
+        let mut bleeding = BleedingOut::new(-11, Some(adding::<0>));
         let mut world = world();
         world.inventory = Carried::default();
         hear(&mut bleeding, &mut world, 7, -11);
@@ -301,9 +303,13 @@ mod tests {
     }
 
     #[test]
-    fn knowing_the_items_opens_nothing_on_a_server_type_without_a_count() {
-        let mut bleeding = BleedingOut::new(-11, uncounted);
+    fn a_server_type_without_a_count_takes_no_report_and_names_no_threshold() {
+        let mut bleeding = BleedingOut::new(-11, None);
         let mut world = world();
+        let outcome = testing::run(|out| bleeding.admitted(&mut world, out));
+        outcome.result.unwrap();
+        assert!(outcome.events.is_empty(), "{:?}", outcome.events);
+        // Knowing the player's items opens nothing.
         hear(&mut bleeding, &mut world, 7, -200);
         let (sent, said) = ask(&mut bleeding, &mut world);
         assert_eq!(sent, []);
@@ -313,7 +319,7 @@ mod tests {
 
     #[test]
     fn a_report_before_admission_counts() {
-        let mut bleeding = BleedingOut::new(-11, adding::<0>);
+        let mut bleeding = BleedingOut::new(-11, Some(adding::<0>));
         let mut world = world();
         bleeding.admit(&report(7, -12), &mut world).unwrap();
         let (sent, _) = ask(&mut bleeding, &mut world);
@@ -322,7 +328,7 @@ mod tests {
 
     #[test]
     fn a_heal_after_the_report_rules_it_out() {
-        let mut bleeding = BleedingOut::new(-11, adding::<0>);
+        let mut bleeding = BleedingOut::new(-11, Some(adding::<0>));
         let mut world = world();
         for current in [-20, 15] {
             hear(&mut bleeding, &mut world, 7, current);
@@ -334,7 +340,7 @@ mod tests {
 
     #[test]
     fn the_dead_report_no_second_death() {
-        let mut bleeding = BleedingOut::new(-11, adding::<0>);
+        let mut bleeding = BleedingOut::new(-11, Some(adding::<0>));
         let mut world = world();
         hear(&mut bleeding, &mut world, 7, -11);
         assert_eq!(ask(&mut bleeding, &mut world).0.len(), 1);

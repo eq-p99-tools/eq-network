@@ -19,7 +19,7 @@ use anyhow::Result;
 
 use super::{
     abilities::Abilities,
-    bleeding::{self, BleedingOut, ItemCount},
+    bleeding::{BleedingOut, ItemCount},
     camp::Camp,
     casting::Casting,
     character::Character,
@@ -537,8 +537,9 @@ mod shared {
     }
 
     /// Reporting a bleed-out at the HP the server takes as death, counting
-    /// what the player's items add as the server does.
-    pub(super) fn bleeding_out(threshold: i32, items: ItemCount) -> Box<dyn Feature> {
+    /// what the player's items add as the server does; with no count, no
+    /// report goes out.
+    pub(super) fn bleeding_out(threshold: i32, items: Option<ItemCount>) -> Box<dyn Feature> {
         Box::new(BleedingOut::new(threshold, items))
     }
 
@@ -970,14 +971,18 @@ impl ServerType for Takp {
 
     /// TAKP announces no death to a player who bleeds out, nor to one
     /// killed by a tick of damage or by their own hand, and waits for the
-    /// client's own report, as the official client sends. The session holds
-    /// every report back until it counts what the player's items add as
-    /// TAKP does, which comes with the `EQMac` inventory.
+    /// client's own report, as the official client sends.
+    ///
+    /// There is no count of what the player's items add yet, so the session
+    /// holds every report back and names no threshold. TAKP adds more than
+    /// the items' own HP: their worn effects, the first food the player
+    /// carries, and for a GM the items below the level they ask for
+    /// (`zone/bonuses.cpp` `Client::CalcItemBonuses`, `AddItemBonuses`,
+    /// `CalcEdibleBonuses`). Its count comes with the `EQMac` inventory,
+    /// checked live against the server's HP; knowing the items alone opens
+    /// nothing.
     fn bleeding_out(&self, _setup: &Setup<'_>) -> Provided {
-        offer(shared::bleeding_out(
-            TAKP_DEATH_THRESHOLD,
-            bleeding::uncounted,
-        ))
+        offer(shared::bleeding_out(TAKP_DEATH_THRESHOLD, None))
     }
 
     fn targeting(&self, _setup: &Setup<'_>) -> Provided {

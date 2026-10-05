@@ -1127,7 +1127,7 @@ mod tests {
         let features = Features(
             vec![
                 Box::new(Transfers::new("Tester", Home::Asked)),
-                Box::new(BleedingOut::new(-11, naked)),
+                Box::new(BleedingOut::new(-11, Some(naked))),
             ],
             Vec::new(),
         );
@@ -1160,9 +1160,14 @@ mod tests {
         ));
         outcome.result.unwrap();
         // Knowing the items is not enough: TAKP's -11 leaves out what they
-        // add, so the player may well be alive.
+        // add, so the player may well be alive. The host heard no threshold,
+        // so it asks for nothing.
         assert_eq!(outcome.sent, []);
         assert!(!world.lifecycle.is_dead());
+        assert!(!outcome.events.iter().any(|event| matches!(
+            event,
+            ClientEvent::World(crate::world::WorldEvent::DeathThreshold(_))
+        )));
         assert!(outcome.events.iter().any(|event| matches!(
             event,
             ClientEvent::Diagnostic(said) if said.contains("cannot count")
