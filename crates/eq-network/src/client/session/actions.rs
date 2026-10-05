@@ -134,6 +134,8 @@ pub(super) fn needs(command: &ClientCommand) -> &'static [Resource] {
         | ClientCommand::CancelTrade { .. }
         | ClientCommand::MoveCoins { .. }
         | ClientCommand::Jump { .. }
+        // Damage done holds nothing back.
+        | ClientCommand::EnvironmentalDamage { .. }
         | ClientCommand::AutoAttack { .. }
         | ClientCommand::UseAbility { .. }
         | ClientCommand::SelectTarget { .. }
@@ -329,6 +331,7 @@ fn refusal(command: &ClientCommand, reason: &str) -> Option<WorldEvent> {
         | ClientCommand::Shop { .. }
         | ClientCommand::CancelTrade { .. }
         | ClientCommand::Jump { .. }
+        | ClientCommand::EnvironmentalDamage { .. }
         | ClientCommand::AutoAttack { .. }
         | ClientCommand::WhoAll { .. }
         | ClientCommand::ConfigureMotion { .. }
