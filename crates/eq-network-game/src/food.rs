@@ -24,8 +24,9 @@ pub const CONSUME_OPCODE: u16 = 0x77d6;
 /// At or below this much food or drink, servers count the player hungry or
 /// thirsty, and the official client eats or drinks.
 pub const HUNGRY: u32 = 3000;
-/// TAKP's own: its client eats or drinks below 3000 (`Client::Hungry`,
-/// `zone/client.h`, "below the auto-consume threshold"), so at 2999 or less.
+/// TAKP's own: its client eats or drinks below 3000, so at 2999 or less
+/// (inferred from TAKP's `Client::Hungry`, `zone/client.h`, whose comment
+/// calls 3000 the auto-consume threshold; the client's own is unrecorded).
 pub const TAKP_HUNGRY: u32 = 2999;
 /// `OP_Stamina` on the `EQMac` wire (TAKP `patch_Mac.conf` 0x4157, its bytes
 /// swapped).
