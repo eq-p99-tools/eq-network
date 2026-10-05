@@ -416,6 +416,21 @@ fn a_death_names_who_died_their_killer_and_corpse() {
 }
 
 #[test]
+fn a_bleed_out_report_names_only_the_player() {
+    let report = bled_out(7).unwrap();
+    assert_eq!(report.opcode, ZONE_DEATH);
+    let mut expected = vec![0; 20];
+    expected[..2].copy_from_slice(&7u16.to_le_bytes());
+    expected[8..10].copy_from_slice(&[0xff, 0xff]);
+    expected[10] = 28;
+    assert_eq!(report.body, expected);
+    // It reads back as the player's death, with no killer and no corpse.
+    let read = death(&report.body).unwrap();
+    assert_eq!((read.spawn_id, read.killer_id, read.corpse_id), (7, 0, 0));
+    assert!(bled_out(0).is_err());
+}
+
+#[test]
 fn the_profile_names_the_first_bind_point() {
     let mut data = vec![0; PROFILE_SIZE];
     data[3784..3788].copy_from_slice(&2u32.to_le_bytes());

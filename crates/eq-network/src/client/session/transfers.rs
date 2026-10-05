@@ -1,6 +1,10 @@
 //! Zone transfers: the zone lines the player crosses, the server's offers to
 //! move the player, its answer and the handoff to the next zone, and the
-//! player's death, which waits for the offer home.
+//! player's death, which waits for the offer home or, where the client asks
+//! its own way home, asks for the bind point once the death pause is over.
+//! Every death of the player comes here, the one the server names and the
+//! one the client reports itself, so this feature alone marks the player
+//! dead.
 //!
 //! Once a zone approves a transfer, the player departs as the official client
 //! does: it asks the zone to save the player and takes its own spawn out
@@ -29,6 +33,12 @@ use std::time::{Duration, Instant};
 /// `EQMacEmu` says the official `EQMac` client ignores it.
 const DEPARTURE: Duration = Duration::from_secs(2);
 
+/// How long a dead player who asks their way home waits before asking for
+/// their bind point: at once for now, as Adam chose while his choice on
+/// eq-network#90 stays open. The official client's wait is unrecorded
+/// (inferred).
+const DEATH_PAUSE: Duration = Duration::ZERO;
+
 /// How the player goes home once they die.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Home {
@@ -52,6 +62,9 @@ pub(super) struct Transfers {
     home: Home,
     /// Where home is, once the zone says.
     bind: Option<zoning::BindPoint>,
+    /// When a dead player who asks their way home asks for their bind
+    /// point, from their death on.
+    going_home: Option<Instant>,
 }
 
 impl Transfers {
@@ -61,6 +74,7 @@ impl Transfers {
             character: character.into(),
             home,
             bind: None,
+            going_home: None,
         }
     }
 
@@ -289,14 +303,20 @@ impl Feature for Transfers {
                     .diagnostic("Zoning: the zone answered the departure".into())
             }
             Message::Event(WorldEvent::Death(death)) if world.is_player(death.spawn_id) => {
+                let already = world.lifecycle.is_dead();
                 world.died();
-                match (self.home, self.bind) {
-                    (Home::Asked, Some(bind)) => Self::start(bind.offer(), world, out),
-                    (Home::Asked, None) => out.log.diagnostic(
-                        "Own character died, and the zone never said where its bind point is"
-                            .into(),
-                    ),
-                    (Home::Offered, _) => out
+                match self.home {
+                    // A second word of the same death, such as the server's
+                    // after the client's own report, changes nothing.
+                    Home::Asked if already => Ok(()),
+                    Home::Asked => {
+                        self.going_home = Some(Instant::now() + DEATH_PAUSE);
+                        out.log.diagnostic(
+                            "Own character died; asking for the bind point after the death pause"
+                                .into(),
+                        )
+                    }
+                    Home::Offered => out
                         .log
                         .diagnostic("Own character died; waiting for the server bind offer".into()),
                 }
@@ -315,8 +335,10 @@ impl Feature for Transfers {
         }
     }
 
-    /// Gives up on a transfer the server never answered, and goes on to the
-    /// world server once a departure has waited long enough.
+    /// Gives up on a transfer the server never answered, goes on to the
+    /// world server once a departure has waited long enough, and asks a dead
+    /// player's way home once the death pause is over and no transfer is
+    /// under way.
     fn tick(&mut self, now: Instant, world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
         ensure!(
             !world.lifecycle.expired(now),
@@ -327,6 +349,16 @@ impl Feature for Transfers {
             return out
                 .log
                 .diagnostic("Zoning: the zone did not answer the departure".into());
+        }
+        let due = self.going_home.is_some_and(|at| now >= at);
+        if due && world.lifecycle.is_dead() && world.lifecycle.pending().is_none() {
+            self.going_home = None;
+            return match self.bind {
+                Some(bind) => Self::start(bind.offer(), world, out),
+                None => out.log.diagnostic(
+                    "Own character died, and the zone never said where its bind point is".into(),
+                ),
+            };
         }
         Ok(())
     }
@@ -612,9 +644,8 @@ mod tests {
         assert_eq!((offer.zone_id, offer.solicited), (4, false));
     }
 
-    #[test]
-    fn a_client_that_asks_its_way_home_asks_for_its_bind_point_on_dying() {
-        let mut transfers = Transfers::new("Tester", Home::Asked);
+    /// An admitted player, spawn 7, in zone 2 with their bind point there.
+    fn bound(transfers: &mut Transfers) -> (World, zoning::BindPoint) {
         let mut world = World::new(5);
         world.player.admit(testing::player(7));
         world.own_spawn = Some(7);
@@ -632,29 +663,113 @@ mod tests {
         testing::run(|out| transfers.observe(&Message::Bind(bind), &mut world, out))
             .result
             .unwrap();
-        let died = Message::Event(WorldEvent::Death(zoning::Death {
+        (world, bind)
+    }
+
+    /// The player's death, as the server or the client's own report names it.
+    fn died() -> Message {
+        Message::Event(WorldEvent::Death(zoning::Death {
             spawn_id: 7,
-            killer_id: 9,
+            killer_id: 0,
             corpse_id: 7,
             bind_zone_id: 0,
             corpse_name: None,
-        }));
-        let outcome = testing::run(|out| transfers.observe(&died, &mut world, out));
+        }))
+    }
+
+    #[test]
+    fn a_client_that_asks_its_way_home_asks_for_its_bind_point_after_the_death_pause() {
+        let mut transfers = Transfers::new("Tester", Home::Asked);
+        let (mut world, bind) = bound(&mut transfers);
+        let before = Instant::now()
+            .checked_sub(Duration::from_millis(1))
+            .unwrap();
+        let outcome = testing::run(|out| transfers.observe(&died(), &mut world, out));
         outcome.result.unwrap();
-        // The request goes out at once, for the bind point's zone.
+        // The player is dead at once, and asks for nothing yet.
+        assert!(outcome.sent.is_empty());
+        assert!(world.lifecycle.is_dead() && world.lifecycle.pending().is_none());
+        testing::run(|out| transfers.tick(before, &mut world, out))
+            .result
+            .unwrap();
+        assert!(world.lifecycle.pending().is_none());
+        // A second word of the same death changes nothing.
+        let outcome = testing::run(|out| transfers.observe(&died(), &mut world, out));
+        outcome.result.unwrap();
+        assert!(outcome.events.is_empty());
+        // Once the pause is over, the request goes out once, for the bind
+        // point's zone.
+        let after = Instant::now() + DEATH_PAUSE;
+        let outcome = testing::run(|out| transfers.tick(after, &mut world, out));
+        outcome.result.unwrap();
         assert_eq!(outcome.sent.len(), 1);
         assert_eq!(outcome.sent[0].opcode, zoning::CHANGE_OPCODE);
         assert_eq!(world.lifecycle.pending(), Some(&bind.offer()));
         assert!(world.lifecycle.is_dead());
+        let outcome = testing::run(|out| transfers.tick(after, &mut world, out));
+        outcome.result.unwrap();
+        assert!(outcome.sent.is_empty());
         // Without a bind point there is nothing to ask for.
         let mut lost = Transfers::new("Tester", Home::Asked);
         let mut world = World::new(5);
         world.player.admit(testing::player(7));
         world.own_spawn = Some(7);
-        let outcome = testing::run(|out| lost.observe(&died, &mut world, out));
+        testing::run(|out| lost.observe(&died(), &mut world, out))
+            .result
+            .unwrap();
+        let outcome = testing::run(|out| lost.tick(after, &mut world, out));
         outcome.result.unwrap();
         assert_eq!(outcome.sent.len(), 0);
         assert!(world.lifecycle.pending().is_none() && world.lifecycle.is_dead());
+    }
+
+    #[test]
+    fn a_death_while_zoning_asks_its_way_home_once_the_transfer_is_refused() {
+        let mut transfers = Transfers::new("Tester", Home::Asked);
+        let (mut world, bind) = bound(&mut transfers);
+        let here = Position {
+            x: 10.0,
+            y: 20.0,
+            z: 3.0,
+            heading: 0.0,
+        };
+        world
+            .body
+            .admit(MotionSession::new(5, 7, here, Instant::now()).unwrap());
+        let cross = ClientCommand::CrossZoneLine {
+            session_id: 5,
+            destination: zoning::ZoneLineDestination::Absolute {
+                zone_id: 4,
+                position: here,
+            },
+            position: here,
+            created: Instant::now(),
+        };
+        testing::run(|out| transfers.handle(&cross, &mut world, out))
+            .result
+            .unwrap();
+        let crossing = world.lifecycle.pending().cloned().unwrap();
+        testing::run(|out| transfers.observe(&died(), &mut world, out))
+            .result
+            .unwrap();
+        // The crossing is still under way, so the player waits for its answer.
+        let after = Instant::now() + DEATH_PAUSE;
+        let outcome = testing::run(|out| transfers.tick(after, &mut world, out));
+        outcome.result.unwrap();
+        assert!(outcome.sent.is_empty());
+        assert_eq!(world.lifecycle.pending(), Some(&crossing));
+        let mut answer = crossing.response("Tester").unwrap().body;
+        answer[84..88].copy_from_slice(&(-1i32).to_le_bytes());
+        let answer = zoning::ZoneAnswer::titanium(&answer).unwrap();
+        testing::run(|out| transfers.observe(&Message::ZoneAnswer(answer), &mut world, out))
+            .result
+            .unwrap();
+        assert!(world.lifecycle.is_dead() && world.lifecycle.pending().is_none());
+        // Refused, the player asks their way home.
+        let outcome = testing::run(|out| transfers.tick(after, &mut world, out));
+        outcome.result.unwrap();
+        assert_eq!(outcome.sent.len(), 1);
+        assert_eq!(world.lifecycle.pending(), Some(&bind.offer()));
     }
 
     #[test]

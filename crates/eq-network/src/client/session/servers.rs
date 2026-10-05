@@ -19,6 +19,7 @@ use anyhow::Result;
 
 use super::{
     abilities::Abilities,
+    bleeding::BleedingOut,
     camp::Camp,
     casting::Casting,
     character::Character,
@@ -249,6 +250,12 @@ pub(super) trait ServerType: Sync {
         None
     }
 
+    /// Reporting that the player bled out, where the server leaves such
+    /// deaths to the client, at the HP it takes as death.
+    fn bleeding_out(&self, _setup: &Setup<'_>) -> Provided {
+        None
+    }
+
     /// The time of day in Norrath.
     fn clock(&self, _setup: &Setup<'_>) -> Provided {
         None
@@ -346,6 +353,7 @@ pub(super) trait ServerType: Sync {
             self.doors(setup),
             self.ground_items(setup),
             self.transfers(setup),
+            self.bleeding_out(setup),
             self.clock(setup),
             self.who(setup),
             self.corpses(setup),
@@ -456,10 +464,11 @@ impl Shield for WorldCodec {
 /// them; each server type still lists the ones it provides.
 mod shared {
     use super::{
-        Abilities, Ability, Belongings, Camp, Casting, Character, Clock, Combat, Corpses, Doors,
-        Edits, Entities, Exchanges, Feature, GameDialect, GroundObjects, Groups, Hazard, Hazards,
-        Home, Listing, Looting, Map, MerchantOffers, Motion, Pets, Raids, Reading, Resurrection,
-        Setup, Socials, Spellbook, Talk, Targeting, Tradeskills, Training, Transfers, Who,
+        Abilities, Ability, Belongings, BleedingOut, Camp, Casting, Character, Clock, Combat,
+        Corpses, Doors, Edits, Entities, Exchanges, Feature, GameDialect, GroundObjects, Groups,
+        Hazard, Hazards, Home, Listing, Looting, Map, MerchantOffers, Motion, Pets, Raids, Reading,
+        Resurrection, Setup, Socials, Spellbook, Talk, Targeting, Tradeskills, Training, Transfers,
+        Who,
     };
 
     pub(super) fn casting() -> Box<dyn Feature> {
@@ -525,6 +534,11 @@ mod shared {
 
     pub(super) fn transfers(setup: &Setup<'_>, home: Home) -> Box<dyn Feature> {
         Box::new(Transfers::new(setup.character, home))
+    }
+
+    /// Reporting a bleed-out at the HP the server takes as death.
+    pub(super) fn bleeding_out(threshold: i32) -> Box<dyn Feature> {
+        Box::new(BleedingOut::new(threshold))
     }
 
     pub(super) fn clock() -> Box<dyn Feature> {
@@ -908,6 +922,10 @@ impl ServerType for Quarm {
     }
 }
 
+/// The HP at which TAKP takes a player as dead: below -10 (`zone/attack.cpp`
+/// `Mob::HasDied`).
+const TAKP_DEATH_THRESHOLD: i32 = -11;
+
 /// A stock TAKP (`EQMacEmu`) server speaking `EQMac`, where the `EQMac`
 /// features are checked first.
 struct Takp;
@@ -947,6 +965,13 @@ impl ServerType for Takp {
     /// point, as TAKP waits for.
     fn transfers(&self, setup: &Setup<'_>) -> Provided {
         offer(shared::transfers(setup, Home::Asked))
+    }
+
+    /// TAKP announces no death to a player who bleeds out, nor to one
+    /// killed by a tick of damage or by their own hand, and waits for the
+    /// client's own report, as the official client sends.
+    fn bleeding_out(&self, _setup: &Setup<'_>) -> Provided {
+        offer(shared::bleeding_out(TAKP_DEATH_THRESHOLD))
     }
 
     fn targeting(&self, _setup: &Setup<'_>) -> Provided {
@@ -1027,14 +1052,15 @@ mod tests {
     #[test]
     fn eqmac_servers_provide_the_features_built_for_them() {
         // Quarm and TAKP speak EQMac: they see the zone's spawns, keep the
-        // player's record and talk. TAKP also camps, moves and zones; Quarm
-        // will once each is checked there.
+        // player's record and talk. TAKP also camps, moves, zones and takes
+        // the client's report of a bleed-out; Quarm will once each is
+        // checked there.
         let setup = Setup::new("Tester", AutoEat::default());
         let quarm = server_type(ServerProtocol::Quarm);
         assert_eq!(quarm.features(&setup).len(), 3);
         assert_eq!(offers(quarm), [Capability::Talking]);
         let takp = server_type(ServerProtocol::Takp);
-        assert_eq!(takp.features(&setup).len(), 8);
+        assert_eq!(takp.features(&setup).len(), 9);
         assert_eq!(
             offers(takp),
             [
@@ -1043,7 +1069,8 @@ mod tests {
                 Capability::Combat,
                 Capability::Talking,
                 Capability::Camping,
-                Capability::Zoning
+                Capability::Zoning,
+                Capability::BleedingOut
             ]
         );
         for server in [quarm, takp] {
@@ -1148,6 +1175,20 @@ mod tests {
         for protocol in [ServerProtocol::Project1999, ServerProtocol::EqEmu] {
             assert!(offers(server_type(protocol)).contains(&Capability::MovingSpells));
         }
+    }
+
+    #[test]
+    fn only_takp_takes_the_clients_report_of_a_bleed_out() {
+        // Titanium's servers announce the player's death themselves, and
+        // Quarm's is not checked yet.
+        for protocol in [
+            ServerProtocol::Project1999,
+            ServerProtocol::EqEmu,
+            ServerProtocol::Quarm,
+        ] {
+            assert!(!offers(server_type(protocol)).contains(&Capability::BleedingOut));
+        }
+        assert!(offers(server_type(ServerProtocol::Takp)).contains(&Capability::BleedingOut));
     }
 
     #[test]

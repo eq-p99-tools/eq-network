@@ -37,6 +37,11 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   bind zone, with reason 10, `ZC_RepopToHomeAtDeath`), since TAKP holds
   the move home until the client asks and removes a dead client that never
   does; Titanium's servers still offer it (`transfers::Home`).
+- A dead player on TAKP asks for their bind point once a death pause is
+  over, one value in the transfers feature, which is zero for now: at once,
+  as Adam chose while that choice stays open. The official client's wait
+  is unrecorded (inferred). A death while a transfer is under way waits for
+  its answer, and a second word of the same death changes nothing.
 - A tell's echo on channel 14 is `ChannelName::TellEcho` on the `EQMac`
   wire too: TAKP echoes a delivered tell to its sender on
   `ChatChannel_TellEcho` (14), as `EQEmu` does on Titanium's.
@@ -53,6 +58,26 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   not, so `DeletingSpells` stays off on P99.
 
 ### Added
+
+- Reporting that the player bled out (`Capability::BleedingOut`, TAKP
+  only). TAKP announces no death to a player who bleeds out, nor to one
+  killed by a tick of damage or by their own hand, and waits for the
+  client's own report. As the zone admits the player,
+  `WorldEvent::DeathThreshold` tells a host the HP at or below which the
+  server takes the player as dead (-11 on TAKP). A host whose HP, with
+  what equipped items add, reaches it on the server's report, with no
+  death named for the player, sends `GameCommand::BledOut` once. The
+  session refuses it while the server's last report is above the
+  threshold, since that report leaves item HP out; otherwise it sends
+  `Request::BledOut`, `EQMac`'s 20-byte `OP_Death` naming the player
+  (`quarm::bled_out`; Titanium sends none). TAKP kills the player it names
+  without checking their HP, so a host must count item HP before it
+  sends. Every field but the player's spawn is inferred until the official
+  client's bleed-out is recorded: no killer, damage or spell, hand to hand
+  (28), and no corpse, level or player flag. The session then takes the
+  player as dead just as if the server had said so: every feature and the
+  host hear one `WorldEvent::Death`, and the transfers feature alone marks
+  the player dead. `Capability::ALL` grows to 36.
 
 - The world's damage to the player (`Capability::EnvironmentalDamage`,
   `EqEmu` only, and there falls alone): `GameCommand::EnvironmentalDamage`

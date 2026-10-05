@@ -248,6 +248,36 @@ pub fn depart(spawn_id: u16) -> EncodedCommand {
     }
 }
 
+/// The skill a bleed-out report names: hand to hand, which TAKP itself
+/// names for a death from a tick (`zone/attack.cpp`
+/// `GenerateDeathPackets`). Inferred: the official client's is unrecorded.
+const BLED_OUT_SKILL: u8 = 28;
+
+/// The player's own report that they bled out (`Death_Struct`, 20 bytes,
+/// laid out as [`death`] reads it). TAKP leaves to the client the deaths it
+/// does not announce to the one who died, and takes this report without
+/// checking the player's HP (`zone/client_packet.cpp` `Handle_OP_Death`), so
+/// it goes out only for a player whose HP reached the server's threshold.
+/// Every field but the spawn is inferred until the official client's
+/// bleed-out is recorded: no killer, as `EQMacEmu` notes the official client
+/// names none for a bleed-out; no damage; no spell (0xFFFF, TAKP's
+/// `SPELL_UNKNOWN`); hand to hand (28), which TAKP itself names for a death
+/// from a tick; and no corpse, level or player flag.
+///
+/// # Errors
+/// Rejects a report without the player's spawn.
+pub fn bled_out(spawn_id: u16) -> Result<EncodedCommand> {
+    ensure!(spawn_id != 0, "a death report needs the player's spawn");
+    let mut body = vec![0; 20];
+    body[..2].copy_from_slice(&spawn_id.to_le_bytes());
+    body[8..10].copy_from_slice(&u16::MAX.to_le_bytes());
+    body[10] = BLED_OUT_SKILL;
+    Ok(EncodedCommand {
+        opcode: ZONE_DEATH,
+        body,
+    })
+}
+
 /// The client starting to camp. TAKP reads nothing in it; the official
 /// client's body is unrecorded.
 #[must_use]
