@@ -182,6 +182,13 @@ fn inventory(body: &[u8]) -> Result<Vec<InventoryItem>> {
     Ok(items)
 }
 
+/// What an item record says about the item itself, as a linked item's
+/// inspection answers with it.
+pub(crate) fn details(body: &[u8]) -> Result<ItemDetails> {
+    ensure!(body.len() == RECORD, "invalid EQMac item length");
+    definition(&Record(body))
+}
+
 /// A merchant's list as TAKP sends it (`ENCODE(OP_ShopInventoryPacket)`): a
 /// count, then each item's class and record, compressed, as the full
 /// inventory comes but with the class itself for a tag. `MacItem` fills a
