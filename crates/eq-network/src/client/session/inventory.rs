@@ -224,6 +224,10 @@ fn change(update: InventoryUpdate, world: &mut World, out: &mut Out<'_, '_>) -> 
 
 /// The player's belongings and the changes to them in flight.
 pub(super) struct Belongings {
+    /// Whether the player acts on them: moves items and coins, trades with
+    /// merchants and eats. Otherwise the session only follows what the
+    /// server says they are.
+    acting: bool,
     /// Moves waiting to settle.
     settlement: Settlement,
     /// A purchase or sale waiting for the merchant.
@@ -235,9 +239,20 @@ pub(super) struct Belongings {
 impl Belongings {
     pub(super) fn new(auto_eat: eq_network_game::food::AutoEat) -> Self {
         Self {
+            acting: true,
             settlement: Settlement::default(),
             trades: MerchantTrades::default(),
             meals: meals::Meals::new(auto_eat),
+        }
+    }
+
+    /// Belongings the session follows but the player does not act on yet:
+    /// it offers nothing, carries out no command and never eats, for a
+    /// server type whose item packets are read before its moves are built.
+    pub(super) fn followed() -> Self {
+        Self {
+            acting: false,
+            ..Self::new(eq_network_game::food::AutoEat::default())
         }
     }
 
@@ -371,7 +386,11 @@ impl Belongings {
 impl Feature for Belongings {
     fn capabilities(&self) -> Vec<crate::world::Capability> {
         use crate::world::Capability;
-        vec![Capability::Inventory, Capability::Trading]
+        if self.acting {
+            vec![Capability::Inventory, Capability::Trading]
+        } else {
+            Vec::new()
+        }
     }
 
     /// Item updates and the profile's coins before admission build the
@@ -422,16 +441,17 @@ impl Feature for Belongings {
     }
 
     fn owns(&self, command: &ClientCommand) -> bool {
-        matches!(
-            command,
-            ClientCommand::MoveInventory(_)
-                | ClientCommand::MoveCoins { .. }
-                | ClientCommand::Shop { .. }
-                | ClientCommand::Buy { .. }
-                | ClientCommand::Sell { .. }
-                | ClientCommand::Consume { .. }
-                | ClientCommand::AutoEat { .. }
-        )
+        self.acting
+            && matches!(
+                command,
+                ClientCommand::MoveInventory(_)
+                    | ClientCommand::MoveCoins { .. }
+                    | ClientCommand::Shop { .. }
+                    | ClientCommand::Buy { .. }
+                    | ClientCommand::Sell { .. }
+                    | ClientCommand::Consume { .. }
+                    | ClientCommand::AutoEat { .. }
+            )
     }
 
     fn handle(
@@ -512,7 +532,7 @@ impl Feature for Belongings {
             Message::Event(WorldEvent::Death(death)) if world.is_player(death.spawn_id) => {
                 self.trades.clear();
             }
-            Message::Event(WorldEvent::Nourishment(nourishment)) => {
+            Message::Event(WorldEvent::Nourishment(nourishment)) if self.acting => {
                 self.meals.nourished(*nourishment, world, out)?;
             }
             // The window closed: what the trade slots held was handed over, or
@@ -769,6 +789,55 @@ mod tests {
             "admission should report the inventory"
         );
         assert!(world.inventory.received());
+    }
+
+    #[test]
+    fn followed_belongings_report_what_the_server_says_and_act_on_nothing() {
+        use eq_network_game::food::{AutoEat, Nourishment};
+        let mut belongings = Belongings::followed();
+        assert_eq!(belongings.capabilities(), []);
+        for command in [
+            ClientCommand::AutoEat {
+                session_id: 5,
+                auto_eat: AutoEat::Anything,
+            },
+            ClientCommand::Consume {
+                session_id: 5,
+                slot: InventorySlot(22),
+                created: Instant::now(),
+            },
+        ] {
+            assert!(!belongings.owns(&command), "{command:?}");
+        }
+        // A ration, staged before the admission and reported at it.
+        let mut ration = item(22);
+        ration.rules.item_type = 14;
+        let mut world = World::new(5);
+        let snapshot = InventoryUpdate::Snapshot(vec![ration]);
+        belongings
+            .admit(
+                &Message::Event(WorldEvent::Inventory(snapshot.clone())),
+                &mut world,
+            )
+            .unwrap();
+        world.own_spawn = Some(7);
+        world.player.admit(testing::player(7));
+        let outcome = testing::run(|out| belongings.admitted(&mut world, out));
+        outcome.result.unwrap();
+        assert_eq!(inventory_events(&outcome.events), [&snapshot]);
+        // A hungry player carrying it does not eat.
+        let hungry = Message::Event(WorldEvent::Nourishment(Nourishment { food: 0, water: 0 }));
+        let outcome = testing::run(|out| belongings.observe(&hungry, &mut world, out));
+        outcome.result.unwrap();
+        assert!(outcome.sent.is_empty(), "sent {:?}", outcome.sent);
+        // What the server changes still changes the inventory.
+        let removal = Message::Event(WorldEvent::Inventory(InventoryUpdate::Remove(
+            InventorySlot(22),
+        )));
+        testing::run(|out| belongings.observe(&removal, &mut world, out))
+            .result
+            .unwrap();
+        assert!(world.inventory.items().is_empty());
     }
 
     #[test]

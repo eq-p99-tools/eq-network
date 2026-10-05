@@ -735,6 +735,110 @@ fn slots_use_titanium_offsets_and_preserve_unknown_addresses() {
 }
 
 #[test]
+fn eqmac_slots_take_titanium_numbers() {
+    for (eqmac, titanium) in [
+        (0, Some(30)),
+        (1, Some(1)),
+        (21, Some(21)),
+        (22, Some(22)),
+        (29, Some(29)),
+        (250, Some(251)),
+        (329, Some(330)),
+        (330, Some(331)),
+        (339, Some(340)),
+        (2000, Some(2000)),
+        (2007, Some(2007)),
+        (2030, Some(2031)),
+        (2109, Some(2110)),
+        (3000, Some(3000)),
+        (3030, Some(3031)),
+        (3109, Some(3110)),
+        (4000, Some(4000)),
+        (4009, Some(4009)),
+        (30, None),
+        (249, None),
+        (340, None),
+        (2008, None),
+        (2110, None),
+        (8000, None),
+        (-1, None),
+    ] {
+        assert_eq!(
+            InventorySlot::from_eqmac(eqmac).map(|slot| slot.0),
+            titanium,
+            "{eqmac}"
+        );
+    }
+    // Each bag's contents stay in their bag, as Titanium numbers both.
+    for (bag, first) in [(22, 250), (29, 320), (0, 330), (2000, 2030), (2007, 2100)] {
+        let bag = InventorySlot::from_eqmac(bag).unwrap();
+        for index in 0..10 {
+            assert_eq!(
+                InventorySlot::from_eqmac(first + i32::from(index))
+                    .unwrap()
+                    .parent(),
+                Some((bag, index))
+            );
+        }
+    }
+}
+
+#[test]
+fn only_the_players_own_slots_are_held() {
+    for slot in [
+        0, 21, 29, 30, 251, 340, 2000, 2015, 2031, 2190, 2500, 2501, 2531, 2550,
+    ] {
+        assert!(InventorySlot(slot).is_held(), "{slot}");
+    }
+    for slot in [31, 250, 341, 2016, 2191, 3000, 3031, 4000] {
+        assert!(!InventorySlot(slot).is_held(), "{slot}");
+    }
+}
+
+#[test]
+fn a_used_unit_or_charge_leaves_the_item_in_place() {
+    let snapshot = || {
+        let mut state = Inventory::default();
+        state.apply(
+            decode(0x5394, wire(22, 42, 0, true, 0, &[]).as_bytes())
+                .unwrap()
+                .unwrap(),
+        );
+        state
+    };
+    let mut state = snapshot();
+    let mut charged = state.items[&InventorySlot(22)].clone();
+    charged.slot = InventorySlot(23);
+    charged.stack_count = None;
+    charged.charges = 2;
+    let mut unlimited = charged.clone();
+    unlimited.slot = InventorySlot(24);
+    unlimited.charges = -1;
+    state.apply(InventoryUpdate::Set(vec![charged]));
+    state.apply(InventoryUpdate::Set(vec![unlimited]));
+    // A stack loses a unit, anything else a charge unless its charges are
+    // unlimited.
+    for slot in [22, 23, 24] {
+        state.apply(InventoryUpdate::Used(InventorySlot(slot)));
+    }
+    assert_eq!(state.items[&InventorySlot(22)].stack_count, Some(6));
+    assert_eq!(state.items[&InventorySlot(23)].charges, 1);
+    assert_eq!(state.items[&InventorySlot(24)].charges, -1);
+    assert!(!state.stale());
+    // Nothing there to use: this projection is wrong.
+    state.apply(InventoryUpdate::Used(InventorySlot(25)));
+    assert!(state.stale());
+    // Nor can a stack of one stay.
+    let mut state = snapshot();
+    let mut last = state.items[&InventorySlot(22)].clone();
+    last.stack_count = Some(1);
+    state.apply(InventoryUpdate::Set(vec![last]));
+    state.apply(InventoryUpdate::Used(InventorySlot(22)));
+    assert!(state.stale());
+    assert!(state.items.contains_key(&InventorySlot(22)));
+}
+
+#[test]
 fn admission_replay_preserves_partial_complete_and_stale_states() {
     let mut before = Inventory::default();
     let mut packet = 0x69u32.to_le_bytes().to_vec();

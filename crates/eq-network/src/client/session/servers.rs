@@ -474,6 +474,12 @@ mod shared {
         Box::new(Belongings::new(setup.auto_eat))
     }
 
+    /// The inventory as the server says it is, which the player cannot
+    /// change yet.
+    pub(super) fn followed_inventory() -> Box<dyn Feature> {
+        Box::new(Belongings::followed())
+    }
+
     /// Moving, with or without the jumps and falls the server takes.
     pub(super) fn motion(falls: bool) -> Box<dyn Feature> {
         Box::new(Motion::new(falls))
@@ -925,6 +931,12 @@ impl ServerType for Takp {
         offer(shared::character())
     }
 
+    /// What TAKP's item packets say the player holds. Moving items waits:
+    /// TAKP disconnects a player whose move it refuses.
+    fn inventory(&self, _setup: &Setup<'_>) -> Provided {
+        offer(shared::followed_inventory())
+    }
+
     fn entities(&self, _setup: &Setup<'_>) -> Provided {
         offer(shared::entities(GameDialect::EqMac))
     }
@@ -1026,14 +1038,15 @@ mod tests {
     #[test]
     fn eqmac_servers_provide_the_features_built_for_them() {
         // Quarm and TAKP speak EQMac: they see the zone's spawns, keep the
-        // player's record and talk. TAKP also camps, moves and zones; Quarm
-        // will once each is checked there.
+        // player's record and talk. TAKP also camps, moves and zones, and
+        // follows the inventory, which offers nothing until items move;
+        // Quarm will once each is checked there.
         let setup = Setup::new("Tester", AutoEat::default());
         let quarm = server_type(ServerProtocol::Quarm);
         assert_eq!(quarm.features(&setup).len(), 3);
         assert_eq!(offers(quarm), [Capability::Talking]);
         let takp = server_type(ServerProtocol::Takp);
-        assert_eq!(takp.features(&setup).len(), 8);
+        assert_eq!(takp.features(&setup).len(), 9);
         assert_eq!(
             offers(takp),
             [

@@ -48,6 +48,22 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- TAKP's inventory: `inventory::decode_eqmac` reads `EQMac`'s item packets
+  as TAKP sends them into the same `InventoryUpdate`s as Titanium's: the
+  full inventory (`OP_CharInventory`: 360-byte item records, compressed
+  with zlib behind a count that does not count them), an item put in a
+  slot (`OP_MerchantItemPacket`, which TAKP sends for every item it
+  places), an item onto the cursor (`OP_SummonedItem`), an emptied slot
+  (`OP_MoveItem`), and a unit or charge used up (`OP_DeleteCharge`), which
+  is the new `InventoryUpdate::Used`, as `EQMac` servers do not say whether
+  a stack unit or a charge went. Each item carries its statistics, worn
+  effect and level rules, so a host can count what TAKP's equipped items
+  add. `InventorySlot::from_eqmac` gives `EQMac`'s slots Titanium's
+  numbers (the cursor is 0 on `EQMac`, and bag contents one lower), and
+  `InventorySlot::is_held` names the slots an item update may fill. TAKP's
+  session follows the inventory but offers no `Capability::Inventory` yet:
+  moving items waits, as TAKP disconnects a player whose move it refuses.
+
 - The world's damage to the player (`Capability::EnvironmentalDamage`,
   `EqEmu` only, and there falls alone): `GameCommand::EnvironmentalDamage`
   reports the damage a host worked out, by its `hazards::Hazard` (falling,

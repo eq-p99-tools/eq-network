@@ -139,9 +139,9 @@ pub fn titanium(opcode: u16, body: &[u8]) -> Vec<Message> {
 }
 
 /// What one `EQMac` zone packet says: the spawns and the player's news that
-/// [`crate::quarm::updates`] reads, the server logging the character out,
-/// its request that the client move, its answer to the client's request,
-/// and the zone's numbered destinations.
+/// [`crate::quarm::updates`] reads, the inventory, the server logging the
+/// character out, its request that the client move, its answer to the
+/// client's request, and the zone's numbered destinations.
 #[must_use]
 pub fn eqmac(opcode: u16, body: &[u8]) -> Vec<Message> {
     match opcode {
@@ -164,10 +164,14 @@ pub fn eqmac(opcode: u16, body: &[u8]) -> Vec<Message> {
                 |considered| Message::Event(WorldEvent::Consideration(considered)),
             )]
         }
-        _ => crate::quarm::updates(opcode, body).map_or_else(
-            |error| vec![unreadable(Part::World, &error)],
-            |events| events.into_iter().map(Message::Event).collect(),
-        ),
+        _ => match inventory::decode_eqmac(opcode, body) {
+            Ok(Some(update)) => vec![Message::Event(WorldEvent::Inventory(update))],
+            Err(error) => vec![unreadable(Part::Inventory, &error)],
+            Ok(None) => crate::quarm::updates(opcode, body).map_or_else(
+                |error| vec![unreadable(Part::World, &error)],
+                |events| events.into_iter().map(Message::Event).collect(),
+            ),
+        },
     }
 }
 
@@ -312,6 +316,21 @@ mod tests {
             eqmac(0x2940, &[9])[..],
             [Message::Unreadable {
                 part: Part::World,
+                ..
+            }]
+        ));
+        // An empty inventory, and an item packet that cannot be read, which
+        // leaves the inventory untrustworthy.
+        assert!(matches!(
+            &eqmac(0xf641, &[0, 0])[..],
+            [Message::Event(WorldEvent::Inventory(
+                crate::inventory::InventoryUpdate::Snapshot(items)
+            ))] if items.is_empty()
+        ));
+        assert!(matches!(
+            eqmac(0x3140, &[0; 12])[..],
+            [Message::Unreadable {
+                part: Part::Inventory,
                 ..
             }]
         ));
