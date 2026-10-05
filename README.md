@@ -22,7 +22,7 @@ against that kind of server:
 
 | Server type | Protocol | What a zone session offers |
 | --- | --- | --- |
-| `EqEmu` | Titanium, for a stock `EQEmu` server | Moving, jumping and falling, targeting, combat, casting and the spellbook (deleting and moving its spells too), the inventory and bank, merchants, handing items to NPCs, looting, chat, camping, doors, items on the ground, zoning, abilities, `/who`, corpses and consent, pets, training, resurrection, reading, tradeskill containers, the map and the time of day |
+| `EqEmu` | Titanium, for a stock `EQEmu` server | Moving, jumping and falling (and a fall's damage), targeting, combat, casting and the spellbook (deleting and moving its spells too), the inventory and bank, merchants, handing items to NPCs, looting, chat, camping, doors, items on the ground, zoning, abilities, `/who`, corpses and consent, pets, training, resurrection, reading, tradeskill containers, the map and the time of day |
 | `Project1999` | Titanium with P99's V62 protection | As `EqEmu`, except jumping and falling, fishing and binding wounds, deleting and moving the spellbook's spells, training, resurrection, reading, tradeskills and the map, which wait to be checked on P99 |
 | `Takp` | Windows TAKP/`EQMac`, for a stock TAKP server | Character creation, entering the world, chat, moving and camping |
 | `Quarm` | Windows TAKP/`EQMac` | Entering the world and chat; Quarm's features follow once they are checked on TAKP |

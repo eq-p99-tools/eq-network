@@ -33,6 +33,9 @@ pub mod food;
 /// Groups: invitations, joining, leaving and disbanding, and who is in the
 /// player's group.
 pub mod group;
+/// Damage the world does to the player, which the client reports: falls,
+/// drowning, lava and freezing.
+pub mod hazards;
 /// Read-only inventory packets, slots, instances, and state.
 pub mod inventory;
 /// Read-only item inspection requests and definitions.

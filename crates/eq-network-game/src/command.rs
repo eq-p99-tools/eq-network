@@ -329,6 +329,18 @@ pub enum GameCommand {
         /// Reject delayed actions instead of replaying them after a stall.
         created: std::time::Instant,
     },
+    /// Report damage the world did to the player, as the host worked it
+    /// out. The server lowers the amount by its own reductions, such as the
+    /// fall damage reductions of spells, items and AAs, so the host leaves
+    /// those out. It never expires, since the damage was done.
+    EnvironmentalDamage {
+        /// Current zone admission.
+        session_id: u64,
+        /// What did it.
+        hazard: crate::hazards::Hazard,
+        /// How much, before the server's own reductions.
+        amount: u32,
+    },
     /// Eat or drink the item in a slot by hand. The session eats and drinks
     /// on its own when the player turns hungry or thirsty.
     Consume {
@@ -621,6 +633,7 @@ impl GameCommand {
             | Self::CancelTrade { session_id }
             | Self::MoveCoins { session_id, .. }
             | Self::Jump { session_id, .. }
+            | Self::EnvironmentalDamage { session_id, .. }
             | Self::AutoAttack { session_id, .. }
             | Self::Consume { session_id, .. }
             | Self::AutoEat { session_id, .. }
@@ -683,6 +696,7 @@ impl GameCommand {
             }
             // Only a server that takes falls from the client lets the player jump.
             Self::Jump { .. } => Capability::Falling,
+            Self::EnvironmentalDamage { .. } => Capability::EnvironmentalDamage,
             Self::MoveInventory(_) | Self::Consume { .. } | Self::AutoEat { .. } => {
                 Capability::Inventory
             }
@@ -752,6 +766,7 @@ impl GameCommand {
             | Self::EndLoot { .. }
             | Self::CancelTrade { .. }
             | Self::AutoEat { .. }
+            | Self::EnvironmentalDamage { .. }
             | Self::WhoAll { .. }
             | Self::Pet { .. }
             | Self::AnswerResurrection { .. }
@@ -912,6 +927,7 @@ pub fn encode(
         | GameCommand::MoveCoins { .. }
         | GameCommand::Move(_)
         | GameCommand::Jump { .. }
+        | GameCommand::EnvironmentalDamage { .. }
         | GameCommand::ConfigureMotion { .. }
         | GameCommand::CrossZoneLine { .. }
         | GameCommand::Consume { .. }
