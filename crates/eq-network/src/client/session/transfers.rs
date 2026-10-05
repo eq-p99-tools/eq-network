@@ -34,9 +34,8 @@ use std::time::{Duration, Instant};
 const DEPARTURE: Duration = Duration::from_secs(2);
 
 /// How long a dead player who asks their way home waits before asking for
-/// their bind point: at once for now, as Adam chose while his choice on
-/// eq-network#90 stays open. The official client's wait is unrecorded
-/// (inferred).
+/// their bind point: none, as Adam chose for eq-network#90 (2026-10-05).
+/// The official client's wait is unrecorded (inferred).
 const DEATH_PAUSE: Duration = Duration::ZERO;
 
 /// How the player goes home once they die.

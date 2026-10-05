@@ -38,10 +38,10 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the move home until the client asks and removes a dead client that never
   does; Titanium's servers still offer it (`transfers::Home`).
 - A dead player on TAKP asks for their bind point once a death pause is
-  over, one value in the transfers feature, which is zero for now: at once,
-  as Adam chose while that choice stays open. The official client's wait
-  is unrecorded (inferred). A death while a transfer is under way waits for
-  its answer, and a second word of the same death changes nothing.
+  over, one value in the transfers feature, which is zero: at once, as
+  Adam chose. The official client's wait is unrecorded (inferred). A death
+  while a transfer is under way waits for its answer, and a second word of
+  the same death changes nothing.
 - A tell's echo on channel 14 is `ChannelName::TellEcho` on the `EQMac`
   wire too: TAKP echoes a delivered tell to its sender on
   `ChatChannel_TellEcho` (14), as `EQEmu` does on Titanium's.
