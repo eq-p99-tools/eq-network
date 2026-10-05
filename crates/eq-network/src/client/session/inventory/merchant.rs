@@ -179,6 +179,24 @@ impl MerchantTrades {
         refused
     }
 
+    /// The item a remembered sale offered, which an echo of `sold` units
+    /// from `slot` answers: the pending sale first, then the one released
+    /// unanswered, as `observe` settles them. None when no remembered sale
+    /// is answered, or the slot was empty when it was offered.
+    pub(super) fn offered(&self, slot: InventorySlot, sold: u32) -> Option<&InventoryItem> {
+        let pending = match &self.pending {
+            Some((Trade::Sale(sale), _)) if sale.answered_by(slot, sold) => Some(sale),
+            _ => None,
+        };
+        pending
+            .or_else(|| {
+                self.unanswered
+                    .as_ref()
+                    .filter(|sale| sale.answered_by(slot, sold))
+            })
+            .and_then(|sale| sale.item.as_deref())
+    }
+
     /// Releases a trade the merchant never answered; true when one was pending.
     pub(super) fn expire(&mut self, now: Instant) -> bool {
         let expired = self
@@ -293,20 +311,24 @@ impl OpenMerchant {
 
     /// Replaces the list with a whole one, as `EQMac`'s comes, each price as
     /// the server charges it; the places listed before and not now are
-    /// returned, to be told as gone. Nothing is listed while no window is
-    /// open.
-    pub(super) fn replace(&mut self, items: &mut [MerchantItem], quotes: Quotes) -> Vec<u32> {
-        let Some(window) = self.0.as_mut() else {
-            return Vec::new();
-        };
+    /// returned, to be told as gone. None while no window is open, which
+    /// lists nothing: without its rate, the prices are not known.
+    pub(super) fn replace(
+        &mut self,
+        items: &mut [MerchantItem],
+        quotes: Quotes,
+    ) -> Option<Vec<u32>> {
+        let window = self.0.as_mut()?;
         let before = std::mem::take(&mut window.places);
         for listed in items.iter_mut() {
             window.list(listed, quotes);
         }
-        before
-            .into_keys()
-            .filter(|place| !window.places.contains_key(place))
-            .collect()
+        Some(
+            before
+                .into_keys()
+                .filter(|place| !window.places.contains_key(place))
+                .collect(),
+        )
     }
 
     /// What the server added to the purse for a sale of `units` of an item
@@ -661,7 +683,10 @@ mod tests {
             quantity: 0,
             item: item(i32::try_from(slot).unwrap()),
         });
-        assert_eq!(merchant.replace(&mut list, Quotes::BeforeRate), [4]);
+        assert_eq!(
+            merchant.replace(&mut list, Quotes::BeforeRate),
+            Some(vec![4])
+        );
         assert_eq!(list.each_ref().map(|listed| listed.price), [100, 100]);
         assert_eq!(
             merchant.check_purchase(5, 1, Some(Coins::from_copper(102))),
@@ -672,10 +697,7 @@ mod tests {
             .is_err());
         // With no window open, nothing is listed.
         let mut closed = OpenMerchant::default();
-        assert_eq!(
-            closed.replace(&mut list, Quotes::BeforeRate),
-            Vec::<u32>::new()
-        );
+        assert_eq!(closed.replace(&mut list, Quotes::BeforeRate), None);
         assert_eq!(closed.sale_price(Quotes::BeforeRate, 100, 1), None);
         // What TAKP adds for a sale, at the window's rate.
         assert_eq!(merchant.sale_price(Quotes::BeforeRate, 100, 2), Some(160));
@@ -732,6 +754,20 @@ mod tests {
             Quotes::WithRate,
         );
         assert!(merchant.check_purchase(3, 1, gold(10)).is_err());
+    }
+
+    #[test]
+    fn the_item_a_remembered_sale_offered_is_what_its_echo_answers() {
+        let start = Instant::now();
+        let mut trades = MerchantTrades::default();
+        trades.sent(&sell(25), &inventory(), start);
+        assert_eq!(trades.offered(InventorySlot(25), 2), Some(&item(25)));
+        // Another slot, or more units than were offered, answer nothing.
+        assert_eq!(trades.offered(InventorySlot(24), 2), None);
+        assert_eq!(trades.offered(InventorySlot(25), 3), None);
+        // Released unanswered, it is still remembered.
+        assert!(trades.expire(start + ANSWER_TIMEOUT));
+        assert_eq!(trades.offered(InventorySlot(25), 2), Some(&item(25)));
     }
 
     #[test]

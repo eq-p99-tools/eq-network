@@ -83,8 +83,10 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   (`merchant::Quotes::BeforeRate`): the session tells each listed item at
   the price TAKP charges, `int(price x rate)` a unit, and prices a sale's
   echo, which carries no price, as TAKP added it to the purse,
-  `int(price / rate + 0.5)` a unit (`Quotes::sale_price`, inferred), before
-  the ledger and the host hear them. TAKP's whole list
+  `int(price / rate + 0.5)` a unit of the item the sale offered
+  (`Quotes::sale_price`, inferred), before the ledger and the host hear
+  them; an echo answering no sale the session remembers adds nothing, and
+  a list arriving with no window open is dropped. TAKP's whole list
   (`merchant::eqmac_list`) replaces the last, as `Message::MerchantList`;
   the session tells the host the places gone, then each item.
   `MerchantOffers` stays off on TAKP, whose rule for what a merchant pays

@@ -140,9 +140,9 @@ fn coins_news(message: &Message, wallet: &mut Wallet) -> Option<bool> {
         }
         // A sale's price, which TAKP adds to the purse without a money
         // update; `EQEmu`'s update right after replaces the purse with the
-        // same coins. TAKP's echo carries the price in 16 bits, so it can
-        // only undercount (inferred: the official client's purse after such
-        // a sale is unrecorded).
+        // same coins. TAKP's echo prices nothing, so the session has priced
+        // it from the sale it sent before this hears it (inferred: the
+        // official client's purse after a sale is unrecorded).
         WorldEvent::Merchant(MerchantUpdate::Sold { price, .. }) if *price > 0 => {
             wallet.add_to_purse(Coins::from_copper(*price));
             Some(true)
@@ -601,10 +601,12 @@ impl Feature for Belongings {
     /// Follows the open merchant's list before anyone hears it, so a list
     /// quoted before the merchant's rate reaches the host at the price
     /// charged; and where a sale's echo prices nothing, prices it as the
-    /// server added it to the purse, from the item sold, before the ledger
-    /// and the host hear it (inferred: TAKP's echo price comes from
-    /// padding).
-    fn explain(&mut self, message: &mut Message, world: &World) {
+    /// server added it to the purse, from the item the sale it answers
+    /// offered, before the ledger and the host hear it (inferred: TAKP's
+    /// echo price comes from padding). An echo answering no sale the
+    /// session remembers adds nothing, so the purse never rises past what
+    /// the server added.
+    fn explain(&mut self, message: &mut Message, _world: &World) {
         let Message::Event(WorldEvent::Merchant(update)) = message else {
             return;
         };
@@ -614,10 +616,9 @@ impl Feature for Belongings {
             price,
         } = update
         {
-            let base = world
-                .inventory
-                .items()
-                .get(&InventorySlot(*slot))
+            let base = self
+                .trades
+                .offered(InventorySlot(*slot), *quantity)
                 .and_then(|item| item.details.price);
             if let Some(added) =
                 base.and_then(|base| self.merchant.sale_price(self.quotes, base, *quantity))
@@ -648,7 +649,13 @@ impl Feature for Belongings {
             // merchant news a list sent item by item would be.
             Message::MerchantList(items) => {
                 let mut items = items.clone();
-                for slot in self.merchant.replace(&mut items, self.quotes) {
+                // Without an open window the prices are not known.
+                let Some(gone) = self.merchant.replace(&mut items, self.quotes) else {
+                    return out
+                        .log
+                        .diagnostic("Merchant list with no merchant window open dropped".into());
+                };
+                for slot in gone {
                     out.log.send(ClientEvent::World(WorldEvent::Merchant(
                         MerchantUpdate::Removed { slot },
                     )))?;
@@ -1101,17 +1108,49 @@ mod tests {
         }));
         belongings.explain(&mut opened, &world);
         // Item 23, worth 100 copper: TAKP adds 100 / 1.25 + 0.5, cut, for one.
-        let mut worth = item(23);
-        worth.details.price = Some(100);
-        let set = Message::Event(WorldEvent::Inventory(InventoryUpdate::Set(vec![worth])));
-        testing::run(|out| belongings.observe(&set, &mut world, out))
+        let worth = |price| {
+            let mut worth = item(23);
+            worth.details.price = Some(price);
+            Message::Event(WorldEvent::Inventory(InventoryUpdate::Set(vec![worth])))
+        };
+        testing::run(|out| belongings.observe(&worth(100), &mut world, out))
             .result
             .unwrap();
-        let mut sold = Message::Event(WorldEvent::Merchant(MerchantUpdate::Sold {
+        let sell = ClientCommand::Sell {
+            session_id: 5,
+            merchant_id: 9,
             slot: 23,
             quantity: 1,
-            price: 0,
-        }));
+            created: Instant::now(),
+        };
+        let echo = |slot| {
+            Message::Event(WorldEvent::Merchant(MerchantUpdate::Sold {
+                slot,
+                quantity: 1,
+                price: 0,
+            }))
+        };
+        // An echo answering no sale adds nothing.
+        let mut stray = echo(23);
+        belongings.explain(&mut stray, &world);
+        assert!(matches!(
+            stray,
+            Message::Event(WorldEvent::Merchant(MerchantUpdate::Sold { price: 0, .. }))
+        ));
+        let eqmac = &super::super::wire::EqMac;
+        testing::run_on(eqmac, |out| belongings.handle(&sell, &mut world, out))
+            .result
+            .unwrap();
+        // Released unanswered, with a pricier item put in its place: the
+        // late echo is priced from the item the sale offered.
+        let later = Instant::now() + Duration::from_secs(3);
+        testing::run(|out| belongings.tick(later, &mut world, out))
+            .result
+            .unwrap();
+        testing::run(|out| belongings.observe(&worth(1000), &mut world, out))
+            .result
+            .unwrap();
+        let mut sold = echo(23);
         belongings.explain(&mut sold, &world);
         assert!(matches!(
             sold,
@@ -1121,6 +1160,20 @@ mod tests {
             .result
             .unwrap();
         assert_eq!(world.coins.purse, Some(Coins::from_copper(80)));
+    }
+
+    #[test]
+    fn a_list_with_no_window_open_is_dropped() {
+        let (mut belongings, mut world) = admitted_on_takp();
+        let list = Message::MerchantList(vec![eq_network_game::merchant::MerchantItem {
+            slot: 0,
+            price: 100,
+            quantity: 0,
+            item: item(3),
+        }]);
+        let outcome = testing::run(|out| belongings.observe(&list, &mut world, out));
+        outcome.result.unwrap();
+        assert!(matches!(outcome.events[..], [ClientEvent::Diagnostic(_)]));
     }
 
     #[test]
