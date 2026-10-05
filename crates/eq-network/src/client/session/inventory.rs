@@ -438,10 +438,12 @@ impl Feature for Belongings {
     }
 
     /// A sold item leaves only when the merchant echoes the sale. Under
-    /// TAKP's rules one move is in flight at a time, as with the official
-    /// client: TAKP answers only a refused move, so a move is answered once
-    /// it settles, and the next waits for that. A move onto a cursor TAKP
-    /// may still refill (from a queue it said nothing of) waits with it.
+    /// TAKP's rules one move is in flight at a time, which is ours and
+    /// stricter than the official client, which moves items without
+    /// waiting: TAKP answers only a refused move, so a move is answered once
+    /// it settles, and holding the next keeps a resync from landing on top
+    /// of other predictions. A move onto a cursor TAKP may still refill
+    /// (from a queue it said nothing of) waits with it.
     fn holds(&self, _world: &World, now: Instant) -> Vec<(Resource, &'static str)> {
         let mut holds = Vec::new();
         if self.trades.active() {

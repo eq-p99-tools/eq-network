@@ -59,10 +59,12 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `MoveRules`. TAKP's keep bags, books and arrows out of more worn slots
   and an instrument from either hand while the other is full, have no
   charm slot, and make a move onto a cursor an unsettled move emptied wait,
-  as TAKP may refill it from a queue it said nothing of. TAKP disconnects a
-  player whose move it refuses and answers no move it accepts, so its
-  session moves one item at a time: each move holds the inventory until it
-  settles. `Inventory::plan_move` keeps planning under `EQEmu`'s rules.
+  as TAKP may refill it from a queue it said nothing of. TAKP answers a
+  move it refuses at once with a resync of its two slots, disconnecting a
+  player below status 10, and answers no move it accepts, so its session
+  moves one item at a time, stricter than the official client: each move
+  holds the inventory until it settles. `Inventory::plan_move` keeps
+  planning under `EQEmu`'s rules.
 
 - TAKP's inventory: `inventory::decode_eqmac` reads `EQMac`'s item packets
   as TAKP sends them into the same `InventoryUpdate`s as Titanium's: the

@@ -90,13 +90,14 @@ pub enum MoveRules {
     EqEmu,
     /// TAKP's, which keep bags, books and arrows out of more worn slots and
     /// an instrument from either hand while the other is full
-    /// (`ItemInstance::IsSlotAllowed`, `common/item_instance.cpp`), have no
-    /// charm slot, and disconnect a player whose move they refuse
-    /// (`Client::SwapItemResync`, `zone/inventory.cpp`). TAKP also hands the
-    /// player an item it queued behind the cursor only once the cursor
-    /// empties, saying nothing of it before (`ZoneDatabase::SaveCursor`,
-    /// `zone/zonedb.cpp`), so a move onto a cursor that a move just emptied
-    /// waits for that move to settle.
+    /// (`ItemInstance::IsSlotAllowed`, `common/item_instance.cpp`) and have
+    /// no charm slot. TAKP answers a move it refuses at once by resending
+    /// its two slots, then disconnects a player below status 10
+    /// (`Client::SwapItemResync`, `zone/inventory.cpp`), and answers no move
+    /// it accepts. It also hands the player an item it queued behind the
+    /// cursor only once the cursor empties, saying nothing of it before
+    /// (`ZoneDatabase::SaveCursor`, `zone/zonedb.cpp`), so a move onto a
+    /// cursor that a move just emptied waits for that move to settle.
     Takp,
 }
 
