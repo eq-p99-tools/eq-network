@@ -389,7 +389,8 @@ pub fn titanium(request: &Request, sender: Sender<'_>) -> Result<EncodedCommand>
 
 /// The `EQMac` client's packet for a request from this sender: camping,
 /// logging out, its stance and position, the world's damage, item moves,
-/// and the host commands its generation encodes so far, which is chat.
+/// eating and drinking, and the host commands its generation encodes so
+/// far, which is chat.
 ///
 /// # Errors
 /// Refuses every other request, and a command the generation cannot carry.
@@ -414,6 +415,11 @@ pub fn eqmac(request: &Request, sender: Sender<'_>) -> Result<EncodedCommand> {
         Request::MoveItem { from, to, quantity } => {
             crate::inventory::eqmac_move(*from, *to, *quantity)
         }
+        Request::Consume {
+            slot,
+            meal,
+            by_hand,
+        } => food::eqmac_consume(*slot, *meal, *by_hand),
         Request::Depart => Ok(crate::quarm::depart(sender.spawn())),
         Request::MoveCoins(transfer) => transfer.encode_eqmac(),
         Request::BledOut => crate::quarm::bled_out(sender.spawn()),

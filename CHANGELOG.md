@@ -104,6 +104,14 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Eating and drinking on TAKP: `food::eqmac_nourishment` reads TAKP's
+  5-byte `OP_Stamina` (food and water as 16 bits, then a fatigue byte), and
+  `food::eqmac_consume` builds its 16-byte `OP_Consume` in `EQMac`'s slot
+  numbers, with the -1 TAKP's struct says the official client sends. TAKP's
+  session eats and drinks on its own once food or water falls below 3000,
+  where TAKP's own client does (`food::TAKP_HUNGRY`, inferred from TAKP's
+  `Client::Hungry`; `EQEmu`'s at 3000), and by hand.
+
 - Inspecting linked items on TAKP: `GameCommand::InspectItem` on the
   `EQMac` wire sends `items::eqmac_request`'s 66-byte request
   (`OP_ItemLinkResponse`: the item as 16 bits from the link's six decimal

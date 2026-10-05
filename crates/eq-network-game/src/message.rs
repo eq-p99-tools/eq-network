@@ -391,6 +391,16 @@ mod tests {
                 ..
             }]
         ));
+        // How fed and watered TAKP says the player is.
+        assert!(matches!(
+            eqmac(0x5741, &[0xb8, 0x0b, 0x70, 0x17, 0])[..],
+            [Message::Event(WorldEvent::Nourishment(
+                crate::food::Nourishment {
+                    food: 3000,
+                    water: 6000
+                }
+            ))]
+        ));
         // A linked item's answer describes it, and never fills a slot.
         let mut linked = [0; 360];
         linked[..14].copy_from_slice(b"Synthetic ring");

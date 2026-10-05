@@ -728,6 +728,11 @@ pub fn updates(opcode: u16, body: &[u8]) -> Result<Vec<WorldEvent>> {
         crate::buffs::EQMAC_BUFF_OPCODE => {
             vec![WorldEvent::Buff(crate::buffs::eqmac_update(body)?)]
         }
+        crate::food::EQMAC_STAMINA_OPCODE => {
+            vec![WorldEvent::Nourishment(crate::food::eqmac_nourishment(
+                body,
+            )?)]
+        }
         0xf540 => crate::world::appearance(body)?.into_iter().collect(),
         crate::combat::EQMAC_DAMAGE_OPCODE => {
             vec![WorldEvent::Damage(crate::combat::eqmac_damage(body)?)]
