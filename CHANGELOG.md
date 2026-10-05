@@ -48,6 +48,40 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- TAKP's spell state, read from the `EQMac` wire as the events Titanium's
+  packets give (Quarm sends the same packets, unchecked there). The
+  profile gives the buffs (`buffs::eqmac_profile`), the 256-slot
+  spellbook (`SpellBook::eqmac_profile`) and each gem's reuse time left
+  (`PlayerState::spell_refresh_ms`). `spells::decode_eqmac` reads a cast
+  beginning, with its base cast time, which the player's focus effects can
+  shorten; an interruption; a gem's refresh, with no reuse adjustment; and
+  the spellbook's replies. `buffs::eqmac_spell_effect` reads a spell taking
+  hold and `buffs::eqmac_update` a buff's fade or corrected duration.
+  `OP_ManaChange`, which TAKP sends only as the spell bar comes back, ends
+  the cast (`SpellUpdate::Mana`, `keep_casting: false`) besides giving the
+  mana, and `OP_ManaUpdate` gives the player's mana between casts. TAKP's
+  server sends an interruption and a fade to the player alone without
+  naming anyone, so the session names the player in them. A fade names no
+  slot either (`buffs::UNKNOWN_SLOT`): a host finds the buff by its spell.
+  The book reaches a host once TAKP offers the spellbook.
+- Casting on TAKP (`Capability::Casting`): a memorized gem's spell
+  (`GameCommand::CastSpell` on the `EQMac` wire, `spells::eqmac_cast`) and
+  an item's click effect from a worn or general slot
+  (`Request::CastItem`, `spells::eqmac_item_cast`), in TAKP's 12-byte
+  `OP_CastSpell` with 16-bit fields and a CRC of 0, which TAKP never reads.
+  The cast is held, as on the other servers, until the spell bar comes back
+  or the cast is interrupted. A hold now also ends on a result for the
+  spell asked for when the server began a different one: TAKP begins a
+  Luclin port as spell 2935 and ends it naming the port.
+- TAKP's spellbook (`Capability::Spellbook`): memorizing, forgetting and
+  scribing in TAKP's own `OP_MemorizeSpell` (`spells::eqmac_memorize`,
+  `spells::eqmac_forget`, `spells::eqmac_scribe`), one change in flight at
+  a time as on every server; TAKP logs two in one server tick as a possible
+  hack. The book has TAKP's 256 slots, and a scribe past them is refused,
+  since TAKP would use the scroll up and scribe nothing. Moving a spell in
+  the book (`spells::eqmac_swap`, built) waits for its check on TAKP.
+  Deleting stays off: TAKP reports a deletion done even for an empty slot
+  and keeps the spell memorizable until the player zones.
 - The world's damage to the player (`Capability::EnvironmentalDamage`,
   `EqEmu` only, and there falls alone): `GameCommand::EnvironmentalDamage`
   reports the damage a host worked out, by its `hazards::Hazard` (falling,
@@ -352,40 +386,6 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `EQMac` creation asks for the start zone's safe point. Quarm does not create
   characters yet, and refuses `CreateCharacter` with `CharacterCreation`
   instead of ignoring it.
-- TAKP's spell state, read from the `EQMac` wire as the events Titanium's
-  packets give (Quarm sends the same packets, unchecked there). The
-  profile gives the buffs (`buffs::eqmac_profile`), the 256-slot
-  spellbook (`SpellBook::eqmac_profile`) and each gem's reuse time left
-  (`PlayerState::spell_refresh_ms`). `spells::decode_eqmac` reads a cast
-  beginning, with its base cast time, which the player's focus effects can
-  shorten; an interruption; a gem's refresh, with no reuse adjustment; and
-  the spellbook's replies. `buffs::eqmac_spell_effect` reads a spell taking
-  hold and `buffs::eqmac_update` a buff's fade or corrected duration.
-  `OP_ManaChange`, which TAKP sends only as the spell bar comes back, ends
-  the cast (`SpellUpdate::Mana`, `keep_casting: false`) besides giving the
-  mana, and `OP_ManaUpdate` gives the player's mana between casts. TAKP's
-  server sends an interruption and a fade to the player alone without
-  naming anyone, so the session names the player in them. A fade names no
-  slot either (`buffs::UNKNOWN_SLOT`): a host finds the buff by its spell.
-  The book reaches a host once TAKP offers the spellbook.
-- Casting on TAKP (`Capability::Casting`): a memorized gem's spell
-  (`GameCommand::CastSpell` on the `EQMac` wire, `spells::eqmac_cast`) and
-  an item's click effect from a worn or general slot
-  (`Request::CastItem`, `spells::eqmac_item_cast`), in TAKP's 12-byte
-  `OP_CastSpell` with 16-bit fields and a CRC of 0, which TAKP never reads.
-  The cast is held, as on the other servers, until the spell bar comes back
-  or the cast is interrupted. A hold now also ends on a result for the
-  spell asked for when the server began a different one: TAKP begins a
-  Luclin port as spell 2935 and ends it naming the port.
-- TAKP's spellbook (`Capability::Spellbook`): memorizing, forgetting and
-  scribing in TAKP's own `OP_MemorizeSpell` (`spells::eqmac_memorize`,
-  `spells::eqmac_forget`, `spells::eqmac_scribe`), one change in flight at
-  a time as on every server; TAKP logs two in one server tick as a possible
-  hack. The book has TAKP's 256 slots, and a scribe past them is refused,
-  since TAKP would use the scroll up and scribe nothing. Moving a spell in
-  the book (`spells::eqmac_swap`, built) waits for its check on TAKP.
-  Deleting stays off: TAKP reports a deletion done even for an empty slot
-  and keeps the spell memorizable until the player zones.
 - Synthetic regression coverage for inventory reconciliation, scribe consumption,
   movement admission, cast state, and fresh-key world/zone handoffs.
 
