@@ -1,4 +1,13 @@
-//! Reconciles merchant replies without treating silence as a refused transaction.
+//! Merchant purchases and sales in flight; the merchant's echo settles each one.
+//!
+//! The server deletes a sold item without sending an item update, so the sale's
+//! echo is turned into that inventory change here, as the Titanium client does it.
+//! An offer the server refuses is never answered, so an unanswered trade releases
+//! after a timeout instead of holding the inventory forever. Echoes carry no
+//! request id, so each is matched to its trade by slot, and a sale's echo
+//! removes units only while the slot still holds the item that was offered: a
+//! sale released unanswered stays remembered for an echo that comes late, and
+//! an echo nothing explains leaves the inventory untrusted.
 use crate::client::ClientCommand;
 use eq_network_game::{
     inventory::{Inventory, InventoryItem, InventorySlot, InventoryUpdate},
@@ -6,70 +15,92 @@ use eq_network_game::{
 };
 use std::time::{Duration, Instant};
 
+/// How long an unanswered purchase or sale holds the inventory.
 const ANSWER_TIMEOUT: Duration = Duration::from_secs(3);
 
-enum Operation {
-    Purchase {
-        slot: u32,
-        quantity: u32,
-    },
-    Sale {
-        slot: InventorySlot,
-        quantity: u32,
-        item: Option<Box<InventoryItem>>,
-    },
+/// A sale offered to the merchant: the slot, how many units were offered, and
+/// what the slot held then.
+struct Sale {
+    slot: InventorySlot,
+    quantity: u32,
+    item: Option<Box<InventoryItem>>,
 }
 
-enum Answer {
-    Waiting(Instant),
-    Uncertain,
+impl Sale {
+    /// Whether an echo of this many units sold from this slot answers it.
+    fn answered_by(&self, slot: InventorySlot, sold: u32) -> bool {
+        self.slot == slot && sold > 0 && sold <= self.quantity
+    }
+
+    /// The inventory change an echo answering the sale stands for: the units
+    /// leave while the slot still holds the item offered. Once the slot holds
+    /// something else, nothing says which item left, so the inventory can no
+    /// longer be trusted.
+    fn settle(&self, sold: u32, inventory: &Inventory) -> InventoryUpdate {
+        let unchanged = !inventory.stale()
+            && self
+                .item
+                .as_deref()
+                .is_some_and(|item| inventory.items().get(&self.slot) == Some(item));
+        if unchanged {
+            InventoryUpdate::Deduct {
+                slot: self.slot,
+                quantity: sold,
+            }
+        } else {
+            InventoryUpdate::Invalidated
+        }
+    }
 }
 
-struct Pending {
-    operation: Operation,
-    answer: Answer,
+/// A purchase or sale waiting for the merchant's echo.
+enum Trade {
+    /// Buying from the merchant's slot; the item arrives in its own item update.
+    Purchase { slot: u32, quantity: u32 },
+    /// Selling from the player's slot.
+    Sale(Sale),
 }
 
-/// Only one transaction can be correlated: merchant echoes carry no request ID.
+/// The trade waiting for the merchant's echo, if any, and the last sale
+/// released unanswered, whose echo may still come.
 #[derive(Default)]
 pub(super) struct MerchantTrades {
-    pending: Option<Pending>,
+    pending: Option<(Trade, Instant)>,
+    unanswered: Option<Sale>,
 }
 
 impl MerchantTrades {
+    /// Whether a purchase or sale is waiting for the merchant.
     pub(super) const fn active(&self) -> bool {
         self.pending.is_some()
     }
 
-    /// Retains the source item until a matching echo, including after a timeout.
+    /// Records a purchase or sale that was handed to transport, and for a sale
+    /// what its slot holds.
     pub(super) fn sent(&mut self, command: &ClientCommand, inventory: &Inventory, now: Instant) {
-        // The session holds the inventory. Never replace an unresolved operation.
-        if self.active() {
-            return;
-        }
-        let operation = match command {
-            ClientCommand::Buy { slot, quantity, .. } => Operation::Purchase {
+        let trade = match command {
+            ClientCommand::Buy { slot, quantity, .. } => Trade::Purchase {
                 slot: *slot,
                 quantity: *quantity,
             },
             ClientCommand::Sell { slot, quantity, .. } => {
                 let slot = InventorySlot(*slot);
-                Operation::Sale {
+                Trade::Sale(Sale {
                     slot,
                     quantity: *quantity,
                     item: inventory.items().get(&slot).cloned().map(Box::new),
-                }
+                })
             }
             _ => return,
         };
-        self.pending = Some(Pending {
-            operation,
-            answer: Answer::Waiting(now),
-        });
+        self.pending = Some((trade, now));
     }
 
-    /// Applies a sale only to its original item. An unrelated reply cannot
-    /// settle another operation; ambiguous replies invalidate the projection.
+    /// Settles the trade a merchant echo answers. A sale's echo also returns
+    /// the inventory change the server made without reporting it, even when it
+    /// comes after the hold was released; an echo for an item the slot no
+    /// longer holds, or one that answers no trade, leaves the inventory
+    /// untrusted instead of removing what the slot holds now.
     pub(super) fn observe(
         &mut self,
         update: &MerchantUpdate,
@@ -77,71 +108,73 @@ impl MerchantTrades {
     ) -> Option<InventoryUpdate> {
         match update {
             MerchantUpdate::Sold { slot, quantity, .. } => {
-                if let Some(Pending {
-                    operation:
-                        Operation::Sale {
-                            slot: expected,
-                            quantity: requested,
-                            item,
-                        },
-                    ..
-                }) = &self.pending
-                {
-                    // A script veto echoes a negative slot, without deleting anything.
-                    if *slot < 0 {
+                // A script veto echoes slot -1 so that nothing is removed.
+                if *slot < 0 {
+                    if matches!(self.pending, Some((Trade::Sale(_), _))) {
                         self.pending = None;
-                        return None;
                     }
-                    if *expected == InventorySlot(*slot) && *quantity > 0 && *quantity <= *requested
-                    {
-                        let unchanged = item
-                            .as_deref()
-                            .is_some_and(|item| inventory.items().get(expected) == Some(item));
+                    return None;
+                }
+                let slot = InventorySlot(*slot);
+                if let Some((Trade::Sale(sale), _)) = &self.pending {
+                    if sale.answered_by(slot, *quantity) {
+                        let update = sale.settle(*quantity, inventory);
                         self.pending = None;
-                        return Some(if unchanged && !inventory.stale() {
-                            InventoryUpdate::Deduct {
-                                slot: InventorySlot(*slot),
-                                quantity: *quantity,
-                            }
-                        } else {
-                            InventoryUpdate::Invalidated
-                        });
+                        return Some(update);
                     }
                 }
-                (*slot >= 0).then_some(InventoryUpdate::Invalidated)
+                if let Some(sale) = self
+                    .unanswered
+                    .take_if(|sale| sale.answered_by(slot, *quantity))
+                {
+                    return Some(sale.settle(*quantity, inventory));
+                }
+                Some(InventoryUpdate::Invalidated)
             }
+            // The purchased item arrives in its own item update, so an echo
+            // that answers no purchase changes nothing here.
             MerchantUpdate::Bought { slot, quantity, .. } => {
-                if matches!(&self.pending, Some(Pending { operation: Operation::Purchase { slot: expected, quantity: requested }, .. }) if slot == expected && *quantity > 0 && quantity <= requested)
-                {
+                if matches!(
+                    &self.pending,
+                    Some((Trade::Purchase { slot: bought, quantity: asked }, _))
+                        if bought == slot && *quantity > 0 && quantity <= asked
+                ) {
                     self.pending = None;
-                    None // The purchased item arrives in a separate item update.
-                } else {
-                    Some(InventoryUpdate::Invalidated)
                 }
+                None
             }
-            MerchantUpdate::Closed => self.clear().then_some(InventoryUpdate::Invalidated),
+            MerchantUpdate::Closed => {
+                self.release();
+                None
+            }
             _ => None,
         }
     }
 
-    /// Reports uncertainty once, retaining the hold: silence is not a rejection.
+    /// Releases a trade the merchant never answered; true when one was pending.
     pub(super) fn expire(&mut self, now: Instant) -> bool {
-        let Some(pending) = &mut self.pending else {
-            return false;
-        };
-        if matches!(pending.answer, Answer::Waiting(sent) if now.saturating_duration_since(sent) >= ANSWER_TIMEOUT)
-        {
-            pending.answer = Answer::Uncertain;
-            true
-        } else {
-            false
+        let expired = self
+            .pending
+            .as_ref()
+            .is_some_and(|(_, sent)| now.saturating_duration_since(*sent) >= ANSWER_TIMEOUT);
+        if expired {
+            self.release();
         }
+        expired
     }
 
-    /// Abandons correlation on a reset. An unresolved operation requires the
-    /// caller to invalidate or replace the inventory.
-    pub(super) fn clear(&mut self) -> bool {
-        self.pending.take().is_some()
+    /// Forgets the trades that can no longer be answered, such as after death.
+    pub(super) fn clear(&mut self) {
+        self.pending = None;
+        self.unanswered = None;
+    }
+
+    /// Stops holding the inventory for the pending trade, keeping a sale for
+    /// an echo that may still come.
+    fn release(&mut self) {
+        if let Some((Trade::Sale(sale), _)) = self.pending.take() {
+            self.unanswered = Some(sale);
+        }
     }
 }
 
@@ -160,9 +193,21 @@ mod tests {
         }
     }
 
+    fn buy(slot: u32) -> ClientCommand {
+        ClientCommand::Buy {
+            session_id: 1,
+            merchant_id: 7,
+            own_id: 3,
+            slot,
+            quantity: 1,
+            created: Instant::now(),
+        }
+    }
+
+    /// Two items, in slots 24 and 25.
     fn inventory() -> Inventory {
         let mut inventory = Inventory::default();
-        inventory.apply(InventoryUpdate::Snapshot(vec![item(25)]));
+        inventory.apply(InventoryUpdate::Snapshot(vec![item(24), item(25)]));
         inventory
     }
 
@@ -174,28 +219,68 @@ mod tests {
         }
     }
 
+    fn deduct(slot: i32) -> InventoryUpdate {
+        InventoryUpdate::Deduct {
+            slot: InventorySlot(slot),
+            quantity: 2,
+        }
+    }
+
     #[test]
-    fn late_matching_sale_settles_the_original_hold() {
+    fn a_sale_holds_until_its_echo_removes_the_units() {
         let start = Instant::now();
         let inventory = inventory();
         let mut trades = MerchantTrades::default();
-        trades.sent(&sell(25), &inventory, start);
-        assert!(!trades.expire(start + Duration::from_secs(1)));
-        assert!(trades.expire(start + ANSWER_TIMEOUT));
-        assert!(trades.active());
-        assert!(!trades.expire(start + ANSWER_TIMEOUT * 2));
-        assert_eq!(
-            trades.observe(&echo(25), &inventory),
-            Some(InventoryUpdate::Deduct {
-                slot: InventorySlot(25),
-                quantity: 2
-            })
+        trades.sent(
+            &ClientCommand::SelectTarget {
+                session_id: 1,
+                spawn_id: None,
+            },
+            &inventory,
+            start,
         );
+        assert!(!trades.active());
+        trades.sent(&sell(25), &inventory, start);
+        assert!(trades.active());
+        assert!(!trades.expire(start + Duration::from_secs(1)));
+        assert_eq!(trades.observe(&echo(25), &inventory), Some(deduct(25)));
         assert!(!trades.active());
     }
 
     #[test]
-    fn delayed_sale_never_deletes_replacement_contents() {
+    fn vetoed_and_unanswered_trades_release_without_removing_anything() {
+        let start = Instant::now();
+        let inventory = inventory();
+        let mut trades = MerchantTrades::default();
+        trades.sent(&sell(25), &inventory, start);
+        assert_eq!(trades.observe(&echo(-1), &inventory), None);
+        assert!(!trades.active());
+        trades.sent(&buy(3), &inventory, start);
+        assert!(!trades.expire(start + Duration::from_secs(1)));
+        assert!(trades.active());
+        assert!(trades.expire(start + ANSWER_TIMEOUT));
+        assert!(!trades.active());
+        assert!(!trades.expire(start + ANSWER_TIMEOUT * 2));
+    }
+
+    #[test]
+    fn a_late_echo_removes_the_units_while_the_slot_holds_the_item_sold() {
+        let start = Instant::now();
+        let inventory = inventory();
+        let mut trades = MerchantTrades::default();
+        trades.sent(&sell(25), &inventory, start);
+        assert!(trades.expire(start + ANSWER_TIMEOUT));
+        assert!(!trades.active());
+        assert_eq!(trades.observe(&echo(25), &inventory), Some(deduct(25)));
+        // That sale is settled: another echo for the slot answers nothing.
+        assert_eq!(
+            trades.observe(&echo(25), &inventory),
+            Some(InventoryUpdate::Invalidated)
+        );
+    }
+
+    #[test]
+    fn a_late_echo_never_removes_what_took_the_items_place() {
         let start = Instant::now();
         let mut inventory = inventory();
         let mut trades = MerchantTrades::default();
@@ -210,7 +295,21 @@ mod tests {
     }
 
     #[test]
-    fn unrelated_echo_does_not_clear_another_hold() {
+    fn a_late_echo_settles_its_own_sale_and_leaves_a_newer_trade_held() {
+        let start = Instant::now();
+        let inventory = inventory();
+        let mut trades = MerchantTrades::default();
+        trades.sent(&sell(25), &inventory, start);
+        trades.expire(start + ANSWER_TIMEOUT);
+        trades.sent(&sell(24), &inventory, start + ANSWER_TIMEOUT);
+        assert_eq!(trades.observe(&echo(25), &inventory), Some(deduct(25)));
+        assert!(trades.active(), "the newer sale's hold was released");
+        assert_eq!(trades.observe(&echo(24), &inventory), Some(deduct(24)));
+        assert!(!trades.active());
+    }
+
+    #[test]
+    fn echoes_that_answer_no_trade_never_settle_the_pending_one() {
         let inventory = inventory();
         let mut trades = MerchantTrades::default();
         trades.sent(&sell(25), &inventory, Instant::now());
@@ -219,61 +318,71 @@ mod tests {
             Some(InventoryUpdate::Invalidated)
         );
         assert!(trades.active());
+        // A purchase's item comes in its own update; its echo changes nothing.
+        let bought = MerchantUpdate::Bought {
+            slot: 25,
+            quantity: 2,
+            price: 1,
+        };
+        assert_eq!(trades.observe(&bought, &inventory), None);
+        assert!(trades.active());
+        // More units than were offered answer nothing either.
+        let more = MerchantUpdate::Sold {
+            slot: 25,
+            quantity: 3,
+            price: 60,
+        };
         assert_eq!(
-            trades.observe(
-                &MerchantUpdate::Bought {
-                    slot: 25,
-                    quantity: 2,
-                    price: 1
-                },
-                &inventory
-            ),
+            trades.observe(&more, &inventory),
             Some(InventoryUpdate::Invalidated)
         );
         assert!(trades.active());
     }
 
     #[test]
-    fn timeout_cannot_be_replaced_by_a_new_transaction() {
+    fn a_purchase_echo_releases_only_its_own_purchase() {
+        let inventory = inventory();
+        let mut trades = MerchantTrades::default();
+        trades.sent(&buy(3), &inventory, Instant::now());
+        let other = MerchantUpdate::Bought {
+            slot: 4,
+            quantity: 1,
+            price: 10,
+        };
+        assert_eq!(trades.observe(&other, &inventory), None);
+        assert!(trades.active());
+        let bought = MerchantUpdate::Bought {
+            slot: 3,
+            quantity: 1,
+            price: 10,
+        };
+        assert_eq!(trades.observe(&bought, &inventory), None);
+        assert!(!trades.active());
+    }
+
+    #[test]
+    fn closing_the_merchant_releases_the_hold_and_a_late_echo_still_settles() {
+        let inventory = inventory();
+        let mut trades = MerchantTrades::default();
+        trades.sent(&sell(25), &inventory, Instant::now());
+        assert_eq!(trades.observe(&MerchantUpdate::Closed, &inventory), None);
+        assert!(!trades.active());
+        assert_eq!(trades.observe(&echo(25), &inventory), Some(deduct(25)));
+    }
+
+    #[test]
+    fn after_death_an_echo_answers_nothing() {
         let inventory = inventory();
         let start = Instant::now();
         let mut trades = MerchantTrades::default();
         trades.sent(&sell(25), &inventory, start);
         trades.expire(start + ANSWER_TIMEOUT);
         trades.sent(&sell(24), &inventory, start + ANSWER_TIMEOUT);
-        assert_eq!(
-            trades.observe(&echo(24), &inventory),
-            Some(InventoryUpdate::Invalidated)
-        );
-        assert!(trades.active());
-        assert!(matches!(
-            trades.observe(&echo(25), &inventory),
-            Some(InventoryUpdate::Deduct { .. })
-        ));
-    }
-
-    #[test]
-    fn closing_an_uncertain_trade_invalidates_and_late_echo_cannot_deduct() {
-        let inventory = inventory();
-        let mut trades = MerchantTrades::default();
-        trades.sent(&sell(25), &inventory, Instant::now());
-        assert_eq!(
-            trades.observe(&MerchantUpdate::Closed, &inventory),
-            Some(InventoryUpdate::Invalidated)
-        );
+        trades.clear();
         assert!(!trades.active());
         assert_eq!(
             trades.observe(&echo(25), &inventory),
             Some(InventoryUpdate::Invalidated)
         );
-    }
-
-    #[test]
-    fn explicit_script_veto_releases_without_invalidating() {
-        let inventory = inventory();
-        let mut trades = MerchantTrades::default();
-        trades.sent(&sell(25), &inventory, Instant::now());
-        assert_eq!(trades.observe(&echo(-1), &inventory), None);
-        assert!(!trades.active());
     }
 }

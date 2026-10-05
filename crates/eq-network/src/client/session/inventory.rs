@@ -295,7 +295,6 @@ impl Belongings {
         world: &World,
         out: &mut Out<'_, '_>,
     ) -> Result<()> {
-        anyhow::ensure!(!self.trades.active(), "Merchant outcome is still unknown");
         if out.command(command)? {
             self.trades.sent(command, &world.inventory, Instant::now());
         }
@@ -405,13 +404,7 @@ impl Feature for Belongings {
     }
 
     /// A sold item leaves only when the merchant echoes the sale.
-    fn holds(&self, world: &World, _now: Instant) -> Vec<(Resource, &'static str)> {
-        if world.inventory.stale() {
-            return vec![(
-                Resource::Inventory,
-                "Inventory needs a refresh; reconnect before changing items",
-            )];
-        }
+    fn holds(&self, _world: &World, _now: Instant) -> Vec<(Resource, &'static str)> {
         self.trades
             .active()
             .then_some((Resource::Inventory, "Wait for the merchant to answer"))
@@ -476,8 +469,8 @@ impl Feature for Belongings {
         }
     }
 
-    /// Settles moves the server let stand, and reports an unanswered trade
-    /// without mistaking silence for an authoritative refusal.
+    /// Settles moves the server let stand, and releases a trade the merchant
+    /// never answered.
     fn tick(&mut self, now: Instant, world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
         // Servers answer only a refused move, so silence settles the rest.
         if let Some(update) = self.settlement.due(&world.inventory, now) {
@@ -487,13 +480,10 @@ impl Feature for Belongings {
             out.log
                 .send(ClientEvent::World(WorldEvent::MerchantRefused {
                     session_id: world.session_id,
-                    reason:
-                        "Merchant outcome unknown; inventory stays held until a reply or reconnect."
-                            .into(),
+                    reason: "The merchant did not accept that offer.".into(),
                 }))?;
-            out.log.diagnostic(
-                "Merchant trade was not answered; retained the inventory hold".into(),
-            )?;
+            out.log
+                .diagnostic("Merchant trade was not answered; released the inventory".into())?;
         }
         Ok(())
     }
@@ -512,9 +502,6 @@ impl Feature for Belongings {
         }
         match message {
             Message::Event(WorldEvent::Inventory(update)) => {
-                if matches!(update, InventoryUpdate::Snapshot(_)) {
-                    self.trades.clear();
-                }
                 world.inventory.0.apply(update.clone());
             }
             Message::Unreadable {
@@ -528,9 +515,7 @@ impl Feature for Belongings {
                 }
             }
             Message::Event(WorldEvent::Death(death)) if world.is_player(death.spawn_id) => {
-                if self.trades.clear() {
-                    change(InventoryUpdate::Invalidated, world, out)?;
-                }
+                self.trades.clear();
             }
             Message::Event(WorldEvent::Nourishment(nourishment)) => {
                 self.meals.nourished(*nourishment, world, out)?;
@@ -868,47 +853,7 @@ mod tests {
     }
 
     #[test]
-    fn closing_an_unanswered_sale_requires_a_snapshot_before_more_trades() {
-        let (mut belongings, mut world) = admitted();
-        let sell = ClientCommand::Sell {
-            session_id: 5,
-            merchant_id: 9,
-            slot: 22,
-            quantity: 1,
-            created: Instant::now(),
-        };
-        testing::run(|out| belongings.handle(&sell, &mut world, out))
-            .result
-            .unwrap();
-        let closed = Message::Event(WorldEvent::Merchant(MerchantUpdate::Closed));
-        testing::run(|out| belongings.observe(&closed, &mut world, out))
-            .result
-            .unwrap();
-        assert!(world.inventory.stale());
-        assert!(Held::new(belongings.holds(&world, Instant::now()))
-            .conflict(&sell)
-            .is_some());
-        let late = Message::Event(WorldEvent::Merchant(MerchantUpdate::Sold {
-            slot: 22,
-            quantity: 1,
-            price: 1,
-        }));
-        testing::run(|out| belongings.observe(&late, &mut world, out))
-            .result
-            .unwrap();
-        assert!(world.inventory.items().contains_key(&InventorySlot(22)));
-        let refreshed = Message::Event(WorldEvent::Inventory(InventoryUpdate::Snapshot(vec![
-            item(22),
-        ])));
-        testing::run(|out| belongings.observe(&refreshed, &mut world, out))
-            .result
-            .unwrap();
-        assert!(!world.inventory.stale());
-        assert_eq!(belongings.holds(&world, Instant::now()), []);
-    }
-
-    #[test]
-    fn an_unanswered_trade_reports_uncertainty_and_keeps_the_inventory_hold() {
+    fn an_unanswered_trade_is_refused_and_releases_the_inventory() {
         let (mut belongings, mut world) = admitted();
         let buy = ClientCommand::Buy {
             session_id: 5,
@@ -932,10 +877,52 @@ mod tests {
             ]
         ));
         assert!(
-            !belongings.holds(&world, Instant::now()).is_empty(),
-            "an uncertain trade lost its hold: {:?}",
+            belongings.holds(&world, Instant::now()).is_empty(),
+            "a hold remains: {:?}",
             belongings.holds(&world, Instant::now())
         );
+    }
+
+    #[test]
+    fn a_late_sale_echo_never_removes_what_took_the_items_place() {
+        let (mut belongings, mut world) = admitted();
+        let sell = ClientCommand::Sell {
+            session_id: 5,
+            merchant_id: 9,
+            slot: 22,
+            quantity: 1,
+            created: Instant::now(),
+        };
+        testing::run(|out| belongings.handle(&sell, &mut world, out))
+            .result
+            .unwrap();
+        let later = Instant::now() + Duration::from_secs(3);
+        testing::run(|out| belongings.tick(later, &mut world, out))
+            .result
+            .unwrap();
+        assert_eq!(belongings.holds(&world, later), []);
+        // Released, the slot takes another item before the echo comes.
+        let mut replacement = item(22);
+        replacement.details.id += 1;
+        let arrived = Message::Event(WorldEvent::Inventory(InventoryUpdate::Set(vec![
+            replacement.clone(),
+        ])));
+        testing::run(|out| belongings.observe(&arrived, &mut world, out))
+            .result
+            .unwrap();
+        let echo = Message::Event(WorldEvent::Merchant(MerchantUpdate::Sold {
+            slot: 22,
+            quantity: 1,
+            price: 40,
+        }));
+        let outcome = testing::run(|out| belongings.observe(&echo, &mut world, out));
+        outcome.result.unwrap();
+        assert_eq!(
+            inventory_events(&outcome.events),
+            [&InventoryUpdate::Invalidated]
+        );
+        assert!(world.inventory.stale());
+        assert_eq!(world.inventory.items()[&InventorySlot(22)], replacement);
     }
 
     #[test]
