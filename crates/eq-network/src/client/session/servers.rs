@@ -942,6 +942,12 @@ impl ServerType for Takp {
         offer(shared::motion(false))
     }
 
+    /// Zone lines and the server's moves, with `EQMac`'s zone change and the
+    /// world's re-entry between zones.
+    fn transfers(&self, setup: &Setup<'_>) -> Provided {
+        offer(shared::transfers(setup))
+    }
+
     fn targeting(&self, _setup: &Setup<'_>) -> Provided {
         offer(shared::targeting())
     }
@@ -1020,14 +1026,14 @@ mod tests {
     #[test]
     fn eqmac_servers_provide_the_features_built_for_them() {
         // Quarm and TAKP speak EQMac: they see the zone's spawns, keep the
-        // player's record and talk. TAKP also camps; Quarm will once that is
-        // checked there.
+        // player's record and talk. TAKP also camps, moves and zones; Quarm
+        // will once each is checked there.
         let setup = Setup::new("Tester", AutoEat::default());
         let quarm = server_type(ServerProtocol::Quarm);
         assert_eq!(quarm.features(&setup).len(), 3);
         assert_eq!(offers(quarm), [Capability::Talking]);
         let takp = server_type(ServerProtocol::Takp);
-        assert_eq!(takp.features(&setup).len(), 7);
+        assert_eq!(takp.features(&setup).len(), 8);
         assert_eq!(
             offers(takp),
             [
@@ -1035,7 +1041,8 @@ mod tests {
                 Capability::Targeting,
                 Capability::Combat,
                 Capability::Talking,
-                Capability::Camping
+                Capability::Camping,
+                Capability::Zoning
             ]
         );
         for server in [quarm, takp] {

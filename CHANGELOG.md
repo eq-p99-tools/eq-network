@@ -7,6 +7,24 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- Zoning departs as the official client does. Once a zone approves a
+  transfer, the session sends `Request::SaveOnZone` and then
+  `Request::Depart` (`OP_SaveOnZoneReq`, then `OP_DeleteSpawn` for the
+  player's own spawn), and goes on to the world server when the zone
+  answers with a logout, the connection ends, or two seconds pass
+  (inferred). A repeated answer while the player departs only goes into the
+  diagnostics: `EQEmu` answers a move to another zone twice, and TAKP
+  answers a repeated request again. `Message::ZoneAnswer` now carries a
+  `zoning::ZoneAnswer`, read per client generation, and the zone session's
+  features hear when the connection ends (`Feature::connection_ended`).
+- TAKP lists zoning: `EQMac`'s zone change (76 bytes, no position), its
+  answer, the zone points, the save and the departure, and the world
+  stage's re-entry between zones (the login's zoning flag, then entering
+  the character the world names).
+- A tell's echo on channel 14 is `ChannelName::TellEcho` on the `EQMac`
+  wire too: TAKP echoes a delivered tell to its sender on
+  `ChatChannel_TellEcho` (14), as `EQEmu` does on Titanium's.
+
 - `WorldEvent::Entered` gains `choices`: what the session leaves to the
   player, none of it among `capabilities`. A server type may leave any
   feature it provides to the player where its own client keeps it off; a
@@ -40,8 +58,7 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   16-bit spawn, TAKP's 24-byte consider request and answer
   (`combat::eqmac_consider_request`, `eqmac_consideration`), the
   auto-attack toggle, and its 24-byte damage records
-  (`combat::eqmac_damage`), whose types are Titanium's. Attacking is not
-  yet checked live there.
+  (`combat::eqmac_damage`), whose types are Titanium's.
 
 - `RaidUpdate::Listed`: a member the server lists as the player joins,
   enters a zone or moves, told apart from one who joins. `EQEmu` sends each

@@ -42,6 +42,21 @@ impl ZonePoints {
     /// # Errors
     /// Rejects truncation, excessive counts, duplicate IDs and non-finite destinations.
     pub fn decode(body: &[u8]) -> Result<Self> {
+        Self::read(body, true)
+    }
+
+    /// Decodes `EQMac`'s table, which TAKP lays out as Titanium's but for an
+    /// unused field where Titanium has the destination's instance
+    /// (`common/eq_packet_structs.h` `ZonePoint_Entry`).
+    ///
+    /// # Errors
+    /// Rejects what [`ZonePoints::decode`] rejects.
+    pub fn decode_eqmac(body: &[u8]) -> Result<Self> {
+        Self::read(body, false)
+    }
+
+    /// The counted table, with or without instances.
+    fn read(body: &[u8], instances: bool) -> Result<Self> {
         ensure!(body.len() >= 4, "truncated zone-point header");
         let count = usize::try_from(word(body, 0))?;
         ensure!(count <= 4096, "excessive zone-point count");
@@ -55,7 +70,7 @@ impl ZonePoints {
             let point = ZonePoint {
                 number: word(record, 0),
                 zone_id: half(record, 20),
-                instance_id: half(record, 22),
+                instance_id: if instances { half(record, 22) } else { 0 },
                 destination: Position {
                     x: float(record, 8),
                     y: float(record, 4),

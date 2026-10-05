@@ -129,6 +129,17 @@ impl Features {
         Ok(())
     }
 
+    /// Lets every feature hear that the connection ended, until one takes
+    /// it as the session's end.
+    fn connection_ended(&mut self, world: &mut World) {
+        for feature in &mut self.0 {
+            feature.connection_ended(world);
+            if world.ending() {
+                break;
+            }
+        }
+    }
+
     /// Lets every feature hear a message once the zone has admitted the
     /// player, until one ends the session.
     fn observe(
@@ -286,7 +297,18 @@ pub(super) fn run(
                 }
             }
         }
-        let Some(mut packet) = session.receive()? else {
+        let received = match session.receive() {
+            Ok(received) => received,
+            Err(error) => {
+                // A feature may expect the zone to close the connection.
+                features.connection_ended(&mut world);
+                return match world.take_exit() {
+                    Some(exit) => Ok(exit),
+                    None => Err(error),
+                };
+            }
+        };
+        let Some(mut packet) = received else {
             continue;
         };
         world.packets += 1;
@@ -1039,8 +1061,8 @@ mod tests {
             assert!(!p99.contains(&capability));
         }
         assert_eq!(eqemu.len(), p99.len() + 15);
-        // EQMac servers talk, TAKP camps too, and neither follows a zone
-        // change yet.
+        // EQMac servers talk; TAKP also camps and moves, and follows zone
+        // changes, which Quarm does not yet.
         assert_eq!(
             features(crate::client::ServerProtocol::Quarm),
             [Capability::Talking]
@@ -1052,7 +1074,8 @@ mod tests {
                 Capability::Targeting,
                 Capability::Combat,
                 Capability::Talking,
-                Capability::Camping
+                Capability::Camping,
+                Capability::Zoning
             ]
         );
     }

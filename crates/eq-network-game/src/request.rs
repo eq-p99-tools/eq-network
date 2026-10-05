@@ -186,6 +186,12 @@ pub enum Request {
         /// The name its window showed.
         name: String,
     },
+    /// Ask the zone the player is leaving to save them, once it approves
+    /// the transfer.
+    SaveOnZone,
+    /// Take the player's own spawn out of the zone they are leaving: the
+    /// last word to it before the world server.
+    Depart,
     /// Take a transfer the server offered or a zone line asked for.
     AnswerZoneOffer {
         /// The zone, or zero for the bind point the server resolves.
@@ -347,6 +353,8 @@ pub fn titanium(request: &Request, sender: Sender<'_>) -> Result<EncodedCommand>
             position,
             reason,
         } => zoning::titanium_answer(sender.name, (*zone_id, *instance_id), *position, *reason)?,
+        Request::SaveOnZone => zoning::titanium_save_on_zone(),
+        Request::Depart => zoning::titanium_depart(sender.spawn()),
         Request::Memorize { gem, spell_id } => spells::titanium_memorize(*gem, *spell_id),
         Request::Forget { gem, spell_id } => spells::titanium_forget(*gem, *spell_id),
         Request::Scribe { slot, spell_id } => spells::titanium_scribe(*slot, *spell_id),
@@ -391,6 +399,15 @@ pub fn eqmac(request: &Request, sender: Sender<'_>) -> Result<EncodedCommand> {
             hazards::eqmac_damage(sender.spawn(), *hazard, *amount)
         }
         Request::Command(command) => command::encode(GameDialect::EqMac, command, sender.name),
+        // EQMac has no instances, and its request carries no position.
+        Request::AnswerZoneOffer {
+            zone_id,
+            instance_id: 0,
+            reason,
+            ..
+        } => crate::quarm::zone_change(sender.name, *zone_id, *reason),
+        Request::SaveOnZone => Ok(crate::quarm::save_on_zone()),
+        Request::Depart => Ok(crate::quarm::depart(sender.spawn())),
         _ => anyhow::bail!("the EQMac client cannot send {request:?} yet"),
     }
 }
@@ -404,6 +421,38 @@ mod tests {
         name: "Tester",
         spawn_id: Some(7),
     };
+
+    #[test]
+    fn each_generation_departs_and_answers_a_zone_offer_its_own_way() {
+        let answer = |instance_id| Request::AnswerZoneOffer {
+            zone_id: 4,
+            instance_id,
+            position: crate::world::Position::default(),
+            reason: 0,
+        };
+        assert_eq!(
+            eqmac(&answer(0), PLAYER).unwrap(),
+            crate::quarm::zone_change("Tester", 4, 0).unwrap()
+        );
+        // EQMac has no instances.
+        assert!(eqmac(&answer(2), PLAYER).is_err());
+        assert_eq!(
+            titanium(&Request::SaveOnZone, PLAYER).unwrap(),
+            crate::zoning::titanium_save_on_zone()
+        );
+        assert_eq!(
+            titanium(&Request::Depart, PLAYER).unwrap(),
+            crate::zoning::titanium_depart(7)
+        );
+        assert_eq!(
+            eqmac(&Request::SaveOnZone, PLAYER).unwrap(),
+            crate::quarm::save_on_zone()
+        );
+        assert_eq!(
+            eqmac(&Request::Depart, PLAYER).unwrap(),
+            crate::quarm::depart(7)
+        );
+    }
 
     #[test]
     fn titanium_requests_are_the_packets_the_codecs_build() {
