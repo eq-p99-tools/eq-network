@@ -70,11 +70,11 @@ releasing an inventory hold or resending a non-idempotent action.
 
 ## Validation and release integration
 
-The workspace CI checks the committed resolution with `--locked`: stable format,
-Clippy, tests and docs on Linux; native tests on Windows; Rust 1.88 minimum-version
-compilation. These checks neither load proprietary assets nor connect to a live
+This library workspace intentionally does not commit `Cargo.lock`. CI resolves
+dependencies for each toolchain: stable format, Clippy, tests and docs on Linux;
+native tests on Windows; Rust 1.88 minimum-version compilation. These checks neither load proprietary assets nor connect to a live
 game server. A fresh downstream resolution and packaged-crate consumer remain
-release checks, since a library consumer does not inherit this workspace lockfile.
+release checks, because a downstream application owns its dependency lockfile.
 
 For each changed feature, record protocol generation, server policy, repository
 revision, capability and scenario. Separate source-derived behavior, synthetic
