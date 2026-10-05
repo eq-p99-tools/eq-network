@@ -27,6 +27,9 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   bind zone, with reason 10, `ZC_RepopToHomeAtDeath`), since TAKP holds
   the move home until the client asks and removes a dead client that never
   does; Titanium's servers still offer it (`transfers::Home`).
+- A tell's echo on channel 14 is `ChannelName::TellEcho` on the `EQMac`
+  wire too: TAKP echoes a delivered tell to its sender on
+  `ChatChannel_TellEcho` (14), as `EQEmu` does on Titanium's.
 
 - `WorldEvent::Entered` gains `choices`: what the session leaves to the
   player, none of it among `capabilities`. A server type may leave any
@@ -40,6 +43,13 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   not, so `DeletingSpells` stays off on P99.
 
 ### Added
+
+- Targeting, considering and attacking on TAKP (`Capability::Targeting`
+  and `Capability::Combat`), in `EQMac`'s own packets: the target as a
+  16-bit spawn, TAKP's 24-byte consider request and answer
+  (`combat::eqmac_consider_request`, `eqmac_consideration`), the
+  auto-attack toggle, and its 24-byte damage records
+  (`combat::eqmac_damage`), whose types are Titanium's.
 
 - `RaidUpdate::Listed`: a member the server lists as the player joins,
   enters a zone or moves, told apart from one who joins. `EQEmu` sends each

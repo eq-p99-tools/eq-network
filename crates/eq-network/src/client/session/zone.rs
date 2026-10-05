@@ -1064,6 +1064,8 @@ mod tests {
             features(crate::client::ServerProtocol::Takp),
             [
                 Capability::Moving,
+                Capability::Targeting,
+                Capability::Combat,
                 Capability::Talking,
                 Capability::Camping,
                 Capability::Zoning

@@ -164,6 +164,12 @@ pub fn eqmac(opcode: u16, body: &[u8]) -> Vec<Message> {
         )],
         crate::quarm::ZONE_PLAYER_PROFILE => vec![crate::quarm::bind_point(body)
             .map_or_else(|error| unreadable(Part::World, &error), Message::Bind)],
+        crate::combat::EQMAC_CONSIDER_OPCODE => {
+            vec![crate::combat::eqmac_consideration(body).map_or_else(
+                |error| unreadable(Part::World, &error),
+                |considered| Message::Event(WorldEvent::Consideration(considered)),
+            )]
+        }
         _ => crate::quarm::updates(opcode, body).map_or_else(
             |error| vec![unreadable(Part::World, &error)],
             |events| events.into_iter().map(Message::Event).collect(),
