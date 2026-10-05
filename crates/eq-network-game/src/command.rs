@@ -954,16 +954,16 @@ pub fn encode(
         GameCommand::SetPosture {
             spawn_id, posture, ..
         } => encode_posture(dialect, *spawn_id, *posture),
-        GameCommand::InspectItem { link_body, .. } => {
-            anyhow::ensure!(
-                dialect == GameDialect::Titanium,
-                "item inspection is not implemented for this dialect"
-            );
-            Ok(EncodedCommand {
+        GameCommand::InspectItem { link_body, .. } => Ok(match dialect {
+            GameDialect::Titanium => EncodedCommand {
                 opcode: 0x53e5,
                 body: crate::items::request(link_body)?.to_vec(),
-            })
-        }
+            },
+            GameDialect::EqMac => EncodedCommand {
+                opcode: crate::items::EQMAC_LINK_OPCODE,
+                body: crate::items::eqmac_request(link_body)?.to_vec(),
+            },
+        }),
         GameCommand::SelectTarget { spawn_id, .. } => encode_target(dialect, *spawn_id),
         GameCommand::Consider { .. } | GameCommand::AutoAttack { .. } => {
             encode_combat(dialect, command)
@@ -1223,6 +1223,24 @@ mod tests {
             *gem = 8;
         }
         assert!(encode(GameDialect::Titanium, &cast, "Example").is_err());
+    }
+
+    #[test]
+    fn each_generation_asks_about_a_linked_item_in_its_own_packet() {
+        let inspect = |link_body: &str| GameCommand::InspectItem {
+            session_id: 7,
+            link_body: link_body.into(),
+        };
+        let titanium = format!("0{:05X}{}", 42, "0".repeat(39));
+        let packet = encode(GameDialect::Titanium, &inspect(&titanium), "Example").unwrap();
+        assert_eq!((packet.opcode, packet.body.len()), (0x53e5, 44));
+        let packet = encode(GameDialect::EqMac, &inspect("0000042"), "Example").unwrap();
+        assert_eq!((packet.opcode, packet.body.len()), (0x6442, 66));
+        assert_eq!(&packet.body[..2], &[42, 0]);
+        // Each reads only its own links, and never a say link.
+        assert!(encode(GameDialect::EqMac, &inspect(&titanium), "Example").is_err());
+        assert!(encode(GameDialect::Titanium, &inspect("0000042"), "Example").is_err());
+        assert!(encode(GameDialect::EqMac, &inspect("0032769"), "Example").is_err());
     }
 
     #[test]

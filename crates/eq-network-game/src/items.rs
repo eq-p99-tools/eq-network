@@ -1,4 +1,5 @@
-//! Read-only Titanium item-link inspection; never equips, trades, or activates items.
+//! Read-only item-link inspection, in Titanium's and `EQMac`'s packets; never
+//! equips, trades, or activates items.
 use anyhow::{ensure, Context, Result};
 use serde::Serialize;
 
@@ -134,6 +135,43 @@ pub fn request(link: &str) -> Result<[u8; 44]> {
     }
     body[24..28].copy_from_slice(&number(37, 45)?.to_le_bytes());
     Ok(body)
+}
+
+/// `OP_ItemLinkResponse` on the `EQMac` wire: the client asking about a
+/// linked item, and the server's answer (TAKP `patch_Mac.conf` 0x4264, its
+/// bytes swapped).
+pub const EQMAC_LINK_OPCODE: u16 = 0x6442;
+
+/// Build `EQMac`'s 66-byte inspection request (`ItemViewRequest_Struct`)
+/// from the preserved 7-character link body: an action digit, then the item
+/// ID as six decimal digits (TAKP `common/say_link.cpp`). The request names
+/// the item as 16 bits, then 64 bytes for its name, which TAKP does not read
+/// and which stay zero (inferred: the official client's are unrecorded).
+///
+/// # Errors
+/// Rejects malformed links and quest say-link IDs (above 0x8000), for which
+/// TAKP has the player say the link's phrase.
+pub fn eqmac_request(link: &str) -> Result<[u8; 66]> {
+    ensure!(
+        link.len() == 7
+            && link.as_bytes()[0].is_ascii_hexdigit()
+            && link.as_bytes()[1..].iter().all(u8::is_ascii_digit),
+        "invalid EQMac item link"
+    );
+    let id: u16 = link[1..].parse().context("invalid EQMac item link")?;
+    ensure!(id != 0 && id < 0x8000, "not an inspectable item link");
+    let mut body = [0; 66];
+    body[..2].copy_from_slice(&id.to_le_bytes());
+    Ok(body)
+}
+
+/// Decode `EQMac`'s answer to an inspection: the linked item's 360-byte
+/// record.
+///
+/// # Errors
+/// Rejects a record of another length and invalid item fields.
+pub fn eqmac_response(body: &[u8]) -> Result<ItemDetails> {
+    crate::inventory::eqmac_details(body)
 }
 
 /// Decode the root item in an `ItemPacketViewLink` response, using Titanium field order.
@@ -388,6 +426,22 @@ mod tests {
         assert!(definition(&fields).is_err());
         assert!(definition(&fields[..111]).is_err());
     }
+    #[test]
+    fn eqmac_inspection_names_the_item_and_never_a_say_link() {
+        let body = eqmac_request("0001234").unwrap();
+        assert_eq!(&body[..2], &1234u16.to_le_bytes());
+        assert_eq!(body[2..], [0; 64]);
+        assert_eq!(&eqmac_request("0032767").unwrap()[..2], &[0xff, 0x7f]);
+        // Say links, no item, IDs beyond 16 bits and malformed bodies.
+        for link in [
+            "0032768", "0032769", "0049153", "0000000", "0999999", "000123", "00012a4", "x001234",
+        ] {
+            assert!(eqmac_request(link).is_err(), "{link}");
+        }
+        // The answer is the item's own record.
+        assert!(eqmac_response(&[0; 12]).is_err());
+    }
+
     #[test]
     fn inspection_preserves_hash_and_rejects_quest_actions() {
         let link = format!("0{:05X}{}1234ABCD", 42, "0".repeat(31));

@@ -313,13 +313,19 @@ impl Belongings {
 
     /// Belongings whose items the player moves under a server type's
     /// `rules`, with what else it `allows`, and merchant packets priced as
-    /// `quotes` says. Without meals the session never eats.
+    /// `quotes` says. Without meals the session never eats; with them it
+    /// eats and drinks when the server's own client would, by the rules'
+    /// threshold.
     pub(super) fn under(
         rules: MoveRules,
         quotes: Quotes,
         allows: Allowances,
         auto_eat: eq_network_game::food::AutoEat,
     ) -> Self {
+        let hungry = match rules {
+            MoveRules::EqEmu => eq_network_game::food::HUNGRY,
+            MoveRules::Takp => eq_network_game::food::TAKP_HUNGRY,
+        };
         Self {
             allows,
             rules,
@@ -327,7 +333,7 @@ impl Belongings {
             trades: MerchantTrades::default(),
             merchant: OpenMerchant::default(),
             quotes,
-            meals: meals::Meals::new(auto_eat),
+            meals: meals::Meals::new(auto_eat, hungry),
         }
     }
 
@@ -984,11 +990,7 @@ mod tests {
         let mut belongings = Belongings::under(
             MoveRules::Takp,
             Quotes::BeforeRate,
-            Allowances {
-                coins: true,
-                merchants: true,
-                ..Allowances::default()
-            },
+            Allowances::ALL,
             eq_network_game::food::AutoEat::default(),
         );
         let mut world = World::new(5);
@@ -1237,8 +1239,8 @@ mod tests {
     }
 
     #[test]
-    fn on_takp_items_move_one_at_a_time_and_meals_wait() {
-        use eq_network_game::food::{AutoEat, Nourishment};
+    fn on_takp_items_move_one_at_a_time_beside_meals_and_merchants() {
+        use eq_network_game::food::AutoEat;
         let (mut belongings, mut world) = admitted_on_takp();
         assert_eq!(
             belongings.capabilities(),
@@ -1257,16 +1259,16 @@ mod tests {
                 slot: InventorySlot(22),
                 created: Instant::now(),
             },
+            ClientCommand::Sell {
+                session_id: 5,
+                merchant_id: 9,
+                slot: 22,
+                quantity: 1,
+                created: Instant::now(),
+            },
         ] {
-            assert!(!belongings.owns(&command), "{command:?}");
+            assert!(belongings.owns(&command), "{command:?}");
         }
-        assert!(belongings.owns(&ClientCommand::Sell {
-            session_id: 5,
-            merchant_id: 9,
-            slot: 22,
-            quantity: 1,
-            created: Instant::now(),
-        }));
         let request = |world: &World, from: i32, to: i32| {
             ClientCommand::MoveInventory(InventoryMove {
                 session_id: 5,
@@ -1305,13 +1307,28 @@ mod tests {
             Held::new(belongings.holds(&world, later)).conflict(&put_down),
             None
         );
-        // A hungry player carrying a ration does not eat.
-        let hungry = Message::Event(WorldEvent::Nourishment(Nourishment { food: 0, water: 0 }));
+    }
+
+    #[test]
+    fn on_takp_the_session_eats_below_3000_in_takps_numbers() {
+        use eq_network_game::food::{eqmac_consume, Meal, Nourishment};
+        let (mut belongings, mut world) = admitted_on_takp();
+        let report =
+            |food| Message::Event(WorldEvent::Nourishment(Nourishment { food, water: 6000 }));
+        // TAKP's own client waits until below 3000.
         let outcome = testing::run_on(&super::super::wire::EqMac, |out| {
-            belongings.observe(&hungry, &mut world, out)
+            belongings.observe(&report(3000), &mut world, out)
         });
         outcome.result.unwrap();
         assert!(outcome.sent.is_empty(), "sent {:?}", outcome.sent);
+        let outcome = testing::run_on(&super::super::wire::EqMac, |out| {
+            belongings.observe(&report(2999), &mut world, out)
+        });
+        outcome.result.unwrap();
+        assert_eq!(
+            outcome.sent,
+            [eqmac_consume(InventorySlot(22), Meal::Food, false).unwrap()]
+        );
     }
 
     #[test]
