@@ -234,9 +234,9 @@ fn change(update: InventoryUpdate, world: &mut World, out: &mut Out<'_, '_>) -> 
 /// What the player may do with their belongings on a server type.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Acts {
-    /// Move items, under the server type's rules; coins, merchants and
-    /// meals wait.
-    Moves,
+    /// Move items under the server type's rules, and eat and drink; coins
+    /// and merchants wait.
+    Items,
     /// Move items and coins, trade with merchants and eat.
     Everything,
 }
@@ -262,18 +262,23 @@ impl Belongings {
             rules: MoveRules::EqEmu,
             settlement: Settlement::default(),
             trades: MerchantTrades::default(),
-            meals: meals::Meals::new(auto_eat),
+            meals: meals::Meals::new(auto_eat, eq_network_game::food::HUNGRY),
         }
     }
 
     /// Belongings whose items the player moves under a server type's rules,
-    /// with nothing else built for that server type yet: coin moves,
-    /// merchants and meals are not offered, and the session never eats.
-    pub(super) fn moving(rules: MoveRules) -> Self {
+    /// and eats and drinks from, when the server's own client would; coin
+    /// moves and merchants are not offered.
+    pub(super) fn items(rules: MoveRules, auto_eat: eq_network_game::food::AutoEat) -> Self {
+        let hungry = match rules {
+            MoveRules::EqEmu => eq_network_game::food::HUNGRY,
+            MoveRules::Takp => eq_network_game::food::TAKP_HUNGRY,
+        };
         Self {
-            acts: Acts::Moves,
+            acts: Acts::Items,
             rules,
-            ..Self::new(eq_network_game::food::AutoEat::default())
+            meals: meals::Meals::new(auto_eat, hungry),
+            ..Self::new(auto_eat)
         }
     }
 
@@ -408,7 +413,7 @@ impl Feature for Belongings {
     fn capabilities(&self) -> Vec<crate::world::Capability> {
         use crate::world::Capability;
         match self.acts {
-            Acts::Moves => vec![Capability::Inventory],
+            Acts::Items => vec![Capability::Inventory],
             Acts::Everything => vec![Capability::Inventory, Capability::Trading],
         }
     }
@@ -474,7 +479,12 @@ impl Feature for Belongings {
 
     fn owns(&self, command: &ClientCommand) -> bool {
         match self.acts {
-            Acts::Moves => matches!(command, ClientCommand::MoveInventory(_)),
+            Acts::Items => matches!(
+                command,
+                ClientCommand::MoveInventory(_)
+                    | ClientCommand::Consume { .. }
+                    | ClientCommand::AutoEat { .. }
+            ),
             Acts::Everything => matches!(
                 command,
                 ClientCommand::MoveInventory(_)
@@ -566,9 +576,7 @@ impl Feature for Belongings {
             Message::Event(WorldEvent::Death(death)) if world.is_player(death.spawn_id) => {
                 self.trades.clear();
             }
-            Message::Event(WorldEvent::Nourishment(nourishment))
-                if self.acts == Acts::Everything =>
-            {
+            Message::Event(WorldEvent::Nourishment(nourishment)) => {
                 self.meals.nourished(*nourishment, world, out)?;
             }
             // The window closed: what the trade slots held was handed over, or
@@ -830,7 +838,8 @@ mod tests {
     /// Admitted player 7 on TAKP, carrying a ration (22) and another item
     /// (23).
     fn admitted_on_takp() -> (Belongings, World) {
-        let mut belongings = Belongings::moving(MoveRules::Takp);
+        let mut belongings =
+            Belongings::items(MoveRules::Takp, eq_network_game::food::AutoEat::default());
         let mut world = World::new(5);
         let mut ration = item(22);
         ration.rules.item_type = 14;
@@ -850,14 +859,14 @@ mod tests {
     }
 
     #[test]
-    fn on_takp_items_move_one_at_a_time_and_nothing_else_is_offered() {
-        use eq_network_game::food::{AutoEat, Nourishment};
+    fn on_takp_items_move_one_at_a_time_and_coins_and_merchants_wait() {
+        use eq_network_game::food::AutoEat;
         let (mut belongings, mut world) = admitted_on_takp();
         assert_eq!(
             belongings.capabilities(),
             [crate::world::Capability::Inventory]
         );
-        for command in [
+        let eating = [
             ClientCommand::AutoEat {
                 session_id: 5,
                 auto_eat: AutoEat::Anything,
@@ -867,16 +876,18 @@ mod tests {
                 slot: InventorySlot(22),
                 created: Instant::now(),
             },
-            ClientCommand::Sell {
-                session_id: 5,
-                merchant_id: 9,
-                slot: 22,
-                quantity: 1,
-                created: Instant::now(),
-            },
-        ] {
-            assert!(!belongings.owns(&command), "{command:?}");
+        ];
+        for command in eating {
+            assert!(belongings.owns(&command), "{command:?}");
         }
+        let sale = ClientCommand::Sell {
+            session_id: 5,
+            merchant_id: 9,
+            slot: 22,
+            quantity: 1,
+            created: Instant::now(),
+        };
+        assert!(!belongings.owns(&sale));
         let request = |world: &World, from: i32, to: i32| {
             ClientCommand::MoveInventory(InventoryMove {
                 session_id: 5,
@@ -915,13 +926,28 @@ mod tests {
             Held::new(belongings.holds(&world, later)).conflict(&put_down),
             None
         );
-        // A hungry player carrying a ration does not eat.
-        let hungry = Message::Event(WorldEvent::Nourishment(Nourishment { food: 0, water: 0 }));
+    }
+
+    #[test]
+    fn on_takp_the_session_eats_below_3000_in_takps_numbers() {
+        use eq_network_game::food::{eqmac_consume, Meal, Nourishment};
+        let (mut belongings, mut world) = admitted_on_takp();
+        let report =
+            |food| Message::Event(WorldEvent::Nourishment(Nourishment { food, water: 6000 }));
+        // TAKP's own client waits until below 3000.
         let outcome = testing::run_on(&super::super::wire::EqMac, |out| {
-            belongings.observe(&hungry, &mut world, out)
+            belongings.observe(&report(3000), &mut world, out)
         });
         outcome.result.unwrap();
         assert!(outcome.sent.is_empty(), "sent {:?}", outcome.sent);
+        let outcome = testing::run_on(&super::super::wire::EqMac, |out| {
+            belongings.observe(&report(2999), &mut world, out)
+        });
+        outcome.result.unwrap();
+        assert_eq!(
+            outcome.sent,
+            [eqmac_consume(InventorySlot(22), Meal::Food, false).unwrap()]
+        );
     }
 
     #[test]

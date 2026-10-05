@@ -24,7 +24,7 @@ for their check on P99:
 | --- | --- | --- |
 | `EqEmu` | Titanium, for a stock `EQEmu` server | Moving, jumping and falling (and a fall's damage), targeting, combat, casting and the spellbook (deleting and moving its spells too), the inventory and bank, merchants and what they pay, handing items to NPCs and trading with players, looting, chat, camping, doors, items on the ground, zoning, abilities, `/who`, corpses and consent, pets, training, resurrection, reading, tradeskill containers, groups and raids, `/afk`, `/anonymous` and `/roleplay`, `/random`, `/emote` and `/assist`, the map and the time of day |
 | `Project1999` | Titanium with P99's V62 protection | As `EqEmu`, except what waits to be checked on P99: jumping and falling, fishing and binding wounds, deleting the spellbook's spells, what merchants pay, training, resurrection, reading, tradeskills, groups and raids, `/afk`, `/anonymous` and `/roleplay`, and `/random`, `/emote` and `/assist`. The map is left to the player, as P99's own client keeps it off |
-| `Takp` | Windows TAKP/`EQMac`, for a stock TAKP server | Character creation, entering the world, chat, moving, targeting, considering and attacking, zoning and camping, and moving items (not yet banking, coins, merchants or meals) |
+| `Takp` | Windows TAKP/`EQMac`, for a stock TAKP server | Character creation, entering the world, chat, moving, targeting, considering and attacking, zoning and camping, moving items, and eating and drinking (not yet banking, coins or merchants) |
 | `Quarm` | Windows TAKP/`EQMac` | Entering the world and chat; Quarm's features follow once they are checked on TAKP |
 
 The table follows [`servers.rs`](crates/eq-network/src/client/session/servers.rs),

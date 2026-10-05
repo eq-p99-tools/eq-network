@@ -544,6 +544,11 @@ pub fn updates(opcode: u16, body: &[u8]) -> Result<Vec<WorldEvent>> {
             ensure!(body.len() == 4, "invalid EQMac mana update");
             vec![WorldEvent::Mana(u32::from(short(body, 0)))]
         }
+        crate::food::EQMAC_STAMINA_OPCODE => {
+            vec![WorldEvent::Nourishment(crate::food::eqmac_nourishment(
+                body,
+            )?)]
+        }
         0xf540 => crate::world::appearance(body)?.into_iter().collect(),
         crate::combat::EQMAC_DAMAGE_OPCODE => {
             vec![WorldEvent::Damage(crate::combat::eqmac_damage(body)?)]

@@ -476,9 +476,9 @@ mod shared {
     }
 
     /// The inventory, whose items the player moves under the server type's
-    /// rules, with no coin moves, merchants or meals yet.
-    pub(super) fn moving_inventory(rules: MoveRules) -> Box<dyn Feature> {
-        Box::new(Belongings::moving(rules))
+    /// rules and eats and drinks from, with no coin moves or merchants yet.
+    pub(super) fn item_inventory(rules: MoveRules, setup: &Setup<'_>) -> Box<dyn Feature> {
+        Box::new(Belongings::items(rules, setup.auto_eat))
     }
 
     /// Moving, with or without the jumps and falls the server takes.
@@ -932,11 +932,11 @@ impl ServerType for Takp {
         offer(shared::character())
     }
 
-    /// What TAKP's item packets say the player holds, and item moves under
-    /// TAKP's rules, which disconnect a player whose move they refuse.
-    /// Coins, merchants and meals wait.
-    fn inventory(&self, _setup: &Setup<'_>) -> Provided {
-        offer(shared::moving_inventory(MoveRules::Takp))
+    /// What TAKP's item packets say the player holds, item moves under
+    /// TAKP's rules, and eating and drinking when TAKP's own client would.
+    /// Coins and merchants wait.
+    fn inventory(&self, setup: &Setup<'_>) -> Provided {
+        offer(shared::item_inventory(MoveRules::Takp, setup))
     }
 
     fn entities(&self, _setup: &Setup<'_>) -> Provided {

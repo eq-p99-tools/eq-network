@@ -334,6 +334,16 @@ mod tests {
                 ..
             }]
         ));
+        // How fed and watered TAKP says the player is.
+        assert!(matches!(
+            eqmac(0x5741, &[0xb8, 0x0b, 0x70, 0x17, 0])[..],
+            [Message::Event(WorldEvent::Nourishment(
+                crate::food::Nourishment {
+                    food: 3000,
+                    water: 6000
+                }
+            ))]
+        ));
         assert!(eqmac(0xffff, &[]).is_empty());
     }
 }
