@@ -95,12 +95,19 @@ fn tell_coins(world: &World, purse: bool, out: &mut Out<'_, '_>) -> Result<()> {
 }
 
 /// Follows what a message says about the coins; true when the purse changed
-/// without the host hearing it (loot coins, a purchase), false when only
+/// without the host hearing it (loot coins, a purchase, coins TAKP added),
+/// false when only
 /// coins elsewhere changed, None when nothing did. A money update replaces
 /// the purse, and the host hears it as it is.
 fn coins_news(message: &Message, wallet: &mut Wallet) -> Option<bool> {
-    let Message::Event(event) = message else {
-        return None;
+    let event = match message {
+        Message::Event(event) => event,
+        // What the server added to the purse, as TAKP announces it.
+        Message::PurseAdded(coins) => {
+            wallet.add_to_purse(*coins);
+            return Some(true);
+        }
+        _ => return None,
     };
     match event {
         WorldEvent::Coins(coins) => {
@@ -1186,6 +1193,31 @@ mod tests {
         });
         assert!(update.events.is_empty());
         assert_eq!(world.coins.purse, Some(Coins::default()));
+    }
+
+    #[test]
+    fn coins_takp_adds_to_the_purse_are_told_as_the_purse_they_make() {
+        let (mut belongings, mut world) = admitted();
+        let purse = Message::Event(WorldEvent::Coins(Coins {
+            gold: 2,
+            ..Coins::default()
+        }));
+        testing::run(|out| belongings.observe(&purse, &mut world, out))
+            .result
+            .unwrap();
+        let added = Message::PurseAdded(Coins {
+            gold: 5,
+            ..Coins::default()
+        });
+        let outcome = testing::run(|out| belongings.observe(&added, &mut world, out));
+        outcome.result.unwrap();
+        assert!(matches!(
+            outcome.events[..],
+            [
+                ClientEvent::World(WorldEvent::Coins(Coins { gold: 7, .. })),
+                ClientEvent::World(WorldEvent::CoinsElsewhere { .. })
+            ]
+        ));
     }
 
     #[test]

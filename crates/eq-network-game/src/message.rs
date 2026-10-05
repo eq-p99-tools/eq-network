@@ -14,6 +14,10 @@ const PROFILE_OPCODE: u16 = 0x75df;
 pub enum Message {
     /// News the host hears about too.
     Event(WorldEvent),
+    /// Coins the server added to the player's purse without saying what the
+    /// purse holds, as `EQMac`'s money notices do one kind at a time; the
+    /// feature keeping the purse adds them, and the host hears the purse.
+    PurseAdded(crate::world::Coins),
     /// The destinations the zone numbered for its zone lines.
     ZonePoints(zoning::ZonePoints),
     /// The server's offer to move the player, to another zone or within this one.
@@ -159,6 +163,8 @@ pub fn eqmac(opcode: u16, body: &[u8]) -> Vec<Message> {
             Message::ZonePoints,
         )],
         crate::quarm::ZONE_PLAYER_PROFILE => eqmac_profile(body),
+        crate::money::EQMAC_PURSE_OPCODE => vec![crate::money::eqmac_purse_addition(body)
+            .map_or_else(|error| unreadable(Part::World, &error), Message::PurseAdded)],
         crate::combat::EQMAC_CONSIDER_OPCODE => {
             vec![crate::combat::eqmac_consideration(body).map_or_else(
                 |error| unreadable(Part::World, &error),
@@ -333,6 +339,24 @@ mod tests {
             }]
         ));
         assert!(eqmac(0xffff, &[]).is_empty());
+    }
+
+    #[test]
+    fn takps_money_notice_adds_to_the_purse_and_names_no_one_else() {
+        let mut notice = [0, 0, 2, 0, 0, 0, 0, 0];
+        notice[4..].copy_from_slice(&5i32.to_le_bytes());
+        assert!(matches!(
+            eqmac(crate::money::EQMAC_PURSE_OPCODE, &notice)[..],
+            [Message::PurseAdded(crate::world::Coins { gold: 5, .. })]
+        ));
+        notice[0] = 7;
+        assert!(matches!(
+            eqmac(crate::money::EQMAC_PURSE_OPCODE, &notice)[..],
+            [Message::Unreadable {
+                part: Part::World,
+                ..
+            }]
+        ));
     }
 
     #[test]

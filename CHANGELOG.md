@@ -7,6 +7,9 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- `Message` gains `PurseAdded`: coins the server added to the player's
+  purse without saying what the purse holds, as TAKP's money notices do.
+  The feature keeping the purse applies it, and a host hears the purse.
 - `WorldEvent::HitPoints` says which values leave out the HP equipped items
   add with `items: ItemHitPoints`, in place of `without_items`. Titanium's
   own update leaves them out of both (`LeftOut`). `EQMac`'s, as TAKP sends
@@ -68,9 +71,13 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   (`money::eqmac_coins`, `WorldEvent::Coins`) and those on the cursor and
   in the bank (`money::eqmac_elsewhere`, `WorldEvent::CoinsElsewhere`),
   signed 32-bit counts where a negative one is refused. `EQMac` has no
-  shared bank. They reach a host through the inventory feature, once TAKP
-  offers it. TAKP's later purse changes (its per-coin additions, loot and
-  merchants) come with those features.
+  shared bank. TAKP's money notice (`OP_TradeMoneyUpdate` from trader 0,
+  `money::eqmac_purse_addition`) says what it added to the purse, one kind
+  at a time; the session adds it (`Message::PurseAdded`) and tells the
+  purse it makes. TAKP never announces what it takes, and a notice naming
+  another trader is refused. All of it reaches a host through the
+  inventory feature, once TAKP offers it; loot coins and merchants come
+  with those features.
 - The world's damage to the player (`Capability::EnvironmentalDamage`,
   `EqEmu` only, and there falls alone): `GameCommand::EnvironmentalDamage`
   reports the damage a host worked out, by its `hazards::Hazard` (falling,

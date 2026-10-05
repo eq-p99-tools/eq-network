@@ -317,6 +317,43 @@ pub fn titanium_elsewhere(profile: &[u8]) -> Result<(Coins, Coins)> {
     Ok((coins(4444), coins(13136)))
 }
 
+/// `EQMac`'s `OP_TradeMoneyUpdate`, which TAKP sends only to say what it
+/// added to the player's purse (`utils/patches/patch_Mac.conf` lists 0x413d,
+/// its bytes swapped).
+pub const EQMAC_PURSE_OPCODE: u16 = 0x3d41;
+
+/// Coins of one kind TAKP added to the player's purse
+/// (`TradeMoneyUpdate_Struct`, 8 bytes: the trader, the kind and the amount
+/// added), as `Client::SendClientMoneyUpdate` sends them from
+/// `Client::AddMoneyToPP`, one per kind: always trader 0, kind 3 for
+/// platinum down to 0 for copper. A trade partner's coins travel in
+/// `OP_TradeCoins`, so another trader is refused rather than guessed at.
+/// TAKP never announces coins it takes.
+///
+/// # Errors
+/// Rejects another length, a trader other than 0, an unknown kind and a
+/// negative amount.
+pub fn eqmac_purse_addition(body: &[u8]) -> Result<Coins> {
+    ensure!(body.len() == 8, "invalid EQMac money update length");
+    let trader = u16::from_le_bytes([body[0], body[1]]);
+    ensure!(
+        trader == 0,
+        "EQMac money update names trader {trader}, not the player's purse"
+    );
+    let coin = match u16::from_le_bytes([body[2], body[3]]) {
+        3 => Coin::Platinum,
+        2 => Coin::Gold,
+        1 => Coin::Silver,
+        0 => Coin::Copper,
+        kind => anyhow::bail!("unknown EQMac coin kind {kind}"),
+    };
+    let amount = u32::try_from(word(body, 4).cast_signed())
+        .map_err(|_| anyhow::anyhow!("negative EQMac money update"))?;
+    let mut coins = Coins::default();
+    *coins.of_mut(coin) = amount;
+    Ok(coins)
+}
+
 /// The coins the player carries, from `EQMac`'s unpacked profile: four
 /// signed 32-bit counts, platinum first, at 2924 (TAKP
 /// `common/patches/mac_structs.h` `PlayerProfile_Struct`).
@@ -388,6 +425,38 @@ mod tests {
         profile[2936..2940].copy_from_slice(&(-1i32).to_le_bytes());
         assert!(eqmac_coins(&profile).is_err());
         assert!(eqmac_elsewhere(&profile[1..]).is_err());
+    }
+
+    #[test]
+    fn takp_says_what_it_added_to_the_purse_one_kind_at_a_time() {
+        let notice = |trader: u16, kind: u16, amount: i32| {
+            let mut body = [0; 8];
+            body[..2].copy_from_slice(&trader.to_le_bytes());
+            body[2..4].copy_from_slice(&kind.to_le_bytes());
+            body[4..].copy_from_slice(&amount.to_le_bytes());
+            body
+        };
+        let added = |coin: Coin, amount| {
+            let mut coins = Coins::default();
+            *coins.of_mut(coin) = amount;
+            coins
+        };
+        for (kind, coin) in [
+            (3, Coin::Platinum),
+            (2, Coin::Gold),
+            (1, Coin::Silver),
+            (0, Coin::Copper),
+        ] {
+            assert_eq!(
+                eqmac_purse_addition(&notice(0, kind, 12)).unwrap(),
+                added(coin, 12)
+            );
+        }
+        // Another trader, an unknown kind, a negative amount, another length.
+        assert!(eqmac_purse_addition(&notice(7, 3, 12)).is_err());
+        assert!(eqmac_purse_addition(&notice(0, 4, 12)).is_err());
+        assert!(eqmac_purse_addition(&notice(0, 3, -1)).is_err());
+        assert!(eqmac_purse_addition(&notice(0, 3, 12)[..7]).is_err());
     }
 
     #[test]
