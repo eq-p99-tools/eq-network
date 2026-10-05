@@ -36,6 +36,13 @@ impl Posture {
 /// refused, and each of those names it.
 #[derive(Clone, Debug, PartialEq)]
 pub enum GameCommand {
+    /// Play on one world of the login server's current list.
+    SelectServer {
+        /// Identity supplied with the list.
+        selection_id: u64,
+        /// The world's place in the list, from zero.
+        index: usize,
+    },
     /// Enter one occupied slot from the current world-server character list.
     SelectCharacter {
         /// Identity supplied with the character list.
@@ -604,7 +611,10 @@ impl GameCommand {
     #[must_use]
     pub const fn session_id(&self) -> Option<u64> {
         match self {
-            Self::SelectCharacter { .. } | Self::CreateCharacter { .. } | Self::SendChat(_) => None,
+            Self::SelectServer { .. }
+            | Self::SelectCharacter { .. }
+            | Self::CreateCharacter { .. }
+            | Self::SendChat(_) => None,
             Self::UseItem(request) => Some(request.session_id),
             Self::MoveInventory(request) => Some(request.session_id),
             Self::Move(request) => Some(request.session_id),
@@ -680,7 +690,9 @@ impl GameCommand {
     pub const fn capability(&self) -> Option<crate::world::Capability> {
         use crate::world::Capability;
         Some(match self {
-            Self::SelectCharacter { .. } | Self::CreateCharacter { .. } => return None,
+            Self::SelectServer { .. }
+            | Self::SelectCharacter { .. }
+            | Self::CreateCharacter { .. } => return None,
             Self::ScribeSpell { .. } | Self::ForgetSpell { .. } | Self::MemorizeSpell { .. } => {
                 Capability::Spellbook
             }
@@ -759,7 +771,8 @@ impl GameCommand {
     #[must_use]
     pub const fn created(&self) -> Option<std::time::Instant> {
         match self {
-            Self::SelectCharacter { .. }
+            Self::SelectServer { .. }
+            | Self::SelectCharacter { .. }
             | Self::CreateCharacter { .. }
             | Self::SendChat(_)
             | Self::InspectItem { .. }
@@ -930,6 +943,9 @@ pub fn encode(
     character: &str,
 ) -> Result<EncodedCommand> {
     match command {
+        GameCommand::SelectServer { .. } => {
+            anyhow::bail!("choosing a world requires the login controller")
+        }
         GameCommand::SelectCharacter { .. } | GameCommand::CreateCharacter { .. } => {
             anyhow::bail!("character selection requires the world controller")
         }

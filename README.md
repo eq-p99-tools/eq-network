@@ -8,7 +8,8 @@ client,
 [`p99-logger-client`](https://github.com/rm-you/p99-logger-client), and the
 native mobile client.
 
-The high-level client logs in, selects a world, lists, creates and enters
+The high-level client logs in, plays on the configured world or the one the
+player chooses from the login server's list, lists, creates and enters
 characters, and runs a zone session: it reports typed world state
 (`WorldEvent`, in a `ClientEvent::World`) and carries out typed commands
 (`ClientCommand`), reconnects, and shuts down cooperatively. Chat arrives
@@ -46,7 +47,12 @@ can use the lower-level crates without pulling in the character-session engine.
 
 A consumer that only listens runs the client with `Client::run`; one that
 plays passes a command queue to `Client::run_with_commands`, whose commands the
-session takes once the zone admits the player.
+session takes once the zone admits the player. Before that, the queue carries
+the player's choices from the lists the session sends: the world from the login
+server's (`WorldEvent::ServerSelection`, answered with
+`ClientCommand::SelectServer`) when the configuration names none, and the
+character from the world's (`WorldEvent::CharacterSelection`, answered with
+`ClientCommand::SelectCharacter`) when it names none.
 
 ```rust,no_run
 use eq_network::client::{
