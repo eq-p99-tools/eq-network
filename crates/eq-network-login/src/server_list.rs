@@ -5,7 +5,8 @@ use crate::login::AppOp;
 pub struct ServerEntry {
     /// World server address as advertised by the login server.
     pub ip: String,
-    /// Stable list identifier used by selection requests.
+    /// The world's list type flags, as `EQEmu`'s login server writes them:
+    /// 1 standard, 8 preferred and 16 legends.
     pub list_id: u32,
     /// Runtime world identifier.
     pub runtime_id: u32,

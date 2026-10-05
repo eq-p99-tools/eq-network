@@ -345,6 +345,175 @@ fn rejected_credentials_close_login_and_never_enter_the_retry_loop() {
     }
 }
 
+/// The next packet from the client that starts with `prefix`, skipping
+/// acknowledgements, statistics and retransmissions.
+fn packet_starting(socket: &UdpSocket, address: SocketAddr, prefix: &[u8]) -> Vec<u8> {
+    loop {
+        let (packet, sender) = receive(socket);
+        assert_eq!(sender, address);
+        if packet.starts_with(prefix) {
+            return packet;
+        }
+    }
+}
+
+/// A login reply that accepts a synthetic account with a synthetic key.
+fn accepted_reply() -> Vec<u8> {
+    use eq_network_login::crypto::{des_encrypt, DesKeyIv};
+    let mut clear = vec![0; 32];
+    clear[0] = 1;
+    clear[8..12].copy_from_slice(&12345u32.to_le_bytes());
+    clear[12..22].copy_from_slice(b"EXAMPLEKEY");
+    let mut body = vec![0; 10];
+    body[0] = 3;
+    body[5] = 2;
+    body.extend(des_encrypt(&clear, DesKeyIv::default()));
+    body
+}
+
+/// A Titanium server list as `EQEmu`'s login server writes it: the address,
+/// type flags, runtime id, name, two codes, status and player count.
+fn server_list(worlds: &[(&str, u32, u32, u32, u32)]) -> Vec<u8> {
+    let mut body = vec![0; 16];
+    body.extend(u32::try_from(worlds.len()).unwrap().to_le_bytes());
+    for (name, flags, runtime_id, status, players) in worlds {
+        body.extend(b"127.0.0.1\0");
+        body.extend(flags.to_le_bytes());
+        body.extend(runtime_id.to_le_bytes());
+        body.extend(name.as_bytes());
+        body.extend(b"\0us\0en\0");
+        body.extend(status.to_le_bytes());
+        body.extend(players.to_le_bytes());
+    }
+    body
+}
+
+/// A Titanium play response: whether the world takes the player, and the
+/// login string id that says why not.
+fn play_response(accepted: bool, message: u32) -> Vec<u8> {
+    let mut body = vec![0; 20];
+    body[10] = u8::from(accepted);
+    body[11..15].copy_from_slice(&message.to_le_bytes());
+    body
+}
+
+/// A login server that lists three worlds, refuses the first one the
+/// player asks for as unavailable, and lets them play on the next.
+fn serve_a_refusal_then_a_world(socket: &UdpSocket) {
+    let (address, id) = negotiate(socket);
+    socket
+        .send_to(&application_packet(0, 0x16, &[]), address)
+        .unwrap();
+    packet_starting(socket, address, &[0, 9, 0, 1, 2, 0]);
+    socket
+        .send_to(&application_packet(1, 0x17, &accepted_reply()), address)
+        .unwrap();
+    packet_starting(socket, address, &[0, 9, 0, 2, 4, 0]);
+    let worlds = server_list(&[
+        ("Example Down", 1, 11, 1, 0),
+        ("Example Busy", 8, 22, 0, 40),
+        ("Example Up", 1, 33, 0, 7),
+    ]);
+    socket
+        .send_to(&application_packet(2, 0x18, &worlds), address)
+        .unwrap();
+    // The player's choice, by the world's runtime id; the login server
+    // refuses it as unavailable, and the list stays up.
+    let play = packet_starting(socket, address, &[0, 9, 0, 3, 0x0d, 0]);
+    assert_eq!(play[16..20], 22u32.to_le_bytes());
+    socket
+        .send_to(
+            &application_packet(3, 0x21, &play_response(false, 326)),
+            address,
+        )
+        .unwrap();
+    let play = packet_starting(socket, address, &[0, 9, 0, 4, 0x0d, 0]);
+    assert_eq!(play[16..20], 33u32.to_le_bytes());
+    socket
+        .send_to(
+            &application_packet(4, 0x21, &play_response(true, 101)),
+            address,
+        )
+        .unwrap();
+    assert_eq!(
+        packet_starting(socket, address, &[0, 5]),
+        closed_packet(&id)
+    );
+}
+
+#[test]
+fn a_player_chooses_the_world_from_the_login_servers_list() {
+    use eq_network::world::WorldEvent;
+    use eq_network_game::servers::{ServerChoice, ServerRefusal, ServerStatus};
+    let socket = peer();
+    let mut settings = config(socket.local_addr().unwrap().port());
+    settings.server.clear();
+    let engine = client(settings);
+    let cancel = CancellationToken::default();
+    let worker_cancel = cancel.clone();
+    let (done, result) = mpsc::channel();
+    let worker = thread::spawn(move || {
+        let (choose, commands) = mpsc::channel();
+        let mut lists = Vec::new();
+        let mut refusals = Vec::new();
+        let outcome =
+            engine.run_with_commands(&worker_cancel, RunOptions::default(), &commands, |event| {
+                match event {
+                    ClientEvent::World(WorldEvent::ServerSelection {
+                        selection_id,
+                        servers,
+                    }) => {
+                        lists.push(servers);
+                        // The world that is down can't be chosen, so only the
+                        // second choice reaches the login server.
+                        for index in [0, 1] {
+                            choose.send(ClientCommand::SelectServer {
+                                selection_id,
+                                index,
+                            })?;
+                        }
+                    }
+                    ClientEvent::World(WorldEvent::ServerRefused {
+                        selection_id,
+                        refusal,
+                    }) => {
+                        refusals.push(refusal);
+                        choose.send(ClientCommand::SelectServer {
+                            selection_id,
+                            index: 2,
+                        })?;
+                    }
+                    ClientEvent::Progress(ConnectionStage::ConnectingWorld) => {
+                        worker_cancel.cancel();
+                    }
+                    _ => (),
+                }
+                Ok(())
+            });
+        done.send((outcome, lists, refusals)).unwrap();
+    });
+    serve_a_refusal_then_a_world(&socket);
+    let (outcome, lists, refusals) = result.recv_timeout(Duration::from_secs(3)).unwrap();
+    cancel.cancel();
+    worker.join().unwrap();
+    outcome.unwrap();
+    let world = |name: &str, status, players, preferred| ServerChoice {
+        name: name.into(),
+        status,
+        players: Some(players),
+        preferred,
+    };
+    assert_eq!(
+        lists,
+        [vec![
+            world("Example Down", ServerStatus::Down, 0, false),
+            world("Example Busy", ServerStatus::Up, 40, true),
+            world("Example Up", ServerStatus::Up, 7, false),
+        ]]
+    );
+    assert_eq!(refusals, [ServerRefusal::Message(326)]);
+}
+
 #[test]
 fn a_front_end_can_tell_what_the_zone_session_lets_the_player_do() {
     use eq_network::world::{titanium_player, Capability, WorldEvent};

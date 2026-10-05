@@ -544,7 +544,10 @@ mod tests {
     };
 
     /// How many kinds of command there are.
-    const KINDS: usize = 68;
+    const KINDS: usize = 69;
+
+    /// The kinds the login and world servers take, before any zone session.
+    const BEFORE_ZONES: [usize; 3] = [0, 1, 68];
 
     /// Which kind of command this is. A new command is a compile error here
     /// until it has a number, and then a test failure until the list below
@@ -620,6 +623,8 @@ mod tests {
             ClientCommand::RaidRemove { .. } => 65,
             ClientCommand::EnvironmentalDamage { .. } => 66,
             ClientCommand::BledOut { .. } => 67,
+            // The login server's, before the world.
+            ClientCommand::SelectServer { .. } => 68,
         }
     }
 
@@ -944,7 +949,12 @@ mod tests {
         let commands = zone_commands();
         let kinds: std::collections::BTreeSet<_> = commands.iter().map(kind).collect();
         assert_eq!(kinds.len(), commands.len(), "one of each");
-        assert_eq!(kinds, (2..KINDS).collect());
+        assert_eq!(
+            kinds,
+            (0..KINDS)
+                .filter(|kind| !BEFORE_ZONES.contains(kind))
+                .collect()
+        );
     }
 
     #[test]
@@ -989,12 +999,19 @@ mod tests {
                 "{command:?} needs {needed:?}, which no server type's owner offers"
             );
         }
-        let selection = ClientCommand::SelectCharacter {
-            selection_id: 1,
-            slot: 0,
-        };
-        for features in &servers {
-            assert!(!features.0.iter().any(|feature| feature.owns(&selection)));
+        for selection in [
+            ClientCommand::SelectServer {
+                selection_id: 1,
+                index: 0,
+            },
+            ClientCommand::SelectCharacter {
+                selection_id: 1,
+                slot: 0,
+            },
+        ] {
+            for features in &servers {
+                assert!(!features.0.iter().any(|feature| feature.owns(&selection)));
+            }
         }
     }
 
