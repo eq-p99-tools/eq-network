@@ -48,6 +48,14 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Inspecting linked items on TAKP: `GameCommand::InspectItem` on the
+  `EQMac` wire sends `items::eqmac_request`'s 66-byte request
+  (`OP_ItemLinkResponse`: the item as 16 bits from the link's six decimal
+  digits, then 64 bytes for a name TAKP does not read), refusing say links
+  (IDs above 0x8000), for which TAKP has the player say the link's phrase.
+  The answer, the item's 360-byte record, is `WorldEvent::ItemDetails`
+  (`items::eqmac_response`).
+
 - TAKP's inventory: `inventory::decode_eqmac` reads `EQMac`'s item packets
   as TAKP sends them into the same `InventoryUpdate`s as Titanium's: the
   full inventory (`OP_CharInventory`: 360-byte item records, compressed

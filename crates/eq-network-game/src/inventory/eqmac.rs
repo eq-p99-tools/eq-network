@@ -146,6 +146,13 @@ fn inventory(body: &[u8]) -> Result<Vec<InventoryItem>> {
     Ok(items)
 }
 
+/// What an item record says about the item itself, as a linked item's
+/// inspection answers with it.
+pub(crate) fn details(body: &[u8]) -> Result<ItemDetails> {
+    ensure!(body.len() == RECORD, "invalid EQMac item length");
+    definition(&Record(body))
+}
+
 /// One item record, as a packet of its own carries it.
 fn single(body: &[u8]) -> Result<InventoryItem> {
     ensure!(body.len() == RECORD, "invalid EQMac item length");

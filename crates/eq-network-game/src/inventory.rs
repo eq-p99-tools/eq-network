@@ -10,6 +10,7 @@ pub use activation::{
 };
 pub use banking::banker_in_range;
 pub use eqmac::decode as decode_eqmac;
+pub(crate) use eqmac::details as eqmac_details;
 pub use titanium::decode;
 pub(crate) use titanium::{parse as parse_items, parse_at};
 
