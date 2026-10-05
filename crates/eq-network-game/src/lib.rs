@@ -61,6 +61,8 @@ pub mod quarm;
 pub mod raid;
 /// Being resurrected: the offer and the player's answer.
 pub mod resurrection;
+/// The worlds a login server lists, and the player's choice among them.
+pub mod servers;
 /// Rolling dice, emoting and assisting.
 pub mod socials;
 /// Server-driven spellbook and casting notifications.

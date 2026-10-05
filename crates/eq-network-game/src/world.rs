@@ -494,6 +494,23 @@ pub enum WorldEvent {
         /// For example `P1999Green`.
         short_name: String,
     },
+    /// The login server's worlds, for the player to choose one to play on;
+    /// none has been entered yet. Only a login with no world configured
+    /// lists them.
+    ServerSelection {
+        /// Fresh identity invalidates choices queued for an older list.
+        selection_id: u64,
+        /// The worlds in the login server's order.
+        servers: Vec<crate::servers::ServerChoice>,
+    },
+    /// The login server refused the world the player chose from the list;
+    /// the list stays up for another choice.
+    ServerRefused {
+        /// The list the refused choice was made from.
+        selection_id: u64,
+        /// Why, in the login server's terms.
+        refusal: crate::servers::ServerRefusal,
+    },
     /// Available characters for this world connection; no zone has been entered.
     CharacterSelection {
         /// Fresh identity invalidates choices queued for an older connection.

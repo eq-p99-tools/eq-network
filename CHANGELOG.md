@@ -7,6 +7,14 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- A configured world that TAKP's list shows down or locked ends the login
+  at once, as one on a Titanium list always has, instead of asking the
+  login server for it.
+
+- `Client::new` checks that a TAKP account and password fit `EQMac`'s
+  19-byte login fields, as it already did for Quarm, instead of the login
+  failing on them later.
+
 - `WorldEvent::Entered` gains `choices`: what the session leaves to the
   player, none of it among `capabilities`. A server type may leave any
   feature it provides to the player where its own client keeps it off; a
@@ -19,6 +27,24 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   not, so `DeletingSpells` stays off on P99.
 
 ### Added
+
+- The login server's list, for the player to choose a world from. When no
+  world is configured (`ClientConfig::server` empty, which needs a command
+  queue), both client generations' logins send `WorldEvent::ServerSelection`
+  with each world's name, whether it is up, down or locked, its players
+  where the list gives them, and whether the list marks it preferred
+  (`servers::ServerChoice`), then play on the world the player picks with
+  `ClientCommand::SelectServer`. A world that is down or locked can't be
+  picked. A world the login server refuses comes back as
+  `WorldEvent::ServerRefused`, with Titanium's login string id or TAKP's
+  own words (`servers::ServerRefusal`), and the list stays up for another
+  choice. The login's 45-second limit pauses while the player chooses, as
+  the world's does at the character list, and records name the world
+  chosen. TAKP's list is read for each world's status and players as
+  EQMacEmu's login server writes them (`ServerStatus::eqmac`), inferred
+  until checked on a TAKP server. `ServerSelection`, `ServerRefused` and
+  `SelectServer` are new variants of the exhaustive `WorldEvent` and
+  `GameCommand`.
 
 - Targeting, considering and attacking on TAKP (`Capability::Targeting`
   and `Capability::Combat`), in `EQMac`'s own packets: the target as a

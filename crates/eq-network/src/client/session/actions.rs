@@ -115,7 +115,8 @@ pub(super) fn needs(command: &ClientCommand) -> &'static [Resource] {
         // A combine takes the container's contents and puts what was made
         // on the cursor.
         | ClientCommand::Combine { .. } => &[Inventory],
-        ClientCommand::SelectCharacter { .. }
+        ClientCommand::SelectServer { .. }
+        | ClientCommand::SelectCharacter { .. }
         | ClientCommand::CreateCharacter { .. }
         | ClientCommand::ClickDoor { .. }
         | ClientCommand::CrossZoneLine { .. }
@@ -317,7 +318,8 @@ fn refusal(command: &ClientCommand, reason: &str) -> Option<WorldEvent> {
         | ClientCommand::SwapSpell { .. } => {
             WorldEvent::BookAction(BookActionStatus::Rejected(reason.into()))
         }
-        ClientCommand::SelectCharacter { .. }
+        ClientCommand::SelectServer { .. }
+        | ClientCommand::SelectCharacter { .. }
         | ClientCommand::CreateCharacter { .. }
         | ClientCommand::SetPosture { .. }
         | ClientCommand::SendChat(_)
