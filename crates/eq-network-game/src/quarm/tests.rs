@@ -302,15 +302,32 @@ fn the_profile_says_the_buffs_the_book_and_each_gems_reuse_left() {
                 && book.slots()[0] == Some(73)
     ));
     assert!(decoded_spells(&data[1..]).is_err());
-    // The synthetic profile, as the zone sends it: no buffs, an empty book
-    // and no gem waiting.
+    // Twelve gold carried, two platinum on the cursor and a copper banked.
+    data[2928..2932].copy_from_slice(&12i32.to_le_bytes());
+    data[2956..2960].copy_from_slice(&2i32.to_le_bytes());
+    data[2952..2956].copy_from_slice(&1i32.to_le_bytes());
+    assert!(matches!(
+        &decoded_coins(&data).unwrap()[..],
+        [
+            WorldEvent::Coins(carried),
+            WorldEvent::CoinsElsewhere { cursor, bank, .. },
+        ] if carried.gold == 12 && cursor.platinum == 2 && bank.copper == 1
+    ));
+    // The synthetic profile, as the zone sends it: no buffs, an empty book,
+    // no gem waiting and no coins.
     let wire = hex::decode(PROFILE).unwrap();
     assert!(matches!(
         &eqmac(ZONE_PLAYER_PROFILE, &wire)[..],
         [
             Message::Event(WorldEvent::BuffSnapshot(buffs)),
             Message::Event(WorldEvent::SpellBook(book)),
-        ] if buffs.iter().all(Option::is_none) && book.slots().iter().all(Option::is_none)
+            Message::Event(WorldEvent::Coins(carried)),
+            Message::Event(WorldEvent::CoinsElsewhere { cursor, bank, .. }),
+        ] if buffs.iter().all(Option::is_none)
+            && book.slots().iter().all(Option::is_none)
+            && carried.is_empty()
+            && cursor.is_empty()
+            && bank.is_empty()
     ));
     assert_eq!(
         profile(&wire, "Example").unwrap().spell_refresh_ms,

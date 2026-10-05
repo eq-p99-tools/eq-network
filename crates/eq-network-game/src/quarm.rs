@@ -407,6 +407,29 @@ fn decoded_spells(data: &[u8]) -> Result<Vec<WorldEvent>> {
     ])
 }
 
+/// The player's coins from their profile: those they carry, and those on
+/// the cursor and in the bank.
+///
+/// # Errors
+/// Rejects malformed compression, unexpected layouts and negative counts.
+pub fn profile_coins(body: &[u8]) -> Result<Vec<WorldEvent>> {
+    decoded_coins(&unpack(body, true)?)
+}
+
+/// The coins in an unpacked profile.
+fn decoded_coins(data: &[u8]) -> Result<Vec<WorldEvent>> {
+    let (cursor, bank) = crate::money::eqmac_elsewhere(data)?;
+    Ok(vec![
+        WorldEvent::Coins(crate::money::eqmac_coins(data)?),
+        WorldEvent::CoinsElsewhere {
+            cursor,
+            bank,
+            given: crate::world::Coins::default(),
+            offered: crate::world::Coins::default(),
+        },
+    ])
+}
+
 /// The separate, uncompressed own-character zone-entry projection.
 #[derive(Clone, Debug)]
 pub struct OwnSpawn {

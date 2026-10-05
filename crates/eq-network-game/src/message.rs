@@ -173,10 +173,17 @@ pub fn eqmac(opcode: u16, body: &[u8]) -> Vec<Message> {
 }
 
 /// What the `EQMac` profile says beside what the admission reads of it: the
-/// player's buffs and spellbook.
+/// player's buffs and spellbook, and their coins.
 fn eqmac_profile(body: &[u8]) -> Vec<Message> {
-    crate::quarm::profile_spells(body).map_or_else(
-        |error| vec![unreadable(Part::Spells, &error)],
+    let mut messages = events(Part::Spells, crate::quarm::profile_spells(body));
+    messages.extend(events(Part::World, crate::quarm::profile_coins(body)));
+    messages
+}
+
+/// The events a reading gives, or why it could not be read.
+fn events(part: Part, read: anyhow::Result<Vec<WorldEvent>>) -> Vec<Message> {
+    read.map_or_else(
+        |error| vec![unreadable(part, &error)],
         |events| events.into_iter().map(Message::Event).collect(),
     )
 }
@@ -340,13 +347,19 @@ mod tests {
                 Message::Event(WorldEvent::Mana(120))
             ]
         ));
-        // A profile that cannot be read leaves the spells unknown.
+        // A profile that cannot be read leaves the spells and coins unknown.
         assert!(matches!(
             eqmac(crate::quarm::ZONE_PLAYER_PROFILE, &[0; 7])[..],
-            [Message::Unreadable {
-                part: Part::Spells,
-                ..
-            }]
+            [
+                Message::Unreadable {
+                    part: Part::Spells,
+                    ..
+                },
+                Message::Unreadable {
+                    part: Part::World,
+                    ..
+                }
+            ]
         ));
     }
 }

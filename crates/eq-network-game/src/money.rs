@@ -317,9 +317,78 @@ pub fn titanium_elsewhere(profile: &[u8]) -> Result<(Coins, Coins)> {
     Ok((coins(4444), coins(13136)))
 }
 
+/// The coins the player carries, from `EQMac`'s unpacked profile: four
+/// signed 32-bit counts, platinum first, at 2924 (TAKP
+/// `common/patches/mac_structs.h` `PlayerProfile_Struct`).
+///
+/// # Errors
+/// Rejects a profile of another size and a count below zero.
+pub fn eqmac_coins(profile: &[u8]) -> Result<Coins> {
+    eqmac_coins_at(profile, 2924)
+}
+
+/// The coins on the cursor and in the bank, from `EQMac`'s unpacked
+/// profile: the bank's at 2940 and the cursor's at 2956, laid out as the
+/// carried ones. `EQMac` has no shared bank.
+///
+/// # Errors
+/// Rejects a profile of another size and a count below zero.
+pub fn eqmac_elsewhere(profile: &[u8]) -> Result<(Coins, Coins)> {
+    Ok((
+        eqmac_coins_at(profile, 2956)?,
+        eqmac_coins_at(profile, 2940)?,
+    ))
+}
+
+/// Four signed counts, platinum first, from `start` in `EQMac`'s profile.
+fn eqmac_coins_at(profile: &[u8], start: usize) -> Result<Coins> {
+    ensure!(
+        profile.len() == crate::quarm::PROFILE_SIZE,
+        "unexpected EQMac profile layout"
+    );
+    let coin = |index: usize| {
+        u32::try_from(word(profile, start + index * 4).cast_signed())
+            .map_err(|_| anyhow::anyhow!("negative EQMac coin count"))
+    };
+    Ok(Coins {
+        platinum: coin(0)?,
+        gold: coin(1)?,
+        silver: coin(2)?,
+        copper: coin(3)?,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn eqmacs_profile_says_what_is_carried_on_the_cursor_and_in_the_bank() {
+        let mut profile = vec![0; crate::quarm::PROFILE_SIZE];
+        let mut put = |start: usize, counts: [i32; 4]| {
+            for (index, count) in counts.into_iter().enumerate() {
+                let at = start + index * 4;
+                profile[at..at + 4].copy_from_slice(&count.to_le_bytes());
+            }
+        };
+        put(2924, [1, 2, 3, 4]);
+        put(2940, [50, 0, 0, 9]);
+        put(2956, [0, 7, 0, 0]);
+        let coins = |platinum, gold, silver, copper| Coins {
+            platinum,
+            gold,
+            silver,
+            copper,
+        };
+        assert_eq!(eqmac_coins(&profile).unwrap(), coins(1, 2, 3, 4));
+        assert_eq!(
+            eqmac_elsewhere(&profile).unwrap(),
+            (coins(0, 7, 0, 0), coins(50, 0, 0, 9))
+        );
+        profile[2936..2940].copy_from_slice(&(-1i32).to_le_bytes());
+        assert!(eqmac_coins(&profile).is_err());
+        assert!(eqmac_elsewhere(&profile[1..]).is_err());
+    }
 
     #[test]
     fn a_move_is_five_signed_words_in_the_servers_numbering() {

@@ -64,6 +64,13 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   naming anyone, so the session names the player in them. A fade names no
   slot either (`buffs::UNKNOWN_SLOT`): a host finds the buff by its spell.
   The book reaches a host once TAKP offers the spellbook.
+- TAKP's coins from the profile: those the player carries
+  (`money::eqmac_coins`, `WorldEvent::Coins`) and those on the cursor and
+  in the bank (`money::eqmac_elsewhere`, `WorldEvent::CoinsElsewhere`),
+  signed 32-bit counts where a negative one is refused. `EQMac` has no
+  shared bank. They reach a host through the inventory feature, once TAKP
+  offers it. TAKP's later purse changes (its per-coin additions, loot and
+  merchants) come with those features.
 - The world's damage to the player (`Capability::EnvironmentalDamage`,
   `EqEmu` only, and there falls alone): `GameCommand::EnvironmentalDamage`
   reports the damage a host worked out, by its `hazards::Hazard` (falling,
