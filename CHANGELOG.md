@@ -18,6 +18,16 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   (`InventoryUpdate::Invalidated`) instead of removing what the slot holds
   now, and a purchase's echo releases only its own purchase.
 
+- An item move from anywhere but the cursor itself waits for a cast to
+  end, exactly as `EQEmu` and TAKP require: both disconnect a player who
+  makes one during a cast that is not a bard song
+  (`Client::Handle_OP_MoveItem`, "Inventory desync"). The session let the
+  numbers 30 to 39 through, a range in which a move can only name the
+  cursor, so no move it sends changes. Both servers let a bard move items
+  while singing, but the session cannot tell a song from a spell, so a
+  bard waits too. That the official client refuses such a move, rather
+  than interrupting the cast, is inferred.
+
 - `WorldEvent::HitPoints` says which values leave out the HP equipped items
   add with `items: ItemHitPoints`, in place of `without_items`. Titanium's
   own update leaves them out of both (`LeftOut`). `EQMac`'s, as TAKP sends
