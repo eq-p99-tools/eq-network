@@ -18,9 +18,9 @@ pub enum Message {
     ZonePoints(zoning::ZonePoints),
     /// The server's offer to move the player, to another zone or within this one.
     ZoneOffer(zoning::ZoneOffer),
-    /// The server's answer to a transfer request. It reads against the pending
-    /// request, so it stays as it arrived.
-    ZoneAnswer(Vec<u8>),
+    /// The server's answer to a transfer request, which the session reads
+    /// against the pending request.
+    ZoneAnswer(zoning::ZoneAnswer),
     /// The next zone's address.
     Handoff(Vec<u8>),
     /// The server logging the character out.
@@ -49,6 +49,8 @@ pub enum Part {
     ZonePoints,
     /// The server's offer to move the player.
     ZoneOffer,
+    /// The server's answer to a transfer request.
+    ZoneAnswer,
     /// Anything else in the world.
     World,
 }
@@ -60,6 +62,7 @@ impl fmt::Display for Part {
             Self::Inventory => "Inventory update",
             Self::ZonePoints => "Zone-point table",
             Self::ZoneOffer => "Zone transfer offer",
+            Self::ZoneAnswer => "Zone transfer answer",
             Self::World => "World update",
         })
     }
@@ -115,7 +118,10 @@ pub fn titanium(opcode: u16, body: &[u8]) -> Vec<Message> {
                 |book| Message::Event(WorldEvent::SpellBook(book)),
             )
         }
-        zoning::CHANGE_OPCODE => Message::ZoneAnswer(body.to_vec()),
+        zoning::CHANGE_OPCODE => zoning::ZoneAnswer::titanium(body).map_or_else(
+            |error| unreadable(Part::ZoneAnswer, &error),
+            Message::ZoneAnswer,
+        ),
         zoning::HANDOFF_OPCODE => Message::Handoff(body.to_vec()),
         LOGOUT_REPLY_OPCODE => Message::LoggedOut,
         _ => match inventory::decode(opcode, body) {
@@ -134,7 +140,8 @@ pub fn titanium(opcode: u16, body: &[u8]) -> Vec<Message> {
 
 /// What one `EQMac` zone packet says: the spawns and the player's news that
 /// [`crate::quarm::updates`] reads, the server logging the character out,
-/// and its request that the client move.
+/// its request that the client move, its answer to the client's request,
+/// and the zone's numbered destinations.
 #[must_use]
 pub fn eqmac(opcode: u16, body: &[u8]) -> Vec<Message> {
     match opcode {
@@ -142,6 +149,14 @@ pub fn eqmac(opcode: u16, body: &[u8]) -> Vec<Message> {
         crate::quarm::ZONE_CHANGE_REQUEST => vec![crate::quarm::zone_request(body).map_or_else(
             |error| unreadable(Part::ZoneOffer, &error),
             Message::ZoneOffer,
+        )],
+        crate::quarm::ZONE_CHANGE => vec![crate::quarm::zone_answer(body).map_or_else(
+            |error| unreadable(Part::ZoneAnswer, &error),
+            Message::ZoneAnswer,
+        )],
+        crate::quarm::ZONE_POINTS => vec![zoning::ZonePoints::decode_eqmac(body).map_or_else(
+            |error| unreadable(Part::ZonePoints, &error),
+            Message::ZonePoints,
         )],
         crate::combat::EQMAC_CONSIDER_OPCODE => {
             vec![crate::combat::eqmac_consideration(body).map_or_else(

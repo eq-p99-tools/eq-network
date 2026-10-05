@@ -229,16 +229,17 @@ impl Wire for EqMac {
         login::eqmac::login(config, stop, log)
     }
 
-    /// `EQMac`'s world sends no manifest and stays the same between zones.
+    /// `EQMac`'s world sends no manifest; between zones it names the
+    /// character in play rather than listing them all.
     fn world(
         &self,
         context: &CharacterSession<'_>,
         _assets: &Assets,
         ip: &str,
-        (world_only, _zoning): (bool, bool),
+        flags: (bool, bool),
         log: &mut Events<'_>,
     ) -> Result<Option<ZoneDestination>> {
-        world::eqmac::world(context, ip, world_only, log)
+        world::eqmac::world(context, ip, flags, log)
     }
 
     fn handoff(

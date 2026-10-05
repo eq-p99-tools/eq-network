@@ -297,7 +297,7 @@ impl World {
     /// # Errors
     /// Rejects a refusal without a transfer under way.
     pub(super) fn transfer_refused(&mut self, now: Instant) -> Result<()> {
-        self.lifecycle.finish(false)?;
+        self.lifecycle.finish(false, now)?;
         if !self.lifecycle.is_dead() {
             self.body.resume(now);
         }
@@ -405,6 +405,10 @@ pub(super) trait Feature {
     fn tick(&mut self, _now: Instant, _world: &mut World, _out: &mut Out<'_, '_>) -> Result<()> {
         Ok(())
     }
+
+    /// Hears that the zone's connection ended, which a feature may take as
+    /// the session's end, as a zone closing on a player who departs.
+    fn connection_ended(&mut self, _world: &mut World) {}
 
     /// Hears a message once the zone has admitted the player.
     ///
