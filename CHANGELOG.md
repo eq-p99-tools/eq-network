@@ -61,7 +61,8 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the whole compressed list (each item through the `EQMac` item reader, its
   price before the merchant's rate and no count), a place gone from the
   list, the purchase and sale echoes (a refused purchase echoed with
-  nothing bought, a sale's price in 16 bits) and the window's closing. The
+  nothing bought, a sale's echo pricing nothing, inferred) and the window's
+  closing; an open answer's rate that is not finite and above 0 is refused. The
   unknown bytes, prices and player IDs TAKP never reads go as 0, and the
   open request's rate as 1 (inferred).
 - Moving items on TAKP (`Capability::Inventory`, with no coins, merchants
