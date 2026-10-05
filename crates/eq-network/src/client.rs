@@ -180,7 +180,9 @@ pub struct ClientConfig {
     pub port: u16,
     /// Login credentials, redacted from diagnostics and zeroized on drop.
     pub credentials: Credentials,
-    /// World-server display name selected after login.
+    /// World-server display name selected after login; empty lists the
+    /// login server's worlds for the player to choose from, which needs a
+    /// command receiver.
     pub server: String,
     /// Character to enter automatically; empty requests interactive selection.
     pub character: String,
@@ -234,12 +236,14 @@ impl ClientConfig {
     }
 
     fn validate(&self) -> Result<()> {
-        for value in [&self.host, &self.server] {
-            ensure!(
-                !value.is_empty() && !value.contains('\0'),
-                "required connection fields must be nonempty and contain no NUL"
-            );
-        }
+        ensure!(
+            !self.host.is_empty() && !self.host.contains('\0'),
+            "required connection fields must be nonempty and contain no NUL"
+        );
+        ensure!(
+            !self.server.contains('\0'),
+            "server name must contain no NUL"
+        );
         for value in [self.credentials.account(), self.credentials.password()] {
             ensure!(
                 !value.is_empty() && !value.contains('\0'),
@@ -247,10 +251,11 @@ impl ClientConfig {
             );
         }
         ensure!(self.port != 0, "login port must be nonzero");
-        if self.protocol == ServerProtocol::Quarm {
+        // EQMac's login packs both into 20-byte fields (`login/eqmac.rs`).
+        if !self.protocol.is_titanium() {
             ensure!(
                 self.credentials.account().len() < 20 && self.credentials.password().len() < 20,
-                "Quarm login fields must fit in 19 bytes"
+                "EQMac login fields must fit in 19 bytes"
             );
         }
         ensure!(
@@ -544,7 +549,8 @@ pub enum ConnectionStage {
     ConnectingLogin,
     /// Sending credentials and waiting for authentication.
     Authenticating,
-    /// Requesting and selecting the configured world.
+    /// Requesting the login server's worlds and choosing one: the
+    /// configured world, or the player's choice from the list.
     SelectingServer,
     /// Opening and authenticating the world-server transport.
     ConnectingWorld,
@@ -648,7 +654,10 @@ impl Client {
     }
 
     /// Connect and process commands from a nonblocking host-owned queue.
-    /// Commands are consumed only after zone admission and may remain queued
+    /// Before the zone admits the player, the queue answers the lists the
+    /// session sends: the login server's worlds, when no world is
+    /// configured, and the world's characters, when no character is. Other
+    /// commands are consumed only after zone admission and may remain queued
     /// while a reconnect is in progress. Dropping every sender disables input.
     ///
     /// # Errors
@@ -673,6 +682,10 @@ impl Client {
         handler: &mut dyn FnMut(ClientEvent) -> Result<()>,
     ) -> Result<()> {
         let mut events = Events::new(&self.config, handler);
+        ensure!(
+            !self.config.server.is_empty() || commands.is_some(),
+            "choosing a world from the server list requires a command receiver"
+        );
         ensure!(
             !self.config.character.is_empty() || commands.is_some() || options.world_only,
             "interactive character selection requires a command receiver"
@@ -745,6 +758,8 @@ struct Events<'a> {
     session_id: String,
     zone: String,
     messages: u64,
+    /// The world played on: the configured one, or the player's choice.
+    server: String,
     character: String,
 }
 
@@ -759,6 +774,7 @@ impl<'a> Events<'a> {
             session_id: String::new(),
             zone: String::new(),
             messages: 0,
+            server: config.server.clone(),
             character: config.character.clone(),
         }
     }
@@ -767,6 +783,7 @@ impl<'a> Events<'a> {
         self.session_id = format!("{:016x}", rand::random::<u64>());
         self.zone.clear();
         self.messages = 0;
+        self.server.clone_from(&self.config.server);
         self.character.clone_from(&self.config.character);
     }
 
@@ -804,7 +821,7 @@ impl<'a> Events<'a> {
         self.messages += 1;
         self.send(ClientEvent::Record(Box::new(Record {
             timestamp: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
-            server: self.config.server.clone(),
+            server: self.server.clone(),
             character: self.character.clone(),
             zone: zone.to_owned(),
             session_id: self.session_id.clone(),
