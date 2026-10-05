@@ -7,6 +7,10 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- `EQMac` spawns now say their class in the server's numbering, as
+  Titanium's do. TAKP's patch sends a banker as 16, a merchant as 32 and the
+  guildmaster classes three lower, so TAKP's bankers and merchants were not
+  known as such: the bank and merchant windows would not open at them.
 - A dead player on TAKP asks for their bind point once a death pause is
   over, one value in the transfers feature, which is zero: at once, as
   Adam chose. The official client's wait is unrecorded (inferred). A death
