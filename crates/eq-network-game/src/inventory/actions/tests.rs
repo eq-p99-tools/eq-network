@@ -708,3 +708,31 @@ fn vah_shir_can_equip_what_names_their_race() {
     assert!(state.plan_move(&request(&state, 30, 13), vah_shir).is_ok());
     assert!(state.plan_move(&request(&state, 30, 13), actor()).is_err());
 }
+
+#[test]
+fn takps_item_packets_for_a_moved_bags_contents_confirm_the_move() {
+    // A bag with two items, on the cursor, goes into the second pack slot.
+    let mut bag = item(30, None, 4);
+    bag.details.id = 50;
+    let mut first = item(331, Some(3), 0);
+    first.details.id = 51;
+    let mut second = item(333, None, 0);
+    second.details.id = 52;
+    let mut state = state(vec![bag, first.clone(), second.clone()]);
+    let update = state
+        .plan_move_for(MoveRules::Takp, &request(&state, 30, 23), actor())
+        .unwrap();
+    state.apply(update);
+    // TAKP accepts it and sends each item in the bag at its new place
+    // (`Client::SwapItem`), which agrees with the prediction.
+    for (mut contained, index) in [(first, 0), (second, 2)] {
+        contained.slot = InventorySlot(23).child(index).unwrap();
+        state.apply(InventoryUpdate::Set(vec![contained]));
+    }
+    assert!(!state.awaiting_correction());
+    assert!(!state.stale());
+    assert_eq!(state.items[&InventorySlot(261)].details.id, 51);
+    assert_eq!(state.items[&InventorySlot(263)].details.id, 52);
+    state.apply(InventoryUpdate::Settled);
+    assert!(!state.predicted());
+}
