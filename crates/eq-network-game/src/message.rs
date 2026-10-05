@@ -163,7 +163,6 @@ pub fn eqmac(opcode: u16, body: &[u8]) -> Vec<Message> {
             |error| unreadable(Part::ZoneOffer, &error),
             Message::ZoneOffer,
         )],
-        // The profile lists the player's group as each zone admits them.
         crate::quarm::ZONE_CHANGE => vec![crate::quarm::zone_answer(body).map_or_else(
             |error| unreadable(Part::ZoneAnswer, &error),
             Message::ZoneAnswer,
@@ -209,6 +208,7 @@ fn eqmac_profile(body: &[u8]) -> Vec<Message> {
         crate::quarm::bind_point(body)
             .map_or_else(|error| unreadable(Part::World, &error), Message::Bind),
     );
+    // The profile lists the player's group as each zone admits them.
     match crate::quarm::profile_group(body) {
         Ok(group) => {
             messages.extend(group.map(|update| Message::Event(WorldEvent::Group(update))));

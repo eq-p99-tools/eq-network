@@ -389,8 +389,9 @@ pub fn titanium(request: &Request, sender: Sender<'_>) -> Result<EncodedCommand>
 
 /// The `EQMac` client's packet for a request from this sender: camping,
 /// logging out, its stance and position, the world's damage, item moves,
-/// eating and drinking, and the host commands its generation encodes so
-/// far, which is chat.
+/// eating and drinking, an item's click, the spellbook's changes but
+/// deleting, and the host commands its generation encodes so far: chat
+/// and casting from a gem.
 ///
 /// # Errors
 /// Refuses every other request, and a command the generation cannot carry.
@@ -425,6 +426,15 @@ pub fn eqmac(request: &Request, sender: Sender<'_>) -> Result<EncodedCommand> {
             by_hand,
         } => food::eqmac_consume(*slot, *meal, *by_hand),
         Request::Depart => Ok(crate::quarm::depart(sender.spawn())),
+        Request::CastItem {
+            spell_id,
+            slot,
+            target_id,
+        } => spells::eqmac_item_cast(*spell_id, *slot, *target_id),
+        Request::Memorize { gem, spell_id } => Ok(spells::eqmac_memorize(*gem, *spell_id)),
+        Request::Forget { gem, spell_id } => Ok(spells::eqmac_forget(*gem, *spell_id)),
+        Request::Scribe { slot, spell_id } => spells::eqmac_scribe(*slot, *spell_id),
+        Request::SwapSpells { from, to } => spells::eqmac_swap(*from, *to),
         Request::MoveCoins(transfer) => transfer.encode_eqmac(),
         Request::BledOut => crate::quarm::bled_out(sender.spawn()),
         _ => anyhow::bail!("the EQMac client cannot send {request:?} yet"),

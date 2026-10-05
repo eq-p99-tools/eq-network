@@ -604,6 +604,44 @@ mod tests {
     }
 
     #[test]
+    fn takps_256_slot_book_memorizes_in_takps_own_packets() {
+        let eqmac = &super::super::wire::EqMac;
+        // TAKP's unpacked profile, spell 73 in the book's first slot.
+        let mut profile = vec![0; 8460];
+        profile[1846..1848].copy_from_slice(&73i16.to_le_bytes());
+        let book = SpellBook::eqmac_profile(&profile).unwrap();
+        assert_eq!(book.slots().len(), 256);
+        let mut spellbook = Spellbook::default();
+        let mut world = World::new(5);
+        spellbook
+            .admit(&Message::Event(WorldEvent::SpellBook(book)), &mut world)
+            .unwrap();
+        world.own_spawn = Some(7);
+        world.player.admit(testing::player(7));
+        let outcome = testing::run_on(eqmac, |out| spellbook.handle(&memorize(2), &mut world, out));
+        outcome.result.unwrap();
+        assert_eq!(
+            outcome.sent,
+            [eq_network_game::quarm::posture(7, Posture::Sitting).unwrap()]
+        );
+        let sat = Instant::now();
+        let outcome = testing::run_on(eqmac, |out| spellbook.tick(sat + SITTING, &mut world, out));
+        outcome.result.unwrap();
+        assert_eq!(outcome.sent, [spells::eqmac_memorize(2, 73)]);
+        // TAKP answers with the same packet, which releases the book.
+        let answers =
+            eq_network_game::message::eqmac(spells::EQMAC_MEMORIZE_OPCODE, &outcome.sent[0].body);
+        assert_eq!(answers.len(), 1);
+        let outcome = testing::run_on(eqmac, |out| spellbook.observe(&answers[0], &mut world, out));
+        outcome.result.unwrap();
+        assert_eq!(statuses(&outcome.events), [&BookActionStatus::Confirmed]);
+        assert_eq!(
+            spellbook.holds(&world, Instant::now()),
+            Vec::<(Resource, &str)>::new()
+        );
+    }
+
+    #[test]
     fn a_request_the_book_cannot_take_is_refused_without_sitting() {
         let (mut spellbook, mut world) = admitted(None);
         let outcome = testing::run(|out| spellbook.handle(&memorize(2), &mut world, out));

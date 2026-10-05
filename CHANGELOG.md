@@ -113,7 +113,7 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Added
 
 - Groups on TAKP (`Capability::Grouping`), read from EQMacEmu's source and
-  not yet checked live. The `EQMac` client's group packets have Titanium's
+  checked live with two characters. The `EQMac` client's group packets have Titanium's
   layouts with their own opcodes (`group::eqmac_invite`, `eqmac_follow`,
   `eqmac_decline`, `eqmac_disband` and `decode_eqmac`); its invitation is
   193 bytes, the names and 65 more (zero, inferred). TAKP also has its own
@@ -245,6 +245,25 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   naming anyone, so the session names the player in them. A fade names no
   slot either (`buffs::UNKNOWN_SLOT`): a host finds the buff by its spell.
   The book reaches a host once TAKP offers the spellbook.
+- Casting on TAKP (`Capability::Casting`): a memorized gem's spell
+  (`GameCommand::CastSpell` on the `EQMac` wire, `spells::eqmac_cast`) and
+  an item's click effect from a worn or general slot
+  (`Request::CastItem`, `spells::eqmac_item_cast`), in TAKP's 12-byte
+  `OP_CastSpell` with 16-bit fields and a CRC of 0 (inferred: TAKP never
+  reads it, and the official client's is unrecorded).
+  The cast is held, as on the other servers, until the spell bar comes back
+  or the cast is interrupted. A hold now also ends on a result for the
+  spell asked for when the server began a different one: TAKP begins a
+  Luclin port as spell 2935 and ends it naming the port.
+- TAKP's spellbook (`Capability::Spellbook`): memorizing, forgetting and
+  scribing in TAKP's own `OP_MemorizeSpell` (`spells::eqmac_memorize`,
+  `spells::eqmac_forget`, `spells::eqmac_scribe`), one change in flight at
+  a time as on every server; TAKP logs two in one server tick as a possible
+  hack. The book has TAKP's 256 slots, and a scribe past them is refused,
+  since TAKP would use the scroll up and scribe nothing. Moving a spell in
+  the book (`spells::eqmac_swap`, built) waits for its check on TAKP.
+  Deleting stays off: TAKP reports a deletion done even for an empty slot
+  and keeps the spell memorizable until the player zones.
 - TAKP's coins from the profile: those the player carries
   (`money::eqmac_coins`, `WorldEvent::Coins`) and those on the cursor and
   in the bank (`money::eqmac_elsewhere`, `WorldEvent::CoinsElsewhere`),
