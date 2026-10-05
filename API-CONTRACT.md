@@ -16,34 +16,19 @@ releasing; the workspace version alone is not evidence of compatibility.
 - Carry typed payloads, quantities, slots and capabilities. Introduce an ID
   newtype where it prevents meaningful mixing; avoid wrappers without an invariant.
 
-### Next command-envelope revision
-
-Repeated admission/time matches in `GameCommand` are a candidate for the next
-breaking API revision, not permission to bypass validation now. The intended
-boundary is an admission-scoped envelope containing a typed admission ID, creation
-`Instant`, and typed action enum. Character selection has a different lifetime
-and stays separate. A host-local request ID cannot create correlation absent from
-the wire protocol.
-
-Before implementing it, inventory every command's actual lifetime and expiry
-semantics, migrate the client/logger/mobile/proxy consumers, and retain the tests
-that require exactly one feature owner and matching capability/resource needs.
-Do not replace those compiler-checked matches with a string registry or an
-unconstrained macro that hides ownership. This document does not change the
-current public command layout.
-
 ## Feature ownership and recovery
 
 One feature owns each command and its state. Wire generation determines layout;
 server policy determines availability. New features start absent, and a frontend
 must honor the session's offered capabilities and explicit player choices.
 
-Resource holds cover the operation's unresolved effects, not merely a UI timer.
-Distinguish pending, uncertain, rejected and settled states. Retain the original
-operation and relevant identity after an unanswered timeout. A late reply must
-not mutate an unrelated replacement slot or release a newer operation's hold.
-When the wire cannot distinguish outcomes, invalidate and reconcile rather than
-guess, replay, or invent a server request identifier.
+Resource holds cover an operation until its answer settles it. Where a server
+refuses with silence, as `EQEmu` refuses a merchant offer, the hold ends after a
+timeout, and the operation is remembered with what it acted on so that a late
+answer still settles it. A late reply must not mutate an unrelated replacement
+slot or release a newer operation's hold. When the wire cannot distinguish
+outcomes, invalidate and reconcile rather than guess, replay, or invent a server
+request identifier.
 
 Closing a window, dying, zoning and reconnecting need explicit feature reset
 semantics. A new admission invalidates old commands and proposals; a UI close
@@ -64,22 +49,23 @@ decision. Applications must not parse a diagnostic sentence to decide whether
 to retry or replay an action. Preserve unknown wire values when they are useful
 for forward compatibility; reject malformed lengths and invalid domain values.
 
-Do not collapse an unknown outcome into a refusal, or treat transport send
-success as authoritative completion. A UI may explain uncertainty without
-releasing an inventory hold or resending a non-idempotent action.
+Report a refusal only where the server refused, or where its silence is how it
+refuses, and never treat transport send success as authoritative completion. A
+timeout never authorizes resending a non-idempotent action.
 
 ## Validation and release integration
 
 This library workspace intentionally does not commit `Cargo.lock`. CI resolves
 dependencies for each toolchain: stable format, Clippy, tests and docs on Linux;
-native tests on Windows; Rust 1.88 minimum-version compilation. These checks neither load proprietary assets nor connect to a live
-game server. A fresh downstream resolution and packaged-crate consumer remain
-release checks, because a downstream application owns its dependency lockfile.
+native tests on Windows; Rust 1.88 minimum-version compilation. These checks
+neither load proprietary assets nor connect to a live game server. A fresh
+downstream resolution and packaged-crate consumer remain release checks,
+because a downstream application owns its dependency lockfile.
 
 For each changed feature, record protocol generation, server policy, repository
 revision, capability and scenario. Separate source-derived behavior, synthetic
-codec/state-machine tests, and live evidence. Prior Quarm login/chat testing does
-not authorize enabling every TAKP feature on Quarm.
+codec/state-machine tests, and live evidence. A check on one server type does not
+list a feature on another: one checked on TAKP waits for its own check on Quarm.
 
 Applications using a Git branch still resolve a specific commit in their
 `Cargo.lock`. A networking merge is not integrated into an application until its
