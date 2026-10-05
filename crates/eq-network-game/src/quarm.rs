@@ -471,7 +471,13 @@ pub fn own_spawn(body: &[u8], character: &str) -> Result<OwnSpawn> {
 /// # Errors
 /// Rejects invalid compression, partial records, zero IDs, and invalid model sizes.
 pub fn spawns(body: &[u8]) -> Result<Vec<SpawnState>> {
-    let data = unpack(body, false)?;
+    decoded_spawns(&unpack(body, false)?)
+}
+
+/// The spawns in an unpacked batch (TAKP `common/patches/mac_structs.h`
+/// `Spawn_Struct`, 224 bytes each): among them the class at 87, which names
+/// a banker (40) or a merchant (41) as on Titanium, and the level at 89.
+fn decoded_spawns(data: &[u8]) -> Result<Vec<SpawnState>> {
     ensure!(
         !data.is_empty() && data.len().is_multiple_of(SPAWN_SIZE),
         "partial EQMac spawn batch"
@@ -482,7 +488,7 @@ pub fn spawns(body: &[u8]) -> Result<Vec<SpawnState>> {
         .map(|record| {
             let spawn_id = valid_id(u32::from(short(record, 76)))?;
             Ok(SpawnState {
-                class: None,
+                class: Some(record[87]),
                 spawn_id,
                 name: String::from_utf8_lossy(cstr(&record[127..191])).into_owned(),
                 kind: match record[86] {
@@ -505,8 +511,8 @@ pub fn spawns(body: &[u8]) -> Result<Vec<SpawnState>> {
                 },
                 // EQMac motion fields are not decoded yet.
                 velocity: [0.0; 3],
-                // Nor are its /who fields.
-                level: 0,
+                level: record[89],
+                // Nor are its other /who fields.
                 listing: crate::listing::Listing::default(),
                 name_parts: crate::names::NameParts::default(),
                 pet_owner: None,
