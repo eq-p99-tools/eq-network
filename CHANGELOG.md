@@ -9,13 +9,14 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - A merchant's echo settles only the trade it answers. Echoes carry no
   request id, so each is matched by its slot, and a sale's echo removes the
-  units only while the slot still holds the item that was offered. A sale
-  released unanswered after the three-second hold is remembered, so its echo
-  still settles it if it comes late; the release itself stays, because
-  `EQEmu` answers a refused offer with silence. An echo for an item the slot
-  no longer holds, or one that answers no trade, leaves the inventory
-  untrusted (`InventoryUpdate::Invalidated`) instead of removing what the
-  slot holds now, and a purchase's echo releases only its own purchase.
+  units only while the slot still holds the item that was offered, less what
+  earlier echoes removed from it. A sale released unanswered after the
+  three-second hold is remembered, so its echo still settles it if it comes
+  late; the release itself stays, because `EQEmu` answers a refused offer
+  with silence. An echo for an item the slot no longer holds, or one that
+  answers no trade, leaves the inventory untrusted
+  (`InventoryUpdate::Invalidated`) instead of removing what the slot holds
+  now, and a purchase's echo releases only its own purchase.
 
 - `WorldEvent::HitPoints` says which values leave out the HP equipped items
   add with `items: ItemHitPoints`, in place of `without_items`. Titanium's

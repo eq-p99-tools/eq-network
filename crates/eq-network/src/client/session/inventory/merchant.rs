@@ -5,9 +5,10 @@
 //! An offer the server refuses is never answered, so an unanswered trade releases
 //! after a timeout instead of holding the inventory forever. Echoes carry no
 //! request id, so each is matched to its trade by slot, and a sale's echo
-//! removes units only while the slot still holds the item that was offered: a
-//! sale released unanswered stays remembered for an echo that comes late, and
-//! an echo nothing explains leaves the inventory untrusted.
+//! removes units only while the slot still holds the item that was offered,
+//! less what earlier echoes removed from it: a sale released unanswered stays
+//! remembered for an echo that comes late, and an echo nothing explains leaves
+//! the inventory untrusted.
 use crate::client::ClientCommand;
 use eq_network_game::{
     inventory::{Inventory, InventoryItem, InventorySlot, InventoryUpdate},
@@ -49,6 +50,21 @@ impl Sale {
             }
         } else {
             InventoryUpdate::Invalidated
+        }
+    }
+
+    /// Follows units an echo for another sale removed from this sale's slot,
+    /// as the inventory applies the deduction: the stack shrinks, or the slot
+    /// empties.
+    fn removed(&mut self, slot: InventorySlot, sold: u32) {
+        if self.slot != slot {
+            return;
+        }
+        match self.item.as_deref_mut() {
+            Some(item) if item.stack_count.is_some_and(|count| count > sold) => {
+                item.stack_count = item.stack_count.map(|count| count - sold);
+            }
+            _ => self.item = None,
         }
     }
 }
@@ -116,20 +132,14 @@ impl MerchantTrades {
                     return None;
                 }
                 let slot = InventorySlot(*slot);
-                if let Some((Trade::Sale(sale), _)) = &self.pending {
-                    if sale.answered_by(slot, *quantity) {
-                        let update = sale.settle(*quantity, inventory);
-                        self.pending = None;
-                        return Some(update);
-                    }
+                let Some(sale) = self.answered(slot, *quantity) else {
+                    return Some(InventoryUpdate::Invalidated);
+                };
+                let update = sale.settle(*quantity, inventory);
+                if matches!(update, InventoryUpdate::Deduct { .. }) {
+                    self.removed(slot, *quantity);
                 }
-                if let Some(sale) = self
-                    .unanswered
-                    .take_if(|sale| sale.answered_by(slot, *quantity))
-                {
-                    return Some(sale.settle(*quantity, inventory));
-                }
-                Some(InventoryUpdate::Invalidated)
+                Some(update)
             }
             // The purchased item arrives in its own item update, so an echo
             // that answers no purchase changes nothing here.
@@ -174,6 +184,31 @@ impl MerchantTrades {
     fn release(&mut self) {
         if let Some((Trade::Sale(sale), _)) = self.pending.take() {
             self.unanswered = Some(sale);
+        }
+    }
+
+    /// Takes the sale an echo of this many units sold from this slot answers:
+    /// the pending one first, then the one released unanswered.
+    fn answered(&mut self, slot: InventorySlot, sold: u32) -> Option<Sale> {
+        let answers = |sale: &Sale| sale.answered_by(slot, sold);
+        if let Some((Trade::Sale(sale), _)) = self
+            .pending
+            .take_if(|(trade, _)| matches!(trade, Trade::Sale(sale) if answers(sale)))
+        {
+            return Some(sale);
+        }
+        self.unanswered.take_if(|sale| answers(sale))
+    }
+
+    /// Carries units an echo removed into the other sales remembered from the
+    /// same slot, so that their echoes still find the item they offered.
+    fn removed(&mut self, slot: InventorySlot, sold: u32) {
+        let pending = match &mut self.pending {
+            Some((Trade::Sale(sale), _)) => Some(sale),
+            _ => None,
+        };
+        for sale in pending.into_iter().chain(self.unanswered.as_mut()) {
+            sale.removed(slot, sold);
         }
     }
 }
@@ -292,6 +327,52 @@ mod tests {
         inventory.apply(trades.observe(&echo(25), &inventory).unwrap());
         assert!(inventory.stale());
         assert_eq!(inventory.items()[&InventorySlot(25)], replacement);
+    }
+
+    #[test]
+    fn late_echoes_for_two_sales_from_one_stack_each_remove_their_units() {
+        let start = Instant::now();
+        let mut stack = item(25);
+        stack.stack_count = Some(5);
+        let mut inventory = Inventory::default();
+        inventory.apply(InventoryUpdate::Snapshot(vec![stack]));
+        let mut trades = MerchantTrades::default();
+        trades.sent(&sell(25), &inventory, start);
+        trades.expire(start + ANSWER_TIMEOUT);
+        trades.sent(&sell(25), &inventory, start + ANSWER_TIMEOUT);
+        for _ in 0..2 {
+            let update = trades.observe(&echo(25), &inventory).unwrap();
+            assert_eq!(update, deduct(25));
+            inventory.apply(update);
+        }
+        assert!(!trades.active());
+        assert!(!inventory.stale());
+        assert_eq!(inventory.items()[&InventorySlot(25)].stack_count, Some(1));
+        // Both sales are settled: a third echo answers nothing.
+        assert_eq!(
+            trades.observe(&echo(25), &inventory),
+            Some(InventoryUpdate::Invalidated)
+        );
+    }
+
+    #[test]
+    fn an_echo_never_removes_an_identical_item_put_where_a_sold_one_was() {
+        let start = Instant::now();
+        let mut inventory = inventory();
+        let mut trades = MerchantTrades::default();
+        trades.sent(&sell(25), &inventory, start);
+        trades.expire(start + ANSWER_TIMEOUT);
+        trades.sent(&sell(25), &inventory, start + ANSWER_TIMEOUT);
+        let update = trades.observe(&echo(25), &inventory).unwrap();
+        assert_eq!(update, deduct(25));
+        inventory.apply(update);
+        // An identical item put in its place is not the one the other sale
+        // offered, which has left.
+        inventory.apply(InventoryUpdate::Set(vec![item(25)]));
+        assert_eq!(
+            trades.observe(&echo(25), &inventory),
+            Some(InventoryUpdate::Invalidated)
+        );
     }
 
     #[test]
