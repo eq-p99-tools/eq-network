@@ -304,9 +304,14 @@ impl Belongings {
     }
 
     /// Buys or sells; the merchant's echo settles the trade.
-    fn trade(&mut self, command: &ClientCommand, out: &mut Out<'_, '_>) -> Result<()> {
+    fn trade(
+        &mut self,
+        command: &ClientCommand,
+        world: &World,
+        out: &mut Out<'_, '_>,
+    ) -> Result<()> {
         if out.command(command)? {
-            self.trades.sent(command, Instant::now());
+            self.trades.sent(command, &world.inventory, Instant::now());
         }
         Ok(())
     }
@@ -480,7 +485,7 @@ impl Feature for Belongings {
                 }
                 None => Ok(()),
             },
-            _ => self.trade(command, out),
+            _ => self.trade(command, world, out),
         }
     }
 
@@ -525,7 +530,7 @@ impl Feature for Belongings {
             } => change(InventoryUpdate::Invalidated, world, out)?,
             // A sale's echo is the only notice that the item left.
             Message::Event(WorldEvent::Merchant(update)) => {
-                if let Some(update) = self.trades.observe(update) {
+                if let Some(update) = self.trades.observe(update, &world.inventory) {
                     change(update, world, out)?;
                 }
             }
@@ -945,6 +950,48 @@ mod tests {
             "a hold remains: {:?}",
             belongings.holds(&world, Instant::now())
         );
+    }
+
+    #[test]
+    fn a_late_sale_echo_never_removes_what_took_the_items_place() {
+        let (mut belongings, mut world) = admitted();
+        let sell = ClientCommand::Sell {
+            session_id: 5,
+            merchant_id: 9,
+            slot: 22,
+            quantity: 1,
+            created: Instant::now(),
+        };
+        testing::run(|out| belongings.handle(&sell, &mut world, out))
+            .result
+            .unwrap();
+        let later = Instant::now() + Duration::from_secs(3);
+        testing::run(|out| belongings.tick(later, &mut world, out))
+            .result
+            .unwrap();
+        assert_eq!(belongings.holds(&world, later), []);
+        // Released, the slot takes another item before the echo comes.
+        let mut replacement = item(22);
+        replacement.details.id += 1;
+        let arrived = Message::Event(WorldEvent::Inventory(InventoryUpdate::Set(vec![
+            replacement.clone(),
+        ])));
+        testing::run(|out| belongings.observe(&arrived, &mut world, out))
+            .result
+            .unwrap();
+        let echo = Message::Event(WorldEvent::Merchant(MerchantUpdate::Sold {
+            slot: 22,
+            quantity: 1,
+            price: 40,
+        }));
+        let outcome = testing::run(|out| belongings.observe(&echo, &mut world, out));
+        outcome.result.unwrap();
+        assert_eq!(
+            inventory_events(&outcome.events),
+            [&InventoryUpdate::Invalidated]
+        );
+        assert!(world.inventory.stale());
+        assert_eq!(world.inventory.items()[&InventorySlot(22)], replacement);
     }
 
     #[test]

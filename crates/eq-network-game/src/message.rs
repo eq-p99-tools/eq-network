@@ -23,6 +23,9 @@ pub enum Message {
     ZoneAnswer(zoning::ZoneAnswer),
     /// The next zone's address.
     Handoff(Vec<u8>),
+    /// The player's bind point, from their profile: where a client that asks
+    /// for its own way home after death asks to go.
+    Bind(zoning::BindPoint),
     /// The server logging the character out.
     LoggedOut,
     /// A message a session feature withholds, to pass on later as it was or
@@ -141,7 +144,8 @@ pub fn titanium(opcode: u16, body: &[u8]) -> Vec<Message> {
 /// What one `EQMac` zone packet says: the spawns and the player's news that
 /// [`crate::quarm::updates`] reads, the inventory, the server logging the
 /// character out, its request that the client move, its answer to the
-/// client's request, and the zone's numbered destinations.
+/// client's request, the zone's numbered destinations, and the player's
+/// bind point from their profile.
 #[must_use]
 pub fn eqmac(opcode: u16, body: &[u8]) -> Vec<Message> {
     match opcode {
@@ -158,6 +162,8 @@ pub fn eqmac(opcode: u16, body: &[u8]) -> Vec<Message> {
             |error| unreadable(Part::ZonePoints, &error),
             Message::ZonePoints,
         )],
+        crate::quarm::ZONE_PLAYER_PROFILE => vec![crate::quarm::bind_point(body)
+            .map_or_else(|error| unreadable(Part::World, &error), Message::Bind)],
         crate::combat::EQMAC_CONSIDER_OPCODE => {
             vec![crate::combat::eqmac_consideration(body).map_or_else(
                 |error| unreadable(Part::World, &error),
