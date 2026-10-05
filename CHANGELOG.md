@@ -7,6 +7,12 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- Merchant timeouts now retain the pending transaction and inventory hold.
+  Late sale replies are checked against the original item; ambiguous replies
+  invalidate the projection instead of deleting replacement contents. If no
+  reply arrives, reconnect to obtain an authoritative inventory before making
+  further item changes.
+
 - A tell's echo on channel 14 is `ChannelName::TellEcho` on the `EQMac`
   wire too: TAKP echoes a delivered tell to its sender on
   `ChatChannel_TellEcho` (14), as `EQEmu` does on Titanium's.
