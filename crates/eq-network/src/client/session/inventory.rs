@@ -22,9 +22,12 @@ use super::{
 use anyhow::{Context, Result};
 use eq_network_game::{
     exchange::ExchangeUpdate,
-    inventory::{banker_in_range, Inventory, InventoryActor, InventoryMove, InventoryUpdate},
+    inventory::{
+        banker_in_range, Inventory, InventoryActor, InventoryMove, InventorySlot, InventoryUpdate,
+        MoveRules,
+    },
     loot::{LootResponse, LootUpdate},
-    merchant::MerchantUpdate,
+    merchant::{MerchantUpdate, Quotes},
     message::{Message, Part},
     money::Wallet,
     request::Request,
@@ -32,7 +35,7 @@ use eq_network_game::{
     world::Coins,
     world::{SpawnKind, WorldEvent},
 };
-use merchant::MerchantTrades;
+use merchant::{MerchantTrades, OpenMerchant};
 use std::time::{Duration, Instant};
 
 /// The player's inventory as the session knows it. Every feature reads it;
@@ -94,13 +97,32 @@ fn tell_coins(world: &World, purse: bool, out: &mut Out<'_, '_>) -> Result<()> {
     }))
 }
 
+/// Tells the host the merchant refused a trade, or that the session did on
+/// its behalf.
+fn merchant_refused(world: &World, reason: &str, out: &mut Out<'_, '_>) -> Result<()> {
+    out.log
+        .send(ClientEvent::World(WorldEvent::MerchantRefused {
+            session_id: world.session_id,
+            reason: reason.into(),
+        }))?;
+    out.log
+        .diagnostic(format!("Merchant trade refused: {reason}"))
+}
+
 /// Follows what a message says about the coins; true when the purse changed
-/// without the host hearing it (loot coins, a purchase), false when only
+/// without the host hearing it (loot coins, a purchase, coins TAKP added),
+/// false when only
 /// coins elsewhere changed, None when nothing did. A money update replaces
 /// the purse, and the host hears it as it is.
 fn coins_news(message: &Message, wallet: &mut Wallet) -> Option<bool> {
-    let Message::Event(event) = message else {
-        return None;
+    let event = match message {
+        Message::Event(event) => event,
+        // What the server added to the purse, as TAKP announces it.
+        Message::PurseAdded(coins) => {
+            wallet.add_to_purse(*coins);
+            return Some(true);
+        }
+        _ => return None,
     };
     match event {
         WorldEvent::Coins(coins) => {
@@ -119,8 +141,17 @@ fn coins_news(message: &Message, wallet: &mut Wallet) -> Option<bool> {
             wallet.add_to_purse(*coins);
             Some(true)
         }
-        WorldEvent::Merchant(MerchantUpdate::Bought { price, .. }) => {
+        WorldEvent::Merchant(MerchantUpdate::Bought { price, .. }) if *price > 0 => {
             wallet.pay(u64::from(*price));
+            Some(true)
+        }
+        // A sale's price, which TAKP adds to the purse without a money
+        // update; `EQEmu`'s update right after replaces the purse with the
+        // same coins. TAKP's echo prices nothing, so the session has priced
+        // it from the sale it sent before this hears it (inferred: the
+        // official client's purse after a sale is unrecorded).
+        WorldEvent::Merchant(MerchantUpdate::Sold { price, .. }) if *price > 0 => {
+            wallet.add_to_purse(Coins::from_copper(*price));
             Some(true)
         }
         // The other player's coins, which the server reports as added.
@@ -157,6 +188,13 @@ impl Settlement {
     /// Notes a move sent at `now`; every move restarts the wait.
     fn sent(&mut self, now: Instant) {
         self.0 = Some(now);
+    }
+
+    /// Whether the last move sent is still unanswered at `now`: the server
+    /// has not refused it, and the window to refuse it has not passed.
+    fn in_flight(&self, now: Instant) -> bool {
+        self.0
+            .is_some_and(|sent| now.saturating_duration_since(sent) < REFUSAL_WINDOW)
     }
 
     /// The settling update, once the last move has gone unrefused for the window
@@ -222,21 +260,73 @@ fn change(update: InventoryUpdate, world: &mut World, out: &mut Out<'_, '_>) -> 
         .send(ClientEvent::World(WorldEvent::Inventory(update)))
 }
 
+/// What a server type lets the player do with their belongings beside
+/// moving items, each as checked on that kind of server.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(super) struct Allowances {
+    /// Moving coins between the purse, the cursor, the bank and a trade.
+    pub(super) coins: bool,
+    /// Buying and selling at merchants.
+    pub(super) merchants: bool,
+    /// Eating and drinking, by hand and on the session's own.
+    pub(super) meals: bool,
+}
+
+impl Allowances {
+    /// Coins, merchants and meals.
+    pub(super) const ALL: Self = Self {
+        coins: true,
+        merchants: true,
+        meals: true,
+    };
+}
+
 /// The player's belongings and the changes to them in flight.
 pub(super) struct Belongings {
+    /// What the player may do with them beside moving items.
+    allows: Allowances,
+    /// The server type's rules for item moves.
+    rules: MoveRules,
     /// Moves waiting to settle.
     settlement: Settlement,
     /// A purchase or sale waiting for the merchant.
     trades: MerchantTrades,
+    /// The merchant whose window is open, and what its list costs.
+    merchant: OpenMerchant,
+    /// How the server type's merchant packets price trades.
+    quotes: Quotes,
     /// How fed and watered the player is, which decides when to eat.
     meals: meals::Meals,
 }
 
 impl Belongings {
+    /// Belongings under `EQEmu`'s rules on Titanium's wire, with coins,
+    /// merchants and meals.
     pub(super) fn new(auto_eat: eq_network_game::food::AutoEat) -> Self {
+        Self::under(
+            MoveRules::EqEmu,
+            Quotes::WithRate,
+            Allowances::ALL,
+            auto_eat,
+        )
+    }
+
+    /// Belongings whose items the player moves under a server type's
+    /// `rules`, with what else it `allows`, and merchant packets priced as
+    /// `quotes` says. Without meals the session never eats.
+    pub(super) fn under(
+        rules: MoveRules,
+        quotes: Quotes,
+        allows: Allowances,
+        auto_eat: eq_network_game::food::AutoEat,
+    ) -> Self {
         Self {
+            allows,
+            rules,
             settlement: Settlement::default(),
             trades: MerchantTrades::default(),
+            merchant: OpenMerchant::default(),
+            quotes,
             meals: meals::Meals::new(auto_eat),
         }
     }
@@ -252,7 +342,7 @@ impl Belongings {
         let now = Instant::now();
         let planned = actor(world)
             .context("Character equipment data is unavailable")
-            .and_then(|actor| world.inventory.0.plan_move(request, actor))
+            .and_then(|actor| world.inventory.0.plan_move_for(self.rules, request, actor))
             .and_then(|update| {
                 let packet = out.encode(&Request::MoveItem {
                     from: request.from,
@@ -288,10 +378,33 @@ impl Belongings {
             }))
     }
 
-    /// Buys or sells; the merchant's echo settles the trade.
-    fn trade(&mut self, command: &ClientCommand, out: &mut Out<'_, '_>) -> Result<()> {
+    /// Buys or sells; the merchant's echo settles the trade. A purchase the
+    /// purse may not cover is refused before it goes out, as is selling a
+    /// NO DROP item, which both servers ignore without a word.
+    fn trade(
+        &mut self,
+        command: &ClientCommand,
+        world: &World,
+        out: &mut Out<'_, '_>,
+    ) -> Result<()> {
+        let refusal = match command {
+            ClientCommand::Buy { slot, quantity, .. } => self
+                .merchant
+                .check_purchase(*slot, *quantity, world.coins.purse)
+                .err(),
+            ClientCommand::Sell { slot, .. } => world
+                .inventory
+                .items()
+                .get(&InventorySlot(*slot))
+                .is_some_and(|item| item.details.flags.iter().any(|flag| flag == "NO DROP"))
+                .then_some("NO DROP items cannot be sold"),
+            _ => None,
+        };
+        if let Some(reason) = refusal {
+            return merchant_refused(world, reason, out);
+        }
         if out.command(command)? {
-            self.trades.sent(command, Instant::now());
+            self.trades.sent(command, &world.inventory, Instant::now());
         }
         Ok(())
     }
@@ -371,7 +484,11 @@ impl Belongings {
 impl Feature for Belongings {
     fn capabilities(&self) -> Vec<crate::world::Capability> {
         use crate::world::Capability;
-        vec![Capability::Inventory, Capability::Trading]
+        let mut offered = vec![Capability::Inventory];
+        if self.allows.merchants {
+            offered.push(Capability::Trading);
+        }
+        offered
     }
 
     /// Item updates and the profile's coins before admission build the
@@ -398,13 +515,25 @@ impl Feature for Belongings {
         tell_coins(world, true, out)
     }
 
-    /// A sold item leaves only when the merchant echoes the sale.
-    fn holds(&self, _world: &World, _now: Instant) -> Vec<(Resource, &'static str)> {
-        self.trades
-            .active()
-            .then_some((Resource::Inventory, "Wait for the merchant to answer"))
-            .into_iter()
-            .collect()
+    /// A sold item leaves only when the merchant echoes the sale. Under
+    /// TAKP's rules one move is in flight at a time, which is ours and
+    /// stricter than the official client, which moves items without
+    /// waiting: TAKP answers only a refused move, so a move is answered once
+    /// it settles, and holding the next keeps a resync from landing on top
+    /// of other predictions. A move onto a cursor TAKP may still refill
+    /// (from a queue it said nothing of) waits with it.
+    fn holds(&self, _world: &World, now: Instant) -> Vec<(Resource, &'static str)> {
+        let mut holds = Vec::new();
+        if self.trades.active() {
+            holds.push((Resource::Inventory, "Wait for the merchant to answer"));
+        }
+        if self.rules == MoveRules::Takp && self.settlement.in_flight(now) {
+            holds.push((
+                Resource::Inventory,
+                "Wait for the server to settle the last move",
+            ));
+        }
+        holds
     }
 
     /// Closing a give or trade window empties the trade slots: the server
@@ -422,16 +551,15 @@ impl Feature for Belongings {
     }
 
     fn owns(&self, command: &ClientCommand) -> bool {
-        matches!(
-            command,
-            ClientCommand::MoveInventory(_)
-                | ClientCommand::MoveCoins { .. }
-                | ClientCommand::Shop { .. }
-                | ClientCommand::Buy { .. }
-                | ClientCommand::Sell { .. }
-                | ClientCommand::Consume { .. }
-                | ClientCommand::AutoEat { .. }
-        )
+        match command {
+            ClientCommand::MoveInventory(_) => true,
+            ClientCommand::MoveCoins { .. } => self.allows.coins,
+            ClientCommand::Shop { .. } | ClientCommand::Buy { .. } | ClientCommand::Sell { .. } => {
+                self.allows.merchants
+            }
+            ClientCommand::Consume { .. } | ClientCommand::AutoEat { .. } => self.allows.meals,
+            _ => false,
+        }
     }
 
     fn handle(
@@ -460,7 +588,7 @@ impl Feature for Belongings {
                 }
                 None => Ok(()),
             },
-            _ => self.trade(command, out),
+            _ => self.trade(command, world, out),
         }
     }
 
@@ -472,15 +600,40 @@ impl Feature for Belongings {
             change(update, world, out)?;
         }
         if self.trades.expire(now) {
-            out.log
-                .send(ClientEvent::World(WorldEvent::MerchantRefused {
-                    session_id: world.session_id,
-                    reason: "The merchant did not accept that offer.".into(),
-                }))?;
-            out.log
-                .diagnostic("Merchant trade was not answered; released the inventory".into())?;
+            merchant_refused(world, "The merchant did not accept that offer.", out)?;
         }
         Ok(())
+    }
+
+    /// Follows the open merchant's list before anyone hears it, so a list
+    /// quoted before the merchant's rate reaches the host at the price
+    /// charged; and where a sale's echo prices nothing, prices it as the
+    /// server added it to the purse, from the item the sale it answers
+    /// offered, before the ledger and the host hear it (inferred: TAKP's
+    /// echo price comes from padding). An echo answering no sale the
+    /// session remembers adds nothing, so the purse never rises past what
+    /// the server added.
+    fn explain(&mut self, message: &mut Message, _world: &World) {
+        let Message::Event(WorldEvent::Merchant(update)) = message else {
+            return;
+        };
+        if let MerchantUpdate::Sold {
+            slot,
+            quantity,
+            price,
+        } = update
+        {
+            let base = self
+                .trades
+                .offered(InventorySlot(*slot), *quantity)
+                .and_then(|item| item.details.price);
+            if let Some(added) =
+                base.and_then(|base| self.merchant.sale_price(self.quotes, base, *quantity))
+            {
+                *price = added;
+            }
+        }
+        self.merchant.explain(update, self.quotes);
     }
 
     /// Item updates, the inventory change a sale's echo stands for, and what
@@ -499,20 +652,45 @@ impl Feature for Belongings {
             Message::Event(WorldEvent::Inventory(update)) => {
                 world.inventory.0.apply(update.clone());
             }
+            // A whole list: the places gone, then each item, told as the
+            // merchant news a list sent item by item would be.
+            Message::MerchantList(items) => {
+                let mut items = items.clone();
+                // Without an open window the prices are not known.
+                let Some(gone) = self.merchant.replace(&mut items, self.quotes) else {
+                    return out
+                        .log
+                        .diagnostic("Merchant list with no merchant window open dropped".into());
+                };
+                for slot in gone {
+                    out.log.send(ClientEvent::World(WorldEvent::Merchant(
+                        MerchantUpdate::Removed { slot },
+                    )))?;
+                }
+                for listed in items {
+                    out.log.send(ClientEvent::World(WorldEvent::Merchant(
+                        MerchantUpdate::Item(Box::new(listed)),
+                    )))?;
+                }
+            }
             Message::Unreadable {
                 part: Part::Inventory,
                 ..
             } => change(InventoryUpdate::Invalidated, world, out)?,
-            // A sale's echo is the only notice that the item left.
+            // A sale's echo is the only notice that the item left, and an echo
+            // of nothing bought the only one that a purchase was refused.
             Message::Event(WorldEvent::Merchant(update)) => {
-                if let Some(update) = self.trades.observe(update) {
+                if self.trades.refused(update) {
+                    merchant_refused(world, "The merchant did not accept that offer.", out)?;
+                } else if let Some(update) = self.trades.observe(update, &world.inventory) {
                     change(update, world, out)?;
                 }
             }
             Message::Event(WorldEvent::Death(death)) if world.is_player(death.spawn_id) => {
                 self.trades.clear();
+                self.merchant.clear();
             }
-            Message::Event(WorldEvent::Nourishment(nourishment)) => {
+            Message::Event(WorldEvent::Nourishment(nourishment)) if self.allows.meals => {
                 self.meals.nourished(*nourishment, world, out)?;
             }
             // The window closed: what the trade slots held was handed over, or
@@ -546,6 +724,35 @@ mod tests {
     }
 
     /// Admitted player 7, carrying one item in slot 22.
+    /// Merchant 9 open at a rate of 1, listing place 3 for 25 copper, with
+    /// a platinum in the purse.
+    fn shopping_at(belongings: &mut Belongings, world: &mut World) {
+        let purse = Message::Event(WorldEvent::Coins(Coins {
+            platinum: 1,
+            ..Coins::default()
+        }));
+        testing::run(|out| belongings.observe(&purse, world, out))
+            .result
+            .unwrap();
+        for mut news in [
+            MerchantUpdate::Opened {
+                merchant_id: 9,
+                accepted: true,
+                rate: 1.0,
+            },
+            MerchantUpdate::Item(Box::new(eq_network_game::merchant::MerchantItem {
+                slot: 3,
+                price: 25,
+                quantity: 0,
+                item: item(3),
+            })),
+        ]
+        .map(|update| Message::Event(WorldEvent::Merchant(update)))
+        {
+            belongings.explain(&mut news, world);
+        }
+    }
+
     fn admitted() -> (Belongings, World) {
         let mut belongings = Belongings::new(eq_network_game::food::AutoEat::default());
         let mut world = World::new(5);
@@ -771,6 +978,342 @@ mod tests {
         assert!(world.inventory.received());
     }
 
+    /// Admitted player 7 on TAKP, carrying a ration (22) and another item
+    /// (23).
+    fn admitted_on_takp() -> (Belongings, World) {
+        let mut belongings = Belongings::under(
+            MoveRules::Takp,
+            Quotes::BeforeRate,
+            Allowances {
+                coins: true,
+                merchants: true,
+                ..Allowances::default()
+            },
+            eq_network_game::food::AutoEat::default(),
+        );
+        let mut world = World::new(5);
+        let mut ration = item(22);
+        ration.rules.item_type = 14;
+        let snapshot = Message::Event(WorldEvent::Inventory(InventoryUpdate::Snapshot(vec![
+            ration,
+            item(23),
+        ])));
+        belongings.admit(&snapshot, &mut world).unwrap();
+        world.own_spawn = Some(7);
+        world.player.admit(testing::player(7));
+        testing::run_on(&super::super::wire::EqMac, |out| {
+            belongings.admitted(&mut world, out)
+        })
+        .result
+        .unwrap();
+        (belongings, world)
+    }
+
+    #[test]
+    fn on_takp_a_merchant_is_told_at_its_charge_and_a_purchase_waits_for_coins_to_cover_it() {
+        let eqmac = &super::super::wire::EqMac;
+        let (mut belongings, mut world) = admitted_on_takp();
+        let purse = |copper| Message::Event(WorldEvent::Coins(Coins::from_copper(copper)));
+        testing::run(|out| belongings.observe(&purse(253), &mut world, out))
+            .result
+            .unwrap();
+        // TAKP opens at its rate and lists 100 copper before it: told as 125.
+        let mut opened = Message::Event(WorldEvent::Merchant(MerchantUpdate::Opened {
+            merchant_id: 9,
+            accepted: true,
+            rate: 1.25,
+        }));
+        belongings.explain(&mut opened, &world);
+        let listed = |slot| eq_network_game::merchant::MerchantItem {
+            slot,
+            price: 100,
+            quantity: 0,
+            item: item(3),
+        };
+        let list =
+            |slots: &[u32]| Message::MerchantList(slots.iter().map(|slot| listed(*slot)).collect());
+        let outcome = testing::run_on(eqmac, |out| {
+            belongings.observe(&list(&[3, 4]), &mut world, out)
+        });
+        outcome.result.unwrap();
+        assert!(matches!(
+            &outcome.events[..],
+            [
+                ClientEvent::World(WorldEvent::Merchant(MerchantUpdate::Item(first))),
+                ClientEvent::World(WorldEvent::Merchant(MerchantUpdate::Item(second))),
+            ] if (first.slot, first.price, second.slot, second.price) == (3, 125, 4, 125)
+        ));
+        // A new whole list without place 4 says it is gone.
+        let outcome = testing::run_on(eqmac, |out| {
+            belongings.observe(&list(&[3]), &mut world, out)
+        });
+        outcome.result.unwrap();
+        assert!(matches!(
+            &outcome.events[..],
+            [
+                ClientEvent::World(WorldEvent::Merchant(MerchantUpdate::Removed { slot: 4 })),
+                ClientEvent::World(WorldEvent::Merchant(MerchantUpdate::Item(item))),
+            ] if item.slot == 3
+        ));
+        // Two may cost up to 254: refused before anything goes out.
+        let buy = ClientCommand::Buy {
+            session_id: 5,
+            merchant_id: 9,
+            own_id: 7,
+            slot: 3,
+            quantity: 2,
+            created: Instant::now(),
+        };
+        let outcome = testing::run_on(eqmac, |out| belongings.handle(&buy, &mut world, out));
+        outcome.result.unwrap();
+        assert_eq!(outcome.sent, []);
+        assert!(matches!(
+            outcome.events[..],
+            [
+                ClientEvent::World(WorldEvent::MerchantRefused { .. }),
+                ClientEvent::Diagnostic(_)
+            ]
+        ));
+        // With a copper more it goes out, in TAKP's packet, and holds.
+        testing::run(|out| belongings.observe(&purse(254), &mut world, out))
+            .result
+            .unwrap();
+        let outcome = testing::run_on(eqmac, |out| belongings.handle(&buy, &mut world, out));
+        outcome.result.unwrap();
+        assert_eq!(outcome.sent.len(), 1);
+        assert_eq!(outcome.sent[0].opcode, 0x3540);
+        assert!(belongings.trades.active());
+        // TAKP refuses it with an echo of nothing bought: refused at once.
+        let nothing = Message::Event(WorldEvent::Merchant(MerchantUpdate::Bought {
+            slot: 0,
+            quantity: 0,
+            price: 0,
+        }));
+        let outcome = testing::run_on(eqmac, |out| belongings.observe(&nothing, &mut world, out));
+        outcome.result.unwrap();
+        assert!(matches!(
+            outcome.events[..],
+            [
+                ClientEvent::World(WorldEvent::MerchantRefused { .. }),
+                ClientEvent::Diagnostic(_)
+            ]
+        ));
+        assert!(!belongings.trades.active());
+        assert_eq!(world.coins.purse, Some(Coins::from_copper(254)));
+    }
+
+    #[test]
+    fn on_takp_a_sale_adds_what_takp_added_though_its_echo_prices_nothing() {
+        let (mut belongings, mut world) = admitted_on_takp();
+        let purse = Message::Event(WorldEvent::Coins(Coins::default()));
+        testing::run(|out| belongings.observe(&purse, &mut world, out))
+            .result
+            .unwrap();
+        let mut opened = Message::Event(WorldEvent::Merchant(MerchantUpdate::Opened {
+            merchant_id: 9,
+            accepted: true,
+            rate: 1.25,
+        }));
+        belongings.explain(&mut opened, &world);
+        // Item 23, worth 100 copper: TAKP adds 100 / 1.25 + 0.5, cut, for one.
+        let worth = |price| {
+            let mut worth = item(23);
+            worth.details.price = Some(price);
+            Message::Event(WorldEvent::Inventory(InventoryUpdate::Set(vec![worth])))
+        };
+        testing::run(|out| belongings.observe(&worth(100), &mut world, out))
+            .result
+            .unwrap();
+        let sell = ClientCommand::Sell {
+            session_id: 5,
+            merchant_id: 9,
+            slot: 23,
+            quantity: 1,
+            created: Instant::now(),
+        };
+        let echo = |slot| {
+            Message::Event(WorldEvent::Merchant(MerchantUpdate::Sold {
+                slot,
+                quantity: 1,
+                price: 0,
+            }))
+        };
+        // An echo answering no sale adds nothing.
+        let mut stray = echo(23);
+        belongings.explain(&mut stray, &world);
+        assert!(matches!(
+            stray,
+            Message::Event(WorldEvent::Merchant(MerchantUpdate::Sold { price: 0, .. }))
+        ));
+        let eqmac = &super::super::wire::EqMac;
+        testing::run_on(eqmac, |out| belongings.handle(&sell, &mut world, out))
+            .result
+            .unwrap();
+        // Released unanswered, with a pricier item put in its place: the
+        // late echo is priced from the item the sale offered.
+        let later = Instant::now() + Duration::from_secs(3);
+        testing::run(|out| belongings.tick(later, &mut world, out))
+            .result
+            .unwrap();
+        testing::run(|out| belongings.observe(&worth(1000), &mut world, out))
+            .result
+            .unwrap();
+        let mut sold = echo(23);
+        belongings.explain(&mut sold, &world);
+        assert!(matches!(
+            sold,
+            Message::Event(WorldEvent::Merchant(MerchantUpdate::Sold { price: 80, .. }))
+        ));
+        testing::run(|out| belongings.observe(&sold, &mut world, out))
+            .result
+            .unwrap();
+        assert_eq!(world.coins.purse, Some(Coins::from_copper(80)));
+    }
+
+    #[test]
+    fn a_list_with_no_window_open_is_dropped() {
+        let (mut belongings, mut world) = admitted_on_takp();
+        let list = Message::MerchantList(vec![eq_network_game::merchant::MerchantItem {
+            slot: 0,
+            price: 100,
+            quantity: 0,
+            item: item(3),
+        }]);
+        let outcome = testing::run(|out| belongings.observe(&list, &mut world, out));
+        outcome.result.unwrap();
+        assert!(matches!(outcome.events[..], [ClientEvent::Diagnostic(_)]));
+    }
+
+    #[test]
+    fn a_sale_adds_its_price_to_the_purse_and_no_drop_is_never_offered() {
+        let (mut belongings, mut world) = admitted();
+        shopping_at(&mut belongings, &mut world);
+        let sold = Message::Event(WorldEvent::Merchant(MerchantUpdate::Sold {
+            slot: 22,
+            quantity: 1,
+            price: 1234,
+        }));
+        let outcome = testing::run(|out| belongings.observe(&sold, &mut world, out));
+        outcome.result.unwrap();
+        // A platinum, and 1 platinum 2 gold 3 silver 4 copper from the sale.
+        assert_eq!(
+            world.coins.purse,
+            Some(Coins {
+                platinum: 2,
+                gold: 2,
+                silver: 3,
+                copper: 4
+            })
+        );
+        assert!(outcome
+            .events
+            .iter()
+            .any(|event| matches!(event, ClientEvent::World(WorldEvent::Coins(_)))));
+        // A NO DROP item is refused before anything goes out.
+        let mut bound = item(23);
+        bound.details.flags.push("NO DROP".into());
+        let snapshot = Message::Event(WorldEvent::Inventory(InventoryUpdate::Set(vec![bound])));
+        testing::run(|out| belongings.observe(&snapshot, &mut world, out))
+            .result
+            .unwrap();
+        let sell = ClientCommand::Sell {
+            session_id: 5,
+            merchant_id: 9,
+            slot: 23,
+            quantity: 1,
+            created: Instant::now(),
+        };
+        let outcome = testing::run(|out| belongings.handle(&sell, &mut world, out));
+        outcome.result.unwrap();
+        assert_eq!(outcome.sent, []);
+        assert!(matches!(
+            outcome.events[..],
+            [
+                ClientEvent::World(WorldEvent::MerchantRefused { .. }),
+                ClientEvent::Diagnostic(_)
+            ]
+        ));
+        assert!(!belongings.trades.active());
+    }
+
+    #[test]
+    fn on_takp_items_move_one_at_a_time_and_meals_wait() {
+        use eq_network_game::food::{AutoEat, Nourishment};
+        let (mut belongings, mut world) = admitted_on_takp();
+        assert_eq!(
+            belongings.capabilities(),
+            [
+                crate::world::Capability::Inventory,
+                crate::world::Capability::Trading
+            ]
+        );
+        for command in [
+            ClientCommand::AutoEat {
+                session_id: 5,
+                auto_eat: AutoEat::Anything,
+            },
+            ClientCommand::Consume {
+                session_id: 5,
+                slot: InventorySlot(22),
+                created: Instant::now(),
+            },
+        ] {
+            assert!(!belongings.owns(&command), "{command:?}");
+        }
+        assert!(belongings.owns(&ClientCommand::Sell {
+            session_id: 5,
+            merchant_id: 9,
+            slot: 22,
+            quantity: 1,
+            created: Instant::now(),
+        }));
+        let request = |world: &World, from: i32, to: i32| {
+            ClientCommand::MoveInventory(InventoryMove {
+                session_id: 5,
+                revision: world.inventory.revision(),
+                from: InventorySlot(from),
+                to: InventorySlot(to),
+                quantity: MoveQuantity::Whole,
+                created: Instant::now(),
+            })
+        };
+        let pick_up = request(&world, 23, 30);
+        assert!(belongings.owns(&pick_up));
+        let outcome = testing::run_on(&super::super::wire::EqMac, |out| {
+            belongings.handle(&pick_up, &mut world, out)
+        });
+        outcome.result.unwrap();
+        // In EQMac's numbers, where the cursor is 0.
+        assert_eq!(
+            outcome.sent,
+            [eq_network_game::inventory::eqmac_move(
+                InventorySlot(23),
+                InventorySlot::CURSOR,
+                MoveQuantity::Whole
+            )
+            .unwrap()]
+        );
+        // The next move waits for TAKP to settle this one.
+        let put_down = request(&world, 30, 24);
+        let held = Held::new(belongings.holds(&world, Instant::now()));
+        assert_eq!(
+            held.conflict(&put_down),
+            Some("Wait for the server to settle the last move")
+        );
+        let later = Instant::now() + REFUSAL_WINDOW;
+        assert_eq!(
+            Held::new(belongings.holds(&world, later)).conflict(&put_down),
+            None
+        );
+        // A hungry player carrying a ration does not eat.
+        let hungry = Message::Event(WorldEvent::Nourishment(Nourishment { food: 0, water: 0 }));
+        let outcome = testing::run_on(&super::super::wire::EqMac, |out| {
+            belongings.observe(&hungry, &mut world, out)
+        });
+        outcome.result.unwrap();
+        assert!(outcome.sent.is_empty(), "sent {:?}", outcome.sent);
+    }
+
     #[test]
     fn a_move_is_predicted_when_sent_and_settles_when_the_server_lets_it_stand() {
         let (mut belongings, mut world) = admitted();
@@ -850,6 +1393,7 @@ mod tests {
     #[test]
     fn an_unanswered_trade_is_refused_and_releases_the_inventory() {
         let (mut belongings, mut world) = admitted();
+        shopping_at(&mut belongings, &mut world);
         let buy = ClientCommand::Buy {
             session_id: 5,
             merchant_id: 9,
@@ -876,6 +1420,48 @@ mod tests {
             "a hold remains: {:?}",
             belongings.holds(&world, Instant::now())
         );
+    }
+
+    #[test]
+    fn a_late_sale_echo_never_removes_what_took_the_items_place() {
+        let (mut belongings, mut world) = admitted();
+        let sell = ClientCommand::Sell {
+            session_id: 5,
+            merchant_id: 9,
+            slot: 22,
+            quantity: 1,
+            created: Instant::now(),
+        };
+        testing::run(|out| belongings.handle(&sell, &mut world, out))
+            .result
+            .unwrap();
+        let later = Instant::now() + Duration::from_secs(3);
+        testing::run(|out| belongings.tick(later, &mut world, out))
+            .result
+            .unwrap();
+        assert_eq!(belongings.holds(&world, later), []);
+        // Released, the slot takes another item before the echo comes.
+        let mut replacement = item(22);
+        replacement.details.id += 1;
+        let arrived = Message::Event(WorldEvent::Inventory(InventoryUpdate::Set(vec![
+            replacement.clone(),
+        ])));
+        testing::run(|out| belongings.observe(&arrived, &mut world, out))
+            .result
+            .unwrap();
+        let echo = Message::Event(WorldEvent::Merchant(MerchantUpdate::Sold {
+            slot: 22,
+            quantity: 1,
+            price: 40,
+        }));
+        let outcome = testing::run(|out| belongings.observe(&echo, &mut world, out));
+        outcome.result.unwrap();
+        assert_eq!(
+            inventory_events(&outcome.events),
+            [&InventoryUpdate::Invalidated]
+        );
+        assert!(world.inventory.stale());
+        assert_eq!(world.inventory.items()[&InventorySlot(22)], replacement);
     }
 
     #[test]
@@ -972,6 +1558,88 @@ mod tests {
                 _ => None,
             })
             .collect()
+    }
+
+    #[test]
+    fn on_takp_coins_move_in_its_own_packet_and_the_bank_waits_for_a_banker() {
+        use eq_network_game::{
+            money::{Coin, CoinPlace, CoinTransfer, EQMAC_MOVE_OPCODE},
+            world::SpawnKind,
+        };
+        let eqmac = &super::super::wire::EqMac;
+        let (mut belongings, mut world) = admitted_on_takp();
+        let purse = Message::Event(WorldEvent::Coins(Coins {
+            gold: 12,
+            ..Coins::default()
+        }));
+        let elsewhere = Message::Event(WorldEvent::CoinsElsewhere {
+            cursor: Coins::default(),
+            bank: Coins::default(),
+            given: Coins::default(),
+            offered: Coins::default(),
+        });
+        for news in [purse, elsewhere] {
+            testing::run(|out| belongings.observe(&news, &mut world, out))
+                .result
+                .unwrap();
+        }
+        // 11 gold from the purse into platinum on the cursor: TAKP takes 10
+        // and adds 1.
+        let move_coins = |from, to| ClientCommand::MoveCoins {
+            session_id: 5,
+            transfer: CoinTransfer {
+                from,
+                to,
+                coin: Coin::Gold,
+                into: Coin::Platinum,
+                amount: 11,
+            },
+            created: Instant::now(),
+        };
+        let outcome = testing::run_on(eqmac, |out| {
+            belongings.handle(
+                &move_coins(CoinPlace::Purse, CoinPlace::Cursor),
+                &mut world,
+                out,
+            )
+        });
+        outcome.result.unwrap();
+        assert_eq!(outcome.sent.len(), 1);
+        assert_eq!(outcome.sent[0].opcode, EQMAC_MOVE_OPCODE);
+        assert_eq!(
+            world.coins.purse,
+            Some(Coins {
+                gold: 2,
+                ..Coins::default()
+            })
+        );
+        assert_eq!(world.coins.cursor.platinum, 1);
+        // Into the bank only beside a banker, which TAKP's spawns now name.
+        let to_bank = ClientCommand::MoveCoins {
+            session_id: 5,
+            transfer: CoinTransfer {
+                from: CoinPlace::Cursor,
+                to: CoinPlace::Bank,
+                coin: Coin::Platinum,
+                into: Coin::Platinum,
+                amount: 1,
+            },
+            created: Instant::now(),
+        };
+        assert!(belongings.owns(&to_bank));
+        let outcome = testing::run_on(eqmac, |out| belongings.handle(&to_bank, &mut world, out));
+        assert_eq!(outcome.sent, []);
+        assert_eq!(
+            coins_refused(&outcome.events),
+            ["Stand near a banker to use the bank"]
+        );
+        let mut banker = testing::spawn(9, SpawnKind::Npc);
+        banker.class = Some(40);
+        world.spawns.insert(banker);
+        let outcome = testing::run_on(eqmac, |out| belongings.handle(&to_bank, &mut world, out));
+        outcome.result.unwrap();
+        assert_eq!(outcome.sent.len(), 1);
+        assert_eq!(world.coins.bank.map(|bank| bank.platinum), Some(1));
     }
 
     #[test]
@@ -1186,6 +1854,31 @@ mod tests {
         });
         assert!(update.events.is_empty());
         assert_eq!(world.coins.purse, Some(Coins::default()));
+    }
+
+    #[test]
+    fn coins_takp_adds_to_the_purse_are_told_as_the_purse_they_make() {
+        let (mut belongings, mut world) = admitted();
+        let purse = Message::Event(WorldEvent::Coins(Coins {
+            gold: 2,
+            ..Coins::default()
+        }));
+        testing::run(|out| belongings.observe(&purse, &mut world, out))
+            .result
+            .unwrap();
+        let added = Message::PurseAdded(Coins {
+            gold: 5,
+            ..Coins::default()
+        });
+        let outcome = testing::run(|out| belongings.observe(&added, &mut world, out));
+        outcome.result.unwrap();
+        assert!(matches!(
+            outcome.events[..],
+            [
+                ClientEvent::World(WorldEvent::Coins(Coins { gold: 7, .. })),
+                ClientEvent::World(WorldEvent::CoinsElsewhere { .. })
+            ]
+        ));
     }
 
     #[test]

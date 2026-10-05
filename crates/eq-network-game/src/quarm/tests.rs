@@ -76,6 +76,39 @@ fn synthetic_spawn_batch_preserves_units_identity_and_visibility() {
     );
 }
 #[test]
+fn a_spawn_says_its_class_and_level() {
+    // As TAKP's patch sends them: a merchant (32 for the server's 41) of
+    // level 30, a banker (16 for 40) of level 50, a guildmaster (20 for 23),
+    // and a cleric (2), whose class passes as it is.
+    let mut data = vec![0; SPAWN_SIZE * 4];
+    for (record, (id, class, level)) in data.as_chunks_mut::<SPAWN_SIZE>().0.iter_mut().zip([
+        (9u16, 32u8, 30u8),
+        (10, 16, 50),
+        (11, 20, 40),
+        (12, 2, 1),
+    ]) {
+        record[76..78].copy_from_slice(&id.to_le_bytes());
+        record[86] = 1;
+        record[87] = class;
+        record[89] = level;
+    }
+    let spawns = decoded_spawns(&data).unwrap();
+    assert_eq!(
+        spawns
+            .iter()
+            .map(|spawn| (spawn.spawn_id, spawn.class, spawn.level))
+            .collect::<Vec<_>>(),
+        [
+            (9, Some(41), 30),
+            (10, Some(40), 50),
+            (11, Some(23), 40),
+            (12, Some(2), 1)
+        ]
+    );
+    assert!(decoded_spawns(&data[1..]).is_err());
+}
+
+#[test]
 fn updates_reject_partial_batches_and_preserve_negative_positions() {
     let mut update = [0; 15];
     update[..2].copy_from_slice(&7u16.to_le_bytes());
@@ -302,15 +335,33 @@ fn the_profile_says_the_buffs_the_book_and_each_gems_reuse_left() {
                 && book.slots()[0] == Some(73)
     ));
     assert!(decoded_spells(&data[1..]).is_err());
-    // The synthetic profile, as the zone sends it: no buffs, an empty book
-    // and no gem waiting.
+    // Twelve gold carried, two platinum on the cursor and a copper banked.
+    data[2928..2932].copy_from_slice(&12i32.to_le_bytes());
+    data[2956..2960].copy_from_slice(&2i32.to_le_bytes());
+    data[2952..2956].copy_from_slice(&1i32.to_le_bytes());
+    assert!(matches!(
+        &decoded_coins(&data).unwrap()[..],
+        [
+            WorldEvent::Coins(carried),
+            WorldEvent::CoinsElsewhere { cursor, bank, .. },
+        ] if carried.gold == 12 && cursor.platinum == 2 && bank.copper == 1
+    ));
+    // The synthetic profile, as the zone sends it: no buffs, an empty book,
+    // no gem waiting, no coins, and its bind point.
     let wire = hex::decode(PROFILE).unwrap();
     assert!(matches!(
         &eqmac(ZONE_PLAYER_PROFILE, &wire)[..],
         [
             Message::Event(WorldEvent::BuffSnapshot(buffs)),
             Message::Event(WorldEvent::SpellBook(book)),
-        ] if buffs.iter().all(Option::is_none) && book.slots().iter().all(Option::is_none)
+            Message::Event(WorldEvent::Coins(carried)),
+            Message::Event(WorldEvent::CoinsElsewhere { cursor, bank, .. }),
+            Message::Bind(_),
+        ] if buffs.iter().all(Option::is_none)
+            && book.slots().iter().all(Option::is_none)
+            && carried.is_empty()
+            && cursor.is_empty()
+            && bank.is_empty()
     ));
     assert_eq!(
         profile(&wire, "Example").unwrap().spell_refresh_ms,
@@ -348,6 +399,28 @@ fn dll_version_ignores_other_features_responses_and_malformed_messages() {
         dll_version_reply(&arbitrary_value),
         Some([0, 0, 0, 1, 7, 0, 4, 128])
     );
+}
+
+#[test]
+fn merchant_packets_read_as_the_merchant_news_every_wire_gives() {
+    use crate::merchant::{MerchantUpdate, EQMAC_BUY_OPCODE, EQMAC_END_CONFIRM_OPCODE};
+    let mut echo = [0; 16];
+    echo[4] = 3;
+    echo[8] = 2;
+    echo[12..].copy_from_slice(&60u32.to_le_bytes());
+    assert_eq!(
+        updates(EQMAC_BUY_OPCODE, &echo).unwrap(),
+        vec![WorldEvent::Merchant(MerchantUpdate::Bought {
+            slot: 3,
+            quantity: 2,
+            price: 60
+        })]
+    );
+    assert_eq!(
+        updates(EQMAC_END_CONFIRM_OPCODE, &[0x0a, 0x66]).unwrap(),
+        vec![WorldEvent::Merchant(MerchantUpdate::Closed)]
+    );
+    assert!(updates(EQMAC_BUY_OPCODE, &echo[..15]).is_err());
 }
 
 #[test]
@@ -522,4 +595,64 @@ fn the_zone_points_and_answer_are_read_as_messages() {
         eqmac(ZONE_CHANGE, &answer[..10]).as_slice(),
         [Message::Unreadable { .. }]
     ));
+}
+
+#[test]
+fn a_death_names_who_died_their_killer_and_corpse() {
+    let mut body = vec![0; 20];
+    body[..2].copy_from_slice(&7u16.to_le_bytes());
+    body[2..4].copy_from_slice(&9u16.to_le_bytes());
+    body[4..6].copy_from_slice(&7u16.to_le_bytes());
+    let read = death(&body).unwrap();
+    assert_eq!((read.spawn_id, read.killer_id, read.corpse_id), (7, 9, 7));
+    assert_eq!(read.bind_zone_id, 0);
+    assert!(matches!(
+        updates(ZONE_DEATH, &body).unwrap().as_slice(),
+        [WorldEvent::Death(_)]
+    ));
+    assert!(death(&body[..19]).is_err());
+    body[..2].fill(0);
+    assert!(death(&body).is_err());
+}
+
+#[test]
+fn a_bleed_out_report_names_only_the_player() {
+    let report = bled_out(7).unwrap();
+    assert_eq!(report.opcode, ZONE_DEATH);
+    let mut expected = vec![0; 20];
+    expected[..2].copy_from_slice(&7u16.to_le_bytes());
+    expected[8..10].copy_from_slice(&[0xff, 0xff]);
+    expected[10] = 28;
+    assert_eq!(report.body, expected);
+    // It reads back as the player's death, with no killer and no corpse.
+    let read = death(&report.body).unwrap();
+    assert_eq!((read.spawn_id, read.killer_id, read.corpse_id), (7, 0, 0));
+    assert!(bled_out(0).is_err());
+}
+
+#[test]
+fn the_profile_names_the_first_bind_point() {
+    let mut data = vec![0; PROFILE_SIZE];
+    data[3784..3788].copy_from_slice(&2u32.to_le_bytes());
+    // A second bind point, which is not the one the player goes home to.
+    data[3788..3792].copy_from_slice(&4u32.to_le_bytes());
+    for (offset, value) in [(3804, 428.0f32), (3824, -74.0), (3844, 3.75), (3864, 128.0)] {
+        data[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+    }
+    let bind = decoded_bind(&data).unwrap();
+    assert_eq!(bind.zone_id, 2);
+    assert_eq!(
+        (
+            bind.position.x,
+            bind.position.y,
+            bind.position.z,
+            bind.position.heading
+        ),
+        (-74.0, 428.0, 3.75, 128.0)
+    );
+    let home = bind.offer();
+    assert_eq!((home.zone_id, home.reason, home.to_bind), (2, 10, true));
+    data[3784..3788].copy_from_slice(&70_000u32.to_le_bytes());
+    assert!(decoded_bind(&data).is_err());
+    assert!(decoded_bind(&data[1..]).is_err());
 }
