@@ -1043,16 +1043,21 @@ mod tests {
         }
     }
 
-    #[test]
-    fn a_bleed_out_report_is_the_players_death_to_every_feature_and_the_host() {
+    /// Admits the player, spawn 7, with these features on the `EQMac` wire,
+    /// the profile naming the bind point first; tells the session it knows
+    /// the player's items, as the inventory feature would; hears the server
+    /// put the player at -11 HP; and asks, as a host would, that the player
+    /// bled out. Then the session hears its own news, and the death pause
+    /// of a dead player runs out.
+    fn bleed_out(
+        mut features: Features,
+    ) -> (
+        World,
+        crate::client::session::feature::testing::Outcome<Result<()>>,
+    ) {
         use crate::client::session::{feature::testing, wire};
         use crate::world::{ItemHitPoints, WorldEvent};
-        use eq_network_game::quarm;
-        let mut features = Features::new(
-            servers::server_type(crate::client::ServerProtocol::Takp),
-            "Tester",
-            eq_network_game::food::AutoEat::default(),
-        );
+        use eq_network_game::inventory::{Inventory, InventoryUpdate};
         let zone = super::super::admission::Zone {
             name: "qeynos".into(),
             far_clip: None,
@@ -1066,8 +1071,6 @@ mod tests {
         };
         let outcome = testing::run(|out| -> Result<()> {
             out.wire = &wire::EqMac;
-            // The profile names the bind point before the zone admits the
-            // player.
             assert!(hear(
                 vec![Message::Bind(bind)],
                 &mut features,
@@ -1084,6 +1087,9 @@ mod tests {
                 out,
             )?;
             world.admitted = Some(Instant::now());
+            let mut inventory = Inventory::default();
+            inventory.apply(InventoryUpdate::Snapshot(Vec::new()));
+            world.inventory = inventory.into();
             let report = Message::Event(WorldEvent::HitPoints {
                 spawn_id: 7,
                 current: -11,
@@ -1097,12 +1103,39 @@ mod tests {
             };
             assert!(features.handle(&bled_out, &mut world, out)?);
             assert!(settle(&mut features, &mut world, out, true)?.is_none());
-            // Transfers heard the death the session made happen.
-            assert!(world.lifecycle.is_dead());
-            // Once the death pause is over, the player asks their way home.
-            features.tick(Instant::now(), &mut world, out)
+            if world.lifecycle.is_dead() {
+                features.tick(Instant::now(), &mut world, out)?;
+            }
+            Ok(())
         });
+        (world, outcome)
+    }
+
+    #[test]
+    fn a_bleed_out_report_is_the_players_death_to_every_feature_and_the_host() {
+        use crate::client::session::{
+            bleeding::BleedingOut,
+            transfers::{Home, Transfers},
+        };
+        use crate::world::WorldEvent;
+        use eq_network_game::quarm;
+        /// A count that finds the player's items add nothing.
+        #[allow(clippy::unnecessary_wraps, reason = "the signature every count has")]
+        const fn naked(_world: &World) -> Result<i32, &'static str> {
+            Ok(0)
+        }
+        let features = Features(
+            vec![
+                Box::new(Transfers::new("Tester", Home::Asked)),
+                Box::new(BleedingOut::new(-11, naked)),
+            ],
+            Vec::new(),
+        );
+        let (world, outcome) = bleed_out(features);
         outcome.result.unwrap();
+        // Transfers heard the death the session made happen, and once the
+        // death pause was over, the player asked their way home.
+        assert!(world.lifecycle.is_dead());
         assert_eq!(outcome.sent[0], quarm::bled_out(7).unwrap());
         assert_eq!(outcome.sent[1].opcode, quarm::ZONE_CHANGE);
         assert_eq!(outcome.sent.len(), 2);
@@ -1116,6 +1149,24 @@ mod tests {
             matches!(event, ClientEvent::World(WorldEvent::Death(death)) if death.spawn_id == 7)
         });
         assert!(threshold.unwrap() < death.unwrap());
+    }
+
+    #[test]
+    fn takp_takes_no_bleed_out_report_until_it_counts_what_the_items_add() {
+        let (world, outcome) = bleed_out(Features::new(
+            servers::server_type(crate::client::ServerProtocol::Takp),
+            "Tester",
+            eq_network_game::food::AutoEat::default(),
+        ));
+        outcome.result.unwrap();
+        // Knowing the items is not enough: TAKP's -11 leaves out what they
+        // add, so the player may well be alive.
+        assert_eq!(outcome.sent, []);
+        assert!(!world.lifecycle.is_dead());
+        assert!(outcome.events.iter().any(|event| matches!(
+            event,
+            ClientEvent::Diagnostic(said) if said.contains("cannot count")
+        )));
     }
 
     #[test]

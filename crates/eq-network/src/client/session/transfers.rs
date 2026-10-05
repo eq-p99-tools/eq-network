@@ -687,7 +687,7 @@ mod tests {
         let outcome = testing::run(|out| transfers.observe(&died(), &mut world, out));
         outcome.result.unwrap();
         // The player is dead at once, and asks for nothing yet.
-        assert!(outcome.sent.is_empty());
+        assert_eq!(outcome.sent, []);
         assert!(world.lifecycle.is_dead() && world.lifecycle.pending().is_none());
         testing::run(|out| transfers.tick(before, &mut world, out))
             .result
@@ -708,7 +708,7 @@ mod tests {
         assert!(world.lifecycle.is_dead());
         let outcome = testing::run(|out| transfers.tick(after, &mut world, out));
         outcome.result.unwrap();
-        assert!(outcome.sent.is_empty());
+        assert_eq!(outcome.sent, []);
         // Without a bind point there is nothing to ask for.
         let mut lost = Transfers::new("Tester", Home::Asked);
         let mut world = World::new(5);
@@ -756,7 +756,7 @@ mod tests {
         let after = Instant::now() + DEATH_PAUSE;
         let outcome = testing::run(|out| transfers.tick(after, &mut world, out));
         outcome.result.unwrap();
-        assert!(outcome.sent.is_empty());
+        assert_eq!(outcome.sent, []);
         assert_eq!(world.lifecycle.pending(), Some(&crossing));
         let mut answer = crossing.response("Tester").unwrap().body;
         answer[84..88].copy_from_slice(&(-1i32).to_le_bytes());

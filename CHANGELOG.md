@@ -66,18 +66,24 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `WorldEvent::DeathThreshold` tells a host the HP at or below which the
   server takes the player as dead (-11 on TAKP). A host whose HP, with
   what equipped items add, reaches it on the server's report, with no
-  death named for the player, sends `GameCommand::BledOut` once. The
-  session refuses it while the server's last report is above the
-  threshold, since that report leaves item HP out; otherwise it sends
-  `Request::BledOut`, `EQMac`'s 20-byte `OP_Death` naming the player
-  (`quarm::bled_out`; Titanium sends none). TAKP kills the player it names
-  without checking their HP, so a host must count item HP before it
-  sends. Every field but the player's spawn is inferred until the official
-  client's bleed-out is recorded: no killer, damage or spell, hand to hand
-  (28), and no corpse, level or player flag. The session then takes the
-  player as dead just as if the server had said so: every feature and the
-  host hear one `WorldEvent::Death`, and the transfers feature alone marks
-  the player dead. `Capability::ALL` grows to 36.
+  death named for the player, sends `GameCommand::BledOut`, and the
+  session sends `Request::BledOut`, `EQMac`'s 20-byte `OP_Death` naming
+  the player (`quarm::bled_out`; Titanium sends none), only when the
+  server's last report with what the player's items add is at or below
+  the threshold. TAKP kills the player it names without checking their
+  HP, and its report leaves item HP out, so a living player in HP gear can
+  show the threshold: the session refuses the report while it does not
+  know the player's items, and counts what they add by the server type's
+  own rule. TAKP adds worn effects, the first food carried and a GM's
+  items below their level too, and its count comes with the `EQMac`
+  inventory, so until then TAKP takes no report at all. A dead player's
+  report is refused too. Every field but the player's spawn is inferred
+  until the official client's bleed-out is recorded: no killer, damage or
+  spell, hand to hand (28), and no corpse, level or player flag. The
+  session then takes the player as dead just as if the server had said
+  so: every feature and the host hear one `WorldEvent::Death`, and the
+  transfers feature alone marks the player dead. `Capability::ALL` grows
+  to 36.
 
 - The world's damage to the player (`Capability::EnvironmentalDamage`,
   `EqEmu` only, and there falls alone): `GameCommand::EnvironmentalDamage`

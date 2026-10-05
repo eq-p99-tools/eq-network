@@ -19,7 +19,7 @@ use anyhow::Result;
 
 use super::{
     abilities::Abilities,
-    bleeding::BleedingOut,
+    bleeding::{self, BleedingOut, ItemCount},
     camp::Camp,
     casting::Casting,
     character::Character,
@@ -466,9 +466,9 @@ mod shared {
     use super::{
         Abilities, Ability, Belongings, BleedingOut, Camp, Casting, Character, Clock, Combat,
         Corpses, Doors, Edits, Entities, Exchanges, Feature, GameDialect, GroundObjects, Groups,
-        Hazard, Hazards, Home, Listing, Looting, Map, MerchantOffers, Motion, Pets, Raids, Reading,
-        Resurrection, Setup, Socials, Spellbook, Talk, Targeting, Tradeskills, Training, Transfers,
-        Who,
+        Hazard, Hazards, Home, ItemCount, Listing, Looting, Map, MerchantOffers, Motion, Pets,
+        Raids, Reading, Resurrection, Setup, Socials, Spellbook, Talk, Targeting, Tradeskills,
+        Training, Transfers, Who,
     };
 
     pub(super) fn casting() -> Box<dyn Feature> {
@@ -536,9 +536,10 @@ mod shared {
         Box::new(Transfers::new(setup.character, home))
     }
 
-    /// Reporting a bleed-out at the HP the server takes as death.
-    pub(super) fn bleeding_out(threshold: i32) -> Box<dyn Feature> {
-        Box::new(BleedingOut::new(threshold))
+    /// Reporting a bleed-out at the HP the server takes as death, counting
+    /// what the player's items add as the server does.
+    pub(super) fn bleeding_out(threshold: i32, items: ItemCount) -> Box<dyn Feature> {
+        Box::new(BleedingOut::new(threshold, items))
     }
 
     pub(super) fn clock() -> Box<dyn Feature> {
@@ -969,9 +970,14 @@ impl ServerType for Takp {
 
     /// TAKP announces no death to a player who bleeds out, nor to one
     /// killed by a tick of damage or by their own hand, and waits for the
-    /// client's own report, as the official client sends.
+    /// client's own report, as the official client sends. The session holds
+    /// every report back until it counts what the player's items add as
+    /// TAKP does, which comes with the `EQMac` inventory.
     fn bleeding_out(&self, _setup: &Setup<'_>) -> Provided {
-        offer(shared::bleeding_out(TAKP_DEATH_THRESHOLD))
+        offer(shared::bleeding_out(
+            TAKP_DEATH_THRESHOLD,
+            bleeding::uncounted,
+        ))
     }
 
     fn targeting(&self, _setup: &Setup<'_>) -> Provided {
