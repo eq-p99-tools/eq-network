@@ -1312,9 +1312,9 @@ mod tests {
             assert!(!p99.contains(&capability));
         }
         assert_eq!(eqemu.len(), p99.len() + 15);
-        // EQMac servers talk; TAKP also camps and moves, follows zone
-        // changes and takes the client's report of a bleed-out, which Quarm
-        // does not yet.
+        // EQMac servers talk; TAKP also camps, moves and moves items, follows
+        // zone changes and takes the client's report of a bleed-out, which
+        // Quarm does not yet.
         assert_eq!(
             features(crate::client::ServerProtocol::Quarm),
             [Capability::Talking]
@@ -1322,6 +1322,8 @@ mod tests {
         assert_eq!(
             features(crate::client::ServerProtocol::Takp),
             [
+                Capability::Inventory,
+                Capability::Trading,
                 Capability::Moving,
                 Capability::Targeting,
                 Capability::Combat,
