@@ -116,14 +116,33 @@ fn count(quantity: u32, verb: &str) -> Result<u8> {
         .with_context(|| format!("{verb} between 1 and 255 units"))
 }
 
-/// Decodes `EQMac`'s merchant packets; other opcodes give none.
+/// The merchant's whole list (`OP_ShopInventoryPacket`), which replaces
+/// what it listed before: TAKP sends the list whole on every change, and
+/// numbers its places afresh each time (`BulkSendMerchantInventory`). Each
+/// price is before the merchant's rate (where `EQEmu`'s list prices carry
+/// it), and no counts come, so each reads as 0, as an unlimited count does
+/// on Titanium.
+///
+/// # Errors
+/// Rejects malformed records and compression.
+pub fn eqmac_list(body: &[u8]) -> Result<Vec<MerchantItem>> {
+    Ok(crate::inventory::eqmac_merchant_stock(body)?
+        .into_iter()
+        .map(|(item, slot, price)| MerchantItem {
+            slot,
+            price,
+            quantity: 0,
+            item,
+        })
+        .collect())
+}
+
+/// Decodes `EQMac`'s merchant packets but the list ([`eqmac_list`]); other
+/// opcodes give none.
 ///
 /// The open answer says whether the merchant trades, and the rate it
 /// charges at (`CalcPriceMod`): a purchase costs a list price times it, and
-/// a sale pays the item's price divided by it. The list comes whole, each
-/// price before that rate (`Client::BulkSendMerchantInventory`, where
-/// `EQEmu`'s list prices carry it), and with no counts, so each reads as 0,
-/// as an unlimited count does on Titanium. A refused purchase is echoed
+/// a sale pays the item's price divided by it. A refused purchase is echoed
 /// with nothing bought. A sale's echo names the player's slot in `EQMac`'s
 /// numbers and prices nothing: `Client::Handle_OP_ShopPlayerSell` fills
 /// the 16-bit `OldMerchant_Purchase_Struct`, which `ENCODE(OP_ShopPlayerSell)`
@@ -151,17 +170,6 @@ pub fn decode_eqmac(opcode: u16, body: &[u8]) -> Result<Option<Vec<MerchantUpdat
                 rate,
             }]
         }
-        EQMAC_STOCK_OPCODE => crate::inventory::eqmac_merchant_stock(body)?
-            .into_iter()
-            .map(|(item, slot, price)| {
-                MerchantUpdate::Item(Box::new(MerchantItem {
-                    slot,
-                    price,
-                    quantity: 0,
-                    item,
-                }))
-            })
-            .collect(),
         EQMAC_DELETE_OPCODE => {
             // The merchant, the player, the place, then a type of 0x40.
             ensure!(body.len() == 6, "invalid EQMac stock removal length");
@@ -277,22 +285,17 @@ mod tests {
             answer[8..].copy_from_slice(&rate.to_le_bytes());
             assert!(decode_eqmac(EQMAC_REQUEST_OPCODE, &answer).is_err());
         }
-        let list = decode_eqmac(
-            EQMAC_STOCK_OPCODE,
-            &stock(&[listed(13005, 0, 12), listed(13006, 1, 30)]),
-        )
-        .unwrap()
-        .unwrap();
+        let list = eqmac_list(&stock(&[listed(13005, 0, 12), listed(13006, 1, 30)])).unwrap();
         let listed_items: Vec<_> = list
             .iter()
-            .map(|update| match update {
-                MerchantUpdate::Item(item) => {
-                    (item.slot, item.price, item.quantity, item.item.details.id)
-                }
-                other => panic!("{other:?}"),
-            })
+            .map(|item| (item.slot, item.price, item.quantity, item.item.details.id))
             .collect();
         assert_eq!(listed_items, [(0, 12, 0, 13005), (1, 30, 0, 13006)]);
+        // The list is not one of the packets the decoder reads.
+        assert_eq!(
+            decode_eqmac(EQMAC_STOCK_OPCODE, &stock(&[listed(13005, 0, 12)])).unwrap(),
+            None
+        );
         assert_eq!(
             decode_eqmac(EQMAC_DELETE_OPCODE, &[132, 3, 7, 0, 2, 0x40]).unwrap(),
             Some(vec![MerchantUpdate::Removed { slot: 2 }])
@@ -356,14 +359,14 @@ mod tests {
         // record, and an empty list.
         let mut tagged = listed(13005, 0, 12);
         tagged[0] = 1;
-        assert!(decode_eqmac(EQMAC_STOCK_OPCODE, &stock(&[tagged])).is_err());
-        assert!(decode_eqmac(EQMAC_STOCK_OPCODE, &stock(&[listed(13005, 0, -1)])).is_err());
+        assert!(eqmac_list(&stock(&[tagged])).is_err());
+        assert!(eqmac_list(&stock(&[listed(13005, 0, -1)])).is_err());
         let mut partial = vec![1, 0];
         partial.extend(miniz_oxide::deflate::compress_to_vec_zlib(
             &listed(13005, 0, 12)[..361],
             4,
         ));
-        assert!(decode_eqmac(EQMAC_STOCK_OPCODE, &partial).is_err());
-        assert!(decode_eqmac(EQMAC_STOCK_OPCODE, &[0, 0]).is_err());
+        assert!(eqmac_list(&partial).is_err());
+        assert!(eqmac_list(&[0, 0]).is_err());
     }
 }

@@ -14,6 +14,11 @@ const PROFILE_OPCODE: u16 = 0x75df;
 pub enum Message {
     /// News the host hears about too.
     Event(WorldEvent),
+    /// A merchant's whole list, which replaces what it listed before, as
+    /// `EQMac`'s comes on every change, its places numbered afresh. The
+    /// feature keeping the merchant window tells the host the places that
+    /// left and each item listed.
+    MerchantList(Vec<crate::merchant::MerchantItem>),
     /// The destinations the zone numbered for its zone lines.
     ZonePoints(zoning::ZonePoints),
     /// The server's offer to move the player, to another zone or within this one.
@@ -164,6 +169,10 @@ pub fn eqmac(opcode: u16, body: &[u8]) -> Vec<Message> {
                 |considered| Message::Event(WorldEvent::Consideration(considered)),
             )]
         }
+        crate::merchant::EQMAC_STOCK_OPCODE => vec![crate::merchant::eqmac_list(body).map_or_else(
+            |error| unreadable(Part::World, &error),
+            Message::MerchantList,
+        )],
         _ => match inventory::decode_eqmac(opcode, body) {
             Ok(Some(update)) => vec![Message::Event(WorldEvent::Inventory(update))],
             Err(error) => vec![unreadable(Part::Inventory, &error)],
@@ -270,6 +279,19 @@ mod tests {
             }]
         ));
         assert!(titanium(0xffff, &[]).is_empty());
+    }
+
+    #[test]
+    fn takps_merchant_list_is_one_message_for_the_session() {
+        // A list that cannot be read says so; one that can is a
+        // `MerchantList` (its records are read in `merchant::eqmac_list`).
+        assert!(matches!(
+            eqmac(crate::merchant::EQMAC_STOCK_OPCODE, &[0, 0])[..],
+            [Message::Unreadable {
+                part: Part::World,
+                ..
+            }]
+        ));
     }
 
     #[test]

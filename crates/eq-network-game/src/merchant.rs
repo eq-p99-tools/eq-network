@@ -11,7 +11,7 @@ use serde::Serialize;
 mod eqmac;
 
 pub use eqmac::{
-    decode_eqmac, eqmac_buy, eqmac_end, eqmac_request, eqmac_sell, EQMAC_BUY_OPCODE,
+    decode_eqmac, eqmac_buy, eqmac_end, eqmac_list, eqmac_request, eqmac_sell, EQMAC_BUY_OPCODE,
     EQMAC_DELETE_OPCODE, EQMAC_END_CONFIRM_OPCODE, EQMAC_END_OPCODE, EQMAC_REQUEST_OPCODE,
     EQMAC_SELL_OPCODE, EQMAC_STOCK_OPCODE,
 };
@@ -31,17 +31,20 @@ pub const DELETE_OPCODE: u16 = 0x0da9;
 /// `ItemPacketMerchant` inside `OP_ItemPacket`.
 pub const ITEM_PACKET_KIND: u32 = 0x64;
 
-/// How a client generation's merchant lists quote their prices: with the
-/// merchant's rate in them, as `EQEmu`'s Titanium lists do
-/// (`Client::BulkSendMerchantInventory` multiplies by `CalcPriceMod`), or
-/// before it, as TAKP's `EQMac` lists do, the rate coming with the window's
-/// opening.
+/// How a client generation's merchant packets price trades: with the
+/// merchant's rate in each list price and each echo priced, as `EQEmu`'s
+/// Titanium packets are (`Client::BulkSendMerchantInventory` multiplies by
+/// `CalcPriceMod`), or with list prices before the rate and a sale's echo
+/// pricing nothing, as TAKP's `EQMac` packets are, the rate coming with the
+/// window's opening; there the client works both out from the rate as the
+/// server does.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum Quotes {
     /// Each list price is what a unit costs.
     #[default]
     WithRate,
-    /// Each list price is before the rate the window opened with.
+    /// Each list price is before the rate the window opened with, and a
+    /// sale's echo prices nothing.
     BeforeRate,
 }
 
@@ -72,6 +75,25 @@ impl Quotes {
         match self {
             Self::WithRate => quote,
             Self::BeforeRate => (quote as f32 * rate) as u32,
+        }
+    }
+
+    /// What the server added to the purse for a sale of `units` of an item
+    /// whose base price is `price`, where the sale's echo prices nothing:
+    /// TAKP adds `int(Price / rate + 0.5)` a unit, in single precision, and
+    /// echoes the count it charged, 1 for a charged item
+    /// (`Client::Handle_OP_ShopPlayerSell`). Inferred from the code; None
+    /// where the echo carries the price.
+    #[must_use]
+    #[allow(
+        clippy::cast_possible_truncation,
+        clippy::cast_precision_loss,
+        clippy::cast_sign_loss
+    )] // As the server computes it: in single precision, cut toward zero.
+    pub fn sale_price(self, price: u32, rate: f32, units: u32) -> Option<u32> {
+        match self {
+            Self::WithRate => None,
+            Self::BeforeRate => Some(((price as f32 / rate + 0.5) as u32).saturating_mul(units)),
         }
     }
 
@@ -306,6 +328,11 @@ mod tests {
         assert_eq!(Quotes::BeforeRate.unit_price(100, 0.875), 87);
         // A list price cut from up to one copper more costs at most 127.
         assert_eq!(Quotes::BeforeRate.most_per_unit(100, 1.25), 127);
+        // A sale: TAKP adds 100 / 1.25 + 0.5, cut, a unit; Titanium's echo
+        // prices it.
+        assert_eq!(Quotes::BeforeRate.sale_price(100, 1.25, 2), Some(160));
+        assert_eq!(Quotes::BeforeRate.sale_price(7, 0.9, 1), Some(8));
+        assert_eq!(Quotes::WithRate.sale_price(100, 1.25, 2), None);
         for (quote, rate) in [(100u32, 1.25f32), (7, 0.9), (1999, 1.1), (0, 1.2)] {
             assert!(
                 Quotes::BeforeRate.most_per_unit(quote, rate)

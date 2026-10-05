@@ -32,7 +32,7 @@ use super::{
     feature::Feature,
     groups::Groups,
     hazards::Hazards,
-    inventory::Belongings,
+    inventory::{Allowances, Belongings},
     listing::Listing,
     looting::Looting,
     map::Map,
@@ -458,11 +458,11 @@ impl Shield for WorldCodec {
 /// them; each server type still lists the ones it provides.
 mod shared {
     use super::{
-        Abilities, Ability, Belongings, Camp, Casting, Character, Clock, Combat, Corpses, Doors,
-        Edits, Entities, Exchanges, Feature, GameDialect, GroundObjects, Groups, Hazard, Hazards,
-        Listing, Looting, Map, MerchantOffers, Motion, MoveRules, Pets, Quotes, Raids, Reading,
-        Resurrection, Setup, Socials, Spellbook, Talk, Targeting, Tradeskills, Training, Transfers,
-        Who,
+        Abilities, Ability, Allowances, Belongings, Camp, Casting, Character, Clock, Combat,
+        Corpses, Doors, Edits, Entities, Exchanges, Feature, GameDialect, GroundObjects, Groups,
+        Hazard, Hazards, Listing, Looting, Map, MerchantOffers, Motion, MoveRules, Pets, Quotes,
+        Raids, Reading, Resurrection, Setup, Socials, Spellbook, Talk, Targeting, Tradeskills,
+        Training, Transfers, Who,
     };
 
     pub(super) fn casting() -> Box<dyn Feature> {
@@ -478,10 +478,19 @@ mod shared {
     }
 
     /// The inventory, whose items the player moves under the server type's
-    /// rules and trades with merchants whose lists quote prices as
-    /// `quotes` says, with no coin moves or meals yet.
-    pub(super) fn shopping_inventory(rules: MoveRules, quotes: Quotes) -> Box<dyn Feature> {
-        Box::new(Belongings::shopping(rules, quotes))
+    /// rules, with what else it allows, and merchant packets priced as
+    /// `quotes` says.
+    pub(super) fn inventory_under(
+        rules: MoveRules,
+        quotes: Quotes,
+        allows: Allowances,
+    ) -> Box<dyn Feature> {
+        Box::new(Belongings::under(
+            rules,
+            quotes,
+            allows,
+            eq_network_game::food::AutoEat::default(),
+        ))
     }
 
     /// Moving, with or without the jumps and falls the server takes.
@@ -940,9 +949,13 @@ impl ServerType for Takp {
     /// merchants, whose lists TAKP quotes before their rate. Coin moves and
     /// meals wait.
     fn inventory(&self, _setup: &Setup<'_>) -> Provided {
-        offer(shared::shopping_inventory(
+        offer(shared::inventory_under(
             MoveRules::Takp,
             Quotes::of(GameDialect::EqMac),
+            Allowances {
+                merchants: true,
+                ..Allowances::default()
+            },
         ))
     }
 

@@ -498,7 +498,6 @@ pub fn updates(opcode: u16, body: &[u8]) -> Result<Vec<WorldEvent>> {
         0x5f41 | 0x6b42 => vec![WorldEvent::Spawns(spawns(body)?)],
         0xf340 => vec![position(body)?],
         crate::merchant::EQMAC_REQUEST_OPCODE
-        | crate::merchant::EQMAC_STOCK_OPCODE
         | crate::merchant::EQMAC_DELETE_OPCODE
         | crate::merchant::EQMAC_BUY_OPCODE
         | crate::merchant::EQMAC_SELL_OPCODE

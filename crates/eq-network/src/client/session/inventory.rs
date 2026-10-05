@@ -253,20 +253,31 @@ fn change(update: InventoryUpdate, world: &mut World, out: &mut Out<'_, '_>) -> 
         .send(ClientEvent::World(WorldEvent::Inventory(update)))
 }
 
-/// What the player may do with their belongings on a server type.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum Acts {
-    /// Move items, under the server type's rules, and trade with
-    /// merchants; coin moves and meals wait.
-    Shops,
-    /// Move items and coins, trade with merchants and eat.
-    Everything,
+/// What a server type lets the player do with their belongings beside
+/// moving items, each as checked on that kind of server.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(super) struct Allowances {
+    /// Moving coins between the purse, the cursor, the bank and a trade.
+    pub(super) coins: bool,
+    /// Buying and selling at merchants.
+    pub(super) merchants: bool,
+    /// Eating and drinking, by hand and on the session's own.
+    pub(super) meals: bool,
+}
+
+impl Allowances {
+    /// Coins, merchants and meals.
+    pub(super) const ALL: Self = Self {
+        coins: true,
+        merchants: true,
+        meals: true,
+    };
 }
 
 /// The player's belongings and the changes to them in flight.
 pub(super) struct Belongings {
-    /// What the player may do with them.
-    acts: Acts,
+    /// What the player may do with them beside moving items.
+    allows: Allowances,
     /// The server type's rules for item moves.
     rules: MoveRules,
     /// Moves waiting to settle.
@@ -275,34 +286,41 @@ pub(super) struct Belongings {
     trades: MerchantTrades,
     /// The merchant whose window is open, and what its list costs.
     merchant: OpenMerchant,
-    /// How the server type's merchant lists quote their prices.
+    /// How the server type's merchant packets price trades.
     quotes: Quotes,
     /// How fed and watered the player is, which decides when to eat.
     meals: meals::Meals,
 }
 
 impl Belongings {
+    /// Belongings under `EQEmu`'s rules on Titanium's wire, with coins,
+    /// merchants and meals.
     pub(super) fn new(auto_eat: eq_network_game::food::AutoEat) -> Self {
+        Self::under(
+            MoveRules::EqEmu,
+            Quotes::WithRate,
+            Allowances::ALL,
+            auto_eat,
+        )
+    }
+
+    /// Belongings whose items the player moves under a server type's
+    /// `rules`, with what else it `allows`, and merchant packets priced as
+    /// `quotes` says. Without meals the session never eats.
+    pub(super) fn under(
+        rules: MoveRules,
+        quotes: Quotes,
+        allows: Allowances,
+        auto_eat: eq_network_game::food::AutoEat,
+    ) -> Self {
         Self {
-            acts: Acts::Everything,
-            rules: MoveRules::EqEmu,
+            allows,
+            rules,
             settlement: Settlement::default(),
             trades: MerchantTrades::default(),
             merchant: OpenMerchant::default(),
-            quotes: Quotes::WithRate,
-            meals: meals::Meals::new(auto_eat),
-        }
-    }
-
-    /// Belongings whose items the player moves under a server type's rules
-    /// and trades with merchants whose lists quote prices as `quotes` says;
-    /// coin moves and meals are not offered, and the session never eats.
-    pub(super) fn shopping(rules: MoveRules, quotes: Quotes) -> Self {
-        Self {
-            acts: Acts::Shops,
-            rules,
             quotes,
-            ..Self::new(eq_network_game::food::AutoEat::default())
+            meals: meals::Meals::new(auto_eat),
         }
     }
 
@@ -459,9 +477,11 @@ impl Belongings {
 impl Feature for Belongings {
     fn capabilities(&self) -> Vec<crate::world::Capability> {
         use crate::world::Capability;
-        match self.acts {
-            Acts::Shops | Acts::Everything => vec![Capability::Inventory, Capability::Trading],
+        let mut offered = vec![Capability::Inventory];
+        if self.allows.merchants {
+            offered.push(Capability::Trading);
         }
+        offered
     }
 
     /// Item updates and the profile's coins before admission build the
@@ -524,24 +544,14 @@ impl Feature for Belongings {
     }
 
     fn owns(&self, command: &ClientCommand) -> bool {
-        match self.acts {
-            Acts::Shops => matches!(
-                command,
-                ClientCommand::MoveInventory(_)
-                    | ClientCommand::Shop { .. }
-                    | ClientCommand::Buy { .. }
-                    | ClientCommand::Sell { .. }
-            ),
-            Acts::Everything => matches!(
-                command,
-                ClientCommand::MoveInventory(_)
-                    | ClientCommand::MoveCoins { .. }
-                    | ClientCommand::Shop { .. }
-                    | ClientCommand::Buy { .. }
-                    | ClientCommand::Sell { .. }
-                    | ClientCommand::Consume { .. }
-                    | ClientCommand::AutoEat { .. }
-            ),
+        match command {
+            ClientCommand::MoveInventory(_) => true,
+            ClientCommand::MoveCoins { .. } => self.allows.coins,
+            ClientCommand::Shop { .. } | ClientCommand::Buy { .. } | ClientCommand::Sell { .. } => {
+                self.allows.merchants
+            }
+            ClientCommand::Consume { .. } | ClientCommand::AutoEat { .. } => self.allows.meals,
+            _ => false,
         }
     }
 
@@ -590,11 +600,32 @@ impl Feature for Belongings {
 
     /// Follows the open merchant's list before anyone hears it, so a list
     /// quoted before the merchant's rate reaches the host at the price
-    /// charged.
-    fn explain(&mut self, message: &mut Message, _world: &World) {
-        if let Message::Event(WorldEvent::Merchant(update)) = message {
-            self.merchant.explain(update, self.quotes);
+    /// charged; and where a sale's echo prices nothing, prices it as the
+    /// server added it to the purse, from the item sold, before the ledger
+    /// and the host hear it (inferred: TAKP's echo price comes from
+    /// padding).
+    fn explain(&mut self, message: &mut Message, world: &World) {
+        let Message::Event(WorldEvent::Merchant(update)) = message else {
+            return;
+        };
+        if let MerchantUpdate::Sold {
+            slot,
+            quantity,
+            price,
+        } = update
+        {
+            let base = world
+                .inventory
+                .items()
+                .get(&InventorySlot(*slot))
+                .and_then(|item| item.details.price);
+            if let Some(added) =
+                base.and_then(|base| self.merchant.sale_price(self.quotes, base, *quantity))
+            {
+                *price = added;
+            }
         }
+        self.merchant.explain(update, self.quotes);
     }
 
     /// Item updates, the inventory change a sale's echo stands for, and what
@@ -613,6 +644,21 @@ impl Feature for Belongings {
             Message::Event(WorldEvent::Inventory(update)) => {
                 world.inventory.0.apply(update.clone());
             }
+            // A whole list: the places gone, then each item, told as the
+            // merchant news a list sent item by item would be.
+            Message::MerchantList(items) => {
+                let mut items = items.clone();
+                for slot in self.merchant.replace(&mut items, self.quotes) {
+                    out.log.send(ClientEvent::World(WorldEvent::Merchant(
+                        MerchantUpdate::Removed { slot },
+                    )))?;
+                }
+                for listed in items {
+                    out.log.send(ClientEvent::World(WorldEvent::Merchant(
+                        MerchantUpdate::Item(Box::new(listed)),
+                    )))?;
+                }
+            }
             Message::Unreadable {
                 part: Part::Inventory,
                 ..
@@ -630,9 +676,7 @@ impl Feature for Belongings {
                 self.trades.clear();
                 self.merchant.clear();
             }
-            Message::Event(WorldEvent::Nourishment(nourishment))
-                if self.acts == Acts::Everything =>
-            {
+            Message::Event(WorldEvent::Nourishment(nourishment)) if self.allows.meals => {
                 self.meals.nourished(*nourishment, world, out)?;
             }
             // The window closed: what the trade slots held was handed over, or
@@ -923,7 +967,15 @@ mod tests {
     /// Admitted player 7 on TAKP, carrying a ration (22) and another item
     /// (23).
     fn admitted_on_takp() -> (Belongings, World) {
-        let mut belongings = Belongings::shopping(MoveRules::Takp, Quotes::BeforeRate);
+        let mut belongings = Belongings::under(
+            MoveRules::Takp,
+            Quotes::BeforeRate,
+            Allowances {
+                merchants: true,
+                ..Allowances::default()
+            },
+            eq_network_game::food::AutoEat::default(),
+        );
         let mut world = World::new(5);
         let mut ration = item(22);
         ration.rules.item_type = 14;
@@ -957,18 +1009,36 @@ mod tests {
             rate: 1.25,
         }));
         belongings.explain(&mut opened, &world);
-        let mut listed = Message::Event(WorldEvent::Merchant(MerchantUpdate::Item(Box::new(
-            eq_network_game::merchant::MerchantItem {
-                slot: 3,
-                price: 100,
-                quantity: 0,
-                item: item(3),
-            },
-        ))));
-        belongings.explain(&mut listed, &world);
+        let listed = |slot| eq_network_game::merchant::MerchantItem {
+            slot,
+            price: 100,
+            quantity: 0,
+            item: item(3),
+        };
+        let list =
+            |slots: &[u32]| Message::MerchantList(slots.iter().map(|slot| listed(*slot)).collect());
+        let outcome = testing::run_on(eqmac, |out| {
+            belongings.observe(&list(&[3, 4]), &mut world, out)
+        });
+        outcome.result.unwrap();
         assert!(matches!(
-            &listed,
-            Message::Event(WorldEvent::Merchant(MerchantUpdate::Item(item))) if item.price == 125
+            &outcome.events[..],
+            [
+                ClientEvent::World(WorldEvent::Merchant(MerchantUpdate::Item(first))),
+                ClientEvent::World(WorldEvent::Merchant(MerchantUpdate::Item(second))),
+            ] if (first.slot, first.price, second.slot, second.price) == (3, 125, 4, 125)
+        ));
+        // A new whole list without place 4 says it is gone.
+        let outcome = testing::run_on(eqmac, |out| {
+            belongings.observe(&list(&[3]), &mut world, out)
+        });
+        outcome.result.unwrap();
+        assert!(matches!(
+            &outcome.events[..],
+            [
+                ClientEvent::World(WorldEvent::Merchant(MerchantUpdate::Removed { slot: 4 })),
+                ClientEvent::World(WorldEvent::Merchant(MerchantUpdate::Item(item))),
+            ] if item.slot == 3
         ));
         // Two may cost up to 254: refused before anything goes out.
         let buy = ClientCommand::Buy {
@@ -1015,6 +1085,42 @@ mod tests {
         ));
         assert!(!belongings.trades.active());
         assert_eq!(world.coins.purse, Some(Coins::from_copper(254)));
+    }
+
+    #[test]
+    fn on_takp_a_sale_adds_what_takp_added_though_its_echo_prices_nothing() {
+        let (mut belongings, mut world) = admitted_on_takp();
+        let purse = Message::Event(WorldEvent::Coins(Coins::default()));
+        testing::run(|out| belongings.observe(&purse, &mut world, out))
+            .result
+            .unwrap();
+        let mut opened = Message::Event(WorldEvent::Merchant(MerchantUpdate::Opened {
+            merchant_id: 9,
+            accepted: true,
+            rate: 1.25,
+        }));
+        belongings.explain(&mut opened, &world);
+        // Item 23, worth 100 copper: TAKP adds 100 / 1.25 + 0.5, cut, for one.
+        let mut worth = item(23);
+        worth.details.price = Some(100);
+        let set = Message::Event(WorldEvent::Inventory(InventoryUpdate::Set(vec![worth])));
+        testing::run(|out| belongings.observe(&set, &mut world, out))
+            .result
+            .unwrap();
+        let mut sold = Message::Event(WorldEvent::Merchant(MerchantUpdate::Sold {
+            slot: 23,
+            quantity: 1,
+            price: 0,
+        }));
+        belongings.explain(&mut sold, &world);
+        assert!(matches!(
+            sold,
+            Message::Event(WorldEvent::Merchant(MerchantUpdate::Sold { price: 80, .. }))
+        ));
+        testing::run(|out| belongings.observe(&sold, &mut world, out))
+            .result
+            .unwrap();
+        assert_eq!(world.coins.purse, Some(Coins::from_copper(80)));
     }
 
     #[test]

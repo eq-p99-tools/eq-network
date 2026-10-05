@@ -7,6 +7,10 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- `Message` gains `MerchantList`: a merchant's whole list, which replaces
+  what it listed before, as `EQMac`'s comes. The feature keeping the
+  merchant window tells the host the places gone and each item, as
+  `MerchantUpdate`s, so a host sees no new event.
 - Merchant trades, on every server: a purchase goes out only for an item
   on the open merchant's list whose most possible cost the purse covers
   (`EQEmu` charges what it lists; for a list quoted before the rate, a
@@ -73,10 +77,16 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Added
 
 - Merchants on TAKP (`Capability::Trading`, beside its item moves; coin
-  moves and meals wait): buying and selling through TAKP's own packets.
-  TAKP's lists quote prices before the merchant's rate
-  (`merchant::Quotes::BeforeRate`), so the session tells each item at the
-  price TAKP charges, `int(price x rate)` a unit, before the host hears it.
+  moves and meals wait, as the inventory feature's allowances for the
+  server type say): buying and selling through TAKP's own packets. TAKP's
+  packets price trades before the merchant's rate
+  (`merchant::Quotes::BeforeRate`): the session tells each listed item at
+  the price TAKP charges, `int(price x rate)` a unit, and prices a sale's
+  echo, which carries no price, as TAKP added it to the purse,
+  `int(price / rate + 0.5)` a unit (`Quotes::sale_price`, inferred), before
+  the ledger and the host hear them. TAKP's whole list
+  (`merchant::eqmac_list`) replaces the last, as `Message::MerchantList`;
+  the session tells the host the places gone, then each item.
   `MerchantOffers` stays off on TAKP, whose rule for what a merchant pays
   is its own. Carries #104 until it merges.
 - TAKP's merchant packets, read and built as the merchant news and requests

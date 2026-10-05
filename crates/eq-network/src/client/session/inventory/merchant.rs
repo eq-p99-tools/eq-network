@@ -12,7 +12,7 @@
 use crate::client::ClientCommand;
 use eq_network_game::{
     inventory::{Inventory, InventoryItem, InventorySlot, InventoryUpdate},
-    merchant::{MerchantUpdate, Quotes},
+    merchant::{MerchantItem, MerchantUpdate, Quotes},
     world::Coins,
 };
 use std::{
@@ -247,6 +247,22 @@ struct Window {
     places: BTreeMap<u32, (u64, bool)>,
 }
 
+impl Window {
+    /// Lists an item at its place: a list quoted before the rate gets its
+    /// price as the server charges it.
+    fn list(&mut self, listed: &mut MerchantItem, quotes: Quotes) {
+        let quote = listed.price;
+        listed.price = quotes.unit_price(quote, self.rate);
+        self.places.insert(
+            listed.slot,
+            (
+                quotes.most_per_unit(quote, self.rate),
+                listed.item.activation.maximum_charges > 1,
+            ),
+        );
+    }
+}
+
 impl OpenMerchant {
     /// Follows the merchant's news before anyone hears it: the window
     /// opening at its rate, each item listed, a place gone, the window
@@ -262,15 +278,7 @@ impl OpenMerchant {
             }
             MerchantUpdate::Item(listed) => {
                 if let Some(window) = self.0.as_mut() {
-                    let quote = listed.price;
-                    listed.price = quotes.unit_price(quote, window.rate);
-                    window.places.insert(
-                        listed.slot,
-                        (
-                            quotes.most_per_unit(quote, window.rate),
-                            listed.item.activation.maximum_charges > 1,
-                        ),
-                    );
+                    window.list(listed, quotes);
                 }
             }
             MerchantUpdate::Removed { slot } => {
@@ -281,6 +289,32 @@ impl OpenMerchant {
             MerchantUpdate::Closed => self.0 = None,
             MerchantUpdate::Bought { .. } | MerchantUpdate::Sold { .. } => (),
         }
+    }
+
+    /// Replaces the list with a whole one, as `EQMac`'s comes, each price as
+    /// the server charges it; the places listed before and not now are
+    /// returned, to be told as gone. Nothing is listed while no window is
+    /// open.
+    pub(super) fn replace(&mut self, items: &mut [MerchantItem], quotes: Quotes) -> Vec<u32> {
+        let Some(window) = self.0.as_mut() else {
+            return Vec::new();
+        };
+        let before = std::mem::take(&mut window.places);
+        for listed in items.iter_mut() {
+            window.list(listed, quotes);
+        }
+        before
+            .into_keys()
+            .filter(|place| !window.places.contains_key(place))
+            .collect()
+    }
+
+    /// What the server added to the purse for a sale of `units` of an item
+    /// whose base price is `price`, where the sale's echo prices nothing and
+    /// a window is open ([`Quotes::sale_price`]).
+    pub(super) fn sale_price(&self, quotes: Quotes, price: u32, units: u32) -> Option<u32> {
+        let window = self.0.as_ref()?;
+        quotes.sale_price(price, window.rate, units)
     }
 
     /// Checks a purchase against the purse: the most it can cost must be in
@@ -615,6 +649,37 @@ mod tests {
             quotes,
         );
         (merchant, listed)
+    }
+
+    #[test]
+    fn a_whole_list_replaces_the_last_and_names_the_places_gone() {
+        let (mut merchant, _) = opened(Quotes::BeforeRate, 1.25, 100);
+        // A new list: place 3 at 80 before the rate, and place 5; 4 is gone.
+        let mut list = [3, 5].map(|slot| eq_network_game::merchant::MerchantItem {
+            slot,
+            price: 80,
+            quantity: 0,
+            item: item(i32::try_from(slot).unwrap()),
+        });
+        assert_eq!(merchant.replace(&mut list, Quotes::BeforeRate), [4]);
+        assert_eq!(list.each_ref().map(|listed| listed.price), [100, 100]);
+        assert_eq!(
+            merchant.check_purchase(5, 1, Some(Coins::from_copper(102))),
+            Ok(())
+        );
+        assert!(merchant
+            .check_purchase(4, 1, Some(Coins::from_copper(1000)))
+            .is_err());
+        // With no window open, nothing is listed.
+        let mut closed = OpenMerchant::default();
+        assert_eq!(
+            closed.replace(&mut list, Quotes::BeforeRate),
+            Vec::<u32>::new()
+        );
+        assert_eq!(closed.sale_price(Quotes::BeforeRate, 100, 1), None);
+        // What TAKP adds for a sale, at the window's rate.
+        assert_eq!(merchant.sale_price(Quotes::BeforeRate, 100, 2), Some(160));
+        assert_eq!(merchant.sale_price(Quotes::WithRate, 100, 2), None);
     }
 
     #[test]
