@@ -1070,7 +1070,8 @@ fn encode_posture(dialect: GameDialect, spawn_id: u16, posture: Posture) -> Resu
     })
 }
 
-/// Titanium-only corpse and merchant requests.
+/// Corpse and merchant requests in Titanium's layouts, and merchant
+/// requests in `EQMac`'s.
 fn encode_trade(dialect: GameDialect, command: &GameCommand) -> Result<EncodedCommand> {
     if dialect == GameDialect::EqMac {
         return encode_eqmac_trade(command);

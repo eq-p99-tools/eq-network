@@ -125,21 +125,30 @@ fn count(quantity: u32, verb: &str) -> Result<u8> {
 /// `EQEmu`'s list prices carry it), and with no counts, so each reads as 0,
 /// as an unlimited count does on Titanium. A refused purchase is echoed
 /// with nothing bought. A sale's echo names the player's slot in `EQMac`'s
-/// numbers, and its price in 16 bits.
+/// numbers and prices nothing: `Client::Handle_OP_ShopPlayerSell` fills
+/// the 16-bit `OldMerchant_Purchase_Struct`, which `ENCODE(OP_ShopPlayerSell)`
+/// reads as the 32-bit `Merchant_Purchase_Struct`, so the price it sends
+/// comes from the padding (inferred from the code). The field is read as
+/// it comes.
 ///
 /// # Errors
-/// Rejects malformed lengths and lists, and a sale from a slot `EQMac`
-/// does not number.
+/// Rejects malformed lengths and lists, an open answer whose rate is not
+/// finite and above 0 (a guessed rate could send a purchase TAKP refuses
+/// for want of coins), and a sale from a slot `EQMac` does not number.
 pub fn decode_eqmac(opcode: u16, body: &[u8]) -> Result<Option<Vec<MerchantUpdate>>> {
     let short = |at: usize| u16::from_le_bytes([body[at], body[at + 1]]);
     Ok(Some(match opcode {
         EQMAC_REQUEST_OPCODE => {
             ensure!(body.len() == 12, "invalid EQMac merchant answer length");
             let rate = f32::from_le_bytes([body[8], body[9], body[10], body[11]]);
+            ensure!(
+                rate.is_finite() && rate > 0.0,
+                "invalid EQMac merchant rate"
+            );
             vec![MerchantUpdate::Opened {
                 merchant_id: short(0),
                 accepted: body[4] == 1,
-                rate: if rate.is_finite() { rate } else { 1.0 },
+                rate,
             }]
         }
         EQMAC_STOCK_OPCODE => crate::inventory::eqmac_merchant_stock(body)?
@@ -263,6 +272,11 @@ mod tests {
                 ..
             }])
         ));
+        // A rate that is not finite and above 0 is not guessed at.
+        for rate in [0.0f32, -1.0, f32::NAN, f32::INFINITY] {
+            answer[8..].copy_from_slice(&rate.to_le_bytes());
+            assert!(decode_eqmac(EQMAC_REQUEST_OPCODE, &answer).is_err());
+        }
         let list = decode_eqmac(
             EQMAC_STOCK_OPCODE,
             &stock(&[listed(13005, 0, 12), listed(13006, 1, 30)]),
