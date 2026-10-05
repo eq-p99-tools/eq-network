@@ -7,6 +7,22 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- A dead player on TAKP asks for their bind point once a death pause is
+  over, one value in the transfers feature, which is zero: at once, as
+  Adam chose. The official client's wait is unrecorded (inferred). A death
+  while a transfer is under way waits for its answer, and a second word of
+  the same death changes nothing.
+
+- An item move from anywhere but the cursor itself waits for a cast to
+  end, exactly as `EQEmu` and TAKP require: both disconnect a player who
+  makes one during a cast that is not a bard song
+  (`Client::Handle_OP_MoveItem`, "Inventory desync"). The session let the
+  numbers 30 to 39 through, a range in which a move can only name the
+  cursor, so no move it sends changes. Both servers let a bard move items
+  while singing, but the session cannot tell a song from a spell, so a
+  bard waits too. That the official client refuses such a move, rather
+  than interrupting the cast, is inferred.
+
 - `WorldEvent::HitPoints` says which values leave out the HP equipped items
   add with `items: ItemHitPoints`, in place of `without_items`. Titanium's
   own update leaves them out of both (`LeftOut`). `EQMac`'s, as TAKP sends
@@ -37,11 +53,6 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   bind zone, with reason 10, `ZC_RepopToHomeAtDeath`), since TAKP holds
   the move home until the client asks and removes a dead client that never
   does; Titanium's servers still offer it (`transfers::Home`).
-- A dead player on TAKP asks for their bind point once a death pause is
-  over, one value in the transfers feature, which is zero: at once, as
-  Adam chose. The official client's wait is unrecorded (inferred). A death
-  while a transfer is under way waits for its answer, and a second word of
-  the same death changes nothing.
 - A tell's echo on channel 14 is `ChannelName::TellEcho` on the `EQMac`
   wire too: TAKP echoes a delivered tell to its sender on
   `ChatChannel_TellEcho` (14), as `EQEmu` does on Titanium's.
@@ -87,6 +98,9 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   transfers feature alone marks the player dead. `Capability::ALL` grows
   to 36.
 
+- `EQMac` spawns say their class and level (TAKP's `Spawn_Struct` at 87
+  and 89), so a TAKP banker (class 40) is known as one, and a front end
+  can show levels.
 - The world's damage to the player (`Capability::EnvironmentalDamage`,
   `EqEmu` only, and there falls alone): `GameCommand::EnvironmentalDamage`
   reports the damage a host worked out, by its `hazards::Hazard` (falling,
