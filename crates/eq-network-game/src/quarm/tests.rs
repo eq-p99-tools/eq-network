@@ -224,6 +224,28 @@ fn dll_version_ignores_other_features_responses_and_malformed_messages() {
 }
 
 #[test]
+fn merchant_packets_read_as_the_merchant_news_every_wire_gives() {
+    use crate::merchant::{MerchantUpdate, EQMAC_BUY_OPCODE, EQMAC_END_CONFIRM_OPCODE};
+    let mut echo = [0; 16];
+    echo[4] = 3;
+    echo[8] = 2;
+    echo[12..].copy_from_slice(&60u32.to_le_bytes());
+    assert_eq!(
+        updates(EQMAC_BUY_OPCODE, &echo).unwrap(),
+        vec![WorldEvent::Merchant(MerchantUpdate::Bought {
+            slot: 3,
+            quantity: 2,
+            price: 60
+        })]
+    );
+    assert_eq!(
+        updates(EQMAC_END_CONFIRM_OPCODE, &[0x0a, 0x66]).unwrap(),
+        vec![WorldEvent::Merchant(MerchantUpdate::Closed)]
+    );
+    assert!(updates(EQMAC_BUY_OPCODE, &echo[..15]).is_err());
+}
+
+#[test]
 fn camping_logging_out_and_a_stance_are_eqmacs_own_packets() {
     use crate::command::Posture;
     assert_eq!(camp().opcode, 0x0742);

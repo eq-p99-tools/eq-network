@@ -52,6 +52,18 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- TAKP's merchant packets, read and built as the merchant news and requests
+  Titanium's give, for the same merchant feature (nothing offered yet):
+  `merchant::eqmac_request`, `eqmac_end`, `eqmac_buy` and `eqmac_sell`
+  build `EQMac`'s 12-, 4- and 16-byte requests (`GameCommand::Shop`, `Buy`
+  and `Sell` on the `EQMac` wire), a sale naming the slot in `EQMac`'s
+  numbers; `merchant::decode_eqmac` reads the open answer and its rate,
+  the whole compressed list (each item through the `EQMac` item reader, its
+  price before the merchant's rate and no count), a place gone from the
+  list, the purchase and sale echoes (a refused purchase echoed with
+  nothing bought, a sale's price in 16 bits) and the window's closing. The
+  unknown bytes, prices and player IDs TAKP never reads go as 0, and the
+  open request's rate as 1 (inferred).
 - Moving items on TAKP (`Capability::Inventory`, with no coins, merchants
   or meals yet): `inventory::eqmac_move` encodes `EQMac`'s 12-byte
   `OP_MoveItem` in `EQMac`'s slot numbers (`InventorySlot::to_eqmac`), and

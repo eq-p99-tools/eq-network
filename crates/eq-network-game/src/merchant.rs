@@ -1,10 +1,20 @@
-//! Titanium merchant windows: opening, stock, purchases, sales and closing.
+//! Merchant windows: opening, stock, purchases, sales and closing, in
+//! Titanium's layouts and, through [`decode_eqmac`](crate::merchant::decode_eqmac),
+//! in `EQMac`'s.
 //!
 //! Prices and stock come from the server; a purchase or sale is only settled by the
 //! server's echo, its money update and the resulting inventory packets.
 use crate::inventory::InventoryItem;
 use anyhow::{ensure, Result};
 use serde::Serialize;
+
+mod eqmac;
+
+pub use eqmac::{
+    decode_eqmac, eqmac_buy, eqmac_end, eqmac_request, eqmac_sell, EQMAC_BUY_OPCODE,
+    EQMAC_DELETE_OPCODE, EQMAC_END_CONFIRM_OPCODE, EQMAC_END_OPCODE, EQMAC_REQUEST_OPCODE,
+    EQMAC_SELL_OPCODE, EQMAC_STOCK_OPCODE,
+};
 
 /// `OP_ShopRequest`: open (1) or close (0) in both directions.
 pub const REQUEST_OPCODE: u16 = 0x45f9;

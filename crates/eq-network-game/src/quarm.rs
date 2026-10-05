@@ -497,6 +497,16 @@ pub fn updates(opcode: u16, body: &[u8]) -> Result<Vec<WorldEvent>> {
     Ok(match opcode {
         0x5f41 | 0x6b42 => vec![WorldEvent::Spawns(spawns(body)?)],
         0xf340 => vec![position(body)?],
+        crate::merchant::EQMAC_REQUEST_OPCODE
+        | crate::merchant::EQMAC_STOCK_OPCODE
+        | crate::merchant::EQMAC_DELETE_OPCODE
+        | crate::merchant::EQMAC_BUY_OPCODE
+        | crate::merchant::EQMAC_SELL_OPCODE
+        | crate::merchant::EQMAC_END_CONFIRM_OPCODE => crate::merchant::decode_eqmac(opcode, body)?
+            .unwrap_or_default()
+            .into_iter()
+            .map(WorldEvent::Merchant)
+            .collect(),
         0x9f40 => {
             ensure!(body.len() >= 4, "truncated EQMac movement batch");
             let count = usize::try_from(word(body, 0))?;
