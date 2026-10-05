@@ -58,8 +58,7 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   numbers, with the -1 TAKP's struct says the official client sends. TAKP's
   session eats and drinks on its own once food or water falls below 3000,
   where TAKP's own client does (`food::TAKP_HUNGRY`, inferred from TAKP's
-  `Client::Hungry`; `EQEmu`'s at 3000), and
-  by hand.
+  `Client::Hungry`; `EQEmu`'s at 3000), and by hand.
 
 - Moving items on TAKP (`Capability::Inventory`, with no coins or merchants
   yet): `inventory::eqmac_move` encodes `EQMac`'s 12-byte
