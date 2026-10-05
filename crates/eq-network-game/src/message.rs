@@ -180,6 +180,10 @@ pub fn eqmac(opcode: u16, body: &[u8]) -> Vec<Message> {
                 |considered| Message::Event(WorldEvent::Consideration(considered)),
             )]
         }
+        crate::items::EQMAC_LINK_OPCODE => vec![crate::items::eqmac_response(body).map_or_else(
+            |error| unreadable(Part::World, &error),
+            |details| Message::Event(WorldEvent::ItemDetails(details)),
+        )],
         crate::merchant::EQMAC_STOCK_OPCODE => vec![crate::merchant::eqmac_list(body).map_or_else(
             |error| unreadable(Part::World, &error),
             Message::MerchantList,
@@ -396,6 +400,21 @@ mod tests {
                     water: 6000
                 }
             ))]
+        ));
+        // A linked item's answer describes it, and never fills a slot.
+        let mut linked = [0; 360];
+        linked[..14].copy_from_slice(b"Synthetic ring");
+        linked[180..182].copy_from_slice(&42u16.to_le_bytes());
+        assert!(matches!(
+            &eqmac(crate::items::EQMAC_LINK_OPCODE, &linked)[..],
+            [Message::Event(WorldEvent::ItemDetails(details))] if details.id == 42
+        ));
+        assert!(matches!(
+            eqmac(crate::items::EQMAC_LINK_OPCODE, &linked[..300])[..],
+            [Message::Unreadable {
+                part: Part::World,
+                ..
+            }]
         ));
         assert!(eqmac(0xffff, &[]).is_empty());
     }
