@@ -76,6 +76,32 @@ fn synthetic_spawn_batch_preserves_units_identity_and_visibility() {
     );
 }
 #[test]
+fn a_spawn_says_its_class_and_level() {
+    // A merchant (class 41) of level 30, and a banker (40) of level 50.
+    let mut data = vec![0; SPAWN_SIZE * 2];
+    for (record, (id, class, level)) in data
+        .as_chunks_mut::<SPAWN_SIZE>()
+        .0
+        .iter_mut()
+        .zip([(9u16, 41u8, 30u8), (10, 40, 50)])
+    {
+        record[76..78].copy_from_slice(&id.to_le_bytes());
+        record[86] = 1;
+        record[87] = class;
+        record[89] = level;
+    }
+    let spawns = decoded_spawns(&data).unwrap();
+    assert_eq!(
+        spawns
+            .iter()
+            .map(|spawn| (spawn.spawn_id, spawn.class, spawn.level))
+            .collect::<Vec<_>>(),
+        [(9, Some(41), 30), (10, Some(40), 50)]
+    );
+    assert!(decoded_spawns(&data[1..]).is_err());
+}
+
+#[test]
 fn updates_reject_partial_batches_and_preserve_negative_positions() {
     let mut update = [0; 15];
     update[..2].copy_from_slice(&7u16.to_le_bytes());

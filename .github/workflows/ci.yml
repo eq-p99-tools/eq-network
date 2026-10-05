@@ -8,6 +8,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   quality:
     name: Format, lint, test, and document
@@ -39,6 +43,17 @@ jobs:
         with:
           key: msrv
       - run: cargo check --workspace --all-targets
+
+  windows:
+    name: Native Windows tests
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: windows
+      - run: cargo test --workspace --all-targets --all-features
 
   dependencies:
     name: Dependency policy
