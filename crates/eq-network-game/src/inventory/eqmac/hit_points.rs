@@ -74,9 +74,10 @@ pub enum UnsettledItem {
 /// waist) add, and the first food and the first drink found in the pack
 /// slots in order, a bag's contents in its place. Each counts when it is a
 /// common item the player's race and class can equip, or food or drink, and
-/// the player has its required level: its HP in full from its recommended
-/// level, and scaled below it (`Client::CalcRecommendedLevelBonus`), with
-/// none for drink; and what its worn effect adds, which `worn_effect` says
+/// the player is at least the level it requires. It adds its HP in full
+/// from its recommended level and scaled below it
+/// (`Client::CalcRecommendedLevelBonus`), none for drink, and what its worn
+/// effect adds, which `worn_effect` says
 /// from the spell and the level it is cast at, or None without the spell's
 /// data.
 #[must_use]
