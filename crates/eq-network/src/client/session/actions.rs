@@ -128,6 +128,8 @@ pub(super) fn needs(command: &ClientCommand) -> &'static [Resource] {
         | ClientCommand::InspectItem { .. }
         | ClientCommand::Consider { .. }
         | ClientCommand::Camp { .. }
+        // A death holds nothing: whatever was under way ends with it.
+        | ClientCommand::BledOut { .. }
         | ClientCommand::Loot { .. }
         | ClientCommand::LootItem { .. }
         | ClientCommand::EndLoot { .. }
@@ -341,6 +343,8 @@ fn refusal(command: &ClientCommand, reason: &str) -> Option<WorldEvent> {
         | ClientCommand::ConfigureMotion { .. }
         | ClientCommand::AutoEat { .. }
         | ClientCommand::CloseContainer { .. }
+        // The host sends a death report on its own; nobody waits on it.
+        | ClientCommand::BledOut { .. }
         | ClientCommand::Move(_) => return None,
     })
 }

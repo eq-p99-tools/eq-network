@@ -98,6 +98,35 @@ pub fn titanium_depart(spawn_id: u16) -> EncodedCommand {
     }
 }
 
+/// Where the player returns once they die, from their profile.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
+pub struct BindPoint {
+    /// The bind point's zone.
+    pub zone_id: u16,
+    /// Where in it.
+    pub position: Position,
+}
+
+/// The reason a move home after death carries
+/// (`ZC_RepopToHomeAtDeath`, TAKP `common/eq_constants.h`), which
+/// Titanium's server offer gives too.
+pub const HOME_AT_DEATH: u32 = 10;
+
+impl BindPoint {
+    /// The move home to this bind point, as the client asks for it.
+    #[must_use]
+    pub const fn offer(&self) -> ZoneOffer {
+        ZoneOffer {
+            zone_id: self.zone_id,
+            instance_id: 0,
+            position: self.position,
+            reason: HOME_AT_DEATH,
+            to_bind: true,
+            solicited: true,
+        }
+    }
+}
+
 /// The zone's answer to a transfer request, as a client generation reads it.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ZoneAnswer {
@@ -224,7 +253,11 @@ pub fn offer(opcode: u16, body: &[u8]) -> Result<ZoneOffer> {
         zone_id: half(body, 0),
         instance_id: half(body, 2),
         position,
-        reason: if to_bind { 10 } else { word(body, 20) },
+        reason: if to_bind {
+            HOME_AT_DEATH
+        } else {
+            word(body, 20)
+        },
         to_bind,
         solicited: true,
     })

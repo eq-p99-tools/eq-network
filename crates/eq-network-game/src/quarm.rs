@@ -61,6 +61,8 @@ pub const ZONE_SAVE_ON_ZONE: u16 = 0x5541;
 /// `OP_DeleteSpawn`: the client taking its own spawn out of the zone it is
 /// leaving (0x4029 swapped).
 pub const ZONE_DEPART: u16 = 0x2940;
+/// `OP_Death`: someone in the zone died (0x404a swapped).
+pub const ZONE_DEATH: u16 = 0x4a40;
 /// The server asking the client to change zones.
 pub const ZONE_CHANGE_REQUEST: u16 = 0x4d41;
 
@@ -135,6 +137,54 @@ pub fn zone_request(body: &[u8]) -> Result<ZoneOffer> {
     })
 }
 
+/// A death (`Death_Struct`, 20 bytes): who died, their killer and their
+/// corpse as 16-bit IDs, then the level, spell, skill, damage and whether a
+/// player died. `EQMac`'s death names no bind zone: the client knows its own
+/// from the profile ([`bind_point`]).
+///
+/// # Errors
+/// Rejects another length and a death of no one.
+pub fn death(body: &[u8]) -> Result<crate::zoning::Death> {
+    ensure!(body.len() == 20, "invalid EQMac death length");
+    Ok(crate::zoning::Death {
+        spawn_id: u32::from(valid_id(u32::from(short(body, 0)))?),
+        killer_id: u32::from(short(body, 2)),
+        corpse_id: u32::from(short(body, 4)),
+        bind_zone_id: 0,
+        corpse_name: None,
+    })
+}
+
+/// The player's first bind point, from their profile: the zone at 3784 and
+/// then y, x, z and heading at 3804, 3824, 3844 and 3864, each an array of
+/// five (TAKP `common/patches/mac_structs.h` `PlayerProfile_Struct`). The
+/// bind heading is on the 512 scale already, as TAKP writes it there
+/// (`common/patches/mac.cpp` `ENCODE(OP_PlayerProfile)`).
+///
+/// # Errors
+/// Rejects a profile that does not unpack, a zone beyond 16 bits, and a
+/// position that is not finite.
+pub fn bind_point(body: &[u8]) -> Result<crate::zoning::BindPoint> {
+    decoded_bind(&unpack(body, true)?)
+}
+
+/// The first bind point in an unpacked profile.
+fn decoded_bind(data: &[u8]) -> Result<crate::zoning::BindPoint> {
+    ensure!(
+        data.len() == PROFILE_SIZE,
+        "unexpected EQMac profile layout"
+    );
+    Ok(crate::zoning::BindPoint {
+        zone_id: u16::try_from(word(data, 3784)).context("EQMac bind zone out of range")?,
+        position: Position {
+            x: float(data, 3824)?,
+            y: float(data, 3804)?,
+            z: float(data, 3844)?,
+            heading: float(data, 3864)?,
+        },
+    })
+}
+
 /// The client asking whether it may enter a zone (`ZoneChange_Struct`, 76
 /// bytes: the name, the zone as 32 bits, the reason the server's request
 /// gave, and a zero outcome). `EQMac`'s request carries no position: TAKP
@@ -196,6 +246,36 @@ pub fn depart(spawn_id: u16) -> EncodedCommand {
         opcode: ZONE_DEPART,
         body: spawn_id.to_le_bytes().to_vec(),
     }
+}
+
+/// The skill a bleed-out report names: hand to hand, which TAKP itself
+/// names for a death from a tick (`zone/attack.cpp`
+/// `GenerateDeathPackets`). Inferred: the official client's is unrecorded.
+const BLED_OUT_SKILL: u8 = 28;
+
+/// The player's own report that they bled out (`Death_Struct`, 20 bytes,
+/// laid out as [`death`] reads it). TAKP leaves to the client the deaths it
+/// does not announce to the one who died, and takes this report without
+/// checking the player's HP (`zone/client_packet.cpp` `Handle_OP_Death`), so
+/// it goes out only for a player whose HP reached the server's threshold.
+/// Every field but the spawn is inferred until the official client's
+/// bleed-out is recorded: no killer, as `EQMacEmu` notes the official client
+/// names none for a bleed-out; no damage; no spell (0xFFFF, TAKP's
+/// `SPELL_UNKNOWN`); hand to hand (28), which TAKP itself names for a death
+/// from a tick; and no corpse, level or player flag.
+///
+/// # Errors
+/// Rejects a report without the player's spawn.
+pub fn bled_out(spawn_id: u16) -> Result<EncodedCommand> {
+    ensure!(spawn_id != 0, "a death report needs the player's spawn");
+    let mut body = vec![0; 20];
+    body[..2].copy_from_slice(&spawn_id.to_le_bytes());
+    body[8..10].copy_from_slice(&u16::MAX.to_le_bytes());
+    body[10] = BLED_OUT_SKILL;
+    Ok(EncodedCommand {
+        opcode: ZONE_DEATH,
+        body,
+    })
 }
 
 /// The client starting to camp. TAKP reads nothing in it; the official
@@ -521,6 +601,7 @@ pub fn updates(opcode: u16, body: &[u8]) -> Result<Vec<WorldEvent>> {
             ensure!(body.len() == 2, "invalid EQMac despawn length");
             vec![WorldEvent::Despawn(valid_id(u32::from(short(body, 0)))?)]
         }
+        ZONE_DEATH => vec![WorldEvent::Death(death(body)?)],
         0xb240 => {
             ensure!(body.len() == 12, "invalid EQMac health length");
             let spawn_id = valid_id(word(body, 0))?;

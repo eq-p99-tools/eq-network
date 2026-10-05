@@ -7,6 +7,12 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- A dead player on TAKP asks for their bind point once a death pause is
+  over, one value in the transfers feature, which is zero: at once, as
+  Adam chose. The official client's wait is unrecorded (inferred). A death
+  while a transfer is under way waits for its answer, and a second word of
+  the same death changes nothing.
+
 - A merchant's echo settles only the trade it answers. Echoes carry no
   request id, so each is matched by its slot, and a sale's echo removes the
   units only while the slot still holds the item that was offered, less what
@@ -52,6 +58,12 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   answer, the zone points, the save and the departure, and the world
   stage's re-entry between zones (the login's zoning flag, then entering
   the character the world names).
+- `EQMac` deaths: `OP_Death` (20 bytes) is read as `WorldEvent::Death`,
+  and the profile's first bind point as the new `Message::Bind`. A dead
+  player on TAKP asks for their bind point at once (the zone change for the
+  bind zone, with reason 10, `ZC_RepopToHomeAtDeath`), since TAKP holds
+  the move home until the client asks and removes a dead client that never
+  does; Titanium's servers still offer it (`transfers::Home`).
 - A tell's echo on channel 14 is `ChannelName::TellEcho` on the `EQMac`
   wire too: TAKP echoes a delivered tell to its sender on
   `ChatChannel_TellEcho` (14), as `EQEmu` does on Titanium's.
@@ -68,6 +80,34 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   not, so `DeletingSpells` stays off on P99.
 
 ### Added
+
+- Reporting that the player bled out (`Capability::BleedingOut`, TAKP
+  only). TAKP announces no death to a player who bleeds out, nor to one
+  killed by a tick of damage or by their own hand, and waits for the
+  client's own report. As the zone admits the player,
+  `WorldEvent::DeathThreshold` tells a host the HP at or below which the
+  server takes the player as dead (-11 on TAKP), once the session counts
+  what the player's items add there. A host whose HP, with
+  what equipped items add, reaches it on the server's report, with no
+  death named for the player, sends `GameCommand::BledOut`, and the
+  session sends `Request::BledOut`, `EQMac`'s 20-byte `OP_Death` naming
+  the player (`quarm::bled_out`; Titanium sends none), only when the
+  server's last report with what the player's items add is at or below
+  the threshold. TAKP kills the player it names without checking their
+  HP, and its report leaves item HP out, so a living player in HP gear can
+  show the threshold: the session refuses the report while it does not
+  know the player's items, and counts what they add by the server type's
+  own rule. TAKP adds worn effects, the first food carried and a GM's
+  items below their level too, and its count comes with the `EQMac`
+  inventory, so until then TAKP takes no report at all and names no
+  threshold, and a host asks for none. A dead player's report is refused
+  too. Every field but the player's spawn is inferred
+  until the official client's bleed-out is recorded: no killer, damage or
+  spell, hand to hand (28), and no corpse, level or player flag. The
+  session then takes the player as dead just as if the server had said
+  so: every feature and the host hear one `WorldEvent::Death`, and the
+  transfers feature alone marks the player dead. `Capability::ALL` grows
+  to 36.
 
 - `EQMac` spawns say their class and level (TAKP's `Spawn_Struct` at 87
   and 89), so a TAKP banker (class 40) is known as one, and a front end
