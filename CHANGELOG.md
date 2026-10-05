@@ -48,6 +48,22 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- TAKP's spell state, read from the `EQMac` wire as the events Titanium's
+  packets give (Quarm sends the same packets, unchecked there). The
+  profile gives the buffs (`buffs::eqmac_profile`), the 256-slot
+  spellbook (`SpellBook::eqmac_profile`) and each gem's reuse time left
+  (`PlayerState::spell_refresh_ms`). `spells::decode_eqmac` reads a cast
+  beginning, with its base cast time, which the player's focus effects can
+  shorten; an interruption; a gem's refresh, with no reuse adjustment; and
+  the spellbook's replies. `buffs::eqmac_spell_effect` reads a spell taking
+  hold and `buffs::eqmac_update` a buff's fade or corrected duration.
+  `OP_ManaChange`, which TAKP sends only as the spell bar comes back, ends
+  the cast (`SpellUpdate::Mana`, `keep_casting: false`) besides giving the
+  mana, and `OP_ManaUpdate` gives the player's mana between casts. TAKP's
+  server sends an interruption and a fade to the player alone without
+  naming anyone, so the session names the player in them. A fade names no
+  slot either (`buffs::UNKNOWN_SLOT`): a host finds the buff by its spell.
+  The book reaches a host once TAKP offers the spellbook.
 - The world's damage to the player (`Capability::EnvironmentalDamage`,
   `EqEmu` only, and there falls alone): `GameCommand::EnvironmentalDamage`
   reports the damage a host worked out, by its `hazards::Hazard` (falling,
@@ -352,22 +368,6 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `EQMac` creation asks for the start zone's safe point. Quarm does not create
   characters yet, and refuses `CreateCharacter` with `CharacterCreation`
   instead of ignoring it.
-- TAKP's spell state, read from the `EQMac` wire as the events Titanium's
-  packets give (Quarm sends the same packets, unchecked there). The
-  profile gives the buffs (`buffs::eqmac_profile`), the 256-slot
-  spellbook (`SpellBook::eqmac_profile`) and each gem's reuse time left
-  (`PlayerState::spell_refresh_ms`). `spells::decode_eqmac` reads a cast
-  beginning, with its base cast time, which the player's focus effects can
-  shorten; an interruption; a gem's refresh, with no reuse adjustment; and
-  the spellbook's replies. `buffs::eqmac_spell_effect` reads a spell taking
-  hold and `buffs::eqmac_update` a buff's fade or corrected duration.
-  `OP_ManaChange`, which TAKP sends only as the spell bar comes back, ends
-  the cast (`SpellUpdate::Mana`, `keep_casting: false`) besides giving the
-  mana, and `OP_ManaUpdate` gives the player's mana between casts. TAKP's
-  server sends an interruption and a fade to the player alone without
-  naming anyone, so the session names the player in them. A fade names no
-  slot either (`buffs::UNKNOWN_SLOT`): a host finds the buff by its spell.
-  The book reaches a host once TAKP offers the spellbook.
 - Synthetic regression coverage for inventory reconciliation, scribe consumption,
   movement admission, cast state, and fresh-key world/zone handoffs.
 
