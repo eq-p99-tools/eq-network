@@ -425,12 +425,16 @@ pub enum Capability {
     /// the Raid window does. No server type offers it yet: `EQEmu` has no
     /// handler for it.
     RaidGroupLeaders,
+    /// Reporting the damage the world does to the player, which the client
+    /// works out and the server takes from it: falls, and drowning, lava
+    /// and freezing where the server type takes those too.
+    EnvironmentalDamage,
 }
 
 impl Capability {
     /// Every capability, in order: what a session offers when its server and
     /// client generation support everything.
-    pub const ALL: [Self; 34] = [
+    pub const ALL: [Self; 35] = [
         Self::Casting,
         Self::Spellbook,
         Self::Inventory,
@@ -465,6 +469,7 @@ impl Capability {
         Self::Assisting,
         Self::Raiding,
         Self::RaidGroupLeaders,
+        Self::EnvironmentalDamage,
     ];
 }
 
@@ -1443,6 +1448,7 @@ mod tests {
             Capability::Assisting => 31,
             Capability::Raiding => 32,
             Capability::RaidGroupLeaders => 33,
+            Capability::EnvironmentalDamage => 34,
         };
         for (index, capability) in Capability::ALL.into_iter().enumerate() {
             assert_eq!(place(capability), index, "{capability:?}");

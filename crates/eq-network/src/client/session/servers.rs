@@ -31,6 +31,7 @@ use super::{
     exchange::Exchanges,
     feature::Feature,
     groups::Groups,
+    hazards::Hazards,
     inventory::Belongings,
     listing::Listing,
     looting::Looting,
@@ -54,7 +55,7 @@ use super::{
     CharacterSession, Events, ServerProtocol, ZoneExit,
 };
 use crate::p99::{self, WorldCodec};
-use eq_network_game::{abilities::Ability, GameDialect};
+use eq_network_game::{abilities::Ability, hazards::Hazard, GameDialect};
 
 /// What a zone session builds its features with.
 pub(super) struct Setup<'a> {
@@ -319,6 +320,12 @@ pub(super) trait ServerType: Sync {
         None
     }
 
+    /// Reporting the damage the world does to the player, which the client
+    /// works out: falls, and drowning, lava and freezing.
+    fn hazards(&self, _setup: &Setup<'_>) -> Provided {
+        None
+    }
+
     /// Every feature the server type provides, in the order the zone session
     /// offers them each command, packet and timer.
     fn features(&self, setup: &Setup<'_>) -> Vec<Provision> {
@@ -353,6 +360,7 @@ pub(super) trait ServerType: Sync {
             self.listing(setup),
             self.socials(setup),
             self.raids(setup),
+            self.hazards(setup),
         ]
         .into_iter()
         .flatten()
@@ -449,9 +457,9 @@ impl Shield for WorldCodec {
 mod shared {
     use super::{
         Abilities, Ability, Belongings, Camp, Casting, Character, Clock, Combat, Corpses, Doors,
-        Edits, Entities, Exchanges, Feature, GameDialect, GroundObjects, Groups, Listing, Looting,
-        Map, MerchantOffers, Motion, Pets, Raids, Reading, Resurrection, Setup, Socials, Spellbook,
-        Talk, Targeting, Tradeskills, Training, Transfers, Who,
+        Edits, Entities, Exchanges, Feature, GameDialect, GroundObjects, Groups, Hazard, Hazards,
+        Listing, Looting, Map, MerchantOffers, Motion, Pets, Raids, Reading, Resurrection, Setup,
+        Socials, Spellbook, Talk, Targeting, Tradeskills, Training, Transfers, Who,
     };
 
     pub(super) fn casting() -> Box<dyn Feature> {
@@ -574,6 +582,11 @@ mod shared {
     pub(super) fn raids() -> Box<dyn Feature> {
         Box::<Raids>::default()
     }
+
+    /// Reporting the hazards the server type takes from the client.
+    pub(super) fn hazards(taken: &'static [Hazard]) -> Box<dyn Feature> {
+        Box::new(Hazards::new(taken))
+    }
 }
 
 /// The abilities checked on P99: every one but fishing, which came later,
@@ -596,6 +609,13 @@ const P99_ABILITIES: [Ability; 16] = [
     Ability::FeignDeath,
     Ability::SenseHeading,
 ];
+
+/// The hazards `EQEmu` takes from the client so far: falls, whose damage it
+/// takes as the client reports it and lowers by the player's fall damage
+/// reductions from spells, items and AAs (`Client::Handle_OP_EnvDamage`).
+/// Drowning, lava and freezing wait until the official client's reports of
+/// them are recorded.
+const EQEMU_HAZARDS: [Hazard; 1] = [Hazard::Falling];
 
 /// Project 1999: Titanium with V62 protection and 256-unit saved headings.
 /// Jumps and falls wait until they are measured on P99.
@@ -860,6 +880,10 @@ impl ServerType for EqEmu {
     fn raids(&self, _setup: &Setup<'_>) -> Provided {
         offer(shared::raids())
     }
+
+    fn hazards(&self, _setup: &Setup<'_>) -> Provided {
+        offer(shared::hazards(&EQEMU_HAZARDS))
+    }
 }
 
 /// Project Quarm, which speaks `EQMac`. Its features come as they are
@@ -1090,10 +1114,11 @@ mod tests {
     fn p99_and_eqemu_provide_every_feature_one_each() {
         // Training, resurrection, reading, tradeskills, the map, deleting
         // spells, merchants' offers, groups, the player's listing, dice,
-        // emotes, assisting and raids are checked on EQEmu alone so far.
+        // emotes, assisting, raids and the world's damage are checked on
+        // EQEmu alone so far.
         for (protocol, count) in [
             (ServerProtocol::Project1999, 21),
-            (ServerProtocol::EqEmu, 30),
+            (ServerProtocol::EqEmu, 31),
         ] {
             let server = server_type(protocol);
             let setup = Setup::new("Tester", AutoEat::default());
@@ -1113,6 +1138,7 @@ mod tests {
             Capability::Emoting,
             Capability::Assisting,
             Capability::Raiding,
+            Capability::EnvironmentalDamage,
         ] {
             assert!(!offers(server_type(ServerProtocol::Project1999)).contains(&capability));
             assert!(offers(server_type(ServerProtocol::EqEmu)).contains(&capability));
