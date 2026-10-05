@@ -623,6 +623,14 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- On Windows, a session no longer ends with "Overlapped I/O operation is in
+  progress" (os error 997) or its cancelled twin (995). std's sockets are
+  overlapped there, and their read timeout (`SO_RCVTIMEO`) leaves a socket
+  whose read timed out in an indeterminate state, so a read that only ran
+  out of time can come back as either error; both transports now treat it
+  as the timeout it is. Seen live twice in half an hour on an idle TAKP
+  session, and once on `EQEmu`; the cause is inferred from Microsoft's and
+  Rust's documentation, not reproduced on demand.
 - Vah Shir can equip what names their race: the move planner refused
   every equip for race 130 as a race it did not know.
 
