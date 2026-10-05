@@ -46,6 +46,16 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   there as on `EQEmu`, checked with the official client. Deleting one does
   not, so `DeletingSpells` stays off on P99.
 
+- An item move from anywhere but the cursor itself waits for a cast to
+  end, exactly as `EQEmu` and TAKP require: both disconnect a player who
+  makes one during a cast that is not a bard song
+  (`Client::Handle_OP_MoveItem`, "Inventory desync"). The session let the
+  numbers 30 to 39 through, a range in which a move can only name the
+  cursor, so no move it sends changes. Both servers let a bard move items
+  while singing, but the session cannot tell a song from a spell, so a
+  bard waits too. That the official client refuses such a move, rather
+  than interrupting the cast, is inferred.
+
 ### Added
 
 - The world's damage to the player (`Capability::EnvironmentalDamage`,
