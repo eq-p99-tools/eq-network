@@ -253,12 +253,17 @@ fn definition(record: &Record<'_>) -> Result<ItemDetails> {
             required_level: u32::try_from(record.short(352))
                 .context("invalid EQMac required level")?,
             recommended_level: u32::from(record.byte(324)),
-            worn: effect.spell(&[2]).map(|spell_id| WornEffect {
-                spell_id: u32::from(spell_id),
-                effect_type: 2,
-                level: u32::from(effect.level),
-                level2: u32::from(effect.level),
-            }),
+            // TAKP applies worn effects for common items alone
+            // (`Client::AddItemBonuses`).
+            worn: effect
+                .spell(&[2])
+                .filter(|_| middle.common)
+                .map(|spell_id| WornEffect {
+                    spell_id: u32::from(spell_id),
+                    effect_type: 2,
+                    level: u32::from(effect.level),
+                    level2: u32::from(effect.level),
+                }),
         }),
         bonuses: Some(ItemBonuses {
             strength: middle.signed(228),
@@ -478,6 +483,9 @@ impl Record<'_> {
         })
     }
 }
+
+mod hit_points;
+pub use hit_points::{takp_item_hit_points, ItemHitPointCount, UnsettledItem, Wearer};
 
 #[cfg(test)]
 mod tests;
