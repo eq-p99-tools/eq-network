@@ -158,6 +158,7 @@ pub fn eqmac(opcode: u16, body: &[u8]) -> Vec<Message> {
             |error| unreadable(Part::ZonePoints, &error),
             Message::ZonePoints,
         )],
+        crate::quarm::ZONE_PLAYER_PROFILE => eqmac_profile(body),
         crate::combat::EQMAC_CONSIDER_OPCODE => {
             vec![crate::combat::eqmac_consideration(body).map_or_else(
                 |error| unreadable(Part::World, &error),
@@ -169,6 +170,15 @@ pub fn eqmac(opcode: u16, body: &[u8]) -> Vec<Message> {
             |events| events.into_iter().map(Message::Event).collect(),
         ),
     }
+}
+
+/// What the `EQMac` profile says beside what the admission reads of it: the
+/// player's buffs and spellbook.
+fn eqmac_profile(body: &[u8]) -> Vec<Message> {
+    crate::quarm::profile_spells(body).map_or_else(
+        |error| vec![unreadable(Part::Spells, &error)],
+        |events| events.into_iter().map(Message::Event).collect(),
+    )
 }
 
 fn unreadable(part: Part, error: &anyhow::Error) -> Message {
@@ -316,5 +326,27 @@ mod tests {
             }]
         ));
         assert!(eqmac(0xffff, &[]).is_empty());
+    }
+
+    #[test]
+    fn an_eqmac_cast_ending_is_a_spell_notice_and_a_change_in_mana() {
+        assert!(matches!(
+            eqmac(0x7f41, &[120, 0, 42, 0])[..],
+            [
+                Message::Event(WorldEvent::Spell(spells::SpellUpdate::Mana {
+                    spell_id: 42,
+                    keep_casting: false
+                })),
+                Message::Event(WorldEvent::Mana(120))
+            ]
+        ));
+        // A profile that cannot be read leaves the spells unknown.
+        assert!(matches!(
+            eqmac(crate::quarm::ZONE_PLAYER_PROFILE, &[0; 7])[..],
+            [Message::Unreadable {
+                part: Part::Spells,
+                ..
+            }]
+        ));
     }
 }

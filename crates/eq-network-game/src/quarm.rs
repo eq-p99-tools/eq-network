@@ -6,6 +6,7 @@
 
 use crate::{
     command::EncodedCommand,
+    spells::SpellUpdate,
     world::{
         BaseAttributes, ItemHitPoints, PlayerState, Position, SpawnKind, SpawnState, WorldEvent,
     },
@@ -14,7 +15,7 @@ use crate::{
 use anyhow::{ensure, Context, Result};
 use zeroize::Zeroizing;
 
-const PROFILE_SIZE: usize = 8460;
+pub(crate) const PROFILE_SIZE: usize = 8460;
 const SPAWN_SIZE: usize = 224;
 
 /// The client's data rate, the first thing it sends a zone.
@@ -366,7 +367,9 @@ fn decoded_profile(data: &[u8], character: &str) -> Result<PlayerState> {
         endurance: None,
         skills: None,
         practice_points: None,
-        spell_refresh_ms: None,
+        // What is left of each gem's reuse timer, in milliseconds
+        // (`spellSlotRefresh`).
+        spell_refresh_ms: Some(std::array::from_fn(|index| word(data, 4972 + index * 4))),
         memorized_spells: std::array::from_fn(|i| {
             let id = short(data, 2870 + i * 2);
             (id != 0 && id != u16::MAX).then_some(u32::from(id))
@@ -385,6 +388,23 @@ fn decoded_profile(data: &[u8], character: &str) -> Result<PlayerState> {
 /// Reads a signed `EQMac` profile attribute after the profile length check.
 fn signed_attribute(data: &[u8], offset: usize) -> i32 {
     i32::from(i16::from_le_bytes([data[offset], data[offset + 1]]))
+}
+
+/// The player's buffs and spellbook from their profile, as the admission's
+/// buff table and book.
+///
+/// # Errors
+/// Rejects malformed compression and unexpected layouts.
+pub fn profile_spells(body: &[u8]) -> Result<Vec<WorldEvent>> {
+    decoded_spells(&unpack(body, true)?)
+}
+
+/// The buffs and spellbook in an unpacked profile.
+fn decoded_spells(data: &[u8]) -> Result<Vec<WorldEvent>> {
+    Ok(vec![
+        WorldEvent::BuffSnapshot(crate::buffs::eqmac_profile(data)?),
+        WorldEvent::SpellBook(crate::spells::SpellBook::eqmac_profile(data)?),
+    ])
 }
 
 /// The separate, uncompressed own-character zone-entry projection.
@@ -542,7 +562,37 @@ pub fn updates(opcode: u16, body: &[u8]) -> Result<Vec<WorldEvent>> {
         }
         0x7f41 => {
             ensure!(body.len() == 4, "invalid EQMac mana update");
-            vec![WorldEvent::Mana(u32::from(short(body, 0)))]
+            // The mana left and the spell, as the spell bar comes back: TAKP
+            // sends it only then (`Mob::SendSpellBarEnable`), so it ends
+            // every cast, whether the spell landed or not.
+            vec![
+                WorldEvent::Spell(SpellUpdate::Mana {
+                    spell_id: u32::from(short(body, 2)),
+                    keep_casting: false,
+                }),
+                WorldEvent::Mana(u32::from(short(body, 0))),
+            ]
+        }
+        0x1942 => {
+            // The player's own mana between casts (`Client::SendManaUpdate`):
+            // their spawn, then the mana.
+            ensure!(body.len() == 4, "invalid EQMac own mana update");
+            vec![WorldEvent::Mana(u32::from(short(body, 2)))]
+        }
+        crate::spells::EQMAC_BEGIN_OPCODE
+        | crate::spells::EQMAC_INTERRUPT_OPCODE
+        | crate::spells::EQMAC_MEMORIZE_OPCODE
+        | crate::spells::EQMAC_DELETE_OPCODE
+        | crate::spells::EQMAC_SWAP_OPCODE => crate::spells::decode_eqmac(opcode, body)?
+            .map(WorldEvent::Spell)
+            .into_iter()
+            .collect(),
+        crate::buffs::EQMAC_ACTION_OPCODE => crate::buffs::eqmac_spell_effect(body)?
+            .map(WorldEvent::SpellEffect)
+            .into_iter()
+            .collect(),
+        crate::buffs::EQMAC_BUFF_OPCODE => {
+            vec![WorldEvent::Buff(crate::buffs::eqmac_update(body)?)]
         }
         0xf540 => crate::world::appearance(body)?.into_iter().collect(),
         crate::combat::EQMAC_DAMAGE_OPCODE => {
