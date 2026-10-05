@@ -23,6 +23,9 @@ pub(super) struct Meals {
     auto_eat: AutoEat,
     /// Bites sent whose answers have not come.
     bites: u32,
+    /// The most food or water at which the server's own client eats or
+    /// drinks by itself.
+    hungry: u32,
 }
 
 /// The first food or drink the player carries that the choice takes, as the
@@ -47,11 +50,14 @@ fn first(inventory: &Inventory, meal: Meal, auto_eat: AutoEat) -> Option<Invento
 }
 
 impl Meals {
-    pub(super) const fn new(auto_eat: AutoEat) -> Self {
+    /// Meals for a player whose server's own client eats or drinks at
+    /// `hungry` or less.
+    pub(super) const fn new(auto_eat: AutoEat, hungry: u32) -> Self {
         Self {
             last: None,
             auto_eat,
             bites: 0,
+            hungry,
         }
     }
 
@@ -81,7 +87,7 @@ impl Meals {
         }
         let (mut food, mut water) = (None, None);
         for meal in [Meal::Food, Meal::Drink] {
-            if nourishment.of(meal) > food::HUNGRY {
+            if nourishment.of(meal) > self.hungry {
                 continue;
             }
             if let Some(slot) = first(&world.inventory, meal, self.auto_eat) {

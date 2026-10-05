@@ -8,7 +8,8 @@ client,
 [`p99-logger-client`](https://github.com/rm-you/p99-logger-client), and the
 native mobile client.
 
-The high-level client logs in, selects a world, lists, creates and enters
+The high-level client logs in, plays on the configured world or the one the
+player chooses from the login server's list, lists, creates and enters
 characters, and runs a zone session: it reports typed world state
 (`WorldEvent`, in a `ClientEvent::World`) and carries out typed commands
 (`ClientCommand`), reconnects, and shuts down cooperatively. Chat arrives
@@ -24,7 +25,7 @@ for their check on P99:
 | --- | --- | --- |
 | `EqEmu` | Titanium, for a stock `EQEmu` server | Moving, jumping and falling (and a fall's damage), targeting, combat, casting and the spellbook (deleting and moving its spells too), the inventory and bank, merchants and what they pay, handing items to NPCs and trading with players, looting, chat, camping, doors, items on the ground, zoning, abilities, `/who`, corpses and consent, pets, training, resurrection, reading, tradeskill containers, groups and raids, `/afk`, `/anonymous` and `/roleplay`, `/random`, `/emote` and `/assist`, the map and the time of day |
 | `Project1999` | Titanium with P99's V62 protection | As `EqEmu`, except what waits to be checked on P99: jumping and falling, fishing and binding wounds, deleting the spellbook's spells, what merchants pay, training, resurrection, reading, tradeskills, groups and raids, `/afk`, `/anonymous` and `/roleplay`, and `/random`, `/emote` and `/assist`. The map is left to the player, as P99's own client keeps it off |
-| `Takp` | Windows TAKP/`EQMac`, for a stock TAKP server | Character creation, entering the world, chat, moving, targeting, considering and attacking, zoning and camping |
+| `Takp` | Windows TAKP/`EQMac`, for a stock TAKP server | Character creation, entering the world, chat, moving, targeting, considering and attacking, zoning and camping, moving items and coins (the bank's beside a banker), buying and selling at merchants (not yet what a merchant pays), and eating and drinking |
 | `Quarm` | Windows TAKP/`EQMac` | Entering the world and chat; Quarm's features follow once they are checked on TAKP |
 
 The table follows [`servers.rs`](crates/eq-network/src/client/session/servers.rs),
@@ -46,7 +47,12 @@ can use the lower-level crates without pulling in the character-session engine.
 
 A consumer that only listens runs the client with `Client::run`; one that
 plays passes a command queue to `Client::run_with_commands`, whose commands the
-session takes once the zone admits the player.
+session takes once the zone admits the player. Before that, the queue carries
+the player's choices from the lists the session sends: the world from the login
+server's (`WorldEvent::ServerSelection`, answered with
+`ClientCommand::SelectServer`) when the configuration names none, and the
+character from the world's (`WorldEvent::CharacterSelection`, answered with
+`ClientCommand::SelectCharacter`) when it names none.
 
 ```rust,no_run
 use eq_network::client::{

@@ -15,7 +15,7 @@ use super::{
 use crate::chat::{self, ChatEvent};
 use crate::{
     assets::Assets,
-    client::{CancellationToken, ClientConfig, Events},
+    client::{CancellationToken, ClientCommand, ClientConfig, Events},
 };
 use anyhow::{bail, Result};
 use eq_network_game::{
@@ -25,7 +25,10 @@ use eq_network_game::{
     GameDialect,
 };
 use eq_network_transport::Transport;
-use std::{net::SocketAddr, sync::atomic::AtomicBool};
+use std::{
+    net::SocketAddr,
+    sync::{atomic::AtomicBool, mpsc::Receiver},
+};
 
 /// One client generation's zone packets.
 pub(super) trait Wire: Sync {
@@ -58,7 +61,9 @@ pub(super) trait Wire: Sync {
         bail!("this client generation cannot send {request:?} yet")
     }
 
-    /// Logs in the way the generation's client does: the session's
+    /// Logs in the way the generation's client does, playing on the
+    /// configured world or, when none is, the one the player chooses from
+    /// the login server's list through `commands`: the session's
     /// credentials and the world server's address.
     ///
     /// # Errors
@@ -68,6 +73,7 @@ pub(super) trait Wire: Sync {
         &self,
         _config: &ClientConfig,
         _stop: &CancellationToken,
+        _commands: Option<&Receiver<ClientCommand>>,
         _log: &mut Events<'_>,
     ) -> Result<(Credentials, String)> {
         bail!("this client generation cannot log in yet")
@@ -153,9 +159,10 @@ impl Wire for Titanium {
         &self,
         config: &ClientConfig,
         stop: &CancellationToken,
+        commands: Option<&Receiver<ClientCommand>>,
         log: &mut Events<'_>,
     ) -> Result<(Credentials, String)> {
-        login::titanium(config, stop, log)
+        login::titanium(config, stop, commands, log)
     }
 
     fn world(
@@ -224,9 +231,10 @@ impl Wire for EqMac {
         &self,
         config: &ClientConfig,
         stop: &CancellationToken,
+        commands: Option<&Receiver<ClientCommand>>,
         log: &mut Events<'_>,
     ) -> Result<(Credentials, String)> {
-        login::eqmac::login(config, stop, log)
+        login::eqmac::login(config, stop, commands, log)
     }
 
     /// `EQMac`'s world sends no manifest; between zones it names the
