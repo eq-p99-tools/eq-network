@@ -9,7 +9,9 @@ pub use activation::{
     titanium_item_cast, ClickEffect, ClickKind, ItemActivation, ItemUse, CAST_OPCODE,
 };
 pub use banking::banker_in_range;
-pub use eqmac::decode as decode_eqmac;
+pub use eqmac::{
+    decode as decode_eqmac, takp_item_hit_points, ItemHitPointCount, UnsettledItem, Wearer,
+};
 pub use titanium::decode;
 pub(crate) use titanium::{parse as parse_items, parse_at};
 

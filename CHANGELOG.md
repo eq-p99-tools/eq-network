@@ -7,6 +7,10 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- `InventoryUpdate` gains `Used`: a unit or charge the server used up
+  without saying which, as TAKP's `OP_DeleteCharge` says it. Hosts that
+  match `InventoryUpdate` exhaustively need an arm for it.
+
 - `WorldEvent::HitPoints` says which values leave out the HP equipped items
   add with `items: ItemHitPoints`, in place of `without_items`. Titanium's
   own update leaves them out of both (`LeftOut`). `EQMac`'s, as TAKP sends
@@ -63,6 +67,15 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `InventorySlot::is_held` names the slots an item update may fill. TAKP's
   session follows the inventory but offers no `Capability::Inventory` yet:
   moving items waits, as TAKP disconnects a player whose move it refuses.
+  `inventory::takp_item_hit_points` is the one count of what TAKP adds for
+  the player's items (`itembonuses.HP`, which its own HP update leaves out
+  of the current HP), for a host's gauge and a bleed-out check alike: the
+  worn items from ear to waist and the first food and the first drink
+  carried, by TAKP's equip, level and worn-effect rules, with a worn
+  effect's HP from the caller's spell data. It lists what it could not
+  settle (`UnsettledItem`): an inventory it cannot trust, a worn effect
+  without spell data, and an item above the player's required level, which
+  TAKP counts only for an account of status 80 or more.
 
 - The world's damage to the player (`Capability::EnvironmentalDamage`,
   `EqEmu` only, and there falls alone): `GameCommand::EnvironmentalDamage`
