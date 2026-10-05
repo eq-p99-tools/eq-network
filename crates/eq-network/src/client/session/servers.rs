@@ -1009,6 +1009,14 @@ impl ServerType for Takp {
         offer(shared::motion(false))
     }
 
+    /// Groups, with `EQMac`'s opcodes for Titanium's layouts (TAKP
+    /// `zone/client_packet.cpp` `Handle_OP_GroupInvite2`, `GroupFollow`,
+    /// `GroupCancelInvite`, `GroupDisband`), checked live there with two
+    /// characters.
+    fn groups(&self, _setup: &Setup<'_>) -> Provided {
+        offer(shared::groups())
+    }
+
     /// Zone lines and the server's moves, with `EQMac`'s zone change and the
     /// world's re-entry between zones; a dead player asks for their bind
     /// point, as TAKP waits for.
@@ -1118,7 +1126,7 @@ mod tests {
         assert_eq!(quarm.features(&setup).len(), 3);
         assert_eq!(offers(quarm), [Capability::Talking]);
         let takp = server_type(ServerProtocol::Takp);
-        assert_eq!(takp.features(&setup).len(), 12);
+        assert_eq!(takp.features(&setup).len(), 13);
         assert_eq!(
             offers(takp),
             [
@@ -1132,6 +1140,7 @@ mod tests {
                 Capability::Talking,
                 Capability::Camping,
                 Capability::Zoning,
+                Capability::Grouping,
                 Capability::BleedingOut
             ]
         );

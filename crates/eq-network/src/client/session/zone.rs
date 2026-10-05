@@ -1349,6 +1349,7 @@ mod tests {
                 Capability::Talking,
                 Capability::Camping,
                 Capability::Zoning,
+                Capability::Grouping,
                 Capability::BleedingOut
             ]
         );

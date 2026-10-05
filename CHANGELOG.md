@@ -112,6 +112,16 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Groups on TAKP (`Capability::Grouping`), read from EQMacEmu's source and
+  checked live with two characters. The `EQMac` client's group packets have Titanium's
+  layouts with their own opcodes (`group::eqmac_invite`, `eqmac_follow`,
+  `eqmac_decline`, `eqmac_disband` and `decode_eqmac`); its invitation is
+  193 bytes, the names and 65 more (zero, inferred). TAKP also has its own
+  ways: it removes a player from a group with a quiet update naming them,
+  read as `GroupUpdate::Left`, and lists the player's group in the profile
+  (`quarm::profile_group`) as each zone admits them, with the leader named
+  afterwards. The session tells the host a group listed before the
+  admission once the zone admits the player.
 - The login server's list, for the player to choose a world from. When no
   world is configured (`ClientConfig::server` empty, which needs a command
   queue), both client generations' logins send `WorldEvent::ServerSelection`

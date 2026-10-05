@@ -405,6 +405,10 @@ pub fn eqmac(request: &Request, sender: Sender<'_>) -> Result<EncodedCommand> {
             hazards::eqmac_damage(sender.spawn(), *hazard, *amount)
         }
         Request::Command(command) => command::encode(GameDialect::EqMac, command, sender.name),
+        Request::InviteToGroup(name) => group::eqmac_invite(name, sender.name),
+        Request::FollowGroup(inviter) => group::eqmac_follow(inviter, sender.name),
+        Request::DeclineGroup(inviter) => group::eqmac_decline(inviter, sender.name),
+        Request::Disband => group::eqmac_disband(sender.name),
         // EQMac has no instances, and its request carries no position.
         Request::AnswerZoneOffer {
             zone_id,

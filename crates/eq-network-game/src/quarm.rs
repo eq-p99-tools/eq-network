@@ -409,6 +409,29 @@ pub fn profile(body: &[u8], character: &str) -> Result<PlayerState> {
     decoded_profile(&data, character)
 }
 
+/// The player's group as the profile lists it each time a zone admits them
+/// (`mac_structs.h` `groupMembers`), with the leader unknown; None outside a
+/// group.
+///
+/// # Errors
+/// Rejects malformed compression and unexpected layouts.
+pub fn profile_group(body: &[u8]) -> Result<Option<crate::group::GroupUpdate>> {
+    let data = unpack(body, true)?;
+    decoded_group(&data)
+}
+
+/// Where the profile's six group places lie, the player's own among them.
+const PROFILE_GROUP: std::ops::Range<usize> = 5012..5396;
+
+fn decoded_group(data: &[u8]) -> Result<Option<crate::group::GroupUpdate>> {
+    ensure!(
+        data.len() == PROFILE_SIZE,
+        "unexpected EQMac profile layout"
+    );
+    let player = String::from_utf8_lossy(cstr(&data[6..70]));
+    Ok(crate::group::profile_members(&data[PROFILE_GROUP], &player))
+}
+
 /// Projects validated profile fields without retaining the decompressed payload.
 fn decoded_profile(data: &[u8], character: &str) -> Result<PlayerState> {
     ensure!(
@@ -637,6 +660,8 @@ fn position(body: &[u8]) -> Result<WorldEvent> {
 ///
 /// # Errors
 /// Rejects malformed recognized packets, invalid IDs, and invalid health values.
+// One arm per opcode, so the match grows with each one decoded.
+#[allow(clippy::too_many_lines)]
 pub fn updates(opcode: u16, body: &[u8]) -> Result<Vec<WorldEvent>> {
     Ok(match opcode {
         0x5f41 | 0x6b42 => vec![WorldEvent::Spawns(spawns(body)?)],
@@ -734,6 +759,14 @@ pub fn updates(opcode: u16, body: &[u8]) -> Result<Vec<WorldEvent>> {
             )?)]
         }
         0xf540 => crate::world::appearance(body)?.into_iter().collect(),
+        crate::group::EQMAC_INVITE_OPCODE
+        | crate::group::EQMAC_INVITE2_OPCODE
+        | crate::group::EQMAC_FOLLOW_OPCODE
+        | crate::group::EQMAC_CANCEL_OPCODE
+        | crate::group::EQMAC_UPDATE_OPCODE => crate::group::decode_eqmac(opcode, body)?
+            .map(WorldEvent::Group)
+            .into_iter()
+            .collect(),
         crate::combat::EQMAC_DAMAGE_OPCODE => {
             vec![WorldEvent::Damage(crate::combat::eqmac_damage(body)?)]
         }

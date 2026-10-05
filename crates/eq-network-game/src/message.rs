@@ -208,6 +208,13 @@ fn eqmac_profile(body: &[u8]) -> Vec<Message> {
         crate::quarm::bind_point(body)
             .map_or_else(|error| unreadable(Part::World, &error), Message::Bind),
     );
+    // The profile lists the player's group as each zone admits them.
+    match crate::quarm::profile_group(body) {
+        Ok(group) => {
+            messages.extend(group.map(|update| Message::Event(WorldEvent::Group(update))));
+        }
+        Err(error) => messages.push(unreadable(Part::World, &error)),
+    }
     messages
 }
 
@@ -449,13 +456,17 @@ mod tests {
                 Message::Event(WorldEvent::Mana(120))
             ]
         ));
-        // A profile that cannot be read leaves the spells, the coins and the
-        // bind point unknown.
+        // A profile that cannot be read leaves the spells, the coins, the
+        // bind point and the group unknown.
         assert!(matches!(
             eqmac(crate::quarm::ZONE_PLAYER_PROFILE, &[0; 7])[..],
             [
                 Message::Unreadable {
                     part: Part::Spells,
+                    ..
+                },
+                Message::Unreadable {
+                    part: Part::World,
                     ..
                 },
                 Message::Unreadable {
