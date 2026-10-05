@@ -33,7 +33,7 @@ use super::{
     feature::Feature,
     groups::Groups,
     hazards::Hazards,
-    inventory::Belongings,
+    inventory::{Allowances, Belongings},
     listing::Listing,
     looting::Looting,
     map::Map,
@@ -56,7 +56,9 @@ use super::{
     CharacterSession, Events, ServerProtocol, ZoneExit,
 };
 use crate::p99::{self, WorldCodec};
-use eq_network_game::{abilities::Ability, hazards::Hazard, GameDialect};
+use eq_network_game::{
+    abilities::Ability, hazards::Hazard, inventory::MoveRules, merchant::Quotes, GameDialect,
+};
 
 /// What a zone session builds its features with.
 pub(super) struct Setup<'a> {
@@ -464,11 +466,11 @@ impl Shield for WorldCodec {
 /// them; each server type still lists the ones it provides.
 mod shared {
     use super::{
-        Abilities, Ability, Belongings, BleedingOut, Camp, Casting, Character, Clock, Combat,
-        Corpses, Doors, Edits, Entities, Exchanges, Feature, GameDialect, GroundObjects, Groups,
-        Hazard, Hazards, Home, ItemCount, Listing, Looting, Map, MerchantOffers, Motion, Pets,
-        Raids, Reading, Resurrection, Setup, Socials, Spellbook, Talk, Targeting, Tradeskills,
-        Training, Transfers, Who,
+        Abilities, Ability, Allowances, Belongings, BleedingOut, Camp, Casting, Character, Clock,
+        Combat, Corpses, Doors, Edits, Entities, Exchanges, Feature, GameDialect, GroundObjects,
+        Groups, Hazard, Hazards, Home, ItemCount, Listing, Looting, Map, MerchantOffers, Motion,
+        MoveRules, Pets, Quotes, Raids, Reading, Resurrection, Setup, Socials, Spellbook, Talk,
+        Targeting, Tradeskills, Training, Transfers, Who,
     };
 
     pub(super) fn casting() -> Box<dyn Feature> {
@@ -483,10 +485,20 @@ mod shared {
         Box::new(Belongings::new(setup.auto_eat))
     }
 
-    /// The inventory as the server says it is, which the player cannot
-    /// change yet.
-    pub(super) fn followed_inventory() -> Box<dyn Feature> {
-        Box::new(Belongings::followed())
+    /// The inventory, whose items the player moves under the server type's
+    /// rules, with what else it allows, and merchant packets priced as
+    /// `quotes` says.
+    pub(super) fn inventory_under(
+        rules: MoveRules,
+        quotes: Quotes,
+        allows: Allowances,
+    ) -> Box<dyn Feature> {
+        Box::new(Belongings::under(
+            rules,
+            quotes,
+            allows,
+            eq_network_game::food::AutoEat::default(),
+        ))
     }
 
     /// Moving, with or without the jumps and falls the server takes.
@@ -951,10 +963,20 @@ impl ServerType for Takp {
         offer(shared::character())
     }
 
-    /// What TAKP's item packets say the player holds. Moving items waits:
-    /// TAKP disconnects a player whose move it refuses.
+    /// What TAKP's item packets say the player holds, item moves under
+    /// TAKP's rules, which disconnect a player whose move they refuse, coin
+    /// moves, which TAKP answers no more than `EQEmu` does, and merchants,
+    /// whose lists TAKP quotes before their rate. Meals wait.
     fn inventory(&self, _setup: &Setup<'_>) -> Provided {
-        offer(shared::followed_inventory())
+        offer(shared::inventory_under(
+            MoveRules::Takp,
+            Quotes::of(GameDialect::EqMac),
+            Allowances {
+                coins: true,
+                merchants: true,
+                ..Allowances::default()
+            },
+        ))
     }
 
     fn entities(&self, _setup: &Setup<'_>) -> Provided {
@@ -1075,10 +1097,9 @@ mod tests {
     #[test]
     fn eqmac_servers_provide_the_features_built_for_them() {
         // Quarm and TAKP speak EQMac: they see the zone's spawns, keep the
-        // player's record and talk. TAKP also camps, moves and zones,
-        // follows the inventory, which offers nothing until items move, and
-        // takes the client's report of a bleed-out; Quarm will once each is
-        // checked there.
+        // player's record and talk. TAKP also camps, moves, zones, moves
+        // items and takes the client's report of a bleed-out; Quarm will once
+        // each is checked there.
         let setup = Setup::new("Tester", AutoEat::default());
         let quarm = server_type(ServerProtocol::Quarm);
         assert_eq!(quarm.features(&setup).len(), 3);
@@ -1088,6 +1109,8 @@ mod tests {
         assert_eq!(
             offers(takp),
             [
+                Capability::Inventory,
+                Capability::Trading,
                 Capability::Moving,
                 Capability::Targeting,
                 Capability::Combat,

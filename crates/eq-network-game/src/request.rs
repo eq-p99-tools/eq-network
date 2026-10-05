@@ -388,8 +388,8 @@ pub fn titanium(request: &Request, sender: Sender<'_>) -> Result<EncodedCommand>
 }
 
 /// The `EQMac` client's packet for a request from this sender: camping,
-/// logging out, its stance and position, the world's damage, and the host
-/// commands its generation encodes so far, which is chat.
+/// logging out, its stance and position, the world's damage, item moves,
+/// and the host commands its generation encodes so far, which is chat.
 ///
 /// # Errors
 /// Refuses every other request, and a command the generation cannot carry.
@@ -411,7 +411,11 @@ pub fn eqmac(request: &Request, sender: Sender<'_>) -> Result<EncodedCommand> {
             ..
         } => crate::quarm::zone_change(sender.name, *zone_id, *reason),
         Request::SaveOnZone => Ok(crate::quarm::save_on_zone()),
+        Request::MoveItem { from, to, quantity } => {
+            crate::inventory::eqmac_move(*from, *to, *quantity)
+        }
         Request::Depart => Ok(crate::quarm::depart(sender.spawn())),
+        Request::MoveCoins(transfer) => transfer.encode_eqmac(),
         Request::BledOut => crate::quarm::bled_out(sender.spawn()),
         _ => anyhow::bail!("the EQMac client cannot send {request:?} yet"),
     }
@@ -426,6 +430,33 @@ mod tests {
         name: "Tester",
         spawn_id: Some(7),
     };
+
+    #[test]
+    fn each_generation_moves_items_in_its_own_numbers() {
+        let pick_up = Request::MoveItem {
+            from: InventorySlot(22),
+            to: InventorySlot::CURSOR,
+            quantity: MoveQuantity::Whole,
+        };
+        assert_eq!(
+            titanium(&pick_up, PLAYER).unwrap(),
+            inventory::titanium_move(
+                InventorySlot(22),
+                InventorySlot::CURSOR,
+                MoveQuantity::Whole
+            )
+            .unwrap()
+        );
+        let mac = eqmac(&pick_up, PLAYER).unwrap();
+        assert_eq!(mac.opcode, 0x2c41);
+        assert_eq!(&mac.body[4..8], &[0; 4]);
+        let charm = Request::MoveItem {
+            from: InventorySlot(0),
+            to: InventorySlot::CURSOR,
+            quantity: MoveQuantity::Whole,
+        };
+        assert!(eqmac(&charm, PLAYER).is_err());
+    }
 
     #[test]
     fn each_generation_departs_and_answers_a_zone_offer_its_own_way() {

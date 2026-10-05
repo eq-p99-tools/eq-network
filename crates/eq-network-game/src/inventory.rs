@@ -4,14 +4,18 @@ mod activation;
 mod banking;
 mod eqmac;
 mod titanium;
-pub use actions::{titanium_move, InventoryActor, InventoryMove, MoveQuantity, MOVE_OPCODE};
+pub use actions::{
+    titanium_move, InventoryActor, InventoryMove, MoveQuantity, MoveRules, MOVE_OPCODE,
+};
 pub use activation::{
     titanium_item_cast, ClickEffect, ClickKind, ItemActivation, ItemUse, CAST_OPCODE,
 };
 pub use banking::banker_in_range;
 pub(crate) use eqmac::details as eqmac_details;
+pub(crate) use eqmac::merchant_stock as eqmac_merchant_stock;
 pub use eqmac::{
-    decode as decode_eqmac, takp_item_hit_points, ItemHitPointCount, UnsettledItem, Wearer,
+    decode as decode_eqmac, move_item as eqmac_move, takp_item_hit_points, ItemHitPointCount,
+    UnsettledItem, Wearer,
 };
 pub use titanium::decode;
 pub(crate) use titanium::{parse as parse_items, parse_at};
@@ -42,6 +46,19 @@ impl InventorySlot {
             0 => Some(Self::CURSOR),
             1..=29 | 2000..=2007 | 3000..=3007 | 4000..=4009 => Some(Self(slot)),
             250..=339 | 2030..=2109 | 3030..=3109 => Some(Self(slot + 1)),
+            _ => None,
+        }
+    }
+
+    /// The `EQMac` number of this slot, the inverse of
+    /// [`InventorySlot::from_eqmac`]; None where `EQMac` has no such slot, as
+    /// for the charm.
+    #[must_use]
+    pub const fn to_eqmac(self) -> Option<i32> {
+        match self.0 {
+            30 => Some(0),
+            1..=29 | 2000..=2007 | 3000..=3007 | 4000..=4009 => Some(self.0),
+            251..=340 | 2031..=2110 | 3031..=3110 => Some(self.0 - 1),
             _ => None,
         }
     }

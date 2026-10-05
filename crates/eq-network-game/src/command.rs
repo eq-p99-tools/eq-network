@@ -866,6 +866,51 @@ fn encode_cast(
     })
 }
 
+/// `EQMac`'s merchant requests (`crate::merchant`'s `eqmac_*`); looting is
+/// not built for it yet.
+fn encode_eqmac_trade(command: &GameCommand) -> Result<EncodedCommand> {
+    let (opcode, body) = match command {
+        GameCommand::Shop {
+            merchant_id,
+            own_id,
+            open: true,
+            ..
+        } => (
+            crate::merchant::EQMAC_REQUEST_OPCODE,
+            crate::merchant::eqmac_request(*merchant_id, *own_id)?.to_vec(),
+        ),
+        GameCommand::Shop {
+            merchant_id,
+            own_id,
+            ..
+        } => (
+            crate::merchant::EQMAC_END_OPCODE,
+            crate::merchant::eqmac_end(*merchant_id, *own_id)?.to_vec(),
+        ),
+        GameCommand::Buy {
+            merchant_id,
+            own_id,
+            slot,
+            quantity,
+            ..
+        } => (
+            crate::merchant::EQMAC_BUY_OPCODE,
+            crate::merchant::eqmac_buy(*merchant_id, *own_id, *slot, *quantity)?.to_vec(),
+        ),
+        GameCommand::Sell {
+            merchant_id,
+            slot,
+            quantity,
+            ..
+        } => (
+            crate::merchant::EQMAC_SELL_OPCODE,
+            crate::merchant::eqmac_sell(*merchant_id, *slot, *quantity)?.to_vec(),
+        ),
+        _ => anyhow::bail!("looting is not implemented for the EQMac client"),
+    };
+    Ok(EncodedCommand { opcode, body })
+}
+
 /// Encode a typed client action for one game dialect.
 ///
 /// `character` supplies the active character name for packet layouts that
@@ -1040,12 +1085,12 @@ fn encode_posture(dialect: GameDialect, spawn_id: u16, posture: Posture) -> Resu
     })
 }
 
-/// Titanium-only corpse and merchant requests.
+/// Corpse and merchant requests in Titanium's layouts, and merchant
+/// requests in `EQMac`'s.
 fn encode_trade(dialect: GameDialect, command: &GameCommand) -> Result<EncodedCommand> {
-    anyhow::ensure!(
-        dialect == GameDialect::Titanium,
-        "looting and merchants are not implemented for this dialect"
-    );
+    if dialect == GameDialect::EqMac {
+        return encode_eqmac_trade(command);
+    }
     let (opcode, body) = match command {
         GameCommand::Loot { corpse_id, .. } => (
             crate::loot::REQUEST_OPCODE,
@@ -1253,9 +1298,20 @@ mod tests {
     }
 
     #[test]
-    fn corpse_and_merchant_commands_use_their_titanium_opcodes() {
+    fn corpse_and_merchant_commands_use_each_generations_opcodes() {
         let created = std::time::Instant::now();
-        for (command, opcode, length) in [
+        // EQMac's merchant requests, in its own opcodes and lengths; its
+        // looting is not built.
+        let eqmac = [
+            None,
+            None,
+            None,
+            Some((0x0b40, 12)),
+            Some((0x3740, 4)),
+            Some((0x3540, 16)),
+            Some((0x2740, 16)),
+        ];
+        for ((command, opcode, length), eqmac) in [
             (
                 GameCommand::Loot {
                     session_id: 1,
@@ -1330,10 +1386,18 @@ mod tests {
                 0x0e13,
                 16,
             ),
-        ] {
+        ]
+        .into_iter()
+        .zip(eqmac)
+        {
             let packet = encode(GameDialect::Titanium, &command, "Example").unwrap();
             assert_eq!((packet.opcode, packet.body.len()), (opcode, length));
-            assert!(encode(GameDialect::EqMac, &command, "Example").is_err());
+            assert_eq!(
+                encode(GameDialect::EqMac, &command, "Example")
+                    .ok()
+                    .map(|packet| (packet.opcode, packet.body.len())),
+                eqmac
+            );
         }
     }
 

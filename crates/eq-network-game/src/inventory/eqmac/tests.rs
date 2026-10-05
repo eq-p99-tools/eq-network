@@ -461,3 +461,36 @@ fn the_server_empties_slots_and_uses_up_units() {
     assert!(decode(MOVE_OPCODE, &change(8000, u32::MAX, u32::MAX)).is_err());
     assert!(decode(DELETE_CHARGE_OPCODE, &[0; 8]).is_err());
 }
+
+#[test]
+fn moves_go_out_in_eqmac_numbers() {
+    let words = |command: &EncodedCommand| -> Vec<u32> {
+        command
+            .body
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|word| u32::from_le_bytes(*word))
+            .collect()
+    };
+    let pick_up = move_item(
+        InventorySlot(22),
+        InventorySlot::CURSOR,
+        MoveQuantity::Whole,
+    )
+    .unwrap();
+    assert_eq!(pick_up.opcode, MOVE_OPCODE);
+    assert_eq!(words(&pick_up), [22, 0, 0]);
+    // Bag contents are one lower than Titanium numbers them, and a count
+    // moves part of a stack.
+    let five = MoveQuantity::Count(std::num::NonZeroU32::new(5).unwrap());
+    let banked = move_item(
+        InventorySlot(22).child(3).unwrap(),
+        InventorySlot(2000).child(0).unwrap(),
+        five,
+    )
+    .unwrap();
+    assert_eq!(words(&banked), [253, 2030, 5]);
+    // EQMac has no charm slot.
+    assert!(move_item(InventorySlot(0), InventorySlot::CURSOR, MoveQuantity::Whole).is_err());
+}

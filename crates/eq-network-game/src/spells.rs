@@ -1,7 +1,17 @@
-//! Server-driven Titanium spell state.
+//! Server-driven spell state, in Titanium's layouts and, through
+//! [`decode_eqmac`](crate::spells::decode_eqmac) and
+//! [`SpellBook::eqmac_profile`](crate::spells::SpellBook::eqmac_profile), in
+//! `EQMac`'s.
 use crate::command::EncodedCommand;
 use anyhow::{ensure, Result};
 use serde::Serialize;
+
+mod eqmac;
+
+pub use eqmac::{
+    decode_eqmac, EQMAC_BEGIN_OPCODE, EQMAC_BOOK_SLOTS, EQMAC_DELETE_OPCODE,
+    EQMAC_INTERRUPT_OPCODE, EQMAC_MEMORIZE_OPCODE, EQMAC_SWAP_OPCODE,
+};
 
 /// `OP_MemorizeSpell`: scribing, memorizing and forgetting, by mode.
 pub const MEMORIZE_OPCODE: u16 = 0x308e;
