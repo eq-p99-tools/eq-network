@@ -32,6 +32,9 @@ pub enum Message {
     ZoneAnswer(zoning::ZoneAnswer),
     /// The next zone's address.
     Handoff(Vec<u8>),
+    /// The player's bind point, from their profile: where a client that asks
+    /// for its own way home after death asks to go.
+    Bind(zoning::BindPoint),
     /// The server logging the character out.
     LoggedOut,
     /// A message a session feature withholds, to pass on later as it was or
@@ -150,7 +153,8 @@ pub fn titanium(opcode: u16, body: &[u8]) -> Vec<Message> {
 /// What one `EQMac` zone packet says: the spawns and the player's news that
 /// [`crate::quarm::updates`] reads, the inventory, the server logging the
 /// character out, its request that the client move, its answer to the
-/// client's request, and the zone's numbered destinations.
+/// client's request, the zone's numbered destinations, and the player's
+/// bind point from their profile.
 #[must_use]
 pub fn eqmac(opcode: u16, body: &[u8]) -> Vec<Message> {
     match opcode {
@@ -196,6 +200,10 @@ pub fn eqmac(opcode: u16, body: &[u8]) -> Vec<Message> {
 fn eqmac_profile(body: &[u8]) -> Vec<Message> {
     let mut messages = events(Part::Spells, crate::quarm::profile_spells(body));
     messages.extend(events(Part::World, crate::quarm::profile_coins(body)));
+    messages.push(
+        crate::quarm::bind_point(body)
+            .map_or_else(|error| unreadable(Part::World, &error), Message::Bind),
+    );
     messages
 }
 
@@ -412,12 +420,17 @@ mod tests {
                 Message::Event(WorldEvent::Mana(120))
             ]
         ));
-        // A profile that cannot be read leaves the spells and coins unknown.
+        // A profile that cannot be read leaves the spells, the coins and the
+        // bind point unknown.
         assert!(matches!(
             eqmac(crate::quarm::ZONE_PLAYER_PROFILE, &[0; 7])[..],
             [
                 Message::Unreadable {
                     part: Part::Spells,
+                    ..
+                },
+                Message::Unreadable {
+                    part: Part::World,
                     ..
                 },
                 Message::Unreadable {

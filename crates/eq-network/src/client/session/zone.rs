@@ -230,17 +230,17 @@ pub(super) fn run(
             admission.stage()
         );
         let speaker = sender(&config.character, &world);
-        features.tick(
-            Instant::now(),
-            &mut world,
-            &mut Out {
+        let exit = {
+            let mut out = Out {
                 sink: &mut session,
                 log: &mut *log,
                 wire: server.wire(),
                 sender: speaker,
-            },
-        )?;
-        if let Some(exit) = world.take_exit() {
+            };
+            features.tick(Instant::now(), &mut world, &mut out)?;
+            settle(&mut features, &mut world, &mut out, follows_zones)?
+        };
+        if let Some(exit) = exit {
             session.close()?;
             return Ok(exit);
         }
@@ -273,17 +273,20 @@ pub(super) fn run(
                         continue;
                     }
                     let speaker = sender(&config.character, &world);
-                    let handled = features.handle(
-                        &command,
-                        &mut world,
-                        &mut Out {
+                    let (handled, exit) = {
+                        let mut out = Out {
                             sink: &mut session,
                             log: &mut *log,
                             wire: server.wire(),
                             sender: speaker,
-                        },
-                    )?;
-                    if let Some(exit) = world.take_exit() {
+                        };
+                        let handled = features.handle(&command, &mut world, &mut out)?;
+                        (
+                            handled,
+                            settle(&mut features, &mut world, &mut out, follows_zones)?,
+                        )
+                    };
+                    if let Some(exit) = exit {
                         session.close()?;
                         return Ok(exit);
                     }
@@ -338,59 +341,39 @@ pub(super) fn run(
             },
         )? {
             let speaker = sender(&config.character, &world);
-            admit(
-                player,
-                &zone,
-                &mut features,
-                &mut world,
-                &mut Out {
+            let exit = {
+                let mut out = Out {
                     sink: &mut session,
                     log: &mut *log,
                     wire: server.wire(),
                     sender: speaker,
-                },
-            )?;
-        }
-        // Everything else is read once, in the server's client generation, the
-        // same way before and after admission, and heard by every feature.
-        for mut message in server.wire().messages(packet.opcode, &packet.body) {
-            features.explain(&mut message, &world);
-            if let Message::Unreadable { part, error } = &message {
-                log.diagnostic(format!("{part} rejected: {error}"))?;
-            }
-            if world.ready() {
-                let speaker = sender(&config.character, &world);
-                features.observe(
-                    &message,
-                    &mut world,
-                    &mut Out {
-                        sink: &mut session,
-                        log: &mut *log,
-                        wire: server.wire(),
-                        sender: speaker,
-                    },
-                )?;
-            } else {
-                features.admit(&message, &mut world)?;
-            }
-            if let Some(exit) = world.take_exit() {
+                };
+                admit(player, &zone, &mut features, &mut world, &mut out)?;
+                settle(&mut features, &mut world, &mut out, follows_zones)?
+            };
+            if let Some(exit) = exit {
                 session.close()?;
                 return Ok(exit);
             }
-            ensure!(
-                !matches!(message, Message::LoggedOut),
-                "server logged the character out"
-            );
-            // The server moving the player where no feature follows ends the
-            // session.
-            ensure!(
-                follows_zones || !matches!(message, Message::ZoneOffer(_)),
-                "server requested a new zone, which this server type cannot follow yet"
-            );
-            // Before the admission, the features staged what they need of it.
-            if let (Message::Event(event), true) = (message, world.ready()) {
-                log.send(ClientEvent::World(event))?;
-            }
+        }
+        // Everything else is read once, in the server's client generation, the
+        // same way before and after admission, and heard by every feature.
+        let speaker = sender(&config.character, &world);
+        let exit = hear(
+            server.wire().messages(packet.opcode, &packet.body),
+            &mut features,
+            &mut world,
+            &mut Out {
+                sink: &mut session,
+                log: &mut *log,
+                wire: server.wire(),
+                sender: speaker,
+            },
+            follows_zones,
+        )?;
+        if let Some(exit) = exit {
+            session.close()?;
+            return Ok(exit);
         }
         let zone = log.zone.clone();
         match server
@@ -419,6 +402,84 @@ fn sender<'a>(name: &'a str, world: &World) -> eq_network_game::request::Sender<
         name,
         spawn_id: world.player.as_ref().map(|player| player.spawn_id),
     }
+}
+
+/// How many messages the session's own news may add while one step is
+/// heard, before the features are taken to answer each other without end.
+const MOST_NEWS: usize = 16;
+
+/// Lets every feature hear messages, the zone's or what the session itself
+/// made happen ([`World::happened`]), in order, what a message makes happen
+/// before the message after it, and tells the host each event once the zone
+/// has admitted the player. Returns how the session ends, once a feature
+/// decides.
+///
+/// # Errors
+/// Returns an error when a feature fails, when the server logs the player
+/// out or moves them where no feature follows, and when the news does not
+/// settle.
+fn hear(
+    messages: Vec<Message>,
+    features: &mut Features,
+    world: &mut World,
+    out: &mut Out<'_, '_>,
+    follows_zones: bool,
+) -> Result<Option<ZoneExit>> {
+    let mut queue = std::collections::VecDeque::from(messages);
+    let mut news = 0;
+    while let Some(mut message) = queue.pop_front() {
+        features.explain(&mut message, world);
+        if let Message::Unreadable { part, error } = &message {
+            out.log.diagnostic(format!("{part} rejected: {error}"))?;
+        }
+        if world.ready() {
+            features.observe(&message, world, out)?;
+        } else {
+            features.admit(&message, world)?;
+        }
+        if let Some(exit) = world.take_exit() {
+            return Ok(Some(exit));
+        }
+        ensure!(
+            !matches!(message, Message::LoggedOut),
+            "server logged the character out"
+        );
+        // The server moving the player where no feature follows ends the
+        // session.
+        ensure!(
+            follows_zones || !matches!(message, Message::ZoneOffer(_)),
+            "server requested a new zone, which this server type cannot follow yet"
+        );
+        // Before the admission, the features staged what they need of it.
+        if let (Message::Event(event), true) = (message, world.ready()) {
+            out.log.send(ClientEvent::World(event))?;
+        }
+        let made = world.take_news();
+        news += made.len();
+        ensure!(news <= MOST_NEWS, "the session's own news did not settle");
+        for message in made.into_iter().rev() {
+            queue.push_front(message);
+        }
+    }
+    Ok(None)
+}
+
+/// How the session ends once a step into the features decided it, or else
+/// once every feature has heard what the step made happen.
+///
+/// # Errors
+/// Returns an error as [`hear`] does.
+fn settle(
+    features: &mut Features,
+    world: &mut World,
+    out: &mut Out<'_, '_>,
+    follows_zones: bool,
+) -> Result<Option<ZoneExit>> {
+    if let Some(exit) = world.take_exit() {
+        return Ok(Some(exit));
+    }
+    let news = world.take_news();
+    hear(news, features, world, out, follows_zones)
 }
 
 /// Why a command is refused when no feature of the server type takes it:
@@ -483,7 +544,7 @@ mod tests {
     };
 
     /// How many kinds of command there are.
-    const KINDS: usize = 67;
+    const KINDS: usize = 68;
 
     /// Which kind of command this is. A new command is a compile error here
     /// until it has a number, and then a test failure until the list below
@@ -558,6 +619,7 @@ mod tests {
             ClientCommand::RaidMakeLeader { .. } => 64,
             ClientCommand::RaidRemove { .. } => 65,
             ClientCommand::EnvironmentalDamage { .. } => 66,
+            ClientCommand::BledOut { .. } => 67,
         }
     }
 
@@ -660,6 +722,10 @@ mod tests {
                 created,
             },
             ClientCommand::Camp {
+                session_id,
+                created,
+            },
+            ClientCommand::BledOut {
                 session_id,
                 created,
             },
@@ -883,33 +949,53 @@ mod tests {
 
     #[test]
     fn exactly_one_feature_owns_each_command_a_zone_takes() {
-        // The server type with every feature, so that each owner can offer
-        // what its commands need.
-        let features = Features::new(
-            servers::server_type(crate::client::ServerProtocol::EqEmu),
-            "Tester",
-            eq_network_game::food::AutoEat::default(),
-        );
+        // Every server type, so that each command has an owner somewhere:
+        // EQEmu has every feature but the bleed-out report, which TAKP has.
+        let servers: Vec<_> = [
+            crate::client::ServerProtocol::EqEmu,
+            crate::client::ServerProtocol::Project1999,
+            crate::client::ServerProtocol::Quarm,
+            crate::client::ServerProtocol::Takp,
+        ]
+        .into_iter()
+        .map(|protocol| {
+            Features::new(
+                servers::server_type(protocol),
+                "Tester",
+                eq_network_game::food::AutoEat::default(),
+            )
+        })
+        .collect();
         for command in zone_commands() {
-            let owners: Vec<_> = features
-                .0
-                .iter()
-                .filter(|feature| feature.owns(&command))
-                .collect();
-            assert_eq!(owners.len(), 1, "{command:?}");
             let needed = command
                 .capability()
                 .expect("a zone command needs a capability");
+            // A feature may own a command its server type does not offer,
+            // as P99's motion owns the jump it does not take.
+            let mut offered = false;
+            for features in &servers {
+                let owners: Vec<_> = features
+                    .0
+                    .iter()
+                    .filter(|feature| feature.owns(&command))
+                    .collect();
+                assert!(owners.len() <= 1, "{command:?}");
+                offered |= owners
+                    .first()
+                    .is_some_and(|owner| owner.capabilities().contains(&needed));
+            }
             assert!(
-                owners[0].capabilities().contains(&needed),
-                "{command:?} needs {needed:?}, which its owner does not offer"
+                offered,
+                "{command:?} needs {needed:?}, which no server type's owner offers"
             );
         }
         let selection = ClientCommand::SelectCharacter {
             selection_id: 1,
             slot: 0,
         };
-        assert!(!features.0.iter().any(|feature| feature.owns(&selection)));
+        for features in &servers {
+            assert!(!features.0.iter().any(|feature| feature.owns(&selection)));
+        }
     }
 
     #[test]
@@ -955,6 +1041,171 @@ mod tests {
                 Some(&titanium_posture(spawn_id, Posture::Sitting).unwrap())
             );
         }
+    }
+
+    /// Admits the player, spawn 7, with these features on the `EQMac` wire,
+    /// the profile naming the bind point first; tells the session it knows
+    /// the player's items, as the inventory feature would; hears the server
+    /// put the player at -11 HP; and asks, as a host would, that the player
+    /// bled out. Then the session hears its own news, and the death pause
+    /// of a dead player runs out.
+    fn bleed_out(
+        mut features: Features,
+    ) -> (
+        World,
+        crate::client::session::feature::testing::Outcome<Result<()>>,
+    ) {
+        use crate::client::session::{feature::testing, wire};
+        use crate::world::{ItemHitPoints, WorldEvent};
+        use eq_network_game::inventory::{Inventory, InventoryUpdate};
+        let zone = super::super::admission::Zone {
+            name: "qeynos".into(),
+            far_clip: None,
+            sky: None,
+        };
+        let mut world = World::new(5);
+        world.own_spawn = Some(7);
+        let bind = eq_network_game::zoning::BindPoint {
+            zone_id: 2,
+            position: crate::world::Position::default(),
+        };
+        let outcome = testing::run(|out| -> Result<()> {
+            out.wire = &wire::EqMac;
+            assert!(hear(
+                vec![Message::Bind(bind)],
+                &mut features,
+                &mut world,
+                out,
+                true
+            )?
+            .is_none());
+            admit(
+                Ok(testing::player(7)),
+                &zone,
+                &mut features,
+                &mut world,
+                out,
+            )?;
+            world.admitted = Some(Instant::now());
+            let mut inventory = Inventory::default();
+            inventory.apply(InventoryUpdate::Snapshot(Vec::new()));
+            world.inventory = inventory.into();
+            let report = Message::Event(WorldEvent::HitPoints {
+                spawn_id: 7,
+                current: -11,
+                maximum: 100,
+                items: ItemHitPoints::LeftOutOfCurrent,
+            });
+            assert!(hear(vec![report], &mut features, &mut world, out, true)?.is_none());
+            let bled_out = ClientCommand::BledOut {
+                session_id: 5,
+                created: Instant::now(),
+            };
+            assert!(features.handle(&bled_out, &mut world, out)?);
+            assert!(settle(&mut features, &mut world, out, true)?.is_none());
+            if world.lifecycle.is_dead() {
+                features.tick(Instant::now(), &mut world, out)?;
+            }
+            Ok(())
+        });
+        (world, outcome)
+    }
+
+    #[test]
+    fn a_bleed_out_report_is_the_players_death_to_every_feature_and_the_host() {
+        use crate::client::session::{
+            bleeding::BleedingOut,
+            transfers::{Home, Transfers},
+        };
+        use crate::world::WorldEvent;
+        use eq_network_game::quarm;
+        /// A count that finds the player's items add nothing.
+        #[allow(clippy::unnecessary_wraps, reason = "the signature every count has")]
+        const fn naked(_world: &World) -> Result<i32, &'static str> {
+            Ok(0)
+        }
+        let features = Features(
+            vec![
+                Box::new(Transfers::new("Tester", Home::Asked)),
+                Box::new(BleedingOut::new(-11, Some(naked))),
+            ],
+            Vec::new(),
+        );
+        let (world, outcome) = bleed_out(features);
+        outcome.result.unwrap();
+        // Transfers heard the death the session made happen, and once the
+        // death pause was over, the player asked their way home.
+        assert!(world.lifecycle.is_dead());
+        assert_eq!(outcome.sent[0], quarm::bled_out(7).unwrap());
+        assert_eq!(outcome.sent[1].opcode, quarm::ZONE_CHANGE);
+        assert_eq!(outcome.sent.len(), 2);
+        // The host heard the threshold at admission, and then the death, as
+        // it hears the server's.
+        let threshold = outcome
+            .events
+            .iter()
+            .position(|event| matches!(event, ClientEvent::World(WorldEvent::DeathThreshold(-11))));
+        let death = outcome.events.iter().position(|event| {
+            matches!(event, ClientEvent::World(WorldEvent::Death(death)) if death.spawn_id == 7)
+        });
+        assert!(threshold.unwrap() < death.unwrap());
+    }
+
+    #[test]
+    fn takp_takes_no_bleed_out_report_until_it_counts_what_the_items_add() {
+        let (world, outcome) = bleed_out(Features::new(
+            servers::server_type(crate::client::ServerProtocol::Takp),
+            "Tester",
+            eq_network_game::food::AutoEat::default(),
+        ));
+        outcome.result.unwrap();
+        // Knowing the items is not enough: TAKP's -11 leaves out what they
+        // add, so the player may well be alive. The host heard no threshold,
+        // so it asks for nothing.
+        assert_eq!(outcome.sent, []);
+        assert!(!world.lifecycle.is_dead());
+        assert!(!outcome.events.iter().any(|event| matches!(
+            event,
+            ClientEvent::World(crate::world::WorldEvent::DeathThreshold(_))
+        )));
+        assert!(outcome.events.iter().any(|event| matches!(
+            event,
+            ClientEvent::Diagnostic(said) if said.contains("cannot count")
+        )));
+    }
+
+    #[test]
+    fn news_that_never_settles_ends_the_session() {
+        use crate::client::session::feature::{testing, Feature};
+        /// A feature that answers every message with another.
+        struct Echo;
+        impl Feature for Echo {
+            fn observe(
+                &mut self,
+                _message: &Message,
+                world: &mut World,
+                _out: &mut Out<'_, '_>,
+            ) -> Result<()> {
+                world.happened(Message::Withheld);
+                Ok(())
+            }
+        }
+        let mut features = Features(vec![Box::new(Echo)], Vec::new());
+        let mut world = World::new(5);
+        world.admitted = Some(Instant::now());
+        let outcome = testing::run(|out| {
+            hear(
+                vec![Message::Withheld],
+                &mut features,
+                &mut world,
+                out,
+                true,
+            )
+        });
+        let Err(error) = outcome.result else {
+            panic!("news that never settles must end the session");
+        };
+        assert_eq!(error.to_string(), "the session's own news did not settle");
     }
 
     #[test]
@@ -1061,8 +1312,9 @@ mod tests {
             assert!(!p99.contains(&capability));
         }
         assert_eq!(eqemu.len(), p99.len() + 15);
-        // EQMac servers talk; TAKP also camps, moves and moves items, and
-        // follows zone changes, which Quarm does not yet.
+        // EQMac servers talk; TAKP also camps, moves and moves items, follows
+        // zone changes and takes the client's report of a bleed-out, which
+        // Quarm does not yet.
         assert_eq!(
             features(crate::client::ServerProtocol::Quarm),
             [Capability::Talking]
@@ -1077,7 +1329,8 @@ mod tests {
                 Capability::Combat,
                 Capability::Talking,
                 Capability::Camping,
-                Capability::Zoning
+                Capability::Zoning,
+                Capability::BleedingOut
             ]
         );
     }

@@ -211,6 +211,17 @@ pub enum GameCommand {
         /// Reject delayed actions instead of replaying them after a stall.
         created: std::time::Instant,
     },
+    /// Report that the player bled out: the server left their death to the
+    /// client, and their HP, with what equipped items add, reached its
+    /// threshold ([`crate::world::WorldEvent::DeathThreshold`]) on the
+    /// server's report, with no death named for them. A host sends it once;
+    /// the player is then dead, as if the server had said so.
+    BledOut {
+        /// Current zone admission.
+        session_id: u64,
+        /// Reject delayed reports instead of replaying them after a stall.
+        created: std::time::Instant,
+    },
     /// Open a nearby corpse for looting.
     Loot {
         /// Current zone admission.
@@ -612,6 +623,7 @@ impl GameCommand {
             | Self::InspectItem { session_id, .. }
             | Self::Consider { session_id, .. }
             | Self::Camp { session_id, .. }
+            | Self::BledOut { session_id, .. }
             | Self::Loot { session_id, .. }
             | Self::LootItem { session_id, .. }
             | Self::EndLoot { session_id, .. }
@@ -691,6 +703,7 @@ impl GameCommand {
             Self::SendChat(_) | Self::InspectItem { .. } => Capability::Talking,
             Self::Consider { .. } | Self::AutoAttack { .. } => Capability::Combat,
             Self::Camp { .. } => Capability::Camping,
+            Self::BledOut { .. } => Capability::BleedingOut,
             Self::Loot { .. } | Self::LootItem { .. } | Self::EndLoot { .. } => Capability::Looting,
             Self::Shop { .. } | Self::Buy { .. } | Self::Sell { .. } => Capability::Trading,
             Self::OfferTrade { .. } | Self::AcceptTrade { .. } | Self::CancelTrade { .. } => {
@@ -798,6 +811,7 @@ impl GameCommand {
             | Self::SetPosture { created, .. }
             | Self::Consider { created, .. }
             | Self::Camp { created, .. }
+            | Self::BledOut { created, .. }
             | Self::Loot { created, .. }
             | Self::LootItem { created, .. }
             | Self::Shop { created, .. }
@@ -996,7 +1010,8 @@ pub fn encode(
         | GameCommand::DeleteSpell { .. }
         | GameCommand::SwapSpell { .. }
         | GameCommand::ScribeSpell { .. }
-        | GameCommand::Camp { .. } => {
+        | GameCommand::Camp { .. }
+        | GameCommand::BledOut { .. } => {
             anyhow::bail!("this command requires the admitted session controller")
         }
         GameCommand::SendChat(message) => Ok(EncodedCommand {
