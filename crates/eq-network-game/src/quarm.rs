@@ -503,6 +503,20 @@ pub fn own_spawn(body: &[u8], character: &str) -> Result<OwnSpawn> {
     })
 }
 
+/// A spawn's class in the server's numbering, the one Titanium's spawns use,
+/// from the Mac client's: TAKP's patch sends a banker (40) as 16, a merchant
+/// (41) as 32 and the guildmaster classes (20 to 34) three lower
+/// (`common/patches/mac.cpp`, `ENCODE(OP_ZoneSpawns)`); the player classes
+/// pass as they are.
+const fn server_class(mac: u8) -> u8 {
+    match mac {
+        16 => 40,
+        17..=31 => mac + 3,
+        32 => 41,
+        other => other,
+    }
+}
+
 /// Decode a compressed initial or incremental spawn batch.
 ///
 /// # Errors
@@ -512,8 +526,9 @@ pub fn spawns(body: &[u8]) -> Result<Vec<SpawnState>> {
 }
 
 /// The spawns in an unpacked batch (TAKP `common/patches/mac_structs.h`
-/// `Spawn_Struct`, 224 bytes each): among them the class at 87, which names
-/// a banker (40) or a merchant (41) as on Titanium, and the level at 89.
+/// `Spawn_Struct`, 224 bytes each): among them the class at 87, in the Mac
+/// client's numbering and read back into the server's ([`server_class`]),
+/// and the level at 89.
 fn decoded_spawns(data: &[u8]) -> Result<Vec<SpawnState>> {
     ensure!(
         !data.is_empty() && data.len().is_multiple_of(SPAWN_SIZE),
@@ -525,7 +540,7 @@ fn decoded_spawns(data: &[u8]) -> Result<Vec<SpawnState>> {
         .map(|record| {
             let spawn_id = valid_id(u32::from(short(record, 76)))?;
             Ok(SpawnState {
-                class: Some(record[87]),
+                class: Some(server_class(record[87])),
                 spawn_id,
                 name: String::from_utf8_lossy(cstr(&record[127..191])).into_owned(),
                 kind: match record[86] {

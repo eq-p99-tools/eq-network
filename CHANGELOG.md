@@ -499,6 +499,11 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- TAKP's bankers and merchants are known as such, so the bank and merchant
+  windows open at them. `EQMac` spawns now say their class in the server's
+  numbering, as Titanium's do: TAKP's patch sends a banker (40) as 16, a
+  merchant (41) as 32 and the guildmaster classes (20 to 34) three lower
+  (`common/patches/mac.cpp`, `ENCODE(OP_ZoneSpawns)`).
 - Combined transport packets (`OP_Combined`) give every part a one-byte
   length, as `EQEmu` does, so a part of exactly 255 bytes no longer ends the
   session with "invalid combined length". `build_combined` refuses parts

@@ -77,14 +77,16 @@ fn synthetic_spawn_batch_preserves_units_identity_and_visibility() {
 }
 #[test]
 fn a_spawn_says_its_class_and_level() {
-    // A merchant (class 41) of level 30, and a banker (40) of level 50.
-    let mut data = vec![0; SPAWN_SIZE * 2];
-    for (record, (id, class, level)) in data
-        .as_chunks_mut::<SPAWN_SIZE>()
-        .0
-        .iter_mut()
-        .zip([(9u16, 41u8, 30u8), (10, 40, 50)])
-    {
+    // As TAKP's patch sends them: a merchant (32 for the server's 41) of
+    // level 30, a banker (16 for 40) of level 50, a guildmaster (20 for 23),
+    // and a cleric (2), whose class passes as it is.
+    let mut data = vec![0; SPAWN_SIZE * 4];
+    for (record, (id, class, level)) in data.as_chunks_mut::<SPAWN_SIZE>().0.iter_mut().zip([
+        (9u16, 32u8, 30u8),
+        (10, 16, 50),
+        (11, 20, 40),
+        (12, 2, 1),
+    ]) {
         record[76..78].copy_from_slice(&id.to_le_bytes());
         record[86] = 1;
         record[87] = class;
@@ -96,7 +98,12 @@ fn a_spawn_says_its_class_and_level() {
             .iter()
             .map(|spawn| (spawn.spawn_id, spawn.class, spawn.level))
             .collect::<Vec<_>>(),
-        [(9, Some(41), 30), (10, Some(40), 50)]
+        [
+            (9, Some(41), 30),
+            (10, Some(40), 50),
+            (11, Some(23), 40),
+            (12, Some(2), 1)
+        ]
     );
     assert!(decoded_spawns(&data[1..]).is_err());
 }
