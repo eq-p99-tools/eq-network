@@ -78,6 +78,13 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Coin moves on TAKP, in its own packet (`money::EQMAC_MOVE_OPCODE`,
+  `CoinTransfer::encode_eqmac`): the same five signed words as Titanium's,
+  between the purse, the cursor, the bank beside a banker and the trade
+  window, converting as the server does (11 gold into platinum takes 10 and
+  adds 1). TAKP answers a move no more than `EQEmu` does, so the purse,
+  cursor and bank change when the move is sent, and the next profile
+  corrects them; coins still never leave the trade window.
 - Merchants on TAKP (`Capability::Trading`, beside its item moves; coin
   moves and meals wait, as the inventory feature's allowances for the
   server type say): buying and selling through TAKP's own packets. TAKP's

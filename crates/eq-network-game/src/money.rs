@@ -15,6 +15,9 @@ use serde::Serialize;
 
 /// `OP_MoveCoin`: coins moved between two places.
 pub const MOVE_OPCODE: u16 = 0x7657;
+/// `EQMac`'s `OP_MoveCoin` (TAKP `utils/patches/patch_Mac.conf` lists
+/// 0x412d, its bytes swapped).
+pub const EQMAC_MOVE_OPCODE: u16 = 0x2d41;
 
 /// A kind of coin.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
@@ -131,6 +134,28 @@ impl CoinTransfer {
     /// Rejects a move of nothing, one that stays where it is, and amounts the
     /// servers' signed field cannot carry.
     pub fn encode(&self) -> Result<EncodedCommand> {
+        Ok(EncodedCommand {
+            opcode: MOVE_OPCODE,
+            body: self.body()?,
+        })
+    }
+
+    /// `EQMac`'s packet for the move: the same five signed words, which
+    /// TAKP reads as they come (`MoveCoin_Struct`, untranslated by the Mac
+    /// patch; `Client::OPMoveCoin` numbers the places as Titanium's servers
+    /// do, with no shared bank).
+    ///
+    /// # Errors
+    /// Rejects what [`CoinTransfer::encode`] does.
+    pub fn encode_eqmac(&self) -> Result<EncodedCommand> {
+        Ok(EncodedCommand {
+            opcode: EQMAC_MOVE_OPCODE,
+            body: self.body()?,
+        })
+    }
+
+    /// Where from and to, the two kinds and the amount, as signed words.
+    fn body(self) -> Result<Vec<u8>> {
         ensure!(self.amount > 0, "move at least one coin");
         ensure!(
             self.from != self.to || self.coin != self.into,
@@ -147,10 +172,7 @@ impl CoinTransfer {
             body.extend_from_slice(&value.to_le_bytes());
         }
         body.extend_from_slice(&amount.to_le_bytes());
-        Ok(EncodedCommand {
-            opcode: MOVE_OPCODE,
-            body,
-        })
+        Ok(body)
     }
 }
 
@@ -484,6 +506,29 @@ mod tests {
         assert!(eqmac_purse_addition(&notice(0, 4, 12)).is_err());
         assert!(eqmac_purse_addition(&notice(0, 3, -1)).is_err());
         assert!(eqmac_purse_addition(&notice(0, 3, 12)[..7]).is_err());
+    }
+
+    #[test]
+    fn eqmacs_move_is_the_same_five_words_in_its_own_opcode() {
+        let transfer = CoinTransfer {
+            from: CoinPlace::Purse,
+            to: CoinPlace::Bank,
+            coin: Coin::Gold,
+            into: Coin::Platinum,
+            amount: 11,
+        };
+        let eqmac = transfer.encode_eqmac().unwrap();
+        assert_eq!(eqmac.opcode, EQMAC_MOVE_OPCODE);
+        assert_eq!(eqmac.body, transfer.encode().unwrap().body);
+        // TAKP takes 10 of the 11 gold and adds 1 platinum, as `amounts`
+        // counts.
+        assert_eq!(transfer.amounts(), (10, 1));
+        assert!(CoinTransfer {
+            amount: 0,
+            ..transfer
+        }
+        .encode_eqmac()
+        .is_err());
     }
 
     #[test]

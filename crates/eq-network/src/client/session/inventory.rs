@@ -985,6 +985,7 @@ mod tests {
             MoveRules::Takp,
             Quotes::BeforeRate,
             Allowances {
+                coins: true,
                 merchants: true,
                 ..Allowances::default()
             },
@@ -1236,7 +1237,7 @@ mod tests {
     }
 
     #[test]
-    fn on_takp_items_move_one_at_a_time_and_coins_and_meals_wait() {
+    fn on_takp_items_move_one_at_a_time_and_meals_wait() {
         use eq_network_game::food::{AutoEat, Nourishment};
         let (mut belongings, mut world) = admitted_on_takp();
         assert_eq!(
@@ -1557,6 +1558,88 @@ mod tests {
                 _ => None,
             })
             .collect()
+    }
+
+    #[test]
+    fn on_takp_coins_move_in_its_own_packet_and_the_bank_waits_for_a_banker() {
+        use eq_network_game::{
+            money::{Coin, CoinPlace, CoinTransfer, EQMAC_MOVE_OPCODE},
+            world::SpawnKind,
+        };
+        let eqmac = &super::super::wire::EqMac;
+        let (mut belongings, mut world) = admitted_on_takp();
+        let purse = Message::Event(WorldEvent::Coins(Coins {
+            gold: 12,
+            ..Coins::default()
+        }));
+        let elsewhere = Message::Event(WorldEvent::CoinsElsewhere {
+            cursor: Coins::default(),
+            bank: Coins::default(),
+            given: Coins::default(),
+            offered: Coins::default(),
+        });
+        for news in [purse, elsewhere] {
+            testing::run(|out| belongings.observe(&news, &mut world, out))
+                .result
+                .unwrap();
+        }
+        // 11 gold from the purse into platinum on the cursor: TAKP takes 10
+        // and adds 1.
+        let move_coins = |from, to| ClientCommand::MoveCoins {
+            session_id: 5,
+            transfer: CoinTransfer {
+                from,
+                to,
+                coin: Coin::Gold,
+                into: Coin::Platinum,
+                amount: 11,
+            },
+            created: Instant::now(),
+        };
+        let outcome = testing::run_on(eqmac, |out| {
+            belongings.handle(
+                &move_coins(CoinPlace::Purse, CoinPlace::Cursor),
+                &mut world,
+                out,
+            )
+        });
+        outcome.result.unwrap();
+        assert_eq!(outcome.sent.len(), 1);
+        assert_eq!(outcome.sent[0].opcode, EQMAC_MOVE_OPCODE);
+        assert_eq!(
+            world.coins.purse,
+            Some(Coins {
+                gold: 2,
+                ..Coins::default()
+            })
+        );
+        assert_eq!(world.coins.cursor.platinum, 1);
+        // Into the bank only beside a banker, which TAKP's spawns now name.
+        let to_bank = ClientCommand::MoveCoins {
+            session_id: 5,
+            transfer: CoinTransfer {
+                from: CoinPlace::Cursor,
+                to: CoinPlace::Bank,
+                coin: Coin::Platinum,
+                into: Coin::Platinum,
+                amount: 1,
+            },
+            created: Instant::now(),
+        };
+        assert!(belongings.owns(&to_bank));
+        let outcome = testing::run_on(eqmac, |out| belongings.handle(&to_bank, &mut world, out));
+        assert_eq!(outcome.sent, []);
+        assert_eq!(
+            coins_refused(&outcome.events),
+            ["Stand near a banker to use the bank"]
+        );
+        let mut banker = testing::spawn(9, SpawnKind::Npc);
+        banker.class = Some(40);
+        world.spawns.insert(banker);
+        let outcome = testing::run_on(eqmac, |out| belongings.handle(&to_bank, &mut world, out));
+        outcome.result.unwrap();
+        assert_eq!(outcome.sent.len(), 1);
+        assert_eq!(world.coins.bank.map(|bank| bank.platinum), Some(1));
     }
 
     #[test]

@@ -411,6 +411,7 @@ pub fn eqmac(request: &Request, sender: Sender<'_>) -> Result<EncodedCommand> {
             crate::inventory::eqmac_move(*from, *to, *quantity)
         }
         Request::Depart => Ok(crate::quarm::depart(sender.spawn())),
+        Request::MoveCoins(transfer) => transfer.encode_eqmac(),
         _ => anyhow::bail!("the EQMac client cannot send {request:?} yet"),
     }
 }

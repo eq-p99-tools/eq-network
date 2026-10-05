@@ -945,14 +945,15 @@ impl ServerType for Takp {
     }
 
     /// What TAKP's item packets say the player holds, item moves under
-    /// TAKP's rules, which disconnect a player whose move they refuse, and
-    /// merchants, whose lists TAKP quotes before their rate. Coin moves and
-    /// meals wait.
+    /// TAKP's rules, which disconnect a player whose move they refuse, coin
+    /// moves, which TAKP answers no more than `EQEmu` does, and merchants,
+    /// whose lists TAKP quotes before their rate. Meals wait.
     fn inventory(&self, _setup: &Setup<'_>) -> Provided {
         offer(shared::inventory_under(
             MoveRules::Takp,
             Quotes::of(GameDialect::EqMac),
             Allowances {
+                coins: true,
                 merchants: true,
                 ..Allowances::default()
             },
