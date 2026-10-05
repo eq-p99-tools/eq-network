@@ -7,6 +7,9 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- A coin move that would leave a place holding more than 2,147,483,647
+  coins of a kind is refused before it goes out, on every server: TAKP
+  kicks for it, and `EQEmu`'s count would wrap.
 - `Message` gains `MerchantList`: a merchant's whole list, which replaces
   what it listed before, as `EQMac`'s comes. The feature keeping the
   merchant window tells the host the places gone and each item, as

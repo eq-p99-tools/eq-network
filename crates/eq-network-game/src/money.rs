@@ -219,7 +219,10 @@ impl Wallet {
     /// # Errors
     /// Refuses a move that moves nothing, or whose source does not hold
     /// what it takes or whose destination is not known yet; servers log
-    /// such a move as a possible hack.
+    /// such a move as a possible hack. Also refuses one that would leave a
+    /// place holding more of a kind than the servers' signed count can:
+    /// TAKP kicks for it (`Client::OPMoveCoin`), and `EQEmu`'s count would
+    /// wrap, since its overflow check compares in 64 bits.
     pub fn apply(&mut self, transfer: CoinTransfer) -> Result<(), &'static str> {
         let (taken, added) = transfer.amounts();
         if taken == 0 {
@@ -231,8 +234,14 @@ impl Wallet {
         {
             return Err("You do not have that many coins there");
         }
-        if self.get(transfer.to).is_none() {
+        let Some(destination) = self.get(transfer.to) else {
             return Err("Those coins are not known yet");
+        };
+        // TAKP counts the destination before the source gives anything up.
+        if u64::from(destination.of(transfer.into)) + u64::from(added)
+            > u64::from(i32::MAX.unsigned_abs())
+        {
+            return Err("That place cannot hold so many coins");
         }
         if let Some(from) = self.place(transfer.from) {
             *from.of_mut(transfer.coin) -= taken;
@@ -625,6 +634,29 @@ mod tests {
             .unwrap();
         assert_eq!(wallet.bank.unwrap().of(Coin::Platinum), 1);
         assert_eq!(wallet.cursor.of(Coin::Gold), 1);
+        // Never more of a kind than the servers' signed count holds.
+        let mut full = Wallet {
+            purse: Some(Coins {
+                platinum: 1,
+                ..Coins::default()
+            }),
+            bank: Some(Coins {
+                platinum: i32::MAX.unsigned_abs(),
+                ..Coins::default()
+            }),
+            ..Wallet::default()
+        };
+        assert_eq!(
+            full.apply(CoinTransfer {
+                from: CoinPlace::Purse,
+                to: CoinPlace::Bank,
+                coin: Coin::Platinum,
+                into: Coin::Platinum,
+                amount: 1,
+            }),
+            Err("That place cannot hold so many coins")
+        );
+        assert_eq!(full.purse.unwrap().platinum, 1);
         // Too few to change kind, or to a place not known yet.
         let mut unknown = Wallet::default();
         assert!(unknown
