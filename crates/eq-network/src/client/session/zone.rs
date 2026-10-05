@@ -1061,8 +1061,8 @@ mod tests {
             assert!(!p99.contains(&capability));
         }
         assert_eq!(eqemu.len(), p99.len() + 15);
-        // EQMac servers talk; TAKP also casts, camps and moves, and follows
-        // zone changes, which Quarm does not yet.
+        // EQMac servers talk; TAKP also casts, keeps the spellbook, camps and
+        // moves, and follows zone changes, which Quarm does not yet.
         assert_eq!(
             features(crate::client::ServerProtocol::Quarm),
             [Capability::Talking]
@@ -1071,6 +1071,7 @@ mod tests {
             features(crate::client::ServerProtocol::Takp),
             [
                 Capability::Casting,
+                Capability::Spellbook,
                 Capability::Moving,
                 Capability::Targeting,
                 Capability::Combat,

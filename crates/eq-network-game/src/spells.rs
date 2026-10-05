@@ -9,9 +9,9 @@ use serde::Serialize;
 mod eqmac;
 
 pub use eqmac::{
-    decode_eqmac, eqmac_cast, eqmac_item_cast, EQMAC_BEGIN_OPCODE, EQMAC_BOOK_SLOTS,
-    EQMAC_CAST_OPCODE, EQMAC_DELETE_OPCODE, EQMAC_INTERRUPT_OPCODE, EQMAC_MEMORIZE_OPCODE,
-    EQMAC_SWAP_OPCODE,
+    decode_eqmac, eqmac_cast, eqmac_forget, eqmac_item_cast, eqmac_memorize, eqmac_scribe,
+    eqmac_swap, EQMAC_BEGIN_OPCODE, EQMAC_BOOK_SLOTS, EQMAC_CAST_OPCODE, EQMAC_DELETE_OPCODE,
+    EQMAC_INTERRUPT_OPCODE, EQMAC_MEMORIZE_OPCODE, EQMAC_SWAP_OPCODE,
 };
 
 /// `OP_MemorizeSpell`: scribing, memorizing and forgetting, by mode.

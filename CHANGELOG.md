@@ -377,6 +377,15 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   or the cast is interrupted. A hold now also ends on a result for the
   spell asked for when the server began a different one: TAKP begins a
   Luclin port as spell 2935 and ends it naming the port.
+- TAKP's spellbook (`Capability::Spellbook`): memorizing, forgetting and
+  scribing in TAKP's own `OP_MemorizeSpell` (`spells::eqmac_memorize`,
+  `spells::eqmac_forget`, `spells::eqmac_scribe`), one change in flight at
+  a time as on every server; TAKP logs two in one server tick as a possible
+  hack. The book has TAKP's 256 slots, and a scribe past them is refused,
+  since TAKP would use the scroll up and scribe nothing. Moving a spell in
+  the book (`spells::eqmac_swap`, built) waits for its check on TAKP.
+  Deleting stays off: TAKP reports a deletion done even for an empty slot
+  and keeps the spell memorizable until the player zones.
 - Synthetic regression coverage for inventory reconciliation, scribe consumption,
   movement admission, cast state, and fresh-key world/zone handoffs.
 

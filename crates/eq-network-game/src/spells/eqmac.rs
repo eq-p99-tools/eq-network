@@ -119,6 +119,61 @@ fn cast(slot: u16, spell_id: u32, item: u16, target_id: u16) -> Result<EncodedCo
     })
 }
 
+/// `EQMac`'s request memorizing a spell into a gem, already checked
+/// against the book.
+#[must_use]
+pub fn eqmac_memorize(gem: u8, spell_id: u32) -> EncodedCommand {
+    book_packet(u32::from(gem), spell_id, 1)
+}
+
+/// `EQMac`'s request forgetting a gem's spell, already checked against the
+/// gem. TAKP refuses a forget whose spell the player could not memorize, so
+/// it names the gem's own spell.
+#[must_use]
+pub fn eqmac_forget(gem: u8, spell_id: u32) -> EncodedCommand {
+    book_packet(u32::from(gem), spell_id, 2)
+}
+
+/// `EQMac`'s request scribing the cursor's scroll into a book slot, already
+/// checked against the book and the cursor.
+///
+/// # Errors
+/// Refuses a slot past the 256-slot book, where TAKP would use the scroll
+/// up and scribe nothing (`Client::ScribeSpell`).
+pub fn eqmac_scribe(slot: u16, spell_id: u32) -> Result<EncodedCommand> {
+    let slot = book_slot(u32::from(slot))?;
+    Ok(book_packet(u32::from(slot), spell_id, 0))
+}
+
+/// `EQMac`'s request exchanging two book slots, already checked against the
+/// book; TAKP answers with the same packet.
+///
+/// # Errors
+/// Refuses a slot past the 256-slot book.
+pub fn eqmac_swap(from: u16, to: u16) -> Result<EncodedCommand> {
+    let mut body = Vec::with_capacity(8);
+    for slot in [from, to] {
+        body.extend_from_slice(&u32::from(book_slot(u32::from(slot))?).to_le_bytes());
+    }
+    Ok(EncodedCommand {
+        opcode: EQMAC_SWAP_OPCODE,
+        body,
+    })
+}
+
+/// TAKP's `MemorizeSpell_Struct` (12 bytes): the gem or book slot, the
+/// spell and the mode, each 32 bits; 0 scribes, 1 memorizes and 2 forgets.
+fn book_packet(slot: u32, spell_id: u32, mode: u32) -> EncodedCommand {
+    let mut body = Vec::with_capacity(12);
+    for value in [slot, spell_id, mode] {
+        body.extend_from_slice(&value.to_le_bytes());
+    }
+    EncodedCommand {
+        opcode: EQMAC_MEMORIZE_OPCODE,
+        body,
+    }
+}
+
 /// Decodes `EQMac`'s spell notices; other opcodes give none.
 ///
 /// A begun cast carries its base cast time, which the client shortens by the
@@ -294,6 +349,44 @@ mod tests {
             assert!(eqmac_cast(0, spell, 9).is_err());
         }
         assert!(eqmac_cast(0, 42, 0).is_err());
+    }
+
+    #[test]
+    fn book_requests_are_takps_packets_and_stay_inside_the_book() {
+        let words = |packet: EncodedCommand| {
+            packet
+                .body
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .map(|word| u32::from_le_bytes(*word))
+                .collect::<Vec<_>>()
+        };
+        let memorize = eqmac_memorize(2, 42);
+        assert_eq!(memorize.opcode, EQMAC_MEMORIZE_OPCODE);
+        assert_eq!(words(memorize), [2, 42, 1]);
+        assert_eq!(words(eqmac_forget(2, 42)), [2, 42, 2]);
+        assert_eq!(words(eqmac_scribe(255, 42).unwrap()), [255, 42, 0]);
+        let swap = eqmac_swap(0, 255).unwrap();
+        assert_eq!(swap.opcode, EQMAC_SWAP_OPCODE);
+        assert_eq!(words(swap), [0, 255]);
+        // TAKP would use a scroll up on slot 256 and scribe nothing.
+        assert!(eqmac_scribe(256, 42).is_err());
+        assert!(eqmac_swap(0, 256).is_err());
+        assert!(eqmac_swap(256, 0).is_err());
+        // Each answer reads back as the change it asked for.
+        assert_eq!(
+            decode_eqmac(EQMAC_MEMORIZE_OPCODE, &eqmac_memorize(2, 42).body).unwrap(),
+            Some(SpellUpdate::Slot {
+                slot: 2,
+                spell_id: 42,
+                mode: 1
+            })
+        );
+        assert_eq!(
+            decode_eqmac(EQMAC_SWAP_OPCODE, &eqmac_swap(0, 255).unwrap().body).unwrap(),
+            Some(SpellUpdate::BookSwap { from: 0, to: 255 })
+        );
     }
 
     #[test]
