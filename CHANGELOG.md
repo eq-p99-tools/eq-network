@@ -7,9 +7,55 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- A coin move that would leave a place holding more than 2,147,483,647
+  coins of a kind is refused before it goes out, on every server: TAKP
+  kicks for it, and `EQEmu`'s count would wrap.
+- `Message` gains `MerchantList`: a merchant's whole list, which replaces
+  what it listed before, as `EQMac`'s comes. The feature keeping the
+  merchant window tells the host the places gone and each item, as
+  `MerchantUpdate`s, so a host sees no new event.
+- Merchant trades, on every server: a purchase goes out only for an item
+  on the open merchant's list whose most possible cost the purse covers
+  (`EQEmu` charges what it lists; for a list quoted before the rate, a
+  price a copper higher times the rate, rounded up), since TAKP logs a
+  purchase it refuses for want of coins as a possible hack; a NO DROP item
+  is refused before a sale goes out, as both servers ignore it without a
+  word; a sale's echo adds its price to the purse, platinum first (TAKP
+  sends no money update after a sale, and `EQEmu`'s replaces the purse with
+  the same coins); and an echo of nothing bought ends a pending purchase as
+  refused at once (TAKP's answer to a refused purchase; `EQEmu` sends none).
 - `InventoryUpdate` gains `Used`: a unit or charge the server used up
   without saying which, as TAKP's `OP_DeleteCharge` says it. Hosts that
   match `InventoryUpdate` exhaustively need an arm for it.
+- A dead player on TAKP asks for their bind point once a death pause is
+  over, one value in the transfers feature, which is zero: at once, as
+  Adam chose. The official client's wait is unrecorded (inferred). A death
+  while a transfer is under way waits for its answer, and a second word of
+  the same death changes nothing.
+
+- A merchant's echo settles only the trade it answers. Echoes carry no
+  request id, so each is matched by its slot, and a sale's echo removes the
+  units only while the slot still holds the item that was offered, less what
+  earlier echoes removed from it. A sale released unanswered after the
+  three-second hold is remembered, so its echo still settles it if it comes
+  late; the release itself stays, because `EQEmu` answers a refused offer
+  with silence. An echo for an item the slot no longer holds, or one that
+  answers no trade, leaves the inventory untrusted
+  (`InventoryUpdate::Invalidated`) instead of removing what the slot holds
+  now, and a purchase's echo releases only its own purchase.
+- `Message` gains `PurseAdded`: coins the server added to the player's
+  purse without saying what the purse holds, as TAKP's money notices do.
+  The feature keeping the purse applies it, and a host hears the purse.
+
+- An item move from anywhere but the cursor itself waits for a cast to
+  end, exactly as `EQEmu` and TAKP require: both disconnect a player who
+  makes one during a cast that is not a bard song
+  (`Client::Handle_OP_MoveItem`, "Inventory desync"). The session let the
+  numbers 30 to 39 through, a range in which a move can only name the
+  cursor, so no move it sends changes. Both servers let a bard move items
+  while singing, but the session cannot tell a song from a spell, so a
+  bard waits too. That the official client refuses such a move, rather
+  than interrupting the cast, is inferred.
 
 - `WorldEvent::HitPoints` says which values leave out the HP equipped items
   add with `items: ItemHitPoints`, in place of `without_items`. Titanium's
@@ -35,6 +81,12 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   answer, the zone points, the save and the departure, and the world
   stage's re-entry between zones (the login's zoning flag, then entering
   the character the world names).
+- `EQMac` deaths: `OP_Death` (20 bytes) is read as `WorldEvent::Death`,
+  and the profile's first bind point as the new `Message::Bind`. A dead
+  player on TAKP asks for their bind point at once (the zone change for the
+  bind zone, with reason 10, `ZC_RepopToHomeAtDeath`), since TAKP holds
+  the move home until the client asks and removes a dead client that never
+  does; Titanium's servers still offer it (`transfers::Home`).
 - A tell's echo on channel 14 is `ChannelName::TellEcho` on the `EQMac`
   wire too: TAKP echoes a delivered tell to its sender on
   `ChatChannel_TellEcho` (14), as `EQEmu` does on Titanium's.
@@ -62,6 +114,43 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Moving items on TAKP (`Capability::Inventory`, with no coins or merchants
   yet): `inventory::eqmac_move` encodes `EQMac`'s 12-byte
+- Coin moves on TAKP, in its own packet (`money::EQMAC_MOVE_OPCODE`,
+  `CoinTransfer::encode_eqmac`): the same five signed words as Titanium's,
+  between the purse, the cursor, the bank beside a banker and the trade
+  window, converting as the server does (11 gold into platinum takes 10 and
+  adds 1). TAKP answers a move no more than `EQEmu` does, so the purse,
+  cursor and bank change when the move is sent, and the next profile
+  corrects them; coins still never leave the trade window.
+- Merchants on TAKP (`Capability::Trading`, beside its item moves; coin
+  moves and meals wait, as the inventory feature's allowances for the
+  server type say): buying and selling through TAKP's own packets. TAKP's
+  packets price trades before the merchant's rate
+  (`merchant::Quotes::BeforeRate`): the session tells each listed item at
+  the price TAKP charges, `int(price x rate)` a unit, and prices a sale's
+  echo, which carries no price, as TAKP added it to the purse,
+  `int(price / rate + 0.5)` a unit of the item the sale offered
+  (`Quotes::sale_price`, inferred), before the ledger and the host hear
+  them; an echo answering no sale the session remembers adds nothing, and
+  a list arriving with no window open is dropped. TAKP's whole list
+  (`merchant::eqmac_list`) replaces the last, as `Message::MerchantList`;
+  the session tells the host the places gone, then each item.
+  `MerchantOffers` stays off on TAKP, whose rule for what a merchant pays
+  is its own. Carries #104 until it merges.
+- TAKP's merchant packets, read and built as the merchant news and requests
+  Titanium's give, for the same merchant feature (nothing offered yet):
+  `merchant::eqmac_request`, `eqmac_end`, `eqmac_buy` and `eqmac_sell`
+  build `EQMac`'s 12-, 4- and 16-byte requests (`GameCommand::Shop`, `Buy`
+  and `Sell` on the `EQMac` wire), a sale naming the slot in `EQMac`'s
+  numbers; `merchant::decode_eqmac` reads the open answer and its rate,
+  the whole compressed list (each item through the `EQMac` item reader, its
+  price before the merchant's rate and no count), a place gone from the
+  list, the purchase and sale echoes (a refused purchase echoed with
+  nothing bought, a sale's echo pricing nothing, inferred) and the window's
+  closing; an open answer's rate that is not finite and above 0 is refused. The
+  unknown bytes, prices and player IDs TAKP never reads go as 0, and the
+  open request's rate as 1 (inferred).
+- Moving items on TAKP (`Capability::Inventory`, with no coins, merchants
+  or meals yet): `inventory::eqmac_move` encodes `EQMac`'s 12-byte
   `OP_MoveItem` in `EQMac`'s slot numbers (`InventorySlot::to_eqmac`), and
   `Inventory::plan_move_for` plans a move under a server type's
   `MoveRules`. TAKP's keep bags, books and arrows out of more worn slots
@@ -99,6 +188,64 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   without spell data, and an item above the player's required level, which
   TAKP counts only for an account of status 80 or more.
 
+- TAKP's spell state, read from the `EQMac` wire as the events Titanium's
+  packets give (Quarm sends the same packets, unchecked there). The
+  profile gives the buffs (`buffs::eqmac_profile`), the 256-slot
+  spellbook (`SpellBook::eqmac_profile`) and each gem's reuse time left
+  (`PlayerState::spell_refresh_ms`). `spells::decode_eqmac` reads a cast
+  beginning, with its base cast time, which the player's focus effects can
+  shorten; an interruption; a gem's refresh, with no reuse adjustment; and
+  the spellbook's replies. `buffs::eqmac_spell_effect` reads a spell taking
+  hold and `buffs::eqmac_update` a buff's fade or corrected duration.
+  `OP_ManaChange`, which TAKP sends only as the spell bar comes back, ends
+  the cast (`SpellUpdate::Mana`, `keep_casting: false`) besides giving the
+  mana, and `OP_ManaUpdate` gives the player's mana between casts. TAKP's
+  server sends an interruption and a fade to the player alone without
+  naming anyone, so the session names the player in them. A fade names no
+  slot either (`buffs::UNKNOWN_SLOT`): a host finds the buff by its spell.
+  The book reaches a host once TAKP offers the spellbook.
+- TAKP's coins from the profile: those the player carries
+  (`money::eqmac_coins`, `WorldEvent::Coins`) and those on the cursor and
+  in the bank (`money::eqmac_elsewhere`, `WorldEvent::CoinsElsewhere`),
+  signed 32-bit counts where a negative one is refused. `EQMac` has no
+  shared bank. TAKP's money notice (`OP_TradeMoneyUpdate` from trader 0,
+  `money::eqmac_purse_addition`) says what it added to the purse, one kind
+  at a time; the session adds it (`Message::PurseAdded`) and tells the
+  purse it makes. TAKP never announces what it takes, and a notice naming
+  another trader is refused. All of it reaches a host through the
+  inventory feature, once TAKP offers it; loot coins and merchants come
+  with those features.
+- Reporting that the player bled out (`Capability::BleedingOut`, TAKP
+  only). TAKP announces no death to a player who bleeds out, nor to one
+  killed by a tick of damage or by their own hand, and waits for the
+  client's own report. As the zone admits the player,
+  `WorldEvent::DeathThreshold` tells a host the HP at or below which the
+  server takes the player as dead (-11 on TAKP), once the session counts
+  what the player's items add there. A host whose HP, with
+  what equipped items add, reaches it on the server's report, with no
+  death named for the player, sends `GameCommand::BledOut`, and the
+  session sends `Request::BledOut`, `EQMac`'s 20-byte `OP_Death` naming
+  the player (`quarm::bled_out`; Titanium sends none), only when the
+  server's last report with what the player's items add is at or below
+  the threshold. TAKP kills the player it names without checking their
+  HP, and its report leaves item HP out, so a living player in HP gear can
+  show the threshold: the session refuses the report while it does not
+  know the player's items, and counts what they add by the server type's
+  own rule. TAKP adds worn effects, the first food carried and a GM's
+  items below their level too, and its count comes with the `EQMac`
+  inventory, so until then TAKP takes no report at all and names no
+  threshold, and a host asks for none. A dead player's report is refused
+  too. Every field but the player's spawn is inferred
+  until the official client's bleed-out is recorded: no killer, damage or
+  spell, hand to hand (28), and no corpse, level or player flag. The
+  session then takes the player as dead just as if the server had said
+  so: every feature and the host hear one `WorldEvent::Death`, and the
+  transfers feature alone marks the player dead. `Capability::ALL` grows
+  to 36.
+
+- `EQMac` spawns say their class and level (TAKP's `Spawn_Struct` at 87
+  and 89), so a TAKP banker (class 40) is known as one, and a front end
+  can show levels.
 - The world's damage to the player (`Capability::EnvironmentalDamage`,
   `EqEmu` only, and there falls alone): `GameCommand::EnvironmentalDamage`
   reports the damage a host worked out, by its `hazards::Hazard` (falling,
@@ -489,6 +636,11 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Vah Shir can equip what names their race: the move planner refused
   every equip for race 130 as a race it did not know.
 
+- TAKP's bankers and merchants are known as such, so the bank and merchant
+  windows open at them. `EQMac` spawns now say their class in the server's
+  numbering, as Titanium's do: TAKP's patch sends a banker (40) as 16, a
+  merchant (41) as 32 and the guildmaster classes (20 to 34) three lower
+  (`common/patches/mac.cpp`, `ENCODE(OP_ZoneSpawns)`).
 - Combined transport packets (`OP_Combined`) give every part a one-byte
   length, as `EQEmu` does, so a part of exactly 255 bytes no longer ends the
   session with "invalid combined length". `build_combined` refuses parts

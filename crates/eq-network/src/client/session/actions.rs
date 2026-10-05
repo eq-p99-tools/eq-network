@@ -9,6 +9,7 @@
 use super::{casting, ClientCommand, ClientEvent, Events};
 use anyhow::Result;
 use eq_network_game::{
+    inventory::InventorySlot,
     spells::BookActionStatus,
     world::{CampStatus, WorldEvent},
 };
@@ -99,10 +100,13 @@ pub(super) fn needs(command: &ClientCommand) -> &'static [Resource] {
         | ClientCommand::ForgetSpell { .. }
         | ClientCommand::DeleteSpell { .. }
         | ClientCommand::SwapSpell { .. } => &[Casting, Spellbook],
-        // EQEmu kicks a move from outside the cursor range (30-39) during a cast
-        // ("Inventory desync"); bard songs are exempt there, but the session
-        // cannot tell songs apart, so singing bards wait too.
-        ClientCommand::MoveInventory(request) if !(30..=39).contains(&request.from.0) => {
+        // `EQEmu` and TAKP disconnect a player who moves an item from anywhere
+        // but the cursor during a cast that is not a bard song
+        // (`Client::Handle_OP_MoveItem`, "Inventory desync"). The session
+        // cannot tell songs apart, so singing bards wait too. That the
+        // official client refuses such a move, rather than interrupting the
+        // cast, is inferred.
+        ClientCommand::MoveInventory(request) if request.from != InventorySlot::CURSOR => {
             &[Casting, Inventory]
         }
         // A picked-up item lands on the cursor; Give hands the trade slots over.
@@ -124,6 +128,8 @@ pub(super) fn needs(command: &ClientCommand) -> &'static [Resource] {
         | ClientCommand::InspectItem { .. }
         | ClientCommand::Consider { .. }
         | ClientCommand::Camp { .. }
+        // A death holds nothing: whatever was under way ends with it.
+        | ClientCommand::BledOut { .. }
         | ClientCommand::Loot { .. }
         | ClientCommand::LootItem { .. }
         | ClientCommand::EndLoot { .. }
@@ -337,6 +343,8 @@ fn refusal(command: &ClientCommand, reason: &str) -> Option<WorldEvent> {
         | ClientCommand::ConfigureMotion { .. }
         | ClientCommand::AutoEat { .. }
         | ClientCommand::CloseContainer { .. }
+        // The host sends a death report on its own; nobody waits on it.
+        | ClientCommand::BledOut { .. }
         | ClientCommand::Move(_) => return None,
     })
 }
@@ -544,12 +552,12 @@ mod tests {
         );
     }
 
-    fn move_from(slot: i32) -> ClientCommand {
+    fn moving(from: i32, to: i32) -> ClientCommand {
         ClientCommand::MoveInventory(eq_network_game::inventory::InventoryMove {
             session_id: 1,
             revision: 1,
-            from: eq_network_game::inventory::InventorySlot(slot),
-            to: eq_network_game::inventory::InventorySlot(30),
+            from: InventorySlot(from),
+            to: InventorySlot(to),
             quantity: eq_network_game::inventory::MoveQuantity::Whole,
             created: Instant::now(),
         })
@@ -560,8 +568,17 @@ mod tests {
         let mut guard = CastGuard::default();
         guard.submitted(42, Instant::now());
         let casting = Held::casting(&guard);
-        assert!(casting.conflict(&move_from(23)).is_some());
-        assert!(casting.conflict(&move_from(251)).is_some());
-        assert_eq!(casting.conflict(&move_from(30)), None);
+        // Worn, carried, in a bag, in a bag on the cursor, banked, and in a
+        // world container.
+        for slot in [0, 13, 23, 251, 331, 2000, 2031, 4000] {
+            assert!(casting.conflict(&moving(slot, 30)).is_some(), "{slot}");
+        }
+        // The cursor alone, not the numbers next to it.
+        for slot in [31, 39] {
+            assert!(casting.conflict(&moving(slot, 30)).is_some(), "{slot}");
+        }
+        for to in [22, 3000, 4000] {
+            assert_eq!(casting.conflict(&moving(30, to)), None, "{to}");
+        }
     }
 }

@@ -48,6 +48,9 @@ const RECORD: usize = 360;
 const TAGGED: usize = 2 + RECORD;
 /// The most items a full inventory may hold.
 const MAX_ITEMS: usize = 1024;
+/// The most items TAKP puts in a merchant's list
+/// (`ENCODE(OP_ShopInventoryPacket)`).
+const MERCHANT_ITEMS: usize = 80;
 /// How many units make a full stack: `EQMac` items carry no stack size
 /// (`common/item_data.h` `EQMAC_STACKSIZE`).
 const STACK: u32 = 20;
@@ -179,6 +182,44 @@ fn inventory(body: &[u8]) -> Result<Vec<InventoryItem>> {
     Ok(items)
 }
 
+/// A merchant's list as TAKP sends it (`ENCODE(OP_ShopInventoryPacket)`): a
+/// count, then each item's class and record, compressed, as the full
+/// inventory comes but with the class itself for a tag. `MacItem` fills a
+/// listed record's slot with the item's place on the list, and its price
+/// with the price before the merchant's rate
+/// (`Client::BulkSendMerchantInventory`). Each comes as the item, placed at
+/// its place on the list, its place and its price.
+///
+/// # Errors
+/// Rejects malformed records and compression, more than 80 items, records
+/// tagged for another class, and negative places or prices.
+pub(crate) fn merchant_stock(body: &[u8]) -> Result<Vec<(InventoryItem, u32, u32)>> {
+    ensure!(body.len() > 2, "truncated EQMac merchant list");
+    let data = miniz_oxide::inflate::decompress_to_vec_zlib_with_limit(
+        &body[2..],
+        MERCHANT_ITEMS * TAGGED,
+    )
+    .map_err(|_| anyhow!("invalid or oversized EQMac merchant list"))?;
+    let (records, rest) = data.as_chunks::<TAGGED>();
+    ensure!(rest.is_empty(), "partial EQMac merchant record");
+    records
+        .iter()
+        .map(|tagged| {
+            let record = Record(&tagged[2..]);
+            ensure!(
+                i16::from_le_bytes([tagged[0], tagged[1]]) == record.short(178),
+                "EQMac merchant record tagged for another class"
+            );
+            let place =
+                u32::try_from(record.short(184)).context("negative EQMac merchant place")?;
+            let price =
+                u32::try_from(record.signed_word(192)).context("negative EQMac merchant price")?;
+            let item = item_at(&record, InventorySlot(i32::try_from(place)?))?;
+            Ok((item, place, price))
+        })
+        .collect()
+}
+
 /// One item record, as a packet of its own carries it.
 fn single(body: &[u8]) -> Result<InventoryItem> {
     ensure!(body.len() == RECORD, "invalid EQMac item length");
@@ -187,10 +228,15 @@ fn single(body: &[u8]) -> Result<InventoryItem> {
 
 /// An item record as an item in the slot it names.
 fn item(record: &Record<'_>) -> Result<InventoryItem> {
-    let class = record.class()?;
-    let details = definition(record)?;
     let slot = InventorySlot::from_eqmac(i32::from(record.short(184)))
         .context("unknown EQMac inventory slot")?;
+    item_at(record, slot)
+}
+
+/// An item record as an item at `slot`.
+fn item_at(record: &Record<'_>, slot: InventorySlot) -> Result<InventoryItem> {
+    let class = record.class()?;
+    let details = definition(record)?;
     let common = class == Class::Common;
     let container = class == Class::Container;
     let item_type = if common { record.byte(253) } else { 0 };

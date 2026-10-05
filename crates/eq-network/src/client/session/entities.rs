@@ -8,6 +8,7 @@ use super::{
 use anyhow::{ensure, Result};
 use eq_network_game::{
     message::Message,
+    spells::SpellUpdate,
     world::{PostureState, SpawnState, WorldEvent},
     GameDialect,
 };
@@ -82,7 +83,8 @@ impl Spawns {
 #[derive(Debug, Default)]
 pub(super) struct Entities {
     postures: BTreeMap<u16, PostureState>,
-    /// The client generation, whose rule names a corpse.
+    /// The client generation, whose rules name a corpse and say whom a
+    /// notice is about.
     dialect: GameDialect,
 }
 
@@ -93,13 +95,37 @@ impl Entities {
             ..Self::default()
         }
     }
+
+    /// Names the player in the notices `EQMac`'s server sends them alone
+    /// without naming anyone: a cast interruption (TAKP
+    /// `Mob::InterruptSpell`) and a buff's fade
+    /// (`Client::MakeBuffFadePacket`).
+    fn name_the_player(&self, event: &mut WorldEvent, world: &World) {
+        let (GameDialect::EqMac, Some(own)) = (self.dialect, world.own_spawn) else {
+            return;
+        };
+        match event {
+            WorldEvent::Spell(SpellUpdate::Interrupted { caster_id, .. }) if *caster_id == 0 => {
+                *caster_id = u32::from(own);
+            }
+            WorldEvent::Buff(update) if update.entity_id == 0 => {
+                update.entity_id = u32::from(own);
+            }
+            _ => (),
+        }
+    }
 }
 
 impl Feature for Entities {
-    /// Names the corpse a death leaves, from the spawn that died, by the
-    /// client generation's rule, before any feature or the host hears it.
+    /// Names the corpse a death leaves, from the spawn that died, and the
+    /// player in the notices that leave them unnamed, by the client
+    /// generation's rules, before any feature or the host hears it.
     fn explain(&mut self, message: &mut Message, world: &World) {
-        let Message::Event(WorldEvent::Death(death)) = message else {
+        let Message::Event(event) = message else {
+            return;
+        };
+        self.name_the_player(event, world);
+        let WorldEvent::Death(death) = event else {
             return;
         };
         let spawn = u16::try_from(death.spawn_id)
@@ -260,6 +286,53 @@ mod tests {
         // no corpse.
         assert_eq!(named(GameDialect::Titanium, 10), None);
         assert_eq!(named(GameDialect::EqMac, 8), None);
+    }
+
+    #[test]
+    fn eqmacs_unnamed_interruptions_and_fades_are_the_players_own() {
+        use eq_network_game::buffs::{BuffUpdate, UNKNOWN_SLOT};
+        let mut world = World::new(5);
+        world.own_spawn = Some(7);
+        let explained = |dialect, world: &World, event: WorldEvent| {
+            let mut message = Message::Event(event);
+            Entities::new(dialect).explain(&mut message, world);
+            match message {
+                Message::Event(event) => event,
+                _ => unreachable!("an event stays an event"),
+            }
+        };
+        let interrupted = |caster_id| {
+            WorldEvent::Spell(SpellUpdate::Interrupted {
+                caster_id,
+                message_id: 173,
+                caster_name: None,
+            })
+        };
+        let fade = |entity_id| {
+            WorldEvent::Buff(BuffUpdate {
+                spell_id: 42,
+                entity_id,
+                slot: UNKNOWN_SLOT,
+                buff: None,
+            })
+        };
+        assert_eq!(
+            explained(GameDialect::EqMac, &world, interrupted(0)),
+            interrupted(7)
+        );
+        assert_eq!(explained(GameDialect::EqMac, &world, fade(0)), fade(7));
+        // A notice that names someone keeps them, Titanium's keep theirs, and
+        // before the zone names the player there is no one to name.
+        assert_eq!(
+            explained(GameDialect::EqMac, &world, interrupted(9)),
+            interrupted(9)
+        );
+        assert_eq!(explained(GameDialect::Titanium, &world, fade(0)), fade(0));
+        world.own_spawn = None;
+        assert_eq!(
+            explained(GameDialect::EqMac, &world, interrupted(0)),
+            interrupted(0)
+        );
     }
 
     #[test]
