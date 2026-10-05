@@ -129,6 +129,17 @@ impl Features {
         Ok(())
     }
 
+    /// Lets every feature hear that the connection ended, until one takes
+    /// it as the session's end.
+    fn connection_ended(&mut self, world: &mut World) {
+        for feature in &mut self.0 {
+            feature.connection_ended(world);
+            if world.ending() {
+                break;
+            }
+        }
+    }
+
     /// Lets every feature hear a message once the zone has admitted the
     /// player, until one ends the session.
     fn observe(
@@ -286,7 +297,18 @@ pub(super) fn run(
                 }
             }
         }
-        let Some(mut packet) = session.receive()? else {
+        let received = match session.receive() {
+            Ok(received) => received,
+            Err(error) => {
+                // A feature may expect the zone to close the connection.
+                features.connection_ended(&mut world);
+                return match world.take_exit() {
+                    Some(exit) => Ok(exit),
+                    None => Err(error),
+                };
+            }
+        };
+        let Some(mut packet) = received else {
             continue;
         };
         world.packets += 1;
@@ -461,7 +483,7 @@ mod tests {
     };
 
     /// How many kinds of command there are.
-    const KINDS: usize = 66;
+    const KINDS: usize = 67;
 
     /// Which kind of command this is. A new command is a compile error here
     /// until it has a number, and then a test failure until the list below
@@ -535,6 +557,7 @@ mod tests {
             ClientCommand::RaidMove { .. } => 63,
             ClientCommand::RaidMakeLeader { .. } => 64,
             ClientCommand::RaidRemove { .. } => 65,
+            ClientCommand::EnvironmentalDamage { .. } => 66,
         }
     }
 
@@ -842,6 +865,11 @@ mod tests {
                 created,
             },
             ClientCommand::CloseContainer { session_id },
+            ClientCommand::EnvironmentalDamage {
+                session_id,
+                hazard: eq_network_game::hazards::Hazard::Falling,
+                amount: 160,
+            },
         ]
     }
 
@@ -1027,13 +1055,14 @@ mod tests {
             Capability::Emoting,
             Capability::Assisting,
             Capability::Raiding,
+            Capability::EnvironmentalDamage,
         ] {
             assert!(eqemu.contains(&capability));
             assert!(!p99.contains(&capability));
         }
-        assert_eq!(eqemu.len(), p99.len() + 14);
-        // EQMac servers talk, TAKP camps too, and neither follows a zone
-        // change yet.
+        assert_eq!(eqemu.len(), p99.len() + 15);
+        // EQMac servers talk; TAKP also camps and moves, and follows zone
+        // changes, which Quarm does not yet.
         assert_eq!(
             features(crate::client::ServerProtocol::Quarm),
             [Capability::Talking]
@@ -1042,8 +1071,11 @@ mod tests {
             features(crate::client::ServerProtocol::Takp),
             [
                 Capability::Moving,
+                Capability::Targeting,
+                Capability::Combat,
                 Capability::Talking,
                 Capability::Camping,
+                Capability::Zoning,
                 Capability::Grouping
             ]
         );

@@ -6,7 +6,9 @@
 
 use crate::{
     command::EncodedCommand,
-    world::{BaseAttributes, PlayerState, Position, SpawnKind, SpawnState, WorldEvent},
+    world::{
+        BaseAttributes, ItemHitPoints, PlayerState, Position, SpawnKind, SpawnState, WorldEvent,
+    },
     zoning::ZoneOffer,
 };
 use anyhow::{ensure, Context, Result};
@@ -47,6 +49,18 @@ pub const ZONE_CAMP: u16 = 0x0742;
 /// The server's answer to a logout (`OP_LogoutReply`), which ends the zone
 /// connection.
 pub const ZONE_LOGOUT_REPLY: u16 = 0x5941;
+/// `OP_ZoneChange`: the client asking whether it may enter a zone, and the
+/// server's answer (TAKP `utils/patches/patch_Mac.conf` lists 0x40a3, its
+/// bytes swapped).
+pub const ZONE_CHANGE: u16 = 0xa340;
+/// `OP_SendZonepoints`: the zone's numbered destinations (0x40b4 swapped).
+pub const ZONE_POINTS: u16 = 0xb440;
+/// `OP_SaveOnZoneReq`: the client asking the zone it is leaving to save the
+/// player (0x4155 swapped).
+pub const ZONE_SAVE_ON_ZONE: u16 = 0x5541;
+/// `OP_DeleteSpawn`: the client taking its own spawn out of the zone it is
+/// leaving (0x4029 swapped).
+pub const ZONE_DEPART: u16 = 0x2940;
 /// The server asking the client to change zones.
 pub const ZONE_CHANGE_REQUEST: u16 = 0x4d41;
 
@@ -119,6 +133,69 @@ pub fn zone_request(body: &[u8]) -> Result<ZoneOffer> {
         to_bind: false,
         solicited: true,
     })
+}
+
+/// The client asking whether it may enter a zone (`ZoneChange_Struct`, 76
+/// bytes: the name, the zone as 32 bits, the reason the server's request
+/// gave, and a zero outcome). `EQMac`'s request carries no position: TAKP
+/// finds the destination itself (`zone/zoning.cpp` `Handle_OP_ZoneChange`).
+///
+/// # Errors
+/// Rejects a name its field cannot hold.
+pub fn zone_change(character: &str, zone_id: u16, reason: u32) -> Result<EncodedCommand> {
+    ensure!(
+        !character.is_empty() && character.len() < 64 && !character.contains('\0'),
+        "invalid character name"
+    );
+    let mut body = vec![0; 76];
+    body[..character.len()].copy_from_slice(character.as_bytes());
+    body[64..68].copy_from_slice(&u32::from(zone_id).to_le_bytes());
+    body[68..72].copy_from_slice(&reason.to_le_bytes());
+    Ok(EncodedCommand {
+        opcode: ZONE_CHANGE,
+        body,
+    })
+}
+
+/// The server's answer to the client's request (`ZoneChange_Struct`): the
+/// name, the zone, and the outcome, one for a success; no instance and no
+/// position.
+///
+/// # Errors
+/// Rejects another length, an unterminated name and a zone beyond 16 bits.
+pub fn zone_answer(body: &[u8]) -> Result<crate::zoning::ZoneAnswer> {
+    ensure!(body.len() == 76, "invalid EQMac zone answer length");
+    Ok(crate::zoning::ZoneAnswer {
+        character: crate::zoning::name(&body[..64])?,
+        zone_id: u16::try_from(word(body, 64)).context("EQMac zone ID out of range")?,
+        instance_id: 0,
+        position: None,
+        success: i32::from_le_bytes(body[72..76].try_into()?),
+    })
+}
+
+/// The client asking the zone it is leaving to save the player. TAKP reads
+/// nothing in it (`zone/client_packet.cpp` `Handle_OP_Save`, whose comment
+/// says the payload is 192 bytes), so its 192 bytes stay zero (inferred:
+/// the official `EQMac` client's own body is unrecorded).
+#[must_use]
+pub fn save_on_zone() -> EncodedCommand {
+    EncodedCommand {
+        opcode: ZONE_SAVE_ON_ZONE,
+        body: vec![0; 192],
+    }
+}
+
+/// The client taking its own spawn out of the zone it is leaving, which
+/// TAKP waits for once the world approves the move (`zone/zoning.cpp`
+/// `HandleZoneTransferResponse`, then `Handle_OP_DeleteSpawn`): the spawn
+/// as 16 bits (`DeleteSpawn_Struct`).
+#[must_use]
+pub fn depart(spawn_id: u16) -> EncodedCommand {
+    EncodedCommand {
+        opcode: ZONE_DEPART,
+        body: spawn_id.to_le_bytes().to_vec(),
+    }
 }
 
 /// The client starting to camp. TAKP reads nothing in it; the official
@@ -374,7 +451,13 @@ pub fn own_spawn(body: &[u8], character: &str) -> Result<OwnSpawn> {
 /// # Errors
 /// Rejects invalid compression, partial records, zero IDs, and invalid model sizes.
 pub fn spawns(body: &[u8]) -> Result<Vec<SpawnState>> {
-    let data = unpack(body, false)?;
+    decoded_spawns(&unpack(body, false)?)
+}
+
+/// The spawns in an unpacked batch (TAKP `common/patches/mac_structs.h`
+/// `Spawn_Struct`, 224 bytes each): among them the class at 87, which names
+/// a banker (40) or a merchant (41) as on Titanium, and the level at 89.
+fn decoded_spawns(data: &[u8]) -> Result<Vec<SpawnState>> {
     ensure!(
         !data.is_empty() && data.len().is_multiple_of(SPAWN_SIZE),
         "partial EQMac spawn batch"
@@ -385,7 +468,7 @@ pub fn spawns(body: &[u8]) -> Result<Vec<SpawnState>> {
         .map(|record| {
             let spawn_id = valid_id(u32::from(short(record, 76)))?;
             Ok(SpawnState {
-                class: None,
+                class: Some(record[87]),
                 spawn_id,
                 name: String::from_utf8_lossy(cstr(&record[127..191])).into_owned(),
                 kind: match record[86] {
@@ -408,8 +491,8 @@ pub fn spawns(body: &[u8]) -> Result<Vec<SpawnState>> {
                 },
                 // EQMac motion fields are not decoded yet.
                 velocity: [0.0; 3],
-                // Nor are its /who fields.
-                level: 0,
+                level: record[89],
+                // Nor are its other /who fields.
                 listing: crate::listing::Listing::default(),
                 name_parts: crate::names::NameParts::default(),
                 pet_owner: None,
@@ -470,13 +553,18 @@ pub fn updates(opcode: u16, body: &[u8]) -> Result<Vec<WorldEvent>> {
                 maximum > 0 && current <= maximum,
                 "invalid EQMac health values"
             );
+            // Right for others; the player's own update leaves out what
+            // items add, so the host takes the player's health from the hit
+            // points instead.
             let percent = u8::try_from(i64::from(current.max(0)) * 100 / i64::from(maximum))?;
             vec![
                 WorldEvent::HitPoints {
                     spawn_id,
                     current,
                     maximum,
-                    without_items: false,
+                    // Read as the player's own update, the only one with
+                    // real values: others' carry a percent over 100.
+                    items: ItemHitPoints::LeftOutOfCurrent,
                 },
                 WorldEvent::HealthPercent { spawn_id, percent },
             ]
@@ -494,6 +582,9 @@ pub fn updates(opcode: u16, body: &[u8]) -> Result<Vec<WorldEvent>> {
             .map(WorldEvent::Group)
             .into_iter()
             .collect(),
+        crate::combat::EQMAC_DAMAGE_OPCODE => {
+            vec![WorldEvent::Damage(crate::combat::eqmac_damage(body)?)]
+        }
         0x9941 => {
             ensure!(
                 body.len() == 4 && word(body, 0) <= 330,

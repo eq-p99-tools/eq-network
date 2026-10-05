@@ -11,6 +11,7 @@ use crate::{
     corpses, doors, exchange,
     food::{self, Meal},
     group,
+    hazards::{self, Hazard},
     inventory::{self, InventorySlot, MoveQuantity},
     listing::{self, Anonymity},
     money::CoinTransfer,
@@ -185,6 +186,12 @@ pub enum Request {
         /// The name its window showed.
         name: String,
     },
+    /// Ask the zone the player is leaving to save them, once it approves
+    /// the transfer.
+    SaveOnZone,
+    /// Take the player's own spawn out of the zone they are leaving: the
+    /// last word to it before the world server.
+    Depart,
     /// Take a transfer the server offered or a zone line asked for.
     AnswerZoneOffer {
         /// The zone, or zero for the bind point the server resolves.
@@ -265,6 +272,13 @@ pub enum Request {
     Position(PositionPacket),
     /// The player jumped.
     Jump,
+    /// The world hurt the player: the damage the client worked out.
+    EnvironmentalDamage {
+        /// What did it.
+        hazard: Hazard,
+        /// How much, before the server's own reductions.
+        amount: u32,
+    },
 }
 
 /// The Titanium client's packet for a request from this sender.
@@ -339,6 +353,8 @@ pub fn titanium(request: &Request, sender: Sender<'_>) -> Result<EncodedCommand>
             position,
             reason,
         } => zoning::titanium_answer(sender.name, (*zone_id, *instance_id), *position, *reason)?,
+        Request::SaveOnZone => zoning::titanium_save_on_zone(),
+        Request::Depart => zoning::titanium_depart(sender.spawn()),
         Request::Memorize { gem, spell_id } => spells::titanium_memorize(*gem, *spell_id),
         Request::Forget { gem, spell_id } => spells::titanium_forget(*gem, *spell_id),
         Request::Scribe { slot, spell_id } => spells::titanium_scribe(*slot, *spell_id),
@@ -361,12 +377,15 @@ pub fn titanium(request: &Request, sender: Sender<'_>) -> Result<EncodedCommand>
         } => food::consume(*slot, *meal, *by_hand),
         Request::Position(sample) => sample.packet()?,
         Request::Jump => movement::titanium_jump(),
+        Request::EnvironmentalDamage { hazard, amount } => {
+            hazards::titanium_damage(sender.spawn(), *hazard, *amount)?
+        }
     })
 }
 
 /// The `EQMac` client's packet for a request from this sender: camping,
-/// logging out, its stance and position, and the host commands its
-/// generation encodes so far, which is chat.
+/// logging out, its stance and position, the world's damage, and the host
+/// commands its generation encodes so far, which is chat.
 ///
 /// # Errors
 /// Refuses every other request, and a command the generation cannot carry.
@@ -376,11 +395,23 @@ pub fn eqmac(request: &Request, sender: Sender<'_>) -> Result<EncodedCommand> {
         Request::Logout => Ok(crate::quarm::logout()),
         Request::Posture(posture) => crate::quarm::posture(sender.spawn(), *posture),
         Request::Position(sample) => crate::quarm::client_update(sample),
+        Request::EnvironmentalDamage { hazard, amount } => {
+            hazards::eqmac_damage(sender.spawn(), *hazard, *amount)
+        }
         Request::Command(command) => command::encode(GameDialect::EqMac, command, sender.name),
         Request::InviteToGroup(name) => group::eqmac_invite(name, sender.name),
         Request::FollowGroup(inviter) => group::eqmac_follow(inviter, sender.name),
         Request::DeclineGroup(inviter) => group::eqmac_decline(inviter, sender.name),
         Request::Disband => group::eqmac_disband(sender.name),
+        // EQMac has no instances, and its request carries no position.
+        Request::AnswerZoneOffer {
+            zone_id,
+            instance_id: 0,
+            reason,
+            ..
+        } => crate::quarm::zone_change(sender.name, *zone_id, *reason),
+        Request::SaveOnZone => Ok(crate::quarm::save_on_zone()),
+        Request::Depart => Ok(crate::quarm::depart(sender.spawn())),
         _ => anyhow::bail!("the EQMac client cannot send {request:?} yet"),
     }
 }
@@ -394,6 +425,38 @@ mod tests {
         name: "Tester",
         spawn_id: Some(7),
     };
+
+    #[test]
+    fn each_generation_departs_and_answers_a_zone_offer_its_own_way() {
+        let answer = |instance_id| Request::AnswerZoneOffer {
+            zone_id: 4,
+            instance_id,
+            position: crate::world::Position::default(),
+            reason: 0,
+        };
+        assert_eq!(
+            eqmac(&answer(0), PLAYER).unwrap(),
+            crate::quarm::zone_change("Tester", 4, 0).unwrap()
+        );
+        // EQMac has no instances.
+        assert!(eqmac(&answer(2), PLAYER).is_err());
+        assert_eq!(
+            titanium(&Request::SaveOnZone, PLAYER).unwrap(),
+            crate::zoning::titanium_save_on_zone()
+        );
+        assert_eq!(
+            titanium(&Request::Depart, PLAYER).unwrap(),
+            crate::zoning::titanium_depart(7)
+        );
+        assert_eq!(
+            eqmac(&Request::SaveOnZone, PLAYER).unwrap(),
+            crate::quarm::save_on_zone()
+        );
+        assert_eq!(
+            eqmac(&Request::Depart, PLAYER).unwrap(),
+            crate::quarm::depart(7)
+        );
+    }
 
     #[test]
     fn titanium_requests_are_the_packets_the_codecs_build() {
@@ -469,5 +532,27 @@ mod tests {
             exchange::busy(7, 50).unwrap()
         );
         assert!(eqmac(&answer(false), PLAYER).is_err());
+    }
+
+    #[test]
+    fn each_generation_reports_the_worlds_damage_in_its_own_packet() {
+        let fall = Request::EnvironmentalDamage {
+            hazard: Hazard::Falling,
+            amount: 160,
+        };
+        assert_eq!(
+            titanium(&fall, PLAYER).unwrap(),
+            hazards::titanium_damage(7, Hazard::Falling, 160).unwrap()
+        );
+        assert_eq!(
+            eqmac(&fall, PLAYER).unwrap(),
+            hazards::eqmac_damage(7, Hazard::Falling, 160).unwrap()
+        );
+        let unspawned = Sender {
+            spawn_id: None,
+            ..PLAYER
+        };
+        assert!(titanium(&fall, unspawned).is_err());
+        assert!(eqmac(&fall, unspawned).is_err());
     }
 }

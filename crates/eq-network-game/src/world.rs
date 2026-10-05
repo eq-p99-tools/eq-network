@@ -425,12 +425,16 @@ pub enum Capability {
     /// the Raid window does. No server type offers it yet: `EQEmu` has no
     /// handler for it.
     RaidGroupLeaders,
+    /// Reporting the damage the world does to the player, which the client
+    /// works out and the server takes from it: falls, and drowning, lava
+    /// and freezing where the server type takes those too.
+    EnvironmentalDamage,
 }
 
 impl Capability {
     /// Every capability, in order: what a session offers when its server and
     /// client generation support everything.
-    pub const ALL: [Self; 34] = [
+    pub const ALL: [Self; 35] = [
         Self::Casting,
         Self::Spellbook,
         Self::Inventory,
@@ -465,7 +469,22 @@ impl Capability {
         Self::Assisting,
         Self::Raiding,
         Self::RaidGroupLeaders,
+        Self::EnvironmentalDamage,
     ];
+}
+
+/// Which values of a hit-point report leave out the HP equipped items add,
+/// which the client adds back itself.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+pub enum ItemHitPoints {
+    /// Both leave them out: Titanium's own update, where `EQEmu` subtracts
+    /// `itembonuses.HP` from each (zone/mob.cpp `Mob::SendHPUpdate`).
+    LeftOut,
+    /// The current leaves them out and the maximum counts them: `EQMac`'s
+    /// own update, where TAKP subtracts `itembonuses.HP` from the current
+    /// alone and sends the full maximum, which the official client ignores
+    /// for its own HP (zone/mob.cpp `Mob::SendHPUpdate`).
+    LeftOutOfCurrent,
 }
 
 /// Changes delivered to a graphical consumer, independent of its rendering engine.
@@ -707,10 +726,8 @@ pub enum WorldEvent {
         current: i32,
         /// Maximum HP, never negative.
         maximum: i32,
-        /// Both values leave out the HP equipped items add, which the client adds
-        /// back itself: Titanium's own update, where `EQEmu` subtracts
-        /// `itembonuses.HP` (zone/mob.cpp `Mob::SendHPUpdate`).
-        without_items: bool,
+        /// Which values leave out the HP equipped items add.
+        items: ItemHitPoints,
     },
     /// Current mana and endurance; maxima remain unknown.
     Resources {
@@ -1179,7 +1196,7 @@ pub fn titanium_update(opcode: u16, body: &[u8]) -> Result<Option<WorldEvent>> {
                 current,
                 maximum,
                 spawn_id: u16::from_le_bytes([body[8], body[9]]),
-                without_items: true,
+                items: ItemHitPoints::LeftOut,
             }
         }
         0x4839 => {
@@ -1431,6 +1448,7 @@ mod tests {
             Capability::Assisting => 31,
             Capability::Raiding => 32,
             Capability::RaidGroupLeaders => 33,
+            Capability::EnvironmentalDamage => 34,
         };
         for (index, capability) in Capability::ALL.into_iter().enumerate() {
             assert_eq!(place(capability), index, "{capability:?}");
@@ -1771,7 +1789,7 @@ mod tests {
                 spawn_id: 7,
                 current: 27,
                 maximum: 40,
-                without_items: true,
+                items: ItemHitPoints::LeftOut,
             })
         );
         // Negative HP, dying or below the equipped item bonus, stays negative.
@@ -1782,7 +1800,7 @@ mod tests {
                 spawn_id: 7,
                 current: -2,
                 maximum: 40,
-                without_items: true,
+                items: ItemHitPoints::LeftOut,
             })
         );
         hp[4..8].copy_from_slice(&(-1i32).to_le_bytes());

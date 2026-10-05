@@ -7,6 +7,34 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- `WorldEvent::HitPoints` says which values leave out the HP equipped items
+  add with `items: ItemHitPoints`, in place of `without_items`. Titanium's
+  own update leaves them out of both (`LeftOut`). `EQMac`'s, as TAKP sends
+  it, leaves them out of the current alone and counts them in the maximum
+  (`LeftOutOfCurrent`), so a host adds item HP back to the current only.
+  It was read as counting them in both, which showed the player's HP low
+  whenever gear adds HP. The health percent that `EQMac`'s update also
+  gives is right for others, but for the player it leaves item HP out, so
+  a host should take the player's health from the hit points.
+
+- Zoning departs as the official client does. Once a zone approves a
+  transfer, the session sends `Request::SaveOnZone` and then
+  `Request::Depart` (`OP_SaveOnZoneReq`, then `OP_DeleteSpawn` for the
+  player's own spawn), and goes on to the world server when the zone
+  answers with a logout, the connection ends, or two seconds pass
+  (inferred). A repeated answer while the player departs only goes into the
+  diagnostics: `EQEmu` answers a move to another zone twice, and TAKP
+  answers a repeated request again. `Message::ZoneAnswer` now carries a
+  `zoning::ZoneAnswer`, read per client generation, and the zone session's
+  features hear when the connection ends (`Feature::connection_ended`).
+- TAKP lists zoning: `EQMac`'s zone change (76 bytes, no position), its
+  answer, the zone points, the save and the departure, and the world
+  stage's re-entry between zones (the login's zoning flag, then entering
+  the character the world names).
+- A tell's echo on channel 14 is `ChannelName::TellEcho` on the `EQMac`
+  wire too: TAKP echoes a delivered tell to its sender on
+  `ChatChannel_TellEcho` (14), as `EQEmu` does on Titanium's.
+
 - `WorldEvent::Entered` gains `choices`: what the session leaves to the
   player, none of it among `capabilities`. A server type may leave any
   feature it provides to the player where its own client keeps it off; a
@@ -30,6 +58,30 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   (`quarm::profile_group`) as each zone admits them, with the leader named
   afterwards. The session tells the host a group listed before the
   admission once the zone admits the player.
+- `EQMac` spawns say their class and level (TAKP's `Spawn_Struct` at 87
+  and 89), so a TAKP banker (class 40) is known as one, and a front end
+  can show levels.
+- The world's damage to the player (`Capability::EnvironmentalDamage`,
+  `EqEmu` only, and there falls alone): `GameCommand::EnvironmentalDamage`
+  reports the damage a host worked out, by its `hazards::Hazard` (falling,
+  drowning, lava or freezing), in its client generation's packet:
+  Titanium's 31-byte `OP_EnvDamage` (`hazards::titanium_damage`) or
+  `EQMac`'s 24-byte `OP_Damage` (`hazards::eqmac_damage`). The server takes
+  the amount as it is and applies its own reductions, such as `EQEmu`'s
+  fall damage reductions from spells, items and AAs, so a host leaves
+  those out. Each server type lists the hazards it takes from the client
+  and the session refuses the rest: `EQEmu` takes falls, while drowning,
+  lava and freezing wait until the official client's reports of them are
+  recorded. What the official clients put in the fields neither server
+  reads is unrecorded (inferred: the player's spawn, zeros, and
+  Titanium's constant 0xFFFF).
+
+- Targeting, considering and attacking on TAKP (`Capability::Targeting`
+  and `Capability::Combat`), in `EQMac`'s own packets: the target as a
+  16-bit spawn, TAKP's 24-byte consider request and answer
+  (`combat::eqmac_consider_request`, `eqmac_consideration`), the
+  auto-attack toggle, and its 24-byte damage records
+  (`combat::eqmac_damage`), whose types are Titanium's.
 
 - `RaidUpdate::Listed`: a member the server lists as the player joins,
   enters a zone or moves, told apart from one who joins. `EQEmu` sends each
@@ -406,7 +458,9 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Movement still requires calibration. Airborne movement (falls and jumps) is
   accepted only on stock EQEmu sessions, with provisional physics, until
-  official-client falls and jumps are measured; fall damage is not reported.
+  official-client falls and jumps are measured. Fall damage is reported only
+  there, as the host works it out; drowning, lava and freezing are not
+  reported anywhere yet.
   Complete server-specific buff reconciliation is not implemented.
 - Latest scribe-consumption reconciliation and fresh-key zoning changes have
   offline regression coverage but still need fresh live verification.
