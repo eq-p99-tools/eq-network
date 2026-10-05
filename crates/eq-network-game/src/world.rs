@@ -429,12 +429,18 @@ pub enum Capability {
     /// works out and the server takes from it: falls, and drowning, lava
     /// and freezing where the server type takes those too.
     EnvironmentalDamage,
+    /// Telling the server the player bled out
+    /// ([`crate::command::GameCommand::BledOut`]): the client's own report of
+    /// a death the server leaves to it, at the HP it takes as death
+    /// ([`WorldEvent::DeathThreshold`], named once the session can count
+    /// what the player's items add).
+    BleedingOut,
 }
 
 impl Capability {
     /// Every capability, in order: what a session offers when its server and
     /// client generation support everything.
-    pub const ALL: [Self; 35] = [
+    pub const ALL: [Self; 36] = [
         Self::Casting,
         Self::Spellbook,
         Self::Inventory,
@@ -470,6 +476,7 @@ impl Capability {
         Self::Raiding,
         Self::RaidGroupLeaders,
         Self::EnvironmentalDamage,
+        Self::BleedingOut,
     ];
 }
 
@@ -845,6 +852,15 @@ pub enum WorldEvent {
     /// The abilities this server type offers, as the zone admits the player;
     /// a host greys the rest, which the session refuses.
     AbilitiesOffered(Vec<crate::abilities::Ability>),
+    /// The HP at or below which this server type leaves the player's death
+    /// to the client, as the zone admits the player; named only where the
+    /// session takes that report: it offers [`Capability::BleedingOut`] and
+    /// counts what the player's items add on this server type. A host whose
+    /// own HP, with what equipped items add, reaches it on the server's
+    /// report, with no death named for the player, reports the death
+    /// ([`crate::command::GameCommand::BledOut`]); with no threshold named,
+    /// a host asks for none.
+    DeathThreshold(i32),
     /// An ability was not used, and why: the server would have ignored it.
     AbilityRefused {
         /// Admission from the request.
@@ -1466,6 +1482,7 @@ mod tests {
             Capability::Raiding => 32,
             Capability::RaidGroupLeaders => 33,
             Capability::EnvironmentalDamage => 34,
+            Capability::BleedingOut => 35,
         };
         for (index, capability) in Capability::ALL.into_iter().enumerate() {
             assert_eq!(place(capability), index, "{capability:?}");

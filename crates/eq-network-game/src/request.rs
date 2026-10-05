@@ -192,6 +192,9 @@ pub enum Request {
     /// Take the player's own spawn out of the zone they are leaving: the
     /// last word to it before the world server.
     Depart,
+    /// Report that the player bled out: the client's own death report, for
+    /// a death the server leaves to it.
+    BledOut,
     /// Take a transfer the server offered or a zone line asked for.
     AnswerZoneOffer {
         /// The zone, or zero for the bind point the server resolves.
@@ -355,6 +358,7 @@ pub fn titanium(request: &Request, sender: Sender<'_>) -> Result<EncodedCommand>
         } => zoning::titanium_answer(sender.name, (*zone_id, *instance_id), *position, *reason)?,
         Request::SaveOnZone => zoning::titanium_save_on_zone(),
         Request::Depart => zoning::titanium_depart(sender.spawn()),
+        Request::BledOut => anyhow::bail!("the Titanium client cannot send {request:?}"),
         Request::Memorize { gem, spell_id } => spells::titanium_memorize(*gem, *spell_id),
         Request::Forget { gem, spell_id } => spells::titanium_forget(*gem, *spell_id),
         Request::Scribe { slot, spell_id } => spells::titanium_scribe(*slot, *spell_id),
@@ -384,8 +388,8 @@ pub fn titanium(request: &Request, sender: Sender<'_>) -> Result<EncodedCommand>
 }
 
 /// The `EQMac` client's packet for a request from this sender: camping,
-/// logging out, its stance and position, the world's damage, and the host
-/// commands its generation encodes so far, which is chat.
+/// logging out, its stance and position, the world's damage, item moves,
+/// and the host commands its generation encodes so far, which is chat.
 ///
 /// # Errors
 /// Refuses every other request, and a command the generation cannot carry.
@@ -407,7 +411,12 @@ pub fn eqmac(request: &Request, sender: Sender<'_>) -> Result<EncodedCommand> {
             ..
         } => crate::quarm::zone_change(sender.name, *zone_id, *reason),
         Request::SaveOnZone => Ok(crate::quarm::save_on_zone()),
+        Request::MoveItem { from, to, quantity } => {
+            crate::inventory::eqmac_move(*from, *to, *quantity)
+        }
         Request::Depart => Ok(crate::quarm::depart(sender.spawn())),
+        Request::MoveCoins(transfer) => transfer.encode_eqmac(),
+        Request::BledOut => crate::quarm::bled_out(sender.spawn()),
         _ => anyhow::bail!("the EQMac client cannot send {request:?} yet"),
     }
 }
@@ -421,6 +430,33 @@ mod tests {
         name: "Tester",
         spawn_id: Some(7),
     };
+
+    #[test]
+    fn each_generation_moves_items_in_its_own_numbers() {
+        let pick_up = Request::MoveItem {
+            from: InventorySlot(22),
+            to: InventorySlot::CURSOR,
+            quantity: MoveQuantity::Whole,
+        };
+        assert_eq!(
+            titanium(&pick_up, PLAYER).unwrap(),
+            inventory::titanium_move(
+                InventorySlot(22),
+                InventorySlot::CURSOR,
+                MoveQuantity::Whole
+            )
+            .unwrap()
+        );
+        let mac = eqmac(&pick_up, PLAYER).unwrap();
+        assert_eq!(mac.opcode, 0x2c41);
+        assert_eq!(&mac.body[4..8], &[0; 4]);
+        let charm = Request::MoveItem {
+            from: InventorySlot(0),
+            to: InventorySlot::CURSOR,
+            quantity: MoveQuantity::Whole,
+        };
+        assert!(eqmac(&charm, PLAYER).is_err());
+    }
 
     #[test]
     fn each_generation_departs_and_answers_a_zone_offer_its_own_way() {
@@ -452,6 +488,21 @@ mod tests {
             eqmac(&Request::Depart, PLAYER).unwrap(),
             crate::quarm::depart(7)
         );
+    }
+
+    #[test]
+    fn only_the_eqmac_client_reports_that_it_bled_out() {
+        assert_eq!(
+            eqmac(&Request::BledOut, PLAYER).unwrap(),
+            crate::quarm::bled_out(7).unwrap()
+        );
+        // Without a spawn there is no one to report.
+        let unspawned = Sender {
+            spawn_id: None,
+            ..PLAYER
+        };
+        assert!(eqmac(&Request::BledOut, unspawned).is_err());
+        assert!(titanium(&Request::BledOut, PLAYER).is_err());
     }
 
     #[test]

@@ -1,6 +1,7 @@
 mod abilities;
 mod actions;
 pub(super) mod admission;
+mod bleeding;
 mod camp;
 mod casting;
 mod character;

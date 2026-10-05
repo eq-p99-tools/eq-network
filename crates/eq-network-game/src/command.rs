@@ -218,6 +218,17 @@ pub enum GameCommand {
         /// Reject delayed actions instead of replaying them after a stall.
         created: std::time::Instant,
     },
+    /// Report that the player bled out: the server left their death to the
+    /// client, and their HP, with what equipped items add, reached its
+    /// threshold ([`crate::world::WorldEvent::DeathThreshold`]) on the
+    /// server's report, with no death named for them. A host sends it once;
+    /// the player is then dead, as if the server had said so.
+    BledOut {
+        /// Current zone admission.
+        session_id: u64,
+        /// Reject delayed reports instead of replaying them after a stall.
+        created: std::time::Instant,
+    },
     /// Open a nearby corpse for looting.
     Loot {
         /// Current zone admission.
@@ -622,6 +633,7 @@ impl GameCommand {
             | Self::InspectItem { session_id, .. }
             | Self::Consider { session_id, .. }
             | Self::Camp { session_id, .. }
+            | Self::BledOut { session_id, .. }
             | Self::Loot { session_id, .. }
             | Self::LootItem { session_id, .. }
             | Self::EndLoot { session_id, .. }
@@ -703,6 +715,7 @@ impl GameCommand {
             Self::SendChat(_) | Self::InspectItem { .. } => Capability::Talking,
             Self::Consider { .. } | Self::AutoAttack { .. } => Capability::Combat,
             Self::Camp { .. } => Capability::Camping,
+            Self::BledOut { .. } => Capability::BleedingOut,
             Self::Loot { .. } | Self::LootItem { .. } | Self::EndLoot { .. } => Capability::Looting,
             Self::Shop { .. } | Self::Buy { .. } | Self::Sell { .. } => Capability::Trading,
             Self::OfferTrade { .. } | Self::AcceptTrade { .. } | Self::CancelTrade { .. } => {
@@ -811,6 +824,7 @@ impl GameCommand {
             | Self::SetPosture { created, .. }
             | Self::Consider { created, .. }
             | Self::Camp { created, .. }
+            | Self::BledOut { created, .. }
             | Self::Loot { created, .. }
             | Self::LootItem { created, .. }
             | Self::Shop { created, .. }
@@ -863,6 +877,51 @@ fn encode_cast(
         opcode: 0x304b,
         body,
     })
+}
+
+/// `EQMac`'s merchant requests (`crate::merchant`'s `eqmac_*`); looting is
+/// not built for it yet.
+fn encode_eqmac_trade(command: &GameCommand) -> Result<EncodedCommand> {
+    let (opcode, body) = match command {
+        GameCommand::Shop {
+            merchant_id,
+            own_id,
+            open: true,
+            ..
+        } => (
+            crate::merchant::EQMAC_REQUEST_OPCODE,
+            crate::merchant::eqmac_request(*merchant_id, *own_id)?.to_vec(),
+        ),
+        GameCommand::Shop {
+            merchant_id,
+            own_id,
+            ..
+        } => (
+            crate::merchant::EQMAC_END_OPCODE,
+            crate::merchant::eqmac_end(*merchant_id, *own_id)?.to_vec(),
+        ),
+        GameCommand::Buy {
+            merchant_id,
+            own_id,
+            slot,
+            quantity,
+            ..
+        } => (
+            crate::merchant::EQMAC_BUY_OPCODE,
+            crate::merchant::eqmac_buy(*merchant_id, *own_id, *slot, *quantity)?.to_vec(),
+        ),
+        GameCommand::Sell {
+            merchant_id,
+            slot,
+            quantity,
+            ..
+        } => (
+            crate::merchant::EQMAC_SELL_OPCODE,
+            crate::merchant::eqmac_sell(*merchant_id, *slot, *quantity)?.to_vec(),
+        ),
+        _ => anyhow::bail!("looting is not implemented for the EQMac client"),
+    };
+    Ok(EncodedCommand { opcode, body })
 }
 
 /// Encode a typed client action for one game dialect.
@@ -967,7 +1026,8 @@ pub fn encode(
         | GameCommand::DeleteSpell { .. }
         | GameCommand::SwapSpell { .. }
         | GameCommand::ScribeSpell { .. }
-        | GameCommand::Camp { .. } => {
+        | GameCommand::Camp { .. }
+        | GameCommand::BledOut { .. } => {
             anyhow::bail!("this command requires the admitted session controller")
         }
         GameCommand::SendChat(message) => Ok(EncodedCommand {
@@ -1041,12 +1101,12 @@ fn encode_posture(dialect: GameDialect, spawn_id: u16, posture: Posture) -> Resu
     })
 }
 
-/// Titanium-only corpse and merchant requests.
+/// Corpse and merchant requests in Titanium's layouts, and merchant
+/// requests in `EQMac`'s.
 fn encode_trade(dialect: GameDialect, command: &GameCommand) -> Result<EncodedCommand> {
-    anyhow::ensure!(
-        dialect == GameDialect::Titanium,
-        "looting and merchants are not implemented for this dialect"
-    );
+    if dialect == GameDialect::EqMac {
+        return encode_eqmac_trade(command);
+    }
     let (opcode, body) = match command {
         GameCommand::Loot { corpse_id, .. } => (
             crate::loot::REQUEST_OPCODE,
@@ -1236,9 +1296,20 @@ mod tests {
     }
 
     #[test]
-    fn corpse_and_merchant_commands_use_their_titanium_opcodes() {
+    fn corpse_and_merchant_commands_use_each_generations_opcodes() {
         let created = std::time::Instant::now();
-        for (command, opcode, length) in [
+        // EQMac's merchant requests, in its own opcodes and lengths; its
+        // looting is not built.
+        let eqmac = [
+            None,
+            None,
+            None,
+            Some((0x0b40, 12)),
+            Some((0x3740, 4)),
+            Some((0x3540, 16)),
+            Some((0x2740, 16)),
+        ];
+        for ((command, opcode, length), eqmac) in [
             (
                 GameCommand::Loot {
                     session_id: 1,
@@ -1313,10 +1384,18 @@ mod tests {
                 0x0e13,
                 16,
             ),
-        ] {
+        ]
+        .into_iter()
+        .zip(eqmac)
+        {
             let packet = encode(GameDialect::Titanium, &command, "Example").unwrap();
             assert_eq!((packet.opcode, packet.body.len()), (opcode, length));
-            assert!(encode(GameDialect::EqMac, &command, "Example").is_err());
+            assert_eq!(
+                encode(GameDialect::EqMac, &command, "Example")
+                    .ok()
+                    .map(|packet| (packet.opcode, packet.body.len())),
+                eqmac
+            );
         }
     }
 

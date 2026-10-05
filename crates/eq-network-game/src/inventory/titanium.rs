@@ -39,9 +39,7 @@ pub fn decode(opcode: u16, body: &[u8]) -> Result<Option<InventoryUpdate>> {
                     .all(|item| item.slot.parent().is_some_and(|(p, _)| p == root)),
                 "multiple root items in item update"
             );
-            if kind == 0x67
-                && !matches!(root.0,0..=30|251..=340|2000..=2015|2031..=2190|2500..=2501|2531..=2550)
-            {
+            if kind == 0x67 && !root.is_held() {
                 return Ok(None);
             }
             if kind == 0x6a {
