@@ -12,9 +12,13 @@
 use crate::client::ClientCommand;
 use eq_network_game::{
     inventory::{Inventory, InventoryItem, InventorySlot, InventoryUpdate},
-    merchant::MerchantUpdate,
+    merchant::{MerchantUpdate, Quotes},
+    world::Coins,
 };
-use std::time::{Duration, Instant};
+use std::{
+    collections::BTreeMap,
+    time::{Duration, Instant},
+};
 
 /// How long an unanswered purchase or sale holds the inventory.
 const ANSWER_TIMEOUT: Duration = Duration::from_secs(3);
@@ -161,6 +165,20 @@ impl MerchantTrades {
         }
     }
 
+    /// Ends a pending purchase that an echo answers with nothing bought,
+    /// which can only mean the merchant refused it: TAKP echoes a refused
+    /// purchase with no place, count or price
+    /// (`Client::Handle_OP_ShopPlayerBuy`), where `EQEmu` says nothing.
+    /// True when one ended.
+    pub(super) fn refused(&mut self, update: &MerchantUpdate) -> bool {
+        let refused = matches!(update, MerchantUpdate::Bought { quantity: 0, .. })
+            && matches!(self.pending, Some((Trade::Purchase { .. }, _)));
+        if refused {
+            self.pending = None;
+        }
+        refused
+    }
+
     /// Releases a trade the merchant never answered; true when one was pending.
     pub(super) fn expire(&mut self, now: Instant) -> bool {
         let expired = self
@@ -210,6 +228,94 @@ impl MerchantTrades {
         for sale in pending.into_iter().chain(self.unanswered.as_mut()) {
             sale.removed(slot, sold);
         }
+    }
+}
+
+/// The merchant whose window is open: the rate it charges at, and the most
+/// each place on its list can cost, which a purchase is checked against
+/// before it goes out. TAKP logs a purchase it refuses for want of coins as
+/// a possible hack, so nothing the purse might not cover is sent.
+#[derive(Default)]
+pub(super) struct OpenMerchant(Option<Window>);
+
+/// An open merchant window.
+struct Window {
+    /// The rate the window opened with.
+    rate: f32,
+    /// By place on the list: the most a unit costs, and whether the item is
+    /// priced once whatever the count, as a charged item is.
+    places: BTreeMap<u32, (u64, bool)>,
+}
+
+impl OpenMerchant {
+    /// Follows the merchant's news before anyone hears it: the window
+    /// opening at its rate, each item listed, a place gone, the window
+    /// closing. A list quoted before the rate gets each price as the server
+    /// charges it.
+    pub(super) fn explain(&mut self, update: &mut MerchantUpdate, quotes: Quotes) {
+        match update {
+            MerchantUpdate::Opened { accepted, rate, .. } => {
+                self.0 = accepted.then(|| Window {
+                    rate: *rate,
+                    places: BTreeMap::new(),
+                });
+            }
+            MerchantUpdate::Item(listed) => {
+                if let Some(window) = self.0.as_mut() {
+                    let quote = listed.price;
+                    listed.price = quotes.unit_price(quote, window.rate);
+                    window.places.insert(
+                        listed.slot,
+                        (
+                            quotes.most_per_unit(quote, window.rate),
+                            listed.item.activation.maximum_charges > 1,
+                        ),
+                    );
+                }
+            }
+            MerchantUpdate::Removed { slot } => {
+                if let Some(window) = self.0.as_mut() {
+                    window.places.remove(slot);
+                }
+            }
+            MerchantUpdate::Closed => self.0 = None,
+            MerchantUpdate::Bought { .. } | MerchantUpdate::Sold { .. } => (),
+        }
+    }
+
+    /// Checks a purchase against the purse: the most it can cost must be in
+    /// it. Both servers price a charged item once whatever the count.
+    ///
+    /// # Errors
+    /// Refuses a place not on the open merchant's list, a purse not known
+    /// yet, and a cost the purse may not cover.
+    pub(super) fn check_purchase(
+        &self,
+        slot: u32,
+        quantity: u32,
+        purse: Option<Coins>,
+    ) -> Result<(), &'static str> {
+        let (most, once) = self
+            .0
+            .as_ref()
+            .and_then(|window| window.places.get(&slot))
+            .copied()
+            .ok_or("That item is not on the merchant's list")?;
+        let purse = purse.ok_or("Your coins are not known yet")?;
+        let cost = if once {
+            most
+        } else {
+            most.saturating_mul(u64::from(quantity))
+        };
+        if purse.total_copper() < cost {
+            return Err("You may not have enough coins for that");
+        }
+        Ok(())
+    }
+
+    /// Forgets the window, as after death.
+    pub(super) fn clear(&mut self) {
+        self.0 = None;
     }
 }
 
@@ -449,6 +555,118 @@ mod tests {
         assert_eq!(trades.observe(&MerchantUpdate::Closed, &inventory), None);
         assert!(!trades.active());
         assert_eq!(trades.observe(&echo(25), &inventory), Some(deduct(25)));
+    }
+
+    #[test]
+    fn an_echo_of_nothing_bought_ends_a_pending_purchase_as_refused() {
+        let start = Instant::now();
+        let mut trades = MerchantTrades::default();
+        let nothing = MerchantUpdate::Bought {
+            slot: 0,
+            quantity: 0,
+            price: 0,
+        };
+        // Answering no purchase, it ends nothing.
+        assert!(!trades.refused(&nothing));
+        trades.sent(&sell(25), &inventory(), start);
+        assert!(!trades.refused(&nothing));
+        assert!(trades.active());
+        trades.clear();
+        trades.sent(&buy(4), &inventory(), start);
+        assert!(trades.refused(&nothing));
+        assert!(!trades.active());
+        // A purchase echoed with units bought is not a refusal.
+        trades.sent(&buy(4), &inventory(), start);
+        assert!(!trades.refused(&MerchantUpdate::Bought {
+            slot: 4,
+            quantity: 1,
+            price: 25
+        }));
+    }
+
+    /// A merchant opened at `rate`, listing an item at place 3 for `quote`,
+    /// and a charged one at place 4.
+    fn opened(quotes: Quotes, rate: f32, quote: u32) -> (OpenMerchant, MerchantUpdate) {
+        let mut merchant = OpenMerchant::default();
+        merchant.explain(
+            &mut MerchantUpdate::Opened {
+                merchant_id: 9,
+                accepted: true,
+                rate,
+            },
+            quotes,
+        );
+        let mut listed = MerchantUpdate::Item(Box::new(eq_network_game::merchant::MerchantItem {
+            slot: 3,
+            price: quote,
+            quantity: 0,
+            item: item(3),
+        }));
+        merchant.explain(&mut listed, quotes);
+        let mut charged = item(4);
+        charged.activation.maximum_charges = 5;
+        merchant.explain(
+            &mut MerchantUpdate::Item(Box::new(eq_network_game::merchant::MerchantItem {
+                slot: 4,
+                price: quote,
+                quantity: 0,
+                item: charged,
+            })),
+            quotes,
+        );
+        (merchant, listed)
+    }
+
+    #[test]
+    fn a_list_quoted_before_the_rate_is_told_at_the_price_charged() {
+        let (_, listed) = opened(Quotes::BeforeRate, 1.25, 100);
+        assert!(matches!(listed, MerchantUpdate::Item(item) if item.price == 125));
+        let (_, listed) = opened(Quotes::WithRate, 1.25, 100);
+        assert!(matches!(listed, MerchantUpdate::Item(item) if item.price == 100));
+    }
+
+    #[test]
+    fn a_purchase_goes_out_only_when_the_purse_covers_the_most_it_can_cost() {
+        let gold = |gold| {
+            Some(Coins {
+                gold,
+                ..Coins::default()
+            })
+        };
+        // EQEmu charges what it lists: two at 100 copper each.
+        let (merchant, _) = opened(Quotes::WithRate, 1.0, 100);
+        assert_eq!(merchant.check_purchase(3, 2, gold(2)), Ok(()));
+        assert!(merchant.check_purchase(3, 3, gold(2)).is_err());
+        // A charged item costs one unit's price whatever the count.
+        assert_eq!(merchant.check_purchase(4, 5, gold(1)), Ok(()));
+        // TAKP: 100 before a rate of 1.25 costs at most 127 a unit.
+        let (merchant, _) = opened(Quotes::BeforeRate, 1.25, 100);
+        assert!(merchant
+            .check_purchase(3, 2, Some(Coins::from_copper(253)))
+            .is_err());
+        assert_eq!(
+            merchant.check_purchase(3, 2, Some(Coins::from_copper(254))),
+            Ok(())
+        );
+        // An unlisted place, an unknown purse, and a closed window.
+        assert!(merchant.check_purchase(5, 1, gold(10)).is_err());
+        assert!(merchant.check_purchase(3, 1, None).is_err());
+        let (mut merchant, _) = opened(Quotes::WithRate, 1.0, 100);
+        merchant.explain(&mut MerchantUpdate::Removed { slot: 3 }, Quotes::WithRate);
+        assert!(merchant.check_purchase(3, 1, gold(10)).is_err());
+        merchant.explain(&mut MerchantUpdate::Closed, Quotes::WithRate);
+        assert!(merchant.check_purchase(4, 1, gold(10)).is_err());
+        // A refused opening opens nothing.
+        let mut merchant = OpenMerchant::default();
+        merchant.explain(
+            &mut MerchantUpdate::Opened {
+                merchant_id: 9,
+                accepted: false,
+                rate: 1.0,
+            },
+            Quotes::WithRate,
+        );
+        assert!(merchant.check_purchase(3, 1, gold(10)).is_err());
     }
 
     #[test]

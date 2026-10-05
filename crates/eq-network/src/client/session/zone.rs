@@ -1071,6 +1071,7 @@ mod tests {
             features(crate::client::ServerProtocol::Takp),
             [
                 Capability::Inventory,
+                Capability::Trading,
                 Capability::Moving,
                 Capability::Targeting,
                 Capability::Combat,

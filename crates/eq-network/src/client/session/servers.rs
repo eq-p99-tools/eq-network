@@ -55,7 +55,9 @@ use super::{
     CharacterSession, Events, ServerProtocol, ZoneExit,
 };
 use crate::p99::{self, WorldCodec};
-use eq_network_game::{abilities::Ability, hazards::Hazard, inventory::MoveRules, GameDialect};
+use eq_network_game::{
+    abilities::Ability, hazards::Hazard, inventory::MoveRules, merchant::Quotes, GameDialect,
+};
 
 /// What a zone session builds its features with.
 pub(super) struct Setup<'a> {
@@ -458,7 +460,7 @@ mod shared {
     use super::{
         Abilities, Ability, Belongings, Camp, Casting, Character, Clock, Combat, Corpses, Doors,
         Edits, Entities, Exchanges, Feature, GameDialect, GroundObjects, Groups, Hazard, Hazards,
-        Listing, Looting, Map, MerchantOffers, Motion, MoveRules, Pets, Raids, Reading,
+        Listing, Looting, Map, MerchantOffers, Motion, MoveRules, Pets, Quotes, Raids, Reading,
         Resurrection, Setup, Socials, Spellbook, Talk, Targeting, Tradeskills, Training, Transfers,
         Who,
     };
@@ -476,9 +478,10 @@ mod shared {
     }
 
     /// The inventory, whose items the player moves under the server type's
-    /// rules, with no coin moves, merchants or meals yet.
-    pub(super) fn moving_inventory(rules: MoveRules) -> Box<dyn Feature> {
-        Box::new(Belongings::moving(rules))
+    /// rules and trades with merchants whose lists quote prices as
+    /// `quotes` says, with no coin moves or meals yet.
+    pub(super) fn shopping_inventory(rules: MoveRules, quotes: Quotes) -> Box<dyn Feature> {
+        Box::new(Belongings::shopping(rules, quotes))
     }
 
     /// Moving, with or without the jumps and falls the server takes.
@@ -932,11 +935,15 @@ impl ServerType for Takp {
         offer(shared::character())
     }
 
-    /// What TAKP's item packets say the player holds, and item moves under
-    /// TAKP's rules, which disconnect a player whose move they refuse.
-    /// Coins, merchants and meals wait.
+    /// What TAKP's item packets say the player holds, item moves under
+    /// TAKP's rules, which disconnect a player whose move they refuse, and
+    /// merchants, whose lists TAKP quotes before their rate. Coin moves and
+    /// meals wait.
     fn inventory(&self, _setup: &Setup<'_>) -> Provided {
-        offer(shared::moving_inventory(MoveRules::Takp))
+        offer(shared::shopping_inventory(
+            MoveRules::Takp,
+            Quotes::of(GameDialect::EqMac),
+        ))
     }
 
     fn entities(&self, _setup: &Setup<'_>) -> Provided {
@@ -1052,6 +1059,7 @@ mod tests {
             offers(takp),
             [
                 Capability::Inventory,
+                Capability::Trading,
                 Capability::Moving,
                 Capability::Targeting,
                 Capability::Combat,

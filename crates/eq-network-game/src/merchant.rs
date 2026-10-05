@@ -31,6 +31,64 @@ pub const DELETE_OPCODE: u16 = 0x0da9;
 /// `ItemPacketMerchant` inside `OP_ItemPacket`.
 pub const ITEM_PACKET_KIND: u32 = 0x64;
 
+/// How a client generation's merchant lists quote their prices: with the
+/// merchant's rate in them, as `EQEmu`'s Titanium lists do
+/// (`Client::BulkSendMerchantInventory` multiplies by `CalcPriceMod`), or
+/// before it, as TAKP's `EQMac` lists do, the rate coming with the window's
+/// opening.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum Quotes {
+    /// Each list price is what a unit costs.
+    #[default]
+    WithRate,
+    /// Each list price is before the rate the window opened with.
+    BeforeRate,
+}
+
+impl Quotes {
+    /// How a client generation's lists quote their prices.
+    #[must_use]
+    pub const fn of(dialect: crate::GameDialect) -> Self {
+        match dialect {
+            crate::GameDialect::Titanium => Self::WithRate,
+            crate::GameDialect::EqMac => Self::BeforeRate,
+        }
+    }
+
+    /// What a unit costs, from its list price and the window's rate, as the
+    /// server charges it. TAKP charges `Price * SellRate * rate` per unit,
+    /// in single precision and cut to whole copper
+    /// (`Client::Handle_OP_ShopPlayerBuy`), where its list price is
+    /// `Price * SellRate` already cut (`BulkSendMerchantInventory`), so for
+    /// an item whose `SellRate` is not 1 this can be a copper short; the
+    /// most a unit costs is [`Quotes::most_per_unit`].
+    #[must_use]
+    #[allow(
+        clippy::cast_possible_truncation,
+        clippy::cast_precision_loss,
+        clippy::cast_sign_loss
+    )] // As the server computes it: in single precision, cut toward zero.
+    pub fn unit_price(self, quote: u32, rate: f32) -> u32 {
+        match self {
+            Self::WithRate => quote,
+            Self::BeforeRate => (quote as f32 * rate) as u32,
+        }
+    }
+
+    /// The most a unit can cost, never below what the server charges: the
+    /// list price where it carries the rate (`EQEmu` charges what it lists,
+    /// cut the same way), and otherwise a list price one copper higher than
+    /// the cut one, times the rate, rounded up.
+    #[must_use]
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)] // Rounded up first; a negative rate costs nothing.
+    pub fn most_per_unit(self, quote: u32, rate: f32) -> u64 {
+        match self {
+            Self::WithRate => u64::from(quote),
+            Self::BeforeRate => ((f64::from(quote) + 1.0) * f64::from(rate)).ceil() as u64,
+        }
+    }
+}
+
 /// One item offered by the merchant.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct MerchantItem {
@@ -234,6 +292,27 @@ fn merchant_header(body: &[u8]) -> Result<(u32, u32, u32)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_quote_before_the_rate_costs_what_the_server_charges_and_never_more_than_its_most() {
+        use crate::GameDialect;
+        assert_eq!(Quotes::of(GameDialect::Titanium), Quotes::WithRate);
+        assert_eq!(Quotes::of(GameDialect::EqMac), Quotes::BeforeRate);
+        // Titanium's lists carry the rate: a unit costs what is listed.
+        assert_eq!(Quotes::WithRate.unit_price(125, 1.3), 125);
+        assert_eq!(Quotes::WithRate.most_per_unit(125, 1.3), 125);
+        // TAKP's do not: 100 at 1.25 costs 125, and at 0.875, 87.
+        assert_eq!(Quotes::BeforeRate.unit_price(100, 1.25), 125);
+        assert_eq!(Quotes::BeforeRate.unit_price(100, 0.875), 87);
+        // A list price cut from up to one copper more costs at most 127.
+        assert_eq!(Quotes::BeforeRate.most_per_unit(100, 1.25), 127);
+        for (quote, rate) in [(100u32, 1.25f32), (7, 0.9), (1999, 1.1), (0, 1.2)] {
+            assert!(
+                Quotes::BeforeRate.most_per_unit(quote, rate)
+                    >= u64::from(Quotes::BeforeRate.unit_price(quote, rate))
+            );
+        }
+    }
 
     fn wire(slot: u32, price: u32, count: i32) -> Vec<u8> {
         let mut fields = vec!["0".to_owned(); 159];

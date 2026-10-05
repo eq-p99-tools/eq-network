@@ -7,6 +7,16 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- Merchant trades, on every server: a purchase goes out only for an item
+  on the open merchant's list whose most possible cost the purse covers
+  (`EQEmu` charges what it lists; for a list quoted before the rate, a
+  price a copper higher times the rate, rounded up), since TAKP logs a
+  purchase it refuses for want of coins as a possible hack; a NO DROP item
+  is refused before a sale goes out, as both servers ignore it without a
+  word; a sale's echo adds its price to the purse, platinum first (TAKP
+  sends no money update after a sale, and `EQEmu`'s replaces the purse with
+  the same coins); and an echo of nothing bought ends a pending purchase as
+  refused at once (TAKP's answer to a refused purchase; `EQEmu` sends none).
 - `InventoryUpdate` gains `Used`: a unit or charge the server used up
   without saying which, as TAKP's `OP_DeleteCharge` says it. Hosts that
   match `InventoryUpdate` exhaustively need an arm for it.
@@ -62,6 +72,13 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Merchants on TAKP (`Capability::Trading`, beside its item moves; coin
+  moves and meals wait): buying and selling through TAKP's own packets.
+  TAKP's lists quote prices before the merchant's rate
+  (`merchant::Quotes::BeforeRate`), so the session tells each item at the
+  price TAKP charges, `int(price x rate)` a unit, before the host hears it.
+  `MerchantOffers` stays off on TAKP, whose rule for what a merchant pays
+  is its own. Carries #104 until it merges.
 - TAKP's merchant packets, read and built as the merchant news and requests
   Titanium's give, for the same merchant feature (nothing offered yet):
   `merchant::eqmac_request`, `eqmac_end`, `eqmac_buy` and `eqmac_sell`

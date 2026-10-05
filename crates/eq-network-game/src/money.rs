@@ -264,6 +264,19 @@ impl Wallet {
 }
 
 impl Coins {
+    /// A value in copper as servers add it to a purse
+    /// (`Client::AddMoneyToPP`): platinum first, then gold, silver and
+    /// copper.
+    #[must_use]
+    pub const fn from_copper(copper: u32) -> Self {
+        Self {
+            platinum: copper / 1000,
+            gold: copper % 1000 / 100,
+            silver: copper % 100 / 10,
+            copper: copper % 10,
+        }
+    }
+
     /// How many of one kind.
     #[must_use]
     pub const fn of(&self, coin: Coin) -> u32 {
@@ -320,6 +333,20 @@ pub fn titanium_elsewhere(profile: &[u8]) -> Result<(Coins, Coins)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn copper_is_added_platinum_first() {
+        assert_eq!(
+            Coins::from_copper(12_345),
+            Coins {
+                platinum: 12,
+                gold: 3,
+                silver: 4,
+                copper: 5
+            }
+        );
+        assert!(Coins::from_copper(0).is_empty());
+    }
 
     #[test]
     fn a_move_is_five_signed_words_in_the_servers_numbering() {
