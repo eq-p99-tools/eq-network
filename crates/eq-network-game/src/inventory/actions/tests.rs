@@ -630,3 +630,81 @@ fn invalid_stack_counts_are_rejected() {
         assert!(state.plan_move(&request, actor()).is_err());
     }
 }
+
+#[test]
+fn takp_keeps_bags_arrows_and_instruments_out_of_slots_it_refuses() {
+    let plan = |rules, state: &Inventory, from: i32, to: i32| {
+        state.plan_move_for(rules, &request(state, from, to), actor())
+    };
+    // A bag that could be worn on the back: EQEmu takes it, TAKP never does.
+    let mut bag = item(30, None, 4);
+    bag.details.slots = 1 << 8;
+    let worn_bag = state(vec![bag]);
+    assert!(plan(MoveRules::EqEmu, &worn_bag, 30, 8).is_ok());
+    assert!(plan(MoveRules::Takp, &worn_bag, 30, 8).is_err());
+    // Arrows that could go in the range slot go only in the ammo slot.
+    let mut arrows = item(30, None, 0);
+    arrows.rules.item_type = 27;
+    arrows.details.slots = (1 << 11) | (1 << 21);
+    let quiver = state(vec![arrows]);
+    assert!(plan(MoveRules::EqEmu, &quiver, 30, 11).is_ok());
+    assert!(plan(MoveRules::Takp, &quiver, 30, 11).is_err());
+    assert!(plan(MoveRules::Takp, &quiver, 30, 21).is_ok());
+    // An instrument in the secondary hand keeps the primary empty...
+    let mut lute = item(14, None, 0);
+    lute.rules.item_type = 24;
+    let playing = state(vec![lute.clone(), item(30, None, 0)]);
+    assert!(plan(MoveRules::EqEmu, &playing, 30, 13).is_ok());
+    assert!(plan(MoveRules::Takp, &playing, 30, 13).is_err());
+    // ...and goes there only while the primary is empty.
+    lute.slot = InventorySlot::CURSOR;
+    let armed = state(vec![item(13, None, 0), lute.clone()]);
+    assert!(plan(MoveRules::EqEmu, &armed, 30, 14).is_ok());
+    assert!(plan(MoveRules::Takp, &armed, 30, 14).is_err());
+    assert!(plan(MoveRules::Takp, &state(vec![lute]), 30, 14).is_ok());
+    // TAKP has no charm slot.
+    let mut charm = item(30, None, 0);
+    charm.details.slots = 1;
+    let charmed = state(vec![charm]);
+    assert!(plan(MoveRules::EqEmu, &charmed, 30, 0).is_ok());
+    assert!(plan(MoveRules::Takp, &charmed, 30, 0).is_err());
+}
+
+#[test]
+fn on_takp_a_move_onto_a_cursor_a_move_emptied_waits_until_it_settles() {
+    let mut state = state(vec![item(22, None, 0), item(23, None, 0)]);
+    for (from, to) in [(22, 30), (30, 24)] {
+        let update = state
+            .plan_move_for(MoveRules::Takp, &request(&state, from, to), actor())
+            .unwrap();
+        state.apply(update);
+    }
+    // TAKP may be handing over an item it queued behind the cursor.
+    let next = request(&state, 23, 30);
+    assert_eq!(
+        state
+            .plan_move_for(MoveRules::Takp, &next, actor())
+            .unwrap_err()
+            .to_string(),
+        "Wait for the server to settle the last move"
+    );
+    assert!(state
+        .plan_move_for(MoveRules::EqEmu, &next, actor())
+        .is_ok());
+    state.apply(InventoryUpdate::Settled);
+    let next = request(&state, 23, 30);
+    assert!(state.plan_move_for(MoveRules::Takp, &next, actor()).is_ok());
+}
+
+#[test]
+fn vah_shir_can_equip_what_names_their_race() {
+    let mut cloak = item(30, None, 0);
+    cloak.details.races = 1 << 13;
+    let vah_shir = InventoryActor {
+        race: 130,
+        ..actor()
+    };
+    let state = state(vec![cloak]);
+    assert!(state.plan_move(&request(&state, 30, 13), vah_shir).is_ok());
+    assert!(state.plan_move(&request(&state, 30, 13), actor()).is_err());
+}

@@ -784,6 +784,18 @@ fn eqmac_slots_take_titanium_numbers() {
 }
 
 #[test]
+fn every_eqmac_slot_number_comes_back_from_its_titanium_number() {
+    for eqmac in (-1..5000).filter(|slot| InventorySlot::from_eqmac(*slot).is_some()) {
+        let slot = InventorySlot::from_eqmac(eqmac).unwrap();
+        assert_eq!(slot.to_eqmac(), Some(eqmac), "{eqmac}");
+    }
+    // The charm and the shared bank have no EQMac number.
+    for titanium in [0, 2008, 2500, 2531] {
+        assert_eq!(InventorySlot(titanium).to_eqmac(), None, "{titanium}");
+    }
+}
+
+#[test]
 fn only_the_players_own_slots_are_held() {
     for slot in [
         0, 21, 29, 30, 251, 340, 2000, 2015, 2031, 2190, 2500, 2501, 2531, 2550,

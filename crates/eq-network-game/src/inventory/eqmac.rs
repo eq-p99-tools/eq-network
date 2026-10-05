@@ -15,8 +15,9 @@
 //! used up.
 use super::{
     ClickEffect, ClickKind, InventoryItem, InventorySlot, InventoryUpdate, ItemActivation,
-    ItemPlacement,
+    ItemPlacement, MoveQuantity,
 };
+use crate::command::EncodedCommand;
 use crate::items::{EquipmentRules, ItemBonuses, ItemDetails, ItemStat, WornEffect};
 use anyhow::{anyhow, bail, ensure, Context, Result};
 use std::collections::BTreeMap;
@@ -101,6 +102,38 @@ pub fn decode(opcode: u16, body: &[u8]) -> Result<Option<InventoryUpdate>> {
         }
         _ => Ok(None),
     }
+}
+
+/// `EQMac`'s `OP_MoveItem` for a move already planned (`MoveItem_Struct`,
+/// `common/patches/mac_structs.h`): both slots in `EQMac`'s numbers, then
+/// how many of a stack go, zero for a whole item. TAKP merges onto the same
+/// item only with a count, and swaps whole items (`Client::SwapItem`,
+/// `zone/inventory.cpp`).
+///
+/// # Errors
+/// Rejects a slot `EQMac` has no number for.
+pub fn move_item(
+    from: InventorySlot,
+    to: InventorySlot,
+    quantity: MoveQuantity,
+) -> Result<EncodedCommand> {
+    let number = |slot: InventorySlot| {
+        slot.to_eqmac()
+            .and_then(|slot| u32::try_from(slot).ok())
+            .context("no EQMac inventory slot")
+    };
+    let count = match quantity {
+        MoveQuantity::Whole => 0,
+        MoveQuantity::Count(count) => count.get(),
+    };
+    let mut body = Vec::with_capacity(12);
+    for value in [number(from)?, number(to)?, count] {
+        body.extend_from_slice(&value.to_le_bytes());
+    }
+    Ok(EncodedCommand {
+        opcode: MOVE_OPCODE,
+        body,
+    })
 }
 
 /// The full inventory. Its first byte counts what TAKP meant to send,

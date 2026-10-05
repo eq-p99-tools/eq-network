@@ -55,7 +55,7 @@ use super::{
     CharacterSession, Events, ServerProtocol, ZoneExit,
 };
 use crate::p99::{self, WorldCodec};
-use eq_network_game::{abilities::Ability, hazards::Hazard, GameDialect};
+use eq_network_game::{abilities::Ability, hazards::Hazard, inventory::MoveRules, GameDialect};
 
 /// What a zone session builds its features with.
 pub(super) struct Setup<'a> {
@@ -458,8 +458,9 @@ mod shared {
     use super::{
         Abilities, Ability, Belongings, Camp, Casting, Character, Clock, Combat, Corpses, Doors,
         Edits, Entities, Exchanges, Feature, GameDialect, GroundObjects, Groups, Hazard, Hazards,
-        Listing, Looting, Map, MerchantOffers, Motion, Pets, Raids, Reading, Resurrection, Setup,
-        Socials, Spellbook, Talk, Targeting, Tradeskills, Training, Transfers, Who,
+        Listing, Looting, Map, MerchantOffers, Motion, MoveRules, Pets, Raids, Reading,
+        Resurrection, Setup, Socials, Spellbook, Talk, Targeting, Tradeskills, Training, Transfers,
+        Who,
     };
 
     pub(super) fn casting() -> Box<dyn Feature> {
@@ -474,10 +475,10 @@ mod shared {
         Box::new(Belongings::new(setup.auto_eat))
     }
 
-    /// The inventory as the server says it is, which the player cannot
-    /// change yet.
-    pub(super) fn followed_inventory() -> Box<dyn Feature> {
-        Box::new(Belongings::followed())
+    /// The inventory, whose items the player moves under the server type's
+    /// rules, with no coin moves, merchants or meals yet.
+    pub(super) fn moving_inventory(rules: MoveRules) -> Box<dyn Feature> {
+        Box::new(Belongings::moving(rules))
     }
 
     /// Moving, with or without the jumps and falls the server takes.
@@ -931,10 +932,11 @@ impl ServerType for Takp {
         offer(shared::character())
     }
 
-    /// What TAKP's item packets say the player holds. Moving items waits:
-    /// TAKP disconnects a player whose move it refuses.
+    /// What TAKP's item packets say the player holds, and item moves under
+    /// TAKP's rules, which disconnect a player whose move they refuse.
+    /// Coins, merchants and meals wait.
     fn inventory(&self, _setup: &Setup<'_>) -> Provided {
-        offer(shared::followed_inventory())
+        offer(shared::moving_inventory(MoveRules::Takp))
     }
 
     fn entities(&self, _setup: &Setup<'_>) -> Provided {
@@ -1038,9 +1040,8 @@ mod tests {
     #[test]
     fn eqmac_servers_provide_the_features_built_for_them() {
         // Quarm and TAKP speak EQMac: they see the zone's spawns, keep the
-        // player's record and talk. TAKP also camps, moves and zones, and
-        // follows the inventory, which offers nothing until items move;
-        // Quarm will once each is checked there.
+        // player's record and talk. TAKP also camps, moves, zones and
+        // moves items; Quarm will once each is checked there.
         let setup = Setup::new("Tester", AutoEat::default());
         let quarm = server_type(ServerProtocol::Quarm);
         assert_eq!(quarm.features(&setup).len(), 3);
@@ -1050,6 +1051,7 @@ mod tests {
         assert_eq!(
             offers(takp),
             [
+                Capability::Inventory,
                 Capability::Moving,
                 Capability::Targeting,
                 Capability::Combat,

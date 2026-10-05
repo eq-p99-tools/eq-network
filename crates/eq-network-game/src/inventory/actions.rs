@@ -81,6 +81,25 @@ pub struct InventoryActor {
     pub world_container: bool,
 }
 
+/// Whose rules a move must also meet: the server type's own, beyond the
+/// placement rules every server shares.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum MoveRules {
+    /// `EQEmu`'s, which P99 shares (`Client::SwapItem`).
+    #[default]
+    EqEmu,
+    /// TAKP's, which keep bags, books and arrows out of more worn slots and
+    /// an instrument from either hand while the other is full
+    /// (`ItemInstance::IsSlotAllowed`, `common/item_instance.cpp`), have no
+    /// charm slot, and disconnect a player whose move they refuse
+    /// (`Client::SwapItemResync`, `zone/inventory.cpp`). TAKP also hands the
+    /// player an item it queued behind the cursor only once the cursor
+    /// empties, saying nothing of it before (`ZoneDatabase::SaveCursor`,
+    /// `zone/zonedb.cpp`), so a move onto a cursor that a move just emptied
+    /// waits for that move to settle.
+    Takp,
+}
+
 impl Inventory {
     /// Selects the next carried destination, filling compatible stacks before empty slots.
     /// Re-evaluate after every submitted move; never cache a sequence across revisions.
@@ -170,12 +189,28 @@ impl Inventory {
         Ok(update)
     }
 
-    /// Computes placement without modifying inventory or sending a packet.
+    /// Computes placement under `EQEmu`'s rules without modifying inventory or
+    /// sending a packet.
     ///
     /// # Errors
     /// Rejects unsupported or inconsistent moves using the latest known inventory.
     pub fn plan_move(
         &self,
+        request: &InventoryMove,
+        actor: InventoryActor,
+    ) -> Result<InventoryUpdate> {
+        self.plan_move_for(MoveRules::EqEmu, request, actor)
+    }
+
+    /// Computes placement under a server type's rules without modifying
+    /// inventory or sending a packet.
+    ///
+    /// # Errors
+    /// Rejects unsupported or inconsistent moves using the latest known
+    /// inventory, and moves the server type's rules refuse.
+    pub fn plan_move_for(
+        &self,
+        rules: MoveRules,
         request: &InventoryMove,
         actor: InventoryActor,
     ) -> Result<InventoryUpdate> {
@@ -196,6 +231,9 @@ impl Inventory {
             !request.from.is_trade(),
             "Cancel the trade to take an item back"
         );
+        if rules == MoveRules::Takp {
+            self.check_takp_move(request)?;
+        }
         if request.to.is_trade() {
             check_trade(request, self.items.contains_key(&request.to))?;
             // `EQEmu` disconnects a client that offers another player a NO
@@ -219,9 +257,9 @@ impl Inventory {
             .context("Source slot is empty")?;
         if let Some(destination) = self.items.get(&request.to) {
             if let MoveQuantity::Count(amount) = request.quantity {
-                return self.plan_merge(request, source, destination, amount.get(), actor);
+                return self.plan_merge(rules, request, source, destination, amount.get(), actor);
             }
-            return self.plan_cursor_swap(request, source, destination, actor);
+            return self.plan_cursor_swap(rules, request, source, destination, actor);
         }
         if let Some((parent, index)) = request.from.parent() {
             ensure!(
@@ -237,7 +275,7 @@ impl Inventory {
                 .is_some_and(|(parent, _)| parent == request.to)),
             "Destination has inconsistent container contents"
         );
-        self.check_slot(request.to, source, actor)?;
+        self.check_slot(rules, request.to, source, actor)?;
         let mut result = self.items.clone();
         let count = match request.quantity {
             MoveQuantity::Whole => None,
@@ -282,6 +320,7 @@ impl Inventory {
 
     fn plan_merge(
         &self,
+        rules: MoveRules,
         request: &InventoryMove,
         source: &InventoryItem,
         destination: &InventoryItem,
@@ -317,7 +356,7 @@ impl Inventory {
             amount <= available && amount <= capacity - existing,
             "Not enough items or stack space"
         );
-        self.check_slot(request.to, source, actor)?;
+        self.check_slot(rules, request.to, source, actor)?;
         let mut result = self.items.clone();
         if amount == available {
             result.remove(&request.from);
@@ -336,6 +375,7 @@ impl Inventory {
 
     fn plan_cursor_swap(
         &self,
+        rules: MoveRules,
         request: &InventoryMove,
         source: &InventoryItem,
         destination: &InventoryItem,
@@ -353,8 +393,8 @@ impl Inventory {
             source.details.id != destination.details.id || source.stack_count.is_none(),
             "Matching stacks require a merge operation"
         );
-        self.check_slot(request.to, source, actor)?;
-        self.check_slot(request.from, destination, actor)?;
+        self.check_slot(rules, request.to, source, actor)?;
+        self.check_slot(rules, request.from, destination, actor)?;
         let mut result = self.items.clone();
         // Remove both subtrees before remapping: inserting while removing could
         // overwrite a bag child whose slot belongs to the other subtree.
@@ -408,6 +448,7 @@ impl Inventory {
 
     fn check_slot(
         &self,
+        rules: MoveRules,
         slot: InventorySlot,
         item: &InventoryItem,
         actor: InventoryActor,
@@ -455,6 +496,7 @@ impl Inventory {
             let race_bit = match actor.race {
                 1..=12 => actor.race - 1,
                 128 => 12,
+                130 => 13,
                 _ => anyhow::bail!("Race eligibility is not supported yet"),
             };
             ensure!(
@@ -480,6 +522,9 @@ impl Inventory {
                         && stat.value > i32::from(actor.level)),
                 "Your level is too low for this item"
             );
+            if rules == MoveRules::Takp {
+                self.check_takp_worn(slot, item)?;
+            }
             if slot.0 == 13 && matches!(item.rules.item_type, 1 | 4 | 35) {
                 ensure!(
                     !self.items.contains_key(&InventorySlot(14)),
@@ -510,6 +555,60 @@ impl Inventory {
         Ok(())
     }
 }
+impl Inventory {
+    /// What TAKP needs of any move: slots it numbers, and a cursor that no
+    /// unsettled move emptied, which TAKP may yet refill.
+    fn check_takp_move(&self, request: &InventoryMove) -> Result<()> {
+        ensure!(
+            request.from.to_eqmac().is_some() && request.to.to_eqmac().is_some(),
+            "This server has no such slot"
+        );
+        ensure!(
+            request.to != InventorySlot::CURSOR
+                || self.items.contains_key(&InventorySlot::CURSOR)
+                || !self.unconfirmed.contains_key(&InventorySlot::CURSOR),
+            "Wait for the server to settle the last move"
+        );
+        Ok(())
+    }
+
+    /// What TAKP refuses in a worn slot beyond the rules every server
+    /// shares (`ItemInstance::IsSlotAllowed`): bags and books anywhere,
+    /// arrows in the range slot, anything in the primary hand while the
+    /// secondary holds an instrument, and an instrument in the secondary
+    /// hand while the primary is full. A book without a text to read is not
+    /// told apart from other items (inferred: none has worn slots).
+    fn check_takp_worn(&self, slot: InventorySlot, item: &InventoryItem) -> Result<()> {
+        const INSTRUMENTS: std::ops::RangeInclusive<u8> = 23..=26;
+        ensure!(
+            item.bag_slots == 0 && item.book.is_none(),
+            "Bags and books cannot be worn"
+        );
+        if slot.0 == 11 {
+            ensure!(
+                !matches!(item.rules.item_type, 27 | 28),
+                "Arrows go in the ammo slot"
+            );
+        }
+        if slot.0 == 13 {
+            ensure!(
+                !self
+                    .items
+                    .get(&InventorySlot(14))
+                    .is_some_and(|secondary| INSTRUMENTS.contains(&secondary.rules.item_type)),
+                "Put away the instrument in your secondary hand first"
+            );
+        }
+        if slot.0 == 14 && INSTRUMENTS.contains(&item.rules.item_type) {
+            ensure!(
+                !self.items.contains_key(&InventorySlot(13)),
+                "Empty your primary hand before holding an instrument"
+            );
+        }
+        Ok(())
+    }
+}
+
 fn movable(slot: InventorySlot, actor: InventoryActor) -> bool {
     slot.is_equipment()
         || slot.is_carried()

@@ -22,7 +22,9 @@ use super::{
 use anyhow::{Context, Result};
 use eq_network_game::{
     exchange::ExchangeUpdate,
-    inventory::{banker_in_range, Inventory, InventoryActor, InventoryMove, InventoryUpdate},
+    inventory::{
+        banker_in_range, Inventory, InventoryActor, InventoryMove, InventoryUpdate, MoveRules,
+    },
     loot::{LootResponse, LootUpdate},
     merchant::MerchantUpdate,
     message::{Message, Part},
@@ -159,6 +161,13 @@ impl Settlement {
         self.0 = Some(now);
     }
 
+    /// Whether the last move sent is still unanswered at `now`: the server
+    /// has not refused it, and the window to refuse it has not passed.
+    fn in_flight(&self, now: Instant) -> bool {
+        self.0
+            .is_some_and(|sent| now.saturating_duration_since(sent) < REFUSAL_WINDOW)
+    }
+
     /// The settling update, once the last move has gone unrefused for the window
     /// and predictions remain.
     fn due(&mut self, inventory: &Inventory, now: Instant) -> Option<InventoryUpdate> {
@@ -222,12 +231,22 @@ fn change(update: InventoryUpdate, world: &mut World, out: &mut Out<'_, '_>) -> 
         .send(ClientEvent::World(WorldEvent::Inventory(update)))
 }
 
+/// What the player may do with their belongings on a server type.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Acts {
+    /// Move items, under the server type's rules; coins, merchants and
+    /// meals wait.
+    Moves,
+    /// Move items and coins, trade with merchants and eat.
+    Everything,
+}
+
 /// The player's belongings and the changes to them in flight.
 pub(super) struct Belongings {
-    /// Whether the player acts on them: moves items and coins, trades with
-    /// merchants and eats. Otherwise the session only follows what the
-    /// server says they are.
-    acting: bool,
+    /// What the player may do with them.
+    acts: Acts,
+    /// The server type's rules for item moves.
+    rules: MoveRules,
     /// Moves waiting to settle.
     settlement: Settlement,
     /// A purchase or sale waiting for the merchant.
@@ -239,19 +258,21 @@ pub(super) struct Belongings {
 impl Belongings {
     pub(super) fn new(auto_eat: eq_network_game::food::AutoEat) -> Self {
         Self {
-            acting: true,
+            acts: Acts::Everything,
+            rules: MoveRules::EqEmu,
             settlement: Settlement::default(),
             trades: MerchantTrades::default(),
             meals: meals::Meals::new(auto_eat),
         }
     }
 
-    /// Belongings the session follows but the player does not act on yet:
-    /// it offers nothing, carries out no command and never eats, for a
-    /// server type whose item packets are read before its moves are built.
-    pub(super) fn followed() -> Self {
+    /// Belongings whose items the player moves under a server type's rules,
+    /// with nothing else built for that server type yet: coin moves,
+    /// merchants and meals are not offered, and the session never eats.
+    pub(super) fn moving(rules: MoveRules) -> Self {
         Self {
-            acting: false,
+            acts: Acts::Moves,
+            rules,
             ..Self::new(eq_network_game::food::AutoEat::default())
         }
     }
@@ -267,7 +288,7 @@ impl Belongings {
         let now = Instant::now();
         let planned = actor(world)
             .context("Character equipment data is unavailable")
-            .and_then(|actor| world.inventory.0.plan_move(request, actor))
+            .and_then(|actor| world.inventory.0.plan_move_for(self.rules, request, actor))
             .and_then(|update| {
                 let packet = out.encode(&Request::MoveItem {
                     from: request.from,
@@ -386,10 +407,9 @@ impl Belongings {
 impl Feature for Belongings {
     fn capabilities(&self) -> Vec<crate::world::Capability> {
         use crate::world::Capability;
-        if self.acting {
-            vec![Capability::Inventory, Capability::Trading]
-        } else {
-            Vec::new()
+        match self.acts {
+            Acts::Moves => vec![Capability::Inventory],
+            Acts::Everything => vec![Capability::Inventory, Capability::Trading],
         }
     }
 
@@ -417,13 +437,23 @@ impl Feature for Belongings {
         tell_coins(world, true, out)
     }
 
-    /// A sold item leaves only when the merchant echoes the sale.
-    fn holds(&self, _world: &World, _now: Instant) -> Vec<(Resource, &'static str)> {
-        self.trades
-            .active()
-            .then_some((Resource::Inventory, "Wait for the merchant to answer"))
-            .into_iter()
-            .collect()
+    /// A sold item leaves only when the merchant echoes the sale. Under
+    /// TAKP's rules one move is in flight at a time, as with the official
+    /// client: TAKP answers only a refused move, so a move is answered once
+    /// it settles, and the next waits for that. A move onto a cursor TAKP
+    /// may still refill (from a queue it said nothing of) waits with it.
+    fn holds(&self, _world: &World, now: Instant) -> Vec<(Resource, &'static str)> {
+        let mut holds = Vec::new();
+        if self.trades.active() {
+            holds.push((Resource::Inventory, "Wait for the merchant to answer"));
+        }
+        if self.rules == MoveRules::Takp && self.settlement.in_flight(now) {
+            holds.push((
+                Resource::Inventory,
+                "Wait for the server to settle the last move",
+            ));
+        }
+        holds
     }
 
     /// Closing a give or trade window empties the trade slots: the server
@@ -441,8 +471,9 @@ impl Feature for Belongings {
     }
 
     fn owns(&self, command: &ClientCommand) -> bool {
-        self.acting
-            && matches!(
+        match self.acts {
+            Acts::Moves => matches!(command, ClientCommand::MoveInventory(_)),
+            Acts::Everything => matches!(
                 command,
                 ClientCommand::MoveInventory(_)
                     | ClientCommand::MoveCoins { .. }
@@ -451,7 +482,8 @@ impl Feature for Belongings {
                     | ClientCommand::Sell { .. }
                     | ClientCommand::Consume { .. }
                     | ClientCommand::AutoEat { .. }
-            )
+            ),
+        }
     }
 
     fn handle(
@@ -532,7 +564,9 @@ impl Feature for Belongings {
             Message::Event(WorldEvent::Death(death)) if world.is_player(death.spawn_id) => {
                 self.trades.clear();
             }
-            Message::Event(WorldEvent::Nourishment(nourishment)) if self.acting => {
+            Message::Event(WorldEvent::Nourishment(nourishment))
+                if self.acts == Acts::Everything =>
+            {
                 self.meals.nourished(*nourishment, world, out)?;
             }
             // The window closed: what the trade slots held was handed over, or
@@ -791,11 +825,36 @@ mod tests {
         assert!(world.inventory.received());
     }
 
+    /// Admitted player 7 on TAKP, carrying a ration (22) and another item
+    /// (23).
+    fn admitted_on_takp() -> (Belongings, World) {
+        let mut belongings = Belongings::moving(MoveRules::Takp);
+        let mut world = World::new(5);
+        let mut ration = item(22);
+        ration.rules.item_type = 14;
+        let snapshot = Message::Event(WorldEvent::Inventory(InventoryUpdate::Snapshot(vec![
+            ration,
+            item(23),
+        ])));
+        belongings.admit(&snapshot, &mut world).unwrap();
+        world.own_spawn = Some(7);
+        world.player.admit(testing::player(7));
+        testing::run_on(&super::super::wire::EqMac, |out| {
+            belongings.admitted(&mut world, out)
+        })
+        .result
+        .unwrap();
+        (belongings, world)
+    }
+
     #[test]
-    fn followed_belongings_report_what_the_server_says_and_act_on_nothing() {
+    fn on_takp_items_move_one_at_a_time_and_nothing_else_is_offered() {
         use eq_network_game::food::{AutoEat, Nourishment};
-        let mut belongings = Belongings::followed();
-        assert_eq!(belongings.capabilities(), []);
+        let (mut belongings, mut world) = admitted_on_takp();
+        assert_eq!(
+            belongings.capabilities(),
+            [crate::world::Capability::Inventory]
+        );
         for command in [
             ClientCommand::AutoEat {
                 session_id: 5,
@@ -806,38 +865,61 @@ mod tests {
                 slot: InventorySlot(22),
                 created: Instant::now(),
             },
+            ClientCommand::Sell {
+                session_id: 5,
+                merchant_id: 9,
+                slot: 22,
+                quantity: 1,
+                created: Instant::now(),
+            },
         ] {
             assert!(!belongings.owns(&command), "{command:?}");
         }
-        // A ration, staged before the admission and reported at it.
-        let mut ration = item(22);
-        ration.rules.item_type = 14;
-        let mut world = World::new(5);
-        let snapshot = InventoryUpdate::Snapshot(vec![ration]);
-        belongings
-            .admit(
-                &Message::Event(WorldEvent::Inventory(snapshot.clone())),
-                &mut world,
-            )
-            .unwrap();
-        world.own_spawn = Some(7);
-        world.player.admit(testing::player(7));
-        let outcome = testing::run(|out| belongings.admitted(&mut world, out));
+        let request = |world: &World, from: i32, to: i32| {
+            ClientCommand::MoveInventory(InventoryMove {
+                session_id: 5,
+                revision: world.inventory.revision(),
+                from: InventorySlot(from),
+                to: InventorySlot(to),
+                quantity: MoveQuantity::Whole,
+                created: Instant::now(),
+            })
+        };
+        let pick_up = request(&world, 23, 30);
+        assert!(belongings.owns(&pick_up));
+        let outcome = testing::run_on(&super::super::wire::EqMac, |out| {
+            belongings.handle(&pick_up, &mut world, out)
+        });
         outcome.result.unwrap();
-        assert_eq!(inventory_events(&outcome.events), [&snapshot]);
-        // A hungry player carrying it does not eat.
+        // In EQMac's numbers, where the cursor is 0.
+        assert_eq!(
+            outcome.sent,
+            [eq_network_game::inventory::eqmac_move(
+                InventorySlot(23),
+                InventorySlot::CURSOR,
+                MoveQuantity::Whole
+            )
+            .unwrap()]
+        );
+        // The next move waits for TAKP to settle this one.
+        let put_down = request(&world, 30, 24);
+        let held = Held::new(belongings.holds(&world, Instant::now()));
+        assert_eq!(
+            held.conflict(&put_down),
+            Some("Wait for the server to settle the last move")
+        );
+        let later = Instant::now() + REFUSAL_WINDOW;
+        assert_eq!(
+            Held::new(belongings.holds(&world, later)).conflict(&put_down),
+            None
+        );
+        // A hungry player carrying a ration does not eat.
         let hungry = Message::Event(WorldEvent::Nourishment(Nourishment { food: 0, water: 0 }));
-        let outcome = testing::run(|out| belongings.observe(&hungry, &mut world, out));
+        let outcome = testing::run_on(&super::super::wire::EqMac, |out| {
+            belongings.observe(&hungry, &mut world, out)
+        });
         outcome.result.unwrap();
         assert!(outcome.sent.is_empty(), "sent {:?}", outcome.sent);
-        // What the server changes still changes the inventory.
-        let removal = Message::Event(WorldEvent::Inventory(InventoryUpdate::Remove(
-            InventorySlot(22),
-        )));
-        testing::run(|out| belongings.observe(&removal, &mut world, out))
-            .result
-            .unwrap();
-        assert!(world.inventory.items().is_empty());
     }
 
     #[test]

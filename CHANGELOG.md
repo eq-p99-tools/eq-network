@@ -52,6 +52,18 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Moving items on TAKP (`Capability::Inventory`, with no coins, merchants
+  or meals yet): `inventory::eqmac_move` encodes `EQMac`'s 12-byte
+  `OP_MoveItem` in `EQMac`'s slot numbers (`InventorySlot::to_eqmac`), and
+  `Inventory::plan_move_for` plans a move under a server type's
+  `MoveRules`. TAKP's keep bags, books and arrows out of more worn slots
+  and an instrument from either hand while the other is full, have no
+  charm slot, and make a move onto a cursor an unsettled move emptied wait,
+  as TAKP may refill it from a queue it said nothing of. TAKP disconnects a
+  player whose move it refuses and answers no move it accepts, so its
+  session moves one item at a time: each move holds the inventory until it
+  settles. `Inventory::plan_move` keeps planning under `EQEmu`'s rules.
+
 - TAKP's inventory: `inventory::decode_eqmac` reads `EQMac`'s item packets
   as TAKP sends them into the same `InventoryUpdate`s as Titanium's: the
   full inventory (`OP_CharInventory`: 360-byte item records, compressed
@@ -463,6 +475,9 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   and `created` say which admission a command names and when it was made.
 
 ### Fixed
+
+- Vah Shir can equip what names their race: the move planner refused
+  every equip for race 130 as a race it did not know.
 
 - Combined transport packets (`OP_Combined`) give every part a one-byte
   length, as `EQEmu` does, so a part of exactly 255 bytes no longer ends the
