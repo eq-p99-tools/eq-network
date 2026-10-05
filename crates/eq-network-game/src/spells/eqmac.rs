@@ -5,8 +5,11 @@
 //! interruptions that name no caster. The opcodes are TAKP
 //! `utils/patches/patch_Mac.conf`'s, their bytes swapped.
 use super::{SpellBook, SpellUpdate};
+use crate::{command::EncodedCommand, inventory::InventorySlot};
 use anyhow::{ensure, Context, Result};
 
+/// `OP_CastSpell`: the client asking to cast.
+pub const EQMAC_CAST_OPCODE: u16 = 0x7e41;
 /// `OP_BeginCast`: a cast beginning, sent to everyone nearby.
 pub const EQMAC_BEGIN_OPCODE: u16 = 0xa940;
 /// `OP_InterruptCast`: the player's own cast stopping, sent to them alone.
@@ -25,6 +28,16 @@ pub const EQMAC_BOOK_SLOTS: usize = 256;
 /// slot at 1846 (`common/patches/mac_structs.h` `PlayerProfile_Struct`
 /// `spell_book`).
 const PROFILE_BOOK: std::ops::Range<usize> = 1846..1846 + EQMAC_BOOK_SLOTS * 2;
+
+/// The casting slot of an item's click effect (TAKP `CastingSlot::Item`).
+const ITEM_CAST: u16 = 10;
+/// The item slot of a cast from a gem: none.
+const NO_ITEM: u16 = u16::MAX;
+/// The item slots TAKP casts click effects from: the worn ones, which on the
+/// Mac client have no charm slot, and the general ones. It casts nothing in
+/// a bag (`common/patches/mac_limits.h` `AllowClickCastFromBag`,
+/// `InventoryProfile::SupportsClickCasting`).
+const CLICKABLE: std::ops::RangeInclusive<u16> = 1..=29;
 
 /// The message TAKP's discipline command sends through `OP_InterruptCast` to
 /// say a discipline can be used again (`Client::Handle_OP_Discipline`); it
@@ -54,6 +67,110 @@ impl SpellBook {
                 })
                 .collect(),
         })
+    }
+}
+
+/// `EQMac`'s cast of a memorized gem's spell at a target.
+///
+/// # Errors
+/// Refuses a gem past the eighth, a spell 16 bits cannot carry, and no
+/// target.
+pub fn eqmac_cast(gem: u8, spell_id: u32, target_id: u16) -> Result<EncodedCommand> {
+    ensure!(gem < 8, "invalid spell gem");
+    cast(u16::from(gem), spell_id, NO_ITEM, target_id)
+}
+
+/// `EQMac`'s cast of an item's click effect at a target, already checked
+/// against the item.
+///
+/// # Errors
+/// Refuses an item outside the worn and general slots, a spell 16 bits
+/// cannot carry, and no target.
+pub fn eqmac_item_cast(
+    spell_id: u32,
+    slot: InventorySlot,
+    target_id: u16,
+) -> Result<EncodedCommand> {
+    let item = u16::try_from(slot.0)
+        .ok()
+        .filter(|slot| CLICKABLE.contains(slot))
+        .context("TAKP casts items only from worn and general slots")?;
+    cast(ITEM_CAST, spell_id, item, target_id)
+}
+
+/// TAKP's `CastSpell_Struct` (12 bytes, packed): the casting slot, the
+/// spell, the item's slot and the target as 16 bits each, then a CRC TAKP
+/// never reads (`Client::Handle_OP_CastSpell`), sent as 0 (inferred: the
+/// official client's is unrecorded).
+fn cast(slot: u16, spell_id: u32, item: u16, target_id: u16) -> Result<EncodedCommand> {
+    let spell = u16::try_from(spell_id)
+        .ok()
+        .filter(|spell| !matches!(*spell, 0 | u16::MAX))
+        .context("invalid EQMac spell")?;
+    ensure!(target_id != 0, "a cast needs a target");
+    let mut body = Vec::with_capacity(12);
+    for value in [slot, spell, item, target_id] {
+        body.extend_from_slice(&value.to_le_bytes());
+    }
+    body.extend_from_slice(&0u32.to_le_bytes());
+    Ok(EncodedCommand {
+        opcode: EQMAC_CAST_OPCODE,
+        body,
+    })
+}
+
+/// `EQMac`'s request memorizing a spell into a gem, already checked
+/// against the book.
+#[must_use]
+pub fn eqmac_memorize(gem: u8, spell_id: u32) -> EncodedCommand {
+    book_packet(u32::from(gem), spell_id, 1)
+}
+
+/// `EQMac`'s request forgetting a gem's spell, already checked against the
+/// gem. TAKP refuses a forget whose spell the player could not memorize, so
+/// it names the gem's own spell.
+#[must_use]
+pub fn eqmac_forget(gem: u8, spell_id: u32) -> EncodedCommand {
+    book_packet(u32::from(gem), spell_id, 2)
+}
+
+/// `EQMac`'s request scribing the cursor's scroll into a book slot, already
+/// checked against the book and the cursor.
+///
+/// # Errors
+/// Refuses a slot past the 256-slot book, where TAKP would use the scroll
+/// up and scribe nothing (`Client::ScribeSpell`).
+pub fn eqmac_scribe(slot: u16, spell_id: u32) -> Result<EncodedCommand> {
+    let slot = book_slot(u32::from(slot))?;
+    Ok(book_packet(u32::from(slot), spell_id, 0))
+}
+
+/// `EQMac`'s request exchanging two book slots, already checked against the
+/// book; TAKP answers with the same packet.
+///
+/// # Errors
+/// Refuses a slot past the 256-slot book.
+pub fn eqmac_swap(from: u16, to: u16) -> Result<EncodedCommand> {
+    let mut body = Vec::with_capacity(8);
+    for slot in [from, to] {
+        body.extend_from_slice(&u32::from(book_slot(u32::from(slot))?).to_le_bytes());
+    }
+    Ok(EncodedCommand {
+        opcode: EQMAC_SWAP_OPCODE,
+        body,
+    })
+}
+
+/// TAKP's `MemorizeSpell_Struct` (12 bytes): the gem or book slot, the
+/// spell and the mode, each 32 bits; 0 scribes, 1 memorizes and 2 forgets.
+fn book_packet(slot: u32, spell_id: u32, mode: u32) -> EncodedCommand {
+    let mut body = Vec::with_capacity(12);
+    for value in [slot, spell_id, mode] {
+        body.extend_from_slice(&value.to_le_bytes());
+    }
+    EncodedCommand {
+        opcode: EQMAC_MEMORIZE_OPCODE,
+        body,
     }
 }
 
@@ -209,6 +326,67 @@ mod tests {
                 })
             );
         }
+    }
+
+    #[test]
+    fn a_cast_names_its_gem_or_item_slot_in_sixteen_bit_fields() {
+        assert_eq!(
+            eqmac_cast(7, 42, 9).unwrap().body,
+            [7, 0, 42, 0, 255, 255, 9, 0, 0, 0, 0, 0]
+        );
+        // An item's click: casting slot 10 and the item's own slot, which
+        // TAKP numbers as Titanium does for worn and general slots.
+        let item = eqmac_item_cast(73, InventorySlot(23), 9).unwrap();
+        assert_eq!(item.opcode, EQMAC_CAST_OPCODE);
+        assert_eq!(item.body, [10, 0, 73, 0, 23, 0, 9, 0, 0, 0, 0, 0]);
+        assert!(eqmac_item_cast(73, InventorySlot(1), 9).is_ok());
+        // No charm slot, cursor or bag.
+        for slot in [0, 30, 251, 262] {
+            assert!(eqmac_item_cast(73, InventorySlot(slot), 9).is_err());
+        }
+        assert!(eqmac_cast(8, 42, 9).is_err());
+        for spell in [0, 0xffff, 0x1_0000] {
+            assert!(eqmac_cast(0, spell, 9).is_err());
+        }
+        assert!(eqmac_cast(0, 42, 0).is_err());
+    }
+
+    #[test]
+    fn book_requests_are_takps_packets_and_stay_inside_the_book() {
+        let words = |packet: EncodedCommand| {
+            packet
+                .body
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .map(|word| u32::from_le_bytes(*word))
+                .collect::<Vec<_>>()
+        };
+        let memorize = eqmac_memorize(2, 42);
+        assert_eq!(memorize.opcode, EQMAC_MEMORIZE_OPCODE);
+        assert_eq!(words(memorize), [2, 42, 1]);
+        assert_eq!(words(eqmac_forget(2, 42)), [2, 42, 2]);
+        assert_eq!(words(eqmac_scribe(255, 42).unwrap()), [255, 42, 0]);
+        let swap = eqmac_swap(0, 255).unwrap();
+        assert_eq!(swap.opcode, EQMAC_SWAP_OPCODE);
+        assert_eq!(words(swap), [0, 255]);
+        // TAKP would use a scroll up on slot 256 and scribe nothing.
+        assert!(eqmac_scribe(256, 42).is_err());
+        assert!(eqmac_swap(0, 256).is_err());
+        assert!(eqmac_swap(256, 0).is_err());
+        // Each answer reads back as the change it asked for.
+        assert_eq!(
+            decode_eqmac(EQMAC_MEMORIZE_OPCODE, &eqmac_memorize(2, 42).body).unwrap(),
+            Some(SpellUpdate::Slot {
+                slot: 2,
+                spell_id: 42,
+                mode: 1
+            })
+        );
+        assert_eq!(
+            decode_eqmac(EQMAC_SWAP_OPCODE, &eqmac_swap(0, 255).unwrap().body).unwrap(),
+            Some(SpellUpdate::BookSwap { from: 0, to: 255 })
+        );
     }
 
     #[test]

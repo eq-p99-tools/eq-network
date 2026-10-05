@@ -955,6 +955,25 @@ impl ServerType for Takp {
         Some(&creation::EqMac)
     }
 
+    /// Casting from the gems and items' click effects, in `EQMac`'s cast
+    /// request; the cast is held until TAKP brings the spell bar back or
+    /// interrupts it.
+    fn casting(&self, _setup: &Setup<'_>) -> Provided {
+        offer(shared::casting())
+    }
+
+    /// Memorizing, forgetting and scribing spells in TAKP's 256-slot book.
+    /// Moving a spell in the book waits for its check on TAKP. Deleting
+    /// stays off: TAKP reports a deletion done even for an empty slot and
+    /// keeps the spell memorizable until the player zones
+    /// (`Client::Handle_OP_DeleteSpell`), unchecked live.
+    fn spellbook(&self, _setup: &Setup<'_>) -> Provided {
+        offer(shared::spellbook(Edits {
+            deleting: false,
+            moving: false,
+        }))
+    }
+
     fn character(&self, _setup: &Setup<'_>) -> Provided {
         offer(shared::character())
     }
@@ -1091,18 +1110,20 @@ mod tests {
     #[test]
     fn eqmac_servers_provide_the_features_built_for_them() {
         // Quarm and TAKP speak EQMac: they see the zone's spawns, keep the
-        // player's record and talk. TAKP also camps, moves, zones, moves
-        // items and takes the client's report of a bleed-out; Quarm will once
-        // each is checked there.
+        // player's record and talk. TAKP also casts, keeps the spellbook,
+        // camps, moves, zones, moves items and takes the client's report of
+        // a bleed-out; Quarm will once each is checked there.
         let setup = Setup::new("Tester", AutoEat::default());
         let quarm = server_type(ServerProtocol::Quarm);
         assert_eq!(quarm.features(&setup).len(), 3);
         assert_eq!(offers(quarm), [Capability::Talking]);
         let takp = server_type(ServerProtocol::Takp);
-        assert_eq!(takp.features(&setup).len(), 10);
+        assert_eq!(takp.features(&setup).len(), 12);
         assert_eq!(
             offers(takp),
             [
+                Capability::Casting,
+                Capability::Spellbook,
                 Capability::Inventory,
                 Capability::Trading,
                 Capability::Moving,
