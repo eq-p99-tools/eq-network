@@ -11,6 +11,7 @@ pub use activation::{
     titanium_item_cast, ClickEffect, ClickKind, ItemActivation, ItemUse, CAST_OPCODE,
 };
 pub use banking::banker_in_range;
+pub(crate) use eqmac::details as eqmac_details;
 pub(crate) use eqmac::merchant_stock as eqmac_merchant_stock;
 pub use eqmac::{
     decode as decode_eqmac, move_item as eqmac_move, takp_item_hit_points, ItemHitPointCount,

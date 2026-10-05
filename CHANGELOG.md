@@ -104,6 +104,13 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Inspecting linked items on TAKP: `GameCommand::InspectItem` on the
+  `EQMac` wire sends `items::eqmac_request`'s 66-byte request
+  (`OP_ItemLinkResponse`: the item as 16 bits from the link's six decimal
+  digits, then 64 bytes for a name TAKP does not read), refusing say links
+  (IDs above 0x8000), for which TAKP has the player say the link's phrase.
+  The answer, the item's 360-byte record, is `WorldEvent::ItemDetails`
+  (`items::eqmac_response`).
 - Coin moves on TAKP, in its own packet (`money::EQMAC_MOVE_OPCODE`,
   `CoinTransfer::encode_eqmac`): the same five signed words as Titanium's,
   between the purse, the cursor, the bank beside a banker and the trade
