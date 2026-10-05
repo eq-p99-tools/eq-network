@@ -38,6 +38,21 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- The world's damage to the player (`Capability::EnvironmentalDamage`,
+  `EqEmu` only, and there falls alone): `GameCommand::EnvironmentalDamage`
+  reports the damage a host worked out, by its `hazards::Hazard` (falling,
+  drowning, lava or freezing), in its client generation's packet:
+  Titanium's 31-byte `OP_EnvDamage` (`hazards::titanium_damage`) or
+  `EQMac`'s 24-byte `OP_Damage` (`hazards::eqmac_damage`). The server takes
+  the amount as it is and applies its own reductions, such as `EQEmu`'s
+  fall damage reductions from spells, items and AAs, so a host leaves
+  those out. Each server type lists the hazards it takes from the client
+  and the session refuses the rest: `EQEmu` takes falls, while drowning,
+  lava and freezing wait until the official client's reports of them are
+  recorded. What the official clients put in the fields neither server
+  reads is unrecorded (inferred: the player's spawn, zeros, and
+  Titanium's constant 0xFFFF).
+
 - Targeting, considering and attacking on TAKP (`Capability::Targeting`
   and `Capability::Combat`), in `EQMac`'s own packets: the target as a
   16-bit spawn, TAKP's 24-byte consider request and answer
@@ -420,7 +435,9 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Movement still requires calibration. Airborne movement (falls and jumps) is
   accepted only on stock EQEmu sessions, with provisional physics, until
-  official-client falls and jumps are measured; fall damage is not reported.
+  official-client falls and jumps are measured. Fall damage is reported only
+  there, as the host works it out; drowning, lava and freezing are not
+  reported anywhere yet.
   Complete server-specific buff reconciliation is not implemented.
 - Latest scribe-consumption reconciliation and fresh-key zoning changes have
   offline regression coverage but still need fresh live verification.
