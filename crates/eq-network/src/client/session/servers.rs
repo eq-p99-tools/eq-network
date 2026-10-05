@@ -921,6 +921,13 @@ impl ServerType for Takp {
         Some(&creation::EqMac)
     }
 
+    /// Casting from the gems and items' click effects, in `EQMac`'s cast
+    /// request; the cast is held until TAKP brings the spell bar back or
+    /// interrupts it.
+    fn casting(&self, _setup: &Setup<'_>) -> Provided {
+        offer(shared::casting())
+    }
+
     fn character(&self, _setup: &Setup<'_>) -> Provided {
         offer(shared::character())
     }
@@ -1026,17 +1033,18 @@ mod tests {
     #[test]
     fn eqmac_servers_provide_the_features_built_for_them() {
         // Quarm and TAKP speak EQMac: they see the zone's spawns, keep the
-        // player's record and talk. TAKP also camps, moves and zones; Quarm
-        // will once each is checked there.
+        // player's record and talk. TAKP also casts, camps, moves and zones;
+        // Quarm will once each is checked there.
         let setup = Setup::new("Tester", AutoEat::default());
         let quarm = server_type(ServerProtocol::Quarm);
         assert_eq!(quarm.features(&setup).len(), 3);
         assert_eq!(offers(quarm), [Capability::Talking]);
         let takp = server_type(ServerProtocol::Takp);
-        assert_eq!(takp.features(&setup).len(), 8);
+        assert_eq!(takp.features(&setup).len(), 9);
         assert_eq!(
             offers(takp),
             [
+                Capability::Casting,
                 Capability::Moving,
                 Capability::Targeting,
                 Capability::Combat,

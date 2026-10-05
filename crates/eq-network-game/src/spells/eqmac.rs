@@ -5,8 +5,11 @@
 //! interruptions that name no caster. The opcodes are TAKP
 //! `utils/patches/patch_Mac.conf`'s, their bytes swapped.
 use super::{SpellBook, SpellUpdate};
+use crate::{command::EncodedCommand, inventory::InventorySlot};
 use anyhow::{ensure, Context, Result};
 
+/// `OP_CastSpell`: the client asking to cast.
+pub const EQMAC_CAST_OPCODE: u16 = 0x7e41;
 /// `OP_BeginCast`: a cast beginning, sent to everyone nearby.
 pub const EQMAC_BEGIN_OPCODE: u16 = 0xa940;
 /// `OP_InterruptCast`: the player's own cast stopping, sent to them alone.
@@ -25,6 +28,16 @@ pub const EQMAC_BOOK_SLOTS: usize = 256;
 /// slot at 1846 (`common/patches/mac_structs.h` `PlayerProfile_Struct`
 /// `spell_book`).
 const PROFILE_BOOK: std::ops::Range<usize> = 1846..1846 + EQMAC_BOOK_SLOTS * 2;
+
+/// The casting slot of an item's click effect (TAKP `CastingSlot::Item`).
+const ITEM_CAST: u16 = 10;
+/// The item slot of a cast from a gem: none.
+const NO_ITEM: u16 = u16::MAX;
+/// The item slots TAKP casts click effects from: the worn ones, which on the
+/// Mac client have no charm slot, and the general ones. It casts nothing in
+/// a bag (`common/patches/mac_limits.h` `AllowClickCastFromBag`,
+/// `InventoryProfile::SupportsClickCasting`).
+const CLICKABLE: std::ops::RangeInclusive<u16> = 1..=29;
 
 /// The message TAKP's discipline command sends through `OP_InterruptCast` to
 /// say a discipline can be used again (`Client::Handle_OP_Discipline`); it
@@ -55,6 +68,55 @@ impl SpellBook {
                 .collect(),
         })
     }
+}
+
+/// `EQMac`'s cast of a memorized gem's spell at a target.
+///
+/// # Errors
+/// Refuses a gem past the eighth, a spell 16 bits cannot carry, and no
+/// target.
+pub fn eqmac_cast(gem: u8, spell_id: u32, target_id: u16) -> Result<EncodedCommand> {
+    ensure!(gem < 8, "invalid spell gem");
+    cast(u16::from(gem), spell_id, NO_ITEM, target_id)
+}
+
+/// `EQMac`'s cast of an item's click effect at a target, already checked
+/// against the item.
+///
+/// # Errors
+/// Refuses an item outside the worn and general slots, a spell 16 bits
+/// cannot carry, and no target.
+pub fn eqmac_item_cast(
+    spell_id: u32,
+    slot: InventorySlot,
+    target_id: u16,
+) -> Result<EncodedCommand> {
+    let item = u16::try_from(slot.0)
+        .ok()
+        .filter(|slot| CLICKABLE.contains(slot))
+        .context("TAKP casts items only from worn and general slots")?;
+    cast(ITEM_CAST, spell_id, item, target_id)
+}
+
+/// TAKP's `CastSpell_Struct` (12 bytes, packed): the casting slot, the
+/// spell, the item's slot and the target as 16 bits each, then a CRC TAKP
+/// never reads (`Client::Handle_OP_CastSpell`), sent as 0: the official
+/// client's is unrecorded.
+fn cast(slot: u16, spell_id: u32, item: u16, target_id: u16) -> Result<EncodedCommand> {
+    let spell = u16::try_from(spell_id)
+        .ok()
+        .filter(|spell| !matches!(*spell, 0 | u16::MAX))
+        .context("invalid EQMac spell")?;
+    ensure!(target_id != 0, "a cast needs a target");
+    let mut body = Vec::with_capacity(12);
+    for value in [slot, spell, item, target_id] {
+        body.extend_from_slice(&value.to_le_bytes());
+    }
+    body.extend_from_slice(&0u32.to_le_bytes());
+    Ok(EncodedCommand {
+        opcode: EQMAC_CAST_OPCODE,
+        body,
+    })
 }
 
 /// Decodes `EQMac`'s spell notices; other opcodes give none.
@@ -209,6 +271,29 @@ mod tests {
                 })
             );
         }
+    }
+
+    #[test]
+    fn a_cast_names_its_gem_or_item_slot_in_sixteen_bit_fields() {
+        assert_eq!(
+            eqmac_cast(7, 42, 9).unwrap().body,
+            [7, 0, 42, 0, 255, 255, 9, 0, 0, 0, 0, 0]
+        );
+        // An item's click: casting slot 10 and the item's own slot, which
+        // TAKP numbers as Titanium does for worn and general slots.
+        let item = eqmac_item_cast(73, InventorySlot(23), 9).unwrap();
+        assert_eq!(item.opcode, EQMAC_CAST_OPCODE);
+        assert_eq!(item.body, [10, 0, 73, 0, 23, 0, 9, 0, 0, 0, 0, 0]);
+        assert!(eqmac_item_cast(73, InventorySlot(1), 9).is_ok());
+        // No charm slot, cursor or bag.
+        for slot in [0, 30, 251, 262] {
+            assert!(eqmac_item_cast(73, InventorySlot(slot), 9).is_err());
+        }
+        assert!(eqmac_cast(8, 42, 9).is_err());
+        for spell in [0, 0xffff, 0x1_0000] {
+            assert!(eqmac_cast(0, spell, 9).is_err());
+        }
+        assert!(eqmac_cast(0, 42, 0).is_err());
     }
 
     #[test]

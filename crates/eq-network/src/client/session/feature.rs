@@ -525,8 +525,17 @@ pub(super) mod testing {
         pub(in crate::client::session) heard: Vec<std::time::Instant>,
     }
 
-    /// Runs one step of a feature with an `Out` that records.
+    /// Runs one step of a feature with an `Out` that records, on the
+    /// Titanium wire.
     pub(in crate::client::session) fn run<R>(
+        step: impl FnOnce(&mut Out<'_, '_>) -> R,
+    ) -> Outcome<R> {
+        run_on(&super::super::wire::Titanium, step)
+    }
+
+    /// Runs one step of a feature with an `Out` that records, on `wire`.
+    pub(in crate::client::session) fn run_on<R>(
+        wire: &'static dyn super::super::wire::Wire,
         step: impl FnOnce(&mut Out<'_, '_>) -> R,
     ) -> Outcome<R> {
         let config = ClientConfig::new(
@@ -546,7 +555,7 @@ pub(super) mod testing {
         let result = step(&mut Out {
             sink: &mut sink,
             log: &mut log,
-            wire: &super::super::wire::Titanium,
+            wire,
             // Every test admits the player as spawn 7 named Tester.
             sender: eq_network_game::request::Sender {
                 name: "Tester",

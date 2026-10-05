@@ -384,8 +384,9 @@ pub fn titanium(request: &Request, sender: Sender<'_>) -> Result<EncodedCommand>
 }
 
 /// The `EQMac` client's packet for a request from this sender: camping,
-/// logging out, its stance and position, the world's damage, and the host
-/// commands its generation encodes so far, which is chat.
+/// logging out, its stance and position, the world's damage, an item's
+/// click, and the host commands its generation encodes so far: chat and
+/// casting from a gem.
 ///
 /// # Errors
 /// Refuses every other request, and a command the generation cannot carry.
@@ -408,6 +409,11 @@ pub fn eqmac(request: &Request, sender: Sender<'_>) -> Result<EncodedCommand> {
         } => crate::quarm::zone_change(sender.name, *zone_id, *reason),
         Request::SaveOnZone => Ok(crate::quarm::save_on_zone()),
         Request::Depart => Ok(crate::quarm::depart(sender.spawn())),
+        Request::CastItem {
+            spell_id,
+            slot,
+            target_id,
+        } => spells::eqmac_item_cast(*spell_id, *slot, *target_id),
         _ => anyhow::bail!("the EQMac client cannot send {request:?} yet"),
     }
 }

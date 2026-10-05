@@ -827,7 +827,10 @@ pub struct EncodedCommand {
     pub body: Vec<u8>,
 }
 
-/// `OP_CastSpell`: a memorized gem's spell at a target.
+/// `OP_CastSpell`: a memorized gem's spell at a target. Titanium's is five
+/// 32-bit words: the gem, the spell, no item, the target and 0.
+/// `EQMac`'s is TAKP's packed `CastSpell_Struct`
+/// ([`crate::spells::eqmac_cast`]).
 fn encode_cast(
     dialect: GameDialect,
     gem: u8,
@@ -835,21 +838,22 @@ fn encode_cast(
     target_id: u16,
 ) -> Result<EncodedCommand> {
     anyhow::ensure!(
-        dialect == GameDialect::Titanium,
-        "casting is not implemented for this dialect"
-    );
-    anyhow::ensure!(
         gem < 8 && spell_id != 0 && spell_id != u32::MAX && target_id != 0,
         "invalid spell cast"
     );
-    let mut body = Vec::with_capacity(20);
-    for value in [u32::from(gem), spell_id, u32::MAX, u32::from(target_id), 0] {
-        body.extend_from_slice(&value.to_le_bytes());
+    match dialect {
+        GameDialect::Titanium => {
+            let mut body = Vec::with_capacity(20);
+            for value in [u32::from(gem), spell_id, u32::MAX, u32::from(target_id), 0] {
+                body.extend_from_slice(&value.to_le_bytes());
+            }
+            Ok(EncodedCommand {
+                opcode: 0x304b,
+                body,
+            })
+        }
+        GameDialect::EqMac => crate::spells::eqmac_cast(gem, spell_id, target_id),
     }
-    Ok(EncodedCommand {
-        opcode: 0x304b,
-        body,
-    })
 }
 
 /// Encode a typed client action for one game dialect.
@@ -1142,11 +1146,16 @@ mod tests {
         assert_eq!(packet.body.len(), 20);
         assert_eq!(&packet.body[8..12], &[255; 4]);
         assert_eq!(&packet.body[16..], &[0; 4]);
-        assert!(encode(GameDialect::EqMac, &cast, "Example").is_err());
+        // EQMac's: the gem, the spell, no item and the target in 16 bits,
+        // then a CRC of 0.
+        let packet = encode(GameDialect::EqMac, &cast, "Example").unwrap();
+        assert_eq!(packet.opcode, 0x7e41);
+        assert_eq!(packet.body, [2, 0, 42, 0, 255, 255, 19, 0, 0, 0, 0, 0]);
         if let GameCommand::CastSpell { gem, .. } = &mut cast {
             *gem = 8;
         }
         assert!(encode(GameDialect::Titanium, &cast, "Example").is_err());
+        assert!(encode(GameDialect::EqMac, &cast, "Example").is_err());
     }
 
     #[test]
