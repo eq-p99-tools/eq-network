@@ -19,6 +19,13 @@ pub const WEAR_CHANGE_OPCODE: u16 = 0x7441;
 pub const STATES_ADDED_OPCODE: u16 = 0x63da;
 /// `OP_PlayerStateRemove`: a spawn left states (Titanium).
 pub const STATES_REMOVED_OPCODE: u16 = 0x381d;
+/// `OP_Illusion`: a spawn took on another look, or its own again
+/// (Titanium).
+pub const ILLUSION_OPCODE: u16 = 0x448d;
+/// `OP_Illusion` on the `EQMac` wire.
+pub const EQMAC_ILLUSION_OPCODE: u16 = 0x9140;
+/// `OP_FaceChange`: someone's face changed (`EQMac`).
+pub const EQMAC_FACE_CHANGE_OPCODE: u16 = 0x2542;
 
 /// EQ's texture slots, in the order servers send them.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
@@ -183,6 +190,27 @@ impl SpawnStates {
 }
 
 impl Appearance {
+    /// The face and hair.
+    #[must_use]
+    pub const fn features(&self) -> Features {
+        Features {
+            face: self.face,
+            hair_style: self.hair_style,
+            hair_color: self.hair_color,
+            beard: self.beard,
+            beard_color: self.beard_color,
+        }
+    }
+
+    /// Takes on a face and hair.
+    pub const fn set_features(&mut self, features: Features) {
+        self.face = features.face;
+        self.hair_style = features.hair_style;
+        self.hair_color = features.hair_color;
+        self.beard = features.beard;
+        self.beard_color = features.beard_color;
+    }
+
     /// The material or held model number in one slot.
     #[must_use]
     pub const fn material(&self, slot: TextureSlot) -> u32 {
@@ -201,9 +229,10 @@ impl Appearance {
         self.tints[change.slot.index()] = change.tint;
     }
 
-    /// Keeps what an appearance update changes here; the size is the
-    /// spawn's, and kind 0, an area's regeneration and the kinds no server
-    /// sends on its own change nothing.
+    /// Keeps what an appearance update changes here: an illusion's face
+    /// and hair among it, while the size, race and gender are the spawn's.
+    /// Kind 0, an area's regeneration and the kinds no server sends on its
+    /// own change nothing.
     pub fn apply_update(&mut self, change: &AppearanceChange) {
         match *change {
             AppearanceChange::Pvp(on) => self.pvp = on,
@@ -217,6 +246,7 @@ impl Appearance {
             AppearanceChange::DamageState(state) => self.damage_state = state,
             AppearanceChange::StatesAdded(states) => self.states = self.states.with(states),
             AppearanceChange::StatesRemoved(states) => self.states = self.states.without(states),
+            AppearanceChange::Illusion(illusion) => self.set_features(illusion.features),
             AppearanceChange::Died(_)
             | AppearanceChange::Size(_)
             | AppearanceChange::AreaRegeneration { .. }
@@ -367,6 +397,40 @@ pub enum Pool {
     Endurance,
 }
 
+/// A face and hair, as [`Appearance`] holds them.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize)]
+pub struct Features {
+    /// Face texture.
+    pub face: u8,
+    /// Hair style.
+    pub hair_style: u8,
+    /// Hair color.
+    pub hair_color: u8,
+    /// Beard style.
+    pub beard: u8,
+    /// Beard color.
+    pub beard_color: u8,
+}
+
+/// A spawn taking on another look, or its own again, as an illusion spell
+/// lands or fades or a game master or quest changes its race, gender or
+/// texture.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
+pub struct Illusion {
+    /// The race whose model the spawn takes.
+    pub race: u32,
+    /// The model's gender.
+    pub gender: u8,
+    /// The body texture; None for a player race, whose gear shows.
+    pub texture: Option<u8>,
+    /// The helm texture; None for a player race, whose gear shows.
+    pub helm_texture: Option<u8>,
+    /// The size; 0 for the race's own, as `EQMac`'s record sends it.
+    pub size: f32,
+    /// The face and hair.
+    pub features: Features,
+}
+
 /// A change in how a spawn shows, from an appearance update of a kind the
 /// listing, visibility, posture and pet events leave out.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize)]
@@ -414,6 +478,9 @@ pub enum AppearanceChange {
     /// States the spawn left, from Titanium's `OP_PlayerStateRemove`, sent
     /// the same way.
     StatesRemoved(SpawnStates),
+    /// Another look, or the spawn's own again, from `OP_Illusion`, which
+    /// every server sends the zone, the spawn's own player included.
+    Illusion(Illusion),
     /// A kind no server sends on its own, kept as a game master's
     /// `#appearance` sends it; most are the client's own reports and
     /// settings.
@@ -514,7 +581,118 @@ pub(crate) fn titanium(opcode: u16, body: &[u8]) -> Result<Option<WorldEvent>> {
         crate::listing::APPEARANCE_OPCODE => update(body)?,
         WEAR_CHANGE_OPCODE => Some(WorldEvent::WearChange(titanium_wear_change(body)?)),
         STATES_ADDED_OPCODE | STATES_REMOVED_OPCODE => Some(titanium_states(opcode, body)?),
+        ILLUSION_OPCODE => Some(titanium_illusion(body)?),
         _ => None,
+    })
+}
+
+/// A texture, unless 0xff, with which the servers leave a player race's
+/// gear to show.
+fn texture(byte: u8) -> Option<u8> {
+    (byte != u8::MAX).then_some(byte)
+}
+
+/// Decodes Titanium's `OP_Illusion` (168 bytes): the spawn in 32 bits, its
+/// name at 4, the race at 68, gender, texture and helm texture at 72 to 74,
+/// the face in 32 bits at 76, hair and beard at 80 to 83 and the size at 84.
+/// `EQEmu`'s Titanium encoder sends a face change (`OP_SetFace`) as one of
+/// race -1, which reads as [`WorldEvent::FaceChanged`].
+///
+/// # Errors
+/// Rejects a wrong length, a spawn ID that is zero or past 16 bits, another
+/// negative race, a face past 255 and a size that is negative or not a
+/// number.
+pub(crate) fn titanium_illusion(body: &[u8]) -> Result<WorldEvent> {
+    ensure!(body.len() == 168, "invalid illusion length");
+    let word = |at: usize| u32::from_le_bytes([body[at], body[at + 1], body[at + 2], body[at + 3]]);
+    let spawn_id = u16::try_from(word(0)).context("illusion spawn ID out of range")?;
+    ensure!(spawn_id != 0, "illusion without a spawn");
+    let features = Features {
+        face: u8::try_from(word(76)).context("illusion face out of range")?,
+        hair_style: body[80],
+        hair_color: body[81],
+        beard: body[82],
+        beard_color: body[83],
+    };
+    let race = word(68).cast_signed();
+    if race == -1 {
+        return Ok(WorldEvent::FaceChanged {
+            spawn_id: Some(spawn_id),
+            features,
+            eye_colors: None,
+        });
+    }
+    let size = f32::from_bits(word(84));
+    ensure!(size.is_finite() && size >= 0.0, "invalid illusion size");
+    Ok(WorldEvent::Appearance {
+        spawn_id,
+        change: AppearanceChange::Illusion(Illusion {
+            race: u32::try_from(race).context("invalid illusion race")?,
+            gender: body[72],
+            texture: texture(body[73]),
+            helm_texture: texture(body[74]),
+            size,
+            features,
+        }),
+    })
+}
+
+/// Decodes `EQMac`'s `OP_Illusion` (20 bytes): the spawn, the race,
+/// gender, texture and helm texture, the face, hair and beard, and the size
+/// in whole units at 16, -1 for the race's own (TAKP and Quarm
+/// `Mob::SendIllusionPacket`).
+///
+/// # Errors
+/// Rejects a wrong length, a zero spawn ID, a negative race, a face past
+/// 255 and a size below -1 or past 16 bits.
+pub(crate) fn eqmac_illusion(body: &[u8]) -> Result<WorldEvent> {
+    ensure!(body.len() == 20, "invalid EQMac illusion length");
+    let spawn_id = u16::from_le_bytes([body[0], body[1]]);
+    ensure!(spawn_id != 0, "illusion without a spawn");
+    let size = match i32::from_le_bytes([body[16], body[17], body[18], body[19]]) {
+        -1 => 0.0,
+        size => f32::from(u16::try_from(size).context("invalid illusion size")?),
+    };
+    Ok(WorldEvent::Appearance {
+        spawn_id,
+        change: AppearanceChange::Illusion(Illusion {
+            race: u32::try_from(i16::from_le_bytes([body[2], body[3]]))
+                .context("invalid illusion race")?,
+            gender: body[4],
+            texture: texture(body[5]),
+            helm_texture: texture(body[6]),
+            size,
+            features: Features {
+                face: u8::try_from(i16::from_le_bytes([body[8], body[9]]))
+                    .context("illusion face out of range")?,
+                hair_style: body[10],
+                hair_color: body[11],
+                beard: body[12],
+                beard_color: body[13],
+            },
+        }),
+    })
+}
+
+/// Decodes `EQMac`'s `OP_FaceChange` (7 bytes): hair and beard colors, two
+/// eye colors, hair style, beard and face. TAKP and Quarm relay a player's
+/// own face change to the whole zone, that player included, and the record
+/// names no one.
+///
+/// # Errors
+/// Rejects a wrong length.
+pub(crate) fn eqmac_face_change(body: &[u8]) -> Result<WorldEvent> {
+    ensure!(body.len() == 7, "invalid EQMac face change length");
+    Ok(WorldEvent::FaceChanged {
+        spawn_id: None,
+        features: Features {
+            face: body[6],
+            hair_style: body[4],
+            hair_color: body[0],
+            beard: body[5],
+            beard_color: body[1],
+        },
+        eye_colors: Some([body[2], body[3]]),
     })
 }
 
@@ -799,6 +977,137 @@ mod tests {
                 change: ListingChange::GuildRank(GuildRank::Leader)
             })
         );
+    }
+
+    #[test]
+    fn titanium_illusions_change_the_look_and_race_minus_one_the_face() {
+        let mut body = vec![0u8; 168];
+        body[..4].copy_from_slice(&73u32.to_le_bytes());
+        body[4..9].copy_from_slice(b"Synth");
+        body[68..72].copy_from_slice(&60i32.to_le_bytes());
+        body[72] = 1;
+        body[73] = 2;
+        body[74] = 0xff;
+        body[76..80].copy_from_slice(&3u32.to_le_bytes());
+        body[80..84].copy_from_slice(&[4, 5, 6, 7]);
+        body[84..88].copy_from_slice(&5.5f32.to_le_bytes());
+        let features = Features {
+            face: 3,
+            hair_style: 4,
+            hair_color: 5,
+            beard: 6,
+            beard_color: 7,
+        };
+        assert_eq!(
+            crate::world::titanium_update(ILLUSION_OPCODE, &body).unwrap(),
+            Some(WorldEvent::Appearance {
+                spawn_id: 73,
+                change: AppearanceChange::Illusion(Illusion {
+                    race: 60,
+                    gender: 1,
+                    texture: Some(2),
+                    helm_texture: None,
+                    size: 5.5,
+                    features,
+                })
+            })
+        );
+        // `EQEmu`'s face change: race -1, the rest 0xff and size 0.
+        let mut face = body.clone();
+        face[4..68].fill(0);
+        face[68..72].copy_from_slice(&(-1i32).to_le_bytes());
+        face[72..75].fill(0xff);
+        face[84..88].fill(0);
+        assert_eq!(
+            titanium_illusion(&face).unwrap(),
+            WorldEvent::FaceChanged {
+                spawn_id: Some(73),
+                features,
+                eye_colors: None
+            }
+        );
+        let broken = |at: std::ops::Range<usize>, bytes: &[u8]| {
+            let mut broken = body.clone();
+            broken[at].copy_from_slice(bytes);
+            titanium_illusion(&broken).is_err()
+        };
+        assert!(broken(0..4, &0u32.to_le_bytes()));
+        assert!(broken(0..4, &70_000u32.to_le_bytes()));
+        assert!(broken(68..72, &(-2i32).to_le_bytes()));
+        assert!(broken(76..80, &256u32.to_le_bytes()));
+        assert!(broken(84..88, &(-1.0f32).to_le_bytes()));
+        assert!(broken(84..88, &f32::NAN.to_le_bytes()));
+        assert!(titanium_illusion(&body[..167]).is_err());
+    }
+
+    #[test]
+    fn eqmac_illusions_size_by_the_race_at_minus_one_and_face_changes_name_no_one() {
+        let mut body = [0u8; 20];
+        body[..2].copy_from_slice(&73u16.to_le_bytes());
+        body[2..4].copy_from_slice(&75i16.to_le_bytes());
+        body[4] = 2;
+        body[5] = 0xff;
+        body[6] = 0xff;
+        body[7] = 0xff;
+        body[8..10].copy_from_slice(&1i16.to_le_bytes());
+        body[10..14].copy_from_slice(&[2, 3, 4, 5]);
+        body[16..20].copy_from_slice(&(-1i32).to_le_bytes());
+        let illusion = |size| {
+            vec![WorldEvent::Appearance {
+                spawn_id: 73,
+                change: AppearanceChange::Illusion(Illusion {
+                    race: 75,
+                    gender: 2,
+                    texture: None,
+                    helm_texture: None,
+                    size,
+                    features: Features {
+                        face: 1,
+                        hair_style: 2,
+                        hair_color: 3,
+                        beard: 4,
+                        beard_color: 5,
+                    },
+                }),
+            }]
+        };
+        assert_eq!(
+            crate::quarm::updates(EQMAC_ILLUSION_OPCODE, &body).unwrap(),
+            illusion(0.0)
+        );
+        body[16..20].copy_from_slice(&12i32.to_le_bytes());
+        assert_eq!(
+            crate::quarm::updates(EQMAC_ILLUSION_OPCODE, &body).unwrap(),
+            illusion(12.0)
+        );
+        for (at, bytes) in [
+            (0, 0i16.to_le_bytes()),
+            (2, (-1i16).to_le_bytes()),
+            (8, 256i16.to_le_bytes()),
+        ] {
+            let mut broken = body;
+            broken[at..at + 2].copy_from_slice(&bytes);
+            assert!(eqmac_illusion(&broken).is_err(), "{at}");
+        }
+        let mut broken = body;
+        broken[16..20].copy_from_slice(&(-2i32).to_le_bytes());
+        assert!(eqmac_illusion(&broken).is_err());
+        assert!(eqmac_illusion(&body[..19]).is_err());
+        assert_eq!(
+            crate::quarm::updates(EQMAC_FACE_CHANGE_OPCODE, &[1, 2, 3, 4, 5, 6, 7]).unwrap(),
+            [WorldEvent::FaceChanged {
+                spawn_id: None,
+                features: Features {
+                    face: 7,
+                    hair_style: 5,
+                    hair_color: 1,
+                    beard: 6,
+                    beard_color: 2,
+                },
+                eye_colors: Some([3, 4]),
+            }]
+        );
+        assert!(eqmac_face_change(&[0; 8]).is_err());
     }
 
     #[test]

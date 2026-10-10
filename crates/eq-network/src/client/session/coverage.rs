@@ -253,6 +253,22 @@ const EQMAC_PROFILE: &[Part] = &[
         Reason::Planned(Step::AlternateAdvancement),
     ),
 ];
+/// What the session leaves unread of Titanium's illusion.
+const ILLUSION: &[Part] = &[
+    Part(
+        "the spawn's name",
+        Reason::Needless("the spawn ID names it, and a face change leaves it empty"),
+    ),
+    Part(
+        "the byte after the textures and the last 80 bytes",
+        Reason::Needless("EQEmu's Titanium encoder leaves them zero"),
+    ),
+];
+/// What the session leaves unread of `EQMac`'s illusion.
+const EQMAC_ILLUSION: &[Part] = &[Part(
+    "the byte after the textures and the two after the beard",
+    Reason::Needless("TAKP and Quarm always send 0xff, then zeros"),
+)];
 /// What the session leaves unread of `EQMac`'s word that the server took or
 /// gave back the player's control.
 const OWN_NAME: &[Part] = &[Part(

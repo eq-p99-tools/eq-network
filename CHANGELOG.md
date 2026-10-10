@@ -191,6 +191,18 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `AppearanceChange::StatesAdded` and `StatesRemoved`. `EQEmu` sends them
   to the zone as a stun lands and ends, as an NPC turns aggressive or
   takes up a looted weapon, and as another player says theirs changed.
+- Illusions and face changes, on both generations: a spawn taking on
+  another look, or its own again, as `AppearanceChange::Illusion`
+  (`appearance::Illusion`: the race, gender, body and helm textures, none
+  for a player race, whose gear shows, the size, 0 for the race's own,
+  and the face and hair as `appearance::Features`), from `OP_Illusion`;
+  and a face or hair change as `WorldEvent::FaceChanged`, from `EQEmu`'s
+  illusion of race -1 on Titanium, which names the spawn, and `EQMac`'s
+  `OP_FaceChange`, which TAKP and Quarm relay from a player to the whole
+  zone and which names no one but has both eyes' colors. The session's
+  spawn table takes an illusion's race, gender, size, face and hair, and a
+  named face change's face and hair. Hosts that match `WorldEvent`
+  exhaustively need an arm for `FaceChanged`.
 
 - A quest's word on the player's base stats, on Titanium:
   `WorldEvent::StatsChanged` (`stats::StatChange`: each stat by name, 0
@@ -344,8 +356,8 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   types that send it and the parts of the session that read it, or why it
   is left unread (work still to come, an answer to a request eq-network
   never sends, parked work, or nothing in it worth reading), taken from
-  `EQEmu`'s, TAKP's and Quarm's sources: Titanium's 258 messages, 125 of
-  them read, and `EQMac`'s 177, 89 read. A zone session now tells once, as
+  `EQEmu`'s, TAKP's and Quarm's sources: Titanium's 258 messages, 126 of
+  them read, and `EQMac`'s 177, 91 read. A zone session now tells once, as
   a diagnostic, of each message it leaves unread with the reason (but one
   with nothing worth reading) and of each the table does not list, where
   before a message nothing read left no trace once the zone admitted the

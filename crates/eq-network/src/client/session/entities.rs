@@ -78,6 +78,15 @@ impl Spawns {
                     spawn.apply_appearance(change);
                 }
             }
+            WorldEvent::FaceChanged {
+                spawn_id: Some(spawn_id),
+                features,
+                ..
+            } => {
+                if let Some(spawn) = self.0.get_mut(spawn_id) {
+                    spawn.appearance.set_features(*features);
+                }
+            }
             WorldEvent::Listing { spawn_id, change } => {
                 if let Some(spawn) = self.0.get_mut(spawn_id) {
                     spawn.apply_listing(*change);
@@ -347,6 +356,61 @@ mod tests {
             (12, Some(3), Some(GuildRank::Officer))
         );
         assert!(world.spawns.visible(9).is_none());
+    }
+
+    #[test]
+    fn illusions_and_named_face_changes_change_the_table() {
+        use eq_network_game::appearance::{AppearanceChange, Features, Illusion};
+        let mut entities = Entities::default();
+        let mut world = World::new(5);
+        let spawns = vec![spawn(7, SpawnKind::Player), spawn(8, SpawnKind::Player)];
+        entities
+            .admit(&event(WorldEvent::Spawns(spawns)), &mut world)
+            .unwrap();
+        let features = |face| Features {
+            face,
+            ..Features::default()
+        };
+        let updates = [
+            WorldEvent::Appearance {
+                spawn_id: 7,
+                change: AppearanceChange::Illusion(Illusion {
+                    race: 60,
+                    gender: 2,
+                    texture: None,
+                    helm_texture: None,
+                    size: 6.0,
+                    features: features(1),
+                }),
+            },
+            WorldEvent::FaceChanged {
+                spawn_id: Some(8),
+                features: features(3),
+                eye_colors: None,
+            },
+            // A face change that names no one changes no one.
+            WorldEvent::FaceChanged {
+                spawn_id: None,
+                features: features(5),
+                eye_colors: Some([1, 1]),
+            },
+        ];
+        for update in updates {
+            testing::run(|out| entities.observe(&event(update), &mut world, out))
+                .result
+                .unwrap();
+        }
+        let illusioned = world.spawns.visible(7).unwrap();
+        assert_eq!(
+            (
+                illusioned.race,
+                illusioned.gender,
+                illusioned.size,
+                illusioned.appearance.face
+            ),
+            (60, 2, 6.0, 1)
+        );
+        assert_eq!(world.spawns.visible(8).unwrap().appearance.face, 3);
     }
 
     #[test]

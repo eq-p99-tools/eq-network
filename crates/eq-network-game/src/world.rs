@@ -266,14 +266,20 @@ pub struct SpawnState {
 }
 
 impl SpawnState {
-    /// Keeps what an appearance update changes: the size here, the rest in
+    /// Keeps what an appearance update changes: the size here, and an
+    /// illusion's race, gender and size, the rest in
     /// [`SpawnState::appearance`].
     pub fn apply_appearance(&mut self, change: &crate::appearance::AppearanceChange) {
-        if let crate::appearance::AppearanceChange::Size(size) = *change {
-            self.size = size;
-        } else {
-            self.appearance.apply_update(change);
+        match *change {
+            crate::appearance::AppearanceChange::Size(size) => self.size = size,
+            crate::appearance::AppearanceChange::Illusion(illusion) => {
+                self.race = illusion.race;
+                self.gender = u32::from(illusion.gender);
+                self.size = illusion.size;
+            }
+            _ => (),
         }
+        self.appearance.apply_update(change);
     }
 
     /// Keeps a change in how `/who` lists the spawn: the level here, the
@@ -784,6 +790,17 @@ pub enum WorldEvent {
         spawn_id: u16,
         /// What changed.
         change: crate::appearance::AppearanceChange,
+    },
+    /// A spawn's face or hair changed: on Titanium, named, as `EQEmu` sends
+    /// a face change as an illusion of race -1; on `EQMac`, unnamed, as TAKP
+    /// and Quarm relay a player's own change to the whole zone.
+    FaceChanged {
+        /// Whose face it is, where the record names them.
+        spawn_id: Option<u16>,
+        /// The face and hair.
+        features: crate::appearance::Features,
+        /// Both eyes' colors, where the record has them (`EQMac`).
+        eye_colors: Option<[u8; 2]>,
     },
     /// A change in how `/who` lists a player.
     Listing {
