@@ -1348,7 +1348,6 @@ pub fn titanium_update(opcode: u16, body: &[u8]) -> Result<Option<WorldEvent>> {
     }
     Ok(Some(match opcode {
         0x6a53 => WorldEvent::Buff(crate::buffs::titanium_update(body)?),
-        0x7c32 => return crate::appearance::update(body),
         0x6d44 => {
             ensure!(body.len() == 12, "invalid level update length");
             let current = u8::try_from(word(body, 0))?;
@@ -1414,9 +1413,6 @@ pub fn titanium_update(opcode: u16, body: &[u8]) -> Result<Option<WorldEvent>> {
         }
         0x14cb => titanium_position(body)?,
         0x3a2b => p99_compact_position(body)?,
-        crate::appearance::WEAR_CHANGE_OPCODE => {
-            WorldEvent::WearChange(crate::appearance::titanium_wear_change(body)?)
-        }
         0x3bcf => {
             ensure!(body.len() == 10, "invalid hit-point update length");
             // Both fields are signed: the server sends only the player's own HP,
@@ -1448,12 +1444,12 @@ pub fn titanium_update(opcode: u16, body: &[u8]) -> Result<Option<WorldEvent>> {
     }))
 }
 
-/// Stuns and charms, the end of hiding, a quest's word on the player's
-/// stats, disciplines and reuse timers, the target the server sets,
-/// rewards, sacrifices and translocates, a player becoming a corpse, doors,
-/// ground objects, loot, merchant, exchange, training, resurrection, group,
-/// dice, assist, raid, book, combine, bandaging, chat server, weather and
-/// inventory packets, each owned by its codec.
+/// How spawns look, stuns and charms, the end of hiding, a quest's word on
+/// the player's stats, disciplines and reuse timers, the target the server
+/// sets, rewards, sacrifices and translocates, a player becoming a corpse,
+/// doors, ground objects, loot, merchant, exchange, training, resurrection,
+/// group, dice, assist, raid, book, combine, bandaging, chat server, weather
+/// and inventory packets, each owned by its codec.
 fn titanium_views(opcode: u16, body: &[u8]) -> Result<Option<WorldEvent>> {
     match opcode {
         crate::rewards::SOUND_OPCODE => {
@@ -1509,7 +1505,9 @@ fn titanium_views(opcode: u16, body: &[u8]) -> Result<Option<WorldEvent>> {
         _ => (),
     }
     Ok(
-        if let Some(event) = crate::disciplines::titanium(opcode, body)? {
+        if let Some(event) = crate::appearance::titanium(opcode, body)? {
+            Some(event)
+        } else if let Some(event) = crate::disciplines::titanium(opcode, body)? {
             Some(event)
         } else if let Some(update) = crate::doors::decode(opcode, body)? {
             Some(WorldEvent::Doors(update))

@@ -183,6 +183,14 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `EQMac`'s record marks every NPC link-dead and never marks sneaking, so
   those two come from updates alone. Hosts that build `Appearance` without
   `..Appearance::default()` need the fields.
+- What a spawn holds or suffers that shapes how it stands and moves, on
+  Titanium: `Appearance::states`, a set of `EQEmu`'s bits
+  (`appearance::SpawnStates`: a weapon in either hand, an instrument,
+  sheathed, aggressive, stunned), from the spawn record and from
+  `OP_PlayerStateAdd` and `OP_PlayerStateRemove`, read as
+  `AppearanceChange::StatesAdded` and `StatesRemoved`. `EQEmu` sends them
+  to the zone as a stun lands and ends, as an NPC turns aggressive or
+  takes up a looted weapon, and as another player says theirs changed.
 
 - A quest's word on the player's base stats, on Titanium:
   `WorldEvent::StatsChanged` (`stats::StatChange`: each stat by name, 0
@@ -336,7 +344,7 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   types that send it and the parts of the session that read it, or why it
   is left unread (work still to come, an answer to a request eq-network
   never sends, parked work, or nothing in it worth reading), taken from
-  `EQEmu`'s, TAKP's and Quarm's sources: Titanium's 258 messages, 123 of
+  `EQEmu`'s, TAKP's and Quarm's sources: Titanium's 258 messages, 125 of
   them read, and `EQMac`'s 177, 89 read. A zone session now tells once, as
   a diagnostic, of each message it leaves unread with the reason (but one
   with nothing worth reading) and of each the table does not list, where

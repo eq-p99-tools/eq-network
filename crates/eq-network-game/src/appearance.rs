@@ -15,6 +15,10 @@ use serde::Serialize;
 
 /// `OP_WearChange`: one texture slot of a spawn changed.
 pub const WEAR_CHANGE_OPCODE: u16 = 0x7441;
+/// `OP_PlayerStateAdd`: a spawn took on states (Titanium).
+pub const STATES_ADDED_OPCODE: u16 = 0x63da;
+/// `OP_PlayerStateRemove`: a spawn left states (Titanium).
+pub const STATES_REMOVED_OPCODE: u16 = 0x381d;
 
 /// EQ's texture slots, in the order servers send them.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
@@ -118,6 +122,64 @@ pub struct Appearance {
     /// How damaged a destructible NPC shows, from updates alone; 0 until one
     /// comes, as for an unharmed one.
     pub damage_state: u8,
+    /// What the spawn holds or suffers that shapes how it stands and moves,
+    /// from Titanium's record and updates.
+    pub states: SpawnStates,
+}
+
+/// What a spawn holds or suffers that shapes how it stands and moves: a set
+/// of the servers' bits (`EQEmu`'s `PlayerState`, `zone/common.h`), which
+/// name players but come for NPCs too.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize)]
+pub struct SpawnStates(u32);
+
+impl SpawnStates {
+    /// 1, which `EQEmu` names open.
+    pub const OPEN: Self = Self(1);
+    /// 2, a weapon sheathed.
+    pub const WEAPON_SHEATHED: Self = Self(2);
+    /// 4, aggressive, as an NPC turns on someone.
+    pub const AGGRESSIVE: Self = Self(4);
+    /// 8, aggressive by force.
+    pub const FORCED_AGGRESSIVE: Self = Self(8);
+    /// 16, an instrument in hand.
+    pub const INSTRUMENT: Self = Self(16);
+    /// 32, stunned.
+    pub const STUNNED: Self = Self(32);
+    /// 64, a weapon in the primary hand.
+    pub const PRIMARY_WEAPON: Self = Self(64);
+    /// 128, a weapon in the secondary hand.
+    pub const SECONDARY_WEAPON: Self = Self(128);
+
+    /// The set with these bits.
+    #[must_use]
+    pub const fn from_bits(bits: u32) -> Self {
+        Self(bits)
+    }
+
+    /// The set's bits.
+    #[must_use]
+    pub const fn bits(self) -> u32 {
+        self.0
+    }
+
+    /// Whether every state of `other` is in the set.
+    #[must_use]
+    pub const fn contains(self, other: Self) -> bool {
+        self.0 & other.0 == other.0
+    }
+
+    /// The set with `other`'s states too.
+    #[must_use]
+    pub const fn with(self, other: Self) -> Self {
+        Self(self.0 | other.0)
+    }
+
+    /// The set less `other`'s states.
+    #[must_use]
+    pub const fn without(self, other: Self) -> Self {
+        Self(self.0 & !other.0)
+    }
 }
 
 impl Appearance {
@@ -153,6 +215,8 @@ impl Appearance {
             AppearanceChange::NpcTint(tint) => self.npc_tint = tint,
             AppearanceChange::ShowHelm(on) => self.show_helm = on,
             AppearanceChange::DamageState(state) => self.damage_state = state,
+            AppearanceChange::StatesAdded(states) => self.states = self.states.with(states),
+            AppearanceChange::StatesRemoved(states) => self.states = self.states.without(states),
             AppearanceChange::Died(_)
             | AppearanceChange::Size(_)
             | AppearanceChange::AreaRegeneration { .. }
@@ -201,6 +265,7 @@ pub(crate) fn titanium_spawn(record: &[u8]) -> Appearance {
         show_helm: record[139] != 0,
         light: record[330],
         fly_mode: FlyMode::from_wire(u32::from(record[333])),
+        states: SpawnStates(word(152)),
         ..Appearance::default()
     }
 }
@@ -341,6 +406,14 @@ pub enum AppearanceChange {
     /// Kind 44: how damaged a destructible NPC shows; `EQEmu` sends 0 to 4 as
     /// its health falls by quarters.
     DamageState(u8),
+    /// States the spawn took on, from Titanium's `OP_PlayerStateAdd`, which
+    /// `EQEmu` sends the zone, the spawn's own player included, as a stun
+    /// lands, an NPC turns aggressive or takes up a looted weapon, and as
+    /// another player says theirs changed.
+    StatesAdded(SpawnStates),
+    /// States the spawn left, from Titanium's `OP_PlayerStateRemove`, sent
+    /// the same way.
+    StatesRemoved(SpawnStates),
     /// A kind no server sends on its own, kept as a game master's
     /// `#appearance` sends it; most are the client's own reports and
     /// settings.
@@ -431,6 +504,41 @@ pub(crate) fn update(body: &[u8]) -> Result<Option<WorldEvent>> {
     }))
 }
 
+/// What Titanium's messages on how spawns look say: appearance updates,
+/// wear changes and player states; None for other messages.
+///
+/// # Errors
+/// Rejects malformed records of those messages.
+pub(crate) fn titanium(opcode: u16, body: &[u8]) -> Result<Option<WorldEvent>> {
+    Ok(match opcode {
+        crate::listing::APPEARANCE_OPCODE => update(body)?,
+        WEAR_CHANGE_OPCODE => Some(WorldEvent::WearChange(titanium_wear_change(body)?)),
+        STATES_ADDED_OPCODE | STATES_REMOVED_OPCODE => Some(titanium_states(opcode, body)?),
+        _ => None,
+    })
+}
+
+/// Decodes Titanium's `OP_PlayerStateAdd` or `OP_PlayerStateRemove`: the
+/// spawn in 32 bits, then the states (`PlayerState_Struct`).
+///
+/// # Errors
+/// Rejects a wrong length and a spawn ID that is zero or past 16 bits.
+pub(crate) fn titanium_states(opcode: u16, body: &[u8]) -> Result<WorldEvent> {
+    ensure!(body.len() == 8, "invalid player state length");
+    let spawn_id = u16::try_from(u32::from_le_bytes([body[0], body[1], body[2], body[3]]))
+        .context("player state spawn ID out of range")?;
+    ensure!(spawn_id != 0, "player state without a spawn");
+    let states = SpawnStates(u32::from_le_bytes([body[4], body[5], body[6], body[7]]));
+    Ok(WorldEvent::Appearance {
+        spawn_id,
+        change: if opcode == STATES_ADDED_OPCODE {
+            AppearanceChange::StatesAdded(states)
+        } else {
+            AppearanceChange::StatesRemoved(states)
+        },
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -450,6 +558,7 @@ mod tests {
         record[348 + 4..348 + 8].copy_from_slice(&[0x10, 0x20, 0xc0, 0xff]);
         record[330] = 6;
         record[333] = 1;
+        record[152..156].copy_from_slice(&(64u32 | 4).to_le_bytes());
         let look = titanium_spawn(&record);
         assert_eq!(look.material(TextureSlot::Chest), 2);
         assert_eq!(look.material(TextureSlot::Primary), 10);
@@ -467,6 +576,50 @@ mod tests {
         );
         assert!(look.show_helm);
         assert_eq!((look.light, look.fly_mode), (6, FlyMode::Flying));
+        assert_eq!(
+            look.states,
+            SpawnStates::PRIMARY_WEAPON.with(SpawnStates::AGGRESSIVE)
+        );
+    }
+
+    #[test]
+    fn player_states_come_and_go_by_the_bit() {
+        let body = |spawn_id: u32, states: u32| {
+            let mut body = spawn_id.to_le_bytes().to_vec();
+            body.extend_from_slice(&states.to_le_bytes());
+            body
+        };
+        let stunned = SpawnStates::STUNNED;
+        for (opcode, change) in [
+            (STATES_ADDED_OPCODE, AppearanceChange::StatesAdded(stunned)),
+            (
+                STATES_REMOVED_OPCODE,
+                AppearanceChange::StatesRemoved(stunned),
+            ),
+        ] {
+            assert_eq!(
+                crate::world::titanium_update(opcode, &body(73, 32)).unwrap(),
+                Some(WorldEvent::Appearance {
+                    spawn_id: 73,
+                    change
+                })
+            );
+            assert!(titanium_states(opcode, &body(73, 32)[..7]).is_err());
+            assert!(titanium_states(opcode, &body(0, 32)).is_err());
+            assert!(titanium_states(opcode, &body(70_000, 32)).is_err());
+        }
+        let mut look = Appearance::default();
+        let held = SpawnStates::from_bits(64 | 128);
+        look.apply_update(&AppearanceChange::StatesAdded(held));
+        look.apply_update(&AppearanceChange::StatesAdded(stunned));
+        look.apply_update(&AppearanceChange::StatesRemoved(
+            SpawnStates::SECONDARY_WEAPON,
+        ));
+        assert!(look
+            .states
+            .contains(SpawnStates::PRIMARY_WEAPON.with(stunned)));
+        assert!(!look.states.contains(SpawnStates::SECONDARY_WEAPON));
+        assert_eq!(look.states.bits(), 64 | 32);
     }
 
     #[test]
