@@ -2,8 +2,8 @@
 //! reuse timers; and the reuse timers groups of spells share.
 //!
 //! `EQEmu` lists the disciplines a Titanium player knows, by spell, in
-//! `OP_DisciplineUpdate`: once the zone has admitted the player, as it
-//! leaves the profile's own list empty
+//! `OP_DisciplineUpdate`: once the zone has admitted a player who knows
+//! any, as it leaves the profile's own list empty
 //! (`ZoneDatabase::LoadCharacterDisciplines`), and as the list changes, from
 //! a tome, a quest or a GM. It tells of a discipline reuse timer in
 //! `OP_DisciplineTimer` as a discipline starts it, as a quest refuses a

@@ -96,8 +96,8 @@ pub struct PlayerState {
     pub languages: Option<Vec<u8>>,
     /// The disciplines the player knows, by spell ID, in the list's 100
     /// slots, 0 for an empty one, when decoded: Titanium's profile, which
-    /// `EQEmu` leaves empty until its list follows
-    /// ([`WorldEvent::Disciplines`]). The `EQMac` profile lists none.
+    /// `EQEmu` leaves empty until its list follows for a player who knows
+    /// any ([`WorldEvent::Disciplines`]). The `EQMac` profile lists none.
     pub disciplines: Option<Vec<u32>>,
     /// Numeric gender identifier.
     pub gender: u32,
@@ -1175,7 +1175,7 @@ pub enum WorldEvent {
     SkillReady(u32),
     /// The disciplines the player knows, by spell ID, in the list's 100
     /// slots, 0 for an empty one: `EQEmu`'s list once the zone has admitted
-    /// the player and as it changes ([`crate::disciplines`]).
+    /// a player who knows any, and as it changes ([`crate::disciplines`]).
     Disciplines(Vec<u32>),
     /// A discipline reuse timer as the server set it. `EQEmu`'s copies at
     /// zone-in of timers 11 to 19 carry its other reuse timers
