@@ -1031,6 +1031,9 @@ pub enum WorldEvent {
     },
     /// A melee, skill or spell damage record for any nearby entities.
     Damage(crate::combat::Damage),
+    /// A one-shot motion for a nearby spawn, the player's own included, such
+    /// as a swing as an attack goes out.
+    Animation(crate::combat::Animation),
     /// Own-character skill update; unknown skill IDs remain available to consumers.
     Skill {
         /// Protocol skill index (22 is dual wield).
@@ -1177,6 +1180,7 @@ pub fn titanium_update(opcode: u16, body: &[u8]) -> Result<Option<WorldEvent>> {
             WorldEvent::Consideration(crate::combat::consideration(body)?)
         }
         crate::combat::DAMAGE_OPCODE => WorldEvent::Damage(crate::combat::damage(body)?),
+        crate::combat::ANIMATION_OPCODE => WorldEvent::Animation(crate::combat::animation(body)?),
         crate::food::STAMINA_OPCODE => {
             WorldEvent::Nourishment(crate::food::decode(opcode, body)?.unwrap_or_default())
         }

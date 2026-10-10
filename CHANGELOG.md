@@ -112,6 +112,21 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Swings and the other one-shot motions the server asks clients to play:
+  `WorldEvent::Animation` (`combat::Animation`: the spawn, the servers'
+  animation number and the speed as a multiple of normal), from Titanium's
+  4-byte `OP_Animation` (`combat::animation`) and `EQMac`'s 12-byte one
+  (`combat::eqmac_animation`), read from `EQEmu`'s and TAKP's source and not
+  yet checked live. Both servers send one to every client near a spawn as
+  it swings, kicks or uses a monk attack, the player's own included. It
+  sends nothing and gives the player nothing to do, so it is read as
+  `OP_Damage` is: by each client generation's wire, for every server that
+  speaks it. The speed scale (Titanium's byte over 10, `EQMac`'s float as
+  sent) is inferred from the servers' defaults. A record of the wrong
+  length, an `EQMac` action outside 0 to 65535 or an `EQMac` speed that is
+  negative or not a number is the usual unreadable-packet diagnostic.
+  `Animation` is a new variant of the exhaustive `WorldEvent`.
+
 - Groups on TAKP (`Capability::Grouping`), read from EQMacEmu's source and
   checked live with two characters. The `EQMac` client's group packets have Titanium's
   layouts with their own opcodes (`group::eqmac_invite`, `eqmac_follow`,

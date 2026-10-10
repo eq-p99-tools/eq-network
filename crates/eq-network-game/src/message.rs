@@ -427,6 +427,46 @@ mod tests {
     }
 
     #[test]
+    fn a_swing_is_news_for_the_host_on_both_client_generations() {
+        use crate::combat::{Animation, ANIMATION_OPCODE, EQMAC_ANIMATION_OPCODE};
+        assert!(matches!(
+            titanium(ANIMATION_OPCODE, &[9, 0, 10, 5])[..],
+            [Message::Event(WorldEvent::Animation(Animation {
+                spawn_id: 9,
+                action: 5,
+                ..
+            }))]
+        ));
+        let mut record = [0; 12];
+        record[0] = 9;
+        record[4] = 8;
+        record[8..].copy_from_slice(&1.0f32.to_le_bytes());
+        assert!(matches!(
+            eqmac(EQMAC_ANIMATION_OPCODE, &record)[..],
+            [Message::Event(WorldEvent::Animation(Animation {
+                spawn_id: 9,
+                action: 8,
+                ..
+            }))]
+        ));
+        // One that cannot be read is the usual diagnostic, and nothing more.
+        record[4..8].copy_from_slice(&(-1i32).to_le_bytes());
+        for messages in [
+            titanium(ANIMATION_OPCODE, &[9, 0, 10]),
+            eqmac(EQMAC_ANIMATION_OPCODE, &record[..11]),
+            eqmac(EQMAC_ANIMATION_OPCODE, &record),
+        ] {
+            assert!(matches!(
+                messages[..],
+                [Message::Unreadable {
+                    part: Part::World,
+                    ..
+                }]
+            ));
+        }
+    }
+
+    #[test]
     fn takps_money_notice_adds_to_the_purse_and_names_no_one_else() {
         let mut notice = [0, 0, 2, 0, 0, 0, 0, 0];
         notice[4..].copy_from_slice(&5i32.to_le_bytes());
