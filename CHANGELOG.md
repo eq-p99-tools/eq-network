@@ -112,6 +112,19 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- A record of every message each client generation's servers send: one
+  table per generation, one row per opcode, naming the message, the server
+  types that send it and the parts of the session that read it, or why it
+  is left unread (work still to come, an answer to a request eq-network
+  never sends, parked work, or nothing in it worth reading), taken from
+  `EQEmu`'s, TAKP's and Quarm's sources: Titanium's 257 messages, 104 of
+  them read, and `EQMac`'s 173, 70 read. A zone session now tells once, as
+  a diagnostic, of each message it leaves unread with the reason (but one
+  with nothing worth reading) and of each the table does not list, where
+  before a message nothing read left no trace once the zone admitted the
+  player. A test holds each table to its generation's decoders over all
+  65,536 opcodes.
+
 - Swings and the other one-shot motions the server asks clients to play:
   `WorldEvent::Animation` (`combat::Animation`: the spawn, the servers'
   animation number and the speed as a multiple of normal), from Titanium's
