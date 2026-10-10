@@ -8,6 +8,7 @@
 
 use super::{
     admission::{Admission, EqMacAdmission, Handshake, TitaniumAdmission},
+    coverage::{self, ServerMessage},
     login::{self, Credentials},
     servers::Shield,
     world, CharacterSession, ZoneDestination,
@@ -50,6 +51,13 @@ pub(super) trait Wire: Sync {
     /// Returns an error when a communication packet is malformed.
     fn chat(&self, _opcode: u16, _body: &[u8], _include_raw: bool) -> Result<Option<ChatEvent>> {
         Ok(None)
+    }
+
+    /// What the session does with a message the generation's servers send,
+    /// from the generation's table; nothing for one no server is listed as
+    /// sending.
+    fn coverage(&self, _opcode: u16) -> Option<ServerMessage> {
+        None
     }
 
     /// The packet that asks the server for what the session wants.
@@ -151,6 +159,10 @@ impl Wire for Titanium {
         chat::parse(opcode, body, include_raw)
     }
 
+    fn coverage(&self, opcode: u16) -> Option<ServerMessage> {
+        coverage::titanium(opcode)
+    }
+
     fn encode(&self, request: &Request, sender: Sender<'_>) -> Result<EncodedCommand> {
         request::titanium(request, sender)
     }
@@ -221,6 +233,10 @@ impl Wire for EqMac {
 
     fn chat(&self, opcode: u16, body: &[u8], include_raw: bool) -> Result<Option<ChatEvent>> {
         chat::parse_for(GameDialect::EqMac, opcode, body, include_raw)
+    }
+
+    fn coverage(&self, opcode: u16) -> Option<ServerMessage> {
+        coverage::eqmac(opcode)
     }
 
     fn encode(&self, request: &Request, sender: Sender<'_>) -> Result<EncodedCommand> {
@@ -334,6 +350,57 @@ mod tests {
         // An opcode that carries no communication in either generation.
         assert!(EqMac.chat(0x0001, &[], false).unwrap().is_none());
         assert!(Titanium.chat(0x0001, &[], false).unwrap().is_none());
+    }
+
+    /// Bodies to probe a generation's decoders with: none, a byte, and
+    /// longer ones of two fills behind a plausible spawn id. Every decoder
+    /// makes something of a single byte, if only an unreadable message, so
+    /// the byte alone finds each one; the longer bodies are for a decoder
+    /// that passes over what is too short.
+    fn probes() -> Vec<Vec<u8>> {
+        let mut bodies = vec![Vec::new()];
+        for length in [1, 4, 16, 64, 256, 1024, 8192] {
+            for fill in [0, 0xff] {
+                let mut body = vec![fill; length];
+                if length >= 2 {
+                    body[..2].copy_from_slice(&7u16.to_le_bytes());
+                }
+                bodies.push(body);
+            }
+        }
+        bodies
+    }
+
+    /// Whether a generation's zone decoders make anything of an opcode: a
+    /// message, communication (or a malformed one), or an answer.
+    fn decodes(wire: &dyn Wire, opcode: u16, bodies: &[Vec<u8>]) -> bool {
+        bodies.iter().any(|body| {
+            !wire.messages(opcode, body).is_empty()
+                || !matches!(wire.chat(opcode, body, false), Ok(None))
+                || wire.answer(opcode, body).is_some()
+        })
+    }
+
+    #[test]
+    fn each_generation_lists_as_read_exactly_what_its_decoders_read() {
+        let bodies = probes();
+        for (generation, wire) in [("Titanium", &Titanium as &dyn Wire), ("EQMac", &EqMac)] {
+            for opcode in 0..=u16::MAX {
+                let listed = wire
+                    .coverage(opcode)
+                    .is_some_and(|message| message.readers().iter().any(|reader| reader.decodes()));
+                let decoded = decodes(wire, opcode, &bodies);
+                assert!(
+                    decoded == listed,
+                    "{generation} 0x{opcode:04x}: {}",
+                    if decoded {
+                        "its decoders read it, but its table does not list it read by them"
+                    } else {
+                        "its table lists it read by its decoders, which make nothing of it"
+                    }
+                );
+            }
+        }
     }
 
     #[test]

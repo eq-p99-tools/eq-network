@@ -8,6 +8,7 @@ use super::{
 };
 
 use super::admission::{Handshake, Zone};
+use super::coverage::Unheard;
 use eq_network_game::message::Message;
 use eq_network_transport::Transport;
 
@@ -195,6 +196,7 @@ pub(super) fn run(
     let mut progress = Instant::now();
     let session_id = rand::random();
     let mut world = World::new(session_id);
+    let mut unheard = Unheard::default();
     let mut features = Features::new(server, &config.character, config.auto_eat);
     let follows_zones = features
         .capabilities()
@@ -329,6 +331,8 @@ pub(super) fn run(
                 packet.body.len()
             ))?;
         }
+        // What the zone leaves unread still leaves a trace, once a session.
+        unheard.tell(server.wire(), packet.opcode, packet.body.len(), log)?;
         if let Some((player, zone)) = admission.read(
             &mut packet,
             &mut world,
