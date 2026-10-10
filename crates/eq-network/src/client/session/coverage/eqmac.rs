@@ -10,7 +10,7 @@ use super::{
         AlternateAdvancement, Appearance, Bazaar, EqMacExchanges, EqMacWorld, LaterSystems,
         PlayerState, Raids, Social, WorldAndSession,
     },
-    ACTION, DESCRIPTION, EQMAC, PROFILE, PUSH, QUARM, TAKP, WEATHER,
+    ACTION, DESCRIPTION, EQMAC, LOG_SERVER, PROFILE, PUSH, QUARM, TAKP, WEATHER,
 };
 
 /// What the session does with a message `EQMac`'s servers send; nothing for
@@ -26,12 +26,19 @@ pub(in crate::client) fn eqmac(opcode: u16) -> Option<ServerMessage> {
         0x0480 => sent("OP_ZoneServerInfo", EQMAC, Read(&[World])),
         0x0541 => sent("OP_TradeSkillCombine", EQMAC, planned(EqMacWorld)),
         0x0542 => sent("OP_ClearObject", EQMAC, planned(EqMacWorld)),
-        0x0580 => sent("OP_ZoneUnavail", EQMAC, planned(WorldAndSession)),
+        0x0580 => sent("OP_ZoneUnavail", EQMAC, Read(&[World])),
         0x0642 => sent("OP_Translocate", QUARM, planned(PlayerState)),
-        0x0710 => sent("OP_ApproveWorld", EQMAC, planned(WorldAndSession)),
+        0x0710 => sent(
+            "OP_ApproveWorld",
+            EQMAC,
+            Unread(Needless(
+                "TAKP and Quarm always answer 0 and name no one (world/client.cpp \
+                 SendApproveWorld)",
+            )),
+        ),
         0x0741 => sent("OP_ChannelMessage", EQMAC, Read(&[Chat])),
         0x0840 => sent("OP_MoneyUpdate", EQMAC, planned(Bazaar)),
-        0x0980 => sent("OP_SetChatServer", EQMAC, planned(WorldAndSession)),
+        0x0980 => sent("OP_SetChatServer", EQMAC, Read(&[World])),
         0x0b20 => sent("OP_WhoAllResponse", EQMAC, planned(EqMacWorld)),
         0x0b40 => sent("OP_ShopRequest", EQMAC, Read(&[Zone])),
         0x0c40 => sent("OP_ShopInventoryPacket", EQMAC, Read(&[Zone])),
@@ -182,7 +189,7 @@ pub(in crate::client) fn eqmac(opcode: u16) -> Option<ServerMessage> {
         0xb640 => sent("OP_InspectAnswer", EQMAC, unasked(Social)),
         0xba41 => sent("OP_ApplyPoison", EQMAC, unasked(PlayerState)),
         0xbe41 => sent("OP_SkillUpdate2", EQMAC, planned(EqMacWorld)),
-        0xc341 => sent("OP_LogServer", EQMAC, planned(WorldAndSession)),
+        0xc341 => sent("OP_LogServer", EQMAC, Partly(&[World, Zone], LOG_SERVER)),
         0xc441 => sent("OP_Surname", EQMAC, unasked(Social)),
         0xcb40 => sent("OP_GMNameChange", EQMAC, planned(Social)),
         0xce40 => sent("OP_ReadBook", EQMAC, planned(EqMacWorld)),
@@ -197,7 +204,7 @@ pub(in crate::client) fn eqmac(opcode: u16) -> Option<ServerMessage> {
         0xd640 => sent("OP_TradeRefused", EQMAC, planned(EqMacExchanges)),
         0xd740 => sent("OP_ClickObjectAction", EQMAC, planned(EqMacWorld)),
         0xd840 => sent("OP_SendExpZonein", EQMAC, Read(&[Admission])),
-        0xd841 => sent("OP_ExpansionInfo", EQMAC, planned(WorldAndSession)),
+        0xd841 => sent("OP_ExpansionInfo", EQMAC, Read(&[World])),
         0xda40 => sent("OP_TradeAcceptClick", EQMAC, planned(EqMacExchanges)),
         0xda41 => sent("OP_YellForHelp", EQMAC, planned(Social)),
         0xdb40 => sent("OP_CancelTrade", EQMAC, planned(EqMacExchanges)),

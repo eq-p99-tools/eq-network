@@ -694,6 +694,10 @@ pub fn updates(opcode: u16, body: &[u8]) -> Result<Vec<WorldEvent>> {
             vec![WorldEvent::Despawn(valid_id(u32::from(short(body, 0)))?)]
         }
         ZONE_DEATH => vec![WorldEvent::Death(death(body)?)],
+        // Quarm's zones send their part of the rules at every zone-in.
+        crate::rules::EQMAC_LOG_SERVER_OPCODE => {
+            vec![WorldEvent::Rules(crate::rules::eqmac_rules(body)?)]
+        }
         0xb240 => {
             ensure!(body.len() == 12, "invalid EQMac health length");
             let spawn_id = valid_id(word(body, 0))?;

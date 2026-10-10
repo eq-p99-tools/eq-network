@@ -175,10 +175,9 @@ impl fmt::Display for Reason {
 /// step at a time.
 #[derive(Clone, Copy, Debug)]
 pub(super) enum Step {
-    /// The world and the session: a zone that is down, the character the
-    /// world enters, the world's rules and expansions, the chat server's
-    /// offer, the logout's first step, the weather, and Quarm's move to the
-    /// bind point and its shared bank offer.
+    /// The world and the session: the logout's first step, the weather, the
+    /// rest of the zone's description, and Quarm's move to the bind point
+    /// and its shared bank offer.
     WorldAndSession,
     /// The player's own state: the push of a hit, stun, mesmerize and charm,
     /// the end of sneaking and hiding, disciplines and reuse timers, a
@@ -264,6 +263,11 @@ const ACTION: &[Part] = &[Part(
 const WEATHER: &[Part] = &[Part(
     "its kind and intensity",
     Reason::Planned(Step::WorldAndSession),
+)];
+/// What the session leaves unread of `EQMac`'s log-server settings.
+const LOG_SERVER: &[Part] = &[Part(
+    "the error-reporting server's address, port, password and e-mail",
+    Reason::Needless("nothing here reports to it"),
 )];
 /// What the session leaves unread of the zone's description.
 const DESCRIPTION: &[Part] = &[Part(
