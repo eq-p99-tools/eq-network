@@ -221,7 +221,9 @@ pub(in crate::client) fn eqmac(opcode: u16) -> Option<ServerMessage> {
         0xe440 => sent("OP_TradeCoins", EQMAC, planned(EqMacExchanges)),
         0xe640 => sent("OP_TradeRequestAck", EQMAC, planned(EqMacExchanges)),
         0xea41 => sent("OP_Sacrifice", EQMAC, Partly(&[Zone], SACRIFICE)),
-        0xec41 => sent("OP_RezzComplete", EQMAC, planned(PlayerState)),
+        // TAKP's word that the player may go to their corpse after their
+        // yes, which its client moves itself on, as on a translocate's.
+        0xec41 => sent("OP_RezzComplete", TAKP, planned(EqMacExchanges)),
         0xf041 => sent("OP_LFGCommand", EQMAC, planned(EqMacWorld)),
         0xf240 => sent("OP_TimeOfDay", EQMAC, Unread(Parked("eq-network#91"))),
         0xf241 => sent("OP_DisciplineChange", EQMAC, planned(PlayerState)),

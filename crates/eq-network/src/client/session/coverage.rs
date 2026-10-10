@@ -180,8 +180,8 @@ impl fmt::Display for Reason {
 /// step at a time.
 #[derive(Clone, Copy, Debug)]
 pub(super) enum Step {
-    /// The player's own state: disciplines and reuse timers, a target the
-    /// server sets, rewards, and the confirmations the player answers.
+    /// The player's own state: disciplines and reuse timers, stats, skills
+    /// and languages.
     PlayerState,
     /// Spawns' appearance and effects: the appearance kinds left, illusions,
     /// renames, spell and level effects, sounds, projectiles and spawn

@@ -7,6 +7,13 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- The message tables no longer list Titanium's `OP_RezzComplete`, which
+  `EQEmu` sends only to the world server, and list `EQMac`'s as TAKP's
+  alone, as Quarm too sends it only to the world server; it is planned
+  with `EQMac`'s catch-up on exchanges, since TAKP's client moves itself
+  to the corpse on it. `EQMac`'s `OP_Translocate` names TAKP as a sender
+  too.
+
 - Quarm's move of a dead player to their bind point (`OP_GMGoto`) is read
   as a zone offer home. Quarm's session does not follow zones yet, so it
   ends there, as it does on Quarm's other moves, where before it stayed on
@@ -174,6 +181,11 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   it carries no heading, so the player faces heading 0 after it, and the
   transfer request that follows gives reason 8 (both inferred). Hosts that
   match `WorldEvent` exhaustively need arms for the four events.
+- A player becoming a corpse, on Titanium: `WorldEvent::BecameCorpse` (the
+  spawn, which the corpse keeps, and where it lies), from
+  `OP_BecomeCorpse`, which `EQEmu` sends the player just before word of
+  their death, and everyone else in the zone as a player leaves a corpse.
+  Hosts that match `WorldEvent` exhaustively need an arm for it.
 
 - The server's hold on the player, on both generations, read from the
   emulators' sources and not yet checked live: a stun
@@ -248,8 +260,8 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   types that send it and the parts of the session that read it, or why it
   is left unread (work still to come, an answer to a request eq-network
   never sends, parked work, or nothing in it worth reading), taken from
-  `EQEmu`'s, TAKP's and Quarm's sources: Titanium's 258 messages, 112 of
-  them read, and `EQMac`'s 176, 82 read. A zone session now tells once, as
+  `EQEmu`'s, TAKP's and Quarm's sources: Titanium's 258 messages, 119 of
+  them read, and `EQMac`'s 177, 87 read. A zone session now tells once, as
   a diagnostic, of each message it leaves unread with the reason (but one
   with nothing worth reading) and of each the table does not list, where
   before a message nothing read left no trace once the zone admitted the

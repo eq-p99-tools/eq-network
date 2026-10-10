@@ -672,6 +672,15 @@ pub enum WorldEvent {
     ItemDetails(crate::items::ItemDetails),
     /// Server death notification; consumers compare its ID with their own spawn.
     Death(crate::zoning::Death),
+    /// A player became a corpse where they lie: the player, just before
+    /// word of their death, and another player who leaves a corpse, which
+    /// keeps their spawn ID.
+    BecameCorpse {
+        /// The player's spawn, now their corpse.
+        spawn_id: u16,
+        /// Where it lies: x, y and z; the record carries no heading.
+        position: [f32; 3],
+    },
     /// A transfer request is in progress; stop all old-zone input until its reply.
     ZoneTransfer(crate::zoning::ZoneOffer),
     /// The server rejected the pending transfer.
@@ -1349,10 +1358,10 @@ pub fn titanium_update(opcode: u16, body: &[u8]) -> Result<Option<WorldEvent>> {
 }
 
 /// Stuns and charms, the end of hiding, the target the server sets,
-/// rewards, sacrifices and translocates, doors, ground objects, loot,
-/// merchant, exchange, training, resurrection, group, dice, assist, raid,
-/// book, combine, bandaging, chat server, weather and inventory packets,
-/// each owned by its codec.
+/// rewards, sacrifices and translocates, a player becoming a corpse, doors,
+/// ground objects, loot, merchant, exchange, training, resurrection, group,
+/// dice, assist, raid, book, combine, bandaging, chat server, weather and
+/// inventory packets, each owned by its codec.
 fn titanium_views(opcode: u16, body: &[u8]) -> Result<Option<WorldEvent>> {
     match opcode {
         crate::rewards::SOUND_OPCODE => {
@@ -1385,6 +1394,10 @@ fn titanium_views(opcode: u16, body: &[u8]) -> Result<Option<WorldEvent>> {
             return Ok(Some(WorldEvent::Charm(crate::control::titanium_charm(
                 body,
             )?)));
+        }
+        crate::corpses::BECOME_CORPSE_OPCODE => {
+            let (spawn_id, position) = crate::corpses::became_corpse(body)?;
+            return Ok(Some(WorldEvent::BecameCorpse { spawn_id, position }));
         }
         crate::confirmations::SACRIFICE_OPCODE => {
             return Ok(Some(WorldEvent::SacrificeOffer(
@@ -2136,6 +2149,22 @@ mod tests {
         );
         assert!(titanium_update(0x541e, &quest[..64]).is_err());
         assert!(titanium_update(0x4c8c, &[0; 12]).is_err());
+    }
+
+    #[test]
+    fn a_player_becoming_a_corpse_is_read() {
+        let mut body = 7u32.to_le_bytes().to_vec();
+        for value in [1748.0f32, 263.0, 27.0] {
+            body.extend_from_slice(&value.to_le_bytes());
+        }
+        assert_eq!(
+            titanium_update(0x4dbc, &body).unwrap(),
+            Some(WorldEvent::BecameCorpse {
+                spawn_id: 7,
+                position: [263.0, 1748.0, 27.0],
+            })
+        );
+        assert!(titanium_update(0x4dbc, &body[..12]).is_err());
     }
 
     #[test]
