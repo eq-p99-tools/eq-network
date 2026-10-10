@@ -226,7 +226,7 @@ pub(in crate::client) fn eqmac(opcode: u16) -> Option<ServerMessage> {
         0xec41 => sent("OP_RezzComplete", TAKP, planned(EqMacExchanges)),
         0xf041 => sent("OP_LFGCommand", EQMAC, planned(EqMacWorld)),
         0xf240 => sent("OP_TimeOfDay", EQMAC, Unread(Parked("eq-network#91"))),
-        0xf241 => sent("OP_DisciplineChange", EQMAC, planned(PlayerState)),
+        0xf241 => sent("OP_DisciplineChange", EQMAC, Read(&[Zone])),
         0xf340 => sent("OP_ClientUpdate", EQMAC, Read(&[Zone])),
         // Quarm's DLL and feature messages ride on spawn 0's appearance.
         0xf540 => sent(

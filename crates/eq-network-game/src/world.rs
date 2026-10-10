@@ -1143,6 +1143,19 @@ pub enum WorldEvent {
     /// skill: `EQMac`'s servers' word, before the official client's own
     /// wait ends ([`crate::abilities::eqmac_reset_skill`]).
     SkillReady(u32),
+    /// The disciplines the player knows, by spell ID, in the list's 100
+    /// slots, 0 for an empty one: `EQEmu`'s list once the zone has admitted
+    /// the player and as it changes ([`crate::disciplines`]).
+    Disciplines(Vec<u32>),
+    /// A discipline reuse timer as the server set it. `EQEmu`'s copies at
+    /// zone-in of timers 11 to 19 carry its other reuse timers
+    /// ([`crate::disciplines`]).
+    DisciplineReuse(crate::disciplines::Reuse),
+    /// A reuse timer a group of spells shares, as the server set it.
+    LinkedReuse(crate::disciplines::Reuse),
+    /// `EQMac`'s servers: the discipline the player began, by the servers'
+    /// number for it, or none as it ends.
+    Discipline(Option<u8>),
 }
 
 /// A profile heading on the 0..512 scale live movement uses. Project 1999 saves
@@ -1366,8 +1379,8 @@ pub fn titanium_update(opcode: u16, body: &[u8]) -> Result<Option<WorldEvent>> {
 }
 
 /// Stuns and charms, the end of hiding, a quest's word on the player's
-/// stats, the target the server sets, rewards, sacrifices and translocates,
-/// a player becoming a corpse, doors,
+/// stats, disciplines and reuse timers, the target the server sets,
+/// rewards, sacrifices and translocates, a player becoming a corpse, doors,
 /// ground objects, loot, merchant, exchange, training, resurrection, group,
 /// dice, assist, raid, book, combine, bandaging, chat server, weather and
 /// inventory packets, each owned by its codec.
@@ -1425,41 +1438,45 @@ fn titanium_views(opcode: u16, body: &[u8]) -> Result<Option<WorldEvent>> {
         }
         _ => (),
     }
-    Ok(if let Some(update) = crate::doors::decode(opcode, body)? {
-        Some(WorldEvent::Doors(update))
-    } else if let Some(update) = crate::objects::decode(opcode, body)? {
-        Some(WorldEvent::Objects(update))
-    } else if let Some(update) = crate::loot::decode(opcode, body)? {
-        Some(WorldEvent::Loot(update))
-    } else if let Some(update) = crate::merchant::decode(opcode, body)? {
-        Some(WorldEvent::Merchant(update))
-    } else if let Some(update) = crate::exchange::decode(opcode, body)? {
-        Some(WorldEvent::Exchange(update))
-    } else if let Some(update) = crate::training::decode(opcode, body)? {
-        Some(WorldEvent::Training(update))
-    } else if let Some(offer) = crate::resurrection::decode(opcode, body)? {
-        Some(WorldEvent::Resurrection(offer))
-    } else if let Some(update) = crate::group::decode(opcode, body)? {
-        Some(WorldEvent::Group(update))
-    } else if let Some(roll) = crate::socials::decode_roll(opcode, body)? {
-        Some(WorldEvent::Roll(roll))
-    } else if let Some(answer) = crate::socials::decode_assist(opcode, body)? {
-        Some(WorldEvent::Assisted(answer))
-    } else if let Some(update) = crate::raid::decode(opcode, body)? {
-        Some(WorldEvent::Raid(update))
-    } else if let Some(text) = crate::books::decode(opcode, body)? {
-        Some(WorldEvent::BookText(text))
-    } else if let Some(update) = crate::tradeskills::decode(opcode, body)? {
-        Some(WorldEvent::Combine(update))
-    } else if let Some(update) = crate::bind_wound::decode(opcode, body)? {
-        Some(WorldEvent::BindWound(update))
-    } else if let Some(offer) = crate::channels::titanium(opcode, body)? {
-        Some(WorldEvent::ChatServer(offer))
-    } else if let Some(weather) = crate::clock::titanium_weather(opcode, body)? {
-        Some(WorldEvent::Weather(weather))
-    } else {
-        crate::inventory::decode(opcode, body)?.map(WorldEvent::Inventory)
-    })
+    Ok(
+        if let Some(event) = crate::disciplines::titanium(opcode, body)? {
+            Some(event)
+        } else if let Some(update) = crate::doors::decode(opcode, body)? {
+            Some(WorldEvent::Doors(update))
+        } else if let Some(update) = crate::objects::decode(opcode, body)? {
+            Some(WorldEvent::Objects(update))
+        } else if let Some(update) = crate::loot::decode(opcode, body)? {
+            Some(WorldEvent::Loot(update))
+        } else if let Some(update) = crate::merchant::decode(opcode, body)? {
+            Some(WorldEvent::Merchant(update))
+        } else if let Some(update) = crate::exchange::decode(opcode, body)? {
+            Some(WorldEvent::Exchange(update))
+        } else if let Some(update) = crate::training::decode(opcode, body)? {
+            Some(WorldEvent::Training(update))
+        } else if let Some(offer) = crate::resurrection::decode(opcode, body)? {
+            Some(WorldEvent::Resurrection(offer))
+        } else if let Some(update) = crate::group::decode(opcode, body)? {
+            Some(WorldEvent::Group(update))
+        } else if let Some(roll) = crate::socials::decode_roll(opcode, body)? {
+            Some(WorldEvent::Roll(roll))
+        } else if let Some(answer) = crate::socials::decode_assist(opcode, body)? {
+            Some(WorldEvent::Assisted(answer))
+        } else if let Some(update) = crate::raid::decode(opcode, body)? {
+            Some(WorldEvent::Raid(update))
+        } else if let Some(text) = crate::books::decode(opcode, body)? {
+            Some(WorldEvent::BookText(text))
+        } else if let Some(update) = crate::tradeskills::decode(opcode, body)? {
+            Some(WorldEvent::Combine(update))
+        } else if let Some(update) = crate::bind_wound::decode(opcode, body)? {
+            Some(WorldEvent::BindWound(update))
+        } else if let Some(offer) = crate::channels::titanium(opcode, body)? {
+            Some(WorldEvent::ChatServer(offer))
+        } else if let Some(weather) = crate::clock::titanium_weather(opcode, body)? {
+            Some(WorldEvent::Weather(weather))
+        } else {
+            crate::inventory::decode(opcode, body)?.map(WorldEvent::Inventory)
+        },
+    )
 }
 
 /// `OP_MoneyUpdate`: carried coins after a purchase, sale or loot.
@@ -2215,6 +2232,34 @@ mod tests {
             }))
         );
         assert!(titanium_update(0x5b7b, &body[..140]).is_err());
+    }
+
+    #[test]
+    fn disciplines_and_reuse_timers_are_read() {
+        let record = |fields: &[u32]| -> Vec<u8> {
+            fields
+                .iter()
+                .flat_map(|field| field.to_le_bytes())
+                .collect()
+        };
+        let mut slots = [0; 100];
+        slots[0] = 4585;
+        assert!(matches!(
+            titanium_update(0x7180, &record(&slots)).unwrap(),
+            Some(WorldEvent::Disciplines(list)) if list[..2] == [4585, 0]
+        ));
+        assert!(matches!(
+            titanium_update(0x53df, &record(&[2, 1800, 0])).unwrap(),
+            Some(WorldEvent::DisciplineReuse(reuse)) if reuse.timer == 2
+        ));
+        assert!(matches!(
+            titanium_update(0x6a00, &record(&[7, 5030, 5000])).unwrap(),
+            Some(WorldEvent::LinkedReuse(reuse))
+                if reuse.remaining == std::time::Duration::from_secs(30)
+        ));
+        assert!(titanium_update(0x7180, &record(&slots[..99])).is_err());
+        assert!(titanium_update(0x53df, &record(&[2, 1800])).is_err());
+        assert!(titanium_update(0x6a00, &record(&[7, 5030])).is_err());
     }
 
     #[test]

@@ -31,6 +31,9 @@ pub mod control;
 pub mod corpses;
 /// Titanium character creation requests and stat rules.
 pub mod creation;
+/// The player's disciplines and their reuse timers, and the reuse timers
+/// groups of spells share.
+pub mod disciplines;
 /// Server-defined interactive doors and their movement notifications.
 pub mod doors;
 /// Handing items to another character: the give and trade windows.

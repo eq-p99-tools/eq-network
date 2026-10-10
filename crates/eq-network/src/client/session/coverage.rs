@@ -288,6 +288,14 @@ const STATS: &[Part] = &[Part(
     "the first byte, the five resists and the second copy of every field",
     Reason::Needless("EQEmu never sets them (zone/client.cpp Client::SetStats, Client::IncStats)"),
 )];
+/// What the session leaves unread of a discipline reuse timer.
+const DISCIPLINE_TIMER: &[Part] = &[Part(
+    "the last field",
+    Reason::Needless(
+        "EQEmu leaves it 0 (zone/effects.cpp Client::SendDisciplineTimer, \
+         zone/client.cpp Client::SendDisciplineTimers)",
+    ),
+)];
 /// What the session leaves unread of `EQMac`'s word that a skill's button
 /// is ready again.
 const RESET_SKILL: &[Part] = &[Part(

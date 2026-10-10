@@ -158,6 +158,18 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   client then starts its full wait anew, and for each skill with a
   recovery timer on a GM's `#cleartimers`. Hosts that match `WorldEvent`
   exhaustively need an arm for it.
+- The player's disciplines and reuse timers. On Titanium: the disciplines
+  the player knows (`WorldEvent::Disciplines`: a spell ID in each of the
+  list's 100 slots, 0 for an empty one), from `OP_DisciplineUpdate`, which
+  `EQEmu` sends once the zone has admitted the player and as the list
+  changes; a discipline reuse timer (`WorldEvent::DisciplineReuse`, a
+  `disciplines::Reuse`: the timer and how long until it is ready), from
+  `OP_DisciplineTimer`, whose copies at zone-in of timers 11 to 19 carry
+  `EQEmu`'s other reuse timers; and a reuse timer a group of spells shares
+  (`WorldEvent::LinkedReuse`), from `OP_LinkedReuse`. On `EQMac`: the
+  discipline the player began, or none as it ends
+  (`WorldEvent::Discipline`), from `OP_DisciplineChange`. Hosts that match
+  `WorldEvent` exhaustively need arms for the four.
 
 - The player's target as the server sets it, on both generations:
   `WorldEvent::Target`, from `OP_TargetCommand` (`EQEmu`'s sense spells,

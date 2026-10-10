@@ -439,6 +439,19 @@ fn a_sacrifice_offer_is_read() {
 }
 
 #[test]
+fn a_discipline_begins_and_ends() {
+    assert_eq!(
+        updates(0xf241, &[30, 0, 0, 0]).unwrap(),
+        [WorldEvent::Discipline(Some(30))]
+    );
+    assert_eq!(
+        updates(0xf241, &[0; 4]).unwrap(),
+        [WorldEvent::Discipline(None)]
+    );
+    assert!(updates(0xf241, &[30]).is_err());
+}
+
+#[test]
 fn a_skills_button_is_ready_again() {
     // Mend, skill 32, with the timer 0 the servers send.
     let body = [32, 0, 0, 0, 0, 0, 0, 0];
