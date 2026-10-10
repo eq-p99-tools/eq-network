@@ -557,6 +557,10 @@ pub fn long_name(short_name: &str) -> Option<&'static str> {
         .map(|(_, _, long)| *long)
 }
 
+/// Titanium's `OP_NewZone`: the zone's header, as the zone admits the player
+/// and again whenever a GM command or a quest changes the zone. `EQMac`'s is
+/// [`crate::quarm::ZONE_NEW`].
+pub const TITANIUM_HEADER_OPCODE: u16 = 0x0920;
 /// The length of Titanium's zone header. `EQEmu` sends more after it, for
 /// later clients; the Titanium client copies only these bytes.
 const TITANIUM_HEADER_LENGTH: usize = 700;

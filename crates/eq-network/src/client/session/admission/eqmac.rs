@@ -7,7 +7,7 @@
 //! spawn in an appearance of its own, and the player is admitted once that,
 //! the own spawn and the ready avatar are all in. Quarm's version checks, at
 //! any time, are the wire's to answer.
-use super::{describe, Admission, Handshake, Zone};
+use super::{Admission, Handshake, Zone};
 use crate::client::session::{feature::World, put_string, ClientEvent, ConnectionStage};
 use crate::world::PlayerState;
 use anyhow::{bail, ensure, Result};
@@ -150,7 +150,7 @@ impl Admission for EqMacAdmission {
                     name,
                     far_clip: crate::world::eqmac_far_clip(&packet.body),
                     sky: clock::eqmac_zone_sky(&packet.body),
-                    description: describe(zones::eqmac_description, &packet.body, handshake.log)?,
+                    description: zones::eqmac_description(&packet.body).ok(),
                 });
                 self.step = self.step.max(Step::Described);
             }

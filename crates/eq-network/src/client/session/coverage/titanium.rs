@@ -42,7 +42,7 @@ pub(in crate::client) fn titanium(opcode: u16) -> Option<ServerMessage> {
         0x0920 => sent(
             "OP_NewZone",
             EQEMU,
-            Partly(&[Admission], TITANIUM_DESCRIPTION),
+            Partly(&[Admission, Zone], TITANIUM_DESCRIPTION),
         ),
         0x0937 => sent("OP_CameraEffect", EQEMU, planned(Appearance)),
         0x098e => sent("OP_DzExpeditionInfo", EQEMU, planned(LaterSystems)),

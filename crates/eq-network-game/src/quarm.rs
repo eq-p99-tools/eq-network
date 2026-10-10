@@ -29,7 +29,8 @@ pub const ZONE_PLAYER_PROFILE: u16 = 0x3640;
 pub const ZONE_WEATHER: u16 = 0x3641;
 /// The client asking for the zone's description.
 pub const ZONE_REQUEST_NEW: u16 = 0x5d40;
-/// The zone's description.
+/// The zone's description: as it admits the player, and again whenever a GM
+/// command or a quest changes the zone.
 pub const ZONE_NEW: u16 = 0x5b40;
 /// The client asking for the zone's spawns.
 pub const ZONE_REQUEST_SPAWNS: u16 = 0x0a40;

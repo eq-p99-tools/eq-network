@@ -84,27 +84,9 @@ pub(in crate::client) struct Zone {
     pub(super) far_clip: Option<f32>,
     /// Its sky and fog, when the description gives them.
     pub(super) sky: Option<eq_network_game::clock::ZoneSky>,
-    /// The rest of its description, when it could be read.
+    /// The rest of its description, when it could be read. The zone reads
+    /// every header, this one too, and tells of one it cannot read.
     pub(super) description: Option<ZoneDescription>,
-}
-
-/// Reads the rest of a zone's description with `read`, telling the host
-/// why when it cannot be read; the admission goes on without it.
-///
-/// # Errors
-/// Returns an error when the host's event handler fails.
-fn describe(
-    read: impl FnOnce(&[u8]) -> Result<ZoneDescription>,
-    header: &[u8],
-    log: &mut Events<'_>,
-) -> Result<Option<ZoneDescription>> {
-    match read(header) {
-        Ok(description) => Ok(Some(description)),
-        Err(error) => {
-            log.diagnostic(format!("Zone description unreadable: {error}"))?;
-            Ok(None)
-        }
-    }
 }
 
 /// Titanium's handshake in progress.
@@ -261,11 +243,7 @@ impl Admission for TitaniumAdmission {
                     name,
                     far_clip: crate::world::titanium_far_clip(&packet.body),
                     sky: eq_network_game::clock::titanium_zone_sky(&packet.body),
-                    description: describe(
-                        zones::titanium_description,
-                        &packet.body,
-                        handshake.log,
-                    )?,
+                    description: zones::titanium_description(&packet.body).ok(),
                 });
                 handshake.session.send(0x067a, &0u32.to_le_bytes())?;
                 handshake.session.send(0x5e3a, &0u32.to_le_bytes())?;

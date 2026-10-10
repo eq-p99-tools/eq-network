@@ -896,10 +896,12 @@ pub enum WorldEvent {
     /// The time of day, as a zone admits the player and whenever it is
     /// changed; between those it runs on its own.
     TimeOfDay(crate::clock::GameTime),
-    /// How the zone's sky and fog look, right after the admission.
+    /// How the zone's sky and fog look: right after the admission, and again
+    /// whenever the server sends the zone's header anew, as GM commands and
+    /// quests that change the zone do.
     Sky(crate::clock::ZoneSky),
-    /// What the zone's header says of it beyond its name, sky and far clip,
-    /// right after the admission.
+    /// What the zone's header says of it beyond its name and sky, at the same
+    /// times as [`WorldEvent::Sky`].
     ZoneDescription(crate::zones::ZoneDescription),
     /// The zone's weather, once the player is in the zone and whenever it
     /// changes.
