@@ -161,10 +161,9 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   server adds the coins to the purse without a money update, so the
   session adds them to the purse it keeps and tells the host the purse
   they make (inferred: the official client's purse after a reward is
-  unrecorded). `EQEmu`'s fixed `OP_Sound` record that gives nothing (a
-  quest's `ding`, and an ability point earned where its rule says so) is
-  `WorldEvent::Ding`. Hosts that match `WorldEvent` exhaustively need arms
-  for both.
+  unrecorded). `EQEmu`'s fixed `OP_Sound` record, which gives nothing, is
+  `WorldEvent::Ding`: the sound the official client plays for a quest's
+  `ding`. Hosts that match `WorldEvent` exhaustively need arms for both.
 - Offers the player answers, on both generations, answered only on the
   player's word: a sacrifice (`WorldEvent::SacrificeOffer`, naming its
   caster) from `OP_Sacrifice`, answered with `GameCommand::AnswerSacrifice`,

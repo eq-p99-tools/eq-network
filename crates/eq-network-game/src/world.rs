@@ -837,8 +837,8 @@ pub enum WorldEvent {
     /// the purse with no money update, and the experience and items it gave,
     /// which come with messages of their own.
     Reward(crate::rewards::Reward),
-    /// `EQEmu`'s sound that gives nothing: a quest's `ding`, and the
-    /// player's earning of an ability point where the server's rule says so.
+    /// The sound the official client plays for a quest's `ding`
+    /// ([`Sound::Ding`](crate::rewards::Sound::Ding)).
     Ding,
     /// Corpse loot session changes.
     Loot(crate::loot::LootUpdate),

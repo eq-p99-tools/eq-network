@@ -74,7 +74,8 @@ pub struct Reward {
 pub enum Sound {
     /// A quest's reward.
     Reward(Reward),
-    /// `EQEmu`'s fixed record that gives nothing.
+    /// The sound the official client plays for a quest's `ding`:
+    /// `EQEmu`'s fixed record, which gives nothing.
     Ding,
 }
 
