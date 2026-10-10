@@ -256,6 +256,20 @@ const OWN_NAME: &[Part] = &[Part(
     "the player's own name",
     Reason::Needless("the session has it from its entry"),
 )];
+/// What the session leaves unread of a quest's reward.
+const REWARD: &[Part] = &[
+    Part(
+        "the player's own spawn",
+        Reason::Needless("the server sends a reward only to the player it names"),
+    ),
+    Part(
+        "the faction and its modifier",
+        Reason::Needless(
+            "the server tells the faction's change in its own lines \
+             (zone/client.cpp Client::SetFactionLevel)",
+        ),
+    ),
+];
 /// What the session leaves unread of `EQMac`'s log-server settings.
 const LOG_SERVER: &[Part] = &[Part(
     "the error-reporting server's address, port, password and e-mail",

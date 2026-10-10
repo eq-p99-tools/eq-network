@@ -110,10 +110,10 @@ fn merchant_refused(world: &World, reason: &str, out: &mut Out<'_, '_>) -> Resul
 }
 
 /// Follows what a message says about the coins; true when the purse changed
-/// without the host hearing it (loot coins, a purchase, coins TAKP added),
-/// false when only
-/// coins elsewhere changed, None when nothing did. A money update replaces
-/// the purse, and the host hears it as it is.
+/// without the host hearing it (loot coins, a purchase, a reward's coins,
+/// coins TAKP added), false when only coins elsewhere changed, None when
+/// nothing did. A money update replaces the purse, and the host hears it as
+/// it is.
 fn coins_news(message: &Message, wallet: &mut Wallet) -> Option<bool> {
     let event = match message {
         Message::Event(event) => event,
@@ -143,6 +143,13 @@ fn coins_news(message: &Message, wallet: &mut Wallet) -> Option<bool> {
         }
         WorldEvent::Merchant(MerchantUpdate::Bought { price, .. }) if *price > 0 => {
             wallet.pay(u64::from(*price));
+            Some(true)
+        }
+        // A reward's coins, which every server adds to the purse without a
+        // money update (inferred: the official client's purse after a
+        // reward is unrecorded).
+        WorldEvent::Reward(reward) if !reward.coins.is_empty() => {
+            wallet.add_to_purse(reward.coins);
             Some(true)
         }
         // A sale's price, which TAKP adds to the purse without a money
@@ -1896,6 +1903,50 @@ mod tests {
                 ClientEvent::World(WorldEvent::CoinsElsewhere { .. })
             ]
         ));
+    }
+
+    #[test]
+    fn a_rewards_coins_go_into_the_purse_and_are_told() {
+        let (mut belongings, mut world) = admitted();
+        let purse = Message::Event(WorldEvent::Coins(Coins {
+            gold: 2,
+            ..Coins::default()
+        }));
+        testing::run(|out| belongings.observe(&purse, &mut world, out))
+            .result
+            .unwrap();
+        let reward = |coins| {
+            Message::Event(WorldEvent::Reward(eq_network_game::rewards::Reward {
+                giver_id: Some(581),
+                coins,
+                experience: 100,
+                items: vec![13_005],
+            }))
+        };
+        let given = reward(Coins {
+            gold: 5,
+            copper: 3,
+            ..Coins::default()
+        });
+        let outcome = testing::run(|out| belongings.observe(&given, &mut world, out));
+        outcome.result.unwrap();
+        assert!(matches!(
+            outcome.events[..],
+            [
+                ClientEvent::World(WorldEvent::Coins(Coins {
+                    gold: 7,
+                    copper: 3,
+                    ..
+                })),
+                ClientEvent::World(WorldEvent::CoinsElsewhere { .. })
+            ]
+        ));
+        // A reward with no coins leaves the purse alone.
+        let outcome =
+            testing::run(|out| belongings.observe(&reward(Coins::default()), &mut world, out));
+        outcome.result.unwrap();
+        assert!(outcome.events.is_empty());
+        assert_eq!(world.coins.purse.unwrap().gold, 7);
     }
 
     #[test]

@@ -146,6 +146,18 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   targets: `WorldEvent::TargetOfTarget`, from `OP_TargetHoTT`. The table
   lists what `EQEmu` sends with no Titanium opcode (0x0000) as needing no
   reading. Hosts that match `WorldEvent` exhaustively need arms for both.
+- What a quest or a task gives the player, on both generations:
+  `WorldEvent::Reward` (`rewards::Reward`: the giver, the coins, the
+  experience and the items), from `EQEmu`'s quest reward, which rides
+  `OP_Sound`, and its coins alone (`OP_CashReward`, from a task or a
+  quest's `givecash`), and from TAKP's and Quarm's `OP_Reward`. Every
+  server adds the coins to the purse without a money update, so the
+  session adds them to the purse it keeps and tells the host the purse
+  they make (inferred: the official client's purse after a reward is
+  unrecorded). `EQEmu`'s fixed `OP_Sound` record that gives nothing (a
+  quest's `ding`, and an ability point earned where its rule says so) is
+  `WorldEvent::Ding`. Hosts that match `WorldEvent` exhaustively need arms
+  for both.
 
 - The server's hold on the player, on both generations, read from the
   emulators' sources and not yet checked live: a stun

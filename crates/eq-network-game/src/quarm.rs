@@ -829,6 +829,9 @@ pub fn updates(opcode: u16, body: &[u8]) -> Result<Vec<WorldEvent>> {
         crate::targets::EQMAC_TARGET_COMMAND_OPCODE | crate::targets::EQMAC_TARGET_MOUSE_OPCODE => {
             vec![WorldEvent::Target(crate::targets::eqmac_target(body)?)]
         }
+        crate::rewards::EQMAC_REWARD_OPCODE => {
+            vec![WorldEvent::Reward(crate::rewards::eqmac_reward(body)?)]
+        }
         0x9941 => {
             ensure!(
                 body.len() == 4 && word(body, 0) <= 330,

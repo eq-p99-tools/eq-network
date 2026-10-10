@@ -69,6 +69,8 @@ pub mod quarm;
 pub mod raid;
 /// Being resurrected: the offer and the player's answer.
 pub mod resurrection;
+/// What a quest or a task gives the player.
+pub mod rewards;
 /// A world's rules, and the expansions it lets the account play.
 pub mod rules;
 /// The worlds a login server lists, and the player's choice among them.

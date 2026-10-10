@@ -7,7 +7,7 @@ use super::{
     Reason::{Needless, Planned},
     ServerMessage,
     Step::{AlternateAdvancement, Appearance, Bazaar, LaterSystems, PlayerState, Raids, Social},
-    APPEARANCE, EQEMU, P99, PROFILE, TITANIUM_DESCRIPTION,
+    APPEARANCE, EQEMU, P99, PROFILE, REWARD, TITANIUM_DESCRIPTION,
 };
 
 /// What the session does with a message Titanium's servers send; nothing
@@ -209,7 +209,7 @@ pub(in crate::client) fn titanium(opcode: u16) -> Option<ServerMessage> {
         0x497c => sent("OP_Action", EQEMU, Read(&[Zone])),
         0x4b05 => sent("OP_RezzComplete", EQEMU, planned(PlayerState)),
         0x4c24 => sent("OP_SpawnDoor", EQEMU, Read(&[Zone])),
-        0x4c8c => sent("OP_CashReward", EQEMU, planned(PlayerState)),
+        0x4c8c => sent("OP_CashReward", EQEMU, Read(&[Zone])),
         0x4cc7 => sent("OP_GuildRenameGuild", EQEMU, planned(Social)),
         0x4d81 => sent("OP_DeleteItem", EQEMU, Read(&[Zone])),
         0x4dbc => sent("OP_BecomeCorpse", EQEMU, planned(PlayerState)),
@@ -223,7 +223,8 @@ pub(in crate::client) fn titanium(opcode: u16) -> Option<ServerMessage> {
         0x52a4 => sent("OP_PostEnterWorld", EQEMU, Read(&[World])),
         0x5394 => sent("OP_CharInventory", EQEMU, Read(&[Zone])),
         0x53df => sent("OP_DisciplineTimer", EQEMU, planned(PlayerState)),
-        0x541e => sent("OP_Sound", EQEMU, planned(Appearance)),
+        // A quest's reward, or EQEmu's fixed record that gives nothing.
+        0x541e => sent("OP_Sound", EQEMU, Partly(&[Zone], REWARD)),
         0x547a => sent("OP_Emote", EQEMU, Read(&[Chat])),
         0x5483 => sent("OP_MarkNPC", EQEMU, planned(Raids)),
         0x54eb => sent("OP_TaskActivityComplete", EQEMU, planned(LaterSystems)),

@@ -818,6 +818,13 @@ pub enum WorldEvent {
         /// Why it was not sent.
         reason: String,
     },
+    /// What a quest or a task gives the player: coins the server added to
+    /// the purse with no money update, and the experience and items it gave,
+    /// which come with messages of their own.
+    Reward(crate::rewards::Reward),
+    /// `EQEmu`'s sound that gives nothing: a quest's `ding`, and the
+    /// player's earning of an ability point where the server's rule says so.
+    Ding,
     /// Corpse loot session changes.
     Loot(crate::loot::LootUpdate),
     /// Merchant window changes.
@@ -1315,12 +1322,21 @@ pub fn titanium_update(opcode: u16, body: &[u8]) -> Result<Option<WorldEvent>> {
     }))
 }
 
-/// Stuns and charms, the end of hiding, the target the server sets, doors,
-/// ground objects, loot, merchant, exchange, training, resurrection, group,
-/// dice, assist, raid, book, combine, bandaging, chat server, weather and
-/// inventory packets, each owned by its codec.
+/// Stuns and charms, the end of hiding, the target the server sets,
+/// rewards, doors, ground objects, loot, merchant, exchange, training,
+/// resurrection, group, dice, assist, raid, book, combine, bandaging, chat
+/// server, weather and inventory packets, each owned by its codec.
 fn titanium_views(opcode: u16, body: &[u8]) -> Result<Option<WorldEvent>> {
     match opcode {
+        crate::rewards::SOUND_OPCODE => {
+            return Ok(Some(match crate::rewards::titanium_sound(body)? {
+                crate::rewards::Sound::Reward(reward) => WorldEvent::Reward(reward),
+                crate::rewards::Sound::Ding => WorldEvent::Ding,
+            }));
+        }
+        crate::rewards::CASH_REWARD_OPCODE => {
+            return Ok(Some(WorldEvent::Reward(crate::rewards::cash_reward(body)?)));
+        }
         crate::control::STUN_OPCODE => {
             return Ok(Some(WorldEvent::Stun(crate::control::stun(body)?)));
         }
@@ -2045,6 +2061,42 @@ mod tests {
         );
         assert!(titanium_update(0x1477, &[0; 2]).is_err());
         assert!(titanium_update(0x6a12, &[0; 8]).is_err());
+    }
+
+    #[test]
+    fn rewards_and_eqemus_ding_are_read() {
+        let mut quest = vec![0; 68];
+        quest[..4].copy_from_slice(&581u32.to_le_bytes());
+        quest[32..36].copy_from_slice(&2u32.to_le_bytes());
+        assert_eq!(
+            titanium_update(0x541e, &quest).unwrap(),
+            Some(WorldEvent::Reward(crate::rewards::Reward {
+                giver_id: Some(581),
+                coins: Coins {
+                    platinum: 2,
+                    ..Coins::default()
+                },
+                ..crate::rewards::Reward::default()
+            }))
+        );
+        assert_eq!(
+            titanium_update(0x541e, &crate::rewards::DING).unwrap(),
+            Some(WorldEvent::Ding)
+        );
+        let mut cash = [0; 16];
+        cash[..4].copy_from_slice(&7u32.to_le_bytes());
+        assert_eq!(
+            titanium_update(0x4c8c, &cash).unwrap(),
+            Some(WorldEvent::Reward(crate::rewards::Reward {
+                coins: Coins {
+                    copper: 7,
+                    ..Coins::default()
+                },
+                ..crate::rewards::Reward::default()
+            }))
+        );
+        assert!(titanium_update(0x541e, &quest[..64]).is_err());
+        assert!(titanium_update(0x4c8c, &[0; 12]).is_err());
     }
 
     #[test]
