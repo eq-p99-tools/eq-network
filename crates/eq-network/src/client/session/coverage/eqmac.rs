@@ -10,7 +10,7 @@ use super::{
         AlternateAdvancement, Appearance, Bazaar, EqMacExchanges, EqMacWorld, LaterSystems,
         PlayerState, Raids, Social, WorldAndSession,
     },
-    ACTION, DESCRIPTION, EQMAC, LOG_SERVER, PROFILE, PUSH, QUARM, TAKP, WEATHER,
+    ACTION, EQMAC, EQMAC_DESCRIPTION, LOG_SERVER, PROFILE, PUSH, QUARM, TAKP,
 };
 
 /// What the session does with a message `EQMac`'s servers send; nothing for
@@ -80,7 +80,7 @@ pub(in crate::client) fn eqmac(opcode: u16) -> Option<ServerMessage> {
             EQMAC,
             Partly(&[Admission, Zone], PROFILE),
         ),
-        0x3641 => sent("OP_Weather", EQMAC, Partly(&[Admission], WEATHER)),
+        0x3641 => sent("OP_Weather", EQMAC, Read(&[Admission, Zone])),
         0x3642 => sent("OP_FormattedMessage", EQMAC, Read(&[Chat])),
         0x3741 => sent("OP_Consider", EQMAC, Read(&[Zone])),
         0x3840 => sent("OP_ShopDelItem", EQMAC, Read(&[Zone])),
@@ -135,7 +135,7 @@ pub(in crate::client) fn eqmac(opcode: u16) -> Option<ServerMessage> {
         0x5900 => sent("OP_SessionReady", TAKP, Read(&[Login])),
         0x5941 => sent("OP_LogoutReply", EQMAC, Read(&[Zone])),
         0x5a41 => sent("OP_CancelSneakHide", EQMAC, planned(PlayerState)),
-        0x5b40 => sent("OP_NewZone", EQMAC, Partly(&[Admission], DESCRIPTION)),
+        0x5b40 => sent("OP_NewZone", EQMAC, Partly(&[Admission], EQMAC_DESCRIPTION)),
         0x5b41 => sent("OP_Stun", EQMAC, planned(PlayerState)),
         0x5d41 => sent("OP_DuelAccept / OP_DuelResponse2", EQMAC, planned(Social)),
         0x5f41 => sent("OP_ZoneSpawns", EQMAC, Read(&[Zone])),

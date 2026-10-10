@@ -1,8 +1,15 @@
 //! Zone numbers, as servers number zones in `/who all` answers and
 //! elsewhere, with the short names the official client shows for them and
-//! their long names.
+//! their long names; and what a zone's header (`OP_NewZone`) says of the
+//! zone as it admits the player.
 //!
-//! Reference: `EQEmu`'s `Zones` constants (`common/eq_constants.h`).
+//! References: `EQEmu`'s `Zones` constants (`common/eq_constants.h`); for
+//! the header, `EQEmu`'s `NewZone_Struct` (`common/eq_packet_structs.h`),
+//! which reaches the Titanium client as it is, and TAKP's and Quarm's `EQMac`
+//! `NewZone_Struct` (`common/patches/mac_structs.h`).
+
+use anyhow::{ensure, Result};
+use serde::Serialize;
 
 /// Every numbered zone, its short name and its long name, by number.
 static ZONES: [(u16, &str, &str); 481] = [
@@ -550,6 +557,164 @@ pub fn long_name(short_name: &str) -> Option<&'static str> {
         .map(|(_, _, long)| *long)
 }
 
+/// The length of Titanium's zone header. `EQEmu` sends more after it, for
+/// later clients; the Titanium client copies only these bytes.
+const TITANIUM_HEADER_LENGTH: usize = 700;
+/// The length of `EQMac`'s zone header.
+pub const EQMAC_HEADER_LENGTH: usize = 572;
+
+/// What a zone's header says of it beyond its short name and its sky, which
+/// are read on their own.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct ZoneDescription {
+    /// The zone's long name.
+    pub long_name: String,
+    /// The zone's type, by the server's number.
+    pub zone_type: u8,
+    /// How strongly the zone pulls a player down.
+    pub gravity: f32,
+    /// Where the server puts a player it finds out of bounds: x, y and z.
+    pub safe_point: [f32; 3],
+    /// The height the structs name `max_z` and mark as guessed. When it is
+    /// not zero, the servers' own maps find no ground above it
+    /// (`zone/map.cpp`).
+    pub max_z: f32,
+    /// The height below which a player is under the world.
+    pub underworld: f32,
+    /// The nearest the zone lets the view be clipped.
+    pub min_clip: f32,
+    /// The farthest the zone lets the view reach, as the header gives it;
+    /// [`crate::world::WorldEvent::Entered`] carries it as the far clip when
+    /// it is above zero.
+    pub max_clip: f32,
+    /// The zone's experience multiplier.
+    pub experience_multiplier: f32,
+    /// The zone's four sets of weather odds, of which the server picks one
+    /// at random whenever the weather may change.
+    pub weather: [WeatherOdds; 4],
+    /// `EQMac`: the music the zone plays.
+    pub music: Option<ZoneMusic>,
+    /// `EQMac`: the setting TAKP's struct names `skylock`, as it came.
+    pub sky_lock: Option<u32>,
+    /// `EQMac`: how many minutes a player's corpse lies in the zone before
+    /// the server moves it to the zone's graveyard, when it has one
+    /// (`zone/corpse.cpp`).
+    pub graveyard_minutes: Option<u16>,
+}
+
+/// One of a zone's sets of weather odds.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize)]
+pub struct WeatherOdds {
+    /// The percent chance of rain.
+    pub rain_chance: u8,
+    /// How many Norrath hours rain lasts.
+    pub rain_hours: u8,
+    /// The percent chance of snow.
+    pub snow_chance: u8,
+    /// How many Norrath hours snow lasts.
+    pub snow_hours: u8,
+}
+
+/// The music an `EQMac` zone plays, by the client's track numbers.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize)]
+pub struct ZoneMusic {
+    /// By day.
+    pub day: i16,
+    /// By night.
+    pub night: i16,
+    /// Under water.
+    pub water: i16,
+}
+
+/// Reads a Titanium zone header: the long name at 96, the type at 374,
+/// gravity at 420, the weather odds from 425, then from 488 the experience
+/// multiplier, the safe point (y, x, z), `max_z`, the underworld and the
+/// minimum and maximum clip. The character's name at 0, and the zone's
+/// number and instance and a second copy of its short name past 600, are
+/// left unread.
+///
+/// # Errors
+/// Rejects a header shorter than Titanium's 700 bytes, and values that are
+/// not finite.
+pub fn titanium_description(header: &[u8]) -> Result<ZoneDescription> {
+    ensure!(
+        header.len() >= TITANIUM_HEADER_LENGTH,
+        "truncated zone header"
+    );
+    description(header, 488)
+}
+
+/// Reads an `EQMac` zone header (572 bytes), which keeps the first fields
+/// where Titanium's does and the rest 4 bytes sooner, from 484; its music
+/// is at 476 (water, day, night), its sky lock at 540 and its graveyard time
+/// at 544. The character's name and the fields neither server sets are left
+/// unread.
+///
+/// # Errors
+/// Rejects any other length, and values that are not finite.
+pub fn eqmac_description(header: &[u8]) -> Result<ZoneDescription> {
+    ensure!(
+        header.len() == EQMAC_HEADER_LENGTH,
+        "invalid EQMac zone header length"
+    );
+    let short = |offset: usize| i16::from_le_bytes([header[offset], header[offset + 1]]);
+    Ok(ZoneDescription {
+        music: Some(ZoneMusic {
+            day: short(478),
+            night: short(480),
+            water: short(476),
+        }),
+        sky_lock: Some(u32::from_le_bytes([
+            header[540],
+            header[541],
+            header[542],
+            header[543],
+        ])),
+        graveyard_minutes: Some(u16::from_le_bytes([header[544], header[545]])),
+        ..description(header, 484)?
+    })
+}
+
+/// The fields both generations' headers share, with those from the
+/// experience multiplier on at `from`.
+fn description(header: &[u8], from: usize) -> Result<ZoneDescription> {
+    let float = |offset: usize| {
+        let value = f32::from_le_bytes([
+            header[offset],
+            header[offset + 1],
+            header[offset + 2],
+            header[offset + 3],
+        ]);
+        ensure!(value.is_finite(), "invalid zone header value");
+        Ok(value)
+    };
+    let long_name = &header[96..374];
+    let long_name = &long_name[..long_name
+        .iter()
+        .position(|&byte| byte == 0)
+        .unwrap_or(long_name.len())];
+    Ok(ZoneDescription {
+        long_name: String::from_utf8_lossy(long_name).into_owned(),
+        zone_type: header[374],
+        gravity: float(420)?,
+        safe_point: [float(from + 8)?, float(from + 4)?, float(from + 12)?],
+        max_z: float(from + 16)?,
+        underworld: float(from + 20)?,
+        min_clip: float(from + 24)?,
+        max_clip: float(from + 28)?,
+        experience_multiplier: float(from)?,
+        weather: std::array::from_fn(|index| WeatherOdds {
+            rain_chance: header[425 + index],
+            rain_hours: header[429 + index],
+            snow_chance: header[433 + index],
+            snow_hours: header[437 + index],
+        }),
+        music: None,
+        sky_lock: None,
+        graveyard_minutes: None,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -565,5 +730,88 @@ mod tests {
         assert_eq!(number("nowhere"), None);
         assert_eq!(long_name("QEYTOQRG"), Some("The Qeynos Hills"));
         assert_eq!(long_name("nowhere"), None);
+    }
+
+    /// A header of `length` bytes with the shared fields set, its
+    /// experience multiplier and what follows it from `from`.
+    fn header(length: usize, from: usize) -> Vec<u8> {
+        let mut header = vec![0; length];
+        header[96..106].copy_from_slice(b"Test Plain");
+        header[374] = 2;
+        header[420..424].copy_from_slice(&0.4f32.to_le_bytes());
+        header[425..441].copy_from_slice(&[10, 0, 0, 0, 2, 0, 0, 0, 0, 5, 0, 0, 0, 1, 0, 0]);
+        for (offset, value) in [
+            (0, 1.5f32),
+            (4, 20.0),
+            (8, -30.0),
+            (12, 4.0),
+            (16, 1000.0),
+            (20, -500.0),
+            (24, 50.0),
+            (28, 600.0),
+        ] {
+            header[from + offset..from + offset + 4].copy_from_slice(&value.to_le_bytes());
+        }
+        header
+    }
+
+    #[test]
+    fn each_generations_header_describes_the_zone() {
+        let expected = ZoneDescription {
+            long_name: "Test Plain".into(),
+            zone_type: 2,
+            gravity: 0.4,
+            safe_point: [-30.0, 20.0, 4.0],
+            max_z: 1000.0,
+            underworld: -500.0,
+            min_clip: 50.0,
+            max_clip: 600.0,
+            experience_multiplier: 1.5,
+            weather: [
+                WeatherOdds {
+                    rain_chance: 10,
+                    rain_hours: 2,
+                    snow_chance: 0,
+                    snow_hours: 0,
+                },
+                WeatherOdds {
+                    snow_chance: 5,
+                    snow_hours: 1,
+                    ..WeatherOdds::default()
+                },
+                WeatherOdds::default(),
+                WeatherOdds::default(),
+            ],
+            music: None,
+            sky_lock: None,
+            graveyard_minutes: None,
+        };
+        // EQEmu sends Titanium more than its 700 bytes.
+        let titanium = header(740, 488);
+        assert_eq!(titanium_description(&titanium).unwrap(), expected);
+        assert_eq!(titanium_description(&titanium[..700]).unwrap(), expected);
+        assert!(titanium_description(&titanium[..699]).is_err());
+        let mut eqmac = header(572, 484);
+        eqmac[476..482].copy_from_slice(&[4, 0, 21, 0, 0, 0]);
+        eqmac[540] = 1;
+        eqmac[544..546].copy_from_slice(&5u16.to_le_bytes());
+        assert_eq!(
+            eqmac_description(&eqmac).unwrap(),
+            ZoneDescription {
+                music: Some(ZoneMusic {
+                    day: 21,
+                    night: 0,
+                    water: 4,
+                }),
+                sky_lock: Some(1),
+                graveyard_minutes: Some(5),
+                ..expected
+            }
+        );
+        assert!(eqmac_description(&eqmac[..571]).is_err());
+        assert!(eqmac_description(&titanium[..700]).is_err());
+        // A value that is not a number spoils the description.
+        eqmac[420..424].copy_from_slice(&f32::NAN.to_le_bytes());
+        assert!(eqmac_description(&eqmac).is_err());
     }
 }

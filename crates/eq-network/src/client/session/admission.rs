@@ -8,6 +8,7 @@ use super::{
     ConnectionStage, ConnectionState, Context, Events, Instant, Result,
 };
 use crate::world::{PlayerState, Position};
+use eq_network_game::zones::{self, ZoneDescription};
 use eq_network_transport::{Application, Transport};
 
 mod eqmac;
@@ -83,6 +84,27 @@ pub(in crate::client) struct Zone {
     pub(super) far_clip: Option<f32>,
     /// Its sky and fog, when the description gives them.
     pub(super) sky: Option<eq_network_game::clock::ZoneSky>,
+    /// The rest of its description, when it could be read.
+    pub(super) description: Option<ZoneDescription>,
+}
+
+/// Reads the rest of a zone's description with `read`, telling the host
+/// why when it cannot be read; the admission goes on without it.
+///
+/// # Errors
+/// Returns an error when the host's event handler fails.
+fn describe(
+    read: impl FnOnce(&[u8]) -> Result<ZoneDescription>,
+    header: &[u8],
+    log: &mut Events<'_>,
+) -> Result<Option<ZoneDescription>> {
+    match read(header) {
+        Ok(description) => Ok(Some(description)),
+        Err(error) => {
+            log.diagnostic(format!("Zone description unreadable: {error}"))?;
+            Ok(None)
+        }
+    }
 }
 
 /// Titanium's handshake in progress.
@@ -239,6 +261,11 @@ impl Admission for TitaniumAdmission {
                     name,
                     far_clip: crate::world::titanium_far_clip(&packet.body),
                     sky: eq_network_game::clock::titanium_zone_sky(&packet.body),
+                    description: describe(
+                        zones::titanium_description,
+                        &packet.body,
+                        handshake.log,
+                    )?,
                 });
                 handshake.session.send(0x067a, &0u32.to_le_bytes())?;
                 handshake.session.send(0x5e3a, &0u32.to_le_bytes())?;
@@ -334,13 +361,14 @@ mod tests {
         let mut spawn = vec![0; 385];
         spawn[7..13].copy_from_slice(b"Tester");
         spawn[340..344].copy_from_slice(&9u32.to_le_bytes());
-        let mut description = vec![0; 96];
+        let mut description = vec![0; 700];
         description[64..72].copy_from_slice(b"qeytoqrg");
+        description[96..106].copy_from_slice(b"Test Hills");
         let mut read = |admission: &mut TitaniumAdmission, world: &mut World, opcode, body| {
             admission
                 .read(&mut packet(opcode, body), world, &mut handshake)
                 .unwrap()
-                .map(|(_, zone)| zone.name)
+                .map(|(_, zone)| zone)
         };
         // The profile, spawn and weather come in any order.
         assert!(read(&mut admission, &mut world, WEATHER_OPCODE, Vec::new()).is_none());
@@ -362,8 +390,9 @@ mod tests {
         read(&mut admission, &mut world, EXPERIENCE_OPCODE, Vec::new());
         assert_eq!(admission.progress(), Stage::Answered);
         assert!(world.admitted.is_none());
-        let zone = read(&mut admission, &mut world, EXPERIENCE_OPCODE, Vec::new());
-        assert_eq!(zone.as_deref(), Some("qeytoqrg"));
+        let zone = read(&mut admission, &mut world, EXPERIENCE_OPCODE, Vec::new()).unwrap();
+        assert_eq!(zone.name, "qeytoqrg");
+        assert_eq!(zone.description.unwrap().long_name, "Test Hills");
         assert_eq!(admission.progress(), Stage::Admitted);
         assert!(world.admitted.is_some());
         // Once admitted, the handshake takes nothing more.

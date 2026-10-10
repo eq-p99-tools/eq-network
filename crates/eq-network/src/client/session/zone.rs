@@ -523,6 +523,11 @@ fn admit(
                 out.log
                     .send(ClientEvent::World(crate::world::WorldEvent::Sky(sky)))?;
             }
+            if let Some(description) = &zone.description {
+                out.log.send(ClientEvent::World(
+                    crate::world::WorldEvent::ZoneDescription(description.clone()),
+                ))?;
+            }
             features.admitted(world, out)?;
         }
         Err(error) => out
@@ -1030,6 +1035,7 @@ mod tests {
             name: "qeynos".into(),
             far_clip: None,
             sky: None,
+            description: None,
         };
         // The player zones twice, and each zone gives them a different spawn.
         for spawn_id in [7u16, 9] {
@@ -1064,6 +1070,51 @@ mod tests {
         }
     }
 
+    #[test]
+    fn the_admission_tells_the_zone_then_its_sky_then_its_description() {
+        use crate::client::session::feature::testing;
+        use crate::world::WorldEvent;
+        let mut header = vec![0; 700];
+        header[96..103].copy_from_slice(b"Example");
+        let zone = super::super::admission::Zone {
+            name: "qeynos".into(),
+            far_clip: Some(450.0),
+            sky: eq_network_game::clock::titanium_zone_sky(&header),
+            description: eq_network_game::zones::titanium_description(&header).ok(),
+        };
+        let mut world = World::new(5);
+        let mut features = Features::new(
+            servers::server_type(crate::client::ServerProtocol::EqEmu),
+            "Tester",
+            eq_network_game::food::AutoEat::default(),
+        );
+        let outcome = testing::run(|out| {
+            admit(
+                Ok(testing::player(7)),
+                &zone,
+                &mut features,
+                &mut world,
+                out,
+            )
+        });
+        outcome.result.unwrap();
+        let told: Vec<String> = outcome
+            .events
+            .iter()
+            .filter_map(|event| match event {
+                ClientEvent::World(WorldEvent::Entered { far_clip, .. }) => {
+                    Some(format!("entered, far clip {far_clip:?}"))
+                }
+                ClientEvent::World(WorldEvent::Sky(_)) => Some("sky".into()),
+                ClientEvent::World(WorldEvent::ZoneDescription(description)) => {
+                    Some(description.long_name.clone())
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(told, ["entered, far clip Some(450.0)", "sky", "Example"]);
+    }
+
     /// Admits the player, spawn 7, with these features on the `EQMac` wire,
     /// the profile naming the bind point first; tells the session it knows
     /// the player's items, as the inventory feature would; hears the server
@@ -1083,6 +1134,7 @@ mod tests {
             name: "qeynos".into(),
             far_clip: None,
             sky: None,
+            description: None,
         };
         let mut world = World::new(5);
         world.own_spawn = Some(7);

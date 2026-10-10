@@ -898,6 +898,12 @@ pub enum WorldEvent {
     TimeOfDay(crate::clock::GameTime),
     /// How the zone's sky and fog look, right after the admission.
     Sky(crate::clock::ZoneSky),
+    /// What the zone's header says of it beyond its name, sky and far clip,
+    /// right after the admission.
+    ZoneDescription(crate::zones::ZoneDescription),
+    /// The zone's weather, once the player is in the zone and whenever it
+    /// changes.
+    Weather(crate::clock::Weather),
     /// A consent to drag a player's corpses given or taken back, told to
     /// the owner and to the one consented.
     Consent(crate::corpses::Consent),
@@ -1141,6 +1147,17 @@ pub fn titanium_far_clip(new_zone: &[u8]) -> Option<f32> {
     (value.is_finite() && value > 0.0).then_some(value)
 }
 
+/// Reads the far clip distance from an `EQMac` zone header (572 bytes), a
+/// float at offset 512; None for another length, or when not positive.
+#[must_use]
+pub fn eqmac_far_clip(new_zone: &[u8]) -> Option<f32> {
+    if new_zone.len() != crate::zones::EQMAC_HEADER_LENGTH {
+        return None;
+    }
+    let value = f32::from_le_bytes(new_zone[512..516].try_into().ok()?);
+    (value.is_finite() && value > 0.0).then_some(value)
+}
+
 /// Reads the world's short name from a Titanium log-server settings body
 /// (`OP_LogServer`), which carries it NUL-terminated in 32 bytes at offset 32.
 ///
@@ -1268,7 +1285,8 @@ pub fn titanium_update(opcode: u16, body: &[u8]) -> Result<Option<WorldEvent>> {
 
 /// Spell actions, doors, ground objects, loot, merchant, exchange,
 /// training, resurrection, group, dice, assist, raid, book, combine,
-/// bandaging, chat server and inventory packets, each owned by its codec.
+/// bandaging, chat server, weather and inventory packets, each owned by its
+/// codec.
 fn titanium_views(opcode: u16, body: &[u8]) -> Result<Option<WorldEvent>> {
     if opcode == 0x497c {
         return Ok(crate::buffs::titanium_spell_effect(body)?.map(WorldEvent::SpellEffect));
@@ -1303,6 +1321,8 @@ fn titanium_views(opcode: u16, body: &[u8]) -> Result<Option<WorldEvent>> {
         Some(WorldEvent::BindWound(update))
     } else if let Some(offer) = crate::channels::titanium(opcode, body)? {
         Some(WorldEvent::ChatServer(offer))
+    } else if let Some(weather) = crate::clock::titanium_weather(opcode, body)? {
+        Some(WorldEvent::Weather(weather))
     } else {
         crate::inventory::decode(opcode, body)?.map(WorldEvent::Inventory)
     })
@@ -1778,6 +1798,13 @@ mod tests {
         assert_eq!(titanium_far_clip(&header[..519]), None);
         header[516..520].copy_from_slice(&0.0f32.to_le_bytes());
         assert_eq!(titanium_far_clip(&header), None);
+        // EQMac's 572-byte header keeps it 4 bytes sooner.
+        let mut header = vec![0; 572];
+        header[512..516].copy_from_slice(&300.0f32.to_le_bytes());
+        assert_eq!(eqmac_far_clip(&header), Some(300.0));
+        assert_eq!(eqmac_far_clip(&header[..571]), None);
+        header[512..516].copy_from_slice(&f32::INFINITY.to_le_bytes());
+        assert_eq!(eqmac_far_clip(&header), None);
     }
 
     #[test]

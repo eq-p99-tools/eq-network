@@ -179,9 +179,8 @@ impl fmt::Display for Reason {
 /// step at a time.
 #[derive(Clone, Copy, Debug)]
 pub(super) enum Step {
-    /// The world and the session: the logout's first step, the weather, the
-    /// rest of the zone's description, and Quarm's move to the bind point
-    /// and its shared bank offer.
+    /// The world and the session: the logout's first step, and Quarm's move
+    /// to the bind point and its shared bank offer.
     WorldAndSession,
     /// The player's own state: the push of a hit, stun, mesmerize and charm,
     /// the end of sneaking and hiding, disciplines and reuse timers, a
@@ -263,21 +262,43 @@ const ACTION: &[Part] = &[Part(
     "melee and skill actions, and the push",
     Reason::Planned(Step::PlayerState),
 )];
-/// What the session leaves unread of the weather.
-const WEATHER: &[Part] = &[Part(
-    "its kind and intensity",
-    Reason::Planned(Step::WorldAndSession),
-)];
 /// What the session leaves unread of `EQMac`'s log-server settings.
 const LOG_SERVER: &[Part] = &[Part(
     "the error-reporting server's address, port, password and e-mail",
     Reason::Needless("nothing here reports to it"),
 )];
-/// What the session leaves unread of the zone's description.
-const DESCRIPTION: &[Part] = &[Part(
-    "fog, gravity, the safe point and the rest",
-    Reason::Planned(Step::WorldAndSession),
-)];
+/// What the session leaves unread of Titanium's zone header.
+const TITANIUM_DESCRIPTION: &[Part] = &[
+    Part(
+        "the character's name, the zone's number and a second copy of its name",
+        Reason::Needless("the session has them from its entry and the player's profile"),
+    ),
+    Part(
+        "the zone's instance",
+        Reason::Needless("EQEmu never sets it (zone/zone.cpp Zone::LoadZoneCFG)"),
+    ),
+    Part(
+        "what EQEmu sends past the header's 700 bytes",
+        Reason::Needless(
+            "it is for later clients; the Titanium client copies only the 700 \
+             (common/eq_packet_structs.h NewZone_Struct)",
+        ),
+    ),
+];
+/// What the session leaves unread of `EQMac`'s zone header.
+const EQMAC_DESCRIPTION: &[Part] = &[
+    Part(
+        "the character's name",
+        Reason::Needless("the session has it from its entry"),
+    ),
+    Part(
+        "special dates and codes, the time zone, and the forage, fishing and script settings",
+        Reason::Needless(
+            "neither server sets them (common/patches/mac.cpp ENCODE(OP_NewZone), \
+             zone/zone.cpp)",
+        ),
+    ),
+];
 
 /// Where in the session a message arrives.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

@@ -24,7 +24,8 @@ pub const ZONE_DATA_RATE: u16 = 0xe841;
 pub const ZONE_ENTRY: u16 = 0x2840;
 /// The player's profile.
 pub const ZONE_PLAYER_PROFILE: u16 = 0x3640;
-/// The zone's weather, after which the client asks for the zone.
+/// The zone's weather: as it admits the player, after which the client asks
+/// for the zone, and once the player is in the zone and whenever it changes.
 pub const ZONE_WEATHER: u16 = 0x3641;
 /// The client asking for the zone's description.
 pub const ZONE_REQUEST_NEW: u16 = 0x5d40;
@@ -694,6 +695,7 @@ pub fn updates(opcode: u16, body: &[u8]) -> Result<Vec<WorldEvent>> {
             vec![WorldEvent::Despawn(valid_id(u32::from(short(body, 0)))?)]
         }
         ZONE_DEATH => vec![WorldEvent::Death(death(body)?)],
+        ZONE_WEATHER => vec![WorldEvent::Weather(crate::clock::weather(body)?)],
         // Quarm's zones send their part of the rules at every zone-in.
         crate::rules::EQMAC_LOG_SERVER_OPCODE => {
             vec![WorldEvent::Rules(crate::rules::eqmac_rules(body)?)]
