@@ -10,8 +10,8 @@ use super::{
         AlternateAdvancement, Appearance, Bazaar, EqMacExchanges, EqMacWorld, LaterSystems,
         PlayerState, Raids, Social,
     },
-    EQMAC, EQMAC_DESCRIPTION, LOG_SERVER, OWN_NAME, PROFILE, QUARM, RESET_SKILL, REWARD, SACRIFICE,
-    TAKP, TRANSLOCATE,
+    EQMAC, EQMAC_DESCRIPTION, EQMAC_PROFILE, LOG_SERVER, OWN_NAME, QUARM, RESET_SKILL, REWARD,
+    SACRIFICE, TAKP, TRANSLOCATE,
 };
 
 /// What the session does with a message `EQMac`'s servers send; nothing for
@@ -80,7 +80,7 @@ pub(in crate::client) fn eqmac(opcode: u16) -> Option<ServerMessage> {
         0x3640 => sent(
             "OP_PlayerProfile",
             EQMAC,
-            Partly(&[Admission, Zone], PROFILE),
+            Partly(&[Admission, Zone], EQMAC_PROFILE),
         ),
         0x3641 => sent("OP_Weather", EQMAC, Read(&[Admission, Zone])),
         0x3642 => sent("OP_FormattedMessage", EQMAC, Read(&[Chat])),

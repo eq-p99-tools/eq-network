@@ -7,6 +7,11 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- The message tables say what each generation's profile leaves unread
+  apart: `EQMac`'s skills, practice points and deity, which they had
+  counted as read, are planned with `EQMac`'s catch-up on the world, and
+  its profile has no leadership or tribute to list.
+
 - The message tables no longer list Titanium's `OP_RezzComplete`, which
   `EQEmu` sends only to the world server, and list `EQMac`'s as TAKP's
   alone, as Quarm too sends it only to the world server; it is planned
@@ -170,6 +175,16 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   discipline the player began, or none as it ends
   (`WorldEvent::Discipline`), from `OP_DisciplineChange`. Hosts that match
   `WorldEvent` exhaustively need arms for the four.
+- The player's languages, on both generations: `PlayerState::languages`,
+  each language's skill by its number, from the profile (Titanium's 28,
+  and the 26 TAKP and Quarm fill of `EQMac`'s room for 32), kept current
+  from skill updates for skill 100 and up, which every server sends for a
+  language (`world::LANGUAGE_SKILLS`); `EQMac`'s skill updates wait for
+  its catch-up on the world. On Titanium, the profile's list of
+  the disciplines the player knows: `PlayerState::disciplines`, which
+  `EQEmu` leaves empty in the profile and the session keeps current from
+  `WorldEvent::Disciplines`. Hosts that build `PlayerState` need the two
+  fields.
 
 - The player's target as the server sets it, on both generations:
   `WorldEvent::Target`, from `OP_TargetCommand` (`EQEmu`'s sense spells,
@@ -286,8 +301,8 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   types that send it and the parts of the session that read it, or why it
   is left unread (work still to come, an answer to a request eq-network
   never sends, parked work, or nothing in it worth reading), taken from
-  `EQEmu`'s, TAKP's and Quarm's sources: Titanium's 258 messages, 119 of
-  them read, and `EQMac`'s 177, 87 read. A zone session now tells once, as
+  `EQEmu`'s, TAKP's and Quarm's sources: Titanium's 258 messages, 123 of
+  them read, and `EQMac`'s 177, 89 read. A zone session now tells once, as
   a diagnostic, of each message it leaves unread with the reason (but one
   with nothing worth reading) and of each the table does not list, where
   before a message nothing read left no trace once the zone admitted the

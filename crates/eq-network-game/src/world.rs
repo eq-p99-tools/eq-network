@@ -88,6 +88,17 @@ pub struct PlayerState {
     /// Unspent practice points, which training at a guildmaster spends, when
     /// decoded.
     pub practice_points: Option<u32>,
+    /// The player's skill in each language, 0 to 100, by the language's
+    /// number (0 is the Common Tongue), when decoded: the 28 Titanium's
+    /// profile lists, and the 26 TAKP and Quarm fill of the `EQMac` profile's
+    /// room for 32 (`common/patches/mac.cpp`). Skill updates for skill
+    /// [`LANGUAGE_SKILLS`] and up change it ([`PlayerState::apply_skill`]).
+    pub languages: Option<Vec<u8>>,
+    /// The disciplines the player knows, by spell ID, in the list's 100
+    /// slots, 0 for an empty one, when decoded: Titanium's profile, which
+    /// `EQEmu` leaves empty until its list follows
+    /// ([`WorldEvent::Disciplines`]). The `EQMac` profile lists none.
+    pub disciplines: Option<Vec<u32>>,
     /// Numeric gender identifier.
     pub gender: u32,
     /// Current level.
@@ -122,10 +133,28 @@ pub struct PlayerState {
     pub name_parts: crate::names::NameParts,
 }
 
+/// Where languages begin among skill numbers: every server tells of a
+/// language's skill as skill 100 plus the language's number
+/// (`Client::SetLanguageSkill`).
+pub const LANGUAGE_SKILLS: u32 = 100;
+
 impl PlayerState {
-    /// Updates only an existing skill slot; unknown IDs never grow profile storage.
+    /// Updates only an existing skill or language slot, a language's
+    /// numbered from [`LANGUAGE_SKILLS`]; unknown IDs never grow profile
+    /// storage, and a language's value beyond a byte changes nothing.
     pub fn apply_skill(&mut self, skill_id: u32, value: u32) {
-        if let Some(slot) = usize::try_from(skill_id).ok().and_then(|index| {
+        if let Some(language) = skill_id.checked_sub(LANGUAGE_SKILLS) {
+            if let (Some(slot), Ok(value)) = (
+                usize::try_from(language).ok().and_then(|index| {
+                    self.languages
+                        .as_mut()
+                        .and_then(|languages| languages.get_mut(index))
+                }),
+                u8::try_from(value),
+            ) {
+                *slot = value;
+            }
+        } else if let Some(slot) = usize::try_from(skill_id).ok().and_then(|index| {
             self.skills
                 .as_mut()
                 .and_then(|skills| skills.get_mut(index))
@@ -1130,7 +1159,8 @@ pub enum WorldEvent {
     HideAndSneakEnded,
     /// Own-character skill update; unknown skill IDs remain available to consumers.
     Skill {
-        /// Protocol skill index (22 is dual wield).
+        /// Protocol skill index (22 is dual wield); from
+        /// [`LANGUAGE_SKILLS`] on, a language's.
         skill_id: u32,
         /// New server skill value.
         value: u32,
@@ -1166,6 +1196,12 @@ pub enum WorldEvent {
 pub fn profile_heading(raw: f32, revolution: f32) -> f32 {
     (raw * 512.0 / revolution).rem_euclid(512.0)
 }
+
+/// Where the Titanium profile lists the player's languages
+/// (`MAX_PP_LANGUAGE`, 28).
+const TITANIUM_LANGUAGES: std::ops::Range<usize> = 13084..13112;
+/// Where the Titanium profile lists the disciplines the player knows.
+const TITANIUM_DISCIPLINES: std::ops::Range<usize> = 5508..5908;
 
 /// Decode the profile and validated, decrypted own-spawn record. `revolution`
 /// is the profile's heading scale, see [`profile_heading`].
@@ -1213,6 +1249,10 @@ pub fn titanium_player(profile: &[u8], spawn: &[u8], revolution: f32) -> Result<
                 .collect(),
         ),
         practice_points: Some(word(profile, 2224)),
+        languages: Some(profile[TITANIUM_LANGUAGES].to_vec()),
+        disciplines: Some(crate::disciplines::titanium_list(
+            &profile[TITANIUM_DISCIPLINES],
+        )?),
         gender: word(profile, 4),
         level: profile[20],
         position,
@@ -1940,6 +1980,33 @@ mod tests {
         );
         profile[13116..13120].copy_from_slice(&f32::NAN.to_le_bytes());
         assert!(titanium_player(&profile, &spawn, 256.0).is_err());
+    }
+
+    #[test]
+    fn the_titanium_profile_lists_languages_and_disciplines() {
+        let mut profile = vec![0; 19592];
+        let mut spawn = vec![0; 385];
+        spawn[340..344].copy_from_slice(&7u32.to_le_bytes());
+        // The Common Tongue at 100 and Vah Shir, language 24, at 25.
+        profile[13084] = 100;
+        profile[13084 + 24] = 25;
+        // A discipline in the list's first slot.
+        profile[5508..5512].copy_from_slice(&4585u32.to_le_bytes());
+        let mut player = titanium_player(&profile, &spawn, 256.0).unwrap();
+        let mut languages = player.languages.clone().unwrap();
+        assert_eq!(languages.len(), 28);
+        assert_eq!((languages[0], languages[24]), (100, 25));
+        assert_eq!(player.disciplines.as_ref().unwrap()[..2], [4585, 0]);
+        // A language's skill update names skill 100 plus its number.
+        player.apply_skill(LANGUAGE_SKILLS + 24, 26);
+        languages[24] = 26;
+        assert_eq!(player.languages.as_ref(), Some(&languages));
+        // Beyond the list, or beyond a byte, it changes nothing.
+        player.apply_skill(LANGUAGE_SKILLS + 28, 5);
+        player.apply_skill(LANGUAGE_SKILLS + 24, 256);
+        assert_eq!(player.languages.as_ref(), Some(&languages));
+        // The skills stay apart.
+        assert_eq!(player.skills.as_ref().unwrap()[24], 0);
     }
 
     #[test]

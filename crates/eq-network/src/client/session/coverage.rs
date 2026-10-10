@@ -180,8 +180,9 @@ impl fmt::Display for Reason {
 /// step at a time.
 #[derive(Clone, Copy, Debug)]
 pub(super) enum Step {
-    /// The player's own state: disciplines and reuse timers, stats, skills
-    /// and languages.
+    /// The player's own state: what is left of it answers requests
+    /// eq-network does not send yet, the player's begging, disarming, pick
+    /// pocketing, poisoning and tracking, and a banker's change.
     PlayerState,
     /// Spawns' appearance and effects: the appearance kinds left, illusions,
     /// renames, spell and level effects, sounds, projectiles and spawn
@@ -233,17 +234,24 @@ const TAKP: &[ServerProtocol] = &[ServerProtocol::Takp];
 /// Quarm's alone.
 const QUARM: &[ServerProtocol] = &[ServerProtocol::Quarm];
 
-/// What the session leaves unread of the player's profile.
-const PROFILE: &[Part] = &[
-    Part(
-        "languages and disciplines",
-        Reason::Planned(Step::PlayerState),
-    ),
+/// What the session leaves unread of Titanium's profile.
+const TITANIUM_PROFILE: &[Part] = &[
     Part(
         "alternate advancement and leadership",
         Reason::Planned(Step::AlternateAdvancement),
     ),
     Part("tribute", Reason::Planned(Step::LaterSystems)),
+];
+/// What the session leaves unread of `EQMac`'s profile.
+const EQMAC_PROFILE: &[Part] = &[
+    Part(
+        "skills, practice points and deity",
+        Reason::Planned(Step::EqMacWorld),
+    ),
+    Part(
+        "alternate advancement",
+        Reason::Planned(Step::AlternateAdvancement),
+    ),
 ];
 /// What the session leaves unread of a spawn's appearance.
 const APPEARANCE: &[Part] = &[Part(
