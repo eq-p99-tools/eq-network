@@ -778,6 +778,16 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- A damage shield's record (`OP_Damage` of kinds 244 to 249,
+  `combat::DAMAGE_SHIELD_KINDS`) reads as the points the shield dealt,
+  `DamageOutcome::Hit`. Both servers send those points negated, so a
+  shield of 1 to 6 points read as a block, parry, riposte, dodge,
+  invulnerability or rune, and a larger one as an unknown code. A spell
+  that took hold and dealt nothing (kind 231, value 0) reads as the new
+  `DamageOutcome::Landed` rather than a miss, and TAKP's and Quarm's
+  lifetap record to its caster, which names the caster as both target and
+  source, as the new `DamageOutcome::Tapped` with the points taken. Hosts
+  that match `DamageOutcome` exhaustively need arms for both.
 - On Windows, a session no longer ends with "Overlapped I/O operation is in
   progress" (os error 997) or its cancelled twin (995). std's sockets are
   overlapped there, and their read timeout (`SO_RCVTIMEO`) leaves a socket

@@ -34,6 +34,15 @@ pub const EQMAC_ANIMATION_OPCODE: u16 = 0xa140;
 
 /// Damage kind used for spell damage and beneficial spell landings.
 pub const SPELL_DAMAGE_KIND: u8 = 231;
+/// The damage kinds of a damage shield's record: decay, chill, freezing,
+/// torment, burn and thorns (`EQEmu`'s and TAKP's `DmgShieldType`,
+/// `common/spdat.h`), by the shield's spell or its resist. A shield against
+/// spells sends the kind of its wearer's other damage shield
+/// (`Mob::DamageShield`), so its record reads as one of that kind. On a
+/// wearer with no other damage shield it sends kind 0, and its record,
+/// negative with the attacker as its target, reads as an avoidance code
+/// (past 6 points, an unknown one) that nothing can tell from a real one.
+pub const DAMAGE_SHIELD_KINDS: std::ops::RangeInclusive<u8> = 244..=249;
 
 /// The server's answer to a consider request.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
@@ -84,10 +93,11 @@ impl From<u32> for ConColor {
     }
 }
 
-/// Outcome carried in the signed damage field.
+/// Outcome carried in the signed damage field, read by the record's kind.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 pub enum DamageOutcome {
-    /// Points of damage dealt.
+    /// Points of damage dealt; for a damage shield's kind, the points the
+    /// shield dealt the one who struck its wearer.
     Hit(u32),
     /// The attack missed.
     Miss,
@@ -103,6 +113,13 @@ pub enum DamageOutcome {
     Invulnerable,
     /// Absorbed by a rune.
     Rune,
+    /// A spell took hold and dealt no damage: the record `EQEmu` and TAKP
+    /// send everyone near as most spells land, and `EQEmu`'s for a spell a
+    /// rune absorbed whole.
+    Landed,
+    /// The points a lifetap took, in the record TAKP and Quarm send its
+    /// caster alone, naming the caster as both target and source.
+    Tapped(u32),
     /// Unrecognized negative code.
     Other(i32),
 }
@@ -122,6 +139,31 @@ impl From<i32> for DamageOutcome {
     }
 }
 
+impl DamageOutcome {
+    /// Reads a record's damage field by its kind. Both servers send a
+    /// damage shield's points negated (`EQEmu`'s and TAKP's
+    /// `Mob::DamageShield`), a spell that took hold and dealt nothing as 0
+    /// (`Mob::SpellOnTarget`), and TAKP and Quarm a lifetap's points to its
+    /// caster negated, the caster as target and source
+    /// (`Mob::GenerateDamagePackets`); the rest are damage or the avoidance
+    /// codes. A tap a rune absorbs whole sends 0, which reads as
+    /// [`Self::Landed`].
+    fn read(kind: u8, (target_id, source_id): (u16, u16), raw: i32) -> Self {
+        if DAMAGE_SHIELD_KINDS.contains(&kind) {
+            return Self::Hit(raw.unsigned_abs());
+        }
+        if kind == SPELL_DAMAGE_KIND {
+            if raw == 0 {
+                return Self::Landed;
+            }
+            if raw < 0 && target_id == source_id {
+                return Self::Tapped(raw.unsigned_abs());
+            }
+        }
+        raw.into()
+    }
+}
+
 /// One `OP_Damage` record.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 pub struct Damage {
@@ -129,11 +171,16 @@ pub struct Damage {
     pub target_id: u16,
     /// Attacking entity.
     pub source_id: u16,
-    /// Skill used, or [`SPELL_DAMAGE_KIND`] for spells.
+    /// The damage's type, not the skill: the servers' type for the skill
+    /// (`EQEmu`'s `SkillDamageTypes`, `common/eq_constants.h`: both blunt
+    /// skills send 0 and every kick 30), [`SPELL_DAMAGE_KIND`] for spells,
+    /// [`DAMAGE_SHIELD_KINDS`] for damage shields, 252 for a fall (another
+    /// client's own record, which `EQEmu` relays to everyone near it), 253
+    /// for traps and 255 for a skill with no type of its own.
     pub kind: u8,
     /// Spell responsible for spell damage; None for melee and skills.
     pub spell_id: Option<u16>,
-    /// Signed outcome from the damage field.
+    /// The damage field, read by the kind.
     pub outcome: DamageOutcome,
 }
 
@@ -238,13 +285,17 @@ pub fn damage(body: &[u8]) -> Result<Damage> {
     let kind = body[4];
     let spell_id = u16::from_le_bytes([body[5], body[6]]);
     let raw = i32::from_le_bytes(word(body, 7)?.to_le_bytes());
+    let spawns = (
+        u16::from_le_bytes([body[0], body[1]]),
+        u16::from_le_bytes([body[2], body[3]]),
+    );
     Ok(Damage {
-        target_id: u16::from_le_bytes([body[0], body[1]]),
-        source_id: u16::from_le_bytes([body[2], body[3]]),
+        target_id: spawns.0,
+        source_id: spawns.1,
         kind,
         spell_id: (kind == SPELL_DAMAGE_KIND && !matches!(spell_id, 0 | u16::MAX))
             .then_some(spell_id),
-        outcome: raw.into(),
+        outcome: DamageOutcome::read(kind, spawns, raw),
     })
 }
 
@@ -260,13 +311,17 @@ pub fn eqmac_damage(body: &[u8]) -> Result<Damage> {
         .map_err(|_| anyhow::anyhow!("EQMac damage type beyond any skill's"))?;
     let spell_id = u16::from_le_bytes([body[6], body[7]]);
     let raw = i32::from_le_bytes(word(body, 8)?.to_le_bytes());
+    let spawns = (
+        u16::from_le_bytes([body[0], body[1]]),
+        u16::from_le_bytes([body[2], body[3]]),
+    );
     Ok(Damage {
-        target_id: u16::from_le_bytes([body[0], body[1]]),
-        source_id: u16::from_le_bytes([body[2], body[3]]),
+        target_id: spawns.0,
+        source_id: spawns.1,
         kind,
         spell_id: (kind == SPELL_DAMAGE_KIND && !matches!(spell_id, 0 | u16::MAX))
             .then_some(spell_id),
-        outcome: raw.into(),
+        outcome: DamageOutcome::read(kind, spawns, raw),
     })
 }
 
@@ -409,7 +464,7 @@ mod tests {
         body[5..7].copy_from_slice(&219u16.to_le_bytes());
         let spell = damage(&body).unwrap();
         assert_eq!(spell.spell_id, Some(219));
-        assert_eq!(spell.outcome, DamageOutcome::Miss);
+        assert_eq!(spell.outcome, DamageOutcome::Landed);
         body[4] = 1;
         for (raw, outcome) in [
             (12, DamageOutcome::Hit(12)),
@@ -430,6 +485,60 @@ mod tests {
             );
         }
         assert!(damage(&body[..22]).is_err());
+    }
+
+    #[test]
+    fn each_kind_reads_its_damage_field_its_own_way() {
+        const SPELL: u8 = SPELL_DAMAGE_KIND;
+        // Target, source, kind and value: what each generation's record
+        // reads as.
+        let cases = [
+            // A damage shield's points come negated, its wearer the source;
+            // either sign reads as the points.
+            ((553, 581), 249, -3, DamageOutcome::Hit(3)),
+            ((553, 581), 244, -40, DamageOutcome::Hit(40)),
+            ((553, 581), 246, 7, DamageOutcome::Hit(7)),
+            // A spell that took hold and dealt nothing.
+            ((581, 553), SPELL, 0, DamageOutcome::Landed),
+            ((553, 553), SPELL, 0, DamageOutcome::Landed),
+            // A lifetap's points to its caster, the caster target and source.
+            ((553, 553), SPELL, -5, DamageOutcome::Tapped(5)),
+            ((553, 553), SPELL, -120, DamageOutcome::Tapped(120)),
+            // A spell on someone else keeps the codes.
+            ((581, 553), SPELL, -5, DamageOutcome::Invulnerable),
+            ((581, 553), SPELL, -6, DamageOutcome::Rune),
+            ((581, 553), SPELL, 30, DamageOutcome::Hit(30)),
+            // Melee, a fall and a trap read as before.
+            ((581, 553), 0, 0, DamageOutcome::Miss),
+            ((581, 581), 30, -1, DamageOutcome::Block),
+            ((581, 581), 252, 160, DamageOutcome::Hit(160)),
+            ((581, 0), 253, 25, DamageOutcome::Hit(25)),
+        ];
+        // A shield of 1 to 6 points reads as its points, never an avoidance.
+        let shields = DAMAGE_SHIELD_KINDS.flat_map(|kind| {
+            (1..=6i32).map(move |points| {
+                (
+                    (553, 581),
+                    kind,
+                    -points,
+                    DamageOutcome::Hit(points.unsigned_abs()),
+                )
+            })
+        });
+        for ((target, source), kind, raw, outcome) in cases.into_iter().chain(shields) {
+            let mut titanium = titanium_record(raw);
+            titanium[..2].copy_from_slice(&u16::to_le_bytes(target));
+            titanium[2..4].copy_from_slice(&u16::to_le_bytes(source));
+            titanium[4] = kind;
+            let mut eqmac = [0u8; 24];
+            eqmac[..2].copy_from_slice(&u16::to_le_bytes(target));
+            eqmac[2..4].copy_from_slice(&u16::to_le_bytes(source));
+            eqmac[4..6].copy_from_slice(&u16::from(kind).to_le_bytes());
+            eqmac[8..12].copy_from_slice(&raw.to_le_bytes());
+            let case = format!("{target} {source} {kind} {raw}");
+            assert_eq!(damage(&titanium).unwrap().outcome, outcome, "{case}");
+            assert_eq!(eqmac_damage(&eqmac).unwrap().outcome, outcome, "{case}");
+        }
     }
 
     #[test]
