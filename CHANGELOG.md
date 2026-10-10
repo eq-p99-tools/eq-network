@@ -7,6 +7,21 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- A world's word that the zone being entered is down (`OP_ZoneUnavail`)
+  ends the attempt at once, on both generations, telling
+  `WorldEvent::ZoneUnavailable` with the zone's short name where the world
+  gives one, where before the world stage waited out its 60-second
+  handshake. The delay before the next attempt still applies.
+- Between zones, a Titanium world that names a character other than the
+  one in play (`OP_EnterWorld`) ends the attempt, as an `EQMac` world's
+  already did. From the character list, a name there is `EQEmu`'s
+  automatic login: it is told as a diagnostic, and the session keeps to
+  its own choice.
+- The login loops tell once, as a diagnostic, of each message they leave
+  unread and why, as the zone session does. `EQMac`'s `OP_ApproveWorld` is
+  listed as left unread with nothing in it worth reading, since TAKP and
+  Quarm always send it with an answer of 0 and no name.
+
 - A configured world that TAKP's list shows down or locked ends the login
   at once, as one on a Titanium list always has, instead of asking the
   login server for it.
@@ -112,13 +127,30 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- What a world tells of itself as the player logs in, on both
+  generations: its rules (`WorldEvent::Rules`, a `rules::WorldRules`: the
+  player-versus-player ruleset by the server's number, whether no-drop
+  items trade, and each generation's own flags) from `OP_LogServer`, which
+  Quarm's zones also send, with the zone's own ruleset, at every zone-in;
+  the expansions it lets the account play (`WorldEvent::Expansions`, a
+  `rules::Expansions` mask with `includes`) from `OP_ExpansionInfo`; and
+  its chat server (`WorldEvent::ChatServer`, a `channels::ChatServer`:
+  channels or mail, the host and port, and the world and character the
+  chat server knows the player by) from `OP_SetChatServer` and Titanium's
+  `OP_SetChatServer2`, which `EQEmu`'s zones send again when their chat
+  server reconnects. The offer's key is never read into a value, so
+  nothing told, kept or recorded carries it, and nothing connects to the
+  chat server. `EQMac` sessions now tell `WorldEvent::WorldName` too, from
+  their world's `OP_LogServer`. Hosts that match `WorldEvent` exhaustively
+  need arms for these and for `ZoneUnavailable`.
+
 - A record of every message each client generation's servers send: one
   table per generation, one row per opcode, naming the message, the server
   types that send it and the parts of the session that read it, or why it
   is left unread (work still to come, an answer to a request eq-network
   never sends, parked work, or nothing in it worth reading), taken from
-  `EQEmu`'s, TAKP's and Quarm's sources: Titanium's 258 messages, 104 of
-  them read, and `EQMac`'s 176, 70 read. A zone session now tells once, as
+  `EQEmu`'s, TAKP's and Quarm's sources: Titanium's 258 messages, 109 of
+  them read, and `EQMac`'s 176, 74 read. A zone session now tells once, as
   a diagnostic, of each message it leaves unread with the reason (but one
   with nothing worth reading) and of each the table does not list, where
   before a message nothing read left no trace once the zone admitted the
