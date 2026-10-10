@@ -1,8 +1,9 @@
 //! How spawns look: their worn gear in EQ's nine texture slots, tints and
-//! facial features, as Titanium spawn records and wear changes carry them,
-//! and the appearance updates (`OP_SpawnAppearance`) that change how a spawn
-//! shows on both generations. Which textures and models draw that is the
-//! client's business.
+//! facial features, as Titanium spawn records and wear changes carry them;
+//! their light, fly mode and the like, as both generations' records carry
+//! some of them; and the appearance updates (`OP_SpawnAppearance`) that
+//! change how a spawn shows on both. Which textures and models draw that is
+//! the client's business.
 //!
 //! Layout reference: `EQEmu`'s `SpawnAppearance_Struct`
 //! (`common/eq_packet_structs.h`), the same on both generations, and the
@@ -73,6 +74,10 @@ impl TextureSlot {
 
 /// How a spawn's gear and features look.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize)]
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "each flag is one the servers set on its own"
+)]
 pub struct Appearance {
     /// Per [`TextureSlot`]: the material an armor slot shows (0 cloth,
     /// 1 leather, 2 chain, 3 plate, robes from 10), or for the two held slots
@@ -92,6 +97,27 @@ pub struct Appearance {
     pub beard_color: u8,
     /// Whether a player shows their helm.
     pub show_helm: bool,
+    /// The type of light the spawn carries, 0 for none.
+    pub light: u8,
+    /// How the spawn keeps to the ground.
+    pub fly_mode: FlyMode,
+    /// Open to player combat, from `EQMac`'s record and updates. Titanium's
+    /// record does not say; `EQEmu` sends each such player's update to a
+    /// player as they zone in.
+    pub pvp: bool,
+    /// Link-dead, from updates alone: `EQMac`'s record marks every NPC so.
+    pub linkdead: bool,
+    /// Sneaking, from updates alone: TAKP and Quarm never set the `EQMac`
+    /// record's mark.
+    pub sneaking: bool,
+    /// A player's name drawn in an NPC's color, from updates alone.
+    pub npc_name_color: bool,
+    /// An NPC's tint, by its number in the server's tint list, from updates
+    /// alone; 0 until one comes.
+    pub npc_tint: u32,
+    /// How damaged a destructible NPC shows, from updates alone; 0 until one
+    /// comes, as for an unharmed one.
+    pub damage_state: u8,
 }
 
 impl Appearance {
@@ -111,6 +137,27 @@ impl Appearance {
     pub fn apply(&mut self, change: &WearChange) {
         self.materials[change.slot.index()] = change.material;
         self.tints[change.slot.index()] = change.tint;
+    }
+
+    /// Keeps what an appearance update changes here; the size is the
+    /// spawn's, and kind 0, an area's regeneration and the kinds no server
+    /// sends on its own change nothing.
+    pub fn apply_update(&mut self, change: &AppearanceChange) {
+        match *change {
+            AppearanceChange::Pvp(on) => self.pvp = on,
+            AppearanceChange::Light(light) => self.light = light,
+            AppearanceChange::Sneaking(on) => self.sneaking = on,
+            AppearanceChange::Linkdead(on) => self.linkdead = on,
+            AppearanceChange::FlyMode(mode) => self.fly_mode = mode,
+            AppearanceChange::NpcNameColor(on) => self.npc_name_color = on,
+            AppearanceChange::NpcTint(tint) => self.npc_tint = tint,
+            AppearanceChange::ShowHelm(on) => self.show_helm = on,
+            AppearanceChange::DamageState(state) => self.damage_state = state,
+            AppearanceChange::Died(_)
+            | AppearanceChange::Size(_)
+            | AppearanceChange::AreaRegeneration { .. }
+            | AppearanceChange::Other { .. } => (),
+        }
     }
 }
 
@@ -152,6 +199,21 @@ pub(crate) fn titanium_spawn(record: &[u8]) -> Appearance {
         beard: record[156],
         beard_color: record[146],
         show_helm: record[139] != 0,
+        light: record[330],
+        fly_mode: FlyMode::from_wire(u32::from(record[333])),
+        ..Appearance::default()
+    }
+}
+
+/// Reads what an `EQMac` spawn record (TAKP's `mac_structs.h` `Spawn_Struct`,
+/// 224 bytes) says of the look here: whether the spawn is open to player
+/// combat at 92, its light at 94 and its fly mode at 100.
+pub(crate) fn eqmac_spawn(record: &[u8]) -> Appearance {
+    Appearance {
+        pvp: record[92] != 0,
+        light: record[94],
+        fly_mode: FlyMode::from_wire(u32::from(record[100])),
+        ..Appearance::default()
     }
 }
 
@@ -386,6 +448,8 @@ mod tests {
         record[197 + 4..197 + 8].copy_from_slice(&2u32.to_le_bytes());
         record[197 + 28..197 + 32].copy_from_slice(&10u32.to_le_bytes());
         record[348 + 4..348 + 8].copy_from_slice(&[0x10, 0x20, 0xc0, 0xff]);
+        record[330] = 6;
+        record[333] = 1;
         let look = titanium_spawn(&record);
         assert_eq!(look.material(TextureSlot::Chest), 2);
         assert_eq!(look.material(TextureSlot::Primary), 10);
@@ -402,6 +466,69 @@ mod tests {
             (3, 2, 4, 5, 6)
         );
         assert!(look.show_helm);
+        assert_eq!((look.light, look.fly_mode), (6, FlyMode::Flying));
+    }
+
+    #[test]
+    fn eqmac_records_carry_pvp_light_and_fly_mode() {
+        let mut record = [0u8; 224];
+        // TAKP marks every NPC link-dead, which is not read.
+        record[98] = 1;
+        record[92] = 1;
+        record[94] = 3;
+        record[100] = 2;
+        assert_eq!(
+            eqmac_spawn(&record),
+            Appearance {
+                pvp: true,
+                light: 3,
+                fly_mode: FlyMode::Levitating,
+                ..Appearance::default()
+            }
+        );
+    }
+
+    #[test]
+    fn lasting_updates_change_the_look() {
+        let mut look = Appearance::default();
+        for change in [
+            AppearanceChange::Pvp(true),
+            AppearanceChange::Light(2),
+            AppearanceChange::Sneaking(true),
+            AppearanceChange::Linkdead(true),
+            AppearanceChange::FlyMode(FlyMode::Water),
+            AppearanceChange::NpcNameColor(true),
+            AppearanceChange::NpcTint(5),
+            AppearanceChange::ShowHelm(true),
+            AppearanceChange::DamageState(2),
+        ] {
+            look.apply_update(&change);
+        }
+        let changed = Appearance {
+            show_helm: true,
+            light: 2,
+            fly_mode: FlyMode::Water,
+            pvp: true,
+            linkdead: true,
+            sneaking: true,
+            npc_name_color: true,
+            npc_tint: 5,
+            damage_state: 2,
+            ..Appearance::default()
+        };
+        assert_eq!(look, changed);
+        for change in [
+            AppearanceChange::Died(115),
+            AppearanceChange::Size(3.0),
+            AppearanceChange::AreaRegeneration {
+                pool: Pool::Mana,
+                multiplier: 2.0,
+            },
+            AppearanceChange::Other { kind: 2, value: 9 },
+        ] {
+            look.apply_update(&change);
+        }
+        assert_eq!(look, changed);
     }
 
     #[test]

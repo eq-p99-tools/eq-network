@@ -139,6 +139,34 @@ pub struct Listing {
     pub looking: bool,
 }
 
+impl Listing {
+    /// Keeps a change, as the session's spawn table does; the level `/who`
+    /// shows is the spawn's, beside its listing, so it changes nothing here.
+    /// A rank is kept only with a guild: leaving or changing guilds clears
+    /// it until the new guild's rank comes, and one coming with no guild, as
+    /// `EQEmu` follows a member's removal with, is not kept.
+    pub fn apply(&mut self, change: ListingChange) {
+        match change {
+            ListingChange::Level(_) => (),
+            ListingChange::Guild(guild) => {
+                if guild != self.guild {
+                    self.guild_rank = None;
+                }
+                self.guild = guild;
+            }
+            ListingChange::GuildRank(rank) => {
+                if self.guild.is_some() {
+                    self.guild_rank = Some(rank);
+                }
+            }
+            ListingChange::Anonymity(anonymity) => self.anonymity = anonymity,
+            ListingChange::GameMaster(on) => self.game_master = on,
+            ListingChange::Away(on) => self.away = on,
+            ListingChange::Looking(on) => self.looking = on,
+        }
+    }
+}
+
 /// A change in how `/who` lists a player.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 pub enum ListingChange {
@@ -292,6 +320,44 @@ mod tests {
         body.extend_from_slice(&[1, 0, 0, 0]);
         assert_eq!(looking(&body).unwrap(), (12, ListingChange::Looking(true)));
         assert!(looking(&body[..7]).is_err());
+    }
+
+    #[test]
+    fn a_listing_keeps_each_change_and_a_new_guild_waits_for_its_rank() {
+        let mut listing = Listing::default();
+        for change in [
+            ListingChange::Guild(Some(3)),
+            ListingChange::GuildRank(GuildRank::Leader),
+            ListingChange::Anonymity(Anonymity::Roleplaying),
+            ListingChange::GameMaster(true),
+            ListingChange::Away(true),
+            ListingChange::Looking(true),
+            ListingChange::Level(40),
+        ] {
+            listing.apply(change);
+        }
+        assert_eq!(
+            listing,
+            Listing {
+                guild: Some(3),
+                guild_rank: Some(GuildRank::Leader),
+                anonymity: Anonymity::Roleplaying,
+                game_master: true,
+                away: true,
+                looking: true,
+            }
+        );
+        // The same guild again keeps the rank; another or none clears it.
+        listing.apply(ListingChange::Guild(Some(3)));
+        assert_eq!(listing.guild_rank, Some(GuildRank::Leader));
+        listing.apply(ListingChange::Guild(Some(4)));
+        assert_eq!((listing.guild, listing.guild_rank), (Some(4), None));
+        listing.apply(ListingChange::GuildRank(GuildRank::Member));
+        listing.apply(ListingChange::Guild(None));
+        assert_eq!((listing.guild, listing.guild_rank), (None, None));
+        // A rank with no guild, as EQEmu sends after a member's removal.
+        listing.apply(ListingChange::GuildRank(GuildRank::Member));
+        assert_eq!((listing.guild, listing.guild_rank), (None, None));
     }
 
     #[test]

@@ -7,6 +7,16 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- The session's spawn table keeps what each spawn's updates change: its
+  look, size, `/who` listing and level (`SpawnState::apply_listing`), and
+  whose pet it is, where before it kept the listing, the level and the
+  owner from the spawn records alone. A charm's owner comes only by
+  update, so the session refused pet commands for a charmed pet as if the
+  player had none (found reading the code; not checked live). A host
+  keeps a look or listing it holds apart from a spawn, as its own
+  player's, the same way with `Appearance::apply_update` and
+  `Listing::apply`, which keeps a guild rank only with a guild.
+
 - The message tables say what each generation's profile leaves unread
   apart: `EQMac`'s skills, practice points and deity, which they had
   counted as read, are planned with `EQMac`'s catch-up on the world, and
@@ -165,6 +175,14 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   unreadable-packet diagnostic, where before it was dropped. Hosts that
   match `WorldEvent` or `ListingChange` exhaustively need arms for them,
   and hosts that build `Listing` the field.
+- How a spawn shows beyond its gear, in `Appearance`: `light`,
+  `fly_mode`, `pvp`, `linkdead`, `sneaking`, `npc_name_color`, `npc_tint`
+  and `damage_state`, from Titanium's spawn record (light and fly mode)
+  and `EQMac`'s (PvP, light and fly mode) and kept current from appearance
+  updates by `SpawnState::apply_appearance`, which takes a new size too.
+  `EQMac`'s record marks every NPC link-dead and never marks sneaking, so
+  those two come from updates alone. Hosts that build `Appearance` without
+  `..Appearance::default()` need the fields.
 
 - A quest's word on the player's base stats, on Titanium:
   `WorldEvent::StatsChanged` (`stats::StatChange`: each stat by name, 0

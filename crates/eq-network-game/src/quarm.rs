@@ -659,7 +659,7 @@ fn decoded_spawns(data: &[u8]) -> Result<Vec<SpawnState>> {
                 gender: u32::from(record[88]),
                 size: nonnegative(record, 28)?,
                 invisible: record[90] != 0,
-                appearance: crate::appearance::Appearance::default(),
+                appearance: crate::appearance::eqmac_spawn(record),
                 position: Position {
                     x: signed(record, 9),
                     y: signed(record, 7),

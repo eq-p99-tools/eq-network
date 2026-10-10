@@ -73,6 +73,21 @@ impl Spawns {
                     spawn.appearance.apply(change);
                 }
             }
+            WorldEvent::Appearance { spawn_id, change } => {
+                if let Some(spawn) = self.0.get_mut(spawn_id) {
+                    spawn.apply_appearance(change);
+                }
+            }
+            WorldEvent::Listing { spawn_id, change } => {
+                if let Some(spawn) = self.0.get_mut(spawn_id) {
+                    spawn.apply_listing(*change);
+                }
+            }
+            WorldEvent::PetOwner { spawn_id, owner } => {
+                if let Some(spawn) = self.0.get_mut(spawn_id) {
+                    spawn.pet_owner = *owner;
+                }
+            }
             _ => (),
         }
     }
@@ -251,6 +266,87 @@ mod tests {
                 ClientEvent::World(WorldEvent::Posture { spawn_id: 8, .. }),
             ] if spawns.len() == 2
         ));
+    }
+
+    #[test]
+    fn the_table_keeps_what_appearance_listing_and_pet_updates_change() {
+        use eq_network_game::{
+            appearance::{AppearanceChange, FlyMode},
+            listing::{GuildRank, ListingChange},
+        };
+        let mut entities = Entities::default();
+        let mut world = World::new(5);
+        let spawns = vec![spawn(7, SpawnKind::Player), spawn(8, SpawnKind::Npc)];
+        entities
+            .admit(&event(WorldEvent::Spawns(spawns)), &mut world)
+            .unwrap();
+        // Before the admission and after it alike.
+        entities
+            .admit(
+                &event(WorldEvent::Appearance {
+                    spawn_id: 8,
+                    change: AppearanceChange::Size(9.0),
+                }),
+                &mut world,
+            )
+            .unwrap();
+        let updates = [
+            WorldEvent::Appearance {
+                spawn_id: 8,
+                change: AppearanceChange::FlyMode(FlyMode::Levitating),
+            },
+            WorldEvent::Appearance {
+                spawn_id: 8,
+                change: AppearanceChange::Light(4),
+            },
+            // Once-only kinds change nothing.
+            WorldEvent::Appearance {
+                spawn_id: 8,
+                change: AppearanceChange::Other { kind: 2, value: 1 },
+            },
+            WorldEvent::Listing {
+                spawn_id: 7,
+                change: ListingChange::Guild(Some(3)),
+            },
+            WorldEvent::Listing {
+                spawn_id: 7,
+                change: ListingChange::GuildRank(GuildRank::Officer),
+            },
+            WorldEvent::Listing {
+                spawn_id: 7,
+                change: ListingChange::Level(12),
+            },
+            WorldEvent::PetOwner {
+                spawn_id: 8,
+                owner: Some(7),
+            },
+            // News of a spawn the table has not seen is left alone.
+            WorldEvent::Appearance {
+                spawn_id: 9,
+                change: AppearanceChange::Pvp(true),
+            },
+        ];
+        for update in updates {
+            testing::run(|out| entities.observe(&event(update), &mut world, out))
+                .result
+                .unwrap();
+        }
+        let npc = world.spawns.visible(8).unwrap();
+        assert_eq!(npc.size, 9.0);
+        assert_eq!(
+            (npc.appearance.fly_mode, npc.appearance.light, npc.pet_owner),
+            (FlyMode::Levitating, 4, Some(7))
+        );
+        let player = world.spawns.visible(7).unwrap();
+        assert_eq!(
+            (
+                player.level,
+                player.listing.guild,
+                player.listing.guild_rank
+            ),
+            (12, Some(3), Some(GuildRank::Officer))
+        );
+        assert!(world.spawns.visible(9).is_none());
     }
 
     #[test]

@@ -265,6 +265,28 @@ pub struct SpawnState {
     pub name_parts: crate::names::NameParts,
 }
 
+impl SpawnState {
+    /// Keeps what an appearance update changes: the size here, the rest in
+    /// [`SpawnState::appearance`].
+    pub fn apply_appearance(&mut self, change: &crate::appearance::AppearanceChange) {
+        if let crate::appearance::AppearanceChange::Size(size) = *change {
+            self.size = size;
+        } else {
+            self.appearance.apply_update(change);
+        }
+    }
+
+    /// Keeps a change in how `/who` lists the spawn: the level here, the
+    /// rest in [`SpawnState::listing`].
+    pub fn apply_listing(&mut self, change: crate::listing::ListingChange) {
+        if let crate::listing::ListingChange::Level(level) = change {
+            self.level = level;
+        } else {
+            self.listing.apply(change);
+        }
+    }
+}
+
 /// Decode a decrypted Titanium spawn batch, without accepting partial records.
 ///
 /// # Errors
