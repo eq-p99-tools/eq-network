@@ -391,6 +391,22 @@ fn the_servers_hold_on_the_player_is_read_from_its_messages() {
 }
 
 #[test]
+fn the_target_the_server_sets_or_echoes_is_read() {
+    assert_eq!(
+        updates(0xfe41, &581u16.to_le_bytes()).unwrap(),
+        [WorldEvent::Target(Some(581))]
+    );
+    // The echo of the player's own clearing.
+    assert_eq!(
+        updates(0x6241, &[0; 2]).unwrap(),
+        [WorldEvent::Target(None)]
+    );
+    for opcode in [0xfe41, 0x6241] {
+        assert!(updates(opcode, &[0; 4]).is_err());
+    }
+}
+
+#[test]
 fn the_end_of_hiding_is_read_and_carries_nothing() {
     assert_eq!(
         updates(0x5a41, &[]).unwrap(),

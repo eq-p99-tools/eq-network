@@ -137,6 +137,16 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- The player's target as the server sets it, on both generations:
+  `WorldEvent::Target`, from `OP_TargetCommand` (`EQEmu`'s sense spells,
+  its corpse locator and Perl; TAKP's and Quarm's refusal of a mouse
+  target, which puts back the last one) and from TAKP's and Quarm's echo
+  of the player clearing their target (`OP_TargetMouse`, now listed); the
+  session's target follows it. On Titanium, whom the player's target
+  targets: `WorldEvent::TargetOfTarget`, from `OP_TargetHoTT`. The table
+  lists what `EQEmu` sends with no Titanium opcode (0x0000) as needing no
+  reading. Hosts that match `WorldEvent` exhaustively need arms for both.
+
 - The server's hold on the player, on both generations, read from the
   emulators' sources and not yet checked live: a stun
   (`WorldEvent::Stun`: its length, or none as one ends) from `OP_Stun`; a

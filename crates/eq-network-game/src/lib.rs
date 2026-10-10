@@ -77,6 +77,8 @@ pub mod servers;
 pub mod socials;
 /// Server-driven spellbook and casting notifications.
 pub mod spells;
+/// The player's target as the server sets it, and whom that target targets.
+pub mod targets;
 /// Tradeskill combines in the player's own containers.
 pub mod tradeskills;
 /// Training skills at a guildmaster.

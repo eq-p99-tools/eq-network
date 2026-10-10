@@ -15,6 +15,15 @@ use super::{
 #[allow(clippy::too_many_lines, reason = "one row per message")]
 pub(in crate::client) fn titanium(opcode: u16) -> Option<ServerMessage> {
     Some(match opcode {
+        0x0000 => sent(
+            "a message with no Titanium opcode",
+            EQEMU,
+            Unread(Needless(
+                "EQEmu sends any message Titanium has no opcode for as 0x0000, as is \
+                 (common/net/eqstream.cpp), such as OP_TargetReject after a /target this \
+                 client never sends, so it cannot say what it was",
+            )),
+        ),
         0x0016 => sent("OP_ChatMessage", EQEMU, Read(&[Login])),
         0x0017 => sent("OP_LoginAccepted", EQEMU, Read(&[Login])),
         0x0018 => sent("OP_ServerListResponse", EQEMU, Read(&[Login])),
@@ -72,7 +81,7 @@ pub(in crate::client) fn titanium(opcode: u16) -> Option<ServerMessage> {
         0x12e5 => sent("OP_Charm", EQEMU, Read(&[Zone])),
         0x1306 => sent("OP_GMZoneRequest", EQEMU, unasked(Social)),
         0x13e7 => sent("OP_Begging", EQEMU, unasked(PlayerState)),
-        0x1477 => sent("OP_TargetCommand", EQEMU, planned(PlayerState)),
+        0x1477 => sent("OP_TargetCommand", EQEMU, Read(&[Zone])),
         0x147d => sent("OP_GuildMemberList", EQEMU, planned(Social)),
         0x1496 => sent("OP_ReadBook", EQEMU, Read(&[Zone])),
         0x14cb => sent("OP_ClientUpdate", EQEMU, Read(&[Zone])),
@@ -279,7 +288,7 @@ pub(in crate::client) fn titanium(opcode: u16) -> Option<ServerMessage> {
         0x6966 => sent("OP_SetGuildRank", EQEMU, planned(Social)),
         0x6980 => sent("OP_GMKill", EQEMU, planned(Social)),
         0x6a00 => sent("OP_LinkedReuse", EQEMU, planned(PlayerState)),
-        0x6a12 => sent("OP_TargetHoTT", EQEMU, planned(PlayerState)),
+        0x6a12 => sent("OP_TargetHoTT", EQEMU, Read(&[Zone])),
         0x6a1d => sent("OP_TaskRequestTimer", EQEMU, planned(LaterSystems)),
         0x6a53 => sent("OP_Buff", EQEMU, Read(&[Zone])),
         0x6a5b => sent("OP_BankerChange", EQEMU, unasked(PlayerState)),

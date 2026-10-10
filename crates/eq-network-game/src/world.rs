@@ -677,6 +677,13 @@ pub enum WorldEvent {
     },
     /// Selection request was handed to transport; this is not a server acknowledgment.
     TargetSent(Option<u16>),
+    /// The player's target as the server set it, or none: `EQEmu` as a sense
+    /// spell or a corpse locator picks a spawn, TAKP and Quarm as they refuse
+    /// a mouse target, putting back the last one, and as they echo the
+    /// player's clearing of it ([`crate::targets`]).
+    Target(Option<u16>),
+    /// Whom the player's target targets, or no one (`EQEmu`).
+    TargetOfTarget(Option<u16>),
     /// Local validation rejected a target request before transmission.
     TargetRejected {
         /// Admission that originated the request.
@@ -1308,10 +1315,10 @@ pub fn titanium_update(opcode: u16, body: &[u8]) -> Result<Option<WorldEvent>> {
     }))
 }
 
-/// Stuns and charms, the end of hiding, doors, ground objects, loot,
-/// merchant, exchange, training, resurrection, group, dice, assist, raid,
-/// book, combine, bandaging, chat server, weather and inventory packets,
-/// each owned by its codec.
+/// Stuns and charms, the end of hiding, the target the server sets, doors,
+/// ground objects, loot, merchant, exchange, training, resurrection, group,
+/// dice, assist, raid, book, combine, bandaging, chat server, weather and
+/// inventory packets, each owned by its codec.
 fn titanium_views(opcode: u16, body: &[u8]) -> Result<Option<WorldEvent>> {
     match opcode {
         crate::control::STUN_OPCODE => {
@@ -1320,6 +1327,16 @@ fn titanium_views(opcode: u16, body: &[u8]) -> Result<Option<WorldEvent>> {
         crate::abilities::CANCEL_SNEAK_HIDE_OPCODE => {
             ensure!(body.is_empty(), "invalid hide end length");
             return Ok(Some(WorldEvent::HideAndSneakEnded));
+        }
+        crate::targets::TARGET_COMMAND_OPCODE => {
+            return Ok(Some(WorldEvent::Target(crate::targets::titanium_target(
+                body,
+            )?)));
+        }
+        crate::targets::TARGET_OF_TARGET_OPCODE => {
+            return Ok(Some(WorldEvent::TargetOfTarget(
+                crate::targets::titanium_target(body)?,
+            )));
         }
         crate::control::CHARM_OPCODE => {
             return Ok(Some(WorldEvent::Charm(crate::control::titanium_charm(
@@ -2010,6 +2027,24 @@ mod tests {
         );
         assert!(titanium_update(0x1e51, &[0; 8]).is_err());
         assert!(titanium_update(0x12e5, &[0; 6]).is_err());
+    }
+
+    #[test]
+    fn the_target_the_server_sets_and_the_targets_target_are_read() {
+        assert_eq!(
+            titanium_update(0x1477, &581u32.to_le_bytes()).unwrap(),
+            Some(WorldEvent::Target(Some(581)))
+        );
+        assert_eq!(
+            titanium_update(0x1477, &[0; 4]).unwrap(),
+            Some(WorldEvent::Target(None))
+        );
+        assert_eq!(
+            titanium_update(0x6a12, &553u32.to_le_bytes()).unwrap(),
+            Some(WorldEvent::TargetOfTarget(Some(553)))
+        );
+        assert!(titanium_update(0x1477, &[0; 2]).is_err());
+        assert!(titanium_update(0x6a12, &[0; 8]).is_err());
     }
 
     #[test]

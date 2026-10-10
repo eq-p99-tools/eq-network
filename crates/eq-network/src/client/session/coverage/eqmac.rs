@@ -142,6 +142,9 @@ pub(in crate::client) fn eqmac(opcode: u16) -> Option<ServerMessage> {
         0x5f41 => sent("OP_ZoneSpawns", EQMAC, Read(&[Zone])),
         0x5f42 => sent("OP_RaidInvite", EQMAC, planned(Raids)),
         0x6042 => sent("OP_RaidUpdate", EQMAC, planned(Raids)),
+        // The player's own, which TAKP and Quarm echo as the player clears
+        // their target.
+        0x6241 => sent("OP_TargetMouse", EQMAC, Read(&[Zone])),
         0x6441 => sent("OP_ItemPacket", EQMAC, Read(&[Zone])),
         0x6442 => sent("OP_ItemLinkResponse", EQMAC, Read(&[Zone])),
         0x6541 => sent("OP_BookPacket", EQMAC, Read(&[Zone])),
@@ -243,7 +246,7 @@ pub(in crate::client) fn eqmac(opcode: u16) -> Option<ServerMessage> {
         0xf641 => sent("OP_CharInventory", EQMAC, Read(&[Zone])),
         0xf741 => sent("OP_SpawnDoor", EQMAC, planned(EqMacWorld)),
         0xfb40 => sent("OP_ObjectItemPacket", EQMAC, planned(EqMacWorld)),
-        0xfe41 => sent("OP_TargetCommand", EQMAC, planned(PlayerState)),
+        0xfe41 => sent("OP_TargetCommand", EQMAC, Read(&[Zone])),
         _ => return None,
     })
 }
