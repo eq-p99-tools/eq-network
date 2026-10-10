@@ -264,6 +264,17 @@ const ILLUSION: &[Part] = &[
         Reason::Needless("EQEmu's Titanium encoder leaves them zero"),
     ),
 ];
+/// What the session leaves unread of a rename.
+const RENAME: &[Part] = &[
+    Part(
+        "the old name's second copy",
+        Reason::Needless("EQEmu writes the old name there again"),
+    ),
+    Part(
+        "the two words after the names",
+        Reason::Needless("EQEmu always sends 0 and 1"),
+    ),
+];
 /// What the session leaves unread of `EQMac`'s illusion.
 const EQMAC_ILLUSION: &[Part] = &[Part(
     "the byte after the textures and the two after the beard",

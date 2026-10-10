@@ -729,6 +729,14 @@ pub enum WorldEvent {
     ItemDetails(crate::items::ItemDetails),
     /// Server death notification; consumers compare its ID with their own spawn.
     Death(crate::zoning::Death),
+    /// A corpse moved, on `EQMac`: summoned, returned, a game master's
+    /// `#summon`, and on Quarm all the while it is dragged.
+    CorpseMoved {
+        /// The corpse.
+        spawn_id: u16,
+        /// Where it lies now: x, y and z; the record carries no heading.
+        position: [f32; 3],
+    },
     /// A player became a corpse where they lie: the player, just before
     /// word of their death, and another player who leaves a corpse, which
     /// keeps their spawn ID.
@@ -811,6 +819,20 @@ pub enum WorldEvent {
     },
     /// Guild names by number, from the world or a guild member's zone.
     GuildNames(Vec<(u32, String)>),
+    /// A spawn's new name: on Titanium, an NPC's corpse taking the server's
+    /// name and the temporary names and renames of game masters, quests and
+    /// pets' owners.
+    Renamed {
+        /// Whose name it was. The record names no spawn: the session names
+        /// it before anyone hears it, from the spawn with the old name, or
+        /// the NPC corpse whose name the server's rule makes the new one
+        /// ([`corpse_name`]); None where neither is in the zone.
+        spawn_id: Option<u16>,
+        /// The name before.
+        old_name: String,
+        /// The new name.
+        new_name: String,
+    },
     /// A character's last name changed.
     LastName {
         /// The character, by the name they spawned with.
@@ -1409,10 +1431,6 @@ pub fn titanium_update(opcode: u16, body: &[u8]) -> Result<Option<WorldEvent>> {
         crate::listing::GUILDS_OPCODE => {
             WorldEvent::GuildNames(crate::listing::titanium_guilds(body)?)
         }
-        crate::names::LAST_NAME_OPCODE => {
-            let (name, last_name) = crate::names::last_name(body)?;
-            WorldEvent::LastName { name, last_name }
-        }
         0x0695 => {
             ensure!(
                 body.len() == 3 && body[2] <= 100,
@@ -1461,8 +1479,8 @@ pub fn titanium_update(opcode: u16, body: &[u8]) -> Result<Option<WorldEvent>> {
     }))
 }
 
-/// How spawns look, stuns and charms, the end of hiding, a quest's word on
-/// the player's stats, disciplines and reuse timers, the target the server
+/// How spawns look and their names, stuns and charms, the end of hiding, a
+/// quest's word on the player's stats, disciplines and reuse timers, the target the server
 /// sets, rewards, sacrifices and translocates, a player becoming a corpse,
 /// doors, ground objects, loot, merchant, exchange, training, resurrection,
 /// group, dice, assist, raid, book, combine, bandaging, chat server, weather
@@ -1523,6 +1541,8 @@ fn titanium_views(opcode: u16, body: &[u8]) -> Result<Option<WorldEvent>> {
     }
     Ok(
         if let Some(event) = crate::appearance::titanium(opcode, body)? {
+            Some(event)
+        } else if let Some(event) = crate::names::titanium(opcode, body)? {
             Some(event)
         } else if let Some(event) = crate::disciplines::titanium(opcode, body)? {
             Some(event)

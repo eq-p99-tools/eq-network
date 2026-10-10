@@ -1,13 +1,16 @@
 //! The parts of a character's name around the first: a title before it, and
 //! a last name and a suffix after it, which the official client's
-//! `/shownames` adds over heads.
+//! `/shownames` adds over heads; and a spawn's renaming.
 
+use crate::world::WorldEvent;
 use anyhow::{ensure, Result};
 use serde::Serialize;
 
 /// Titanium's `OP_GMLastName`: a character's new last name, sent to
 /// everyone in the zone, the character included, when it changes.
 pub const LAST_NAME_OPCODE: u16 = 0x23a1;
+/// Titanium's `OP_MobRename`: a spawn's new name.
+pub const RENAME_OPCODE: u16 = 0x0498;
 
 /// A character's title, last name and suffix; each empty where the server
 /// sends none or the dialect does not report it.
@@ -44,6 +47,48 @@ pub(crate) fn last_name(body: &[u8]) -> Result<(String, String)> {
     Ok((name, text(&body[128..192])))
 }
 
+/// Decodes `OP_MobRename` (`MobRename_Struct`, 200 bytes): the old name at
+/// 0, again at 64, and the new name at 128. `EQEmu` sends it to the zone
+/// (`Mob::SendRename`) as an NPC's corpse takes the server's name, from the
+/// one the client gives it (`'s_corpse` for `` `s_corpse ``), as a game
+/// master, a quest or a pet's owner gives a spawn a temporary name, and as
+/// a game master changes a player's first name. It names no spawn.
+///
+/// # Errors
+/// Rejects a malformed length and a missing name.
+pub(crate) fn titanium_rename(body: &[u8]) -> Result<(String, String)> {
+    ensure!(body.len() == 200, "invalid rename length");
+    let (old_name, new_name) = (text(&body[..64]), text(&body[128..192]));
+    ensure!(
+        !old_name.is_empty() && !new_name.is_empty(),
+        "rename without a name"
+    );
+    Ok((old_name, new_name))
+}
+
+/// What Titanium's messages on names say: last names and renames; None for
+/// other messages.
+///
+/// # Errors
+/// Rejects malformed records of those messages.
+pub(crate) fn titanium(opcode: u16, body: &[u8]) -> Result<Option<WorldEvent>> {
+    Ok(match opcode {
+        LAST_NAME_OPCODE => {
+            let (name, last_name) = last_name(body)?;
+            Some(WorldEvent::LastName { name, last_name })
+        }
+        RENAME_OPCODE => {
+            let (old_name, new_name) = titanium_rename(body)?;
+            Some(WorldEvent::Renamed {
+                spawn_id: None,
+                old_name,
+                new_name,
+            })
+        }
+        _ => None,
+    })
+}
+
 fn text(bytes: &[u8]) -> String {
     String::from_utf8_lossy(crate::world::until_nul(bytes)).into_owned()
 }
@@ -51,6 +96,27 @@ fn text(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn renames_carry_the_old_name_and_the_new() {
+        let mut body = [0u8; 200];
+        body[..15].copy_from_slice(b"a_rat's_corpse8");
+        body[64..79].copy_from_slice(b"a_rat's_corpse8");
+        body[128..143].copy_from_slice(b"a_rat`s_corpse8");
+        body[196] = 1;
+        assert_eq!(
+            crate::world::titanium_update(RENAME_OPCODE, &body).unwrap(),
+            Some(WorldEvent::Renamed {
+                spawn_id: None,
+                old_name: "a_rat's_corpse8".into(),
+                new_name: "a_rat`s_corpse8".into(),
+            })
+        );
+        assert!(titanium_rename(&body[..199]).is_err());
+        let mut nameless = body;
+        nameless[128..143].fill(0);
+        assert!(titanium_rename(&nameless).is_err());
+    }
 
     #[test]
     fn spawn_records_carry_title_last_name_and_suffix() {

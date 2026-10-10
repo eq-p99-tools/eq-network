@@ -9,7 +9,7 @@ use anyhow::{ensure, Result};
 use eq_network_game::{
     message::Message,
     spells::SpellUpdate,
-    world::{PostureState, SpawnState, WorldEvent},
+    world::{PostureState, SpawnKind, SpawnState, WorldEvent},
     GameDialect,
 };
 use std::collections::BTreeMap;
@@ -97,6 +97,21 @@ impl Spawns {
                     spawn.pet_owner = *owner;
                 }
             }
+            WorldEvent::Renamed {
+                spawn_id: Some(spawn_id),
+                new_name,
+                ..
+            } => {
+                if let Some(spawn) = self.0.get_mut(spawn_id) {
+                    spawn.name.clone_from(new_name);
+                }
+            }
+            WorldEvent::CorpseMoved { spawn_id, position } => {
+                if let Some(spawn) = self.0.get_mut(spawn_id) {
+                    let [x, y, z] = *position;
+                    (spawn.position.x, spawn.position.y, spawn.position.z) = (x, y, z);
+                }
+            }
             _ => (),
         }
     }
@@ -138,17 +153,51 @@ impl Entities {
             _ => (),
         }
     }
+
+    /// The spawn a rename is about, which the record does not name: the one
+    /// with the old name, or the NPC corpse whose name by the generation's
+    /// rule is the new one, as the server renames a corpse from the name the
+    /// client gives it to its own.
+    fn renamed(&self, world: &World, old_name: &str, new_name: &str) -> Option<u16> {
+        let spawns = &world.spawns;
+        spawns
+            .all()
+            .find(|spawn| spawn.name == old_name)
+            .or_else(|| {
+                spawns.all().find(|spawn| {
+                    spawn.kind == SpawnKind::NpcCorpse
+                        && eq_network_game::world::corpse_name(
+                            self.dialect,
+                            &spawn.name,
+                            spawn.kind,
+                            spawn.spawn_id,
+                        )
+                        .is_some_and(|name| name == new_name)
+                })
+            })
+            .map(|spawn| spawn.spawn_id)
+    }
 }
 
 impl Feature for Entities {
-    /// Names the corpse a death leaves, from the spawn that died, and the
-    /// player in the notices that leave them unnamed, by the client
-    /// generation's rules, before any feature or the host hears it.
+    /// Names the corpse a death leaves, from the spawn that died, the spawn
+    /// a rename is about, and the player in the notices that leave them
+    /// unnamed, by the client generation's rules, before any feature or the
+    /// host hears it.
     fn explain(&mut self, message: &mut Message, world: &World) {
         let Message::Event(event) = message else {
             return;
         };
         self.name_the_player(event, world);
+        if let WorldEvent::Renamed {
+            spawn_id: spawn_id @ None,
+            old_name,
+            new_name,
+        } = event
+        {
+            *spawn_id = self.renamed(world, old_name, new_name);
+            return;
+        }
         let WorldEvent::Death(death) = event else {
             return;
         };
@@ -411,6 +460,82 @@ mod tests {
             (60, 2, 6.0, 1)
         );
         assert_eq!(world.spawns.visible(8).unwrap().appearance.face, 3);
+    }
+
+    #[test]
+    fn a_rename_names_its_spawn_and_renames_it_in_the_table() {
+        let mut entities = Entities::new(GameDialect::Titanium);
+        let mut world = World::new(5);
+        let mut npc = spawn(8, SpawnKind::NpcCorpse);
+        npc.name = "a_rat008".into();
+        let mut guard = spawn(9, SpawnKind::Npc);
+        guard.name = "Guard_Synth000".into();
+        entities
+            .admit(&event(WorldEvent::Spawns(vec![npc, guard])), &mut world)
+            .unwrap();
+        let named = |entities: &mut Entities, world: &World, old: &str, new: &str| {
+            let mut rename = event(WorldEvent::Renamed {
+                spawn_id: None,
+                old_name: old.into(),
+                new_name: new.into(),
+            });
+            entities.explain(&mut rename, world);
+            rename
+        };
+        // An NPC's corpse, from the name the client gave it to the server's.
+        let corpse = named(&mut entities, &world, "a_rat's_corpse8", "a_rat`s_corpse8");
+        assert!(matches!(
+            corpse,
+            Message::Event(WorldEvent::Renamed {
+                spawn_id: Some(8),
+                ..
+            })
+        ));
+        // A temporary name, by the name the spawn has.
+        let guard = named(&mut entities, &world, "Guard_Synth000", "Gate_Keeper");
+        assert!(matches!(
+            guard,
+            Message::Event(WorldEvent::Renamed {
+                spawn_id: Some(9),
+                ..
+            })
+        ));
+        // No one in the zone.
+        let nobody = named(&mut entities, &world, "Absent", "Elsewhere");
+        assert!(matches!(
+            nobody,
+            Message::Event(WorldEvent::Renamed { spawn_id: None, .. })
+        ));
+        for message in [corpse, guard, nobody] {
+            testing::run(|out| entities.observe(&message, &mut world, out))
+                .result
+                .unwrap();
+        }
+        assert_eq!(world.spawns.visible(8).unwrap().name, "a_rat`s_corpse8");
+        assert_eq!(world.spawns.visible(9).unwrap().name, "Gate_Keeper");
+    }
+
+    #[test]
+    fn an_eqmac_corpse_moves_and_keeps_its_heading() {
+        let mut entities = Entities::new(GameDialect::EqMac);
+        let mut world = World::new(5);
+        let mut corpse = spawn(8, SpawnKind::PlayerCorpse);
+        corpse.position.heading = 128.0;
+        entities
+            .admit(&event(WorldEvent::Spawns(vec![corpse])), &mut world)
+            .unwrap();
+        let moved = event(WorldEvent::CorpseMoved {
+            spawn_id: 8,
+            position: [1.0, 2.0, 3.0],
+        });
+        testing::run(|out| entities.observe(&moved, &mut world, out))
+            .result
+            .unwrap();
+        let position = world.spawns.visible(8).unwrap().position;
+        assert_eq!(
+            [position.x, position.y, position.z, position.heading],
+            [1.0, 2.0, 3.0, 128.0]
+        );
     }
 
     #[test]

@@ -7,7 +7,7 @@ use super::{
     Reason::{Needless, Planned},
     ServerMessage,
     Step::{AlternateAdvancement, Appearance, Bazaar, LaterSystems, PlayerState, Raids, Social},
-    DISCIPLINE_TIMER, EQEMU, ILLUSION, P99, REWARD, SACRIFICE, STATS, TITANIUM_DESCRIPTION,
+    DISCIPLINE_TIMER, EQEMU, ILLUSION, P99, RENAME, REWARD, SACRIFICE, STATS, TITANIUM_DESCRIPTION,
     TITANIUM_PROFILE, TRANSLOCATE,
 };
 
@@ -36,7 +36,7 @@ pub(in crate::client) fn titanium(opcode: u16) -> Option<ServerMessage> {
         0x013f => sent("OP_SharedTaskSelectWindow", EQEMU, planned(LaterSystems)),
         0x024d => sent("OP_MOTD", EQEMU, Read(&[Chat])),
         0x0353 => sent("OP_RecipeAutoCombine", EQEMU, unasked(LaterSystems)),
-        0x0498 => sent("OP_MobRename", EQEMU, planned(Appearance)),
+        0x0498 => sent("OP_MobRename", EQEMU, Partly(&[Zone], RENAME)),
         0x04ec => sent("OP_ExpansionInfo", EQEMU, Read(&[World])),
         0x0557 => sent("OP_VetRewardsAvaliable", EQEMU, planned(LaterSystems)),
         0x0587 => sent("OP_SendExpZonein", EQEMU, Read(&[Admission])),

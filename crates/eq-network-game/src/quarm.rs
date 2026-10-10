@@ -803,6 +803,10 @@ pub fn updates(opcode: u16, body: &[u8]) -> Result<Vec<WorldEvent>> {
         crate::appearance::EQMAC_FACE_CHANGE_OPCODE => {
             vec![crate::appearance::eqmac_face_change(body)?]
         }
+        crate::corpses::EQMAC_POSITION_OPCODE => {
+            let (spawn_id, position) = crate::corpses::eqmac_position(body)?;
+            vec![WorldEvent::CorpseMoved { spawn_id, position }]
+        }
         crate::group::EQMAC_INVITE_OPCODE
         | crate::group::EQMAC_INVITE2_OPCODE
         | crate::group::EQMAC_FOLLOW_OPCODE

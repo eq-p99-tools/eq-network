@@ -203,6 +203,19 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   spawn table takes an illusion's race, gender, size, face and hair, and a
   named face change's face and hair. Hosts that match `WorldEvent`
   exhaustively need an arm for `FaceChanged`.
+- A spawn's new name, on Titanium: `WorldEvent::Renamed` (the old name
+  and the new), from `OP_MobRename`, which `EQEmu` sends as an NPC's
+  corpse takes the server's name, from the one the client gives it, and
+  for the temporary names and renames of game masters, quests and pets'
+  owners. The record names no spawn: the session names it before anyone
+  hears it, from the spawn with the old name or the NPC corpse whose name
+  by `world::corpse_name` is the new one, and renames it in its table.
+  And a corpse's move, on `EQMac`: `WorldEvent::CorpseMoved` (the corpse
+  and where it lies, without a heading), from `OP_CorpsePosition`, which
+  TAKP and Quarm send as a corpse is summoned, returned or moved by a game
+  master, and on Quarm as it is dragged; the session's table moves it and
+  keeps its heading. Hosts that match `WorldEvent` exhaustively need arms
+  for both.
 
 - A quest's word on the player's base stats, on Titanium:
   `WorldEvent::StatsChanged` (`stats::StatChange`: each stat by name, 0
@@ -356,8 +369,8 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   types that send it and the parts of the session that read it, or why it
   is left unread (work still to come, an answer to a request eq-network
   never sends, parked work, or nothing in it worth reading), taken from
-  `EQEmu`'s, TAKP's and Quarm's sources: Titanium's 258 messages, 126 of
-  them read, and `EQMac`'s 177, 91 read. A zone session now tells once, as
+  `EQEmu`'s, TAKP's and Quarm's sources: Titanium's 258 messages, 127 of
+  them read, and `EQMac`'s 177, 92 read. A zone session now tells once, as
   a diagnostic, of each message it leaves unread with the reason (but one
   with nothing worth reading) and of each the table does not list, where
   before a message nothing read left no trace once the zone admitted the

@@ -59,7 +59,7 @@ pub(in crate::client) fn eqmac(opcode: u16) -> Option<ServerMessage> {
         0x1842 => sent("OP_BecomeTrader", EQMAC, planned(Bazaar)),
         0x1941 => sent("OP_GuildRemove", EQMAC, planned(Social)),
         0x1942 => sent("OP_ManaUpdate", EQMAC, Read(&[Zone])),
-        0x2140 => sent("OP_CorpsePosition", EQMAC, planned(Appearance)),
+        0x2140 => sent("OP_CorpsePosition", EQMAC, Read(&[Zone])),
         0x2342 => sent("OP_AAExpUpdate", EQMAC, planned(AlternateAdvancement)),
         0x2442 => sent("OP_TraderBuy", EQMAC, planned(Bazaar)),
         0x2541 => sent("OP_Begging", EQMAC, unasked(PlayerState)),
