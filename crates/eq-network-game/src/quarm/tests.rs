@@ -337,6 +337,49 @@ fn spell_notices_read_as_the_spell_news_every_wire_gives() {
 }
 
 #[test]
+fn the_servers_hold_on_the_player_is_read_from_its_messages() {
+    use std::time::Duration;
+    assert_eq!(
+        updates(0x5b41, &3000u32.to_le_bytes()).unwrap(),
+        [WorldEvent::Stun(Some(Duration::from_secs(3)))]
+    );
+    assert_eq!(updates(0x5b41, &[0; 4]).unwrap(), [WorldEvent::Stun(None)]);
+    let mut charm = [0u8; 6];
+    charm[2..4].copy_from_slice(&7u16.to_le_bytes());
+    assert_eq!(
+        updates(0x4442, &charm).unwrap(),
+        [WorldEvent::Charm(crate::control::Charm {
+            owner_id: None,
+            pet_id: 7,
+            charmed: false,
+        })]
+    );
+    // The freeze and unfreeze carry the player's name, which is not read.
+    let mut name = [0u8; 65];
+    name[..6].copy_from_slice(b"Tester");
+    assert_eq!(
+        updates(0x6a40, &name).unwrap(),
+        [WorldEvent::Controlled(true)]
+    );
+    assert_eq!(
+        updates(0x6b40, &name).unwrap(),
+        [WorldEvent::Controlled(false)]
+    );
+    assert_eq!(
+        updates(0xb040, &[]).unwrap(),
+        [WorldEvent::Controlled(false)]
+    );
+    assert_eq!(updates(0xa941, &[]).unwrap(), [WorldEvent::Berserk(true)]);
+    assert_eq!(updates(0xaa41, &[]).unwrap(), [WorldEvent::Berserk(false)]);
+    for opcode in [0x5b41, 0x4442, 0x6a40, 0x6b40] {
+        assert!(updates(opcode, &[0; 3]).is_err());
+    }
+    for opcode in [0xb040, 0xa941, 0xaa41] {
+        assert!(updates(opcode, &[0]).is_err());
+    }
+}
+
+#[test]
 fn the_profile_says_the_buffs_the_book_and_each_gems_reuse_left() {
     use crate::message::{eqmac, Message};
     let mut data = vec![0; PROFILE_SIZE];

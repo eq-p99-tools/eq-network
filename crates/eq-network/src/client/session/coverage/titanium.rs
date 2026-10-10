@@ -69,7 +69,7 @@ pub(in crate::client) fn titanium(opcode: u16) -> Option<ServerMessage> {
         // P99's zone refusing the client's validation.
         0x1252 => sent("P99's zone validation refusal", P99, Read(&[Admission])),
         0x12d6 => sent("OP_GroupInvite2", EQEMU, Read(&[Zone])),
-        0x12e5 => sent("OP_Charm", EQEMU, planned(PlayerState)),
+        0x12e5 => sent("OP_Charm", EQEMU, Read(&[Zone])),
         0x1306 => sent("OP_GMZoneRequest", EQEMU, unasked(Social)),
         0x13e7 => sent("OP_Begging", EQEMU, unasked(PlayerState)),
         0x1477 => sent("OP_TargetCommand", EQEMU, planned(PlayerState)),
@@ -93,7 +93,7 @@ pub(in crate::client) fn titanium(opcode: u16) -> Option<ServerMessage> {
         0x1d4d => sent("OP_Marquee", EQEMU, planned(Social)),
         0x1db5 => sent("OP_AdventureInfo", EQEMU, planned(LaterSystems)),
         0x1dde => sent("OP_OnLevelMessage", EQEMU, planned(Social)),
-        0x1e51 => sent("OP_Stun", EQEMU, planned(PlayerState)),
+        0x1e51 => sent("OP_Stun", EQEMU, Read(&[Zone])),
         0x1ee9 => sent("OP_BazaarSearch", EQEMU, planned(Bazaar)),
         0x1f21 => sent(
             "OP_RaidUpdate",

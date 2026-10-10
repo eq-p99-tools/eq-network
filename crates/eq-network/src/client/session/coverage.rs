@@ -255,6 +255,12 @@ const ACTION: &[Part] = &[Part(
     "actions of a kind other than a spell's",
     Reason::Planned(Step::PlayerState),
 )];
+/// What the session leaves unread of `EQMac`'s word that the server took or
+/// gave back the player's control.
+const OWN_NAME: &[Part] = &[Part(
+    "the player's own name",
+    Reason::Needless("the session has it from its entry"),
+)];
 /// What the session leaves unread of `EQMac`'s log-server settings.
 const LOG_SERVER: &[Part] = &[Part(
     "the error-reporting server's address, port, password and e-mail",
@@ -444,11 +450,12 @@ mod tests {
         };
         let mut log = Events::new(&config, &mut handler);
         let mut unheard = Unheard::new(Stage::Zone);
-        // A position, read; a stun, left unread; the character list, read
-        // only from the world; an opcode no server is listed as sending; and
-        // the empty AA stats, which carry nothing: each arriving twice.
+        // A position, read; an adventure merchant's sale, left unread; the
+        // character list, read only from the world; an opcode no server is
+        // listed as sending; and the empty AA stats, which carry nothing:
+        // each arriving twice.
         for opcode in [
-            0x14cb, 0x1e51, 0x4513, 0x0001, 0x5996, 0x14cb, 0x1e51, 0x4513, 0x0001, 0x5996,
+            0x14cb, 0x0097, 0x4513, 0x0001, 0x5996, 0x14cb, 0x0097, 0x4513, 0x0001, 0x5996,
         ] {
             unheard.tell(&Titanium, opcode, 8, &mut log).unwrap();
         }
@@ -456,8 +463,8 @@ mod tests {
         assert_eq!(
             said,
             [
-                "Zone sent OP_Stun (0x1e51, 8 bytes), left unread: planned with the \
-                 player's own state",
+                "Zone sent OP_AdventureMerchantSell (0x0097, 8 bytes), left unread: planned \
+                 with later and rarely used systems",
                 "Zone sent OP_SendCharInfo (0x4513, 8 bytes), left unread: the session reads \
                  it only before the zone",
                 "Zone sent an unlisted message (0x0001, 8 bytes), left unread: no server is \

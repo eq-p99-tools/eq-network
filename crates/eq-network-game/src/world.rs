@@ -1056,6 +1056,20 @@ pub enum WorldEvent {
     /// A one-shot motion for a nearby spawn, the player's own included, such
     /// as a swing as an attack goes out.
     Animation(crate::combat::Animation),
+    /// A stun on the player begins, for this long, or ends (`None`). One
+    /// that runs out sends nothing; see [`crate::control::stun`].
+    Stun(Option<std::time::Duration>),
+    /// A player's charm takes hold or ends, or the server gives a player
+    /// back the control it took for a charm or a fear.
+    Charm(crate::control::Charm),
+    /// `EQMac`'s servers took the player's control (true), for a charm, a
+    /// fear or link death, or gave it back (false). `EQEmu` says the same
+    /// to Titanium with the player's own posture: [`PostureState::Frozen`],
+    /// then the posture they had.
+    Controlled(bool),
+    /// `EQMac`'s servers: the player, a warrior, went berserk (true) or
+    /// calmed down (false).
+    Berserk(bool),
     /// Own-character skill update; unknown skill IDs remain available to consumers.
     Skill {
         /// Protocol skill index (22 is dual wield).
@@ -1285,13 +1299,24 @@ pub fn titanium_update(opcode: u16, body: &[u8]) -> Result<Option<WorldEvent>> {
     }))
 }
 
-/// Spell actions, doors, ground objects, loot, merchant, exchange,
-/// training, resurrection, group, dice, assist, raid, book, combine,
-/// bandaging, chat server, weather and inventory packets, each owned by its
-/// codec.
+/// Spell actions, stuns and charms, doors, ground objects, loot, merchant,
+/// exchange, training, resurrection, group, dice, assist, raid, book,
+/// combine, bandaging, chat server, weather and inventory packets, each
+/// owned by its codec.
 fn titanium_views(opcode: u16, body: &[u8]) -> Result<Option<WorldEvent>> {
-    if opcode == 0x497c {
-        return Ok(crate::buffs::titanium_spell_effect(body)?.map(WorldEvent::SpellEffect));
+    match opcode {
+        0x497c => {
+            return Ok(crate::buffs::titanium_spell_effect(body)?.map(WorldEvent::SpellEffect));
+        }
+        crate::control::STUN_OPCODE => {
+            return Ok(Some(WorldEvent::Stun(crate::control::stun(body)?)));
+        }
+        crate::control::CHARM_OPCODE => {
+            return Ok(Some(WorldEvent::Charm(crate::control::titanium_charm(
+                body,
+            )?)));
+        }
+        _ => (),
     }
     Ok(if let Some(update) = crate::doors::decode(opcode, body)? {
         Some(WorldEvent::Doors(update))
@@ -1947,6 +1972,34 @@ mod tests {
         assert!(titanium_update(0x55bc, &[0; 3]).is_err());
         body[75..79].copy_from_slice(&f32::NAN.to_le_bytes());
         assert!(titanium_spawns(&body).is_err());
+    }
+
+    #[test]
+    fn a_stun_and_a_charm_are_read_from_titaniums_messages() {
+        assert_eq!(
+            titanium_update(0x1e51, &1500u32.to_le_bytes()).unwrap(),
+            Some(WorldEvent::Stun(Some(std::time::Duration::from_millis(
+                1500
+            ))))
+        );
+        assert_eq!(
+            titanium_update(0x1e51, &[0; 4]).unwrap(),
+            Some(WorldEvent::Stun(None))
+        );
+        let mut charm = [0u8; 12];
+        charm[..4].copy_from_slice(&553u32.to_le_bytes());
+        charm[4..8].copy_from_slice(&581u32.to_le_bytes());
+        charm[8..].copy_from_slice(&1u32.to_le_bytes());
+        assert_eq!(
+            titanium_update(0x12e5, &charm).unwrap(),
+            Some(WorldEvent::Charm(crate::control::Charm {
+                owner_id: Some(553),
+                pet_id: 581,
+                charmed: true,
+            }))
+        );
+        assert!(titanium_update(0x1e51, &[0; 8]).is_err());
+        assert!(titanium_update(0x12e5, &[0; 6]).is_err());
     }
 
     #[test]

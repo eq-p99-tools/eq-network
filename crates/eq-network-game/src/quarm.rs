@@ -810,6 +810,22 @@ pub fn updates(opcode: u16, body: &[u8]) -> Result<Vec<WorldEvent>> {
         crate::combat::EQMAC_ANIMATION_OPCODE => {
             vec![WorldEvent::Animation(crate::combat::eqmac_animation(body)?)]
         }
+        crate::control::EQMAC_STUN_OPCODE => vec![WorldEvent::Stun(crate::control::stun(body)?)],
+        crate::control::EQMAC_CHARM_OPCODE => {
+            vec![WorldEvent::Charm(crate::control::eqmac_charm(body)?)]
+        }
+        crate::control::EQMAC_FREEZE_OPCODE
+        | crate::control::EQMAC_UNFREEZE_OPCODE
+        | crate::control::EQMAC_RETURN_OPCODE => crate::control::eqmac_control(opcode, body)?
+            .map(WorldEvent::Controlled)
+            .into_iter()
+            .collect(),
+        crate::control::EQMAC_BERSERK_START_OPCODE | crate::control::EQMAC_BERSERK_END_OPCODE => {
+            crate::control::eqmac_berserk(opcode, body)?
+                .map(WorldEvent::Berserk)
+                .into_iter()
+                .collect()
+        }
         0x9941 => {
             ensure!(
                 body.len() == 4 && word(body, 0) <= 330,

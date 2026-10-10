@@ -137,6 +137,21 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- The server's hold on the player, on both generations, read from the
+  emulators' sources and not yet checked live: a stun
+  (`WorldEvent::Stun`: its length, or none as one ends) from `OP_Stun`; a
+  player's charm taking hold or ending, and the server giving a player
+  back the control it took for a charm or a fear (`WorldEvent::Charm`, a
+  `control::Charm`), from `OP_Charm`; and on `EQMac`, the server taking
+  the player's control and giving it back (`WorldEvent::Controlled`) from
+  `OP_FreezeClientControl`, `OP_UnfreezeClientControl` and
+  `OP_ReturnClientControl`, and a warrior going berserk and calming down
+  (`WorldEvent::Berserk`) from `OP_BerserkStart` and `OP_BerserkEnd`, which
+  the table now lists. `EQEmu` tells a Titanium client of its control
+  with the player's own posture, which the session already reads
+  (`PostureState::Frozen`). Hosts that match `WorldEvent` exhaustively
+  need arms for the four.
+
 - The push a hit or a spell gives, on both generations: `Damage` and
   `SpellEffect` gain `push` (`combat::Push`: the force, the heading in
   `Position`'s 512-unit turn and the pitch, as the server sends them),

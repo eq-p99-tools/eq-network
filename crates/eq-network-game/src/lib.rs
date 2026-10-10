@@ -22,6 +22,9 @@ pub mod clock;
 pub mod combat;
 /// Typed client actions and dialect-specific application packet encoding.
 pub mod command;
+/// The server's hold on the player: stuns, charms, its own control of the
+/// player, and a warrior's berserk.
+pub mod control;
 /// Players' corpses: consent, summoning and dragging.
 pub mod corpses;
 /// Titanium character creation requests and stat rules.
