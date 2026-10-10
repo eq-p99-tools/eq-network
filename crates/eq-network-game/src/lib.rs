@@ -22,6 +22,8 @@ pub mod clock;
 pub mod combat;
 /// Typed client actions and dialect-specific application packet encoding.
 pub mod command;
+/// The server's questions the player answers: a sacrifice and a translocate.
+pub mod confirmations;
 /// The server's hold on the player: stuns, charms, its own control of the
 /// player, and a warrior's berserk.
 pub mod control;

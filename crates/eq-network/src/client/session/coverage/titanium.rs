@@ -7,7 +7,7 @@ use super::{
     Reason::{Needless, Planned},
     ServerMessage,
     Step::{AlternateAdvancement, Appearance, Bazaar, LaterSystems, PlayerState, Raids, Social},
-    APPEARANCE, EQEMU, P99, PROFILE, REWARD, TITANIUM_DESCRIPTION,
+    APPEARANCE, EQEMU, P99, PROFILE, REWARD, SACRIFICE, TITANIUM_DESCRIPTION, TRANSLOCATE,
 };
 
 /// What the session does with a message Titanium's servers send; nothing
@@ -314,7 +314,7 @@ pub(in crate::client) fn titanium(opcode: u16) -> Option<ServerMessage> {
         0x7180 => sent("OP_DisciplineUpdate", EQEMU, planned(PlayerState)),
         0x7213 => sent("OP_ZoneEntry", EQEMU, Read(&[Admission])),
         0x722f => sent("OP_SharedTaskMemberList", EQEMU, planned(LaterSystems)),
-        0x727a => sent("OP_Sacrifice", EQEMU, planned(PlayerState)),
+        0x727a => sent("OP_Sacrifice", EQEMU, Partly(&[Zone], SACRIFICE)),
         0x7416 => sent(
             "OP_ClearLeadershipAbilities",
             EQEMU,
@@ -345,7 +345,7 @@ pub(in crate::client) fn titanium(opcode: u16) -> Option<ServerMessage> {
         0x7cba => sent("OP_EnterWorld", EQEMU, Read(&[World])),
         0x7e03 => sent("OP_ShopEnd", EQEMU, planned(Bazaar)),
         0x7fe4 => sent("OP_MoneyOnCorpse", EQEMU, Read(&[Zone])),
-        0x8258 => sent("OP_Translocate", EQEMU, planned(PlayerState)),
+        0x8258 => sent("OP_Translocate", EQEMU, Partly(&[Zone], TRANSLOCATE)),
         0xb4ab => sent("OP_GuildBank", EQEMU, planned(LaterSystems)),
         _ => return None,
     })

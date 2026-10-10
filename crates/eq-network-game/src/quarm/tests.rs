@@ -426,6 +426,19 @@ fn a_quest_reward_is_read() {
 }
 
 #[test]
+fn a_sacrifice_offer_is_read() {
+    let body: Vec<u8> = [581u32, 7, 0]
+        .iter()
+        .flat_map(|value| value.to_le_bytes())
+        .collect();
+    assert!(matches!(
+        &updates(0xea41, &body).unwrap()[..],
+        [WorldEvent::SacrificeOffer(offer)] if offer.caster_id == 581
+    ));
+    assert!(updates(0xea41, &body[..11]).is_err());
+}
+
+#[test]
 fn the_end_of_hiding_is_read_and_carries_nothing() {
     assert_eq!(
         updates(0x5a41, &[]).unwrap(),

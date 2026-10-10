@@ -560,10 +560,10 @@ mod tests {
     };
 
     /// How many kinds of command there are.
-    const KINDS: usize = 69;
+    const KINDS: usize = 71;
 
     /// The kinds the login and world servers take, before any zone session.
-    const BEFORE_ZONES: [usize; 3] = [0, 1, 68];
+    const BEFORE_ZONES: [usize; 3] = [0, 1, 70];
 
     /// Which kind of command this is. A new command is a compile error here
     /// until it has a number, and then a test failure until the list below
@@ -639,8 +639,10 @@ mod tests {
             ClientCommand::RaidRemove { .. } => 65,
             ClientCommand::EnvironmentalDamage { .. } => 66,
             ClientCommand::BledOut { .. } => 67,
+            ClientCommand::AnswerSacrifice { .. } => 68,
+            ClientCommand::AnswerTranslocate { .. } => 69,
             // The login server's, before the world.
-            ClientCommand::SelectServer { .. } => 68,
+            ClientCommand::SelectServer { .. } => 70,
         }
     }
 
@@ -887,6 +889,14 @@ mod tests {
                 created,
             },
             ClientCommand::AnswerResurrection {
+                session_id,
+                accept: true,
+            },
+            ClientCommand::AnswerSacrifice {
+                session_id,
+                accept: false,
+            },
+            ClientCommand::AnswerTranslocate {
                 session_id,
                 accept: true,
             },
@@ -1387,11 +1397,13 @@ mod tests {
             Capability::Assisting,
             Capability::Raiding,
             Capability::EnvironmentalDamage,
+            Capability::Sacrifice,
+            Capability::Translocate,
         ] {
             assert!(eqemu.contains(&capability));
             assert!(!p99.contains(&capability));
         }
-        assert_eq!(eqemu.len(), p99.len() + 15);
+        assert_eq!(eqemu.len(), p99.len() + 17);
         // EQMac servers talk; TAKP also casts, keeps the spellbook, camps,
         // moves and moves items, follows zone changes and takes the client's
         // report of a bleed-out, which Quarm does not yet.

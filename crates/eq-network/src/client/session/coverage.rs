@@ -270,6 +270,19 @@ const REWARD: &[Part] = &[
         ),
     ),
 ];
+/// What the session leaves unread of an offer to sacrifice the player.
+const SACRIFICE: &[Part] = &[Part(
+    "the player's own spawn",
+    Reason::Needless("the server sends an offer only to the player it names"),
+)];
+/// What the session leaves unread of an offer to translocate the player.
+const TRANSLOCATE: &[Part] = &[Part(
+    "the field after the spell",
+    Reason::Needless(
+        "every server leaves it 0 (zone/client.cpp Client::SendOPTranslocateConfirm, \
+         and TAKP's Client::SendPendingTranslocatePacket)",
+    ),
+)];
 /// What the session leaves unread of `EQMac`'s log-server settings.
 const LOG_SERVER: &[Part] = &[Part(
     "the error-reporting server's address, port, password and e-mail",

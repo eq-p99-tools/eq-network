@@ -158,6 +158,22 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   quest's `ding`, and an ability point earned where its rule says so) is
   `WorldEvent::Ding`. Hosts that match `WorldEvent` exhaustively need arms
   for both.
+- Offers the player answers, on both generations, answered only on the
+  player's word: a sacrifice (`WorldEvent::SacrificeOffer`, naming its
+  caster) from `OP_Sacrifice`, answered with `GameCommand::AnswerSacrifice`,
+  and a translocate (`WorldEvent::TranslocateOffer`: the caster, the spell
+  and where it takes the player) from `OP_Translocate`, answered with
+  `GameCommand::AnswerTranslocate`. The answer repeats the offer with the
+  player's choice: 1 for yes, and 0 for no, but -1 for a translocate on
+  `EQMac` (inferred: what the official clients answer is unrecorded). An
+  answer with no offer waiting is refused (`WorldEvent::SacrificeRefused`,
+  `WorldEvent::TranslocateRefused`). `EQEmu` offers both
+  (`Capability::Sacrifice`, `Capability::Translocate`); P99, TAKP and Quarm
+  wait for their live checks. TAKP answers a yes to a translocate with the
+  offer again, which reads as the server's offer to move the player there;
+  it carries no heading, so the player faces heading 0 after it, and the
+  transfer request that follows gives reason 8 (both inferred). Hosts that
+  match `WorldEvent` exhaustively need arms for the four events.
 
 - The server's hold on the player, on both generations, read from the
   emulators' sources and not yet checked live: a stun

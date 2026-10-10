@@ -10,7 +10,8 @@ use super::{
         AlternateAdvancement, Appearance, Bazaar, EqMacExchanges, EqMacWorld, LaterSystems,
         PlayerState, Raids, Social,
     },
-    EQMAC, EQMAC_DESCRIPTION, LOG_SERVER, OWN_NAME, PROFILE, QUARM, REWARD, TAKP,
+    EQMAC, EQMAC_DESCRIPTION, LOG_SERVER, OWN_NAME, PROFILE, QUARM, REWARD, SACRIFICE, TAKP,
+    TRANSLOCATE,
 };
 
 /// What the session does with a message `EQMac`'s servers send; nothing for
@@ -27,7 +28,8 @@ pub(in crate::client) fn eqmac(opcode: u16) -> Option<ServerMessage> {
         0x0541 => sent("OP_TradeSkillCombine", EQMAC, planned(EqMacWorld)),
         0x0542 => sent("OP_ClearObject", EQMAC, planned(EqMacWorld)),
         0x0580 => sent("OP_ZoneUnavail", EQMAC, Read(&[World])),
-        0x0642 => sent("OP_Translocate", QUARM, planned(PlayerState)),
+        // An offer, and TAKP's word that the player may go after their yes.
+        0x0642 => sent("OP_Translocate", EQMAC, Partly(&[Zone], TRANSLOCATE)),
         0x0710 => sent(
             "OP_ApproveWorld",
             EQMAC,
@@ -218,7 +220,7 @@ pub(in crate::client) fn eqmac(opcode: u16) -> Option<ServerMessage> {
         0xdf40 => sent("OP_TradeItemPacket", EQMAC, planned(EqMacExchanges)),
         0xe440 => sent("OP_TradeCoins", EQMAC, planned(EqMacExchanges)),
         0xe640 => sent("OP_TradeRequestAck", EQMAC, planned(EqMacExchanges)),
-        0xea41 => sent("OP_Sacrifice", EQMAC, planned(PlayerState)),
+        0xea41 => sent("OP_Sacrifice", EQMAC, Partly(&[Zone], SACRIFICE)),
         0xec41 => sent("OP_RezzComplete", EQMAC, planned(PlayerState)),
         0xf041 => sent("OP_LFGCommand", EQMAC, planned(EqMacWorld)),
         0xf240 => sent("OP_TimeOfDay", EQMAC, Unread(Parked("eq-network#91"))),
