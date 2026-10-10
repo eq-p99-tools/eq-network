@@ -1070,6 +1070,10 @@ pub enum WorldEvent {
     /// `EQMac`'s servers: the player, a warrior, went berserk (true) or
     /// calmed down (false).
     Berserk(bool),
+    /// The server spun the player around: `Mob::Spin`'s record, which
+    /// `EQEmu` and TAKP send only from quests
+    /// ([`Action::Spin`](crate::buffs::Action::Spin)).
+    Spun,
     /// Own-character skill update; unknown skill IDs remain available to consumers.
     Skill {
         /// Protocol skill index (22 is dual wield).
@@ -1299,15 +1303,12 @@ pub fn titanium_update(opcode: u16, body: &[u8]) -> Result<Option<WorldEvent>> {
     }))
 }
 
-/// Spell actions, stuns and charms, doors, ground objects, loot, merchant,
-/// exchange, training, resurrection, group, dice, assist, raid, book,
-/// combine, bandaging, chat server, weather and inventory packets, each
-/// owned by its codec.
+/// Stuns and charms, doors, ground objects, loot, merchant, exchange,
+/// training, resurrection, group, dice, assist, raid, book, combine,
+/// bandaging, chat server, weather and inventory packets, each owned by its
+/// codec.
 fn titanium_views(opcode: u16, body: &[u8]) -> Result<Option<WorldEvent>> {
     match opcode {
-        0x497c => {
-            return Ok(crate::buffs::titanium_spell_effect(body)?.map(WorldEvent::SpellEffect));
-        }
         crate::control::STUN_OPCODE => {
             return Ok(Some(WorldEvent::Stun(crate::control::stun(body)?)));
         }

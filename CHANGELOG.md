@@ -151,7 +151,6 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   with the player's own posture, which the session already reads
   (`PostureState::Frozen`). Hosts that match `WorldEvent` exhaustively
   need arms for the four.
-
 - The push a hit or a spell gives, on both generations: `Damage` and
   `SpellEffect` gain `push` (`combat::Push`: the force, the heading in
   `Position`'s 512-unit turn and the pitch, as the server sends them),
@@ -159,6 +158,16 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   yet. `Damage` and `SpellEffect` no longer implement `Eq`, since the push
   is made of floats. A push that is not a finite number reads as none, and
   the record carrying it still reads.
+- The spin a quest gives the player, on both generations:
+  `WorldEvent::Spun`, from `Mob::Spin`'s fixed record in `OP_Action`, which
+  the session now reads whole. `buffs::Action` says what an action is (a
+  spell's, the spin, or another kind), from `buffs::titanium_action` and
+  `buffs::eqmac_action`; `message::titanium` and `message::eqmac` read
+  `OP_Action` instead of `world::titanium_update` and `quarm::updates`.
+  No server is known to send an action of another kind: `Message` gains
+  `UnknownKind`, which the zone session drops, telling of each message's
+  kind once a session as a diagnostic that names only the opcode and the
+  kind. Hosts that match `WorldEvent` exhaustively need an arm for `Spun`.
 
 - The zone's weather, on both generations: `WorldEvent::Weather`
   (`clock::Weather`: clear, or rain or snow with the server's intensity),

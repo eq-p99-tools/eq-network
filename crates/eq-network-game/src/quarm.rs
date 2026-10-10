@@ -783,10 +783,6 @@ pub fn updates(opcode: u16, body: &[u8]) -> Result<Vec<WorldEvent>> {
             .map(WorldEvent::Spell)
             .into_iter()
             .collect(),
-        crate::buffs::EQMAC_ACTION_OPCODE => crate::buffs::eqmac_spell_effect(body)?
-            .map(WorldEvent::SpellEffect)
-            .into_iter()
-            .collect(),
         crate::buffs::EQMAC_BUFF_OPCODE => {
             vec![WorldEvent::Buff(crate::buffs::eqmac_update(body)?)]
         }

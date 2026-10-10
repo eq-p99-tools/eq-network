@@ -7,7 +7,7 @@ use super::{
     Reason::{Needless, Planned},
     ServerMessage,
     Step::{AlternateAdvancement, Appearance, Bazaar, LaterSystems, PlayerState, Raids, Social},
-    ACTION, APPEARANCE, EQEMU, P99, PROFILE, TITANIUM_DESCRIPTION,
+    APPEARANCE, EQEMU, P99, PROFILE, TITANIUM_DESCRIPTION,
 };
 
 /// What the session does with a message Titanium's servers send; nothing
@@ -197,7 +197,7 @@ pub(in crate::client) fn titanium(opcode: u16) -> Option<ServerMessage> {
         0x475a => sent("OP_GuildMOTD", EQEMU, Read(&[Chat])),
         0x4839 => sent("OP_ManaChange", EQEMU, Read(&[Zone])),
         0x48c2 => sent("OP_CancelSneakHide", EQEMU, planned(PlayerState)),
-        0x497c => sent("OP_Action", EQEMU, Partly(&[Zone], ACTION)),
+        0x497c => sent("OP_Action", EQEMU, Read(&[Zone])),
         0x4b05 => sent("OP_RezzComplete", EQEMU, planned(PlayerState)),
         0x4c24 => sent("OP_SpawnDoor", EQEMU, Read(&[Zone])),
         0x4c8c => sent("OP_CashReward", EQEMU, planned(PlayerState)),

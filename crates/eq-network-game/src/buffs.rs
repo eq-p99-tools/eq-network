@@ -2,9 +2,15 @@
 use anyhow::{ensure, Result};
 use serde::Serialize;
 
+/// Titanium's `OP_Action`, which carries spell landings and one other
+/// record ([`Action`]).
+pub const TITANIUM_ACTION_OPCODE: u16 = 0x497c;
 /// `EQMac`'s `OP_Action`, which carries spell landings among other actions
 /// (TAKP `utils/patches/patch_Mac.conf` lists 0x4046, its bytes swapped).
 pub const EQMAC_ACTION_OPCODE: u16 = 0x4640;
+/// The target and the source of `Mob::Spin`'s fixed record, which no spawn
+/// is.
+const SPIN_SPAWN: u16 = 0x0a0b;
 /// `EQMac`'s `OP_Buff`: a buff's fade, or its duration corrected (0x4132
 /// swapped).
 pub const EQMAC_BUFF_OPCODE: u16 = 0x3241;
@@ -37,6 +43,58 @@ pub struct SpellEffect {
     /// when it sends no force or pitch, or a value that is not a finite
     /// number. See [`Push`](crate::combat::Push) for what each server sends.
     pub push: Option<crate::combat::Push>,
+}
+
+/// What a server's action (`OP_Action`) is, by its kind.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub enum Action {
+    /// A spell's (kind 231): the spell taking hold, or a buff from it doing
+    /// so.
+    Spell(SpellEffect),
+    /// `Mob::Spin`'s fixed record, which spins the player: kind 0, its
+    /// target and source both spawn 0x0A0B, which no spawn is. `EQEmu` and
+    /// TAKP send it only from quests (Lua's and Perl's `Spin`); a spell
+    /// that spins its target spins only an NPC on the server, and "the
+    /// spinning is handled by the client" (`zone/spell_effects.cpp`).
+    Spin,
+    /// An action of another kind, which no server is known to send: its
+    /// kind. No open server sends a melee or skill action this way; P99's
+    /// source is closed, so it may.
+    Other(u8),
+}
+
+/// Decodes Titanium's action by its kind at 22: a spell's
+/// ([`titanium_spell_effect`]), the spin, or another.
+///
+/// # Errors
+/// Rejects any length other than 31 bytes.
+pub fn titanium_action(body: &[u8]) -> Result<Action> {
+    Ok(match titanium_spell_effect(body)? {
+        Some(effect) => Action::Spell(effect),
+        None => other_action(body, 22),
+    })
+}
+
+/// Decodes `EQMac`'s action by its kind at 24: a spell's
+/// ([`eqmac_spell_effect`]), the spin, or another.
+///
+/// # Errors
+/// Rejects any length other than 36 bytes.
+pub fn eqmac_action(body: &[u8]) -> Result<Action> {
+    Ok(match eqmac_spell_effect(body)? {
+        Some(effect) => Action::Spell(effect),
+        None => other_action(body, 24),
+    })
+}
+
+/// An action that is not a spell's: the spin, by its kind and spawns, or
+/// another kind.
+fn other_action(body: &[u8], kind_at: usize) -> Action {
+    let short = |offset| u16::from_le_bytes([body[offset], body[offset + 1]]);
+    match body[kind_at] {
+        0 if short(0) == SPIN_SPAWN && short(2) == SPIN_SPAWN => Action::Spin,
+        kind => Action::Other(kind),
+    }
 }
 
 /// Decodes spell actions, excluding melee actions sharing the same opcode,
@@ -315,6 +373,40 @@ mod tests {
         body[28] = 2;
         assert!(titanium_update(&body).is_err());
         assert!(titanium_update(&body[..31]).is_err());
+    }
+
+    #[test]
+    fn actions_are_a_spells_the_spin_or_another_kind() {
+        // Mob::Spin's fixed record, in each generation's length.
+        let mut titanium = [0u8; 31];
+        titanium[..6].copy_from_slice(&[0x0b, 0x0a, 0x0b, 0x0a, 0xe7, 0x00]);
+        titanium[6..8].copy_from_slice(&[0x4d, 0x04]);
+        titanium[18..20].copy_from_slice(&[0xd4, 0x43]);
+        let mut eqmac = [0u8; 36];
+        eqmac[..8].copy_from_slice(&titanium[..8]);
+        eqmac[18..20].copy_from_slice(&[0xd4, 0x43]);
+        assert_eq!(titanium_action(&titanium).unwrap(), Action::Spin);
+        assert_eq!(eqmac_action(&eqmac).unwrap(), Action::Spin);
+        // Kind 0 naming a real spawn is not the spin.
+        titanium[..2].copy_from_slice(&7u16.to_le_bytes());
+        eqmac[2..4].copy_from_slice(&7u16.to_le_bytes());
+        assert_eq!(titanium_action(&titanium).unwrap(), Action::Other(0));
+        assert_eq!(eqmac_action(&eqmac).unwrap(), Action::Other(0));
+        // Any other kind is told by its kind.
+        titanium[22] = 8;
+        eqmac[24] = 30;
+        assert_eq!(titanium_action(&titanium).unwrap(), Action::Other(8));
+        assert_eq!(eqmac_action(&eqmac).unwrap(), Action::Other(30));
+        // A spell's action.
+        titanium[22] = 231;
+        eqmac[24] = 231;
+        assert!(matches!(
+            titanium_action(&titanium).unwrap(),
+            Action::Spell(_)
+        ));
+        assert!(matches!(eqmac_action(&eqmac).unwrap(), Action::Spell(_)));
+        assert!(titanium_action(&titanium[..30]).is_err());
+        assert!(eqmac_action(&eqmac[..35]).is_err());
     }
 
     #[test]

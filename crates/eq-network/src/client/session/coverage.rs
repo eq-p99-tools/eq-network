@@ -24,6 +24,7 @@ pub(super) use titanium::titanium;
 
 use super::{wire::Wire, Events, ServerProtocol};
 use anyhow::Result;
+use eq_network_game::message::Message;
 use std::{collections::HashSet, fmt};
 
 /// A message a client generation's servers send.
@@ -250,11 +251,6 @@ const APPEARANCE: &[Part] = &[Part(
     "the other appearance kinds",
     Reason::Planned(Step::Appearance),
 )];
-/// What the session leaves unread of an action.
-const ACTION: &[Part] = &[Part(
-    "actions of a kind other than a spell's",
-    Reason::Planned(Step::PlayerState),
-)];
 /// What the session leaves unread of `EQMac`'s word that the server took or
 /// gave back the player's control.
 const OWN_NAME: &[Part] = &[Part(
@@ -328,10 +324,13 @@ impl fmt::Display for Stage {
 }
 
 /// The messages a login or zone session leaves unread, each told once a
-/// session but those with nothing worth reading.
+/// session but those with nothing worth reading, and the messages of a kind
+/// no server is known to send, each kind told once a session.
 pub(super) struct Unheard {
     stage: Stage,
     told: HashSet<u16>,
+    /// The kinds told of, with their message's opcode.
+    kinds: HashSet<(u16, u32)>,
 }
 
 impl Unheard {
@@ -340,7 +339,41 @@ impl Unheard {
         Self {
             stage,
             told: HashSet::new(),
+            kinds: HashSet::new(),
         }
+    }
+
+    /// Drops each of a packet's messages of a kind no server is known to
+    /// send ([`Message::UnknownKind`]), telling of it, by its opcode and kind
+    /// alone, the first time they arrive in the session; passes on the rest.
+    ///
+    /// # Errors
+    /// Returns an error when the host's event handler fails.
+    pub(super) fn sift(
+        &mut self,
+        wire: &dyn Wire,
+        opcode: u16,
+        messages: Vec<Message>,
+        log: &mut Events<'_>,
+    ) -> Result<Vec<Message>> {
+        let mut kept = Vec::with_capacity(messages.len());
+        for message in messages {
+            let Message::UnknownKind(kind) = message else {
+                kept.push(message);
+                continue;
+            };
+            if self.kinds.insert((opcode, kind)) {
+                let name = wire
+                    .coverage(opcode)
+                    .map_or("an unlisted message", |message| message.name);
+                log.diagnostic(format!(
+                    "{} sent {name} (0x{opcode:04x}) of kind {kind}, left unread: no server is \
+                     known to send that kind",
+                    self.stage
+                ))?;
+            }
+        }
+        Ok(kept)
     }
 
     /// Tells, the first time one arrives in the session, of a message the
@@ -434,6 +467,48 @@ mod tests {
                  it only after the login",
                 "Login sent an unlisted message (0x0001, 4 bytes), left unread: no server is \
                  listed as sending it",
+            ]
+        );
+    }
+
+    #[test]
+    fn the_zone_tells_once_of_each_kind_no_server_is_known_to_send() {
+        let config = ClientConfig::new("ACCOUNT", "PASSWORD", "Test Server", "Tester");
+        let mut said = Vec::new();
+        let mut handler = |event| {
+            if let ClientEvent::Diagnostic(line) = event {
+                said.push(line);
+            }
+            Ok(())
+        };
+        let mut log = Events::new(&config, &mut handler);
+        let mut unheard = Unheard::new(Stage::Zone);
+        // Two actions of kind 8, one of kind 30, and the spin, which is read.
+        for kind in [8, 30, 8] {
+            let kept = unheard
+                .sift(
+                    &Titanium,
+                    0x497c,
+                    vec![Message::UnknownKind(kind)],
+                    &mut log,
+                )
+                .unwrap();
+            assert!(kept.is_empty());
+        }
+        let spun = vec![Message::Event(eq_network_game::world::WorldEvent::Spun)];
+        let kept = unheard.sift(&Titanium, 0x497c, spun, &mut log).unwrap();
+        assert!(matches!(
+            kept[..],
+            [Message::Event(eq_network_game::world::WorldEvent::Spun)]
+        ));
+        drop(log);
+        assert_eq!(
+            said,
+            [
+                "Zone sent OP_Action (0x497c) of kind 8, left unread: no server is known to \
+                 send that kind",
+                "Zone sent OP_Action (0x497c) of kind 30, left unread: no server is known to \
+                 send that kind",
             ]
         );
     }
