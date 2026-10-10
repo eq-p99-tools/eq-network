@@ -8,6 +8,7 @@ mod character;
 mod clock;
 mod combat;
 mod corpses;
+mod coverage;
 mod creation;
 mod doors;
 mod entities;

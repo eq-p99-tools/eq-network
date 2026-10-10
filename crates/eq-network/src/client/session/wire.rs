@@ -8,6 +8,7 @@
 
 use super::{
     admission::{Admission, EqMacAdmission, Handshake, TitaniumAdmission},
+    coverage::{self, ServerMessage},
     login::{self, Credentials},
     servers::Shield,
     world, CharacterSession, ZoneDestination,
@@ -50,6 +51,13 @@ pub(super) trait Wire: Sync {
     /// Returns an error when a communication packet is malformed.
     fn chat(&self, _opcode: u16, _body: &[u8], _include_raw: bool) -> Result<Option<ChatEvent>> {
         Ok(None)
+    }
+
+    /// What the session does with a message the generation's servers send,
+    /// from the generation's table; nothing for one no server is listed as
+    /// sending.
+    fn coverage(&self, _opcode: u16) -> Option<ServerMessage> {
+        None
     }
 
     /// The packet that asks the server for what the session wants.
@@ -151,6 +159,10 @@ impl Wire for Titanium {
         chat::parse(opcode, body, include_raw)
     }
 
+    fn coverage(&self, opcode: u16) -> Option<ServerMessage> {
+        coverage::titanium(opcode)
+    }
+
     fn encode(&self, request: &Request, sender: Sender<'_>) -> Result<EncodedCommand> {
         request::titanium(request, sender)
     }
@@ -221,6 +233,10 @@ impl Wire for EqMac {
 
     fn chat(&self, opcode: u16, body: &[u8], include_raw: bool) -> Result<Option<ChatEvent>> {
         chat::parse_for(GameDialect::EqMac, opcode, body, include_raw)
+    }
+
+    fn coverage(&self, opcode: u16) -> Option<ServerMessage> {
+        coverage::eqmac(opcode)
     }
 
     fn encode(&self, request: &Request, sender: Sender<'_>) -> Result<EncodedCommand> {
