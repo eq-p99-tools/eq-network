@@ -130,6 +130,13 @@ impl Reader {
     const fn in_zone(self) -> bool {
         !matches!(self, Self::Login | Self::World)
     }
+
+    /// Whether it is one of the generation's zone decoders, which a test
+    /// can probe.
+    #[cfg(test)]
+    pub(super) const fn decodes(self) -> bool {
+        matches!(self, Self::Zone | Self::Chat | Self::Answer)
+    }
 }
 
 /// Why the session leaves a message, or a part of one, unread.
