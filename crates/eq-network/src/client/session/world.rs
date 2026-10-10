@@ -14,7 +14,7 @@ use crate::{
     world::WorldEvent,
 };
 use anyhow::{anyhow, ensure, Context, Result};
-use eq_network_game::{channels, rules, zoning};
+use eq_network_game::{channels, rules, zoning::TITANIUM_UNAVAILABLE_OPCODE};
 use std::{
     net::IpAddr,
     time::{Duration, Instant},
@@ -48,7 +48,7 @@ impl From<u16> for WorldOpcode {
             0x3ea6 => Self::ApproveName,
             eq_network_game::listing::GUILDS_OPCODE => Self::Guilds,
             0x7cba => Self::EnterWorld,
-            zoning::TITANIUM_UNAVAILABLE_OPCODE => Self::ZoneUnavailable,
+            TITANIUM_UNAVAILABLE_OPCODE => Self::ZoneUnavailable,
             value => Self::Unknown(value),
         }
     }
@@ -199,7 +199,7 @@ fn news(opcode: u16, body: &[u8], log: &mut Events<'_>) -> Result<()> {
 /// # Errors
 /// Returns an error when the host's event handler fails.
 fn unavailable(body: &[u8], log: &mut Events<'_>) -> Result<anyhow::Error> {
-    let zone = zoning::unavailable(body).or_else(|error| {
+    let zone = eq_network_game::zoning::unavailable(body).or_else(|error| {
         log.diagnostic(format!("Unavailable zone unnamed: {error}"))?;
         Ok::<_, anyhow::Error>(None)
     })?;

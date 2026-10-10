@@ -24,7 +24,8 @@ use anyhow::{ensure, Context, Result};
 use eq_network_game::{
     channels::{self, ChatService},
     creation::EQMAC_APPROVE_NAME_OPCODE,
-    rules, zoning,
+    rules,
+    zoning::EQMAC_UNAVAILABLE_OPCODE,
 };
 use std::time::{Duration, Instant};
 use zeroize::Zeroizing;
@@ -128,7 +129,7 @@ pub(in crate::client::session) fn world(
                 selection = Some(list);
                 chosen = automatic;
             }
-            zoning::EQMAC_UNAVAILABLE_OPCODE => {
+            EQMAC_UNAVAILABLE_OPCODE => {
                 let error = unavailable(&packet.body, log)?;
                 session.close()?;
                 return Err(error);
