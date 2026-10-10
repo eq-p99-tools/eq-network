@@ -283,6 +283,11 @@ const TRANSLOCATE: &[Part] = &[Part(
          and TAKP's Client::SendPendingTranslocatePacket)",
     ),
 )];
+/// What the session leaves unread of a quest's word on the player's stats.
+const STATS: &[Part] = &[Part(
+    "the first byte, the five resists and the second copy of every field",
+    Reason::Needless("EQEmu never sets them (zone/client.cpp Client::SetStats, Client::IncStats)"),
+)];
 /// What the session leaves unread of `EQMac`'s log-server settings.
 const LOG_SERVER: &[Part] = &[Part(
     "the error-reporting server's address, port, password and e-mail",

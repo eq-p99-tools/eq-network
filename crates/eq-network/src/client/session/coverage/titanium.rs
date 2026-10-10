@@ -7,7 +7,7 @@ use super::{
     Reason::{Needless, Planned},
     ServerMessage,
     Step::{AlternateAdvancement, Appearance, Bazaar, LaterSystems, PlayerState, Raids, Social},
-    APPEARANCE, EQEMU, P99, PROFILE, REWARD, SACRIFICE, TITANIUM_DESCRIPTION, TRANSLOCATE,
+    APPEARANCE, EQEMU, P99, PROFILE, REWARD, SACRIFICE, STATS, TITANIUM_DESCRIPTION, TRANSLOCATE,
 };
 
 /// What the session does with a message Titanium's servers send; nothing
@@ -246,7 +246,7 @@ pub(in crate::client) fn titanium(opcode: u16) -> Option<ServerMessage> {
             Unread(Needless("it carries nothing")),
         ),
         0x5a48 => sent("OP_FormattedMessage", EQEMU, Read(&[Chat])),
-        0x5b7b => sent("OP_IncreaseStats", EQEMU, planned(PlayerState)),
+        0x5b7b => sent("OP_IncreaseStats", EQEMU, Partly(&[Zone], STATS)),
         0x5c78 => sent("OP_Damage", EQEMU, Read(&[Zone])),
         0x5cc0 => sent("OP_PVPStats", EQEMU, planned(LaterSystems)),
         0x5d11 => sent("OP_Track", EQEMU, unasked(PlayerState)),

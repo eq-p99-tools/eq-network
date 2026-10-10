@@ -1135,6 +1135,10 @@ pub enum WorldEvent {
         /// New server skill value.
         value: u32,
     },
+    /// A quest's word on the player's base stats: each stat's new value or
+    /// its rise, which the record does not tell apart ([`crate::stats`]);
+    /// the next profile has them as the server keeps them.
+    StatsChanged(crate::stats::StatChange),
 }
 
 /// A profile heading on the 0..512 scale live movement uses. Project 1999 saves
@@ -1357,8 +1361,9 @@ pub fn titanium_update(opcode: u16, body: &[u8]) -> Result<Option<WorldEvent>> {
     }))
 }
 
-/// Stuns and charms, the end of hiding, the target the server sets,
-/// rewards, sacrifices and translocates, a player becoming a corpse, doors,
+/// Stuns and charms, the end of hiding, a quest's word on the player's
+/// stats, the target the server sets, rewards, sacrifices and translocates,
+/// a player becoming a corpse, doors,
 /// ground objects, loot, merchant, exchange, training, resurrection, group,
 /// dice, assist, raid, book, combine, bandaging, chat server, weather and
 /// inventory packets, each owned by its codec.
@@ -1375,6 +1380,11 @@ fn titanium_views(opcode: u16, body: &[u8]) -> Result<Option<WorldEvent>> {
         }
         crate::control::STUN_OPCODE => {
             return Ok(Some(WorldEvent::Stun(crate::control::stun(body)?)));
+        }
+        crate::stats::INCREASE_STATS_OPCODE => {
+            return Ok(Some(WorldEvent::StatsChanged(
+                crate::stats::titanium_change(body)?,
+            )));
         }
         crate::abilities::CANCEL_SNEAK_HIDE_OPCODE => {
             ensure!(body.is_empty(), "invalid hide end length");
@@ -2187,6 +2197,20 @@ mod tests {
         ));
         assert!(titanium_update(0x727a, &sacrifice[..8]).is_err());
         assert!(titanium_update(0x8258, &translocate[..91]).is_err());
+    }
+
+    #[test]
+    fn a_quests_word_on_the_players_stats_is_read() {
+        let mut body = vec![0; 141];
+        body[1] = 5;
+        assert_eq!(
+            titanium_update(0x5b7b, &body).unwrap(),
+            Some(WorldEvent::StatsChanged(crate::stats::StatChange {
+                strength: 5,
+                ..crate::stats::StatChange::default()
+            }))
+        );
+        assert!(titanium_update(0x5b7b, &body[..140]).is_err());
     }
 
     #[test]

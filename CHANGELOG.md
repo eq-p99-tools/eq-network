@@ -144,6 +144,15 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- A quest's word on the player's base stats, on Titanium:
+  `WorldEvent::StatsChanged` (`stats::StatChange`: each stat by name, 0
+  for one the quest left alone), from `OP_IncreaseStats`, which `EQEmu`
+  sends for a quest's `setstat` and `incstat`. A value is the stat's new
+  value from the first and its rise from the second, which the record does
+  not tell apart, so the session changes nothing on it; the next profile
+  has the stats as the server keeps them. Hosts that match `WorldEvent`
+  exhaustively need an arm for it.
+
 - The player's target as the server sets it, on both generations:
   `WorldEvent::Target`, from `OP_TargetCommand` (`EQEmu`'s sense spells,
   its corpse locator and Perl; TAKP's and Quarm's refusal of a mouse
