@@ -10,7 +10,7 @@ use super::{
         AlternateAdvancement, Appearance, Bazaar, EqMacExchanges, EqMacWorld, LaterSystems,
         PlayerState, Raids, Social,
     },
-    ACTION, EQMAC, EQMAC_DESCRIPTION, LOG_SERVER, PROFILE, PUSH, QUARM, TAKP,
+    ACTION, EQMAC, EQMAC_DESCRIPTION, LOG_SERVER, PROFILE, QUARM, TAKP,
 };
 
 /// What the session does with a message `EQMac`'s servers send; nothing for
@@ -128,7 +128,7 @@ pub(in crate::client) fn eqmac(opcode: u16) -> Option<ServerMessage> {
         ),
         0x5240 => sent("OP_LootItemPacket", EQMAC, planned(EqMacExchanges)),
         0x5741 => sent("OP_Stamina", EQMAC, Read(&[Zone])),
-        0x5840 => sent("OP_Damage", EQMAC, Partly(&[Zone], PUSH)),
+        0x5840 => sent("OP_Damage", EQMAC, Read(&[Zone])),
         0x5900 => sent("OP_SessionReady", TAKP, Read(&[Login])),
         0x5941 => sent("OP_LogoutReply", EQMAC, Read(&[Zone])),
         0x5a41 => sent("OP_CancelSneakHide", EQMAC, planned(PlayerState)),

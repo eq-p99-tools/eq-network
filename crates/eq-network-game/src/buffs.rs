@@ -17,7 +17,7 @@ pub const UNKNOWN_SLOT: u32 = u32::MAX;
 const EQMAC_PROFILE_BUFFS: std::ops::Range<usize> = 616..766;
 
 /// Server spell action. Its icon flag does not supply a buff slot or duration.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct SpellEffect {
     /// Target entity in this zone.
     pub target_id: u16,
@@ -33,9 +33,14 @@ pub struct SpellEffect {
     pub spell_level: u8,
     /// Raw flags; the documented icon value is 4.
     pub effect_flag: u8,
+    /// The push the spell gives its target, as the server sends it; none
+    /// when it sends no force or pitch, or a value that is not a finite
+    /// number. See [`Push`](crate::combat::Push) for what each server sends.
+    pub push: Option<crate::combat::Push>,
 }
 
-/// Decodes spell actions, excluding melee actions sharing the same opcode.
+/// Decodes spell actions, excluding melee actions sharing the same opcode,
+/// with the push at 10 (`Action_Struct`).
 ///
 /// # Errors
 /// Rejects malformed Titanium action lengths.
@@ -53,13 +58,15 @@ pub fn titanium_spell_effect(body: &[u8]) -> Result<Option<SpellEffect>> {
         spell_id: short(27),
         spell_level: body[29],
         effect_flag: body[30],
+        push: crate::combat::push(body, 10)?,
     }))
 }
 
 /// Decodes `EQMac`'s spell actions (TAKP `Action_Struct`, 36 bytes),
 /// excluding other actions sharing the opcode. TAKP sends one as the spell
 /// lands, with flag 0, and again with flag 4 once a buff takes hold
-/// (`Mob::SpellOnTarget`). The action carries no spell level, which reads 0.
+/// (`Mob::SpellOnTarget`). The action carries no spell level, which reads 0,
+/// and its push at 12.
 ///
 /// # Errors
 /// Rejects malformed `EQMac` action lengths.
@@ -77,6 +84,7 @@ pub fn eqmac_spell_effect(body: &[u8]) -> Result<Option<SpellEffect>> {
         spell_id: short(30),
         spell_level: 0,
         effect_flag: body[33],
+        push: crate::combat::push(body, 12)?,
     }))
 }
 
@@ -268,6 +276,17 @@ mod tests {
             ),
             (42, 125, 4)
         );
+        assert_eq!(effect.push, None);
+        // A spell's push back, the caster's heading and its push up, at 10.
+        body[10..14].copy_from_slice(&1.5f32.to_le_bytes());
+        body[14..18].copy_from_slice(&128.0f32.to_le_bytes());
+        body[18..22].copy_from_slice(&0.25f32.to_le_bytes());
+        let push = titanium_spell_effect(&body).unwrap().unwrap().push.unwrap();
+        assert_eq!((push.force, push.heading, push.pitch), (1.5, 128.0, 0.25));
+        // A value that is not a finite number is no push; the action reads.
+        body[10..14].copy_from_slice(&f32::NAN.to_le_bytes());
+        let effect = titanium_spell_effect(&body).unwrap().unwrap();
+        assert_eq!((effect.spell_id, effect.push), (42, None));
         assert!(titanium_spell_effect(&body[..30]).is_err());
         assert!(titanium_update(&body).is_err());
     }
@@ -319,8 +338,14 @@ mod tests {
                 spell_id: 42,
                 spell_level: 0,
                 effect_flag: 4,
+                push: None,
             })
         );
+        // TAKP's force, its doubled heading and a pitch, at 12.
+        body[12..16].copy_from_slice(&2.0f32.to_le_bytes());
+        body[16..20].copy_from_slice(&300.0f32.to_le_bytes());
+        let push = eqmac_spell_effect(&body).unwrap().unwrap().push.unwrap();
+        assert_eq!((push.force, push.heading, push.pitch), (2.0, 300.0, 0.0));
         assert!(eqmac_spell_effect(&body[..35]).is_err());
         assert!(eqmac_spell_effect(&[0; 37]).is_err());
     }

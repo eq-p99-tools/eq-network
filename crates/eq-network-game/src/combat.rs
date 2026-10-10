@@ -4,7 +4,9 @@
 //! `OP_Damage`; these records keep the server's numeric fields so a consumer
 //! can do the same without inventing results. `OP_Animation` asks every
 //! client near a spawn to play one of its motions, such as a swing, so a
-//! consumer can show what the server says happened.
+//! consumer can show what the server says happened. Damage records and
+//! spell actions carry the push a hit or a spell gives
+//! ([`Push`](crate::combat::Push)).
 use anyhow::{ensure, Context, Result};
 use serde::Serialize;
 
@@ -164,8 +166,57 @@ impl DamageOutcome {
     }
 }
 
+/// A push a hit or a spell gives the spawn it lands on, as the server sends
+/// it. Nothing here applies it: how far the official client moves for one
+/// is not recorded yet.
+///
+/// `EQEmu` pushes a player on every melee hit that does damage, unless they
+/// are rooted, and an NPC by chance, by the skill's force and toward the
+/// attacker's heading (`Mob::CommonDamage`); it gives a spell's push back
+/// and push up to its action and its landing record
+/// (`Mob::SpellOnTarget`). It keeps one melee record and sets its force
+/// only for a push, so a later miss or avoidance it sends carries the last
+/// push's force; it never sets that record's pitch. TAKP and Quarm give a
+/// force only to a melee hit, by the skill, and send the caster's heading
+/// with every spell, and no force; neither sets the pitch. So a push in a
+/// record of a miss or an avoidance is never one to apply.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
+pub struct Push {
+    /// How hard.
+    pub force: f32,
+    /// Which way, in [`Position`](crate::world::Position)'s 512-unit turn:
+    /// the attacker's or the caster's heading, which TAKP and Quarm send
+    /// doubled from their own 256-unit turn.
+    pub heading: f32,
+    /// How far up: Titanium's `hit_pitch`, which `EQEmu` fills with a
+    /// spell's push up, and `EQMac`'s `pushup_angle`, an angle whose sine
+    /// times the force is the upward push (TAKP's `Damage_Struct`).
+    pub pitch: f32,
+}
+
+/// Reads the push at `at`: the force, the heading and the pitch, three
+/// floats. None when the force and the pitch are both 0, since a heading
+/// alone pushes nothing, and when any of the three is not a finite number,
+/// which nothing could apply; the record carrying it reads all the same.
+///
+/// # Errors
+/// Rejects a record too short to hold the three.
+pub(crate) fn push(body: &[u8], at: usize) -> Result<Option<Push>> {
+    let mut values = [0.0f32; 3];
+    for (index, value) in values.iter_mut().enumerate() {
+        *value = f32::from_bits(word(body, at + index * 4)?);
+    }
+    let [force, heading, pitch] = values;
+    let finite = values.iter().all(|value| value.is_finite());
+    Ok((finite && (force != 0.0 || pitch != 0.0)).then_some(Push {
+        force,
+        heading,
+        pitch,
+    }))
+}
+
 /// One `OP_Damage` record.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
 pub struct Damage {
     /// Entity receiving the attack.
     pub target_id: u16,
@@ -182,6 +233,10 @@ pub struct Damage {
     pub spell_id: Option<u16>,
     /// The damage field, read by the kind.
     pub outcome: DamageOutcome,
+    /// The push the record gives its target; none when it sends no force
+    /// or pitch, or a value that is not a finite number. See [`Push`] for
+    /// which records carry one.
+    pub push: Option<Push>,
 }
 
 /// One `OP_Animation`: a motion the server asks the clients near a spawn to
@@ -276,7 +331,8 @@ pub fn consideration(body: &[u8]) -> Result<Consideration> {
     })
 }
 
-/// Decodes one damage record.
+/// Decodes one damage record: the target and source, the kind, the spell,
+/// the damage and the push at 11 (`CombatDamage_Struct`).
 ///
 /// # Errors
 /// Rejects any length other than the 23-byte Titanium structure.
@@ -296,12 +352,14 @@ pub fn damage(body: &[u8]) -> Result<Damage> {
         spell_id: (kind == SPELL_DAMAGE_KIND && !matches!(spell_id, 0 | u16::MAX))
             .then_some(spell_id),
         outcome: DamageOutcome::read(kind, spawns, raw),
+        push: push(body, 11)?,
     })
 }
 
 /// Decodes `EQMac`'s damage record: Titanium's fields, the type and the
-/// spell 16 bits wide, then the damage at 8 (TAKP `Damage_Struct`, whose
-/// types are Titanium's: `SkillDamageTypes`, and 231 for spells).
+/// spell 16 bits wide, then the damage at 8 and the push at 12 (TAKP
+/// `Damage_Struct`, whose types are Titanium's: `SkillDamageTypes`, and 231
+/// for spells).
 ///
 /// # Errors
 /// Rejects a malformed record, and a type beyond any skill's.
@@ -322,6 +380,7 @@ pub fn eqmac_damage(body: &[u8]) -> Result<Damage> {
         spell_id: (kind == SPELL_DAMAGE_KIND && !matches!(spell_id, 0 | u16::MAX))
             .then_some(spell_id),
         outcome: DamageOutcome::read(kind, spawns, raw),
+        push: push(body, 12)?,
     })
 }
 
@@ -539,6 +598,44 @@ mod tests {
             assert_eq!(damage(&titanium).unwrap().outcome, outcome, "{case}");
             assert_eq!(eqmac_damage(&eqmac).unwrap().outcome, outcome, "{case}");
         }
+    }
+
+    #[test]
+    fn damage_records_carry_their_push() {
+        let mut titanium = titanium_record(12);
+        let mut eqmac = [0u8; 24];
+        eqmac[8..12].copy_from_slice(&12i32.to_le_bytes());
+        // No force and no pitch: no push, whatever the heading.
+        titanium[15..19].copy_from_slice(&256.0f32.to_le_bytes());
+        eqmac[16..20].copy_from_slice(&256.0f32.to_le_bytes());
+        assert_eq!(damage(&titanium).unwrap().push, None);
+        assert_eq!(eqmac_damage(&eqmac).unwrap().push, None);
+        // A force, a heading and a pitch, each where its generation keeps it.
+        let push = Push {
+            force: 0.3,
+            heading: 256.0,
+            pitch: 0.5,
+        };
+        for (body, at) in [(&mut titanium[..], 11), (&mut eqmac[..], 12)] {
+            for (offset, value) in [(0, push.force), (4, push.heading), (8, push.pitch)] {
+                body[at + offset..at + offset + 4].copy_from_slice(&value.to_le_bytes());
+            }
+        }
+        assert_eq!(damage(&titanium).unwrap().push, Some(push));
+        assert_eq!(eqmac_damage(&eqmac).unwrap().push, Some(push));
+        // A pitch alone is a push too.
+        titanium[11..15].copy_from_slice(&0.0f32.to_le_bytes());
+        assert_eq!(damage(&titanium).unwrap().push.unwrap().force, 0.0);
+        // A value that is not a finite number is no push, and the record
+        // still reads.
+        titanium[19..23].copy_from_slice(&f32::NAN.to_le_bytes());
+        eqmac[12..16].copy_from_slice(&f32::INFINITY.to_le_bytes());
+        let (titanium, eqmac) = (damage(&titanium).unwrap(), eqmac_damage(&eqmac).unwrap());
+        assert_eq!((titanium.push, eqmac.push), (None, None));
+        assert_eq!(
+            (titanium.outcome, eqmac.outcome),
+            (DamageOutcome::Hit(12), DamageOutcome::Hit(12))
+        );
     }
 
     #[test]

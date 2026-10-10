@@ -179,10 +179,9 @@ impl fmt::Display for Reason {
 /// step at a time.
 #[derive(Clone, Copy, Debug)]
 pub(super) enum Step {
-    /// The player's own state: the push of a hit, stun, mesmerize and charm,
-    /// the end of sneaking and hiding, disciplines and reuse timers, a
-    /// target the server sets, rewards, and the confirmations the player
-    /// answers.
+    /// The player's own state: stun, mesmerize and charm, the end of
+    /// sneaking and hiding, disciplines and reuse timers, a target the
+    /// server sets, rewards, and the confirmations the player answers.
     PlayerState,
     /// Spawns' appearance and effects: the appearance kinds left, illusions,
     /// renames, spell and level effects, sounds, projectiles and spawn
@@ -251,11 +250,9 @@ const APPEARANCE: &[Part] = &[Part(
     "the other appearance kinds",
     Reason::Planned(Step::Appearance),
 )];
-/// What the session leaves unread of a hit.
-const PUSH: &[Part] = &[Part("the push", Reason::Planned(Step::PlayerState))];
 /// What the session leaves unread of an action.
 const ACTION: &[Part] = &[Part(
-    "melee and skill actions, and the push",
+    "actions of a kind other than a spell's",
     Reason::Planned(Step::PlayerState),
 )];
 /// What the session leaves unread of `EQMac`'s log-server settings.

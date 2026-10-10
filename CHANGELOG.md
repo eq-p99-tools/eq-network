@@ -137,6 +137,14 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- The push a hit or a spell gives, on both generations: `Damage` and
+  `SpellEffect` gain `push` (`combat::Push`: the force, the heading in
+  `Position`'s 512-unit turn and the pitch, as the server sends them),
+  none when the server sends no force and no pitch. Nothing applies it
+  yet. `Damage` and `SpellEffect` no longer implement `Eq`, since the push
+  is made of floats. A push that is not a finite number reads as none, and
+  the record carrying it still reads.
+
 - The zone's weather, on both generations: `WorldEvent::Weather`
   (`clock::Weather`: clear, or rain or snow with the server's intensity),
   once the player is in the zone and whenever it changes.
