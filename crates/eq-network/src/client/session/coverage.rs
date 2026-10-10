@@ -5,8 +5,9 @@
 //! parts of the session that read it, or why it is left unread: work still
 //! to come, an answer to a request eq-network never sends, or nothing in it
 //! worth reading. The zone session tells once of each message it leaves
-//! unread and of each the table does not list ([`Unheard`]), and a test holds
-//! each table to its generation's decoders.
+//! unread, but one with nothing worth reading, and of each the table does
+//! not list ([`Unheard`]), and a test holds each table to its generation's
+//! decoders.
 //!
 //! What the servers send comes from the emulators' sources: `EQEmu`'s for
 //! Titanium, TAKP's and Quarm's for `EQMac`. P99's server is closed, so its
@@ -49,9 +50,11 @@ impl ServerMessage {
         }
     }
 
-    /// Whether the zone session reads it.
-    fn read_in_zone(&self) -> bool {
-        self.readers().iter().any(|reader| reader.in_zone())
+    /// Whether the zone session tells of it when it arrives: no part of the
+    /// zone reads it, and something in it is worth reading.
+    fn told_in_zone(&self) -> bool {
+        !matches!(self.reading, Reading::Unread(Reason::Needless(_)))
+            && !self.readers().iter().any(|reader| reader.in_zone())
     }
 }
 
@@ -149,7 +152,8 @@ pub(super) enum Reason {
     Unasked(Step),
     /// Parked work reads it.
     Parked(&'static str),
-    /// Nothing in it needs reading, for this reason.
+    /// Nothing in it needs reading, for this reason, so the zone does not
+    /// tell of it.
     Needless(&'static str),
 }
 
@@ -267,14 +271,15 @@ const DESCRIPTION: &[Part] = &[Part(
     Reason::Planned(Step::WorldAndSession),
 )];
 
-/// The messages a zone session leaves unread, each told once a session.
+/// The messages a zone session leaves unread, each told once a session but
+/// those with nothing worth reading.
 #[derive(Default)]
 pub(super) struct Unheard(HashSet<u16>);
 
 impl Unheard {
     /// Tells, the first time one arrives in the session, of a message the
-    /// generation lists but the zone leaves unread, and of one it does not
-    /// list.
+    /// generation lists but the zone leaves unread, unless nothing in it is
+    /// worth reading, and of one it does not list.
     ///
     /// # Errors
     /// Returns an error when the host's event handler fails.
@@ -286,7 +291,7 @@ impl Unheard {
         log: &mut Events<'_>,
     ) -> Result<()> {
         let message = wire.coverage(opcode);
-        if message.is_some_and(|message| message.read_in_zone()) || !self.0.insert(opcode) {
+        if message.is_some_and(|message| !message.told_in_zone()) || !self.0.insert(opcode) {
             return Ok(());
         }
         let why = match message {
@@ -345,10 +350,10 @@ mod tests {
         let mut log = Events::new(&config, &mut handler);
         let mut unheard = Unheard::default();
         // A position, read; a stun, left unread; the character list, read
-        // only from the world; and an opcode no server is listed as sending,
-        // each arriving twice.
+        // only from the world; an opcode no server is listed as sending; and
+        // the empty AA stats, which carry nothing: each arriving twice.
         for opcode in [
-            0x14cb, 0x1e51, 0x4513, 0x0001, 0x14cb, 0x1e51, 0x4513, 0x0001,
+            0x14cb, 0x1e51, 0x4513, 0x0001, 0x5996, 0x14cb, 0x1e51, 0x4513, 0x0001, 0x5996,
         ] {
             unheard.tell(&Titanium, opcode, 8, &mut log).unwrap();
         }
