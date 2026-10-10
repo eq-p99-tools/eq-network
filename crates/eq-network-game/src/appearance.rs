@@ -1,7 +1,15 @@
 //! How spawns look: their worn gear in EQ's nine texture slots, tints and
-//! facial features, as Titanium spawn records and wear changes carry them.
-//! Which textures and models draw that is the client's business.
-use anyhow::{ensure, Result};
+//! facial features, as Titanium spawn records and wear changes carry them,
+//! and the appearance updates (`OP_SpawnAppearance`) that change how a spawn
+//! shows on both generations. Which textures and models draw that is the
+//! client's business.
+//!
+//! Layout reference: `EQEmu`'s `SpawnAppearance_Struct`
+//! (`common/eq_packet_structs.h`), the same on both generations, and the
+//! servers' `AppearanceType` numbers (`EQEmu`'s and TAKP's
+//! `common/eq_constants.h`).
+use crate::world::WorldEvent;
+use anyhow::{ensure, Context, Result};
 use serde::Serialize;
 
 /// `OP_WearChange`: one texture slot of a spawn changed.
@@ -165,6 +173,202 @@ pub fn titanium_wear_change(body: &[u8]) -> Result<WearChange> {
     })
 }
 
+/// The appearance kinds read here, by the servers' numbers. Those that say
+/// how `/who` lists a player are [`crate::listing`]'s, and a pet's owner is
+/// [`crate::pets`]'s.
+const DIE: u16 = 0;
+const INVISIBILITY: u16 = 3;
+const PVP: u16 = 4;
+const LIGHT: u16 = 5;
+const POSTURE: u16 = 14;
+const SNEAK: u16 = 15;
+const LINKDEAD: u16 = 18;
+const FLY_MODE: u16 = 19;
+const SIZE: u16 = 29;
+const NPC_NAME_COLOR: u16 = 31;
+const AREA_HEALTH_REGENERATION: u16 = 35;
+const AREA_MANA_REGENERATION: u16 = 36;
+const AREA_ENDURANCE_REGENERATION: u16 = 37;
+const NPC_TINT: u16 = 39;
+const SHOW_HELM: u16 = 43;
+const DAMAGE_STATE: u16 = 44;
+
+/// How a spawn keeps to the ground, by the servers' numbers and names
+/// (`AppearanceType::FlyMode`); how each looks is the client's business.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize)]
+pub enum FlyMode {
+    /// 0, on the ground.
+    #[default]
+    Off,
+    /// 1, flying.
+    Flying,
+    /// 2, levitating, as a levitation spell sets it.
+    Levitating,
+    /// 3, which the servers name water.
+    Water,
+    /// 4, floating.
+    Floating,
+    /// 5, levitating while running.
+    LevitatingWhileRunning,
+    /// A number past those, kept as sent.
+    Other(u32),
+}
+
+impl FlyMode {
+    /// The mode with this number.
+    const fn from_wire(value: u32) -> Self {
+        match value {
+            0 => Self::Off,
+            1 => Self::Flying,
+            2 => Self::Levitating,
+            3 => Self::Water,
+            4 => Self::Floating,
+            5 => Self::LevitatingWhileRunning,
+            other => Self::Other(other),
+        }
+    }
+}
+
+/// What an area's regeneration multiplies.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+pub enum Pool {
+    /// Health.
+    Health,
+    /// Mana.
+    Mana,
+    /// Endurance.
+    Endurance,
+}
+
+/// A change in how a spawn shows, from an appearance update of a kind the
+/// listing, visibility, posture and pet events leave out.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
+pub enum AppearanceChange {
+    /// Kind 0, with its value as sent. `EQEmu`'s own note says it "causes the
+    /// client to keel over and zone to bind point" (unverified); `EQEmu`
+    /// sends it only for a legacy spell effect, with the lying posture's
+    /// number (115), and TAKP and Quarm only on a game master's word.
+    Died(u32),
+    /// Kind 4: the spawn is open to player combat, or no longer.
+    Pvp(bool),
+    /// Kind 5: the type of light the spawn carries, 0 for none.
+    Light(u8),
+    /// Kind 15: sneaking, or no longer.
+    Sneaking(bool),
+    /// Kind 18: link-dead, or back; the servers also mark a charmed or
+    /// feared player link-dead so the tag shows by their name.
+    Linkdead(bool),
+    /// Kind 19: how the spawn keeps to the ground.
+    FlyMode(FlyMode),
+    /// Kind 29: the spawn's new size, in whole units.
+    Size(f32),
+    /// Kind 31: a player's name drawn in an NPC's color, or no longer.
+    NpcNameColor(bool),
+    /// Kinds 35 to 37, to the player alone: what the area multiplies the
+    /// pool's regeneration by, sent in thousandths; 1 is no change.
+    AreaRegeneration {
+        /// Health, mana or endurance.
+        pool: Pool,
+        /// The multiplier.
+        multiplier: f64,
+    },
+    /// Kind 39: an NPC's tint, by its number in the server's tint list.
+    NpcTint(u32),
+    /// Kind 43: whether a player shows their helm.
+    ShowHelm(bool),
+    /// Kind 44: how damaged a destructible NPC shows; `EQEmu` sends 0 to 4 as
+    /// its health falls by quarters.
+    DamageState(u8),
+    /// A kind no server sends on its own, kept as a game master's
+    /// `#appearance` sends it; most are the client's own reports and
+    /// settings.
+    Other {
+        /// The kind's number.
+        kind: u16,
+        /// Its value as sent.
+        value: u32,
+    },
+}
+
+impl AppearanceChange {
+    /// The change an update of this kind makes, to this value.
+    fn read(kind: u16, value: u32) -> Result<Self> {
+        let on = value != 0;
+        Ok(match kind {
+            DIE => Self::Died(value),
+            PVP => Self::Pvp(on),
+            LIGHT => Self::Light(u8::try_from(value).context("light type out of range")?),
+            SNEAK => Self::Sneaking(on),
+            LINKDEAD => Self::Linkdead(on),
+            FLY_MODE => Self::FlyMode(FlyMode::from_wire(value)),
+            SIZE => Self::Size(f32::from(
+                u16::try_from(value).context("appearance size out of range")?,
+            )),
+            NPC_NAME_COLOR => Self::NpcNameColor(on),
+            AREA_HEALTH_REGENERATION | AREA_MANA_REGENERATION | AREA_ENDURANCE_REGENERATION => {
+                Self::AreaRegeneration {
+                    pool: match kind {
+                        AREA_HEALTH_REGENERATION => Pool::Health,
+                        AREA_MANA_REGENERATION => Pool::Mana,
+                        _ => Pool::Endurance,
+                    },
+                    multiplier: f64::from(value) / 1000.0,
+                }
+            }
+            NPC_TINT => Self::NpcTint(value),
+            SHOW_HELM => Self::ShowHelm(on),
+            DAMAGE_STATE => {
+                Self::DamageState(u8::try_from(value).context("damage state out of range")?)
+            }
+            kind => Self::Other { kind, value },
+        })
+    }
+}
+
+/// Decodes `OP_SpawnAppearance` (Titanium's 0x7c32, `EQMac`'s 0xf540): a
+/// spawn, a kind and a value. A record naming no spawn is the server
+/// addressing the client itself, never a spawn's look: the player's own spawn
+/// ID as they zone in, which the admission reads, and Quarm's client library's
+/// handshakes, which [`crate::quarm`] answers.
+///
+/// # Errors
+/// Rejects a wrong length, a value out of its kind's range, and a listing,
+/// visibility, posture or pet update naming no spawn.
+pub(crate) fn update(body: &[u8]) -> Result<Option<WorldEvent>> {
+    ensure!(body.len() == 8, "invalid appearance length");
+    let spawn_id = u16::from_le_bytes([body[0], body[1]]);
+    let kind = u16::from_le_bytes([body[2], body[3]]);
+    let value = u32::from_le_bytes([body[4], body[5], body[6], body[7]]);
+    let listing = crate::listing::appearance(kind, value)?;
+    if spawn_id == 0 {
+        ensure!(
+            listing.is_none()
+                && !matches!(kind, INVISIBILITY | POSTURE | crate::pets::PET_APPEARANCE),
+            "invalid appearance spawn ID"
+        );
+        return Ok(None);
+    }
+    Ok(Some(match (kind, listing) {
+        (_, Some(change)) => WorldEvent::Listing { spawn_id, change },
+        (INVISIBILITY, None) => WorldEvent::Visibility {
+            spawn_id,
+            invisible: value != 0,
+        },
+        (POSTURE, None) => WorldEvent::Posture {
+            spawn_id,
+            posture: value.into(),
+        },
+        (crate::pets::PET_APPEARANCE, None) => WorldEvent::PetOwner {
+            spawn_id,
+            owner: u16::try_from(value).ok().filter(|owner| *owner != 0),
+        },
+        (kind, None) => WorldEvent::Appearance {
+            spawn_id,
+            change: AppearanceChange::read(kind, value)?,
+        },
+    }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -223,6 +427,98 @@ mod tests {
         assert!(titanium_wear_change(&body[..8]).is_err());
         assert!(titanium_wear_change(&[0, 0, 3, 0, 0, 0, 0, 0, 5]).is_err());
         assert!(titanium_wear_change(&[9, 0, 3, 0, 0, 0, 0, 0, 9]).is_err());
+    }
+
+    fn record(spawn_id: u16, kind: u16, value: u32) -> Vec<u8> {
+        let mut body = spawn_id.to_le_bytes().to_vec();
+        body.extend_from_slice(&kind.to_le_bytes());
+        body.extend_from_slice(&value.to_le_bytes());
+        body
+    }
+
+    #[test]
+    fn appearance_updates_read_every_kind_on_a_spawn() {
+        let change = |kind, value| match update(&record(73, kind, value)).unwrap() {
+            Some(WorldEvent::Appearance {
+                spawn_id: 73,
+                change,
+            }) => change,
+            other => panic!("{other:?}"),
+        };
+        assert_eq!(change(0, 115), AppearanceChange::Died(115));
+        assert_eq!(change(4, 1), AppearanceChange::Pvp(true));
+        assert_eq!(change(5, 2), AppearanceChange::Light(2));
+        assert_eq!(change(15, 0), AppearanceChange::Sneaking(false));
+        assert_eq!(change(18, 1), AppearanceChange::Linkdead(true));
+        for (value, mode) in [
+            (0, FlyMode::Off),
+            (1, FlyMode::Flying),
+            (2, FlyMode::Levitating),
+            (3, FlyMode::Water),
+            (4, FlyMode::Floating),
+            (5, FlyMode::LevitatingWhileRunning),
+            (6, FlyMode::Other(6)),
+        ] {
+            assert_eq!(change(19, value), AppearanceChange::FlyMode(mode));
+        }
+        assert_eq!(change(29, 12), AppearanceChange::Size(12.0));
+        assert_eq!(change(31, 1), AppearanceChange::NpcNameColor(true));
+        for (kind, pool) in [(35, Pool::Health), (36, Pool::Mana), (37, Pool::Endurance)] {
+            assert_eq!(
+                change(kind, 2500),
+                AppearanceChange::AreaRegeneration {
+                    pool,
+                    multiplier: 2.5
+                }
+            );
+        }
+        assert_eq!(change(39, 17), AppearanceChange::NpcTint(17));
+        assert_eq!(change(43, 0), AppearanceChange::ShowHelm(false));
+        assert_eq!(change(44, 3), AppearanceChange::DamageState(3));
+        // What no server sends on its own is kept as a game master sent it.
+        assert_eq!(
+            change(17, 90),
+            AppearanceChange::Other {
+                kind: 17,
+                value: 90
+            }
+        );
+        assert_eq!(
+            change(16, 5),
+            AppearanceChange::Other { kind: 16, value: 5 }
+        );
+        for (kind, value) in [(5, 256), (29, 65_536), (44, 256)] {
+            assert!(update(&record(73, kind, value)).is_err(), "{kind}");
+        }
+    }
+
+    #[test]
+    fn records_naming_no_spawn_are_the_servers_word_to_the_client() {
+        // The player's own spawn ID, Quarm's client library's handshakes and
+        // any other kind: none is a spawn's look.
+        for (kind, value) in [(16, 73), (256, 4 << 16 | 7), (257, 1), (4, 1), (29, 6)] {
+            assert_eq!(update(&record(0, kind, value)).unwrap(), None, "{kind}");
+            assert_eq!(
+                crate::quarm::updates(0xf540, &record(0, kind, value)).unwrap(),
+                []
+            );
+        }
+        // The listing, visibility, posture and pet always name one.
+        for kind in [1, 3, 14, 20, 21, 22, 23, 24, 25] {
+            assert!(update(&record(0, kind, 1)).is_err(), "{kind}");
+        }
+    }
+
+    #[test]
+    fn guild_ranks_join_the_listing() {
+        use crate::listing::{GuildRank, ListingChange};
+        assert_eq!(
+            update(&record(73, 23, 2)).unwrap(),
+            Some(WorldEvent::Listing {
+                spawn_id: 73,
+                change: ListingChange::GuildRank(GuildRank::Leader)
+            })
+        );
     }
 
     #[test]

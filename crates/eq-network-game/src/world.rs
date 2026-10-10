@@ -755,6 +755,14 @@ pub enum WorldEvent {
         /// Whether the server marks this entity invisible.
         invisible: bool,
     },
+    /// A change in how a spawn shows that lasts, such as its size or light,
+    /// or that the host hears once, such as an area's regeneration.
+    Appearance {
+        /// Zone-local entity identifier.
+        spawn_id: u16,
+        /// What changed.
+        change: crate::appearance::AppearanceChange,
+    },
     /// A change in how `/who` lists a player.
     Listing {
         /// Zone-local entity identifier.
@@ -1318,7 +1326,7 @@ pub fn titanium_update(opcode: u16, body: &[u8]) -> Result<Option<WorldEvent>> {
     }
     Ok(Some(match opcode {
         0x6a53 => WorldEvent::Buff(crate::buffs::titanium_update(body)?),
-        0x7c32 => return appearance(body),
+        0x7c32 => return crate::appearance::update(body),
         0x6d44 => {
             ensure!(body.len() == 12, "invalid level update length");
             let current = u8::try_from(word(body, 0))?;
@@ -1529,34 +1537,6 @@ fn money_update(body: &[u8]) -> Result<Coins> {
         silver: coin(8)?,
         copper: coin(12)?,
     })
-}
-
-/// Decodes persistent appearance state without interpreting unrelated update kinds.
-pub(crate) fn appearance(body: &[u8]) -> Result<Option<WorldEvent>> {
-    ensure!(body.len() == 8, "invalid appearance length");
-    let kind = u16::from_le_bytes([body[2], body[3]]);
-    let value = word(body, 4);
-    let listing = crate::listing::appearance(kind, value);
-    if !matches!(kind, 3 | 14 | crate::pets::PET_APPEARANCE) && listing.is_none() {
-        return Ok(None);
-    }
-    let spawn_id = u16::from_le_bytes([body[0], body[1]]);
-    ensure!(spawn_id != 0, "invalid appearance spawn ID");
-    Ok(Some(match (kind, listing) {
-        (_, Some(change)) => WorldEvent::Listing { spawn_id, change },
-        (crate::pets::PET_APPEARANCE, None) => WorldEvent::PetOwner {
-            spawn_id,
-            owner: u16::try_from(value).ok().filter(|owner| *owner != 0),
-        },
-        (14, None) => WorldEvent::Posture {
-            spawn_id,
-            posture: value.into(),
-        },
-        _ => WorldEvent::Visibility {
-            spawn_id,
-            invisible: value != 0,
-        },
-    }))
 }
 
 /// EQ units per second for one unit of a Titanium motion delta, fitted on
@@ -1805,7 +1785,13 @@ mod tests {
         }
         assert!(super::titanium_update(0x7c32, &[0; 9]).is_err());
         packet[2..4].copy_from_slice(&99u16.to_le_bytes());
-        assert!(super::titanium_update(0x7c32, &packet).unwrap().is_none());
+        assert_eq!(
+            super::titanium_update(0x7c32, &packet).unwrap(),
+            Some(super::WorldEvent::Appearance {
+                spawn_id: 73,
+                change: crate::appearance::AppearanceChange::Other { kind: 99, value: 2 }
+            })
+        );
         packet[2..4].copy_from_slice(&3u16.to_le_bytes());
         packet[..2].fill(0);
         assert!(super::titanium_update(0x7c32, &packet).is_err());

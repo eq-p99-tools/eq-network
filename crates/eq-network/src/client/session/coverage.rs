@@ -253,11 +253,6 @@ const EQMAC_PROFILE: &[Part] = &[
         Reason::Planned(Step::AlternateAdvancement),
     ),
 ];
-/// What the session leaves unread of a spawn's appearance.
-const APPEARANCE: &[Part] = &[Part(
-    "the other appearance kinds",
-    Reason::Planned(Step::Appearance),
-)];
 /// What the session leaves unread of `EQMac`'s word that the server took or
 /// gave back the player's control.
 const OWN_NAME: &[Part] = &[Part(

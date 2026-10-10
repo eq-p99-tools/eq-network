@@ -149,6 +149,23 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Every kind of appearance update on a spawn, on both generations:
+  `WorldEvent::Appearance` (`appearance::AppearanceChange`), from the kinds
+  of `OP_SpawnAppearance` the session dropped: PvP, light, sneaking,
+  link-dead, fly mode (`appearance::FlyMode`), size, a player's name in an
+  NPC's color, an NPC's tint, show helm, a destructible NPC's damage state,
+  an area's regeneration, which comes to the player alone, kind 0 with its
+  value (`EQEmu`'s note says it makes the client keel over and go to its
+  bind point; unverified), and, as `Other`, the kinds no server sends on
+  its own, which a game master's `#appearance` can. A guild rank joins the
+  listing: `ListingChange::GuildRank` and `Listing::guild_rank`
+  (`listing::GuildRank`), from the update and from Titanium's spawn record.
+  A record naming no spawn is still left to the admission and Quarm's
+  handshakes, and a `/who` level past 255 is now the usual
+  unreadable-packet diagnostic, where before it was dropped. Hosts that
+  match `WorldEvent` or `ListingChange` exhaustively need arms for them,
+  and hosts that build `Listing` the field.
+
 - A quest's word on the player's base stats, on Titanium:
   `WorldEvent::StatsChanged` (`stats::StatChange`: each stat by name, 0
   for one the quest left alone), from `OP_IncreaseStats`, which `EQEmu`

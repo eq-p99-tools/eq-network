@@ -4,7 +4,7 @@ use super::{
     planned, sent, unasked, Part,
     Reader::{Admission, Answer, Chat, Login, World, Zone},
     Reading::{Partly, Read, Unread},
-    Reason::{Needless, Parked, Planned},
+    Reason::{Needless, Parked},
     ServerMessage,
     Step::{
         AlternateAdvancement, Appearance, Bazaar, EqMacExchanges, EqMacWorld, LaterSystems,
@@ -234,17 +234,14 @@ pub(in crate::client) fn eqmac(opcode: u16) -> Option<ServerMessage> {
             EQMAC,
             Partly(
                 &[Admission, Zone, Answer],
-                &[
-                    Part("the other appearance kinds", Planned(Appearance)),
-                    Part(
-                        "Quarm's shared bank offer",
-                        Needless(
-                            "only Quarm's own client library answers it, and Quarm leaves the \
-                             shared bank off unanswered (zone/client_packet.cpp \
-                             ClientFeature::SharedBankBagsSupported)",
-                        ),
+                &[Part(
+                    "Quarm's shared bank offer",
+                    Needless(
+                        "only Quarm's own client library answers it, and Quarm leaves the \
+                         shared bank off unanswered (zone/client_packet.cpp \
+                         ClientFeature::SharedBankBagsSupported)",
                     ),
-                ],
+                )],
             ),
         ),
         0xf641 => sent("OP_CharInventory", EQMAC, Read(&[Zone])),

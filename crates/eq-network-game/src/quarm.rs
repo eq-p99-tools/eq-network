@@ -798,7 +798,7 @@ pub fn updates(opcode: u16, body: &[u8]) -> Result<Vec<WorldEvent>> {
                 body,
             )?)]
         }
-        0xf540 => crate::world::appearance(body)?.into_iter().collect(),
+        0xf540 => crate::appearance::update(body)?.into_iter().collect(),
         crate::group::EQMAC_INVITE_OPCODE
         | crate::group::EQMAC_INVITE2_OPCODE
         | crate::group::EQMAC_FOLLOW_OPCODE
