@@ -3,7 +3,11 @@
 //! generation logs in its own way: Titanium's is here, `EQMac`'s in
 //! [`eqmac`]. Both play on the configured world, or list the worlds for the
 //! player to choose from when none is configured.
-use super::{cstr, le32};
+use super::{
+    coverage::{Stage, Unheard},
+    cstr, le32,
+    wire::Titanium,
+};
 use crate::{
     client::{
         selection::{configured_world, Worlds},
@@ -86,6 +90,7 @@ pub(super) fn titanium(
     let mut credentials = None;
     let mut choice = WorldChoice::default();
     let mut sent_credentials = false;
+    let mut unheard = Unheard::new(Stage::Login);
     loop {
         let packet = match choice.next(&mut session, &mut deadline, stop, commands)? {
             Next::Chosen(world) => {
@@ -145,7 +150,7 @@ pub(super) fn titanium(
                 log.send(ClientEvent::Progress(ConnectionStage::ConnectingWorld))?;
                 return Ok((credentials, ip));
             }
-            _ => (),
+            _ => unheard.tell(&Titanium, packet.opcode, packet.body.len(), log)?,
         }
     }
 }

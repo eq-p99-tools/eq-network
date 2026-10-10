@@ -8,7 +8,7 @@ use super::{
 };
 
 use super::admission::{Handshake, Zone};
-use super::coverage::Unheard;
+use super::coverage::{Stage, Unheard};
 use eq_network_game::message::Message;
 use eq_network_transport::Transport;
 
@@ -196,7 +196,7 @@ pub(super) fn run(
     let mut progress = Instant::now();
     let session_id = rand::random();
     let mut world = World::new(session_id);
-    let mut unheard = Unheard::default();
+    let mut unheard = Unheard::new(Stage::Zone);
     let mut features = Features::new(server, &config.character, config.auto_eat);
     let follows_zones = features
         .capabilities()

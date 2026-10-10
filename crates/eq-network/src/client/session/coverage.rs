@@ -4,9 +4,10 @@
 //! A row names the message, the server types whose servers send it, and the
 //! parts of the session that read it, or why it is left unread: work still
 //! to come, an answer to a request eq-network never sends, or nothing in it
-//! worth reading. The zone session tells once of each message it leaves
-//! unread, but one with nothing worth reading, and of each the table does
-//! not list ([`Unheard`]), and a test holds each table to its generation's
+//! worth reading. The login and zone sessions tell once of each message
+//! they leave unread, but one with nothing worth reading, and of each the
+//! table does not list ([`Unheard`]); the world session tells of every
+//! message it receives. A test holds each table to its generation's
 //! decoders.
 //!
 //! What the servers send comes from the emulators' sources: `EQEmu`'s for
@@ -50,11 +51,11 @@ impl ServerMessage {
         }
     }
 
-    /// Whether the zone session tells of it when it arrives: no part of the
-    /// zone reads it, and something in it is worth reading.
-    fn told_in_zone(&self) -> bool {
+    /// Whether the session tells of it when it arrives at `stage`: nothing
+    /// there reads it, and something in it is worth reading.
+    fn told_at(&self, stage: Stage) -> bool {
         !matches!(self.reading, Reading::Unread(Reason::Needless(_)))
-            && !self.readers().iter().any(|reader| reader.in_zone())
+            && !self.readers().iter().any(|reader| reader.at(stage))
     }
 }
 
@@ -129,9 +130,12 @@ pub(super) enum Reader {
 }
 
 impl Reader {
-    /// Whether it reads the zone's messages.
-    const fn in_zone(self) -> bool {
-        !matches!(self, Self::Login | Self::World)
+    /// Whether it reads the messages that arrive at `stage`.
+    const fn at(self, stage: Stage) -> bool {
+        match stage {
+            Stage::Login => matches!(self, Self::Login),
+            Stage::Zone => !matches!(self, Self::Login | Self::World),
+        }
     }
 
     /// Whether it is one of the generation's zone decoders, which a test
@@ -275,14 +279,52 @@ const DESCRIPTION: &[Part] = &[Part(
     Reason::Planned(Step::WorldAndSession),
 )];
 
-/// The messages a zone session leaves unread, each told once a session but
-/// those with nothing worth reading.
-#[derive(Default)]
-pub(super) struct Unheard(HashSet<u16>);
+/// Where in the session a message arrives.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum Stage {
+    /// At the login server.
+    Login,
+    /// At a zone, its admission of the player included.
+    Zone,
+}
+
+impl Stage {
+    /// Where else the session reads what it leaves unread here.
+    const fn elsewhere(self) -> &'static str {
+        match self {
+            Self::Login => "after the login",
+            Self::Zone => "before the zone",
+        }
+    }
+}
+
+impl fmt::Display for Stage {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::Login => "Login",
+            Self::Zone => "Zone",
+        })
+    }
+}
+
+/// The messages a login or zone session leaves unread, each told once a
+/// session but those with nothing worth reading.
+pub(super) struct Unheard {
+    stage: Stage,
+    told: HashSet<u16>,
+}
 
 impl Unheard {
+    /// Nothing told yet of what arrives at `stage`.
+    pub(super) fn new(stage: Stage) -> Self {
+        Self {
+            stage,
+            told: HashSet::new(),
+        }
+    }
+
     /// Tells, the first time one arrives in the session, of a message the
-    /// generation lists but the zone leaves unread, unless nothing in it is
+    /// generation lists but this stage leaves unread, unless nothing in it is
     /// worth reading, and of one it does not list.
     ///
     /// # Errors
@@ -295,7 +337,8 @@ impl Unheard {
         log: &mut Events<'_>,
     ) -> Result<()> {
         let message = wire.coverage(opcode);
-        if message.is_some_and(|message| !message.told_in_zone()) || !self.0.insert(opcode) {
+        if message.is_some_and(|message| !message.told_at(self.stage)) || !self.told.insert(opcode)
+        {
             return Ok(());
         }
         let why = match message {
@@ -304,11 +347,12 @@ impl Unheard {
                 reading: Reading::Unread(reason),
                 ..
             }) => reason.to_string(),
-            Some(_) => "the session reads it only before the zone".to_owned(),
+            Some(_) => format!("the session reads it only {}", self.stage.elsewhere()),
         };
         let name = message.map_or("an unlisted message", |message| message.name);
         log.diagnostic(format!(
-            "Zone sent {name} (0x{opcode:04x}, {length} bytes), left unread: {why}"
+            "{} sent {name} (0x{opcode:04x}, {length} bytes), left unread: {why}",
+            self.stage
         ))
     }
 }
@@ -342,6 +386,39 @@ mod tests {
     }
 
     #[test]
+    fn the_login_tells_once_of_each_message_it_leaves_unread() {
+        use crate::client::session::wire::EqMac;
+        let config = ClientConfig::new("ACCOUNT", "PASSWORD", "Test Server", "Tester");
+        let mut said = Vec::new();
+        let mut handler = |event| {
+            if let ClientEvent::Diagnostic(line) = event {
+                said.push(line);
+            }
+            Ok(())
+        };
+        let mut log = Events::new(&config, &mut handler);
+        let mut unheard = Unheard::new(Stage::Login);
+        // The login server's ready message, read there; its banner, which
+        // answers what eq-network never asks; a zone's position update; and
+        // an opcode no server is listed as sending: each arriving twice.
+        for opcode in [
+            0x5900, 0x5200, 0xf340, 0x0001, 0x5900, 0x5200, 0xf340, 0x0001,
+        ] {
+            unheard.tell(&EqMac, opcode, 4, &mut log).unwrap();
+        }
+        drop(log);
+        assert_eq!(
+            said,
+            [
+                "Login sent OP_ClientUpdate (0xf340, 4 bytes), left unread: the session reads \
+                 it only after the login",
+                "Login sent an unlisted message (0x0001, 4 bytes), left unread: no server is \
+                 listed as sending it",
+            ]
+        );
+    }
+
+    #[test]
     fn the_zone_tells_once_of_each_message_it_leaves_unread() {
         let config = ClientConfig::new("ACCOUNT", "PASSWORD", "Test Server", "Tester");
         let mut said = Vec::new();
@@ -352,7 +429,7 @@ mod tests {
             Ok(())
         };
         let mut log = Events::new(&config, &mut handler);
-        let mut unheard = Unheard::default();
+        let mut unheard = Unheard::new(Stage::Zone);
         // A position, read; a stun, left unread; the character list, read
         // only from the world; an opcode no server is listed as sending; and
         // the empty AA stats, which carry nothing: each arriving twice.
