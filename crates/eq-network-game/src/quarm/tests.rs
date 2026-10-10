@@ -391,6 +391,15 @@ fn the_servers_hold_on_the_player_is_read_from_its_messages() {
 }
 
 #[test]
+fn the_end_of_hiding_is_read_and_carries_nothing() {
+    assert_eq!(
+        updates(0x5a41, &[]).unwrap(),
+        [WorldEvent::HideAndSneakEnded]
+    );
+    assert!(updates(0x5a41, &[0]).is_err());
+}
+
+#[test]
 fn the_profile_says_the_buffs_the_book_and_each_gems_reuse_left() {
     use crate::message::{eqmac, Message};
     let mut data = vec![0; PROFILE_SIZE];

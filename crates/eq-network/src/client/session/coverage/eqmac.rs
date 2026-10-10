@@ -131,7 +131,7 @@ pub(in crate::client) fn eqmac(opcode: u16) -> Option<ServerMessage> {
         0x5840 => sent("OP_Damage", EQMAC, Read(&[Zone])),
         0x5900 => sent("OP_SessionReady", TAKP, Read(&[Login])),
         0x5941 => sent("OP_LogoutReply", EQMAC, Read(&[Zone])),
-        0x5a41 => sent("OP_CancelSneakHide", EQMAC, planned(PlayerState)),
+        0x5a41 => sent("OP_CancelSneakHide", EQMAC, Read(&[Zone])),
         0x5b40 => sent(
             "OP_NewZone",
             EQMAC,

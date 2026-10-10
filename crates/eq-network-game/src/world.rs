@@ -1074,6 +1074,11 @@ pub enum WorldEvent {
     /// `EQEmu` and TAKP send only from quests
     /// ([`Action::Spin`](crate::buffs::Action::Spin)).
     Spun,
+    /// The server ended the player's hiding and sneaking. `EQEmu` sends it
+    /// only to a hidden player and ends the hiding once the client answers
+    /// ([`crate::abilities::titanium_unhide`]); TAKP and Quarm end both
+    /// before they send it.
+    HideAndSneakEnded,
     /// Own-character skill update; unknown skill IDs remain available to consumers.
     Skill {
         /// Protocol skill index (22 is dual wield).
@@ -1303,14 +1308,18 @@ pub fn titanium_update(opcode: u16, body: &[u8]) -> Result<Option<WorldEvent>> {
     }))
 }
 
-/// Stuns and charms, doors, ground objects, loot, merchant, exchange,
-/// training, resurrection, group, dice, assist, raid, book, combine,
-/// bandaging, chat server, weather and inventory packets, each owned by its
-/// codec.
+/// Stuns and charms, the end of hiding, doors, ground objects, loot,
+/// merchant, exchange, training, resurrection, group, dice, assist, raid,
+/// book, combine, bandaging, chat server, weather and inventory packets,
+/// each owned by its codec.
 fn titanium_views(opcode: u16, body: &[u8]) -> Result<Option<WorldEvent>> {
     match opcode {
         crate::control::STUN_OPCODE => {
             return Ok(Some(WorldEvent::Stun(crate::control::stun(body)?)));
+        }
+        crate::abilities::CANCEL_SNEAK_HIDE_OPCODE => {
+            ensure!(body.is_empty(), "invalid hide end length");
+            return Ok(Some(WorldEvent::HideAndSneakEnded));
         }
         crate::control::CHARM_OPCODE => {
             return Ok(Some(WorldEvent::Charm(crate::control::titanium_charm(
@@ -2001,6 +2010,15 @@ mod tests {
         );
         assert!(titanium_update(0x1e51, &[0; 8]).is_err());
         assert!(titanium_update(0x12e5, &[0; 6]).is_err());
+    }
+
+    #[test]
+    fn the_end_of_hiding_is_read_and_carries_nothing() {
+        assert_eq!(
+            titanium_update(0x48c2, &[]).unwrap(),
+            Some(WorldEvent::HideAndSneakEnded)
+        );
+        assert!(titanium_update(0x48c2, &[0]).is_err());
     }
 
     #[test]

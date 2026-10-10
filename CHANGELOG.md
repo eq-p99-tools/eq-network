@@ -168,6 +168,10 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `UnknownKind`, which the zone session drops, telling of each message's
   kind once a session as a diagnostic that names only the opcode and the
   kind. Hosts that match `WorldEvent` exhaustively need an arm for `Spun`.
+- The server's end of the player's hiding and sneaking, on both
+  generations: `WorldEvent::HideAndSneakEnded`, from `OP_CancelSneakHide`.
+  `Request` gains `Unhide`, which `abilities::titanium_unhide` encodes.
+  Hosts that match `WorldEvent` exhaustively need an arm for it.
 
 - The zone's weather, on both generations: `WorldEvent::Weather`
   (`clock::Weather`: clear, or rain or snow with the server's intensity),
@@ -206,8 +210,8 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   types that send it and the parts of the session that read it, or why it
   is left unread (work still to come, an answer to a request eq-network
   never sends, parked work, or nothing in it worth reading), taken from
-  `EQEmu`'s, TAKP's and Quarm's sources: Titanium's 258 messages, 109 of
-  them read, and `EQMac`'s 175, 74 read. A zone session now tells once, as
+  `EQEmu`'s, TAKP's and Quarm's sources: Titanium's 258 messages, 112 of
+  them read, and `EQMac`'s 176, 82 read. A zone session now tells once, as
   a diagnostic, of each message it leaves unread with the reason (but one
   with nothing worth reading) and of each the table does not list, where
   before a message nothing read left no trace once the zone admitted the
@@ -820,6 +824,16 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   lifetap record to its caster, which names the caster as both target and
   source, as the new `DamageOutcome::Tapped` with the points taken. Hosts
   that match `DamageOutcome` exhaustively need arms for both.
+- On `EQEmu`, a player whose hiding the server ended (a spell on them, a
+  trap, looting, an item's use or a trade) stayed hidden from the zone,
+  NPCs included, until they moved: `EQEmu` keeps the player hidden until
+  the client answers its `OP_CancelSneakHide`, which its source says the
+  Titanium client does, and the session never did. It now answers as
+  `EQEmu` expects, with the player's own appearance, invisibility 0
+  (`Request::Unhide`), on `EQEmu` alone, inferred from its source and not
+  yet checked live or against the official client. P99 hears nothing back
+  until its hiding is checked live there, and TAKP and Quarm end the
+  hiding themselves.
 - On Windows, a session no longer ends with "Overlapped I/O operation is in
   progress" (os error 997) or its cancelled twin (995). std's sockets are
   overlapped there, and their read timeout (`SO_RCVTIMEO`) leaves a socket

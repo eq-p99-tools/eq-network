@@ -5,7 +5,7 @@
 //! player wants; who asks comes with it as the [`Sender`](crate::request::Sender), for the packets
 //! that repeat the player's name or spawn.
 use crate::{
-    abilities::Ability,
+    abilities::{self, Ability},
     books::{self, Book},
     command::{self, EncodedCommand, GameCommand, Posture},
     corpses, doors, exchange,
@@ -114,6 +114,10 @@ pub enum Request {
     SetAway(bool),
     /// Say how the player hides from `/who`.
     SetAnonymity(Anonymity),
+    /// Say the player is seen again, as a Titanium client answers the
+    /// server's end of its hiding: its own appearance, invisibility 0
+    /// ([`abilities::titanium_unhide`]).
+    Unhide,
     /// Roll a die from the lowest to the highest number.
     Random {
         /// The lowest number.
@@ -315,6 +319,7 @@ pub fn titanium(request: &Request, sender: Sender<'_>) -> Result<EncodedCommand>
         Request::SetAnonymity(anonymity) => {
             listing::titanium_anonymity(sender.spawn(), *anonymity)?
         }
+        Request::Unhide => abilities::titanium_unhide(sender.spawn())?,
         Request::Random { low, high } => socials::random(*low, *high),
         Request::Emote(text) => socials::emote(text)?,
         Request::Assist(spawn_id) => socials::assist(*spawn_id),

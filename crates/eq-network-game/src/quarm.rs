@@ -822,6 +822,10 @@ pub fn updates(opcode: u16, body: &[u8]) -> Result<Vec<WorldEvent>> {
                 .into_iter()
                 .collect()
         }
+        crate::abilities::EQMAC_CANCEL_SNEAK_HIDE_OPCODE => {
+            ensure!(body.is_empty(), "invalid EQMac hide end length");
+            vec![WorldEvent::HideAndSneakEnded]
+        }
         0x9941 => {
             ensure!(
                 body.len() == 4 && word(body, 0) <= 330,

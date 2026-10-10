@@ -33,6 +33,7 @@ use super::{
     feature::Feature,
     groups::Groups,
     hazards::Hazards,
+    hiding::HideAnswer,
     inventory::{Allowances, Belongings},
     listing::Listing,
     looting::Looting,
@@ -227,6 +228,12 @@ pub(super) trait ServerType: Sync {
         None
     }
 
+    /// Answering the server's end of the player's hiding, where the server
+    /// keeps the player hidden until the client answers.
+    fn hide_answer(&self, _setup: &Setup<'_>) -> Provided {
+        None
+    }
+
     /// Speaking on the chat channels.
     fn talk(&self, _setup: &Setup<'_>) -> Provided {
         None
@@ -350,6 +357,7 @@ pub(super) trait ServerType: Sync {
             self.looting(setup),
             self.exchange(setup),
             self.abilities(setup),
+            self.hide_answer(setup),
             self.talk(setup),
             self.camp(setup),
             self.doors(setup),
@@ -468,9 +476,9 @@ mod shared {
     use super::{
         Abilities, Ability, Allowances, Belongings, BleedingOut, Camp, Casting, Character, Clock,
         Combat, Corpses, Doors, Edits, Entities, Exchanges, Feature, GameDialect, GroundObjects,
-        Groups, Hazard, Hazards, Home, ItemCount, Listing, Looting, Map, MerchantOffers, Motion,
-        MoveRules, Pets, Quotes, Raids, Reading, Resurrection, Setup, Socials, Spellbook, Talk,
-        Targeting, Tradeskills, Training, Transfers, Who,
+        Groups, Hazard, Hazards, HideAnswer, Home, ItemCount, Listing, Looting, Map,
+        MerchantOffers, Motion, MoveRules, Pets, Quotes, Raids, Reading, Resurrection, Setup,
+        Socials, Spellbook, Talk, Targeting, Tradeskills, Training, Transfers, Who,
     };
 
     pub(super) fn casting() -> Box<dyn Feature> {
@@ -528,6 +536,10 @@ mod shared {
 
     pub(super) fn abilities(listed: &'static [Ability]) -> Box<dyn Feature> {
         Box::new(Abilities::new(listed))
+    }
+
+    pub(super) fn hide_answer() -> Box<dyn Feature> {
+        Box::new(HideAnswer)
     }
 
     pub(super) fn talk() -> Box<dyn Feature> {
@@ -823,6 +835,12 @@ impl ServerType for EqEmu {
 
     fn abilities(&self, _setup: &Setup<'_>) -> Provided {
         offer(shared::abilities(&Ability::ALL))
+    }
+
+    /// `EQEmu` keeps a player whose hiding it ended hidden until the
+    /// Titanium client answers (`Client::CancelSneakHide`).
+    fn hide_answer(&self, _setup: &Setup<'_>) -> Provided {
+        offer(shared::hide_answer())
     }
 
     fn talk(&self, _setup: &Setup<'_>) -> Provided {
@@ -1214,10 +1232,11 @@ mod tests {
         // Training, resurrection, reading, tradeskills, the map, deleting
         // spells, merchants' offers, groups, the player's listing, dice,
         // emotes, assisting, raids and the world's damage are checked on
-        // EQEmu alone so far.
+        // EQEmu alone so far, and only EQEmu waits for the answer to the
+        // end of hiding.
         for (protocol, count) in [
             (ServerProtocol::Project1999, 21),
-            (ServerProtocol::EqEmu, 31),
+            (ServerProtocol::EqEmu, 32),
         ] {
             let server = server_type(protocol);
             let setup = Setup::new("Tester", AutoEat::default());
@@ -1246,6 +1265,27 @@ mod tests {
         for protocol in [ServerProtocol::Project1999, ServerProtocol::EqEmu] {
             assert!(offers(server_type(protocol)).contains(&Capability::MovingSpells));
         }
+    }
+
+    #[test]
+    fn only_eqemu_answers_the_end_of_hiding() {
+        // EQEmu keeps the player hidden until the client answers; P99's
+        // answer waits for a live check there, and TAKP and Quarm end the
+        // hiding themselves.
+        let setup = Setup::new("Tester", AutoEat::default());
+        for protocol in [
+            ServerProtocol::Project1999,
+            ServerProtocol::Quarm,
+            ServerProtocol::Takp,
+        ] {
+            assert!(
+                server_type(protocol).hide_answer(&setup).is_none(),
+                "{protocol:?}"
+            );
+        }
+        assert!(server_type(ServerProtocol::EqEmu)
+            .hide_answer(&setup)
+            .is_some());
     }
 
     #[test]

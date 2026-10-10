@@ -63,7 +63,7 @@ impl Anonymity {
 }
 
 /// The player's own appearance update of a kind, to a value.
-fn update(spawn_id: u16, kind: u16, value: u32) -> Result<EncodedCommand> {
+pub(crate) fn update(spawn_id: u16, kind: u16, value: u32) -> Result<EncodedCommand> {
     ensure!(
         spawn_id != 0,
         "an appearance update needs the player's spawn ID"
