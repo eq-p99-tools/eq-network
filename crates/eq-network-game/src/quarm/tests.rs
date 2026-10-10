@@ -551,6 +551,35 @@ fn a_zone_request_names_the_zone_place_and_reason() {
 }
 
 #[test]
+fn quarms_move_to_bind_names_the_zone_and_place_without_a_heading() {
+    let mut body = [0; 152];
+    body[..7].copy_from_slice(b"Example");
+    body[64..71].copy_from_slice(b"Example");
+    body[132..136].copy_from_slice(&4u32.to_le_bytes());
+    body[136..140].copy_from_slice(&(-162.0f32).to_le_bytes());
+    body[140..144].copy_from_slice(&(-259.0f32).to_le_bytes());
+    body[144..148].copy_from_slice(&3.75f32.to_le_bytes());
+    let offer = to_bind(&body).unwrap();
+    assert_eq!((offer.zone_id, offer.instance_id, offer.reason), (4, 0, 0));
+    assert_eq!(
+        offer.position,
+        Position {
+            x: -259.0,
+            y: -162.0,
+            z: 3.75,
+            heading: 0.0
+        }
+    );
+    assert!(offer.solicited && offer.to_bind);
+    assert!(to_bind(&body[..151]).is_err());
+    body[144..148].copy_from_slice(&f32::NAN.to_le_bytes());
+    assert!(to_bind(&body).is_err());
+    body[144..148].copy_from_slice(&3.75f32.to_le_bytes());
+    body[132..136].copy_from_slice(&70_000u32.to_le_bytes());
+    assert!(to_bind(&body).is_err());
+}
+
+#[test]
 fn mac_filters_enable_every_chat_and_combat_category() {
     let filters = server_filters();
     for index in 0..17 {

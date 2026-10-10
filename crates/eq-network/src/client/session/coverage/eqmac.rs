@@ -8,7 +8,7 @@ use super::{
     ServerMessage,
     Step::{
         AlternateAdvancement, Appearance, Bazaar, EqMacExchanges, EqMacWorld, LaterSystems,
-        PlayerState, Raids, Social, WorldAndSession,
+        PlayerState, Raids, Social,
     },
     ACTION, EQMAC, EQMAC_DESCRIPTION, LOG_SERVER, PROFILE, PUSH, QUARM, TAKP,
 };
@@ -119,9 +119,6 @@ pub(in crate::client) fn eqmac(opcode: u16) -> Option<ServerMessage> {
         0x4e40 => sent("OP_LootRequest", EQMAC, planned(EqMacExchanges)),
         0x4f41 => sent("OP_GMZoneRequest", EQMAC, unasked(Social)),
         0x5040 => sent("OP_MoneyOnCorpse", EQMAC, planned(EqMacExchanges)),
-        // The client's own logout: neither server's source sends it, yet the
-        // session takes it as one.
-        0x5041 => sent("OP_Logout", &[], Read(&[Admission, Zone])),
         0x5200 => sent(
             "OP_LoginBanner",
             TAKP,
@@ -151,7 +148,7 @@ pub(in crate::client) fn eqmac(opcode: u16) -> Option<ServerMessage> {
         0x6b42 => sent("OP_NewSpawn", EQMAC, Read(&[Zone])),
         0x6c40 => sent("OP_GMKill", EQMAC, planned(Social)),
         0x6d40 => sent("OP_GMKick", EQMAC, planned(Social)),
-        0x6e40 => sent("OP_GMGoto", QUARM, planned(WorldAndSession)),
+        0x6e40 => sent("OP_GMGoto", QUARM, Read(&[Zone])),
         0x6e41 => sent("OP_GMLastName", EQMAC, planned(EqMacWorld)),
         0x6f40 => sent("OP_ZoneInAvatarSet", EQMAC, Read(&[Admission])),
         0x7841 => sent("OP_SummonedItem", EQMAC, Read(&[Zone])),
@@ -227,7 +224,14 @@ pub(in crate::client) fn eqmac(opcode: u16) -> Option<ServerMessage> {
                 &[Admission, Zone, Answer],
                 &[
                     Part("the other appearance kinds", Planned(Appearance)),
-                    Part("Quarm's shared bank offer", Planned(WorldAndSession)),
+                    Part(
+                        "Quarm's shared bank offer",
+                        Needless(
+                            "only Quarm's own client library answers it, and Quarm leaves the \
+                             shared bank off unanswered (zone/client_packet.cpp \
+                             ClientFeature::SharedBankBagsSupported)",
+                        ),
+                    ),
                 ],
             ),
         ),

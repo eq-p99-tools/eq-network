@@ -338,15 +338,14 @@ mod tests {
 
     #[test]
     fn each_generation_reads_its_own_layouts() {
-        use eq_network_game::quarm::ZONE_LOGOUT;
-        // Titanium's logout reply means nothing to EQMac, and EQMac's logout
-        // nothing to Titanium.
+        use eq_network_game::quarm::ZONE_LOGOUT_REPLY;
+        // Each generation's logout reply means nothing to the other.
         assert!(EqMac.messages(0x3cdc, &[]).is_empty());
         assert!(matches!(
-            EqMac.messages(ZONE_LOGOUT, &[])[..],
+            EqMac.messages(ZONE_LOGOUT_REPLY, &[])[..],
             [Message::LoggedOut]
         ));
-        assert!(Titanium.messages(ZONE_LOGOUT, &[]).is_empty());
+        assert!(Titanium.messages(ZONE_LOGOUT_REPLY, &[]).is_empty());
         // An opcode that carries no communication in either generation.
         assert!(EqMac.chat(0x0001, &[], false).unwrap().is_none());
         assert!(Titanium.chat(0x0001, &[], false).unwrap().is_none());

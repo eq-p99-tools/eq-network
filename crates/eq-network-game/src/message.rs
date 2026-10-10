@@ -152,14 +152,19 @@ pub fn titanium(opcode: u16, body: &[u8]) -> Vec<Message> {
 
 /// What one `EQMac` zone packet says: the spawns and the player's news that
 /// [`crate::quarm::updates`] reads, the inventory, the server logging the
-/// character out, its request that the client move, its answer to the
-/// client's request, the zone's numbered destinations, and the player's
-/// bind point from their profile.
+/// character out, its request that the client move and Quarm's move of a
+/// dead player to their bind point, its answer to the client's request, the
+/// zone's numbered destinations, and the player's bind point from their
+/// profile.
 #[must_use]
 pub fn eqmac(opcode: u16, body: &[u8]) -> Vec<Message> {
     match opcode {
-        crate::quarm::ZONE_LOGOUT | crate::quarm::ZONE_LOGOUT_REPLY => vec![Message::LoggedOut],
+        crate::quarm::ZONE_LOGOUT_REPLY => vec![Message::LoggedOut],
         crate::quarm::ZONE_CHANGE_REQUEST => vec![crate::quarm::zone_request(body).map_or_else(
+            |error| unreadable(Part::ZoneOffer, &error),
+            Message::ZoneOffer,
+        )],
+        crate::quarm::ZONE_TO_BIND => vec![crate::quarm::to_bind(body).map_or_else(
             |error| unreadable(Part::ZoneOffer, &error),
             Message::ZoneOffer,
         )],
@@ -338,12 +343,13 @@ mod tests {
 
     #[test]
     fn eqmac_packets_say_the_same_things_in_their_own_layouts() {
-        use crate::quarm::{ZONE_CHANGE_REQUEST, ZONE_LOGOUT, ZONE_LOGOUT_REPLY};
-        assert!(matches!(eqmac(ZONE_LOGOUT, &[])[..], [Message::LoggedOut]));
+        use crate::quarm::{ZONE_CHANGE_REQUEST, ZONE_LOGOUT, ZONE_LOGOUT_REPLY, ZONE_TO_BIND};
         assert!(matches!(
             eqmac(ZONE_LOGOUT_REPLY, &[])[..],
             [Message::LoggedOut]
         ));
+        // The client's own logout, which no server sends, says nothing.
+        assert!(eqmac(ZONE_LOGOUT, &[]).is_empty());
         // A despawn, then a health update that says two things.
         assert!(matches!(
             eqmac(0x2940, &[9, 0])[..],
@@ -375,6 +381,13 @@ mod tests {
                 part: Part::ZoneOffer,
                 ..
             }]
+        ));
+        // Quarm's move of a dead player to their bind point.
+        let mut to_bind = [0; 152];
+        to_bind[132..136].copy_from_slice(&4u32.to_le_bytes());
+        assert!(matches!(
+            &eqmac(ZONE_TO_BIND, &to_bind)[..],
+            [Message::ZoneOffer(offer)] if offer.zone_id == 4 && offer.to_bind && offer.solicited
         ));
         assert!(matches!(
             eqmac(0x2940, &[9])[..],

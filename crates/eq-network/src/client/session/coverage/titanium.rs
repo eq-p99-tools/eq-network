@@ -6,10 +6,7 @@ use super::{
     Reading::{Partly, Read, Unread},
     Reason::{Needless, Planned},
     ServerMessage,
-    Step::{
-        AlternateAdvancement, Appearance, Bazaar, LaterSystems, PlayerState, Raids, Social,
-        WorldAndSession,
-    },
+    Step::{AlternateAdvancement, Appearance, Bazaar, LaterSystems, PlayerState, Raids, Social},
     ACTION, APPEARANCE, EQEMU, P99, PROFILE, PUSH, TITANIUM_DESCRIPTION,
 };
 
@@ -295,7 +292,14 @@ pub(in crate::client) fn titanium(opcode: u16) -> Option<ServerMessage> {
         0x700d => sent("OP_MoveDoor", EQEMU, Read(&[Zone])),
         0x704f => sent("OP_GuildSelectTribute", EQEMU, planned(LaterSystems)),
         0x7081 => sent("OP_LootItem", EQEMU, Read(&[Zone])),
-        0x711e => sent("OP_PreLogoutReply", EQEMU, planned(WorldAndSession)),
+        0x711e => sent(
+            "OP_PreLogoutReply",
+            EQEMU,
+            Unread(Needless(
+                "it is empty, and the logout reply, zone change, death or sacrifice after it says \
+                 what it begins (zone/client.cpp SendLogoutPackets)",
+            )),
+        ),
         0x712a => sent("OP_GuildMemberDelete", EQEMU, planned(Social)),
         0x7180 => sent("OP_DisciplineUpdate", EQEMU, planned(PlayerState)),
         0x7213 => sent("OP_ZoneEntry", EQEMU, Read(&[Admission])),

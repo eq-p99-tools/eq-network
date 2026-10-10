@@ -15,9 +15,8 @@ use eq_network_game::{
     clock,
     quarm::{
         self, ZONE_AVATAR_READY, ZONE_CHANGE_REQUEST, ZONE_CLIENT_UPDATE, ZONE_DATA_RATE,
-        ZONE_ENTRY, ZONE_EXPERIENCE_READY, ZONE_LOGOUT, ZONE_NEW, ZONE_PLAYER_PROFILE,
-        ZONE_REQUEST_NEW, ZONE_REQUEST_SPAWNS, ZONE_SERVER_FILTER, ZONE_SPAWN_APPEARANCE,
-        ZONE_WEATHER,
+        ZONE_ENTRY, ZONE_EXPERIENCE_READY, ZONE_NEW, ZONE_PLAYER_PROFILE, ZONE_REQUEST_NEW,
+        ZONE_REQUEST_SPAWNS, ZONE_SERVER_FILTER, ZONE_SPAWN_APPEARANCE, ZONE_WEATHER,
     },
     zones,
 };
@@ -178,7 +177,6 @@ impl Admission for EqMacAdmission {
                     .log
                     .send(ClientEvent::Progress(ConnectionStage::EnteringWorld))?;
             }
-            ZONE_LOGOUT => bail!("server logged the character out"),
             ZONE_CHANGE_REQUEST => bail!("server requested a new zone during admission"),
             _ => (),
         }
@@ -330,7 +328,7 @@ mod tests {
     }
 
     #[test]
-    fn readiness_before_the_profile_or_a_logout_ends_the_admission() {
+    fn readiness_before_the_profile_ends_the_admission() {
         let config = ClientConfig::new("ACCOUNT", "PASSWORD", "Test Server", "Example");
         let mut handler = |_| Ok(());
         let mut log = Events::new(&config, &mut handler);
@@ -361,14 +359,12 @@ mod tests {
                 )
                 .unwrap();
         }
-        for opcode in [ZONE_AVATAR_READY, ZONE_LOGOUT] {
-            let mut packet = Application {
-                opcode,
-                body: Vec::new(),
-            };
-            assert!(admission
-                .read(&mut packet, &mut world, &mut handshake)
-                .is_err());
-        }
+        let mut ready = Application {
+            opcode: ZONE_AVATAR_READY,
+            body: Vec::new(),
+        };
+        assert!(admission
+            .read(&mut ready, &mut world, &mut handshake)
+            .is_err());
     }
 }

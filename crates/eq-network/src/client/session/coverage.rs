@@ -179,9 +179,6 @@ impl fmt::Display for Reason {
 /// step at a time.
 #[derive(Clone, Copy, Debug)]
 pub(super) enum Step {
-    /// The world and the session: the logout's first step, and Quarm's move
-    /// to the bind point and its shared bank offer.
-    WorldAndSession,
     /// The player's own state: the push of a hit, stun, mesmerize and charm,
     /// the end of sneaking and hiding, disciplines and reuse timers, a
     /// target the server sets, rewards, and the confirmations the player
@@ -213,7 +210,6 @@ pub(super) enum Step {
 impl fmt::Display for Step {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
-            Self::WorldAndSession => "the world and the session",
             Self::PlayerState => "the player's own state",
             Self::Appearance => "spawns' appearance and effects",
             Self::Social => "social, guild, title and GM messages",

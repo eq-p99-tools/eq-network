@@ -43,8 +43,8 @@ pub const ZONE_SERVER_FILTER: u16 = 0xff41;
 pub const ZONE_CLIENT_UPDATE: u16 = 0xf340;
 /// A spawn appearance: the own spawn's ID, and the DLL version check.
 pub const ZONE_SPAWN_APPEARANCE: u16 = 0xf540;
-/// The client's logout once its camp timer completes, which the server
-/// also sends to log the character out.
+/// The client's logout once its camp timer completes. Neither TAKP's nor
+/// Quarm's zones send it; they end a logout with [`ZONE_LOGOUT_REPLY`].
 pub const ZONE_LOGOUT: u16 = 0x5041;
 /// The client starting to camp (`OP_Camp`).
 pub const ZONE_CAMP: u16 = 0x0742;
@@ -67,6 +67,9 @@ pub const ZONE_DEPART: u16 = 0x2940;
 pub const ZONE_DEATH: u16 = 0x4a40;
 /// The server asking the client to change zones.
 pub const ZONE_CHANGE_REQUEST: u16 = 0x4d41;
+/// `OP_GMGoto`, with which Quarm moves a dead player to their bind point
+/// (`zone/zoning.cpp`, `ZoneToBindPoint`; 0x406e swapped).
+pub const ZONE_TO_BIND: u16 = 0x6e40;
 
 // akplus-dll af2bd327, eqgame.cpp: DLL_VERSION and DLL_VERSION_MESSAGE_ID.
 // This announcement is independent of the optional gameplay feature handshakes.
@@ -135,6 +138,33 @@ pub fn zone_request(body: &[u8]) -> Result<ZoneOffer> {
         },
         reason: word(body, 20),
         to_bind: false,
+        solicited: true,
+    })
+}
+
+/// Quarm's move of a dead player to their bind point (`GMGoto_Struct`, 152
+/// bytes): the zone as the client numbers it at 132, then where to, y, x
+/// and z. The names at 0 and 64 are the player's own, Quarm leaves the
+/// success flag at 128 unset, and the move carries no heading. Quarm numbers
+/// the zone 185 when the client would otherwise take it for the zone it is
+/// in, and keeps the real one to itself.
+///
+/// # Errors
+/// Rejects another length, zone numbers beyond 16 bits and coordinates that
+/// are not finite.
+pub fn to_bind(body: &[u8]) -> Result<ZoneOffer> {
+    ensure!(body.len() == 152, "invalid Quarm move to bind length");
+    Ok(ZoneOffer {
+        zone_id: u16::try_from(word(body, 132)).context("EQMac zone ID out of range")?,
+        instance_id: 0,
+        position: Position {
+            x: float(body, 140)?,
+            y: float(body, 136)?,
+            z: float(body, 144)?,
+            heading: 0.0,
+        },
+        reason: 0,
+        to_bind: true,
         solicited: true,
     })
 }
