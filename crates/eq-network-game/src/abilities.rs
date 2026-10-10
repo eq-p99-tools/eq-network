@@ -7,7 +7,9 @@
 //! [`crate::bind_wound`]), and keep a recovery timer for each; the combat
 //! abilities share one. They end the player's hiding and sneaking with
 //! `OP_CancelSneakHide`, which a Titanium client answers
-//! ([`titanium_unhide`](crate::abilities::titanium_unhide)).
+//! ([`titanium_unhide`](crate::abilities::titanium_unhide)). TAKP and Quarm
+//! say when a skill's button is ready again before the official client's
+//! own wait ends ([`eqmac_reset_skill`](crate::abilities::eqmac_reset_skill)).
 //!
 //! Layout reference: `EQEmu`'s `CombatAbility_Struct` and
 //! `ClientTarget_Struct` (`common/eq_packet_structs.h`) and the Titanium
@@ -36,6 +38,8 @@ pub const FISHING_OPCODE: u16 = 0x0b36;
 pub const CANCEL_SNEAK_HIDE_OPCODE: u16 = 0x48c2;
 /// `EQMac`'s `OP_CancelSneakHide`, which carries nothing either.
 pub const EQMAC_CANCEL_SNEAK_HIDE_OPCODE: u16 = 0x5a41;
+/// `EQMac`'s `OP_ResetSkill`: a skill's button is ready again.
+pub const EQMAC_RESET_SKILL_OPCODE: u16 = 0x3d42;
 /// The appearance kind a Titanium client answers the end of its hiding with
 /// (`AppearanceType::Invisibility`).
 const INVISIBILITY: u16 = 3;
@@ -310,6 +314,23 @@ impl Ability {
 /// Rejects a zero spawn ID.
 pub fn titanium_unhide(spawn_id: u16) -> anyhow::Result<EncodedCommand> {
     crate::listing::update(spawn_id, INVISIBILITY, 0)
+}
+
+/// Reads `EQMac`'s `OP_ResetSkill`: the skill whose button is ready again,
+/// by the servers' number for it ([`Ability::skill`]). TAKP and Quarm send
+/// it for Mend as their own wait ends, when the player pressed Mend too soon
+/// after a zone and so started the official client's full wait anew
+/// (`Client::Handle_OP_Mend`), and for each skill with a recovery timer the
+/// player has on a GM's `#cleartimers` (`Client::ResetAllSkills`).
+///
+/// Layout reference: TAKP's `ResetSkill_Struct`, 8 bytes: the skill in 16
+/// bits, two bytes of padding and a timer every server leaves 0.
+///
+/// # Errors
+/// Rejects any length other than 8 bytes.
+pub fn eqmac_reset_skill(body: &[u8]) -> anyhow::Result<u32> {
+    anyhow::ensure!(body.len() == 8, "invalid skill reset length");
+    Ok(u32::from(u16::from_le_bytes([body[0], body[1]])))
 }
 
 /// Whether a melee ability reaches the target, as `EQEmu` decides

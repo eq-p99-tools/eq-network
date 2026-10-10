@@ -1139,6 +1139,10 @@ pub enum WorldEvent {
     /// its rise, which the record does not tell apart ([`crate::stats`]);
     /// the next profile has them as the server keeps them.
     StatsChanged(crate::stats::StatChange),
+    /// A skill's button is ready again, by the servers' number for the
+    /// skill: `EQMac`'s servers' word, before the official client's own
+    /// wait ends ([`crate::abilities::eqmac_reset_skill`]).
+    SkillReady(u32),
 }
 
 /// A profile heading on the 0..512 scale live movement uses. Project 1999 saves

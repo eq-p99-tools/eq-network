@@ -10,8 +10,8 @@ use super::{
         AlternateAdvancement, Appearance, Bazaar, EqMacExchanges, EqMacWorld, LaterSystems,
         PlayerState, Raids, Social,
     },
-    EQMAC, EQMAC_DESCRIPTION, LOG_SERVER, OWN_NAME, PROFILE, QUARM, REWARD, SACRIFICE, TAKP,
-    TRANSLOCATE,
+    EQMAC, EQMAC_DESCRIPTION, LOG_SERVER, OWN_NAME, PROFILE, QUARM, RESET_SKILL, REWARD, SACRIFICE,
+    TAKP, TRANSLOCATE,
 };
 
 /// What the session does with a message `EQMac`'s servers send; nothing for
@@ -88,7 +88,7 @@ pub(in crate::client) fn eqmac(opcode: u16) -> Option<ServerMessage> {
         0x3840 => sent("OP_ShopDelItem", EQMAC, Read(&[Zone])),
         0x3d20 => sent("OP_GroupFollow", EQMAC, Read(&[Zone])),
         0x3d41 => sent("OP_TradeMoneyUpdate", EQMAC, Read(&[Zone])),
-        0x3d42 => sent("OP_ResetSkill", EQMAC, planned(PlayerState)),
+        0x3d42 => sent("OP_ResetSkill", EQMAC, Partly(&[Zone], RESET_SKILL)),
         0x3e20 => sent("OP_GroupInvite", EQMAC, Read(&[Zone])),
         0x4040 => sent("OP_GroupInvite2", EQMAC, Read(&[Zone])),
         0x4140 => sent("OP_GroupCancelInvite", EQMAC, Read(&[Zone])),

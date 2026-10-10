@@ -826,6 +826,11 @@ pub fn updates(opcode: u16, body: &[u8]) -> Result<Vec<WorldEvent>> {
             ensure!(body.is_empty(), "invalid EQMac hide end length");
             vec![WorldEvent::HideAndSneakEnded]
         }
+        crate::abilities::EQMAC_RESET_SKILL_OPCODE => {
+            vec![WorldEvent::SkillReady(crate::abilities::eqmac_reset_skill(
+                body,
+            )?)]
+        }
         crate::targets::EQMAC_TARGET_COMMAND_OPCODE | crate::targets::EQMAC_TARGET_MOUSE_OPCODE => {
             vec![WorldEvent::Target(crate::targets::eqmac_target(body)?)]
         }

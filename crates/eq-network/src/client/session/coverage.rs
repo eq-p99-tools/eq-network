@@ -288,6 +288,12 @@ const STATS: &[Part] = &[Part(
     "the first byte, the five resists and the second copy of every field",
     Reason::Needless("EQEmu never sets them (zone/client.cpp Client::SetStats, Client::IncStats)"),
 )];
+/// What the session leaves unread of `EQMac`'s word that a skill's button
+/// is ready again.
+const RESET_SKILL: &[Part] = &[Part(
+    "the timer",
+    Reason::Needless("every server sends 0 (TAKP's and Quarm's Client::ResetSkill)"),
+)];
 /// What the session leaves unread of `EQMac`'s log-server settings.
 const LOG_SERVER: &[Part] = &[Part(
     "the error-reporting server's address, port, password and e-mail",

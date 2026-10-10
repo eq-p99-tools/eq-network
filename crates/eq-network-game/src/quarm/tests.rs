@@ -439,6 +439,17 @@ fn a_sacrifice_offer_is_read() {
 }
 
 #[test]
+fn a_skills_button_is_ready_again() {
+    // Mend, skill 32, with the timer 0 the servers send.
+    let body = [32, 0, 0, 0, 0, 0, 0, 0];
+    assert_eq!(
+        updates(0x3d42, &body).unwrap(),
+        [WorldEvent::SkillReady(32)]
+    );
+    assert!(updates(0x3d42, &body[..4]).is_err());
+}
+
+#[test]
 fn the_end_of_hiding_is_read_and_carries_nothing() {
     assert_eq!(
         updates(0x5a41, &[]).unwrap(),

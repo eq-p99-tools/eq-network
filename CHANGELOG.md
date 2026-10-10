@@ -152,6 +152,12 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   not tell apart, so the session changes nothing on it; the next profile
   has the stats as the server keeps them. Hosts that match `WorldEvent`
   exhaustively need an arm for it.
+- A skill's button ready again, on `EQMac`: `WorldEvent::SkillReady` (the
+  skill's number), from `OP_ResetSkill`, which TAKP and Quarm send for
+  Mend when the player pressed it too soon after a zone, since the official
+  client then starts its full wait anew, and for each skill with a
+  recovery timer on a GM's `#cleartimers`. Hosts that match `WorldEvent`
+  exhaustively need an arm for it.
 
 - The player's target as the server sets it, on both generations:
   `WorldEvent::Target`, from `OP_TargetCommand` (`EQEmu`'s sense spells,
