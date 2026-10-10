@@ -1,9 +1,11 @@
-//! Titanium consider, auto-attack and combat-damage records.
+//! Titanium consider, auto-attack, combat-damage and animation records.
 //!
 //! The Titanium client prints melee and spell-damage messages itself from
 //! `OP_Damage`; these records keep the server's numeric fields so a consumer
-//! can do the same without inventing results.
-use anyhow::{ensure, Result};
+//! can do the same without inventing results. `OP_Animation` asks every
+//! client near a spawn to play one of its motions, such as a swing, so a
+//! consumer can show what the server says happened.
+use anyhow::{ensure, Context, Result};
 use serde::Serialize;
 
 /// `OP_Consider`, sent by the client and echoed with the server's assessment.
@@ -21,6 +23,14 @@ pub const EQMAC_DAMAGE_OPCODE: u16 = 0x5840;
 
 /// `OP_Damage`: one melee, skill or spell damage record.
 pub const DAMAGE_OPCODE: u16 = 0x5c78;
+
+/// `OP_Animation`: a spawn's one-shot motion, which `EQEmu` sends to every
+/// client near the spawn, the spawn's own included (`Mob::DoAnim`).
+pub const ANIMATION_OPCODE: u16 = 0x2acf;
+/// `EQMac`'s `OP_Animation`: TAKP's 12-byte `Animation_Struct`, with the
+/// action 32 bits wide and the speed a float (TAKP's `0x40a1`, in this
+/// library's byte order as [`EQMAC_DAMAGE_OPCODE`] is).
+pub const EQMAC_ANIMATION_OPCODE: u16 = 0xa140;
 
 /// Damage kind used for spell damage and beneficial spell landings.
 pub const SPELL_DAMAGE_KIND: u8 = 231;
@@ -125,6 +135,24 @@ pub struct Damage {
     pub spell_id: Option<u16>,
     /// Signed outcome from the damage field.
     pub outcome: DamageOutcome,
+}
+
+/// One `OP_Animation`: a motion the server asks the clients near a spawn to
+/// play once, such as a swing as an attack goes out.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
+pub struct Animation {
+    /// The spawn that moves.
+    pub spawn_id: u16,
+    /// The servers' animation number, the same on both client generations
+    /// (`EQEmu`'s and TAKP's `DoAnim` arguments): 1 to 11 the weapon swings,
+    /// kicks and the bow, 42 to 44 the three casting gestures and 45 to 47
+    /// the monk attacks. Every number is kept, known or not.
+    pub action: u16,
+    /// How fast to play it, as a multiple of the normal speed: Titanium's
+    /// byte over 10 and `EQMac`'s float as sent. Inferred from the servers'
+    /// defaults, 10 for `EQEmu` and 1.0 for TAKP, which every swing in their
+    /// attack code sends.
+    pub speed: f32,
 }
 
 /// Encodes a consider request for a visible target.
@@ -239,6 +267,44 @@ pub fn eqmac_damage(body: &[u8]) -> Result<Damage> {
         spell_id: (kind == SPELL_DAMAGE_KIND && !matches!(spell_id, 0 | u16::MAX))
             .then_some(spell_id),
         outcome: raw.into(),
+    })
+}
+
+/// Decodes Titanium's animation record: the spawn as 16 bits, then the
+/// speed byte (10 is normal) and the action byte.
+///
+/// # Errors
+/// Rejects any length other than the 4-byte Titanium structure.
+pub fn animation(body: &[u8]) -> Result<Animation> {
+    let &[low, high, speed, action] = body else {
+        anyhow::bail!("invalid animation length");
+    };
+    Ok(Animation {
+        spawn_id: u16::from_le_bytes([low, high]),
+        action: action.into(),
+        speed: f32::from(speed) / 10.0,
+    })
+}
+
+/// Decodes `EQMac`'s animation record: the spawn as 16 bits, two bytes of
+/// padding, the action as a signed 32-bit number and the speed as a float
+/// (TAKP `Animation_Struct`).
+///
+/// # Errors
+/// Rejects any length other than the 12-byte `EQMac` structure, an action
+/// outside 0 to 65535, and a speed that is negative or not a number.
+pub fn eqmac_animation(body: &[u8]) -> Result<Animation> {
+    ensure!(body.len() == 12, "invalid EQMac animation length");
+    let action = i32::from_le_bytes(word(body, 4)?.to_le_bytes());
+    let speed = f32::from_bits(word(body, 8)?);
+    ensure!(
+        speed.is_finite() && speed >= 0.0,
+        "invalid EQMac animation speed"
+    );
+    Ok(Animation {
+        spawn_id: u16::from_le_bytes([body[0], body[1]]),
+        action: u16::try_from(action).context("EQMac animation beyond any action")?,
+        speed,
     })
 }
 
@@ -364,6 +430,60 @@ mod tests {
             );
         }
         assert!(damage(&body[..22]).is_err());
+    }
+
+    #[test]
+    fn titanium_animations_read_the_spawn_speed_and_action() {
+        let swing = animation(&[0x2d, 0x01, 10, 5]).unwrap();
+        assert_eq!(
+            swing,
+            Animation {
+                spawn_id: 301,
+                action: 5,
+                speed: 1.0,
+            }
+        );
+        // Every action and speed byte is kept, known or not.
+        let other = animation(&[7, 0, 25, 200]).unwrap();
+        assert_eq!((other.action, other.speed), (200, 2.5));
+        for body in [&[][..], &[0; 3], &[0; 5]] {
+            assert!(animation(body).is_err());
+        }
+    }
+
+    #[test]
+    fn eqmac_animations_read_takps_12_byte_record() {
+        let mut record = [0u8; 12];
+        record[..2].copy_from_slice(&301u16.to_le_bytes());
+        // The padding is not read.
+        record[2..4].copy_from_slice(&[0xcd, 0xcd]);
+        record[4..8].copy_from_slice(&8i32.to_le_bytes());
+        record[8..].copy_from_slice(&1.0f32.to_le_bytes());
+        assert_eq!(
+            eqmac_animation(&record).unwrap(),
+            Animation {
+                spawn_id: 301,
+                action: 8,
+                speed: 1.0,
+            }
+        );
+        record[4..8].copy_from_slice(&65535i32.to_le_bytes());
+        assert_eq!(eqmac_animation(&record).unwrap().action, u16::MAX);
+        for action in [-1, 65536] {
+            record[4..8].copy_from_slice(&i32::to_le_bytes(action));
+            assert!(eqmac_animation(&record).is_err());
+        }
+        record[4..8].copy_from_slice(&5i32.to_le_bytes());
+        for speed in [f32::NAN, f32::INFINITY, -1.0] {
+            record[8..].copy_from_slice(&speed.to_le_bytes());
+            assert!(eqmac_animation(&record).is_err());
+        }
+        record[8..].copy_from_slice(&0.5f32.to_le_bytes());
+        assert_eq!(eqmac_animation(&record).unwrap().speed, 0.5);
+        assert!(eqmac_animation(&record[..11]).is_err());
+        assert!(eqmac_animation(&[0; 13]).is_err());
+        // Titanium's four bytes are not `EQMac`'s record.
+        assert!(eqmac_animation(&[0x2d, 0x01, 10, 5]).is_err());
     }
 
     #[test]
