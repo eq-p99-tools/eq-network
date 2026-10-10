@@ -1,14 +1,18 @@
 //! How spawns look: their worn gear in EQ's nine texture slots, tints and
 //! facial features, as Titanium spawn records and wear changes carry them;
 //! their light, fly mode and the like, as both generations' records carry
-//! some of them; and the appearance updates (`OP_SpawnAppearance`) that
-//! change how a spawn shows on both. Which textures and models draw that is
-//! the client's business.
+//! some of them; and what changes how a spawn shows: appearance updates
+//! (`OP_SpawnAppearance`) on both generations, Titanium's player states, and
+//! both generations' illusions and face changes. Which textures and models
+//! draw that is the client's business.
 //!
 //! Layout reference: `EQEmu`'s `SpawnAppearance_Struct`
 //! (`common/eq_packet_structs.h`), the same on both generations, and the
 //! servers' `AppearanceType` numbers (`EQEmu`'s and TAKP's
-//! `common/eq_constants.h`).
+//! `common/eq_constants.h`); `EQEmu`'s `PlayerState_Struct`
+//! (`common/eq_packet_structs.h`) and Titanium `Illusion_Struct`
+//! (`common/patches/titanium_structs.h`); and TAKP's `Illusion_Struct` and
+//! `FaceChange_Struct` (`common/eq_packet_structs.h`).
 use crate::world::WorldEvent;
 use anyhow::{ensure, Context, Result};
 use serde::Serialize;

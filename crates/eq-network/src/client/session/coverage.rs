@@ -184,9 +184,8 @@ pub(super) enum Step {
     /// eq-network does not send yet, the player's begging, disarming, pick
     /// pocketing, poisoning and tracking, and a banker's change.
     PlayerState,
-    /// Spawns' appearance and effects: the appearance kinds left, illusions,
-    /// renames, spell and level effects, sounds, projectiles and spawn
-    /// states.
+    /// Spawns' effects: spell and level effects, camera shakes, sounds and
+    /// projectiles.
     Appearance,
     /// Social, guild, title and GM messages: inspection, duels, guild
     /// membership, titles and last names, popups and the GM notices.
@@ -211,7 +210,7 @@ impl fmt::Display for Step {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
             Self::PlayerState => "the player's own state",
-            Self::Appearance => "spawns' appearance and effects",
+            Self::Appearance => "spawns' effects",
             Self::Social => "social, guild, title and GM messages",
             Self::EqMacWorld => "EQMac's catch-up on the world",
             Self::EqMacExchanges => "EQMac's catch-up on exchanges",

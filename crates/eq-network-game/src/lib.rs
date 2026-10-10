@@ -2,7 +2,8 @@
 
 /// Abilities: kick, bash, taunt, hide, sneak, forage and the like.
 pub mod abilities;
-/// Worn gear and features in EQ's texture slots, and wear changes.
+/// How spawns look: worn gear, features, lights and the like, and the
+/// updates, states and illusions that change them.
 pub mod appearance;
 /// Binding wounds with bandages.
 pub mod bind_wound;
@@ -50,7 +51,8 @@ pub mod hazards;
 pub mod inventory;
 /// Read-only item inspection requests and definitions.
 pub mod items;
-/// How `/who` lists a player: guild, anonymity and flags, and guild names.
+/// How `/who` lists a player: guild and rank, anonymity and flags, and guild
+/// names.
 pub mod listing;
 /// Corpse looting requests, listings and acknowledgements.
 pub mod loot;
@@ -60,7 +62,8 @@ pub mod merchant;
 pub mod money;
 /// Movement wire layout and session-scoped motion validation.
 pub mod movement;
-/// Titles, last names and suffixes: the parts of a name around the first.
+/// Titles, last names and suffixes: the parts of a name around the first;
+/// and renames.
 pub mod names;
 /// Items on the ground and world containers.
 pub mod objects;
