@@ -468,6 +468,42 @@ impl Belongings {
         out.log.diagnostic(format!("Coin move refused: {reason}"))
     }
 
+    /// Stages destruction locally, sends it, and commits only after a successful
+    /// send. This action never draws from the purse, bank or trade window.
+    fn destroy_coins(
+        command: &ClientCommand,
+        world: &mut World,
+        out: &mut Out<'_, '_>,
+    ) -> Result<()> {
+        let ClientCommand::DestroyCoins {
+            session_id,
+            destruction,
+            ..
+        } = command
+        else {
+            return Ok(());
+        };
+        let mut after = *world.coins;
+        let prepared = after
+            .destroy(*destruction)
+            .map_err(str::to_owned)
+            .and_then(|()| {
+                out.encode(&Request::DestroyCoins(*destruction))
+                    .map_err(|error| error.to_string())
+            });
+        match prepared {
+            Ok(packet) => {
+                out.send(&packet)?;
+                world.coins.0 = after;
+                tell_coins(world, false, out)
+            }
+            Err(reason) => out.log.send(ClientEvent::World(WorldEvent::CoinsRefused {
+                session_id: *session_id,
+                reason,
+            })),
+        }
+    }
+
     /// Opens or closes a merchant's window; only a merchant the player can
     /// see will trade.
     fn shop(command: &ClientCommand, world: &World, out: &mut Out<'_, '_>) -> Result<()> {
@@ -559,7 +595,9 @@ impl Feature for Belongings {
     fn owns(&self, command: &ClientCommand) -> bool {
         match command {
             ClientCommand::MoveInventory(_) => true,
-            ClientCommand::MoveCoins { .. } => self.allows.coins,
+            ClientCommand::MoveCoins { .. } | ClientCommand::DestroyCoins { .. } => {
+                self.allows.coins
+            }
             ClientCommand::Shop { .. } | ClientCommand::Buy { .. } | ClientCommand::Sell { .. } => {
                 self.allows.merchants
             }
@@ -577,6 +615,7 @@ impl Feature for Belongings {
         match command {
             ClientCommand::MoveInventory(request) => self.move_item(request, world, out),
             ClientCommand::MoveCoins { .. } => Self::move_coins(command, world, out),
+            ClientCommand::DestroyCoins { .. } => Self::destroy_coins(command, world, out),
             ClientCommand::Shop { .. } => Self::shop(command, world, out),
             ClientCommand::AutoEat { auto_eat, .. } => {
                 self.meals.choose(*auto_eat);
@@ -1564,6 +1603,40 @@ mod tests {
             created: Instant::now(),
         };
         (belongings, world, move_coins)
+    }
+
+    #[test]
+    fn coin_destruction_sends_only_backed_cursor_balances() {
+        use eq_network_game::money::{Coin, CoinDestruction};
+        let (mut belongings, mut world) = admitted();
+        world.coins.0.cursor.silver = 9;
+        let command = |amount| ClientCommand::DestroyCoins {
+            session_id: 5,
+            destruction: CoinDestruction {
+                coin: Coin::Silver,
+                amount,
+            },
+            created: Instant::now(),
+        };
+        let refused = testing::run(|out| belongings.handle(&command(10), &mut world, out));
+        refused.result.unwrap();
+        assert_eq!(refused.sent, []);
+        assert_eq!(world.coins.cursor.silver, 9);
+        assert_eq!(coins_refused(&refused.events).len(), 1);
+        let unsupported = testing::run_on(&super::super::wire::EqMac, |out| {
+            belongings.handle(&command(2), &mut world, out)
+        });
+        unsupported.result.unwrap();
+        assert_eq!(unsupported.sent, []);
+        assert_eq!(world.coins.cursor.silver, 9);
+        let accepted = testing::run(|out| belongings.handle(&command(7), &mut world, out));
+        accepted.result.unwrap();
+        assert_eq!(accepted.sent.len(), 1);
+        assert_eq!(accepted.sent[0].opcode, 0x7657);
+        assert_eq!(world.coins.cursor.silver, 2);
+        assert!(
+            matches!(accepted.events.as_slice(), [ClientEvent::World(WorldEvent::CoinsElsewhere { cursor, .. })] if cursor.silver == 2)
+        );
     }
 
     /// The reasons the host heard for refused coin moves.

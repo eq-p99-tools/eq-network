@@ -249,6 +249,7 @@ enum CommunicationOpcode {
     SpecialMessage,
     FormattedMessage,
     SimpleMessage,
+    ColoredText,
     GuildMotd,
     Unknown(u16),
 }
@@ -263,6 +264,7 @@ impl CommunicationOpcode {
                 0x2372 => Self::SpecialMessage,
                 0x5a48 => Self::FormattedMessage,
                 0x673c => Self::SimpleMessage,
+                0x0b2d => Self::ColoredText,
                 0x475a => Self::GuildMotd,
                 value => Self::Unknown(value),
             },
@@ -508,7 +510,7 @@ pub struct ChatEvent {
     /// Arguments supplied to a formatted string-table message.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub arguments: Option<Vec<Message>>,
-    /// The message type the server gave a formatted, simple or special
+    /// The message type the server gave a formatted, simple, special or colored
     /// message (256 say, 257 tell, ... 335 system, as `EQEmu`'s `MT_*`
     /// numbers them), by which the official client colours the line; None
     /// for a channel message, whose channel says it, and where a
@@ -704,6 +706,16 @@ pub fn parse_for(
             // EqMac's layout is left until it is checked on TAKP.
             event.message_type = (protocol == GameDialect::Titanium).then(|| u32_at(body, 8));
             event.arguments = Some(arguments);
+            event
+        }
+        CommunicationOpcode::ColoredText => {
+            // Titanium ColoredText_Struct: color followed by a NUL-terminated
+            // string, including the same links/markup as other display text.
+            ensure!(body.len() >= 5, "truncated ColoredText");
+            ensure!(body[4..].contains(&0), "unterminated ColoredText");
+            let mut event = ChatEvent::new(opcode, body, ChannelName::System, include_raw)
+                .with_message(message_for(protocol, &body[4..], include_raw));
+            event.message_type = Some(u32_at(body, 0));
             event
         }
         CommunicationOpcode::SimpleMessage => {

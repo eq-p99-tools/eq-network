@@ -140,6 +140,7 @@ pub(super) fn needs(command: &ClientCommand) -> &'static [Resource] {
         | ClientCommand::OfferTrade { .. }
         | ClientCommand::CancelTrade { .. }
         | ClientCommand::MoveCoins { .. }
+        | ClientCommand::DestroyCoins { .. }
         | ClientCommand::Jump { .. }
         // Damage done holds nothing back.
         | ClientCommand::EnvironmentalDamage { .. }
@@ -255,6 +256,7 @@ fn refusal(command: &ClientCommand, reason: &str) -> Option<WorldEvent> {
         | ClientCommand::OfferTrade { session_id, .. }
         | ClientCommand::AcceptTrade { session_id, .. }
         | ClientCommand::MoveCoins { session_id, .. }
+        | ClientCommand::DestroyCoins { session_id, .. }
         | ClientCommand::Consume { session_id, .. }
         | ClientCommand::UseAbility { session_id, .. }
         | ClientCommand::Pet { session_id, .. }
@@ -362,7 +364,9 @@ fn reasoned(command: &ClientCommand, session_id: u64, reason: String) -> Option<
         ClientCommand::OfferTrade { .. } | ClientCommand::AcceptTrade { .. } => {
             WorldEvent::ExchangeRefused { session_id, reason }
         }
-        ClientCommand::MoveCoins { .. } => WorldEvent::CoinsRefused { session_id, reason },
+        ClientCommand::MoveCoins { .. } | ClientCommand::DestroyCoins { .. } => {
+            WorldEvent::CoinsRefused { session_id, reason }
+        }
         ClientCommand::Consume { .. } => WorldEvent::ConsumeRefused {
             session_id,
             reason,
@@ -441,6 +445,27 @@ fn reasoned(command: &ClientCommand, session_id: u64, reason: String) -> Option<
 mod tests {
     use super::*;
     use casting::CastGuard;
+
+    #[test]
+    fn destruction_is_bound_to_admission_and_expires() {
+        let now = Instant::now();
+        let command = |session_id, created| ClientCommand::DestroyCoins {
+            session_id,
+            created,
+            destruction: eq_network_game::money::CoinDestruction {
+                coin: eq_network_game::money::Coin::Silver,
+                amount: 2,
+            },
+        };
+        assert_eq!(stale(&command(5, now), 5, now), None);
+        assert!(stale(&command(4, now), 5, now).is_some());
+        let expired = now.checked_sub(Duration::from_secs(10)).unwrap();
+        assert!(stale(&command(5, expired), 5, now).is_some());
+        assert!(matches!(
+            refusal(&command(5, now), "refused"),
+            Some(WorldEvent::CoinsRefused { .. })
+        ));
+    }
 
     #[test]
     fn commands_for_an_earlier_admission_or_made_too_long_ago_are_stale() {

@@ -7,6 +7,156 @@ use serde::Serialize;
 /// `OP_WearChange`: one texture slot of a spawn changed.
 pub const WEAR_CHANGE_OPCODE: u16 = 0x7441;
 
+/// Appearance fields not already represented by posture, visibility, listing
+/// or pet-owner events. These are reports, not movement permissions.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+pub enum AppearanceChange {
+    /// Light type emitted by this spawn.
+    Light(u32),
+    /// Whether the spawn is sneaking.
+    Sneaking(bool),
+    /// Server movement presentation mode (including levitation).
+    FlyMode(FlyMode),
+    /// Size in integral model units, as carried by the appearance packet.
+    Size(u32),
+    /// A kind or value not interpreted here. Spawn zero can carry server
+    /// extensions, so it must not be treated as a real entity automatically.
+    Unknown {
+        /// Appearance discriminator.
+        kind: u16,
+        /// Original parameter, including sentinels.
+        value: u32,
+    },
+}
+
+/// The appearance protocol's movement presentation modes.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+pub enum FlyMode {
+    /// Ordinary grounded presentation.
+    Ground,
+    /// Free flight presentation.
+    Flying,
+    /// Levitation.
+    Levitating,
+    /// Water movement.
+    Water,
+    /// Floating.
+    Floating,
+    /// Levitation while running.
+    RunningLevitation,
+    /// Unsupported mode; not permission to fly.
+    Unknown(u32),
+}
+
+/// Interprets the shared appearance kinds without discarding unknown values.
+pub(crate) fn change(kind: u16, value: u32) -> AppearanceChange {
+    match kind {
+        5 => AppearanceChange::Light(value),
+        15 if value <= 1 => AppearanceChange::Sneaking(value == 1),
+        19 => AppearanceChange::FlyMode(match value {
+            0 => FlyMode::Ground,
+            1 => FlyMode::Flying,
+            2 => FlyMode::Levitating,
+            3 => FlyMode::Water,
+            4 => FlyMode::Floating,
+            5 => FlyMode::RunningLevitation,
+            other => FlyMode::Unknown(other),
+        }),
+        29 => AppearanceChange::Size(value),
+        _ => AppearanceChange::Unknown { kind, value },
+    }
+}
+
+/// Size carried by an illusion. Keep the generations distinct: `EQMac`'s
+/// integer -1 means racial default, not a negative scale or a float bit pattern.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
+pub enum IllusionSize {
+    /// Titanium's floating-point size.
+    Titanium(f32),
+    /// `EQMac`'s integral size, including its -1 racial-default sentinel.
+    EqMac(i32),
+}
+
+/// Model and facial features in an illusion notification. Texture and face
+/// sentinel values are retained; applying them is a separate state operation.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct Illusion {
+    /// Entity whose model changes.
+    pub spawn_id: u16,
+    /// Model race number.
+    pub race: u32,
+    /// Model gender, including any wire sentinel.
+    pub gender: u8,
+    /// Body texture, including 255's generation-specific meaning.
+    pub texture: u8,
+    /// Helmet texture, including 255's generation-specific meaning.
+    pub helm_texture: u8,
+    /// Face texture, without narrowing Titanium's 32-bit field.
+    pub face: u32,
+    /// Hair style.
+    pub hair_style: u8,
+    /// Hair color.
+    pub hair_color: u8,
+    /// Beard style.
+    pub beard: u8,
+    /// Beard color.
+    pub beard_color: u8,
+    /// Generation-specific model size.
+    pub size: IllusionSize,
+}
+
+/// Reads an illusion, preserving each generation's field widths and sentinels.
+///
+/// # Errors
+/// Rejects malformed lengths, invalid entity IDs and non-finite floating sizes.
+pub fn illusion(dialect: crate::GameDialect, opcode: u16, body: &[u8]) -> Result<Option<Illusion>> {
+    use crate::{
+        wire_read::{spawn_id, word},
+        GameDialect,
+    };
+    let (spawn, race, gender, face, features, size) = match (dialect, opcode) {
+        (GameDialect::Titanium, 0x448d) => {
+            ensure!(body.len() == 168, "invalid Titanium illusion length");
+            let size = f32::from_bits(word(body, 84));
+            ensure!(size.is_finite(), "invalid illusion size");
+            (
+                spawn_id(word(body, 0))?,
+                word(body, 68),
+                72,
+                word(body, 76),
+                80,
+                IllusionSize::Titanium(size),
+            )
+        }
+        (GameDialect::EqMac, 0x9140) => {
+            ensure!(body.len() == 20, "invalid EQMac illusion length");
+            let short = |at| u16::from_le_bytes([body[at], body[at + 1]]);
+            (
+                spawn_id(u32::from(short(0)))?,
+                u32::from(short(2)),
+                4,
+                u32::from(short(8)),
+                10,
+                IllusionSize::EqMac(word(body, 16).cast_signed()),
+            )
+        }
+        _ => return Ok(None),
+    };
+    Ok(Some(Illusion {
+        spawn_id: spawn,
+        race,
+        gender: body[gender],
+        texture: body[gender + 1],
+        helm_texture: body[gender + 2],
+        face,
+        hair_style: body[features],
+        hair_color: body[features + 1],
+        beard: body[features + 2],
+        beard_color: body[features + 3],
+        size,
+    }))
+}
+
 /// EQ's texture slots, in the order servers send them.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 pub enum TextureSlot {
@@ -162,6 +312,25 @@ pub fn titanium_wear_change(body: &[u8]) -> Result<WearChange> {
         slot,
         material: u32::from(u16::from_le_bytes([body[2], body[3]])),
         tint: tint(&body[4..8]),
+    })
+}
+
+/// Reads `EQMac`'s padded twelve-byte wear update. Its material is only u16;
+/// bytes 3 and 6..8 are padding and must not contribute to field values.
+///
+/// # Errors
+/// Rejects malformed lengths, zero spawn IDs and unknown texture slots.
+pub fn eqmac_wear_change(body: &[u8]) -> Result<WearChange> {
+    ensure!(body.len() == 12, "invalid EQMac wear change length");
+    let spawn_id = u16::from_le_bytes([body[0], body[1]]);
+    ensure!(spawn_id != 0, "invalid wear change spawn ID");
+    let slot = TextureSlot::from_index(usize::from(body[2]))
+        .ok_or_else(|| anyhow::anyhow!("invalid wear change texture slot"))?;
+    Ok(WearChange {
+        spawn_id,
+        slot,
+        material: u32::from(u16::from_le_bytes([body[4], body[5]])),
+        tint: tint(&body[8..12]),
     })
 }
 

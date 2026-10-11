@@ -193,7 +193,58 @@ pub struct Wallet {
     pub offered: Coins,
 }
 
+/// Coins explicitly destroyed from the cursor, with no destination or conversion.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+pub struct CoinDestruction {
+    /// The kind held on the cursor.
+    pub coin: Coin,
+    /// How many coins to destroy.
+    pub amount: u32,
+}
+
+impl CoinDestruction {
+    /// Encodes Titanium's cursor-to-void `OP_MoveCoin` request.
+    ///
+    /// # Errors
+    /// Rejects zero and amounts outside the server's positive signed range.
+    pub fn encode(self) -> Result<EncodedCommand> {
+        ensure!(self.amount > 0, "destroy at least one coin");
+        let amount = i32::try_from(self.amount)?;
+        let mut body = Vec::with_capacity(20);
+        for value in [
+            0,
+            u32::MAX,
+            self.coin.wire(),
+            self.coin.wire(),
+            amount.unsigned_abs(),
+        ] {
+            body.extend_from_slice(&value.to_le_bytes());
+        }
+        Ok(EncodedCommand {
+            opcode: MOVE_OPCODE,
+            body,
+        })
+    }
+}
+
 impl Wallet {
+    /// Removes explicitly destroyed coins from the cursor only.
+    ///
+    /// # Errors
+    /// Leaves the wallet unchanged for zero, an invalid signed amount or an
+    /// amount exceeding what the cursor holds.
+    pub fn destroy(&mut self, destruction: CoinDestruction) -> Result<(), &'static str> {
+        if destruction.amount == 0 || destruction.amount > i32::MAX.unsigned_abs() {
+            return Err("Invalid coin destruction amount");
+        }
+        let held = self.cursor.of_mut(destruction.coin);
+        if *held < destruction.amount {
+            return Err("You do not have that many coins on the cursor");
+        }
+        *held -= destruction.amount;
+        Ok(())
+    }
+
     /// The coins in a place, where they are known.
     #[must_use]
     pub const fn get(&self, place: CoinPlace) -> Option<Coins> {

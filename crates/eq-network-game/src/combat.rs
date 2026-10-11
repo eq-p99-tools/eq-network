@@ -123,7 +123,7 @@ impl From<i32> for DamageOutcome {
 }
 
 /// One `OP_Damage` record.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
 pub struct Damage {
     /// Entity receiving the attack.
     pub target_id: u16,
@@ -135,6 +135,121 @@ pub struct Damage {
     pub spell_id: Option<u16>,
     /// Signed outcome from the damage field.
     pub outcome: DamageOutcome,
+    /// Push fields in wire units, not an automatically applied position change.
+    pub motion: HitMotion,
+}
+
+/// Push information shared by damage and action packets. Angles remain in
+/// wire units; do not assume [`crate::world::Position`]'s heading scale.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize)]
+pub struct HitMotion {
+    /// Reported force; zero describes no push.
+    pub force: f32,
+    /// Reported push heading.
+    pub heading: f32,
+    /// Reported push pitch.
+    pub pitch: f32,
+}
+
+/// One `OP_Action`, before interpreting its kind as a spell or another action.
+/// Padding is omitted; generation-specific fields retain their widths.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
+pub struct Action {
+    /// Receiving entity; zero is retained for packet-specific meanings.
+    pub target_id: u16,
+    /// Originating entity.
+    pub source_id: u16,
+    /// Caster level for a spell; other kinds can interpret it differently.
+    pub level: u16,
+    /// Instrument-modifier word for a spell; retains the bits for other kinds.
+    pub modifier_word: u32,
+    /// Spell kind 231, or another action/skill discriminator.
+    pub kind: u8,
+    /// Spell field, including zero and all-ones sentinels on non-spell actions.
+    pub spell_id: u16,
+    /// Effect flags; not an authoritative buff slot.
+    pub effect_flag: u8,
+    /// Push parameters, not an automatically applied position change.
+    pub motion: HitMotion,
+    /// Fields which do not have the same meaning in both generations.
+    pub details: ActionDetails,
+}
+
+/// Generation-specific portions of `OP_Action`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+pub enum ActionDetails {
+    /// Titanium's extra spell-level byte and two words of uncertain meaning.
+    Titanium {
+        /// Word at offset 23, tentatively named minimum damage by the source.
+        unknown23: u16,
+        /// Word at offset 25, tentatively named to-hit by the source.
+        unknown25: u16,
+        /// Additional spell-level byte.
+        spell_level: u8,
+    },
+    /// `EQMac`'s target level, unused spell field and signed tap amount.
+    EqMac {
+        /// Target level, unused by the reference client.
+        target_level: u16,
+        /// Extra spell field, unused by the reference client.
+        unused_spell_id: u16,
+        /// Signed amount used by instant tap spells.
+        tap_amount: i16,
+    },
+}
+
+/// Reads an action record, including kinds which are not spell landings.
+///
+/// # Errors
+/// Rejects malformed lengths and non-finite push parameters.
+pub fn action(dialect: crate::GameDialect, body: &[u8]) -> Result<Action> {
+    use crate::GameDialect;
+    let (length, modifier, push, kind, spell, flag) = match dialect {
+        GameDialect::Titanium => (31, 6, 10, 22, 27, 30),
+        GameDialect::EqMac => (36, 8, 12, 24, 30, 33),
+    };
+    ensure!(body.len() == length, "invalid action length");
+    let short = |at| u16::from_le_bytes([body[at], body[at + 1]]);
+    let details = match dialect {
+        GameDialect::Titanium => ActionDetails::Titanium {
+            unknown23: short(23),
+            unknown25: short(25),
+            spell_level: body[29],
+        },
+        GameDialect::EqMac => ActionDetails::EqMac {
+            target_level: short(6),
+            unused_spell_id: short(26),
+            tap_amount: short(28).cast_signed(),
+        },
+    };
+    Ok(Action {
+        target_id: short(0),
+        source_id: short(2),
+        level: short(4),
+        modifier_word: word(body, modifier)?,
+        kind: body[kind],
+        spell_id: short(spell),
+        effect_flag: body[flag],
+        motion: hit_motion(body, push)?,
+        details,
+    })
+}
+
+fn hit_motion(body: &[u8], offset: usize) -> Result<HitMotion> {
+    let force = f32::from_bits(word(body, offset)?);
+    let heading = f32::from_bits(word(body, offset + 4)?);
+    let pitch = f32::from_bits(word(body, offset + 8)?);
+    ensure!(
+        [force, heading, pitch]
+            .iter()
+            .all(|value| value.is_finite()),
+        "invalid combat push"
+    );
+    Ok(HitMotion {
+        force,
+        heading,
+        pitch,
+    })
 }
 
 /// One `OP_Animation`: a motion the server asks the clients near a spawn to
@@ -245,6 +360,7 @@ pub fn damage(body: &[u8]) -> Result<Damage> {
         spell_id: (kind == SPELL_DAMAGE_KIND && !matches!(spell_id, 0 | u16::MAX))
             .then_some(spell_id),
         outcome: raw.into(),
+        motion: hit_motion(body, 11)?,
     })
 }
 
@@ -267,6 +383,7 @@ pub fn eqmac_damage(body: &[u8]) -> Result<Damage> {
         spell_id: (kind == SPELL_DAMAGE_KIND && !matches!(spell_id, 0 | u16::MAX))
             .then_some(spell_id),
         outcome: raw.into(),
+        motion: hit_motion(body, 12)?,
     })
 }
 

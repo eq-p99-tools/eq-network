@@ -17,6 +17,10 @@ pub const ROLL_OPCODE: u16 = 0x6cd5;
 pub const EMOTE_OPCODE: u16 = 0x547a;
 /// `OP_Assist`: whose target to take; the server answers with that target.
 pub const ASSIST_OPCODE: u16 = 0x7709;
+/// `EQMac`'s roll reply, in the library's byte order.
+pub const EQMAC_ROLL_OPCODE: u16 = 0x1640;
+/// `EQMac`'s assist reply; the entity ID occupies two bytes.
+pub const EQMAC_ASSIST_OPCODE: u16 = 0x0042;
 
 /// The emote's text field; the server reads at most 512 bytes of it.
 const EMOTE_TEXT: usize = 1024;
@@ -113,14 +117,47 @@ pub fn decode_roll(opcode: u16, body: &[u8]) -> Result<Option<Roll>> {
     if opcode != ROLL_OPCODE {
         return Ok(None);
     }
+    roll(body).map(Some)
+}
+
+/// Reads the shared 76-byte roll record used by both generations.
+fn roll(body: &[u8]) -> Result<Roll> {
     ensure!(body.len() == 12 + NAME, "invalid roll length");
     let field = &body[12..12 + NAME];
     let end = field.iter().position(|byte| *byte == 0).unwrap_or(NAME);
-    Ok(Some(Roll {
+    Ok(Roll {
         name: String::from_utf8_lossy(&field[..end]).into_owned(),
         low: word(body, 0),
         high: word(body, 4),
         result: word(body, 8),
+    })
+}
+
+/// Reads an `EQMac` roll, whose body matches Titanium's `RandomReply_Struct`.
+///
+/// # Errors
+/// Rejects a malformed length.
+pub fn decode_eqmac_roll(opcode: u16, body: &[u8]) -> Result<Option<Roll>> {
+    if opcode == EQMAC_ROLL_OPCODE {
+        roll(body).map(Some)
+    } else {
+        Ok(None)
+    }
+}
+
+/// Reads `EQMac`'s assist answer. Its signed -1 sentinel means keep the target,
+/// unlike an ordinary entity ID. Zero is also left without a target to select.
+///
+/// # Errors
+/// Rejects a malformed length.
+pub fn decode_eqmac_assist(opcode: u16, body: &[u8]) -> Result<Option<Assisted>> {
+    if opcode != EQMAC_ASSIST_OPCODE {
+        return Ok(None);
+    }
+    ensure!(body.len() == 2, "invalid EQMac assist length");
+    let id = u16::from_le_bytes([body[0], body[1]]);
+    Ok(Some(Assisted {
+        target: (!matches!(id, 0 | u16::MAX)).then_some(id),
     }))
 }
 

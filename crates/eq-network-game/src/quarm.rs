@@ -663,8 +663,27 @@ fn position(body: &[u8]) -> Result<WorldEvent> {
 // One arm per opcode, so the match grows with each one decoded.
 #[allow(clippy::too_many_lines)]
 pub fn updates(opcode: u16, body: &[u8]) -> Result<Vec<WorldEvent>> {
+    if let Some(event) = crate::message::additional_event(crate::GameDialect::EqMac, opcode, body)?
+    {
+        return Ok(vec![event]);
+    }
     Ok(match opcode {
         0x5f41 | 0x6b42 => vec![WorldEvent::Spawns(spawns(body)?)],
+        0x9841 => vec![crate::world::level_update(body)?],
+        0x8941 => vec![crate::world::skill_update(body)?],
+        0x9240 => vec![WorldEvent::WearChange(
+            crate::appearance::eqmac_wear_change(body)?,
+        )],
+        0xce40 => vec![WorldEvent::BookText(crate::books::eqmac_text(body)?)],
+        0xd540 => vec![WorldEvent::Consent(crate::corpses::decode_consent(body)?)],
+        crate::socials::EQMAC_ROLL_OPCODE => crate::socials::decode_eqmac_roll(opcode, body)?
+            .map(WorldEvent::Roll)
+            .into_iter()
+            .collect(),
+        crate::socials::EQMAC_ASSIST_OPCODE => crate::socials::decode_eqmac_assist(opcode, body)?
+            .map(WorldEvent::Assisted)
+            .into_iter()
+            .collect(),
         0xf340 => vec![position(body)?],
         crate::merchant::EQMAC_REQUEST_OPCODE
         | crate::merchant::EQMAC_DELETE_OPCODE
@@ -746,10 +765,10 @@ pub fn updates(opcode: u16, body: &[u8]) -> Result<Vec<WorldEvent>> {
             .map(WorldEvent::Spell)
             .into_iter()
             .collect(),
-        crate::buffs::EQMAC_ACTION_OPCODE => crate::buffs::eqmac_spell_effect(body)?
-            .map(WorldEvent::SpellEffect)
-            .into_iter()
-            .collect(),
+        crate::buffs::EQMAC_ACTION_OPCODE => vec![crate::message::action_event(
+            crate::GameDialect::EqMac,
+            body,
+        )?],
         crate::buffs::EQMAC_BUFF_OPCODE => {
             vec![WorldEvent::Buff(crate::buffs::eqmac_update(body)?)]
         }

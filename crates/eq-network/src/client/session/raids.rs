@@ -141,6 +141,8 @@ impl Quiet {
 /// and removes.
 #[derive(Default)]
 pub(super) struct Raids {
+    /// A no-raid admission notice, delivered once the zone is ready.
+    staged_absence: bool,
     /// Who invited the player last, until the player answers or is in a
     /// raid.
     invitation: Option<String>,
@@ -224,6 +226,11 @@ impl Raids {
                 }
             }
             RaidUpdate::Disbanded => self.raid = None,
+            RaidUpdate::NotInRaid => {
+                self.raid = None;
+                self.forming = false;
+                self.listing = None;
+            }
             RaidUpdate::Leader { name } => {
                 if let Some(raid) = self.raid.as_mut() {
                     raid.leader = Some(name.clone());
@@ -427,6 +434,24 @@ fn said(update: RaidUpdate, out: &mut Out<'_, '_>) -> Result<()> {
 }
 
 impl Feature for Raids {
+    fn admit(&mut self, message: &Message, _world: &mut World) -> Result<()> {
+        if matches!(
+            message,
+            Message::Event(WorldEvent::Raid(RaidUpdate::NotInRaid))
+        ) {
+            self.staged_absence = true;
+        }
+        Ok(())
+    }
+
+    fn admitted(&mut self, _world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
+        if std::mem::take(&mut self.staged_absence) {
+            self.follow_news(&RaidUpdate::NotInRaid, out.sender.name);
+            said(RaidUpdate::NotInRaid, out)?;
+        }
+        Ok(())
+    }
+
     fn capabilities(&self) -> Vec<crate::world::Capability> {
         vec![crate::world::Capability::Raiding]
     }
@@ -672,6 +697,35 @@ mod tests {
         ] {
             hear(raids, world, update);
         }
+    }
+
+    #[test]
+    fn explicit_no_raid_resets_membership_and_admission_delivers_it_once() {
+        let mut raids = Raids::default();
+        let mut world = World::new(5);
+        led_raid(&mut raids, &mut world);
+        assert!(raids.raid.is_some());
+        assert_eq!(
+            hear(&mut raids, &mut world, RaidUpdate::NotInRaid),
+            [RaidUpdate::NotInRaid]
+        );
+        assert!(raids.raid.is_none());
+        assert!(raids.listing.is_none());
+        raids
+            .admit(
+                &Message::Event(WorldEvent::Raid(RaidUpdate::NotInRaid)),
+                &mut world,
+            )
+            .unwrap();
+        let result = testing::run(|out| raids.admitted(&mut world, out));
+        result.result.unwrap();
+        assert!(matches!(
+            result.events.as_slice(),
+            [ClientEvent::World(WorldEvent::Raid(RaidUpdate::NotInRaid))]
+        ));
+        assert!(testing::run(|out| raids.admitted(&mut world, out))
+            .events
+            .is_empty());
     }
 
     #[test]

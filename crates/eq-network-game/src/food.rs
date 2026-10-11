@@ -185,7 +185,9 @@ pub fn consume(slot: InventorySlot, meal: Meal, by_hand: bool) -> EncodedCommand
     let mut body = Vec::with_capacity(16);
     body.extend_from_slice(&slot.0.to_le_bytes());
     body.extend_from_slice(&(if by_hand { BY_HAND } else { ON_ITS_OWN }).to_le_bytes());
-    body.extend_from_slice(&[0; 4]);
+    // Both manually consumed food and drink from the official P99 client
+    // carry -1 here. Automatic consumption was not part of that capture.
+    body.extend_from_slice(&(if by_hand { u32::MAX } else { 0 }).to_le_bytes());
     body.extend_from_slice(&[meal.wire(), 0, 0, 0]);
     EncodedCommand {
         opcode: CONSUME_OPCODE,

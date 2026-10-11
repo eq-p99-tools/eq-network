@@ -89,15 +89,30 @@ pub fn titanium_request(book: &Book) -> Result<EncodedCommand> {
 /// Rejects a body too short to hold the window and the kind.
 pub fn titanium_text(body: &[u8]) -> Result<BookText> {
     ensure!(body.len() >= 2, "invalid book text length");
-    let text = &body[2..];
+    Ok(book_text(body[1], &body[2..]))
+}
+
+/// Reads `EQMac`'s book text, which omits Titanium's window byte.
+///
+/// # Errors
+/// Rejects a body too short for the kind and its terminated text field.
+pub fn eqmac_text(body: &[u8]) -> Result<BookText> {
+    ensure!(
+        body.len() >= 2 && body[1..].contains(&0),
+        "invalid EQMac book text"
+    );
+    Ok(book_text(body[0], &body[1..]))
+}
+
+fn book_text(kind: u8, text: &[u8]) -> BookText {
     let end = text
         .iter()
         .position(|byte| *byte == 0)
         .unwrap_or(text.len());
-    Ok(BookText {
-        kind: body[1],
+    BookText {
+        kind,
         text: String::from_utf8_lossy(&text[..end]).into_owned(),
-    })
+    }
 }
 
 /// Decodes a Titanium book packet from the server: a text to read; None for

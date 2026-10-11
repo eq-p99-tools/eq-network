@@ -11,6 +11,76 @@
 use anyhow::{ensure, Result};
 use serde::Serialize;
 
+/// Precipitation selected by the server's eight-byte weather writer.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+pub enum Precipitation {
+    /// Rain; an intensity of zero stops it.
+    Rain,
+    /// Snow; an intensity of zero stops it.
+    Snow,
+    /// An unsupported precipitation type, retaining the wire value.
+    Unknown(u32),
+}
+
+/// A weather notification, separate from its role in zone admission.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+pub enum Weather {
+    /// The eight-byte form written by both reference servers.
+    Precipitation {
+        /// Precipitation type. Zero intensity means no active precipitation.
+        kind: Precipitation,
+        /// Server-defined intensity; do not assume a percentage.
+        intensity: u32,
+    },
+    /// Titanium's twelve-byte admission form uses different type values
+    /// and supplies no intensity (`Handle_Connect_OP_ZoneEntry`).
+    Admission {
+        /// First word; the reference writer sends 255.
+        marker: u32,
+        /// None for clear weather; rain = 0x31 and snow = 2 on this form.
+        kind: Option<Precipitation>,
+        /// Last word; the reference writer sets it to 1 for snow, 0 otherwise.
+        /// Preserve it without treating it as an intensity.
+        mode: u32,
+    },
+}
+
+/// Reads weather in either generation, retaining unknown type values.
+///
+/// # Errors
+/// Rejects lengths other than eight bytes, or twelve on Titanium.
+pub fn weather(dialect: crate::GameDialect, opcode: u16, body: &[u8]) -> Result<Option<Weather>> {
+    let expected = match dialect {
+        crate::GameDialect::Titanium => 0x254d,
+        crate::GameDialect::EqMac => 0x3641,
+    };
+    if opcode != expected {
+        return Ok(None);
+    }
+    let word = |at| crate::wire_read::word(body, at);
+    if dialect == crate::GameDialect::Titanium && body.len() == 12 {
+        return Ok(Some(Weather::Admission {
+            marker: word(0),
+            kind: match word(4) {
+                0 => None,
+                0x31 => Some(Precipitation::Rain),
+                2 => Some(Precipitation::Snow),
+                other => Some(Precipitation::Unknown(other)),
+            },
+            mode: word(8),
+        }));
+    }
+    ensure!(body.len() == 8, "invalid weather length");
+    Ok(Some(Weather::Precipitation {
+        kind: match word(0) {
+            0 => Precipitation::Rain,
+            1 => Precipitation::Snow,
+            other => Precipitation::Unknown(other),
+        },
+        intensity: word(4),
+    }))
+}
+
 /// `OP_TimeOfDay`: the time in Norrath.
 pub const TIME_OPCODE: u16 = 0x1580;
 /// Real seconds to a Norrath minute.

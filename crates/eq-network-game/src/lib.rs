@@ -20,12 +20,18 @@ pub mod clock;
 pub mod combat;
 /// Typed client actions and dialect-specific application packet encoding.
 pub mod command;
+/// Translocate and sacrifice confirmation exchanges.
+pub mod confirmation;
+/// Server-imposed stun, charm and target notifications.
+pub mod control;
 /// Players' corpses: consent, summoning and dragging.
 pub mod corpses;
 /// Titanium character creation requests and stat rules.
 pub mod creation;
 /// Server-defined interactive doors and their movement notifications.
 pub mod doors;
+/// Zone identity, environment and seasonal weather settings.
+pub mod environment;
 /// Handing items to another character: the give and trade windows.
 pub mod exchange;
 /// Food and drink: hunger, thirst, and eating and drinking.
@@ -64,6 +70,8 @@ pub mod quarm;
 pub mod raid;
 /// Being resurrected: the offer and the player's answer.
 pub mod resurrection;
+/// Discipline and linked-spell reuse notifications.
+pub mod reuse;
 /// The worlds a login server lists, and the player's choice among them.
 pub mod servers;
 /// Rolling dice, emoting and assisting.
@@ -89,6 +97,8 @@ pub mod message;
 pub mod request;
 
 use serde::{Deserialize, Serialize};
+
+mod wire_read;
 
 /// Game packet layout used by a client generation.
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]

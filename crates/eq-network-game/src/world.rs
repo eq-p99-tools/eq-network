@@ -501,6 +501,27 @@ pub enum ItemHitPoints {
 /// wildcard arm.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub enum WorldEvent {
+    /// A non-spell form of `OP_Action`; its kind and push fields are preserved.
+    Action(crate::combat::Action),
+    /// A server-imposed control notification, not a local command result.
+    Control(crate::control::ControlUpdate),
+    /// Discipline or linked-spell reuse state; not gem-indexed cooldowns.
+    Reuse(crate::reuse::ReuseUpdate),
+    /// A translocate or sacrifice exchange, never automatically accepted.
+    Confirmation(crate::confirmation::Confirmation),
+    /// Weather state, separate from readiness to enter a zone.
+    Weather(crate::clock::Weather),
+    /// The admitted zone's identity and environment settings.
+    ZoneEnvironment(Box<crate::environment::ZoneEnvironment>),
+    /// Model and facial-feature changes from an illusion.
+    Illusion(crate::appearance::Illusion),
+    /// Additional appearance state or an uninterpreted appearance subtype.
+    Appearance {
+        /// Entity ID; zero is retained for unknown server extensions only.
+        spawn_id: u16,
+        /// Typed change or the unrecognized kind and original parameter.
+        change: crate::appearance::AppearanceChange,
+    },
     /// A server spell action; icon flags do not establish an authoritative buff slot.
     SpellEffect(crate::buffs::SpellEffect),
     /// Admission buff slots; holes retain their original indexes.
@@ -766,7 +787,8 @@ pub enum WorldEvent {
     Level {
         /// New server level.
         current: u8,
-        /// Previous server level; may exceed the new level after experience loss.
+        /// Server's previous-level field; may exceed the new level after
+        /// experience loss. `EQMac` reports its saved highest level here.
         previous: u8,
         /// Experience on the Titanium 0..330 scale.
         experience: u32,
@@ -1153,24 +1175,8 @@ pub fn titanium_update(opcode: u16, body: &[u8]) -> Result<Option<WorldEvent>> {
     Ok(Some(match opcode {
         0x6a53 => WorldEvent::Buff(crate::buffs::titanium_update(body)?),
         0x7c32 => return appearance(body),
-        0x6d44 => {
-            ensure!(body.len() == 12, "invalid level update length");
-            let current = u8::try_from(word(body, 0))?;
-            let previous = u8::try_from(word(body, 4))?;
-            ensure!(current != 0 && previous != 0, "invalid zero level");
-            WorldEvent::Level {
-                current,
-                previous,
-                experience: word(body, 8).min(330),
-            }
-        }
-        0x6a93 => {
-            ensure!(body.len() == 8, "invalid skill update length");
-            WorldEvent::Skill {
-                skill_id: word(body, 0),
-                value: word(body, 4),
-            }
-        }
+        0x6d44 => level_update(body)?,
+        0x6a93 => skill_update(body)?,
         0x667c => WorldEvent::ItemDetails(crate::items::response(body)?),
         0x3397 if body.get(..4) == Some(&[0, 0, 0, 0]) => {
             WorldEvent::ItemDetails(crate::items::response(body)?)
@@ -1252,12 +1258,39 @@ pub fn titanium_update(opcode: u16, body: &[u8]) -> Result<Option<WorldEvent>> {
     }))
 }
 
+/// Both generations carry their own level changes as three u32 words.
+pub(crate) fn level_update(body: &[u8]) -> Result<WorldEvent> {
+    ensure!(body.len() == 12, "invalid level update length");
+    let current = u8::try_from(word(body, 0))?;
+    let previous = u8::try_from(word(body, 4))?;
+    ensure!(current != 0 && previous != 0, "invalid zero level");
+    Ok(WorldEvent::Level {
+        current,
+        previous,
+        experience: word(body, 8).min(330),
+    })
+}
+
+/// Both generations' ordinary skill updates use two u32 words.
+pub(crate) fn skill_update(body: &[u8]) -> Result<WorldEvent> {
+    ensure!(body.len() == 8, "invalid skill update length");
+    Ok(WorldEvent::Skill {
+        skill_id: word(body, 0),
+        value: word(body, 4),
+    })
+}
+
 /// Spell actions, doors, ground objects, loot, merchant, exchange,
 /// training, resurrection, group, dice, assist, raid, book, combine,
 /// bandaging and inventory packets, each owned by its codec.
 fn titanium_views(opcode: u16, body: &[u8]) -> Result<Option<WorldEvent>> {
+    if let Some(event) =
+        crate::message::additional_event(crate::GameDialect::Titanium, opcode, body)?
+    {
+        return Ok(Some(event));
+    }
     if opcode == 0x497c {
-        return Ok(crate::buffs::titanium_spell_effect(body)?.map(WorldEvent::SpellEffect));
+        return crate::message::action_event(crate::GameDialect::Titanium, body).map(Some);
     }
     Ok(if let Some(update) = crate::doors::decode(opcode, body)? {
         Some(WorldEvent::Doors(update))
@@ -1304,16 +1337,21 @@ fn money_update(body: &[u8]) -> Result<Coins> {
     })
 }
 
-/// Decodes persistent appearance state without interpreting unrelated update kinds.
+/// Decodes persistent appearance state, retaining unsupported kinds for analysis.
 pub(crate) fn appearance(body: &[u8]) -> Result<Option<WorldEvent>> {
     ensure!(body.len() == 8, "invalid appearance length");
     let kind = u16::from_le_bytes([body[2], body[3]]);
     let value = word(body, 4);
     let listing = crate::listing::appearance(kind, value);
-    if !matches!(kind, 3 | 14 | crate::pets::PET_APPEARANCE) && listing.is_none() {
-        return Ok(None);
-    }
     let spawn_id = u16::from_le_bytes([body[0], body[1]]);
+    if !matches!(kind, 3 | 14 | crate::pets::PET_APPEARANCE) && listing.is_none() {
+        let change = crate::appearance::change(kind, value);
+        ensure!(
+            spawn_id != 0 || matches!(change, crate::appearance::AppearanceChange::Unknown { .. }),
+            "invalid appearance spawn ID"
+        );
+        return Ok(Some(WorldEvent::Appearance { spawn_id, change }));
+    }
     ensure!(spawn_id != 0, "invalid appearance spawn ID");
     Ok(Some(match (kind, listing) {
         (_, Some(change)) => WorldEvent::Listing { spawn_id, change },
@@ -1576,7 +1614,13 @@ mod tests {
         }
         assert!(super::titanium_update(0x7c32, &[0; 9]).is_err());
         packet[2..4].copy_from_slice(&99u16.to_le_bytes());
-        assert!(super::titanium_update(0x7c32, &packet).unwrap().is_none());
+        assert!(matches!(
+            super::titanium_update(0x7c32, &packet).unwrap(),
+            Some(super::WorldEvent::Appearance {
+                change: crate::appearance::AppearanceChange::Unknown { kind: 99, .. },
+                ..
+            })
+        ));
         packet[2..4].copy_from_slice(&3u16.to_le_bytes());
         packet[..2].fill(0);
         assert!(super::titanium_update(0x7c32, &packet).is_err());

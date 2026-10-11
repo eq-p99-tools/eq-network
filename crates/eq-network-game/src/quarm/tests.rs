@@ -316,7 +316,10 @@ fn spell_notices_read_as_the_spell_news_every_wire_gives() {
         })]
     ));
     action[24] = 1;
-    assert_eq!(updates(0x4640, &action).unwrap(), []);
+    assert!(matches!(
+        updates(0x4640, &action).unwrap().as_slice(),
+        [WorldEvent::Action(crate::combat::Action { kind: 1, .. })]
+    ));
     // A fade, by spell.
     let mut fade = [0; 20];
     fade[2] = 2;

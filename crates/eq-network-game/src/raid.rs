@@ -40,6 +40,7 @@ const ACCEPT: u32 = 1;
 const REMOVE: u32 = 1;
 const INVITE: u32 = 3;
 const DISBAND: u32 = 5;
+const NO_RAID: u32 = 10;
 const MOVE: u32 = 6;
 const CREATE: u32 = 8;
 const LOCK: u32 = 8;
@@ -121,6 +122,8 @@ pub enum RaidUpdate {
     },
     /// The player is out of their raid.
     Disbanded,
+    /// Admission reports no current raid; this is not a disband announcement.
+    NotInRaid,
     /// The raid has this leader.
     Leader {
         /// The leader.
@@ -288,6 +291,15 @@ pub fn decode(opcode: u16, body: &[u8]) -> Result<Option<RaidUpdate>> {
             general()?;
             Some(RaidUpdate::Disbanded)
         }
+        NO_RAID => {
+            // P99/Titanium sends the 136-byte general record. Newer EQEmu
+            // passes its 140-byte internal record through unchanged.
+            ensure!(
+                matches!(body.len(), 136 | 140),
+                "invalid no-raid notice length"
+            );
+            Some(RaidUpdate::NotInRaid)
+        }
         MAKE_LEADER => {
             general()?;
             Some(RaidUpdate::Leader {
@@ -431,10 +443,10 @@ mod tests {
                 by: "Tester".into()
             })
         );
-        // The zone-in marker and the leadership abilities are not read.
+        // An explicit admission reset is distinct from a disband announcement.
         assert_eq!(
             decode(UPDATE_OPCODE, &update(10, 136, "Tester", "Tester")).unwrap(),
-            None
+            Some(RaidUpdate::NotInRaid)
         );
         assert_eq!(
             decode(UPDATE_OPCODE, &update(14, 388, "Tester", "Tester")).unwrap(),

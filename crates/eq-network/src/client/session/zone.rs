@@ -587,7 +587,7 @@ mod tests {
             ClientCommand::OfferTrade { .. } => 29,
             ClientCommand::AcceptTrade { .. } => 30,
             ClientCommand::CancelTrade { .. } => 31,
-            ClientCommand::MoveCoins { .. } => 32,
+            ClientCommand::MoveCoins { .. } | ClientCommand::DestroyCoins { .. } => 32,
             ClientCommand::UseAbility { .. } => 33,
             ClientCommand::Consume { .. } => 34,
             ClientCommand::WhoAll { .. } => 35,

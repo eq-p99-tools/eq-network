@@ -4,6 +4,40 @@
 use crate::{inventory, spells, world::WorldEvent, zoning};
 use std::fmt;
 
+/// Routes spell and non-spell forms after a single action decode.
+pub(crate) fn action_event(dialect: crate::GameDialect, body: &[u8]) -> anyhow::Result<WorldEvent> {
+    let action = crate::combat::action(dialect, body)?;
+    Ok(crate::buffs::from_action(action)
+        .map_or(WorldEvent::Action(action), WorldEvent::SpellEffect))
+}
+
+/// Shared dispatch for supplemental read-only events. Generation selects the
+/// wire layout; the session's capability policy remains separate.
+pub(crate) fn additional_event(
+    dialect: crate::GameDialect,
+    opcode: u16,
+    body: &[u8],
+) -> anyhow::Result<Option<WorldEvent>> {
+    Ok(
+        if dialect == crate::GameDialect::Titanium && opcode == crate::environment::TITANIUM_OPCODE
+        {
+            Some(WorldEvent::ZoneEnvironment(Box::new(
+                crate::environment::titanium(body)?,
+            )))
+        } else if let Some(update) = crate::control::decode(dialect, opcode, body)? {
+            Some(WorldEvent::Control(update))
+        } else if let Some(update) = crate::reuse::decode(dialect, opcode, body)? {
+            Some(WorldEvent::Reuse(update))
+        } else if let Some(update) = crate::confirmation::decode(dialect, opcode, body)? {
+            Some(WorldEvent::Confirmation(update))
+        } else if let Some(update) = crate::clock::weather(dialect, opcode, body)? {
+            Some(WorldEvent::Weather(update))
+        } else {
+            crate::appearance::illusion(dialect, opcode, body)?.map(WorldEvent::Illusion)
+        },
+    )
+}
+
 /// `OP_LogoutReply`: the server ends the session after a logout.
 const LOGOUT_REPLY_OPCODE: u16 = 0x3cdc;
 /// `OP_PlayerProfile`: the player's saved state, sent as the zone admits them.

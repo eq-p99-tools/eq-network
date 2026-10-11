@@ -17,7 +17,7 @@ pub const UNKNOWN_SLOT: u32 = u32::MAX;
 const EQMAC_PROFILE_BUFFS: std::ops::Range<usize> = 616..766;
 
 /// Server spell action. Its icon flag does not supply a buff slot or duration.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct SpellEffect {
     /// Target entity in this zone.
     pub target_id: u16,
@@ -33,27 +33,21 @@ pub struct SpellEffect {
     pub spell_level: u8,
     /// Raw flags; the documented icon value is 4.
     pub effect_flag: u8,
+    /// Server-reported push parameters; no local movement is implied.
+    pub motion: crate::combat::HitMotion,
+    /// Generation-specific words, including `EQMac`'s signed tap amount.
+    pub details: crate::combat::ActionDetails,
 }
 
 /// Decodes spell actions, excluding melee actions sharing the same opcode.
 ///
 /// # Errors
-/// Rejects malformed Titanium action lengths.
+/// Rejects malformed Titanium action lengths and non-finite push parameters.
 pub fn titanium_spell_effect(body: &[u8]) -> Result<Option<SpellEffect>> {
-    ensure!(body.len() == 31, "invalid Titanium action length");
-    if body[22] != 231 {
-        return Ok(None);
-    }
-    let short = |offset| u16::from_le_bytes([body[offset], body[offset + 1]]);
-    Ok(Some(SpellEffect {
-        target_id: short(0),
-        caster_id: short(2),
-        caster_level: short(4),
-        instrument_modifier: word(body, 6),
-        spell_id: short(27),
-        spell_level: body[29],
-        effect_flag: body[30],
-    }))
+    Ok(from_action(crate::combat::action(
+        crate::GameDialect::Titanium,
+        body,
+    )?))
 }
 
 /// Decodes `EQMac`'s spell actions (TAKP `Action_Struct`, 36 bytes),
@@ -62,22 +56,33 @@ pub fn titanium_spell_effect(body: &[u8]) -> Result<Option<SpellEffect>> {
 /// (`Mob::SpellOnTarget`). The action carries no spell level, which reads 0.
 ///
 /// # Errors
-/// Rejects malformed `EQMac` action lengths.
+/// Rejects malformed `EQMac` action lengths and non-finite push parameters.
 pub fn eqmac_spell_effect(body: &[u8]) -> Result<Option<SpellEffect>> {
-    ensure!(body.len() == 36, "invalid EQMac action length");
-    if body[24] != 231 {
-        return Ok(None);
+    Ok(from_action(crate::combat::action(
+        crate::GameDialect::EqMac,
+        body,
+    )?))
+}
+
+/// Interprets an already decoded action without reading the packet twice.
+pub(crate) fn from_action(action: crate::combat::Action) -> Option<SpellEffect> {
+    if action.kind != crate::combat::SPELL_DAMAGE_KIND {
+        return None;
     }
-    let short = |offset| u16::from_le_bytes([body[offset], body[offset + 1]]);
-    Ok(Some(SpellEffect {
-        target_id: short(0),
-        caster_id: short(2),
-        caster_level: short(4),
-        instrument_modifier: word(body, 8),
-        spell_id: short(30),
-        spell_level: 0,
-        effect_flag: body[33],
-    }))
+    Some(SpellEffect {
+        target_id: action.target_id,
+        caster_id: action.source_id,
+        caster_level: action.level,
+        instrument_modifier: action.modifier_word,
+        spell_id: action.spell_id,
+        spell_level: match action.details {
+            crate::combat::ActionDetails::Titanium { spell_level, .. } => spell_level,
+            crate::combat::ActionDetails::EqMac { .. } => 0,
+        },
+        effect_flag: action.effect_flag,
+        motion: action.motion,
+        details: action.details,
+    })
 }
 
 /// A buff record supplied by the server, without evaluating its spell effects.
@@ -319,6 +324,12 @@ mod tests {
                 spell_id: 42,
                 spell_level: 0,
                 effect_flag: 4,
+                motion: crate::combat::HitMotion::default(),
+                details: crate::combat::ActionDetails::EqMac {
+                    target_level: 0,
+                    unused_spell_id: 0,
+                    tap_amount: 0,
+                },
             })
         );
         assert!(eqmac_spell_effect(&body[..35]).is_err());

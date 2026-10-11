@@ -332,6 +332,15 @@ pub enum GameCommand {
         /// Reject delayed actions instead of replaying them after a stall.
         created: std::time::Instant,
     },
+    /// Explicitly destroy coins currently held on the cursor.
+    DestroyCoins {
+        /// Current zone admission.
+        session_id: u64,
+        /// What to destroy; never takes directly from the purse or bank.
+        destruction: crate::money::CoinDestruction,
+        /// Reject delayed actions instead of replaying them after a stall.
+        created: std::time::Instant,
+    },
     /// Announce a jump the client is simulating; only sessions that accept falls
     /// send it.
     Jump {
@@ -644,6 +653,7 @@ impl GameCommand {
             | Self::AcceptTrade { session_id, .. }
             | Self::CancelTrade { session_id }
             | Self::MoveCoins { session_id, .. }
+            | Self::DestroyCoins { session_id, .. }
             | Self::Jump { session_id, .. }
             | Self::EnvironmentalDamage { session_id, .. }
             | Self::AutoAttack { session_id, .. }
@@ -709,9 +719,10 @@ impl GameCommand {
             // Only a server that takes falls from the client lets the player jump.
             Self::Jump { .. } => Capability::Falling,
             Self::EnvironmentalDamage { .. } => Capability::EnvironmentalDamage,
-            Self::MoveInventory(_) | Self::Consume { .. } | Self::AutoEat { .. } => {
-                Capability::Inventory
-            }
+            Self::MoveInventory(_)
+            | Self::Consume { .. }
+            | Self::AutoEat { .. }
+            | Self::DestroyCoins { .. } => Capability::Inventory,
             Self::SendChat(_) | Self::InspectItem { .. } => Capability::Talking,
             Self::Consider { .. } | Self::AutoAttack { .. } => Capability::Combat,
             Self::Camp { .. } => Capability::Camping,
@@ -833,6 +844,7 @@ impl GameCommand {
             | Self::OfferTrade { created, .. }
             | Self::AcceptTrade { created, .. }
             | Self::MoveCoins { created, .. }
+            | Self::DestroyCoins { created, .. }
             | Self::Jump { created, .. }
             | Self::AutoAttack { created, .. }
             | Self::Consume { created, .. }
@@ -988,6 +1000,7 @@ pub fn encode(
         | GameCommand::AcceptTrade { .. }
         | GameCommand::CancelTrade { .. }
         | GameCommand::MoveCoins { .. }
+        | GameCommand::DestroyCoins { .. }
         | GameCommand::Move(_)
         | GameCommand::Jump { .. }
         | GameCommand::EnvironmentalDamage { .. }

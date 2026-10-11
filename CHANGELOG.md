@@ -7,6 +7,30 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- `WorldEvent` gains `Control`, `Reuse`, `Confirmation`, `Weather`, `Illusion`,
+  `Appearance` and non-spell `Action`; consumers must update exhaustive matches for these
+  unreleased API additions. P99/EQEmu's clock feature delivers the latest
+  admission weather after entry. No new action capabilities are enabled.
+- Damage and spell-effect events retain combat push fields, and spell effects
+  retain generation-specific action details, including EQMac tap amounts. These
+  structs gain fields and use `PartialEq` instead of `Eq` for floating values;
+  the receive codecs do not apply push to player movement.
+
+- Titanium colored system messages now produce chat events, preserving their
+  color/message type and item links. `WorldEvent::ZoneEnvironment` exposes known
+  zone settings and is delivered after admission; these settings do not change
+  player movement. `RaidUpdate::NotInRaid` clears raid state without reporting a
+  disband. These variants require downstream exhaustive matches to be updated.
+- `GameCommand::DestroyCoins` and `Request::DestroyCoins` support destroying a
+  positive, available cursor balance on Titanium, with session/expiry checks and
+  no denomination conversion. EQMac rejects the request. The session changes its
+  wallet only after the packet is successfully sent.
+- Titanium door clicks now include the observed click marker and no-item
+  sentinel. Manual food/drink consumption uses the observed reserved word.
+  These corrections match official-client P99 recordings; automatic consumption
+  keeps its existing encoding pending a corresponding recording. See
+  [capture validation](docs/protocol/capture-validation.md) for evidence and limits.
+
 - A configured world that TAKP's list shows down or locked ends the login
   at once, as one on a Titanium list always has, instead of asking the
   login server for it.
@@ -111,6 +135,13 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   not, so `DeletingSpells` stays off on P99.
 
 ### Added
+
+- Source-derived receive codecs for stun, charm, forced targets, discipline and
+  linked-spell reuse, translocate/sacrifice exchanges, weather and illusions.
+  EQMac also reads rolls, assist replies, wear, level/skill, books and corpse
+  consent. Unknown appearance subtypes retain their kind and parameter.
+  [Protocol evidence and capture plan](docs/protocol/source-derived.md) distinguish
+  codec coverage from server validation and playable feature support.
 
 - Swings and the other one-shot motions the server asks clients to play:
   `WorldEvent::Animation` (`combat::Animation`: the spawn, the servers'

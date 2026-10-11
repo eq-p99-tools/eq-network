@@ -262,6 +262,8 @@ pub enum Request {
     },
     /// Move coins between places, or change them into another coin.
     MoveCoins(CoinTransfer),
+    /// Explicitly destroy coins currently on the cursor.
+    DestroyCoins(crate::money::CoinDestruction),
     /// Eat or drink.
     Consume {
         /// Where the food or drink is.
@@ -374,6 +376,7 @@ pub fn titanium(request: &Request, sender: Sender<'_>) -> Result<EncodedCommand>
             inventory::titanium_move(*from, *to, *quantity)?
         }
         Request::MoveCoins(transfer) => transfer.encode()?,
+        Request::DestroyCoins(destruction) => destruction.encode()?,
         Request::Consume {
             slot,
             meal,
