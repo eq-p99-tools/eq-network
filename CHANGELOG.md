@@ -7,6 +7,12 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- Titanium door clicks now send 3 in the second byte and -1 as the held
+  item, and eating or drinking by hand sends -1 in the request's third
+  word, as the official client does (taken from #121). Eating on its own
+  still sends 0 there, since what the official client sends then is
+  unrecorded.
+
 - A configured world that TAKP's list shows down or locked ends the login
   at once, as one on a Titanium list always has, instead of asking the
   login server for it.
