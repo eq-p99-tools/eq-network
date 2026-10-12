@@ -415,6 +415,14 @@ const BECOME_NPC: &[Part] = &[Part(
          (zone/client_packet.cpp Client::Handle_OP_GMBecomeNPC)",
     ),
 )];
+/// What the session leaves unread of `EQMac`'s petition record.
+const PETITION: &[Part] = &[Part(
+    "the receiving game master's name",
+    Reason::Needless(
+        "TAKP and Quarm send each game master their own name there, or none once the petition \
+         is checked out (zone/entity.cpp EntityList::SendPetitionToAdmins)",
+    ),
+)];
 /// What the session leaves unread of `EQMac`'s rename by a game master.
 const GM_RENAME: &[Part] = &[Part(
     "the game master's name, the bad-name flag and the last three bytes",

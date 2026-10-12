@@ -1210,8 +1210,9 @@ pub enum WorldEvent {
     /// roster.
     Guild(crate::guild::GuildUpdate),
     /// What a game master or the world tells the zone of a player: a kick,
-    /// a kill, or the player made to look like an NPC ([`crate::gm`]).
-    /// Nothing acts on one yet.
+    /// a kill, or the player made to look like an NPC; or, to a game
+    /// master, a petition in the queue ([`crate::gm`]). Nothing acts on
+    /// one yet.
     Gm(crate::gm::GmNotice),
     /// News of raids: the server's word (an invitation, the raid's leader
     /// and members, who left, the player's end in it) and the requests the

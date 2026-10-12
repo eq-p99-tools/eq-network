@@ -12,7 +12,7 @@ use super::{
     },
     BECOME_NPC, DUEL_ANSWER, DUEL_REQUEST, EQMAC, EQMAC_DESCRIPTION, EQMAC_ILLUSION, EQMAC_PROFILE,
     EQMAC_PROJECTILE, EQMAC_TITLE, GM_RENAME, INSPECT_REQUEST, INVITE, KICK, LOG_SERVER, OWN_NAME,
-    QUARM, REMOVAL, RESET_SKILL, REWARD, SACRIFICE, SOUND, TAKP, TRANSLOCATE,
+    PETITION, QUARM, REMOVAL, RESET_SKILL, REWARD, SACRIFICE, SOUND, TAKP, TRANSLOCATE,
 };
 
 /// What the session does with a message `EQMac`'s servers send; nothing for
@@ -46,7 +46,7 @@ pub(in crate::client) fn eqmac(opcode: u16) -> Option<ServerMessage> {
         0x0b40 => sent("OP_ShopRequest", EQMAC, Read(&[Zone])),
         0x0c40 => sent("OP_ShopInventoryPacket", EQMAC, Read(&[Zone])),
         0x1040 => sent("OP_TradeReset", EQMAC, planned(EqMacExchanges)),
-        0x1140 => sent("OP_PetitionRefresh", EQMAC, planned(Social)),
+        0x1140 => sent("OP_PetitionRefresh", EQMAC, Partly(&[Zone], PETITION)),
         0x1142 => sent("OP_BazaarSearch", EQMAC, planned(Bazaar)),
         0x1242 => sent("OP_Trader", EQMAC, planned(Bazaar)),
         0x1342 => sent("OP_ShopPlayerRecharge", QUARM, unasked(EqMacExchanges)),
@@ -177,7 +177,8 @@ pub(in crate::client) fn eqmac(opcode: u16) -> Option<ServerMessage> {
         0x8b40 => sent("OP_ApproveName", EQMAC, Read(&[World])),
         0x8c41 => sent("OP_GMBecomeNPC", EQMAC, Partly(&[Zone], BECOME_NPC)),
         0x8e40 => sent("OP_MoveDoor", EQMAC, planned(EqMacWorld)),
-        0x8e41 => sent("OP_PetitionCheckout", EQMAC, planned(Social)),
+        // The petition a game master checks out, answering their own OP_PetitionCheckout.
+        0x8e41 => sent("OP_PetitionCheckout", EQMAC, unasked(Social)),
         0x9140 => sent("OP_Illusion", EQMAC, Partly(&[Zone], EQMAC_ILLUSION)),
         0x9240 => sent("OP_WearChange", EQMAC, planned(EqMacWorld)),
         0x9241 => sent("OP_GuildsList", EQMAC, planned(EqMacWorld)),
