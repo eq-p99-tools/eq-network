@@ -1173,6 +1173,22 @@ pub enum WorldEvent {
     Roll(crate::socials::Roll),
     /// The server's answer to the player's assist: the target to take.
     Assisted(crate::socials::Assisted),
+    /// A player near the player yelled for help ([`crate::socials`]).
+    YellForHelp {
+        /// Who yelled.
+        spawn_id: u16,
+    },
+    /// A voice macro another player spoke to the player, their group or
+    /// their raid ([`crate::socials`]).
+    VoiceMacro(crate::socials::VoiceMacro),
+    /// Another player asks to inspect the player: the server passes the
+    /// request on for the player's client to answer with what the player
+    /// wears. Nothing answers it yet, so the inspector sees no window
+    /// ([`crate::socials`]).
+    InspectRequest {
+        /// Who asks, as their client names them.
+        inspector_id: u16,
+    },
     /// News of raids: the server's word (an invitation, the raid's leader
     /// and members, who left, the player's end in it) and the requests the
     /// session sent or answered for the player.
@@ -1509,8 +1525,10 @@ pub fn titanium_update(opcode: u16, body: &[u8]) -> Result<Option<WorldEvent>> {
 /// disciplines and reuse timers, the target the server sets, rewards,
 /// sacrifices and translocates, a player becoming a corpse, doors, ground
 /// objects, loot, merchant, exchange, training, resurrection, group, dice,
-/// assist, raid, book, combine, bandaging, chat server, weather and
-/// inventory packets, each owned by its codec.
+/// assist, other players' yells, voice macros and inspect requests, raid,
+/// book, combine, bandaging, chat server, weather and inventory packets,
+/// each owned by its codec.
+#[allow(clippy::too_many_lines, reason = "one branch per codec")]
 fn titanium_views(opcode: u16, body: &[u8]) -> Result<Option<WorldEvent>> {
     match opcode {
         crate::rewards::SOUND_OPCODE => {
@@ -1596,6 +1614,8 @@ fn titanium_views(opcode: u16, body: &[u8]) -> Result<Option<WorldEvent>> {
             Some(WorldEvent::Roll(roll))
         } else if let Some(answer) = crate::socials::decode_assist(opcode, body)? {
             Some(WorldEvent::Assisted(answer))
+        } else if let Some(event) = crate::socials::titanium(opcode, body)? {
+            Some(event)
         } else if let Some(update) = crate::raid::decode(opcode, body)? {
             Some(WorldEvent::Raid(update))
         } else if let Some(text) = crate::books::decode(opcode, body)? {

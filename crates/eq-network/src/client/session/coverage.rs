@@ -311,6 +311,16 @@ const MARQUEE: &[Part] = &[Part(
          (zone/client.cpp Client::SendMarqueeMessage, common/eq_packet_structs.h)",
     ),
 )];
+/// What the session leaves unread of a voice macro.
+const VOICE_MACRO: &[Part] = &[Part(
+    "the word after whom it is spoken to, and the last 60 bytes",
+    Reason::Needless("EQEmu leaves them zero (zone/worldserver.cpp WorldServer::HandleMessage)"),
+)];
+/// What the session leaves unread of a request to inspect the player.
+const INSPECT_REQUEST: &[Part] = &[Part(
+    "the player's own spawn",
+    Reason::Needless("the servers pass a request on only to the player it names"),
+)];
 /// What the session leaves unread of a Titanium projectile.
 const PROJECTILE: &[Part] = &[Part(
     "the first word, the two words after the item and the unknown bytes",

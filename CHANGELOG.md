@@ -178,6 +178,19 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- What other players do to or for the player, on both generations: a yell
+  for help near the player (`WorldEvent::YellForHelp`, the yeller's spawn),
+  from `OP_YellForHelp`, which every server passes to those within 100 of
+  the yeller; and a request to inspect the player
+  (`WorldEvent::InspectRequest`, the inspector's spawn), from
+  `OP_InspectRequest`, which every server passes on for the player's client
+  to answer. Nothing answers it yet, so the inspector still sees no window.
+  On Titanium, a voice macro spoken to the player, their group or their
+  raid (`WorldEvent::VoiceMacro` with `socials::VoiceMacro`: the speaker, to
+  whom as `socials::VoiceKind`, the voice and the macro's number), from
+  `OP_VoiceMacroOut`. Hosts that match `WorldEvent` exhaustively need arms
+  for them.
+
 - Popups and marquees on Titanium: `WorldEvent::Popup` (`popups::Popup`:
   the title, the text in the client's own markup, the buttons, how long it
   stays open, None until the player closes it, and its number), from
@@ -446,8 +459,8 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   types that send it and the parts of the session that read it, or why it
   is left unread (work still to come, an answer to a request eq-network
   never sends, parked work, or nothing in it worth reading), taken from
-  `EQEmu`'s, TAKP's and Quarm's sources: Titanium's 258 messages, 135 of
-  them read, and `EQMac`'s 177, 97 read. A zone session now tells once, as
+  `EQEmu`'s, TAKP's and Quarm's sources: Titanium's 258 messages, 138 of
+  them read, and `EQMac`'s 177, 99 read. A zone session now tells once, as
   a diagnostic, of each message it leaves unread with the reason (but one
   with nothing worth reading, and an empty one under opcode 0, where
   `EQEmu` sends what Titanium has no opcode for, such as the empty

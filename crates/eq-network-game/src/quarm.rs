@@ -872,6 +872,10 @@ pub fn updates(opcode: u16, body: &[u8]) -> Result<Vec<WorldEvent>> {
                 body,
             )?)]
         }
+        crate::socials::EQMAC_YELL_OPCODE => vec![crate::socials::yell(body)?],
+        crate::socials::EQMAC_INSPECT_REQUEST_OPCODE => {
+            vec![crate::socials::eqmac_inspect_request(body)?]
+        }
         0x9941 => {
             ensure!(
                 body.len() == 4 && word(body, 0) <= 330,

@@ -7,8 +7,9 @@ use super::{
     Reason::{Needless, Planned, Unmapped},
     ServerMessage,
     Step::{AlternateAdvancement, Bazaar, LaterSystems, PlayerState, Raids, Social},
-    DISCIPLINE_TIMER, EQEMU, ILLUSION, MARQUEE, NIMBUS, P99, POPUP, PROJECTILE, RENAME, REWARD,
-    SACRIFICE, STATS, TITANIUM_DESCRIPTION, TITANIUM_PROFILE, TRANSLOCATE,
+    DISCIPLINE_TIMER, EQEMU, ILLUSION, INSPECT_REQUEST, MARQUEE, NIMBUS, P99, POPUP, PROJECTILE,
+    RENAME, REWARD, SACRIFICE, STATS, TITANIUM_DESCRIPTION, TITANIUM_PROFILE, TRANSLOCATE,
+    VOICE_MACRO,
 };
 
 /// What the session does with a message Titanium's servers send; nothing
@@ -140,7 +141,7 @@ pub(in crate::client) fn titanium(opcode: u16) -> Option<ServerMessage> {
         0x2dc1 => sent("OP_CancelTrade", EQEMU, Read(&[Zone])),
         0x2dd6 => sent("OP_GroupUpdate", EQEMU, Read(&[Zone])),
         0x2e78 => sent("OP_ZoneSpawns", EQEMU, Read(&[Zone])),
-        0x2ec6 => sent("OP_VoiceMacroOut", EQEMU, planned(Social)),
+        0x2ec6 => sent("OP_VoiceMacroOut", EQEMU, Partly(&[Zone], VOICE_MACRO)),
         0x308e => sent("OP_MemorizeSpell", EQEMU, Read(&[Zone])),
         0x31f8 => sent("OP_RecipeReply", EQEMU, unasked(LaterSystems)),
         0x3230 => sent("OP_GuildDeleteGuild", EQEMU, planned(Social)),
@@ -270,7 +271,7 @@ pub(in crate::client) fn titanium(opcode: u16) -> Option<ServerMessage> {
         0x60b6 => sent("OP_OpenGuildTributeMaster", EQEMU, unasked(LaterSystems)),
         0x6160 => sent("OP_Death", EQEMU, Read(&[Zone])),
         0x61b6 => sent("OP_ZoneServerInfo", EQEMU, Read(&[World, Zone])),
-        0x61ef => sent("OP_YellForHelp", EQEMU, planned(Social)),
+        0x61ef => sent("OP_YellForHelp", EQEMU, Read(&[Zone])),
         0x625d => sent("OP_SelectTribute", EQEMU, planned(LaterSystems)),
         0x6380 => sent("OP_ConsentResponse", EQEMU, Read(&[Zone])),
         0x63da => sent("OP_PlayerStateAdd", EQEMU, Read(&[Zone])),
@@ -331,7 +332,7 @@ pub(in crate::client) fn titanium(opcode: u16) -> Option<ServerMessage> {
         ),
         0x76a2 => sent("OP_CompletedTasks", EQEMU, planned(LaterSystems)),
         0x7709 => sent("OP_Assist", EQEMU, Read(&[Zone])),
-        0x775d => sent("OP_InspectRequest", EQEMU, planned(Social)),
+        0x775d => sent("OP_InspectRequest", EQEMU, Partly(&[Zone], INSPECT_REQUEST)),
         0x77d0 => sent("OP_RemoveAllDoors", EQEMU, Read(&[Zone])),
         0x7834 => sent("OP_RequestClientZoneChange", EQEMU, Read(&[Zone])),
         0x7864 => sent("OP_GMBecomeNPC", EQEMU, planned(Social)),

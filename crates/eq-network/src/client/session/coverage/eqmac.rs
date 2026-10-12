@@ -10,8 +10,8 @@ use super::{
         AlternateAdvancement, Bazaar, EqMacExchanges, EqMacWorld, LaterSystems, PlayerState, Raids,
         Social,
     },
-    EQMAC, EQMAC_DESCRIPTION, EQMAC_ILLUSION, EQMAC_PROFILE, EQMAC_PROJECTILE, LOG_SERVER,
-    OWN_NAME, QUARM, RESET_SKILL, REWARD, SACRIFICE, SOUND, TAKP, TRANSLOCATE,
+    EQMAC, EQMAC_DESCRIPTION, EQMAC_ILLUSION, EQMAC_PROFILE, EQMAC_PROJECTILE, INSPECT_REQUEST,
+    LOG_SERVER, OWN_NAME, QUARM, RESET_SKILL, REWARD, SACRIFICE, SOUND, TAKP, TRANSLOCATE,
 };
 
 /// What the session does with a message `EQMac`'s servers send; nothing for
@@ -194,7 +194,7 @@ pub(in crate::client) fn eqmac(opcode: u16) -> Option<ServerMessage> {
         0xb040 => sent("OP_ReturnClientControl", EQMAC, Read(&[Zone])),
         0xb240 => sent("OP_HPUpdate / OP_MobHealth", EQMAC, Read(&[Zone])),
         0xb440 => sent("OP_SendZonepoints", EQMAC, Read(&[Zone])),
-        0xb540 => sent("OP_InspectRequest", EQMAC, planned(Social)),
+        0xb540 => sent("OP_InspectRequest", EQMAC, Partly(&[Zone], INSPECT_REQUEST)),
         0xb640 => sent("OP_InspectAnswer", EQMAC, unasked(Social)),
         0xba41 => sent("OP_ApplyPoison", EQMAC, unasked(PlayerState)),
         0xbe41 => sent("OP_SkillUpdate2", EQMAC, planned(EqMacWorld)),
@@ -215,7 +215,7 @@ pub(in crate::client) fn eqmac(opcode: u16) -> Option<ServerMessage> {
         0xd840 => sent("OP_SendExpZonein", EQMAC, Read(&[Admission])),
         0xd841 => sent("OP_ExpansionInfo", EQMAC, Read(&[World])),
         0xda40 => sent("OP_TradeAcceptClick", EQMAC, planned(EqMacExchanges)),
-        0xda41 => sent("OP_YellForHelp", EQMAC, planned(Social)),
+        0xda41 => sent("OP_YellForHelp", EQMAC, Read(&[Zone])),
         0xdb40 => sent("OP_CancelTrade", EQMAC, planned(EqMacExchanges)),
         0xdc40 => sent("OP_FinishTrade", EQMAC, planned(EqMacExchanges)),
         0xdd41 => sent("OP_MOTD", EQMAC, Read(&[Chat])),
