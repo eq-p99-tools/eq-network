@@ -178,7 +178,7 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
-- Guilds, on Titanium: `WorldEvent::Guild` (`guild::GuildUpdate`). The
+- Guilds: `WorldEvent::Guild` (`guild::GuildUpdate`). On Titanium, the
   member list reads as `GuildUpdate::Members` (`guild::GuildMember`: each
   member's name, level, class, rank, banker and alt flags, when they were
   last on, their tribute as `guild::GuildTribute`, their public note, and
@@ -191,7 +191,13 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   player's own banker flag) and `Disbanded`, from the messages `EQEmu`
   sends the guild's members in the zone as the world tells of each; and
   `MemberRenamed` and `Renamed`, from messages nothing in `EQEmu` sends
-  today. The session keeps no roster. The message tables list Titanium's
+  today. On both generations, an invitation to join the guild, or to take
+  a higher rank in it, reads as `Invite` (the inviter, the guild and the
+  rank offered), from `OP_GuildInvite`, which every server passes on from
+  the inviter's client; nothing answers it yet. On `EQMac`, a member's
+  removal reads as `MemberRemoved`, from `OP_GuildRemove`, which TAKP and
+  Quarm send only when a removal fails, with a line saying it succeeded.
+  The session keeps no roster. The message tables list Titanium's
   `OP_GetGuildMOTDReply` and `EQMac`'s `OP_GuildAdded` as answers to
   requests eq-network never sends. Hosts that match `WorldEvent`
   exhaustively need an arm for it.
@@ -489,8 +495,8 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   types that send it and the parts of the session that read it, or why it
   is left unread (work still to come, an answer to a request eq-network
   never sends, parked work, or nothing in it worth reading), taken from
-  `EQEmu`'s, TAKP's and Quarm's sources: Titanium's 258 messages, 150 of
-  them read, and `EQMac`'s 177, 102 read. A zone session now tells once, as
+  `EQEmu`'s, TAKP's and Quarm's sources: Titanium's 258 messages, 151 of
+  them read, and `EQMac`'s 177, 104 read. A zone session now tells once, as
   a diagnostic, of each message it leaves unread with the reason (but one
   with nothing worth reading, and an empty one under opcode 0, where
   `EQEmu` sends what Titanium has no opcode for, such as the empty

@@ -1,4 +1,5 @@
-//! The player's guild: its member list and its members' changes.
+//! The player's guild: its member list, its members' changes and
+//! invitations.
 //!
 //! `EQEmu` sends a player their guild's whole member list
 //! (`OP_GuildMemberList`) as they enter a zone, when their list is out of
@@ -15,12 +16,21 @@
 //! player their own banker flag as it changes (`OP_SetGuildRank`). Nothing
 //! in `EQEmu` sends `OP_GuildMemberDetails`, `OP_GuildMemberRename` or
 //! `OP_GuildRenameGuild` today, `#guild rename` included; they are read as
-//! their layouts say. Guild numbers name guilds from the guild list
-//! ([`crate::listing`]). The session keeps no roster: each update passes
-//! to the host.
+//! their layouts say.
+//!
+//! Every server passes an invitation (`OP_GuildInvite`) from the inviter's
+//! client to the player invited: to join, to a player in no guild, or to
+//! take a higher rank, to a member. Nothing here answers one yet. TAKP and
+//! Quarm send the guild's members in the zone a member's removal
+//! (`OP_GuildRemove`) only when the removal fails, with a line saying it
+//! succeeded; it reads as what it says, so it is no proof of the roster.
+//!
+//! Guild numbers name guilds from the guild list ([`crate::listing`]). The
+//! session keeps no roster: each update passes to the host.
 //!
 //! Ranks are Titanium's three ([`GuildRank`](crate::listing::GuildRank)),
-//! onto which `EQEmu`'s encoders map its own eight.
+//! onto which `EQEmu`'s encoders map its own eight; TAKP and Quarm number
+//! theirs the same.
 //!
 //! Layout reference: `EQEmu`'s Titanium `GuildMembers_Struct`,
 //! `GuildMemberEntry_Struct`, `GuildMemberAdd_Struct`,
@@ -31,12 +41,16 @@
 //! `GuildMemberLevel_Struct`, `GuildMemberPublicNote_Struct`,
 //! `GuildRenameMember_Struct`, `GuildRenameGuild_Struct` and
 //! `GuildDelete_Struct` (`common/eq_packet_structs.h`), which Titanium's
-//! wire carries as built. The member list comes from
+//! wire carries as built, as it does `GuildCommand_Struct`; and TAKP's and
+//! Quarm's `GuildCommand_Struct` and `GuildRemove_Struct`
+//! (`common/eq_packet_structs.h`). The member list comes from
 //! `ZoneGuildManager::MakeGuildMembers` (`zone/guild_mgr.cpp`) by
 //! `Client::SendGuildMembersList` and `Client::SendGuildMembers`, the
 //! changes by the senders in `zone/guild.cpp` from
 //! `ZoneGuildManager::ProcessWorldPacket`, and `OP_SetGuildRank` by
-//! `Client::RefreshGuildInfo`.
+//! `Client::RefreshGuildInfo`; the invitations and removals pass through
+//! `Client::Handle_OP_GuildInvite` and TAKP's and Quarm's
+//! `Client::Handle_OP_GuildRemove` (`zone/client_packet.cpp`).
 use crate::{listing::GuildRank, world::until_nul};
 use anyhow::{bail, ensure, Context, Result};
 use serde::Serialize;
@@ -63,6 +77,14 @@ pub const MEMBER_RENAME_OPCODE: u16 = 0x7c59;
 pub const RENAME_OPCODE: u16 = 0x4cc7;
 /// `OP_GuildDeleteGuild`: the guild was disbanded (Titanium).
 pub const DISBAND_OPCODE: u16 = 0x3230;
+/// `OP_GuildInvite`: an invitation to join the guild or take a higher
+/// rank in it (Titanium).
+pub const INVITE_OPCODE: u16 = 0x18b7;
+/// `EQMac`'s `OP_GuildInvite`.
+pub const EQMAC_INVITE_OPCODE: u16 = 0x1741;
+/// `EQMac`'s `OP_GuildRemove`: a member's removal, which TAKP and Quarm
+/// send only when it fails.
+pub const EQMAC_REMOVE_OPCODE: u16 = 0x1941;
 
 /// The smallest member in the list: an empty name and note.
 const MEMBER_LEAST: usize = 42;
@@ -77,6 +99,8 @@ const DETAILS_LENGTH: usize = 80;
 const ADD_LENGTH: usize = 92;
 /// The record of both messages numbered 0x6966 after Titanium's encoders.
 const RANK_LENGTH: usize = 80;
+/// The invitation's record on both generations, and `EQMac`'s removal's.
+const COMMAND_LENGTH: usize = 136;
 /// The banker word's bits: the low one for a banker, the next for an alt.
 const BANKER: u32 = 1;
 const ALT: u32 = 2;
@@ -117,7 +141,10 @@ pub enum GuildUpdate {
         /// When they were last on, in seconds since 1970.
         last_on: u32,
     },
-    /// A member left the guild, or was removed from it.
+    /// A member left the guild, or was removed from it. On `EQMac`, TAKP
+    /// and Quarm send it only when a removal fails, with a line saying it
+    /// succeeded: it says what the official client is told, which is no
+    /// proof of the roster.
     MemberRemoved {
         /// The guild.
         guild_id: u32,
@@ -178,6 +205,16 @@ pub enum GuildUpdate {
         /// The guild.
         guild_id: u32,
     },
+    /// An invitation to join the guild, to a player in no guild; or, to a
+    /// member, to take a higher rank in it. Nothing answers it yet.
+    Invite {
+        /// Who invites.
+        inviter: String,
+        /// The guild.
+        guild_id: u32,
+        /// The rank offered.
+        rank: GuildRank,
+    },
 }
 
 /// A member of the player's guild, as the member list gives them.
@@ -237,6 +274,7 @@ pub(crate) fn titanium(opcode: u16, body: &[u8]) -> Result<Option<GuildUpdate>> 
         MEMBER_UPDATE_OPCODE => member_location(body)?,
         MEMBER_ADD_OPCODE => member_added(body)?,
         MEMBER_RANK_OPCODE => member_rank(body)?,
+        INVITE_OPCODE => invite(body)?,
         MEMBER_DELETE_OPCODE => {
             sized(body, 4 + NAME, "member removal")?;
             GuildUpdate::MemberRemoved {
@@ -305,6 +343,11 @@ fn field(bytes: &[u8], what: &str) -> Result<String> {
 /// The name in the 64 bytes at `at`.
 fn name(body: &[u8], at: usize) -> Result<String> {
     field(&body[at..at + NAME], "name")
+}
+
+/// The guild in a 16-bit field.
+fn short_guild(body: &[u8], at: usize) -> u32 {
+    u32::from(u16::from_le_bytes([body[at], body[at + 1]]))
 }
 
 /// A zone, None for 0: the member is offline.
@@ -478,6 +521,38 @@ fn titanium_members(body: &[u8]) -> Result<Vec<GuildMember>> {
         "guild member list longer than its members"
     );
     Ok(members)
+}
+
+/// Decodes `OP_GuildInvite`, the same on both generations (136 bytes): the
+/// invitee's name and the inviter's, each in 64 bytes and ended by a NUL
+/// within them; the guild, 16 bits, which the servers fill in where the
+/// inviter's client left it 0, and two bytes; and the rank offered, 32
+/// bits.
+///
+/// # Errors
+/// Rejects a wrong length and an inviter's name that fills its field.
+pub(crate) fn invite(body: &[u8]) -> Result<GuildUpdate> {
+    sized(body, COMMAND_LENGTH, "invitation")?;
+    Ok(GuildUpdate::Invite {
+        inviter: name(body, NAME)?,
+        guild_id: short_guild(body, 2 * NAME),
+        rank: GuildRank::from_wire(word(body, 2 * NAME + 4)),
+    })
+}
+
+/// Decodes `EQMac`'s `OP_GuildRemove` (136 bytes): the remover's name and
+/// the removed member's, each in 64 bytes and ended by a NUL within them;
+/// the guild, 16 bits, and two bytes; and a rank, 32 bits. TAKP and Quarm
+/// leave the remover and the rank empty.
+///
+/// # Errors
+/// Rejects a wrong length and a member's name that fills its field.
+pub(crate) fn eqmac_removal(body: &[u8]) -> Result<GuildUpdate> {
+    sized(body, COMMAND_LENGTH, "removal")?;
+    Ok(GuildUpdate::MemberRemoved {
+        guild_id: short_guild(body, 2 * NAME),
+        name: name(body, NAME)?,
+    })
 }
 
 #[cfg(test)]
@@ -761,6 +836,62 @@ mod tests {
             body[at..].fill(b'a');
             assert!(titanium(opcode, &body).is_err(), "{opcode:#06x}");
         }
+    }
+
+    /// A record of two names, a 16-bit guild, two bytes and a rank, as
+    /// `GuildCommand_Struct` and `GuildRemove_Struct` lay them out.
+    fn command(first: &str, second: &str, guild_id: u16, rank: u32) -> Vec<u8> {
+        let mut body = text(first, NAME);
+        body.extend(text(second, NAME));
+        body.extend_from_slice(&guild_id.to_le_bytes());
+        body.extend_from_slice(&[0, 0]);
+        body.extend(le(&[rank]));
+        body
+    }
+
+    #[test]
+    fn invitations_name_the_inviter_guild_and_rank_on_both_generations() {
+        let invite = |rank| GuildUpdate::Invite {
+            inviter: "Inviter".into(),
+            guild_id: 7,
+            rank,
+        };
+        let body = command("Player", "Inviter", 7, 0);
+        assert_eq!(
+            titanium_update(INVITE_OPCODE, &body).unwrap(),
+            Some(WorldEvent::Guild(invite(GuildRank::Member)))
+        );
+        assert_eq!(
+            crate::quarm::updates(EQMAC_INVITE_OPCODE, &command("Player", "Inviter", 7, 1))
+                .unwrap(),
+            [WorldEvent::Guild(invite(GuildRank::Officer))]
+        );
+        let rejected = |body: &[u8]| {
+            titanium(INVITE_OPCODE, body).is_err()
+                && crate::quarm::updates(EQMAC_INVITE_OPCODE, body).is_err()
+        };
+        assert!(rejected(&body[..135]));
+        assert!(rejected(&[body.as_slice(), &[0]].concat()));
+        let mut unended = body;
+        unended[NAME..2 * NAME].fill(b'a');
+        assert!(rejected(&unended));
+    }
+
+    #[test]
+    fn eqmac_removals_name_the_member_removed() {
+        // TAKP's and Quarm's record: no remover and no rank.
+        let body = command("", "Member", 7, 0);
+        assert_eq!(
+            crate::quarm::updates(EQMAC_REMOVE_OPCODE, &body).unwrap(),
+            [WorldEvent::Guild(GuildUpdate::MemberRemoved {
+                guild_id: 7,
+                name: "Member".into(),
+            })]
+        );
+        assert!(crate::quarm::updates(EQMAC_REMOVE_OPCODE, &body[..135]).is_err());
+        let mut unended = body;
+        unended[NAME..2 * NAME].fill(b'a');
+        assert!(crate::quarm::updates(EQMAC_REMOVE_OPCODE, &unended).is_err());
     }
 
     #[test]

@@ -7,7 +7,7 @@ use super::{
     Reason::{Needless, Planned, Unmapped},
     ServerMessage,
     Step::{AlternateAdvancement, Bazaar, LaterSystems, PlayerState, Raids, Social},
-    DISCIPLINE_TIMER, DUEL_REQUEST, EQEMU, ILLUSION, INSPECT_REQUEST, MARQUEE, MEMBER_ADD,
+    DISCIPLINE_TIMER, DUEL_REQUEST, EQEMU, ILLUSION, INSPECT_REQUEST, INVITE, MARQUEE, MEMBER_ADD,
     MEMBER_LIST, MEMBER_RANK, MEMBER_UPDATE, NIMBUS, P99, POPUP, PROJECTILE, RENAME, REWARD,
     SACRIFICE, STATS, TITANIUM_DESCRIPTION, TITANIUM_PROFILE, TRANSLOCATE, VOICE_MACRO,
 };
@@ -94,7 +94,7 @@ pub(in crate::client) fn titanium(opcode: u16) -> Option<ServerMessage> {
         0x1826 => sent("OP_DzMemberListName", EQEMU, planned(LaterSystems)),
         0x1858 => sent("OP_LFGuild", EQEMU, planned(LaterSystems)),
         0x1860 => sent("OP_NewSpawn", EQEMU, Read(&[Zone])),
-        0x18b7 => sent("OP_GuildInvite", EQEMU, planned(Social)),
+        0x18b7 => sent("OP_GuildInvite", EQEMU, Partly(&[Zone], INVITE)),
         0x1a29 => sent("OP_GuildSendActiveTributes", EQEMU, planned(LaterSystems)),
         0x1a59 => sent("OP_PVPLeaderBoardReply", EQEMU, unasked(LaterSystems)),
         0x1a85 => sent("OP_LFGAppearance", EQEMU, Read(&[Zone])),
