@@ -178,6 +178,17 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Popups and marquees on Titanium: `WorldEvent::Popup` (`popups::Popup`:
+  the title, the text in the client's own markup, the buttons, how long it
+  stays open, None until the player closes it, and its number), from
+  `OP_OnLevelMessage`, which `EQEmu` sends for quests and game masters'
+  commands such as `#show version`; and `WorldEvent::Marquee`
+  (`popups::Marquee`: the message type that colours it, its priority, how
+  long it takes to fade in and out and how long it shows, and its text),
+  from `OP_Marquee`, which `EQEmu` sends for quests, bots, a spell effect
+  and the world's broadcasts. Nothing answers a popup yet. Hosts that
+  match `WorldEvent` exhaustively need arms for them.
+
 - Coloured text and `EQMac`'s spell and world lines, read as chat on
   `ChannelName::System`, where before the session dropped them. On
   Titanium, `OP_ColoredText`, with its colour in `ChatEvent::message_type`
@@ -435,7 +446,7 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   types that send it and the parts of the session that read it, or why it
   is left unread (work still to come, an answer to a request eq-network
   never sends, parked work, or nothing in it worth reading), taken from
-  `EQEmu`'s, TAKP's and Quarm's sources: Titanium's 258 messages, 133 of
+  `EQEmu`'s, TAKP's and Quarm's sources: Titanium's 258 messages, 135 of
   them read, and `EQMac`'s 177, 97 read. A zone session now tells once, as
   a diagnostic, of each message it leaves unread with the reason (but one
   with nothing worth reading, and an empty one under opcode 0, where

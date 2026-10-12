@@ -74,6 +74,9 @@ pub mod objects;
 pub mod p99;
 /// Pets: commands, owners and buffs.
 pub mod pets;
+/// What the server puts on the player's screen outside the chat window:
+/// popups and marquees.
+pub mod popups;
 /// TAKP/EQMac player and entity presentation codecs.
 pub mod quarm;
 /// Raids: invitations, joining, leaving, and the server's word on the raid.

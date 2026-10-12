@@ -295,6 +295,22 @@ const NIMBUS: &[Part] = &[Part(
          and its comments name no use for them (zone/mob.cpp Mob::SendSpellEffect)",
     ),
 )];
+/// What the session leaves unread of a popup.
+const POPUP: &[Part] = &[Part(
+    "the last two words",
+    Reason::Needless(
+        "EQEmu's Titanium encoder always sets them to 0 and 0xffffffff \
+         (common/patches/titanium.cpp ENCODE(OP_OnLevelMessage))",
+    ),
+)];
+/// What the session leaves unread of a marquee.
+const MARQUEE: &[Part] = &[Part(
+    "the word after the message type",
+    Reason::Needless(
+        "EQEmu always sets it to 10, and its notes say changing it changed nothing \
+         (zone/client.cpp Client::SendMarqueeMessage, common/eq_packet_structs.h)",
+    ),
+)];
 /// What the session leaves unread of a Titanium projectile.
 const PROJECTILE: &[Part] = &[Part(
     "the first word, the two words after the item and the unknown bytes",

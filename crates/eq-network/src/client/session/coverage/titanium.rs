@@ -7,8 +7,8 @@ use super::{
     Reason::{Needless, Planned, Unmapped},
     ServerMessage,
     Step::{AlternateAdvancement, Bazaar, LaterSystems, PlayerState, Raids, Social},
-    DISCIPLINE_TIMER, EQEMU, ILLUSION, NIMBUS, P99, PROJECTILE, RENAME, REWARD, SACRIFICE, STATS,
-    TITANIUM_DESCRIPTION, TITANIUM_PROFILE, TRANSLOCATE,
+    DISCIPLINE_TIMER, EQEMU, ILLUSION, MARQUEE, NIMBUS, P99, POPUP, PROJECTILE, RENAME, REWARD,
+    SACRIFICE, STATS, TITANIUM_DESCRIPTION, TITANIUM_PROFILE, TRANSLOCATE,
 };
 
 /// What the session does with a message Titanium's servers send; nothing
@@ -96,9 +96,9 @@ pub(in crate::client) fn titanium(opcode: u16) -> Option<ServerMessage> {
         0x1b48 => sent("OP_GroupInvite", EQEMU, Read(&[Zone])),
         0x1c3f => sent("OP_DzExpeditionEndsWarning", EQEMU, planned(LaterSystems)),
         0x1c4a => sent("OP_DeleteCharge", EQEMU, Read(&[Zone])),
-        0x1d4d => sent("OP_Marquee", EQEMU, planned(Social)),
+        0x1d4d => sent("OP_Marquee", EQEMU, Partly(&[Zone], MARQUEE)),
         0x1db5 => sent("OP_AdventureInfo", EQEMU, planned(LaterSystems)),
-        0x1dde => sent("OP_OnLevelMessage", EQEMU, planned(Social)),
+        0x1dde => sent("OP_OnLevelMessage", EQEMU, Partly(&[Zone], POPUP)),
         0x1e51 => sent("OP_Stun", EQEMU, Read(&[Zone])),
         0x1ee9 => sent("OP_BazaarSearch", EQEMU, planned(Bazaar)),
         0x1f21 => sent(
