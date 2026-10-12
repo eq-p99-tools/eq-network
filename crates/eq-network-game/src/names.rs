@@ -17,10 +17,13 @@
 //!
 //! Layout reference: `EQEmu`'s `GMLastName_Struct`, `MobRename_Struct` and
 //! `SetTitleReply_Struct` (`common/eq_packet_structs.h`), which Titanium's
-//! wire carries as built; and TAKP's and Quarm's `SetTitle_Struct`
-//! (`common/eq_packet_structs.h`). The titles come from
+//! wire carries as built; and TAKP's and Quarm's `SetTitle_Struct` and
+//! `GMName_Struct` (`common/eq_packet_structs.h`). The titles come from
 //! `Client::NotifyNewTitlesAvailable` (`zone/client.cpp`) and
-//! `Client::SetAATitle` and `Client::SetTitleSuffix` (`zone/titles.cpp`).
+//! `Client::SetAATitle` and `Client::SetTitleSuffix` (`zone/titles.cpp`);
+//! `EQMac`'s renames by a game master from `Client::Handle_OP_GMNameChange`
+//! (`zone/client_packet.cpp`) and `Client::ChangeFirstName`
+//! (`zone/client.cpp`).
 
 use crate::world::WorldEvent;
 use anyhow::{bail, ensure, Context, Result};
@@ -39,11 +42,17 @@ pub const TITLE_OPCODE: u16 = 0x5eab;
 /// `EQMac`'s `OP_SetTitle`: empty, titles the player has newly earned; or
 /// a character's title or suffix changed, without saying which or to what.
 pub const EQMAC_TITLE_OPCODE: u16 = 0xd440;
+/// `EQMac`'s `OP_GMNameChange`: a game master renamed a player.
+pub const EQMAC_GM_RENAME_OPCODE: u16 = 0xcb40;
 
 /// Titanium's title record.
 const TITLE_LENGTH: usize = 40;
 /// Its title or suffix field.
 const TITLE: usize = 32;
+/// `EQMac`'s rename by a game master.
+const GM_RENAME_LENGTH: usize = 196;
+/// Its name fields.
+const NAME: usize = 64;
 
 /// A character's title, last name and suffix; each empty where the server
 /// sends none or the dialect does not report it.
@@ -109,6 +118,37 @@ pub(crate) fn titanium_rename(body: &[u8]) -> Result<(String, String)> {
         "rename without a name"
     );
     Ok((old_name, new_name))
+}
+
+/// Decodes `EQMac`'s `OP_GMNameChange` (196 bytes): the old name, the game
+/// master's and the new name, 64 bytes each and each ended by a NUL within
+/// them; a flag for the server to refuse the old name from then on; and
+/// three bytes. TAKP and Quarm pass a game master's `/name` on to the whole
+/// zone, the player renamed included, the three bytes set to 1. Their
+/// `#set name` sends it too, after the rename, so both names are the new
+/// one, then sends the player back to character select. It names no spawn.
+///
+/// # Errors
+/// Rejects a wrong length, and an old or new name that is empty or fills
+/// its field.
+pub(crate) fn eqmac_gm_rename(body: &[u8]) -> Result<WorldEvent> {
+    ensure!(
+        body.len() == GM_RENAME_LENGTH,
+        "invalid game master rename length"
+    );
+    let name = |at: usize| {
+        let field = &body[at..at + NAME];
+        ensure!(
+            field[0] != 0 && field.contains(&0),
+            "game master rename without a name"
+        );
+        Ok(text(field))
+    };
+    Ok(WorldEvent::Renamed {
+        spawn_id: None,
+        old_name: name(0)?,
+        new_name: name(2 * NAME)?,
+    })
 }
 
 /// Decodes Titanium's `OP_SetTitleReply` (40 bytes): 0 for a title or 1
@@ -218,6 +258,37 @@ mod tests {
         let mut nameless = body;
         nameless[128..143].fill(0);
         assert!(titanium_rename(&nameless).is_err());
+    }
+
+    #[test]
+    fn eqmac_game_masters_renames_carry_the_old_name_and_the_new() {
+        let mut body = [0_u8; 196];
+        body[..8].copy_from_slice(b"Examplar");
+        body[64..74].copy_from_slice(b"Gamemaster");
+        body[128..136].copy_from_slice(b"Exemplar");
+        body[192] = 1;
+        body[193..196].fill(1);
+        assert_eq!(
+            eqmac_gm_rename(&body).unwrap(),
+            WorldEvent::Renamed {
+                spawn_id: None,
+                old_name: "Examplar".into(),
+                new_name: "Exemplar".into(),
+            }
+        );
+        assert!(eqmac_gm_rename(&body[..195]).is_err());
+        for at in [0, 128] {
+            let mut nameless = body;
+            nameless[at..at + 64].fill(0);
+            assert!(eqmac_gm_rename(&nameless).is_err());
+            let mut full = body;
+            full[at..at + 64].fill(b'a');
+            assert!(eqmac_gm_rename(&full).is_err());
+        }
+        // The game master's name is not read.
+        let mut unnamed_master = body;
+        unnamed_master[64..128].fill(0);
+        assert!(eqmac_gm_rename(&unnamed_master).is_ok());
     }
 
     #[test]

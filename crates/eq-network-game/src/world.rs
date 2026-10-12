@@ -841,7 +841,8 @@ pub enum WorldEvent {
     GuildNames(Vec<(u32, String)>),
     /// A spawn's new name: on Titanium, an NPC's corpse taking the server's
     /// name and the temporary names and renames of game masters, quests and
-    /// pets' owners.
+    /// pets' owners; on `EQMac`, a game master's renaming of a player, which
+    /// after TAKP's and Quarm's `#set name` gives the new name as both.
     Renamed {
         /// Whose name it was. The record names no spawn: the session names
         /// it before anyone hears it, from the spawn with the old name, or

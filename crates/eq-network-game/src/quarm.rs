@@ -892,6 +892,7 @@ pub fn updates(opcode: u16, body: &[u8]) -> Result<Vec<WorldEvent>> {
             vec![WorldEvent::Guild(crate::guild::eqmac_removal(body)?)]
         }
         crate::names::EQMAC_TITLE_OPCODE => vec![crate::names::eqmac_title(body)?],
+        crate::names::EQMAC_GM_RENAME_OPCODE => vec![crate::names::eqmac_gm_rename(body)?],
         0x9941 => {
             ensure!(
                 body.len() == 4 && word(body, 0) <= 330,

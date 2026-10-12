@@ -397,6 +397,16 @@ const REMOVAL: &[Part] = &[Part(
         "TAKP and Quarm leave them empty (zone/client_packet.cpp Client::Handle_OP_GuildRemove)",
     ),
 )];
+/// What the session leaves unread of `EQMac`'s rename by a game master.
+const GM_RENAME: &[Part] = &[Part(
+    "the game master's name, the bad-name flag and the last three bytes",
+    Reason::Needless(
+        "who renamed the player changes nothing the zone shows, the flag only tells the server \
+         to refuse the old name from then on, and TAKP and Quarm set the three bytes to 1 \
+         (zone/client_packet.cpp Client::Handle_OP_GMNameChange, zone/client.cpp \
+         Client::ChangeFirstName)",
+    ),
+)];
 /// What the session leaves unread of `EQMac`'s change to a title.
 const EQMAC_TITLE: &[Part] = &[Part(
     "the first word",

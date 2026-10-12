@@ -11,8 +11,8 @@ use super::{
         Social,
     },
     DUEL_ANSWER, DUEL_REQUEST, EQMAC, EQMAC_DESCRIPTION, EQMAC_ILLUSION, EQMAC_PROFILE,
-    EQMAC_PROJECTILE, EQMAC_TITLE, INSPECT_REQUEST, INVITE, LOG_SERVER, OWN_NAME, QUARM, REMOVAL,
-    RESET_SKILL, REWARD, SACRIFICE, SOUND, TAKP, TRANSLOCATE,
+    EQMAC_PROJECTILE, EQMAC_TITLE, GM_RENAME, INSPECT_REQUEST, INVITE, LOG_SERVER, OWN_NAME, QUARM,
+    REMOVAL, RESET_SKILL, REWARD, SACRIFICE, SOUND, TAKP, TRANSLOCATE,
 };
 
 /// What the session does with a message `EQMac`'s servers send; nothing for
@@ -204,7 +204,7 @@ pub(in crate::client) fn eqmac(opcode: u16) -> Option<ServerMessage> {
         0xbe41 => sent("OP_SkillUpdate2", EQMAC, planned(EqMacWorld)),
         0xc341 => sent("OP_LogServer", EQMAC, Partly(&[World, Zone], LOG_SERVER)),
         0xc441 => sent("OP_Surname", EQMAC, unasked(Social)),
-        0xcb40 => sent("OP_GMNameChange", EQMAC, planned(Social)),
+        0xcb40 => sent("OP_GMNameChange", EQMAC, Partly(&[Zone], GM_RENAME)),
         0xce40 => sent("OP_ReadBook", EQMAC, planned(EqMacWorld)),
         0xce41 => sent("OP_SwapSpell", EQMAC, Read(&[Zone])),
         0xcf40 => sent("OP_RequestDuel", EQMAC, Partly(&[Zone], DUEL_REQUEST)),
