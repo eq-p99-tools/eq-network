@@ -18,6 +18,7 @@ use super::{
 #[allow(clippy::too_many_lines, reason = "one row per message")]
 pub(in crate::client) fn eqmac(opcode: u16) -> Option<ServerMessage> {
     Some(match opcode {
+        0x0042 => sent("OP_Assist", EQMAC, unasked(EqMacWorld)),
         0x0180 => sent("OP_EnterWorld", EQMAC, Read(&[World])),
         0x0200 => sent("OP_ClientError", TAKP, Read(&[Login])),
         0x0400 => sent("OP_LoginAccepted", TAKP, Read(&[Login])),
@@ -52,7 +53,7 @@ pub(in crate::client) fn eqmac(opcode: u16) -> Option<ServerMessage> {
         0x2140 => sent("OP_CorpsePosition", EQMAC, planned(Appearance)),
         0x2342 => sent("OP_AAExpUpdate", EQMAC, planned(AlternateAdvancement)),
         0x2442 => sent("OP_TraderBuy", EQMAC, planned(Bazaar)),
-        0x2541 => sent("OP_Begging", QUARM, unasked(PlayerState)),
+        0x2541 => sent("OP_Begging", EQMAC, unasked(PlayerState)),
         0x2542 => sent("OP_FaceChange", EQMAC, planned(Appearance)),
         0x2620 => sent("OP_GroupUpdate", EQMAC, Read(&[Zone])),
         0x2641 => sent("OP_ControlBoat", EQMAC, unasked(LaterSystems)),
@@ -178,9 +179,11 @@ pub(in crate::client) fn eqmac(opcode: u16) -> Option<ServerMessage> {
         0xb240 => sent("OP_HPUpdate / OP_MobHealth", EQMAC, Read(&[Zone])),
         0xb440 => sent("OP_SendZonepoints", EQMAC, Read(&[Zone])),
         0xb540 => sent("OP_InspectRequest", EQMAC, planned(Social)),
+        0xb640 => sent("OP_InspectAnswer", EQMAC, unasked(Social)),
         0xba41 => sent("OP_ApplyPoison", EQMAC, unasked(PlayerState)),
         0xbe41 => sent("OP_SkillUpdate2", EQMAC, planned(EqMacWorld)),
         0xc341 => sent("OP_LogServer", EQMAC, planned(WorldAndSession)),
+        0xc441 => sent("OP_Surname", EQMAC, unasked(Social)),
         0xcb40 => sent("OP_GMNameChange", EQMAC, planned(Social)),
         0xce40 => sent("OP_ReadBook", EQMAC, planned(EqMacWorld)),
         0xce41 => sent("OP_SwapSpell", EQMAC, Read(&[Zone])),

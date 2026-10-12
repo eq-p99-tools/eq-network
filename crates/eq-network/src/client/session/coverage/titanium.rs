@@ -199,6 +199,7 @@ pub(in crate::client) fn titanium(opcode: u16) -> Option<ServerMessage> {
         0x45ff => sent("OP_AugmentInfo", EQEMU, unasked(LaterSystems)),
         0x461a => sent("OP_GuildMemberLevel", EQEMU, planned(Social)),
         0x4665 => sent("OP_TributeTimer", EQEMU, planned(LaterSystems)),
+        0x4668 => sent("OP_Surname", EQEMU, unasked(Social)),
         0x475a => sent("OP_GuildMOTD", EQEMU, Read(&[Chat])),
         0x4839 => sent("OP_ManaChange", EQEMU, Read(&[Zone])),
         0x48c2 => sent("OP_CancelSneakHide", EQEMU, planned(PlayerState)),

@@ -190,7 +190,7 @@ pub(super) enum Step {
     /// states.
     Appearance,
     /// Social, guild, title and GM messages: inspection, duels, guild
-    /// membership, titles, popups and the GM notices.
+    /// membership, titles and last names, popups and the GM notices.
     Social,
     /// `EQMac`'s catch-up on the world: what Titanium's decoders already
     /// read, from doors to the training window.
