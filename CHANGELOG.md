@@ -174,8 +174,15 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   and a sound file to play (`Effect::Sound` with `effects::Cue::File`),
   from `OP_PlayMP3`, which only quests send. On `EQMac`, a sound to play
   by number (`Cue::Number`), from `OP_PlaySound`, which a game master's
-  `#playsound` and quests send. Hosts that match `WorldEvent` exhaustively
-  need an arm for it.
+  `#playsound` and quests send. On both, a projectile (`Effect::Projectile`
+  with `effects::Projectile`: the spawn it flies from and the one it flies
+  at, where it starts, its velocity, its launch angle in 512ths of a turn
+  on both wires, its tilt and arc, the item, its type, the skill and the
+  model, and on `EQMac` its light and behavior), from Titanium's
+  `OP_SomeItemPacketMaybe` and `EQMac`'s `OP_Projectile`, which the
+  servers send to the players near an arrow, a thrown item, an NPC's
+  ranged attack or a spell's bolt (TAKP and Quarm send a bolt to the whole
+  zone). Hosts that match `WorldEvent` exhaustively need an arm for it.
 
 - Every kind of appearance update on a spawn, on both generations:
   `WorldEvent::Appearance` (`appearance::AppearanceChange`), from the kinds
@@ -387,8 +394,8 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   types that send it and the parts of the session that read it, or why it
   is left unread (work still to come, an answer to a request eq-network
   never sends, parked work, or nothing in it worth reading), taken from
-  `EQEmu`'s, TAKP's and Quarm's sources: Titanium's 258 messages, 131 of
-  them read, and `EQMac`'s 177, 93 read. A zone session now tells once, as
+  `EQEmu`'s, TAKP's and Quarm's sources: Titanium's 258 messages, 132 of
+  them read, and `EQMac`'s 177, 94 read. A zone session now tells once, as
   a diagnostic, of each message it leaves unread with the reason (but one
   with nothing worth reading) and of each the table does not list, where
   before a message nothing read left no trace once the zone admitted the

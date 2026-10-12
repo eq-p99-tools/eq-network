@@ -6,8 +6,8 @@ use super::{
     Reading::{Partly, Read, Unread},
     Reason::{Needless, Planned},
     ServerMessage,
-    Step::{AlternateAdvancement, Appearance, Bazaar, LaterSystems, PlayerState, Raids, Social},
-    DISCIPLINE_TIMER, EQEMU, ILLUSION, NIMBUS, P99, RENAME, REWARD, SACRIFICE, STATS,
+    Step::{AlternateAdvancement, Bazaar, LaterSystems, PlayerState, Raids, Social},
+    DISCIPLINE_TIMER, EQEMU, ILLUSION, NIMBUS, P99, PROJECTILE, RENAME, REWARD, SACRIFICE, STATS,
     TITANIUM_DESCRIPTION, TITANIUM_PROFILE, TRANSLOCATE,
 };
 
@@ -188,7 +188,7 @@ pub(in crate::client) fn titanium(opcode: u16) -> Option<ServerMessage> {
         0x3eba => sent("OP_SendZonepoints", EQEMU, Read(&[Zone])),
         0x3eec => sent("OP_SetGroupTarget", EQEMU, planned(Raids)),
         0x3f26 => sent("OP_AdventureDetails", EQEMU, planned(LaterSystems)),
-        0x4033 => sent("OP_SomeItemPacketMaybe", EQEMU, planned(Appearance)),
+        0x4033 => sent("OP_SomeItemPacketMaybe", EQEMU, Partly(&[Zone], PROJECTILE)),
         0x4048 => sent("OP_TradeRequestAck", EQEMU, Read(&[Zone])),
         0x407c => sent("OP_ZoneUnavail", EQEMU, Read(&[World])),
         0x407e => sent("OP_VetClaimReply", EQEMU, unasked(LaterSystems)),

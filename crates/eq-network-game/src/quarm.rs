@@ -810,6 +810,9 @@ pub fn updates(opcode: u16, body: &[u8]) -> Result<Vec<WorldEvent>> {
         crate::effects::EQMAC_PLAY_SOUND_OPCODE => {
             vec![WorldEvent::Effect(crate::effects::eqmac_sound(body)?)]
         }
+        crate::effects::EQMAC_PROJECTILE_OPCODE => {
+            vec![WorldEvent::Effect(crate::effects::eqmac_projectile(body)?)]
+        }
         crate::group::EQMAC_INVITE_OPCODE
         | crate::group::EQMAC_INVITE2_OPCODE
         | crate::group::EQMAC_FOLLOW_OPCODE

@@ -37,8 +37,8 @@ pub mod creation;
 pub mod disciplines;
 /// Server-defined interactive doors and their movement notifications.
 pub mod doors;
-/// Effects the servers play on a spawn, on the player's screen or as a
-/// sound.
+/// Effects the servers play on a spawn, on the player's screen, as a sound
+/// or as a projectile's flight.
 pub mod effects;
 /// Handing items to another character: the give and trade windows.
 pub mod exchange;

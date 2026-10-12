@@ -7,11 +7,11 @@ use super::{
     Reason::{Needless, Parked},
     ServerMessage,
     Step::{
-        AlternateAdvancement, Appearance, Bazaar, EqMacExchanges, EqMacWorld, LaterSystems,
-        PlayerState, Raids, Social,
+        AlternateAdvancement, Bazaar, EqMacExchanges, EqMacWorld, LaterSystems, PlayerState, Raids,
+        Social,
     },
-    EQMAC, EQMAC_DESCRIPTION, EQMAC_ILLUSION, EQMAC_PROFILE, LOG_SERVER, OWN_NAME, QUARM,
-    RESET_SKILL, REWARD, SACRIFICE, SOUND, TAKP, TRANSLOCATE,
+    EQMAC, EQMAC_DESCRIPTION, EQMAC_ILLUSION, EQMAC_PROFILE, EQMAC_PROJECTILE, LOG_SERVER,
+    OWN_NAME, QUARM, RESET_SKILL, REWARD, SACRIFICE, SOUND, TAKP, TRANSLOCATE,
 };
 
 /// What the session does with a message `EQMac`'s servers send; nothing for
@@ -94,7 +94,7 @@ pub(in crate::client) fn eqmac(opcode: u16) -> Option<ServerMessage> {
         0x4140 => sent("OP_GroupCancelInvite", EQMAC, Read(&[Zone])),
         0x4142 => sent("OP_SpellTextMessageStringID", TAKP, planned(Social)),
         0x4442 => sent("OP_Charm", EQMAC, Read(&[Zone])),
-        0x4540 => sent("OP_Projectile", EQMAC, planned(Appearance)),
+        0x4540 => sent("OP_Projectile", EQMAC, Partly(&[Zone], EQMAC_PROJECTILE)),
         0x4541 => sent("OP_LootComplete", EQMAC, planned(EqMacExchanges)),
         // TAKP's login server answers on the request's own opcode.
         0x4600 => sent("OP_ServerListRequest", TAKP, Read(&[Login])),
