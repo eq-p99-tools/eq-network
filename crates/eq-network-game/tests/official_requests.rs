@@ -1,4 +1,5 @@
-//! Requests whose bytes follow the official client's, with synthetic values.
+//! Requests whose bytes follow the official client's, and the values kept
+//! where the official client's are unrecorded; the IDs and slots are made up.
 use eq_network_game::{
     doors,
     food::{self, Meal},
