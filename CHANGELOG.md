@@ -28,8 +28,7 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Titanium door clicks now include the observed click marker and no-item
   sentinel. Manual food/drink consumption uses the observed reserved word.
   These corrections match official-client P99 recordings; automatic consumption
-  keeps its existing encoding pending a corresponding recording. See
-  [capture validation](docs/protocol/capture-validation.md) for evidence and limits.
+  keeps its existing encoding pending a corresponding recording.
 
 - A configured world that TAKP's list shows down or locked ends the login
   at once, as one on a Titanium list always has, instead of asking the
@@ -140,8 +139,6 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   linked-spell reuse, translocate/sacrifice exchanges, weather and illusions.
   EQMac also reads rolls, assist replies, wear, level/skill, books and corpse
   consent. Unknown appearance subtypes retain their kind and parameter.
-  [Protocol evidence and capture plan](docs/protocol/source-derived.md) distinguish
-  codec coverage from server validation and playable feature support.
 
 - Swings and the other one-shot motions the server asks clients to play:
   `WorldEvent::Animation` (`combat::Animation`: the spawn, the servers'

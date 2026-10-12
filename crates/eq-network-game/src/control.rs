@@ -1,6 +1,5 @@
 //! Server control notifications. Receiving one does not send an answer or
-//! authorize a local action. Layouts and evidence are listed in
-//! `docs/protocol/source-derived.md`.
+//! authorize a local action.
 use crate::{
     wire_read::{spawn_id, word},
     GameDialect,
