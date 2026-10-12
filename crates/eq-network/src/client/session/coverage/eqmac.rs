@@ -11,7 +11,7 @@ use super::{
         PlayerState, Raids, Social,
     },
     EQMAC, EQMAC_DESCRIPTION, EQMAC_ILLUSION, EQMAC_PROFILE, LOG_SERVER, OWN_NAME, QUARM,
-    RESET_SKILL, REWARD, SACRIFICE, TAKP, TRANSLOCATE,
+    RESET_SKILL, REWARD, SACRIFICE, SOUND, TAKP, TRANSLOCATE,
 };
 
 /// What the session does with a message `EQMac`'s servers send; nothing for
@@ -103,7 +103,7 @@ pub(in crate::client) fn eqmac(opcode: u16) -> Option<ServerMessage> {
         0x4700 => sent("OP_PlayEverquestRequest", TAKP, Read(&[Login])),
         0x4740 => sent("OP_SendCharInfo", EQMAC, Read(&[World])),
         0x4741 => sent("OP_DeleteCharge", EQMAC, Read(&[Zone])),
-        0x4840 => sent("OP_PlaySound", EQMAC, planned(Appearance)),
+        0x4840 => sent("OP_PlaySound", EQMAC, Partly(&[Zone], SOUND)),
         0x4a00 => sent(
             "OP_LoginUnknown2",
             TAKP,

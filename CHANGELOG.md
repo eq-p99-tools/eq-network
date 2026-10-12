@@ -159,15 +159,23 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
-- Effects the servers play, on Titanium: `WorldEvent::Effect`
-  (`effects::Effect`). A spell's nimbus on a spawn (`Effect::Nimbus`: the
-  effect, the spawn it plays from and the one it is drawn on, how long it
-  plays and how long its last part waits), from `OP_SpellEffect`, which
-  `EQEmu` sends to the zone as a spell with one lands, to a player zoning
-  in for each one a spawn carries, and for quests; and a camera shake
-  (`Effect::CameraShake`: how long and how hard), from `OP_CameraEffect`,
-  which a game master's `#camerashake` and quests send. Hosts that match
-  `WorldEvent` exhaustively need an arm for it.
+- Effects the servers play: `WorldEvent::Effect` (`effects::Effect`). On
+  Titanium, a spell's nimbus on a spawn (`Effect::Nimbus`: the effect, the
+  spawn it plays from and the one it is drawn on, how long it plays and
+  how long its last part waits), from `OP_SpellEffect`, which `EQEmu`
+  sends to the zone as a spell with one lands, to a player zoning in for
+  each one a spawn carries, and for quests; particles on a spawn
+  (`Effect::Particles`: up to five `effects::Particle`s, each an effect and
+  the two values sent with it, kept as sent since `EQEmu`'s comments
+  disagree on what they do), from `OP_LevelAppearance`, which `EQEmu`
+  sends as an NPC rises in level and for the effects it keeps on a spawn;
+  a camera shake (`Effect::CameraShake`: how long and how hard), from
+  `OP_CameraEffect`, which a game master's `#camerashake` and quests send;
+  and a sound file to play (`Effect::Sound` with `effects::Cue::File`),
+  from `OP_PlayMP3`, which only quests send. On `EQMac`, a sound to play
+  by number (`Cue::Number`), from `OP_PlaySound`, which a game master's
+  `#playsound` and quests send. Hosts that match `WorldEvent` exhaustively
+  need an arm for it.
 
 - Every kind of appearance update on a spawn, on both generations:
   `WorldEvent::Appearance` (`appearance::AppearanceChange`), from the kinds
@@ -379,8 +387,8 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   types that send it and the parts of the session that read it, or why it
   is left unread (work still to come, an answer to a request eq-network
   never sends, parked work, or nothing in it worth reading), taken from
-  `EQEmu`'s, TAKP's and Quarm's sources: Titanium's 258 messages, 129 of
-  them read, and `EQMac`'s 177, 92 read. A zone session now tells once, as
+  `EQEmu`'s, TAKP's and Quarm's sources: Titanium's 258 messages, 131 of
+  them read, and `EQMac`'s 177, 93 read. A zone session now tells once, as
   a diagnostic, of each message it leaves unread with the reason (but one
   with nothing worth reading) and of each the table does not list, where
   before a message nothing read left no trace once the zone admitted the

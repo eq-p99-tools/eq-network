@@ -810,8 +810,8 @@ pub enum WorldEvent {
         /// Both eyes' colors, where the record has them (`EQMac`).
         eye_colors: Option<[u8; 2]>,
     },
-    /// An effect the server plays on a spawn or on the player's screen.
-    /// The session's spawn table keeps none.
+    /// An effect the server plays: on a spawn, on the player's screen or as
+    /// a sound. The session's spawn table keeps none.
     Effect(crate::effects::Effect),
     /// A change in how `/who` lists a player.
     Listing {

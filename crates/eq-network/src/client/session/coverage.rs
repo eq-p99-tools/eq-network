@@ -184,7 +184,7 @@ pub(super) enum Step {
     /// eq-network does not send yet, the player's begging, disarming, pick
     /// pocketing, poisoning and tracking, and a banker's change.
     PlayerState,
-    /// Spawns' effects: level effects, sounds and projectiles.
+    /// Spawns' effects: projectiles.
     Appearance,
     /// Social, guild, title and GM messages: inspection, duels, guild
     /// membership, titles and last names, popups and the GM notices.
@@ -285,6 +285,11 @@ const NIMBUS: &[Part] = &[Part(
         "EQEmu sets the field to 3000 unless a quest gives another, and the bytes to 1, 1 and 0, \
          and its comments name no use for them (zone/mob.cpp Mob::SendSpellEffect)",
     ),
+)];
+/// What the session leaves unread of `EQMac`'s sound.
+const SOUND: &[Part] = &[Part(
+    "the player's own spawn",
+    Reason::Needless("TAKP and Quarm send a sound only to the player it names"),
 )];
 /// What the session leaves unread of `EQMac`'s word that the server took or
 /// gave back the player's control.
