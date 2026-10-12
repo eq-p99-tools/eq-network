@@ -7,8 +7,8 @@ use super::{
     Reason::{Needless, Planned},
     ServerMessage,
     Step::{AlternateAdvancement, Appearance, Bazaar, LaterSystems, PlayerState, Raids, Social},
-    DISCIPLINE_TIMER, EQEMU, ILLUSION, P99, RENAME, REWARD, SACRIFICE, STATS, TITANIUM_DESCRIPTION,
-    TITANIUM_PROFILE, TRANSLOCATE,
+    DISCIPLINE_TIMER, EQEMU, ILLUSION, NIMBUS, P99, RENAME, REWARD, SACRIFICE, STATS,
+    TITANIUM_DESCRIPTION, TITANIUM_PROFILE, TRANSLOCATE,
 };
 
 /// What the session does with a message Titanium's servers send; nothing
@@ -54,7 +54,7 @@ pub(in crate::client) fn titanium(opcode: u16) -> Option<ServerMessage> {
             EQEMU,
             Partly(&[Admission, Zone], TITANIUM_DESCRIPTION),
         ),
-        0x0937 => sent("OP_CameraEffect", EQEMU, planned(Appearance)),
+        0x0937 => sent("OP_CameraEffect", EQEMU, Read(&[Zone])),
         0x098e => sent("OP_DzExpeditionInfo", EQEMU, planned(LaterSystems)),
         0x09b6 => sent("OP_DzMemberList", EQEMU, planned(LaterSystems)),
         0x0a94 => sent("OP_LootComplete", EQEMU, Read(&[Zone])),
@@ -121,7 +121,7 @@ pub(in crate::client) fn titanium(opcode: u16) -> Option<ServerMessage> {
         0x2126 => sent("OP_SwapSpell", EQEMU, Read(&[Zone])),
         0x21ed => sent("OP_ClearObject", EQEMU, Read(&[Zone])),
         0x221e => sent("OP_ShopPlayerBuy", EQEMU, Read(&[Zone])),
-        0x22c5 => sent("OP_SpellEffect", EQEMU, planned(Appearance)),
+        0x22c5 => sent("OP_SpellEffect", EQEMU, Partly(&[Zone], NIMBUS)),
         0x2372 => sent("OP_SpecialMesg", EQEMU, Read(&[Chat])),
         0x238f => sent("OP_GMTraining", EQEMU, Read(&[Zone])),
         0x23a1 => sent("OP_GMLastName", EQEMU, Read(&[Zone])),

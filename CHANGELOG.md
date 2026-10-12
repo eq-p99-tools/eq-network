@@ -159,6 +159,16 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Effects the servers play, on Titanium: `WorldEvent::Effect`
+  (`effects::Effect`). A spell's nimbus on a spawn (`Effect::Nimbus`: the
+  effect, the spawn it plays from and the one it is drawn on, how long it
+  plays and how long its last part waits), from `OP_SpellEffect`, which
+  `EQEmu` sends to the zone as a spell with one lands, to a player zoning
+  in for each one a spawn carries, and for quests; and a camera shake
+  (`Effect::CameraShake`: how long and how hard), from `OP_CameraEffect`,
+  which a game master's `#camerashake` and quests send. Hosts that match
+  `WorldEvent` exhaustively need an arm for it.
+
 - Every kind of appearance update on a spawn, on both generations:
   `WorldEvent::Appearance` (`appearance::AppearanceChange`), from the kinds
   of `OP_SpawnAppearance` the session dropped: PvP, light, sneaking,
@@ -369,7 +379,7 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   types that send it and the parts of the session that read it, or why it
   is left unread (work still to come, an answer to a request eq-network
   never sends, parked work, or nothing in it worth reading), taken from
-  `EQEmu`'s, TAKP's and Quarm's sources: Titanium's 258 messages, 127 of
+  `EQEmu`'s, TAKP's and Quarm's sources: Titanium's 258 messages, 129 of
   them read, and `EQMac`'s 177, 92 read. A zone session now tells once, as
   a diagnostic, of each message it leaves unread with the reason (but one
   with nothing worth reading) and of each the table does not list, where

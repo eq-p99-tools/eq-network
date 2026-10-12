@@ -184,8 +184,7 @@ pub(super) enum Step {
     /// eq-network does not send yet, the player's begging, disarming, pick
     /// pocketing, poisoning and tracking, and a banker's change.
     PlayerState,
-    /// Spawns' effects: spell and level effects, camera shakes, sounds and
-    /// projectiles.
+    /// Spawns' effects: level effects, sounds and projectiles.
     Appearance,
     /// Social, guild, title and GM messages: inspection, duels, guild
     /// membership, titles and last names, popups and the GM notices.
@@ -278,6 +277,14 @@ const RENAME: &[Part] = &[
 const EQMAC_ILLUSION: &[Part] = &[Part(
     "the byte after the textures and the two after the beard",
     Reason::Needless("TAKP and Quarm always send 0xff, then zeros"),
+)];
+/// What the session leaves unread of a spell's nimbus.
+const NIMBUS: &[Part] = &[Part(
+    "the field after the delay and the four bytes after it",
+    Reason::Needless(
+        "EQEmu sets the field to 3000 unless a quest gives another, and the bytes to 1, 1 and 0, \
+         and its comments name no use for them (zone/mob.cpp Mob::SendSpellEffect)",
+    ),
 )];
 /// What the session leaves unread of `EQMac`'s word that the server took or
 /// gave back the player's control.

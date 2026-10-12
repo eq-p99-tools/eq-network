@@ -37,6 +37,8 @@ pub mod creation;
 pub mod disciplines;
 /// Server-defined interactive doors and their movement notifications.
 pub mod doors;
+/// Effects the servers play on a spawn or on the player's screen.
+pub mod effects;
 /// Handing items to another character: the give and trade windows.
 pub mod exchange;
 /// Food and drink: hunger, thirst, and eating and drinking.
