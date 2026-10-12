@@ -1193,6 +1193,9 @@ pub enum WorldEvent {
     /// client turning it down ([`crate::socials`]). Nothing answers a
     /// challenge yet.
     Duel(crate::socials::DuelUpdate),
+    /// News of the player's guild ([`crate::guild`]). The session keeps no
+    /// roster.
+    Guild(crate::guild::GuildUpdate),
     /// News of raids: the server's word (an invitation, the raid's leader
     /// and members, who left, the player's end in it) and the requests the
     /// session sent or answered for the player.
@@ -1530,8 +1533,8 @@ pub fn titanium_update(opcode: u16, body: &[u8]) -> Result<Option<WorldEvent>> {
 /// sacrifices and translocates, a player becoming a corpse, doors, ground
 /// objects, loot, merchant, exchange, training, resurrection, group, dice,
 /// assist, other players' yells, voice macros, inspect requests and duels,
-/// raid, book, combine, bandaging, chat server, weather and inventory
-/// packets, each owned by its codec.
+/// guild, raid, book, combine, bandaging, chat server, weather and
+/// inventory packets, each owned by its codec.
 #[allow(clippy::too_many_lines, reason = "one branch per codec")]
 fn titanium_views(opcode: u16, body: &[u8]) -> Result<Option<WorldEvent>> {
     match opcode {
@@ -1620,6 +1623,8 @@ fn titanium_views(opcode: u16, body: &[u8]) -> Result<Option<WorldEvent>> {
             Some(WorldEvent::Assisted(answer))
         } else if let Some(event) = crate::socials::titanium(opcode, body)? {
             Some(event)
+        } else if let Some(update) = crate::guild::titanium(opcode, body)? {
+            Some(WorldEvent::Guild(update))
         } else if let Some(update) = crate::raid::decode(opcode, body)? {
             Some(WorldEvent::Raid(update))
         } else if let Some(text) = crate::books::decode(opcode, body)? {

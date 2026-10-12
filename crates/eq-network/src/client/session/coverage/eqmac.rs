@@ -164,7 +164,9 @@ pub(in crate::client) fn eqmac(opcode: u16) -> Option<ServerMessage> {
         0x6e41 => sent("OP_GMLastName", EQMAC, planned(EqMacWorld)),
         0x6f40 => sent("OP_ZoneInAvatarSet", EQMAC, Read(&[Admission])),
         0x7841 => sent("OP_SummonedItem", EQMAC, Read(&[Zone])),
-        0x7b41 => sent("OP_GuildAdded", EQMAC, planned(Social)),
+        // The answer to OP_GetGuildsList, with the player's own guild; not news
+        // that the player joined one.
+        0x7b41 => sent("OP_GuildAdded", EQMAC, unasked(Social)),
         0x7f41 => sent("OP_ManaChange", EQMAC, Read(&[Zone])),
         0x8040 => sent("OP_Reward", EQMAC, Partly(&[Zone], REWARD)),
         0x8041 => sent("OP_SpecialMesg", EQMAC, Read(&[Chat])),

@@ -7,9 +7,9 @@ use super::{
     Reason::{Needless, Planned, Unmapped},
     ServerMessage,
     Step::{AlternateAdvancement, Bazaar, LaterSystems, PlayerState, Raids, Social},
-    DISCIPLINE_TIMER, DUEL_REQUEST, EQEMU, ILLUSION, INSPECT_REQUEST, MARQUEE, NIMBUS, P99, POPUP,
-    PROJECTILE, RENAME, REWARD, SACRIFICE, STATS, TITANIUM_DESCRIPTION, TITANIUM_PROFILE,
-    TRANSLOCATE, VOICE_MACRO,
+    DISCIPLINE_TIMER, DUEL_REQUEST, EQEMU, ILLUSION, INSPECT_REQUEST, MARQUEE, MEMBER_LIST, NIMBUS,
+    P99, POPUP, PROJECTILE, RENAME, REWARD, SACRIFICE, STATS, TITANIUM_DESCRIPTION,
+    TITANIUM_PROFILE, TRANSLOCATE, VOICE_MACRO,
 };
 
 /// What the session does with a message Titanium's servers send; nothing
@@ -80,7 +80,7 @@ pub(in crate::client) fn titanium(opcode: u16) -> Option<ServerMessage> {
         0x1306 => sent("OP_GMZoneRequest", EQEMU, unasked(Social)),
         0x13e7 => sent("OP_Begging", EQEMU, unasked(PlayerState)),
         0x1477 => sent("OP_TargetCommand", EQEMU, Read(&[Zone])),
-        0x147d => sent("OP_GuildMemberList", EQEMU, planned(Social)),
+        0x147d => sent("OP_GuildMemberList", EQEMU, Partly(&[Zone], MEMBER_LIST)),
         0x1496 => sent("OP_ReadBook", EQEMU, Read(&[Zone])),
         0x14cb => sent("OP_ClientUpdate", EQEMU, Read(&[Zone])),
         0x152d => sent("OP_TributeInfo", EQEMU, planned(LaterSystems)),
@@ -145,7 +145,8 @@ pub(in crate::client) fn titanium(opcode: u16) -> Option<ServerMessage> {
         0x308e => sent("OP_MemorizeSpell", EQEMU, Read(&[Zone])),
         0x31f8 => sent("OP_RecipeReply", EQEMU, unasked(LaterSystems)),
         0x3230 => sent("OP_GuildDeleteGuild", EQEMU, planned(Social)),
-        0x3246 => sent("OP_GetGuildMOTDReply", EQEMU, planned(Social)),
+        // The answer to /getguildmotd.
+        0x3246 => sent("OP_GetGuildMOTDReply", EQEMU, unasked(Social)),
         0x32c0 => sent("OP_GuildTributeDonateItem", EQEMU, planned(LaterSystems)),
         0x32cf => sent("OP_GuildMemberPublicNote", EQEMU, planned(Social)),
         0x330d => sent("OP_DzMemberListStatus", EQEMU, planned(LaterSystems)),

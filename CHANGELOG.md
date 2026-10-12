@@ -178,6 +178,18 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Guilds, on Titanium: `WorldEvent::Guild` (`guild::GuildUpdate`). The
+  member list reads as `GuildUpdate::Members` (`guild::GuildMember`: each
+  member's name, level, class, rank, banker and alt flags, when they were
+  last on, their tribute as `guild::GuildTribute`, their public note, and
+  their zone, None while offline), from `OP_GuildMemberList`, which
+  `EQEmu` sends as the player enters a zone, when their list is out of
+  date, as they join and as they reload their interface. The session
+  keeps no roster. The message tables list Titanium's
+  `OP_GetGuildMOTDReply` and `EQMac`'s `OP_GuildAdded` as answers to
+  requests eq-network never sends. Hosts that match `WorldEvent`
+  exhaustively need an arm for it.
+
 - Duels, on both generations: `WorldEvent::Duel` (`socials::DuelUpdate`).
   `Challenge` names the other player, from `OP_RequestDuel`, which every
   server sends to the player challenged and, as their acceptance, to the
@@ -471,7 +483,7 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   types that send it and the parts of the session that read it, or why it
   is left unread (work still to come, an answer to a request eq-network
   never sends, parked work, or nothing in it worth reading), taken from
-  `EQEmu`'s, TAKP's and Quarm's sources: Titanium's 258 messages, 140 of
+  `EQEmu`'s, TAKP's and Quarm's sources: Titanium's 258 messages, 141 of
   them read, and `EQMac`'s 177, 102 read. A zone session now tells once, as
   a diagnostic, of each message it leaves unread with the reason (but one
   with nothing worth reading, and an empty one under opcode 0, where

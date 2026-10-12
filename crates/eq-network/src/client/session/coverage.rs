@@ -338,6 +338,24 @@ const DUEL_ANSWER: &[Part] = &[Part(
          (common/eq_packet_structs.h DuelResponse_Struct)",
     ),
 )];
+/// What the session leaves unread of the guild's member list.
+const MEMBER_LIST: &[Part] = &[
+    Part(
+        "the name before the count",
+        Reason::Needless(
+            "the list is always of the player's own guild, which the name names, or on a \
+             reload the player (zone/guild.cpp Client::SendGuildMembersList, \
+             Client::SendGuildMembers)",
+        ),
+    ),
+    Part(
+        "each member's word after their tribute, and their instance",
+        Reason::Needless(
+            "EQEmu's Titanium encoder always sets them to 1 and 0 \
+             (common/patches/titanium.cpp ENCODE(OP_GuildMemberList))",
+        ),
+    ),
+];
 /// What the session leaves unread of a Titanium projectile.
 const PROJECTILE: &[Part] = &[Part(
     "the first word, the two words after the item and the unknown bytes",

@@ -47,6 +47,8 @@ pub mod food;
 /// Groups: invitations, joining, leaving and disbanding, and who is in the
 /// player's group.
 pub mod group;
+/// The player's guild: its member list.
+pub mod guild;
 /// Damage the world does to the player, which the client reports: falls,
 /// drowning, lava and freezing.
 pub mod hazards;
