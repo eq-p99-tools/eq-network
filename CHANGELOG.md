@@ -7,6 +7,10 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- The session's spawn table keeps a character's new last name
+  (`WorldEvent::LastName`, applied to the spawn of that name), which it
+  passed over before.
+
 - The session's spawn table keeps what each spawn's updates change: its
   look, size, `/who` listing and level (`SpawnState::apply_listing`), and
   whose pet it is, where before it kept the listing, the level and the
@@ -177,6 +181,41 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   not, so `DeletingSpells` stays off on P99.
 
 ### Added
+
+- What game masters and the world tell the zone of a player, on both
+  generations: `WorldEvent::Gm` (`gm::GmNotice`). `Kicked` and `Killed`
+  name the player and the game master, None from the world, from
+  `OP_GMKick` and `OP_GMKill`: the world's reach only the player they name,
+  and a game master's `/kick` or `/kill` of a player in the zone reaches
+  everyone in it, the server leaving the named player's client to leave
+  or die. `BecameNpc` carries the highest level of player the server lets
+  attack the player, from `OP_GMBecomeNPC`, a game master's `/becomenpc`.
+  On `EQMac`, `Petition` carries a petition in the queue
+  (`gm::PetitionEntry`), or None for the empty queue's record, from
+  `OP_PetitionRefresh`, which TAKP and Quarm send game masters; its time
+  is read at either width a server's own time has. Nothing acts on a
+  notice yet. The message tables list `EQMac`'s `OP_PetitionCheckout` and
+  `OP_SoulMarkUpdate` as answers to requests eq-network never sends.
+  Hosts that match `WorldEvent` exhaustively need an arm for it.
+
+- `EQMac`'s renames of a player by a game master (`OP_GMNameChange`) read
+  as `WorldEvent::Renamed`, which the session names from the spawn with
+  the old name, as it does Titanium's. After TAKP's and Quarm's
+  `#set name`, both names are the new one, and the player returns under
+  it.
+
+- Titles, on both generations: `WorldEvent::NewTitles`, from Titanium's
+  `OP_NewTitlesAvailable` and `EQMac`'s empty `OP_SetTitle`, which the
+  servers send as the player earns titles to choose from; and
+  `WorldEvent::TitleChanged` (the spawn and a `names::TitleChange`), from
+  Titanium's `OP_SetTitleReply`, which `EQEmu` sends the whole zone with a
+  character's new title or suffix as it is set or cleared, and `EQMac`'s
+  8-byte `OP_SetTitle`, which names the character but says neither which
+  changed nor to what (`TitleChange::Unspecified`). The session's spawn
+  table keeps a title or suffix in the spawn's name parts. The message
+  tables list Titanium's `OP_SendTitleList` as an answer to a request
+  eq-network never sends. Hosts that match `WorldEvent` exhaustively need
+  arms for them.
 
 - Guilds: `WorldEvent::Guild` (`guild::GuildUpdate`). On Titanium, the
   member list reads as `GuildUpdate::Members` (`guild::GuildMember`: each
@@ -495,8 +534,8 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   types that send it and the parts of the session that read it, or why it
   is left unread (work still to come, an answer to a request eq-network
   never sends, parked work, or nothing in it worth reading), taken from
-  `EQEmu`'s, TAKP's and Quarm's sources: Titanium's 258 messages, 151 of
-  them read, and `EQMac`'s 177, 104 read. A zone session now tells once, as
+  `EQEmu`'s, TAKP's and Quarm's sources: Titanium's 258 messages, 156 of
+  them read, and `EQMac`'s 177, 110 read. A zone session now tells once, as
   a diagnostic, of each message it leaves unread with the reason (but one
   with nothing worth reading, and an empty one under opcode 0, where
   `EQEmu` sends what Titanium has no opcode for, such as the empty

@@ -196,8 +196,11 @@ pub(super) enum Step {
     /// eq-network does not send yet, the player's begging, disarming, pick
     /// pocketing, poisoning and tracking, and a banker's change.
     PlayerState,
-    /// Social, guild, title and GM messages: inspection, duels, guild
-    /// membership, titles and last names, popups and the GM notices.
+    /// Social, guild, title and GM messages: what is left of them answers
+    /// requests eq-network does not send yet, for an inspection, the
+    /// guild's message of the day and list, the titles, a surname, and a
+    /// game master's zone requests, finds, petition checkouts and soul
+    /// marks.
     Social,
     /// `EQMac`'s catch-up on the world: what Titanium's decoders already
     /// read, from doors to the training window.

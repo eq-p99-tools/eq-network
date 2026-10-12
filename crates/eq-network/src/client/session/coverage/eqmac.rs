@@ -210,7 +210,9 @@ pub(in crate::client) fn eqmac(opcode: u16) -> Option<ServerMessage> {
         0xce41 => sent("OP_SwapSpell", EQMAC, Read(&[Zone])),
         0xcf40 => sent("OP_RequestDuel", EQMAC, Partly(&[Zone], DUEL_REQUEST)),
         0xd040 => sent("OP_DuelResponse", TAKP, Partly(&[Zone], DUEL_ANSWER)),
-        0xd041 => sent("OP_SoulMarkUpdate", EQMAC, planned(Social)),
+        // The answer, through the world, to a game master's own OP_SoulMarkUpdate
+        // asking for a player's soul marks.
+        0xd041 => sent("OP_SoulMarkUpdate", EQMAC, unasked(Social)),
         0xd140 => sent("OP_TradeRequest", EQMAC, planned(EqMacExchanges)),
         0xd341 => sent("OP_SpellTextMessage", EQMAC, Read(&[Chat])),
         0xd440 => sent("OP_SetTitle", EQMAC, Partly(&[Zone], EQMAC_TITLE)),
