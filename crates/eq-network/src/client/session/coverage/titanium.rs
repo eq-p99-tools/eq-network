@@ -54,7 +54,7 @@ pub(in crate::client) fn titanium(opcode: u16) -> Option<ServerMessage> {
         0x098e => sent("OP_DzExpeditionInfo", EQEMU, planned(LaterSystems)),
         0x09b6 => sent("OP_DzMemberList", EQEMU, planned(LaterSystems)),
         0x0a94 => sent("OP_LootComplete", EQEMU, Read(&[Zone])),
-        0x0b2d => sent("OP_ColoredText", EQEMU, planned(Social)),
+        0x0b2d => sent("OP_ColoredText", EQEMU, Read(&[Chat])),
         0x0b40 => sent("OP_TradeSkillCombine", EQEMU, Read(&[Zone])),
         0x0b97 => sent("OP_InterruptCast", EQEMU, Read(&[Zone])),
         0x0c2c => sent("OP_ApplyPoison", EQEMU, unasked(PlayerState)),

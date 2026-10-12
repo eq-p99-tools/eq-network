@@ -178,6 +178,20 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Coloured text and `EQMac`'s spell and world lines, read as chat on
+  `ChannelName::System`, where before the session dropped them. On
+  Titanium, `OP_ColoredText`, with its colour in `ChatEvent::message_type`
+  (below 256 for the consider colours), which `EQEmu` sends for quests,
+  auras and expeditions and as a buff's fade line. On `EQMac`,
+  `OP_SpellTextMessage`, a spell line another player's client sends, which
+  TAKP and Quarm pass on to those near it; TAKP's
+  `OP_SpellTextMessageStringID`, another caster's interruption or regained
+  concentration by the official client's string number (`string_id`), with
+  the caster's name as its argument; and `OP_MultiLineMsg`, the world's
+  text for one player, which nothing in TAKP's or Quarm's world sends
+  today. The spell lines name the spawn they are about in a new field,
+  `ChatEvent::source_spawn_id`.
+
 - Effects the servers play: `WorldEvent::Effect` (`effects::Effect`). On
   Titanium, a spell's nimbus on a spawn (`Effect::Nimbus`: the effect, the
   spawn it plays from and the one it is drawn on, how long it plays and
@@ -421,8 +435,8 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   types that send it and the parts of the session that read it, or why it
   is left unread (work still to come, an answer to a request eq-network
   never sends, parked work, or nothing in it worth reading), taken from
-  `EQEmu`'s, TAKP's and Quarm's sources: Titanium's 258 messages, 132 of
-  them read, and `EQMac`'s 177, 94 read. A zone session now tells once, as
+  `EQEmu`'s, TAKP's and Quarm's sources: Titanium's 258 messages, 133 of
+  them read, and `EQMac`'s 177, 97 read. A zone session now tells once, as
   a diagnostic, of each message it leaves unread with the reason (but one
   with nothing worth reading, and an empty one under opcode 0, where
   `EQEmu` sends what Titanium has no opcode for, such as the empty

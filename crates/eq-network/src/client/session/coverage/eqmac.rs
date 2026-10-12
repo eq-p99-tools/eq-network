@@ -49,7 +49,9 @@ pub(in crate::client) fn eqmac(opcode: u16) -> Option<ServerMessage> {
         0x1142 => sent("OP_BazaarSearch", EQMAC, planned(Bazaar)),
         0x1242 => sent("OP_Trader", EQMAC, planned(Bazaar)),
         0x1342 => sent("OP_ShopPlayerRecharge", QUARM, unasked(EqMacExchanges)),
-        0x1440 => sent("OP_MultiLineMsg", EQMAC, planned(Social)),
+        // The world's text for one player, which the zone relays; nothing
+        // in TAKP's or Quarm's world sends it today.
+        0x1440 => sent("OP_MultiLineMsg", EQMAC, Read(&[Chat])),
         0x1442 => sent("OP_AAAction", EQMAC, planned(AlternateAdvancement)),
         0x1540 => sent("OP_Emote", EQMAC, Read(&[Chat])),
         0x1542 => sent("OP_RespondAA", EQMAC, planned(AlternateAdvancement)),
@@ -92,7 +94,7 @@ pub(in crate::client) fn eqmac(opcode: u16) -> Option<ServerMessage> {
         0x3e20 => sent("OP_GroupInvite", EQMAC, Read(&[Zone])),
         0x4040 => sent("OP_GroupInvite2", EQMAC, Read(&[Zone])),
         0x4140 => sent("OP_GroupCancelInvite", EQMAC, Read(&[Zone])),
-        0x4142 => sent("OP_SpellTextMessageStringID", TAKP, planned(Social)),
+        0x4142 => sent("OP_SpellTextMessageStringID", TAKP, Read(&[Chat])),
         0x4442 => sent("OP_Charm", EQMAC, Read(&[Zone])),
         0x4540 => sent("OP_Projectile", EQMAC, Partly(&[Zone], EQMAC_PROJECTILE)),
         0x4541 => sent("OP_LootComplete", EQMAC, planned(EqMacExchanges)),
@@ -205,7 +207,7 @@ pub(in crate::client) fn eqmac(opcode: u16) -> Option<ServerMessage> {
         0xd040 => sent("OP_DuelResponse", TAKP, planned(Social)),
         0xd041 => sent("OP_SoulMarkUpdate", EQMAC, planned(Social)),
         0xd140 => sent("OP_TradeRequest", EQMAC, planned(EqMacExchanges)),
-        0xd341 => sent("OP_SpellTextMessage", EQMAC, planned(Social)),
+        0xd341 => sent("OP_SpellTextMessage", EQMAC, Read(&[Chat])),
         0xd440 => sent("OP_SetTitle", EQMAC, planned(Social)),
         0xd540 => sent("OP_ConsentResponse", EQMAC, planned(EqMacExchanges)),
         0xd640 => sent("OP_TradeRefused", EQMAC, planned(EqMacExchanges)),
