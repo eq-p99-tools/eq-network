@@ -1,6 +1,7 @@
 //! Rolling dice (`/random`), emoting (`/emote`) and assisting (`/assist`);
 //! and what other players do to or for the player: yelling for help near
-//! them, speaking a voice macro to them, and asking to inspect them.
+//! them, speaking a voice macro to them, asking to inspect them, and
+//! challenging them to a duel.
 //!
 //! The servers pass a player's yell for help (`OP_YellForHelp`) to everyone
 //! within 100 of them but the yeller. `EQEmu` passes a voice macro
@@ -10,15 +11,28 @@
 //! (`OP_InspectRequest`) on to the player inspected, for their client to
 //! answer with what they wear; nothing here answers one yet.
 //!
+//! A challenge to a duel (`OP_RequestDuel`) reaches the player challenged
+//! naming the challenger, and their acceptance reaches the challenger the
+//! same way, naming them; `EQEmu` and Quarm then send both players
+//! `OP_DuelAccept` (Quarm's `OP_DuelResponse2`), naming the challenger and
+//! the one who accepted. TAKP passes the clients' own records between
+//! them, and with them a client's answer turning a challenge down
+//! (`OP_DuelResponse`), where `EQEmu` and Quarm send a line of text.
+//! Nothing here answers a challenge yet.
+//!
 //! Layout reference: `EQEmu`'s Titanium `RandomReq_Struct`,
 //! `RandomReply_Struct`, `Emote_Struct`, `EntityId_Struct` and
 //! `Inspect_Struct` (`common/patches/titanium_structs.h`) and
-//! `VoiceMacroOut_Struct` (`common/eq_packet_structs.h`), which Titanium's
-//! wire carries as built, and TAKP's and Quarm's `Inspect_Struct`
+//! `VoiceMacroOut_Struct` and `Duel_Struct` (`common/eq_packet_structs.h`),
+//! which Titanium's wire carries as built; TAKP's and Quarm's
+//! `Inspect_Struct`, Quarm's `Duel_Struct`, and TAKP's
+//! `DuelChallenge_Struct` and `DuelResponse_Struct`
 //! (`common/eq_packet_structs.h`). The rules are
 //! `Client::Handle_OP_RandomReq`, `Handle_OP_Emote`, `Handle_OP_Assist`,
-//! `Handle_OP_YellForHelp` and `Handle_OP_InspectRequest`
-//! (`zone/client_packet.cpp`), and a voice macro's relay is `EQEmu`'s
+//! `Handle_OP_YellForHelp`, `Handle_OP_InspectRequest`,
+//! `Handle_OP_RequestDuel` and `Handle_OP_DuelAccept` (Quarm's
+//! `Handle_OP_DuelResponse2`), and TAKP's `Handle_OP_DuelResponse`
+//! (`zone/client_packet.cpp`); a voice macro's relay is `EQEmu`'s
 //! `WorldServer::HandleMessage` (`zone/worldserver.cpp`).
 use crate::{
     command::EncodedCommand,
@@ -46,6 +60,16 @@ pub const VOICE_MACRO_OPCODE: u16 = 0x2ec6;
 pub const INSPECT_REQUEST_OPCODE: u16 = 0x775d;
 /// `EQMac`'s `OP_InspectRequest`.
 pub const EQMAC_INSPECT_REQUEST_OPCODE: u16 = 0xb540;
+/// `OP_RequestDuel`: a challenge to a duel, or its acceptance (Titanium).
+pub const REQUEST_DUEL_OPCODE: u16 = 0x28e1;
+/// `OP_DuelAccept`: a duel begins (Titanium).
+pub const DUEL_ACCEPT_OPCODE: u16 = 0x1b09;
+/// `EQMac`'s `OP_RequestDuel`.
+pub const EQMAC_REQUEST_DUEL_OPCODE: u16 = 0xcf40;
+/// `EQMac`'s `OP_DuelAccept`, which Quarm names `OP_DuelResponse2`.
+pub const EQMAC_DUEL_ACCEPT_OPCODE: u16 = 0x5d41;
+/// TAKP's `OP_DuelResponse`: a client's answer turning a challenge down.
+pub const EQMAC_DUEL_RESPONSE_OPCODE: u16 = 0xd040;
 
 /// The emote's text field; the server reads at most 512 bytes of it.
 const EMOTE_TEXT: usize = 1024;
@@ -112,6 +136,59 @@ impl VoiceKind {
             1 => Self::Tell,
             2 => Self::Group,
             3 => Self::Raid,
+            other => Self::Other(other),
+        }
+    }
+}
+
+/// News of a duel.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+pub enum DuelUpdate {
+    /// Another player challenges the player to a duel; or, from the player
+    /// the player challenged, accepts. Every server sends both alike, so
+    /// which it is depends on whether the player challenged them.
+    Challenge {
+        /// The other player.
+        from: u16,
+    },
+    /// A duel begins. TAKP sends it only to the challenger, whose official
+    /// client ignores it, by TAKP's note.
+    Accepted {
+        /// Who challenged.
+        challenger: u16,
+        /// Who accepted.
+        accepter: u16,
+    },
+    /// Another player's client turned a duel with the player down (TAKP;
+    /// `EQEmu` and Quarm send a line of text instead).
+    Refused {
+        /// The other player.
+        from: u16,
+        /// Why.
+        reason: DuelRefusal,
+    },
+}
+
+/// Why a client turned a duel down, by TAKP's numbers for it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+pub enum DuelRefusal {
+    /// The player declined it.
+    Declined,
+    /// The player is dueling already.
+    Dueling,
+    /// The player is considering another challenge.
+    Considering,
+    /// A reason this crate does not know, as sent.
+    Other(i8),
+}
+
+impl DuelRefusal {
+    /// The reason a duel answer's byte names.
+    const fn from_byte(byte: i8) -> Self {
+        match byte {
+            0 => Self::Declined,
+            1 => Self::Dueling,
+            2 => Self::Considering,
             other => Self::Other(other),
         }
     }
@@ -226,7 +303,8 @@ pub fn decode_assist(opcode: u16, body: &[u8]) -> Result<Option<Assisted>> {
 }
 
 /// What Titanium's messages from other players say: a yell for help, a
-/// voice macro and an inspect request; None for other messages.
+/// voice macro, an inspect request and a duel's news; None for other
+/// messages.
 ///
 /// # Errors
 /// Rejects malformed records of those messages.
@@ -235,6 +313,8 @@ pub(crate) fn titanium(opcode: u16, body: &[u8]) -> Result<Option<WorldEvent>> {
         YELL_OPCODE => yell(body)?,
         VOICE_MACRO_OPCODE => WorldEvent::VoiceMacro(voice_macro(body)?),
         INSPECT_REQUEST_OPCODE => titanium_inspect_request(body)?,
+        REQUEST_DUEL_OPCODE => WorldEvent::Duel(titanium_challenge(body)?),
+        DUEL_ACCEPT_OPCODE => WorldEvent::Duel(titanium_accepted(body)?),
         _ => return Ok(None),
     }))
 }
@@ -291,6 +371,71 @@ pub(crate) fn eqmac_inspect_request(body: &[u8]) -> Result<WorldEvent> {
     ensure!(body.len() == 4, "invalid inspect request length");
     Ok(WorldEvent::InspectRequest {
         inspector_id: short_spawn(body, 2, "inspect request")?,
+    })
+}
+
+/// Decodes Titanium's `OP_RequestDuel` (8 bytes): two spawns, each 32
+/// bits, the second the other player. `EQEmu` names them in both.
+///
+/// # Errors
+/// Rejects a wrong length and a second spawn that is zero or past 16 bits.
+fn titanium_challenge(body: &[u8]) -> Result<DuelUpdate> {
+    ensure!(body.len() == 8, "invalid duel request length");
+    Ok(DuelUpdate::Challenge {
+        from: spawn(body, 4, "duel request")?,
+    })
+}
+
+/// Decodes Titanium's `OP_DuelAccept` (8 bytes): the challenger's spawn,
+/// then the accepter's, each 32 bits.
+///
+/// # Errors
+/// Rejects a wrong length and a spawn that is zero or past 16 bits.
+fn titanium_accepted(body: &[u8]) -> Result<DuelUpdate> {
+    ensure!(body.len() == 8, "invalid duel acceptance length");
+    Ok(DuelUpdate::Accepted {
+        challenger: spawn(body, 0, "duel acceptance")?,
+        accepter: spawn(body, 4, "duel acceptance")?,
+    })
+}
+
+/// Decodes `EQMac`'s `OP_RequestDuel` (4 bytes): two spawns, each 16 bits,
+/// the second the other player. Quarm names them in both; TAKP passes the
+/// sender's record on, whose first is the player's own spawn.
+///
+/// # Errors
+/// Rejects a wrong length and a second spawn of zero.
+pub(crate) fn eqmac_challenge(body: &[u8]) -> Result<DuelUpdate> {
+    ensure!(body.len() == 4, "invalid duel request length");
+    Ok(DuelUpdate::Challenge {
+        from: short_spawn(body, 2, "duel request")?,
+    })
+}
+
+/// Decodes `EQMac`'s `OP_DuelAccept` (4 bytes): the challenger's spawn,
+/// then the accepter's, each 16 bits.
+///
+/// # Errors
+/// Rejects a wrong length and a spawn of zero.
+pub(crate) fn eqmac_accepted(body: &[u8]) -> Result<DuelUpdate> {
+    ensure!(body.len() == 4, "invalid duel acceptance length");
+    Ok(DuelUpdate::Accepted {
+        challenger: short_spawn(body, 0, "duel acceptance")?,
+        accepter: short_spawn(body, 2, "duel acceptance")?,
+    })
+}
+
+/// Decodes TAKP's `OP_DuelResponse` (6 bytes): the player's own spawn and
+/// the other player's, each 16 bits, the reason as a signed byte, and a
+/// byte of padding.
+///
+/// # Errors
+/// Rejects a wrong length and another player of zero.
+pub(crate) fn eqmac_refused(body: &[u8]) -> Result<DuelUpdate> {
+    ensure!(body.len() == 6, "invalid duel answer length");
+    Ok(DuelUpdate::Refused {
+        from: short_spawn(body, 2, "duel answer")?,
+        reason: DuelRefusal::from_byte(body[4].cast_signed()),
     })
 }
 
@@ -407,5 +552,80 @@ mod tests {
         for bad in [&[7, 0, 0, 0][..], &[7, 0, 44]] {
             assert!(eqmac_inspect_request(bad).is_err(), "{bad:?}");
         }
+    }
+
+    #[test]
+    fn titanium_duels_name_the_other_player_then_both() {
+        let words = |first: u32, second: u32| {
+            let mut body = first.to_le_bytes().to_vec();
+            body.extend_from_slice(&second.to_le_bytes());
+            body
+        };
+        // A challenge, or its acceptance, names the other player twice;
+        // only the second is read.
+        for first in [300, 0] {
+            assert_eq!(
+                titanium_update(REQUEST_DUEL_OPCODE, &words(first, 300)).unwrap(),
+                Some(WorldEvent::Duel(DuelUpdate::Challenge { from: 300 }))
+            );
+        }
+        assert_eq!(
+            titanium_update(DUEL_ACCEPT_OPCODE, &words(300, 7)).unwrap(),
+            Some(WorldEvent::Duel(DuelUpdate::Accepted {
+                challenger: 300,
+                accepter: 7,
+            }))
+        );
+        for bad in [words(300, 0), words(300, 70_000)] {
+            assert!(titanium_challenge(&bad).is_err());
+        }
+        for bad in [words(0, 7), words(300, 0), words(70_000, 7)] {
+            assert!(titanium_accepted(&bad).is_err());
+        }
+        assert!(titanium_challenge(&words(300, 300)[..7]).is_err());
+        assert!(titanium_accepted(&words(300, 7)[..7]).is_err());
+    }
+
+    #[test]
+    fn eqmac_duels_name_the_other_player_and_takp_says_why_not() {
+        let updates = |opcode: u16, body: &[u8]| crate::quarm::updates(opcode, body).unwrap();
+        let duel = |update: DuelUpdate| [WorldEvent::Duel(update)];
+        // Quarm names the challenger twice; TAKP passes the sender's record
+        // on, the player's own spawn first.
+        for body in [[44, 1, 44, 1], [7, 0, 44, 1]] {
+            assert_eq!(
+                updates(EQMAC_REQUEST_DUEL_OPCODE, &body),
+                duel(DuelUpdate::Challenge { from: 300 })
+            );
+        }
+        assert_eq!(
+            updates(EQMAC_DUEL_ACCEPT_OPCODE, &[44, 1, 7, 0]),
+            duel(DuelUpdate::Accepted {
+                challenger: 300,
+                accepter: 7,
+            })
+        );
+        assert_eq!(
+            updates(EQMAC_DUEL_RESPONSE_OPCODE, &[7, 0, 44, 1, 0, 0]),
+            duel(DuelUpdate::Refused {
+                from: 300,
+                reason: DuelRefusal::Declined,
+            })
+        );
+        assert_eq!(
+            [1, 2, 0xff].map(|byte| eqmac_refused(&[7, 0, 44, 1, byte, 0]).unwrap()),
+            [
+                DuelRefusal::Dueling,
+                DuelRefusal::Considering,
+                DuelRefusal::Other(-1)
+            ]
+            .map(|reason| DuelUpdate::Refused { from: 300, reason })
+        );
+        assert!(eqmac_challenge(&[44, 1, 0, 0]).is_err());
+        assert!(eqmac_challenge(&[44, 1, 44]).is_err());
+        assert!(eqmac_accepted(&[0, 0, 7, 0]).is_err());
+        assert!(eqmac_accepted(&[44, 1, 0, 0]).is_err());
+        assert!(eqmac_refused(&[7, 0, 0, 0, 0, 0]).is_err());
+        assert!(eqmac_refused(&[7, 0, 44, 1, 0]).is_err());
     }
 }

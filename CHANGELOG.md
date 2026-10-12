@@ -178,6 +178,18 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Duels, on both generations: `WorldEvent::Duel` (`socials::DuelUpdate`).
+  `Challenge` names the other player, from `OP_RequestDuel`, which every
+  server sends to the player challenged and, as their acceptance, to the
+  challenger; `Accepted` names the challenger and the one who accepted,
+  from `OP_DuelAccept` (Quarm's `OP_DuelResponse2`), which `EQEmu` and
+  Quarm send both players as a duel begins; and `Refused` names the other
+  player and why (`socials::DuelRefusal`: declined, dueling already, or
+  considering another challenge), from TAKP's `OP_DuelResponse`, which
+  passes on a client's answer turning a challenge down. Nothing answers a
+  challenge yet. Hosts that match `WorldEvent` exhaustively need an arm for
+  it.
+
 - What other players do to or for the player, on both generations: a yell
   for help near the player (`WorldEvent::YellForHelp`, the yeller's spawn),
   from `OP_YellForHelp`, which every server passes to those within 100 of
@@ -459,8 +471,8 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   types that send it and the parts of the session that read it, or why it
   is left unread (work still to come, an answer to a request eq-network
   never sends, parked work, or nothing in it worth reading), taken from
-  `EQEmu`'s, TAKP's and Quarm's sources: Titanium's 258 messages, 138 of
-  them read, and `EQMac`'s 177, 99 read. A zone session now tells once, as
+  `EQEmu`'s, TAKP's and Quarm's sources: Titanium's 258 messages, 140 of
+  them read, and `EQMac`'s 177, 102 read. A zone session now tells once, as
   a diagnostic, of each message it leaves unread with the reason (but one
   with nothing worth reading, and an empty one under opcode 0, where
   `EQEmu` sends what Titanium has no opcode for, such as the empty

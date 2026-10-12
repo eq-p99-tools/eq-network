@@ -7,9 +7,9 @@ use super::{
     Reason::{Needless, Planned, Unmapped},
     ServerMessage,
     Step::{AlternateAdvancement, Bazaar, LaterSystems, PlayerState, Raids, Social},
-    DISCIPLINE_TIMER, EQEMU, ILLUSION, INSPECT_REQUEST, MARQUEE, NIMBUS, P99, POPUP, PROJECTILE,
-    RENAME, REWARD, SACRIFICE, STATS, TITANIUM_DESCRIPTION, TITANIUM_PROFILE, TRANSLOCATE,
-    VOICE_MACRO,
+    DISCIPLINE_TIMER, DUEL_REQUEST, EQEMU, ILLUSION, INSPECT_REQUEST, MARQUEE, NIMBUS, P99, POPUP,
+    PROJECTILE, RENAME, REWARD, SACRIFICE, STATS, TITANIUM_DESCRIPTION, TITANIUM_PROFILE,
+    TRANSLOCATE, VOICE_MACRO,
 };
 
 /// What the session does with a message Titanium's servers send; nothing
@@ -93,7 +93,7 @@ pub(in crate::client) fn titanium(opcode: u16) -> Option<ServerMessage> {
         0x1a29 => sent("OP_GuildSendActiveTributes", EQEMU, planned(LaterSystems)),
         0x1a59 => sent("OP_PVPLeaderBoardReply", EQEMU, unasked(LaterSystems)),
         0x1a85 => sent("OP_LFGAppearance", EQEMU, Read(&[Zone])),
-        0x1b09 => sent("OP_DuelAccept", EQEMU, planned(Social)),
+        0x1b09 => sent("OP_DuelAccept", EQEMU, Read(&[Zone])),
         0x1b48 => sent("OP_GroupInvite", EQEMU, Read(&[Zone])),
         0x1c3f => sent("OP_DzExpeditionEndsWarning", EQEMU, planned(LaterSystems)),
         0x1c4a => sent("OP_DeleteCharge", EQEMU, Read(&[Zone])),
@@ -134,7 +134,7 @@ pub(in crate::client) fn titanium(opcode: u16) -> Option<ServerMessage> {
         0x27b3 => sent("OP_TributeMoney", EQEMU, unasked(LaterSystems)),
         0x2844 => sent("OP_BecomeTrader", EQEMU, planned(Bazaar)),
         0x28aa => sent("OP_DzCompass", EQEMU, planned(LaterSystems)),
-        0x28e1 => sent("OP_RequestDuel", EQEMU, planned(Social)),
+        0x28e1 => sent("OP_RequestDuel", EQEMU, Partly(&[Zone], DUEL_REQUEST)),
         0x2acf => sent("OP_Animation", EQEMU, Read(&[Zone])),
         0x2ad8 => sent("OP_PickPocket", EQEMU, unasked(PlayerState)),
         0x2c81 => sent("OP_ControlBoat", EQEMU, unasked(LaterSystems)),

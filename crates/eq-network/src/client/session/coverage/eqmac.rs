@@ -10,8 +10,9 @@ use super::{
         AlternateAdvancement, Bazaar, EqMacExchanges, EqMacWorld, LaterSystems, PlayerState, Raids,
         Social,
     },
-    EQMAC, EQMAC_DESCRIPTION, EQMAC_ILLUSION, EQMAC_PROFILE, EQMAC_PROJECTILE, INSPECT_REQUEST,
-    LOG_SERVER, OWN_NAME, QUARM, RESET_SKILL, REWARD, SACRIFICE, SOUND, TAKP, TRANSLOCATE,
+    DUEL_ANSWER, DUEL_REQUEST, EQMAC, EQMAC_DESCRIPTION, EQMAC_ILLUSION, EQMAC_PROFILE,
+    EQMAC_PROJECTILE, INSPECT_REQUEST, LOG_SERVER, OWN_NAME, QUARM, RESET_SKILL, REWARD, SACRIFICE,
+    SOUND, TAKP, TRANSLOCATE,
 };
 
 /// What the session does with a message `EQMac`'s servers send; nothing for
@@ -142,7 +143,7 @@ pub(in crate::client) fn eqmac(opcode: u16) -> Option<ServerMessage> {
             Partly(&[Admission, Zone], EQMAC_DESCRIPTION),
         ),
         0x5b41 => sent("OP_Stun", EQMAC, Read(&[Zone])),
-        0x5d41 => sent("OP_DuelAccept / OP_DuelResponse2", EQMAC, planned(Social)),
+        0x5d41 => sent("OP_DuelAccept / OP_DuelResponse2", EQMAC, Read(&[Zone])),
         0x5f41 => sent("OP_ZoneSpawns", EQMAC, Read(&[Zone])),
         0x5f42 => sent("OP_RaidInvite", EQMAC, planned(Raids)),
         0x6042 => sent("OP_RaidUpdate", EQMAC, planned(Raids)),
@@ -203,8 +204,8 @@ pub(in crate::client) fn eqmac(opcode: u16) -> Option<ServerMessage> {
         0xcb40 => sent("OP_GMNameChange", EQMAC, planned(Social)),
         0xce40 => sent("OP_ReadBook", EQMAC, planned(EqMacWorld)),
         0xce41 => sent("OP_SwapSpell", EQMAC, Read(&[Zone])),
-        0xcf40 => sent("OP_RequestDuel", EQMAC, planned(Social)),
-        0xd040 => sent("OP_DuelResponse", TAKP, planned(Social)),
+        0xcf40 => sent("OP_RequestDuel", EQMAC, Partly(&[Zone], DUEL_REQUEST)),
+        0xd040 => sent("OP_DuelResponse", TAKP, Partly(&[Zone], DUEL_ANSWER)),
         0xd041 => sent("OP_SoulMarkUpdate", EQMAC, planned(Social)),
         0xd140 => sent("OP_TradeRequest", EQMAC, planned(EqMacExchanges)),
         0xd341 => sent("OP_SpellTextMessage", EQMAC, Read(&[Chat])),

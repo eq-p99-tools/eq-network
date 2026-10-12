@@ -90,7 +90,7 @@ pub mod rules;
 /// The worlds a login server lists, and the player's choice among them.
 pub mod servers;
 /// Rolling dice, emoting and assisting; and other players' yells for help,
-/// voice macros and requests to inspect the player.
+/// voice macros, requests to inspect the player and duels.
 pub mod socials;
 /// Server-driven spellbook and casting notifications.
 pub mod spells;

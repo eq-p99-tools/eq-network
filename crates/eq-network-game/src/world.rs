@@ -1189,6 +1189,10 @@ pub enum WorldEvent {
         /// Who asks, as their client names them.
         inspector_id: u16,
     },
+    /// News of a duel: a challenge or its acceptance, its start, or a
+    /// client turning it down ([`crate::socials`]). Nothing answers a
+    /// challenge yet.
+    Duel(crate::socials::DuelUpdate),
     /// News of raids: the server's word (an invitation, the raid's leader
     /// and members, who left, the player's end in it) and the requests the
     /// session sent or answered for the player.
@@ -1525,9 +1529,9 @@ pub fn titanium_update(opcode: u16, body: &[u8]) -> Result<Option<WorldEvent>> {
 /// disciplines and reuse timers, the target the server sets, rewards,
 /// sacrifices and translocates, a player becoming a corpse, doors, ground
 /// objects, loot, merchant, exchange, training, resurrection, group, dice,
-/// assist, other players' yells, voice macros and inspect requests, raid,
-/// book, combine, bandaging, chat server, weather and inventory packets,
-/// each owned by its codec.
+/// assist, other players' yells, voice macros, inspect requests and duels,
+/// raid, book, combine, bandaging, chat server, weather and inventory
+/// packets, each owned by its codec.
 #[allow(clippy::too_many_lines, reason = "one branch per codec")]
 fn titanium_views(opcode: u16, body: &[u8]) -> Result<Option<WorldEvent>> {
     match opcode {

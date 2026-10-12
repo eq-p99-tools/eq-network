@@ -321,6 +321,23 @@ const INSPECT_REQUEST: &[Part] = &[Part(
     "the player's own spawn",
     Reason::Needless("the servers pass a request on only to the player it names"),
 )];
+/// What the session leaves unread of a challenge to a duel.
+const DUEL_REQUEST: &[Part] = &[Part(
+    "the first spawn",
+    Reason::Needless(
+        "the second names the other player on every server; EQEmu and Quarm send the same in \
+         the first, and TAKP the player's own spawn (zone/client_packet.cpp \
+         Client::Handle_OP_RequestDuel, Client::Handle_OP_DuelAccept)",
+    ),
+)];
+/// What the session leaves unread of TAKP's answer to a challenge.
+const DUEL_ANSWER: &[Part] = &[Part(
+    "the player's own spawn and the last byte",
+    Reason::Needless(
+        "TAKP passes an answer on only to the player it names, and the byte pads the record \
+         (common/eq_packet_structs.h DuelResponse_Struct)",
+    ),
+)];
 /// What the session leaves unread of a Titanium projectile.
 const PROJECTILE: &[Part] = &[Part(
     "the first word, the two words after the item and the unknown bytes",

@@ -876,6 +876,15 @@ pub fn updates(opcode: u16, body: &[u8]) -> Result<Vec<WorldEvent>> {
         crate::socials::EQMAC_INSPECT_REQUEST_OPCODE => {
             vec![crate::socials::eqmac_inspect_request(body)?]
         }
+        crate::socials::EQMAC_REQUEST_DUEL_OPCODE => {
+            vec![WorldEvent::Duel(crate::socials::eqmac_challenge(body)?)]
+        }
+        crate::socials::EQMAC_DUEL_ACCEPT_OPCODE => {
+            vec![WorldEvent::Duel(crate::socials::eqmac_accepted(body)?)]
+        }
+        crate::socials::EQMAC_DUEL_RESPONSE_OPCODE => {
+            vec![WorldEvent::Duel(crate::socials::eqmac_refused(body)?)]
+        }
         0x9941 => {
             ensure!(
                 body.len() == 4 && word(body, 0) <= 330,
