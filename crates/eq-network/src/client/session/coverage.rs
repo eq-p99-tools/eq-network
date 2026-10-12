@@ -356,6 +356,31 @@ const MEMBER_LIST: &[Part] = &[
         ),
     ),
 ];
+/// What the session leaves unread of a guild member's zone.
+const MEMBER_UPDATE: &[Part] = &[Part(
+    "the update's instance",
+    Reason::Needless(
+        "EQEmu sets it to 0 for a change and to 1 for each member online after an interface \
+         reload, never to the member's instance (zone/guild_mgr.cpp \
+         ZoneGuildManager::ProcessWorldPacket, from zone/guild.cpp Client::SendGuildMembers)",
+    ),
+)];
+/// What the session leaves unread of a new guild member.
+const MEMBER_ADD: &[Part] = &[Part(
+    "the word after the guild",
+    Reason::Needless(
+        "EQEmu's Titanium encoder leaves it zero \
+         (common/patches/titanium.cpp ENCODE(OP_GuildMemberAdd))",
+    ),
+)];
+/// What the session leaves unread of a guild member's rank.
+const MEMBER_RANK: &[Part] = &[Part(
+    "the word after the guild",
+    Reason::Needless(
+        "EQEmu's Titanium encoders leave it zero (common/patches/titanium.cpp \
+         ENCODE(OP_GuildMemberRankAltBanker), ENCODE(OP_SetGuildRank))",
+    ),
+)];
 /// What the session leaves unread of a Titanium projectile.
 const PROJECTILE: &[Part] = &[Part(
     "the first word, the two words after the item and the unknown bytes",

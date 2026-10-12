@@ -1,29 +1,82 @@
-//! The player's guild: its member list.
+//! The player's guild: its member list and its members' changes.
 //!
 //! `EQEmu` sends a player their guild's whole member list
 //! (`OP_GuildMemberList`) as they enter a zone, when their list is out of
-//! date, as they join, and as they reload their interface. Guild numbers
-//! name guilds from the guild list ([`crate::listing`]). The session keeps
-//! no roster: each update passes to the host.
+//! date, as they join, and as they reload their interface; after the
+//! reload, it also sends them a record for each guild member online then,
+//! with the zone they are in (`OP_GuildMemberUpdate`). As the world
+//! tells of a change, it sends the guild's members in the zone a member
+//! entering a zone or leaving the game (`OP_GuildMemberUpdate`), joining
+//! (`OP_GuildMemberAdd`, or the whole list where a member's is out of
+//! date), and leaving (`OP_GuildMemberDelete`); a member's new level,
+//! public note, and rank and flags (`OP_GuildMemberLevel`,
+//! `OP_GuildMemberPublicNote` and `OP_GuildMemberRankAltBanker`); and the
+//! guild's end (`OP_GuildDeleteGuild`). In the guild hall, it sends a
+//! player their own banker flag as it changes (`OP_SetGuildRank`). Nothing
+//! in `EQEmu` sends `OP_GuildMemberDetails`, `OP_GuildMemberRename` or
+//! `OP_GuildRenameGuild` today, `#guild rename` included; they are read as
+//! their layouts say. Guild numbers name guilds from the guild list
+//! ([`crate::listing`]). The session keeps no roster: each update passes
+//! to the host.
 //!
 //! Ranks are Titanium's three ([`GuildRank`](crate::listing::GuildRank)),
 //! onto which `EQEmu`'s encoders map its own eight.
 //!
-//! Layout reference: `EQEmu`'s Titanium `GuildMembers_Struct` and
-//! `GuildMemberEntry_Struct` (`common/patches/titanium_structs.h`), which
-//! `ENCODE(OP_GuildMemberList)` fills (`common/patches/titanium.cpp`) from
-//! `ZoneGuildManager::MakeGuildMembers` (`zone/guild_mgr.cpp`). The senders
-//! are `Client::SendGuildMembersList` and `Client::SendGuildMembers`
-//! (`zone/guild.cpp`).
-use crate::listing::GuildRank;
-use anyhow::{ensure, Context, Result};
+//! Layout reference: `EQEmu`'s Titanium `GuildMembers_Struct`,
+//! `GuildMemberEntry_Struct`, `GuildMemberAdd_Struct`,
+//! `GuildMemberRank_Struct` and `GuildSetRank_Struct`
+//! (`common/patches/titanium_structs.h`), which Titanium's encoders fill
+//! (`common/patches/titanium.cpp`); and `GuildMemberUpdate_Struct`,
+//! `GuildMemberDetails_Struct`, `GuildMemberDelete_Struct`,
+//! `GuildMemberLevel_Struct`, `GuildMemberPublicNote_Struct`,
+//! `GuildRenameMember_Struct`, `GuildRenameGuild_Struct` and
+//! `GuildDelete_Struct` (`common/eq_packet_structs.h`), which Titanium's
+//! wire carries as built. The member list comes from
+//! `ZoneGuildManager::MakeGuildMembers` (`zone/guild_mgr.cpp`) by
+//! `Client::SendGuildMembersList` and `Client::SendGuildMembers`, the
+//! changes by the senders in `zone/guild.cpp` from
+//! `ZoneGuildManager::ProcessWorldPacket`, and `OP_SetGuildRank` by
+//! `Client::RefreshGuildInfo`.
+use crate::{listing::GuildRank, world::until_nul};
+use anyhow::{bail, ensure, Context, Result};
 use serde::Serialize;
 
 /// `OP_GuildMemberList`: the guild's members (Titanium).
 pub const MEMBER_LIST_OPCODE: u16 = 0x147d;
+/// `OP_GuildMemberUpdate`: a member entered a zone or left the game; and
+/// `OP_GuildMemberDetails`, which shares its number (Titanium).
+pub const MEMBER_UPDATE_OPCODE: u16 = 0x0f4d;
+/// `OP_GuildMemberAdd`: a player joined the guild (Titanium).
+pub const MEMBER_ADD_OPCODE: u16 = 0x754e;
+/// `OP_GuildMemberDelete`: a member left the guild (Titanium).
+pub const MEMBER_DELETE_OPCODE: u16 = 0x712a;
+/// `OP_GuildMemberLevel`: a member's new level (Titanium).
+pub const MEMBER_LEVEL_OPCODE: u16 = 0x461a;
+/// `OP_GuildMemberPublicNote`: a member's new public note (Titanium).
+pub const MEMBER_NOTE_OPCODE: u16 = 0x32cf;
+/// `OP_GuildMemberRankAltBanker`: a member's rank and flags; and
+/// `OP_SetGuildRank`, the player's own, which shares its number (Titanium).
+pub const MEMBER_RANK_OPCODE: u16 = 0x6966;
+/// `OP_GuildMemberRename`: a member's new name (Titanium).
+pub const MEMBER_RENAME_OPCODE: u16 = 0x7c59;
+/// `OP_GuildRenameGuild`: the guild's new name (Titanium).
+pub const RENAME_OPCODE: u16 = 0x4cc7;
+/// `OP_GuildDeleteGuild`: the guild was disbanded (Titanium).
+pub const DISBAND_OPCODE: u16 = 0x3230;
 
 /// The smallest member in the list: an empty name and note.
 const MEMBER_LEAST: usize = 42;
+/// A name's field.
+const NAME: usize = 64;
+/// A public note's field.
+const NOTE: usize = 256;
+/// `OP_GuildMemberUpdate`'s record, and `OP_GuildMemberDetails`'.
+const UPDATE_LENGTH: usize = 76;
+const DETAILS_LENGTH: usize = 80;
+/// `OP_GuildMemberAdd`'s record after Titanium's encoder.
+const ADD_LENGTH: usize = 92;
+/// The record of both messages numbered 0x6966 after Titanium's encoders.
+const RANK_LENGTH: usize = 80;
 /// The banker word's bits: the low one for a banker, the next for an alt.
 const BANKER: u32 = 1;
 const ALT: u32 = 2;
@@ -33,6 +86,98 @@ const ALT: u32 = 2;
 pub enum GuildUpdate {
     /// The guild's members, in full.
     Members(Vec<GuildMember>),
+    /// Where a member is: one who entered a zone or left the game, or after
+    /// an interface reload each member online, from `OP_GuildMemberUpdate`;
+    /// or from `OP_GuildMemberDetails`, which nothing in `EQEmu` sends
+    /// today.
+    MemberLocation {
+        /// The guild.
+        guild_id: u32,
+        /// The member.
+        name: String,
+        /// The zone they entered or are in; None as they leave the game.
+        zone_id: Option<u16>,
+        /// When they were last seen, in seconds since 1970.
+        last_on: u32,
+    },
+    /// A player joined the guild.
+    MemberAdded {
+        /// The guild.
+        guild_id: u32,
+        /// The new member.
+        name: String,
+        /// Their level.
+        level: u32,
+        /// Their class number.
+        class: u32,
+        /// Their rank.
+        rank: GuildRank,
+        /// The zone they are in; None while offline.
+        zone_id: Option<u16>,
+        /// When they were last on, in seconds since 1970.
+        last_on: u32,
+    },
+    /// A member left the guild, or was removed from it.
+    MemberRemoved {
+        /// The guild.
+        guild_id: u32,
+        /// The member.
+        name: String,
+    },
+    /// A member's new level.
+    MemberLevel {
+        /// The guild.
+        guild_id: u32,
+        /// The member.
+        name: String,
+        /// Their level.
+        level: u32,
+    },
+    /// A member's new public note.
+    MemberNote {
+        /// The guild.
+        guild_id: u32,
+        /// The member.
+        name: String,
+        /// Their note.
+        note: String,
+    },
+    /// A member's rank and flags, from `OP_GuildMemberRankAltBanker`; or
+    /// the player's own, from `OP_SetGuildRank`, which names no guild and
+    /// sets no alt flag.
+    MemberRank {
+        /// The guild; None from `OP_SetGuildRank`.
+        guild_id: Option<u32>,
+        /// The member.
+        name: String,
+        /// Their rank.
+        rank: GuildRank,
+        /// Whether they may use the guild bank.
+        banker: bool,
+        /// Whether they are another member's alternate character.
+        alt: bool,
+    },
+    /// A member's new name, which nothing in `EQEmu` sends today.
+    MemberRenamed {
+        /// The guild.
+        guild_id: u32,
+        /// Their name before.
+        old_name: String,
+        /// Their name now.
+        new_name: String,
+    },
+    /// The guild's new name, which nothing in `EQEmu` sends today.
+    Renamed {
+        /// The guild.
+        guild_id: u32,
+        /// Its name now.
+        name: String,
+    },
+    /// The guild was disbanded.
+    Disbanded {
+        /// The guild.
+        guild_id: u32,
+    },
 }
 
 /// A member of the player's guild, as the member list gives them.
@@ -76,13 +221,170 @@ pub struct GuildTribute {
 
 /// What Titanium's guild messages say; None for other messages.
 ///
+/// The six simplest are read here, every number in them 32 bits and every
+/// name in 64 bytes, ended by a NUL within them: `OP_GuildMemberDelete`
+/// (68 bytes), the guild and the member's name; `OP_GuildMemberLevel`
+/// (72), those and the level; `OP_GuildMemberPublicNote` (324), those and
+/// the note in 256 bytes; `OP_GuildMemberRename` (132), the guild, the
+/// old name and the new; `OP_GuildRenameGuild` (68), the guild and its new
+/// name; and `OP_GuildDeleteGuild` (4), the guild.
+///
 /// # Errors
 /// Rejects malformed records of those messages.
 pub(crate) fn titanium(opcode: u16, body: &[u8]) -> Result<Option<GuildUpdate>> {
     Ok(Some(match opcode {
         MEMBER_LIST_OPCODE => GuildUpdate::Members(titanium_members(body)?),
+        MEMBER_UPDATE_OPCODE => member_location(body)?,
+        MEMBER_ADD_OPCODE => member_added(body)?,
+        MEMBER_RANK_OPCODE => member_rank(body)?,
+        MEMBER_DELETE_OPCODE => {
+            sized(body, 4 + NAME, "member removal")?;
+            GuildUpdate::MemberRemoved {
+                guild_id: word(body, 0),
+                name: name(body, 4)?,
+            }
+        }
+        MEMBER_LEVEL_OPCODE => {
+            sized(body, 8 + NAME, "member level")?;
+            GuildUpdate::MemberLevel {
+                guild_id: word(body, 0),
+                name: name(body, 4)?,
+                level: word(body, 4 + NAME),
+            }
+        }
+        MEMBER_NOTE_OPCODE => {
+            sized(body, 4 + NAME + NOTE, "member note")?;
+            GuildUpdate::MemberNote {
+                guild_id: word(body, 0),
+                name: name(body, 4)?,
+                note: field(&body[4 + NAME..], "public note")?,
+            }
+        }
+        MEMBER_RENAME_OPCODE => {
+            sized(body, 4 + 2 * NAME, "member rename")?;
+            GuildUpdate::MemberRenamed {
+                guild_id: word(body, 0),
+                old_name: name(body, 4)?,
+                new_name: name(body, 4 + NAME)?,
+            }
+        }
+        RENAME_OPCODE => {
+            sized(body, 4 + NAME, "rename")?;
+            GuildUpdate::Renamed {
+                guild_id: word(body, 0),
+                name: name(body, 4)?,
+            }
+        }
+        DISBAND_OPCODE => {
+            sized(body, 4, "disbanding")?;
+            GuildUpdate::Disbanded {
+                guild_id: word(body, 0),
+            }
+        }
         _ => return Ok(None),
     }))
+}
+
+/// A little-endian word of a record.
+fn word(body: &[u8], at: usize) -> u32 {
+    u32::from_le_bytes([body[at], body[at + 1], body[at + 2], body[at + 3]])
+}
+
+/// Checks a record's length.
+fn sized(body: &[u8], length: usize, what: &str) -> Result<()> {
+    ensure!(body.len() == length, "invalid guild {what} length");
+    Ok(())
+}
+
+/// A text field's text, which a NUL ends within the field.
+fn field(bytes: &[u8], what: &str) -> Result<String> {
+    ensure!(bytes.contains(&0), "guild {what} without its end");
+    Ok(String::from_utf8_lossy(until_nul(bytes)).into_owned())
+}
+
+/// The name in the 64 bytes at `at`.
+fn name(body: &[u8], at: usize) -> Result<String> {
+    field(&body[at..at + NAME], "name")
+}
+
+/// A zone, None for 0: the member is offline.
+fn zone(zone_id: u16) -> Option<u16> {
+    (zone_id != 0).then_some(zone_id)
+}
+
+/// A zone sent in 32 bits.
+fn wide_zone(body: &[u8], at: usize) -> Result<Option<u16>> {
+    Ok(zone(
+        u16::try_from(word(body, at)).context("guild member's zone out of range")?,
+    ))
+}
+
+/// Decodes `OP_GuildMemberUpdate` (76 bytes): the guild, 32 bits; the
+/// member's name in 64 bytes, ended by a NUL within them; the zone they
+/// entered or are in, 0 as they leave the game, and an instance `EQEmu`
+/// sets to 0 for a change and to 1 for a member online after an interface
+/// reload, each 16 bits; and when they were last seen, 32 bits.
+/// `OP_GuildMemberDetails` shares its number at 80 bytes: the guild, the
+/// name, the zone and when they were last on, each number 32 bits, then 1
+/// while they are offline.
+///
+/// # Errors
+/// Rejects another length, a name that fills its field, and a zone past
+/// 16 bits.
+fn member_location(body: &[u8]) -> Result<GuildUpdate> {
+    let zone_id = match body.len() {
+        UPDATE_LENGTH => zone(u16::from_le_bytes([body[68], body[69]])),
+        DETAILS_LENGTH => wide_zone(body, 68)?.filter(|_| word(body, 76) == 0),
+        _ => bail!("invalid guild member update length"),
+    };
+    Ok(GuildUpdate::MemberLocation {
+        guild_id: word(body, 0),
+        name: name(body, 4)?,
+        zone_id,
+        last_on: word(body, 72),
+    })
+}
+
+/// Decodes `OP_GuildMemberAdd` (92 bytes after Titanium's encoder): the
+/// guild, a word the encoder leaves zero, and the new member's level,
+/// class, rank, zone and when they were last on, each 32 bits; then their
+/// name in 64 bytes, ended by a NUL within them.
+///
+/// # Errors
+/// Rejects a wrong length, a name that fills its field, and a zone past
+/// 16 bits.
+fn member_added(body: &[u8]) -> Result<GuildUpdate> {
+    sized(body, ADD_LENGTH, "member add")?;
+    Ok(GuildUpdate::MemberAdded {
+        guild_id: word(body, 0),
+        name: name(body, 28)?,
+        level: word(body, 8),
+        class: word(body, 12),
+        rank: GuildRank::from_wire(word(body, 16)),
+        zone_id: wide_zone(body, 20)?,
+        last_on: word(body, 24),
+    })
+}
+
+/// Decodes the two messages numbered 0x6966 (80 bytes after Titanium's
+/// encoders), which share one layout: the guild in
+/// `OP_GuildMemberRankAltBanker` and 0 in `OP_SetGuildRank`, a word the
+/// encoders leave zero, and the rank, each 32 bits; the member's name in
+/// 64 bytes, ended by a NUL within them; and a word with 1 for a banker
+/// and 2 for an alt, of which `OP_SetGuildRank` sets only the banker's.
+///
+/// # Errors
+/// Rejects a wrong length and a name that fills its field.
+fn member_rank(body: &[u8]) -> Result<GuildUpdate> {
+    sized(body, RANK_LENGTH, "rank")?;
+    let flags = word(body, 76);
+    Ok(GuildUpdate::MemberRank {
+        guild_id: crate::listing::guild(word(body, 0)),
+        name: name(body, 12)?,
+        rank: GuildRank::from_wire(word(body, 8)),
+        banker: flags & BANKER != 0,
+        alt: flags & ALT != 0,
+    })
 }
 
 /// Reads the member list's fields in order; its numbers are big-endian.
@@ -144,7 +446,7 @@ impl Fields<'_> {
             last_on,
             tribute: GuildTribute { on, total, last },
             note,
-            zone_id: (zone_id != 0).then_some(zone_id),
+            zone_id: zone(zone_id),
         })
     }
 }
@@ -262,6 +564,203 @@ mod tests {
             Some(GuildUpdate::Members(Vec::new()))
         );
         assert_eq!(titanium(0x1234, &body).unwrap(), None);
+    }
+
+    /// Little-endian words, as `EQEmu` builds its records.
+    fn le(words: &[u32]) -> Vec<u8> {
+        words.iter().flat_map(|word| word.to_le_bytes()).collect()
+    }
+
+    /// A text field as `EQEmu` fills it: the text, then NULs.
+    fn text(text: &str, length: usize) -> Vec<u8> {
+        let mut field = text.as_bytes().to_vec();
+        field.resize(length, 0);
+        field
+    }
+
+    #[test]
+    fn member_updates_say_where_a_member_is() {
+        let update = |zone_id: u16| {
+            let mut body = le(&[7]);
+            body.extend(text("Member", NAME));
+            body.extend_from_slice(&zone_id.to_le_bytes());
+            body.extend_from_slice(&[0, 0]);
+            body.extend(le(&[1_700_000_000]));
+            body
+        };
+        let location = |zone_id| GuildUpdate::MemberLocation {
+            guild_id: 7,
+            name: "Member".into(),
+            zone_id,
+            last_on: 1_700_000_000,
+        };
+        assert_eq!(
+            titanium_update(MEMBER_UPDATE_OPCODE, &update(202)).unwrap(),
+            Some(WorldEvent::Guild(location(Some(202))))
+        );
+        assert_eq!(
+            titanium(MEMBER_UPDATE_OPCODE, &update(0)).unwrap(),
+            Some(location(None))
+        );
+        // The details record: the zone in 32 bits, and 1 while offline.
+        let details = |zone_id: u32, offline: u32| {
+            let mut body = le(&[7]);
+            body.extend(text("Member", NAME));
+            body.extend(le(&[zone_id, 1_700_000_000, offline]));
+            body
+        };
+        assert_eq!(
+            titanium(MEMBER_UPDATE_OPCODE, &details(202, 0)).unwrap(),
+            Some(location(Some(202)))
+        );
+        assert_eq!(
+            titanium(MEMBER_UPDATE_OPCODE, &details(202, 1)).unwrap(),
+            Some(location(None))
+        );
+        assert!(titanium(MEMBER_UPDATE_OPCODE, &details(0x1_0000, 0)).is_err());
+        assert!(titanium(MEMBER_UPDATE_OPCODE, &update(202)[..75]).is_err());
+        let mut unended = update(202);
+        unended[4..4 + NAME].fill(b'a');
+        assert!(titanium(MEMBER_UPDATE_OPCODE, &unended).is_err());
+    }
+
+    #[test]
+    fn new_members_keep_their_level_class_rank_and_zone() {
+        let mut body = le(&[7, 0, 30, 2, 1, 202, 1_700_000_000]);
+        body.extend(text("Newmember", NAME));
+        assert_eq!(
+            titanium_update(MEMBER_ADD_OPCODE, &body).unwrap(),
+            Some(WorldEvent::Guild(GuildUpdate::MemberAdded {
+                guild_id: 7,
+                name: "Newmember".into(),
+                level: 30,
+                class: 2,
+                rank: GuildRank::Officer,
+                zone_id: Some(202),
+                last_on: 1_700_000_000,
+            }))
+        );
+        assert!(titanium(MEMBER_ADD_OPCODE, &body[..91]).is_err());
+        body[20..24].copy_from_slice(&0x1_0000u32.to_le_bytes());
+        assert!(titanium(MEMBER_ADD_OPCODE, &body).is_err());
+    }
+
+    #[test]
+    fn ranks_read_alike_from_both_messages_of_their_number() {
+        let rank = |words: [u32; 3], flags: u32| {
+            let mut body = le(&words);
+            body.extend(text("Member", NAME));
+            body.extend(le(&[flags]));
+            body
+        };
+        // A member's rank, as an alt and a banker.
+        assert_eq!(
+            titanium_update(MEMBER_RANK_OPCODE, &rank([7, 0, 2], 3)).unwrap(),
+            Some(WorldEvent::Guild(GuildUpdate::MemberRank {
+                guild_id: Some(7),
+                name: "Member".into(),
+                rank: GuildRank::Leader,
+                banker: true,
+                alt: true,
+            }))
+        );
+        // The player's own, in the guild hall: no guild, a banker, and the
+        // rank Titanium's encoder sends for EQEmu's rank of none.
+        assert_eq!(
+            titanium(MEMBER_RANK_OPCODE, &rank([0, 0, 9], 1)).unwrap(),
+            Some(GuildUpdate::MemberRank {
+                guild_id: None,
+                name: "Member".into(),
+                rank: GuildRank::Other(9),
+                banker: true,
+                alt: false,
+            })
+        );
+        assert!(titanium(MEMBER_RANK_OPCODE, &rank([7, 0, 0], 2)[..79]).is_err());
+    }
+
+    #[test]
+    fn members_changes_name_the_guild_and_member() {
+        let named = |names: &[&str], tail: &[u8]| {
+            let mut body = le(&[7]);
+            for name in names {
+                body.extend(text(name, NAME));
+            }
+            body.extend_from_slice(tail);
+            body
+        };
+        let cases = [
+            (
+                MEMBER_DELETE_OPCODE,
+                named(&["Member"], &[]),
+                GuildUpdate::MemberRemoved {
+                    guild_id: 7,
+                    name: "Member".into(),
+                },
+            ),
+            (
+                MEMBER_LEVEL_OPCODE,
+                named(&["Member"], &le(&[31])),
+                GuildUpdate::MemberLevel {
+                    guild_id: 7,
+                    name: "Member".into(),
+                    level: 31,
+                },
+            ),
+            (
+                MEMBER_NOTE_OPCODE,
+                named(&["Member"], &text("A synthetic note", NOTE)),
+                GuildUpdate::MemberNote {
+                    guild_id: 7,
+                    name: "Member".into(),
+                    note: "A synthetic note".into(),
+                },
+            ),
+            (
+                MEMBER_RENAME_OPCODE,
+                named(&["Member", "Renamed"], &[]),
+                GuildUpdate::MemberRenamed {
+                    guild_id: 7,
+                    old_name: "Member".into(),
+                    new_name: "Renamed".into(),
+                },
+            ),
+            (
+                RENAME_OPCODE,
+                named(&["Synthetic Guild"], &[]),
+                GuildUpdate::Renamed {
+                    guild_id: 7,
+                    name: "Synthetic Guild".into(),
+                },
+            ),
+            (
+                DISBAND_OPCODE,
+                le(&[7]),
+                GuildUpdate::Disbanded { guild_id: 7 },
+            ),
+        ];
+        for (opcode, body, update) in cases {
+            assert_eq!(
+                titanium_update(opcode, &body).unwrap(),
+                Some(WorldEvent::Guild(update)),
+                "{opcode:#06x}"
+            );
+            assert!(titanium(opcode, &body[1..]).is_err(), "{opcode:#06x}");
+            assert!(
+                titanium(opcode, &[body.as_slice(), &[0]].concat()).is_err(),
+                "{opcode:#06x}"
+            );
+        }
+        // A name or note that fills its field.
+        for (opcode, at, length) in [
+            (MEMBER_DELETE_OPCODE, 4, 4 + NAME),
+            (MEMBER_RENAME_OPCODE, 4 + NAME, 4 + 2 * NAME),
+            (MEMBER_NOTE_OPCODE, 4 + NAME, 4 + NAME + NOTE),
+        ] {
+            let mut body = vec![0; length];
+            body[at..].fill(b'a');
+            assert!(titanium(opcode, &body).is_err(), "{opcode:#06x}");
+        }
     }
 
     #[test]

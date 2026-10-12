@@ -187,7 +187,7 @@ pub enum ListingChange {
 }
 
 /// A guild number, unless it stands for no guild.
-fn guild(number: u32) -> Option<u32> {
+pub(crate) fn guild(number: u32) -> Option<u32> {
     (number != 0 && number != u32::MAX).then_some(number)
 }
 
