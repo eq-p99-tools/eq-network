@@ -708,6 +708,16 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- A zone's door table is no longer refused whole when it holds two or more
+  static objects. `EQEmu` lists each of a zone's static objects (an object
+  of type 0) in the door table with door ID 255, so that ID repeats, and
+  the decoder refused the table at the second one: the player got no doors
+  in that zone. The decoder now keeps every such record, still refuses any
+  other repeated ID, and takes tables of up to 500 doors, the most `EQEmu`
+  lists (it refused more than 256). `Doors` keeps every static object for
+  the admission snapshot, and `entries` the last one listed, as before; a
+  click on one is refused before it goes out, since nothing uses a static
+  object. Found reading `EQEmu`'s sources; which zones it hit is not known.
 - On Windows, a session no longer ends with "Overlapped I/O operation is in
   progress" (os error 997) or its cancelled twin (995). std's sockets are
   overlapped there, and their read timeout (`SO_RCVTIMEO`) leaves a socket
