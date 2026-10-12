@@ -853,12 +853,24 @@ pub enum WorldEvent {
         /// The new name.
         new_name: String,
     },
-    /// A character's last name changed.
+    /// A character's last name changed; the session's spawn table keeps it
+    /// for the spawn of that name.
     LastName {
         /// The character, by the name they spawned with.
         name: String,
         /// The new last name; empty when it was taken away.
         last_name: String,
+    },
+    /// The player has newly earned titles to choose from
+    /// ([`crate::names`]).
+    NewTitles,
+    /// A character's title or suffix changed ([`crate::names`]); the
+    /// session's spawn table keeps it.
+    TitleChanged {
+        /// Whose, by spawn ID.
+        spawn_id: u16,
+        /// What changed.
+        change: crate::names::TitleChange,
     },
     /// Current mana on protocols without a combined endurance update.
     Mana(u32),

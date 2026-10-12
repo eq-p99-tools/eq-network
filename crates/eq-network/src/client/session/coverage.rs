@@ -397,6 +397,14 @@ const REMOVAL: &[Part] = &[Part(
         "TAKP and Quarm leave them empty (zone/client_packet.cpp Client::Handle_OP_GuildRemove)",
     ),
 )];
+/// What the session leaves unread of `EQMac`'s change to a title.
+const EQMAC_TITLE: &[Part] = &[Part(
+    "the first word",
+    Reason::Needless(
+        "TAKP and Quarm leave it zero, for a title and a suffix alike, though their notes guess \
+         it marks a suffix (zone/titles.cpp Client::SetAATitle, Client::SetTitleSuffix)",
+    ),
+)];
 /// What the session leaves unread of a Titanium projectile.
 const PROJECTILE: &[Part] = &[Part(
     "the first word, the two words after the item and the unknown bytes",

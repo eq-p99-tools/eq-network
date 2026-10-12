@@ -11,8 +11,8 @@ use super::{
         Social,
     },
     DUEL_ANSWER, DUEL_REQUEST, EQMAC, EQMAC_DESCRIPTION, EQMAC_ILLUSION, EQMAC_PROFILE,
-    EQMAC_PROJECTILE, INSPECT_REQUEST, INVITE, LOG_SERVER, OWN_NAME, QUARM, REMOVAL, RESET_SKILL,
-    REWARD, SACRIFICE, SOUND, TAKP, TRANSLOCATE,
+    EQMAC_PROJECTILE, EQMAC_TITLE, INSPECT_REQUEST, INVITE, LOG_SERVER, OWN_NAME, QUARM, REMOVAL,
+    RESET_SKILL, REWARD, SACRIFICE, SOUND, TAKP, TRANSLOCATE,
 };
 
 /// What the session does with a message `EQMac`'s servers send; nothing for
@@ -212,7 +212,7 @@ pub(in crate::client) fn eqmac(opcode: u16) -> Option<ServerMessage> {
         0xd041 => sent("OP_SoulMarkUpdate", EQMAC, planned(Social)),
         0xd140 => sent("OP_TradeRequest", EQMAC, planned(EqMacExchanges)),
         0xd341 => sent("OP_SpellTextMessage", EQMAC, Read(&[Chat])),
-        0xd440 => sent("OP_SetTitle", EQMAC, planned(Social)),
+        0xd440 => sent("OP_SetTitle", EQMAC, Partly(&[Zone], EQMAC_TITLE)),
         0xd540 => sent("OP_ConsentResponse", EQMAC, planned(EqMacExchanges)),
         0xd640 => sent("OP_TradeRefused", EQMAC, planned(EqMacExchanges)),
         0xd740 => sent("OP_ClickObjectAction", EQMAC, planned(EqMacWorld)),
