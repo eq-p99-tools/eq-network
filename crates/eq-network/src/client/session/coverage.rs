@@ -397,6 +397,24 @@ const REMOVAL: &[Part] = &[Part(
         "TAKP and Quarm leave them empty (zone/client_packet.cpp Client::Handle_OP_GuildRemove)",
     ),
 )];
+/// What the session leaves unread of a kick or a kill.
+const KICK: &[Part] = &[Part(
+    "the last byte",
+    Reason::Needless(
+        "the emulators name no use for it, and the world leaves it zero \
+         (common/eq_packet_structs.h GMKick_Struct, GMKill_Struct; zone/client.cpp \
+         Client::WorldKick, Client::GMKill)",
+    ),
+)];
+/// What the session leaves unread of a game master making the player look
+/// like an NPC.
+const BECOME_NPC: &[Part] = &[Part(
+    "the spawn",
+    Reason::Needless(
+        "the servers send it only to the player it names, as their own spawn \
+         (zone/client_packet.cpp Client::Handle_OP_GMBecomeNPC)",
+    ),
+)];
 /// What the session leaves unread of `EQMac`'s rename by a game master.
 const GM_RENAME: &[Part] = &[Part(
     "the game master's name, the bad-name flag and the last three bytes",

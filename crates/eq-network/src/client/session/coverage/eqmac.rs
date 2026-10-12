@@ -10,9 +10,9 @@ use super::{
         AlternateAdvancement, Bazaar, EqMacExchanges, EqMacWorld, LaterSystems, PlayerState, Raids,
         Social,
     },
-    DUEL_ANSWER, DUEL_REQUEST, EQMAC, EQMAC_DESCRIPTION, EQMAC_ILLUSION, EQMAC_PROFILE,
-    EQMAC_PROJECTILE, EQMAC_TITLE, GM_RENAME, INSPECT_REQUEST, INVITE, LOG_SERVER, OWN_NAME, QUARM,
-    REMOVAL, RESET_SKILL, REWARD, SACRIFICE, SOUND, TAKP, TRANSLOCATE,
+    BECOME_NPC, DUEL_ANSWER, DUEL_REQUEST, EQMAC, EQMAC_DESCRIPTION, EQMAC_ILLUSION, EQMAC_PROFILE,
+    EQMAC_PROJECTILE, EQMAC_TITLE, GM_RENAME, INSPECT_REQUEST, INVITE, KICK, LOG_SERVER, OWN_NAME,
+    QUARM, REMOVAL, RESET_SKILL, REWARD, SACRIFICE, SOUND, TAKP, TRANSLOCATE,
 };
 
 /// What the session does with a message `EQMac`'s servers send; nothing for
@@ -159,8 +159,8 @@ pub(in crate::client) fn eqmac(opcode: u16) -> Option<ServerMessage> {
         0x6a40 => sent("OP_FreezeClientControl", EQMAC, Partly(&[Zone], OWN_NAME)),
         0x6b40 => sent("OP_UnfreezeClientControl", EQMAC, Partly(&[Zone], OWN_NAME)),
         0x6b42 => sent("OP_NewSpawn", EQMAC, Read(&[Zone])),
-        0x6c40 => sent("OP_GMKill", EQMAC, planned(Social)),
-        0x6d40 => sent("OP_GMKick", EQMAC, planned(Social)),
+        0x6c40 => sent("OP_GMKill", EQMAC, Partly(&[Zone], KICK)),
+        0x6d40 => sent("OP_GMKick", EQMAC, Partly(&[Zone], KICK)),
         0x6e40 => sent("OP_GMGoto", QUARM, Read(&[Zone])),
         0x6e41 => sent("OP_GMLastName", EQMAC, planned(EqMacWorld)),
         0x6f40 => sent("OP_ZoneInAvatarSet", EQMAC, Read(&[Admission])),
@@ -175,7 +175,7 @@ pub(in crate::client) fn eqmac(opcode: u16) -> Option<ServerMessage> {
         0x8800 => sent("OP_LoginComplete", TAKP, Read(&[Login])),
         0x8941 => sent("OP_SkillUpdate", EQMAC, planned(EqMacWorld)),
         0x8b40 => sent("OP_ApproveName", EQMAC, Read(&[World])),
-        0x8c41 => sent("OP_GMBecomeNPC", EQMAC, planned(Social)),
+        0x8c41 => sent("OP_GMBecomeNPC", EQMAC, Partly(&[Zone], BECOME_NPC)),
         0x8e40 => sent("OP_MoveDoor", EQMAC, planned(EqMacWorld)),
         0x8e41 => sent("OP_PetitionCheckout", EQMAC, planned(Social)),
         0x9140 => sent("OP_Illusion", EQMAC, Partly(&[Zone], EQMAC_ILLUSION)),

@@ -7,9 +7,10 @@ use super::{
     Reason::{Needless, Planned, Unmapped},
     ServerMessage,
     Step::{AlternateAdvancement, Bazaar, LaterSystems, PlayerState, Raids, Social},
-    DISCIPLINE_TIMER, DUEL_REQUEST, EQEMU, ILLUSION, INSPECT_REQUEST, INVITE, MARQUEE, MEMBER_ADD,
-    MEMBER_LIST, MEMBER_RANK, MEMBER_UPDATE, NIMBUS, P99, POPUP, PROJECTILE, RENAME, REWARD,
-    SACRIFICE, STATS, TITANIUM_DESCRIPTION, TITANIUM_PROFILE, TRANSLOCATE, VOICE_MACRO,
+    BECOME_NPC, DISCIPLINE_TIMER, DUEL_REQUEST, EQEMU, ILLUSION, INSPECT_REQUEST, INVITE, KICK,
+    MARQUEE, MEMBER_ADD, MEMBER_LIST, MEMBER_RANK, MEMBER_UPDATE, NIMBUS, P99, POPUP, PROJECTILE,
+    RENAME, REWARD, SACRIFICE, STATS, TITANIUM_DESCRIPTION, TITANIUM_PROFILE, TRANSLOCATE,
+    VOICE_MACRO,
 };
 
 /// What the session does with a message Titanium's servers send; nothing
@@ -292,7 +293,7 @@ pub(in crate::client) fn titanium(opcode: u16) -> Option<ServerMessage> {
         0x67ea => sent("OP_GuildTributeFavorAndTimer", EQEMU, planned(LaterSystems)),
         0x682d => sent("OP_TaskActivity", EQEMU, planned(LaterSystems)),
         0x6839 => sent("OP_TradeBusy", EQEMU, Read(&[Zone])),
-        0x692c => sent("OP_GMKick", EQEMU, planned(Social)),
+        0x692c => sent("OP_GMKick", EQEMU, Partly(&[Zone], KICK)),
         0x6937 => sent("OP_ClickObjectAction", EQEMU, Read(&[Zone])),
         0x6957 => sent("OP_GuildsList", EQEMU, Read(&[World, Zone])),
         0x6966 => sent(
@@ -300,7 +301,7 @@ pub(in crate::client) fn titanium(opcode: u16) -> Option<ServerMessage> {
             EQEMU,
             Partly(&[Zone], MEMBER_RANK),
         ),
-        0x6980 => sent("OP_GMKill", EQEMU, planned(Social)),
+        0x6980 => sent("OP_GMKill", EQEMU, Partly(&[Zone], KICK)),
         0x6a00 => sent("OP_LinkedReuse", EQEMU, Read(&[Zone])),
         0x6a12 => sent("OP_TargetHoTT", EQEMU, Read(&[Zone])),
         0x6a1d => sent("OP_TaskRequestTimer", EQEMU, planned(LaterSystems)),
@@ -347,7 +348,7 @@ pub(in crate::client) fn titanium(opcode: u16) -> Option<ServerMessage> {
         0x775d => sent("OP_InspectRequest", EQEMU, Partly(&[Zone], INSPECT_REQUEST)),
         0x77d0 => sent("OP_RemoveAllDoors", EQEMU, Read(&[Zone])),
         0x7834 => sent("OP_RequestClientZoneChange", EQEMU, Read(&[Zone])),
-        0x7864 => sent("OP_GMBecomeNPC", EQEMU, planned(Social)),
+        0x7864 => sent("OP_GMBecomeNPC", EQEMU, Partly(&[Zone], BECOME_NPC)),
         0x79b4 => sent("OP_SharedTaskInvite", EQEMU, planned(LaterSystems)),
         0x7a83 => sent("OP_Stamina", EQEMU, Read(&[Zone])),
         0x7abc => sent("OP_DzSetLeaderName", EQEMU, planned(LaterSystems)),
