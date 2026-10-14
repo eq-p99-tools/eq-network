@@ -527,6 +527,7 @@ fn a_front_end_can_tell_what_the_zone_session_lets_the_player_do() {
         zone: "qeynos".into(),
         player: Box::new(player),
         far_clip: None,
+        spell_landing_flag: Some(4),
     };
     // The front end matches the event exhaustively and keeps the report.
     let (offered, choices) = match entered {
