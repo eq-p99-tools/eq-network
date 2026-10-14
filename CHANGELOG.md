@@ -112,6 +112,12 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `WorldEvent::Entered` gains `spell_landing_flag`: the effect flag of the
+  spell action that says a spell landed on its target, so a front end can
+  draw the landing. `EQEmu` sends 4 for each target (`Mob::SpellOnTarget`);
+  P99, Quarm and TAKP say None until each is checked (TAKP sends 4 only once
+  a buff takes hold). Front ends that build the event add the field.
+
 - Swings and the other one-shot motions the server asks clients to play:
   `WorldEvent::Animation` (`combat::Animation`: the spawn, the servers'
   animation number and the speed as a multiple of normal), from Titanium's
