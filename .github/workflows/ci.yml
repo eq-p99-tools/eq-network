@@ -2,6 +2,7 @@ name: CI
 
 # The full suite runs only on demand (Actions > CI > Run workflow), at milestones.
 # Pull requests and main run Lint; contributors run these checks locally.
+# Temporary while development is heavy: the full suite returns to pull requests later.
 on:
   workflow_dispatch:
 
