@@ -729,6 +729,11 @@ pub enum WorldEvent {
         /// nothing past it, and servers log targets beyond it as possible cheats.
         /// None when the dialect has not reported it.
         far_clip: Option<f32>,
+        /// The effect flag of a spell action (`SpellEffect::effect_flag`)
+        /// that says the spell landed on its target, so a front end can draw
+        /// the landing; None where it is unchecked for the server type, and
+        /// then no action says so.
+        spell_landing_flag: Option<u8>,
     },
     /// Server-reported position, including corrections for the local player.
     Position {

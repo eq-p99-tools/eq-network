@@ -155,6 +155,13 @@ pub(super) trait ServerType: Sync {
         None
     }
 
+    /// The effect flag of the spell action that says a spell landed on its
+    /// target, so a front end can draw the landing; None until it is checked
+    /// for this server type.
+    fn spell_landing_flag(&self) -> Option<u8> {
+        None
+    }
+
     /// Runs the character's stay in a zone: the shared zone session, with
     /// the features this server type provides.
     ///
@@ -770,6 +777,13 @@ impl ServerType for EqEmu {
         &Titanium
     }
 
+    /// `EQEmu` sends the spell action at a cast's completion with flag 0,
+    /// and again for each target the spell lands on with flag 4
+    /// (`Mob::SpellOnTarget`, its "success flag").
+    fn spell_landing_flag(&self) -> Option<u8> {
+        Some(4)
+    }
+
     fn start_choice(&self) -> bool {
         true
     }
@@ -1113,6 +1127,25 @@ mod tests {
         assert!((empty.profile_turn() - 512.0).abs() < f32::EPSILON);
         assert!(!empty.start_choice());
         assert!(empty.creation().is_none());
+        assert_eq!(empty.spell_landing_flag(), None);
+    }
+
+    #[test]
+    fn only_eqemu_says_which_spell_action_is_a_landing_so_far() {
+        assert_eq!(
+            server_type(ServerProtocol::EqEmu).spell_landing_flag(),
+            Some(4)
+        );
+        // P99 waits for a live look; TAKP sends flag 0 as a spell lands and
+        // flag 4 only once a buff takes hold, and the Mac client's own rule
+        // is unchecked.
+        for protocol in [
+            ServerProtocol::Project1999,
+            ServerProtocol::Quarm,
+            ServerProtocol::Takp,
+        ] {
+            assert_eq!(server_type(protocol).spell_landing_flag(), None);
+        }
     }
 
     #[test]

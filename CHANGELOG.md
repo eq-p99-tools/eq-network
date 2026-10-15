@@ -118,6 +118,12 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `WorldEvent::Entered` gains `spell_landing_flag`: the effect flag of the
+  spell action that says a spell landed on its target, so a front end can
+  draw the landing. `EQEmu` sends 4 for each target (`Mob::SpellOnTarget`);
+  P99, Quarm and TAKP say None until each is checked (TAKP sends 4 only once
+  a buff takes hold). Front ends that build the event add the field.
+
 - Swings and the other one-shot motions the server asks clients to play:
   `WorldEvent::Animation` (`combat::Animation`: the spawn, the servers'
   animation number and the speed as a multiple of normal), from Titanium's
@@ -714,6 +720,16 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- A zone's door table is no longer refused whole when it holds two or more
+  static objects. `EQEmu` lists each of a zone's static objects (an object
+  of type 0) in the door table with door ID 255, so that ID repeats, and
+  the decoder refused the table at the second one: the player got no doors
+  in that zone. The decoder now keeps every such record, still refuses any
+  other repeated ID, and takes tables of up to 500 doors, the most `EQEmu`
+  lists (it refused more than 256). `Doors` keeps every static object for
+  the admission snapshot, and `entries` the last one listed, as before; a
+  click on one is refused before it goes out, since nothing uses a static
+  object. Found reading `EQEmu`'s sources; which zones it hit is not known.
 - On Windows, a session no longer ends with "Overlapped I/O operation is in
   progress" (os error 997) or its cancelled twin (995). std's sockets are
   overlapped there, and their read timeout (`SO_RCVTIMEO`) leaves a socket
