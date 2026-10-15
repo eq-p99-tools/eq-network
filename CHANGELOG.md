@@ -118,6 +118,14 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `SpawnState` gains `walk_speed` and `run_speed`: the spawn record's walk
+  and run speeds, server protocol values as `PlayerState`'s are, read from
+  Titanium spawn records at the offsets the player's own record uses. A
+  bad value is zero rather than dropping the spawn; `EQMac` spawns report
+  zero until their record's offsets are checked.
+- `world::ANIMATION_UNITS_PER_SECOND` is public: the units a second one
+  speed value moves, so a host can turn a record's speed into units.
+
 - `WorldEvent::Entered` gains `spell_landing_flag`: the effect flag of the
   spell action that says a spell landed on its target, so a front end can
   draw the landing. `EQEmu` sends 4 for each target (`Mob::SpellOnTarget`);
