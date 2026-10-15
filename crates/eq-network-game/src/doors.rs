@@ -177,6 +177,11 @@ impl Doors {
 pub fn titanium_click(id: u8, player_id: u16) -> EncodedCommand {
     let mut body = vec![0; 16];
     body[0] = id;
+    // The official client sends 3 here and -1 as the held item for an
+    // ordinary open or close (what the 3 means is unknown, and a click
+    // holding a key is unrecorded).
+    body[1] = 3;
+    body[8..12].copy_from_slice(&u32::MAX.to_le_bytes());
     body[12..14].copy_from_slice(&player_id.to_le_bytes());
     EncodedCommand {
         opcode: CLICK_OPCODE,
@@ -325,7 +330,10 @@ mod tests {
         let packet = admitted.click_packet(7, 0x1234, position).unwrap();
         assert_eq!(packet.opcode, CLICK_OPCODE);
         assert_eq!(packet.body[0], 7);
-        assert_eq!(&packet.body[1..12], &[0; 11]);
+        assert_eq!(
+            &packet.body[1..12],
+            &[3, 0, 0, 0, 0, 0, 0, 255, 255, 255, 255]
+        );
         assert_eq!(&packet.body[12..], &[0x34, 0x12, 0, 0]);
         assert!(admitted.click_packet(7, 0, position).is_err());
         assert!(admitted.click_packet(8, 1, position).is_err());
