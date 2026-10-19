@@ -114,6 +114,25 @@ pub(super) fn decode_destination(
     Ok((host, port, file_response(assets, &manifest, log)?))
 }
 
+/// Reads a world's character list, keeping what it says beyond names and
+/// Titanium's levels and zones only where the server type's list is checked
+/// to carry it.
+pub(super) fn character_list(
+    server: &dyn servers::ServerType,
+    dialect: eq_network_game::GameDialect,
+    body: &[u8],
+) -> Result<Vec<eq_network_game::characters::CharacterChoice>> {
+    let entries = eq_network_game::characters::decode(dialect, body)?;
+    Ok(if server.character_preview() {
+        entries
+    } else {
+        entries
+            .into_iter()
+            .map(|entry| entry.without_look(dialect))
+            .collect()
+    })
+}
+
 /// Logs in to the world with the exact login body and starts the server's
 /// protection, if it has any, from that body.
 fn open_world(
@@ -337,8 +356,7 @@ pub(super) fn titanium(
                     session.send(0x7752, &0u32.to_le_bytes())?;
                     session.send(0x5e99, &[])?;
                     if let Some(body) = early_list.take() {
-                        let entries =
-                            eq_network_game::characters::decode(config.protocol.into(), &body)?;
+                        let entries = character_list(server, config.protocol.into(), &body)?;
                         let (list, automatic) = crate::client::selection::Selection::new(
                             entries,
                             &config.character,
@@ -393,8 +411,7 @@ pub(super) fn titanium(
                     tutorial_pending |= server.start_choice();
                     attempt.created(log)?;
                 }
-                let entries =
-                    eq_network_game::characters::decode(config.protocol.into(), &packet.body)?;
+                let entries = character_list(server, config.protocol.into(), &packet.body)?;
                 let (list, automatic) =
                     crate::client::selection::Selection::new(entries, &config.character, log)?;
                 selection = Some(list);
@@ -404,8 +421,7 @@ pub(super) fn titanium(
                 early_list = Some(packet.body.clone());
             }
             WorldOpcode::CharacterList if accepted && !entered && selection.is_none() => {
-                let entries =
-                    eq_network_game::characters::decode(config.protocol.into(), &packet.body)?;
+                let entries = character_list(server, config.protocol.into(), &packet.body)?;
                 let (list, automatic) =
                     crate::client::selection::Selection::new(entries, &config.character, log)?;
                 selection = Some(list);
