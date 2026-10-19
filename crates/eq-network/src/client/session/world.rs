@@ -123,7 +123,7 @@ pub(super) fn character_list(
     body: &[u8],
 ) -> Result<Vec<eq_network_game::characters::CharacterChoice>> {
     let entries = eq_network_game::characters::decode(dialect, body)?;
-    Ok(if server.character_looks() {
+    Ok(if server.character_preview() {
         entries
     } else {
         entries

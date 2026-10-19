@@ -168,7 +168,7 @@ pub(super) trait ServerType: Sync {
     /// character's look, and on `EQMac` its level and zone, as the client
     /// generation's list lays them out; a front end draws a character at
     /// select only where it does. False until checked for this server type.
-    fn character_looks(&self) -> bool {
+    fn character_preview(&self) -> bool {
         false
     }
 
@@ -835,7 +835,7 @@ impl ServerType for EqEmu {
 
     /// Its list fills each character's look from the character's worn
     /// items (world/worlddb.cpp `GetCharSelectInfo`).
-    fn character_looks(&self) -> bool {
+    fn character_preview(&self) -> bool {
         true
     }
 
@@ -1028,7 +1028,7 @@ impl ServerType for Takp {
 
     /// Its list fills each character's look, level and zone
     /// (world/worlddb.cpp `GetCharSelectInfo`).
-    fn character_looks(&self) -> bool {
+    fn character_preview(&self) -> bool {
         true
     }
 
@@ -1335,7 +1335,7 @@ mod tests {
     #[test]
     fn character_looks_are_kept_only_where_the_list_is_checked_to_carry_them() {
         use eq_network_game::GameDialect;
-        let listed = |protocol| server_type(protocol).character_looks();
+        let listed = |protocol| server_type(protocol).character_preview();
         assert!(listed(ServerProtocol::EqEmu));
         assert!(listed(ServerProtocol::Takp));
         assert!(!listed(ServerProtocol::Project1999));
