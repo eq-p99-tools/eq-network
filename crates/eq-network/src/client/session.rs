@@ -16,6 +16,7 @@ mod exchange;
 pub(super) mod feature;
 mod groups;
 mod hazards;
+mod hiding;
 mod inventory;
 mod lifecycle;
 mod listing;

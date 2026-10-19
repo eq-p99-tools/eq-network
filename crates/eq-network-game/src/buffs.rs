@@ -2,9 +2,15 @@
 use anyhow::{ensure, Result};
 use serde::Serialize;
 
+/// Titanium's `OP_Action`, which carries spell landings and one other
+/// record ([`Action`]).
+pub const TITANIUM_ACTION_OPCODE: u16 = 0x497c;
 /// `EQMac`'s `OP_Action`, which carries spell landings among other actions
 /// (TAKP `utils/patches/patch_Mac.conf` lists 0x4046, its bytes swapped).
 pub const EQMAC_ACTION_OPCODE: u16 = 0x4640;
+/// The target and the source of `Mob::Spin`'s fixed record, which no spawn
+/// is.
+const SPIN_SPAWN: u16 = 0x0a0b;
 /// `EQMac`'s `OP_Buff`: a buff's fade, or its duration corrected (0x4132
 /// swapped).
 pub const EQMAC_BUFF_OPCODE: u16 = 0x3241;
@@ -17,7 +23,7 @@ pub const UNKNOWN_SLOT: u32 = u32::MAX;
 const EQMAC_PROFILE_BUFFS: std::ops::Range<usize> = 616..766;
 
 /// Server spell action. Its icon flag does not supply a buff slot or duration.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct SpellEffect {
     /// Target entity in this zone.
     pub target_id: u16,
@@ -33,9 +39,66 @@ pub struct SpellEffect {
     pub spell_level: u8,
     /// Raw flags; the documented icon value is 4.
     pub effect_flag: u8,
+    /// The push the spell gives its target, as the server sends it; none
+    /// when it sends no force or pitch, or a value that is not a finite
+    /// number. See [`Push`](crate::combat::Push) for what each server sends.
+    pub push: Option<crate::combat::Push>,
 }
 
-/// Decodes spell actions, excluding melee actions sharing the same opcode.
+/// What a server's action (`OP_Action`) is, by its kind.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub enum Action {
+    /// A spell's (kind 231): the spell taking hold, or a buff from it doing
+    /// so.
+    Spell(SpellEffect),
+    /// `Mob::Spin`'s fixed record, which spins the player: kind 0, its
+    /// target and source both spawn 0x0A0B, which no spawn is. `EQEmu` and
+    /// TAKP send it only from quests (Lua's and Perl's `Spin`); a spell
+    /// that spins its target spins only an NPC on the server, and "the
+    /// spinning is handled by the client" (`zone/spell_effects.cpp`).
+    Spin,
+    /// An action of another kind, which no server is known to send: its
+    /// kind. No open server sends a melee or skill action this way; P99's
+    /// source is closed, so it may.
+    Other(u8),
+}
+
+/// Decodes Titanium's action by its kind at 22: a spell's
+/// ([`titanium_spell_effect`]), the spin, or another.
+///
+/// # Errors
+/// Rejects any length other than 31 bytes.
+pub fn titanium_action(body: &[u8]) -> Result<Action> {
+    Ok(match titanium_spell_effect(body)? {
+        Some(effect) => Action::Spell(effect),
+        None => other_action(body, 22),
+    })
+}
+
+/// Decodes `EQMac`'s action by its kind at 24: a spell's
+/// ([`eqmac_spell_effect`]), the spin, or another.
+///
+/// # Errors
+/// Rejects any length other than 36 bytes.
+pub fn eqmac_action(body: &[u8]) -> Result<Action> {
+    Ok(match eqmac_spell_effect(body)? {
+        Some(effect) => Action::Spell(effect),
+        None => other_action(body, 24),
+    })
+}
+
+/// An action that is not a spell's: the spin, by its kind and spawns, or
+/// another kind.
+fn other_action(body: &[u8], kind_at: usize) -> Action {
+    let short = |offset| u16::from_le_bytes([body[offset], body[offset + 1]]);
+    match body[kind_at] {
+        0 if short(0) == SPIN_SPAWN && short(2) == SPIN_SPAWN => Action::Spin,
+        kind => Action::Other(kind),
+    }
+}
+
+/// Decodes spell actions, excluding melee actions sharing the same opcode,
+/// with the push at 10 (`Action_Struct`).
 ///
 /// # Errors
 /// Rejects malformed Titanium action lengths.
@@ -53,13 +116,15 @@ pub fn titanium_spell_effect(body: &[u8]) -> Result<Option<SpellEffect>> {
         spell_id: short(27),
         spell_level: body[29],
         effect_flag: body[30],
+        push: crate::combat::push(body, 10)?,
     }))
 }
 
 /// Decodes `EQMac`'s spell actions (TAKP `Action_Struct`, 36 bytes),
 /// excluding other actions sharing the opcode. TAKP sends one as the spell
 /// lands, with flag 0, and again with flag 4 once a buff takes hold
-/// (`Mob::SpellOnTarget`). The action carries no spell level, which reads 0.
+/// (`Mob::SpellOnTarget`). The action carries no spell level, which reads 0,
+/// and its push at 12.
 ///
 /// # Errors
 /// Rejects malformed `EQMac` action lengths.
@@ -77,6 +142,7 @@ pub fn eqmac_spell_effect(body: &[u8]) -> Result<Option<SpellEffect>> {
         spell_id: short(30),
         spell_level: 0,
         effect_flag: body[33],
+        push: crate::combat::push(body, 12)?,
     }))
 }
 
@@ -268,6 +334,17 @@ mod tests {
             ),
             (42, 125, 4)
         );
+        assert_eq!(effect.push, None);
+        // A spell's push back, the caster's heading and its push up, at 10.
+        body[10..14].copy_from_slice(&1.5f32.to_le_bytes());
+        body[14..18].copy_from_slice(&128.0f32.to_le_bytes());
+        body[18..22].copy_from_slice(&0.25f32.to_le_bytes());
+        let push = titanium_spell_effect(&body).unwrap().unwrap().push.unwrap();
+        assert_eq!((push.force, push.heading, push.pitch), (1.5, 128.0, 0.25));
+        // A value that is not a finite number is no push; the action reads.
+        body[10..14].copy_from_slice(&f32::NAN.to_le_bytes());
+        let effect = titanium_spell_effect(&body).unwrap().unwrap();
+        assert_eq!((effect.spell_id, effect.push), (42, None));
         assert!(titanium_spell_effect(&body[..30]).is_err());
         assert!(titanium_update(&body).is_err());
     }
@@ -299,6 +376,40 @@ mod tests {
     }
 
     #[test]
+    fn actions_are_a_spells_the_spin_or_another_kind() {
+        // Mob::Spin's fixed record, in each generation's length.
+        let mut titanium = [0u8; 31];
+        titanium[..6].copy_from_slice(&[0x0b, 0x0a, 0x0b, 0x0a, 0xe7, 0x00]);
+        titanium[6..8].copy_from_slice(&[0x4d, 0x04]);
+        titanium[18..20].copy_from_slice(&[0xd4, 0x43]);
+        let mut eqmac = [0u8; 36];
+        eqmac[..8].copy_from_slice(&titanium[..8]);
+        eqmac[18..20].copy_from_slice(&[0xd4, 0x43]);
+        assert_eq!(titanium_action(&titanium).unwrap(), Action::Spin);
+        assert_eq!(eqmac_action(&eqmac).unwrap(), Action::Spin);
+        // Kind 0 naming a real spawn is not the spin.
+        titanium[..2].copy_from_slice(&7u16.to_le_bytes());
+        eqmac[2..4].copy_from_slice(&7u16.to_le_bytes());
+        assert_eq!(titanium_action(&titanium).unwrap(), Action::Other(0));
+        assert_eq!(eqmac_action(&eqmac).unwrap(), Action::Other(0));
+        // Any other kind is told by its kind.
+        titanium[22] = 8;
+        eqmac[24] = 30;
+        assert_eq!(titanium_action(&titanium).unwrap(), Action::Other(8));
+        assert_eq!(eqmac_action(&eqmac).unwrap(), Action::Other(30));
+        // A spell's action.
+        titanium[22] = 231;
+        eqmac[24] = 231;
+        assert!(matches!(
+            titanium_action(&titanium).unwrap(),
+            Action::Spell(_)
+        ));
+        assert!(matches!(eqmac_action(&eqmac).unwrap(), Action::Spell(_)));
+        assert!(titanium_action(&titanium[..30]).is_err());
+        assert!(eqmac_action(&eqmac[..35]).is_err());
+    }
+
+    #[test]
     fn eqmacs_action_reads_its_own_layout_and_skips_other_actions() {
         let mut body = [0; 36];
         body[..2].copy_from_slice(&7u16.to_le_bytes());
@@ -319,8 +430,14 @@ mod tests {
                 spell_id: 42,
                 spell_level: 0,
                 effect_flag: 4,
+                push: None,
             })
         );
+        // TAKP's force, its doubled heading and a pitch, at 12.
+        body[12..16].copy_from_slice(&2.0f32.to_le_bytes());
+        body[16..20].copy_from_slice(&300.0f32.to_le_bytes());
+        let push = eqmac_spell_effect(&body).unwrap().unwrap().push.unwrap();
+        assert_eq!((push.force, push.heading, push.pitch), (2.0, 300.0, 0.0));
         assert!(eqmac_spell_effect(&body[..35]).is_err());
         assert!(eqmac_spell_effect(&[0; 37]).is_err());
     }

@@ -375,10 +375,17 @@ pub(super) fn run(
             }
         }
         // Everything else is read once, in the server's client generation, the
-        // same way before and after admission, and heard by every feature.
+        // same way before and after admission, and heard by every feature;
+        // a kind no server is known to send leaves a trace, once a session.
+        let messages = unheard.sift(
+            server.wire(),
+            packet.opcode,
+            server.wire().messages(packet.opcode, &packet.body),
+            log,
+        )?;
         let speaker = sender(&config.character, &world);
         let exit = hear(
-            server.wire().messages(packet.opcode, &packet.body),
+            messages,
             &mut features,
             &mut world,
             &mut Out {

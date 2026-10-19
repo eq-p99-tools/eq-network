@@ -300,22 +300,29 @@ fn spell_notices_read_as_the_spell_news_every_wire_gives() {
             success: true
         })]
     );
-    // A spell taking hold on spawn 7, and a melee action, which is no spell.
+    // A spell taking hold on spawn 7, and an action of another kind, which
+    // is no spell: the action is read beside the updates.
     let mut action = [0; 36];
     action[..2].copy_from_slice(&7u16.to_le_bytes());
     action[24] = 231;
     action[30..32].copy_from_slice(&42u16.to_le_bytes());
     action[33] = 4;
     assert!(matches!(
-        &updates(0x4640, &action).unwrap()[..],
-        [WorldEvent::SpellEffect(SpellEffect {
-            target_id: 7,
-            spell_id: 42,
-            effect_flag: 4,
-            ..
-        })]
+        &crate::message::eqmac(0x4640, &action)[..],
+        [crate::message::Message::Event(WorldEvent::SpellEffect(
+            SpellEffect {
+                target_id: 7,
+                spell_id: 42,
+                effect_flag: 4,
+                ..
+            }
+        ))]
     ));
     action[24] = 1;
+    assert!(matches!(
+        crate::message::eqmac(0x4640, &action)[..],
+        [crate::message::Message::UnknownKind(1)]
+    ));
     assert_eq!(updates(0x4640, &action).unwrap(), []);
     // A fade, by spell.
     let mut fade = [0; 20];
@@ -331,9 +338,65 @@ fn spell_notices_read_as_the_spell_news_every_wire_gives() {
             buff: None
         })]
     );
-    for opcode in [0xa940, 0x3542, 0x8241, 0x4a42, 0xce41, 0x4640, 0x3241] {
+    for opcode in [0xa940, 0x3542, 0x8241, 0x4a42, 0xce41, 0x3241] {
         assert!(updates(opcode, &[0; 3]).is_err());
     }
+    assert!(matches!(
+        crate::message::eqmac(0x4640, &[0; 3])[..],
+        [crate::message::Message::Unreadable { .. }]
+    ));
+}
+
+#[test]
+fn the_servers_hold_on_the_player_is_read_from_its_messages() {
+    use std::time::Duration;
+    assert_eq!(
+        updates(0x5b41, &3000u32.to_le_bytes()).unwrap(),
+        [WorldEvent::Stun(Some(Duration::from_secs(3)))]
+    );
+    assert_eq!(updates(0x5b41, &[0; 4]).unwrap(), [WorldEvent::Stun(None)]);
+    let mut charm = [0u8; 6];
+    charm[2..4].copy_from_slice(&7u16.to_le_bytes());
+    assert_eq!(
+        updates(0x4442, &charm).unwrap(),
+        [WorldEvent::Charm(crate::control::Charm {
+            owner_id: None,
+            pet_id: 7,
+            charmed: false,
+        })]
+    );
+    // The freeze and unfreeze carry the player's name, which is not read.
+    let mut name = [0u8; 65];
+    name[..6].copy_from_slice(b"Tester");
+    assert_eq!(
+        updates(0x6a40, &name).unwrap(),
+        [WorldEvent::Controlled(true)]
+    );
+    assert_eq!(
+        updates(0x6b40, &name).unwrap(),
+        [WorldEvent::Controlled(false)]
+    );
+    assert_eq!(
+        updates(0xb040, &[]).unwrap(),
+        [WorldEvent::Controlled(false)]
+    );
+    assert_eq!(updates(0xa941, &[]).unwrap(), [WorldEvent::Berserk(true)]);
+    assert_eq!(updates(0xaa41, &[]).unwrap(), [WorldEvent::Berserk(false)]);
+    for opcode in [0x5b41, 0x4442, 0x6a40, 0x6b40] {
+        assert!(updates(opcode, &[0; 3]).is_err());
+    }
+    for opcode in [0xb040, 0xa941, 0xaa41] {
+        assert!(updates(opcode, &[0]).is_err());
+    }
+}
+
+#[test]
+fn the_end_of_hiding_is_read_and_carries_nothing() {
+    assert_eq!(
+        updates(0x5a41, &[]).unwrap(),
+        [WorldEvent::HideAndSneakEnded]
+    );
+    assert!(updates(0x5a41, &[0]).is_err());
 }
 
 #[test]

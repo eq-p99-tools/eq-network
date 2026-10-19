@@ -7,7 +7,7 @@ use super::{
     Reason::{Needless, Planned, Unmapped},
     ServerMessage,
     Step::{AlternateAdvancement, Appearance, Bazaar, LaterSystems, PlayerState, Raids, Social},
-    ACTION, APPEARANCE, EQEMU, P99, PROFILE, PUSH, TITANIUM_DESCRIPTION,
+    APPEARANCE, EQEMU, P99, PROFILE, TITANIUM_DESCRIPTION,
 };
 
 /// What the session does with a message Titanium's servers send; nothing
@@ -73,7 +73,7 @@ pub(in crate::client) fn titanium(opcode: u16) -> Option<ServerMessage> {
         // P99's zone refusing the client's validation.
         0x1252 => sent("P99's zone validation refusal", P99, Read(&[Admission])),
         0x12d6 => sent("OP_GroupInvite2", EQEMU, Read(&[Zone])),
-        0x12e5 => sent("OP_Charm", EQEMU, planned(PlayerState)),
+        0x12e5 => sent("OP_Charm", EQEMU, Read(&[Zone])),
         0x1306 => sent("OP_GMZoneRequest", EQEMU, unasked(Social)),
         0x13e7 => sent("OP_Begging", EQEMU, unasked(PlayerState)),
         0x1477 => sent("OP_TargetCommand", EQEMU, planned(PlayerState)),
@@ -97,7 +97,7 @@ pub(in crate::client) fn titanium(opcode: u16) -> Option<ServerMessage> {
         0x1d4d => sent("OP_Marquee", EQEMU, planned(Social)),
         0x1db5 => sent("OP_AdventureInfo", EQEMU, planned(LaterSystems)),
         0x1dde => sent("OP_OnLevelMessage", EQEMU, planned(Social)),
-        0x1e51 => sent("OP_Stun", EQEMU, planned(PlayerState)),
+        0x1e51 => sent("OP_Stun", EQEMU, Read(&[Zone])),
         0x1ee9 => sent("OP_BazaarSearch", EQEMU, planned(Bazaar)),
         0x1f21 => sent(
             "OP_RaidUpdate",
@@ -200,8 +200,8 @@ pub(in crate::client) fn titanium(opcode: u16) -> Option<ServerMessage> {
         0x4668 => sent("OP_Surname", EQEMU, unasked(Social)),
         0x475a => sent("OP_GuildMOTD", EQEMU, Read(&[Chat])),
         0x4839 => sent("OP_ManaChange", EQEMU, Read(&[Zone])),
-        0x48c2 => sent("OP_CancelSneakHide", EQEMU, planned(PlayerState)),
-        0x497c => sent("OP_Action", EQEMU, Partly(&[Zone], ACTION)),
+        0x48c2 => sent("OP_CancelSneakHide", EQEMU, Read(&[Zone])),
+        0x497c => sent("OP_Action", EQEMU, Read(&[Zone])),
         0x4b05 => sent("OP_RezzComplete", EQEMU, planned(PlayerState)),
         0x4c24 => sent("OP_SpawnDoor", EQEMU, Read(&[Zone])),
         0x4c8c => sent("OP_CashReward", EQEMU, planned(PlayerState)),
@@ -242,7 +242,7 @@ pub(in crate::client) fn titanium(opcode: u16) -> Option<ServerMessage> {
         ),
         0x5a48 => sent("OP_FormattedMessage", EQEMU, Read(&[Chat])),
         0x5b7b => sent("OP_IncreaseStats", EQEMU, planned(PlayerState)),
-        0x5c78 => sent("OP_Damage", EQEMU, Partly(&[Zone], PUSH)),
+        0x5c78 => sent("OP_Damage", EQEMU, Read(&[Zone])),
         0x5cc0 => sent("OP_PVPStats", EQEMU, planned(LaterSystems)),
         0x5d11 => sent("OP_Track", EQEMU, unasked(PlayerState)),
         0x5dd8 => sent("OP_ZoneChange", EQEMU, Read(&[Zone])),

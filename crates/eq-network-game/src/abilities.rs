@@ -5,13 +5,17 @@
 //! heading on the player. Servers answer in chat, in the combat stream, with
 //! an item on the cursor or, for a bandaging, with its own packet (see
 //! [`crate::bind_wound`]), and keep a recovery timer for each; the combat
-//! abilities share one.
+//! abilities share one. They end the player's hiding and sneaking with
+//! `OP_CancelSneakHide`, which a Titanium client answers
+//! ([`titanium_unhide`](crate::abilities::titanium_unhide)).
 //!
 //! Layout reference: `EQEmu`'s `CombatAbility_Struct` and
 //! `ClientTarget_Struct` (`common/eq_packet_structs.h`) and the Titanium
 //! opcodes (`utils/patches/patch_Titanium.conf`); `Client::OPCombatAbility`
 //! (`zone/special_attacks.cpp`) and the handlers in `zone/client_packet.cpp`
-//! for the rules; `common/features.h` for recovery times.
+//! for the rules; `common/features.h` for recovery times;
+//! `Client::CancelSneakHide` (`zone/client_process.cpp`) and TAKP's
+//! `Mob::CommonBreakSneakHide` (`zone/attack.cpp`) for the end of hiding.
 use crate::command::EncodedCommand;
 use serde::Serialize;
 use std::time::Duration;
@@ -26,6 +30,15 @@ const MELEE_STRIKE: u32 = 100;
 
 /// `OP_Fishing`, which carries nothing.
 pub const FISHING_OPCODE: u16 = 0x0b36;
+
+/// `OP_CancelSneakHide`: the server ended the player's hiding and sneaking.
+/// It carries nothing.
+pub const CANCEL_SNEAK_HIDE_OPCODE: u16 = 0x48c2;
+/// `EQMac`'s `OP_CancelSneakHide`, which carries nothing either.
+pub const EQMAC_CANCEL_SNEAK_HIDE_OPCODE: u16 = 0x5a41;
+/// The appearance kind a Titanium client answers the end of its hiding with
+/// (`AppearanceType::Invisibility`).
+const INVISIBILITY: u16 = 3;
 
 /// Races that bash without the skill or a shield (`EQEmu`'s "slam"):
 /// Barbarian, Troll and Ogre.
@@ -284,6 +297,21 @@ impl Ability {
     }
 }
 
+/// The Titanium client's answer to the server's end of its hiding, as
+/// `EQEmu`'s source describes it (not yet recorded from the client): the
+/// player's own appearance, invisibility 0. `EQEmu` ends the player's
+/// sneaking as it sends `OP_CancelSneakHide`, which it sends only to a
+/// hidden player, and leaves them hidden until this answer comes; the answer
+/// takes them out of hiding, zeroing their invisibility, and `EQEmu` shows
+/// it to the zone (`Client::Handle_OP_SpawnAppearance`). TAKP and Quarm end
+/// both before they send theirs, and wait for nothing.
+///
+/// # Errors
+/// Rejects a zero spawn ID.
+pub fn titanium_unhide(spawn_id: u16) -> anyhow::Result<EncodedCommand> {
+    crate::listing::update(spawn_id, INVISIBILITY, 0)
+}
+
 /// Whether a melee ability reaches the target, as `EQEmu` decides
 /// (`Mob::CombatRange`): within a reach that grows with the larger body,
 /// across the ground; the server allows more against a target that flees.
@@ -352,6 +380,18 @@ pub struct Body {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_titanium_client_answers_the_end_of_its_hiding_with_invisibility_0() {
+        assert_eq!(
+            titanium_unhide(7).unwrap(),
+            EncodedCommand {
+                opcode: crate::listing::APPEARANCE_OPCODE,
+                body: vec![7, 0, 3, 0, 0, 0, 0, 0],
+            }
+        );
+        assert!(titanium_unhide(0).is_err());
+    }
 
     #[test]
     fn strikes_and_taunt_name_the_target_and_the_rest_carry_nothing() {

@@ -24,6 +24,7 @@ pub(super) use titanium::titanium;
 
 use super::{wire::Wire, Events, ServerProtocol};
 use anyhow::Result;
+use eq_network_game::message::Message;
 use std::{collections::HashSet, fmt};
 
 /// A message a client generation's servers send.
@@ -191,10 +192,8 @@ impl fmt::Display for Reason {
 /// step at a time.
 #[derive(Clone, Copy, Debug)]
 pub(super) enum Step {
-    /// The player's own state: the push of a hit, stun, mesmerize and charm,
-    /// the end of sneaking and hiding, disciplines and reuse timers, a
-    /// target the server sets, rewards, and the confirmations the player
-    /// answers.
+    /// The player's own state: disciplines and reuse timers, a target the
+    /// server sets, rewards, and the confirmations the player answers.
     PlayerState,
     /// Spawns' appearance and effects: the appearance kinds left, illusions,
     /// renames, spell and level effects, sounds, projectiles and spawn
@@ -263,12 +262,11 @@ const APPEARANCE: &[Part] = &[Part(
     "the other appearance kinds",
     Reason::Planned(Step::Appearance),
 )];
-/// What the session leaves unread of a hit.
-const PUSH: &[Part] = &[Part("the push", Reason::Planned(Step::PlayerState))];
-/// What the session leaves unread of an action.
-const ACTION: &[Part] = &[Part(
-    "melee and skill actions, and the push",
-    Reason::Planned(Step::PlayerState),
+/// What the session leaves unread of `EQMac`'s word that the server took or
+/// gave back the player's control.
+const OWN_NAME: &[Part] = &[Part(
+    "the player's own name",
+    Reason::Needless("the session has it from its entry"),
 )];
 /// What the session leaves unread of `EQMac`'s log-server settings.
 const LOG_SERVER: &[Part] = &[Part(
@@ -337,10 +335,13 @@ impl fmt::Display for Stage {
 }
 
 /// The messages a login or zone session leaves unread, each told once a
-/// session but those with nothing worth reading.
+/// session but those with nothing worth reading, and the messages of a kind
+/// no server is known to send, each kind told once a session.
 pub(super) struct Unheard {
     stage: Stage,
     told: HashSet<u16>,
+    /// The kinds told of, with their message's opcode.
+    kinds: HashSet<(u16, u32)>,
 }
 
 impl Unheard {
@@ -349,7 +350,41 @@ impl Unheard {
         Self {
             stage,
             told: HashSet::new(),
+            kinds: HashSet::new(),
         }
+    }
+
+    /// Drops each of a packet's messages of a kind no server is known to
+    /// send ([`Message::UnknownKind`]), telling of it, by its opcode and kind
+    /// alone, the first time they arrive in the session; passes on the rest.
+    ///
+    /// # Errors
+    /// Returns an error when the host's event handler fails.
+    pub(super) fn sift(
+        &mut self,
+        wire: &dyn Wire,
+        opcode: u16,
+        messages: Vec<Message>,
+        log: &mut Events<'_>,
+    ) -> Result<Vec<Message>> {
+        let mut kept = Vec::with_capacity(messages.len());
+        for message in messages {
+            let Message::UnknownKind(kind) = message else {
+                kept.push(message);
+                continue;
+            };
+            if self.kinds.insert((opcode, kind)) {
+                let name = wire
+                    .coverage(opcode)
+                    .map_or("an unlisted message", |message| message.name);
+                log.diagnostic(format!(
+                    "{} sent {name} (0x{opcode:04x}) of kind {kind}, left unread: no server is \
+                     known to send that kind",
+                    self.stage
+                ))?;
+            }
+        }
+        Ok(kept)
     }
 
     /// Tells, the first time one arrives in the session, of a message the
@@ -449,6 +484,48 @@ mod tests {
     }
 
     #[test]
+    fn the_zone_tells_once_of_each_kind_no_server_is_known_to_send() {
+        let config = ClientConfig::new("ACCOUNT", "PASSWORD", "Test Server", "Tester");
+        let mut said = Vec::new();
+        let mut handler = |event| {
+            if let ClientEvent::Diagnostic(line) = event {
+                said.push(line);
+            }
+            Ok(())
+        };
+        let mut log = Events::new(&config, &mut handler);
+        let mut unheard = Unheard::new(Stage::Zone);
+        // Two actions of kind 8, one of kind 30, and the spin, which is read.
+        for kind in [8, 30, 8] {
+            let kept = unheard
+                .sift(
+                    &Titanium,
+                    0x497c,
+                    vec![Message::UnknownKind(kind)],
+                    &mut log,
+                )
+                .unwrap();
+            assert!(kept.is_empty());
+        }
+        let spun = vec![Message::Event(eq_network_game::world::WorldEvent::Spun)];
+        let kept = unheard.sift(&Titanium, 0x497c, spun, &mut log).unwrap();
+        assert!(matches!(
+            kept[..],
+            [Message::Event(eq_network_game::world::WorldEvent::Spun)]
+        ));
+        drop(log);
+        assert_eq!(
+            said,
+            [
+                "Zone sent OP_Action (0x497c) of kind 8, left unread: no server is known to \
+                 send that kind",
+                "Zone sent OP_Action (0x497c) of kind 30, left unread: no server is known to \
+                 send that kind",
+            ]
+        );
+    }
+
+    #[test]
     fn the_zone_tells_once_of_each_message_it_leaves_unread() {
         let config = ClientConfig::new("ACCOUNT", "PASSWORD", "Test Server", "Tester");
         let mut said = Vec::new();
@@ -460,11 +537,12 @@ mod tests {
         };
         let mut log = Events::new(&config, &mut handler);
         let mut unheard = Unheard::new(Stage::Zone);
-        // A position, read; a stun, left unread; the character list, read
-        // only from the world; an opcode no server is listed as sending; and
-        // the empty AA stats, which carry nothing: each arriving twice.
+        // A position, read; an adventure merchant's sale, left unread; the
+        // character list, read only from the world; an opcode no server is
+        // listed as sending; and the empty AA stats, which carry nothing:
+        // each arriving twice.
         for opcode in [
-            0x14cb, 0x1e51, 0x4513, 0x0001, 0x5996, 0x14cb, 0x1e51, 0x4513, 0x0001, 0x5996,
+            0x14cb, 0x0097, 0x4513, 0x0001, 0x5996, 0x14cb, 0x0097, 0x4513, 0x0001, 0x5996,
         ] {
             unheard.tell(&Titanium, opcode, 8, &mut log).unwrap();
         }
@@ -472,8 +550,8 @@ mod tests {
         assert_eq!(
             said,
             [
-                "Zone sent OP_Stun (0x1e51, 8 bytes), left unread: planned with the \
-                 player's own state",
+                "Zone sent OP_AdventureMerchantSell (0x0097, 8 bytes), left unread: planned \
+                 with later and rarely used systems",
                 "Zone sent OP_SendCharInfo (0x4513, 8 bytes), left unread: the session reads \
                  it only before the zone",
                 "Zone sent an unlisted message (0x0001, 8 bytes), left unread: no server is \

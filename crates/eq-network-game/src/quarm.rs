@@ -787,10 +787,6 @@ pub fn updates(opcode: u16, body: &[u8]) -> Result<Vec<WorldEvent>> {
             .map(WorldEvent::Spell)
             .into_iter()
             .collect(),
-        crate::buffs::EQMAC_ACTION_OPCODE => crate::buffs::eqmac_spell_effect(body)?
-            .map(WorldEvent::SpellEffect)
-            .into_iter()
-            .collect(),
         crate::buffs::EQMAC_BUFF_OPCODE => {
             vec![WorldEvent::Buff(crate::buffs::eqmac_update(body)?)]
         }
@@ -813,6 +809,26 @@ pub fn updates(opcode: u16, body: &[u8]) -> Result<Vec<WorldEvent>> {
         }
         crate::combat::EQMAC_ANIMATION_OPCODE => {
             vec![WorldEvent::Animation(crate::combat::eqmac_animation(body)?)]
+        }
+        crate::control::EQMAC_STUN_OPCODE => vec![WorldEvent::Stun(crate::control::stun(body)?)],
+        crate::control::EQMAC_CHARM_OPCODE => {
+            vec![WorldEvent::Charm(crate::control::eqmac_charm(body)?)]
+        }
+        crate::control::EQMAC_FREEZE_OPCODE
+        | crate::control::EQMAC_UNFREEZE_OPCODE
+        | crate::control::EQMAC_RETURN_OPCODE => crate::control::eqmac_control(opcode, body)?
+            .map(WorldEvent::Controlled)
+            .into_iter()
+            .collect(),
+        crate::control::EQMAC_BERSERK_START_OPCODE | crate::control::EQMAC_BERSERK_END_OPCODE => {
+            crate::control::eqmac_berserk(opcode, body)?
+                .map(WorldEvent::Berserk)
+                .into_iter()
+                .collect()
+        }
+        crate::abilities::EQMAC_CANCEL_SNEAK_HIDE_OPCODE => {
+            ensure!(body.is_empty(), "invalid EQMac hide end length");
+            vec![WorldEvent::HideAndSneakEnded]
         }
         0x9941 => {
             ensure!(

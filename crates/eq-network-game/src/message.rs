@@ -41,6 +41,10 @@ pub enum Message {
     /// as what the next one shows it to be; no other feature hears it, and
     /// the host hears nothing of it.
     Withheld,
+    /// A message of a kind no server is known to send: the kind, which
+    /// nothing reads. The zone session tells of each kind of a message once
+    /// and drops it.
+    UnknownKind(u32),
     /// A packet that could not be read.
     Unreadable {
         /// What the packet was about.
@@ -137,6 +141,7 @@ pub fn titanium(opcode: u16, body: &[u8]) -> Vec<Message> {
         ),
         zoning::HANDOFF_OPCODE => Message::Handoff(body.to_vec()),
         LOGOUT_REPLY_OPCODE => Message::LoggedOut,
+        crate::buffs::TITANIUM_ACTION_OPCODE => action(crate::buffs::titanium_action(body)),
         crate::zones::TITANIUM_HEADER_OPCODE => {
             messages.extend(crate::clock::titanium_zone_sky(body).map(sky));
             described(crate::zones::titanium_description(body))
@@ -182,6 +187,7 @@ pub fn eqmac(opcode: u16, body: &[u8]) -> Vec<Message> {
             Message::ZonePoints,
         )],
         crate::quarm::ZONE_PLAYER_PROFILE => eqmac_profile(body),
+        crate::buffs::EQMAC_ACTION_OPCODE => vec![action(crate::buffs::eqmac_action(body))],
         crate::quarm::ZONE_NEW => crate::clock::eqmac_zone_sky(body)
             .map(sky)
             .into_iter()
@@ -233,6 +239,17 @@ fn eqmac_profile(body: &[u8]) -> Vec<Message> {
     messages
 }
 
+/// What an action says: a spell's, the spin, or a kind no server is known
+/// to send.
+fn action(action: anyhow::Result<crate::buffs::Action>) -> Message {
+    match action {
+        Ok(crate::buffs::Action::Spell(effect)) => Message::Event(WorldEvent::SpellEffect(effect)),
+        Ok(crate::buffs::Action::Spin) => Message::Event(WorldEvent::Spun),
+        Ok(crate::buffs::Action::Other(kind)) => Message::UnknownKind(kind.into()),
+        Err(error) => unreadable(Part::World, &error),
+    }
+}
+
 /// A zone's sky, as its header gives it.
 fn sky(sky: crate::clock::ZoneSky) -> Message {
     Message::Event(WorldEvent::Sky(sky))
@@ -280,6 +297,35 @@ mod tests {
                     endurance: 80
                 })
             ]
+        ));
+    }
+
+    #[test]
+    fn an_action_is_a_spells_the_spin_or_a_kind_no_server_sends() {
+        let mut spin = [0u8; 31];
+        spin[..4].copy_from_slice(&[0x0b, 0x0a, 0x0b, 0x0a]);
+        assert!(matches!(
+            titanium(crate::buffs::TITANIUM_ACTION_OPCODE, &spin)[..],
+            [Message::Event(WorldEvent::Spun)]
+        ));
+        let mut melee = spin;
+        melee[..4].copy_from_slice(&[7, 0, 8, 0]);
+        melee[22] = 1;
+        assert!(matches!(
+            titanium(crate::buffs::TITANIUM_ACTION_OPCODE, &melee)[..],
+            [Message::UnknownKind(1)]
+        ));
+        melee[22] = 231;
+        assert!(matches!(
+            titanium(crate::buffs::TITANIUM_ACTION_OPCODE, &melee)[..],
+            [Message::Event(WorldEvent::SpellEffect(_))]
+        ));
+        assert!(matches!(
+            titanium(crate::buffs::TITANIUM_ACTION_OPCODE, &melee[..30])[..],
+            [Message::Unreadable {
+                part: Part::World,
+                ..
+            }]
         ));
     }
 

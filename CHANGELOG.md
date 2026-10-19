@@ -156,6 +156,42 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- The server's hold on the player, on both generations, read from the
+  emulators' sources and not yet checked live: a stun
+  (`WorldEvent::Stun`: its length, or none as one ends) from `OP_Stun`; a
+  player's charm taking hold or ending, and the server giving a player
+  back the control it took for a charm or a fear (`WorldEvent::Charm`, a
+  `control::Charm`), from `OP_Charm`; and on `EQMac`, the server taking
+  the player's control and giving it back (`WorldEvent::Controlled`) from
+  `OP_FreezeClientControl`, `OP_UnfreezeClientControl` and
+  `OP_ReturnClientControl`, and a warrior going berserk and calming down
+  (`WorldEvent::Berserk`) from `OP_BerserkStart` and `OP_BerserkEnd`, which
+  the table now lists. `EQEmu` tells a Titanium client of its control
+  with the player's own posture, which the session already reads
+  (`PostureState::Frozen`). Hosts that match `WorldEvent` exhaustively
+  need arms for the four.
+- The push a hit or a spell gives, on both generations: `Damage` and
+  `SpellEffect` gain `push` (`combat::Push`: the force, the heading in
+  `Position`'s 512-unit turn and the pitch, as the server sends them),
+  none when the server sends no force and no pitch. Nothing applies it
+  yet. `Damage` and `SpellEffect` no longer implement `Eq`, since the push
+  is made of floats. A push that is not a finite number reads as none, and
+  the record carrying it still reads.
+- The spin a quest gives the player, on both generations:
+  `WorldEvent::Spun`, from `Mob::Spin`'s fixed record in `OP_Action`, which
+  the session now reads whole. `buffs::Action` says what an action is (a
+  spell's, the spin, or another kind), from `buffs::titanium_action` and
+  `buffs::eqmac_action`; `message::titanium` and `message::eqmac` read
+  `OP_Action` instead of `world::titanium_update` and `quarm::updates`.
+  No server is known to send an action of another kind: `Message` gains
+  `UnknownKind`, which the zone session drops, telling of each message's
+  kind once a session as a diagnostic that names only the opcode and the
+  kind. Hosts that match `WorldEvent` exhaustively need an arm for `Spun`.
+- The server's end of the player's hiding and sneaking, on both
+  generations: `WorldEvent::HideAndSneakEnded`, from `OP_CancelSneakHide`.
+  `Request` gains `Unhide`, which `abilities::titanium_unhide` encodes.
+  Hosts that match `WorldEvent` exhaustively need an arm for it.
+
 - The zone's weather, on both generations: `WorldEvent::Weather`
   (`clock::Weather`: clear, or rain or snow with the server's intensity),
   once the player is in the zone and whenever it changes.
@@ -193,8 +229,8 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   types that send it and the parts of the session that read it, or why it
   is left unread (work still to come, an answer to a request eq-network
   never sends, parked work, or nothing in it worth reading), taken from
-  `EQEmu`'s, TAKP's and Quarm's sources: Titanium's 259 messages, 109 of
-  them read, and `EQMac`'s 175, 74 read. A zone session now tells once, as
+  `EQEmu`'s, TAKP's and Quarm's sources: Titanium's 259 messages, 112 of
+  them read, and `EQMac`'s 176, 82 read. A zone session now tells once, as
   a diagnostic, of each message it leaves unread with the reason (but one
   with nothing worth reading, and an empty one under opcode 0, where
   `EQEmu` sends what Titanium has no opcode for, such as the empty
@@ -814,6 +850,26 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- A damage shield's record (`OP_Damage` of kinds 244 to 249,
+  `combat::DAMAGE_SHIELD_KINDS`) reads as the points the shield dealt,
+  `DamageOutcome::Hit`. Both servers send those points negated, so a
+  shield of 1 to 6 points read as a block, parry, riposte, dodge,
+  invulnerability or rune, and a larger one as an unknown code. A spell
+  that took hold and dealt nothing (kind 231, value 0) reads as the new
+  `DamageOutcome::Landed` rather than a miss, and TAKP's and Quarm's
+  lifetap record to its caster, which names the caster as both target and
+  source, as the new `DamageOutcome::Tapped` with the points taken. Hosts
+  that match `DamageOutcome` exhaustively need arms for both.
+- On `EQEmu`, a player whose hiding the server ended (a spell on them, a
+  trap, looting, an item's use or a trade) stayed hidden from the zone,
+  NPCs included, until they moved: `EQEmu` keeps the player hidden until
+  the client answers its `OP_CancelSneakHide`, which its source says the
+  Titanium client does, and the session never did. It now answers as
+  `EQEmu` expects, with the player's own appearance, invisibility 0
+  (`Request::Unhide`), on `EQEmu` alone, inferred from its source and not
+  yet checked live or against the official client. P99 hears nothing back
+  until its hiding is checked live there, and TAKP and Quarm end the
+  hiding themselves.
 - A zone's door table is no longer refused whole when it holds two or more
   static objects. `EQEmu` lists each of a zone's static objects (an object
   of type 0) in the door table with door ID 255, so that ID repeats, and
