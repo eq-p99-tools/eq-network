@@ -164,6 +164,14 @@ pub(super) trait ServerType: Sync {
         None
     }
 
+    /// Whether the world's character list is checked to carry each
+    /// character's look, and on `EQMac` its level and zone, as the client
+    /// generation's list lays them out; a front end draws a character at
+    /// select only where it does. False until checked for this server type.
+    fn character_looks(&self) -> bool {
+        false
+    }
+
     /// The effect flag of the spell action that says a spell landed on its
     /// target, so a front end can draw the landing; None until it is checked
     /// for this server type.
@@ -825,6 +833,12 @@ impl ServerType for EqEmu {
         true
     }
 
+    /// Its list fills each character's look from the character's worn
+    /// items (world/worlddb.cpp `GetCharSelectInfo`).
+    fn character_looks(&self) -> bool {
+        true
+    }
+
     fn creation(&self) -> Option<&'static dyn Creation> {
         Some(&creation::Titanium)
     }
@@ -1010,6 +1024,12 @@ impl ServerType for Takp {
 
     fn creation(&self) -> Option<&'static dyn Creation> {
         Some(&creation::EqMac)
+    }
+
+    /// Its list fills each character's look, level and zone
+    /// (world/worlddb.cpp `GetCharSelectInfo`).
+    fn character_looks(&self) -> bool {
+        true
     }
 
     /// Casting from the gems and items' click effects, in `EQMac`'s cast
@@ -1310,6 +1330,34 @@ mod tests {
         assert!((eqemu.profile_turn() - 512.0).abs() < f32::EPSILON);
         assert!(eqemu.start_choice());
         assert!(offers(eqemu).contains(&Capability::Falling));
+    }
+
+    #[test]
+    fn character_looks_are_kept_only_where_the_list_is_checked_to_carry_them() {
+        use eq_network_game::GameDialect;
+        let listed = |protocol| server_type(protocol).character_looks();
+        assert!(listed(ServerProtocol::EqEmu));
+        assert!(listed(ServerProtocol::Takp));
+        assert!(!listed(ServerProtocol::Project1999));
+        assert!(!listed(ServerProtocol::Quarm));
+        let mut body = vec![0; 1620];
+        body[..7].copy_from_slice(b"Example");
+        body[640] = 30;
+        body[660..662].copy_from_slice(&330u16.to_le_bytes());
+        for (protocol, kept) in [(ServerProtocol::Takp, true), (ServerProtocol::Quarm, false)] {
+            let entries = super::super::world::character_list(
+                server_type(protocol),
+                GameDialect::EqMac,
+                &body,
+            )
+            .unwrap();
+            assert_eq!(entries[0].level.is_some(), kept, "{protocol:?}");
+            assert_eq!(
+                entries[0].look.map(|look| look.race),
+                kept.then_some(330),
+                "{protocol:?}"
+            );
+        }
     }
 
     #[test]

@@ -245,6 +245,7 @@ mod tests {
                 name: "Example".into(),
                 level: None,
                 zone_id: None,
+                look: None,
             }],
         };
         for (id, slot, expected) in [(9, 3, Some("Example")), (8, 3, None), (9, 2, None)] {

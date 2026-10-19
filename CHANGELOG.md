@@ -156,6 +156,16 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Each character a world lists carries how it looks
+  (`CharacterChoice::look`, a `CharacterLook`): race, gender, class,
+  deity, its worn gear as a spawn's `Appearance` (armour materials and
+  tints, the held items' model numbers, face, hair and beard), eye colours
+  and, on Titanium, whether the world offers Go Home and the tutorial,
+  read from both generations' lists at the emulators' layouts. A server
+  type gives them only where its list is checked to carry them
+  (`EQEmu` and TAKP); elsewhere `look` is `None`, and an `EQMac` list's
+  level and zone stay `None` as before.
+
 - The server's hold on the player, on both generations, read from the
   emulators' sources and not yet checked live: a stun
   (`WorldEvent::Stun`: its length, or none as one ends) from `OP_Stun`; a
