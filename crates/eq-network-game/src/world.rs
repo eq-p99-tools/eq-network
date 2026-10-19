@@ -819,6 +819,10 @@ pub enum WorldEvent {
         /// Both eyes' colors, where the record has them (`EQMac`).
         eye_colors: Option<[u8; 2]>,
     },
+    /// An effect the server plays: on a spawn, on the player's screen, as a
+    /// sound or as a projectile's flight. The session's spawn table keeps
+    /// none.
+    Effect(crate::effects::Effect),
     /// A change in how `/who` lists a player.
     Listing {
         /// Zone-local entity identifier.
@@ -1493,12 +1497,13 @@ pub fn titanium_update(opcode: u16, body: &[u8]) -> Result<Option<WorldEvent>> {
     }))
 }
 
-/// How spawns look and their names, stuns and charms, the end of hiding, a
-/// quest's word on the player's stats, disciplines and reuse timers, the target the server
-/// sets, rewards, sacrifices and translocates, a player becoming a corpse,
-/// doors, ground objects, loot, merchant, exchange, training, resurrection,
-/// group, dice, assist, raid, book, combine, bandaging, chat server, weather
-/// and inventory packets, each owned by its codec.
+/// How spawns look and their names, effects, stuns and charms, the end of
+/// hiding, a quest's word on the player's stats, disciplines and reuse
+/// timers, the target the server sets, rewards, sacrifices and
+/// translocates, a player becoming a corpse, doors, ground objects, loot,
+/// merchant, exchange, training, resurrection, group, dice, assist, raid,
+/// book, combine, bandaging, chat server, weather and inventory packets,
+/// each owned by its codec.
 fn titanium_views(opcode: u16, body: &[u8]) -> Result<Option<WorldEvent>> {
     match opcode {
         crate::rewards::SOUND_OPCODE => {
@@ -1558,6 +1563,8 @@ fn titanium_views(opcode: u16, body: &[u8]) -> Result<Option<WorldEvent>> {
             Some(event)
         } else if let Some(event) = crate::names::titanium(opcode, body)? {
             Some(event)
+        } else if let Some(effect) = crate::effects::titanium(opcode, body)? {
+            Some(WorldEvent::Effect(effect))
         } else if let Some(event) = crate::disciplines::titanium(opcode, body)? {
             Some(event)
         } else if let Some(update) = crate::doors::decode(opcode, body)? {

@@ -196,9 +196,6 @@ pub(super) enum Step {
     /// eq-network does not send yet, the player's begging, disarming, pick
     /// pocketing, poisoning and tracking, and a banker's change.
     PlayerState,
-    /// Spawns' effects: spell and level effects, camera shakes, sounds and
-    /// projectiles.
-    Appearance,
     /// Social, guild, title and GM messages: inspection, duels, guild
     /// membership, titles and last names, popups and the GM notices.
     Social,
@@ -222,7 +219,6 @@ impl fmt::Display for Step {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
             Self::PlayerState => "the player's own state",
-            Self::Appearance => "spawns' effects",
             Self::Social => "social, guild, title and GM messages",
             Self::EqMacWorld => "EQMac's catch-up on the world",
             Self::EqMacExchanges => "EQMac's catch-up on exchanges",
@@ -290,6 +286,35 @@ const RENAME: &[Part] = &[
 const EQMAC_ILLUSION: &[Part] = &[Part(
     "the byte after the textures and the two after the beard",
     Reason::Needless("TAKP and Quarm always send 0xff, then zeros"),
+)];
+/// What the session leaves unread of a spell's nimbus.
+const NIMBUS: &[Part] = &[Part(
+    "the field after the delay and the four bytes after it",
+    Reason::Needless(
+        "EQEmu sets the field to 3000 unless a quest gives another, and the bytes to 1, 1 and 0, \
+         and its comments name no use for them (zone/mob.cpp Mob::SendSpellEffect)",
+    ),
+)];
+/// What the session leaves unread of a Titanium projectile.
+const PROJECTILE: &[Part] = &[Part(
+    "the first word, the two words after the item and the unknown bytes",
+    Reason::Needless(
+        "EQEmu sets the first word to 1 and the two words to 125 and 16, which its comments say \
+         change nothing, and leaves the rest zero (zone/special_attacks.cpp)",
+    ),
+)];
+/// What the session leaves unread of `EQMac`'s projectile.
+const EQMAC_PROJECTILE: &[Part] = &[Part(
+    "the first word, the burst values, the yaw and pitch and the unknown fields",
+    Reason::Needless(
+        "TAKP and Quarm set the first word to 1 and the yaw and pitch to 0, and leave the rest \
+         zero (zone/special_attacks.cpp)",
+    ),
+)];
+/// What the session leaves unread of `EQMac`'s sound.
+const SOUND: &[Part] = &[Part(
+    "the player's own spawn",
+    Reason::Needless("TAKP and Quarm send a sound only to the player it names"),
 )];
 /// What the session leaves unread of `EQMac`'s word that the server took or
 /// gave back the player's control.

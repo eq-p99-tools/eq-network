@@ -178,6 +178,31 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Effects the servers play: `WorldEvent::Effect` (`effects::Effect`). On
+  Titanium, a spell's nimbus on a spawn (`Effect::Nimbus`: the effect, the
+  spawn it plays from and the one it is drawn on, how long it plays and
+  how long its last part waits), from `OP_SpellEffect`, which `EQEmu`
+  sends to the zone as a spell with one lands, to a player zoning in for
+  each one a spawn carries, and for quests; particles on a spawn
+  (`Effect::Particles`: up to five `effects::Particle`s, each an effect and
+  the two values sent with it, kept as sent since `EQEmu`'s comments
+  disagree on what they do), from `OP_LevelAppearance`, which `EQEmu`
+  sends as an NPC rises in level and for the effects it keeps on a spawn;
+  a camera shake (`Effect::CameraShake`: how long and how hard), from
+  `OP_CameraEffect`, which a game master's `#camerashake` and quests send;
+  and a sound file to play (`Effect::Sound` with `effects::Cue::File`),
+  from `OP_PlayMP3`, which only quests send. On `EQMac`, a sound to play
+  by number (`Cue::Number`), from `OP_PlaySound`, which a game master's
+  `#playsound` and quests send. On both, a projectile (`Effect::Projectile`
+  with `effects::Projectile`: the spawn it flies from and the one it flies
+  at, where it starts, its velocity, its launch angle in 512ths of a turn
+  on both wires, its tilt and arc, the item, its type, the skill and the
+  model, and on `EQMac` its light and behavior), from Titanium's
+  `OP_SomeItemPacketMaybe` and `EQMac`'s `OP_Projectile`, which the
+  servers send to the players near an arrow, a thrown item, an NPC's
+  ranged attack or a spell's bolt (TAKP and Quarm send a bolt to the whole
+  zone). Hosts that match `WorldEvent` exhaustively need an arm for it.
+
 - Every kind of appearance update on a spawn, on both generations:
   `WorldEvent::Appearance` (`appearance::AppearanceChange`), from the kinds
   of `OP_SpawnAppearance` the session dropped: PvP, light, sneaking,
@@ -396,8 +421,8 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   types that send it and the parts of the session that read it, or why it
   is left unread (work still to come, an answer to a request eq-network
   never sends, parked work, or nothing in it worth reading), taken from
-  `EQEmu`'s, TAKP's and Quarm's sources: Titanium's 258 messages, 127 of
-  them read, and `EQMac`'s 177, 92 read. A zone session now tells once, as
+  `EQEmu`'s, TAKP's and Quarm's sources: Titanium's 258 messages, 132 of
+  them read, and `EQMac`'s 177, 94 read. A zone session now tells once, as
   a diagnostic, of each message it leaves unread with the reason (but one
   with nothing worth reading, and an empty one under opcode 0, where
   `EQEmu` sends what Titanium has no opcode for, such as the empty
