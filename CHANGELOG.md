@@ -7,6 +7,16 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- Quarm's move of a dead player to their bind point (`OP_GMGoto`) is read
+  as a zone offer home. Quarm's session does not follow zones yet, so it
+  ends there, as it does on Quarm's other moves, where before it stayed on
+  in a zone the server had moved the player out of.
+- An `EQMac` session no longer reads the client's own logout
+  (`OP_Logout`), which neither TAKP nor Quarm sends; their logout reply
+  still ends the session. Titanium's `OP_PreLogoutReply` and Quarm's
+  shared bank offer are listed as left unread with nothing worth reading:
+  the first is empty, and the message after it says what it begins; only
+  Quarm's own client library answers the second.
 - A world's word that the zone being entered is down (`OP_ZoneUnavail`)
   ends the attempt at once, on both generations, telling
   `WorldEvent::ZoneUnavailable` with the zone's short name where the world
@@ -146,6 +156,21 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- The zone's weather, on both generations: `WorldEvent::Weather`
+  (`clock::Weather`: clear, or rain or snow with the server's intensity),
+  once the player is in the zone and whenever it changes.
+- The rest of the zone's header: `WorldEvent::ZoneDescription`
+  (`zones::ZoneDescription`: the long name, the zone's type, gravity, the
+  safe point, `max_z`, the underworld height, the nearest and farthest
+  clip, the experience multiplier and four sets of weather odds, with
+  `EQMac`'s music, sky lock and graveyard time), right after the zone's
+  sky, and both again whenever the server sends the header anew, as GM
+  commands and quests that change the zone do. `EQMac` sessions now read
+  the sky, fog and far clip from the zone header as Titanium's do, so
+  `WorldEvent::Sky` and `Entered.far_clip` come on TAKP and Quarm too.
+  Hosts that match `WorldEvent` exhaustively need arms for both new
+  events.
+
 - What a world tells of itself as the player logs in, on both
   generations: its rules (`WorldEvent::Rules`, a `rules::WorldRules`: the
   player-versus-player ruleset by the server's number, whether no-drop
@@ -169,7 +194,7 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   is left unread (work still to come, an answer to a request eq-network
   never sends, parked work, or nothing in it worth reading), taken from
   `EQEmu`'s, TAKP's and Quarm's sources: Titanium's 259 messages, 109 of
-  them read, and `EQMac`'s 176, 74 read. A zone session now tells once, as
+  them read, and `EQMac`'s 175, 74 read. A zone session now tells once, as
   a diagnostic, of each message it leaves unread with the reason (but one
   with nothing worth reading, and an empty one under opcode 0, where
   `EQEmu` sends what Titanium has no opcode for, such as the empty

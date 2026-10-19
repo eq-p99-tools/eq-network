@@ -8,9 +8,9 @@ use super::{
     ServerMessage,
     Step::{
         AlternateAdvancement, Appearance, Bazaar, EqMacExchanges, EqMacWorld, LaterSystems,
-        PlayerState, Raids, Social, WorldAndSession,
+        PlayerState, Raids, Social,
     },
-    ACTION, DESCRIPTION, EQMAC, LOG_SERVER, PROFILE, PUSH, QUARM, TAKP, WEATHER,
+    ACTION, EQMAC, EQMAC_DESCRIPTION, LOG_SERVER, PROFILE, PUSH, QUARM, TAKP,
 };
 
 /// What the session does with a message `EQMac`'s servers send; nothing for
@@ -80,7 +80,7 @@ pub(in crate::client) fn eqmac(opcode: u16) -> Option<ServerMessage> {
             EQMAC,
             Partly(&[Admission, Zone], PROFILE),
         ),
-        0x3641 => sent("OP_Weather", EQMAC, Partly(&[Admission], WEATHER)),
+        0x3641 => sent("OP_Weather", EQMAC, Read(&[Admission, Zone])),
         0x3642 => sent("OP_FormattedMessage", EQMAC, Read(&[Chat])),
         0x3741 => sent("OP_Consider", EQMAC, Read(&[Zone])),
         0x3840 => sent("OP_ShopDelItem", EQMAC, Read(&[Zone])),
@@ -119,9 +119,6 @@ pub(in crate::client) fn eqmac(opcode: u16) -> Option<ServerMessage> {
         0x4e40 => sent("OP_LootRequest", EQMAC, planned(EqMacExchanges)),
         0x4f41 => sent("OP_GMZoneRequest", EQMAC, unasked(Social)),
         0x5040 => sent("OP_MoneyOnCorpse", EQMAC, planned(EqMacExchanges)),
-        // The client's own logout: neither server's source sends it, yet the
-        // session takes it as one.
-        0x5041 => sent("OP_Logout", &[], Read(&[Admission, Zone])),
         0x5200 => sent(
             "OP_LoginBanner",
             TAKP,
@@ -135,7 +132,11 @@ pub(in crate::client) fn eqmac(opcode: u16) -> Option<ServerMessage> {
         0x5900 => sent("OP_SessionReady", TAKP, Read(&[Login])),
         0x5941 => sent("OP_LogoutReply", EQMAC, Read(&[Zone])),
         0x5a41 => sent("OP_CancelSneakHide", EQMAC, planned(PlayerState)),
-        0x5b40 => sent("OP_NewZone", EQMAC, Partly(&[Admission], DESCRIPTION)),
+        0x5b40 => sent(
+            "OP_NewZone",
+            EQMAC,
+            Partly(&[Admission, Zone], EQMAC_DESCRIPTION),
+        ),
         0x5b41 => sent("OP_Stun", EQMAC, planned(PlayerState)),
         0x5d41 => sent("OP_DuelAccept / OP_DuelResponse2", EQMAC, planned(Social)),
         0x5f41 => sent("OP_ZoneSpawns", EQMAC, Read(&[Zone])),
@@ -151,7 +152,7 @@ pub(in crate::client) fn eqmac(opcode: u16) -> Option<ServerMessage> {
         0x6b42 => sent("OP_NewSpawn", EQMAC, Read(&[Zone])),
         0x6c40 => sent("OP_GMKill", EQMAC, planned(Social)),
         0x6d40 => sent("OP_GMKick", EQMAC, planned(Social)),
-        0x6e40 => sent("OP_GMGoto", QUARM, planned(WorldAndSession)),
+        0x6e40 => sent("OP_GMGoto", QUARM, Read(&[Zone])),
         0x6e41 => sent("OP_GMLastName", EQMAC, planned(EqMacWorld)),
         0x6f40 => sent("OP_ZoneInAvatarSet", EQMAC, Read(&[Admission])),
         0x7841 => sent("OP_SummonedItem", EQMAC, Read(&[Zone])),
@@ -227,7 +228,14 @@ pub(in crate::client) fn eqmac(opcode: u16) -> Option<ServerMessage> {
                 &[Admission, Zone, Answer],
                 &[
                     Part("the other appearance kinds", Planned(Appearance)),
-                    Part("Quarm's shared bank offer", Planned(WorldAndSession)),
+                    Part(
+                        "Quarm's shared bank offer",
+                        Needless(
+                            "only Quarm's own client library answers it, and Quarm leaves the \
+                             shared bank off unanswered (zone/client_packet.cpp \
+                             ClientFeature::SharedBankBagsSupported)",
+                        ),
+                    ),
                 ],
             ),
         ),

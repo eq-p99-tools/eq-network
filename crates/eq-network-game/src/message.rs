@@ -83,7 +83,8 @@ impl fmt::Display for Part {
 /// What one Titanium zone packet says. A mana update is both a spell notice
 /// and a change in resources, so one packet can say two things; the player's
 /// profile says what is in their spellbook, which buffs they wear and the
-/// coins they carry.
+/// coins they carry, and the zone's header its sky and the rest of its
+/// description.
 #[must_use]
 pub fn titanium(opcode: u16, body: &[u8]) -> Vec<Message> {
     let mut messages = Vec::new();
@@ -136,6 +137,10 @@ pub fn titanium(opcode: u16, body: &[u8]) -> Vec<Message> {
         ),
         zoning::HANDOFF_OPCODE => Message::Handoff(body.to_vec()),
         LOGOUT_REPLY_OPCODE => Message::LoggedOut,
+        crate::zones::TITANIUM_HEADER_OPCODE => {
+            messages.extend(crate::clock::titanium_zone_sky(body).map(sky));
+            described(crate::zones::titanium_description(body))
+        }
         _ => match inventory::decode(opcode, body) {
             Ok(Some(update)) => Message::Event(WorldEvent::Inventory(update)),
             Err(error) => unreadable(Part::Inventory, &error),
@@ -152,14 +157,19 @@ pub fn titanium(opcode: u16, body: &[u8]) -> Vec<Message> {
 
 /// What one `EQMac` zone packet says: the spawns and the player's news that
 /// [`crate::quarm::updates`] reads, the inventory, the server logging the
-/// character out, its request that the client move, its answer to the
-/// client's request, the zone's numbered destinations, and the player's
-/// bind point from their profile.
+/// character out, its request that the client move and Quarm's move of a
+/// dead player to their bind point, its answer to the client's request, the
+/// zone's numbered destinations, the zone's header, and the player's bind
+/// point from their profile.
 #[must_use]
 pub fn eqmac(opcode: u16, body: &[u8]) -> Vec<Message> {
     match opcode {
-        crate::quarm::ZONE_LOGOUT | crate::quarm::ZONE_LOGOUT_REPLY => vec![Message::LoggedOut],
+        crate::quarm::ZONE_LOGOUT_REPLY => vec![Message::LoggedOut],
         crate::quarm::ZONE_CHANGE_REQUEST => vec![crate::quarm::zone_request(body).map_or_else(
+            |error| unreadable(Part::ZoneOffer, &error),
+            Message::ZoneOffer,
+        )],
+        crate::quarm::ZONE_TO_BIND => vec![crate::quarm::to_bind(body).map_or_else(
             |error| unreadable(Part::ZoneOffer, &error),
             Message::ZoneOffer,
         )],
@@ -172,6 +182,11 @@ pub fn eqmac(opcode: u16, body: &[u8]) -> Vec<Message> {
             Message::ZonePoints,
         )],
         crate::quarm::ZONE_PLAYER_PROFILE => eqmac_profile(body),
+        crate::quarm::ZONE_NEW => crate::clock::eqmac_zone_sky(body)
+            .map(sky)
+            .into_iter()
+            .chain([described(crate::zones::eqmac_description(body))])
+            .collect(),
         crate::money::EQMAC_PURSE_OPCODE => vec![crate::money::eqmac_purse_addition(body)
             .map_or_else(|error| unreadable(Part::World, &error), Message::PurseAdded)],
         crate::combat::EQMAC_CONSIDER_OPCODE => {
@@ -216,6 +231,19 @@ fn eqmac_profile(body: &[u8]) -> Vec<Message> {
         Err(error) => messages.push(unreadable(Part::World, &error)),
     }
     messages
+}
+
+/// A zone's sky, as its header gives it.
+fn sky(sky: crate::clock::ZoneSky) -> Message {
+    Message::Event(WorldEvent::Sky(sky))
+}
+
+/// The rest of a zone's description, or why its header could not be read.
+fn described(description: anyhow::Result<crate::zones::ZoneDescription>) -> Message {
+    description.map_or_else(
+        |error| unreadable(Part::World, &error),
+        |description| Message::Event(WorldEvent::ZoneDescription(description)),
+    )
 }
 
 /// The events a reading gives, or why it could not be read.
@@ -324,6 +352,45 @@ mod tests {
     }
 
     #[test]
+    fn a_zone_header_says_its_sky_and_the_rest_of_its_description() {
+        let header = |length: usize| {
+            let mut header = vec![0; length];
+            header[96..103].copy_from_slice(b"Example");
+            header[474] = 1;
+            header
+        };
+        // As GM commands and quests send it again: EQEmu's 740 bytes, of
+        // which Titanium takes 700, and EQMac's 572.
+        for messages in [
+            titanium(crate::zones::TITANIUM_HEADER_OPCODE, &header(740)),
+            eqmac(crate::quarm::ZONE_NEW, &header(572)),
+        ] {
+            assert!(matches!(
+                &messages[..],
+                [
+                    Message::Event(WorldEvent::Sky(sky)),
+                    Message::Event(WorldEvent::ZoneDescription(description)),
+                ] if sky.sky == 1 && description.long_name == "Example"
+            ));
+        }
+        // A header too short for its sky says only why it is unreadable.
+        assert!(matches!(
+            &titanium(crate::zones::TITANIUM_HEADER_OPCODE, &header(740)[..400])[..],
+            [Message::Unreadable {
+                part: Part::World,
+                ..
+            }]
+        ));
+        assert!(matches!(
+            &eqmac(crate::quarm::ZONE_NEW, &header(700))[..],
+            [Message::Unreadable {
+                part: Part::World,
+                ..
+            }]
+        ));
+    }
+
+    #[test]
     fn takps_merchant_list_is_one_message_for_the_session() {
         // A list that cannot be read says so; one that can is a
         // `MerchantList` (its records are read in `merchant::eqmac_list`).
@@ -338,12 +405,13 @@ mod tests {
 
     #[test]
     fn eqmac_packets_say_the_same_things_in_their_own_layouts() {
-        use crate::quarm::{ZONE_CHANGE_REQUEST, ZONE_LOGOUT, ZONE_LOGOUT_REPLY};
-        assert!(matches!(eqmac(ZONE_LOGOUT, &[])[..], [Message::LoggedOut]));
+        use crate::quarm::{ZONE_CHANGE_REQUEST, ZONE_LOGOUT, ZONE_LOGOUT_REPLY, ZONE_TO_BIND};
         assert!(matches!(
             eqmac(ZONE_LOGOUT_REPLY, &[])[..],
             [Message::LoggedOut]
         ));
+        // The client's own logout, which no server sends, says nothing.
+        assert!(eqmac(ZONE_LOGOUT, &[]).is_empty());
         // A despawn, then a health update that says two things.
         assert!(matches!(
             eqmac(0x2940, &[9, 0])[..],
@@ -375,6 +443,13 @@ mod tests {
                 part: Part::ZoneOffer,
                 ..
             }]
+        ));
+        // Quarm's move of a dead player to their bind point.
+        let mut to_bind = [0; 152];
+        to_bind[132..136].copy_from_slice(&4u32.to_le_bytes());
+        assert!(matches!(
+            &eqmac(ZONE_TO_BIND, &to_bind)[..],
+            [Message::ZoneOffer(offer)] if offer.zone_id == 4 && offer.to_bind && offer.solicited
         ));
         assert!(matches!(
             eqmac(0x2940, &[9])[..],

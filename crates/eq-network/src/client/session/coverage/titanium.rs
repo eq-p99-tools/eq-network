@@ -6,11 +6,8 @@ use super::{
     Reading::{Partly, Read, Unread},
     Reason::{Needless, Planned, Unmapped},
     ServerMessage,
-    Step::{
-        AlternateAdvancement, Appearance, Bazaar, LaterSystems, PlayerState, Raids, Social,
-        WorldAndSession,
-    },
-    ACTION, APPEARANCE, DESCRIPTION, EQEMU, P99, PROFILE, PUSH, WEATHER,
+    Step::{AlternateAdvancement, Appearance, Bazaar, LaterSystems, PlayerState, Raids, Social},
+    ACTION, APPEARANCE, EQEMU, P99, PROFILE, PUSH, TITANIUM_DESCRIPTION,
 };
 
 /// What the session does with a message Titanium's servers send; nothing
@@ -46,7 +43,11 @@ pub(in crate::client) fn titanium(opcode: u16) -> Option<ServerMessage> {
             EQEMU,
             unasked(AlternateAdvancement),
         ),
-        0x0920 => sent("OP_NewZone", EQEMU, Partly(&[Admission], DESCRIPTION)),
+        0x0920 => sent(
+            "OP_NewZone",
+            EQEMU,
+            Partly(&[Admission, Zone], TITANIUM_DESCRIPTION),
+        ),
         0x0937 => sent("OP_CameraEffect", EQEMU, planned(Appearance)),
         0x098e => sent("OP_DzExpeditionInfo", EQEMU, planned(LaterSystems)),
         0x09b6 => sent("OP_DzMemberList", EQEMU, planned(LaterSystems)),
@@ -124,7 +125,7 @@ pub(in crate::client) fn titanium(opcode: u16) -> Option<ServerMessage> {
             EQEMU,
             unasked(LaterSystems),
         ),
-        0x254d => sent("OP_Weather", EQEMU, Partly(&[Admission], WEATHER)),
+        0x254d => sent("OP_Weather", EQEMU, Read(&[Admission, Zone])),
         0x267c => sent("OP_MoneyUpdate", EQEMU, Read(&[Zone])),
         0x26ab => sent("OP_PlayMP3", EQEMU, planned(Appearance)),
         0x27b3 => sent("OP_TributeMoney", EQEMU, unasked(LaterSystems)),
@@ -295,7 +296,14 @@ pub(in crate::client) fn titanium(opcode: u16) -> Option<ServerMessage> {
         0x700d => sent("OP_MoveDoor", EQEMU, Read(&[Zone])),
         0x704f => sent("OP_GuildSelectTribute", EQEMU, planned(LaterSystems)),
         0x7081 => sent("OP_LootItem", EQEMU, Read(&[Zone])),
-        0x711e => sent("OP_PreLogoutReply", EQEMU, planned(WorldAndSession)),
+        0x711e => sent(
+            "OP_PreLogoutReply",
+            EQEMU,
+            Unread(Needless(
+                "it is empty, and the logout reply, zone change, death or sacrifice after it says \
+                 what it begins (zone/client.cpp SendLogoutPackets)",
+            )),
+        ),
         0x712a => sent("OP_GuildMemberDelete", EQEMU, planned(Social)),
         0x7180 => sent("OP_DisciplineUpdate", EQEMU, planned(PlayerState)),
         0x7213 => sent("OP_ZoneEntry", EQEMU, Read(&[Admission])),

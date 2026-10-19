@@ -11,10 +11,14 @@ use super::{Admission, Handshake, Zone};
 use crate::client::session::{feature::World, put_string, ClientEvent, ConnectionStage};
 use crate::world::PlayerState;
 use anyhow::{bail, ensure, Result};
-use eq_network_game::quarm::{
-    self, ZONE_AVATAR_READY, ZONE_CHANGE_REQUEST, ZONE_CLIENT_UPDATE, ZONE_DATA_RATE, ZONE_ENTRY,
-    ZONE_EXPERIENCE_READY, ZONE_LOGOUT, ZONE_NEW, ZONE_PLAYER_PROFILE, ZONE_REQUEST_NEW,
-    ZONE_REQUEST_SPAWNS, ZONE_SERVER_FILTER, ZONE_SPAWN_APPEARANCE, ZONE_WEATHER,
+use eq_network_game::{
+    clock,
+    quarm::{
+        self, ZONE_AVATAR_READY, ZONE_CHANGE_REQUEST, ZONE_CLIENT_UPDATE, ZONE_DATA_RATE,
+        ZONE_ENTRY, ZONE_EXPERIENCE_READY, ZONE_NEW, ZONE_PLAYER_PROFILE, ZONE_REQUEST_NEW,
+        ZONE_REQUEST_SPAWNS, ZONE_SERVER_FILTER, ZONE_SPAWN_APPEARANCE, ZONE_WEATHER,
+    },
+    zones,
 };
 use eq_network_transport::Application;
 use std::time::Instant;
@@ -43,7 +47,7 @@ pub(in crate::client) struct EqMacAdmission {
     own_spawn: Option<quarm::OwnSpawn>,
     /// The player's spawn, as the zone's appearance named it.
     assigned_id: Option<u16>,
-    zone: Option<String>,
+    zone: Option<Zone>,
     step: Step,
 }
 
@@ -142,7 +146,12 @@ impl Admission for EqMacAdmission {
                     Some(handshake.session.last_received_seconds()),
                 )?;
                 handshake.session.send(ZONE_REQUEST_SPAWNS, &[])?;
-                self.zone = Some(name);
+                self.zone = Some(Zone {
+                    name,
+                    far_clip: crate::world::eqmac_far_clip(&packet.body),
+                    sky: clock::eqmac_zone_sky(&packet.body),
+                    description: zones::eqmac_description(&packet.body).ok(),
+                });
                 self.step = self.step.max(Step::Described);
             }
             ZONE_EXPERIENCE_READY if self.step == Step::Described => {
@@ -168,28 +177,21 @@ impl Admission for EqMacAdmission {
                     .log
                     .send(ClientEvent::Progress(ConnectionStage::EnteringWorld))?;
             }
-            ZONE_LOGOUT => bail!("server logged the character out"),
             ZONE_CHANGE_REQUEST => bail!("server requested a new zone during admission"),
             _ => (),
         }
-        let (Step::Ready, Some(spawn), Some(spawn_id), Some(zone)) = (
+        let (Step::Ready, Some(spawn), Some(spawn_id), true) = (
             self.step,
             self.own_spawn.as_ref(),
             self.assigned_id,
-            self.zone.as_ref(),
+            self.zone.is_some(),
         ) else {
             return Ok(None);
         };
         let player = self.player(spawn_id, spawn);
-        let zone = Zone {
-            name: zone.clone(),
-            // The EQMac zone header's clip and sky fields have not been verified.
-            far_clip: None,
-            sky: None,
-        };
         world.admitted = Some(Instant::now());
         self.step = Step::Admitted;
-        Ok(Some((player, zone)))
+        Ok(self.zone.take().map(|zone| (player, zone)))
     }
 }
 
@@ -257,8 +259,11 @@ mod tests {
         let mut own = [0; 356];
         own[5..12].copy_from_slice(b"Example");
         own[80..84].copy_from_slice(&42.0f32.to_le_bytes());
-        let mut description = [0; 96];
+        // The zone's 572-byte header: its name, far clip and description.
+        let mut description = [0; 572];
         description[64..71].copy_from_slice(b"example");
+        description[96..103].copy_from_slice(b"Example");
+        description[512..516].copy_from_slice(&300.0f32.to_le_bytes());
         // A version check during the entry is the wire's to answer.
         assert!(read(
             &mut admission,
@@ -294,6 +299,12 @@ mod tests {
         assert_eq!((player.spawn_id, player.level), (7, 12));
         assert!((player.position.x - 42.0).abs() < f32::EPSILON);
         assert_eq!(zone.name, "example");
+        assert_eq!(zone.far_clip, Some(300.0));
+        assert!(zone.sky.is_some());
+        assert_eq!(
+            zone.description.map(|description| description.long_name),
+            Some("Example".to_owned())
+        );
         assert_eq!(world.own_spawn, Some(7));
         assert!(world.admitted.is_some());
         // Once admitted, the handshake takes nothing more.
@@ -317,7 +328,7 @@ mod tests {
     }
 
     #[test]
-    fn readiness_before_the_profile_or_a_logout_ends_the_admission() {
+    fn readiness_before_the_profile_ends_the_admission() {
         let config = ClientConfig::new("ACCOUNT", "PASSWORD", "Test Server", "Example");
         let mut handler = |_| Ok(());
         let mut log = Events::new(&config, &mut handler);
@@ -348,14 +359,12 @@ mod tests {
                 )
                 .unwrap();
         }
-        for opcode in [ZONE_AVATAR_READY, ZONE_LOGOUT] {
-            let mut packet = Application {
-                opcode,
-                body: Vec::new(),
-            };
-            assert!(admission
-                .read(&mut packet, &mut world, &mut handshake)
-                .is_err());
-        }
+        let mut ready = Application {
+            opcode: ZONE_AVATAR_READY,
+            body: Vec::new(),
+        };
+        assert!(admission
+            .read(&mut ready, &mut world, &mut handshake)
+            .is_err());
     }
 }
