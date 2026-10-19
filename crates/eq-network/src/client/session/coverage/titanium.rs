@@ -4,7 +4,7 @@ use super::{
     planned, sent, unasked, Part,
     Reader::{Admission, Chat, Login, World, Zone},
     Reading::{Partly, Read, Unread},
-    Reason::{Needless, Planned},
+    Reason::{Needless, Planned, Unmapped},
     ServerMessage,
     Step::{AlternateAdvancement, Appearance, Bazaar, LaterSystems, PlayerState, Raids, Social},
     APPEARANCE, EQEMU, P99, PROFILE, REWARD, SACRIFICE, TITANIUM_DESCRIPTION, TRANSLOCATE,
@@ -15,15 +15,11 @@ use super::{
 #[allow(clippy::too_many_lines, reason = "one row per message")]
 pub(in crate::client) fn titanium(opcode: u16) -> Option<ServerMessage> {
     Some(match opcode {
-        0x0000 => sent(
-            "a message with no Titanium opcode",
-            EQEMU,
-            Unread(Needless(
-                "EQEmu sends any message Titanium has no opcode for as 0x0000, as is \
-                 (common/net/eqstream.cpp), such as OP_TargetReject after a /target this \
-                 client never sends, so it cannot say what it was",
-            )),
-        ),
+        // `EQEmu`'s Titanium opcode list leaves OP_FinishWindow and
+        // OP_FinishWindow2 at 0, and its stream sends them under 0, empty,
+        // after a container closes or a trade ends; OP_TargetReject goes
+        // the same way, after a /target this client never sends.
+        0x0000 => sent("an unmapped message", EQEMU, Unread(Unmapped)),
         0x0016 => sent("OP_ChatMessage", EQEMU, Read(&[Login])),
         0x0017 => sent("OP_LoginAccepted", EQEMU, Read(&[Login])),
         0x0018 => sent("OP_ServerListResponse", EQEMU, Read(&[Login])),

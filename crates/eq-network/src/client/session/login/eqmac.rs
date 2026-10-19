@@ -87,7 +87,7 @@ pub(in crate::client::session) fn login(
             }
             LOGIN_SERVER_LIST if requested_list && !choice.listed() => {
                 let servers = parse_server_list(&packet.body)?;
-                if let Some(world) = choice.list(servers, &config.server, log)? {
+                if let Some(world) = choice.list(servers, config, log)? {
                     play(&mut session, world)?;
                 }
             }
