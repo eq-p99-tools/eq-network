@@ -31,6 +31,9 @@ pub mod control;
 pub mod corpses;
 /// Titanium character creation requests and stat rules.
 pub mod creation;
+/// The player's disciplines and their reuse timers, and the reuse timers
+/// groups of spells share.
+pub mod disciplines;
 /// Server-defined interactive doors and their movement notifications.
 pub mod doors;
 /// Handing items to another character: the give and trade windows.
@@ -81,6 +84,8 @@ pub mod servers;
 pub mod socials;
 /// Server-driven spellbook and casting notifications.
 pub mod spells;
+/// A quest's word on the player's base stats.
+pub mod stats;
 /// The player's target as the server sets it, and whom that target targets.
 pub mod targets;
 /// Tradeskill combines in the player's own containers.

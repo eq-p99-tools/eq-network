@@ -88,6 +88,17 @@ pub struct PlayerState {
     /// Unspent practice points, which training at a guildmaster spends, when
     /// decoded.
     pub practice_points: Option<u32>,
+    /// The player's skill in each language, 0 to 100, by the language's
+    /// number (0 is the Common Tongue), when decoded: the 28 Titanium's
+    /// profile lists, and the 26 TAKP and Quarm fill of the `EQMac` profile's
+    /// room for 32 (`common/patches/mac.cpp`). Skill updates for skill
+    /// [`LANGUAGE_SKILLS`] and up change it ([`PlayerState::apply_skill`]).
+    pub languages: Option<Vec<u8>>,
+    /// The disciplines the player knows, by spell ID, in the list's 100
+    /// slots, 0 for an empty one, when decoded: Titanium's profile, which
+    /// `EQEmu` leaves empty until its list follows for a player who knows
+    /// any ([`WorldEvent::Disciplines`]). The `EQMac` profile lists none.
+    pub disciplines: Option<Vec<u32>>,
     /// Numeric gender identifier.
     pub gender: u32,
     /// Current level.
@@ -122,10 +133,28 @@ pub struct PlayerState {
     pub name_parts: crate::names::NameParts,
 }
 
+/// Where languages begin among skill numbers: every server tells of a
+/// language's skill as skill 100 plus the language's number
+/// (`Client::SetLanguageSkill`).
+pub const LANGUAGE_SKILLS: u32 = 100;
+
 impl PlayerState {
-    /// Updates only an existing skill slot; unknown IDs never grow profile storage.
+    /// Updates only an existing skill or language slot, a language's
+    /// numbered from [`LANGUAGE_SKILLS`]; unknown IDs never grow profile
+    /// storage, and a language's value beyond a byte changes nothing.
     pub fn apply_skill(&mut self, skill_id: u32, value: u32) {
-        if let Some(slot) = usize::try_from(skill_id).ok().and_then(|index| {
+        if let Some(language) = skill_id.checked_sub(LANGUAGE_SKILLS) {
+            if let (Some(slot), Ok(value)) = (
+                usize::try_from(language).ok().and_then(|index| {
+                    self.languages
+                        .as_mut()
+                        .and_then(|languages| languages.get_mut(index))
+                }),
+                u8::try_from(value),
+            ) {
+                *slot = value;
+            }
+        } else if let Some(slot) = usize::try_from(skill_id).ok().and_then(|index| {
             self.skills
                 .as_mut()
                 .and_then(|skills| skills.get_mut(index))
@@ -1144,11 +1173,33 @@ pub enum WorldEvent {
     HideAndSneakEnded,
     /// Own-character skill update; unknown skill IDs remain available to consumers.
     Skill {
-        /// Protocol skill index (22 is dual wield).
+        /// Protocol skill index (22 is dual wield); from
+        /// [`LANGUAGE_SKILLS`] on, a language's.
         skill_id: u32,
         /// New server skill value.
         value: u32,
     },
+    /// A quest's word on the player's base stats: each stat's new value or
+    /// its rise, which the record does not tell apart ([`crate::stats`]);
+    /// the next profile has them as the server keeps them.
+    StatsChanged(crate::stats::StatChange),
+    /// A skill's button is ready again, by the servers' number for the
+    /// skill: `EQMac`'s servers' word, before the official client's own
+    /// wait ends ([`crate::abilities::eqmac_reset_skill`]).
+    SkillReady(u32),
+    /// The disciplines the player knows, by spell ID, in the list's 100
+    /// slots, 0 for an empty one: `EQEmu`'s list once the zone has admitted
+    /// a player who knows any, and as it changes ([`crate::disciplines`]).
+    Disciplines(Vec<u32>),
+    /// A discipline reuse timer as the server set it. `EQEmu`'s copies at
+    /// zone-in of timers 11 to 19 carry its other reuse timers
+    /// ([`crate::disciplines`]).
+    DisciplineReuse(crate::disciplines::Reuse),
+    /// A reuse timer a group of spells shares, as the server set it.
+    LinkedReuse(crate::disciplines::Reuse),
+    /// `EQMac`'s servers: the discipline the player began, by the servers'
+    /// number for it, or none as it ends.
+    Discipline(Option<u8>),
 }
 
 /// A profile heading on the 0..512 scale live movement uses. Project 1999 saves
@@ -1159,6 +1210,12 @@ pub enum WorldEvent {
 pub fn profile_heading(raw: f32, revolution: f32) -> f32 {
     (raw * 512.0 / revolution).rem_euclid(512.0)
 }
+
+/// Where the Titanium profile lists the player's languages
+/// (`MAX_PP_LANGUAGE`, 28).
+const TITANIUM_LANGUAGES: std::ops::Range<usize> = 13084..13112;
+/// Where the Titanium profile lists the disciplines the player knows.
+const TITANIUM_DISCIPLINES: std::ops::Range<usize> = 5508..5908;
 
 /// Decode the profile and validated, decrypted own-spawn record. `revolution`
 /// is the profile's heading scale, see [`profile_heading`].
@@ -1206,6 +1263,10 @@ pub fn titanium_player(profile: &[u8], spawn: &[u8], revolution: f32) -> Result<
                 .collect(),
         ),
         practice_points: Some(word(profile, 2224)),
+        languages: Some(profile[TITANIUM_LANGUAGES].to_vec()),
+        disciplines: Some(crate::disciplines::titanium_list(
+            &profile[TITANIUM_DISCIPLINES],
+        )?),
         gender: word(profile, 4),
         level: profile[20],
         position,
@@ -1371,7 +1432,8 @@ pub fn titanium_update(opcode: u16, body: &[u8]) -> Result<Option<WorldEvent>> {
     }))
 }
 
-/// Stuns and charms, the end of hiding, the target the server sets,
+/// Stuns and charms, the end of hiding, a quest's word on the player's
+/// stats, disciplines and reuse timers, the target the server sets,
 /// rewards, sacrifices and translocates, a player becoming a corpse, doors,
 /// ground objects, loot, merchant, exchange, training, resurrection, group,
 /// dice, assist, raid, book, combine, bandaging, chat server, weather and
@@ -1389,6 +1451,11 @@ fn titanium_views(opcode: u16, body: &[u8]) -> Result<Option<WorldEvent>> {
         }
         crate::control::STUN_OPCODE => {
             return Ok(Some(WorldEvent::Stun(crate::control::stun(body)?)));
+        }
+        crate::stats::INCREASE_STATS_OPCODE => {
+            return Ok(Some(WorldEvent::StatsChanged(
+                crate::stats::titanium_change(body)?,
+            )));
         }
         crate::abilities::CANCEL_SNEAK_HIDE_OPCODE => {
             ensure!(body.is_empty(), "invalid hide end length");
@@ -1425,41 +1492,45 @@ fn titanium_views(opcode: u16, body: &[u8]) -> Result<Option<WorldEvent>> {
         }
         _ => (),
     }
-    Ok(if let Some(update) = crate::doors::decode(opcode, body)? {
-        Some(WorldEvent::Doors(update))
-    } else if let Some(update) = crate::objects::decode(opcode, body)? {
-        Some(WorldEvent::Objects(update))
-    } else if let Some(update) = crate::loot::decode(opcode, body)? {
-        Some(WorldEvent::Loot(update))
-    } else if let Some(update) = crate::merchant::decode(opcode, body)? {
-        Some(WorldEvent::Merchant(update))
-    } else if let Some(update) = crate::exchange::decode(opcode, body)? {
-        Some(WorldEvent::Exchange(update))
-    } else if let Some(update) = crate::training::decode(opcode, body)? {
-        Some(WorldEvent::Training(update))
-    } else if let Some(offer) = crate::resurrection::decode(opcode, body)? {
-        Some(WorldEvent::Resurrection(offer))
-    } else if let Some(update) = crate::group::decode(opcode, body)? {
-        Some(WorldEvent::Group(update))
-    } else if let Some(roll) = crate::socials::decode_roll(opcode, body)? {
-        Some(WorldEvent::Roll(roll))
-    } else if let Some(answer) = crate::socials::decode_assist(opcode, body)? {
-        Some(WorldEvent::Assisted(answer))
-    } else if let Some(update) = crate::raid::decode(opcode, body)? {
-        Some(WorldEvent::Raid(update))
-    } else if let Some(text) = crate::books::decode(opcode, body)? {
-        Some(WorldEvent::BookText(text))
-    } else if let Some(update) = crate::tradeskills::decode(opcode, body)? {
-        Some(WorldEvent::Combine(update))
-    } else if let Some(update) = crate::bind_wound::decode(opcode, body)? {
-        Some(WorldEvent::BindWound(update))
-    } else if let Some(offer) = crate::channels::titanium(opcode, body)? {
-        Some(WorldEvent::ChatServer(offer))
-    } else if let Some(weather) = crate::clock::titanium_weather(opcode, body)? {
-        Some(WorldEvent::Weather(weather))
-    } else {
-        crate::inventory::decode(opcode, body)?.map(WorldEvent::Inventory)
-    })
+    Ok(
+        if let Some(event) = crate::disciplines::titanium(opcode, body)? {
+            Some(event)
+        } else if let Some(update) = crate::doors::decode(opcode, body)? {
+            Some(WorldEvent::Doors(update))
+        } else if let Some(update) = crate::objects::decode(opcode, body)? {
+            Some(WorldEvent::Objects(update))
+        } else if let Some(update) = crate::loot::decode(opcode, body)? {
+            Some(WorldEvent::Loot(update))
+        } else if let Some(update) = crate::merchant::decode(opcode, body)? {
+            Some(WorldEvent::Merchant(update))
+        } else if let Some(update) = crate::exchange::decode(opcode, body)? {
+            Some(WorldEvent::Exchange(update))
+        } else if let Some(update) = crate::training::decode(opcode, body)? {
+            Some(WorldEvent::Training(update))
+        } else if let Some(offer) = crate::resurrection::decode(opcode, body)? {
+            Some(WorldEvent::Resurrection(offer))
+        } else if let Some(update) = crate::group::decode(opcode, body)? {
+            Some(WorldEvent::Group(update))
+        } else if let Some(roll) = crate::socials::decode_roll(opcode, body)? {
+            Some(WorldEvent::Roll(roll))
+        } else if let Some(answer) = crate::socials::decode_assist(opcode, body)? {
+            Some(WorldEvent::Assisted(answer))
+        } else if let Some(update) = crate::raid::decode(opcode, body)? {
+            Some(WorldEvent::Raid(update))
+        } else if let Some(text) = crate::books::decode(opcode, body)? {
+            Some(WorldEvent::BookText(text))
+        } else if let Some(update) = crate::tradeskills::decode(opcode, body)? {
+            Some(WorldEvent::Combine(update))
+        } else if let Some(update) = crate::bind_wound::decode(opcode, body)? {
+            Some(WorldEvent::BindWound(update))
+        } else if let Some(offer) = crate::channels::titanium(opcode, body)? {
+            Some(WorldEvent::ChatServer(offer))
+        } else if let Some(weather) = crate::clock::titanium_weather(opcode, body)? {
+            Some(WorldEvent::Weather(weather))
+        } else {
+            crate::inventory::decode(opcode, body)?.map(WorldEvent::Inventory)
+        },
+    )
 }
 
 /// `OP_MoneyUpdate`: carried coins after a purchase, sale or loot.
@@ -1937,6 +2008,33 @@ mod tests {
     }
 
     #[test]
+    fn the_titanium_profile_lists_languages_and_disciplines() {
+        let mut profile = vec![0; 19592];
+        let mut spawn = vec![0; 385];
+        spawn[340..344].copy_from_slice(&7u32.to_le_bytes());
+        // The Common Tongue at 100 and Vah Shir, language 24, at 25.
+        profile[13084] = 100;
+        profile[13084 + 24] = 25;
+        // A discipline in the list's first slot.
+        profile[5508..5512].copy_from_slice(&4585u32.to_le_bytes());
+        let mut player = titanium_player(&profile, &spawn, 256.0).unwrap();
+        let mut languages = player.languages.clone().unwrap();
+        assert_eq!(languages.len(), 28);
+        assert_eq!((languages[0], languages[24]), (100, 25));
+        assert_eq!(player.disciplines.as_ref().unwrap()[..2], [4585, 0]);
+        // A language's skill update names skill 100 plus its number.
+        player.apply_skill(LANGUAGE_SKILLS + 24, 26);
+        languages[24] = 26;
+        assert_eq!(player.languages.as_ref(), Some(&languages));
+        // Beyond the list, or beyond a byte, it changes nothing.
+        player.apply_skill(LANGUAGE_SKILLS + 28, 5);
+        player.apply_skill(LANGUAGE_SKILLS + 24, 256);
+        assert_eq!(player.languages.as_ref(), Some(&languages));
+        // The skills stay apart.
+        assert_eq!(player.skills.as_ref().unwrap()[24], 0);
+    }
+
+    #[test]
     fn the_far_clip_comes_from_the_zone_header() {
         // Synthetic header shaped like Titanium's 700-byte OP_NewZone.
         let mut header = vec![0; 700];
@@ -2223,6 +2321,48 @@ mod tests {
         ));
         assert!(titanium_update(0x727a, &sacrifice[..8]).is_err());
         assert!(titanium_update(0x8258, &translocate[..91]).is_err());
+    }
+
+    #[test]
+    fn a_quests_word_on_the_players_stats_is_read() {
+        let mut body = vec![0; 141];
+        body[1] = 5;
+        assert_eq!(
+            titanium_update(0x5b7b, &body).unwrap(),
+            Some(WorldEvent::StatsChanged(crate::stats::StatChange {
+                strength: 5,
+                ..crate::stats::StatChange::default()
+            }))
+        );
+        assert!(titanium_update(0x5b7b, &body[..140]).is_err());
+    }
+
+    #[test]
+    fn disciplines_and_reuse_timers_are_read() {
+        let record = |fields: &[u32]| -> Vec<u8> {
+            fields
+                .iter()
+                .flat_map(|field| field.to_le_bytes())
+                .collect()
+        };
+        let mut slots = [0; 100];
+        slots[0] = 4585;
+        assert!(matches!(
+            titanium_update(0x7180, &record(&slots)).unwrap(),
+            Some(WorldEvent::Disciplines(list)) if list[..2] == [4585, 0]
+        ));
+        assert!(matches!(
+            titanium_update(0x53df, &record(&[2, 1800, 0])).unwrap(),
+            Some(WorldEvent::DisciplineReuse(reuse)) if reuse.timer == 2
+        ));
+        assert!(matches!(
+            titanium_update(0x6a00, &record(&[7, 5030, 5000])).unwrap(),
+            Some(WorldEvent::LinkedReuse(reuse))
+                if reuse.remaining == std::time::Duration::from_secs(30)
+        ));
+        assert!(titanium_update(0x7180, &record(&slots[..99])).is_err());
+        assert!(titanium_update(0x53df, &record(&[2, 1800])).is_err());
+        assert!(titanium_update(0x6a00, &record(&[7, 5030])).is_err());
     }
 
     #[test]

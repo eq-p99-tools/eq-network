@@ -464,6 +464,11 @@ fn decoded_group(data: &[u8]) -> Result<Option<crate::group::GroupUpdate>> {
     Ok(crate::group::profile_members(&data[PROFILE_GROUP], &player))
 }
 
+/// Where the profile lists the player's languages: the 26 TAKP and Quarm
+/// fill (`MAX_PP_LANGUAGE`; `common/patches/mac.cpp` copies 26) of the
+/// field's room for 32, whose comment says the client uses the first 25.
+const PROFILE_LANGUAGES: std::ops::Range<usize> = 284..310;
+
 /// Projects validated profile fields without retaining the decompressed payload.
 fn decoded_profile(data: &[u8], character: &str) -> Result<PlayerState> {
     ensure!(
@@ -502,6 +507,8 @@ fn decoded_profile(data: &[u8], character: &str) -> Result<PlayerState> {
         endurance: None,
         skills: None,
         practice_points: None,
+        languages: Some(data[PROFILE_LANGUAGES].to_vec()),
+        disciplines: None,
         // What is left of each gem's reuse timer, in milliseconds
         // (`spellSlotRefresh`).
         spell_refresh_ms: Some(std::array::from_fn(|index| word(data, 4972 + index * 4))),
@@ -829,6 +836,16 @@ pub fn updates(opcode: u16, body: &[u8]) -> Result<Vec<WorldEvent>> {
         crate::abilities::EQMAC_CANCEL_SNEAK_HIDE_OPCODE => {
             ensure!(body.is_empty(), "invalid EQMac hide end length");
             vec![WorldEvent::HideAndSneakEnded]
+        }
+        crate::disciplines::EQMAC_CHANGE_OPCODE => {
+            vec![WorldEvent::Discipline(crate::disciplines::eqmac_change(
+                body,
+            )?)]
+        }
+        crate::abilities::EQMAC_RESET_SKILL_OPCODE => {
+            vec![WorldEvent::SkillReady(crate::abilities::eqmac_reset_skill(
+                body,
+            )?)]
         }
         crate::targets::EQMAC_TARGET_COMMAND_OPCODE | crate::targets::EQMAC_TARGET_MOUSE_OPCODE => {
             vec![WorldEvent::Target(crate::targets::eqmac_target(body)?)]

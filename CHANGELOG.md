@@ -7,6 +7,11 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- The message tables say what each generation's profile leaves unread
+  apart: `EQMac`'s skills, practice points and deity, which they had
+  counted as read, are planned with `EQMac`'s catch-up on the world, and
+  its profile has no leadership or tribute to list.
+
 - The message tables no longer list Titanium's `OP_RezzComplete`, which
   `EQEmu` sends only to the world server, and list `EQMac`'s as TAKP's
   alone, as Quarm too sends it only to the world server; it is planned
@@ -163,6 +168,43 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- A quest's word on the player's base stats, on Titanium:
+  `WorldEvent::StatsChanged` (`stats::StatChange`: each stat by name, 0
+  for one the quest left alone), from `OP_IncreaseStats`, which `EQEmu`
+  sends for a quest's `setstat` and `incstat`. A value is the stat's new
+  value from the first and its rise from the second, which the record does
+  not tell apart, so the session changes nothing on it; the next profile
+  has the stats as the server keeps them. Hosts that match `WorldEvent`
+  exhaustively need an arm for it.
+- A skill's button ready again, on `EQMac`: `WorldEvent::SkillReady` (the
+  skill's number), from `OP_ResetSkill`, which TAKP and Quarm send for
+  Mend when the player pressed it too soon after a zone, since the official
+  client then starts its full wait anew, and for each skill with a
+  recovery timer on a GM's `#cleartimers`. Hosts that match `WorldEvent`
+  exhaustively need an arm for it.
+- The player's disciplines and reuse timers. On Titanium: the disciplines
+  the player knows (`WorldEvent::Disciplines`: a spell ID in each of the
+  list's 100 slots, 0 for an empty one), from `OP_DisciplineUpdate`, which
+  `EQEmu` sends once the zone has admitted a player who knows any and as
+  the list changes; a discipline reuse timer (`WorldEvent::DisciplineReuse`,
+  a `disciplines::Reuse`: the timer and how long until it is ready), from
+  `OP_DisciplineTimer`, whose copies at zone-in of timers 11 to 19 carry
+  `EQEmu`'s other reuse timers; and a reuse timer a group of spells shares
+  (`WorldEvent::LinkedReuse`), from `OP_LinkedReuse`. On `EQMac`: the
+  discipline the player began, or none as it ends
+  (`WorldEvent::Discipline`), from `OP_DisciplineChange`. Hosts that match
+  `WorldEvent` exhaustively need arms for the four.
+- The player's languages, on both generations: `PlayerState::languages`,
+  each language's skill by its number, from the profile (Titanium's 28,
+  and the 26 TAKP and Quarm fill of `EQMac`'s room for 32), kept current
+  from skill updates for skill 100 and up, which every server sends for a
+  language (`world::LANGUAGE_SKILLS`); `EQMac`'s skill updates wait for
+  its catch-up on the world. On Titanium, the profile's list of
+  the disciplines the player knows: `PlayerState::disciplines`, which
+  `EQEmu` leaves empty in the profile and the session keeps current from
+  `WorldEvent::Disciplines`. Hosts that build `PlayerState` need the two
+  fields.
+
 - The player's target as the server sets it, on both generations:
   `WorldEvent::Target`, from `OP_TargetCommand` (`EQEmu`'s sense spells,
   its corpse locator and Perl; TAKP's and Quarm's refusal of a mouse
@@ -286,8 +328,8 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   types that send it and the parts of the session that read it, or why it
   is left unread (work still to come, an answer to a request eq-network
   never sends, parked work, or nothing in it worth reading), taken from
-  `EQEmu`'s, TAKP's and Quarm's sources: Titanium's 258 messages, 119 of
-  them read, and `EQMac`'s 177, 87 read. A zone session now tells once, as
+  `EQEmu`'s, TAKP's and Quarm's sources: Titanium's 258 messages, 123 of
+  them read, and `EQMac`'s 177, 89 read. A zone session now tells once, as
   a diagnostic, of each message it leaves unread with the reason (but one
   with nothing worth reading, and an empty one under opcode 0, where
   `EQEmu` sends what Titanium has no opcode for, such as the empty

@@ -192,8 +192,9 @@ impl fmt::Display for Reason {
 /// step at a time.
 #[derive(Clone, Copy, Debug)]
 pub(super) enum Step {
-    /// The player's own state: disciplines and reuse timers, stats, skills
-    /// and languages.
+    /// The player's own state: what is left of it answers requests
+    /// eq-network does not send yet, the player's begging, disarming, pick
+    /// pocketing, poisoning and tracking, and a banker's change.
     PlayerState,
     /// Spawns' appearance and effects: the appearance kinds left, illusions,
     /// renames, spell and level effects, sounds, projectiles and spawn
@@ -245,17 +246,24 @@ const TAKP: &[ServerProtocol] = &[ServerProtocol::Takp];
 /// Quarm's alone.
 const QUARM: &[ServerProtocol] = &[ServerProtocol::Quarm];
 
-/// What the session leaves unread of the player's profile.
-const PROFILE: &[Part] = &[
-    Part(
-        "languages and disciplines",
-        Reason::Planned(Step::PlayerState),
-    ),
+/// What the session leaves unread of Titanium's profile.
+const TITANIUM_PROFILE: &[Part] = &[
     Part(
         "alternate advancement and leadership",
         Reason::Planned(Step::AlternateAdvancement),
     ),
     Part("tribute", Reason::Planned(Step::LaterSystems)),
+];
+/// What the session leaves unread of `EQMac`'s profile.
+const EQMAC_PROFILE: &[Part] = &[
+    Part(
+        "skills, practice points and deity",
+        Reason::Planned(Step::EqMacWorld),
+    ),
+    Part(
+        "alternate advancement",
+        Reason::Planned(Step::AlternateAdvancement),
+    ),
 ];
 /// What the session leaves unread of a spawn's appearance.
 const APPEARANCE: &[Part] = &[Part(
@@ -294,6 +302,25 @@ const TRANSLOCATE: &[Part] = &[Part(
         "every server leaves it 0 (zone/client.cpp Client::SendOPTranslocateConfirm, \
          and TAKP's Client::SendPendingTranslocatePacket)",
     ),
+)];
+/// What the session leaves unread of a quest's word on the player's stats.
+const STATS: &[Part] = &[Part(
+    "the first byte, the five resists and the second copy of every field",
+    Reason::Needless("EQEmu never sets them (zone/client.cpp Client::SetStats, Client::IncStats)"),
+)];
+/// What the session leaves unread of a discipline reuse timer.
+const DISCIPLINE_TIMER: &[Part] = &[Part(
+    "the last field",
+    Reason::Needless(
+        "EQEmu leaves it 0 (zone/effects.cpp Client::SendDisciplineTimer, \
+         zone/client.cpp Client::SendDisciplineTimers)",
+    ),
+)];
+/// What the session leaves unread of `EQMac`'s word that a skill's button
+/// is ready again.
+const RESET_SKILL: &[Part] = &[Part(
+    "the timer",
+    Reason::Needless("every server sends 0 (TAKP's and Quarm's Client::ResetSkill)"),
 )];
 /// What the session leaves unread of `EQMac`'s log-server settings.
 const LOG_SERVER: &[Part] = &[Part(

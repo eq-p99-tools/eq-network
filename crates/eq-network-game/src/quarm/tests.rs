@@ -29,6 +29,22 @@ fn profile_attributes_preserve_signed_width_and_field_order() {
 }
 
 #[test]
+fn the_profile_lists_the_languages_the_servers_fill() {
+    let mut data = vec![0; PROFILE_SIZE];
+    data[6..13].copy_from_slice(b"Example");
+    // The Common Tongue at 100, language 25, the last the servers fill, at
+    // 10, and a byte of the field's room past it, which none fills.
+    data[284] = 100;
+    data[284 + 25] = 10;
+    data[284 + 26] = 99;
+    let player = decoded_profile(&data, "Example").unwrap();
+    let languages = player.languages.unwrap();
+    assert_eq!(languages.len(), 26);
+    assert_eq!((languages[0], languages[25]), (100, 10));
+    assert_eq!(player.disciplines, None);
+}
+
+#[test]
 fn the_profile_lists_the_players_group_without_its_leader() {
     let mut data = vec![0; PROFILE_SIZE];
     data[6..13].copy_from_slice(b"Example");
@@ -436,6 +452,30 @@ fn a_sacrifice_offer_is_read() {
         [WorldEvent::SacrificeOffer(offer)] if offer.caster_id == 581
     ));
     assert!(updates(0xea41, &body[..11]).is_err());
+}
+
+#[test]
+fn a_discipline_begins_and_ends() {
+    assert_eq!(
+        updates(0xf241, &[30, 0, 0, 0]).unwrap(),
+        [WorldEvent::Discipline(Some(30))]
+    );
+    assert_eq!(
+        updates(0xf241, &[0; 4]).unwrap(),
+        [WorldEvent::Discipline(None)]
+    );
+    assert!(updates(0xf241, &[30]).is_err());
+}
+
+#[test]
+fn a_skills_button_is_ready_again() {
+    // Mend, skill 32, with the timer 0 the servers send.
+    let body = [32, 0, 0, 0, 0, 0, 0, 0];
+    assert_eq!(
+        updates(0x3d42, &body).unwrap(),
+        [WorldEvent::SkillReady(32)]
+    );
+    assert!(updates(0x3d42, &body[..4]).is_err());
 }
 
 #[test]
