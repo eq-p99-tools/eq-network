@@ -7,6 +7,12 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- A zone session now tells, as a diagnostic, of each inventory update the
+  zone sends once the player is admitted: what changed and in which slots
+  ("Zone sent an inventory update: the world container emptied"), so a log
+  shows the server's side of every change. A closed world container, whose
+  `OP_ClearObject` left no trace before, now shows.
+
 - A P99 login shows only P99's worlds from `EQEmu`'s public login server's
   list: those whose lowercased name starts with "project 1999" or "an
   interesting" (the "An Interesting Hole" test world), as the SSO login
