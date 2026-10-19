@@ -338,6 +338,65 @@ const DUEL_ANSWER: &[Part] = &[Part(
          (common/eq_packet_structs.h DuelResponse_Struct)",
     ),
 )];
+/// What the session leaves unread of the guild's member list.
+const MEMBER_LIST: &[Part] = &[
+    Part(
+        "the name before the count",
+        Reason::Needless(
+            "the list is always of the player's own guild, which the name names, or on a \
+             reload the player (zone/guild.cpp Client::SendGuildMembersList, \
+             Client::SendGuildMembers)",
+        ),
+    ),
+    Part(
+        "each member's word after their tribute, and their instance",
+        Reason::Needless(
+            "EQEmu's Titanium encoder always sets them to 1 and 0 \
+             (common/patches/titanium.cpp ENCODE(OP_GuildMemberList))",
+        ),
+    ),
+];
+/// What the session leaves unread of a guild member's zone.
+const MEMBER_UPDATE: &[Part] = &[Part(
+    "the update's instance",
+    Reason::Needless(
+        "EQEmu sets it to 0 for a change and to 1 for each member online after an interface \
+         reload, never to the member's instance (zone/guild_mgr.cpp \
+         ZoneGuildManager::ProcessWorldPacket, from zone/guild.cpp Client::SendGuildMembers)",
+    ),
+)];
+/// What the session leaves unread of a new guild member.
+const MEMBER_ADD: &[Part] = &[Part(
+    "the word after the guild",
+    Reason::Needless(
+        "EQEmu's Titanium encoder leaves it zero \
+         (common/patches/titanium.cpp ENCODE(OP_GuildMemberAdd))",
+    ),
+)];
+/// What the session leaves unread of a guild member's rank.
+const MEMBER_RANK: &[Part] = &[Part(
+    "the word after the guild",
+    Reason::Needless(
+        "EQEmu's Titanium encoders leave it zero (common/patches/titanium.cpp \
+         ENCODE(OP_GuildMemberRankAltBanker), ENCODE(OP_SetGuildRank))",
+    ),
+)];
+/// What the session leaves unread of a guild invitation.
+const INVITE: &[Part] = &[Part(
+    "the invitee's name and the two bytes after the guild",
+    Reason::Needless(
+        "every server passes an invitation only to the player it names, and the emulators' \
+         notes say the bytes are 0 in one (common/eq_packet_structs.h GuildCommand_Struct, \
+         zone/client_packet.cpp Client::Handle_OP_GuildInvite)",
+    ),
+)];
+/// What the session leaves unread of `EQMac`'s guild removal.
+const REMOVAL: &[Part] = &[Part(
+    "the remover's name, the two bytes after the guild and the rank",
+    Reason::Needless(
+        "TAKP and Quarm leave them empty (zone/client_packet.cpp Client::Handle_OP_GuildRemove)",
+    ),
+)];
 /// What the session leaves unread of a Titanium projectile.
 const PROJECTILE: &[Part] = &[Part(
     "the first word, the two words after the item and the unknown bytes",

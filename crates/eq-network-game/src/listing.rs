@@ -111,7 +111,7 @@ pub enum GuildRank {
 impl GuildRank {
     /// The rank with this number: Titanium's three, onto which `EQEmu`'s
     /// encoder maps its own ranks, and TAKP's and Quarm's.
-    const fn from_wire(value: u32) -> Self {
+    pub(crate) const fn from_wire(value: u32) -> Self {
         match value {
             0 => Self::Member,
             1 => Self::Officer,
@@ -187,7 +187,7 @@ pub enum ListingChange {
 }
 
 /// A guild number, unless it stands for no guild.
-fn guild(number: u32) -> Option<u32> {
+pub(crate) fn guild(number: u32) -> Option<u32> {
     (number != 0 && number != u32::MAX).then_some(number)
 }
 

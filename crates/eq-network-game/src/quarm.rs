@@ -885,6 +885,12 @@ pub fn updates(opcode: u16, body: &[u8]) -> Result<Vec<WorldEvent>> {
         crate::socials::EQMAC_DUEL_RESPONSE_OPCODE => {
             vec![WorldEvent::Duel(crate::socials::eqmac_refused(body)?)]
         }
+        crate::guild::EQMAC_INVITE_OPCODE => {
+            vec![WorldEvent::Guild(crate::guild::invite(body)?)]
+        }
+        crate::guild::EQMAC_REMOVE_OPCODE => {
+            vec![WorldEvent::Guild(crate::guild::eqmac_removal(body)?)]
+        }
         0x9941 => {
             ensure!(
                 body.len() == 4 && word(body, 0) <= 330,

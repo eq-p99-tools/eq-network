@@ -11,8 +11,8 @@ use super::{
         Social,
     },
     DUEL_ANSWER, DUEL_REQUEST, EQMAC, EQMAC_DESCRIPTION, EQMAC_ILLUSION, EQMAC_PROFILE,
-    EQMAC_PROJECTILE, INSPECT_REQUEST, LOG_SERVER, OWN_NAME, QUARM, RESET_SKILL, REWARD, SACRIFICE,
-    SOUND, TAKP, TRANSLOCATE,
+    EQMAC_PROJECTILE, INSPECT_REQUEST, INVITE, LOG_SERVER, OWN_NAME, QUARM, REMOVAL, RESET_SKILL,
+    REWARD, SACRIFICE, SOUND, TAKP, TRANSLOCATE,
 };
 
 /// What the session does with a message `EQMac`'s servers send; nothing for
@@ -58,9 +58,10 @@ pub(in crate::client) fn eqmac(opcode: u16) -> Option<ServerMessage> {
         0x1542 => sent("OP_RespondAA", EQMAC, planned(AlternateAdvancement)),
         0x1640 => sent("OP_RandomReply", EQMAC, planned(EqMacWorld)),
         0x1642 => sent("OP_TraderShop", EQMAC, planned(Bazaar)),
-        0x1741 => sent("OP_GuildInvite", EQMAC, planned(Social)),
+        0x1741 => sent("OP_GuildInvite", EQMAC, Partly(&[Zone], INVITE)),
         0x1842 => sent("OP_BecomeTrader", EQMAC, planned(Bazaar)),
-        0x1941 => sent("OP_GuildRemove", EQMAC, planned(Social)),
+        // TAKP and Quarm send it only when a removal fails.
+        0x1941 => sent("OP_GuildRemove", EQMAC, Partly(&[Zone], REMOVAL)),
         0x1942 => sent("OP_ManaUpdate", EQMAC, Read(&[Zone])),
         0x2140 => sent("OP_CorpsePosition", EQMAC, Read(&[Zone])),
         0x2342 => sent("OP_AAExpUpdate", EQMAC, planned(AlternateAdvancement)),
@@ -164,7 +165,9 @@ pub(in crate::client) fn eqmac(opcode: u16) -> Option<ServerMessage> {
         0x6e41 => sent("OP_GMLastName", EQMAC, planned(EqMacWorld)),
         0x6f40 => sent("OP_ZoneInAvatarSet", EQMAC, Read(&[Admission])),
         0x7841 => sent("OP_SummonedItem", EQMAC, Read(&[Zone])),
-        0x7b41 => sent("OP_GuildAdded", EQMAC, planned(Social)),
+        // The answer to OP_GetGuildsList, with the player's own guild; not news
+        // that the player joined one.
+        0x7b41 => sent("OP_GuildAdded", EQMAC, unasked(Social)),
         0x7f41 => sent("OP_ManaChange", EQMAC, Read(&[Zone])),
         0x8040 => sent("OP_Reward", EQMAC, Partly(&[Zone], REWARD)),
         0x8041 => sent("OP_SpecialMesg", EQMAC, Read(&[Chat])),

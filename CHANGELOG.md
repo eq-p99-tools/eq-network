@@ -178,6 +178,30 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Guilds: `WorldEvent::Guild` (`guild::GuildUpdate`). On Titanium, the
+  member list reads as `GuildUpdate::Members` (`guild::GuildMember`: each
+  member's name, level, class, rank, banker and alt flags, when they were
+  last on, their tribute as `guild::GuildTribute`, their public note, and
+  their zone, None while offline), from `OP_GuildMemberList`, which
+  `EQEmu` sends as the player enters a zone, when their list is out of
+  date, as they join and as they reload their interface. Members' changes
+  read as `MemberLocation` (a member entering a zone or leaving the game),
+  `MemberAdded`, `MemberRemoved`, `MemberLevel`, `MemberNote`, `MemberRank`
+  (a member's rank and banker and alt flags, or in the guild hall the
+  player's own banker flag) and `Disbanded`, from the messages `EQEmu`
+  sends the guild's members in the zone as the world tells of each; and
+  `MemberRenamed` and `Renamed`, from messages nothing in `EQEmu` sends
+  today. On both generations, an invitation to join the guild, or to take
+  a higher rank in it, reads as `Invite` (the inviter, the guild and the
+  rank offered), from `OP_GuildInvite`, which every server passes on from
+  the inviter's client; nothing answers it yet. On `EQMac`, a member's
+  removal reads as `MemberRemoved`, from `OP_GuildRemove`, which TAKP and
+  Quarm send only when a removal fails, with a line saying it succeeded.
+  The session keeps no roster. The message tables list Titanium's
+  `OP_GetGuildMOTDReply` and `EQMac`'s `OP_GuildAdded` as answers to
+  requests eq-network never sends. Hosts that match `WorldEvent`
+  exhaustively need an arm for it.
+
 - Duels, on both generations: `WorldEvent::Duel` (`socials::DuelUpdate`).
   `Challenge` names the other player, from `OP_RequestDuel`, which every
   server sends to the player challenged and, as their acceptance, to the
@@ -471,8 +495,8 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   types that send it and the parts of the session that read it, or why it
   is left unread (work still to come, an answer to a request eq-network
   never sends, parked work, or nothing in it worth reading), taken from
-  `EQEmu`'s, TAKP's and Quarm's sources: Titanium's 258 messages, 140 of
-  them read, and `EQMac`'s 177, 102 read. A zone session now tells once, as
+  `EQEmu`'s, TAKP's and Quarm's sources: Titanium's 258 messages, 151 of
+  them read, and `EQMac`'s 177, 104 read. A zone session now tells once, as
   a diagnostic, of each message it leaves unread with the reason (but one
   with nothing worth reading, and an empty one under opcode 0, where
   `EQEmu` sends what Titanium has no opcode for, such as the empty
