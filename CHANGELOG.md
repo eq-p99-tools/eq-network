@@ -7,6 +7,12 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- A zone session now tells, as a diagnostic, of each inventory update the
+  zone sends once the player is admitted: what changed and in which slots
+  ("Zone sent an inventory update: the world container emptied"), so a log
+  shows the server's side of every change. A closed world container, whose
+  `OP_ClearObject` left no trace before, now shows.
+
 - Titanium door clicks now send 3 in the second byte and -1 as the held
   item, and eating or drinking by hand sends -1 in the request's third
   word, as the official client does (taken from #121). Eating on its own
