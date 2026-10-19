@@ -271,6 +271,34 @@ pub struct SpawnState {
     pub name_parts: crate::names::NameParts,
 }
 
+impl SpawnState {
+    /// Keeps what an appearance update changes: the size here, and an
+    /// illusion's race, gender and size, the rest in
+    /// [`SpawnState::appearance`].
+    pub fn apply_appearance(&mut self, change: &crate::appearance::AppearanceChange) {
+        match *change {
+            crate::appearance::AppearanceChange::Size(size) => self.size = size,
+            crate::appearance::AppearanceChange::Illusion(illusion) => {
+                self.race = illusion.race;
+                self.gender = u32::from(illusion.gender);
+                self.size = illusion.size;
+            }
+            _ => (),
+        }
+        self.appearance.apply_update(change);
+    }
+
+    /// Keeps a change in how `/who` lists the spawn: the level here, the
+    /// rest in [`SpawnState::listing`].
+    pub fn apply_listing(&mut self, change: crate::listing::ListingChange) {
+        if let crate::listing::ListingChange::Level(level) = change {
+            self.level = level;
+        } else {
+            self.listing.apply(change);
+        }
+    }
+}
+
 /// Decode a decrypted Titanium spawn batch, without accepting partial records.
 ///
 /// # Errors
@@ -710,6 +738,14 @@ pub enum WorldEvent {
     ItemDetails(crate::items::ItemDetails),
     /// Server death notification; consumers compare its ID with their own spawn.
     Death(crate::zoning::Death),
+    /// A corpse moved, on `EQMac`: summoned, returned, a game master's
+    /// `#summon`, and on Quarm all the while it is dragged.
+    CorpseMoved {
+        /// The corpse.
+        spawn_id: u16,
+        /// Where it lies now: x, y and z; the record carries no heading.
+        position: [f32; 3],
+    },
     /// A player became a corpse where they lie: the player, just before
     /// word of their death, and another player who leaves a corpse, which
     /// keeps their spawn ID.
@@ -764,6 +800,25 @@ pub enum WorldEvent {
         /// Whether the server marks this entity invisible.
         invisible: bool,
     },
+    /// A change in how a spawn shows that lasts, such as its size or light,
+    /// or that the host hears once, such as an area's regeneration.
+    Appearance {
+        /// Zone-local entity identifier.
+        spawn_id: u16,
+        /// What changed.
+        change: crate::appearance::AppearanceChange,
+    },
+    /// A spawn's face or hair changed: on Titanium, named, as `EQEmu` sends
+    /// a face change as an illusion of race -1; on `EQMac`, unnamed, as TAKP
+    /// and Quarm relay a player's own change to the whole zone.
+    FaceChanged {
+        /// Whose face it is, where the record names them.
+        spawn_id: Option<u16>,
+        /// The face and hair.
+        features: crate::appearance::Features,
+        /// Both eyes' colors, where the record has them (`EQMac`).
+        eye_colors: Option<[u8; 2]>,
+    },
     /// A change in how `/who` lists a player.
     Listing {
         /// Zone-local entity identifier.
@@ -773,6 +828,20 @@ pub enum WorldEvent {
     },
     /// Guild names by number, from the world or a guild member's zone.
     GuildNames(Vec<(u32, String)>),
+    /// A spawn's new name: on Titanium, an NPC's corpse taking the server's
+    /// name and the temporary names and renames of game masters, quests and
+    /// pets' owners.
+    Renamed {
+        /// Whose name it was. The record names no spawn: the session names
+        /// it before anyone hears it, from the spawn with the old name, or
+        /// the NPC corpse whose name the server's rule makes the new one
+        /// ([`corpse_name`]); None where neither is in the zone.
+        spawn_id: Option<u16>,
+        /// The name before.
+        old_name: String,
+        /// The new name.
+        new_name: String,
+    },
     /// A character's last name changed.
     LastName {
         /// The character, by the name they spawned with.
@@ -1332,7 +1401,6 @@ pub fn titanium_update(opcode: u16, body: &[u8]) -> Result<Option<WorldEvent>> {
     }
     Ok(Some(match opcode {
         0x6a53 => WorldEvent::Buff(crate::buffs::titanium_update(body)?),
-        0x7c32 => return appearance(body),
         0x6d44 => {
             ensure!(body.len() == 12, "invalid level update length");
             let current = u8::try_from(word(body, 0))?;
@@ -1377,10 +1445,6 @@ pub fn titanium_update(opcode: u16, body: &[u8]) -> Result<Option<WorldEvent>> {
         crate::listing::GUILDS_OPCODE => {
             WorldEvent::GuildNames(crate::listing::titanium_guilds(body)?)
         }
-        crate::names::LAST_NAME_OPCODE => {
-            let (name, last_name) = crate::names::last_name(body)?;
-            WorldEvent::LastName { name, last_name }
-        }
         0x0695 => {
             ensure!(
                 body.len() == 3 && body[2] <= 100,
@@ -1398,9 +1462,6 @@ pub fn titanium_update(opcode: u16, body: &[u8]) -> Result<Option<WorldEvent>> {
         }
         0x14cb => titanium_position(body)?,
         0x3a2b => p99_compact_position(body)?,
-        crate::appearance::WEAR_CHANGE_OPCODE => {
-            WorldEvent::WearChange(crate::appearance::titanium_wear_change(body)?)
-        }
         0x3bcf => {
             ensure!(body.len() == 10, "invalid hit-point update length");
             // Both fields are signed: the server sends only the player's own HP,
@@ -1432,12 +1493,12 @@ pub fn titanium_update(opcode: u16, body: &[u8]) -> Result<Option<WorldEvent>> {
     }))
 }
 
-/// Stuns and charms, the end of hiding, a quest's word on the player's
-/// stats, disciplines and reuse timers, the target the server sets,
-/// rewards, sacrifices and translocates, a player becoming a corpse, doors,
-/// ground objects, loot, merchant, exchange, training, resurrection, group,
-/// dice, assist, raid, book, combine, bandaging, chat server, weather and
-/// inventory packets, each owned by its codec.
+/// How spawns look and their names, stuns and charms, the end of hiding, a
+/// quest's word on the player's stats, disciplines and reuse timers, the target the server
+/// sets, rewards, sacrifices and translocates, a player becoming a corpse,
+/// doors, ground objects, loot, merchant, exchange, training, resurrection,
+/// group, dice, assist, raid, book, combine, bandaging, chat server, weather
+/// and inventory packets, each owned by its codec.
 fn titanium_views(opcode: u16, body: &[u8]) -> Result<Option<WorldEvent>> {
     match opcode {
         crate::rewards::SOUND_OPCODE => {
@@ -1493,7 +1554,11 @@ fn titanium_views(opcode: u16, body: &[u8]) -> Result<Option<WorldEvent>> {
         _ => (),
     }
     Ok(
-        if let Some(event) = crate::disciplines::titanium(opcode, body)? {
+        if let Some(event) = crate::appearance::titanium(opcode, body)? {
+            Some(event)
+        } else if let Some(event) = crate::names::titanium(opcode, body)? {
+            Some(event)
+        } else if let Some(event) = crate::disciplines::titanium(opcode, body)? {
             Some(event)
         } else if let Some(update) = crate::doors::decode(opcode, body)? {
             Some(WorldEvent::Doors(update))
@@ -1543,34 +1608,6 @@ fn money_update(body: &[u8]) -> Result<Coins> {
         silver: coin(8)?,
         copper: coin(12)?,
     })
-}
-
-/// Decodes persistent appearance state without interpreting unrelated update kinds.
-pub(crate) fn appearance(body: &[u8]) -> Result<Option<WorldEvent>> {
-    ensure!(body.len() == 8, "invalid appearance length");
-    let kind = u16::from_le_bytes([body[2], body[3]]);
-    let value = word(body, 4);
-    let listing = crate::listing::appearance(kind, value);
-    if !matches!(kind, 3 | 14 | crate::pets::PET_APPEARANCE) && listing.is_none() {
-        return Ok(None);
-    }
-    let spawn_id = u16::from_le_bytes([body[0], body[1]]);
-    ensure!(spawn_id != 0, "invalid appearance spawn ID");
-    Ok(Some(match (kind, listing) {
-        (_, Some(change)) => WorldEvent::Listing { spawn_id, change },
-        (crate::pets::PET_APPEARANCE, None) => WorldEvent::PetOwner {
-            spawn_id,
-            owner: u16::try_from(value).ok().filter(|owner| *owner != 0),
-        },
-        (14, None) => WorldEvent::Posture {
-            spawn_id,
-            posture: value.into(),
-        },
-        _ => WorldEvent::Visibility {
-            spawn_id,
-            invisible: value != 0,
-        },
-    }))
 }
 
 /// EQ units per second for one unit of a Titanium motion delta, fitted on
@@ -1830,7 +1867,13 @@ mod tests {
         }
         assert!(super::titanium_update(0x7c32, &[0; 9]).is_err());
         packet[2..4].copy_from_slice(&99u16.to_le_bytes());
-        assert!(super::titanium_update(0x7c32, &packet).unwrap().is_none());
+        assert_eq!(
+            super::titanium_update(0x7c32, &packet).unwrap(),
+            Some(super::WorldEvent::Appearance {
+                spawn_id: 73,
+                change: crate::appearance::AppearanceChange::Other { kind: 99, value: 2 }
+            })
+        );
         packet[2..4].copy_from_slice(&3u16.to_le_bytes());
         packet[..2].fill(0);
         assert!(super::titanium_update(0x7c32, &packet).is_err());

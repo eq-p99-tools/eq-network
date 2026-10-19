@@ -145,6 +145,14 @@ fn a_spawn_says_its_class_and_level() {
         ]
     );
     assert!(decoded_spawns(&data[1..]).is_err());
+    // The record's light and fly mode reach the spawn's look.
+    data[94] = 2;
+    data[100] = 2;
+    let look = decoded_spawns(&data).unwrap()[0].appearance;
+    assert_eq!(
+        (look.light, look.fly_mode),
+        (2, crate::appearance::FlyMode::Levitating)
+    );
 }
 
 #[test]

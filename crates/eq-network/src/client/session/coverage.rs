@@ -196,9 +196,8 @@ pub(super) enum Step {
     /// eq-network does not send yet, the player's begging, disarming, pick
     /// pocketing, poisoning and tracking, and a banker's change.
     PlayerState,
-    /// Spawns' appearance and effects: the appearance kinds left, illusions,
-    /// renames, spell and level effects, sounds, projectiles and spawn
-    /// states.
+    /// Spawns' effects: spell and level effects, camera shakes, sounds and
+    /// projectiles.
     Appearance,
     /// Social, guild, title and GM messages: inspection, duels, guild
     /// membership, titles and last names, popups and the GM notices.
@@ -223,7 +222,7 @@ impl fmt::Display for Step {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
             Self::PlayerState => "the player's own state",
-            Self::Appearance => "spawns' appearance and effects",
+            Self::Appearance => "spawns' effects",
             Self::Social => "social, guild, title and GM messages",
             Self::EqMacWorld => "EQMac's catch-up on the world",
             Self::EqMacExchanges => "EQMac's catch-up on exchanges",
@@ -265,10 +264,32 @@ const EQMAC_PROFILE: &[Part] = &[
         Reason::Planned(Step::AlternateAdvancement),
     ),
 ];
-/// What the session leaves unread of a spawn's appearance.
-const APPEARANCE: &[Part] = &[Part(
-    "the other appearance kinds",
-    Reason::Planned(Step::Appearance),
+/// What the session leaves unread of Titanium's illusion.
+const ILLUSION: &[Part] = &[
+    Part(
+        "the spawn's name",
+        Reason::Needless("the spawn ID names it, and a face change leaves it empty"),
+    ),
+    Part(
+        "the byte after the textures and the last 80 bytes",
+        Reason::Needless("EQEmu's Titanium encoder leaves them zero"),
+    ),
+];
+/// What the session leaves unread of a rename.
+const RENAME: &[Part] = &[
+    Part(
+        "the old name's second copy",
+        Reason::Needless("EQEmu writes the old name there again"),
+    ),
+    Part(
+        "the two words after the names",
+        Reason::Needless("EQEmu always sends 0 and 1"),
+    ),
+];
+/// What the session leaves unread of `EQMac`'s illusion.
+const EQMAC_ILLUSION: &[Part] = &[Part(
+    "the byte after the textures and the two after the beard",
+    Reason::Needless("TAKP and Quarm always send 0xff, then zeros"),
 )];
 /// What the session leaves unread of `EQMac`'s word that the server took or
 /// gave back the player's control.

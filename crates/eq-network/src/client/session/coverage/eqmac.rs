@@ -4,14 +4,14 @@ use super::{
     planned, sent, unasked, Part,
     Reader::{Admission, Answer, Chat, Login, World, Zone},
     Reading::{Partly, Read, Unread},
-    Reason::{Needless, Parked, Planned},
+    Reason::{Needless, Parked},
     ServerMessage,
     Step::{
         AlternateAdvancement, Appearance, Bazaar, EqMacExchanges, EqMacWorld, LaterSystems,
         PlayerState, Raids, Social,
     },
-    EQMAC, EQMAC_DESCRIPTION, EQMAC_PROFILE, LOG_SERVER, OWN_NAME, QUARM, RESET_SKILL, REWARD,
-    SACRIFICE, TAKP, TRANSLOCATE,
+    EQMAC, EQMAC_DESCRIPTION, EQMAC_ILLUSION, EQMAC_PROFILE, LOG_SERVER, OWN_NAME, QUARM,
+    RESET_SKILL, REWARD, SACRIFICE, TAKP, TRANSLOCATE,
 };
 
 /// What the session does with a message `EQMac`'s servers send; nothing for
@@ -59,11 +59,11 @@ pub(in crate::client) fn eqmac(opcode: u16) -> Option<ServerMessage> {
         0x1842 => sent("OP_BecomeTrader", EQMAC, planned(Bazaar)),
         0x1941 => sent("OP_GuildRemove", EQMAC, planned(Social)),
         0x1942 => sent("OP_ManaUpdate", EQMAC, Read(&[Zone])),
-        0x2140 => sent("OP_CorpsePosition", EQMAC, planned(Appearance)),
+        0x2140 => sent("OP_CorpsePosition", EQMAC, Read(&[Zone])),
         0x2342 => sent("OP_AAExpUpdate", EQMAC, planned(AlternateAdvancement)),
         0x2442 => sent("OP_TraderBuy", EQMAC, planned(Bazaar)),
         0x2541 => sent("OP_Begging", EQMAC, unasked(PlayerState)),
-        0x2542 => sent("OP_FaceChange", EQMAC, planned(Appearance)),
+        0x2542 => sent("OP_FaceChange", EQMAC, Read(&[Zone])),
         0x2620 => sent("OP_GroupUpdate", EQMAC, Read(&[Zone])),
         0x2641 => sent("OP_ControlBoat", EQMAC, unasked(LaterSystems)),
         0x2740 => sent("OP_ShopPlayerSell", EQMAC, Read(&[Zone])),
@@ -172,7 +172,7 @@ pub(in crate::client) fn eqmac(opcode: u16) -> Option<ServerMessage> {
         0x8c41 => sent("OP_GMBecomeNPC", EQMAC, planned(Social)),
         0x8e40 => sent("OP_MoveDoor", EQMAC, planned(EqMacWorld)),
         0x8e41 => sent("OP_PetitionCheckout", EQMAC, planned(Social)),
-        0x9140 => sent("OP_Illusion", EQMAC, planned(Appearance)),
+        0x9140 => sent("OP_Illusion", EQMAC, Partly(&[Zone], EQMAC_ILLUSION)),
         0x9240 => sent("OP_WearChange", EQMAC, planned(EqMacWorld)),
         0x9241 => sent("OP_GuildsList", EQMAC, planned(EqMacWorld)),
         0x9340 => sent("OP_Bind_Wound", EQMAC, planned(EqMacWorld)),
@@ -234,17 +234,14 @@ pub(in crate::client) fn eqmac(opcode: u16) -> Option<ServerMessage> {
             EQMAC,
             Partly(
                 &[Admission, Zone, Answer],
-                &[
-                    Part("the other appearance kinds", Planned(Appearance)),
-                    Part(
-                        "Quarm's shared bank offer",
-                        Needless(
-                            "only Quarm's own client library answers it, and Quarm leaves the \
-                             shared bank off unanswered (zone/client_packet.cpp \
-                             ClientFeature::SharedBankBagsSupported)",
-                        ),
+                &[Part(
+                    "Quarm's shared bank offer",
+                    Needless(
+                        "only Quarm's own client library answers it, and Quarm leaves the \
+                         shared bank off unanswered (zone/client_packet.cpp \
+                         ClientFeature::SharedBankBagsSupported)",
                     ),
-                ],
+                )],
             ),
         ),
         0xf641 => sent("OP_CharInventory", EQMAC, Read(&[Zone])),

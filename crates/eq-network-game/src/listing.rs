@@ -1,8 +1,9 @@
 //! How `/who` lists a player beyond their name, level, class and race: their
-//! guild, whether they hide from `/who`, and the game master, away and
-//! looking-for-group flags. A Titanium client lists its own zone's players
-//! from what the zone told it: each spawn record, then appearance updates
-//! (`OP_SpawnAppearance`) and looking-for-group notices (`OP_LFGAppearance`).
+//! guild and rank in it, whether they hide from `/who`, and the game master,
+//! away and looking-for-group flags. A Titanium client lists its own zone's
+//! players from what the zone told it: each spawn record, then appearance
+//! updates (`OP_SpawnAppearance`) and looking-for-group notices
+//! (`OP_LFGAppearance`).
 //! Guild numbers name guilds from the guild list (`OP_GuildsList`), which the
 //! world sends on entry and a zone sends a guild's members.
 //!
@@ -14,7 +15,7 @@
 //! (`common/patches/titanium_structs.h`), and its `AppearanceType` numbers
 //! (`common/eq_constants.h`).
 use crate::command::EncodedCommand;
-use anyhow::{ensure, Result};
+use anyhow::{ensure, Context, Result};
 use serde::Serialize;
 
 /// `OP_SpawnAppearance`: a spawn's appearance update.
@@ -93,11 +94,41 @@ pub fn titanium_anonymity(spawn_id: u16, anonymity: Anonymity) -> Result<Encoded
     update(spawn_id, ANONYMITY, anonymity.wire())
 }
 
+/// A player's rank in their guild.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+pub enum GuildRank {
+    /// 0, a member.
+    Member,
+    /// 1, an officer.
+    Officer,
+    /// 2, the leader.
+    Leader,
+    /// A number past those, kept as sent: TAKP sends 3 for a guild it does
+    /// not know.
+    Other(u32),
+}
+
+impl GuildRank {
+    /// The rank with this number: Titanium's three, onto which `EQEmu`'s
+    /// encoder maps its own ranks, and TAKP's and Quarm's.
+    const fn from_wire(value: u32) -> Self {
+        match value {
+            0 => Self::Member,
+            1 => Self::Officer,
+            2 => Self::Leader,
+            other => Self::Other(other),
+        }
+    }
+}
+
 /// How `/who` lists a player beyond their name, level, class and race.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize)]
 pub struct Listing {
     /// The guild's number; None for no guild.
     pub guild: Option<u32>,
+    /// The player's rank in the guild; None without one, and where the
+    /// dialect does not report it.
+    pub guild_rank: Option<GuildRank>,
     /// Whether the player hides from `/who`.
     pub anonymity: Anonymity,
     /// In game master mode.
@@ -108,6 +139,34 @@ pub struct Listing {
     pub looking: bool,
 }
 
+impl Listing {
+    /// Keeps a change, as the session's spawn table does; the level `/who`
+    /// shows is the spawn's, beside its listing, so it changes nothing here.
+    /// A rank is kept only with a guild: leaving or changing guilds clears
+    /// it until the new guild's rank comes, and one coming with no guild, as
+    /// `EQEmu` follows a member's removal with, is not kept.
+    pub fn apply(&mut self, change: ListingChange) {
+        match change {
+            ListingChange::Level(_) => (),
+            ListingChange::Guild(guild) => {
+                if guild != self.guild {
+                    self.guild_rank = None;
+                }
+                self.guild = guild;
+            }
+            ListingChange::GuildRank(rank) => {
+                if self.guild.is_some() {
+                    self.guild_rank = Some(rank);
+                }
+            }
+            ListingChange::Anonymity(anonymity) => self.anonymity = anonymity,
+            ListingChange::GameMaster(on) => self.game_master = on,
+            ListingChange::Away(on) => self.away = on,
+            ListingChange::Looking(on) => self.looking = on,
+        }
+    }
+}
+
 /// A change in how `/who` lists a player.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 pub enum ListingChange {
@@ -115,6 +174,8 @@ pub enum ListingChange {
     Level(u8),
     /// Joined, left or changed guilds.
     Guild(Option<u32>),
+    /// The rank that comes with a guild, or a promotion or demotion.
+    GuildRank(GuildRank),
     /// Turned anonymous or roleplaying, or open again.
     Anonymity(Anonymity),
     /// Game master mode on or off.
@@ -141,8 +202,10 @@ fn word(bytes: &[u8], offset: usize) -> u32 {
 
 /// How a Titanium spawn record (`Spawn_Struct`, 385 bytes) lists the player.
 pub(crate) fn titanium_spawn(record: &[u8]) -> Listing {
+    let guild = guild(word(record, 238));
     Listing {
-        guild: guild(word(record, 238)),
+        guild,
+        guild_rank: guild.map(|_| GuildRank::from_wire(u32::from(record[193]))),
         anonymity: Anonymity::from_wire(u32::from(record[5])),
         game_master: record[1] != 0,
         away: record[237] != 0,
@@ -150,17 +213,21 @@ pub(crate) fn titanium_spawn(record: &[u8]) -> Listing {
     }
 }
 
-/// The change an appearance update makes to a listing, by the update's type
-/// and value; None for other updates.
-pub(crate) fn appearance(kind: u16, value: u32) -> Option<ListingChange> {
-    Some(match kind {
-        1 => ListingChange::Level(u8::try_from(value).ok()?),
+/// The change an appearance update makes to a listing, by the update's kind
+/// and value; None for other kinds.
+///
+/// # Errors
+/// Rejects a `/who` level past 255.
+pub(crate) fn appearance(kind: u16, value: u32) -> Result<Option<ListingChange>> {
+    Ok(Some(match kind {
+        1 => ListingChange::Level(u8::try_from(value).context("who level out of range")?),
         20 => ListingChange::GameMaster(value != 0),
         21 => ListingChange::Anonymity(Anonymity::from_wire(value)),
         22 => ListingChange::Guild(guild(value)),
+        23 => ListingChange::GuildRank(GuildRank::from_wire(value)),
         24 => ListingChange::Away(value != 0),
-        _ => return None,
-    })
+        _ => return Ok(None),
+    }))
 }
 
 /// Decodes `OP_LFGAppearance`: whose flag changed, and whether they now look
@@ -208,6 +275,8 @@ mod tests {
         assert_eq!(titanium_spawn(&record), Listing::default());
         record[238..242].copy_from_slice(&u32::MAX.to_le_bytes());
         assert_eq!(titanium_spawn(&record).guild, None);
+        record[193] = 1;
+        assert_eq!(titanium_spawn(&record).guild_rank, None);
         record[238..242].copy_from_slice(&7u32.to_le_bytes());
         record[5] = 2;
         record[1] = 1;
@@ -217,6 +286,7 @@ mod tests {
             titanium_spawn(&record),
             Listing {
                 guild: Some(7),
+                guild_rank: Some(GuildRank::Officer),
                 anonymity: Anonymity::Roleplaying,
                 game_master: true,
                 away: true,
@@ -227,20 +297,67 @@ mod tests {
 
     #[test]
     fn updates_change_the_listing() {
-        assert_eq!(appearance(1, 51), Some(ListingChange::Level(51)));
-        assert_eq!(appearance(1, 300), None);
-        assert_eq!(appearance(20, 1), Some(ListingChange::GameMaster(true)));
+        let change = |kind, value| appearance(kind, value).unwrap();
+        assert_eq!(change(1, 51), Some(ListingChange::Level(51)));
+        assert!(appearance(1, 300).is_err());
+        assert_eq!(change(20, 1), Some(ListingChange::GameMaster(true)));
         assert_eq!(
-            appearance(21, 1),
+            change(21, 1),
             Some(ListingChange::Anonymity(Anonymity::Anonymous))
         );
-        assert_eq!(appearance(22, u32::MAX), Some(ListingChange::Guild(None)));
-        assert_eq!(appearance(24, 0), Some(ListingChange::Away(false)));
-        assert_eq!(appearance(14, 110), None);
+        assert_eq!(change(22, u32::MAX), Some(ListingChange::Guild(None)));
+        for (value, rank) in [
+            (0, GuildRank::Member),
+            (1, GuildRank::Officer),
+            (2, GuildRank::Leader),
+            (3, GuildRank::Other(3)),
+        ] {
+            assert_eq!(change(23, value), Some(ListingChange::GuildRank(rank)));
+        }
+        assert_eq!(change(24, 0), Some(ListingChange::Away(false)));
+        assert_eq!(change(14, 110), None);
         let mut body = 12u32.to_le_bytes().to_vec();
         body.extend_from_slice(&[1, 0, 0, 0]);
         assert_eq!(looking(&body).unwrap(), (12, ListingChange::Looking(true)));
         assert!(looking(&body[..7]).is_err());
+    }
+
+    #[test]
+    fn a_listing_keeps_each_change_and_a_new_guild_waits_for_its_rank() {
+        let mut listing = Listing::default();
+        for change in [
+            ListingChange::Guild(Some(3)),
+            ListingChange::GuildRank(GuildRank::Leader),
+            ListingChange::Anonymity(Anonymity::Roleplaying),
+            ListingChange::GameMaster(true),
+            ListingChange::Away(true),
+            ListingChange::Looking(true),
+            ListingChange::Level(40),
+        ] {
+            listing.apply(change);
+        }
+        assert_eq!(
+            listing,
+            Listing {
+                guild: Some(3),
+                guild_rank: Some(GuildRank::Leader),
+                anonymity: Anonymity::Roleplaying,
+                game_master: true,
+                away: true,
+                looking: true,
+            }
+        );
+        // The same guild again keeps the rank; another or none clears it.
+        listing.apply(ListingChange::Guild(Some(3)));
+        assert_eq!(listing.guild_rank, Some(GuildRank::Leader));
+        listing.apply(ListingChange::Guild(Some(4)));
+        assert_eq!((listing.guild, listing.guild_rank), (Some(4), None));
+        listing.apply(ListingChange::GuildRank(GuildRank::Member));
+        listing.apply(ListingChange::Guild(None));
+        assert_eq!((listing.guild, listing.guild_rank), (None, None));
+        // A rank with no guild, as EQEmu sends after a member's removal.
+        listing.apply(ListingChange::GuildRank(GuildRank::Member));
+        assert_eq!((listing.guild, listing.guild_rank), (None, None));
     }
 
     #[test]
@@ -255,7 +372,7 @@ mod tests {
         ] {
             let sent = titanium_anonymity(7, anonymity).unwrap();
             assert_eq!(
-                appearance(21, word(&sent.body, 4)),
+                appearance(21, word(&sent.body, 4)).unwrap(),
                 Some(ListingChange::Anonymity(anonymity))
             );
         }

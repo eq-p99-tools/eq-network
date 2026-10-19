@@ -3,7 +3,8 @@
 //! lies close (`/corpse`), and dragging one along (`/corpsedrag`,
 //! `/corpsedrop`). Servers answer a consent with `OP_ConsentResponse`, for
 //! the owner and the one consented, and say the rest in their own string
-//! table messages; a dragged corpse moves as any spawn does.
+//! table messages; a dragged corpse moves as any spawn does on Titanium,
+//! and `EQMac`'s servers tell where any corpse moves (`OP_CorpsePosition`).
 //!
 //! Layout reference: `EQEmu`'s `BecomeCorpse_Struct`, `Consent_Struct`,
 //! `ConsentResponse_Struct`, `CorpseDrag_Struct` and `GMSummon_Struct`
@@ -30,6 +31,8 @@ pub const DROP_OPCODE: u16 = 0x7c7c;
 pub const SUMMON_OPCODE: u16 = 0x1edc;
 /// `OP_BecomeCorpse`: a player became a corpse where they lie.
 pub const BECOME_CORPSE_OPCODE: u16 = 0x4dbc;
+/// `OP_CorpsePosition`: a corpse moved (`EQMac`).
+pub const EQMAC_POSITION_OPCODE: u16 = 0x2140;
 /// The longest name a consent carries: `EQEmu` takes fewer than 64 bytes
 /// with the NUL.
 pub const MAX_NAME: usize = 62;
@@ -179,9 +182,54 @@ pub fn became_corpse(body: &[u8]) -> Result<(u16, [f32; 3])> {
     Ok((spawn_id, [x, y, z]))
 }
 
+/// Decodes `EQMac`'s `OP_CorpsePosition` (16 bytes: the corpse, two unused
+/// bytes, then where it lies, y first): the corpse, and where it lies, x, y
+/// and z. TAKP and Quarm send it to the zone as a corpse moves
+/// (`Mob::SendRealPosition`): summoned, returned, a game master's
+/// `#summon`, and on Quarm all the while it is dragged.
+///
+/// # Errors
+/// Rejects any length other than 16 bytes, a corpse that names no spawn,
+/// and a place that is not finite.
+pub fn eqmac_position(body: &[u8]) -> Result<(u16, [f32; 3])> {
+    ensure!(body.len() == 16, "invalid EQMac corpse position length");
+    let spawn_id = u16::from_le_bytes([body[0], body[1]]);
+    ensure!(spawn_id != 0, "corpse position of no spawn");
+    let [y, x, z] = [4, 8, 12]
+        .map(|at| f32::from_le_bytes([body[at], body[at + 1], body[at + 2], body[at + 3]]));
+    ensure!(
+        [x, y, z].iter().all(|value| value.is_finite()),
+        "corpse at no place"
+    );
+    Ok((spawn_id, [x, y, z]))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_eqmac_corpse_moves_without_turning() {
+        let mut body = 9u16.to_le_bytes().to_vec();
+        body.extend_from_slice(&[0, 0]);
+        for value in [2.0f32, 1.0, 3.0] {
+            body.extend_from_slice(&value.to_le_bytes());
+        }
+        assert_eq!(eqmac_position(&body).unwrap(), (9, [1.0, 2.0, 3.0]));
+        assert_eq!(
+            crate::quarm::updates(EQMAC_POSITION_OPCODE, &body).unwrap(),
+            [crate::world::WorldEvent::CorpseMoved {
+                spawn_id: 9,
+                position: [1.0, 2.0, 3.0]
+            }]
+        );
+        assert!(eqmac_position(&body[..15]).is_err());
+        let mut nowhere = body.clone();
+        nowhere[12..16].copy_from_slice(&f32::INFINITY.to_le_bytes());
+        assert!(eqmac_position(&nowhere).is_err());
+        body[..2].fill(0);
+        assert!(eqmac_position(&body).is_err());
+    }
 
     #[test]
     fn a_player_becomes_a_corpse_where_they_lie() {

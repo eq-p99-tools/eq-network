@@ -7,6 +7,16 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- The session's spawn table keeps what each spawn's updates change: its
+  look, size, `/who` listing and level (`SpawnState::apply_listing`), and
+  whose pet it is, where before it kept the listing, the level and the
+  owner from the spawn records alone. A charm's owner comes only by
+  update, so the session refused pet commands for a charmed pet as if the
+  player had none (found reading the code; not checked live). A host
+  keeps a look or listing it holds apart from a spawn, as its own
+  player's, the same way with `Appearance::apply_update` and
+  `Listing::apply`, which keeps a guild rank only with a guild.
+
 - The message tables say what each generation's profile leaves unread
   apart: `EQMac`'s skills, practice points and deity, which they had
   counted as read, are planned with `EQMac`'s catch-up on the world, and
@@ -168,6 +178,64 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Every kind of appearance update on a spawn, on both generations:
+  `WorldEvent::Appearance` (`appearance::AppearanceChange`), from the kinds
+  of `OP_SpawnAppearance` the session dropped: PvP, light, sneaking,
+  link-dead, fly mode (`appearance::FlyMode`), size, a player's name in an
+  NPC's color, an NPC's tint, show helm, a destructible NPC's damage state,
+  an area's regeneration, which comes to the player alone, kind 0 with its
+  value (`EQEmu`'s note says it makes the client keel over and go to its
+  bind point; unverified), and, as `Other`, the kinds no server sends on
+  its own, which a game master's `#appearance` can. A guild rank joins the
+  listing: `ListingChange::GuildRank` and `Listing::guild_rank`
+  (`listing::GuildRank`), from the update and from Titanium's spawn record.
+  A record naming no spawn is still left to the admission and Quarm's
+  handshakes, and a `/who` level past 255 is now the usual
+  unreadable-packet diagnostic, where before it was dropped. Hosts that
+  match `WorldEvent` or `ListingChange` exhaustively need arms for them,
+  and hosts that build `Listing` the field.
+- How a spawn shows beyond its gear, in `Appearance`: `light`,
+  `fly_mode`, `pvp`, `linkdead`, `sneaking`, `npc_name_color`, `npc_tint`
+  and `damage_state`, from Titanium's spawn record (light and fly mode)
+  and `EQMac`'s (PvP, light and fly mode) and kept current from appearance
+  updates by `SpawnState::apply_appearance`, which takes a new size too.
+  `EQMac`'s record marks every NPC link-dead and never marks sneaking, so
+  those two come from updates alone. Hosts that build `Appearance` without
+  `..Appearance::default()` need the fields.
+- What a spawn holds or suffers that shapes how it stands and moves, on
+  Titanium: `Appearance::states`, a set of `EQEmu`'s bits
+  (`appearance::SpawnStates`: a weapon in either hand, an instrument,
+  sheathed, aggressive, stunned), from the spawn record and from
+  `OP_PlayerStateAdd` and `OP_PlayerStateRemove`, read as
+  `AppearanceChange::StatesAdded` and `StatesRemoved`. `EQEmu` sends them
+  to the zone as a stun lands and ends, as an NPC turns aggressive or
+  takes up a looted weapon, and as another player says theirs changed.
+- Illusions and face changes, on both generations: a spawn taking on
+  another look, or its own again, as `AppearanceChange::Illusion`
+  (`appearance::Illusion`: the race, gender, body and helm textures, none
+  for a player race, whose gear shows, the size, 0 for the race's own,
+  and the face and hair as `appearance::Features`), from `OP_Illusion`;
+  and a face or hair change as `WorldEvent::FaceChanged`, from `EQEmu`'s
+  illusion of race -1 on Titanium, which names the spawn, and `EQMac`'s
+  `OP_FaceChange`, which TAKP and Quarm relay from a player to the whole
+  zone and which names no one but has both eyes' colors. The session's
+  spawn table takes an illusion's race, gender, size, face and hair, and a
+  named face change's face and hair. Hosts that match `WorldEvent`
+  exhaustively need an arm for `FaceChanged`.
+- A spawn's new name, on Titanium: `WorldEvent::Renamed` (the old name
+  and the new), from `OP_MobRename`, which `EQEmu` sends as an NPC's
+  corpse takes the server's name, from the one the client gives it, and
+  for the temporary names and renames of game masters, quests and pets'
+  owners. The record names no spawn: the session names it before anyone
+  hears it, from the spawn with the old name or the NPC corpse whose name
+  by `world::corpse_name` is the new one, and renames it in its table.
+  And a corpse's move, on `EQMac`: `WorldEvent::CorpseMoved` (the corpse
+  and where it lies, without a heading), from `OP_CorpsePosition`, which
+  TAKP and Quarm send as a corpse is summoned, returned or moved by a game
+  master, and on Quarm as it is dragged; the session's table moves it and
+  keeps its heading. Hosts that match `WorldEvent` exhaustively need arms
+  for both.
+
 - A quest's word on the player's base stats, on Titanium:
   `WorldEvent::StatsChanged` (`stats::StatChange`: each stat by name, 0
   for one the quest left alone), from `OP_IncreaseStats`, which `EQEmu`
@@ -328,8 +396,8 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   types that send it and the parts of the session that read it, or why it
   is left unread (work still to come, an answer to a request eq-network
   never sends, parked work, or nothing in it worth reading), taken from
-  `EQEmu`'s, TAKP's and Quarm's sources: Titanium's 258 messages, 123 of
-  them read, and `EQMac`'s 177, 89 read. A zone session now tells once, as
+  `EQEmu`'s, TAKP's and Quarm's sources: Titanium's 258 messages, 127 of
+  them read, and `EQMac`'s 177, 92 read. A zone session now tells once, as
   a diagnostic, of each message it leaves unread with the reason (but one
   with nothing worth reading, and an empty one under opcode 0, where
   `EQEmu` sends what Titanium has no opcode for, such as the empty
