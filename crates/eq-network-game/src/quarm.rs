@@ -627,8 +627,12 @@ fn decoded_spawns(data: &[u8]) -> Result<Vec<SpawnState>> {
                     z: signed(record, 11) / 10.0,
                     heading: f32::from(record[5]) * 2.0,
                 },
-                // EQMac motion fields are not decoded yet.
+                // EQMac motion fields are not decoded yet, nor its speeds:
+                // the zone spawn record's offsets for them are unchecked (260
+                // and 264 are the own spawn record's).
                 velocity: [0.0; 3],
+                walk_speed: 0.0,
+                run_speed: 0.0,
                 level: record[89],
                 // Nor are its other /who fields.
                 listing: crate::listing::Listing::default(),

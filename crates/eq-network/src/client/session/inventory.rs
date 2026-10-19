@@ -23,8 +23,8 @@ use anyhow::{Context, Result};
 use eq_network_game::{
     exchange::ExchangeUpdate,
     inventory::{
-        banker_in_range, Inventory, InventoryActor, InventoryMove, InventorySlot, InventoryUpdate,
-        MoveRules,
+        banker_in_range, Inventory, InventoryActor, InventoryItem, InventoryMove, InventorySlot,
+        InventoryUpdate, MoveRules,
     },
     loot::{LootResponse, LootUpdate},
     merchant::{MerchantUpdate, Quotes},
@@ -251,6 +251,40 @@ fn update(message: &Message) -> Option<InventoryUpdate> {
         } => Some(InventoryUpdate::Invalidated),
         _ => None,
     }
+}
+
+/// The line telling of an inventory update the zone sent, so that a log
+/// shows the server's side of every change; an emptied world container, for
+/// one, leaves no other trace.
+fn told(update: &InventoryUpdate) -> String {
+    let slots = |items: &[InventoryItem]| {
+        items
+            .iter()
+            .map(|item| item.slot.0.to_string())
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    let what = match update {
+        InventoryUpdate::Prediction(items) => format!("a prediction for slots {}", slots(items)),
+        InventoryUpdate::Consume { slot, charge } => format!(
+            "a {} used from slot {}",
+            if *charge { "charge" } else { "unit" },
+            slot.0
+        ),
+        InventoryUpdate::Snapshot(items) => format!("the whole inventory, {} items", items.len()),
+        InventoryUpdate::Set(items) => format!("slots {} set", slots(items)),
+        InventoryUpdate::Cursor(items) => format!("slots {} pushed onto the cursor", slots(items)),
+        InventoryUpdate::Remove(slot) => format!("slot {} emptied", slot.0),
+        InventoryUpdate::Used(slot) => format!("a unit or charge used from slot {}", slot.0),
+        InventoryUpdate::Deduct { slot, quantity } => {
+            format!("{quantity} taken from slot {}", slot.0)
+        }
+        InventoryUpdate::Invalidated => "the inventory needs refreshing".to_owned(),
+        InventoryUpdate::Settled => "the moves in flight settled".to_owned(),
+        InventoryUpdate::TradeEmptied => "the trade slots emptied".to_owned(),
+        InventoryUpdate::WorldEmptied => "the world container emptied".to_owned(),
+    };
+    format!("Zone sent an inventory update: {what}")
 }
 
 /// Changes the inventory and tells the host.
@@ -657,6 +691,7 @@ impl Feature for Belongings {
         match message {
             Message::Event(WorldEvent::Inventory(update)) => {
                 world.inventory.0.apply(update.clone());
+                out.log.diagnostic(told(update))?;
             }
             // A whole list: the places gone, then each item, told as the
             // merchant news a list sent item by item would be.
@@ -963,6 +998,31 @@ mod tests {
         settlement.sent(start);
         inventory.apply(InventoryUpdate::Settled);
         assert_eq!(settlement.due(&inventory, due), None);
+    }
+
+    #[test]
+    fn each_inventory_update_the_zone_sends_is_told_in_one_line() {
+        let (mut belongings, mut world) = admitted();
+        let mut told = Vec::new();
+        for update in [
+            InventoryUpdate::Set(vec![item(22), item(23)]),
+            InventoryUpdate::WorldEmptied,
+        ] {
+            let message = Message::Event(WorldEvent::Inventory(update));
+            let outcome = testing::run(|out| belongings.observe(&message, &mut world, out));
+            outcome.result.unwrap();
+            told.extend(outcome.events.into_iter().filter_map(|event| match event {
+                ClientEvent::Diagnostic(line) => Some(line),
+                _ => None,
+            }));
+        }
+        assert_eq!(
+            told,
+            [
+                "Zone sent an inventory update: slots 22, 23 set",
+                "Zone sent an inventory update: the world container emptied",
+            ]
+        );
     }
 
     #[test]
