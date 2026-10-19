@@ -444,12 +444,16 @@ pub enum Capability {
     /// ([`WorldEvent::DeathThreshold`], named once the session can count
     /// what the player's items add).
     BleedingOut,
+    /// Accepting or declining a sacrifice, which takes the player's life.
+    Sacrifice,
+    /// Accepting or declining a translocate, which moves the player.
+    Translocate,
 }
 
 impl Capability {
     /// Every capability, in order: what a session offers when its server and
     /// client generation support everything.
-    pub const ALL: [Self; 36] = [
+    pub const ALL: [Self; 38] = [
         Self::Casting,
         Self::Spellbook,
         Self::Inventory,
@@ -486,6 +490,8 @@ impl Capability {
         Self::RaidGroupLeaders,
         Self::EnvironmentalDamage,
         Self::BleedingOut,
+        Self::Sacrifice,
+        Self::Translocate,
     ];
 }
 
@@ -675,6 +681,15 @@ pub enum WorldEvent {
     ItemDetails(crate::items::ItemDetails),
     /// Server death notification; consumers compare its ID with their own spawn.
     Death(crate::zoning::Death),
+    /// A player became a corpse where they lie: the player, just before
+    /// word of their death, and another player who leaves a corpse, which
+    /// keeps their spawn ID.
+    BecameCorpse {
+        /// The player's spawn, now their corpse.
+        spawn_id: u16,
+        /// Where it lies: x, y and z; the record carries no heading.
+        position: [f32; 3],
+    },
     /// A transfer request is in progress; stop all old-zone input until its reply.
     ZoneTransfer(crate::zoning::ZoneOffer),
     /// The server rejected the pending transfer.
@@ -686,6 +701,13 @@ pub enum WorldEvent {
     },
     /// Selection request was handed to transport; this is not a server acknowledgment.
     TargetSent(Option<u16>),
+    /// The player's target as the server set it, or none: `EQEmu` as a sense
+    /// spell or a corpse locator picks a spawn, TAKP and Quarm as they refuse
+    /// a mouse target, putting back the last one, and as they echo the
+    /// player's clearing of it ([`crate::targets`]).
+    Target(Option<u16>),
+    /// Whom the player's target targets, or no one (`EQEmu`).
+    TargetOfTarget(Option<u16>),
     /// Local validation rejected a target request before transmission.
     TargetRejected {
         /// Admission that originated the request.
@@ -825,6 +847,13 @@ pub enum WorldEvent {
         /// Why it was not sent.
         reason: String,
     },
+    /// What a quest or a task gives the player: coins the server added to
+    /// the purse with no money update, and the experience and items it gave,
+    /// which come with messages of their own.
+    Reward(crate::rewards::Reward),
+    /// The sound the official client plays for a quest's `ding`
+    /// ([`Sound::Ding`](crate::rewards::Sound::Ding)).
+    Ding,
     /// Corpse loot session changes.
     Loot(crate::loot::LootUpdate),
     /// Merchant window changes.
@@ -971,6 +1000,26 @@ pub enum WorldEvent {
     Resurrection(crate::resurrection::ResurrectionOffer),
     /// An answer to a resurrection was not sent, and why.
     ResurrectionRefused {
+        /// Admission from the request.
+        session_id: u64,
+        /// Why not.
+        reason: String,
+    },
+    /// A sacrifice was cast on the player; the player may accept, giving
+    /// their life for the caster's gain, or decline it.
+    SacrificeOffer(crate::confirmations::SacrificeOffer),
+    /// An answer to a sacrifice was not sent, and why.
+    SacrificeRefused {
+        /// Admission from the request.
+        session_id: u64,
+        /// Why not.
+        reason: String,
+    },
+    /// A translocate was cast on the player; the player may accept, going
+    /// where it takes them, or decline it.
+    TranslocateOffer(crate::confirmations::TranslocateOffer),
+    /// An answer to a translocate was not sent, and why.
+    TranslocateRefused {
         /// Admission from the request.
         session_id: u64,
         /// Why not.
@@ -1322,12 +1371,22 @@ pub fn titanium_update(opcode: u16, body: &[u8]) -> Result<Option<WorldEvent>> {
     }))
 }
 
-/// Stuns and charms, the end of hiding, doors, ground objects, loot,
-/// merchant, exchange, training, resurrection, group, dice, assist, raid,
-/// book, combine, bandaging, chat server, weather and inventory packets,
-/// each owned by its codec.
+/// Stuns and charms, the end of hiding, the target the server sets,
+/// rewards, sacrifices and translocates, a player becoming a corpse, doors,
+/// ground objects, loot, merchant, exchange, training, resurrection, group,
+/// dice, assist, raid, book, combine, bandaging, chat server, weather and
+/// inventory packets, each owned by its codec.
 fn titanium_views(opcode: u16, body: &[u8]) -> Result<Option<WorldEvent>> {
     match opcode {
+        crate::rewards::SOUND_OPCODE => {
+            return Ok(Some(match crate::rewards::titanium_sound(body)? {
+                crate::rewards::Sound::Reward(reward) => WorldEvent::Reward(reward),
+                crate::rewards::Sound::Ding => WorldEvent::Ding,
+            }));
+        }
+        crate::rewards::CASH_REWARD_OPCODE => {
+            return Ok(Some(WorldEvent::Reward(crate::rewards::cash_reward(body)?)));
+        }
         crate::control::STUN_OPCODE => {
             return Ok(Some(WorldEvent::Stun(crate::control::stun(body)?)));
         }
@@ -1335,10 +1394,34 @@ fn titanium_views(opcode: u16, body: &[u8]) -> Result<Option<WorldEvent>> {
             ensure!(body.is_empty(), "invalid hide end length");
             return Ok(Some(WorldEvent::HideAndSneakEnded));
         }
+        crate::targets::TARGET_COMMAND_OPCODE => {
+            return Ok(Some(WorldEvent::Target(crate::targets::titanium_target(
+                body,
+            )?)));
+        }
+        crate::targets::TARGET_OF_TARGET_OPCODE => {
+            return Ok(Some(WorldEvent::TargetOfTarget(
+                crate::targets::titanium_target(body)?,
+            )));
+        }
         crate::control::CHARM_OPCODE => {
             return Ok(Some(WorldEvent::Charm(crate::control::titanium_charm(
                 body,
             )?)));
+        }
+        crate::corpses::BECOME_CORPSE_OPCODE => {
+            let (spawn_id, position) = crate::corpses::became_corpse(body)?;
+            return Ok(Some(WorldEvent::BecameCorpse { spawn_id, position }));
+        }
+        crate::confirmations::SACRIFICE_OPCODE => {
+            return Ok(Some(WorldEvent::SacrificeOffer(
+                crate::confirmations::sacrifice(body)?,
+            )));
+        }
+        crate::confirmations::TRANSLOCATE_OPCODE => {
+            return Ok(Some(WorldEvent::TranslocateOffer(
+                crate::confirmations::titanium_translocate(body)?,
+            )));
         }
         _ => (),
     }
@@ -1585,6 +1668,8 @@ mod tests {
             Capability::RaidGroupLeaders => 33,
             Capability::EnvironmentalDamage => 34,
             Capability::BleedingOut => 35,
+            Capability::Sacrifice => 36,
+            Capability::Translocate => 37,
         };
         for (index, capability) in Capability::ALL.into_iter().enumerate() {
             assert_eq!(place(capability), index, "{capability:?}");
@@ -2046,6 +2131,98 @@ mod tests {
         );
         assert!(titanium_update(0x1e51, &[0; 8]).is_err());
         assert!(titanium_update(0x12e5, &[0; 6]).is_err());
+    }
+
+    #[test]
+    fn the_target_the_server_sets_and_the_targets_target_are_read() {
+        assert_eq!(
+            titanium_update(0x1477, &581u32.to_le_bytes()).unwrap(),
+            Some(WorldEvent::Target(Some(581)))
+        );
+        assert_eq!(
+            titanium_update(0x1477, &[0; 4]).unwrap(),
+            Some(WorldEvent::Target(None))
+        );
+        assert_eq!(
+            titanium_update(0x6a12, &553u32.to_le_bytes()).unwrap(),
+            Some(WorldEvent::TargetOfTarget(Some(553)))
+        );
+        assert!(titanium_update(0x1477, &[0; 2]).is_err());
+        assert!(titanium_update(0x6a12, &[0; 8]).is_err());
+    }
+
+    #[test]
+    fn rewards_and_eqemus_ding_are_read() {
+        let mut quest = vec![0; 68];
+        quest[..4].copy_from_slice(&581u32.to_le_bytes());
+        quest[32..36].copy_from_slice(&2u32.to_le_bytes());
+        assert_eq!(
+            titanium_update(0x541e, &quest).unwrap(),
+            Some(WorldEvent::Reward(crate::rewards::Reward {
+                giver_id: Some(581),
+                coins: Coins {
+                    platinum: 2,
+                    ..Coins::default()
+                },
+                ..crate::rewards::Reward::default()
+            }))
+        );
+        assert_eq!(
+            titanium_update(0x541e, &crate::rewards::DING).unwrap(),
+            Some(WorldEvent::Ding)
+        );
+        let mut cash = [0; 16];
+        cash[..4].copy_from_slice(&7u32.to_le_bytes());
+        assert_eq!(
+            titanium_update(0x4c8c, &cash).unwrap(),
+            Some(WorldEvent::Reward(crate::rewards::Reward {
+                coins: Coins {
+                    copper: 7,
+                    ..Coins::default()
+                },
+                ..crate::rewards::Reward::default()
+            }))
+        );
+        assert!(titanium_update(0x541e, &quest[..64]).is_err());
+        assert!(titanium_update(0x4c8c, &[0; 12]).is_err());
+    }
+
+    #[test]
+    fn a_player_becoming_a_corpse_is_read() {
+        let mut body = 7u32.to_le_bytes().to_vec();
+        for value in [1748.0f32, 263.0, 27.0] {
+            body.extend_from_slice(&value.to_le_bytes());
+        }
+        assert_eq!(
+            titanium_update(0x4dbc, &body).unwrap(),
+            Some(WorldEvent::BecameCorpse {
+                spawn_id: 7,
+                position: [263.0, 1748.0, 27.0],
+            })
+        );
+        assert!(titanium_update(0x4dbc, &body[..12]).is_err());
+    }
+
+    #[test]
+    fn sacrifice_and_translocate_offers_are_read() {
+        let sacrifice: Vec<u8> = [581u32, 7, 0]
+            .iter()
+            .flat_map(|value| value.to_le_bytes())
+            .collect();
+        assert!(matches!(
+            titanium_update(0x727a, &sacrifice).unwrap(),
+            Some(WorldEvent::SacrificeOffer(offer)) if offer.caster_id == 581
+        ));
+        let mut translocate = vec![0; 92];
+        translocate[..4].copy_from_slice(&4u32.to_le_bytes());
+        translocate[12..18].copy_from_slice(b"Tester");
+        assert!(matches!(
+            titanium_update(0x8258, &translocate).unwrap(),
+            Some(WorldEvent::TranslocateOffer(offer))
+                if offer.zone_id == 4 && offer.caster == "Tester"
+        ));
+        assert!(titanium_update(0x727a, &sacrifice[..8]).is_err());
+        assert!(titanium_update(0x8258, &translocate[..91]).is_err());
     }
 
     #[test]

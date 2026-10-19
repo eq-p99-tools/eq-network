@@ -162,10 +162,11 @@ pub fn titanium(opcode: u16, body: &[u8]) -> Vec<Message> {
 
 /// What one `EQMac` zone packet says: the spawns and the player's news that
 /// [`crate::quarm::updates`] reads, the inventory, the server logging the
-/// character out, its request that the client move and Quarm's move of a
-/// dead player to their bind point, its answer to the client's request, the
-/// zone's numbered destinations, the zone's header, and the player's bind
-/// point from their profile.
+/// character out, its request that the client move, Quarm's move of a dead
+/// player to their bind point and TAKP's word that a translocate the player
+/// accepted lets them go, a translocate's offer, the server's answer to the
+/// client's request, the zone's numbered destinations, the zone's header,
+/// and the player's bind point from their profile.
 #[must_use]
 pub fn eqmac(opcode: u16, body: &[u8]) -> Vec<Message> {
     match opcode {
@@ -178,6 +179,15 @@ pub fn eqmac(opcode: u16, body: &[u8]) -> Vec<Message> {
             |error| unreadable(Part::ZoneOffer, &error),
             Message::ZoneOffer,
         )],
+        crate::confirmations::EQMAC_TRANSLOCATE_OPCODE => {
+            vec![match crate::confirmations::eqmac_translocate(body) {
+                Ok(crate::confirmations::Translocate::Offer(offer)) => {
+                    Message::Event(WorldEvent::TranslocateOffer(offer))
+                }
+                Ok(crate::confirmations::Translocate::Go(offer)) => Message::ZoneOffer(offer),
+                Err(error) => unreadable(Part::World, &error),
+            }]
+        }
         crate::quarm::ZONE_CHANGE => vec![crate::quarm::zone_answer(body).map_or_else(
             |error| unreadable(Part::ZoneAnswer, &error),
             Message::ZoneAnswer,
@@ -598,6 +608,31 @@ mod tests {
         notice[0] = 7;
         assert!(matches!(
             eqmac(crate::money::EQMAC_PURSE_OPCODE, &notice)[..],
+            [Message::Unreadable {
+                part: Part::World,
+                ..
+            }]
+        ));
+    }
+
+    #[test]
+    fn an_eqmac_translocate_is_an_offer_or_takps_word_to_go() {
+        let mut body = vec![0; 92];
+        body[..4].copy_from_slice(&4u32.to_le_bytes());
+        body[12..18].copy_from_slice(b"Tester");
+        let opcode = crate::confirmations::EQMAC_TRANSLOCATE_OPCODE;
+        assert!(matches!(
+            &eqmac(opcode, &body)[..],
+            [Message::Event(WorldEvent::TranslocateOffer(offer))] if offer.zone_id == 4
+        ));
+        body[88..].copy_from_slice(&1u32.to_le_bytes());
+        assert!(matches!(
+            &eqmac(opcode, &body)[..],
+            [Message::ZoneOffer(offer)] if offer.zone_id == 4 && offer.solicited && !offer.to_bind
+        ));
+        body[88..].copy_from_slice(&(-1i32).to_le_bytes());
+        assert!(matches!(
+            &eqmac(opcode, &body)[..],
             [Message::Unreadable {
                 part: Part::World,
                 ..

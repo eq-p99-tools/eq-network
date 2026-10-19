@@ -453,6 +453,22 @@ pub enum GameCommand {
         /// True accepts.
         accept: bool,
     },
+    /// Accept or decline the sacrifice offered last, which takes the
+    /// player's life: only ever on the player's own choice.
+    AnswerSacrifice {
+        /// Current zone admission.
+        session_id: u64,
+        /// True accepts.
+        accept: bool,
+    },
+    /// Accept or decline the translocate offered last, which moves the
+    /// player: only ever on the player's own choice.
+    AnswerTranslocate {
+        /// Current zone admission.
+        session_id: u64,
+        /// True accepts.
+        accept: bool,
+    },
     /// Invite a player into the player's group, by name: `/invite`.
     InviteToGroup {
         /// Current zone admission.
@@ -654,6 +670,8 @@ impl GameCommand {
             | Self::Pet { session_id, .. }
             | Self::Training { session_id, .. }
             | Self::AnswerResurrection { session_id, .. }
+            | Self::AnswerSacrifice { session_id, .. }
+            | Self::AnswerTranslocate { session_id, .. }
             | Self::InviteToGroup { session_id, .. }
             | Self::FollowGroup { session_id }
             | Self::DeclineGroup { session_id }
@@ -737,6 +755,8 @@ impl GameCommand {
             Self::Pet { .. } => Capability::Pets,
             Self::Training { .. } => Capability::Training,
             Self::AnswerResurrection { .. } => Capability::Resurrection,
+            Self::AnswerSacrifice { .. } => Capability::Sacrifice,
+            Self::AnswerTranslocate { .. } => Capability::Translocate,
             Self::InviteToGroup { .. }
             | Self::FollowGroup { .. }
             | Self::DeclineGroup { .. }
@@ -783,6 +803,8 @@ impl GameCommand {
             | Self::WhoAll { .. }
             | Self::Pet { .. }
             | Self::AnswerResurrection { .. }
+            | Self::AnswerSacrifice { .. }
+            | Self::AnswerTranslocate { .. }
             | Self::InviteToGroup { .. }
             | Self::FollowGroup { .. }
             | Self::DeclineGroup { .. }
@@ -937,6 +959,10 @@ fn encode_eqmac_trade(command: &GameCommand) -> Result<EncodedCommand> {
 ///
 /// Returns an error when a command contains values that cannot be represented
 /// by the selected dialect.
+#[allow(
+    clippy::too_many_lines,
+    reason = "every kind of command named, so that a new one is a decision here"
+)]
 pub fn encode(
     dialect: GameDialect,
     command: &GameCommand,
@@ -1000,6 +1026,8 @@ pub fn encode(
         | GameCommand::Pet { .. }
         | GameCommand::Training { .. }
         | GameCommand::AnswerResurrection { .. }
+        | GameCommand::AnswerSacrifice { .. }
+        | GameCommand::AnswerTranslocate { .. }
         | GameCommand::InviteToGroup { .. }
         | GameCommand::FollowGroup { .. }
         | GameCommand::DeclineGroup { .. }

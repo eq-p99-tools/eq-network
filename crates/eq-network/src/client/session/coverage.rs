@@ -192,8 +192,8 @@ impl fmt::Display for Reason {
 /// step at a time.
 #[derive(Clone, Copy, Debug)]
 pub(super) enum Step {
-    /// The player's own state: disciplines and reuse timers, a target the
-    /// server sets, rewards, and the confirmations the player answers.
+    /// The player's own state: disciplines and reuse timers, stats, skills
+    /// and languages.
     PlayerState,
     /// Spawns' appearance and effects: the appearance kinds left, illusions,
     /// renames, spell and level effects, sounds, projectiles and spawn
@@ -267,6 +267,33 @@ const APPEARANCE: &[Part] = &[Part(
 const OWN_NAME: &[Part] = &[Part(
     "the player's own name",
     Reason::Needless("the session has it from its entry"),
+)];
+/// What the session leaves unread of a quest's reward.
+const REWARD: &[Part] = &[
+    Part(
+        "the player's own spawn",
+        Reason::Needless("the server sends a reward only to the player it names"),
+    ),
+    Part(
+        "the faction and its modifier",
+        Reason::Needless(
+            "the server tells the faction's change in its own lines \
+             (zone/client.cpp Client::SetFactionLevel)",
+        ),
+    ),
+];
+/// What the session leaves unread of an offer to sacrifice the player.
+const SACRIFICE: &[Part] = &[Part(
+    "the player's own spawn",
+    Reason::Needless("the server sends an offer only to the player it names"),
+)];
+/// What the session leaves unread of an offer to translocate the player.
+const TRANSLOCATE: &[Part] = &[Part(
+    "the field after the spell",
+    Reason::Needless(
+        "every server leaves it 0 (zone/client.cpp Client::SendOPTranslocateConfirm, \
+         and TAKP's Client::SendPendingTranslocatePacket)",
+    ),
 )];
 /// What the session leaves unread of `EQMac`'s log-server settings.
 const LOG_SERVER: &[Part] = &[Part(

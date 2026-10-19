@@ -1,17 +1,18 @@
-//! Corpses that belong to players: consenting another player to drag them
-//! (`/consent`, `/deny`), summoning one that lies close (`/corpse`), and
-//! dragging one along (`/corpsedrag`, `/corpsedrop`). Servers answer a
-//! consent with `OP_ConsentResponse`, for the owner and the one consented,
-//! and say the rest in their own string table messages; a dragged corpse
-//! moves as any spawn does.
+//! Corpses that belong to players: a player becoming one, consenting
+//! another player to drag them (`/consent`, `/deny`), summoning one that
+//! lies close (`/corpse`), and dragging one along (`/corpsedrag`,
+//! `/corpsedrop`). Servers answer a consent with `OP_ConsentResponse`, for
+//! the owner and the one consented, and say the rest in their own string
+//! table messages; a dragged corpse moves as any spawn does.
 //!
-//! Layout reference: `EQEmu`'s `Consent_Struct`, `ConsentResponse_Struct`,
-//! `CorpseDrag_Struct` and `GMSummon_Struct` (`common/eq_packet_structs.h`
-//! and `common/patches/titanium_structs.h`), and `Client::Handle_OP_Consent`,
-//! `Handle_OP_CorpseDrag`, `Handle_OP_CorpseDrop` and `OPGMSummon`
-//! (`zone/client_packet.cpp`, `zone/client_process.cpp`) for the rules.
+//! Layout reference: `EQEmu`'s `BecomeCorpse_Struct`, `Consent_Struct`,
+//! `ConsentResponse_Struct`, `CorpseDrag_Struct` and `GMSummon_Struct`
+//! (`common/eq_packet_structs.h` and `common/patches/titanium_structs.h`),
+//! and `Client::Death`, `Client::Handle_OP_Consent`, `Handle_OP_CorpseDrag`,
+//! `Handle_OP_CorpseDrop` and `OPGMSummon` (`zone/attack.cpp`,
+//! `zone/client_packet.cpp`, `zone/client_process.cpp`) for the rules.
 use crate::command::EncodedCommand;
-use anyhow::{ensure, Result};
+use anyhow::{ensure, Context, Result};
 use serde::Serialize;
 
 /// `OP_Consent`: let a player drag the player's corpses.
@@ -27,6 +28,8 @@ pub const DRAG_OPCODE: u16 = 0x50c0;
 pub const DROP_OPCODE: u16 = 0x7c7c;
 /// `OP_GMSummon`, which the official client also sends for `/corpse`.
 pub const SUMMON_OPCODE: u16 = 0x1edc;
+/// `OP_BecomeCorpse`: a player became a corpse where they lie.
+pub const BECOME_CORPSE_OPCODE: u16 = 0x4dbc;
 /// The longest name a consent carries: `EQEmu` takes fewer than 64 bytes
 /// with the NUL.
 pub const MAX_NAME: usize = 62;
@@ -152,9 +155,52 @@ pub fn decode_consent(body: &[u8]) -> Result<Consent> {
     })
 }
 
+/// Decodes `OP_BecomeCorpse` (16 bytes: the spawn as a 32-bit ID, then
+/// where it lies, y first): the spawn, and where it lies, x, y and z. `EQEmu`
+/// sends it to the player just before word of their death, and to everyone
+/// else in the zone as a player leaves a corpse, which keeps the player's
+/// spawn ID (`Client::Death`, `Client::Sacrifice`, `EntityList::AddCorpse`).
+///
+/// # Errors
+/// Rejects any length other than 16 bytes, a spawn that names none, and a
+/// place that is not finite.
+pub fn became_corpse(body: &[u8]) -> Result<(u16, [f32; 3])> {
+    ensure!(body.len() == 16, "invalid corpse length");
+    let word = |at: usize| u32::from_le_bytes([body[at], body[at + 1], body[at + 2], body[at + 3]]);
+    let spawn_id = u16::try_from(word(0))
+        .ok()
+        .filter(|&id| id != 0)
+        .context("corpse of no spawn")?;
+    let [y, x, z] = [4, 8, 12].map(|at| f32::from_bits(word(at)));
+    ensure!(
+        [x, y, z].iter().all(|value| value.is_finite()),
+        "corpse at no place"
+    );
+    Ok((spawn_id, [x, y, z]))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_player_becomes_a_corpse_where_they_lie() {
+        let mut body = Vec::new();
+        body.extend_from_slice(&7u32.to_le_bytes());
+        for value in [1748.0f32, 263.0, 27.0] {
+            body.extend_from_slice(&value.to_le_bytes());
+        }
+        assert_eq!(became_corpse(&body).unwrap(), (7, [263.0, 1748.0, 27.0]));
+        assert!(became_corpse(&body[..15]).is_err());
+        let mut none = body.clone();
+        none[..4].copy_from_slice(&0u32.to_le_bytes());
+        assert!(became_corpse(&none).is_err(), "no spawn");
+        let mut far = body.clone();
+        far[..4].copy_from_slice(&0x1_0000u32.to_le_bytes());
+        assert!(became_corpse(&far).is_err(), "beyond 16 bits");
+        body[4..8].copy_from_slice(&f32::INFINITY.to_le_bytes());
+        assert!(became_corpse(&body).is_err(), "no place");
+    }
 
     #[test]
     fn consents_name_a_player_and_answers_say_where() {

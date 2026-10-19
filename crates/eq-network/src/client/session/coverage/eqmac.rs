@@ -10,7 +10,8 @@ use super::{
         AlternateAdvancement, Appearance, Bazaar, EqMacExchanges, EqMacWorld, LaterSystems,
         PlayerState, Raids, Social,
     },
-    EQMAC, EQMAC_DESCRIPTION, LOG_SERVER, OWN_NAME, PROFILE, QUARM, TAKP,
+    EQMAC, EQMAC_DESCRIPTION, LOG_SERVER, OWN_NAME, PROFILE, QUARM, REWARD, SACRIFICE, TAKP,
+    TRANSLOCATE,
 };
 
 /// What the session does with a message `EQMac`'s servers send; nothing for
@@ -27,7 +28,8 @@ pub(in crate::client) fn eqmac(opcode: u16) -> Option<ServerMessage> {
         0x0541 => sent("OP_TradeSkillCombine", EQMAC, planned(EqMacWorld)),
         0x0542 => sent("OP_ClearObject", EQMAC, planned(EqMacWorld)),
         0x0580 => sent("OP_ZoneUnavail", EQMAC, Read(&[World])),
-        0x0642 => sent("OP_Translocate", QUARM, planned(PlayerState)),
+        // An offer, and TAKP's word that the player may go after their yes.
+        0x0642 => sent("OP_Translocate", EQMAC, Partly(&[Zone], TRANSLOCATE)),
         0x0710 => sent(
             "OP_ApproveWorld",
             EQMAC,
@@ -142,6 +144,9 @@ pub(in crate::client) fn eqmac(opcode: u16) -> Option<ServerMessage> {
         0x5f41 => sent("OP_ZoneSpawns", EQMAC, Read(&[Zone])),
         0x5f42 => sent("OP_RaidInvite", EQMAC, planned(Raids)),
         0x6042 => sent("OP_RaidUpdate", EQMAC, planned(Raids)),
+        // The player's own, which TAKP and Quarm echo as the player clears
+        // their target.
+        0x6241 => sent("OP_TargetMouse", EQMAC, Read(&[Zone])),
         0x6441 => sent("OP_ItemPacket", EQMAC, Read(&[Zone])),
         0x6442 => sent("OP_ItemLinkResponse", EQMAC, Read(&[Zone])),
         0x6541 => sent("OP_BookPacket", EQMAC, Read(&[Zone])),
@@ -158,7 +163,7 @@ pub(in crate::client) fn eqmac(opcode: u16) -> Option<ServerMessage> {
         0x7841 => sent("OP_SummonedItem", EQMAC, Read(&[Zone])),
         0x7b41 => sent("OP_GuildAdded", EQMAC, planned(Social)),
         0x7f41 => sent("OP_ManaChange", EQMAC, Read(&[Zone])),
-        0x8040 => sent("OP_Reward", EQMAC, planned(PlayerState)),
+        0x8040 => sent("OP_Reward", EQMAC, Partly(&[Zone], REWARD)),
         0x8041 => sent("OP_SpecialMesg", EQMAC, Read(&[Chat])),
         0x8241 => sent("OP_MemorizeSpell", EQMAC, Read(&[Zone])),
         0x8800 => sent("OP_LoginComplete", TAKP, Read(&[Login])),
@@ -215,8 +220,10 @@ pub(in crate::client) fn eqmac(opcode: u16) -> Option<ServerMessage> {
         0xdf40 => sent("OP_TradeItemPacket", EQMAC, planned(EqMacExchanges)),
         0xe440 => sent("OP_TradeCoins", EQMAC, planned(EqMacExchanges)),
         0xe640 => sent("OP_TradeRequestAck", EQMAC, planned(EqMacExchanges)),
-        0xea41 => sent("OP_Sacrifice", EQMAC, planned(PlayerState)),
-        0xec41 => sent("OP_RezzComplete", EQMAC, planned(PlayerState)),
+        0xea41 => sent("OP_Sacrifice", EQMAC, Partly(&[Zone], SACRIFICE)),
+        // TAKP's word that the player may go to their corpse after their
+        // yes, which its client moves itself on, as on a translocate's.
+        0xec41 => sent("OP_RezzComplete", TAKP, planned(EqMacExchanges)),
         0xf041 => sent("OP_LFGCommand", EQMAC, planned(EqMacWorld)),
         0xf240 => sent("OP_TimeOfDay", EQMAC, Unread(Parked("eq-network#91"))),
         0xf241 => sent("OP_DisciplineChange", EQMAC, planned(PlayerState)),
@@ -243,7 +250,7 @@ pub(in crate::client) fn eqmac(opcode: u16) -> Option<ServerMessage> {
         0xf641 => sent("OP_CharInventory", EQMAC, Read(&[Zone])),
         0xf741 => sent("OP_SpawnDoor", EQMAC, planned(EqMacWorld)),
         0xfb40 => sent("OP_ObjectItemPacket", EQMAC, planned(EqMacWorld)),
-        0xfe41 => sent("OP_TargetCommand", EQMAC, planned(PlayerState)),
+        0xfe41 => sent("OP_TargetCommand", EQMAC, Read(&[Zone])),
         _ => return None,
     })
 }

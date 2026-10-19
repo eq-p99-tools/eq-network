@@ -22,6 +22,8 @@ pub mod clock;
 pub mod combat;
 /// Typed client actions and dialect-specific application packet encoding.
 pub mod command;
+/// The server's questions the player answers: a sacrifice and a translocate.
+pub mod confirmations;
 /// The server's hold on the player: stuns, charms, its own control of the
 /// player, and a warrior's berserk.
 pub mod control;
@@ -69,6 +71,8 @@ pub mod quarm;
 pub mod raid;
 /// Being resurrected: the offer and the player's answer.
 pub mod resurrection;
+/// What a quest or a task gives the player.
+pub mod rewards;
 /// A world's rules, and the expansions it lets the account play.
 pub mod rules;
 /// The worlds a login server lists, and the player's choice among them.
@@ -77,6 +81,8 @@ pub mod servers;
 pub mod socials;
 /// Server-driven spellbook and casting notifications.
 pub mod spells;
+/// The player's target as the server sets it, and whom that target targets.
+pub mod targets;
 /// Tradeskill combines in the player's own containers.
 pub mod tradeskills;
 /// Training skills at a guildmaster.

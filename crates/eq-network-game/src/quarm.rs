@@ -830,6 +830,17 @@ pub fn updates(opcode: u16, body: &[u8]) -> Result<Vec<WorldEvent>> {
             ensure!(body.is_empty(), "invalid EQMac hide end length");
             vec![WorldEvent::HideAndSneakEnded]
         }
+        crate::targets::EQMAC_TARGET_COMMAND_OPCODE | crate::targets::EQMAC_TARGET_MOUSE_OPCODE => {
+            vec![WorldEvent::Target(crate::targets::eqmac_target(body)?)]
+        }
+        crate::rewards::EQMAC_REWARD_OPCODE => {
+            vec![WorldEvent::Reward(crate::rewards::eqmac_reward(body)?)]
+        }
+        crate::confirmations::EQMAC_SACRIFICE_OPCODE => {
+            vec![WorldEvent::SacrificeOffer(crate::confirmations::sacrifice(
+                body,
+            )?)]
+        }
         0x9941 => {
             ensure!(
                 body.len() == 4 && word(body, 0) <= 330,

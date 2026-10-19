@@ -7,7 +7,7 @@ use super::{
     Reason::{Needless, Planned, Unmapped},
     ServerMessage,
     Step::{AlternateAdvancement, Appearance, Bazaar, LaterSystems, PlayerState, Raids, Social},
-    APPEARANCE, EQEMU, P99, PROFILE, TITANIUM_DESCRIPTION,
+    APPEARANCE, EQEMU, P99, PROFILE, REWARD, SACRIFICE, TITANIUM_DESCRIPTION, TRANSLOCATE,
 };
 
 /// What the session does with a message Titanium's servers send; nothing
@@ -17,7 +17,8 @@ pub(in crate::client) fn titanium(opcode: u16) -> Option<ServerMessage> {
     Some(match opcode {
         // `EQEmu`'s Titanium opcode list leaves OP_FinishWindow and
         // OP_FinishWindow2 at 0, and its stream sends them under 0, empty,
-        // after a container closes or a trade ends.
+        // after a container closes or a trade ends; OP_TargetReject goes
+        // the same way, after a /target this client never sends.
         0x0000 => sent("an unmapped message", EQEMU, Unread(Unmapped)),
         0x0016 => sent("OP_ChatMessage", EQEMU, Read(&[Login])),
         0x0017 => sent("OP_LoginAccepted", EQEMU, Read(&[Login])),
@@ -76,7 +77,7 @@ pub(in crate::client) fn titanium(opcode: u16) -> Option<ServerMessage> {
         0x12e5 => sent("OP_Charm", EQEMU, Read(&[Zone])),
         0x1306 => sent("OP_GMZoneRequest", EQEMU, unasked(Social)),
         0x13e7 => sent("OP_Begging", EQEMU, unasked(PlayerState)),
-        0x1477 => sent("OP_TargetCommand", EQEMU, planned(PlayerState)),
+        0x1477 => sent("OP_TargetCommand", EQEMU, Read(&[Zone])),
         0x147d => sent("OP_GuildMemberList", EQEMU, planned(Social)),
         0x1496 => sent("OP_ReadBook", EQEMU, Read(&[Zone])),
         0x14cb => sent("OP_ClientUpdate", EQEMU, Read(&[Zone])),
@@ -202,12 +203,11 @@ pub(in crate::client) fn titanium(opcode: u16) -> Option<ServerMessage> {
         0x4839 => sent("OP_ManaChange", EQEMU, Read(&[Zone])),
         0x48c2 => sent("OP_CancelSneakHide", EQEMU, Read(&[Zone])),
         0x497c => sent("OP_Action", EQEMU, Read(&[Zone])),
-        0x4b05 => sent("OP_RezzComplete", EQEMU, planned(PlayerState)),
         0x4c24 => sent("OP_SpawnDoor", EQEMU, Read(&[Zone])),
-        0x4c8c => sent("OP_CashReward", EQEMU, planned(PlayerState)),
+        0x4c8c => sent("OP_CashReward", EQEMU, Read(&[Zone])),
         0x4cc7 => sent("OP_GuildRenameGuild", EQEMU, planned(Social)),
         0x4d81 => sent("OP_DeleteItem", EQEMU, Read(&[Zone])),
-        0x4dbc => sent("OP_BecomeCorpse", EQEMU, planned(PlayerState)),
+        0x4dbc => sent("OP_BecomeCorpse", EQEMU, Read(&[Zone])),
         0x4e31 => sent("OP_PetBuffWindow", EQEMU, Read(&[Zone])),
         0x4ea2 => sent("OP_RecipeDetails", EQEMU, unasked(LaterSystems)),
         0x4eca => sent("OP_NewTitlesAvailable", EQEMU, planned(Social)),
@@ -218,7 +218,8 @@ pub(in crate::client) fn titanium(opcode: u16) -> Option<ServerMessage> {
         0x52a4 => sent("OP_PostEnterWorld", EQEMU, Read(&[World])),
         0x5394 => sent("OP_CharInventory", EQEMU, Read(&[Zone])),
         0x53df => sent("OP_DisciplineTimer", EQEMU, planned(PlayerState)),
-        0x541e => sent("OP_Sound", EQEMU, planned(Appearance)),
+        // A quest's reward, or EQEmu's fixed record that gives nothing.
+        0x541e => sent("OP_Sound", EQEMU, Partly(&[Zone], REWARD)),
         0x547a => sent("OP_Emote", EQEMU, Read(&[Chat])),
         0x5483 => sent("OP_MarkNPC", EQEMU, planned(Raids)),
         0x54eb => sent("OP_TaskActivityComplete", EQEMU, planned(LaterSystems)),
@@ -283,7 +284,7 @@ pub(in crate::client) fn titanium(opcode: u16) -> Option<ServerMessage> {
         0x6966 => sent("OP_SetGuildRank", EQEMU, planned(Social)),
         0x6980 => sent("OP_GMKill", EQEMU, planned(Social)),
         0x6a00 => sent("OP_LinkedReuse", EQEMU, planned(PlayerState)),
-        0x6a12 => sent("OP_TargetHoTT", EQEMU, planned(PlayerState)),
+        0x6a12 => sent("OP_TargetHoTT", EQEMU, Read(&[Zone])),
         0x6a1d => sent("OP_TaskRequestTimer", EQEMU, planned(LaterSystems)),
         0x6a53 => sent("OP_Buff", EQEMU, Read(&[Zone])),
         0x6a5b => sent("OP_BankerChange", EQEMU, unasked(PlayerState)),
@@ -308,7 +309,7 @@ pub(in crate::client) fn titanium(opcode: u16) -> Option<ServerMessage> {
         0x7180 => sent("OP_DisciplineUpdate", EQEMU, planned(PlayerState)),
         0x7213 => sent("OP_ZoneEntry", EQEMU, Read(&[Admission])),
         0x722f => sent("OP_SharedTaskMemberList", EQEMU, planned(LaterSystems)),
-        0x727a => sent("OP_Sacrifice", EQEMU, planned(PlayerState)),
+        0x727a => sent("OP_Sacrifice", EQEMU, Partly(&[Zone], SACRIFICE)),
         0x7416 => sent(
             "OP_ClearLeadershipAbilities",
             EQEMU,
@@ -339,7 +340,7 @@ pub(in crate::client) fn titanium(opcode: u16) -> Option<ServerMessage> {
         0x7cba => sent("OP_EnterWorld", EQEMU, Read(&[World])),
         0x7e03 => sent("OP_ShopEnd", EQEMU, planned(Bazaar)),
         0x7fe4 => sent("OP_MoneyOnCorpse", EQEMU, Read(&[Zone])),
-        0x8258 => sent("OP_Translocate", EQEMU, planned(PlayerState)),
+        0x8258 => sent("OP_Translocate", EQEMU, Partly(&[Zone], TRANSLOCATE)),
         0xb4ab => sent("OP_GuildBank", EQEMU, planned(LaterSystems)),
         _ => return None,
     })
