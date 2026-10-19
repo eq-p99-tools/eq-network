@@ -15,7 +15,13 @@ use eq_network_transport::Transport;
 /// The zone's features, each offered every command, packet, timer and
 /// event, and what the server type leaves to the player of what they let
 /// the player do.
-struct Features(Vec<Box<dyn Feature>>, Vec<crate::world::Capability>);
+struct Features {
+    provided: Vec<Box<dyn Feature>>,
+    choices: Vec<crate::world::Capability>,
+    /// The spell action flag that says a spell landed, as the server type
+    /// says.
+    spell_landing_flag: Option<u8>,
+}
 
 impl Features {
     /// The features the server type provides.
@@ -40,17 +46,21 @@ impl Features {
         choices.retain(|capability| !offered.contains(capability));
         choices.sort_unstable();
         choices.dedup();
-        Self(features, choices)
+        Self {
+            provided: features,
+            choices,
+            spell_landing_flag: server.spell_landing_flag(),
+        }
     }
 
     /// What the features let the player do, each once, but what the server
     /// type leaves to the player.
     fn capabilities(&self) -> Vec<crate::world::Capability> {
         let mut capabilities: Vec<_> = self
-            .0
+            .provided
             .iter()
             .flat_map(|feature| feature.capabilities())
-            .filter(|capability| !self.1.contains(capability))
+            .filter(|capability| !self.choices.contains(capability))
             .collect();
         capabilities.sort_unstable();
         capabilities.dedup();
@@ -59,19 +69,19 @@ impl Features {
 
     /// What the server type leaves to the player, each once.
     fn choices(&self) -> Vec<crate::world::Capability> {
-        self.1.clone()
+        self.choices.clone()
     }
 
     /// Lets every feature shape the player the admission reports.
     fn shape(&mut self, player: &mut crate::world::PlayerState) {
-        for feature in &mut self.0 {
+        for feature in &mut self.provided {
             feature.shape(player);
         }
     }
 
     /// Lets every feature explain a message its own action caused.
     fn explain(&mut self, message: &mut Message, world: &World) {
-        for feature in &mut self.0 {
+        for feature in &mut self.provided {
             feature.explain(message, world);
         }
     }
@@ -79,7 +89,7 @@ impl Features {
     /// Lets every feature record a message from before the zone admitted the
     /// player.
     fn admit(&mut self, message: &Message, world: &mut World) -> Result<()> {
-        for feature in &mut self.0 {
+        for feature in &mut self.provided {
             feature.admit(message, world)?;
         }
         Ok(())
@@ -87,7 +97,7 @@ impl Features {
 
     /// Has every feature tell the host what it staged before admission.
     fn admitted(&mut self, world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
-        for feature in &mut self.0 {
+        for feature in &mut self.provided {
             feature.admitted(world, out)?;
         }
         Ok(())
@@ -95,7 +105,7 @@ impl Features {
 
     /// What every feature's actions in flight hold.
     fn holds(&self, world: &World, now: Instant) -> Vec<(actions::Resource, &'static str)> {
-        self.0
+        self.provided
             .iter()
             .flat_map(|feature| feature.holds(world, now))
             .collect()
@@ -109,10 +119,14 @@ impl Features {
         world: &mut World,
         out: &mut Out<'_, '_>,
     ) -> Result<bool> {
-        for feature in &mut self.0 {
+        for feature in &mut self.provided {
             feature.notice(command, world, out)?;
         }
-        let Some(owner) = self.0.iter_mut().find(|feature| feature.owns(command)) else {
+        let Some(owner) = self
+            .provided
+            .iter_mut()
+            .find(|feature| feature.owns(command))
+        else {
             return Ok(false);
         };
         owner.handle(command, world, out)?;
@@ -121,7 +135,7 @@ impl Features {
 
     /// Runs the features' timers until one ends the session.
     fn tick(&mut self, now: Instant, world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
-        for feature in &mut self.0 {
+        for feature in &mut self.provided {
             feature.tick(now, world, out)?;
             if world.ending() {
                 break;
@@ -133,7 +147,7 @@ impl Features {
     /// Lets every feature hear that the connection ended, until one takes
     /// it as the session's end.
     fn connection_ended(&mut self, world: &mut World) {
-        for feature in &mut self.0 {
+        for feature in &mut self.provided {
             feature.connection_ended(world);
             if world.ending() {
                 break;
@@ -149,7 +163,7 @@ impl Features {
         world: &mut World,
         out: &mut Out<'_, '_>,
     ) -> Result<()> {
-        for feature in &mut self.0 {
+        for feature in &mut self.provided {
             feature.observe(message, world, out)?;
             if world.ending() {
                 break;
@@ -525,6 +539,7 @@ fn admit(
                     zone: zone.name.clone(),
                     player: Box::new(player),
                     far_clip: zone.far_clip,
+                    spell_landing_flag: features.spell_landing_flag,
                 }))?;
             if let Some(sky) = zone.sky {
                 out.log
@@ -1001,7 +1016,7 @@ mod tests {
             let mut offered = false;
             for features in &servers {
                 let owners: Vec<_> = features
-                    .0
+                    .provided
                     .iter()
                     .filter(|feature| feature.owns(&command))
                     .collect();
@@ -1026,7 +1041,10 @@ mod tests {
             },
         ] {
             for features in &servers {
-                assert!(!features.0.iter().any(|feature| feature.owns(&selection)));
+                assert!(!features
+                    .provided
+                    .iter()
+                    .any(|feature| feature.owns(&selection)));
             }
         }
     }
@@ -1204,13 +1222,14 @@ mod tests {
         const fn naked(_world: &World) -> Result<i32, &'static str> {
             Ok(0)
         }
-        let features = Features(
-            vec![
+        let features = Features {
+            provided: vec![
                 Box::new(Transfers::new("Tester", Home::Asked)),
                 Box::new(BleedingOut::new(-11, Some(naked))),
             ],
-            Vec::new(),
-        );
+            choices: Vec::new(),
+            spell_landing_flag: None,
+        };
         let (world, outcome) = bleed_out(features);
         outcome.result.unwrap();
         // Transfers heard the death the session made happen, and once the
@@ -1270,7 +1289,11 @@ mod tests {
                 Ok(())
             }
         }
-        let mut features = Features(vec![Box::new(Echo)], Vec::new());
+        let mut features = Features {
+            provided: vec![Box::new(Echo)],
+            choices: Vec::new(),
+            spell_landing_flag: None,
+        };
         let mut world = World::new(5);
         world.admitted = Some(Instant::now());
         let outcome = testing::run(|out| {

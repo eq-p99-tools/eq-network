@@ -3,7 +3,7 @@ use anyhow::{bail, Result};
 use eq_network::chat::OutboundChat;
 use eq_network::client::{
     CancellationToken, Client, ClientCommand, ClientConfig, ClientEvent, ClientIdentity,
-    ConnectionStage, ConnectionState, LoginError, RunOptions,
+    ConnectionStage, ConnectionState, LoginError, RunOptions, ServerProtocol,
 };
 use std::{
     net::{SocketAddr, UdpSocket},
@@ -448,6 +448,8 @@ fn a_player_chooses_the_world_from_the_login_servers_list() {
     let socket = peer();
     let mut settings = config(socket.local_addr().unwrap().port());
     settings.server.clear();
+    // A stock `EQEmu` login, which plays on every world listed.
+    settings.protocol = ServerProtocol::EqEmu;
     let engine = client(settings);
     let cancel = CancellationToken::default();
     let worker_cancel = cancel.clone();
@@ -527,6 +529,7 @@ fn a_front_end_can_tell_what_the_zone_session_lets_the_player_do() {
         zone: "qeynos".into(),
         player: Box::new(player),
         far_clip: None,
+        spell_landing_flag: Some(4),
     };
     // The front end matches the event exhaustively and keeps the report.
     let (offered, choices) = match entered {
