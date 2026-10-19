@@ -178,6 +178,56 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Duels, on both generations: `WorldEvent::Duel` (`socials::DuelUpdate`).
+  `Challenge` names the other player, from `OP_RequestDuel`, which every
+  server sends to the player challenged and, as their acceptance, to the
+  challenger; `Accepted` names the challenger and the one who accepted,
+  from `OP_DuelAccept` (Quarm's `OP_DuelResponse2`), which `EQEmu` and
+  Quarm send both players as a duel begins; and `Refused` names the other
+  player and why (`socials::DuelRefusal`: declined, dueling already, or
+  considering another challenge), from TAKP's `OP_DuelResponse`, which
+  passes on a client's answer turning a challenge down. Nothing answers a
+  challenge yet. Hosts that match `WorldEvent` exhaustively need an arm for
+  it.
+
+- What other players do to or for the player, on both generations: a yell
+  for help near the player (`WorldEvent::YellForHelp`, the yeller's spawn),
+  from `OP_YellForHelp`, which every server passes to those within 100 of
+  the yeller; and a request to inspect the player
+  (`WorldEvent::InspectRequest`, the inspector's spawn), from
+  `OP_InspectRequest`, which every server passes on for the player's client
+  to answer. Nothing answers it yet, so the inspector still sees no window.
+  On Titanium, a voice macro spoken to the player, their group or their
+  raid (`WorldEvent::VoiceMacro` with `socials::VoiceMacro`: the speaker, to
+  whom as `socials::VoiceKind`, the voice and the macro's number), from
+  `OP_VoiceMacroOut`. Hosts that match `WorldEvent` exhaustively need arms
+  for them.
+
+- Popups and marquees on Titanium: `WorldEvent::Popup` (`popups::Popup`:
+  the title, the text in the client's own markup, the buttons, how long it
+  stays open, None until the player closes it, and its number), from
+  `OP_OnLevelMessage`, which `EQEmu` sends for quests and game masters'
+  commands such as `#show version`; and `WorldEvent::Marquee`
+  (`popups::Marquee`: the message type that colours it, its priority, how
+  long it takes to fade in and out and how long it shows, and its text),
+  from `OP_Marquee`, which `EQEmu` sends for quests, bots, a spell effect
+  and the world's broadcasts. Nothing answers a popup yet. Hosts that
+  match `WorldEvent` exhaustively need arms for them.
+
+- Coloured text and `EQMac`'s spell and world lines, read as chat on
+  `ChannelName::System`, where before the session dropped them. On
+  Titanium, `OP_ColoredText`, with its colour in `ChatEvent::message_type`
+  (below 256 for the consider colours), which `EQEmu` sends for quests,
+  auras and expeditions and as a buff's fade line. On `EQMac`,
+  `OP_SpellTextMessage`, a spell line another player's client sends, which
+  TAKP and Quarm pass on to those near it; TAKP's
+  `OP_SpellTextMessageStringID`, another caster's interruption or regained
+  concentration by the official client's string number (`string_id`), with
+  the caster's name as its argument; and `OP_MultiLineMsg`, the world's
+  text for one player, which nothing in TAKP's or Quarm's world sends
+  today. The spell lines name the spawn they are about in a new field,
+  `ChatEvent::source_spawn_id`.
+
 - Effects the servers play: `WorldEvent::Effect` (`effects::Effect`). On
   Titanium, a spell's nimbus on a spawn (`Effect::Nimbus`: the effect, the
   spawn it plays from and the one it is drawn on, how long it plays and
@@ -421,8 +471,8 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   types that send it and the parts of the session that read it, or why it
   is left unread (work still to come, an answer to a request eq-network
   never sends, parked work, or nothing in it worth reading), taken from
-  `EQEmu`'s, TAKP's and Quarm's sources: Titanium's 258 messages, 132 of
-  them read, and `EQMac`'s 177, 94 read. A zone session now tells once, as
+  `EQEmu`'s, TAKP's and Quarm's sources: Titanium's 258 messages, 140 of
+  them read, and `EQMac`'s 177, 102 read. A zone session now tells once, as
   a diagnostic, of each message it leaves unread with the reason (but one
   with nothing worth reading, and an empty one under opcode 0, where
   `EQEmu` sends what Titanium has no opcode for, such as the empty

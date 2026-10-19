@@ -295,6 +295,49 @@ const NIMBUS: &[Part] = &[Part(
          and its comments name no use for them (zone/mob.cpp Mob::SendSpellEffect)",
     ),
 )];
+/// What the session leaves unread of a popup.
+const POPUP: &[Part] = &[Part(
+    "the last two words",
+    Reason::Needless(
+        "EQEmu's Titanium encoder always sets them to 0 and 0xffffffff \
+         (common/patches/titanium.cpp ENCODE(OP_OnLevelMessage))",
+    ),
+)];
+/// What the session leaves unread of a marquee.
+const MARQUEE: &[Part] = &[Part(
+    "the word after the message type",
+    Reason::Needless(
+        "EQEmu always sets it to 10, and its notes say changing it changed nothing \
+         (zone/client.cpp Client::SendMarqueeMessage, common/eq_packet_structs.h)",
+    ),
+)];
+/// What the session leaves unread of a voice macro.
+const VOICE_MACRO: &[Part] = &[Part(
+    "the word after whom it is spoken to, and the last 60 bytes",
+    Reason::Needless("EQEmu leaves them zero (zone/worldserver.cpp WorldServer::HandleMessage)"),
+)];
+/// What the session leaves unread of a request to inspect the player.
+const INSPECT_REQUEST: &[Part] = &[Part(
+    "the player's own spawn",
+    Reason::Needless("the servers pass a request on only to the player it names"),
+)];
+/// What the session leaves unread of a challenge to a duel.
+const DUEL_REQUEST: &[Part] = &[Part(
+    "the first spawn",
+    Reason::Needless(
+        "the second names the other player on every server; EQEmu and Quarm send the same in \
+         the first, and TAKP the player's own spawn (zone/client_packet.cpp \
+         Client::Handle_OP_RequestDuel, Client::Handle_OP_DuelAccept)",
+    ),
+)];
+/// What the session leaves unread of TAKP's answer to a challenge.
+const DUEL_ANSWER: &[Part] = &[Part(
+    "the player's own spawn and the last byte",
+    Reason::Needless(
+        "TAKP passes an answer on only to the player it names, and the byte pads the record \
+         (common/eq_packet_structs.h DuelResponse_Struct)",
+    ),
+)];
 /// What the session leaves unread of a Titanium projectile.
 const PROJECTILE: &[Part] = &[Part(
     "the first word, the two words after the item and the unknown bytes",
