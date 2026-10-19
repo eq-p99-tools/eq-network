@@ -114,8 +114,7 @@ pub(in crate::client::session) fn world(
                     && (selection.is_none()
                         || creating.as_ref().is_some_and(Creating::requested)) =>
             {
-                let entries =
-                    eq_network_game::characters::decode(config.protocol.into(), &packet.body)?;
+                let entries = super::character_list(server, config.protocol.into(), &packet.body)?;
                 if let Some(attempt) = creating.take() {
                     attempt.created(log)?;
                 } else {

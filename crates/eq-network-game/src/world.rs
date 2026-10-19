@@ -243,6 +243,12 @@ pub struct SpawnState {
     /// Motion at the last report, in EQ units per second along X, Y and Z; zero
     /// when standing still or not reported.
     pub velocity: [f32; 3],
+    /// The record's walk speed, a server protocol value (`EQEmu` sends its walk
+    /// speed value over 40), not world units per second; zero where the record
+    /// holds none that is valid or the dialect does not report it.
+    pub walk_speed: f32,
+    /// The record's run speed, as `walk_speed`.
+    pub run_speed: f32,
     /// Requested model size; zero selects the racial default.
     pub size: f32,
     /// Server visibility flag; consumers must not expose invisible entities.
@@ -303,6 +309,9 @@ pub fn titanium_spawns(body: &[u8]) -> Result<Vec<SpawnState>> {
                 invisible: record[84] != 0,
                 position,
                 velocity,
+                // The same fields the own spawn record's are read from.
+                walk_speed: speed(record, 324),
+                run_speed: speed(record, 233),
                 appearance: crate::appearance::titanium_spawn(record),
                 level: record[151],
                 listing: crate::listing::titanium_spawn(record),
@@ -794,6 +803,11 @@ pub enum WorldEvent {
         /// nothing past it, and servers log targets beyond it as possible cheats.
         /// None when the dialect has not reported it.
         far_clip: Option<f32>,
+        /// The effect flag of a spell action (`SpellEffect::effect_flag`)
+        /// that says the spell landed on its target, so a front end can draw
+        /// the landing; None where it is unchecked for the server type, and
+        /// then no action says so.
+        spell_landing_flag: Option<u8>,
     },
     /// Server-reported position, including corrections for the local player.
     Position {
@@ -1568,7 +1582,9 @@ const DELTA_UNITS_PER_SECOND: f32 = 0.144;
 /// EQ units per second for one unit of a moving spawn's animation value, which
 /// is its speed: `EQEmu` moves NPCs `speed * 0.4 * 1.45` units per second
 /// (`zone/mob_movement_manager.cpp`), and P99's recorded NPCs match (0.57).
-const ANIMATION_UNITS_PER_SECOND: f32 = 0.4 * 1.45;
+/// A spawn record's walk or run speed is a speed value over 40 (`EQEmu`'s
+/// `Mob::Mob` in `zone/mob.cpp`), so it moves 40 times this a second.
+pub const ANIMATION_UNITS_PER_SECOND: f32 = 0.4 * 1.45;
 
 /// A server position update for another spawn.
 fn titanium_position(body: &[u8]) -> Result<WorldEvent> {
@@ -1665,6 +1681,15 @@ fn word(bytes: &[u8], offset: usize) -> u32 {
             .expect("layout checked by caller"),
     )
 }
+/// A spawn record's speed field, or zero for one that is not a finite,
+/// non-negative number, so a bad speed costs the spawn only its speed.
+fn speed(record: &[u8], offset: usize) -> f32 {
+    float(record, offset)
+        .ok()
+        .filter(|speed| *speed >= 0.0)
+        .unwrap_or(0.0)
+}
+
 fn float(bytes: &[u8], offset: usize) -> Result<f32> {
     let value = f32::from_bits(word(bytes, offset));
     ensure!(value.is_finite(), "non-finite world field");
@@ -2132,6 +2157,14 @@ mod tests {
             record[340..344].copy_from_slice(&u32::try_from(index + 10).unwrap().to_le_bytes());
             record[94..98].copy_from_slice(&((0x7ffffu32 - 7) << 10).to_le_bytes());
             record[106..110].copy_from_slice(&(1024u32 << 13).to_le_bytes());
+            // A default NPC's walk and run, and a second record's bad speeds.
+            let (walk, run) = if index == 0 {
+                (0.45f32, 1.25f32)
+            } else {
+                (f32::NAN, -1.0)
+            };
+            record[324..328].copy_from_slice(&walk.to_le_bytes());
+            record[233..237].copy_from_slice(&run.to_le_bytes());
         }
         // Synthetic credentials only; prove the odd record length does not reset XOR phase.
         let clear = body.clone();
@@ -2150,6 +2183,9 @@ mod tests {
         assert_eq!(spawns[1].class, Some(255));
         assert_eq!(spawns[1].kind, SpawnKind::NpcCorpse);
         assert_eq!(spawns[1].spawn_id, 11);
+        // The record's speeds, and none for a bad one rather than no spawn.
+        assert_eq!((spawns[0].walk_speed, spawns[0].run_speed), (0.45, 1.25));
+        assert_eq!((spawns[1].walk_speed, spawns[1].run_speed), (0.0, 0.0));
         // Health out of range is no health at all.
         assert_eq!(
             (spawns[0].hp_percent, spawns[1].hp_percent),
