@@ -262,6 +262,7 @@ impl Record<'_> {
                 beard: self.byte(layout.beard),
                 beard_color: self.byte(layout.beard_color),
                 show_helm: true,
+                ..Appearance::default()
             },
             eye_colors: layout.eyes.map(|array| self.byte(array)),
             go_home: layout.go_home.is_some_and(|array| self.byte(array) != 0),
