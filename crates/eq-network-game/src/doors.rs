@@ -7,10 +7,20 @@ use std::collections::BTreeMap;
 /// `OP_ClickDoor`: the player uses a door.
 pub const CLICK_OPCODE: u16 = 0x043b;
 
+/// The door ID of a zone's static objects. `EQEmu` loads each object of
+/// type 0 as a door with no ID of its own and lists it in the door table with
+/// this one, so it repeats there.
+const STATIC_ID: u8 = 255;
+
+/// The most doors `EQEmu` lists in one table.
+const MOST_DOORS: usize = 500;
+
 /// A server-defined door or interactive zone object; open types are not all hinged doors.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct Door {
-    /// Zone-local identifier, independent of spawn IDs.
+    /// Zone-local identifier, independent of spawn IDs. 255 is a static
+    /// object rather than a door: every static object in the zone comes with
+    /// it, and nothing uses one.
     pub id: u8,
     /// Local asset model name, not a filesystem path.
     pub model: String,
@@ -68,7 +78,12 @@ pub enum DoorUpdate {
 
 /// Zone-local door state. Unknown IDs never create synthetic doors.
 #[derive(Clone, Debug, Default)]
-pub struct Doors(BTreeMap<u8, Door>);
+pub struct Doors {
+    /// Definitions by ID; of the static objects, the last one listed.
+    doors: BTreeMap<u8, Door>,
+    /// Every static object listed, in order.
+    statics: Vec<Door>,
+}
 
 impl Doors {
     /// Local proximity policy for ordinary use, not a claim about server lock/key rules.
@@ -77,7 +92,8 @@ impl Doors {
     /// Encodes ordinary use after checking the current door table and player position.
     ///
     /// # Errors
-    /// Rejects unknown doors, invalid own IDs and non-finite or distant positions.
+    /// Rejects static objects, unknown doors, invalid own IDs and non-finite or
+    /// distant positions.
     pub fn click_packet(
         &self,
         id: u8,
@@ -90,12 +106,15 @@ impl Doors {
 
     /// Checks a click on a door against the current door table and the
     /// player's position: the door must still be there and within reach.
+    /// Nothing uses a static object, so a click on one never goes out.
     ///
     /// # Errors
-    /// Rejects unknown doors, invalid own IDs and non-finite or distant positions.
+    /// Rejects static objects, unknown doors, invalid own IDs and non-finite or
+    /// distant positions.
     pub fn check_click(&self, id: u8, player_id: u16, position: Position) -> Result<()> {
+        ensure!(id != STATIC_ID, "a static object cannot be used");
         let door = self
-            .0
+            .doors
             .get(&id)
             .ok_or_else(|| anyhow::anyhow!("door is no longer available"))?;
         let distance = (position.x - door.position.x)
@@ -107,33 +126,49 @@ impl Doors {
         );
         Ok(())
     }
-    /// Current server-provided definitions in stable door-ID order.
+    /// Current server-provided definitions in stable door-ID order. Static
+    /// objects share one ID, so only the last one listed is here;
+    /// [`Doors::admission`] carries them all.
     #[must_use]
     pub fn entries(&self) -> &BTreeMap<u8, Door> {
-        &self.0
+        &self.doors
     }
 
     /// Applies an already validated packet. A new definition resets previous animation state.
     pub fn apply(&mut self, update: &DoorUpdate) {
         match update {
-            DoorUpdate::RemoveAll => self.0.clear(),
+            DoorUpdate::RemoveAll => {
+                self.doors.clear();
+                self.statics.clear();
+            }
             DoorUpdate::Spawn(doors) => {
                 for door in doors {
-                    self.0.insert(door.id, door.clone());
+                    if door.id == STATIC_ID {
+                        self.statics.push(door.clone());
+                    }
+                    self.doors.insert(door.id, door.clone());
                 }
             }
             DoorUpdate::Move { id, action } => {
-                if let Some(door) = self.0.get_mut(id) {
+                if let Some(door) = self.doors.get_mut(id) {
                     door.action = Some(*action);
                 }
             }
         }
     }
 
-    /// Reconstructs admission state without losing actions received during loading.
+    /// Reconstructs admission state without losing actions received during
+    /// loading, with every static object.
     #[must_use]
     pub fn admission(&self) -> DoorUpdate {
-        DoorUpdate::Spawn(self.0.values().cloned().collect())
+        DoorUpdate::Spawn(
+            self.doors
+                .values()
+                .filter(|door| door.id != STATIC_ID)
+                .chain(&self.statics)
+                .cloned()
+                .collect(),
+        )
     }
 }
 
@@ -142,6 +177,11 @@ impl Doors {
 pub fn titanium_click(id: u8, player_id: u16) -> EncodedCommand {
     let mut body = vec![0; 16];
     body[0] = id;
+    // The official client sends 3 here and -1 as the held item for an
+    // ordinary open or close (what the 3 means is unknown, and a click
+    // holding a key is unrecorded).
+    body[1] = 3;
+    body[8..12].copy_from_slice(&u32::MAX.to_le_bytes());
     body[12..14].copy_from_slice(&player_id.to_le_bytes());
     EncodedCommand {
         opcode: CLICK_OPCODE,
@@ -152,7 +192,8 @@ pub fn titanium_click(id: u8, player_id: u16) -> EncodedCommand {
 /// Decodes exact Titanium door records, rejecting a malformed batch atomically.
 ///
 /// # Errors
-/// Rejects partial records, duplicate IDs and non-finite placement coordinates.
+/// Rejects partial records, tables of more than 500 doors, a repeated ID other
+/// than a static object's, and non-finite placement coordinates.
 pub fn decode(opcode: u16, body: &[u8]) -> Result<Option<DoorUpdate>> {
     match opcode {
         0x77d0 => {
@@ -168,7 +209,7 @@ pub fn decode(opcode: u16, body: &[u8]) -> Result<Option<DoorUpdate>> {
         }
         0x4c24 => {
             ensure!(
-                body.len().is_multiple_of(80) && body.len() <= 256 * 80,
+                body.len().is_multiple_of(80) && body.len() <= MOST_DOORS * 80,
                 "invalid door table length"
             );
             let mut ids = std::collections::BTreeSet::new();
@@ -195,7 +236,7 @@ pub fn decode(opcode: u16, body: &[u8]) -> Result<Option<DoorUpdate>> {
                     "non-finite door placement"
                 );
                 let id = record[60];
-                ensure!(ids.insert(id), "duplicate door ID");
+                ensure!(id == STATIC_ID || ids.insert(id), "duplicate door ID");
                 let end = record[..32].iter().position(|b| *b == 0).unwrap_or(32);
                 doors.push(Door {
                     id,
@@ -289,7 +330,10 @@ mod tests {
         let packet = admitted.click_packet(7, 0x1234, position).unwrap();
         assert_eq!(packet.opcode, CLICK_OPCODE);
         assert_eq!(packet.body[0], 7);
-        assert_eq!(&packet.body[1..12], &[0; 11]);
+        assert_eq!(
+            &packet.body[1..12],
+            &[3, 0, 0, 0, 0, 0, 0, 255, 255, 255, 255]
+        );
         assert_eq!(&packet.body[12..], &[0x34, 0x12, 0, 0]);
         assert!(admitted.click_packet(7, 0, position).is_err());
         assert!(admitted.click_packet(8, 1, position).is_err());
@@ -310,5 +354,81 @@ mod tests {
         for bytes in [&[][..], &[7], &[7, 1, 0]] {
             assert!(decode(0x700d, bytes).is_err());
         }
+    }
+
+    /// One door record with this ID and model, at this x.
+    fn record(id: u8, model: &[u8], x: f32) -> [u8; 80] {
+        let mut body = [0u8; 80];
+        body[..model.len()].copy_from_slice(model);
+        body[36..40].copy_from_slice(&x.to_le_bytes());
+        body[60] = id;
+        body
+    }
+
+    fn models(update: &DoorUpdate) -> Vec<&str> {
+        let DoorUpdate::Spawn(doors) = update else {
+            panic!("spawn")
+        };
+        doors.iter().map(|door| door.model.as_str()).collect()
+    }
+
+    #[test]
+    fn static_objects_repeat_id_255_and_are_all_kept_but_never_used() {
+        let body = [
+            record(255, b"ROCKA", 1.0),
+            record(7, b"DOOR", 2.0),
+            record(255, b"ROCKB", 3.0),
+        ]
+        .concat();
+        let update = decode(0x4c24, &body).unwrap().unwrap();
+        assert_eq!(models(&update), ["ROCKA", "DOOR", "ROCKB"]);
+        let mut state = Doors::default();
+        state.apply(&update);
+        assert_eq!(
+            state.entries().keys().copied().collect::<Vec<_>>(),
+            [7, 255]
+        );
+        assert_eq!(state.entries()[&255].model, "ROCKB");
+        let admission = state.admission();
+        assert_eq!(models(&admission), ["DOOR", "ROCKA", "ROCKB"]);
+        let mut admitted = Doors::default();
+        admitted.apply(&admission);
+        assert_eq!(admitted.admission(), admission);
+        let at = |x| Position {
+            x,
+            ..Position::default()
+        };
+        assert!(state.click_packet(7, 1, at(2.0)).is_ok());
+        for x in [1.0, 3.0] {
+            let error = state.click_packet(255, 1, at(x)).unwrap_err();
+            assert_eq!(error.to_string(), "a static object cannot be used");
+        }
+        state.apply(&DoorUpdate::RemoveAll);
+        assert!(state.entries().is_empty());
+        assert_eq!(state.admission(), DoorUpdate::Spawn(Vec::new()));
+    }
+
+    #[test]
+    fn a_repeated_door_id_other_than_a_static_objects_refuses_the_table() {
+        let body = [record(7, b"DOOR", 0.0), record(7, b"GATE", 1.0)].concat();
+        let error = decode(0x4c24, &body).unwrap_err();
+        assert_eq!(error.to_string(), "duplicate door ID");
+    }
+
+    #[test]
+    fn a_table_holds_up_to_500_doors() {
+        let table = |count: usize| {
+            (0..count)
+                .flat_map(|index| record(u8::try_from(index).unwrap_or(255), b"DOOR", 0.0))
+                .collect::<Vec<_>>()
+        };
+        let update = decode(0x4c24, &table(300)).unwrap().unwrap();
+        let mut state = Doors::default();
+        state.apply(&update);
+        assert_eq!(state.entries().len(), 256);
+        assert_eq!(models(&state.admission()).len(), 300);
+        assert!(decode(0x4c24, &table(500)).is_ok());
+        let error = decode(0x4c24, &table(501)).unwrap_err();
+        assert_eq!(error.to_string(), "invalid door table length");
     }
 }

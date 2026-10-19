@@ -184,4 +184,55 @@ mod tests {
         assert_eq!(error(&click(5, before)), "stale door request");
         assert_eq!(error(&click(5, Instant::now())), "player is unavailable");
     }
+
+    #[test]
+    fn the_snapshot_carries_every_static_object_and_none_is_clicked() {
+        let door = |id, model: &str| Door {
+            id,
+            model: model.into(),
+            position: Position::default(),
+            incline: 0,
+            size: 100,
+            open_type: 0,
+            state_at_spawn: 0,
+            invert_state: 0,
+            parameter: 0,
+            action: None,
+        };
+        let table = vec![door(255, "ROCKA"), door(1, "DOOR"), door(255, "ROCKB")];
+        let mut doors = Doors::default();
+        let mut world = World::new(5);
+        doors
+            .admit(
+                &Message::Event(WorldEvent::Doors(DoorUpdate::Spawn(table))),
+                &mut world,
+            )
+            .unwrap();
+        let outcome = testing::run(|out| doors.admitted(&mut world, out));
+        outcome.result.unwrap();
+        assert!(matches!(
+            &outcome.events[..],
+            [ClientEvent::World(WorldEvent::Doors(DoorUpdate::Spawn(sent)))]
+                if sent.iter().map(|door| door.model.as_str()).collect::<Vec<_>>()
+                    == ["DOOR", "ROCKA", "ROCKB"]
+        ));
+        world.player.admit(testing::player(7));
+        let click = ClientCommand::ClickDoor {
+            session_id: 5,
+            door_id: 255,
+            created: Instant::now(),
+        };
+        let outcome = testing::run(|out| doors.handle(&click, &mut world, out));
+        outcome.result.unwrap();
+        assert!(
+            outcome.sent.is_empty(),
+            "expected nothing sent, got {:?}",
+            outcome.sent
+        );
+        assert!(matches!(
+            &outcome.events[..],
+            [ClientEvent::World(DoorAction { door_id: 255, error: Some(error), .. })]
+                if error == "a static object cannot be used"
+        ));
+    }
 }

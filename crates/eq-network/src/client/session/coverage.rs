@@ -51,11 +51,15 @@ impl ServerMessage {
         }
     }
 
-    /// Whether the session tells of it when it arrives at `stage`: nothing
-    /// there reads it, and something in it is worth reading.
-    fn told_at(&self, stage: Stage) -> bool {
-        !matches!(self.reading, Reading::Unread(Reason::Needless(_)))
-            && !self.readers().iter().any(|reader| reader.at(stage))
+    /// Whether the session tells of it when it arrives at `stage` with a
+    /// body of this length: nothing there reads it, and something in it is
+    /// worth reading.
+    fn told_at(&self, stage: Stage, length: usize) -> bool {
+        match self.reading {
+            Reading::Unread(Reason::Needless(_)) => false,
+            Reading::Unread(Reason::Unmapped) => length > 0,
+            _ => !self.readers().iter().any(|reader| reader.at(stage)),
+        }
     }
 }
 
@@ -159,6 +163,11 @@ pub(super) enum Reason {
     /// Nothing in it needs reading, for this reason, so the zone does not
     /// tell of it.
     Needless(&'static str),
+    /// `EQEmu` sends every message the generation's opcode list leaves at 0
+    /// under opcode 0, so the opcode stands for many messages. The empty
+    /// ones carry nothing; the zone tells of one with a body, as an
+    /// unmapped message.
+    Unmapped,
 }
 
 impl fmt::Display for Reason {
@@ -171,6 +180,9 @@ impl fmt::Display for Reason {
             ),
             Self::Parked(work) => write!(f, "parked in {work}"),
             Self::Needless(why) => f.write_str(why),
+            Self::Unmapped => {
+                f.write_str("EQEmu sends each message the client has no opcode for under 0")
+            }
         }
     }
 }
@@ -354,7 +366,8 @@ impl Unheard {
         log: &mut Events<'_>,
     ) -> Result<()> {
         let message = wire.coverage(opcode);
-        if message.is_some_and(|message| !message.told_at(self.stage)) || !self.told.insert(opcode)
+        if message.is_some_and(|message| !message.told_at(self.stage, length))
+            || !self.told.insert(opcode)
         {
             return Ok(());
         }
@@ -465,6 +478,33 @@ mod tests {
                  it only before the zone",
                 "Zone sent an unlisted message (0x0001, 8 bytes), left unread: no server is \
                  listed as sending it",
+            ]
+        );
+    }
+
+    #[test]
+    fn the_zone_tells_once_of_an_unmapped_message_with_a_body_and_never_of_an_empty_one() {
+        let config = ClientConfig::new("ACCOUNT", "PASSWORD", "Test Server", "Tester");
+        let mut said = Vec::new();
+        let mut handler = |event| {
+            if let ClientEvent::Diagnostic(line) = event {
+                said.push(line);
+            }
+            Ok(())
+        };
+        let mut log = Events::new(&config, &mut handler);
+        let mut unheard = Unheard::new(Stage::Zone);
+        // The empty OP_FinishWindow pair after a container closes, then an
+        // unmapped message with a body, twice, then the pair again.
+        for length in [0, 0, 5, 5, 0, 0] {
+            unheard.tell(&Titanium, 0x0000, length, &mut log).unwrap();
+        }
+        drop(log);
+        assert_eq!(
+            said,
+            [
+                "Zone sent an unmapped message (0x0000, 5 bytes), left unread: EQEmu sends each \
+              message the client has no opcode for under 0"
             ]
         );
     }

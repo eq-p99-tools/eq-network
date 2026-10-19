@@ -6,6 +6,7 @@
 use super::{
     coverage::{Stage, Unheard},
     cstr, le32,
+    servers::server_type,
     wire::Titanium,
 };
 use crate::{
@@ -133,7 +134,7 @@ pub(super) fn titanium(
                         (server, shown)
                     })
                     .collect();
-                if let Some(world) = choice.list(servers, &config.server, log)? {
+                if let Some(world) = choice.list(servers, config, log)? {
                     play(&mut session, world)?;
                 }
             }
@@ -218,24 +219,36 @@ impl<T> WorldChoice<T> {
     }
 
     /// Takes the login server's list, each world as the generation gives it
-    /// and as the player sees it: the configured world, to ask for at once,
-    /// or none while the player chooses.
+    /// and as the player sees it, keeping the worlds the configured server
+    /// type plays on: the configured world, to ask for at once, or none
+    /// while the player chooses.
     ///
     /// # Errors
-    /// Returns an error when the configured world is not listed or takes no
+    /// Returns an error when the configured world is not kept or takes no
     /// players, or the host's event handler fails.
     fn list(
         &mut self,
         servers: Vec<(T, ServerChoice)>,
-        configured: &str,
+        config: &ClientConfig,
         log: &mut Events<'_>,
     ) -> Result<Option<&T>> {
-        let (listed, servers): (Vec<T>, Vec<ServerChoice>) = servers.into_iter().unzip();
+        let server_type = server_type(config.protocol);
+        let (kept, hidden): (Vec<_>, Vec<_>) = servers
+            .into_iter()
+            .partition(|(_, shown)| server_type.plays_on(&shown.name));
+        let (listed, servers): (Vec<T>, Vec<ServerChoice>) = kept.into_iter().unzip();
         let listed = self.listed.insert(listed);
+        let configured = config.server.as_str();
         if configured.is_empty() {
             self.worlds = Some(Worlds::publish(servers, log)?);
             return Ok(None);
         }
+        ensure!(
+            !hidden
+                .iter()
+                .any(|(_, shown)| shown.name.eq_ignore_ascii_case(configured)),
+            "configured server is listed but hidden: the server type doesn't play on it"
+        );
         let index = configured_world(&servers, configured)?;
         self.asked = Some(index);
         Ok(Some(&listed[index]))
@@ -346,7 +359,106 @@ fn login_credentials(body: &[u8]) -> Result<Credentials> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::world::WorldEvent;
     use eq_network_login::crypto::des_encrypt;
+
+    /// A listed world as the player sees it, by name, taking players.
+    fn world(name: &str) -> ServerChoice {
+        ServerChoice {
+            name: name.into(),
+            status: ServerStatus::Up,
+            players: Some(1),
+            preferred: false,
+        }
+    }
+
+    /// A list shared by P99 and other `EQEmu` worlds, each with its place
+    /// in the login server's list.
+    fn shared_list() -> Vec<(usize, ServerChoice)> {
+        [
+            "Example EQEmu Server",
+            "Project 1999: Green (Velious, PvE)",
+            "Another EQEmu Server",
+            "An Interesting Hole",
+            "Project 1999: Red (Velious, PvP)",
+        ]
+        .into_iter()
+        .map(world)
+        .enumerate()
+        .collect()
+    }
+
+    #[test]
+    fn a_p99_login_shows_and_plays_only_the_worlds_p99_plays_on() {
+        let config = ClientConfig::new("ACCOUNT", "PASSWORD", "", "");
+        let mut events = Vec::new();
+        let mut handler = |event| {
+            events.push(event);
+            Ok(())
+        };
+        let mut log = Events::new(&config, &mut handler);
+        let mut choice = WorldChoice::default();
+        assert!(choice
+            .list(shared_list(), &config, &mut log)
+            .unwrap()
+            .is_none());
+        drop(log);
+        let Some(ClientEvent::World(WorldEvent::ServerSelection {
+            selection_id,
+            servers,
+        })) = events.pop()
+        else {
+            panic!("the list is published");
+        };
+        let shown: Vec<&str> = servers.iter().map(|server| server.name.as_str()).collect();
+        assert_eq!(
+            shown,
+            [
+                "Project 1999: Green (Velious, PvE)",
+                "An Interesting Hole",
+                "Project 1999: Red (Velious, PvP)",
+            ]
+        );
+        // The player's choice of the second shown world asks for the
+        // login server's fourth.
+        let (sender, commands) = std::sync::mpsc::channel();
+        sender
+            .send(ClientCommand::SelectServer {
+                selection_id,
+                index: 1,
+            })
+            .unwrap();
+        assert_eq!(
+            choice.worlds.as_ref().unwrap().poll(Some(&commands)),
+            Some(1)
+        );
+        assert_eq!(choice.listed.as_ref().unwrap()[1], 3);
+    }
+
+    #[test]
+    fn a_configured_world_is_found_among_the_kept_worlds_only() {
+        let mut handler = |_| Ok(());
+        let config = ClientConfig::new("ACCOUNT", "PASSWORD", "an interesting hole", "");
+        let mut log = Events::new(&config, &mut handler);
+        let mut choice = WorldChoice::default();
+        let asked = choice.list(shared_list(), &config, &mut log).unwrap();
+        assert_eq!(asked, Some(&3));
+        let config = ClientConfig::new("ACCOUNT", "PASSWORD", "Another EQEmu Server", "");
+        let mut log = Events::new(&config, &mut handler);
+        let error = WorldChoice::default()
+            .list(shared_list(), &config, &mut log)
+            .unwrap_err();
+        assert!(error.to_string().contains("hidden"), "{error}");
+        // A stock EQEmu login plays on every world its login server lists.
+        let mut config = config;
+        config.protocol = crate::client::ServerProtocol::EqEmu;
+        let mut log = Events::new(&config, &mut handler);
+        let mut choice = WorldChoice::default();
+        assert_eq!(
+            choice.list(shared_list(), &config, &mut log).unwrap(),
+            Some(&2)
+        );
+    }
 
     #[test]
     fn valid_session_keys_and_malformed_responses_are_not_bad_passwords() {
