@@ -118,6 +118,22 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- A record of every message each client generation's servers send: one
+  table per generation, one row per opcode, naming the message, the server
+  types that send it and the parts of the session that read it, or why it
+  is left unread (work still to come, an answer to a request eq-network
+  never sends, parked work, or nothing in it worth reading), taken from
+  `EQEmu`'s, TAKP's and Quarm's sources: Titanium's 259 messages, 104 of
+  them read, and `EQMac`'s 176, 70 read. A zone session now tells once, as
+  a diagnostic, of each message it leaves unread with the reason (but one
+  with nothing worth reading, and an empty one under opcode 0, where
+  `EQEmu` sends what Titanium has no opcode for, such as the empty
+  OP_FinishWindow pair after a container closes or a trade ends) and of
+  each the table does not list, where
+  before a message nothing read left no trace once the zone admitted the
+  player. A test holds each table to its generation's decoders over all
+  65,536 opcodes.
+
 - `SpawnState` gains `walk_speed` and `run_speed`: the spawn record's walk
   and run speeds, server protocol values as `PlayerState`'s are, read from
   Titanium spawn records at the offsets the player's own record uses. A
