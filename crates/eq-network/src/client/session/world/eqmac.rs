@@ -7,6 +7,7 @@
 //! skips the list and names the character in play (`OP_EnterWorld`), the
 //! client enters it again, and the world hands it off to its new zone (TAKP
 //! `world/client.cpp` `HandleSendLoginInfoPacket`, `SendEnterWorld`).
+use super::{tell, unavailable};
 use crate::{
     client::{
         selection::{Choice, Selection},
@@ -17,9 +18,15 @@ use crate::{
         ClientEvent, ConnectionStage, Events,
     },
     old_transport::OldSession,
+    world::WorldEvent,
 };
 use anyhow::{ensure, Context, Result};
-use eq_network_game::creation::EQMAC_APPROVE_NAME_OPCODE;
+use eq_network_game::{
+    channels::{self, ChatService},
+    creation::EQMAC_APPROVE_NAME_OPCODE,
+    rules,
+    zoning::EQMAC_UNAVAILABLE_OPCODE,
+};
 use std::time::{Duration, Instant};
 use zeroize::Zeroizing;
 
@@ -122,6 +129,11 @@ pub(in crate::client::session) fn world(
                 selection = Some(list);
                 chosen = automatic;
             }
+            EQMAC_UNAVAILABLE_OPCODE => {
+                let error = unavailable(&packet.body, log)?;
+                session.close()?;
+                return Err(error);
+            }
             WORLD_ZONE_SERVER if entered => {
                 let (host, port) = zone_destination(&packet.body)?;
                 session.close()?;
@@ -134,8 +146,43 @@ pub(in crate::client::session) fn world(
                     shield: None,
                 }));
             }
-            _ => (),
+            _ => news(packet.opcode, &packet.body, log)?,
         }
+    }
+}
+
+/// Tells the host what the world says of itself, as TAKP's and Quarm's
+/// worlds send it: its short name and rules, the expansions it lets the
+/// account play and its chat server. Any other message says nothing of it.
+///
+/// # Errors
+/// Returns an error when the host's event handler fails.
+fn news(opcode: u16, body: &[u8], log: &mut Events<'_>) -> Result<()> {
+    match opcode {
+        rules::EQMAC_LOG_SERVER_OPCODE => {
+            let name = rules::eqmac_world_name(body);
+            tell(
+                name.map(|short_name| WorldEvent::WorldName { short_name }),
+                "World short name",
+                log,
+            )?;
+            tell(
+                rules::eqmac_rules(body).map(WorldEvent::Rules),
+                "World rules",
+                log,
+            )
+        }
+        rules::EQMAC_EXPANSIONS_OPCODE => tell(
+            rules::expansions(body).map(WorldEvent::Expansions),
+            "Expansion mask",
+            log,
+        ),
+        channels::EQMAC_CHANNELS_OPCODE => tell(
+            channels::offer(ChatService::Channels, body).map(WorldEvent::ChatServer),
+            "Chat server offer",
+            log,
+        ),
+        _ => Ok(()),
     }
 }
 
@@ -192,6 +239,46 @@ pub(in crate::client::session) fn zone_destination(body: &[u8]) -> Result<(Strin
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::client::session::world::tests::heard;
+    use eq_network_game::{channels::ChatServer, rules::Expansions};
+
+    #[test]
+    fn an_eqmac_world_tells_its_name_rules_expansions_and_chat_server() {
+        let mut settings = [0_u8; 244];
+        settings[4] = 1;
+        settings[32..41].copy_from_slice(b"testworld");
+        let events = heard(|log| {
+            news(0xc341, &settings, log).unwrap();
+            news(0xd841, &7_u32.to_le_bytes(), log).unwrap();
+            news(
+                0x0980,
+                b"chat.example.test,7778,testworld.Tester,0123ABCD\0",
+                log,
+            )
+            .unwrap();
+            // Quarm's zones send 24 bytes of rules, and no name.
+            news(0xc341, &settings[..24], log).unwrap();
+            news(0x4740, &[0; 8], log).unwrap();
+        });
+        assert!(matches!(
+            &events[..],
+            [
+                ClientEvent::World(WorldEvent::WorldName { short_name }),
+                ClientEvent::World(WorldEvent::Rules(world)),
+                ClientEvent::World(WorldEvent::Expansions(Expansions(7))),
+                ClientEvent::World(WorldEvent::ChatServer(ChatServer {
+                    service: ChatService::Channels,
+                    ..
+                })),
+                ClientEvent::Diagnostic(unnamed),
+                ClientEvent::World(WorldEvent::Rules(zone)),
+            ] if short_name == "testworld"
+                && world.pvp == 1
+                && world.locale == Some(0)
+                && zone.locale.is_none()
+                && unnamed.starts_with("World short name unreadable")
+        ));
+    }
 
     #[test]
     fn world_login_is_the_200_byte_windows_eqmac_form() {

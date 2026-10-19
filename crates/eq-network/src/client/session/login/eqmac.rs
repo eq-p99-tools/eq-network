@@ -5,7 +5,11 @@
 use super::{Credentials, Next, WorldChoice, ANSWER_LIMIT};
 use crate::{
     client::{
-        session::{cstr, put_string},
+        session::{
+            coverage::{Stage, Unheard},
+            cstr, put_string,
+            wire::EqMac,
+        },
         CancellationToken, ClientCommand, ClientConfig, ClientEvent, ConnectionStage, Events,
         LoginError,
     },
@@ -55,6 +59,7 @@ pub(in crate::client::session) fn login(
     let mut sent_login = false;
     let mut sent_complete = false;
     let mut requested_list = false;
+    let mut unheard = Unheard::new(Stage::Login);
     loop {
         let packet = match choice.next(&mut session, &mut deadline, stop, commands)? {
             Next::Chosen(world) => {
@@ -116,7 +121,7 @@ pub(in crate::client::session) fn login(
                 }
                 choice.refused(ServerRefusal::Text(message), log)?;
             }
-            _ => (),
+            _ => unheard.tell(&EqMac, packet.opcode, packet.body.len(), log)?,
         }
     }
 }

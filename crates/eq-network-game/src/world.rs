@@ -529,6 +529,20 @@ pub enum WorldEvent {
         /// For example `P1999Green`.
         short_name: String,
     },
+    /// The world's rules, as it lets the player log in, and on Quarm again as
+    /// each zone admits them, saying whether that zone allows
+    /// player-versus-player combat.
+    Rules(crate::rules::WorldRules),
+    /// The expansions the world lets the account play.
+    Expansions(crate::rules::Expansions),
+    /// The zone the player was entering is down; the attempt ends.
+    ZoneUnavailable {
+        /// Its short name, when the world names it.
+        zone: Option<String>,
+    },
+    /// The world's chat server, for channels or mail, which the session
+    /// does not connect to.
+    ChatServer(crate::channels::ChatServer),
     /// The login server's worlds, for the player to choose one to play on;
     /// none has been entered yet. Only a login with no world configured
     /// lists them.
@@ -1268,7 +1282,7 @@ pub fn titanium_update(opcode: u16, body: &[u8]) -> Result<Option<WorldEvent>> {
 
 /// Spell actions, doors, ground objects, loot, merchant, exchange,
 /// training, resurrection, group, dice, assist, raid, book, combine,
-/// bandaging and inventory packets, each owned by its codec.
+/// bandaging, chat server and inventory packets, each owned by its codec.
 fn titanium_views(opcode: u16, body: &[u8]) -> Result<Option<WorldEvent>> {
     if opcode == 0x497c {
         return Ok(crate::buffs::titanium_spell_effect(body)?.map(WorldEvent::SpellEffect));
@@ -1301,6 +1315,8 @@ fn titanium_views(opcode: u16, body: &[u8]) -> Result<Option<WorldEvent>> {
         Some(WorldEvent::Combine(update))
     } else if let Some(update) = crate::bind_wound::decode(opcode, body)? {
         Some(WorldEvent::BindWound(update))
+    } else if let Some(offer) = crate::channels::titanium(opcode, body)? {
+        Some(WorldEvent::ChatServer(offer))
     } else {
         crate::inventory::decode(opcode, body)?.map(WorldEvent::Inventory)
     })

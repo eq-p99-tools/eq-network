@@ -25,6 +25,11 @@ pub const SAVE_ON_ZONE_OPCODE: u16 = 0x1540;
 /// `OP_DeleteSpawn`: the client taking its own spawn out of the zone it is
 /// leaving; the server's copy tells the zone a spawn left.
 pub const DEPART_OPCODE: u16 = 0x55bc;
+/// Titanium's `OP_ZoneUnavail`: the world saying the zone the player is
+/// entering is down.
+pub const TITANIUM_UNAVAILABLE_OPCODE: u16 = 0x407c;
+/// `EQMac`'s `OP_ZoneUnavail`.
+pub const EQMAC_UNAVAILABLE_OPCODE: u16 = 0x0580;
 
 /// A pending destination selected by a server offer or local boundary.
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -227,6 +232,23 @@ pub fn death(body: &[u8]) -> Result<Death> {
     })
 }
 
+/// Reads the world's word that the zone the player is entering is down
+/// (`ZoneUnavail_Struct`, 24 bytes on every server): the zone's short name,
+/// NUL-terminated in the first 16 bytes, and none when the world could not
+/// name it.
+///
+/// # Errors
+/// Rejects any length but 24, and a name that is not plain ASCII.
+pub fn unavailable(body: &[u8]) -> Result<Option<String>> {
+    ensure!(body.len() == 24, "invalid zone-unavailable length");
+    let name = crate::world::until_nul(&body[..16]);
+    ensure!(
+        name.iter().all(u8::is_ascii_graphic),
+        "invalid unavailable zone name"
+    );
+    Ok((!name.is_empty()).then(|| String::from_utf8_lossy(name).into_owned()))
+}
+
 /// Decode a server zone offer; bind packets use X/Y order, solicited packets Y/X.
 ///
 /// # Errors
@@ -384,6 +406,24 @@ fn finite(p: Position) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn an_unavailable_zone_is_named_when_the_world_can() {
+        let mut body = [0_u8; 24];
+        body[..5].copy_from_slice(b"misty");
+        assert_eq!(unavailable(&body).unwrap().as_deref(), Some("misty"));
+        // The name may fill its field without a terminator.
+        body[..16].copy_from_slice(b"averylongzonenam");
+        assert_eq!(
+            unavailable(&body).unwrap().as_deref(),
+            Some("averylongzonenam")
+        );
+        assert_eq!(unavailable(&[0; 24]).unwrap(), None);
+        body[..6].copy_from_slice(b"mi\x1bsty");
+        assert!(unavailable(&body).is_err());
+        assert!(unavailable(&[0; 16]).is_err());
+        assert!(unavailable(&[0; 25]).is_err());
+    }
+
     #[test]
     fn denial_preserves_signed_codes_and_validates_character_before_reporting() {
         let pending = ZoneOffer {

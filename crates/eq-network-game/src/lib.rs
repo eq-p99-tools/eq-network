@@ -10,6 +10,8 @@ pub mod bind_wound;
 pub mod books;
 /// Admission buffs and server-driven buff changes.
 pub mod buffs;
+/// The chat server a world offers for channels and mail.
+pub mod channels;
 /// World-server character selection lists.
 pub mod characters;
 /// Communication packet codecs and structured item-link extraction.
@@ -64,6 +66,8 @@ pub mod quarm;
 pub mod raid;
 /// Being resurrected: the offer and the player's answer.
 pub mod resurrection;
+/// A world's rules, and the expansions it lets the account play.
+pub mod rules;
 /// The worlds a login server lists, and the player's choice among them.
 pub mod servers;
 /// Rolling dice, emoting and assisting.

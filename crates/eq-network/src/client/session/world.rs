@@ -11,8 +11,10 @@ use crate::{
     chat,
     client::{ClientEvent, ClientIdentity, ConnectionStage, Events, RecordEvent},
     transport::Session,
+    world::WorldEvent,
 };
-use anyhow::{ensure, Context, Result};
+use anyhow::{anyhow, ensure, Context, Result};
+use eq_network_game::{channels, rules, zoning::TITANIUM_UNAVAILABLE_OPCODE};
 use std::{
     net::IpAddr,
     time::{Duration, Instant},
@@ -23,7 +25,6 @@ pub(super) mod eqmac;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum WorldOpcode {
-    LogServer,
     ApprovalChallenge,
     FileManifest,
     ValidationResult,
@@ -31,13 +32,14 @@ enum WorldOpcode {
     ZoneHandoff,
     ApproveName,
     Guilds,
+    EnterWorld,
+    ZoneUnavailable,
     Unknown(u16),
 }
 
 impl From<u16> for WorldOpcode {
     fn from(value: u16) -> Self {
         match value {
-            0x0fa6 => Self::LogServer,
             0x3c25 => Self::ApprovalChallenge,
             0x52a4 => Self::FileManifest,
             0x1251 => Self::ValidationResult,
@@ -45,6 +47,8 @@ impl From<u16> for WorldOpcode {
             0x61b6 => Self::ZoneHandoff,
             0x3ea6 => Self::ApproveName,
             eq_network_game::listing::GUILDS_OPCODE => Self::Guilds,
+            0x7cba => Self::EnterWorld,
+            TITANIUM_UNAVAILABLE_OPCODE => Self::ZoneUnavailable,
             value => Self::Unknown(value),
         }
     }
@@ -144,6 +148,94 @@ fn enter_character(
     Ok(Instant::now() + Duration::from_secs(60))
 }
 
+/// Tells the host what the world says of itself as the player logs in, or
+/// why `what` could not be read.
+fn tell(read: Result<WorldEvent>, what: &str, log: &mut Events<'_>) -> Result<()> {
+    match read {
+        Ok(event) => log.send(ClientEvent::World(event)),
+        Err(error) => log.diagnostic(format!("{what} unreadable: {error}")),
+    }
+}
+
+/// Tells the host what the world says of itself, as `EQEmu`'s and P99's
+/// worlds send it: its short name and rules, the expansions it lets the
+/// account play and its chat server. Any other message says nothing of it.
+///
+/// # Errors
+/// Returns an error when the host's event handler fails.
+fn news(opcode: u16, body: &[u8], log: &mut Events<'_>) -> Result<()> {
+    match opcode {
+        // Consumers name per-character files after the world, as the
+        // official client does.
+        rules::TITANIUM_LOG_SERVER_OPCODE => {
+            let name = crate::world::titanium_world_name(body);
+            tell(
+                name.map(|short_name| WorldEvent::WorldName { short_name }),
+                "World short name",
+                log,
+            )?;
+            tell(
+                rules::titanium_rules(body).map(WorldEvent::Rules),
+                "World rules",
+                log,
+            )
+        }
+        rules::TITANIUM_EXPANSIONS_OPCODE => tell(
+            rules::expansions(body).map(WorldEvent::Expansions),
+            "Expansion mask",
+            log,
+        ),
+        _ => match channels::titanium(opcode, body).transpose() {
+            Some(offer) => tell(offer.map(WorldEvent::ChatServer), "Chat server offer", log),
+            None => Ok(()),
+        },
+    }
+}
+
+/// The world's word that the zone the player is entering is down: tells the
+/// host which zone, as far as the world names it, and gives the error that
+/// ends the attempt at once.
+///
+/// # Errors
+/// Returns an error when the host's event handler fails.
+fn unavailable(body: &[u8], log: &mut Events<'_>) -> Result<anyhow::Error> {
+    let zone = eq_network_game::zoning::unavailable(body).or_else(|error| {
+        log.diagnostic(format!("Unavailable zone unnamed: {error}"))?;
+        Ok::<_, anyhow::Error>(None)
+    })?;
+    log.send(ClientEvent::World(WorldEvent::ZoneUnavailable {
+        zone: zone.clone(),
+    }))?;
+    Ok(zone.map_or_else(
+        || anyhow!("the zone is unavailable"),
+        |zone| anyhow!("zone {zone} is unavailable"),
+    ))
+}
+
+/// Reads the character the world names as the player logs in: between
+/// zones the one in play, which must be the session's own; otherwise
+/// `EQEmu`'s automatic login (`World:EnableAutoLogin`), which the session
+/// tells of and leaves to its own choice.
+///
+/// # Errors
+/// Returns an error when the world names another character between zones,
+/// or when the host's event handler fails.
+fn named(body: &[u8], character: &str, zoning: bool, log: &mut Events<'_>) -> Result<()> {
+    let name = cstr(body);
+    if zoning {
+        ensure!(
+            name.is_empty() || name.eq_ignore_ascii_case(character.as_bytes()),
+            "the world named another character between zones"
+        );
+    } else if !name.is_empty() {
+        log.diagnostic(format!(
+            "The world would enter {} by itself; the session keeps to its own choice",
+            name.escape_ascii()
+        ))?;
+    }
+    Ok(())
+}
+
 /// Titanium's world stage: complete world validation, select the
 /// character, and follow its zone handoff.
 // The linear handshake keeps packet ordering and state transitions together.
@@ -217,16 +309,12 @@ pub(super) fn titanium(
             packet.body.len()
         ))?;
         match WorldOpcode::from(packet.opcode) {
-            // Consumers name per-character files after the world, as the official client does.
-            WorldOpcode::LogServer => match crate::world::titanium_world_name(&packet.body) {
-                Ok(short_name) => {
-                    let event = crate::world::WorldEvent::WorldName { short_name };
-                    log.send(ClientEvent::World(event))?;
-                }
-                Err(error) => {
-                    log.diagnostic(format!("World short name unavailable: {error}"))?;
-                }
-            },
+            WorldOpcode::EnterWorld => named(&packet.body, &config.character, zoning, log)?,
+            WorldOpcode::ZoneUnavailable => {
+                let error = unavailable(&packet.body, log)?;
+                session.close()?;
+                return Err(error);
+            }
             // Only protected servers expect an answer; stock EQEmu's is informational.
             WorldOpcode::ApprovalChallenge => {
                 if let Some(shield) = shield.as_mut() {
@@ -344,7 +432,7 @@ pub(super) fn titanium(
                     shield,
                 }));
             }
-            _ => (),
+            _ => news(packet.opcode, &packet.body, log)?,
         }
         // Stock EQEmu accepts the client without the V62 validation reply.
         if world_only && accepted {
@@ -355,7 +443,7 @@ pub(super) fn titanium(
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::*;
     use crate::client::ClientConfig;
     use crate::p99::{self, WorldCodec};
@@ -510,6 +598,109 @@ mod tests {
             assert_eq!(&body[6..16], b"0123456789");
             assert_eq!((body[188], body[192]), (u8::from(zoning), 0xcc));
         }
+    }
+
+    /// What a host hears while `run` tells it things.
+    pub(super) fn heard(run: impl FnOnce(&mut Events<'_>)) -> Vec<ClientEvent> {
+        let config = ClientConfig::new("ACCOUNT", "PASSWORD", "Test Server", "Tester");
+        let mut received = Vec::new();
+        let mut handler = |event| {
+            received.push(event);
+            Ok(())
+        };
+        let mut log = Events::new(&config, &mut handler);
+        run(&mut log);
+        drop(log);
+        received
+    }
+
+    #[test]
+    fn a_titanium_world_tells_its_name_rules_expansions_and_chat_server() {
+        use eq_network_game::{
+            channels::{ChatServer, ChatService},
+            rules::Expansions,
+        };
+        let mut settings = [0_u8; 264];
+        settings[8] = 1;
+        settings[32..41].copy_from_slice(b"testworld");
+        let events = heard(|log| {
+            news(0x0fa6, &settings, log).unwrap();
+            news(0x04ec, &15_u32.to_le_bytes(), log).unwrap();
+            news(
+                0x6536,
+                b"chat.example.test,7778,testworld.Tester,b0123ABCD\0",
+                log,
+            )
+            .unwrap();
+            news(0x00d7, b"garbled\0", log).unwrap();
+            // Anything else says nothing of the world.
+            news(0x4513, &[0; 8], log).unwrap();
+        });
+        assert!(matches!(
+            &events[..],
+            [
+                ClientEvent::World(WorldEvent::WorldName { short_name }),
+                ClientEvent::World(WorldEvent::Rules(rules)),
+                ClientEvent::World(WorldEvent::Expansions(Expansions(15))),
+                ClientEvent::World(WorldEvent::ChatServer(ChatServer {
+                    service: ChatService::Mail,
+                    port: 7778,
+                    ..
+                })),
+                ClientEvent::Diagnostic(unreadable),
+            ] if short_name == "testworld"
+                && rules.no_drop_trades
+                && unreadable == "Chat server offer unreadable: incomplete chat server offer"
+        ));
+    }
+
+    #[test]
+    fn an_unavailable_zone_ends_the_attempt_at_once_with_its_name() {
+        let mut body = [0_u8; 24];
+        body[..5].copy_from_slice(b"misty");
+        let mut error = None;
+        let events = heard(|log| error = Some(unavailable(&body, log).unwrap()));
+        assert_eq!(
+            error.take().unwrap().to_string(),
+            "zone misty is unavailable"
+        );
+        assert!(matches!(
+            &events[..],
+            [ClientEvent::World(WorldEvent::ZoneUnavailable { zone: Some(zone) })] if zone == "misty"
+        ));
+        // A garbled one still ends the attempt, with no zone named.
+        let events = heard(|log| error = Some(unavailable(&[0; 3], log).unwrap()));
+        assert_eq!(error.unwrap().to_string(), "the zone is unavailable");
+        assert!(matches!(
+            &events[..],
+            [
+                ClientEvent::Diagnostic(_),
+                ClientEvent::World(WorldEvent::ZoneUnavailable { zone: None })
+            ]
+        ));
+    }
+
+    #[test]
+    fn between_zones_the_world_must_name_the_character_in_play() {
+        let events = heard(|log| {
+            named(b"tester\0", "Tester", true, log).unwrap();
+            named(b"\0", "Tester", true, log).unwrap();
+            named(&[], "Tester", true, log).unwrap();
+            assert_eq!(
+                named(b"Other\0", "Tester", true, log)
+                    .unwrap_err()
+                    .to_string(),
+                "the world named another character between zones"
+            );
+            // From the list, a name is EQEmu's automatic login: told, and
+            // left to the session's own choice.
+            named(b"\0", "Tester", false, log).unwrap();
+            named(b"Other\0", "Tester", false, log).unwrap();
+        });
+        assert!(matches!(
+            &events[..],
+            [ClientEvent::Diagnostic(line)] if line.starts_with("The world would enter Other by itself")
+        ));
     }
 
     #[test]
