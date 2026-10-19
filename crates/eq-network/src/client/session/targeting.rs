@@ -1,14 +1,15 @@
 //! The player's target: the spawn the player picks, which must be the player
-//! or someone they can see.
+//! or someone they can see, or the one the server sets itself.
 use super::{
     feature::{Feature, Out, World},
     ClientCommand, ClientEvent,
 };
 use anyhow::Result;
-use eq_network_game::world::WorldEvent;
+use eq_network_game::{message::Message, world::WorldEvent};
 
-/// The spawn the server holds as the player's target: the last one sent.
-/// Every feature reads it; only the targeting feature changes it.
+/// The spawn the server holds as the player's target: the last one sent, or
+/// the one the server set since. Every feature reads it; only the targeting
+/// feature changes it.
 #[derive(Clone, Copy, Debug, Default)]
 pub(super) struct Target(Option<u16>);
 
@@ -73,6 +74,20 @@ impl Feature for Targeting {
         }
         Ok(())
     }
+
+    /// Follows the target the server sets: a spell's or a quest's pick, or
+    /// the last target put back as the server refuses one.
+    fn observe(
+        &mut self,
+        message: &Message,
+        world: &mut World,
+        _out: &mut Out<'_, '_>,
+    ) -> Result<()> {
+        if let Message::Event(WorldEvent::Target(spawn_id)) = message {
+            world.target.0 = *spawn_id;
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -85,6 +100,20 @@ mod tests {
         ClientCommand::SelectTarget {
             session_id: 5,
             spawn_id,
+        }
+    }
+
+    #[test]
+    fn the_target_follows_the_one_the_server_sets() {
+        let mut targeting = Targeting;
+        let mut world = World::new(5);
+        world.target = Target::from(8);
+        for spawn_id in [Some(9), None] {
+            let set = Message::Event(WorldEvent::Target(spawn_id));
+            let outcome = testing::run(|out| targeting.observe(&set, &mut world, out));
+            outcome.result.unwrap();
+            assert_eq!(*world.target, spawn_id);
+            assert_eq!(outcome.sent, []);
         }
     }
 

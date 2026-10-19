@@ -391,6 +391,54 @@ fn the_servers_hold_on_the_player_is_read_from_its_messages() {
 }
 
 #[test]
+fn the_target_the_server_sets_or_echoes_is_read() {
+    assert_eq!(
+        updates(0xfe41, &581u16.to_le_bytes()).unwrap(),
+        [WorldEvent::Target(Some(581))]
+    );
+    // The echo of the player's own clearing.
+    assert_eq!(
+        updates(0x6241, &[0; 2]).unwrap(),
+        [WorldEvent::Target(None)]
+    );
+    for opcode in [0xfe41, 0x6241] {
+        assert!(updates(opcode, &[0; 4]).is_err());
+    }
+}
+
+#[test]
+fn a_quest_reward_is_read() {
+    let mut body = [0u8; 48];
+    body[..2].copy_from_slice(&581u16.to_le_bytes());
+    body[28..32].copy_from_slice(&2i32.to_le_bytes());
+    assert_eq!(
+        updates(0x8040, &body).unwrap(),
+        [WorldEvent::Reward(crate::rewards::Reward {
+            giver_id: Some(581),
+            coins: crate::world::Coins {
+                platinum: 2,
+                ..crate::world::Coins::default()
+            },
+            ..crate::rewards::Reward::default()
+        })]
+    );
+    assert!(updates(0x8040, &[0; 47]).is_err());
+}
+
+#[test]
+fn a_sacrifice_offer_is_read() {
+    let body: Vec<u8> = [581u32, 7, 0]
+        .iter()
+        .flat_map(|value| value.to_le_bytes())
+        .collect();
+    assert!(matches!(
+        &updates(0xea41, &body).unwrap()[..],
+        [WorldEvent::SacrificeOffer(offer)] if offer.caster_id == 581
+    ));
+    assert!(updates(0xea41, &body[..11]).is_err());
+}
+
+#[test]
 fn the_end_of_hiding_is_read_and_carries_nothing() {
     assert_eq!(
         updates(0x5a41, &[]).unwrap(),

@@ -25,6 +25,7 @@ use super::{
     character::Character,
     clock::Clock,
     combat::Combat,
+    confirmations::{Sacrifice, Translocate},
     corpses::Corpses,
     creation::{self, Creation},
     doors::Doors,
@@ -310,6 +311,16 @@ pub(super) trait ServerType: Sync {
         None
     }
 
+    /// Accepting or declining a sacrifice.
+    fn sacrifice(&self, _setup: &Setup<'_>) -> Provided {
+        None
+    }
+
+    /// Accepting or declining a translocate.
+    fn translocate(&self, _setup: &Setup<'_>) -> Provided {
+        None
+    }
+
     /// Reading books and notes.
     fn reading(&self, _setup: &Setup<'_>) -> Provided {
         None
@@ -385,6 +396,8 @@ pub(super) trait ServerType: Sync {
             self.pets(setup),
             self.training(setup),
             self.resurrection(setup),
+            self.sacrifice(setup),
+            self.translocate(setup),
             self.reading(setup),
             self.tradeskills(setup),
             self.map(setup),
@@ -492,8 +505,9 @@ mod shared {
         Abilities, Ability, Allowances, Belongings, BleedingOut, Camp, Casting, Character, Clock,
         Combat, Corpses, Doors, Edits, Entities, Exchanges, Feature, GameDialect, GroundObjects,
         Groups, Hazard, Hazards, HideAnswer, Home, ItemCount, Listing, Looting, Map,
-        MerchantOffers, Motion, MoveRules, Pets, Quotes, Raids, Reading, Resurrection, Setup,
-        Socials, Spellbook, Talk, Targeting, Tradeskills, Training, Transfers, Who,
+        MerchantOffers, Motion, MoveRules, Pets, Quotes, Raids, Reading, Resurrection, Sacrifice,
+        Setup, Socials, Spellbook, Talk, Targeting, Tradeskills, Training, Transfers, Translocate,
+        Who,
     };
 
     pub(super) fn casting() -> Box<dyn Feature> {
@@ -606,6 +620,14 @@ mod shared {
 
     pub(super) fn resurrection() -> Box<dyn Feature> {
         Box::<Resurrection>::default()
+    }
+
+    pub(super) fn sacrifice() -> Box<dyn Feature> {
+        Box::<Sacrifice>::default()
+    }
+
+    pub(super) fn translocate() -> Box<dyn Feature> {
+        Box::<Translocate>::default()
     }
 
     pub(super) fn reading() -> Box<dyn Feature> {
@@ -924,6 +946,17 @@ impl ServerType for EqEmu {
 
     fn resurrection(&self, _setup: &Setup<'_>) -> Provided {
         offer(shared::resurrection())
+    }
+
+    /// Answered only on the player's word: a yes takes their life.
+    fn sacrifice(&self, _setup: &Setup<'_>) -> Provided {
+        offer(shared::sacrifice())
+    }
+
+    /// Answered only on the player's word; on a yes `EQEmu` moves the player
+    /// itself (`Client::Handle_OP_Translocate`).
+    fn translocate(&self, _setup: &Setup<'_>) -> Provided {
+        offer(shared::translocate())
     }
 
     fn reading(&self, _setup: &Setup<'_>) -> Provided {
@@ -1324,11 +1357,12 @@ mod tests {
         // Training, resurrection, reading, tradeskills, the map, deleting
         // spells, merchants' offers, groups, the player's listing, dice,
         // emotes, assisting, raids and the world's damage are checked on
-        // EQEmu alone so far, and only EQEmu waits for the answer to the
-        // end of hiding.
+        // EQEmu alone so far; only EQEmu waits for the answer to the end of
+        // hiding; and only EQEmu answers sacrifices and translocates, read
+        // from its source and not yet checked live.
         for (protocol, count) in [
             (ServerProtocol::Project1999, 21),
-            (ServerProtocol::EqEmu, 32),
+            (ServerProtocol::EqEmu, 34),
         ] {
             let server = server_type(protocol);
             let setup = Setup::new("Tester", AutoEat::default());
@@ -1337,6 +1371,8 @@ mod tests {
         for capability in [
             Capability::Training,
             Capability::Resurrection,
+            Capability::Sacrifice,
+            Capability::Translocate,
             Capability::Reading,
             Capability::Tradeskills,
             Capability::Map,

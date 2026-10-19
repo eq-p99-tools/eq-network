@@ -7,6 +7,13 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- The message tables no longer list Titanium's `OP_RezzComplete`, which
+  `EQEmu` sends only to the world server, and list `EQMac`'s as TAKP's
+  alone, as Quarm too sends it only to the world server; it is planned
+  with `EQMac`'s catch-up on exchanges, since TAKP's client moves itself
+  to the corpse on it. `EQMac`'s `OP_Translocate` names TAKP as a sender
+  too.
+
 - Quarm's move of a dead player to their bind point (`OP_GMGoto`) is read
   as a zone offer home. Quarm's session does not follow zones yet, so it
   ends there, as it does on Quarm's other moves, where before it stayed on
@@ -156,6 +163,47 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- The player's target as the server sets it, on both generations:
+  `WorldEvent::Target`, from `OP_TargetCommand` (`EQEmu`'s sense spells,
+  its corpse locator and Perl; TAKP's and Quarm's refusal of a mouse
+  target, which puts back the last one) and from TAKP's and Quarm's echo
+  of the player clearing their target (`OP_TargetMouse`, now listed); the
+  session's target follows it. On Titanium, whom the player's target
+  targets: `WorldEvent::TargetOfTarget`, from `OP_TargetHoTT`. Hosts that
+  match `WorldEvent` exhaustively need arms for both.
+- What a quest or a task gives the player, on both generations:
+  `WorldEvent::Reward` (`rewards::Reward`: the giver, the coins, the
+  experience and the items), from `EQEmu`'s quest reward, which rides
+  `OP_Sound`, and its coins alone (`OP_CashReward`, from a task or a
+  quest's `givecash`), and from TAKP's and Quarm's `OP_Reward`. Every
+  server adds the coins to the purse without a money update, so the
+  session adds them to the purse it keeps and tells the host the purse
+  they make (inferred: the official client's purse after a reward is
+  unrecorded). `EQEmu`'s fixed `OP_Sound` record, which gives nothing, is
+  `WorldEvent::Ding`: the sound the official client plays for a quest's
+  `ding`. Hosts that match `WorldEvent` exhaustively need arms for both.
+- Offers the player answers, on both generations, answered only on the
+  player's word: a sacrifice (`WorldEvent::SacrificeOffer`, naming its
+  caster) from `OP_Sacrifice`, answered with `GameCommand::AnswerSacrifice`,
+  and a translocate (`WorldEvent::TranslocateOffer`: the caster, the spell
+  and where it takes the player) from `OP_Translocate`, answered with
+  `GameCommand::AnswerTranslocate`. The answer repeats the offer with the
+  player's choice: 1 for yes, and 0 for no, but -1 for a translocate on
+  `EQMac` (inferred: what the official clients answer is unrecorded). An
+  answer with no offer waiting is refused (`WorldEvent::SacrificeRefused`,
+  `WorldEvent::TranslocateRefused`). `EQEmu` offers both
+  (`Capability::Sacrifice`, `Capability::Translocate`); P99, TAKP and Quarm
+  wait for their live checks. TAKP answers a yes to a translocate with the
+  offer again, which reads as the server's offer to move the player there;
+  it carries no heading, so the player faces heading 0 after it, and the
+  transfer request that follows gives reason 8 (both inferred). Hosts that
+  match `WorldEvent` exhaustively need arms for the four events.
+- A player becoming a corpse, on Titanium: `WorldEvent::BecameCorpse` (the
+  spawn, which the corpse keeps, and where it lies), from
+  `OP_BecomeCorpse`, which `EQEmu` sends the player just before word of
+  their death, and everyone else in the zone as a player leaves a corpse.
+  Hosts that match `WorldEvent` exhaustively need an arm for it.
+
 - The server's hold on the player, on both generations, read from the
   emulators' sources and not yet checked live: a stun
   (`WorldEvent::Stun`: its length, or none as one ends) from `OP_Stun`; a
@@ -229,8 +277,8 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   types that send it and the parts of the session that read it, or why it
   is left unread (work still to come, an answer to a request eq-network
   never sends, parked work, or nothing in it worth reading), taken from
-  `EQEmu`'s, TAKP's and Quarm's sources: Titanium's 259 messages, 112 of
-  them read, and `EQMac`'s 176, 82 read. A zone session now tells once, as
+  `EQEmu`'s, TAKP's and Quarm's sources: Titanium's 258 messages, 119 of
+  them read, and `EQMac`'s 177, 87 read. A zone session now tells once, as
   a diagnostic, of each message it leaves unread with the reason (but one
   with nothing worth reading, and an empty one under opcode 0, where
   `EQEmu` sends what Titanium has no opcode for, such as the empty

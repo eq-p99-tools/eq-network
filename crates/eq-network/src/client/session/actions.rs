@@ -150,6 +150,8 @@ pub(super) fn needs(command: &ClientCommand) -> &'static [Resource] {
         | ClientCommand::Pet { .. }
         | ClientCommand::Training { .. }
         | ClientCommand::AnswerResurrection { .. }
+        | ClientCommand::AnswerSacrifice { .. }
+        | ClientCommand::AnswerTranslocate { .. }
         | ClientCommand::InviteToGroup { .. }
         | ClientCommand::FollowGroup { .. }
         | ClientCommand::DeclineGroup { .. }
@@ -260,6 +262,8 @@ fn refusal(command: &ClientCommand, reason: &str) -> Option<WorldEvent> {
         | ClientCommand::Pet { session_id, .. }
         | ClientCommand::Training { session_id, .. }
         | ClientCommand::AnswerResurrection { session_id, .. }
+        | ClientCommand::AnswerSacrifice { session_id, .. }
+        | ClientCommand::AnswerTranslocate { session_id, .. }
         | ClientCommand::InviteToGroup { session_id, .. }
         | ClientCommand::FollowGroup { session_id }
         | ClientCommand::DeclineGroup { session_id }
@@ -382,6 +386,12 @@ fn reasoned(command: &ClientCommand, session_id: u64, reason: String) -> Option<
         ClientCommand::Training { .. } => WorldEvent::TrainingRefused { session_id, reason },
         ClientCommand::AnswerResurrection { .. } => {
             WorldEvent::ResurrectionRefused { session_id, reason }
+        }
+        ClientCommand::AnswerSacrifice { .. } => {
+            WorldEvent::SacrificeRefused { session_id, reason }
+        }
+        ClientCommand::AnswerTranslocate { .. } => {
+            WorldEvent::TranslocateRefused { session_id, reason }
         }
         ClientCommand::InviteToGroup { .. }
         | ClientCommand::FollowGroup { .. }

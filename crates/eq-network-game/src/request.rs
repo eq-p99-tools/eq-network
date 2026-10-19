@@ -8,6 +8,7 @@ use crate::{
     abilities::{self, Ability},
     books::{self, Book},
     command::{self, EncodedCommand, GameCommand, Posture},
+    confirmations::{self, SacrificeOffer, TranslocateOffer},
     corpses, doors, exchange,
     food::{self, Meal},
     group,
@@ -98,6 +99,20 @@ pub enum Request {
     AnswerResurrection {
         /// The offer, which the answer repeats.
         offer: ResurrectionOffer,
+        /// True accepts.
+        accept: bool,
+    },
+    /// Accept or decline a sacrifice offer.
+    AnswerSacrifice {
+        /// The offer, which the answer repeats.
+        offer: SacrificeOffer,
+        /// True accepts.
+        accept: bool,
+    },
+    /// Accept or decline a translocate offer.
+    AnswerTranslocate {
+        /// The offer, which the answer repeats.
+        offer: TranslocateOffer,
         /// True accepts.
         accept: bool,
     },
@@ -293,6 +308,7 @@ pub enum Request {
 /// # Errors
 /// Rejects a request whose values the packet cannot carry, such as a name
 /// too long for its field, and one that needs a spawn the player lacks.
+#[allow(clippy::too_many_lines, reason = "one arm per request")]
 pub fn titanium(request: &Request, sender: Sender<'_>) -> Result<EncodedCommand> {
     Ok(match request {
         Request::Camp => command::titanium_camp(),
@@ -310,6 +326,12 @@ pub fn titanium(request: &Request, sender: Sender<'_>) -> Result<EncodedCommand>
         Request::EndTraining(trainer) => training::titanium_end(*trainer, sender.spawn()),
         Request::AnswerResurrection { offer, accept } => {
             resurrection::titanium_answer(offer, *accept)
+        }
+        Request::AnswerSacrifice { offer, accept } => {
+            confirmations::titanium_sacrifice_answer(offer, *accept)
+        }
+        Request::AnswerTranslocate { offer, accept } => {
+            confirmations::titanium_translocate_answer(offer, *accept)
         }
         Request::InviteToGroup(name) => group::invite(name, sender.name)?,
         Request::FollowGroup(inviter) => group::follow(inviter, sender.name)?,
@@ -395,8 +417,8 @@ pub fn titanium(request: &Request, sender: Sender<'_>) -> Result<EncodedCommand>
 /// The `EQMac` client's packet for a request from this sender: camping,
 /// logging out, its stance and position, the world's damage, item moves,
 /// eating and drinking, an item's click, the spellbook's changes but
-/// deleting, and the host commands its generation encodes so far: chat
-/// and casting from a gem.
+/// deleting, the answers to a sacrifice and a translocate, and the host
+/// commands its generation encodes so far: chat and casting from a gem.
 ///
 /// # Errors
 /// Refuses every other request, and a command the generation cannot carry.
@@ -442,6 +464,12 @@ pub fn eqmac(request: &Request, sender: Sender<'_>) -> Result<EncodedCommand> {
         Request::SwapSpells { from, to } => spells::eqmac_swap(*from, *to),
         Request::MoveCoins(transfer) => transfer.encode_eqmac(),
         Request::BledOut => crate::quarm::bled_out(sender.spawn()),
+        Request::AnswerSacrifice { offer, accept } => {
+            Ok(confirmations::eqmac_sacrifice_answer(offer, *accept))
+        }
+        Request::AnswerTranslocate { offer, accept } => {
+            Ok(confirmations::eqmac_translocate_answer(offer, *accept))
+        }
         _ => anyhow::bail!("the EQMac client cannot send {request:?} yet"),
     }
 }

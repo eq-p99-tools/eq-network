@@ -7,6 +7,7 @@ mod casting;
 mod character;
 mod clock;
 mod combat;
+mod confirmations;
 mod corpses;
 mod coverage;
 mod creation;
