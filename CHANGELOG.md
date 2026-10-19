@@ -7,6 +7,12 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- Titanium door clicks now send 3 in the second byte and -1 as the held
+  item, and eating or drinking by hand sends -1 in the request's third
+  word, as the official client does (taken from #121). Eating on its own
+  still sends 0 there, since what the official client sends then is
+  unrecorded.
+
 - A configured world that TAKP's list shows down or locked ends the login
   at once, as one on a Titanium list always has, instead of asking the
   login server for it.
@@ -124,6 +130,20 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   before a message nothing read left no trace once the zone admitted the
   player. A test holds each table to its generation's decoders over all
   65,536 opcodes.
+
+- `SpawnState` gains `walk_speed` and `run_speed`: the spawn record's walk
+  and run speeds, server protocol values as `PlayerState`'s are, read from
+  Titanium spawn records at the offsets the player's own record uses. A
+  bad value is zero rather than dropping the spawn; `EQMac` spawns report
+  zero until their record's offsets are checked.
+- `world::ANIMATION_UNITS_PER_SECOND` is public: the units a second one
+  speed value moves, so a host can turn a record's speed into units.
+
+- `WorldEvent::Entered` gains `spell_landing_flag`: the effect flag of the
+  spell action that says a spell landed on its target, so a front end can
+  draw the landing. `EQEmu` sends 4 for each target (`Mob::SpellOnTarget`);
+  P99, Quarm and TAKP say None until each is checked (TAKP sends 4 only once
+  a buff takes hold). Front ends that build the event add the field.
 
 - Swings and the other one-shot motions the server asks clients to play:
   `WorldEvent::Animation` (`combat::Animation`: the spawn, the servers'
@@ -721,6 +741,16 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- A zone's door table is no longer refused whole when it holds two or more
+  static objects. `EQEmu` lists each of a zone's static objects (an object
+  of type 0) in the door table with door ID 255, so that ID repeats, and
+  the decoder refused the table at the second one: the player got no doors
+  in that zone. The decoder now keeps every such record, still refuses any
+  other repeated ID, and takes tables of up to 500 doors, the most `EQEmu`
+  lists (it refused more than 256). `Doors` keeps every static object for
+  the admission snapshot, and `entries` the last one listed, as before; a
+  click on one is refused before it goes out, since nothing uses a static
+  object. Found reading `EQEmu`'s sources; which zones it hit is not known.
 - On Windows, a session no longer ends with "Overlapped I/O operation is in
   progress" (os error 997) or its cancelled twin (995). std's sockets are
   overlapped there, and their read timeout (`SO_RCVTIMEO`) leaves a socket
