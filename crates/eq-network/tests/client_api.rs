@@ -3,7 +3,7 @@ use anyhow::{bail, Result};
 use eq_network::chat::OutboundChat;
 use eq_network::client::{
     CancellationToken, Client, ClientCommand, ClientConfig, ClientEvent, ClientIdentity,
-    ConnectionStage, ConnectionState, LoginError, RunOptions,
+    ConnectionStage, ConnectionState, LoginError, RunOptions, ServerProtocol,
 };
 use std::{
     net::{SocketAddr, UdpSocket},
@@ -448,6 +448,8 @@ fn a_player_chooses_the_world_from_the_login_servers_list() {
     let socket = peer();
     let mut settings = config(socket.local_addr().unwrap().port());
     settings.server.clear();
+    // A stock `EQEmu` login, which plays on every world listed.
+    settings.protocol = ServerProtocol::EqEmu;
     let engine = client(settings);
     let cancel = CancellationToken::default();
     let worker_cancel = cancel.clone();
