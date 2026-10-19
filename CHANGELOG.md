@@ -54,6 +54,25 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   listed as left unread with nothing in it worth reading, since TAKP and
   Quarm always send it with an answer of 0 and no name.
 
+- A zone session now tells, as a diagnostic, of each inventory update the
+  zone sends once the player is admitted: what changed and in which slots
+  ("Zone sent an inventory update: the world container emptied"), so a log
+  shows the server's side of every change. A closed world container, whose
+  `OP_ClearObject` left no trace before, now shows.
+
+- A P99 login shows only P99's worlds from `EQEmu`'s public login server's
+  list: those whose lowercased name starts with "project 1999" or "an
+  interesting" (the "An Interesting Hole" test world), as the SSO login
+  proxy keeps them. Other worlds are hidden, and a configured world the
+  filter hides ends the login saying so. Every other server type is shown
+  the whole list.
+
+- Titanium door clicks now send 3 in the second byte and -1 as the held
+  item, and eating or drinking by hand sends -1 in the request's third
+  word, as the official client does (taken from #121). Eating on its own
+  still sends 0 there, since what the official client sends then is
+  unrecorded.
+
 - A configured world that TAKP's list shows down or locked ends the login
   at once, as one on a Titanium list always has, instead of asking the
   login server for it.
@@ -260,9 +279,8 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   target, which puts back the last one) and from TAKP's and Quarm's echo
   of the player clearing their target (`OP_TargetMouse`, now listed); the
   session's target follows it. On Titanium, whom the player's target
-  targets: `WorldEvent::TargetOfTarget`, from `OP_TargetHoTT`. The table
-  lists what `EQEmu` sends with no Titanium opcode (0x0000) as needing no
-  reading. Hosts that match `WorldEvent` exhaustively need arms for both.
+  targets: `WorldEvent::TargetOfTarget`, from `OP_TargetHoTT`. Hosts that
+  match `WorldEvent` exhaustively need arms for both.
 - What a quest or a task gives the player, on both generations:
   `WorldEvent::Reward` (`rewards::Reward`: the giver, the coins, the
   experience and the items), from `EQEmu`'s quest reward, which rides
@@ -295,6 +313,15 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `OP_BecomeCorpse`, which `EQEmu` sends the player just before word of
   their death, and everyone else in the zone as a player leaves a corpse.
   Hosts that match `WorldEvent` exhaustively need an arm for it.
+- Each character a world lists carries how it looks
+  (`CharacterChoice::look`, a `CharacterLook`): race, gender, class,
+  deity, its worn gear as a spawn's `Appearance` (armour materials and
+  tints, the held items' model numbers, face, hair and beard), eye colours
+  and, on Titanium, whether the world offers Go Home and the tutorial,
+  read from both generations' lists at the emulators' layouts. A server
+  type gives them only where its list is checked to carry them
+  (`EQEmu` and TAKP); elsewhere `look` is `None`, and an `EQMac` list's
+  level and zone stay `None` as before.
 
 - The server's hold on the player, on both generations, read from the
   emulators' sources and not yet checked live: a stun
@@ -372,10 +399,27 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `EQEmu`'s, TAKP's and Quarm's sources: Titanium's 258 messages, 127 of
   them read, and `EQMac`'s 177, 92 read. A zone session now tells once, as
   a diagnostic, of each message it leaves unread with the reason (but one
-  with nothing worth reading) and of each the table does not list, where
+  with nothing worth reading, and an empty one under opcode 0, where
+  `EQEmu` sends what Titanium has no opcode for, such as the empty
+  OP_FinishWindow pair after a container closes or a trade ends) and of
+  each the table does not list, where
   before a message nothing read left no trace once the zone admitted the
   player. A test holds each table to its generation's decoders over all
   65,536 opcodes.
+
+- `SpawnState` gains `walk_speed` and `run_speed`: the spawn record's walk
+  and run speeds, server protocol values as `PlayerState`'s are, read from
+  Titanium spawn records at the offsets the player's own record uses. A
+  bad value is zero rather than dropping the spawn; `EQMac` spawns report
+  zero until their record's offsets are checked.
+- `world::ANIMATION_UNITS_PER_SECOND` is public: the units a second one
+  speed value moves, so a host can turn a record's speed into units.
+
+- `WorldEvent::Entered` gains `spell_landing_flag`: the effect flag of the
+  spell action that says a spell landed on its target, so a front end can
+  draw the landing. `EQEmu` sends 4 for each target (`Mob::SpellOnTarget`);
+  P99, Quarm and TAKP say None until each is checked (TAKP sends 4 only once
+  a buff takes hold). Front ends that build the event add the field.
 
 - Swings and the other one-shot motions the server asks clients to play:
   `WorldEvent::Animation` (`combat::Animation`: the spawn, the servers'
@@ -993,6 +1037,16 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   yet checked live or against the official client. P99 hears nothing back
   until its hiding is checked live there, and TAKP and Quarm end the
   hiding themselves.
+- A zone's door table is no longer refused whole when it holds two or more
+  static objects. `EQEmu` lists each of a zone's static objects (an object
+  of type 0) in the door table with door ID 255, so that ID repeats, and
+  the decoder refused the table at the second one: the player got no doors
+  in that zone. The decoder now keeps every such record, still refuses any
+  other repeated ID, and takes tables of up to 500 doors, the most `EQEmu`
+  lists (it refused more than 256). `Doors` keeps every static object for
+  the admission snapshot, and `entries` the last one listed, as before; a
+  click on one is refused before it goes out, since nothing uses a static
+  object. Found reading `EQEmu`'s sources; which zones it hit is not known.
 - On Windows, a session no longer ends with "Overlapped I/O operation is in
   progress" (os error 997) or its cancelled twin (995). std's sockets are
   overlapped there, and their read timeout (`SO_RCVTIMEO`) leaves a socket
