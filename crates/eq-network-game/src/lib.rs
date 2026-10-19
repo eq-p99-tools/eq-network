@@ -44,6 +44,10 @@ pub mod effects;
 pub mod exchange;
 /// Food and drink: hunger, thirst, and eating and drinking.
 pub mod food;
+/// What game masters and the world tell the zone of a player: kicks,
+/// kills, and a player made to look like an NPC; and, to game masters, the
+/// petition queue.
+pub mod gm;
 /// Groups: invitations, joining, leaving and disbanding, and who is in the
 /// player's group.
 pub mod group;

@@ -196,8 +196,11 @@ pub(super) enum Step {
     /// eq-network does not send yet, the player's begging, disarming, pick
     /// pocketing, poisoning and tracking, and a banker's change.
     PlayerState,
-    /// Social, guild, title and GM messages: inspection, duels, guild
-    /// membership, titles and last names, popups and the GM notices.
+    /// Social, guild, title and GM messages: what is left of them answers
+    /// requests eq-network does not send yet, for an inspection, the
+    /// guild's message of the day and list, the titles, a surname, and a
+    /// game master's zone requests, finds, petition checkouts and soul
+    /// marks.
     Social,
     /// `EQMac`'s catch-up on the world: what Titanium's decoders already
     /// read, from doors to the training window.
@@ -395,6 +398,50 @@ const REMOVAL: &[Part] = &[Part(
     "the remover's name, the two bytes after the guild and the rank",
     Reason::Needless(
         "TAKP and Quarm leave them empty (zone/client_packet.cpp Client::Handle_OP_GuildRemove)",
+    ),
+)];
+/// What the session leaves unread of a kick or a kill.
+const KICK: &[Part] = &[Part(
+    "the last byte",
+    Reason::Needless(
+        "the emulators name no use for it, and the world leaves it zero \
+         (common/eq_packet_structs.h GMKick_Struct, GMKill_Struct; zone/client.cpp \
+         Client::WorldKick, Client::GMKill)",
+    ),
+)];
+/// What the session leaves unread of a game master making the player look
+/// like an NPC.
+const BECOME_NPC: &[Part] = &[Part(
+    "the spawn",
+    Reason::Needless(
+        "the servers send it only to the player it names, as their own spawn \
+         (zone/client_packet.cpp Client::Handle_OP_GMBecomeNPC)",
+    ),
+)];
+/// What the session leaves unread of `EQMac`'s petition record.
+const PETITION: &[Part] = &[Part(
+    "the receiving game master's name",
+    Reason::Needless(
+        "TAKP and Quarm send each game master their own name there, or none once the petition \
+         is checked out (zone/entity.cpp EntityList::SendPetitionToAdmins)",
+    ),
+)];
+/// What the session leaves unread of `EQMac`'s rename by a game master.
+const GM_RENAME: &[Part] = &[Part(
+    "the game master's name, the bad-name flag and the last three bytes",
+    Reason::Needless(
+        "who renamed the player changes nothing the zone shows, the flag only tells the server \
+         to refuse the old name from then on, and TAKP and Quarm set the three bytes to 1 \
+         (zone/client_packet.cpp Client::Handle_OP_GMNameChange, zone/client.cpp \
+         Client::ChangeFirstName)",
+    ),
+)];
+/// What the session leaves unread of `EQMac`'s change to a title.
+const EQMAC_TITLE: &[Part] = &[Part(
+    "the first word",
+    Reason::Needless(
+        "TAKP and Quarm leave it zero, for a title and a suffix alike, though their notes guess \
+         it marks a suffix (zone/titles.cpp Client::SetAATitle, Client::SetTitleSuffix)",
     ),
 )];
 /// What the session leaves unread of a Titanium projectile.

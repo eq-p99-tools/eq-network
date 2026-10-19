@@ -841,7 +841,8 @@ pub enum WorldEvent {
     GuildNames(Vec<(u32, String)>),
     /// A spawn's new name: on Titanium, an NPC's corpse taking the server's
     /// name and the temporary names and renames of game masters, quests and
-    /// pets' owners.
+    /// pets' owners; on `EQMac`, a game master's renaming of a player, which
+    /// after TAKP's and Quarm's `#set name` gives the new name as both.
     Renamed {
         /// Whose name it was. The record names no spawn: the session names
         /// it before anyone hears it, from the spawn with the old name, or
@@ -853,12 +854,24 @@ pub enum WorldEvent {
         /// The new name.
         new_name: String,
     },
-    /// A character's last name changed.
+    /// A character's last name changed; the session's spawn table keeps it
+    /// for the spawn of that name.
     LastName {
         /// The character, by the name they spawned with.
         name: String,
         /// The new last name; empty when it was taken away.
         last_name: String,
+    },
+    /// The player has newly earned titles to choose from
+    /// ([`crate::names`]).
+    NewTitles,
+    /// A character's title or suffix changed ([`crate::names`]); the
+    /// session's spawn table keeps it.
+    TitleChanged {
+        /// Whose, by spawn ID.
+        spawn_id: u16,
+        /// What changed.
+        change: crate::names::TitleChange,
     },
     /// Current mana on protocols without a combined endurance update.
     Mana(u32),
@@ -1196,6 +1209,11 @@ pub enum WorldEvent {
     /// News of the player's guild ([`crate::guild`]). The session keeps no
     /// roster.
     Guild(crate::guild::GuildUpdate),
+    /// What a game master or the world tells the zone of a player: a kick,
+    /// a kill, or the player made to look like an NPC; or, to a game
+    /// master, a petition in the queue ([`crate::gm`]). Nothing acts on
+    /// one yet.
+    Gm(crate::gm::GmNotice),
     /// News of raids: the server's word (an invitation, the raid's leader
     /// and members, who left, the player's end in it) and the requests the
     /// session sent or answered for the player.
@@ -1533,8 +1551,8 @@ pub fn titanium_update(opcode: u16, body: &[u8]) -> Result<Option<WorldEvent>> {
 /// sacrifices and translocates, a player becoming a corpse, doors, ground
 /// objects, loot, merchant, exchange, training, resurrection, group, dice,
 /// assist, other players' yells, voice macros, inspect requests and duels,
-/// guild, raid, book, combine, bandaging, chat server, weather and
-/// inventory packets, each owned by its codec.
+/// guild, game master, raid, book, combine, bandaging, chat server, weather
+/// and inventory packets, each owned by its codec.
 #[allow(clippy::too_many_lines, reason = "one branch per codec")]
 fn titanium_views(opcode: u16, body: &[u8]) -> Result<Option<WorldEvent>> {
     match opcode {
@@ -1625,6 +1643,8 @@ fn titanium_views(opcode: u16, body: &[u8]) -> Result<Option<WorldEvent>> {
             Some(event)
         } else if let Some(update) = crate::guild::titanium(opcode, body)? {
             Some(WorldEvent::Guild(update))
+        } else if let Some(notice) = crate::gm::titanium(opcode, body)? {
+            Some(WorldEvent::Gm(notice))
         } else if let Some(update) = crate::raid::decode(opcode, body)? {
             Some(WorldEvent::Raid(update))
         } else if let Some(text) = crate::books::decode(opcode, body)? {

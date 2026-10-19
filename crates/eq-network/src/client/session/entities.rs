@@ -8,6 +8,7 @@ use super::{
 use anyhow::{ensure, Result};
 use eq_network_game::{
     message::Message,
+    names::TitleChange,
     spells::SpellUpdate,
     world::{PostureState, SpawnKind, SpawnState, WorldEvent},
     GameDialect,
@@ -110,6 +111,20 @@ impl Spawns {
                 if let Some(spawn) = self.0.get_mut(spawn_id) {
                     let [x, y, z] = *position;
                     (spawn.position.x, spawn.position.y, spawn.position.z) = (x, y, z);
+                }
+            }
+            WorldEvent::TitleChanged { spawn_id, change } => {
+                if let Some(spawn) = self.0.get_mut(spawn_id) {
+                    match change {
+                        TitleChange::Title(title) => spawn.name_parts.title.clone_from(title),
+                        TitleChange::Suffix(suffix) => spawn.name_parts.suffix.clone_from(suffix),
+                        TitleChange::Unspecified => (),
+                    }
+                }
+            }
+            WorldEvent::LastName { name, last_name } => {
+                if let Some(spawn) = self.0.values_mut().find(|spawn| spawn.name == *name) {
+                    spawn.name_parts.last_name.clone_from(last_name);
                 }
             }
             _ => (),
@@ -513,6 +528,71 @@ mod tests {
         }
         assert_eq!(world.spawns.visible(8).unwrap().name, "a_rat`s_corpse8");
         assert_eq!(world.spawns.visible(9).unwrap().name, "Gate_Keeper");
+    }
+
+    #[test]
+    fn the_table_keeps_titles_suffixes_and_last_names() {
+        let mut entities = Entities::default();
+        let mut world = World::new(5);
+        let mut player = spawn(7, SpawnKind::Player);
+        player.name = "Examplar".into();
+        entities
+            .admit(
+                &event(WorldEvent::Spawns(vec![player, spawn(8, SpawnKind::Npc)])),
+                &mut world,
+            )
+            .unwrap();
+        let updates = [
+            WorldEvent::TitleChanged {
+                spawn_id: 7,
+                change: TitleChange::Title("Exemplary".into()),
+            },
+            WorldEvent::TitleChanged {
+                spawn_id: 7,
+                change: TitleChange::Suffix("the Synthetic".into()),
+            },
+            WorldEvent::LastName {
+                name: "Examplar".into(),
+                last_name: "Exemplum".into(),
+            },
+            // EQMac's record says nothing of what changed.
+            WorldEvent::TitleChanged {
+                spawn_id: 7,
+                change: TitleChange::Unspecified,
+            },
+            // A cleared title is an empty one.
+            WorldEvent::TitleChanged {
+                spawn_id: 8,
+                change: TitleChange::Title(String::new()),
+            },
+            // No one in the zone has these.
+            WorldEvent::TitleChanged {
+                spawn_id: 9,
+                change: TitleChange::Title("Absent".into()),
+            },
+            WorldEvent::LastName {
+                name: "Absent".into(),
+                last_name: "Elsewhere".into(),
+            },
+        ];
+        for update in updates {
+            testing::run(|out| entities.observe(&event(update), &mut world, out))
+                .result
+                .unwrap();
+        }
+        assert_eq!(
+            world.spawns.visible(7).unwrap().name_parts,
+            eq_network_game::names::NameParts {
+                title: "Exemplary".into(),
+                last_name: "Exemplum".into(),
+                suffix: "the Synthetic".into(),
+            }
+        );
+        assert_eq!(
+            world.spawns.visible(8).unwrap().name_parts,
+            eq_network_game::names::NameParts::default()
+        );
+        assert_eq!(world.spawns.all().count(), 2);
     }
 
     #[test]
