@@ -13,6 +13,13 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   shows the server's side of every change. A closed world container, whose
   `OP_ClearObject` left no trace before, now shows.
 
+- A P99 login shows only P99's worlds from `EQEmu`'s public login server's
+  list: those whose lowercased name starts with "project 1999" or "an
+  interesting" (the "An Interesting Hole" test world), as the SSO login
+  proxy keeps them. Other worlds are hidden, and a configured world the
+  filter hides ends the login saying so. Every other server type is shown
+  the whole list.
+
 - Titanium door clicks now send 3 in the second byte and -1 as the held
   item, and eating or drinking by hand sends -1 in the request's third
   word, as the official client does (taken from #121). Eating on its own

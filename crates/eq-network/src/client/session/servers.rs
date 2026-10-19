@@ -138,6 +138,14 @@ pub(super) trait ServerType: Sync {
         Ok(None)
     }
 
+    /// Whether the server type plays on a world its login server lists, by
+    /// the world's name: a login server shared with other servers lists
+    /// worlds the player can't play on with this server type, which the
+    /// player isn't shown.
+    fn plays_on(&self, _world: &str) -> bool {
+        true
+    }
+
     /// A full turn in the headings a saved profile carries.
     fn profile_turn(&self) -> f32 {
         512.0
@@ -654,6 +662,10 @@ const P99_ABILITIES: [Ability; 16] = [
 /// them are recorded.
 const EQEMU_HAZARDS: [Hazard; 1] = [Hazard::Falling];
 
+/// The starts of the lowercased names of the worlds P99 plays on, as Adam's
+/// SSO login proxy keeps them.
+const P99_WORLD_PREFIXES: [&str; 2] = ["project 1999", "an interesting"];
+
 /// Project 1999: Titanium with V62 protection and 256-unit saved headings.
 /// Jumps and falls wait until they are measured on P99.
 struct Project1999;
@@ -665,6 +677,19 @@ impl ServerType for Project1999 {
 
     fn protect(&self, login_info: &[u8]) -> Result<Option<Box<dyn Shield>>> {
         Ok(Some(Box::new(WorldCodec::new(login_info)?)))
+    }
+
+    /// P99 logs in through `EQEmu`'s public login server, which lists every
+    /// `EQEmu` world. By Adam's choice (2026-10-19), matching his SSO login
+    /// proxy, P99 is shown only the worlds whose name, lowercased, starts
+    /// with "project 1999" (each of P99's own worlds, whatever its color or
+    /// rules) or "an interesting" ("An Interesting Hole", a test world that
+    /// takes P99's client). Not an observation of the official client.
+    fn plays_on(&self, world: &str) -> bool {
+        let world = world.to_lowercase();
+        P99_WORLD_PREFIXES
+            .iter()
+            .any(|prefix| world.starts_with(prefix))
     }
 
     fn profile_turn(&self) -> f32 {
@@ -1210,6 +1235,40 @@ mod tests {
         );
         // Not yet checked on Quarm.
         assert_eq!(approval(ServerProtocol::Quarm), None);
+    }
+
+    #[test]
+    fn p99_plays_on_its_own_worlds_and_the_test_world_while_the_rest_play_on_any() {
+        let p99 = server_type(ServerProtocol::Project1999);
+        for world in [
+            "Project 1999: Green (Velious, PvE)",
+            "Project 1999: Blue (Velious, PvE)",
+            "Project 1999: Red (Velious, PvP)",
+            "PROJECT 1999: A new color",
+            "An Interesting Hole",
+            "an interesting hole II",
+        ] {
+            assert!(p99.plays_on(world), "{world}");
+        }
+        for world in [
+            "Example EQEmu Server",
+            "Not Project 1999",
+            " Project 1999: Green",
+            "A Hole",
+            "",
+        ] {
+            assert!(!p99.plays_on(world), "{world}");
+        }
+        for protocol in [
+            ServerProtocol::EqEmu,
+            ServerProtocol::Quarm,
+            ServerProtocol::Takp,
+        ] {
+            let server = server_type(protocol);
+            for world in ["Example EQEmu Server", "Project 1999: Green", ""] {
+                assert!(server.plays_on(world), "{protocol:?} {world}");
+            }
+        }
     }
 
     #[test]
