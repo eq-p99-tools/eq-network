@@ -583,6 +583,8 @@ pub struct OwnSpawn {
     pub walk_speed: f32,
     /// Protocol run speed, not world units per second.
     pub run_speed: f32,
+    /// How the player's gear and features look.
+    pub appearance: crate::appearance::Appearance,
 }
 
 /// Decode the own-character entry without retaining names or unused profile bytes.
@@ -605,6 +607,7 @@ pub fn own_spawn(body: &[u8], character: &str) -> Result<OwnSpawn> {
         size: nonnegative(body, 244)?,
         walk_speed: nonnegative(body, 260)?,
         run_speed: nonnegative(body, 264)?,
+        appearance: crate::appearance::eqmac_own_spawn(body),
     })
 }
 
