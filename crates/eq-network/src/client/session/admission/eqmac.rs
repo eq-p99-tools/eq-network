@@ -89,6 +89,7 @@ impl EqMacAdmission {
         player.size = spawn.size;
         player.walk_speed = spawn.walk_speed;
         player.run_speed = spawn.run_speed;
+        player.appearance = spawn.appearance;
         Ok(player)
     }
 }

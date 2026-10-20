@@ -305,13 +305,74 @@ pub(crate) fn titanium_spawn(record: &[u8]) -> Appearance {
 }
 
 /// Reads what an `EQMac` spawn record (TAKP's `mac_structs.h` `Spawn_Struct`,
-/// 224 bytes) says of the look here: whether the spawn is open to player
-/// combat at 92, its light at 94 and its fly mode at 100.
+/// 224 bytes) says of the look here: the hair and beard from 21, the tints
+/// from 40, whether the spawn is open to player combat at 92, its light at
+/// 94, its fly mode at 100, the face at 103 and the materials from 104.
 pub(crate) fn eqmac_spawn(record: &[u8]) -> Appearance {
     Appearance {
         pvp: record[92] != 0,
         light: record[94],
         fly_mode: FlyMode::from_wire(u32::from(record[100])),
+        ..eqmac_outfit(
+            record,
+            &EqMacOutfit {
+                materials: 104,
+                tints: 40,
+                face: 103,
+                hair: 21,
+            },
+        )
+    }
+}
+
+/// Reads the look from an `EQMac` player's own zone entry (TAKP's
+/// `ServerZoneEntry_Struct`, 356 bytes): the face at 183, the materials from
+/// 184, the tints from 204 and the hair and beard from 341.
+pub(crate) fn eqmac_own_spawn(record: &[u8]) -> Appearance {
+    eqmac_outfit(
+        record,
+        &EqMacOutfit {
+            materials: 184,
+            tints: 204,
+            face: 183,
+            hair: 341,
+        },
+    )
+}
+
+/// Where an `EQMac` record keeps the look.
+struct EqMacOutfit {
+    /// Nine 16-bit materials, in [`TextureSlot`] order.
+    materials: usize,
+    /// Nine tints, as Titanium's.
+    tints: usize,
+    /// The face.
+    face: usize,
+    /// The hair color, then the beard color, two eye colors (not read), the
+    /// hair style and the beard.
+    hair: usize,
+}
+
+/// The look an `EQMac` record gives. Its helm is always shown: TAKP sends a
+/// player's head material as 0 when they hide their helm (`zone/client.cpp`,
+/// `Client::FillSpawnStruct`, under `Quarm:UseFixedShowHelmBehavior`).
+fn eqmac_outfit(record: &[u8], at: &EqMacOutfit) -> Appearance {
+    Appearance {
+        materials: std::array::from_fn(|slot| {
+            u32::from(u16::from_le_bytes([
+                record[at.materials + slot * 2],
+                record[at.materials + slot * 2 + 1],
+            ]))
+        }),
+        tints: std::array::from_fn(|slot| {
+            tint(&record[at.tints + slot * 4..at.tints + slot * 4 + 4])
+        }),
+        face: record[at.face],
+        hair_color: record[at.hair],
+        beard_color: record[at.hair + 1],
+        hair_style: record[at.hair + 4],
+        beard: record[at.hair + 5],
+        show_helm: true,
         ..Appearance::default()
     }
 }
@@ -818,9 +879,75 @@ mod tests {
                 pvp: true,
                 light: 3,
                 fly_mode: FlyMode::Levitating,
+                show_helm: true,
                 ..Appearance::default()
             }
         );
+    }
+
+    /// Writes a look where `at` says: plate on the head (3), a robe on the
+    /// chest (10), model 300 in the secondary hand, a red tint on the head
+    /// and none elsewhere, face 4, hair color 2, beard color 5, eye colors
+    /// 6 and 7, hair style 1 and beard 3.
+    fn dressed(record: &mut [u8], at: &EqMacOutfit) {
+        record[at.materials..at.materials + 2].copy_from_slice(&3u16.to_le_bytes());
+        record[at.materials + 2..at.materials + 4].copy_from_slice(&10u16.to_le_bytes());
+        record[at.materials + 16..at.materials + 18].copy_from_slice(&300u16.to_le_bytes());
+        record[at.tints..at.tints + 4].copy_from_slice(&[0, 0, 200, 0xff]);
+        record[at.tints + 4..at.tints + 8].copy_from_slice(&[9, 9, 9, 0]);
+        record[at.face] = 4;
+        record[at.hair..at.hair + 6].copy_from_slice(&[2, 5, 6, 7, 1, 3]);
+    }
+
+    /// The look [`dressed`] writes.
+    fn dressed_look() -> Appearance {
+        let mut materials = [0; 9];
+        materials[0] = 3;
+        materials[1] = 10;
+        materials[8] = 300;
+        let mut tints = [None; 9];
+        tints[0] = Some([200, 0, 0]);
+        Appearance {
+            materials,
+            tints,
+            face: 4,
+            hair_color: 2,
+            beard_color: 5,
+            hair_style: 1,
+            beard: 3,
+            show_helm: true,
+            ..Appearance::default()
+        }
+    }
+
+    #[test]
+    fn eqmac_spawn_records_carry_the_gear_tints_face_and_hair() {
+        let mut record = [0u8; 224];
+        dressed(
+            &mut record,
+            &EqMacOutfit {
+                materials: 104,
+                tints: 40,
+                face: 103,
+                hair: 21,
+            },
+        );
+        assert_eq!(eqmac_spawn(&record), dressed_look());
+    }
+
+    #[test]
+    fn eqmac_own_entries_carry_the_gear_tints_face_and_hair() {
+        let mut record = [0u8; 356];
+        dressed(
+            &mut record,
+            &EqMacOutfit {
+                materials: 184,
+                tints: 204,
+                face: 183,
+                hair: 341,
+            },
+        );
+        assert_eq!(eqmac_own_spawn(&record), dressed_look());
     }
 
     #[test]

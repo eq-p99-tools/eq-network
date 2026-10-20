@@ -1155,6 +1155,13 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- `EQMac` spawns and the player's own zone entry carry their gear, tints,
+  face, hair and beard (`Appearance`), which were left at their defaults:
+  every `EQMac` character drew bare-headed and undressed, the player's own
+  helm hidden while the character list showed it (seen on local TAKP).
+  `Appearance::show_helm` is true on `EQMac`, since TAKP and Quarm send a
+  head material of 0 for a player who hides their helm.
+
 - A damage shield's record (`OP_Damage` of kinds 244 to 249,
   `combat::DAMAGE_SHIELD_KINDS`) reads as the points the shield dealt,
   `DamageOutcome::Hit`. Both servers send those points negated, so a
