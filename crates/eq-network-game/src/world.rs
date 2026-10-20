@@ -583,8 +583,8 @@ pub enum WorldEvent {
     CharacterCreation {
         /// Requested name.
         name: String,
-        /// Whether the character now exists; a new list follows on success.
-        accepted: bool,
+        /// How the world took it; a new list follows a created character.
+        outcome: crate::creation::CreationOutcome,
     },
     /// The world's short name from its log-server settings. The official client
     /// names per-character files after it, such as `UI_<character>_<short name>.ini`.

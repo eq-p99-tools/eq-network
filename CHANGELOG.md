@@ -7,6 +7,14 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- `WorldEvent::CharacterCreation` says how the world took the character
+  (`creation::CreationOutcome`: `Created`, `NameRefused`,
+  `CreationRefused`, or `NotSent` when nothing went to the world) in place
+  of `accepted`. Both generations' worlds refuse a name and a creation with
+  the same one-byte reply, which the session now tells apart by when it
+  comes; a creation refused after its name was approved read as a refused
+  name before (seen on local TAKP).
+
 - The session's spawn table keeps a character's new last name
   (`WorldEvent::LastName`, applied to the spawn of that name), which it
   passed over before.
