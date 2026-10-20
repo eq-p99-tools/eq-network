@@ -57,7 +57,7 @@ timeout never authorizes resending a non-idempotent action.
 
 This library workspace intentionally does not commit `Cargo.lock`. CI resolves
 dependencies for each toolchain: stable format, Clippy, tests and docs on Linux;
-native tests on Windows; Rust 1.88 minimum-version compilation. These checks
+native tests on Windows. These checks
 neither load proprietary assets nor connect to a live game server. A fresh
 downstream resolution and packaged-crate consumer remain release checks,
 because a downstream application owns its dependency lockfile.

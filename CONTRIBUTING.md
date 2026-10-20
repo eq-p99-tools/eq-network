@@ -24,7 +24,6 @@ cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 RUSTDOCFLAGS="-D warnings" cargo doc --workspace --all-features --no-deps
 cargo test --workspace --all-targets --all-features
-cargo +1.88.0 check --workspace --all-targets
 ```
 
 Every unsafe block is forbidden at the workspace lint level. Dependencies must
