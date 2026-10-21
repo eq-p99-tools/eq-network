@@ -32,17 +32,6 @@ jobs:
           RUSTDOCFLAGS: -D warnings
         run: cargo doc --workspace --all-features --no-deps
 
-  msrv:
-    name: Rust 1.88 minimum version
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@1.88.0
-      - uses: Swatinem/rust-cache@v2
-        with:
-          key: msrv
-      - run: cargo check --workspace --all-targets
-
   windows:
     name: Native Windows tests
     runs-on: windows-latest

@@ -162,7 +162,7 @@ mod tests {
             titanium_timer(&record(&[2, 1800, 0])).unwrap(),
             Reuse {
                 timer: 2,
-                remaining: Duration::from_secs(1800),
+                remaining: Duration::from_mins(30),
             }
         );
         assert_eq!(

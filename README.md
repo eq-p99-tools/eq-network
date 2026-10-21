@@ -124,7 +124,7 @@ explicit dialect/profile variants rather than conditionals in application code.
 
 ## Compatibility and safety
 
-- The minimum supported Rust version is 1.88.
+- The minimum supported Rust version is 1.99.
 - Public APIs follow semantic versioning. The crates begin at `0.1.0` while the
   extracted interfaces settle.
 - Credentials are redacted from `Debug` output and zeroized when their owners
