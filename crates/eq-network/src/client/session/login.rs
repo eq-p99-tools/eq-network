@@ -142,6 +142,7 @@ pub(super) fn titanium(
                     choice.refused(refusal, log)?;
                     continue;
                 }
+                session.send(3, &login_complete())?;
                 session.close()?;
                 let ip = choice.accepted(log)?.ip.clone();
                 let credentials = credentials.context("play response before authentication")?;
@@ -161,6 +162,16 @@ fn session_ready() -> [u8; 12] {
     ready[0] = 2;
     ready[10] = 8;
     ready
+}
+
+/// The body the Titanium client sends as opcode 3 once the play response
+/// accepts it, just before it ends the session: the 10-byte header with
+/// sequence 6 and nothing else (the 09-27 P99 capture). `EQEmu`'s login
+/// server has no handler for it.
+fn login_complete() -> [u8; 10] {
+    let mut complete = [0; 10];
+    complete[0] = 6;
+    complete
 }
 
 /// Asks the Titanium login server to play on a listed world.
@@ -475,6 +486,11 @@ mod tests {
             choice.list(shared_list(), &config, &mut log).unwrap(),
             Some(&2)
         );
+    }
+
+    #[test]
+    fn login_complete_is_sequence_6_and_nothing_else() {
+        assert_eq!(login_complete(), [6, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
     }
 
     #[test]
