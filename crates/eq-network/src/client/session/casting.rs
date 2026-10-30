@@ -318,8 +318,9 @@ impl Feature for Casting {
 }
 
 /// Sends the steps of an invisibility drop in the host's order, where the
-/// client generation sends them; a generation that sends none is only
-/// noted, and a step it cannot carry ends the rest.
+/// client generation sends them. Every step is encoded before any is sent,
+/// so a generation that sends none, or a step it cannot carry, sends
+/// nothing and is only noted.
 fn drop_invisibility(
     steps: &[eq_network_game::buffs::InvisibilityStep],
     out: &mut Out<'_, '_>,
