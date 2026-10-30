@@ -117,7 +117,13 @@ pub enum Request {
         accept: bool,
     },
     /// Invite a player into the player's group, by name.
-    InviteToGroup(String),
+    InviteToGroup {
+        /// Who.
+        name: String,
+        /// Whether the player leads a group already, which the `EQMac`
+        /// program sends its invitation differently for.
+        leading: bool,
+    },
     /// Join the group of the one who invited the player, by their name.
     FollowGroup(String),
     /// Decline an invitation, by the inviter's name.
@@ -213,7 +219,10 @@ pub enum Request {
     Depart,
     /// Report that the player bled out: the client's own death report, for
     /// a death the server leaves to it.
-    BledOut,
+    BledOut {
+        /// The player's level, which the report carries.
+        level: u8,
+    },
     /// Take a transfer the server offered or a zone line asked for.
     AnswerZoneOffer {
         /// The zone, or zero for the bind point the server resolves.
@@ -301,6 +310,25 @@ pub enum Request {
         /// How much, before the server's own reductions.
         amount: u32,
     },
+    /// The notice that Safe Fall lessened a fall.
+    SafeFall,
+    /// One step of dropping the player's invisibility, where the client
+    /// generation sends its steps.
+    DropInvisibility(crate::buffs::InvisibilityStep),
+    /// The notice that goes before the auto-attack toggle, where the client
+    /// generation sends one.
+    AttackNotice {
+        /// Whether attacking turns on.
+        enabled: bool,
+    },
+    /// The notice that goes before the damage report, where the client
+    /// generation sends one.
+    EnvironmentalNotice {
+        /// What did it.
+        hazard: Hazard,
+        /// How much.
+        amount: u32,
+    },
 }
 
 /// The Titanium client's packet for a request from this sender.
@@ -333,7 +361,7 @@ pub fn titanium(request: &Request, sender: Sender<'_>) -> Result<EncodedCommand>
         Request::AnswerTranslocate { offer, accept } => {
             confirmations::titanium_translocate_answer(offer, *accept)
         }
-        Request::InviteToGroup(name) => group::invite(name, sender.name)?,
+        Request::InviteToGroup { name, .. } => group::invite(name, sender.name)?,
         Request::FollowGroup(inviter) => group::follow(inviter, sender.name)?,
         Request::DeclineGroup(inviter) => group::decline(inviter, sender.name)?,
         Request::Disband => group::disband(sender.name)?,
@@ -385,7 +413,10 @@ pub fn titanium(request: &Request, sender: Sender<'_>) -> Result<EncodedCommand>
         } => zoning::titanium_answer(sender.name, (*zone_id, *instance_id), *position, *reason)?,
         Request::SaveOnZone => zoning::titanium_save_on_zone(),
         Request::Depart => zoning::titanium_depart(sender.spawn()),
-        Request::BledOut => anyhow::bail!("the Titanium client cannot send {request:?}"),
+        Request::EnvironmentalNotice { .. }
+        | Request::AttackNotice { .. }
+        | Request::DropInvisibility(_)
+        | Request::BledOut { .. } => anyhow::bail!("the Titanium client cannot send {request:?}"),
         Request::Memorize { gem, spell_id } => spells::titanium_memorize(*gem, *spell_id),
         Request::Forget { gem, spell_id } => spells::titanium_forget(*gem, *spell_id),
         Request::Scribe { slot, spell_id } => spells::titanium_scribe(*slot, *spell_id),
@@ -411,6 +442,7 @@ pub fn titanium(request: &Request, sender: Sender<'_>) -> Result<EncodedCommand>
         Request::EnvironmentalDamage { hazard, amount } => {
             hazards::titanium_damage(sender.spawn(), *hazard, *amount)?
         }
+        Request::SafeFall => hazards::safe_fall(true),
     })
 }
 
@@ -431,8 +463,25 @@ pub fn eqmac(request: &Request, sender: Sender<'_>) -> Result<EncodedCommand> {
         Request::EnvironmentalDamage { hazard, amount } => {
             hazards::eqmac_damage(sender.spawn(), *hazard, *amount)
         }
+        Request::EnvironmentalNotice { hazard, amount } => {
+            hazards::eqmac_notice(sender.spawn(), *hazard, *amount)
+        }
+        Request::SafeFall => Ok(hazards::safe_fall(false)),
+        Request::DropInvisibility(crate::buffs::InvisibilityStep::State(state)) => {
+            crate::quarm::invisibility(sender.spawn(), *state)
+        }
+        Request::DropInvisibility(step) => Ok(EncodedCommand {
+            opcode: crate::buffs::EQMAC_BUFF_OPCODE,
+            body: crate::buffs::eqmac_fade(sender.spawn(), *step)?.to_vec(),
+        }),
+        Request::AttackNotice { enabled } => Ok(EncodedCommand {
+            opcode: crate::combat::EQMAC_AUTO_ATTACK2_OPCODE,
+            body: crate::combat::auto_attack(*enabled).to_vec(),
+        }),
         Request::Command(command) => command::encode(GameDialect::EqMac, command, sender.name),
-        Request::InviteToGroup(name) => group::eqmac_invite(name, sender.name),
+        Request::InviteToGroup { name, leading } => {
+            group::eqmac_invite(name, sender.name, *leading)
+        }
         Request::FollowGroup(inviter) => group::eqmac_follow(inviter, sender.name),
         Request::DeclineGroup(inviter) => group::eqmac_decline(inviter, sender.name),
         Request::Disband => group::eqmac_disband(sender.name),
@@ -463,7 +512,7 @@ pub fn eqmac(request: &Request, sender: Sender<'_>) -> Result<EncodedCommand> {
         Request::Scribe { slot, spell_id } => spells::eqmac_scribe(*slot, *spell_id),
         Request::SwapSpells { from, to } => spells::eqmac_swap(*from, *to),
         Request::MoveCoins(transfer) => transfer.encode_eqmac(),
-        Request::BledOut => crate::quarm::bled_out(sender.spawn()),
+        Request::BledOut { level } => crate::quarm::bled_out(sender.spawn(), *level),
         Request::AnswerSacrifice { offer, accept } => {
             Ok(confirmations::eqmac_sacrifice_answer(offer, *accept))
         }
@@ -544,18 +593,38 @@ mod tests {
     }
 
     #[test]
+    fn only_the_eqmac_client_drops_invisibility_as_its_program_does() {
+        use crate::buffs::InvisibilityStep;
+        let state = eqmac(
+            &Request::DropInvisibility(InvisibilityStep::State(0)),
+            PLAYER,
+        )
+        .unwrap();
+        assert_eq!(state.opcode, crate::quarm::ZONE_SPAWN_APPEARANCE);
+        assert_eq!(state.body, [7, 0, 3, 0, 0, 0, 0, 0]);
+        let fade = InvisibilityStep::Fade {
+            slot: 1,
+            spell_id: 42,
+        };
+        let buff = eqmac(&Request::DropInvisibility(fade), PLAYER).unwrap();
+        assert_eq!(buff.opcode, crate::buffs::EQMAC_BUFF_OPCODE);
+        assert_eq!(buff.body, crate::buffs::eqmac_fade(7, fade).unwrap());
+        assert!(titanium(&Request::DropInvisibility(fade), PLAYER).is_err());
+    }
+
+    #[test]
     fn only_the_eqmac_client_reports_that_it_bled_out() {
         assert_eq!(
-            eqmac(&Request::BledOut, PLAYER).unwrap(),
-            crate::quarm::bled_out(7).unwrap()
+            eqmac(&Request::BledOut { level: 34 }, PLAYER).unwrap(),
+            crate::quarm::bled_out(7, 34).unwrap()
         );
         // Without a spawn there is no one to report.
         let unspawned = Sender {
             spawn_id: None,
             ..PLAYER
         };
-        assert!(eqmac(&Request::BledOut, unspawned).is_err());
-        assert!(titanium(&Request::BledOut, PLAYER).is_err());
+        assert!(eqmac(&Request::BledOut { level: 34 }, unspawned).is_err());
+        assert!(titanium(&Request::BledOut { level: 34 }, PLAYER).is_err());
     }
 
     #[test]

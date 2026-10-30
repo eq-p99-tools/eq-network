@@ -83,10 +83,7 @@ pub(super) fn titanium(
         false,
         stop.flag(),
     )?;
-    let mut ready = vec![0; 12];
-    ready[0] = 2;
-    ready[9] = 8;
-    session.send(1, &ready)?;
+    session.send(1, &session_ready())?;
     let mut deadline = Instant::now() + ANSWER_LIMIT;
     let mut credentials = None;
     let mut choice = WorldChoice::default();
@@ -154,6 +151,16 @@ pub(super) fn titanium(
             _ => unheard.tell(&Titanium, packet.opcode, packet.body.len(), log)?,
         }
     }
+}
+
+/// The session-ready body: the 10-byte header with sequence 2, then a 16-bit
+/// 8 at +10, where the Titanium client writes it (from the program:
+/// titanium-login-l1-part2, L-b; the 09-27 P99 capture agrees).
+fn session_ready() -> [u8; 12] {
+    let mut ready = [0; 12];
+    ready[0] = 2;
+    ready[10] = 8;
+    ready
 }
 
 /// Asks the Titanium login server to play on a listed world.
@@ -328,7 +335,14 @@ impl<T> WorldChoice<T> {
     }
 }
 
+/// The error string `EQEmu`'s login server names in a refused login's reply
+/// (`loginserver/client.cpp` `SendFailedLogin`): the account or password
+/// was wrong.
+const BAD_CREDENTIALS_STRING: u32 = 105;
+
 /// Use the SSO crate's failure signature before parsing the successful session key.
+/// `EQEmu`'s own refusal, success 0 with error string 105, also reads as a
+/// wrong account or password, so the player is told so.
 fn login_credentials(body: &[u8]) -> Result<Credentials> {
     let mut application = 0x17u16.to_le_bytes().to_vec();
     application.extend_from_slice(body);
@@ -342,6 +356,9 @@ fn login_credentials(body: &[u8]) -> Result<Credentials> {
         DesKeyIv::default(),
     )?);
     ensure!(clear.len() >= 23, "invalid login response");
+    if clear[0] == 0 && le32(&clear[1..5]) == BAD_CREDENTIALS_STRING {
+        return Err(LoginError::InvalidCredentials.into());
+    }
     let account = le32(&clear[8..12]);
     ensure!(
         account != 0 && account != u32::MAX && clear[0] == 1,
@@ -461,6 +478,18 @@ mod tests {
     }
 
     #[test]
+    fn session_ready_puts_its_8_at_10_and_nowhere_else() {
+        let ready = session_ready();
+        assert_eq!(ready.len(), 12);
+        assert_eq!(ready[0], 2);
+        assert_eq!(ready[10], 8);
+        assert!(ready
+            .iter()
+            .enumerate()
+            .all(|(at, &byte)| at == 0 || at == 10 || byte == 0));
+    }
+
+    #[test]
     fn valid_session_keys_and_malformed_responses_are_not_bad_passwords() {
         let mut clear = vec![0; 32];
         clear[0] = 1;
@@ -477,5 +506,27 @@ mod tests {
             let error = login_credentials(&body[..length]).err().unwrap();
             assert!(!error.is::<LoginError>());
         }
+    }
+
+    #[test]
+    fn eqemus_refusal_reads_as_a_wrong_account_or_password() {
+        // `SendFailedLogin`: everything zero but success false and string 105.
+        let mut clear = vec![0; 32];
+        clear[1..5].copy_from_slice(&105u32.to_le_bytes());
+        let mut body = vec![0; 10];
+        body[0] = 3;
+        body[5] = 2;
+        body.extend(des_encrypt(&clear, DesKeyIv::default()));
+        let error = login_credentials(&body).err().unwrap();
+        assert!(matches!(
+            error.downcast_ref::<LoginError>(),
+            Some(LoginError::InvalidCredentials)
+        ));
+        // Another refusal is still only a rejection.
+        clear[1..5].copy_from_slice(&106u32.to_le_bytes());
+        body.truncate(10);
+        body.extend(des_encrypt(&clear, DesKeyIv::default()));
+        let error = login_credentials(&body).err().unwrap();
+        assert!(!error.is::<LoginError>());
     }
 }

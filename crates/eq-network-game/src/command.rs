@@ -294,6 +294,9 @@ pub enum GameCommand {
         session_id: u64,
         /// Merchant entity.
         merchant_id: u16,
+        /// Own spawn identifier from this admission, which the `EQMac`
+        /// program names in its sale.
+        own_id: u16,
         /// Inventory slot.
         slot: i32,
         /// Units to sell.
@@ -349,8 +352,13 @@ pub enum GameCommand {
         session_id: u64,
         /// What did it.
         hazard: crate::hazards::Hazard,
-        /// How much, before the server's own reductions.
+        /// How much, before the server's own reductions; none where Safe
+        /// Fall took it all.
         amount: u32,
+        /// Whether the player's Safe Fall skill lessened a fall, which both
+        /// programs announce before the damage, even when nothing is left of
+        /// it ([`crate::hazards::safe_fall`]).
+        safe_fall: bool,
     },
     /// Eat or drink the item in a slot by hand. The session eats and drinks
     /// on its own when the player turns hungry or thirsty.
@@ -468,6 +476,15 @@ pub enum GameCommand {
         session_id: u64,
         /// True accepts.
         accept: bool,
+    },
+    /// Drop the player's invisibility as the client generation's program
+    /// does before a cast, a song or an item's click: the steps in order.
+    /// It never expires, since the cast that follows needs it done.
+    DropInvisibility {
+        /// Current zone admission.
+        session_id: u64,
+        /// The steps, in the program's order.
+        steps: Vec<crate::buffs::InvisibilityStep>,
     },
     /// Invite a player into the player's group, by name: `/invite`.
     InviteToGroup {
@@ -672,6 +689,7 @@ impl GameCommand {
             | Self::AnswerResurrection { session_id, .. }
             | Self::AnswerSacrifice { session_id, .. }
             | Self::AnswerTranslocate { session_id, .. }
+            | Self::DropInvisibility { session_id, .. }
             | Self::InviteToGroup { session_id, .. }
             | Self::FollowGroup { session_id }
             | Self::DeclineGroup { session_id }
@@ -717,7 +735,9 @@ impl GameCommand {
             Self::DeleteSpell { .. } => Capability::DeletingSpells,
             Self::SwapSpell { .. } => Capability::MovingSpells,
             // An item's click effect is a cast.
-            Self::CastSpell { .. } | Self::UseItem(_) => Capability::Casting,
+            Self::CastSpell { .. } | Self::UseItem(_) | Self::DropInvisibility { .. } => {
+                Capability::Casting
+            }
             Self::ClickDoor { .. } => Capability::Doors,
             Self::PickUp { .. } => Capability::GroundItems,
             Self::CrossZoneLine { .. } => Capability::Zoning,
@@ -725,7 +745,7 @@ impl GameCommand {
                 Capability::Moving
             }
             // Only a server that takes falls from the client lets the player jump.
-            Self::Jump { .. } => Capability::Falling,
+            Self::Jump { .. } => Capability::Jumping,
             Self::EnvironmentalDamage { .. } => Capability::EnvironmentalDamage,
             Self::MoveInventory(_) | Self::Consume { .. } | Self::AutoEat { .. } => {
                 Capability::Inventory
@@ -805,6 +825,7 @@ impl GameCommand {
             | Self::AnswerResurrection { .. }
             | Self::AnswerSacrifice { .. }
             | Self::AnswerTranslocate { .. }
+            | Self::DropInvisibility { .. }
             | Self::InviteToGroup { .. }
             | Self::FollowGroup { .. }
             | Self::DeclineGroup { .. }
@@ -938,12 +959,13 @@ fn encode_eqmac_trade(command: &GameCommand) -> Result<EncodedCommand> {
         ),
         GameCommand::Sell {
             merchant_id,
+            own_id,
             slot,
             quantity,
             ..
         } => (
             crate::merchant::EQMAC_SELL_OPCODE,
-            crate::merchant::eqmac_sell(*merchant_id, *slot, *quantity)?.to_vec(),
+            crate::merchant::eqmac_sell(*merchant_id, *own_id, *slot, *quantity)?.to_vec(),
         ),
         _ => anyhow::bail!("looting is not implemented for the EQMac client"),
     };
@@ -1028,6 +1050,7 @@ pub fn encode(
         | GameCommand::AnswerResurrection { .. }
         | GameCommand::AnswerSacrifice { .. }
         | GameCommand::AnswerTranslocate { .. }
+        | GameCommand::DropInvisibility { .. }
         | GameCommand::InviteToGroup { .. }
         | GameCommand::FollowGroup { .. }
         | GameCommand::DeclineGroup { .. }
@@ -1432,6 +1455,7 @@ mod tests {
                 GameCommand::Sell {
                     session_id: 1,
                     merchant_id: 9,
+                    own_id: 7,
                     slot: 23,
                     quantity: 1,
                     created,

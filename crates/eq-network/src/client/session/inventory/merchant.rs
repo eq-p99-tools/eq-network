@@ -384,6 +384,7 @@ mod tests {
         ClientCommand::Sell {
             session_id: 1,
             merchant_id: 7,
+            own_id: 3,
             slot,
             quantity: 2,
             created: Instant::now(),

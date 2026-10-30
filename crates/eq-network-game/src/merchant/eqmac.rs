@@ -23,10 +23,11 @@ pub const EQMAC_END_OPCODE: u16 = 0x3740;
 pub const EQMAC_END_CONFIRM_OPCODE: u16 = 0x4641;
 
 /// `EQMac`'s request opening a merchant (`Merchant_Click_Struct`, 12 bytes):
-/// the merchant, the player, 1 to open, three unknown bytes and a rate.
-/// TAKP reads only the merchant (`Client::Handle_OP_ShopRequest`); the
-/// unknown bytes go as 0 and the rate as 1, as on Titanium (inferred: the
-/// official client's are unrecorded).
+/// the merchant and the player. The program writes nothing after them (from
+/// the program, TAKP Batch 1 R7; checklist 6.170), so the command, its pad
+/// and the rate stay 0; TAKP decodes only a 12-byte body and reads only the
+/// merchant (`common/patches/mac.cpp`, `Client::Handle_OP_ShopRequest`;
+/// Settle results S4).
 ///
 /// # Errors
 /// Rejects reserved zero IDs.
@@ -38,8 +39,6 @@ pub fn eqmac_request(merchant_id: u16, player_id: u16) -> Result<[u8; 12]> {
     let mut body = [0; 12];
     body[..2].copy_from_slice(&merchant_id.to_le_bytes());
     body[2..4].copy_from_slice(&player_id.to_le_bytes());
-    body[4] = 1;
-    body[8..].copy_from_slice(&1.0f32.to_le_bytes());
     Ok(body)
 }
 
@@ -61,11 +60,12 @@ pub fn eqmac_end(merchant_id: u16, player_id: u16) -> Result<[u8; 4]> {
     Ok(body)
 }
 
-/// `EQMac`'s purchase (`Merchant_Sell_Struct`, 16 bytes): the merchant, the
-/// player, the item's place on the list, a sold flag and a pad byte, the
-/// count, three pad bytes and a price. TAKP prices the purchase itself
-/// (`Client::Handle_OP_ShopPlayerBuy`), so the price goes as 0 (inferred:
-/// the official client's is unrecorded).
+/// `EQMac`'s purchase (`Merchant_Sell_Struct`, 16 bytes), as the program
+/// writes it (from the program, TAKP Batch 1 R7; checklist 6.170): the
+/// merchant, the player, the item's place on the list, and the count as 32
+/// bits at 8. The program never writes 6, 7 or the price at 12, which stay
+/// 0; TAKP prices the purchase itself (`Client::Handle_OP_ShopPlayerBuy`).
+/// The count stays within the byte TAKP reads.
 ///
 /// # Errors
 /// Rejects zero IDs, a place past 16 bits and a count of 0 or past 255.
@@ -80,22 +80,26 @@ pub fn eqmac_buy(merchant_id: u16, player_id: u16, slot: u32, quantity: u32) -> 
     body[..2].copy_from_slice(&merchant_id.to_le_bytes());
     body[2..4].copy_from_slice(&player_id.to_le_bytes());
     body[4..6].copy_from_slice(&place.to_le_bytes());
-    body[8] = count;
+    body[8..12].copy_from_slice(&u32::from(count).to_le_bytes());
     Ok(body)
 }
 
-/// `EQMac`'s sale (`Merchant_Purchase_Struct`, 16 bytes): the merchant, the
-/// player, the item's slot in `EQMac`'s numbers, a price, the count and
-/// seven pad bytes. TAKP reads neither the player nor the price (its
-/// decoder leaves the player out, and `Client::Handle_OP_ShopPlayerSell`
-/// prices the sale), so both go as 0 (inferred: the official client's are
-/// unrecorded).
+/// `EQMac`'s sale (`Merchant_Purchase_Struct`, 16 bytes), as the program
+/// writes it (from the program, TAKP Batch 1 R7; checklist 6.170): the
+/// merchant, the player's own spawn, the item's slot in `EQMac`'s numbers,
+/// and the count as 32 bits at 8. The program never writes 6, 7 or the
+/// price at 12, which stay 0. TAKP reads neither the player nor the price
+/// (its decoder leaves the player out, and `Client::Handle_OP_ShopPlayerSell`
+/// prices the sale); the count stays within the byte it reads.
 ///
 /// # Errors
-/// Rejects a zero merchant ID, a slot `EQMac` has no number for, and a count
-/// of 0 or past 255.
-pub fn eqmac_sell(merchant_id: u16, slot: i32, quantity: u32) -> Result<[u8; 16]> {
-    ensure!(merchant_id != 0, "shopping requires a merchant");
+/// Rejects zero IDs, a slot `EQMac` has no number for, and a count of 0 or
+/// past 255.
+pub fn eqmac_sell(merchant_id: u16, player_id: u16, slot: i32, quantity: u32) -> Result<[u8; 16]> {
+    ensure!(
+        merchant_id != 0 && player_id != 0,
+        "shopping requires two entities"
+    );
     let mac = InventorySlot(slot)
         .to_eqmac()
         .and_then(|slot| u16::try_from(slot).ok())
@@ -103,8 +107,9 @@ pub fn eqmac_sell(merchant_id: u16, slot: i32, quantity: u32) -> Result<[u8; 16]
     let count = count(quantity, "sell")?;
     let mut body = [0; 16];
     body[..2].copy_from_slice(&merchant_id.to_le_bytes());
+    body[2..4].copy_from_slice(&player_id.to_le_bytes());
     body[4..6].copy_from_slice(&mac.to_le_bytes());
-    body[8] = count;
+    body[8..12].copy_from_slice(&u32::from(count).to_le_bytes());
     Ok(body)
 }
 
@@ -233,9 +238,11 @@ mod tests {
 
     #[test]
     fn requests_are_takps_sixteen_bit_layouts() {
-        let open = eqmac_request(900, 7).unwrap();
-        assert_eq!(open[..8], [132, 3, 7, 0, 1, 0, 0, 0]);
-        assert_eq!(open[8..], 1.0f32.to_le_bytes());
+        // The program writes only the merchant and the player.
+        assert_eq!(
+            eqmac_request(900, 7).unwrap(),
+            [132, 3, 7, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+        );
         assert_eq!(eqmac_end(900, 7).unwrap(), [132, 3, 7, 0]);
         assert_eq!(
             eqmac_buy(900, 7, 3, 2).unwrap(),
@@ -244,23 +251,25 @@ mod tests {
         // A sale names the slot in EQMac's numbers: the second bag's first
         // place, 262 here, is 261 there.
         assert_eq!(
-            eqmac_sell(900, 262, 1).unwrap(),
-            [132, 3, 0, 0, 5, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0]
+            eqmac_sell(900, 7, 262, 1).unwrap(),
+            [132, 3, 7, 0, 5, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0]
         );
-        assert_eq!(eqmac_sell(900, 23, 20).unwrap()[4..6], [23, 0]);
+        assert_eq!(eqmac_sell(900, 7, 23, 20).unwrap()[4..6], [23, 0]);
         assert!(eqmac_request(0, 7).is_err());
         assert!(eqmac_end(900, 0).is_err());
         assert!(eqmac_buy(900, 7, 3, 0).is_err());
         assert!(eqmac_buy(900, 7, 3, 256).is_err());
         assert!(eqmac_buy(900, 7, 0x1_0000, 1).is_err());
         // The charm has no EQMac number.
-        assert!(eqmac_sell(900, 0, 1).is_err());
-        assert!(eqmac_sell(0, 23, 1).is_err());
+        assert!(eqmac_sell(900, 7, 0, 1).is_err());
+        assert!(eqmac_sell(0, 7, 23, 1).is_err());
+        assert!(eqmac_sell(900, 0, 23, 1).is_err());
     }
 
     #[test]
     fn the_answer_list_echoes_and_closing_decode() {
         let mut answer = eqmac_request(900, 7).unwrap();
+        answer[4] = 1;
         answer[8..].copy_from_slice(&1.25f32.to_le_bytes());
         assert_eq!(
             decode_eqmac(EQMAC_REQUEST_OPCODE, &answer).unwrap(),
@@ -323,7 +332,7 @@ mod tests {
                 price: 0
             }])
         );
-        let mut sale = eqmac_sell(900, 262, 1).unwrap();
+        let mut sale = eqmac_sell(900, 7, 262, 1).unwrap();
         sale[6..8].copy_from_slice(&65535u16.to_le_bytes());
         assert_eq!(
             decode_eqmac(EQMAC_SELL_OPCODE, &sale).unwrap(),

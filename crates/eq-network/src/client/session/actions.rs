@@ -143,6 +143,8 @@ pub(super) fn needs(command: &ClientCommand) -> &'static [Resource] {
         | ClientCommand::Jump { .. }
         // Damage done holds nothing back.
         | ClientCommand::EnvironmentalDamage { .. }
+        // Nor does dropping invisibility, which goes before the cast.
+        | ClientCommand::DropInvisibility { .. }
         | ClientCommand::AutoAttack { .. }
         | ClientCommand::UseAbility { .. }
         | ClientCommand::SelectTarget { .. }
@@ -344,6 +346,7 @@ fn refusal(command: &ClientCommand, reason: &str) -> Option<WorldEvent> {
         | ClientCommand::CancelTrade { .. }
         | ClientCommand::Jump { .. }
         | ClientCommand::EnvironmentalDamage { .. }
+        | ClientCommand::DropInvisibility { .. }
         | ClientCommand::AutoAttack { .. }
         | ClientCommand::WhoAll { .. }
         | ClientCommand::ConfigureMotion { .. }

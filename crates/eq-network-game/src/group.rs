@@ -214,17 +214,27 @@ pub fn disband(player: &str) -> Result<EncodedCommand> {
 }
 
 /// The packets the `EQMac` client sends for the same requests, with its own
-/// opcodes; its invitation carries 65 more bytes, zero (inferred: what the
-/// official client writes there is unrecorded, and TAKP passes it on
-/// unread).
+/// opcodes. The program invites with `OP_GroupInvite` (0x203e), or with
+/// `OP_GroupInvite2` (0x4040) when the player leads a group already (from
+/// the program, TAKP Batch 1 R9b); the session calls a player whose group's
+/// leader it was never told the leader of no leader. Its invitation carries
+/// 65 more bytes: an empty string at 128, nothing at 129 to 191, and at 192
+/// a byte of the player's spawn that is likely its player-versus-player flag (unsure). They
+/// go as 0: `EQMacEmu` takes both opcodes alike and passes the body to the
+/// invitee unread (`zone/client_packet.cpp` `Handle_OP_GroupInvite2`,
+/// Settle results S5).
 ///
 /// # Errors
 /// Rejects a name its field cannot hold.
-pub fn eqmac_invite(player: &str, inviter: &str) -> Result<EncodedCommand> {
+pub fn eqmac_invite(player: &str, inviter: &str, leading: bool) -> Result<EncodedCommand> {
     let mut body = names(player, inviter)?;
     body.resize(NAME * 2 + EQMAC_INVITE_TAIL, 0);
     Ok(EncodedCommand {
-        opcode: EQMAC_INVITE_OPCODE,
+        opcode: if leading {
+            EQMAC_INVITE2_OPCODE
+        } else {
+            EQMAC_INVITE_OPCODE
+        },
         body,
     })
 }
@@ -404,7 +414,7 @@ mod tests {
 
     #[test]
     fn eqmac_sends_the_same_requests_with_its_own_opcodes() {
-        let invited = eqmac_invite("Friend", "Tester").unwrap();
+        let invited = eqmac_invite("Friend", "Tester", false).unwrap();
         assert_eq!(
             (invited.opcode, invited.body.len()),
             (EQMAC_INVITE_OPCODE, 193)
@@ -432,7 +442,14 @@ mod tests {
             (left.opcode, left.body),
             (EQMAC_DISBAND_OPCODE, disband("Tester").unwrap().body)
         );
-        assert!(eqmac_invite("", "Tester").is_err());
+        assert!(eqmac_invite("", "Tester", false).is_err());
+        // A leader invites with the second opcode, and the same body.
+        let led = eqmac_invite("Friend", "Tester", true).unwrap();
+        assert_eq!(led.opcode, EQMAC_INVITE2_OPCODE);
+        assert_eq!(
+            led.body,
+            eqmac_invite("Friend", "Tester", false).unwrap().body
+        );
     }
 
     #[test]

@@ -575,7 +575,7 @@ mod tests {
     };
 
     /// How many kinds of command there are.
-    const KINDS: usize = 71;
+    const KINDS: usize = 72;
 
     /// The kinds the login and world servers take, before any zone session.
     const BEFORE_ZONES: [usize; 3] = [0, 1, 70];
@@ -658,6 +658,7 @@ mod tests {
             ClientCommand::AnswerTranslocate { .. } => 69,
             // The login server's, before the world.
             ClientCommand::SelectServer { .. } => 70,
+            ClientCommand::DropInvisibility { .. } => 71,
         }
     }
 
@@ -802,6 +803,7 @@ mod tests {
             ClientCommand::Sell {
                 session_id,
                 merchant_id: 9,
+                own_id: 7,
                 slot: 22,
                 quantity: 1,
                 created,
@@ -915,6 +917,10 @@ mod tests {
                 session_id,
                 accept: true,
             },
+            ClientCommand::DropInvisibility {
+                session_id,
+                steps: vec![eq_network_game::buffs::InvisibilityStep::State(0)],
+            },
             ClientCommand::InviteToGroup {
                 session_id,
                 name: "Friend".into(),
@@ -981,6 +987,7 @@ mod tests {
                 session_id,
                 hazard: eq_network_game::hazards::Hazard::Falling,
                 amount: 160,
+                safe_fall: false,
             },
         ]
     }
@@ -1245,7 +1252,8 @@ mod tests {
         // Transfers heard the death the session made happen, and once the
         // death pause was over, the player asked their way home.
         assert!(world.lifecycle.is_dead());
-        assert_eq!(outcome.sent[0], quarm::bled_out(7).unwrap());
+        let level = world.player.as_ref().unwrap().level;
+        assert_eq!(outcome.sent[0], quarm::bled_out(7, level).unwrap());
         assert_eq!(outcome.sent[1].opcode, quarm::ZONE_CHANGE);
         assert_eq!(outcome.sent.len(), 2);
         // The host heard the threshold at admission, and then the death, as
@@ -1423,14 +1431,16 @@ mod tests {
             Capability::Sacrifice,
             Capability::Translocate,
             Capability::ServerTicks,
+            Capability::Jumping,
         ] {
             assert!(eqemu.contains(&capability));
             assert!(!p99.contains(&capability));
         }
-        assert_eq!(eqemu.len(), p99.len() + 18);
+        assert_eq!(eqemu.len(), p99.len() + 19);
         // EQMac servers talk; TAKP also casts, keeps the spellbook, camps,
-        // moves and moves items, follows zone changes and takes the client's
-        // report of a bleed-out, which Quarm does not yet.
+        // moves, falls and moves items, follows zone changes and takes the
+        // client's reports of a fall and a bleed-out, which Quarm does not
+        // yet.
         assert_eq!(
             features(crate::client::ServerProtocol::Quarm),
             [Capability::Talking]
@@ -1443,12 +1453,14 @@ mod tests {
                 Capability::Inventory,
                 Capability::Trading,
                 Capability::Moving,
+                Capability::Falling,
                 Capability::Targeting,
                 Capability::Combat,
                 Capability::Talking,
                 Capability::Camping,
                 Capability::Zoning,
                 Capability::Grouping,
+                Capability::EnvironmentalDamage,
                 Capability::BleedingOut
             ]
         );

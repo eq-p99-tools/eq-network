@@ -22,7 +22,9 @@ pub(in crate::client) fn eqmac(opcode: u16) -> Option<ServerMessage> {
     Some(match opcode {
         0x0042 => sent("OP_Assist", EQMAC, unasked(EqMacWorld)),
         0x0180 => sent("OP_EnterWorld", EQMAC, Read(&[World])),
-        0x0200 => sent("OP_ClientError", TAKP, Read(&[Login])),
+        // The login server's error, which TAKP's login names OP_ClientError;
+        // the zone's OP_ClientError is another message (0x4148).
+        0x0200 => sent("the login server's error", TAKP, Read(&[Login])),
         0x0400 => sent("OP_LoginAccepted", TAKP, Read(&[Login])),
         0x0442 => sent("OP_GuildMOTD", EQMAC, Read(&[Chat])),
         0x0480 => sent("OP_ZoneServerInfo", EQMAC, Read(&[World])),

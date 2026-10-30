@@ -424,7 +424,7 @@ pub enum Capability {
     Giving,
     /// Walking, running, sitting and standing.
     Moving,
-    /// Jumping and falling, which the server takes from the client.
+    /// Falling, which the server takes from the client.
     Falling,
     /// Choosing a target.
     Targeting,
@@ -509,12 +509,15 @@ pub enum Capability {
     /// packets the server sends at it ([`WorldEvent::ServerTick`]). The
     /// session sends nothing for it.
     ServerTicks,
+    /// Jumping, where the client generation's notice of a jump is known and
+    /// the server takes falls.
+    Jumping,
 }
 
 impl Capability {
     /// Every capability, in order: what a session offers when its server and
     /// client generation support everything.
-    pub const ALL: [Self; 39] = [
+    pub const ALL: [Self; 40] = [
         Self::Casting,
         Self::Spellbook,
         Self::Inventory,
@@ -554,6 +557,7 @@ impl Capability {
         Self::Sacrifice,
         Self::Translocate,
         Self::ServerTicks,
+        Self::Jumping,
     ];
 }
 
@@ -1854,6 +1858,7 @@ mod tests {
             Capability::Sacrifice => 36,
             Capability::Translocate => 37,
             Capability::ServerTicks => 38,
+            Capability::Jumping => 39,
         };
         for (index, capability) in Capability::ALL.into_iter().enumerate() {
             assert_eq!(place(capability), index, "{capability:?}");

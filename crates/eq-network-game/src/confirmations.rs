@@ -49,13 +49,16 @@ const COMPLETE: usize = 88;
 /// The length of the caster's name field.
 const NAME: usize = 64;
 
-/// The reason TAKP's client is taken to give its transfer request once a
-/// translocate lets it go (`ZC_TranslocateSpell2`, TAKP's
-/// `common/eq_constants.h`: a zone command with the caster's name in the
-/// packet), inferred: TAKP takes any reason but 0 there
-/// (`Client::Handle_OP_ZoneChange`), and the official client's is
-/// unrecorded.
+/// The reason the `EQMac` program gives its transfer request once a
+/// translocate to another zone lets it go, when the record names a caster
+/// (from the program, TAKP Batch 1 R8; checklist 6.253). The program's
+/// other reasons are 0 for a zone line, 2 for a boat, 3, 5 for going to a
+/// player, 6 for a gate, 9 for a resurrection and 10 for a death's return,
+/// and the server move's own; the session gives those it originates as the
+/// server's offer says, until the program's triggers for them are read.
 const TRANSLOCATED: u32 = 8;
+/// The reason it gives when the record names no caster.
+const TRANSLOCATED_UNNAMED: u32 = 4;
 
 /// An offer to sacrifice the player.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -117,7 +120,6 @@ fn translocate(body: &[u8]) -> Result<(TranslocateOffer, u32)> {
     ensure!(body.len() == TRANSLOCATE, "invalid translocate length");
     let caster =
         String::from_utf8_lossy(crate::world::until_nul(&body[CASTER..CASTER + NAME])).into_owned();
-    ensure!(!caster.is_empty(), "translocate offer without a caster");
     let float = |at| f32::from_bits(word(body, at));
     // The record carries y before x.
     let (y, x, z) = (float(POSITION), float(POSITION + 4), float(POSITION + 8));
@@ -149,6 +151,10 @@ fn translocate(body: &[u8]) -> Result<(TranslocateOffer, u32)> {
 pub fn titanium_translocate(body: &[u8]) -> Result<TranslocateOffer> {
     let (offer, complete) = translocate(body)?;
     ensure!(complete == 0, "translocate record is not an offer");
+    ensure!(
+        !offer.caster.is_empty(),
+        "translocate offer without a caster"
+    );
     Ok(offer)
 }
 
@@ -159,16 +165,27 @@ pub fn titanium_translocate(body: &[u8]) -> Result<TranslocateOffer> {
 /// unrecorded).
 ///
 /// # Errors
-/// As [`titanium_translocate`], but for an answer of 1.
+/// As [`titanium_translocate`], but for an answer of 1, whose record may
+/// name no caster.
 pub fn eqmac_translocate(body: &[u8]) -> Result<Translocate> {
     let (offer, complete) = translocate(body)?;
     Ok(match complete {
-        0 => Translocate::Offer(offer),
+        0 => {
+            ensure!(
+                !offer.caster.is_empty(),
+                "translocate offer without a caster"
+            );
+            Translocate::Offer(offer)
+        }
         1 => Translocate::Go(ZoneOffer {
             zone_id: offer.zone_id,
             instance_id: 0,
             position: offer.position,
-            reason: TRANSLOCATED,
+            reason: if offer.caster.is_empty() {
+                TRANSLOCATED_UNNAMED
+            } else {
+                TRANSLOCATED
+            },
             to_bind: false,
             solicited: true,
         }),
@@ -350,6 +367,20 @@ mod tests {
         );
         assert!(titanium_translocate(&go).is_err());
         assert!(eqmac_translocate(&translocate_record(-1)).is_err());
+        // A word naming no caster asks with the other reason; an offer
+        // naming none is no offer.
+        let mut unnamed = go;
+        unnamed[CASTER..CASTER + NAME].fill(0);
+        assert!(matches!(
+            eqmac_translocate(&unnamed).unwrap(),
+            Translocate::Go(ZoneOffer {
+                reason: TRANSLOCATED_UNNAMED,
+                ..
+            })
+        ));
+        let mut offer = translocate_record(0);
+        offer[CASTER..CASTER + NAME].fill(0);
+        assert!(eqmac_translocate(&offer).is_err());
     }
 
     #[test]

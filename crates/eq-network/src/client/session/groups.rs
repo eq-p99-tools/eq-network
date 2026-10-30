@@ -152,8 +152,17 @@ impl Feature for Groups {
                 if let Some((reason, string_id)) = self.refusal(name, out.sender.name) {
                     return actions::refuse_officially(command, (reason, Some(string_id)), out.log);
                 }
+                let leading = self.group.as_ref().is_some_and(|group| {
+                    group
+                        .leader
+                        .as_ref()
+                        .is_some_and(|leader| leader.eq_ignore_ascii_case(out.sender.name))
+                });
                 send(
-                    &Request::InviteToGroup(name.to_owned()),
+                    &Request::InviteToGroup {
+                        name: name.to_owned(),
+                        leading,
+                    },
                     GroupUpdate::Inviting {
                         player: name.to_owned(),
                     },

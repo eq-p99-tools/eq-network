@@ -260,10 +260,13 @@ pub fn zone_answer(body: &[u8]) -> Result<crate::zoning::ZoneAnswer> {
     })
 }
 
-/// The client asking the zone it is leaving to save the player. TAKP reads
-/// nothing in it (`zone/client_packet.cpp` `Handle_OP_Save`, whose comment
-/// says the payload is 192 bytes), so its 192 bytes stay zero (inferred:
-/// the official `EQMac` client's own body is unrecorded).
+/// The client asking the zone it is leaving to save the player
+/// (`OP_SaveOnZoneReq`, 0x4155). The program sends its whole character
+/// block as it stands, 8,452 bytes (from the program, TAKP Batch 1 R5), which
+/// the session doesn't hold. TAKP reads nothing in it and checks no size
+/// (`zone/client_packet.cpp` `Handle_OP_SaveOnZoneReq`, `Handle_OP_Save`;
+/// Settle results sections 2 and 5), so 192 zero bytes go, as its comment
+/// on the payload says.
 #[must_use]
 pub fn save_on_zone() -> EncodedCommand {
     EncodedCommand {
@@ -284,30 +287,36 @@ pub fn depart(spawn_id: u16) -> EncodedCommand {
     }
 }
 
-/// The skill a bleed-out report names: hand to hand, which TAKP itself
-/// names for a death from a tick (`zone/attack.cpp`
-/// `GenerateDeathPackets`). Inferred: the official client's is unrecorded.
-const BLED_OUT_SKILL: u8 = 28;
+/// The type a bleed-out report names: 23, which the program writes for a
+/// death found by its own HP check (from the program, TAKP Batch 1 R6, path
+/// B; checklist 6.154; unsure what 23 means).
+const BLED_OUT_TYPE: u8 = 23;
 
 /// The player's own report that they bled out (`Death_Struct`, 20 bytes,
 /// laid out as [`death`] reads it). TAKP leaves to the client the deaths it
 /// does not announce to the one who died, and takes this report without
 /// checking the player's HP (`zone/client_packet.cpp` `Handle_OP_Death`), so
 /// it goes out only for a player whose HP reached the server's threshold.
-/// Every field but the spawn is inferred until the official client's
-/// bleed-out is recorded: no killer, as `EQMacEmu` notes the official client
-/// names none for a bleed-out; no damage; no spell (0xFFFF, TAKP's
-/// `SPELL_UNKNOWN`); hand to hand (28), which TAKP itself names for a death
-/// from a tick; and no corpse, level or player flag.
+///
+/// The fields are the program's for a death its own HP check finds (from
+/// the program, TAKP Batch 1 R6, path B; checklist 6.154): the player's
+/// spawn; no killer; the player's level at 6; no spell (0xFFFF); type 23 at
+/// 10; no damage; and 1 at 16, as the player is a player. The bytes the
+/// program never writes (the corpse at 4, and 7, 11 and 17 to 19) stay 0.
+/// The program names one killer: a player whose damage-over-time buff took
+/// the HP in the tick that brought the player down. The session keeps no
+/// casters for the player's buffs, so its reports name none (unsure, 6.154).
 ///
 /// # Errors
 /// Rejects a report without the player's spawn.
-pub fn bled_out(spawn_id: u16) -> Result<EncodedCommand> {
+pub fn bled_out(spawn_id: u16, level: u8) -> Result<EncodedCommand> {
     ensure!(spawn_id != 0, "a death report needs the player's spawn");
     let mut body = vec![0; 20];
     body[..2].copy_from_slice(&spawn_id.to_le_bytes());
+    body[6] = level;
     body[8..10].copy_from_slice(&u16::MAX.to_le_bytes());
-    body[10] = BLED_OUT_SKILL;
+    body[10] = BLED_OUT_TYPE;
+    body[16] = 1;
     Ok(EncodedCommand {
         opcode: ZONE_DEATH,
         body,
@@ -343,6 +352,25 @@ pub fn posture(spawn_id: u16, posture: crate::command::Posture) -> Result<Encode
     let mut body = spawn_id.to_le_bytes().to_vec();
     body.extend_from_slice(&14u16.to_le_bytes());
     body.extend_from_slice(&posture.appearance().to_le_bytes());
+    Ok(EncodedCommand {
+        opcode: ZONE_SPAWN_APPEARANCE,
+        body,
+    })
+}
+
+/// The player's invisibility now, 0 when none is left (`OP_SpawnAppearance`,
+/// type 3, 8 bytes), as the program sends it while dropping it (from the
+/// program, TAKP Batch 1 R1; checklist 6.163). `EQMacEmu` acts on the
+/// player's own spawn at value 0 only (`zone/client_packet.cpp`
+/// `Handle_OP_SpawnAppearance`, Settle results S2).
+///
+/// # Errors
+/// Refuses a state for no spawn.
+pub fn invisibility(spawn_id: u16, state: u32) -> Result<EncodedCommand> {
+    ensure!(spawn_id != 0, "an appearance needs the player's own spawn");
+    let mut body = spawn_id.to_le_bytes().to_vec();
+    body.extend_from_slice(&3u16.to_le_bytes());
+    body.extend_from_slice(&state.to_le_bytes());
     Ok(EncodedCommand {
         opcode: ZONE_SPAWN_APPEARANCE,
         body,

@@ -307,6 +307,12 @@ pub fn eqmac_consideration(body: &[u8]) -> Result<Consideration> {
     })
 }
 
+/// `EQMac`'s `OP_AutoAttack2` (0x4161 swapped): the program sends it just
+/// before each change of the toggle, with the same body (from the program,
+/// TAKP Batch 1 R2; checklist 6.157). `EQMacEmu` does nothing with it
+/// (`zone/client_packet.cpp` `Handle_OP_AutoAttack2`, Settle results S5).
+pub const EQMAC_AUTO_ATTACK2_OPCODE: u16 = 0x6141;
+
 /// Encodes the auto-attack toggle.
 #[must_use]
 pub const fn auto_attack(enabled: bool) -> [u8; 4] {

@@ -254,7 +254,9 @@ impl Feature for Casting {
     fn owns(&self, command: &ClientCommand) -> bool {
         matches!(
             command,
-            ClientCommand::CastSpell { .. } | ClientCommand::UseItem(_)
+            ClientCommand::CastSpell { .. }
+                | ClientCommand::UseItem(_)
+                | ClientCommand::DropInvisibility { .. }
         )
     }
 
@@ -266,6 +268,7 @@ impl Feature for Casting {
     ) -> Result<()> {
         match command {
             ClientCommand::UseItem(request) => self.use_item(request, world, out),
+            ClientCommand::DropInvisibility { steps, .. } => drop_invisibility(steps, out),
             _ => self.cast(command, world, out),
         }
     }
@@ -311,6 +314,26 @@ impl Feature for Casting {
             _ => (),
         }
         Ok(())
+    }
+}
+
+/// Sends the steps of an invisibility drop in the host's order, where the
+/// client generation sends them. Every step is encoded before any is sent,
+/// so a generation that sends none, or a step it cannot carry, sends
+/// nothing and is only noted.
+fn drop_invisibility(
+    steps: &[eq_network_game::buffs::InvisibilityStep],
+    out: &mut Out<'_, '_>,
+) -> Result<()> {
+    let packets: Result<Vec<_>> = steps
+        .iter()
+        .map(|step| out.encode(&Request::DropInvisibility(*step)))
+        .collect();
+    match packets {
+        Ok(packets) => packets.iter().try_for_each(|packet| out.send(packet)),
+        Err(error) => out
+            .log
+            .diagnostic(format!("Invisibility not dropped: {error}")),
     }
 }
 
