@@ -274,12 +274,14 @@ impl Feature for Motion {
 
     /// Movement starts from the moment the zone admitted the player, before
     /// the host heard of it, so a calibration the host makes on hearing it
-    /// counts as fresh.
-    fn admitted(&mut self, world: &mut World, _out: &mut Out<'_, '_>) -> Result<()> {
+    /// counts as fresh. Its updates keep the spacing the client generation
+    /// keeps between them.
+    fn admitted(&mut self, world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
         if let (Some(player), Some(admitted)) = (world.player.as_ref(), world.admitted) {
             world.body.motion = Some(
                 MotionSession::new(world.session_id, player.spawn_id, player.position, admitted)?
-                    .with_falls(self.falls),
+                    .with_falls(self.falls)
+                    .with_spacing(out.wire.position_spacing()),
             );
         }
         Ok(())

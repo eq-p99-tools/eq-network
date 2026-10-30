@@ -509,3 +509,72 @@ fn queued_calibration_requires_valid_data_from_after_the_last_reset() {
     session.calibrate_fresh(calibration, now, now).unwrap();
     assert_eq!(session.last_sample, now);
 }
+#[test]
+fn a_spacing_holds_the_latest_sample_until_it_passes_and_stops_no_sooner() {
+    let start = Instant::now();
+    let mut session = setup(start).with_spacing(Some(Duration::from_millis(280)));
+    let at = |ms| start + Duration::from_millis(ms);
+    let mut sent = Vec::new();
+    // The first sample goes out at once; the session began 300 ms earlier.
+    let first = at(300);
+    session
+        .send_move(&request(first, 0.5), first, |packet| {
+            sent.push(packet.body.clone());
+            Ok(())
+        })
+        .unwrap();
+    // Two more inside the spacing are accepted but held; the later wins.
+    for (ms, x) in [(400, 1.0), (500, 1.5)] {
+        session
+            .send_move(&request(at(ms), x), at(ms), |_| panic!("sent inside the spacing"))
+            .unwrap();
+        assert!((session.position().x - x).abs() < f32::EPSILON);
+    }
+    assert!(!session.tick(at(579), |_| panic!("early")).unwrap());
+    assert!(session
+        .tick(at(580), |packet| {
+            sent.push(packet.body.clone());
+            Ok(())
+        })
+        .unwrap());
+    let [first, held] = &sent[..] else {
+        panic!("{sent:?}")
+    };
+    assert_eq!(&first[2..4], &[0, 0]);
+    // The held sample takes the next sequence and keeps its motion.
+    assert_eq!(&held[2..4], &[1, 0]);
+    assert_eq!(word(held, 24), 1.5f32.to_bits());
+    assert_eq!(word(held, 12), 0.25f32.to_bits());
+    assert_ne!(word(held, 20) & 0x3ff, 0);
+    // The stop waits for the spacing too, then heartbeats resume.
+    assert!(!session.tick(at(859), |_| panic!("early stop")).unwrap());
+    assert!(session
+        .tick(at(860), |packet| {
+            assert_eq!(&packet.body[2..4], &[2, 0]);
+            assert_eq!(word(&packet.body, 20) & 0x3ff, 0);
+            Ok(())
+        })
+        .unwrap());
+}
+
+#[test]
+fn a_correction_drops_a_held_sample() {
+    let start = Instant::now();
+    let mut session = setup(start).with_spacing(Some(Duration::from_millis(280)));
+    let at = |ms| start + Duration::from_millis(ms);
+    session
+        .send_move(&request(at(300), 0.5), at(300), |_| Ok(()))
+        .unwrap();
+    session
+        .send_move(&request(at(400), 1.0), at(400), |_| panic!("inside the spacing"))
+        .unwrap();
+    session.correct(Position::default(), at(450)).unwrap();
+    // Only the stop for the sample that went out follows, never the held one.
+    assert!(session
+        .tick(at(600), |packet| {
+            assert_eq!(word(&packet.body, 24), 0.0f32.to_bits());
+            assert_eq!(word(&packet.body, 20) & 0x3ff, 0);
+            Ok(())
+        })
+        .unwrap());
+}

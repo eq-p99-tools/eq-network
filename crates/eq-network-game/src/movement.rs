@@ -24,6 +24,14 @@ pub const MAX_FALL_SPEED: f32 = 40.0;
 /// sends one about every 1.1 s (median of its recorded stationary updates).
 pub const STATIONARY_HEARTBEAT: Duration = Duration::from_secs(1);
 
+/// The least time between two of the player's own position updates in the
+/// Titanium program: it sends one only after more than 280 ms since the last
+/// (from the program, Titanium sitting 6, T1; checklist 1.6). The program
+/// also sends only after a change flag is set, and whether anything sets it
+/// on a timer while the player stands still is unsure, so the stationary
+/// heartbeat stays as recorded on P99.
+pub const TITANIUM_POSITION_SPACING: Duration = Duration::from_millis(280);
+
 /// `OP_Jump` (Titanium): an empty notice that the character jumped. `EQEmu` only
 /// charges endurance for it; the arc itself travels in position updates.
 pub const JUMP_OPCODE: u16 = 0x0797;

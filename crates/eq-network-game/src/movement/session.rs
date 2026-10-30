@@ -133,8 +133,23 @@ pub struct MotionSession {
     moving: bool,
     suspended: bool,
     falls: bool,
+    /// The least time between two of the player's own updates, where the
+    /// client generation keeps one; see [`Self::with_spacing`].
+    spacing: Option<Duration>,
+    /// The latest accepted sample the spacing has not let out yet.
+    held: Option<PositionPacket>,
 }
 impl MotionSession {
+    /// Sends the player's own position at most once per `spacing`: a sample
+    /// accepted sooner is held, and a later one replaces it, so the latest
+    /// goes out once the spacing has passed ([`Self::tick`]). Accepting a
+    /// sample is unchanged, so the host's own steps keep their pace.
+    #[must_use]
+    pub const fn with_spacing(mut self, spacing: Option<Duration>) -> Self {
+        self.spacing = spacing;
+        self
+    }
+
     /// Permits [`MovementMode::Fall`] samples. Only stock `EQEmu` sessions enable it
     /// until official-client falls are calibrated.
     #[must_use]
@@ -194,6 +209,8 @@ impl MotionSession {
             moving: false,
             suspended: false,
             falls: false,
+            spacing: None,
+            held: None,
         })
     }
 
@@ -238,6 +255,7 @@ impl MotionSession {
     pub fn resume_stationary(&mut self, now: Instant) {
         self.suspended = false;
         self.calibration = None;
+        self.held = None;
         self.moving = false;
         self.guard.correct(self.position, now);
         self.last_sample = now;
@@ -338,18 +356,27 @@ impl MotionSession {
             delta_heading: turn,
         };
         sample.check()?;
-        send(&sample)?;
+        let spaced = self
+            .spacing
+            .is_some_and(|spacing| now.saturating_duration_since(self.last_sent) < spacing);
+        if spaced {
+            self.held = Some(sample);
+        } else {
+            send(&sample)?;
+            self.held = None;
+            self.last_sent = now;
+            self.sequence = self.sequence.wrapping_add(1);
+        }
         self.guard = guard;
         self.position = request.position;
         self.last_sample = now;
-        self.last_sent = now;
         self.moving = moving || turn != 0;
-        self.sequence = self.sequence.wrapping_add(1);
         Ok(())
     }
 
-    /// Sends a stop after 250 ms without input, or a stationary heartbeat every
-    /// [`super::STATIONARY_HEARTBEAT`].
+    /// Sends a held sample once the spacing has passed, a stop after 250 ms
+    /// without input (or the spacing, if longer), or a stationary heartbeat
+    /// every [`super::STATIONARY_HEARTBEAT`].
     ///
     /// # Errors
     /// Propagates encoding and transport failures without advancing state.
@@ -371,12 +398,31 @@ impl MotionSession {
         now: Instant,
         send: impl FnOnce(&PositionPacket) -> Result<()>,
     ) -> Result<bool> {
+        let spacing = self.spacing.unwrap_or_default();
+        let since = now.saturating_duration_since(self.last_sent);
+        if self.suspended {
+            return Ok(false);
+        }
+        if let Some(held) = self.held {
+            if since < spacing {
+                return Ok(false);
+            }
+            let sample = PositionPacket {
+                sequence: self.sequence,
+                ..held
+            };
+            send(&sample)?;
+            self.held = None;
+            self.sequence = self.sequence.wrapping_add(1);
+            self.last_sent = now;
+            return Ok(true);
+        }
         let interval = if self.moving {
-            Duration::from_millis(250)
+            Duration::from_millis(250).max(spacing)
         } else {
             super::STATIONARY_HEARTBEAT
         };
-        if self.suspended || now.saturating_duration_since(self.last_sent) < interval {
+        if since < interval {
             return Ok(false);
         }
         let sample = PositionPacket {
@@ -412,6 +458,7 @@ impl MotionSession {
         self.position = position;
         self.guard.correct(position, now);
         self.calibration = None;
+        self.held = None;
         self.last_sample = now;
         // Keep the pending stop deadline if the last transmitted sample was moving.
         Ok(())
@@ -421,6 +468,7 @@ impl MotionSession {
     pub fn suspend(&mut self) {
         self.suspended = true;
         self.calibration = None;
+        self.held = None;
         self.moving = false;
     }
 }

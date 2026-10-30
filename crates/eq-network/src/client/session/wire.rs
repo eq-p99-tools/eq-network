@@ -60,6 +60,12 @@ pub(super) trait Wire: Sync {
         None
     }
 
+    /// The least time the generation's client leaves between two of the
+    /// player's own position updates; none where it is unread.
+    fn position_spacing(&self) -> Option<std::time::Duration> {
+        None
+    }
+
     /// The packet that asks the server for what the session wants.
     ///
     /// # Errors
@@ -161,6 +167,10 @@ impl Wire for Titanium {
 
     fn coverage(&self, opcode: u16) -> Option<ServerMessage> {
         coverage::titanium(opcode)
+    }
+
+    fn position_spacing(&self) -> Option<std::time::Duration> {
+        Some(eq_network_game::movement::TITANIUM_POSITION_SPACING)
     }
 
     fn encode(&self, request: &Request, sender: Sender<'_>) -> Result<EncodedCommand> {
