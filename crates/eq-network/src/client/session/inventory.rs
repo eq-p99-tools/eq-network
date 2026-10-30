@@ -1196,6 +1196,7 @@ mod tests {
         let sell = ClientCommand::Sell {
             session_id: 5,
             merchant_id: 9,
+            own_id: 7,
             slot: 23,
             quantity: 1,
             created: Instant::now(),
@@ -1288,6 +1289,7 @@ mod tests {
         let sell = ClientCommand::Sell {
             session_id: 5,
             merchant_id: 9,
+            own_id: 7,
             slot: 23,
             quantity: 1,
             created: Instant::now(),
@@ -1329,6 +1331,7 @@ mod tests {
             ClientCommand::Sell {
                 session_id: 5,
                 merchant_id: 9,
+                own_id: 7,
                 slot: 22,
                 quantity: 1,
                 created: Instant::now(),
@@ -1437,6 +1440,7 @@ mod tests {
         let sell = ClientCommand::Sell {
             session_id: 5,
             merchant_id: 9,
+            own_id: 7,
             slot: 22,
             quantity: 1,
             created: Instant::now(),
@@ -1512,6 +1516,7 @@ mod tests {
         let sell = ClientCommand::Sell {
             session_id: 5,
             merchant_id: 9,
+            own_id: 7,
             slot: 22,
             quantity: 1,
             created: Instant::now(),

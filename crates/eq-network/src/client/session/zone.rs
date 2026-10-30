@@ -802,6 +802,7 @@ mod tests {
             ClientCommand::Sell {
                 session_id,
                 merchant_id: 9,
+                own_id: 7,
                 slot: 22,
                 quantity: 1,
                 created,

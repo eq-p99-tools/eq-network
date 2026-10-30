@@ -294,6 +294,9 @@ pub enum GameCommand {
         session_id: u64,
         /// Merchant entity.
         merchant_id: u16,
+        /// Own spawn identifier from this admission, which the `EQMac`
+        /// program names in its sale.
+        own_id: u16,
         /// Inventory slot.
         slot: i32,
         /// Units to sell.
@@ -943,12 +946,13 @@ fn encode_eqmac_trade(command: &GameCommand) -> Result<EncodedCommand> {
         ),
         GameCommand::Sell {
             merchant_id,
+            own_id,
             slot,
             quantity,
             ..
         } => (
             crate::merchant::EQMAC_SELL_OPCODE,
-            crate::merchant::eqmac_sell(*merchant_id, *slot, *quantity)?.to_vec(),
+            crate::merchant::eqmac_sell(*merchant_id, *own_id, *slot, *quantity)?.to_vec(),
         ),
         _ => anyhow::bail!("looting is not implemented for the EQMac client"),
     };
@@ -1437,6 +1441,7 @@ mod tests {
                 GameCommand::Sell {
                     session_id: 1,
                     merchant_id: 9,
+                    own_id: 7,
                     slot: 23,
                     quantity: 1,
                     created,
