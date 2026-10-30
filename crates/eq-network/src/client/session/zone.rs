@@ -1424,14 +1424,16 @@ mod tests {
             Capability::Sacrifice,
             Capability::Translocate,
             Capability::ServerTicks,
+            Capability::Jumping,
         ] {
             assert!(eqemu.contains(&capability));
             assert!(!p99.contains(&capability));
         }
-        assert_eq!(eqemu.len(), p99.len() + 18);
+        assert_eq!(eqemu.len(), p99.len() + 19);
         // EQMac servers talk; TAKP also casts, keeps the spellbook, camps,
-        // moves and moves items, follows zone changes and takes the client's
-        // report of a bleed-out, which Quarm does not yet.
+        // moves, falls and moves items, follows zone changes and takes the
+        // client's reports of a fall and a bleed-out, which Quarm does not
+        // yet.
         assert_eq!(
             features(crate::client::ServerProtocol::Quarm),
             [Capability::Talking]
@@ -1444,12 +1446,14 @@ mod tests {
                 Capability::Inventory,
                 Capability::Trading,
                 Capability::Moving,
+                Capability::Falling,
                 Capability::Targeting,
                 Capability::Combat,
                 Capability::Talking,
                 Capability::Camping,
                 Capability::Zoning,
                 Capability::Grouping,
+                Capability::EnvironmentalDamage,
                 Capability::BleedingOut
             ]
         );

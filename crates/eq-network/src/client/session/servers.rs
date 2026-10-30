@@ -550,9 +550,10 @@ mod shared {
         Box::new(Belongings::under(rules, quotes, allows, setup.auto_eat))
     }
 
-    /// Moving, with or without the jumps and falls the server takes.
-    pub(super) fn motion(falls: bool) -> Box<dyn Feature> {
-        Box::new(Motion::new(falls))
+    /// Moving, with or without the falls the server takes, and jumps where
+    /// it takes falls and the generation's notice of a jump is known.
+    pub(super) fn motion(falls: bool, jumps: bool) -> Box<dyn Feature> {
+        Box::new(Motion::new(falls, jumps))
     }
 
     pub(super) fn character() -> Box<dyn Feature> {
@@ -678,9 +679,10 @@ mod shared {
         Box::<Raids>::default()
     }
 
-    /// Reporting the hazards the server type takes from the client.
-    pub(super) fn hazards(taken: &'static [Hazard]) -> Box<dyn Feature> {
-        Box::new(Hazards::new(taken))
+    /// Reporting the hazards the server type takes from the client, each
+    /// after a notice where the client generation sends one.
+    pub(super) fn hazards(taken: &'static [Hazard], notice: bool) -> Box<dyn Feature> {
+        Box::new(Hazards::new(taken, notice))
     }
 
     /// The tick, as the server type's marks show it.
@@ -716,6 +718,15 @@ const P99_ABILITIES: [Ability; 16] = [
 /// Drowning, lava and freezing wait until the official client's reports of
 /// them are recorded.
 const EQEMU_HAZARDS: [Hazard; 1] = [Hazard::Falling];
+
+/// The hazards TAKP takes from the client so far: falls. The `EQMac`
+/// program reports one as `OP_EnvDamage` and then `OP_Damage` (from the
+/// program, TAKP Batch 1 R3); `EQMacEmu`'s `Handle_OP_EnvDamage` does
+/// nothing, and `Handle_OP_Damage` takes the amount once, cuts a fall by
+/// the Acrobatics AA and multiplies it by the server's rule
+/// (`zone/client_packet.cpp`, Settle results S1). Drowning waits for
+/// swimming, and lava for its builder's read.
+const TAKP_HAZARDS: [Hazard; 1] = [Hazard::Falling];
 
 /// The starts of the lowercased names of the worlds P99 plays on, as Adam's
 /// SSO login proxy keeps them.
@@ -774,7 +785,7 @@ impl ServerType for Project1999 {
     }
 
     fn motion(&self, _setup: &Setup<'_>) -> Provided {
-        offer(shared::motion(false))
+        offer(shared::motion(false, false))
     }
 
     fn character(&self, _setup: &Setup<'_>) -> Provided {
@@ -894,7 +905,7 @@ impl ServerType for EqEmu {
     }
 
     fn motion(&self, _setup: &Setup<'_>) -> Provided {
-        offer(shared::motion(true))
+        offer(shared::motion(true, true))
     }
 
     fn character(&self, _setup: &Setup<'_>) -> Provided {
@@ -1029,7 +1040,7 @@ impl ServerType for EqEmu {
     }
 
     fn hazards(&self, _setup: &Setup<'_>) -> Provided {
-        offer(shared::hazards(&EQEMU_HAZARDS))
+        offer(shared::hazards(&EQEMU_HAZARDS, false))
     }
 
     /// `EQEmu` regenerates the player's HP, mana and endurance on the tick
@@ -1134,9 +1145,18 @@ impl ServerType for Takp {
         offer(shared::camp())
     }
 
-    /// TAKP takes no falls from the client, as P99 does not.
+    /// TAKP takes falls from the client, which the `EQMac` program works out
+    /// under its own gravity (from the program, TAKP Batch 1 R3; checklist
+    /// 6.161) and reports as damage ([`Self::hazards`]). The `EQMac`
+    /// program's notice of a jump is unread, so the player does not jump.
     fn motion(&self, _setup: &Setup<'_>) -> Provided {
-        offer(shared::motion(false))
+        offer(shared::motion(true, false))
+    }
+
+    /// Falls, which TAKP takes from the client as the program reports them
+    /// ([`TAKP_HAZARDS`]).
+    fn hazards(&self, _setup: &Setup<'_>) -> Provided {
+        offer(shared::hazards(&TAKP_HAZARDS, true))
     }
 
     /// The time of day, which TAKP sends as the zone admits the player
@@ -1274,15 +1294,16 @@ mod tests {
     fn eqmac_servers_provide_the_features_built_for_them() {
         // Quarm and TAKP speak EQMac: they see the zone's spawns, keep the
         // player's record and talk. TAKP also casts, keeps the spellbook,
-        // camps, moves, zones, moves items, keeps the time of day and takes
-        // the client's report of a bleed-out; Quarm will once each is
+        // camps, moves and falls, zones, moves items, keeps the time of day
+        // and takes the client's reports of a fall and a bleed-out; Quarm
+        // will once each is
         // checked there.
         let setup = Setup::new("Tester", AutoEat::default());
         let quarm = server_type(ServerProtocol::Quarm);
         assert_eq!(quarm.features(&setup).len(), 3);
         assert_eq!(offers(quarm), [Capability::Talking]);
         let takp = server_type(ServerProtocol::Takp);
-        assert_eq!(takp.features(&setup).len(), 14);
+        assert_eq!(takp.features(&setup).len(), 15);
         assert_eq!(
             offers(takp),
             [
@@ -1291,12 +1312,14 @@ mod tests {
                 Capability::Inventory,
                 Capability::Trading,
                 Capability::Moving,
+                Capability::Falling,
                 Capability::Targeting,
                 Capability::Combat,
                 Capability::Talking,
                 Capability::Camping,
                 Capability::Zoning,
                 Capability::Grouping,
+                Capability::EnvironmentalDamage,
                 Capability::BleedingOut
             ]
         );

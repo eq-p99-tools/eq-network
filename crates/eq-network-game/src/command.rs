@@ -725,7 +725,7 @@ impl GameCommand {
                 Capability::Moving
             }
             // Only a server that takes falls from the client lets the player jump.
-            Self::Jump { .. } => Capability::Falling,
+            Self::Jump { .. } => Capability::Jumping,
             Self::EnvironmentalDamage { .. } => Capability::EnvironmentalDamage,
             Self::MoveInventory(_) | Self::Consume { .. } | Self::AutoEat { .. } => {
                 Capability::Inventory

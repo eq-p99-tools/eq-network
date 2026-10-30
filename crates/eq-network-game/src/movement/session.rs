@@ -150,8 +150,8 @@ impl MotionSession {
         self
     }
 
-    /// Permits [`MovementMode::Fall`] samples. Only stock `EQEmu` sessions enable it
-    /// until official-client falls are calibrated.
+    /// Permits [`MovementMode::Fall`] samples, where the server type takes
+    /// falls from the client.
     #[must_use]
     pub const fn with_falls(mut self, allowed: bool) -> Self {
         self.falls = allowed;

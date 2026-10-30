@@ -19,12 +19,16 @@ use eq_network_game::{hazards::Hazard, request::Request};
 pub(super) struct Hazards {
     /// The hazards the server type takes from the client.
     taken: &'static [Hazard],
+    /// Whether the client generation sends a notice before each report, as
+    /// the `EQMac` program does.
+    notice: bool,
 }
 
 impl Hazards {
-    /// Reports these hazards, and refuses the rest.
-    pub(super) fn new(taken: &'static [Hazard]) -> Self {
-        Self { taken }
+    /// Reports these hazards, each after a notice where `notice` says the
+    /// generation sends one, and refuses the rest.
+    pub(super) fn new(taken: &'static [Hazard], notice: bool) -> Self {
+        Self { taken, notice }
     }
 }
 
@@ -53,15 +57,28 @@ impl Feature for Hazards {
                 out.log,
             );
         }
-        match out.encode(&Request::EnvironmentalDamage { hazard, amount }) {
-            Ok(packet) => {
+        let notice = if self.notice {
+            Some(out.encode(&Request::EnvironmentalNotice { hazard, amount }))
+        } else {
+            None
+        };
+        match (
+            notice.transpose(),
+            out.encode(&Request::EnvironmentalDamage { hazard, amount }),
+        ) {
+            (Ok(notice), Ok(packet)) => {
+                if let Some(notice) = notice {
+                    out.send(&notice)?;
+                }
                 out.send(&packet)?;
                 out.log
                     .diagnostic(format!("Reported {amount} points of {hazard:?} damage"))
             }
             // The host works the amount out; one the packet cannot carry is
             // not worth the session.
-            Err(error) => out.log.diagnostic(format!("Damage not reported: {error}")),
+            (Err(error), _) | (_, Err(error)) => {
+                out.log.diagnostic(format!("Damage not reported: {error}"))
+            }
         }
     }
 }
@@ -82,7 +99,7 @@ mod tests {
 
     #[test]
     fn a_hazard_the_server_takes_is_reported_as_the_host_worked_it_out() {
-        let mut feature = Hazards::new(&[Hazard::Falling]);
+        let mut feature = Hazards::new(&[Hazard::Falling], false);
         let mut world = World::new(5);
         let outcome =
             testing::run(|out| feature.handle(&report(Hazard::Falling, 160), &mut world, out));
@@ -99,8 +116,26 @@ mod tests {
     }
 
     #[test]
+    fn the_eqmac_program_sends_a_notice_before_the_report() {
+        let mut feature = Hazards::new(&[Hazard::Falling], true);
+        let mut world = World::new(5);
+        let outcome = testing::run(|out| {
+            out.wire = &super::super::wire::EqMac;
+            feature.handle(&report(Hazard::Falling, 160), &mut world, out)
+        });
+        outcome.result.unwrap();
+        assert_eq!(
+            outcome.sent,
+            [
+                hazards::eqmac_notice(7, Hazard::Falling, 160).unwrap(),
+                hazards::eqmac_damage(7, Hazard::Falling, 160).unwrap(),
+            ]
+        );
+    }
+
+    #[test]
     fn other_hazards_and_amounts_the_packet_cannot_carry_are_only_noted() {
-        let mut feature = Hazards::new(&[Hazard::Falling]);
+        let mut feature = Hazards::new(&[Hazard::Falling], false);
         let mut world = World::new(5);
         for command in [
             // Not taken from the client on this server type.

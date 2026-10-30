@@ -304,6 +304,14 @@ pub enum Request {
         /// How much, before the server's own reductions.
         amount: u32,
     },
+    /// The notice that goes before the damage report, where the client
+    /// generation sends one.
+    EnvironmentalNotice {
+        /// What did it.
+        hazard: Hazard,
+        /// How much.
+        amount: u32,
+    },
 }
 
 /// The Titanium client's packet for a request from this sender.
@@ -388,7 +396,7 @@ pub fn titanium(request: &Request, sender: Sender<'_>) -> Result<EncodedCommand>
         } => zoning::titanium_answer(sender.name, (*zone_id, *instance_id), *position, *reason)?,
         Request::SaveOnZone => zoning::titanium_save_on_zone(),
         Request::Depart => zoning::titanium_depart(sender.spawn()),
-        Request::BledOut { .. } => anyhow::bail!("the Titanium client cannot send {request:?}"),
+        Request::EnvironmentalNotice { .. } | Request::BledOut { .. } => anyhow::bail!("the Titanium client cannot send {request:?}"),
         Request::Memorize { gem, spell_id } => spells::titanium_memorize(*gem, *spell_id),
         Request::Forget { gem, spell_id } => spells::titanium_forget(*gem, *spell_id),
         Request::Scribe { slot, spell_id } => spells::titanium_scribe(*slot, *spell_id),
@@ -433,6 +441,9 @@ pub fn eqmac(request: &Request, sender: Sender<'_>) -> Result<EncodedCommand> {
         Request::Position(sample) => crate::quarm::client_update(sample),
         Request::EnvironmentalDamage { hazard, amount } => {
             hazards::eqmac_damage(sender.spawn(), *hazard, *amount)
+        }
+        Request::EnvironmentalNotice { hazard, amount } => {
+            hazards::eqmac_notice(sender.spawn(), *hazard, *amount)
         }
         Request::Command(command) => command::encode(GameDialect::EqMac, command, sender.name),
         Request::InviteToGroup(name) => group::eqmac_invite(name, sender.name),

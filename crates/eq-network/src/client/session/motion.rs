@@ -146,13 +146,19 @@ pub(super) fn withdrawn(session_id: u64) -> WorldEvent {
 
 /// The player's movement and stance.
 pub(super) struct Motion {
-    /// Whether the server lets the player fall and jump.
+    /// Whether the server lets the player fall.
     falls: bool,
+    /// Whether the player may also jump: the generation's notice of a jump
+    /// is known, and the server takes falls.
+    jumps: bool,
 }
 
 impl Motion {
-    pub(super) const fn new(falls: bool) -> Self {
-        Self { falls }
+    pub(super) const fn new(falls: bool, jumps: bool) -> Self {
+        Self {
+            falls,
+            jumps: falls && jumps,
+        }
     }
 
     /// Moves the player, standing them up first if they were sitting or
@@ -228,13 +234,15 @@ impl Motion {
         }
     }
 
-    /// Jumps where the server allows falls.
-    fn jump(world: &World, out: &mut Out<'_, '_>) -> Result<()> {
+    /// Jumps where the server allows falls and the generation's notice of a
+    /// jump is known.
+    fn jump(&self, world: &World, out: &mut Out<'_, '_>) -> Result<()> {
         let jump = world
             .body
             .motion
             .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("the player cannot move yet"))
+            .filter(|_| self.jumps)
+            .ok_or_else(|| anyhow::anyhow!("jumping is not enabled for this server"))
             .and_then(MotionSession::check_jump)
             .and_then(|()| out.encode(&Request::Jump));
         match jump {
@@ -265,10 +273,10 @@ impl Motion {
 impl Feature for Motion {
     fn capabilities(&self) -> Vec<crate::world::Capability> {
         use crate::world::Capability;
-        if self.falls {
-            vec![Capability::Moving, Capability::Falling]
-        } else {
-            vec![Capability::Moving]
+        match (self.falls, self.jumps) {
+            (true, true) => vec![Capability::Moving, Capability::Falling, Capability::Jumping],
+            (true, false) => vec![Capability::Moving, Capability::Falling],
+            _ => vec![Capability::Moving],
         }
     }
 
@@ -305,7 +313,7 @@ impl Feature for Motion {
     ) -> Result<()> {
         match command {
             ClientCommand::Move(request) => Self::step(request, world, out),
-            ClientCommand::Jump { .. } => Self::jump(world, out),
+            ClientCommand::Jump { .. } => self.jump(world, out),
             ClientCommand::ConfigureMotion { .. } => Self::calibrate(command, world, out),
             _ => Self::stance(command, world, out),
         }
@@ -403,7 +411,7 @@ mod tests {
         world.admitted = Some(Instant::now());
         world.body.own(7);
         world.body.place(at(1.0));
-        let mut motion = Motion::new(false);
+        let mut motion = Motion::new(false, false);
         let now = Instant::now();
         let outcome = testing::run(|out| motion.tick(now, &mut world, out));
         outcome.result.unwrap();
@@ -451,7 +459,7 @@ mod tests {
             },
             created: now.checked_sub(Duration::from_millis(5)).unwrap(),
         };
-        let mut motion = Motion::new(false);
+        let mut motion = Motion::new(false, false);
         testing::run(|out| motion.admitted(&mut world, out))
             .result
             .unwrap();
@@ -472,7 +480,7 @@ mod tests {
         world.own_spawn = Some(7);
         world.player.admit(testing::player(7));
         world.admitted = Some(Instant::now());
-        let mut motion = Motion::new(false);
+        let mut motion = Motion::new(false, false);
         testing::run(|out| motion.admitted(&mut world, out))
             .result
             .unwrap();
@@ -509,7 +517,7 @@ mod tests {
         let mut world = World::new(5);
         world.own_spawn = Some(7);
         world.player.admit(testing::player(7));
-        let mut motion = Motion::new(false);
+        let mut motion = Motion::new(false, false);
         let sit = |spawn_id| ClientCommand::SetPosture {
             session_id: 5,
             spawn_id,
@@ -544,7 +552,7 @@ mod tests {
         world.own_spawn = Some(7);
         world.player.admit(testing::player(7));
         world.admitted = Some(Instant::now());
-        let mut motion = Motion::new(false);
+        let mut motion = Motion::new(false, false);
         testing::run(|out| motion.admitted(&mut world, out))
             .result
             .unwrap();
