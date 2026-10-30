@@ -36,6 +36,9 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   - The session response's maximum packet size is read and written
     big-endian, as `EQEmu` writes it and the Titanium login program reads
     it; it read 512 as 131,072 before.
+  - A Titanium login refused with `EQEmu`'s error string 105 reads as
+    `LoginError::InvalidCredentials`, so a wrong password says so on
+    `EQEmu` rather than that the login was rejected.
 
 - `GameTime::hour` is documented as what it always held: hours since the
   day began, the wire's 1 to 24 less one, the calendar both generations

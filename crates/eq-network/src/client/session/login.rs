@@ -328,7 +328,14 @@ impl<T> WorldChoice<T> {
     }
 }
 
+/// The error string `EQEmu`'s login server names in a refused login's reply
+/// (`loginserver/client.cpp` `SendFailedLogin`): the account or password
+/// was wrong.
+const BAD_CREDENTIALS_STRING: u32 = 105;
+
 /// Use the SSO crate's failure signature before parsing the successful session key.
+/// `EQEmu`'s own refusal, success 0 with error string 105, also reads as a
+/// wrong account or password, so the player is told so.
 fn login_credentials(body: &[u8]) -> Result<Credentials> {
     let mut application = 0x17u16.to_le_bytes().to_vec();
     application.extend_from_slice(body);
@@ -342,6 +349,9 @@ fn login_credentials(body: &[u8]) -> Result<Credentials> {
         DesKeyIv::default(),
     )?);
     ensure!(clear.len() >= 23, "invalid login response");
+    if clear[0] == 0 && le32(&clear[1..5]) == BAD_CREDENTIALS_STRING {
+        return Err(LoginError::InvalidCredentials.into());
+    }
     let account = le32(&clear[8..12]);
     ensure!(
         account != 0 && account != u32::MAX && clear[0] == 1,
@@ -477,5 +487,27 @@ mod tests {
             let error = login_credentials(&body[..length]).err().unwrap();
             assert!(!error.is::<LoginError>());
         }
+    }
+
+    #[test]
+    fn eqemus_refusal_reads_as_a_wrong_account_or_password() {
+        // `SendFailedLogin`: everything zero but success false and string 105.
+        let mut clear = vec![0; 32];
+        clear[1..5].copy_from_slice(&105u32.to_le_bytes());
+        let mut body = vec![0; 10];
+        body[0] = 3;
+        body[5] = 2;
+        body.extend(des_encrypt(&clear, DesKeyIv::default()));
+        let error = login_credentials(&body).err().unwrap();
+        assert!(matches!(
+            error.downcast_ref::<LoginError>(),
+            Some(LoginError::InvalidCredentials)
+        ));
+        // Another refusal is still only a rejection.
+        clear[1..5].copy_from_slice(&106u32.to_le_bytes());
+        body.truncate(10);
+        body.extend(des_encrypt(&clear, DesKeyIv::default()));
+        let error = login_credentials(&body).err().unwrap();
+        assert!(!error.is::<LoginError>());
     }
 }

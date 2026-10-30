@@ -222,6 +222,11 @@ impl LoginPacket {
 
 #[must_use]
 /// Return whether a login-accepted packet encodes the standard bad-password result.
+///
+/// The signature (the account all ones and zeros after it) is the proxy
+/// oracle's synthesised form, not one read from a capture: `EQEmu`'s own
+/// refusal leaves the account 0 (`loginserver/client.cpp`
+/// `SendFailedLogin`), and whether P99's carries all ones is unchecked.
 pub fn is_bad_password_login_result(app_payload: &[u8], key_iv: DesKeyIv) -> bool {
     if app_payload.len() < LOGIN_RESULT_HEADER_SIZE {
         return false;
@@ -295,6 +300,9 @@ pub fn build_login_combined(username: &str, password: &str, key_iv: DesKeyIv) ->
 }
 
 /// Encode a synthetic login-accepted response, primarily for proxy testing.
+/// A test builder: nothing in eq-network or the proxy calls it outside tests,
+/// and its account lands where `EQEmu`'s reply keeps success and the error
+/// string.
 ///
 /// # Errors
 ///
