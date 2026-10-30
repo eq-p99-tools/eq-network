@@ -446,7 +446,10 @@ mod tests {
         // A leader invites with the second opcode, and the same body.
         let led = eqmac_invite("Friend", "Tester", true).unwrap();
         assert_eq!(led.opcode, EQMAC_INVITE2_OPCODE);
-        assert_eq!(led.body, eqmac_invite("Friend", "Tester", false).unwrap().body);
+        assert_eq!(
+            led.body,
+            eqmac_invite("Friend", "Tester", false).unwrap().body
+        );
     }
 
     #[test]

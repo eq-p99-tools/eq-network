@@ -526,7 +526,9 @@ fn a_spacing_holds_the_latest_sample_until_it_passes_and_stops_no_sooner() {
     // Two more inside the spacing are accepted but held; the later wins.
     for (ms, x) in [(400, 1.0), (500, 1.5)] {
         session
-            .send_move(&request(at(ms), x), at(ms), |_| panic!("sent inside the spacing"))
+            .send_move(&request(at(ms), x), at(ms), |_| {
+                panic!("sent inside the spacing")
+            })
             .unwrap();
         assert!((session.position().x - x).abs() < f32::EPSILON);
     }
@@ -566,7 +568,9 @@ fn a_correction_drops_a_held_sample() {
         .send_move(&request(at(300), 0.5), at(300), |_| Ok(()))
         .unwrap();
     session
-        .send_move(&request(at(400), 1.0), at(400), |_| panic!("inside the spacing"))
+        .send_move(&request(at(400), 1.0), at(400), |_| {
+            panic!("inside the spacing")
+        })
         .unwrap();
     session.correct(Position::default(), at(450)).unwrap();
     // Only the stop for the sample that went out follows, never the held one.

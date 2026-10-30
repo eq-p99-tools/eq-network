@@ -84,7 +84,10 @@ mod tests {
                 eq_network_game::combat::EQMAC_AUTO_ATTACK_OPCODE
             ]
         );
-        assert!(outcome.sent.iter().all(|packet| packet.body == [1, 0, 0, 0]));
+        assert!(outcome
+            .sent
+            .iter()
+            .all(|packet| packet.body == [1, 0, 0, 0]));
     }
 
     #[test]

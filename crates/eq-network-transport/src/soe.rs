@@ -136,13 +136,16 @@ pub fn build_session_request() -> [u8; 2] {
     (TransportOp::SessionRequest as u16).to_be_bytes()
 }
 
-/// Minimal valid `SessionResponse` (17-byte wire format).
+/// Minimal valid `SessionResponse` (17-byte wire format). The maximum
+/// packet size is big-endian, as `EQEmu` writes it
+/// (`reliable_stream_connection.cpp`) and the Titanium login program reads
+/// it (from the program, Titanium login L1 part one, T-i).
 #[must_use]
 pub fn build_session_response() -> Vec<u8> {
     let mut out = vec![0u8; 17];
     out[0..2].copy_from_slice(&(TransportOp::SessionResponse as u16).to_be_bytes());
     out[6..10].copy_from_slice(&1u32.to_be_bytes()); // encode_key
-    out[13..17].copy_from_slice(&512u32.to_le_bytes()); // max_packet_size
+    out[13..17].copy_from_slice(&512u32.to_be_bytes()); // max_packet_size
     out
 }
 
@@ -169,7 +172,8 @@ pub struct SessionResponse {
     pub encode_pass1: u8,
     /// Second transport encoding selector.
     pub encode_pass2: u8,
-    /// Maximum datagram size advertised by the server.
+    /// Maximum datagram size advertised by the server, big-endian on the
+    /// wire (from the program, Titanium login L1 part one).
     pub max_packet_size: u32,
 }
 
@@ -193,13 +197,33 @@ pub fn parse_session_response(data: &[u8]) -> Result<SessionResponse> {
         crc_bytes: data[10],
         encode_pass1: data[11],
         encode_pass2: data[12],
-        max_packet_size: u32::from_le_bytes([data[13], data[14], data[15], data[16]]),
+        max_packet_size: u32::from_be_bytes([data[13], data[14], data[15], data[16]]),
     })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_session_response_carries_its_packet_size_big_endian() {
+        // Ours round-trips 512.
+        let ours = build_session_response();
+        assert_eq!(ours[13..17], [0, 0, 2, 0]);
+        assert_eq!(parse_session_response(&ours).unwrap().max_packet_size, 512);
+        // The emulator's layout, every field network order as `EQEmu` writes
+        // it (`reliable_stream_connection.cpp`), parses to 512.
+        let mut emulator = vec![0u8; 17];
+        emulator[..2].copy_from_slice(&[0x00, 0x02]);
+        emulator[2..6].copy_from_slice(&0x1234_5678u32.to_be_bytes());
+        emulator[6..10].copy_from_slice(&7u32.to_be_bytes());
+        emulator[10] = 2;
+        emulator[11] = 1;
+        emulator[13..17].copy_from_slice(&[0x00, 0x00, 0x02, 0x00]);
+        let parsed = parse_session_response(&emulator).unwrap();
+        assert_eq!(parsed.max_packet_size, 512);
+        assert_eq!((parsed.connect_code, parsed.encode_key), (0x1234_5678, 7));
+    }
 
     #[test]
     fn build_ack_wire_format() {

@@ -220,7 +220,10 @@ mod tests {
         expected[8] = 160;
         assert_eq!(fall.body, expected);
         assert_eq!(eqmac_damage(300, Hazard::Freezing, 5).unwrap().body[4], 246);
-        assert_eq!(eqmac_notice(300, Hazard::Drowning, 5).unwrap().body[24], 251);
+        assert_eq!(
+            eqmac_notice(300, Hazard::Drowning, 5).unwrap().body[24],
+            251
+        );
     }
 
     #[test]
