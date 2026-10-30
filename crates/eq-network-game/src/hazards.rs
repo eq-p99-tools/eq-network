@@ -26,6 +26,10 @@ use anyhow::{ensure, Result};
 pub const ENV_DAMAGE_OPCODE: u16 = 0x31b3;
 /// `EQMac`'s `OP_EnvDamage` (0x401e swapped), 36 bytes.
 pub const EQMAC_ENV_DAMAGE_OPCODE: u16 = 0x1e40;
+/// `OP_SafeFallSuccess` (Titanium), with no body.
+pub const SAFE_FALL_OPCODE: u16 = 0x3b21;
+/// `EQMac`'s `OP_SafeFallSuccess` (0x41ab swapped), with no body.
+pub const EQMAC_SAFE_FALL_OPCODE: u16 = 0xab41;
 
 /// `EQMac`'s `OP_EnvDamage` body.
 const EQMAC_NOTICE_SIZE: usize = 36;
@@ -153,6 +157,25 @@ pub fn eqmac_damage(spawn_id: u16, hazard: Hazard, amount: u32) -> Result<Encode
     })
 }
 
+/// The notice that the player's Safe Fall skill lessened a fall
+/// (`OP_SafeFallSuccess`, no body). Both programs send it whenever the
+/// player has the skill and the fall would hurt, before the damage, even
+/// when the skill leaves none (from the program: Titanium sitting 6, T2, and
+/// TAKP Batch 1 R3; checklist 6.147). Both servers only check the skill for
+/// a raise on it (`EQMacEmu` and `EQEmu` `Handle_OP_SafeFallSuccess` in
+/// `zone/client_packet.cpp`, Settle results S3).
+#[must_use]
+pub const fn safe_fall(titanium: bool) -> EncodedCommand {
+    EncodedCommand {
+        opcode: if titanium {
+            SAFE_FALL_OPCODE
+        } else {
+            EQMAC_SAFE_FALL_OPCODE
+        },
+        body: Vec::new(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -198,6 +221,13 @@ mod tests {
         assert_eq!(fall.body, expected);
         assert_eq!(eqmac_damage(300, Hazard::Freezing, 5).unwrap().body[4], 246);
         assert_eq!(eqmac_notice(300, Hazard::Drowning, 5).unwrap().body[24], 251);
+    }
+
+    #[test]
+    fn safe_fall_is_an_empty_notice_on_both_generations() {
+        assert_eq!(safe_fall(true).opcode, SAFE_FALL_OPCODE);
+        assert_eq!(safe_fall(false).opcode, EQMAC_SAFE_FALL_OPCODE);
+        assert!(safe_fall(true).body.is_empty() && safe_fall(false).body.is_empty());
     }
 
     #[test]

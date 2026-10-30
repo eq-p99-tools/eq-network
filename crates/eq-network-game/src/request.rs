@@ -304,6 +304,8 @@ pub enum Request {
         /// How much, before the server's own reductions.
         amount: u32,
     },
+    /// The notice that Safe Fall lessened a fall.
+    SafeFall,
     /// The notice that goes before the damage report, where the client
     /// generation sends one.
     EnvironmentalNotice {
@@ -422,6 +424,7 @@ pub fn titanium(request: &Request, sender: Sender<'_>) -> Result<EncodedCommand>
         Request::EnvironmentalDamage { hazard, amount } => {
             hazards::titanium_damage(sender.spawn(), *hazard, *amount)?
         }
+        Request::SafeFall => hazards::safe_fall(true),
     })
 }
 
@@ -445,6 +448,7 @@ pub fn eqmac(request: &Request, sender: Sender<'_>) -> Result<EncodedCommand> {
         Request::EnvironmentalNotice { hazard, amount } => {
             hazards::eqmac_notice(sender.spawn(), *hazard, *amount)
         }
+        Request::SafeFall => Ok(hazards::safe_fall(false)),
         Request::Command(command) => command::encode(GameDialect::EqMac, command, sender.name),
         Request::InviteToGroup(name) => group::eqmac_invite(name, sender.name),
         Request::FollowGroup(inviter) => group::eqmac_follow(inviter, sender.name),

@@ -349,8 +349,13 @@ pub enum GameCommand {
         session_id: u64,
         /// What did it.
         hazard: crate::hazards::Hazard,
-        /// How much, before the server's own reductions.
+        /// How much, before the server's own reductions; none where Safe
+        /// Fall took it all.
         amount: u32,
+        /// Whether the player's Safe Fall skill lessened a fall, which both
+        /// programs announce before the damage, even when nothing is left of
+        /// it ([`crate::hazards::safe_fall`]).
+        safe_fall: bool,
     },
     /// Eat or drink the item in a slot by hand. The session eats and drinks
     /// on its own when the player turns hungry or thirsty.

@@ -981,6 +981,7 @@ mod tests {
                 session_id,
                 hazard: eq_network_game::hazards::Hazard::Falling,
                 amount: 160,
+                safe_fall: false,
             },
         ]
     }

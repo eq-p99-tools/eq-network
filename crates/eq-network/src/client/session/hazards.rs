@@ -47,7 +47,13 @@ impl Feature for Hazards {
         _world: &mut World,
         out: &mut Out<'_, '_>,
     ) -> Result<()> {
-        let ClientCommand::EnvironmentalDamage { hazard, amount, .. } = *command else {
+        let ClientCommand::EnvironmentalDamage {
+            hazard,
+            amount,
+            safe_fall,
+            ..
+        } = *command
+        else {
             return Ok(());
         };
         if !self.taken.contains(&hazard) {
@@ -56,6 +62,15 @@ impl Feature for Hazards {
                 &format!("This server does not take {hazard:?} damage from the client"),
                 out.log,
             );
+        }
+        // Both programs announce Safe Fall first, even when it left nothing.
+        if safe_fall && hazard == Hazard::Falling {
+            out.request(&Request::SafeFall)?;
+            if amount == 0 {
+                return out
+                    .log
+                    .diagnostic("Safe Fall took all of a fall's damage".into());
+            }
         }
         let notice = if self.notice {
             Some(out.encode(&Request::EnvironmentalNotice { hazard, amount }))
@@ -94,6 +109,7 @@ mod tests {
             session_id: 5,
             hazard,
             amount,
+            safe_fall: false,
         }
     }
 
@@ -131,6 +147,30 @@ mod tests {
                 hazards::eqmac_damage(7, Hazard::Falling, 160).unwrap(),
             ]
         );
+    }
+
+    #[test]
+    fn safe_fall_is_announced_first_even_when_it_leaves_nothing() {
+        let mut feature = Hazards::new(&[Hazard::Falling], false);
+        let mut world = World::new(5);
+        let lessened = |amount| ClientCommand::EnvironmentalDamage {
+            session_id: 5,
+            hazard: Hazard::Falling,
+            amount,
+            safe_fall: true,
+        };
+        let outcome = testing::run(|out| feature.handle(&lessened(40), &mut world, out));
+        outcome.result.unwrap();
+        assert_eq!(
+            outcome.sent,
+            [
+                hazards::safe_fall(true),
+                hazards::titanium_damage(7, Hazard::Falling, 40).unwrap(),
+            ]
+        );
+        let outcome = testing::run(|out| feature.handle(&lessened(0), &mut world, out));
+        outcome.result.unwrap();
+        assert_eq!(outcome.sent, [hazards::safe_fall(true)]);
     }
 
     #[test]
