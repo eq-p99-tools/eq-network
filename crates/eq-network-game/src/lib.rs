@@ -105,6 +105,8 @@ pub mod spells;
 pub mod stats;
 /// The player's target as the server sets it, and whom that target targets.
 pub mod targets;
+/// The server's regeneration tick and how often it comes.
+pub mod ticks;
 /// Tradeskill combines in the player's own containers.
 pub mod tradeskills;
 /// Training skills at a guildmaster.

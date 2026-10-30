@@ -505,12 +505,16 @@ pub enum Capability {
     Sacrifice,
     /// Accepting or declining a translocate, which moves the player.
     Translocate,
+    /// Showing when the server's regeneration tick lands, learned from the
+    /// packets the server sends at it ([`WorldEvent::ServerTick`]). The
+    /// session sends nothing for it.
+    ServerTicks,
 }
 
 impl Capability {
     /// Every capability, in order: what a session offers when its server and
     /// client generation support everything.
-    pub const ALL: [Self; 38] = [
+    pub const ALL: [Self; 39] = [
         Self::Casting,
         Self::Spellbook,
         Self::Inventory,
@@ -549,6 +553,7 @@ impl Capability {
         Self::BleedingOut,
         Self::Sacrifice,
         Self::Translocate,
+        Self::ServerTicks,
     ];
 }
 
@@ -1071,6 +1076,11 @@ pub enum WorldEvent {
     /// The zone's weather, once the player is in the zone and whenever it
     /// changes.
     Weather(crate::clock::Weather),
+    /// The server's regeneration tick landed just now, as the packets it
+    /// sends at the tick show; the next lands one period after it, and up
+    /// to the slip later. Nothing is known of the tick in a new zone until
+    /// the first, as the server starts it again there.
+    ServerTick(crate::ticks::Cadence),
     /// A consent to drag a player's corpses given or taken back, told to
     /// the owner and to the one consented.
     Consent(crate::corpses::Consent),
@@ -1843,6 +1853,7 @@ mod tests {
             Capability::BleedingOut => 35,
             Capability::Sacrifice => 36,
             Capability::Translocate => 37,
+            Capability::ServerTicks => 38,
         };
         for (index, capability) in Capability::ALL.into_iter().enumerate() {
             assert_eq!(place(capability), index, "{capability:?}");

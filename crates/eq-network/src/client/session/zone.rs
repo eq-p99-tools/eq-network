@@ -1422,11 +1422,12 @@ mod tests {
             Capability::EnvironmentalDamage,
             Capability::Sacrifice,
             Capability::Translocate,
+            Capability::ServerTicks,
         ] {
             assert!(eqemu.contains(&capability));
             assert!(!p99.contains(&capability));
         }
-        assert_eq!(eqemu.len(), p99.len() + 17);
+        assert_eq!(eqemu.len(), p99.len() + 18);
         // EQMac servers talk; TAKP also casts, keeps the spellbook, camps,
         // moves and moves items, follows zone changes and takes the client's
         // report of a bleed-out, which Quarm does not yet.

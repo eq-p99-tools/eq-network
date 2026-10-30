@@ -50,6 +50,7 @@ use super::{
     spellbook::{Edits, Spellbook},
     talk::Talk,
     targeting::Targeting,
+    ticks::{Marks, Regeneration, Ticks},
     tradeskills::Tradeskills,
     training::Training,
     transfers::{Home, Transfers},
@@ -376,6 +377,12 @@ pub(super) trait ServerType: Sync {
         None
     }
 
+    /// The server's regeneration tick, learned from the packets the server
+    /// sends at it, for a front end to show.
+    fn ticks(&self, _setup: &Setup<'_>) -> Provided {
+        None
+    }
+
     /// Every feature the server type provides, in the order the zone session
     /// offers them each command, packet and timer.
     fn features(&self, setup: &Setup<'_>) -> Vec<Provision> {
@@ -415,6 +422,7 @@ pub(super) trait ServerType: Sync {
             self.socials(setup),
             self.raids(setup),
             self.hazards(setup),
+            self.ticks(setup),
         ]
         .into_iter()
         .flatten()
@@ -512,10 +520,10 @@ mod shared {
     use super::{
         Abilities, Ability, Allowances, Belongings, BleedingOut, Camp, Casting, Character, Clock,
         Combat, Corpses, Doors, Edits, Entities, Exchanges, Feature, GameDialect, GroundObjects,
-        Groups, Hazard, Hazards, HideAnswer, Home, ItemCount, Listing, Looting, Map,
+        Groups, Hazard, Hazards, HideAnswer, Home, ItemCount, Listing, Looting, Map, Marks,
         MerchantOffers, Motion, MoveRules, Pets, Quotes, Raids, Reading, Resurrection, Sacrifice,
-        Setup, Socials, Spellbook, Talk, Targeting, Tradeskills, Training, Transfers, Translocate,
-        Who,
+        Setup, Socials, Spellbook, Talk, Targeting, Ticks, Tradeskills, Training, Transfers,
+        Translocate, Who,
     };
 
     pub(super) fn casting() -> Box<dyn Feature> {
@@ -673,6 +681,11 @@ mod shared {
     /// Reporting the hazards the server type takes from the client.
     pub(super) fn hazards(taken: &'static [Hazard]) -> Box<dyn Feature> {
         Box::new(Hazards::new(taken))
+    }
+
+    /// The tick, as the server type's marks show it.
+    pub(super) fn ticks(marks: Box<dyn Marks>) -> Box<dyn Feature> {
+        Box::new(Ticks::new(marks))
     }
 }
 
@@ -1017,6 +1030,13 @@ impl ServerType for EqEmu {
 
     fn hazards(&self, _setup: &Setup<'_>) -> Provided {
         offer(shared::hazards(&EQEMU_HAZARDS))
+    }
+
+    /// `EQEmu` regenerates the player's HP, mana and endurance on the tick
+    /// and reports each as it changes, so the tick shows while any of them
+    /// regenerates.
+    fn ticks(&self, _setup: &Setup<'_>) -> Provided {
+        offer(shared::ticks(Box::<Regeneration>::default()))
     }
 }
 
@@ -1411,13 +1431,13 @@ mod tests {
     fn p99_and_eqemu_provide_every_feature_one_each() {
         // Training, resurrection, reading, tradeskills, the map, deleting
         // spells, merchants' offers, groups, the player's listing, dice,
-        // emotes, assisting, raids and the world's damage are checked on
+        // emotes, assisting, raids, the world's damage and the server's tick are checked on
         // EQEmu alone so far; only EQEmu waits for the answer to the end of
         // hiding; and only EQEmu answers sacrifices and translocates, read
         // from its source and not yet checked live.
         for (protocol, count) in [
             (ServerProtocol::Project1999, 21),
-            (ServerProtocol::EqEmu, 34),
+            (ServerProtocol::EqEmu, 35),
         ] {
             let server = server_type(protocol);
             let setup = Setup::new("Tester", AutoEat::default());
@@ -1440,6 +1460,7 @@ mod tests {
             Capability::Assisting,
             Capability::Raiding,
             Capability::EnvironmentalDamage,
+            Capability::ServerTicks,
         ] {
             assert!(!offers(server_type(ServerProtocol::Project1999)).contains(&capability));
             assert!(offers(server_type(ServerProtocol::EqEmu)).contains(&capability));
