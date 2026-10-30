@@ -18,7 +18,7 @@
 //! for the rules; `common/features.h` for recovery times;
 //! `Client::CancelSneakHide` (`zone/client_process.cpp`) and TAKP's
 //! `Mob::CommonBreakSneakHide` (`zone/attack.cpp`) for the end of hiding.
-use crate::command::EncodedCommand;
+use crate::{command::EncodedCommand, GameDialect};
 use serde::Serialize;
 use std::time::Duration;
 
@@ -111,6 +111,8 @@ pub enum Recovery {
     Mend,
     /// Feign Death.
     FeignDeath,
+    /// Sense Heading, which only the Titanium client makes wait.
+    SenseHeading,
 }
 
 impl Ability {
@@ -222,7 +224,7 @@ impl Ability {
         self.strikes() || matches!(self, Self::Taunt)
     }
 
-    /// The timer it waits on; Sense Heading waits on none.
+    /// The timer it waits on.
     #[must_use]
     pub const fn recovery(self) -> Option<Recovery> {
         Some(match self {
@@ -243,17 +245,52 @@ impl Ability {
             Self::BindWound => Recovery::BindWound,
             Self::Mend => Recovery::Mend,
             Self::FeignDeath => Recovery::FeignDeath,
-            Self::SenseHeading => return None,
+            Self::SenseHeading => Recovery::SenseHeading,
         })
     }
 
-    /// How long `EQEmu` makes its timer wait when nothing shortens it: its
-    /// `features.h` time less the second its handlers take off. Haste
-    /// shortens a strike's, and skill reuse focus any of them, so this is
-    /// the longest the server waits. A bandaging holds the next until it
-    /// ends, which takes this long unless it fails first.
+    /// How long the generation's client keeps the button waiting after a
+    /// use, from the official client where it has been read and otherwise
+    /// how long `EQEmu` makes its timer wait when nothing shortens it (its
+    /// `features.h` time less the second its handlers take off). A
+    /// bandaging also holds the next until it ends.
+    ///
+    /// Titanium, from the program (titanium-program-s8b T7-a, s8c T7): the
+    /// client's per-skill table, which it waits out in full since the last
+    /// use; Bind Wound waits one second more. The client takes off only the
+    /// skill reuse focus (spell effect 227), which this library doesn't
+    /// track, so it waits the full time: slower than an official client
+    /// with the focus, never faster. Feign Death, Forage, Hide, Sneak and
+    /// Sense Heading are read from the table by index (the decompile
+    /// thread's 10-30 skill-id read). The client also keeps Hide on a
+    /// ready-at time and holds Sneak while its controlled spawn's state is
+    /// set (s8c T7); neither is modelled, only the wait. Frenzy keeps the
+    /// emulator's time: the client skips the timer for its skill type, so
+    /// whether its table value applies is unread. `EQMac` keeps the
+    /// emulator's times throughout, Sense Heading none; the TAKP program's
+    /// table is unread.
     #[must_use]
-    pub const fn reuse(self) -> Duration {
+    pub const fn reuse(self, dialect: GameDialect) -> Duration {
+        if let GameDialect::Titanium = dialect {
+            let millis = match self {
+                // Unread: the emulator's time below.
+                Self::Frenzy => 0,
+                Self::SenseHeading => 2_000,
+                Self::TigerClaw => 5_500,
+                Self::EagleStrike | Self::Taunt => 6_000,
+                Self::DragonPunch => 6_200,
+                Self::Kick | Self::Bash => 8_000,
+                Self::FlyingKick | Self::RoundKick => 8_500,
+                Self::Backstab | Self::FeignDeath | Self::Hide | Self::Sneak => 10_000,
+                Self::BindWound => 11_000,
+                Self::Fishing => 12_000,
+                Self::Forage => 100_000,
+                Self::Mend => 360_000,
+            };
+            if millis > 0 {
+                return Duration::from_millis(millis);
+            }
+        }
         Duration::from_secs(match self {
             Self::Kick | Self::Bash | Self::EagleStrike | Self::Taunt => 4,
             Self::TigerClaw | Self::DragonPunch => 5,
@@ -460,22 +497,71 @@ mod tests {
         assert_eq!(Ability::from_skill(0), None);
         assert_eq!(Ability::Kick.recovery(), Ability::Bash.recovery());
         assert_ne!(Ability::Kick.recovery(), Ability::Taunt.recovery());
-        assert_eq!(Ability::SenseHeading.recovery(), None);
+        assert_eq!(
+            Ability::SenseHeading.recovery(),
+            Some(Recovery::SenseHeading)
+        );
+        assert_eq!(
+            Ability::SenseHeading.reuse(GameDialect::EqMac),
+            Duration::ZERO
+        );
         assert!(Ability::Backstab.strikes() && Ability::Taunt.at_target());
-        assert_eq!(Ability::Kick.reuse(), Duration::from_secs(4));
+        assert_eq!(
+            Ability::Kick.reuse(GameDialect::EqMac),
+            Duration::from_secs(4)
+        );
         let mut skills = vec![0; 100];
         skills[30] = 1;
         assert!(Ability::Kick.known(&skills, 1) && !Ability::Bash.known(&skills, 1));
         assert!(Ability::Bash.known(&skills, 10), "an Ogre slams");
         assert!(!Ability::Kick.known(&[], 1));
-        assert_eq!(Ability::Mend.reuse(), Duration::from_secs(360));
+        for dialect in [GameDialect::Titanium, GameDialect::EqMac] {
+            assert_eq!(Ability::Mend.reuse(dialect), Duration::from_secs(360));
+        }
         // Anyone fishes, and waits ten seconds between casts.
         assert!(Ability::Fishing.known(&[], 1));
-        assert_eq!(Ability::Fishing.reuse(), Duration::from_secs(10));
+        assert_eq!(
+            Ability::Fishing.reuse(GameDialect::EqMac),
+            Duration::from_secs(10)
+        );
         // Anyone bandages, which takes as long as the server's bandaging.
         assert!(Ability::BindWound.known(&[], 1) && !Ability::BindWound.at_target());
-        assert_eq!(Ability::BindWound.reuse(), crate::bind_wound::DURATION);
+        assert_eq!(
+            Ability::BindWound.reuse(GameDialect::EqMac),
+            crate::bind_wound::DURATION
+        );
         assert_eq!(Ability::BindWound.encode(7), crate::bind_wound::encode(7));
+    }
+
+    #[test]
+    fn titanium_waits_as_long_as_the_official_client() {
+        let titanium = |ability: Ability| ability.reuse(GameDialect::Titanium).as_millis();
+        for (ability, millis) in [
+            (Ability::Backstab, 10_000),
+            (Ability::BindWound, 11_000),
+            (Ability::Bash, 8_000),
+            (Ability::DragonPunch, 6_200),
+            (Ability::EagleStrike, 6_000),
+            (Ability::FlyingKick, 8_500),
+            (Ability::Kick, 8_000),
+            (Ability::Mend, 360_000),
+            (Ability::RoundKick, 8_500),
+            (Ability::TigerClaw, 5_500),
+            (Ability::Fishing, 12_000),
+            (Ability::Taunt, 6_000),
+            (Ability::FeignDeath, 10_000),
+            (Ability::Forage, 100_000),
+            (Ability::Hide, 10_000),
+            (Ability::Sneak, 10_000),
+            (Ability::SenseHeading, 2_000),
+            // Whether the table's value applies is unread: the emulator's.
+            (Ability::Frenzy, 9_000),
+        ] {
+            assert_eq!(titanium(ability), millis, "{ability:?}");
+        }
+        for ability in Ability::ALL {
+            assert!(ability.reuse(GameDialect::Titanium) >= ability.reuse(GameDialect::EqMac));
+        }
     }
 
     #[test]
