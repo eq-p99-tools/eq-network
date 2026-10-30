@@ -150,6 +150,16 @@ impl MotionSession {
         self
     }
 
+    /// Lets fall samples descend as fast as the client generation's falls
+    /// go, where it says; otherwise at most [`super::MAX_FALL_SPEED`].
+    #[must_use]
+    pub fn with_fall_speed(mut self, fall_speed: Option<f32>) -> Self {
+        if let Some(fall_speed) = fall_speed {
+            self.guard.set_fall_speed(fall_speed);
+        }
+        self
+    }
+
     /// Permits [`MovementMode::Fall`] samples, where the server type takes
     /// falls from the client.
     #[must_use]

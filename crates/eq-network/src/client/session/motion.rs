@@ -289,7 +289,8 @@ impl Feature for Motion {
             world.body.motion = Some(
                 MotionSession::new(world.session_id, player.spawn_id, player.position, admitted)?
                     .with_falls(self.falls)
-                    .with_spacing(out.wire.position_spacing()),
+                    .with_spacing(out.wire.position_spacing())
+                    .with_fall_speed(out.wire.fall_speed()),
             );
         }
         Ok(())

@@ -60,6 +60,12 @@ pub(super) trait Wire: Sync {
         None
     }
 
+    /// The fastest the generation's client lets the player fall, in world
+    /// units per second; none where it is unread.
+    fn fall_speed(&self) -> Option<f32> {
+        None
+    }
+
     /// The least time the generation's client leaves between two of the
     /// player's own position updates; none where it is unread.
     fn position_spacing(&self) -> Option<std::time::Duration> {
@@ -247,6 +253,10 @@ impl Wire for EqMac {
 
     fn coverage(&self, opcode: u16) -> Option<ServerMessage> {
         coverage::eqmac(opcode)
+    }
+
+    fn fall_speed(&self) -> Option<f32> {
+        Some(eq_network_game::movement::EQMAC_FALL_SPEED)
     }
 
     fn encode(&self, request: &Request, sender: Sender<'_>) -> Result<EncodedCommand> {

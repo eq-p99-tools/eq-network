@@ -20,6 +20,15 @@ pub const MAX_GROUNDED_STEP: f32 = 2.0;
 /// or server limit.
 pub const MAX_FALL_SPEED: f32 = 40.0;
 
+/// The fastest the `EQMac` program's falls go, in world units per second.
+/// The program pulls a falling body down by 0.4 per tick squared, a tick
+/// being 50 ms, and keeps 0.99 of its speed each frame in the air (from the
+/// program, TAKP Batch 1 R3; checklist 6.161), so at one frame a tick a fall
+/// tends to 39.6 units a tick. The air factor's frame is the program's own,
+/// so how fast the official client tends to fall depends on its frame rate
+/// (unsure).
+pub const EQMAC_FALL_SPEED: f32 = 39.6 * 20.0;
+
 /// How often a standing character repeats its position. The official P99 client
 /// sends one about every 1.1 s (median of its recorded stationary updates).
 pub const STATIONARY_HEARTBEAT: Duration = Duration::from_secs(1);
@@ -195,6 +204,8 @@ pub struct MovementGuard {
     input_epoch: Instant,
     speed: Option<f32>,
     bounds: Option<MovementBounds>,
+    /// The fastest descent a fall sample may claim, in world units per second.
+    fall_speed: f32,
 }
 
 impl MovementGuard {
@@ -208,7 +219,14 @@ impl MovementGuard {
             input_epoch: now,
             speed: None,
             bounds: None,
+            fall_speed: MAX_FALL_SPEED,
         }
+    }
+
+    /// Lets a fall sample descend as fast as the client generation's own
+    /// falls go, in world units per second, in place of [`MAX_FALL_SPEED`].
+    pub fn set_fall_speed(&mut self, fall_speed: f32) {
+        self.fall_speed = fall_speed;
     }
 
     /// Pins the safe volume once for this session. Reconnecting requires new bounds.
@@ -290,7 +308,7 @@ impl MovementGuard {
         // stairs and slopes one riser at a time.
         let vertical = if request.mode == MovementMode::Fall {
             delta[2] <= MAX_GROUNDED_STEP
-                && -delta[2] <= MAX_FALL_SPEED * elapsed + MAX_GROUNDED_STEP
+                && -delta[2] <= self.fall_speed * elapsed + MAX_GROUNDED_STEP
         } else {
             delta[2].abs() <= MAX_GROUNDED_STEP
         };

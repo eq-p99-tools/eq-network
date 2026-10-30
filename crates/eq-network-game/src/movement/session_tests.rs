@@ -582,3 +582,22 @@ fn a_correction_drops_a_held_sample() {
         })
         .unwrap());
 }
+
+#[test]
+fn a_generation_may_fall_faster_than_the_provisional_limit() {
+    let start = Instant::now();
+    let now = start + Duration::from_millis(100);
+    let mut fall = request(now, 0.0);
+    fall.mode = MovementMode::Fall;
+    // 20 units in 0.1 s is past 40 units a second, within EQMac's falls.
+    fall.position.z = -20.0;
+    let mut provisional = setup(start).with_falls(true);
+    assert!(provisional
+        .send_move(&fall, now, |_| panic!("faster than the provisional limit"))
+        .is_err());
+    let mut eqmac = setup(start)
+        .with_falls(true)
+        .with_fall_speed(Some(super::super::EQMAC_FALL_SPEED));
+    eqmac.send_move(&fall, now, |_| Ok(())).unwrap();
+    assert_eq!(eqmac.position().z.to_bits(), (-20.0f32).to_bits());
+}
