@@ -213,7 +213,10 @@ pub enum Request {
     Depart,
     /// Report that the player bled out: the client's own death report, for
     /// a death the server leaves to it.
-    BledOut,
+    BledOut {
+        /// The player's level, which the report carries.
+        level: u8,
+    },
     /// Take a transfer the server offered or a zone line asked for.
     AnswerZoneOffer {
         /// The zone, or zero for the bind point the server resolves.
@@ -385,7 +388,7 @@ pub fn titanium(request: &Request, sender: Sender<'_>) -> Result<EncodedCommand>
         } => zoning::titanium_answer(sender.name, (*zone_id, *instance_id), *position, *reason)?,
         Request::SaveOnZone => zoning::titanium_save_on_zone(),
         Request::Depart => zoning::titanium_depart(sender.spawn()),
-        Request::BledOut => anyhow::bail!("the Titanium client cannot send {request:?}"),
+        Request::BledOut { .. } => anyhow::bail!("the Titanium client cannot send {request:?}"),
         Request::Memorize { gem, spell_id } => spells::titanium_memorize(*gem, *spell_id),
         Request::Forget { gem, spell_id } => spells::titanium_forget(*gem, *spell_id),
         Request::Scribe { slot, spell_id } => spells::titanium_scribe(*slot, *spell_id),
@@ -463,7 +466,7 @@ pub fn eqmac(request: &Request, sender: Sender<'_>) -> Result<EncodedCommand> {
         Request::Scribe { slot, spell_id } => spells::eqmac_scribe(*slot, *spell_id),
         Request::SwapSpells { from, to } => spells::eqmac_swap(*from, *to),
         Request::MoveCoins(transfer) => transfer.encode_eqmac(),
-        Request::BledOut => crate::quarm::bled_out(sender.spawn()),
+        Request::BledOut { level } => crate::quarm::bled_out(sender.spawn(), *level),
         Request::AnswerSacrifice { offer, accept } => {
             Ok(confirmations::eqmac_sacrifice_answer(offer, *accept))
         }
@@ -546,16 +549,16 @@ mod tests {
     #[test]
     fn only_the_eqmac_client_reports_that_it_bled_out() {
         assert_eq!(
-            eqmac(&Request::BledOut, PLAYER).unwrap(),
-            crate::quarm::bled_out(7).unwrap()
+            eqmac(&Request::BledOut { level: 34 }, PLAYER).unwrap(),
+            crate::quarm::bled_out(7, 34).unwrap()
         );
         // Without a spawn there is no one to report.
         let unspawned = Sender {
             spawn_id: None,
             ..PLAYER
         };
-        assert!(eqmac(&Request::BledOut, unspawned).is_err());
-        assert!(titanium(&Request::BledOut, PLAYER).is_err());
+        assert!(eqmac(&Request::BledOut { level: 34 }, unspawned).is_err());
+        assert!(titanium(&Request::BledOut { level: 34 }, PLAYER).is_err());
     }
 
     #[test]

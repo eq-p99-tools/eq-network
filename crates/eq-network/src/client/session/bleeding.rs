@@ -138,7 +138,10 @@ impl Feature for BleedingOut {
         let Some(spawn_id) = world.own_spawn else {
             return actions::refuse(command, "The zone never named the player's spawn", out.log);
         };
-        out.request(&Request::BledOut)?;
+        let Some(level) = world.player.as_ref().map(|player| player.level) else {
+            return actions::refuse(command, "The zone never described the player", out.log);
+        };
+        out.request(&Request::BledOut { level })?;
         out.log.diagnostic(format!(
             "Death: reported that the player bled out at {current} HP with what their items add (threshold {})",
             self.threshold
@@ -203,7 +206,9 @@ mod tests {
     /// An admitted player, spawn 7, whose items the session knows.
     fn world() -> World {
         let mut world = World::new(5);
-        world.player.admit(testing::player(7));
+        let mut player = testing::player(7);
+        player.level = 34;
+        world.player.admit(player);
         world.own_spawn = Some(7);
         world.admitted = Some(Instant::now());
         let mut inventory = Inventory::default();
@@ -276,7 +281,7 @@ mod tests {
         // -36 is -11 with them: it goes out, and the player's death is news.
         hear(&mut bleeding, &mut world, 7, -36);
         let (sent, _) = ask(&mut bleeding, &mut world);
-        assert_eq!(sent, [eq_network_game::quarm::bled_out(7).unwrap()]);
+        assert_eq!(sent, [eq_network_game::quarm::bled_out(7, 34).unwrap()]);
         let news = world.take_news();
         let [Message::Event(WorldEvent::Death(death))] = &news[..] else {
             panic!("{news:?}");

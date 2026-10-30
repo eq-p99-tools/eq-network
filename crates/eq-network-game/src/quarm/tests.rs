@@ -838,18 +838,20 @@ fn a_death_names_who_died_their_killer_and_corpse() {
 }
 
 #[test]
-fn a_bleed_out_report_names_only_the_player() {
-    let report = bled_out(7).unwrap();
+fn a_bleed_out_report_carries_the_programs_fields() {
+    let report = bled_out(7, 34).unwrap();
     assert_eq!(report.opcode, ZONE_DEATH);
     let mut expected = vec![0; 20];
     expected[..2].copy_from_slice(&7u16.to_le_bytes());
+    expected[6] = 34;
     expected[8..10].copy_from_slice(&[0xff, 0xff]);
-    expected[10] = 28;
+    expected[10] = 23;
+    expected[16] = 1;
     assert_eq!(report.body, expected);
     // It reads back as the player's death, with no killer and no corpse.
     let read = death(&report.body).unwrap();
     assert_eq!((read.spawn_id, read.killer_id, read.corpse_id), (7, 0, 0));
-    assert!(bled_out(0).is_err());
+    assert!(bled_out(0, 34).is_err());
 }
 
 #[test]

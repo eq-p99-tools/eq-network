@@ -1245,7 +1245,8 @@ mod tests {
         // Transfers heard the death the session made happen, and once the
         // death pause was over, the player asked their way home.
         assert!(world.lifecycle.is_dead());
-        assert_eq!(outcome.sent[0], quarm::bled_out(7).unwrap());
+        let level = world.player.as_ref().unwrap().level;
+        assert_eq!(outcome.sent[0], quarm::bled_out(7, level).unwrap());
         assert_eq!(outcome.sent[1].opcode, quarm::ZONE_CHANGE);
         assert_eq!(outcome.sent.len(), 2);
         // The host heard the threshold at admission, and then the death, as
