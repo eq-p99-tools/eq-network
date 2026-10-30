@@ -83,10 +83,7 @@ pub(super) fn titanium(
         false,
         stop.flag(),
     )?;
-    let mut ready = vec![0; 12];
-    ready[0] = 2;
-    ready[9] = 8;
-    session.send(1, &ready)?;
+    session.send(1, &session_ready())?;
     let mut deadline = Instant::now() + ANSWER_LIMIT;
     let mut credentials = None;
     let mut choice = WorldChoice::default();
@@ -154,6 +151,16 @@ pub(super) fn titanium(
             _ => unheard.tell(&Titanium, packet.opcode, packet.body.len(), log)?,
         }
     }
+}
+
+/// The session-ready body: the 10-byte header with sequence 2, then a 16-bit
+/// 8 at +10, where the Titanium client writes it (from the program:
+/// titanium-login-l1-part2, L-b; the 09-27 P99 capture agrees).
+fn session_ready() -> [u8; 12] {
+    let mut ready = [0; 12];
+    ready[0] = 2;
+    ready[10] = 8;
+    ready
 }
 
 /// Asks the Titanium login server to play on a listed world.
@@ -468,6 +475,18 @@ mod tests {
             choice.list(shared_list(), &config, &mut log).unwrap(),
             Some(&2)
         );
+    }
+
+    #[test]
+    fn session_ready_puts_its_8_at_10_and_nowhere_else() {
+        let ready = session_ready();
+        assert_eq!(ready.len(), 12);
+        assert_eq!(ready[0], 2);
+        assert_eq!(ready[10], 8);
+        assert!(ready
+            .iter()
+            .enumerate()
+            .all(|(at, &byte)| at == 0 || at == 10 || byte == 0));
     }
 
     #[test]

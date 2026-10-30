@@ -84,11 +84,17 @@ pub fn parse_login_base(data: &[u8]) -> Option<LoginBase> {
 
 #[must_use]
 /// Encode a NUL-delimited account name and password using legacy DES-CBC.
+///
+/// After the password come an empty third text and a 0 byte: the Titanium
+/// client writes three texts and a byte, and those two are its constructor
+/// defaults; their setter wasn't traced (from the program:
+/// titanium-login-l1-part3, P3-c). `EQEmu` reads only the first two texts.
 pub fn encrypt_login_credentials(username: &str, password: &str, key_iv: DesKeyIv) -> Vec<u8> {
     let mut plaintext = Zeroizing::new(username.as_bytes().to_vec());
     plaintext.push(0);
     plaintext.extend_from_slice(password.as_bytes());
     plaintext.push(0);
+    plaintext.extend_from_slice(&[0, 0]);
     des_encrypt(&plaintext, key_iv)
 }
 
@@ -361,6 +367,16 @@ mod tests {
         let (username, password) = decrypt_credentials(&encrypted, key_iv).unwrap();
         assert_eq!(username, "example-user");
         assert_eq!(password, "example-password");
+    }
+
+    #[test]
+    fn credentials_end_with_an_empty_text_and_a_zero_byte() {
+        let key_iv = DesKeyIv::default();
+        let encrypted = encrypt_login_credentials("abc", "de", key_iv);
+        let plaintext = des_decrypt(&encrypted, key_iv).unwrap();
+        assert_eq!(plaintext.len(), 16);
+        assert_eq!(&plaintext[..9], b"abc\0de\0\0\0");
+        assert!(plaintext[9..].iter().all(|&b| b == 0));
     }
 
     #[test]
