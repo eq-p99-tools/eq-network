@@ -33,6 +33,9 @@ use std::{
 
 /// One client generation's zone packets.
 pub(super) trait Wire: Sync {
+    /// The generation itself.
+    fn dialect(&self) -> GameDialect;
+
     /// What a zone packet says; nothing where the generation does not read
     /// the packet yet.
     fn messages(&self, _opcode: u16, _body: &[u8]) -> Vec<Message> {
@@ -163,6 +166,10 @@ pub(super) trait Wire: Sync {
 pub(super) struct Titanium;
 
 impl Wire for Titanium {
+    fn dialect(&self) -> GameDialect {
+        GameDialect::Titanium
+    }
+
     fn messages(&self, opcode: u16, body: &[u8]) -> Vec<Message> {
         eq_network_game::message::titanium(opcode, body)
     }
@@ -238,6 +245,10 @@ impl Wire for Titanium {
 pub(super) struct EqMac;
 
 impl Wire for EqMac {
+    fn dialect(&self) -> GameDialect {
+        GameDialect::EqMac
+    }
+
     fn messages(&self, opcode: u16, body: &[u8]) -> Vec<Message> {
         eq_network_game::message::eqmac(opcode, body)
     }

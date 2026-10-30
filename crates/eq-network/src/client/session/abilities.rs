@@ -283,13 +283,14 @@ impl Abilities {
         now: Instant,
     ) -> Result<()> {
         out.request(&Request::Ability { ability, target })?;
+        let reuse = ability.reuse(out.wire.dialect());
         if let Some(recovery) = ability.recovery() {
-            self.ready.insert(recovery, now + ability.reuse());
+            self.ready.insert(recovery, now + reuse);
         }
         out.log.send(ClientEvent::World(WorldEvent::AbilityUsed {
             session_id,
             ability,
-            ready_in: ability.reuse(),
+            ready_in: reuse,
         }))
     }
 }
@@ -350,6 +351,7 @@ mod tests {
         bind_wound::BindWoundEnd,
         inventory::{Inventory, InventoryUpdate},
         world::Position,
+        GameDialect,
     };
 
     /// An admitted warrior (7) with kick and taunt, beside an NPC (42), with
@@ -607,11 +609,15 @@ mod tests {
         // Taunt waits on its own timer.
         let outcome = try_ability(&mut abilities, &world, Ability::Taunt, now);
         assert_eq!(outcome.sent, [Ability::Taunt.encode(42)]);
+        // The Titanium client waits longer than the emulator's own timer.
+        let emulator = now + Ability::Kick.reuse(GameDialect::EqMac);
+        let outcome = try_ability(&mut abilities, &world, Ability::Kick, emulator);
+        assert!(outcome.sent.is_empty(), "sent {:?}", outcome.sent);
         let outcome = try_ability(
             &mut abilities,
             &world,
             Ability::Kick,
-            now + Ability::Kick.reuse(),
+            now + Ability::Kick.reuse(GameDialect::Titanium),
         );
         assert_eq!(outcome.sent.len(), 1);
         // A Barbarian bashes without the skill; an untargeted ability needs
