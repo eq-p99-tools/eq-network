@@ -306,6 +306,12 @@ pub enum Request {
     },
     /// The notice that Safe Fall lessened a fall.
     SafeFall,
+    /// The notice that goes before the auto-attack toggle, where the client
+    /// generation sends one.
+    AttackNotice {
+        /// Whether attacking turns on.
+        enabled: bool,
+    },
     /// The notice that goes before the damage report, where the client
     /// generation sends one.
     EnvironmentalNotice {
@@ -398,7 +404,9 @@ pub fn titanium(request: &Request, sender: Sender<'_>) -> Result<EncodedCommand>
         } => zoning::titanium_answer(sender.name, (*zone_id, *instance_id), *position, *reason)?,
         Request::SaveOnZone => zoning::titanium_save_on_zone(),
         Request::Depart => zoning::titanium_depart(sender.spawn()),
-        Request::EnvironmentalNotice { .. } | Request::BledOut { .. } => anyhow::bail!("the Titanium client cannot send {request:?}"),
+        Request::EnvironmentalNotice { .. }
+        | Request::AttackNotice { .. }
+        | Request::BledOut { .. } => anyhow::bail!("the Titanium client cannot send {request:?}"),
         Request::Memorize { gem, spell_id } => spells::titanium_memorize(*gem, *spell_id),
         Request::Forget { gem, spell_id } => spells::titanium_forget(*gem, *spell_id),
         Request::Scribe { slot, spell_id } => spells::titanium_scribe(*slot, *spell_id),
@@ -449,6 +457,10 @@ pub fn eqmac(request: &Request, sender: Sender<'_>) -> Result<EncodedCommand> {
             hazards::eqmac_notice(sender.spawn(), *hazard, *amount)
         }
         Request::SafeFall => Ok(hazards::safe_fall(false)),
+        Request::AttackNotice { enabled } => Ok(EncodedCommand {
+            opcode: crate::combat::EQMAC_AUTO_ATTACK2_OPCODE,
+            body: crate::combat::auto_attack(*enabled).to_vec(),
+        }),
         Request::Command(command) => command::encode(GameDialect::EqMac, command, sender.name),
         Request::InviteToGroup(name) => group::eqmac_invite(name, sender.name),
         Request::FollowGroup(inviter) => group::eqmac_follow(inviter, sender.name),

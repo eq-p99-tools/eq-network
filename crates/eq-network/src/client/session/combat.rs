@@ -4,9 +4,14 @@ use super::{
     ClientCommand,
 };
 use anyhow::Result;
+use eq_network_game::request::Request;
 
 /// Considers spawns and turns auto attack on and off.
-pub(super) struct Combat;
+pub(super) struct Combat {
+    /// Whether the client generation sends a notice before each change of
+    /// the toggle, as the `EQMac` program does.
+    pub(super) attack_notice: bool,
+}
 
 impl Feature for Combat {
     fn capabilities(&self) -> Vec<crate::world::Capability> {
@@ -39,6 +44,11 @@ impl Feature for Combat {
                     .diagnostic("Rejected considering an unavailable spawn".into());
             }
         }
+        if let ClientCommand::AutoAttack { enabled, .. } = *command {
+            if self.attack_notice {
+                out.request(&Request::AttackNotice { enabled })?;
+            }
+        }
         out.command(command).map(drop)
     }
 }
@@ -51,8 +61,37 @@ mod tests {
     use std::time::Instant;
 
     #[test]
+    fn the_eqmac_program_sends_its_notice_before_the_toggle() {
+        let mut combat = Combat {
+            attack_notice: true,
+        };
+        let mut world = World::new(5);
+        let attack = ClientCommand::AutoAttack {
+            session_id: 5,
+            enabled: true,
+            created: Instant::now(),
+        };
+        let outcome = testing::run(|out| {
+            out.wire = &super::super::wire::EqMac;
+            combat.handle(&attack, &mut world, out)
+        });
+        outcome.result.unwrap();
+        let opcodes: Vec<_> = outcome.sent.iter().map(|packet| packet.opcode).collect();
+        assert_eq!(
+            opcodes,
+            [
+                eq_network_game::combat::EQMAC_AUTO_ATTACK2_OPCODE,
+                eq_network_game::combat::EQMAC_AUTO_ATTACK_OPCODE
+            ]
+        );
+        assert!(outcome.sent.iter().all(|packet| packet.body == [1, 0, 0, 0]));
+    }
+
+    #[test]
     fn the_player_considers_only_a_spawn_they_can_see() {
-        let mut combat = Combat;
+        let mut combat = Combat {
+            attack_notice: false,
+        };
         let mut world = World::new(5);
         world.own_spawn = Some(7);
         world.spawns.insert(testing::spawn(8, SpawnKind::Npc));

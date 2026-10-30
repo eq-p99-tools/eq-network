@@ -568,8 +568,10 @@ mod shared {
         Box::new(Targeting)
     }
 
-    pub(super) fn combat() -> Box<dyn Feature> {
-        Box::new(Combat)
+    /// Considering and attacking, with a notice before each change of the
+    /// attack toggle where the client generation sends one.
+    pub(super) fn combat(attack_notice: bool) -> Box<dyn Feature> {
+        Box::new(Combat { attack_notice })
     }
 
     pub(super) fn looting() -> Box<dyn Feature> {
@@ -801,7 +803,7 @@ impl ServerType for Project1999 {
     }
 
     fn combat(&self, _setup: &Setup<'_>) -> Provided {
-        offer(shared::combat())
+        offer(shared::combat(false))
     }
 
     fn looting(&self, _setup: &Setup<'_>) -> Provided {
@@ -921,7 +923,7 @@ impl ServerType for EqEmu {
     }
 
     fn combat(&self, _setup: &Setup<'_>) -> Provided {
-        offer(shared::combat())
+        offer(shared::combat(false))
     }
 
     fn looting(&self, _setup: &Setup<'_>) -> Provided {
@@ -1201,7 +1203,7 @@ impl ServerType for Takp {
     }
 
     fn combat(&self, _setup: &Setup<'_>) -> Provided {
-        offer(shared::combat())
+        offer(shared::combat(true))
     }
 }
 
