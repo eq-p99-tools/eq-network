@@ -15,11 +15,17 @@
 //!
 //! `GameTime` keeps the calendar, which both generations share: the day
 //! turns as the wire's hour goes from 24 to 1. How a client names an hour
-//! is its own. The Mac client keeps its hours from 0 to 23 (the wire's less
-//! one), turning the day as they wrap, and shows the wire's hour as sent:
-//! 13 as 1 PM, 24 as 12 AM (from the program, the official TAKP client's
-//! `eqgame.exe` read statically on 10-30). That the Titanium client shows
-//! wire hour 1 as 12 AM is inferred: recording checklist items 1.2 and 6.115.
+//! is its own. Both official clients store the wire's hour unchanged and
+//! run their clocks on in hours 1 to 24. The Mac client keeps its hours from
+//! 0 to 23 (the wire's less one), turning the day as they wrap, and its
+//! `/time` shows the wire's hour as sent: 13 as 1 PM, 24 as 12 AM (from the
+//! program, the official TAKP client's `eqgame.exe` read statically on
+//! 10-30, report `program-read-takp-time-20261030`; recording checklist
+//! item 6.155). The Titanium client's `/time` shows the wire's hour less
+//! one: 1 as 12 AM, 13 as 12 PM, 24 as 11 PM (from the program, the
+//! official Titanium client's `eqgame.exe` read statically on 10-30, report
+//! `titanium-program-p0-time-20261030T2051`; checklist items 1.2 and
+//! 6.115).
 use anyhow::{ensure, Result};
 use serde::Serialize;
 
@@ -75,7 +81,8 @@ impl GameTime {
 }
 
 /// Decodes `OP_TimeOfDay`, whose hours run from 1 to 24; the Titanium
-/// client is taken to show hour 1 as 12 AM, which is inferred.
+/// client's `/time` shows hour 1 as 12 AM (from the program, report
+/// `titanium-program-p0-time-20261030T2051`).
 ///
 /// # Errors
 /// Rejects a malformed length.
@@ -90,7 +97,8 @@ pub fn decode(body: &[u8]) -> Result<GameTime> {
 /// Decodes `EQMac`'s `OP_TimeOfDay`, which keeps the year in 16 bits (TAKP
 /// `common/eq_packet_structs.h` `TimeOfDay_Struct`, 6 bytes); its hours
 /// also run from 1 to 24 (`common/eqtime.cpp`), and the Mac client shows
-/// them as sent, 24 as 12 AM (from the program).
+/// them as sent, 24 as 12 AM (from the program, report
+/// `program-read-takp-time-20261030`).
 ///
 /// # Errors
 /// Rejects a malformed length.
