@@ -355,6 +355,25 @@ pub fn posture(spawn_id: u16, posture: crate::command::Posture) -> Result<Encode
     })
 }
 
+/// The player's invisibility now, 0 when none is left (`OP_SpawnAppearance`,
+/// type 3, 8 bytes), as the program sends it while dropping it (from the
+/// program, TAKP Batch 1 R1; checklist 6.163). `EQMacEmu` acts on the
+/// player's own spawn at value 0 only (`zone/client_packet.cpp`
+/// `Handle_OP_SpawnAppearance`, Settle results S2).
+///
+/// # Errors
+/// Refuses a state for no spawn.
+pub fn invisibility(spawn_id: u16, state: u32) -> Result<EncodedCommand> {
+    ensure!(spawn_id != 0, "an appearance needs the player's own spawn");
+    let mut body = spawn_id.to_le_bytes().to_vec();
+    body.extend_from_slice(&3u16.to_le_bytes());
+    body.extend_from_slice(&state.to_le_bytes());
+    Ok(EncodedCommand {
+        opcode: ZONE_SPAWN_APPEARANCE,
+        body,
+    })
+}
+
 /// The player's position (`OP_ClientUpdate`, TAKP's 15-byte
 /// `SpawnPositionUpdate_Struct`): the spawn, its speed, its heading in
 /// halves (0 to 255), its turn, where it stands as whole units (z in tenths,

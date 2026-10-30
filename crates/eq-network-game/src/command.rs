@@ -477,6 +477,15 @@ pub enum GameCommand {
         /// True accepts.
         accept: bool,
     },
+    /// Drop the player's invisibility as the client generation's program
+    /// does before a cast, a song or an item's click: the steps in order.
+    /// It never expires, since the cast that follows needs it done.
+    DropInvisibility {
+        /// Current zone admission.
+        session_id: u64,
+        /// The steps, in the program's order.
+        steps: Vec<crate::buffs::InvisibilityStep>,
+    },
     /// Invite a player into the player's group, by name: `/invite`.
     InviteToGroup {
         /// Current zone admission.
@@ -680,6 +689,7 @@ impl GameCommand {
             | Self::AnswerResurrection { session_id, .. }
             | Self::AnswerSacrifice { session_id, .. }
             | Self::AnswerTranslocate { session_id, .. }
+            | Self::DropInvisibility { session_id, .. }
             | Self::InviteToGroup { session_id, .. }
             | Self::FollowGroup { session_id }
             | Self::DeclineGroup { session_id }
@@ -765,6 +775,7 @@ impl GameCommand {
             Self::AnswerResurrection { .. } => Capability::Resurrection,
             Self::AnswerSacrifice { .. } => Capability::Sacrifice,
             Self::AnswerTranslocate { .. } => Capability::Translocate,
+            Self::DropInvisibility { .. } => Capability::Casting,
             Self::InviteToGroup { .. }
             | Self::FollowGroup { .. }
             | Self::DeclineGroup { .. }
@@ -813,6 +824,7 @@ impl GameCommand {
             | Self::AnswerResurrection { .. }
             | Self::AnswerSacrifice { .. }
             | Self::AnswerTranslocate { .. }
+            | Self::DropInvisibility { .. }
             | Self::InviteToGroup { .. }
             | Self::FollowGroup { .. }
             | Self::DeclineGroup { .. }
@@ -1037,6 +1049,7 @@ pub fn encode(
         | GameCommand::AnswerResurrection { .. }
         | GameCommand::AnswerSacrifice { .. }
         | GameCommand::AnswerTranslocate { .. }
+        | GameCommand::DropInvisibility { .. }
         | GameCommand::InviteToGroup { .. }
         | GameCommand::FollowGroup { .. }
         | GameCommand::DeclineGroup { .. }

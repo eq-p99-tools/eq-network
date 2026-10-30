@@ -575,7 +575,7 @@ mod tests {
     };
 
     /// How many kinds of command there are.
-    const KINDS: usize = 71;
+    const KINDS: usize = 72;
 
     /// The kinds the login and world servers take, before any zone session.
     const BEFORE_ZONES: [usize; 3] = [0, 1, 70];
@@ -658,6 +658,7 @@ mod tests {
             ClientCommand::AnswerTranslocate { .. } => 69,
             // The login server's, before the world.
             ClientCommand::SelectServer { .. } => 70,
+            ClientCommand::DropInvisibility { .. } => 71,
         }
     }
 
@@ -915,6 +916,10 @@ mod tests {
             ClientCommand::AnswerTranslocate {
                 session_id,
                 accept: true,
+            },
+            ClientCommand::DropInvisibility {
+                session_id,
+                steps: vec![eq_network_game::buffs::InvisibilityStep::State(0)],
             },
             ClientCommand::InviteToGroup {
                 session_id,

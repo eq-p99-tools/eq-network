@@ -312,6 +312,9 @@ pub enum Request {
     },
     /// The notice that Safe Fall lessened a fall.
     SafeFall,
+    /// One step of dropping the player's invisibility, where the client
+    /// generation sends its steps.
+    DropInvisibility(crate::buffs::InvisibilityStep),
     /// The notice that goes before the auto-attack toggle, where the client
     /// generation sends one.
     AttackNotice {
@@ -412,6 +415,7 @@ pub fn titanium(request: &Request, sender: Sender<'_>) -> Result<EncodedCommand>
         Request::Depart => zoning::titanium_depart(sender.spawn()),
         Request::EnvironmentalNotice { .. }
         | Request::AttackNotice { .. }
+        | Request::DropInvisibility(_)
         | Request::BledOut { .. } => anyhow::bail!("the Titanium client cannot send {request:?}"),
         Request::Memorize { gem, spell_id } => spells::titanium_memorize(*gem, *spell_id),
         Request::Forget { gem, spell_id } => spells::titanium_forget(*gem, *spell_id),
@@ -463,6 +467,13 @@ pub fn eqmac(request: &Request, sender: Sender<'_>) -> Result<EncodedCommand> {
             hazards::eqmac_notice(sender.spawn(), *hazard, *amount)
         }
         Request::SafeFall => Ok(hazards::safe_fall(false)),
+        Request::DropInvisibility(crate::buffs::InvisibilityStep::State(state)) => {
+            crate::quarm::invisibility(sender.spawn(), *state)
+        }
+        Request::DropInvisibility(step) => Ok(EncodedCommand {
+            opcode: crate::buffs::EQMAC_BUFF_OPCODE,
+            body: crate::buffs::eqmac_fade(sender.spawn(), *step)?.to_vec(),
+        }),
         Request::AttackNotice { enabled } => Ok(EncodedCommand {
             opcode: crate::combat::EQMAC_AUTO_ATTACK2_OPCODE,
             body: crate::combat::auto_attack(*enabled).to_vec(),
@@ -579,6 +590,26 @@ mod tests {
             eqmac(&Request::Depart, PLAYER).unwrap(),
             crate::quarm::depart(7)
         );
+    }
+
+    #[test]
+    fn only_the_eqmac_client_drops_invisibility_as_its_program_does() {
+        use crate::buffs::InvisibilityStep;
+        let state = eqmac(
+            &Request::DropInvisibility(InvisibilityStep::State(0)),
+            PLAYER,
+        )
+        .unwrap();
+        assert_eq!(state.opcode, crate::quarm::ZONE_SPAWN_APPEARANCE);
+        assert_eq!(state.body, [7, 0, 3, 0, 0, 0, 0, 0]);
+        let fade = InvisibilityStep::Fade {
+            slot: 1,
+            spell_id: 42,
+        };
+        let buff = eqmac(&Request::DropInvisibility(fade), PLAYER).unwrap();
+        assert_eq!(buff.opcode, crate::buffs::EQMAC_BUFF_OPCODE);
+        assert_eq!(buff.body, crate::buffs::eqmac_fade(7, fade).unwrap());
+        assert!(titanium(&Request::DropInvisibility(fade), PLAYER).is_err());
     }
 
     #[test]

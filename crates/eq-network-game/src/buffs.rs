@@ -18,6 +18,56 @@ pub const EQMAC_BUFF_OPCODE: u16 = 0x3241;
 /// its spell, as its own client finds it (`Client::MakeBuffFadePacket`), so
 /// a consumer finds the buff by [`BuffUpdate::spell_id`].
 pub const UNKNOWN_SLOT: u32 = u32::MAX;
+/// One step of the `EQMac` program's drop of the player's invisibility,
+/// which it takes before a cast, a song or an item's click (from the
+/// program, TAKP Batch 1 R1; checklist 6.163). The host works the steps out
+/// from the player's buffs and their spells, in the program's order.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum InvisibilityStep {
+    /// Tell the server the player's invisibility now, 0 when none is left
+    /// (`OP_SpawnAppearance`, type 3).
+    State(u32),
+    /// Fade the buff in this slot, naming its spell (`OP_Buff`).
+    Fade {
+        /// The buff slot.
+        slot: u32,
+        /// The buff's spell.
+        spell_id: u16,
+    },
+    /// Clear the buff in this slot outright, as the program's second pass
+    /// does (`OP_Buff` naming no spell).
+    Clear {
+        /// The buff slot.
+        slot: u32,
+    },
+}
+
+/// `EQMac`'s `OP_Buff` for one step of an invisibility drop, 20 bytes, as
+/// the program lays it out (from the program, TAKP Batch 1 R1): the
+/// player's spawn at 0, the cleared ten-byte buff record from 2 with only
+/// the spell at 6 written back, the slot at 12, and at 16 nothing for a
+/// fade or 1 for a clear, whose spell is 0xFFFF. `EQMacEmu` reads only the
+/// spell at 6: it fades the player's buffs of that spell and echoes 0xFFFF
+/// (`zone/client_packet.cpp` `Handle_OP_Buff`, Settle results S2).
+///
+/// # Errors
+/// Refuses a step for no spawn, and a [`InvisibilityStep::State`], which is
+/// no buff.
+pub fn eqmac_fade(spawn_id: u16, step: InvisibilityStep) -> Result<[u8; 20]> {
+    ensure!(spawn_id != 0, "a buff's fade needs the player's own spawn");
+    let (slot, spell_id, cleared) = match step {
+        InvisibilityStep::Fade { slot, spell_id } => (slot, spell_id, 0u32),
+        InvisibilityStep::Clear { slot } => (slot, u16::MAX, 1),
+        InvisibilityStep::State(_) => anyhow::bail!("a state is no buff"),
+    };
+    let mut body = [0; 20];
+    body[..2].copy_from_slice(&spawn_id.to_le_bytes());
+    body[6..8].copy_from_slice(&spell_id.to_le_bytes());
+    body[12..16].copy_from_slice(&slot.to_le_bytes());
+    body[16..].copy_from_slice(&cleared.to_le_bytes());
+    Ok(body)
+}
+
 /// Where the buffs lie in `EQMac`'s unpacked profile: 15 ten-byte records at
 /// 616 (TAKP `common/patches/mac_structs.h` `PlayerProfile_Struct`).
 const EQMAC_PROFILE_BUFFS: std::ops::Range<usize> = 616..766;
@@ -310,6 +360,29 @@ fn word(bytes: &[u8], offset: usize) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_invisibility_drop_fades_or_clears_as_the_program_lays_it_out() {
+        let fade = eqmac_fade(
+            7,
+            InvisibilityStep::Fade {
+                slot: 3,
+                spell_id: 42,
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            fade,
+            [7, 0, 0, 0, 0, 0, 42, 0, 0, 0, 0, 0, 3, 0, 0, 0, 0, 0, 0, 0]
+        );
+        let clear = eqmac_fade(7, InvisibilityStep::Clear { slot: 3 }).unwrap();
+        assert_eq!(
+            clear,
+            [7, 0, 0, 0, 0, 0, 0xff, 0xff, 0, 0, 0, 0, 3, 0, 0, 0, 1, 0, 0, 0]
+        );
+        assert!(eqmac_fade(7, InvisibilityStep::State(0)).is_err());
+        assert!(eqmac_fade(0, InvisibilityStep::Clear { slot: 3 }).is_err());
+    }
     #[test]
     fn action_is_not_a_slot_update_and_melee_does_not_become_a_spell() {
         let mut body = [0; 31];
