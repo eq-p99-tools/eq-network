@@ -261,7 +261,8 @@ impl Ability {
     /// by index (the decompile thread's 10-30 skill-id read). The client
     /// also keeps Hide on a ready-at time and holds Sneak while its
     /// controlled spawn's state is set (s8c T7); neither is modelled, only
-    /// the wait.
+    /// the wait. Frenzy waits its table value too: the client starts the
+    /// strikes' shared timer with it when a Frenzy goes (s8d B, s8e).
     ///
     /// `EQMac`, from the TAKP program (program-read-gate-v2 section C, T7):
     /// the strikes share one timer as long as the last one used, which the
@@ -270,10 +271,9 @@ impl Ability {
     ///
     /// This library tracks neither the focus, haste nor alternate
     /// abilities, so it waits the full time: slower than an official client
-    /// with them, never faster. Frenzy keeps `EQEmu`'s time (its
-    /// `features.h` time less the second its handlers take off): the
-    /// Titanium client skips the timer for its skill type, so whether its
-    /// table value applies is unread, and the TAKP read doesn't list it.
+    /// with them, never faster. On `EQMac`, Frenzy keeps `EQEmu`'s time
+    /// (its `features.h` time less the second its handlers take off), as
+    /// the TAKP read doesn't list it.
     #[must_use]
     pub const fn reuse(self, dialect: GameDialect) -> Duration {
         Duration::from_millis(match self {
@@ -283,7 +283,10 @@ impl Ability {
             Self::DragonPunch => 6_200,
             Self::Kick | Self::Bash => 8_000,
             Self::FlyingKick | Self::RoundKick => 8_500,
-            Self::Frenzy => 9_000,
+            Self::Frenzy => match dialect {
+                GameDialect::Titanium => 15_000,
+                GameDialect::EqMac => 9_000,
+            },
             Self::Backstab | Self::FeignDeath | Self::Hide | Self::Sneak => 10_000,
             Self::BindWound => match dialect {
                 GameDialect::Titanium => 11_000,
@@ -535,8 +538,7 @@ mod tests {
             (Ability::Hide, 10_000),
             (Ability::Sneak, 10_000),
             (Ability::SenseHeading, 2_000),
-            // Whether the table's value applies is unread: the emulator's.
-            (Ability::Frenzy, 9_000),
+            (Ability::Frenzy, 15_000),
         ] {
             assert_eq!(titanium(ability), millis, "{ability:?}");
         }
