@@ -117,7 +117,13 @@ pub enum Request {
         accept: bool,
     },
     /// Invite a player into the player's group, by name.
-    InviteToGroup(String),
+    InviteToGroup {
+        /// Who.
+        name: String,
+        /// Whether the player leads a group already, which the `EQMac`
+        /// program sends its invitation differently for.
+        leading: bool,
+    },
     /// Join the group of the one who invited the player, by their name.
     FollowGroup(String),
     /// Decline an invitation, by the inviter's name.
@@ -352,7 +358,7 @@ pub fn titanium(request: &Request, sender: Sender<'_>) -> Result<EncodedCommand>
         Request::AnswerTranslocate { offer, accept } => {
             confirmations::titanium_translocate_answer(offer, *accept)
         }
-        Request::InviteToGroup(name) => group::invite(name, sender.name)?,
+        Request::InviteToGroup { name, .. } => group::invite(name, sender.name)?,
         Request::FollowGroup(inviter) => group::follow(inviter, sender.name)?,
         Request::DeclineGroup(inviter) => group::decline(inviter, sender.name)?,
         Request::Disband => group::disband(sender.name)?,
@@ -462,7 +468,9 @@ pub fn eqmac(request: &Request, sender: Sender<'_>) -> Result<EncodedCommand> {
             body: crate::combat::auto_attack(*enabled).to_vec(),
         }),
         Request::Command(command) => command::encode(GameDialect::EqMac, command, sender.name),
-        Request::InviteToGroup(name) => group::eqmac_invite(name, sender.name),
+        Request::InviteToGroup { name, leading } => {
+            group::eqmac_invite(name, sender.name, *leading)
+        }
         Request::FollowGroup(inviter) => group::eqmac_follow(inviter, sender.name),
         Request::DeclineGroup(inviter) => group::eqmac_decline(inviter, sender.name),
         Request::Disband => group::eqmac_disband(sender.name),
