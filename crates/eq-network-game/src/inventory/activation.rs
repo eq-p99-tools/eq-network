@@ -39,6 +39,19 @@ pub enum ClickKind {
     Unknown(u8),
 }
 
+impl ClickKind {
+    /// The category an item effect's type number names.
+    pub(super) const fn of(value: u8) -> Self {
+        match value {
+            1 => Self::Click,
+            3 => Self::Expendable,
+            4 => Self::Equipped,
+            5 => Self::Click2,
+            value => Self::Unknown(value),
+        }
+    }
+}
+
 /// Static effect metadata, separate from the item's remaining instance charges.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct ClickEffect {
@@ -87,16 +100,9 @@ impl ItemActivation {
         let effect = if matches!(id, -1 | 0 | 0xffff | 0xffff_ffff) {
             None
         } else {
-            let kind = match u8::try_from(number(135)?)? {
-                1 => ClickKind::Click,
-                3 => ClickKind::Expendable,
-                4 => ClickKind::Equipped,
-                5 => ClickKind::Click2,
-                value => ClickKind::Unknown(value),
-            };
             Some(ClickEffect {
                 spell_id: u32::try_from(id).context("click spell ID out of range")?,
-                kind,
+                kind: ClickKind::of(u8::try_from(number(135)?)?),
                 required_level: u8::try_from(number(136)?)?,
                 effect_level: u8::try_from(number(137)?)?,
                 cast_time_ms: number(60)?,

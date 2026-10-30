@@ -19,11 +19,13 @@ use anyhow::Result;
 
 use super::{
     abilities::Abilities,
+    bleeding::{BleedingOut, ItemCount},
     camp::Camp,
     casting::Casting,
     character::Character,
     clock::Clock,
     combat::Combat,
+    confirmations::{Sacrifice, Translocate},
     corpses::Corpses,
     creation::{self, Creation},
     doors::Doors,
@@ -31,7 +33,9 @@ use super::{
     exchange::Exchanges,
     feature::Feature,
     groups::Groups,
-    inventory::Belongings,
+    hazards::Hazards,
+    hiding::HideAnswer,
+    inventory::{Allowances, Belongings},
     listing::Listing,
     looting::Looting,
     map::Map,
@@ -48,13 +52,15 @@ use super::{
     targeting::Targeting,
     tradeskills::Tradeskills,
     training::Training,
-    transfers::Transfers,
+    transfers::{Home, Transfers},
     who::Who,
     wire::{EqMac, Titanium, Wire},
     CharacterSession, Events, ServerProtocol, ZoneExit,
 };
 use crate::p99::{self, WorldCodec};
-use eq_network_game::{abilities::Ability, GameDialect};
+use eq_network_game::{
+    abilities::Ability, hazards::Hazard, inventory::MoveRules, merchant::Quotes, GameDialect,
+};
 
 /// What a zone session builds its features with.
 pub(super) struct Setup<'a> {
@@ -134,6 +140,14 @@ pub(super) trait ServerType: Sync {
         Ok(None)
     }
 
+    /// Whether the server type plays on a world its login server lists, by
+    /// the world's name: a login server shared with other servers lists
+    /// worlds the player can't play on with this server type, which the
+    /// player isn't shown.
+    fn plays_on(&self, _world: &str) -> bool {
+        true
+    }
+
     /// A full turn in the headings a saved profile carries.
     fn profile_turn(&self) -> f32 {
         512.0
@@ -148,6 +162,21 @@ pub(super) trait ServerType: Sync {
     /// How the world creates characters, if it creates them for this
     /// server type.
     fn creation(&self) -> Option<&'static dyn Creation> {
+        None
+    }
+
+    /// Whether the world's character list is checked to carry each
+    /// character's look, and on `EQMac` its level and zone, as the client
+    /// generation's list lays them out; a front end draws a character at
+    /// select only where it does. False until checked for this server type.
+    fn character_preview(&self) -> bool {
+        false
+    }
+
+    /// The effect flag of the spell action that says a spell landed on its
+    /// target, so a front end can draw the landing; None until it is checked
+    /// for this server type.
+    fn spell_landing_flag(&self) -> Option<u8> {
         None
     }
 
@@ -223,6 +252,12 @@ pub(super) trait ServerType: Sync {
         None
     }
 
+    /// Answering the server's end of the player's hiding, where the server
+    /// keeps the player hidden until the client answers.
+    fn hide_answer(&self, _setup: &Setup<'_>) -> Provided {
+        None
+    }
+
     /// Speaking on the chat channels.
     fn talk(&self, _setup: &Setup<'_>) -> Provided {
         None
@@ -245,6 +280,12 @@ pub(super) trait ServerType: Sync {
 
     /// Zone lines, death and other transfers the server directs.
     fn transfers(&self, _setup: &Setup<'_>) -> Provided {
+        None
+    }
+
+    /// Reporting that the player bled out, where the server leaves such
+    /// deaths to the client, at the HP it takes as death.
+    fn bleeding_out(&self, _setup: &Setup<'_>) -> Provided {
         None
     }
 
@@ -275,6 +316,16 @@ pub(super) trait ServerType: Sync {
 
     /// Accepting or declining a resurrection.
     fn resurrection(&self, _setup: &Setup<'_>) -> Provided {
+        None
+    }
+
+    /// Accepting or declining a sacrifice.
+    fn sacrifice(&self, _setup: &Setup<'_>) -> Provided {
+        None
+    }
+
+    /// Accepting or declining a translocate.
+    fn translocate(&self, _setup: &Setup<'_>) -> Provided {
         None
     }
 
@@ -319,6 +370,12 @@ pub(super) trait ServerType: Sync {
         None
     }
 
+    /// Reporting the damage the world does to the player, which the client
+    /// works out: falls, and drowning, lava and freezing.
+    fn hazards(&self, _setup: &Setup<'_>) -> Provided {
+        None
+    }
+
     /// Every feature the server type provides, in the order the zone session
     /// offers them each command, packet and timer.
     fn features(&self, setup: &Setup<'_>) -> Vec<Provision> {
@@ -334,17 +391,21 @@ pub(super) trait ServerType: Sync {
             self.looting(setup),
             self.exchange(setup),
             self.abilities(setup),
+            self.hide_answer(setup),
             self.talk(setup),
             self.camp(setup),
             self.doors(setup),
             self.ground_items(setup),
             self.transfers(setup),
+            self.bleeding_out(setup),
             self.clock(setup),
             self.who(setup),
             self.corpses(setup),
             self.pets(setup),
             self.training(setup),
             self.resurrection(setup),
+            self.sacrifice(setup),
+            self.translocate(setup),
             self.reading(setup),
             self.tradeskills(setup),
             self.map(setup),
@@ -353,6 +414,7 @@ pub(super) trait ServerType: Sync {
             self.listing(setup),
             self.socials(setup),
             self.raids(setup),
+            self.hazards(setup),
         ]
         .into_iter()
         .flatten()
@@ -448,10 +510,12 @@ impl Shield for WorldCodec {
 /// them; each server type still lists the ones it provides.
 mod shared {
     use super::{
-        Abilities, Ability, Belongings, Camp, Casting, Character, Clock, Combat, Corpses, Doors,
-        Edits, Entities, Exchanges, Feature, GameDialect, GroundObjects, Groups, Listing, Looting,
-        Map, MerchantOffers, Motion, Pets, Raids, Reading, Resurrection, Setup, Socials, Spellbook,
-        Talk, Targeting, Tradeskills, Training, Transfers, Who,
+        Abilities, Ability, Allowances, Belongings, BleedingOut, Camp, Casting, Character, Clock,
+        Combat, Corpses, Doors, Edits, Entities, Exchanges, Feature, GameDialect, GroundObjects,
+        Groups, Hazard, Hazards, HideAnswer, Home, ItemCount, Listing, Looting, Map,
+        MerchantOffers, Motion, MoveRules, Pets, Quotes, Raids, Reading, Resurrection, Sacrifice,
+        Setup, Socials, Spellbook, Talk, Targeting, Tradeskills, Training, Transfers, Translocate,
+        Who,
     };
 
     pub(super) fn casting() -> Box<dyn Feature> {
@@ -464,6 +528,18 @@ mod shared {
 
     pub(super) fn inventory(setup: &Setup<'_>) -> Box<dyn Feature> {
         Box::new(Belongings::new(setup.auto_eat))
+    }
+
+    /// The inventory, whose items the player moves under the server type's
+    /// rules, with what else it allows, and merchant packets priced as
+    /// `quotes` says; the session eats as the player chose.
+    pub(super) fn inventory_under(
+        rules: MoveRules,
+        quotes: Quotes,
+        allows: Allowances,
+        setup: &Setup<'_>,
+    ) -> Box<dyn Feature> {
+        Box::new(Belongings::under(rules, quotes, allows, setup.auto_eat))
     }
 
     /// Moving, with or without the jumps and falls the server takes.
@@ -499,6 +575,10 @@ mod shared {
         Box::new(Abilities::new(listed))
     }
 
+    pub(super) fn hide_answer() -> Box<dyn Feature> {
+        Box::new(HideAnswer)
+    }
+
     pub(super) fn talk() -> Box<dyn Feature> {
         Box::new(Talk)
     }
@@ -515,8 +595,15 @@ mod shared {
         Box::<GroundObjects>::default()
     }
 
-    pub(super) fn transfers(setup: &Setup<'_>) -> Box<dyn Feature> {
-        Box::new(Transfers::new(setup.character))
+    pub(super) fn transfers(setup: &Setup<'_>, home: Home) -> Box<dyn Feature> {
+        Box::new(Transfers::new(setup.character, home))
+    }
+
+    /// Reporting a bleed-out at the HP the server takes as death, counting
+    /// what the player's items add as the server does; with no count, no
+    /// report goes out.
+    pub(super) fn bleeding_out(threshold: i32, items: Option<ItemCount>) -> Box<dyn Feature> {
+        Box::new(BleedingOut::new(threshold, items))
     }
 
     pub(super) fn clock() -> Box<dyn Feature> {
@@ -541,6 +628,14 @@ mod shared {
 
     pub(super) fn resurrection() -> Box<dyn Feature> {
         Box::<Resurrection>::default()
+    }
+
+    pub(super) fn sacrifice() -> Box<dyn Feature> {
+        Box::<Sacrifice>::default()
+    }
+
+    pub(super) fn translocate() -> Box<dyn Feature> {
+        Box::<Translocate>::default()
     }
 
     pub(super) fn reading() -> Box<dyn Feature> {
@@ -574,6 +669,11 @@ mod shared {
     pub(super) fn raids() -> Box<dyn Feature> {
         Box::<Raids>::default()
     }
+
+    /// Reporting the hazards the server type takes from the client.
+    pub(super) fn hazards(taken: &'static [Hazard]) -> Box<dyn Feature> {
+        Box::new(Hazards::new(taken))
+    }
 }
 
 /// The abilities checked on P99: every one but fishing, which came later,
@@ -597,6 +697,17 @@ const P99_ABILITIES: [Ability; 16] = [
     Ability::SenseHeading,
 ];
 
+/// The hazards `EQEmu` takes from the client so far: falls, whose damage it
+/// takes as the client reports it and lowers by the player's fall damage
+/// reductions from spells, items and AAs (`Client::Handle_OP_EnvDamage`).
+/// Drowning, lava and freezing wait until the official client's reports of
+/// them are recorded.
+const EQEMU_HAZARDS: [Hazard; 1] = [Hazard::Falling];
+
+/// The starts of the lowercased names of the worlds P99 plays on, as Adam's
+/// SSO login proxy keeps them.
+const P99_WORLD_PREFIXES: [&str; 2] = ["project 1999", "an interesting"];
+
 /// Project 1999: Titanium with V62 protection and 256-unit saved headings.
 /// Jumps and falls wait until they are measured on P99.
 struct Project1999;
@@ -608,6 +719,19 @@ impl ServerType for Project1999 {
 
     fn protect(&self, login_info: &[u8]) -> Result<Option<Box<dyn Shield>>> {
         Ok(Some(Box::new(WorldCodec::new(login_info)?)))
+    }
+
+    /// P99 logs in through `EQEmu`'s public login server, which lists every
+    /// `EQEmu` world. By Adam's choice (2026-10-19), matching his SSO login
+    /// proxy, P99 is shown only the worlds whose name, lowercased, starts
+    /// with "project 1999" (each of P99's own worlds, whatever its color or
+    /// rules) or "an interesting" ("An Interesting Hole", a test world that
+    /// takes P99's client). Not an observation of the official client.
+    fn plays_on(&self, world: &str) -> bool {
+        let world = world.to_lowercase();
+        P99_WORLD_PREFIXES
+            .iter()
+            .any(|prefix| world.starts_with(prefix))
     }
 
     fn profile_turn(&self) -> f32 {
@@ -685,7 +809,7 @@ impl ServerType for Project1999 {
     }
 
     fn transfers(&self, setup: &Setup<'_>) -> Provided {
-        offer(shared::transfers(setup))
+        offer(shared::transfers(setup, Home::Offered))
     }
 
     fn clock(&self, _setup: &Setup<'_>) -> Provided {
@@ -720,7 +844,20 @@ impl ServerType for EqEmu {
         &Titanium
     }
 
+    /// `EQEmu` sends the spell action at a cast's completion with flag 0,
+    /// and again for each target the spell lands on with flag 4
+    /// (`Mob::SpellOnTarget`, its "success flag").
+    fn spell_landing_flag(&self) -> Option<u8> {
+        Some(4)
+    }
+
     fn start_choice(&self) -> bool {
+        true
+    }
+
+    /// Its list fills each character's look from the character's worn
+    /// items (world/worlddb.cpp `GetCharSelectInfo`).
+    fn character_preview(&self) -> bool {
         true
     }
 
@@ -775,6 +912,12 @@ impl ServerType for EqEmu {
         offer(shared::abilities(&Ability::ALL))
     }
 
+    /// `EQEmu` keeps a player whose hiding it ended hidden until the
+    /// Titanium client answers (`Client::CancelSneakHide`).
+    fn hide_answer(&self, _setup: &Setup<'_>) -> Provided {
+        offer(shared::hide_answer())
+    }
+
     fn talk(&self, _setup: &Setup<'_>) -> Provided {
         offer(shared::talk())
     }
@@ -792,7 +935,7 @@ impl ServerType for EqEmu {
     }
 
     fn transfers(&self, setup: &Setup<'_>) -> Provided {
-        offer(shared::transfers(setup))
+        offer(shared::transfers(setup, Home::Offered))
     }
 
     fn clock(&self, _setup: &Setup<'_>) -> Provided {
@@ -817,6 +960,17 @@ impl ServerType for EqEmu {
 
     fn resurrection(&self, _setup: &Setup<'_>) -> Provided {
         offer(shared::resurrection())
+    }
+
+    /// Answered only on the player's word: a yes takes their life.
+    fn sacrifice(&self, _setup: &Setup<'_>) -> Provided {
+        offer(shared::sacrifice())
+    }
+
+    /// Answered only on the player's word; on a yes `EQEmu` moves the player
+    /// itself (`Client::Handle_OP_Translocate`).
+    fn translocate(&self, _setup: &Setup<'_>) -> Provided {
+        offer(shared::translocate())
     }
 
     fn reading(&self, _setup: &Setup<'_>) -> Provided {
@@ -860,6 +1014,10 @@ impl ServerType for EqEmu {
     fn raids(&self, _setup: &Setup<'_>) -> Provided {
         offer(shared::raids())
     }
+
+    fn hazards(&self, _setup: &Setup<'_>) -> Provided {
+        offer(shared::hazards(&EQEMU_HAZARDS))
+    }
 }
 
 /// Project Quarm, which speaks `EQMac`. Its features come as they are
@@ -884,6 +1042,10 @@ impl ServerType for Quarm {
     }
 }
 
+/// The HP at which TAKP takes a player as dead: below -10 (`zone/attack.cpp`
+/// `Mob::HasDied`).
+const TAKP_DEATH_THRESHOLD: i32 = -11;
+
 /// A stock TAKP (`EQMacEmu`) server speaking `EQMac`, where the `EQMac`
 /// features are checked first.
 struct Takp;
@@ -897,8 +1059,47 @@ impl ServerType for Takp {
         Some(&creation::EqMac)
     }
 
+    /// Its list fills each character's look, level and zone
+    /// (world/worlddb.cpp `GetCharSelectInfo`).
+    fn character_preview(&self) -> bool {
+        true
+    }
+
+    /// Casting from the gems and items' click effects, in `EQMac`'s cast
+    /// request; the cast is held until TAKP brings the spell bar back or
+    /// interrupts it.
+    fn casting(&self, _setup: &Setup<'_>) -> Provided {
+        offer(shared::casting())
+    }
+
+    /// Memorizing, forgetting and scribing spells in TAKP's 256-slot book.
+    /// Moving a spell in the book waits for its check on TAKP. Deleting
+    /// stays off: TAKP reports a deletion done even for an empty slot and
+    /// keeps the spell memorizable until the player zones
+    /// (`Client::Handle_OP_DeleteSpell`), unchecked live.
+    fn spellbook(&self, _setup: &Setup<'_>) -> Provided {
+        offer(shared::spellbook(Edits {
+            deleting: false,
+            moving: false,
+        }))
+    }
+
     fn character(&self, _setup: &Setup<'_>) -> Provided {
         offer(shared::character())
+    }
+
+    /// What TAKP's item packets say the player holds, item moves under
+    /// TAKP's rules, which disconnect a player whose move they refuse, coin
+    /// moves, which TAKP answers no more than `EQEmu` does, merchants, whose
+    /// lists TAKP quotes before their rate, and eating and drinking when
+    /// TAKP's own client would.
+    fn inventory(&self, setup: &Setup<'_>) -> Provided {
+        offer(shared::inventory_under(
+            MoveRules::Takp,
+            Quotes::of(GameDialect::EqMac),
+            Allowances::ALL,
+            setup,
+        ))
     }
 
     fn entities(&self, _setup: &Setup<'_>) -> Provided {
@@ -922,6 +1123,45 @@ impl ServerType for Takp {
     /// (`zone/client_packet.cpp`) and whenever it changes.
     fn clock(&self, _setup: &Setup<'_>) -> Provided {
         offer(shared::clock())
+    }
+
+    /// Groups, with `EQMac`'s opcodes for Titanium's layouts (TAKP
+    /// `zone/client_packet.cpp` `Handle_OP_GroupInvite2`, `GroupFollow`,
+    /// `GroupCancelInvite`, `GroupDisband`), checked live there with two
+    /// characters.
+    fn groups(&self, _setup: &Setup<'_>) -> Provided {
+        offer(shared::groups())
+    }
+
+    /// Zone lines and the server's moves, with `EQMac`'s zone change and the
+    /// world's re-entry between zones; a dead player asks for their bind
+    /// point, as TAKP waits for.
+    fn transfers(&self, setup: &Setup<'_>) -> Provided {
+        offer(shared::transfers(setup, Home::Asked))
+    }
+
+    /// TAKP announces no death to a player who bleeds out, nor to one
+    /// killed by a tick of damage or by their own hand, and waits for the
+    /// client's own report, as the official client sends.
+    ///
+    /// There is no count of what the player's items add yet, so the session
+    /// holds every report back and names no threshold. TAKP adds more than
+    /// the items' own HP: their worn effects, the first food the player
+    /// carries, and for a GM the items below the level they ask for
+    /// (`zone/bonuses.cpp` `Client::CalcItemBonuses`, `AddItemBonuses`,
+    /// `CalcEdibleBonuses`). Its count comes with the `EQMac` inventory,
+    /// checked live against the server's HP; knowing the items alone opens
+    /// nothing.
+    fn bleeding_out(&self, _setup: &Setup<'_>) -> Provided {
+        offer(shared::bleeding_out(TAKP_DEATH_THRESHOLD, None))
+    }
+
+    fn targeting(&self, _setup: &Setup<'_>) -> Provided {
+        offer(shared::targeting())
+    }
+
+    fn combat(&self, _setup: &Setup<'_>) -> Provided {
+        offer(shared::combat())
     }
 }
 
@@ -989,22 +1229,56 @@ mod tests {
         assert!((empty.profile_turn() - 512.0).abs() < f32::EPSILON);
         assert!(!empty.start_choice());
         assert!(empty.creation().is_none());
+        assert_eq!(empty.spell_landing_flag(), None);
+    }
+
+    #[test]
+    fn only_eqemu_says_which_spell_action_is_a_landing_so_far() {
+        assert_eq!(
+            server_type(ServerProtocol::EqEmu).spell_landing_flag(),
+            Some(4)
+        );
+        // P99 waits for a live look; TAKP sends flag 0 as a spell lands and
+        // flag 4 only once a buff takes hold, and the Mac client's own rule
+        // is unchecked.
+        for protocol in [
+            ServerProtocol::Project1999,
+            ServerProtocol::Quarm,
+            ServerProtocol::Takp,
+        ] {
+            assert_eq!(server_type(protocol).spell_landing_flag(), None);
+        }
     }
 
     #[test]
     fn eqmac_servers_provide_the_features_built_for_them() {
         // Quarm and TAKP speak EQMac: they see the zone's spawns, keep the
-        // player's record and talk. TAKP also camps and keeps the time of
-        // day; Quarm will once each is checked there.
+        // player's record and talk. TAKP also casts, keeps the spellbook,
+        // camps, moves, zones, moves items, keeps the time of day and takes
+        // the client's report of a bleed-out; Quarm will once each is
+        // checked there.
         let setup = Setup::new("Tester", AutoEat::default());
         let quarm = server_type(ServerProtocol::Quarm);
         assert_eq!(quarm.features(&setup).len(), 3);
         assert_eq!(offers(quarm), [Capability::Talking]);
         let takp = server_type(ServerProtocol::Takp);
-        assert_eq!(takp.features(&setup).len(), 6);
+        assert_eq!(takp.features(&setup).len(), 14);
         assert_eq!(
             offers(takp),
-            [Capability::Moving, Capability::Talking, Capability::Camping]
+            [
+                Capability::Casting,
+                Capability::Spellbook,
+                Capability::Inventory,
+                Capability::Trading,
+                Capability::Moving,
+                Capability::Targeting,
+                Capability::Combat,
+                Capability::Talking,
+                Capability::Camping,
+                Capability::Zoning,
+                Capability::Grouping,
+                Capability::BleedingOut
+            ]
         );
         for server in [quarm, takp] {
             assert_eq!(
@@ -1042,6 +1316,40 @@ mod tests {
     }
 
     #[test]
+    fn p99_plays_on_its_own_worlds_and_the_test_world_while_the_rest_play_on_any() {
+        let p99 = server_type(ServerProtocol::Project1999);
+        for world in [
+            "Project 1999: Green (Velious, PvE)",
+            "Project 1999: Blue (Velious, PvE)",
+            "Project 1999: Red (Velious, PvP)",
+            "PROJECT 1999: A new color",
+            "An Interesting Hole",
+            "an interesting hole II",
+        ] {
+            assert!(p99.plays_on(world), "{world}");
+        }
+        for world in [
+            "Example EQEmu Server",
+            "Not Project 1999",
+            " Project 1999: Green",
+            "A Hole",
+            "",
+        ] {
+            assert!(!p99.plays_on(world), "{world}");
+        }
+        for protocol in [
+            ServerProtocol::EqEmu,
+            ServerProtocol::Quarm,
+            ServerProtocol::Takp,
+        ] {
+            let server = server_type(protocol);
+            for world in ["Example EQEmu Server", "Project 1999: Green", ""] {
+                assert!(server.plays_on(world), "{protocol:?} {world}");
+            }
+        }
+    }
+
+    #[test]
     fn p99_protects_and_halves_saved_headings_while_eqemu_takes_falls() {
         let p99 = server_type(ServerProtocol::Project1999);
         assert_eq!(
@@ -1065,6 +1373,34 @@ mod tests {
     }
 
     #[test]
+    fn character_looks_are_kept_only_where_the_list_is_checked_to_carry_them() {
+        use eq_network_game::GameDialect;
+        let listed = |protocol| server_type(protocol).character_preview();
+        assert!(listed(ServerProtocol::EqEmu));
+        assert!(listed(ServerProtocol::Takp));
+        assert!(!listed(ServerProtocol::Project1999));
+        assert!(!listed(ServerProtocol::Quarm));
+        let mut body = vec![0; 1620];
+        body[..7].copy_from_slice(b"Example");
+        body[640] = 30;
+        body[660..662].copy_from_slice(&330u16.to_le_bytes());
+        for (protocol, kept) in [(ServerProtocol::Takp, true), (ServerProtocol::Quarm, false)] {
+            let entries = super::super::world::character_list(
+                server_type(protocol),
+                GameDialect::EqMac,
+                &body,
+            )
+            .unwrap();
+            assert_eq!(entries[0].level.is_some(), kept, "{protocol:?}");
+            assert_eq!(
+                entries[0].look.map(|look| look.race),
+                kept.then_some(330),
+                "{protocol:?}"
+            );
+        }
+    }
+
+    #[test]
     fn p99_lists_every_ability_but_fishing_and_binding_wounds() {
         assert!(!P99_ABILITIES.contains(&Ability::Fishing));
         assert!(!P99_ABILITIES.contains(&Ability::BindWound));
@@ -1075,10 +1411,13 @@ mod tests {
     fn p99_and_eqemu_provide_every_feature_one_each() {
         // Training, resurrection, reading, tradeskills, the map, deleting
         // spells, merchants' offers, groups, the player's listing, dice,
-        // emotes, assisting and raids are checked on EQEmu alone so far.
+        // emotes, assisting, raids and the world's damage are checked on
+        // EQEmu alone so far; only EQEmu waits for the answer to the end of
+        // hiding; and only EQEmu answers sacrifices and translocates, read
+        // from its source and not yet checked live.
         for (protocol, count) in [
             (ServerProtocol::Project1999, 21),
-            (ServerProtocol::EqEmu, 30),
+            (ServerProtocol::EqEmu, 34),
         ] {
             let server = server_type(protocol);
             let setup = Setup::new("Tester", AutoEat::default());
@@ -1087,6 +1426,8 @@ mod tests {
         for capability in [
             Capability::Training,
             Capability::Resurrection,
+            Capability::Sacrifice,
+            Capability::Translocate,
             Capability::Reading,
             Capability::Tradeskills,
             Capability::Map,
@@ -1098,6 +1439,7 @@ mod tests {
             Capability::Emoting,
             Capability::Assisting,
             Capability::Raiding,
+            Capability::EnvironmentalDamage,
         ] {
             assert!(!offers(server_type(ServerProtocol::Project1999)).contains(&capability));
             assert!(offers(server_type(ServerProtocol::EqEmu)).contains(&capability));
@@ -1106,6 +1448,41 @@ mod tests {
         for protocol in [ServerProtocol::Project1999, ServerProtocol::EqEmu] {
             assert!(offers(server_type(protocol)).contains(&Capability::MovingSpells));
         }
+    }
+
+    #[test]
+    fn only_eqemu_answers_the_end_of_hiding() {
+        // EQEmu keeps the player hidden until the client answers; P99's
+        // answer waits for a live check there, and TAKP and Quarm end the
+        // hiding themselves.
+        let setup = Setup::new("Tester", AutoEat::default());
+        for protocol in [
+            ServerProtocol::Project1999,
+            ServerProtocol::Quarm,
+            ServerProtocol::Takp,
+        ] {
+            assert!(
+                server_type(protocol).hide_answer(&setup).is_none(),
+                "{protocol:?}"
+            );
+        }
+        assert!(server_type(ServerProtocol::EqEmu)
+            .hide_answer(&setup)
+            .is_some());
+    }
+
+    #[test]
+    fn only_takp_takes_the_clients_report_of_a_bleed_out() {
+        // Titanium's servers announce the player's death themselves, and
+        // Quarm's is not checked yet.
+        for protocol in [
+            ServerProtocol::Project1999,
+            ServerProtocol::EqEmu,
+            ServerProtocol::Quarm,
+        ] {
+            assert!(!offers(server_type(protocol)).contains(&Capability::BleedingOut));
+        }
+        assert!(offers(server_type(ServerProtocol::Takp)).contains(&Capability::BleedingOut));
     }
 
     #[test]

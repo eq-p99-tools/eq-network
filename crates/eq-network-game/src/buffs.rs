@@ -2,8 +2,28 @@
 use anyhow::{ensure, Result};
 use serde::Serialize;
 
+/// Titanium's `OP_Action`, which carries spell landings and one other
+/// record ([`Action`]).
+pub const TITANIUM_ACTION_OPCODE: u16 = 0x497c;
+/// `EQMac`'s `OP_Action`, which carries spell landings among other actions
+/// (TAKP `utils/patches/patch_Mac.conf` lists 0x4046, its bytes swapped).
+pub const EQMAC_ACTION_OPCODE: u16 = 0x4640;
+/// The target and the source of `Mob::Spin`'s fixed record, which no spawn
+/// is.
+const SPIN_SPAWN: u16 = 0x0a0b;
+/// `EQMac`'s `OP_Buff`: a buff's fade, or its duration corrected (0x4132
+/// swapped).
+pub const EQMAC_BUFF_OPCODE: u16 = 0x3241;
+/// The slot of a buff update whose server named none. TAKP fades a buff by
+/// its spell, as its own client finds it (`Client::MakeBuffFadePacket`), so
+/// a consumer finds the buff by [`BuffUpdate::spell_id`].
+pub const UNKNOWN_SLOT: u32 = u32::MAX;
+/// Where the buffs lie in `EQMac`'s unpacked profile: 15 ten-byte records at
+/// 616 (TAKP `common/patches/mac_structs.h` `PlayerProfile_Struct`).
+const EQMAC_PROFILE_BUFFS: std::ops::Range<usize> = 616..766;
+
 /// Server spell action. Its icon flag does not supply a buff slot or duration.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct SpellEffect {
     /// Target entity in this zone.
     pub target_id: u16,
@@ -19,9 +39,66 @@ pub struct SpellEffect {
     pub spell_level: u8,
     /// Raw flags; the documented icon value is 4.
     pub effect_flag: u8,
+    /// The push the spell gives its target, as the server sends it; none
+    /// when it sends no force or pitch, or a value that is not a finite
+    /// number. See [`Push`](crate::combat::Push) for what each server sends.
+    pub push: Option<crate::combat::Push>,
 }
 
-/// Decodes spell actions, excluding melee actions sharing the same opcode.
+/// What a server's action (`OP_Action`) is, by its kind.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub enum Action {
+    /// A spell's (kind 231): the spell taking hold, or a buff from it doing
+    /// so.
+    Spell(SpellEffect),
+    /// `Mob::Spin`'s fixed record, which spins the player: kind 0, its
+    /// target and source both spawn 0x0A0B, which no spawn is. `EQEmu` and
+    /// TAKP send it only from quests (Lua's and Perl's `Spin`); a spell
+    /// that spins its target spins only an NPC on the server, and "the
+    /// spinning is handled by the client" (`zone/spell_effects.cpp`).
+    Spin,
+    /// An action of another kind, which no server is known to send: its
+    /// kind. No open server sends a melee or skill action this way; P99's
+    /// source is closed, so it may.
+    Other(u8),
+}
+
+/// Decodes Titanium's action by its kind at 22: a spell's
+/// ([`titanium_spell_effect`]), the spin, or another.
+///
+/// # Errors
+/// Rejects any length other than 31 bytes.
+pub fn titanium_action(body: &[u8]) -> Result<Action> {
+    Ok(match titanium_spell_effect(body)? {
+        Some(effect) => Action::Spell(effect),
+        None => other_action(body, 22),
+    })
+}
+
+/// Decodes `EQMac`'s action by its kind at 24: a spell's
+/// ([`eqmac_spell_effect`]), the spin, or another.
+///
+/// # Errors
+/// Rejects any length other than 36 bytes.
+pub fn eqmac_action(body: &[u8]) -> Result<Action> {
+    Ok(match eqmac_spell_effect(body)? {
+        Some(effect) => Action::Spell(effect),
+        None => other_action(body, 24),
+    })
+}
+
+/// An action that is not a spell's: the spin, by its kind and spawns, or
+/// another kind.
+fn other_action(body: &[u8], kind_at: usize) -> Action {
+    let short = |offset| u16::from_le_bytes([body[offset], body[offset + 1]]);
+    match body[kind_at] {
+        0 if short(0) == SPIN_SPAWN && short(2) == SPIN_SPAWN => Action::Spin,
+        kind => Action::Other(kind),
+    }
+}
+
+/// Decodes spell actions, excluding melee actions sharing the same opcode,
+/// with the push at 10 (`Action_Struct`).
 ///
 /// # Errors
 /// Rejects malformed Titanium action lengths.
@@ -39,6 +116,33 @@ pub fn titanium_spell_effect(body: &[u8]) -> Result<Option<SpellEffect>> {
         spell_id: short(27),
         spell_level: body[29],
         effect_flag: body[30],
+        push: crate::combat::push(body, 10)?,
+    }))
+}
+
+/// Decodes `EQMac`'s spell actions (TAKP `Action_Struct`, 36 bytes),
+/// excluding other actions sharing the opcode. TAKP sends one as the spell
+/// lands, with flag 0, and again with flag 4 once a buff takes hold
+/// (`Mob::SpellOnTarget`). The action carries no spell level, which reads 0,
+/// and its push at 12.
+///
+/// # Errors
+/// Rejects malformed `EQMac` action lengths.
+pub fn eqmac_spell_effect(body: &[u8]) -> Result<Option<SpellEffect>> {
+    ensure!(body.len() == 36, "invalid EQMac action length");
+    if body[24] != 231 {
+        return Ok(None);
+    }
+    let short = |offset| u16::from_le_bytes([body[offset], body[offset + 1]]);
+    Ok(Some(SpellEffect {
+        target_id: short(0),
+        caster_id: short(2),
+        caster_level: short(4),
+        instrument_modifier: word(body, 8),
+        spell_id: short(30),
+        spell_level: 0,
+        effect_flag: body[33],
+        push: crate::combat::push(body, 12)?,
     }))
 }
 
@@ -125,6 +229,76 @@ fn record(bytes: &[u8]) -> Option<Buff> {
     })
 }
 
+/// Reads `EQMac`'s 15 admission buff slots from an unpacked profile,
+/// retaining holes and their indexes, which are the server's own slots (TAKP
+/// `Client::Handle_Connect_OP_ZoneEntry` copies its buffs there in order).
+///
+/// # Errors
+/// Rejects a profile of another size.
+pub fn eqmac_profile(profile: &[u8]) -> Result<Vec<Option<Buff>>> {
+    ensure!(
+        profile.len() == crate::quarm::PROFILE_SIZE,
+        "invalid EQMac profile length"
+    );
+    Ok(profile[EQMAC_PROFILE_BUFFS]
+        .as_chunks::<10>()
+        .0
+        .iter()
+        .map(eqmac_record)
+        .collect())
+}
+
+/// Decodes `EQMac`'s buff notice (TAKP `SpellBuffFade_Struct`, 20 bytes),
+/// which its server sends the player alone, about their own buffs. A fade
+/// (flag 1) names only the spell, which TAKP's client looks for itself
+/// (`Client::MakeBuffFadePacket`), so its slot is [`UNKNOWN_SLOT`] and its
+/// entity the 0 the server leaves there. Any other flag corrects a buff's
+/// duration and names the player and the server's slot
+/// (`Client::SendBuffDurationPacket`).
+///
+/// # Errors
+/// Rejects malformed `EQMac` buff update lengths.
+pub fn eqmac_update(body: &[u8]) -> Result<BuffUpdate> {
+    ensure!(body.len() == 20, "invalid EQMac buff update length");
+    let short = |offset| u16::from_le_bytes([body[offset], body[offset + 1]]);
+    let fade = word(body, 16) == 1;
+    Ok(BuffUpdate {
+        spell_id: u32::from(short(6)),
+        entity_id: u32::from(short(0)),
+        slot: if fade {
+            UNKNOWN_SLOT
+        } else {
+            u32::from(short(12))
+        },
+        buff: if fade {
+            None
+        } else {
+            eqmac_record(body[2..12].try_into()?)
+        },
+    })
+}
+
+/// Projects a ten-byte `EQMac` buff; an empty type or spell is no buff. A
+/// permanent buff's duration is 0xFFFF (TAKP `CalcBuffDuration_formula`,
+/// formula 50), read signed as -1, a buff with no end. The record names no
+/// caster.
+fn eqmac_record(bytes: &[u8; 10]) -> Option<Buff> {
+    let short = |offset: usize| u16::from_le_bytes([bytes[offset], bytes[offset + 1]]);
+    let spell_id = short(4);
+    if bytes[0] == 0 || matches!(spell_id, 0 | u16::MAX) {
+        return None;
+    }
+    Some(Buff {
+        spell_id: u32::from(spell_id),
+        caster_level: bytes[1],
+        effect_type: bytes[0],
+        bard_modifier: bytes[2],
+        duration_ticks: i32::from(i16::from_le_bytes([bytes[6], bytes[7]])),
+        counters: u32::from(short(8)),
+        caster_id: 0,
+    })
+}
+
 fn word(bytes: &[u8], offset: usize) -> u32 {
     u32::from_le_bytes(
         bytes[offset..offset + 4]
@@ -160,6 +334,17 @@ mod tests {
             ),
             (42, 125, 4)
         );
+        assert_eq!(effect.push, None);
+        // A spell's push back, the caster's heading and its push up, at 10.
+        body[10..14].copy_from_slice(&1.5f32.to_le_bytes());
+        body[14..18].copy_from_slice(&128.0f32.to_le_bytes());
+        body[18..22].copy_from_slice(&0.25f32.to_le_bytes());
+        let push = titanium_spell_effect(&body).unwrap().unwrap().push.unwrap();
+        assert_eq!((push.force, push.heading, push.pitch), (1.5, 128.0, 0.25));
+        // A value that is not a finite number is no push; the action reads.
+        body[10..14].copy_from_slice(&f32::NAN.to_le_bytes());
+        let effect = titanium_spell_effect(&body).unwrap().unwrap();
+        assert_eq!((effect.spell_id, effect.push), (42, None));
         assert!(titanium_spell_effect(&body[..30]).is_err());
         assert!(titanium_update(&body).is_err());
     }
@@ -188,5 +373,135 @@ mod tests {
         body[28] = 2;
         assert!(titanium_update(&body).is_err());
         assert!(titanium_update(&body[..31]).is_err());
+    }
+
+    #[test]
+    fn actions_are_a_spells_the_spin_or_another_kind() {
+        // Mob::Spin's fixed record, in each generation's length.
+        let mut titanium = [0u8; 31];
+        titanium[..6].copy_from_slice(&[0x0b, 0x0a, 0x0b, 0x0a, 0xe7, 0x00]);
+        titanium[6..8].copy_from_slice(&[0x4d, 0x04]);
+        titanium[18..20].copy_from_slice(&[0xd4, 0x43]);
+        let mut eqmac = [0u8; 36];
+        eqmac[..8].copy_from_slice(&titanium[..8]);
+        eqmac[18..20].copy_from_slice(&[0xd4, 0x43]);
+        assert_eq!(titanium_action(&titanium).unwrap(), Action::Spin);
+        assert_eq!(eqmac_action(&eqmac).unwrap(), Action::Spin);
+        // Kind 0 naming a real spawn is not the spin.
+        titanium[..2].copy_from_slice(&7u16.to_le_bytes());
+        eqmac[2..4].copy_from_slice(&7u16.to_le_bytes());
+        assert_eq!(titanium_action(&titanium).unwrap(), Action::Other(0));
+        assert_eq!(eqmac_action(&eqmac).unwrap(), Action::Other(0));
+        // Any other kind is told by its kind.
+        titanium[22] = 8;
+        eqmac[24] = 30;
+        assert_eq!(titanium_action(&titanium).unwrap(), Action::Other(8));
+        assert_eq!(eqmac_action(&eqmac).unwrap(), Action::Other(30));
+        // A spell's action.
+        titanium[22] = 231;
+        eqmac[24] = 231;
+        assert!(matches!(
+            titanium_action(&titanium).unwrap(),
+            Action::Spell(_)
+        ));
+        assert!(matches!(eqmac_action(&eqmac).unwrap(), Action::Spell(_)));
+        assert!(titanium_action(&titanium[..30]).is_err());
+        assert!(eqmac_action(&eqmac[..35]).is_err());
+    }
+
+    #[test]
+    fn eqmacs_action_reads_its_own_layout_and_skips_other_actions() {
+        let mut body = [0; 36];
+        body[..2].copy_from_slice(&7u16.to_le_bytes());
+        body[2..4].copy_from_slice(&8u16.to_le_bytes());
+        body[4..6].copy_from_slice(&60u16.to_le_bytes());
+        body[8..12].copy_from_slice(&10i32.to_le_bytes());
+        body[30..32].copy_from_slice(&42u16.to_le_bytes());
+        body[33] = 4;
+        assert!(eqmac_spell_effect(&body).unwrap().is_none());
+        body[24] = 231;
+        assert_eq!(
+            eqmac_spell_effect(&body).unwrap(),
+            Some(SpellEffect {
+                target_id: 7,
+                caster_id: 8,
+                caster_level: 60,
+                instrument_modifier: 10,
+                spell_id: 42,
+                spell_level: 0,
+                effect_flag: 4,
+                push: None,
+            })
+        );
+        // TAKP's force, its doubled heading and a pitch, at 12.
+        body[12..16].copy_from_slice(&2.0f32.to_le_bytes());
+        body[16..20].copy_from_slice(&300.0f32.to_le_bytes());
+        let push = eqmac_spell_effect(&body).unwrap().unwrap().push.unwrap();
+        assert_eq!((push.force, push.heading, push.pitch), (2.0, 300.0, 0.0));
+        assert!(eqmac_spell_effect(&body[..35]).is_err());
+        assert!(eqmac_spell_effect(&[0; 37]).is_err());
+    }
+
+    /// A ten-byte `EQMac` buff of spell 42: visible with a timer, caster
+    /// level 12, these ticks left and three counters.
+    fn eqmac_buff(ticks: u16) -> [u8; 10] {
+        let mut record = [2, 12, 10, 0, 42, 0, 0, 0, 3, 0];
+        record[6..8].copy_from_slice(&ticks.to_le_bytes());
+        record
+    }
+
+    #[test]
+    fn eqmacs_profile_keeps_holes_and_reads_a_permanent_buff_as_endless() {
+        let mut profile = vec![0; crate::quarm::PROFILE_SIZE];
+        profile[616 + 30..616 + 40].copy_from_slice(&eqmac_buff(0xffff));
+        let mut empty = eqmac_buff(5);
+        empty[4..6].copy_from_slice(&u16::MAX.to_le_bytes());
+        profile[616..626].copy_from_slice(&empty);
+        // The bytes past the table are no buff of it.
+        profile[766..776].copy_from_slice(&eqmac_buff(5));
+        let buffs = eqmac_profile(&profile).unwrap();
+        assert_eq!(buffs.len(), 15);
+        assert_eq!(buffs.iter().flatten().count(), 1);
+        assert_eq!(
+            buffs[3],
+            Some(Buff {
+                spell_id: 42,
+                caster_level: 12,
+                effect_type: 2,
+                bard_modifier: 10,
+                duration_ticks: -1,
+                counters: 3,
+                caster_id: 0,
+            })
+        );
+        assert!(eqmac_profile(&profile[1..]).is_err());
+    }
+
+    #[test]
+    fn an_eqmac_fade_names_only_its_spell_and_a_correction_its_slot() {
+        // A fade: the type, the spell and the flag; no entity or slot.
+        let mut body = [0; 20];
+        body[2] = 2;
+        body[6..8].copy_from_slice(&42u16.to_le_bytes());
+        body[16] = 1;
+        assert_eq!(
+            eqmac_update(&body).unwrap(),
+            BuffUpdate {
+                spell_id: 42,
+                entity_id: 0,
+                slot: UNKNOWN_SLOT,
+                buff: None,
+            }
+        );
+        // A correction names the player, the server's slot and the buff.
+        body[..2].copy_from_slice(&7u16.to_le_bytes());
+        body[2..12].copy_from_slice(&eqmac_buff(30));
+        body[12..14].copy_from_slice(&3u16.to_le_bytes());
+        body[16] = 0;
+        let update = eqmac_update(&body).unwrap();
+        assert_eq!((update.entity_id, update.slot), (7, 3));
+        assert_eq!(update.buff.map(|buff| buff.duration_ticks), Some(30));
+        assert!(eqmac_update(&body[..19]).is_err());
+        assert!(eqmac_update(&[0; 21]).is_err());
     }
 }

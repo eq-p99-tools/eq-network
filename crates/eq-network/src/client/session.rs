@@ -1,18 +1,23 @@
 mod abilities;
 mod actions;
 pub(super) mod admission;
+mod bleeding;
 mod camp;
 mod casting;
 mod character;
 mod clock;
 mod combat;
+mod confirmations;
 mod corpses;
+mod coverage;
 mod creation;
 mod doors;
 mod entities;
 mod exchange;
 pub(super) mod feature;
 mod groups;
+mod hazards;
+mod hiding;
 mod inventory;
 mod lifecycle;
 mod listing;
@@ -68,7 +73,7 @@ pub(super) fn run(
 ) -> Result<()> {
     ensure!(!stop.is_cancelled(), "shutdown requested");
     let server = servers::server_type(config.protocol);
-    let (credentials, ip) = server.wire().login(config, stop, log)?;
+    let (credentials, ip) = server.wire().login(config, stop, commands, log)?;
     let mut context = CharacterSession {
         config: config.clone(),
         identity,
@@ -119,21 +124,6 @@ pub(super) fn run(
         }
     }
     Ok(())
-}
-
-/// Wait for one application packet while enforcing shutdown and a deadline.
-fn next(
-    session: &mut dyn eq_network_transport::Transport,
-    deadline: Instant,
-    stop: &CancellationToken,
-) -> Result<Application> {
-    loop {
-        ensure!(!stop.is_cancelled(), "shutdown requested");
-        ensure!(Instant::now() < deadline, "application handshake timed out");
-        if let Some(packet) = session.receive()? {
-            return Ok(packet);
-        }
-    }
 }
 
 /// What a character's stay in the world and its zones works with.

@@ -1,0 +1,838 @@
+//! What each client generation's servers send, and what the session does
+//! with each message: one table per generation, one row per opcode.
+//!
+//! A row names the message, the server types whose servers send it, and the
+//! parts of the session that read it, or why it is left unread: work still
+//! to come, an answer to a request eq-network never sends, or nothing in it
+//! worth reading. The login and zone sessions tell once of each message
+//! they leave unread, but one with nothing worth reading, and of each the
+//! table does not list ([`Unheard`]); the world session tells of every
+//! message it receives. A test holds each table to its generation's
+//! decoders.
+//!
+//! What the servers send comes from the emulators' sources: `EQEmu`'s for
+//! Titanium, TAKP's and Quarm's for `EQMac`. P99's server is closed, so its
+//! rows are the few messages only it sends, and what else it sends is not
+//! marked; Quarm's login server is not in its source, so the login rows
+//! name TAKP's. Opcodes are the values on the wire.
+
+mod eqmac;
+mod titanium;
+
+pub(super) use eqmac::eqmac;
+pub(super) use titanium::titanium;
+
+use super::{wire::Wire, Events, ServerProtocol};
+use anyhow::Result;
+use eq_network_game::message::Message;
+use std::{collections::HashSet, fmt};
+
+/// A message a client generation's servers send.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct ServerMessage {
+    /// Its name in the emulators' opcode lists, or for P99's own, what it
+    /// is.
+    pub(super) name: &'static str,
+    /// The server types whose servers send it.
+    #[allow(
+        dead_code,
+        reason = "a record for readers, which the session does not consult"
+    )]
+    pub(super) senders: &'static [ServerProtocol],
+    /// What the session does with it.
+    pub(super) reading: Reading,
+}
+
+impl ServerMessage {
+    /// The parts of the session that read it; none when it is left unread.
+    pub(super) const fn readers(&self) -> &'static [Reader] {
+        match self.reading {
+            Reading::Read(readers) | Reading::Partly(readers, _) => readers,
+            Reading::Unread(_) => &[],
+        }
+    }
+
+    /// Whether the session tells of it when it arrives at `stage` with a
+    /// body of this length: nothing there reads it, and something in it is
+    /// worth reading.
+    fn told_at(&self, stage: Stage, length: usize) -> bool {
+        match self.reading {
+            Reading::Unread(Reason::Needless(_)) => false,
+            Reading::Unread(Reason::Unmapped) => length > 0,
+            _ => !self.readers().iter().any(|reader| reader.at(stage)),
+        }
+    }
+}
+
+/// A row of a generation's table.
+const fn sent(
+    name: &'static str,
+    senders: &'static [ServerProtocol],
+    reading: Reading,
+) -> ServerMessage {
+    ServerMessage {
+        name,
+        senders,
+        reading,
+    }
+}
+
+/// Left unread until this step reads it.
+const fn planned(step: Step) -> Reading {
+    Reading::Unread(Reason::Planned(step))
+}
+
+/// An answer to a request eq-network never sends, left unread until the
+/// step that sends the request.
+const fn unasked(step: Step) -> Reading {
+    Reading::Unread(Reason::Unasked(step))
+}
+
+/// What the session does with a message.
+#[derive(Clone, Copy, Debug)]
+pub(super) enum Reading {
+    /// These parts of the session read it.
+    Read(&'static [Reader]),
+    /// These parts of the session read it, all but the parts named.
+    Partly(
+        &'static [Reader],
+        #[allow(
+            dead_code,
+            reason = "a record for readers, which the session does not consult"
+        )]
+        &'static [Part],
+    ),
+    /// The session leaves it unread.
+    Unread(Reason),
+}
+
+/// A part of a message the session leaves unread, and why.
+#[derive(Clone, Copy, Debug)]
+#[allow(
+    dead_code,
+    reason = "a record for readers, which the session does not consult"
+)]
+pub(super) struct Part(pub(super) &'static str, pub(super) Reason);
+
+/// A part of the session that reads the servers' messages.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum Reader {
+    /// The login server's exchange.
+    Login,
+    /// The world server's: validation, the character list and the handoff
+    /// to a zone.
+    World,
+    /// The zone's admission of the player.
+    Admission,
+    /// The generation's decoders, whose messages every zone feature hears
+    /// ([`Wire::messages`](super::wire::Wire::messages)).
+    Zone,
+    /// The zone's communication: chat, emotes and the server's own lines
+    /// ([`Wire::chat`](super::wire::Wire::chat)).
+    Chat,
+    /// What the generation's client answers by itself ([`Wire::answer`](super::wire::Wire::answer)).
+    Answer,
+}
+
+impl Reader {
+    /// Whether it reads the messages that arrive at `stage`.
+    const fn at(self, stage: Stage) -> bool {
+        match stage {
+            Stage::Login => matches!(self, Self::Login),
+            Stage::Zone => !matches!(self, Self::Login | Self::World),
+        }
+    }
+
+    /// Whether it is one of the generation's zone decoders, which a test
+    /// can probe.
+    #[cfg(test)]
+    pub(super) const fn decodes(self) -> bool {
+        matches!(self, Self::Zone | Self::Chat | Self::Answer)
+    }
+}
+
+/// Why the session leaves a message, or a part of one, unread.
+#[derive(Clone, Copy, Debug)]
+pub(super) enum Reason {
+    /// Work still to come reads it.
+    Planned(Step),
+    /// It answers a request eq-network never sends; the work that sends the
+    /// request reads it.
+    Unasked(Step),
+    /// Parked work reads it.
+    Parked(&'static str),
+    /// Nothing in it needs reading, for this reason, so the zone does not
+    /// tell of it.
+    Needless(&'static str),
+    /// `EQEmu` sends every message the generation's opcode list leaves at 0
+    /// under opcode 0, so the opcode stands for many messages. The empty
+    /// ones carry nothing; the zone tells of one with a body, as an
+    /// unmapped message.
+    Unmapped,
+}
+
+impl fmt::Display for Reason {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Planned(step) => write!(f, "planned with {step}"),
+            Self::Unasked(step) => write!(
+                f,
+                "it answers a request eq-network never sends (planned with {step})"
+            ),
+            Self::Parked(work) => write!(f, "parked in {work}"),
+            Self::Needless(why) => f.write_str(why),
+            Self::Unmapped => {
+                f.write_str("EQEmu sends each message the client has no opcode for under 0")
+            }
+        }
+    }
+}
+
+/// The work still to come that reads what the session leaves unread, one
+/// step at a time.
+#[derive(Clone, Copy, Debug)]
+pub(super) enum Step {
+    /// The player's own state: what is left of it answers requests
+    /// eq-network does not send yet, the player's begging, disarming, pick
+    /// pocketing, poisoning and tracking, and a banker's change.
+    PlayerState,
+    /// Social, guild, title and GM messages: what is left of them answers
+    /// requests eq-network does not send yet, for an inspection, the
+    /// guild's message of the day and list, the titles, a surname, and a
+    /// game master's zone requests, finds, petition checkouts and soul
+    /// marks.
+    Social,
+    /// `EQMac`'s catch-up on the world: what Titanium's decoders already
+    /// read, from doors to the training window.
+    EqMacWorld,
+    /// `EQMac`'s catch-up on exchanges: trades, loot and resurrection.
+    EqMacExchanges,
+    /// Alternate advancement and leadership.
+    AlternateAdvancement,
+    /// The bazaar and traders.
+    Bazaar,
+    /// Later and rarely used systems: tasks, adventures, tribute, the guild
+    /// bank and the like.
+    LaterSystems,
+    /// Group roles and raids.
+    Raids,
+}
+
+impl fmt::Display for Step {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::PlayerState => "the player's own state",
+            Self::Social => "social, guild, title and GM messages",
+            Self::EqMacWorld => "EQMac's catch-up on the world",
+            Self::EqMacExchanges => "EQMac's catch-up on exchanges",
+            Self::AlternateAdvancement => "alternate advancement and leadership",
+            Self::Bazaar => "the bazaar and traders",
+            Self::LaterSystems => "later and rarely used systems",
+            Self::Raids => "group roles and raids",
+        })
+    }
+}
+
+/// `EQEmu`'s servers, whose sources list what Titanium's servers send.
+const EQEMU: &[ServerProtocol] = &[ServerProtocol::EqEmu];
+/// P99's, for what only P99 sends.
+const P99: &[ServerProtocol] = &[ServerProtocol::Project1999];
+/// TAKP's and Quarm's.
+const EQMAC: &[ServerProtocol] = &[ServerProtocol::Takp, ServerProtocol::Quarm];
+/// TAKP's alone.
+const TAKP: &[ServerProtocol] = &[ServerProtocol::Takp];
+/// Quarm's alone.
+const QUARM: &[ServerProtocol] = &[ServerProtocol::Quarm];
+
+/// What the session leaves unread of Titanium's profile.
+const TITANIUM_PROFILE: &[Part] = &[
+    Part(
+        "alternate advancement and leadership",
+        Reason::Planned(Step::AlternateAdvancement),
+    ),
+    Part("tribute", Reason::Planned(Step::LaterSystems)),
+];
+/// What the session leaves unread of `EQMac`'s profile.
+const EQMAC_PROFILE: &[Part] = &[
+    Part(
+        "skills, practice points and deity",
+        Reason::Planned(Step::EqMacWorld),
+    ),
+    Part(
+        "alternate advancement",
+        Reason::Planned(Step::AlternateAdvancement),
+    ),
+];
+/// What the session leaves unread of Titanium's illusion.
+const ILLUSION: &[Part] = &[
+    Part(
+        "the spawn's name",
+        Reason::Needless("the spawn ID names it, and a face change leaves it empty"),
+    ),
+    Part(
+        "the byte after the textures and the last 80 bytes",
+        Reason::Needless("EQEmu's Titanium encoder leaves them zero"),
+    ),
+];
+/// What the session leaves unread of a rename.
+const RENAME: &[Part] = &[
+    Part(
+        "the old name's second copy",
+        Reason::Needless("EQEmu writes the old name there again"),
+    ),
+    Part(
+        "the two words after the names",
+        Reason::Needless("EQEmu always sends 0 and 1"),
+    ),
+];
+/// What the session leaves unread of `EQMac`'s illusion.
+const EQMAC_ILLUSION: &[Part] = &[Part(
+    "the byte after the textures and the two after the beard",
+    Reason::Needless("TAKP and Quarm always send 0xff, then zeros"),
+)];
+/// What the session leaves unread of a spell's nimbus.
+const NIMBUS: &[Part] = &[Part(
+    "the field after the delay and the four bytes after it",
+    Reason::Needless(
+        "EQEmu sets the field to 3000 unless a quest gives another, and the bytes to 1, 1 and 0, \
+         and its comments name no use for them (zone/mob.cpp Mob::SendSpellEffect)",
+    ),
+)];
+/// What the session leaves unread of a popup.
+const POPUP: &[Part] = &[Part(
+    "the last two words",
+    Reason::Needless(
+        "EQEmu's Titanium encoder always sets them to 0 and 0xffffffff \
+         (common/patches/titanium.cpp ENCODE(OP_OnLevelMessage))",
+    ),
+)];
+/// What the session leaves unread of a marquee.
+const MARQUEE: &[Part] = &[Part(
+    "the word after the message type",
+    Reason::Needless(
+        "EQEmu always sets it to 10, and its notes say changing it changed nothing \
+         (zone/client.cpp Client::SendMarqueeMessage, common/eq_packet_structs.h)",
+    ),
+)];
+/// What the session leaves unread of a voice macro.
+const VOICE_MACRO: &[Part] = &[Part(
+    "the word after whom it is spoken to, and the last 60 bytes",
+    Reason::Needless("EQEmu leaves them zero (zone/worldserver.cpp WorldServer::HandleMessage)"),
+)];
+/// What the session leaves unread of a request to inspect the player.
+const INSPECT_REQUEST: &[Part] = &[Part(
+    "the player's own spawn",
+    Reason::Needless("the servers pass a request on only to the player it names"),
+)];
+/// What the session leaves unread of a challenge to a duel.
+const DUEL_REQUEST: &[Part] = &[Part(
+    "the first spawn",
+    Reason::Needless(
+        "the second names the other player on every server; EQEmu and Quarm send the same in \
+         the first, and TAKP the player's own spawn (zone/client_packet.cpp \
+         Client::Handle_OP_RequestDuel, Client::Handle_OP_DuelAccept)",
+    ),
+)];
+/// What the session leaves unread of TAKP's answer to a challenge.
+const DUEL_ANSWER: &[Part] = &[Part(
+    "the player's own spawn and the last byte",
+    Reason::Needless(
+        "TAKP passes an answer on only to the player it names, and the byte pads the record \
+         (common/eq_packet_structs.h DuelResponse_Struct)",
+    ),
+)];
+/// What the session leaves unread of the guild's member list.
+const MEMBER_LIST: &[Part] = &[
+    Part(
+        "the name before the count",
+        Reason::Needless(
+            "the list is always of the player's own guild, which the name names, or on a \
+             reload the player (zone/guild.cpp Client::SendGuildMembersList, \
+             Client::SendGuildMembers)",
+        ),
+    ),
+    Part(
+        "each member's word after their tribute, and their instance",
+        Reason::Needless(
+            "EQEmu's Titanium encoder always sets them to 1 and 0 \
+             (common/patches/titanium.cpp ENCODE(OP_GuildMemberList))",
+        ),
+    ),
+];
+/// What the session leaves unread of a guild member's zone.
+const MEMBER_UPDATE: &[Part] = &[Part(
+    "the update's instance",
+    Reason::Needless(
+        "EQEmu sets it to 0 for a change and to 1 for each member online after an interface \
+         reload, never to the member's instance (zone/guild_mgr.cpp \
+         ZoneGuildManager::ProcessWorldPacket, from zone/guild.cpp Client::SendGuildMembers)",
+    ),
+)];
+/// What the session leaves unread of a new guild member.
+const MEMBER_ADD: &[Part] = &[Part(
+    "the word after the guild",
+    Reason::Needless(
+        "EQEmu's Titanium encoder leaves it zero \
+         (common/patches/titanium.cpp ENCODE(OP_GuildMemberAdd))",
+    ),
+)];
+/// What the session leaves unread of a guild member's rank.
+const MEMBER_RANK: &[Part] = &[Part(
+    "the word after the guild",
+    Reason::Needless(
+        "EQEmu's Titanium encoders leave it zero (common/patches/titanium.cpp \
+         ENCODE(OP_GuildMemberRankAltBanker), ENCODE(OP_SetGuildRank))",
+    ),
+)];
+/// What the session leaves unread of a guild invitation.
+const INVITE: &[Part] = &[Part(
+    "the invitee's name and the two bytes after the guild",
+    Reason::Needless(
+        "every server passes an invitation only to the player it names, and the emulators' \
+         notes say the bytes are 0 in one (common/eq_packet_structs.h GuildCommand_Struct, \
+         zone/client_packet.cpp Client::Handle_OP_GuildInvite)",
+    ),
+)];
+/// What the session leaves unread of `EQMac`'s guild removal.
+const REMOVAL: &[Part] = &[Part(
+    "the remover's name, the two bytes after the guild and the rank",
+    Reason::Needless(
+        "TAKP and Quarm leave them empty (zone/client_packet.cpp Client::Handle_OP_GuildRemove)",
+    ),
+)];
+/// What the session leaves unread of a kick or a kill.
+const KICK: &[Part] = &[Part(
+    "the last byte",
+    Reason::Needless(
+        "the emulators name no use for it, and the world leaves it zero \
+         (common/eq_packet_structs.h GMKick_Struct, GMKill_Struct; zone/client.cpp \
+         Client::WorldKick, Client::GMKill)",
+    ),
+)];
+/// What the session leaves unread of a game master making the player look
+/// like an NPC.
+const BECOME_NPC: &[Part] = &[Part(
+    "the spawn",
+    Reason::Needless(
+        "the servers send it only to the player it names, as their own spawn \
+         (zone/client_packet.cpp Client::Handle_OP_GMBecomeNPC)",
+    ),
+)];
+/// What the session leaves unread of `EQMac`'s petition record.
+const PETITION: &[Part] = &[Part(
+    "the receiving game master's name",
+    Reason::Needless(
+        "TAKP and Quarm send each game master their own name there, or none once the petition \
+         is checked out (zone/entity.cpp EntityList::SendPetitionToAdmins)",
+    ),
+)];
+/// What the session leaves unread of `EQMac`'s rename by a game master.
+const GM_RENAME: &[Part] = &[Part(
+    "the game master's name, the bad-name flag and the last three bytes",
+    Reason::Needless(
+        "who renamed the player changes nothing the zone shows, the flag only tells the server \
+         to refuse the old name from then on, and TAKP and Quarm set the three bytes to 1 \
+         (zone/client_packet.cpp Client::Handle_OP_GMNameChange, zone/client.cpp \
+         Client::ChangeFirstName)",
+    ),
+)];
+/// What the session leaves unread of `EQMac`'s change to a title.
+const EQMAC_TITLE: &[Part] = &[Part(
+    "the first word",
+    Reason::Needless(
+        "TAKP and Quarm leave it zero, for a title and a suffix alike, though their notes guess \
+         it marks a suffix (zone/titles.cpp Client::SetAATitle, Client::SetTitleSuffix)",
+    ),
+)];
+/// What the session leaves unread of a Titanium projectile.
+const PROJECTILE: &[Part] = &[Part(
+    "the first word, the two words after the item and the unknown bytes",
+    Reason::Needless(
+        "EQEmu sets the first word to 1 and the two words to 125 and 16, which its comments say \
+         change nothing, and leaves the rest zero (zone/special_attacks.cpp)",
+    ),
+)];
+/// What the session leaves unread of `EQMac`'s projectile.
+const EQMAC_PROJECTILE: &[Part] = &[Part(
+    "the first word, the burst values, the yaw and pitch and the unknown fields",
+    Reason::Needless(
+        "TAKP and Quarm set the first word to 1 and the yaw and pitch to 0, and leave the rest \
+         zero (zone/special_attacks.cpp)",
+    ),
+)];
+/// What the session leaves unread of `EQMac`'s sound.
+const SOUND: &[Part] = &[Part(
+    "the player's own spawn",
+    Reason::Needless("TAKP and Quarm send a sound only to the player it names"),
+)];
+/// What the session leaves unread of `EQMac`'s word that the server took or
+/// gave back the player's control.
+const OWN_NAME: &[Part] = &[Part(
+    "the player's own name",
+    Reason::Needless("the session has it from its entry"),
+)];
+/// What the session leaves unread of a quest's reward.
+const REWARD: &[Part] = &[
+    Part(
+        "the player's own spawn",
+        Reason::Needless("the server sends a reward only to the player it names"),
+    ),
+    Part(
+        "the faction and its modifier",
+        Reason::Needless(
+            "the server tells the faction's change in its own lines \
+             (zone/client.cpp Client::SetFactionLevel)",
+        ),
+    ),
+];
+/// What the session leaves unread of an offer to sacrifice the player.
+const SACRIFICE: &[Part] = &[Part(
+    "the player's own spawn",
+    Reason::Needless("the server sends an offer only to the player it names"),
+)];
+/// What the session leaves unread of an offer to translocate the player.
+const TRANSLOCATE: &[Part] = &[Part(
+    "the field after the spell",
+    Reason::Needless(
+        "every server leaves it 0 (zone/client.cpp Client::SendOPTranslocateConfirm, \
+         and TAKP's Client::SendPendingTranslocatePacket)",
+    ),
+)];
+/// What the session leaves unread of a quest's word on the player's stats.
+const STATS: &[Part] = &[Part(
+    "the first byte, the five resists and the second copy of every field",
+    Reason::Needless("EQEmu never sets them (zone/client.cpp Client::SetStats, Client::IncStats)"),
+)];
+/// What the session leaves unread of a discipline reuse timer.
+const DISCIPLINE_TIMER: &[Part] = &[Part(
+    "the last field",
+    Reason::Needless(
+        "EQEmu leaves it 0 (zone/effects.cpp Client::SendDisciplineTimer, \
+         zone/client.cpp Client::SendDisciplineTimers)",
+    ),
+)];
+/// What the session leaves unread of `EQMac`'s word that a skill's button
+/// is ready again.
+const RESET_SKILL: &[Part] = &[Part(
+    "the timer",
+    Reason::Needless("every server sends 0 (TAKP's and Quarm's Client::ResetSkill)"),
+)];
+/// What the session leaves unread of `EQMac`'s log-server settings.
+const LOG_SERVER: &[Part] = &[Part(
+    "the error-reporting server's address, port, password and e-mail",
+    Reason::Needless("nothing here reports to it"),
+)];
+/// What the session leaves unread of Titanium's zone header.
+const TITANIUM_DESCRIPTION: &[Part] = &[
+    Part(
+        "the character's name, the zone's number and a second copy of its name",
+        Reason::Needless("the session has them from its entry and the player's profile"),
+    ),
+    Part(
+        "the zone's instance",
+        Reason::Needless("EQEmu never sets it (zone/zone.cpp Zone::LoadZoneCFG)"),
+    ),
+    Part(
+        "what EQEmu sends past the header's 700 bytes",
+        Reason::Needless(
+            "it is for later clients; the Titanium client copies only the 700 \
+             (common/eq_packet_structs.h NewZone_Struct)",
+        ),
+    ),
+];
+/// What the session leaves unread of `EQMac`'s zone header.
+const EQMAC_DESCRIPTION: &[Part] = &[
+    Part(
+        "the character's name",
+        Reason::Needless("the session has it from its entry"),
+    ),
+    Part(
+        "special dates and codes, the time zone, and the forage, fishing and script settings",
+        Reason::Needless(
+            "neither server sets them (common/patches/mac.cpp ENCODE(OP_NewZone), \
+             zone/zone.cpp)",
+        ),
+    ),
+];
+
+/// Where in the session a message arrives.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum Stage {
+    /// At the login server.
+    Login,
+    /// At a zone, its admission of the player included.
+    Zone,
+}
+
+impl Stage {
+    /// Where else the session reads what it leaves unread here.
+    const fn elsewhere(self) -> &'static str {
+        match self {
+            Self::Login => "after the login",
+            Self::Zone => "before the zone",
+        }
+    }
+}
+
+impl fmt::Display for Stage {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::Login => "Login",
+            Self::Zone => "Zone",
+        })
+    }
+}
+
+/// The messages a login or zone session leaves unread, each told once a
+/// session but those with nothing worth reading, and the messages of a kind
+/// no server is known to send, each kind told once a session.
+pub(super) struct Unheard {
+    stage: Stage,
+    told: HashSet<u16>,
+    /// The kinds told of, with their message's opcode.
+    kinds: HashSet<(u16, u32)>,
+}
+
+impl Unheard {
+    /// Nothing told yet of what arrives at `stage`.
+    pub(super) fn new(stage: Stage) -> Self {
+        Self {
+            stage,
+            told: HashSet::new(),
+            kinds: HashSet::new(),
+        }
+    }
+
+    /// Drops each of a packet's messages of a kind no server is known to
+    /// send ([`Message::UnknownKind`]), telling of it, by its opcode and kind
+    /// alone, the first time they arrive in the session; passes on the rest.
+    ///
+    /// # Errors
+    /// Returns an error when the host's event handler fails.
+    pub(super) fn sift(
+        &mut self,
+        wire: &dyn Wire,
+        opcode: u16,
+        messages: Vec<Message>,
+        log: &mut Events<'_>,
+    ) -> Result<Vec<Message>> {
+        let mut kept = Vec::with_capacity(messages.len());
+        for message in messages {
+            let Message::UnknownKind(kind) = message else {
+                kept.push(message);
+                continue;
+            };
+            if self.kinds.insert((opcode, kind)) {
+                let name = wire
+                    .coverage(opcode)
+                    .map_or("an unlisted message", |message| message.name);
+                log.diagnostic(format!(
+                    "{} sent {name} (0x{opcode:04x}) of kind {kind}, left unread: no server is \
+                     known to send that kind",
+                    self.stage
+                ))?;
+            }
+        }
+        Ok(kept)
+    }
+
+    /// Tells, the first time one arrives in the session, of a message the
+    /// generation lists but this stage leaves unread, unless nothing in it is
+    /// worth reading, and of one it does not list.
+    ///
+    /// # Errors
+    /// Returns an error when the host's event handler fails.
+    pub(super) fn tell(
+        &mut self,
+        wire: &dyn Wire,
+        opcode: u16,
+        length: usize,
+        log: &mut Events<'_>,
+    ) -> Result<()> {
+        let message = wire.coverage(opcode);
+        if message.is_some_and(|message| !message.told_at(self.stage, length))
+            || !self.told.insert(opcode)
+        {
+            return Ok(());
+        }
+        let why = match message {
+            None => "no server is listed as sending it".to_owned(),
+            Some(ServerMessage {
+                reading: Reading::Unread(reason),
+                ..
+            }) => reason.to_string(),
+            Some(_) => format!("the session reads it only {}", self.stage.elsewhere()),
+        };
+        let name = message.map_or("an unlisted message", |message| message.name);
+        log.diagnostic(format!(
+            "{} sent {name} (0x{opcode:04x}, {length} bytes), left unread: {why}",
+            self.stage
+        ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::client::{session::wire::Titanium, ClientConfig, ClientEvent};
+
+    #[test]
+    fn every_listed_message_is_named_and_says_what_reads_it() {
+        for (generation, table) in [
+            ("Titanium", titanium as fn(u16) -> Option<ServerMessage>),
+            ("EQMac", eqmac),
+        ] {
+            for opcode in 0..=u16::MAX {
+                let Some(message) = table(opcode) else {
+                    continue;
+                };
+                let row = format!("{generation} 0x{opcode:04x}");
+                assert!(!message.name.is_empty(), "{row}");
+                match message.reading {
+                    Reading::Read(readers) => assert!(!readers.is_empty(), "{row}"),
+                    Reading::Partly(readers, parts) => {
+                        assert!(!readers.is_empty() && !parts.is_empty(), "{row}");
+                    }
+                    Reading::Unread(_) => (),
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn the_login_tells_once_of_each_message_it_leaves_unread() {
+        use crate::client::session::wire::EqMac;
+        let config = ClientConfig::new("ACCOUNT", "PASSWORD", "Test Server", "Tester");
+        let mut said = Vec::new();
+        let mut handler = |event| {
+            if let ClientEvent::Diagnostic(line) = event {
+                said.push(line);
+            }
+            Ok(())
+        };
+        let mut log = Events::new(&config, &mut handler);
+        let mut unheard = Unheard::new(Stage::Login);
+        // The login server's ready message, read there; its banner, which
+        // answers what eq-network never asks; a zone's position update; and
+        // an opcode no server is listed as sending: each arriving twice.
+        for opcode in [
+            0x5900, 0x5200, 0xf340, 0x0001, 0x5900, 0x5200, 0xf340, 0x0001,
+        ] {
+            unheard.tell(&EqMac, opcode, 4, &mut log).unwrap();
+        }
+        drop(log);
+        assert_eq!(
+            said,
+            [
+                "Login sent OP_ClientUpdate (0xf340, 4 bytes), left unread: the session reads \
+                 it only after the login",
+                "Login sent an unlisted message (0x0001, 4 bytes), left unread: no server is \
+                 listed as sending it",
+            ]
+        );
+    }
+
+    #[test]
+    fn the_zone_tells_once_of_each_kind_no_server_is_known_to_send() {
+        let config = ClientConfig::new("ACCOUNT", "PASSWORD", "Test Server", "Tester");
+        let mut said = Vec::new();
+        let mut handler = |event| {
+            if let ClientEvent::Diagnostic(line) = event {
+                said.push(line);
+            }
+            Ok(())
+        };
+        let mut log = Events::new(&config, &mut handler);
+        let mut unheard = Unheard::new(Stage::Zone);
+        // Two actions of kind 8, one of kind 30, and the spin, which is read.
+        for kind in [8, 30, 8] {
+            let kept = unheard
+                .sift(
+                    &Titanium,
+                    0x497c,
+                    vec![Message::UnknownKind(kind)],
+                    &mut log,
+                )
+                .unwrap();
+            assert!(kept.is_empty());
+        }
+        let spun = vec![Message::Event(eq_network_game::world::WorldEvent::Spun)];
+        let kept = unheard.sift(&Titanium, 0x497c, spun, &mut log).unwrap();
+        assert!(matches!(
+            kept[..],
+            [Message::Event(eq_network_game::world::WorldEvent::Spun)]
+        ));
+        drop(log);
+        assert_eq!(
+            said,
+            [
+                "Zone sent OP_Action (0x497c) of kind 8, left unread: no server is known to \
+                 send that kind",
+                "Zone sent OP_Action (0x497c) of kind 30, left unread: no server is known to \
+                 send that kind",
+            ]
+        );
+    }
+
+    #[test]
+    fn the_zone_tells_once_of_each_message_it_leaves_unread() {
+        let config = ClientConfig::new("ACCOUNT", "PASSWORD", "Test Server", "Tester");
+        let mut said = Vec::new();
+        let mut handler = |event| {
+            if let ClientEvent::Diagnostic(line) = event {
+                said.push(line);
+            }
+            Ok(())
+        };
+        let mut log = Events::new(&config, &mut handler);
+        let mut unheard = Unheard::new(Stage::Zone);
+        // A position, read; an adventure merchant's sale, left unread; the
+        // character list, read only from the world; an opcode no server is
+        // listed as sending; and the empty AA stats, which carry nothing:
+        // each arriving twice.
+        for opcode in [
+            0x14cb, 0x0097, 0x4513, 0x0001, 0x5996, 0x14cb, 0x0097, 0x4513, 0x0001, 0x5996,
+        ] {
+            unheard.tell(&Titanium, opcode, 8, &mut log).unwrap();
+        }
+        drop(log);
+        assert_eq!(
+            said,
+            [
+                "Zone sent OP_AdventureMerchantSell (0x0097, 8 bytes), left unread: planned \
+                 with later and rarely used systems",
+                "Zone sent OP_SendCharInfo (0x4513, 8 bytes), left unread: the session reads \
+                 it only before the zone",
+                "Zone sent an unlisted message (0x0001, 8 bytes), left unread: no server is \
+                 listed as sending it",
+            ]
+        );
+    }
+
+    #[test]
+    fn the_zone_tells_once_of_an_unmapped_message_with_a_body_and_never_of_an_empty_one() {
+        let config = ClientConfig::new("ACCOUNT", "PASSWORD", "Test Server", "Tester");
+        let mut said = Vec::new();
+        let mut handler = |event| {
+            if let ClientEvent::Diagnostic(line) = event {
+                said.push(line);
+            }
+            Ok(())
+        };
+        let mut log = Events::new(&config, &mut handler);
+        let mut unheard = Unheard::new(Stage::Zone);
+        // The empty OP_FinishWindow pair after a container closes, then an
+        // unmapped message with a body, twice, then the pair again.
+        for length in [0, 0, 5, 5, 0, 0] {
+            unheard.tell(&Titanium, 0x0000, length, &mut log).unwrap();
+        }
+        drop(log);
+        assert_eq!(
+            said,
+            [
+                "Zone sent an unmapped message (0x0000, 5 bytes), left unread: EQEmu sends each \
+              message the client has no opcode for under 0"
+            ]
+        );
+    }
+}

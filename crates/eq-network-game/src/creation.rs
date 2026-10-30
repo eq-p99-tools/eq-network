@@ -29,6 +29,26 @@ const EQMAC_APPROVAL_SIZE: usize = 76;
 /// The size of `EQMac`'s creation request, TAKP's `CharCreate_Struct`.
 const EQMAC_CREATE_SIZE: usize = 8452;
 
+/// How the world took a character the player asked for. Both generations'
+/// worlds answer on the name approval opcode with one byte: first for the
+/// name (1 approved, 0 refused), then, should creating the approved
+/// character fail, a 0 again; a created character is answered with the new
+/// character list instead (TAKP's and `EQEmu`'s `world/client.cpp`,
+/// `HandleNameApprovalPacket` and `HandleCharacterCreatePacket`). Neither
+/// says why.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+pub enum CreationOutcome {
+    /// The character exists; the new character list came with it.
+    Created,
+    /// The world refused the name: taken, filtered or malformed.
+    NameRefused,
+    /// The world approved the name, then could not create the character.
+    CreationRefused,
+    /// Nothing went to the world: the server type creates no characters
+    /// here, or the client found the character one the world would refuse.
+    NotSent,
+}
+
 /// A character to create; stats are in STR, STA, AGI, DEX, WIS, INT, CHA order.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct NewCharacter {

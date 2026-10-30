@@ -6,7 +6,7 @@ use super::{ClientEvent, Events};
 use anyhow::{Context, Result};
 use eq_network_game::{
     command::EncodedCommand,
-    creation::{self, NewCharacter},
+    creation::{self, CreationOutcome, NewCharacter},
     world::WorldEvent,
 };
 use eq_network_transport::Transport;
@@ -87,7 +87,7 @@ impl Creating {
             }
             Err(error) => {
                 log.diagnostic(format!("Rejected character creation: {error}"))?;
-                told(character.name, false, log)?;
+                told(character.name, CreationOutcome::NotSent, log)?;
                 Ok(None)
             }
         }
@@ -111,7 +111,12 @@ impl Creating {
             self.requested = true;
             return Ok(Some(self));
         }
-        told(self.character.name, false, log)?;
+        let outcome = if self.requested {
+            CreationOutcome::CreationRefused
+        } else {
+            CreationOutcome::NameRefused
+        };
+        told(self.character.name, outcome, log)?;
         Ok(None)
     }
 
@@ -126,15 +131,15 @@ impl Creating {
     /// # Errors
     /// Returns an error when the host's event handler fails.
     pub(super) fn created(self, log: &mut Events<'_>) -> Result<()> {
-        told(self.character.name, true, log)
+        told(self.character.name, CreationOutcome::Created, log)
     }
 }
 
 /// Tells the host how the world took the character.
-fn told(name: String, accepted: bool, log: &mut Events<'_>) -> Result<()> {
+fn told(name: String, outcome: CreationOutcome, log: &mut Events<'_>) -> Result<()> {
     log.send(ClientEvent::World(WorldEvent::CharacterCreation {
         name,
-        accepted,
+        outcome,
     }))
 }
 
@@ -175,12 +180,12 @@ mod tests {
     }
 
     /// What the host heard about the creation.
-    fn outcomes(events: &[ClientEvent]) -> Vec<(String, bool)> {
+    fn outcomes(events: &[ClientEvent]) -> Vec<(String, CreationOutcome)> {
         events
             .iter()
             .filter_map(|event| match event {
-                ClientEvent::World(WorldEvent::CharacterCreation { name, accepted }) => {
-                    Some((name.clone(), *accepted))
+                ClientEvent::World(WorldEvent::CharacterCreation { name, outcome }) => {
+                    Some((name.clone(), *outcome))
                 }
                 _ => None,
             })
@@ -213,7 +218,10 @@ mod tests {
             sent,
             [(EQMAC_APPROVE_NAME_OPCODE, 76), (EQMAC_CREATE_OPCODE, 8452)]
         );
-        assert_eq!(outcomes(&events), [("Testcleric".into(), true)]);
+        assert_eq!(
+            outcomes(&events),
+            [("Testcleric".into(), CreationOutcome::Created)]
+        );
     }
 
     #[test]
@@ -231,38 +239,50 @@ mod tests {
             .unwrap()
             .is_none());
         assert_eq!(kept.0.len(), 0, "{:?}", kept.0);
-        // A refused name ends the attempt.
-        let attempt = Creating::start(Some(&Titanium), cleric(), &mut kept, &mut log)
-            .unwrap()
-            .unwrap();
-        assert!(attempt
-            .answered(&[0], &mut kept, &mut log)
-            .unwrap()
-            .is_none());
-        // So does a refused creation, which the world reports on the same
-        // opcode after the name was approved.
-        let attempt = Creating::start(Some(&Titanium), cleric(), &mut kept, &mut log)
-            .unwrap()
-            .unwrap()
-            .answered(&[1], &mut kept, &mut log)
-            .unwrap()
-            .unwrap();
-        assert!(attempt
-            .answered(&[0], &mut kept, &mut log)
-            .unwrap()
-            .is_none());
+        // On both generations, a refused name ends the attempt, and so does
+        // a refused creation, which the world reports on the same opcode
+        // after the name was approved: TAKP's world sent 1, then 0.
+        for creation in [&Titanium as &'static dyn Creation, &EqMac] {
+            let attempt = Creating::start(Some(creation), cleric(), &mut kept, &mut log)
+                .unwrap()
+                .unwrap();
+            assert!(attempt
+                .answered(&[0], &mut kept, &mut log)
+                .unwrap()
+                .is_none());
+            let attempt = Creating::start(Some(creation), cleric(), &mut kept, &mut log)
+                .unwrap()
+                .unwrap()
+                .answered(&[1], &mut kept, &mut log)
+                .unwrap()
+                .unwrap();
+            assert!(attempt
+                .answered(&[0], &mut kept, &mut log)
+                .unwrap()
+                .is_none());
+        }
         drop(log);
         let sent: Vec<u16> = kept.0.iter().map(|(opcode, _)| *opcode).collect();
         assert_eq!(
             sent,
-            [APPROVE_NAME_OPCODE, APPROVE_NAME_OPCODE, CREATE_OPCODE]
+            [
+                APPROVE_NAME_OPCODE,
+                APPROVE_NAME_OPCODE,
+                CREATE_OPCODE,
+                EQMAC_APPROVE_NAME_OPCODE,
+                EQMAC_APPROVE_NAME_OPCODE,
+                EQMAC_CREATE_OPCODE
+            ]
         );
+        let refused = |outcome| ("Testcleric".to_owned(), outcome);
         assert_eq!(
             outcomes(&events),
             [
-                ("Testcleric".into(), false),
-                ("Testcleric".into(), false),
-                ("Testcleric".into(), false)
+                refused(CreationOutcome::NotSent),
+                refused(CreationOutcome::NameRefused),
+                refused(CreationOutcome::CreationRefused),
+                refused(CreationOutcome::NameRefused),
+                refused(CreationOutcome::CreationRefused)
             ]
         );
     }

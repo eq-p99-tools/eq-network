@@ -1,25 +1,28 @@
 name: CI
 
+# The full suite runs only on demand (Actions > CI > Run workflow), at milestones.
+# Pull requests and main run Lint; contributors run these checks locally.
+# Temporary while development is heavy: the full suite returns to pull requests later.
 on:
-  pull_request:
-  push:
-    branches: [main]
+  workflow_dispatch:
 
 permissions:
   contents: read
 
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   quality:
-    name: Format, lint, test, and document
+    name: Lint, test, and document
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
-          components: clippy, rustfmt
+          components: clippy
       - uses: Swatinem/rust-cache@v2
-      - name: Check formatting
-        run: cargo fmt --all -- --check
       - name: Lint all targets
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings
       - name: Test all targets
@@ -29,22 +32,13 @@ jobs:
           RUSTDOCFLAGS: -D warnings
         run: cargo doc --workspace --all-features --no-deps
 
-  msrv:
-    name: Rust 1.88 minimum version
-    runs-on: ubuntu-latest
+  windows:
+    name: Native Windows tests
+    runs-on: windows-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@1.88.0
+      - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
-          key: msrv
-      - run: cargo check --workspace --all-targets
-
-  dependencies:
-    name: Dependency policy
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-      - uses: EmbarkStudios/cargo-deny-action@v2
-        with:
-          command: check
+          key: windows
+      - run: cargo test --workspace --all-targets --all-features

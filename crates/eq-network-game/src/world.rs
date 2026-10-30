@@ -88,6 +88,17 @@ pub struct PlayerState {
     /// Unspent practice points, which training at a guildmaster spends, when
     /// decoded.
     pub practice_points: Option<u32>,
+    /// The player's skill in each language, 0 to 100, by the language's
+    /// number (0 is the Common Tongue), when decoded: the 28 Titanium's
+    /// profile lists, and the 26 TAKP and Quarm fill of the `EQMac` profile's
+    /// room for 32 (`common/patches/mac.cpp`). Skill updates for skill
+    /// [`LANGUAGE_SKILLS`] and up change it ([`PlayerState::apply_skill`]).
+    pub languages: Option<Vec<u8>>,
+    /// The disciplines the player knows, by spell ID, in the list's 100
+    /// slots, 0 for an empty one, when decoded: Titanium's profile, which
+    /// `EQEmu` leaves empty until its list follows for a player who knows
+    /// any ([`WorldEvent::Disciplines`]). The `EQMac` profile lists none.
+    pub disciplines: Option<Vec<u32>>,
     /// Numeric gender identifier.
     pub gender: u32,
     /// Current level.
@@ -122,10 +133,28 @@ pub struct PlayerState {
     pub name_parts: crate::names::NameParts,
 }
 
+/// Where languages begin among skill numbers: every server tells of a
+/// language's skill as skill 100 plus the language's number
+/// (`Client::SetLanguageSkill`).
+pub const LANGUAGE_SKILLS: u32 = 100;
+
 impl PlayerState {
-    /// Updates only an existing skill slot; unknown IDs never grow profile storage.
+    /// Updates only an existing skill or language slot, a language's
+    /// numbered from [`LANGUAGE_SKILLS`]; unknown IDs never grow profile
+    /// storage, and a language's value beyond a byte changes nothing.
     pub fn apply_skill(&mut self, skill_id: u32, value: u32) {
-        if let Some(slot) = usize::try_from(skill_id).ok().and_then(|index| {
+        if let Some(language) = skill_id.checked_sub(LANGUAGE_SKILLS) {
+            if let (Some(slot), Ok(value)) = (
+                usize::try_from(language).ok().and_then(|index| {
+                    self.languages
+                        .as_mut()
+                        .and_then(|languages| languages.get_mut(index))
+                }),
+                u8::try_from(value),
+            ) {
+                *slot = value;
+            }
+        } else if let Some(slot) = usize::try_from(skill_id).ok().and_then(|index| {
             self.skills
                 .as_mut()
                 .and_then(|skills| skills.get_mut(index))
@@ -214,6 +243,12 @@ pub struct SpawnState {
     /// Motion at the last report, in EQ units per second along X, Y and Z; zero
     /// when standing still or not reported.
     pub velocity: [f32; 3],
+    /// The record's walk speed, a server protocol value (`EQEmu` sends its walk
+    /// speed value over 40), not world units per second; zero where the record
+    /// holds none that is valid or the dialect does not report it.
+    pub walk_speed: f32,
+    /// The record's run speed, as `walk_speed`.
+    pub run_speed: f32,
     /// Requested model size; zero selects the racial default.
     pub size: f32,
     /// Server visibility flag; consumers must not expose invisible entities.
@@ -234,6 +269,34 @@ pub struct SpawnState {
     /// The spawn's title, last name and suffix; empty where the dialect does
     /// not report them.
     pub name_parts: crate::names::NameParts,
+}
+
+impl SpawnState {
+    /// Keeps what an appearance update changes: the size here, and an
+    /// illusion's race, gender and size, the rest in
+    /// [`SpawnState::appearance`].
+    pub fn apply_appearance(&mut self, change: &crate::appearance::AppearanceChange) {
+        match *change {
+            crate::appearance::AppearanceChange::Size(size) => self.size = size,
+            crate::appearance::AppearanceChange::Illusion(illusion) => {
+                self.race = illusion.race;
+                self.gender = u32::from(illusion.gender);
+                self.size = illusion.size;
+            }
+            _ => (),
+        }
+        self.appearance.apply_update(change);
+    }
+
+    /// Keeps a change in how `/who` lists the spawn: the level here, the
+    /// rest in [`SpawnState::listing`].
+    pub fn apply_listing(&mut self, change: crate::listing::ListingChange) {
+        if let crate::listing::ListingChange::Level(level) = change {
+            self.level = level;
+        } else {
+            self.listing.apply(change);
+        }
+    }
 }
 
 /// Decode a decrypted Titanium spawn batch, without accepting partial records.
@@ -274,6 +337,9 @@ pub fn titanium_spawns(body: &[u8]) -> Result<Vec<SpawnState>> {
                 invisible: record[84] != 0,
                 position,
                 velocity,
+                // The same fields the own spawn record's are read from.
+                walk_speed: speed(record, 324),
+                run_speed: speed(record, 233),
                 appearance: crate::appearance::titanium_spawn(record),
                 level: record[151],
                 listing: crate::listing::titanium_spawn(record),
@@ -425,12 +491,26 @@ pub enum Capability {
     /// the Raid window does. No server type offers it yet: `EQEmu` has no
     /// handler for it.
     RaidGroupLeaders,
+    /// Reporting the damage the world does to the player, which the client
+    /// works out and the server takes from it: falls, and drowning, lava
+    /// and freezing where the server type takes those too.
+    EnvironmentalDamage,
+    /// Telling the server the player bled out
+    /// ([`crate::command::GameCommand::BledOut`]): the client's own report of
+    /// a death the server leaves to it, at the HP it takes as death
+    /// ([`WorldEvent::DeathThreshold`], named once the session can count
+    /// what the player's items add).
+    BleedingOut,
+    /// Accepting or declining a sacrifice, which takes the player's life.
+    Sacrifice,
+    /// Accepting or declining a translocate, which moves the player.
+    Translocate,
 }
 
 impl Capability {
     /// Every capability, in order: what a session offers when its server and
     /// client generation support everything.
-    pub const ALL: [Self; 34] = [
+    pub const ALL: [Self; 38] = [
         Self::Casting,
         Self::Spellbook,
         Self::Inventory,
@@ -465,7 +545,25 @@ impl Capability {
         Self::Assisting,
         Self::Raiding,
         Self::RaidGroupLeaders,
+        Self::EnvironmentalDamage,
+        Self::BleedingOut,
+        Self::Sacrifice,
+        Self::Translocate,
     ];
+}
+
+/// Which values of a hit-point report leave out the HP equipped items add,
+/// which the client adds back itself.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+pub enum ItemHitPoints {
+    /// Both leave them out: Titanium's own update, where `EQEmu` subtracts
+    /// `itembonuses.HP` from each (zone/mob.cpp `Mob::SendHPUpdate`).
+    LeftOut,
+    /// The current leaves them out and the maximum counts them: `EQMac`'s
+    /// own update, where TAKP subtracts `itembonuses.HP` from the current
+    /// alone and sends the full maximum, which the official client ignores
+    /// for its own HP (zone/mob.cpp `Mob::SendHPUpdate`).
+    LeftOutOfCurrent,
 }
 
 /// Changes delivered to a graphical consumer, independent of its rendering engine.
@@ -485,14 +583,45 @@ pub enum WorldEvent {
     CharacterCreation {
         /// Requested name.
         name: String,
-        /// Whether the character now exists; a new list follows on success.
-        accepted: bool,
+        /// How the world took it; a new list follows a created character.
+        outcome: crate::creation::CreationOutcome,
     },
     /// The world's short name from its log-server settings. The official client
     /// names per-character files after it, such as `UI_<character>_<short name>.ini`.
     WorldName {
         /// For example `P1999Green`.
         short_name: String,
+    },
+    /// The world's rules, as it lets the player log in, and on Quarm again as
+    /// each zone admits them, saying whether that zone allows
+    /// player-versus-player combat.
+    Rules(crate::rules::WorldRules),
+    /// The expansions the world lets the account play.
+    Expansions(crate::rules::Expansions),
+    /// The zone the player was entering is down; the attempt ends.
+    ZoneUnavailable {
+        /// Its short name, when the world names it.
+        zone: Option<String>,
+    },
+    /// The world's chat server, for channels or mail, which the session
+    /// does not connect to.
+    ChatServer(crate::channels::ChatServer),
+    /// The login server's worlds, for the player to choose one to play on;
+    /// none has been entered yet. Only a login with no world configured
+    /// lists them.
+    ServerSelection {
+        /// Fresh identity invalidates choices queued for an older list.
+        selection_id: u64,
+        /// The worlds in the login server's order.
+        servers: Vec<crate::servers::ServerChoice>,
+    },
+    /// The login server refused the world the player chose from the list;
+    /// the list stays up for another choice.
+    ServerRefused {
+        /// The list the refused choice was made from.
+        selection_id: u64,
+        /// Why, in the login server's terms.
+        refusal: crate::servers::ServerRefusal,
     },
     /// Available characters for this world connection; no zone has been entered.
     CharacterSelection {
@@ -609,6 +738,23 @@ pub enum WorldEvent {
     ItemDetails(crate::items::ItemDetails),
     /// Server death notification; consumers compare its ID with their own spawn.
     Death(crate::zoning::Death),
+    /// A corpse moved, on `EQMac`: summoned, returned, a game master's
+    /// `#summon`, and on Quarm all the while it is dragged.
+    CorpseMoved {
+        /// The corpse.
+        spawn_id: u16,
+        /// Where it lies now: x, y and z; the record carries no heading.
+        position: [f32; 3],
+    },
+    /// A player became a corpse where they lie: the player, just before
+    /// word of their death, and another player who leaves a corpse, which
+    /// keeps their spawn ID.
+    BecameCorpse {
+        /// The player's spawn, now their corpse.
+        spawn_id: u16,
+        /// Where it lies: x, y and z; the record carries no heading.
+        position: [f32; 3],
+    },
     /// A transfer request is in progress; stop all old-zone input until its reply.
     ZoneTransfer(crate::zoning::ZoneOffer),
     /// The server rejected the pending transfer.
@@ -620,6 +766,13 @@ pub enum WorldEvent {
     },
     /// Selection request was handed to transport; this is not a server acknowledgment.
     TargetSent(Option<u16>),
+    /// The player's target as the server set it, or none: `EQEmu` as a sense
+    /// spell or a corpse locator picks a spawn, TAKP and Quarm as they refuse
+    /// a mouse target, putting back the last one, and as they echo the
+    /// player's clearing of it ([`crate::targets`]).
+    Target(Option<u16>),
+    /// Whom the player's target targets, or no one (`EQEmu`).
+    TargetOfTarget(Option<u16>),
     /// Local validation rejected a target request before transmission.
     TargetRejected {
         /// Admission that originated the request.
@@ -647,6 +800,36 @@ pub enum WorldEvent {
         /// Whether the server marks this entity invisible.
         invisible: bool,
     },
+    /// A change in how a spawn shows that lasts, such as its size or light,
+    /// or that the host hears once, such as an area's regeneration.
+    Appearance {
+        /// Zone-local entity identifier.
+        spawn_id: u16,
+        /// What changed.
+        change: crate::appearance::AppearanceChange,
+    },
+    /// A spawn's face or hair changed: on Titanium, named, as `EQEmu` sends
+    /// a face change as an illusion of race -1; on `EQMac`, unnamed, as TAKP
+    /// and Quarm relay a player's own change to the whole zone.
+    FaceChanged {
+        /// Whose face it is, where the record names them.
+        spawn_id: Option<u16>,
+        /// The face and hair.
+        features: crate::appearance::Features,
+        /// Both eyes' colors, where the record has them (`EQMac`).
+        eye_colors: Option<[u8; 2]>,
+    },
+    /// An effect the server plays: on a spawn, on the player's screen, as a
+    /// sound or as a projectile's flight. The session's spawn table keeps
+    /// none.
+    Effect(crate::effects::Effect),
+    /// A popup window the server opens on the player's screen, for quests
+    /// and game masters' commands ([`crate::popups`]). Nothing answers it
+    /// yet.
+    Popup(crate::popups::Popup),
+    /// Large text the server shows across the player's screen, for quests,
+    /// bots and the world's broadcasts ([`crate::popups`]).
+    Marquee(crate::popups::Marquee),
     /// A change in how `/who` lists a player.
     Listing {
         /// Zone-local entity identifier.
@@ -656,12 +839,39 @@ pub enum WorldEvent {
     },
     /// Guild names by number, from the world or a guild member's zone.
     GuildNames(Vec<(u32, String)>),
-    /// A character's last name changed.
+    /// A spawn's new name: on Titanium, an NPC's corpse taking the server's
+    /// name and the temporary names and renames of game masters, quests and
+    /// pets' owners; on `EQMac`, a game master's renaming of a player, which
+    /// after TAKP's and Quarm's `#set name` gives the new name as both.
+    Renamed {
+        /// Whose name it was. The record names no spawn: the session names
+        /// it before anyone hears it, from the spawn with the old name, or
+        /// the NPC corpse whose name the server's rule makes the new one
+        /// ([`corpse_name`]); None where neither is in the zone.
+        spawn_id: Option<u16>,
+        /// The name before.
+        old_name: String,
+        /// The new name.
+        new_name: String,
+    },
+    /// A character's last name changed; the session's spawn table keeps it
+    /// for the spawn of that name.
     LastName {
         /// The character, by the name they spawned with.
         name: String,
         /// The new last name; empty when it was taken away.
         last_name: String,
+    },
+    /// The player has newly earned titles to choose from
+    /// ([`crate::names`]).
+    NewTitles,
+    /// A character's title or suffix changed ([`crate::names`]); the
+    /// session's spawn table keeps it.
+    TitleChanged {
+        /// Whose, by spawn ID.
+        spawn_id: u16,
+        /// What changed.
+        change: crate::names::TitleChange,
     },
     /// Current mana on protocols without a combined endurance update.
     Mana(u32),
@@ -686,6 +896,11 @@ pub enum WorldEvent {
         /// nothing past it, and servers log targets beyond it as possible cheats.
         /// None when the dialect has not reported it.
         far_clip: Option<f32>,
+        /// The effect flag of a spell action (`SpellEffect::effect_flag`)
+        /// that says the spell landed on its target, so a front end can draw
+        /// the landing; None where it is unchecked for the server type, and
+        /// then no action says so.
+        spell_landing_flag: Option<u8>,
     },
     /// Server-reported position, including corrections for the local player.
     Position {
@@ -707,10 +922,8 @@ pub enum WorldEvent {
         current: i32,
         /// Maximum HP, never negative.
         maximum: i32,
-        /// Both values leave out the HP equipped items add, which the client adds
-        /// back itself: Titanium's own update, where `EQEmu` subtracts
-        /// `itembonuses.HP` (zone/mob.cpp `Mob::SendHPUpdate`).
-        without_items: bool,
+        /// Which values leave out the HP equipped items add.
+        items: ItemHitPoints,
     },
     /// Current mana and endurance; maxima remain unknown.
     Resources {
@@ -756,6 +969,13 @@ pub enum WorldEvent {
         /// Why it was not sent.
         reason: String,
     },
+    /// What a quest or a task gives the player: coins the server added to
+    /// the purse with no money update, and the experience and items it gave,
+    /// which come with messages of their own.
+    Reward(crate::rewards::Reward),
+    /// The sound the official client plays for a quest's `ding`
+    /// ([`Sound::Ding`](crate::rewards::Sound::Ding)).
+    Ding,
     /// Corpse loot session changes.
     Loot(crate::loot::LootUpdate),
     /// Merchant window changes.
@@ -811,6 +1031,15 @@ pub enum WorldEvent {
     /// The abilities this server type offers, as the zone admits the player;
     /// a host greys the rest, which the session refuses.
     AbilitiesOffered(Vec<crate::abilities::Ability>),
+    /// The HP at or below which this server type leaves the player's death
+    /// to the client, as the zone admits the player; named only where the
+    /// session takes that report: it offers [`Capability::BleedingOut`] and
+    /// counts what the player's items add on this server type. A host whose
+    /// own HP, with what equipped items add, reaches it on the server's
+    /// report, with no death named for the player, reports the death
+    /// ([`crate::command::GameCommand::BledOut`]); with no threshold named,
+    /// a host asks for none.
+    DeathThreshold(i32),
     /// An ability was not used, and why: the server would have ignored it.
     AbilityRefused {
         /// Admission from the request.
@@ -832,8 +1061,16 @@ pub enum WorldEvent {
     /// The time of day, as a zone admits the player and whenever it is
     /// changed; between those it runs on its own.
     TimeOfDay(crate::clock::GameTime),
-    /// How the zone's sky and fog look, right after the admission.
+    /// How the zone's sky and fog look: right after the admission, and again
+    /// whenever the server sends the zone's header anew, as GM commands and
+    /// quests that change the zone do.
     Sky(crate::clock::ZoneSky),
+    /// What the zone's header says of it beyond its name and sky, at the same
+    /// times as [`WorldEvent::Sky`].
+    ZoneDescription(crate::zones::ZoneDescription),
+    /// The zone's weather, once the player is in the zone and whenever it
+    /// changes.
+    Weather(crate::clock::Weather),
     /// A consent to drag a player's corpses given or taken back, told to
     /// the owner and to the one consented.
     Consent(crate::corpses::Consent),
@@ -890,6 +1127,26 @@ pub enum WorldEvent {
         /// Why not.
         reason: String,
     },
+    /// A sacrifice was cast on the player; the player may accept, giving
+    /// their life for the caster's gain, or decline it.
+    SacrificeOffer(crate::confirmations::SacrificeOffer),
+    /// An answer to a sacrifice was not sent, and why.
+    SacrificeRefused {
+        /// Admission from the request.
+        session_id: u64,
+        /// Why not.
+        reason: String,
+    },
+    /// A translocate was cast on the player; the player may accept, going
+    /// where it takes them, or decline it.
+    TranslocateOffer(crate::confirmations::TranslocateOffer),
+    /// An answer to a translocate was not sent, and why.
+    TranslocateRefused {
+        /// Admission from the request.
+        session_id: u64,
+        /// Why not.
+        reason: String,
+    },
     /// News of groups: the server's word (an invitation, an answer to the
     /// player's, who joined or left, the group's members and leader, or its
     /// end) and the requests the session sent for the player.
@@ -929,6 +1186,34 @@ pub enum WorldEvent {
     Roll(crate::socials::Roll),
     /// The server's answer to the player's assist: the target to take.
     Assisted(crate::socials::Assisted),
+    /// A player near the player yelled for help ([`crate::socials`]).
+    YellForHelp {
+        /// Who yelled.
+        spawn_id: u16,
+    },
+    /// A voice macro another player spoke to the player, their group or
+    /// their raid ([`crate::socials`]).
+    VoiceMacro(crate::socials::VoiceMacro),
+    /// Another player asks to inspect the player: the server passes the
+    /// request on for the player's client to answer with what the player
+    /// wears. Nothing answers it yet, so the inspector sees no window
+    /// ([`crate::socials`]).
+    InspectRequest {
+        /// Who asks, as their client names them.
+        inspector_id: u16,
+    },
+    /// News of a duel: a challenge or its acceptance, its start, or a
+    /// client turning it down ([`crate::socials`]). Nothing answers a
+    /// challenge yet.
+    Duel(crate::socials::DuelUpdate),
+    /// News of the player's guild ([`crate::guild`]). The session keeps no
+    /// roster.
+    Guild(crate::guild::GuildUpdate),
+    /// What a game master or the world tells the zone of a player: a kick,
+    /// a kill, or the player made to look like an NPC; or, to a game
+    /// master, a petition in the queue ([`crate::gm`]). Nothing acts on
+    /// one yet.
+    Gm(crate::gm::GmNotice),
     /// News of raids: the server's word (an invitation, the raid's leader
     /// and members, who left, the player's end in it) and the requests the
     /// session sent or answered for the player.
@@ -981,13 +1266,61 @@ pub enum WorldEvent {
     },
     /// A melee, skill or spell damage record for any nearby entities.
     Damage(crate::combat::Damage),
+    /// A one-shot motion for a nearby spawn, the player's own included, such
+    /// as a swing as an attack goes out.
+    Animation(crate::combat::Animation),
+    /// A stun on the player begins, for this long, or ends (`None`). One
+    /// that runs out sends nothing; see [`crate::control::stun`].
+    Stun(Option<std::time::Duration>),
+    /// A player's charm takes hold or ends, or the server gives a player
+    /// back the control it took for a charm or a fear.
+    Charm(crate::control::Charm),
+    /// `EQMac`'s servers took the player's control (true), for a charm, a
+    /// fear or link death, or gave it back (false). `EQEmu` says the same
+    /// to Titanium with the player's own posture: [`PostureState::Frozen`],
+    /// then the posture they had.
+    Controlled(bool),
+    /// `EQMac`'s servers: the player, a warrior, went berserk (true) or
+    /// calmed down (false).
+    Berserk(bool),
+    /// The server spun the player around: `Mob::Spin`'s record, which
+    /// `EQEmu` and TAKP send only from quests
+    /// ([`Action::Spin`](crate::buffs::Action::Spin)).
+    Spun,
+    /// The server ended the player's hiding and sneaking. `EQEmu` sends it
+    /// only to a hidden player and ends the hiding once the client answers
+    /// ([`crate::abilities::titanium_unhide`]); TAKP and Quarm end both
+    /// before they send it.
+    HideAndSneakEnded,
     /// Own-character skill update; unknown skill IDs remain available to consumers.
     Skill {
-        /// Protocol skill index (22 is dual wield).
+        /// Protocol skill index (22 is dual wield); from
+        /// [`LANGUAGE_SKILLS`] on, a language's.
         skill_id: u32,
         /// New server skill value.
         value: u32,
     },
+    /// A quest's word on the player's base stats: each stat's new value or
+    /// its rise, which the record does not tell apart ([`crate::stats`]);
+    /// the next profile has them as the server keeps them.
+    StatsChanged(crate::stats::StatChange),
+    /// A skill's button is ready again, by the servers' number for the
+    /// skill: `EQMac`'s servers' word, before the official client's own
+    /// wait ends ([`crate::abilities::eqmac_reset_skill`]).
+    SkillReady(u32),
+    /// The disciplines the player knows, by spell ID, in the list's 100
+    /// slots, 0 for an empty one: `EQEmu`'s list once the zone has admitted
+    /// a player who knows any, and as it changes ([`crate::disciplines`]).
+    Disciplines(Vec<u32>),
+    /// A discipline reuse timer as the server set it. `EQEmu`'s copies at
+    /// zone-in of timers 11 to 19 carry its other reuse timers
+    /// ([`crate::disciplines`]).
+    DisciplineReuse(crate::disciplines::Reuse),
+    /// A reuse timer a group of spells shares, as the server set it.
+    LinkedReuse(crate::disciplines::Reuse),
+    /// `EQMac`'s servers: the discipline the player began, by the servers'
+    /// number for it, or none as it ends.
+    Discipline(Option<u8>),
 }
 
 /// A profile heading on the 0..512 scale live movement uses. Project 1999 saves
@@ -998,6 +1331,12 @@ pub enum WorldEvent {
 pub fn profile_heading(raw: f32, revolution: f32) -> f32 {
     (raw * 512.0 / revolution).rem_euclid(512.0)
 }
+
+/// Where the Titanium profile lists the player's languages
+/// (`MAX_PP_LANGUAGE`, 28).
+const TITANIUM_LANGUAGES: std::ops::Range<usize> = 13084..13112;
+/// Where the Titanium profile lists the disciplines the player knows.
+const TITANIUM_DISCIPLINES: std::ops::Range<usize> = 5508..5908;
 
 /// Decode the profile and validated, decrypted own-spawn record. `revolution`
 /// is the profile's heading scale, see [`profile_heading`].
@@ -1045,6 +1384,10 @@ pub fn titanium_player(profile: &[u8], spawn: &[u8], revolution: f32) -> Result<
                 .collect(),
         ),
         practice_points: Some(word(profile, 2224)),
+        languages: Some(profile[TITANIUM_LANGUAGES].to_vec()),
+        disciplines: Some(crate::disciplines::titanium_list(
+            &profile[TITANIUM_DISCIPLINES],
+        )?),
         gender: word(profile, 4),
         level: profile[20],
         position,
@@ -1074,6 +1417,17 @@ pub fn titanium_far_clip(new_zone: &[u8]) -> Option<f32> {
     (value.is_finite() && value > 0.0).then_some(value)
 }
 
+/// Reads the far clip distance from an `EQMac` zone header (572 bytes), a
+/// float at offset 512; None for another length, or when not positive.
+#[must_use]
+pub fn eqmac_far_clip(new_zone: &[u8]) -> Option<f32> {
+    if new_zone.len() != crate::zones::EQMAC_HEADER_LENGTH {
+        return None;
+    }
+    let value = f32::from_le_bytes(new_zone[512..516].try_into().ok()?);
+    (value.is_finite() && value > 0.0).then_some(value)
+}
+
 /// Reads the world's short name from a Titanium log-server settings body
 /// (`OP_LogServer`), which carries it NUL-terminated in 32 bytes at offset 32.
 ///
@@ -1099,7 +1453,6 @@ pub fn titanium_update(opcode: u16, body: &[u8]) -> Result<Option<WorldEvent>> {
     }
     Ok(Some(match opcode {
         0x6a53 => WorldEvent::Buff(crate::buffs::titanium_update(body)?),
-        0x7c32 => return appearance(body),
         0x6d44 => {
             ensure!(body.len() == 12, "invalid level update length");
             let current = u8::try_from(word(body, 0))?;
@@ -1127,6 +1480,7 @@ pub fn titanium_update(opcode: u16, body: &[u8]) -> Result<Option<WorldEvent>> {
             WorldEvent::Consideration(crate::combat::consideration(body)?)
         }
         crate::combat::DAMAGE_OPCODE => WorldEvent::Damage(crate::combat::damage(body)?),
+        crate::combat::ANIMATION_OPCODE => WorldEvent::Animation(crate::combat::animation(body)?),
         crate::food::STAMINA_OPCODE => {
             WorldEvent::Nourishment(crate::food::decode(opcode, body)?.unwrap_or_default())
         }
@@ -1142,10 +1496,6 @@ pub fn titanium_update(opcode: u16, body: &[u8]) -> Result<Option<WorldEvent>> {
         }
         crate::listing::GUILDS_OPCODE => {
             WorldEvent::GuildNames(crate::listing::titanium_guilds(body)?)
-        }
-        crate::names::LAST_NAME_OPCODE => {
-            let (name, last_name) = crate::names::last_name(body)?;
-            WorldEvent::LastName { name, last_name }
         }
         0x0695 => {
             ensure!(
@@ -1164,9 +1514,6 @@ pub fn titanium_update(opcode: u16, body: &[u8]) -> Result<Option<WorldEvent>> {
         }
         0x14cb => titanium_position(body)?,
         0x3a2b => p99_compact_position(body)?,
-        crate::appearance::WEAR_CHANGE_OPCODE => {
-            WorldEvent::WearChange(crate::appearance::titanium_wear_change(body)?)
-        }
         0x3bcf => {
             ensure!(body.len() == 10, "invalid hit-point update length");
             // Both fields are signed: the server sends only the player's own HP,
@@ -1179,7 +1526,7 @@ pub fn titanium_update(opcode: u16, body: &[u8]) -> Result<Option<WorldEvent>> {
                 current,
                 maximum,
                 spawn_id: u16::from_le_bytes([body[8], body[9]]),
-                without_items: true,
+                items: ItemHitPoints::LeftOut,
             }
         }
         0x4839 => {
@@ -1198,44 +1545,122 @@ pub fn titanium_update(opcode: u16, body: &[u8]) -> Result<Option<WorldEvent>> {
     }))
 }
 
-/// Spell actions, doors, ground objects, loot, merchant, exchange,
-/// training, resurrection, group, dice, assist, raid, book, combine,
-/// bandaging and inventory packets, each owned by its codec.
+/// How spawns look and their names, effects, popups and marquees, stuns
+/// and charms, the end of hiding, a quest's word on the player's stats,
+/// disciplines and reuse timers, the target the server sets, rewards,
+/// sacrifices and translocates, a player becoming a corpse, doors, ground
+/// objects, loot, merchant, exchange, training, resurrection, group, dice,
+/// assist, other players' yells, voice macros, inspect requests and duels,
+/// guild, game master, raid, book, combine, bandaging, chat server, weather
+/// and inventory packets, each owned by its codec.
+#[allow(clippy::too_many_lines, reason = "one branch per codec")]
 fn titanium_views(opcode: u16, body: &[u8]) -> Result<Option<WorldEvent>> {
-    if opcode == 0x497c {
-        return Ok(crate::buffs::titanium_spell_effect(body)?.map(WorldEvent::SpellEffect));
+    match opcode {
+        crate::rewards::SOUND_OPCODE => {
+            return Ok(Some(match crate::rewards::titanium_sound(body)? {
+                crate::rewards::Sound::Reward(reward) => WorldEvent::Reward(reward),
+                crate::rewards::Sound::Ding => WorldEvent::Ding,
+            }));
+        }
+        crate::rewards::CASH_REWARD_OPCODE => {
+            return Ok(Some(WorldEvent::Reward(crate::rewards::cash_reward(body)?)));
+        }
+        crate::control::STUN_OPCODE => {
+            return Ok(Some(WorldEvent::Stun(crate::control::stun(body)?)));
+        }
+        crate::stats::INCREASE_STATS_OPCODE => {
+            return Ok(Some(WorldEvent::StatsChanged(
+                crate::stats::titanium_change(body)?,
+            )));
+        }
+        crate::abilities::CANCEL_SNEAK_HIDE_OPCODE => {
+            ensure!(body.is_empty(), "invalid hide end length");
+            return Ok(Some(WorldEvent::HideAndSneakEnded));
+        }
+        crate::targets::TARGET_COMMAND_OPCODE => {
+            return Ok(Some(WorldEvent::Target(crate::targets::titanium_target(
+                body,
+            )?)));
+        }
+        crate::targets::TARGET_OF_TARGET_OPCODE => {
+            return Ok(Some(WorldEvent::TargetOfTarget(
+                crate::targets::titanium_target(body)?,
+            )));
+        }
+        crate::control::CHARM_OPCODE => {
+            return Ok(Some(WorldEvent::Charm(crate::control::titanium_charm(
+                body,
+            )?)));
+        }
+        crate::corpses::BECOME_CORPSE_OPCODE => {
+            let (spawn_id, position) = crate::corpses::became_corpse(body)?;
+            return Ok(Some(WorldEvent::BecameCorpse { spawn_id, position }));
+        }
+        crate::confirmations::SACRIFICE_OPCODE => {
+            return Ok(Some(WorldEvent::SacrificeOffer(
+                crate::confirmations::sacrifice(body)?,
+            )));
+        }
+        crate::confirmations::TRANSLOCATE_OPCODE => {
+            return Ok(Some(WorldEvent::TranslocateOffer(
+                crate::confirmations::titanium_translocate(body)?,
+            )));
+        }
+        _ => (),
     }
-    Ok(if let Some(update) = crate::doors::decode(opcode, body)? {
-        Some(WorldEvent::Doors(update))
-    } else if let Some(update) = crate::objects::decode(opcode, body)? {
-        Some(WorldEvent::Objects(update))
-    } else if let Some(update) = crate::loot::decode(opcode, body)? {
-        Some(WorldEvent::Loot(update))
-    } else if let Some(update) = crate::merchant::decode(opcode, body)? {
-        Some(WorldEvent::Merchant(update))
-    } else if let Some(update) = crate::exchange::decode(opcode, body)? {
-        Some(WorldEvent::Exchange(update))
-    } else if let Some(update) = crate::training::decode(opcode, body)? {
-        Some(WorldEvent::Training(update))
-    } else if let Some(offer) = crate::resurrection::decode(opcode, body)? {
-        Some(WorldEvent::Resurrection(offer))
-    } else if let Some(update) = crate::group::decode(opcode, body)? {
-        Some(WorldEvent::Group(update))
-    } else if let Some(roll) = crate::socials::decode_roll(opcode, body)? {
-        Some(WorldEvent::Roll(roll))
-    } else if let Some(answer) = crate::socials::decode_assist(opcode, body)? {
-        Some(WorldEvent::Assisted(answer))
-    } else if let Some(update) = crate::raid::decode(opcode, body)? {
-        Some(WorldEvent::Raid(update))
-    } else if let Some(text) = crate::books::decode(opcode, body)? {
-        Some(WorldEvent::BookText(text))
-    } else if let Some(update) = crate::tradeskills::decode(opcode, body)? {
-        Some(WorldEvent::Combine(update))
-    } else if let Some(update) = crate::bind_wound::decode(opcode, body)? {
-        Some(WorldEvent::BindWound(update))
-    } else {
-        crate::inventory::decode(opcode, body)?.map(WorldEvent::Inventory)
-    })
+    Ok(
+        if let Some(event) = crate::appearance::titanium(opcode, body)? {
+            Some(event)
+        } else if let Some(event) = crate::names::titanium(opcode, body)? {
+            Some(event)
+        } else if let Some(effect) = crate::effects::titanium(opcode, body)? {
+            Some(WorldEvent::Effect(effect))
+        } else if let Some(event) = crate::popups::titanium(opcode, body)? {
+            Some(event)
+        } else if let Some(event) = crate::disciplines::titanium(opcode, body)? {
+            Some(event)
+        } else if let Some(update) = crate::doors::decode(opcode, body)? {
+            Some(WorldEvent::Doors(update))
+        } else if let Some(update) = crate::objects::decode(opcode, body)? {
+            Some(WorldEvent::Objects(update))
+        } else if let Some(update) = crate::loot::decode(opcode, body)? {
+            Some(WorldEvent::Loot(update))
+        } else if let Some(update) = crate::merchant::decode(opcode, body)? {
+            Some(WorldEvent::Merchant(update))
+        } else if let Some(update) = crate::exchange::decode(opcode, body)? {
+            Some(WorldEvent::Exchange(update))
+        } else if let Some(update) = crate::training::decode(opcode, body)? {
+            Some(WorldEvent::Training(update))
+        } else if let Some(offer) = crate::resurrection::decode(opcode, body)? {
+            Some(WorldEvent::Resurrection(offer))
+        } else if let Some(update) = crate::group::decode(opcode, body)? {
+            Some(WorldEvent::Group(update))
+        } else if let Some(roll) = crate::socials::decode_roll(opcode, body)? {
+            Some(WorldEvent::Roll(roll))
+        } else if let Some(answer) = crate::socials::decode_assist(opcode, body)? {
+            Some(WorldEvent::Assisted(answer))
+        } else if let Some(event) = crate::socials::titanium(opcode, body)? {
+            Some(event)
+        } else if let Some(update) = crate::guild::titanium(opcode, body)? {
+            Some(WorldEvent::Guild(update))
+        } else if let Some(notice) = crate::gm::titanium(opcode, body)? {
+            Some(WorldEvent::Gm(notice))
+        } else if let Some(update) = crate::raid::decode(opcode, body)? {
+            Some(WorldEvent::Raid(update))
+        } else if let Some(text) = crate::books::decode(opcode, body)? {
+            Some(WorldEvent::BookText(text))
+        } else if let Some(update) = crate::tradeskills::decode(opcode, body)? {
+            Some(WorldEvent::Combine(update))
+        } else if let Some(update) = crate::bind_wound::decode(opcode, body)? {
+            Some(WorldEvent::BindWound(update))
+        } else if let Some(offer) = crate::channels::titanium(opcode, body)? {
+            Some(WorldEvent::ChatServer(offer))
+        } else if let Some(weather) = crate::clock::titanium_weather(opcode, body)? {
+            Some(WorldEvent::Weather(weather))
+        } else {
+            crate::inventory::decode(opcode, body)?.map(WorldEvent::Inventory)
+        },
+    )
 }
 
 /// `OP_MoneyUpdate`: carried coins after a purchase, sale or loot.
@@ -1250,34 +1675,6 @@ fn money_update(body: &[u8]) -> Result<Coins> {
     })
 }
 
-/// Decodes persistent appearance state without interpreting unrelated update kinds.
-pub(crate) fn appearance(body: &[u8]) -> Result<Option<WorldEvent>> {
-    ensure!(body.len() == 8, "invalid appearance length");
-    let kind = u16::from_le_bytes([body[2], body[3]]);
-    let value = word(body, 4);
-    let listing = crate::listing::appearance(kind, value);
-    if !matches!(kind, 3 | 14 | crate::pets::PET_APPEARANCE) && listing.is_none() {
-        return Ok(None);
-    }
-    let spawn_id = u16::from_le_bytes([body[0], body[1]]);
-    ensure!(spawn_id != 0, "invalid appearance spawn ID");
-    Ok(Some(match (kind, listing) {
-        (_, Some(change)) => WorldEvent::Listing { spawn_id, change },
-        (crate::pets::PET_APPEARANCE, None) => WorldEvent::PetOwner {
-            spawn_id,
-            owner: u16::try_from(value).ok().filter(|owner| *owner != 0),
-        },
-        (14, None) => WorldEvent::Posture {
-            spawn_id,
-            posture: value.into(),
-        },
-        _ => WorldEvent::Visibility {
-            spawn_id,
-            invisible: value != 0,
-        },
-    }))
-}
-
 /// EQ units per second for one unit of a Titanium motion delta, fitted on
 /// official-client P99 recordings: the median over 2,253 straight,
 /// constant-velocity stretches of NPC movement (10th to 90th percentile 0.1429
@@ -1287,7 +1684,9 @@ const DELTA_UNITS_PER_SECOND: f32 = 0.144;
 /// EQ units per second for one unit of a moving spawn's animation value, which
 /// is its speed: `EQEmu` moves NPCs `speed * 0.4 * 1.45` units per second
 /// (`zone/mob_movement_manager.cpp`), and P99's recorded NPCs match (0.57).
-const ANIMATION_UNITS_PER_SECOND: f32 = 0.4 * 1.45;
+/// A spawn record's walk or run speed is a speed value over 40 (`EQEmu`'s
+/// `Mob::Mob` in `zone/mob.cpp`), so it moves 40 times this a second.
+pub const ANIMATION_UNITS_PER_SECOND: f32 = 0.4 * 1.45;
 
 /// A server position update for another spawn.
 fn titanium_position(body: &[u8]) -> Result<WorldEvent> {
@@ -1384,6 +1783,15 @@ fn word(bytes: &[u8], offset: usize) -> u32 {
             .expect("layout checked by caller"),
     )
 }
+/// A spawn record's speed field, or zero for one that is not a finite,
+/// non-negative number, so a bad speed costs the spawn only its speed.
+fn speed(record: &[u8], offset: usize) -> f32 {
+    float(record, offset)
+        .ok()
+        .filter(|speed| *speed >= 0.0)
+        .unwrap_or(0.0)
+}
+
 fn float(bytes: &[u8], offset: usize) -> Result<f32> {
     let value = f32::from_bits(word(bytes, offset));
     ensure!(value.is_finite(), "non-finite world field");
@@ -1431,6 +1839,10 @@ mod tests {
             Capability::Assisting => 31,
             Capability::Raiding => 32,
             Capability::RaidGroupLeaders => 33,
+            Capability::EnvironmentalDamage => 34,
+            Capability::BleedingOut => 35,
+            Capability::Sacrifice => 36,
+            Capability::Translocate => 37,
         };
         for (index, capability) in Capability::ALL.into_iter().enumerate() {
             assert_eq!(place(capability), index, "{capability:?}");
@@ -1520,7 +1932,13 @@ mod tests {
         }
         assert!(super::titanium_update(0x7c32, &[0; 9]).is_err());
         packet[2..4].copy_from_slice(&99u16.to_le_bytes());
-        assert!(super::titanium_update(0x7c32, &packet).unwrap().is_none());
+        assert_eq!(
+            super::titanium_update(0x7c32, &packet).unwrap(),
+            Some(super::WorldEvent::Appearance {
+                spawn_id: 73,
+                change: crate::appearance::AppearanceChange::Other { kind: 99, value: 2 }
+            })
+        );
         packet[2..4].copy_from_slice(&3u16.to_le_bytes());
         packet[..2].fill(0);
         assert!(super::titanium_update(0x7c32, &packet).is_err());
@@ -1698,6 +2116,33 @@ mod tests {
     }
 
     #[test]
+    fn the_titanium_profile_lists_languages_and_disciplines() {
+        let mut profile = vec![0; 19592];
+        let mut spawn = vec![0; 385];
+        spawn[340..344].copy_from_slice(&7u32.to_le_bytes());
+        // The Common Tongue at 100 and Vah Shir, language 24, at 25.
+        profile[13084] = 100;
+        profile[13084 + 24] = 25;
+        // A discipline in the list's first slot.
+        profile[5508..5512].copy_from_slice(&4585u32.to_le_bytes());
+        let mut player = titanium_player(&profile, &spawn, 256.0).unwrap();
+        let mut languages = player.languages.clone().unwrap();
+        assert_eq!(languages.len(), 28);
+        assert_eq!((languages[0], languages[24]), (100, 25));
+        assert_eq!(player.disciplines.as_ref().unwrap()[..2], [4585, 0]);
+        // A language's skill update names skill 100 plus its number.
+        player.apply_skill(LANGUAGE_SKILLS + 24, 26);
+        languages[24] = 26;
+        assert_eq!(player.languages.as_ref(), Some(&languages));
+        // Beyond the list, or beyond a byte, it changes nothing.
+        player.apply_skill(LANGUAGE_SKILLS + 28, 5);
+        player.apply_skill(LANGUAGE_SKILLS + 24, 256);
+        assert_eq!(player.languages.as_ref(), Some(&languages));
+        // The skills stay apart.
+        assert_eq!(player.skills.as_ref().unwrap()[24], 0);
+    }
+
+    #[test]
     fn the_far_clip_comes_from_the_zone_header() {
         // Synthetic header shaped like Titanium's 700-byte OP_NewZone.
         let mut header = vec![0; 700];
@@ -1706,6 +2151,13 @@ mod tests {
         assert_eq!(titanium_far_clip(&header[..519]), None);
         header[516..520].copy_from_slice(&0.0f32.to_le_bytes());
         assert_eq!(titanium_far_clip(&header), None);
+        // EQMac's 572-byte header keeps it 4 bytes sooner.
+        let mut header = vec![0; 572];
+        header[512..516].copy_from_slice(&300.0f32.to_le_bytes());
+        assert_eq!(eqmac_far_clip(&header), Some(300.0));
+        assert_eq!(eqmac_far_clip(&header[..571]), None);
+        header[512..516].copy_from_slice(&f32::INFINITY.to_le_bytes());
+        assert_eq!(eqmac_far_clip(&header), None);
     }
 
     #[test]
@@ -1771,7 +2223,7 @@ mod tests {
                 spawn_id: 7,
                 current: 27,
                 maximum: 40,
-                without_items: true,
+                items: ItemHitPoints::LeftOut,
             })
         );
         // Negative HP, dying or below the equipped item bonus, stays negative.
@@ -1782,7 +2234,7 @@ mod tests {
                 spawn_id: 7,
                 current: -2,
                 maximum: 40,
-                without_items: true,
+                items: ItemHitPoints::LeftOut,
             })
         );
         hp[4..8].copy_from_slice(&(-1i32).to_le_bytes());
@@ -1813,6 +2265,14 @@ mod tests {
             record[340..344].copy_from_slice(&u32::try_from(index + 10).unwrap().to_le_bytes());
             record[94..98].copy_from_slice(&((0x7ffffu32 - 7) << 10).to_le_bytes());
             record[106..110].copy_from_slice(&(1024u32 << 13).to_le_bytes());
+            // A default NPC's walk and run, and a second record's bad speeds.
+            let (walk, run) = if index == 0 {
+                (0.45f32, 1.25f32)
+            } else {
+                (f32::NAN, -1.0)
+            };
+            record[324..328].copy_from_slice(&walk.to_le_bytes());
+            record[233..237].copy_from_slice(&run.to_le_bytes());
         }
         // Synthetic credentials only; prove the odd record length does not reset XOR phase.
         let clear = body.clone();
@@ -1831,6 +2291,9 @@ mod tests {
         assert_eq!(spawns[1].class, Some(255));
         assert_eq!(spawns[1].kind, SpawnKind::NpcCorpse);
         assert_eq!(spawns[1].spawn_id, 11);
+        // The record's speeds, and none for a bad one rather than no spawn.
+        assert_eq!((spawns[0].walk_speed, spawns[0].run_speed), (0.45, 1.25));
+        assert_eq!((spawns[1].walk_speed, spawns[1].run_speed), (0.0, 0.0));
         // Health out of range is no health at all.
         assert_eq!(
             (spawns[0].hp_percent, spawns[1].hp_percent),
@@ -1846,6 +2309,177 @@ mod tests {
         assert!(titanium_update(0x55bc, &[0; 3]).is_err());
         body[75..79].copy_from_slice(&f32::NAN.to_le_bytes());
         assert!(titanium_spawns(&body).is_err());
+    }
+
+    #[test]
+    fn a_stun_and_a_charm_are_read_from_titaniums_messages() {
+        assert_eq!(
+            titanium_update(0x1e51, &1500u32.to_le_bytes()).unwrap(),
+            Some(WorldEvent::Stun(Some(std::time::Duration::from_millis(
+                1500
+            ))))
+        );
+        assert_eq!(
+            titanium_update(0x1e51, &[0; 4]).unwrap(),
+            Some(WorldEvent::Stun(None))
+        );
+        let mut charm = [0u8; 12];
+        charm[..4].copy_from_slice(&553u32.to_le_bytes());
+        charm[4..8].copy_from_slice(&581u32.to_le_bytes());
+        charm[8..].copy_from_slice(&1u32.to_le_bytes());
+        assert_eq!(
+            titanium_update(0x12e5, &charm).unwrap(),
+            Some(WorldEvent::Charm(crate::control::Charm {
+                owner_id: Some(553),
+                pet_id: 581,
+                charmed: true,
+            }))
+        );
+        assert!(titanium_update(0x1e51, &[0; 8]).is_err());
+        assert!(titanium_update(0x12e5, &[0; 6]).is_err());
+    }
+
+    #[test]
+    fn the_target_the_server_sets_and_the_targets_target_are_read() {
+        assert_eq!(
+            titanium_update(0x1477, &581u32.to_le_bytes()).unwrap(),
+            Some(WorldEvent::Target(Some(581)))
+        );
+        assert_eq!(
+            titanium_update(0x1477, &[0; 4]).unwrap(),
+            Some(WorldEvent::Target(None))
+        );
+        assert_eq!(
+            titanium_update(0x6a12, &553u32.to_le_bytes()).unwrap(),
+            Some(WorldEvent::TargetOfTarget(Some(553)))
+        );
+        assert!(titanium_update(0x1477, &[0; 2]).is_err());
+        assert!(titanium_update(0x6a12, &[0; 8]).is_err());
+    }
+
+    #[test]
+    fn rewards_and_eqemus_ding_are_read() {
+        let mut quest = vec![0; 68];
+        quest[..4].copy_from_slice(&581u32.to_le_bytes());
+        quest[32..36].copy_from_slice(&2u32.to_le_bytes());
+        assert_eq!(
+            titanium_update(0x541e, &quest).unwrap(),
+            Some(WorldEvent::Reward(crate::rewards::Reward {
+                giver_id: Some(581),
+                coins: Coins {
+                    platinum: 2,
+                    ..Coins::default()
+                },
+                ..crate::rewards::Reward::default()
+            }))
+        );
+        assert_eq!(
+            titanium_update(0x541e, &crate::rewards::DING).unwrap(),
+            Some(WorldEvent::Ding)
+        );
+        let mut cash = [0; 16];
+        cash[..4].copy_from_slice(&7u32.to_le_bytes());
+        assert_eq!(
+            titanium_update(0x4c8c, &cash).unwrap(),
+            Some(WorldEvent::Reward(crate::rewards::Reward {
+                coins: Coins {
+                    copper: 7,
+                    ..Coins::default()
+                },
+                ..crate::rewards::Reward::default()
+            }))
+        );
+        assert!(titanium_update(0x541e, &quest[..64]).is_err());
+        assert!(titanium_update(0x4c8c, &[0; 12]).is_err());
+    }
+
+    #[test]
+    fn a_player_becoming_a_corpse_is_read() {
+        let mut body = 7u32.to_le_bytes().to_vec();
+        for value in [1748.0f32, 263.0, 27.0] {
+            body.extend_from_slice(&value.to_le_bytes());
+        }
+        assert_eq!(
+            titanium_update(0x4dbc, &body).unwrap(),
+            Some(WorldEvent::BecameCorpse {
+                spawn_id: 7,
+                position: [263.0, 1748.0, 27.0],
+            })
+        );
+        assert!(titanium_update(0x4dbc, &body[..12]).is_err());
+    }
+
+    #[test]
+    fn sacrifice_and_translocate_offers_are_read() {
+        let sacrifice: Vec<u8> = [581u32, 7, 0]
+            .iter()
+            .flat_map(|value| value.to_le_bytes())
+            .collect();
+        assert!(matches!(
+            titanium_update(0x727a, &sacrifice).unwrap(),
+            Some(WorldEvent::SacrificeOffer(offer)) if offer.caster_id == 581
+        ));
+        let mut translocate = vec![0; 92];
+        translocate[..4].copy_from_slice(&4u32.to_le_bytes());
+        translocate[12..18].copy_from_slice(b"Tester");
+        assert!(matches!(
+            titanium_update(0x8258, &translocate).unwrap(),
+            Some(WorldEvent::TranslocateOffer(offer))
+                if offer.zone_id == 4 && offer.caster == "Tester"
+        ));
+        assert!(titanium_update(0x727a, &sacrifice[..8]).is_err());
+        assert!(titanium_update(0x8258, &translocate[..91]).is_err());
+    }
+
+    #[test]
+    fn a_quests_word_on_the_players_stats_is_read() {
+        let mut body = vec![0; 141];
+        body[1] = 5;
+        assert_eq!(
+            titanium_update(0x5b7b, &body).unwrap(),
+            Some(WorldEvent::StatsChanged(crate::stats::StatChange {
+                strength: 5,
+                ..crate::stats::StatChange::default()
+            }))
+        );
+        assert!(titanium_update(0x5b7b, &body[..140]).is_err());
+    }
+
+    #[test]
+    fn disciplines_and_reuse_timers_are_read() {
+        let record = |fields: &[u32]| -> Vec<u8> {
+            fields
+                .iter()
+                .flat_map(|field| field.to_le_bytes())
+                .collect()
+        };
+        let mut slots = [0; 100];
+        slots[0] = 4585;
+        assert!(matches!(
+            titanium_update(0x7180, &record(&slots)).unwrap(),
+            Some(WorldEvent::Disciplines(list)) if list[..2] == [4585, 0]
+        ));
+        assert!(matches!(
+            titanium_update(0x53df, &record(&[2, 1800, 0])).unwrap(),
+            Some(WorldEvent::DisciplineReuse(reuse)) if reuse.timer == 2
+        ));
+        assert!(matches!(
+            titanium_update(0x6a00, &record(&[7, 5030, 5000])).unwrap(),
+            Some(WorldEvent::LinkedReuse(reuse))
+                if reuse.remaining == std::time::Duration::from_secs(30)
+        ));
+        assert!(titanium_update(0x7180, &record(&slots[..99])).is_err());
+        assert!(titanium_update(0x53df, &record(&[2, 1800])).is_err());
+        assert!(titanium_update(0x6a00, &record(&[7, 5030])).is_err());
+    }
+
+    #[test]
+    fn the_end_of_hiding_is_read_and_carries_nothing() {
+        assert_eq!(
+            titanium_update(0x48c2, &[]).unwrap(),
+            Some(WorldEvent::HideAndSneakEnded)
+        );
+        assert!(titanium_update(0x48c2, &[0]).is_err());
     }
 
     #[test]

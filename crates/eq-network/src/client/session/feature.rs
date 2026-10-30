@@ -201,6 +201,9 @@ pub(in crate::client) struct World {
     /// The world container asked for or open, which only the tradeskills
     /// feature changes.
     pub(super) container: OpenContainer,
+    /// What the session itself made happen, for every feature and the host
+    /// to hear next; see [`World::happened`].
+    news: Vec<Message>,
 }
 
 impl World {
@@ -224,6 +227,7 @@ impl World {
             target: super::targeting::Target::default(),
             objects: ZoneObjects::default(),
             container: OpenContainer::default(),
+            news: Vec::new(),
         }
     }
 
@@ -262,6 +266,18 @@ impl World {
         self.exit.take()
     }
 
+    /// Something the session itself made happen, which every feature and the
+    /// host then hear as they hear the zone's messages: a death the client
+    /// reports for the player is their death all the same.
+    pub(super) fn happened(&mut self, message: Message) {
+        self.news.push(message);
+    }
+
+    /// What the session made happen since the loop last asked, in order.
+    pub(super) fn take_news(&mut self) -> Vec<Message> {
+        std::mem::take(&mut self.news)
+    }
+
     /// How the zone session ends, as decided so far.
     #[cfg(test)]
     pub(super) const fn exit(&self) -> Option<&ZoneExit> {
@@ -297,7 +313,7 @@ impl World {
     /// # Errors
     /// Rejects a refusal without a transfer under way.
     pub(super) fn transfer_refused(&mut self, now: Instant) -> Result<()> {
-        self.lifecycle.finish(false)?;
+        self.lifecycle.finish(false, now)?;
         if !self.lifecycle.is_dead() {
             self.body.resume(now);
         }
@@ -406,6 +422,10 @@ pub(super) trait Feature {
         Ok(())
     }
 
+    /// Hears that the zone's connection ended, which a feature may take as
+    /// the session's end, as a zone closing on a player who departs.
+    fn connection_ended(&mut self, _world: &mut World) {}
+
     /// Hears a message once the zone has admitted the player.
     ///
     /// # Errors
@@ -464,6 +484,8 @@ pub(super) mod testing {
             gender: 0,
             position: eq_network_game::world::Position::default(),
             velocity: [0.0; 3],
+            walk_speed: 0.0,
+            run_speed: 0.0,
             size: 6.0,
             invisible: false,
             appearance: eq_network_game::appearance::Appearance::default(),
@@ -521,8 +543,17 @@ pub(super) mod testing {
         pub(in crate::client::session) heard: Vec<std::time::Instant>,
     }
 
-    /// Runs one step of a feature with an `Out` that records.
+    /// Runs one step of a feature with an `Out` that records, on the
+    /// Titanium wire.
     pub(in crate::client::session) fn run<R>(
+        step: impl FnOnce(&mut Out<'_, '_>) -> R,
+    ) -> Outcome<R> {
+        run_on(&super::super::wire::Titanium, step)
+    }
+
+    /// Runs one step of a feature with an `Out` that records, on `wire`.
+    pub(in crate::client::session) fn run_on<R>(
+        wire: &'static dyn super::super::wire::Wire,
         step: impl FnOnce(&mut Out<'_, '_>) -> R,
     ) -> Outcome<R> {
         let config = ClientConfig::new(
@@ -542,7 +573,7 @@ pub(super) mod testing {
         let result = step(&mut Out {
             sink: &mut sink,
             log: &mut log,
-            wire: &super::super::wire::Titanium,
+            wire,
             // Every test admits the player as spawn 7 named Tester.
             sender: eq_network_game::request::Sender {
                 name: "Tester",

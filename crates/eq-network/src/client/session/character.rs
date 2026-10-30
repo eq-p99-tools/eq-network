@@ -1,5 +1,6 @@
 //! The player's character: what the zone says about them before it admits
-//! them, and their level, skills and what they wear as these change.
+//! them, and their level, skills, languages, disciplines and what they wear
+//! as these change.
 use super::{
     feature::{Feature, Out, World},
     ClientEvent,
@@ -41,8 +42,9 @@ impl PlayerRecord {
     }
 }
 
-/// Keeps the admitted player's level, skills, gems and appearance current, and
-/// holds what arrives about them before the admission until it can be told.
+/// Keeps the admitted player's level, skills, languages, disciplines, gems
+/// and appearance current, and holds what arrives about them before the
+/// admission until it can be told.
 #[derive(Default)]
 pub(super) struct Character {
     staged: Staged,
@@ -54,6 +56,7 @@ struct Staged {
     level: Option<u8>,
     experience: Option<u32>,
     skills: BTreeMap<u32, u32>,
+    disciplines: Option<Vec<u32>>,
     /// The player's own wear changes, which arrive before their state exists.
     wear: Vec<WearChange>,
     buffs: Option<Vec<Option<Buff>>>,
@@ -78,6 +81,7 @@ impl Feature for Character {
                 staged.experience = Some(*experience);
             }
             WorldEvent::Experience(value) => staged.experience = Some(*value),
+            WorldEvent::Disciplines(list) => staged.disciplines = Some(list.clone()),
             WorldEvent::WearChange(change) if world.is_player(change.spawn_id) => {
                 staged.wear.push(*change);
             }
@@ -97,6 +101,9 @@ impl Feature for Character {
         }
         for (skill, value) in std::mem::take(&mut staged.skills) {
             player.apply_skill(skill, value);
+        }
+        if let Some(list) = staged.disciplines.take() {
+            player.disciplines = Some(list);
         }
     }
 
@@ -127,6 +134,7 @@ impl Feature for Character {
             }
             WorldEvent::Level { current, .. } => player.level = *current,
             WorldEvent::Skill { skill_id, value } => player.apply_skill(*skill_id, *value),
+            WorldEvent::Disciplines(list) => player.disciplines = Some(list.clone()),
             // A practice at a guildmaster is a skill's new value too.
             WorldEvent::Training(TrainingUpdate::Trained { skill, value, .. }) => {
                 player.apply_skill(*skill, *value);
@@ -193,6 +201,49 @@ mod tests {
                 .skills
                 .as_ref()
                 .and_then(|skills| skills.get(22))
+                .copied(),
+            Some(40)
+        );
+    }
+
+    #[test]
+    fn the_player_learns_disciplines_and_languages() {
+        let mut character = Character::default();
+        let mut world = World::new(5);
+        // A list that arrives before the admission shapes the player.
+        let mut list = vec![0; 100];
+        list[0] = 4585;
+        character
+            .admit(
+                &Message::Event(WorldEvent::Disciplines(list.clone())),
+                &mut world,
+            )
+            .unwrap();
+        let mut player = testing::player(7);
+        character.shape(&mut player);
+        assert_eq!(player.disciplines.as_ref(), Some(&list));
+        world.player.admit(player);
+        // A list after it replaces the player's; a language's skill update
+        // names skill 100 plus its number.
+        list[1] = 4587;
+        for event in [
+            WorldEvent::Disciplines(list.clone()),
+            WorldEvent::Skill {
+                skill_id: eq_network_game::world::LANGUAGE_SKILLS + 3,
+                value: 40,
+            },
+        ] {
+            testing::run(|out| character.observe(&Message::Event(event), &mut world, out))
+                .result
+                .unwrap();
+        }
+        let player = world.player.as_ref().unwrap();
+        assert_eq!(player.disciplines.as_ref(), Some(&list));
+        assert_eq!(
+            player
+                .languages
+                .as_ref()
+                .and_then(|languages| languages.get(3))
                 .copied(),
             Some(40)
         );

@@ -8,7 +8,8 @@ client,
 [`p99-logger-client`](https://github.com/rm-you/p99-logger-client), and the
 native mobile client.
 
-The high-level client logs in, selects a world, lists, creates and enters
+The high-level client logs in, plays on the configured world or the one the
+player chooses from the login server's list, lists, creates and enters
 characters, and runs a zone session: it reports typed world state
 (`WorldEvent`, in a `ClientEvent::World`) and carries out typed commands
 (`ClientCommand`), reconnects, and shuts down cooperatively. Chat arrives
@@ -17,14 +18,20 @@ structured, with item-link data, for consumers that only talk.
 What a zone session offers depends on its server type (`ServerProtocol`), and
 each session reports the `Capability` values it offers so that a front end can
 grey out the rest. A server type gains a feature only once it has been checked
-against that kind of server:
+against that kind of server; P99's earliest listings predate that rule and wait
+for their check on P99:
 
 | Server type | Protocol | What a zone session offers |
 | --- | --- | --- |
-| `EqEmu` | Titanium, for a stock `EQEmu` server | Moving, jumping and falling, targeting, combat, casting and the spellbook (deleting and moving its spells too), the inventory and bank, merchants, handing items to NPCs, looting, chat, camping, doors, items on the ground, zoning, abilities, `/who`, corpses and consent, pets, training, resurrection, reading, tradeskill containers, the map and the time of day |
-| `Project1999` | Titanium with P99's V62 protection | As `EqEmu`, except jumping and falling, fishing and binding wounds, deleting and moving the spellbook's spells, training, resurrection, reading, tradeskills and the map, which wait to be checked on P99 |
-| `Takp` | Windows TAKP/`EQMac`, for a stock TAKP server | Character creation, entering the world, chat, moving and camping |
+| `EqEmu` | Titanium, for a stock `EQEmu` server | Moving, jumping and falling (and a fall's damage), targeting, combat, casting and the spellbook (deleting and moving its spells too), the inventory and bank, merchants and what they pay, handing items to NPCs and trading with players, looting, chat, camping, doors, items on the ground, zoning, abilities, `/who`, corpses and consent, pets, training, resurrection, reading, tradeskill containers, groups and raids, `/afk`, `/anonymous` and `/roleplay`, `/random`, `/emote` and `/assist`, the map and the time of day |
+| `Project1999` | Titanium with P99's V62 protection | As `EqEmu`, except what waits to be checked on P99: jumping and falling, fishing and binding wounds, deleting the spellbook's spells, what merchants pay, training, resurrection, reading, tradeskills, groups and raids, `/afk`, `/anonymous` and `/roleplay`, and `/random`, `/emote` and `/assist`. The map is left to the player, as P99's own client keeps it off |
+| `Takp` | Windows TAKP/`EQMac`, for a stock TAKP server | Character creation, entering the world, chat, moving, targeting, considering and attacking, casting and the spellbook (not yet deleting or moving its spells), zoning and camping, groups, moving items and coins (the bank's beside a banker), buying and selling at merchants (not yet what a merchant pays), and eating and drinking |
 | `Quarm` | Windows TAKP/`EQMac` | Entering the world and chat; Quarm's features follow once they are checked on TAKP |
+
+The table follows [`servers.rs`](crates/eq-network/src/client/session/servers.rs),
+which decides. A front end goes by the capabilities its own session reports, from
+the revision of this library its lockfile resolves. [API and integration
+contracts](API-CONTRACT.md) says how features, commands and their answers behave.
 
 ## Crates
 
@@ -40,7 +47,12 @@ can use the lower-level crates without pulling in the character-session engine.
 
 A consumer that only listens runs the client with `Client::run`; one that
 plays passes a command queue to `Client::run_with_commands`, whose commands the
-session takes once the zone admits the player.
+session takes once the zone admits the player. Before that, the queue carries
+the player's choices from the lists the session sends: the world from the login
+server's (`WorldEvent::ServerSelection`, answered with
+`ClientCommand::SelectServer`) when the configuration names none, and the
+character from the world's (`WorldEvent::CharacterSelection`, answered with
+`ClientCommand::SelectCharacter`) when it names none.
 
 ```rust,no_run
 use eq_network::client::{
@@ -112,7 +124,7 @@ explicit dialect/profile variants rather than conditionals in application code.
 
 ## Compatibility and safety
 
-- The minimum supported Rust version is 1.88.
+- The minimum supported Rust version is 1.99.
 - Public APIs follow semantic versioning. The crates begin at `0.1.0` while the
   extracted interfaces settle.
 - Credentials are redacted from `Debug` output and zeroized when their owners

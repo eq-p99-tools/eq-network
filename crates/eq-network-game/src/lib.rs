@@ -2,7 +2,8 @@
 
 /// Abilities: kick, bash, taunt, hide, sneak, forage and the like.
 pub mod abilities;
-/// Worn gear and features in EQ's texture slots, and wear changes.
+/// How spawns look: worn gear, features, lights and the like, and the
+/// updates, states and illusions that change them.
 pub mod appearance;
 /// Binding wounds with bandages.
 pub mod bind_wound;
@@ -10,6 +11,8 @@ pub mod bind_wound;
 pub mod books;
 /// Admission buffs and server-driven buff changes.
 pub mod buffs;
+/// The chat server a world offers for channels and mail.
+pub mod channels;
 /// World-server character selection lists.
 pub mod characters;
 /// Communication packet codecs and structured item-link extraction.
@@ -20,24 +23,46 @@ pub mod clock;
 pub mod combat;
 /// Typed client actions and dialect-specific application packet encoding.
 pub mod command;
+/// The server's questions the player answers: a sacrifice and a translocate.
+pub mod confirmations;
+/// The server's hold on the player: stuns, charms, its own control of the
+/// player, and a warrior's berserk.
+pub mod control;
 /// Players' corpses: consent, summoning and dragging.
 pub mod corpses;
 /// Titanium character creation requests and stat rules.
 pub mod creation;
+/// The player's disciplines and their reuse timers, and the reuse timers
+/// groups of spells share.
+pub mod disciplines;
 /// Server-defined interactive doors and their movement notifications.
 pub mod doors;
+/// Effects the servers play on a spawn, on the player's screen, as a sound
+/// or as a projectile's flight.
+pub mod effects;
 /// Handing items to another character: the give and trade windows.
 pub mod exchange;
 /// Food and drink: hunger, thirst, and eating and drinking.
 pub mod food;
+/// What game masters and the world tell the zone of a player: kicks,
+/// kills, and a player made to look like an NPC; and, to game masters, the
+/// petition queue.
+pub mod gm;
 /// Groups: invitations, joining, leaving and disbanding, and who is in the
 /// player's group.
 pub mod group;
+/// The player's guild: its member list, its members' changes and
+/// invitations.
+pub mod guild;
+/// Damage the world does to the player, which the client reports: falls,
+/// drowning, lava and freezing.
+pub mod hazards;
 /// Read-only inventory packets, slots, instances, and state.
 pub mod inventory;
 /// Read-only item inspection requests and definitions.
 pub mod items;
-/// How `/who` lists a player: guild, anonymity and flags, and guild names.
+/// How `/who` lists a player: guild and rank, anonymity and flags, and guild
+/// names.
 pub mod listing;
 /// Corpse looting requests, listings and acknowledgements.
 pub mod loot;
@@ -47,7 +72,8 @@ pub mod merchant;
 pub mod money;
 /// Movement wire layout and session-scoped motion validation.
 pub mod movement;
-/// Titles, last names and suffixes: the parts of a name around the first.
+/// Titles, last names and suffixes: the parts of a name around the first;
+/// and renames.
 pub mod names;
 /// Items on the ground and world containers.
 pub mod objects;
@@ -55,16 +81,30 @@ pub mod objects;
 pub mod p99;
 /// Pets: commands, owners and buffs.
 pub mod pets;
+/// What the server puts on the player's screen outside the chat window:
+/// popups and marquees.
+pub mod popups;
 /// TAKP/EQMac player and entity presentation codecs.
 pub mod quarm;
 /// Raids: invitations, joining, leaving, and the server's word on the raid.
 pub mod raid;
 /// Being resurrected: the offer and the player's answer.
 pub mod resurrection;
-/// Rolling dice, emoting and assisting.
+/// What a quest or a task gives the player.
+pub mod rewards;
+/// A world's rules, and the expansions it lets the account play.
+pub mod rules;
+/// The worlds a login server lists, and the player's choice among them.
+pub mod servers;
+/// Rolling dice, emoting and assisting; and other players' yells for help,
+/// voice macros, requests to inspect the player and duels.
 pub mod socials;
 /// Server-driven spellbook and casting notifications.
 pub mod spells;
+/// A quest's word on the player's base stats.
+pub mod stats;
+/// The player's target as the server sets it, and whom that target targets.
+pub mod targets;
 /// Tradeskill combines in the player's own containers.
 pub mod tradeskills;
 /// Training skills at a guildmaster.

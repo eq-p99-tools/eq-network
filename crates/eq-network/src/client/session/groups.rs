@@ -8,7 +8,8 @@
 //! to a full group. Who leaves, is
 //! removed or disbands the group is the server's to decide, by its idea of
 //! the player's target. The server does not answer what the session sends,
-//! so the session says what it sent.
+//! so the session says what it sent. A group listed before the zone admits
+//! the player (`EQMac`'s profile) is told to the host once it does.
 use super::{
     actions,
     feature::{Feature, Out, World},
@@ -44,6 +45,8 @@ pub(super) struct Groups {
     invitation: Option<String>,
     /// The player's group, while they are in one.
     group: Option<Group>,
+    /// The group listed before the zone admitted the player.
+    staged: Option<GroupUpdate>,
 }
 
 impl Groups {
@@ -199,6 +202,23 @@ impl Feature for Groups {
             self.follow_news(update, out.sender.name);
         }
         Ok(())
+    }
+
+    fn admit(&mut self, message: &Message, _world: &mut World) -> Result<()> {
+        if let Message::Event(WorldEvent::Group(update @ GroupUpdate::Members { .. })) = message {
+            self.staged = Some(update.clone());
+        }
+        Ok(())
+    }
+
+    fn admitted(&mut self, _world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
+        match self.staged.take() {
+            Some(update) => {
+                self.follow_news(&update, out.sender.name);
+                out.log.send(ClientEvent::World(WorldEvent::Group(update)))
+            }
+            None => Ok(()),
+        }
     }
 }
 
@@ -384,5 +404,38 @@ mod tests {
         // Disbanded, the player is in no group.
         hear(&mut groups, &mut world, GroupUpdate::Disbanded);
         assert!(groups.group.is_none());
+    }
+
+    #[test]
+    fn a_group_listed_before_the_admission_is_told_after_it() {
+        let mut groups = Groups::default();
+        let mut world = World::new(5);
+        let listed = GroupUpdate::Members {
+            leader: String::new(),
+            members: ["One", "Two", "Three", "Four", "Five"]
+                .map(String::from)
+                .to_vec(),
+        };
+        groups
+            .admit(
+                &Message::Event(WorldEvent::Group(listed.clone())),
+                &mut world,
+            )
+            .unwrap();
+        let outcome = testing::run(|out| groups.admitted(&mut world, out));
+        outcome.result.unwrap();
+        assert!(matches!(
+            &outcome.events[..],
+            [ClientEvent::World(WorldEvent::Group(told))] if *told == listed
+        ));
+        // The session keeps it too: the group is full.
+        let invite = ClientCommand::InviteToGroup {
+            session_id: 5,
+            name: "Friend".into(),
+        };
+        assert_eq!(refused(&mut groups, &mut world, &invite), Some(FULL));
+        // Told once.
+        let outcome = testing::run(|out| groups.admitted(&mut world, out));
+        assert!(outcome.events.is_empty());
     }
 }
