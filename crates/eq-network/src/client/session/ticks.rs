@@ -210,6 +210,7 @@ impl Feature for Ticks {
 mod tests {
     use super::super::feature::testing;
     use super::*;
+    use eq_network_game::world::ItemHitPoints;
 
     /// The player's HP report.
     fn hp(current: i32) -> Message {
@@ -217,7 +218,7 @@ mod tests {
             spawn_id: 7,
             current,
             maximum: 100,
-            without_items: true,
+            items: ItemHitPoints::LeftOut,
         })
     }
 
@@ -255,7 +256,7 @@ mod tests {
             spawn_id: 9,
             current: 90,
             maximum: 100,
-            without_items: true,
+            items: ItemHitPoints::LeftOut,
         });
         assert!(!marks.marks(&other, &world));
         // The admission gives mana and endurance to rise from: a zeroed
