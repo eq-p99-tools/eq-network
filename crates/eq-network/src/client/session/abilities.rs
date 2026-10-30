@@ -353,6 +353,7 @@ mod tests {
         world::Position,
         GameDialect,
     };
+    use std::time::Duration;
 
     /// An admitted warrior (7) with kick and taunt, beside an NPC (42), with
     /// another (43) twenty units away.
@@ -609,8 +610,8 @@ mod tests {
         // Taunt waits on its own timer.
         let outcome = try_ability(&mut abilities, &world, Ability::Taunt, now);
         assert_eq!(outcome.sent, [Ability::Taunt.encode(42)]);
-        // The Titanium client waits longer than the emulator's own timer.
-        let emulator = now + Ability::Kick.reuse(GameDialect::EqMac);
+        // The official client waits longer than the emulator's own timer.
+        let emulator = now + Duration::from_secs(4);
         let outcome = try_ability(&mut abilities, &world, Ability::Kick, emulator);
         assert!(outcome.sent.is_empty(), "sent {:?}", outcome.sent);
         let outcome = try_ability(
