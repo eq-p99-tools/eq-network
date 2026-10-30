@@ -12,6 +12,20 @@
 //! `EQTime::GetCurrentEQTimeOfDay` (`common/eqtime.cpp`) for the calendar:
 //! hours 1 to 24 on the wire, 28 days to a month, 12 months to a year. The
 //! weather: `Zone::weatherSend` (`zone/zone.cpp`) in `EQEmu`, TAKP and Quarm.
+//!
+//! `GameTime` keeps the calendar, which both generations share: the day
+//! turns as the wire's hour goes from 24 to 1. How a client names an hour
+//! is its own. Both official clients store the wire's hour unchanged and
+//! run their clocks on in hours 1 to 24. The Mac client keeps its hours from
+//! 0 to 23 (the wire's less one), turning the day as they wrap, and its
+//! `/time` shows the wire's hour as sent: 13 as 1 PM, 24 as 12 AM (from the
+//! program, the official TAKP client's `eqgame.exe` read statically on
+//! 10-30, report `program-read-takp-time-20261030`; recording checklist
+//! item 6.155). The Titanium client's `/time` shows the wire's hour less
+//! one: 1 as 12 AM, 13 as 12 PM, 24 as 11 PM (from the program, the
+//! official Titanium client's `eqgame.exe` read statically on 10-30, report
+//! `titanium-program-p0-time-20261030T2051`; checklist items 1.2 and
+//! 6.115).
 use anyhow::{ensure, Result};
 use serde::Serialize;
 
@@ -32,7 +46,8 @@ const MONTHS_PER_YEAR: u64 = 12;
 /// A time in Norrath.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 pub struct GameTime {
-    /// The hour, from 0 at midnight to 23.
+    /// Hours since the day began, from 0 to 23: the wire's 1 to 24 less
+    /// one. A client names it in its own way; see the module's notes.
     pub hour: u8,
     /// The minute, from 0 to 59.
     pub minute: u8,
@@ -65,7 +80,9 @@ impl GameTime {
     }
 }
 
-/// Decodes `OP_TimeOfDay`, whose hours run from 1 (midnight) to 24.
+/// Decodes `OP_TimeOfDay`, whose hours run from 1 to 24; the Titanium
+/// client's `/time` shows hour 1 as 12 AM (from the program, report
+/// `titanium-program-p0-time-20261030T2051`).
 ///
 /// # Errors
 /// Rejects a malformed length.
@@ -79,7 +96,9 @@ pub fn decode(body: &[u8]) -> Result<GameTime> {
 
 /// Decodes `EQMac`'s `OP_TimeOfDay`, which keeps the year in 16 bits (TAKP
 /// `common/eq_packet_structs.h` `TimeOfDay_Struct`, 6 bytes); its hours
-/// also run from 1 to 24 (`common/eqtime.cpp`).
+/// also run from 1 to 24 (`common/eqtime.cpp`), and the Mac client shows
+/// them as sent, 24 as 12 AM (from the program, report
+/// `program-read-takp-time-20261030`).
 ///
 /// # Errors
 /// Rejects a malformed length.
@@ -91,7 +110,8 @@ pub fn decode_eqmac(body: &[u8]) -> Result<GameTime> {
     ))
 }
 
-/// The hour, minute, day and month that open both layouts, and the year.
+/// The hour, minute, day and month that open both layouts, and the year;
+/// the hour counted from the day's start, as both generations keep it.
 fn read(body: &[u8], year: u32) -> GameTime {
     GameTime {
         hour: (body[0] % 24 + 23) % 24,

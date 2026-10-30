@@ -7,6 +7,18 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- `GameTime::hour` is documented as what it always held: hours since the
+  day began, the wire's 1 to 24 less one, the calendar both generations
+  keep. It no longer says it counts from midnight, since how a client names
+  the hour is the client's: the Mac client shows the wire's hour as sent,
+  24 as 12 AM, and turns the day as the wire goes from 24 to 1 (from the
+  program, the official TAKP client read statically, report
+  `program-read-takp-time-20261030`; recording checklist item 6.155), and
+  the Titanium client's `/time` shows the wire's hour less one, 1 as 12 AM
+  (from the program, the official Titanium client read statically, report
+  `titanium-program-p0-time-20261030T2051`; items 1.2 and 6.115). The
+  decoding is unchanged.
+
 - `WorldEvent::CharacterCreation` says how the world took the character
   (`creation::CreationOutcome`: `Created`, `NameRefused`,
   `CreationRefused`, or `NotSent` when nothing went to the world) in place
