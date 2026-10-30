@@ -735,7 +735,9 @@ impl GameCommand {
             Self::DeleteSpell { .. } => Capability::DeletingSpells,
             Self::SwapSpell { .. } => Capability::MovingSpells,
             // An item's click effect is a cast.
-            Self::CastSpell { .. } | Self::UseItem(_) => Capability::Casting,
+            Self::CastSpell { .. } | Self::UseItem(_) | Self::DropInvisibility { .. } => {
+                Capability::Casting
+            }
             Self::ClickDoor { .. } => Capability::Doors,
             Self::PickUp { .. } => Capability::GroundItems,
             Self::CrossZoneLine { .. } => Capability::Zoning,
@@ -775,7 +777,6 @@ impl GameCommand {
             Self::AnswerResurrection { .. } => Capability::Resurrection,
             Self::AnswerSacrifice { .. } => Capability::Sacrifice,
             Self::AnswerTranslocate { .. } => Capability::Translocate,
-            Self::DropInvisibility { .. } => Capability::Casting,
             Self::InviteToGroup { .. }
             | Self::FollowGroup { .. }
             | Self::DeclineGroup { .. }

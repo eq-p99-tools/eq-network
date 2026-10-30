@@ -7,6 +7,36 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- From the official programs, read statically (TAKP Batch 1, Titanium
+  sittings 5 and 6, and the Titanium login read L1 part one; servers'
+  handling cited from `EQMacEmu` and `EQEmu`):
+  - Titanium sends the player's own position at most once per 280 ms
+    (`MotionSession::with_spacing`, `TITANIUM_POSITION_SPACING`); a sample
+    accepted sooner is held and the latest goes out once the spacing
+    passes. `EQMac` keeps its pace until its gate is read.
+  - TAKP takes falls and their reports. `EQMac` reports the world's damage
+    as `OP_EnvDamage` then `OP_Damage` with no source and no spell
+    (`hazards::eqmac_notice`). `Capability::Jumping` is new and separate
+    from `Capability::Falling`: TAKP falls without jumps until the `EQMac`
+    jump notice is read.
+  - Both generations send `OP_SafeFallSuccess` before a fall's damage when
+    the player's Safe Fall lessened it; `ClientCommand::EnvironmentalDamage`
+    gains `safe_fall`, and a report of 0 with it sends only the notice.
+  - TAKP's bleed-out report carries type 23, the player's level and the
+    player flag (`Request::BledOut { level }`, `quarm::bled_out`).
+  - TAKP's merchant request carries only the merchant and the player; its
+    buy and sale carry the count as 32 bits, and the sale names the
+    player's own spawn (`ClientCommand::Sell` gains `own_id`).
+  - TAKP sends `OP_AutoAttack2` before each change of auto attack, invites
+    with `OP_GroupInvite2` when the player leads a group, and drops
+    invisibility as the program does (`ClientCommand::DropInvisibility`,
+    `buffs::InvisibilityStep`).
+  - TAKP's word to go after a translocate asks with reason 4 when it names
+    no caster, 8 when it does.
+  - The session response's maximum packet size is read and written
+    big-endian, as `EQEmu` writes it and the Titanium login program reads
+    it; it read 512 as 131,072 before.
+
 - `GameTime::hour` is documented as what it always held: hours since the
   day began, the wire's 1 to 24 less one, the calendar both generations
   keep. It no longer says it counts from midnight, since how a client names

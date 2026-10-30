@@ -13,9 +13,9 @@
 //!
 //! `EQMac` reports the world's damage twice, as the program does (from the
 //! program, TAKP Batch 1 R3 and R4; checklist 6.161 and 6.162): first
-//! `OP_EnvDamage` ([`eqmac_notice`]), then the packet its server sends
+//! `OP_EnvDamage` (`eqmac_notice`), then the packet its server sends
 //! damage records in, [`EQMAC_DAMAGE_OPCODE`](crate::combat::EQMAC_DAMAGE_OPCODE)
-//! ([`eqmac_damage`]). `EQMacEmu`'s `Handle_OP_EnvDamage` does nothing, and
+//! (`eqmac_damage`). `EQMacEmu`'s `Handle_OP_EnvDamage` does nothing, and
 //! `Handle_OP_Damage` takes the amount once (`zone/client_packet.cpp`,
 //! Settle results S1), so the pair costs the player the damage once.
 use crate::{combat::EQMAC_DAMAGE_OPCODE, command::EncodedCommand};

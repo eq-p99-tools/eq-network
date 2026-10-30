@@ -219,7 +219,7 @@ pub fn disband(player: &str) -> Result<EncodedCommand> {
 /// the program, TAKP Batch 1 R9b); the session calls a player whose group's
 /// leader it was never told the leader of no leader. Its invitation carries
 /// 65 more bytes: an empty string at 128, nothing at 129 to 191, and at 192
-/// a byte of the player's spawn that is likely its PvP flag (unsure). They
+/// a byte of the player's spawn that is likely its player-versus-player flag (unsure). They
 /// go as 0: `EQMacEmu` takes both opcodes alike and passes the body to the
 /// invitee unread (`zone/client_packet.cpp` `Handle_OP_GroupInvite2`,
 /// Settle results S5).
