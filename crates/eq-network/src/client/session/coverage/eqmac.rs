@@ -4,7 +4,7 @@ use super::{
     planned, sent, unasked, Part,
     Reader::{Admission, Answer, Chat, Login, World, Zone},
     Reading::{Partly, Read, Unread},
-    Reason::{Needless, Parked},
+    Reason::Needless,
     ServerMessage,
     Step::{
         AlternateAdvancement, Bazaar, EqMacExchanges, EqMacWorld, LaterSystems, PlayerState, Raids,
@@ -234,7 +234,7 @@ pub(in crate::client) fn eqmac(opcode: u16) -> Option<ServerMessage> {
         // yes, which its client moves itself on, as on a translocate's.
         0xec41 => sent("OP_RezzComplete", TAKP, planned(EqMacExchanges)),
         0xf041 => sent("OP_LFGCommand", EQMAC, planned(EqMacWorld)),
-        0xf240 => sent("OP_TimeOfDay", EQMAC, Unread(Parked("eq-network#91"))),
+        0xf240 => sent("OP_TimeOfDay", EQMAC, Read(&[Zone])),
         0xf241 => sent("OP_DisciplineChange", EQMAC, Read(&[Zone])),
         0xf340 => sent("OP_ClientUpdate", EQMAC, Read(&[Zone])),
         // Quarm's DLL and feature messages ride on spawn 0's appearance.

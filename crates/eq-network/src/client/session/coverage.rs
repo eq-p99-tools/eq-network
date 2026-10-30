@@ -159,8 +159,6 @@ pub(super) enum Reason {
     /// It answers a request eq-network never sends; the work that sends the
     /// request reads it.
     Unasked(Step),
-    /// Parked work reads it.
-    Parked(&'static str),
     /// Nothing in it needs reading, for this reason, so the zone does not
     /// tell of it.
     Needless(&'static str),
@@ -179,7 +177,6 @@ impl fmt::Display for Reason {
                 f,
                 "it answers a request eq-network never sends (planned with {step})"
             ),
-            Self::Parked(work) => write!(f, "parked in {work}"),
             Self::Needless(why) => f.write_str(why),
             Self::Unmapped => {
                 f.write_str("EQEmu sends each message the client has no opcode for under 0")

@@ -748,6 +748,17 @@ fn mac_filters_enable_every_chat_and_combat_category() {
 }
 
 #[test]
+fn the_time_of_day_is_news() {
+    let mut body = vec![13, 0, 1, 1];
+    body.extend_from_slice(&3100u16.to_le_bytes());
+    assert!(matches!(
+        updates(ZONE_TIME_OF_DAY, &body).unwrap().as_slice(),
+        [WorldEvent::TimeOfDay(time)] if time.hour == 12
+    ));
+    assert!(updates(ZONE_TIME_OF_DAY, &body[..4]).is_err());
+}
+
+#[test]
 fn zoning_asks_with_the_76_byte_request_and_reads_the_answer() {
     let request = zone_change("Example", 2, 0).unwrap();
     assert_eq!((request.opcode, request.body.len()), (ZONE_CHANGE, 76));

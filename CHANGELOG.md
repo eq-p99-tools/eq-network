@@ -177,6 +177,11 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   wire too: TAKP echoes a delivered tell to its sender on
   `ChatChannel_TellEcho` (14), as `EQEmu` does on Titanium's.
 
+- `EQMac`'s time of day: `OP_TimeOfDay` (0xf240, 6 bytes with a 16-bit
+  year) is read as `WorldEvent::TimeOfDay` (`clock::decode_eqmac`), and
+  TAKP lists the clock, which keeps the time the zone sends while
+  admitting the player until the host can hear it.
+
 - `WorldEvent::Entered` gains `choices`: what the session leaves to the
   player, none of it among `capabilities`. A server type may leave any
   feature it provides to the player where its own client keeps it off; a
