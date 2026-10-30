@@ -250,6 +250,10 @@ enum CommunicationOpcode {
     FormattedMessage,
     SimpleMessage,
     GuildMotd,
+    ColoredText,
+    MultiLineMessage,
+    SpellText,
+    SpellTextStringId,
     Unknown(u16),
 }
 
@@ -264,6 +268,7 @@ impl CommunicationOpcode {
                 0x5a48 => Self::FormattedMessage,
                 0x673c => Self::SimpleMessage,
                 0x475a => Self::GuildMotd,
+                0x0b2d => Self::ColoredText,
                 value => Self::Unknown(value),
             },
             GameDialect::EqMac => match value {
@@ -273,16 +278,21 @@ impl CommunicationOpcode {
                 0x8041 => Self::SpecialMessage,
                 0x3642 => Self::FormattedMessage,
                 0x0442 => Self::GuildMotd,
+                0x1440 => Self::MultiLineMessage,
+                0xd341 => Self::SpellText,
+                0x4142 => Self::SpellTextStringId,
                 value => Self::Unknown(value),
             },
         }
     }
 }
 
-/// The channel the Titanium wire echoes a tell the player sent on, as
-/// `EQEmu` sends it. The `EQMac` generation's number for the echo is not
-/// checked yet, so there it stays unknown.
-const TITANIUM_TELL_ECHO: u32 = 14;
+/// The channel a server echoes a tell the player sent on, so that it shows
+/// on their own client: `EQEmu` on the Titanium wire, and TAKP on the
+/// `EQMac` wire (`ChatChannel_TellEcho` in TAKP's `common/eq_constants.h`,
+/// sent back through `ChannelMessageSend` in its `zone/worldserver.cpp`
+/// once the tell is delivered).
+const TELL_ECHO: u32 = 14;
 
 /// Map a wire channel ID to its stable JSON name while preserving unknown IDs.
 #[must_use]
@@ -324,12 +334,63 @@ fn titanium_special(opcode: u16, body: &[u8], include_raw: bool) -> Result<ChatE
     Ok(event)
 }
 
+/// Titanium's coloured text (`ColoredText_Struct`): a colour, which is a
+/// message type or, below 256, a consider colour, then NUL-terminated text
+/// with the links and markup of any other line.
+fn colored_text(opcode: u16, body: &[u8], include_raw: bool) -> Result<ChatEvent> {
+    ensure!(body.len() >= 5, "truncated ColoredText");
+    ensure!(body[4..].contains(&0), "unterminated ColoredText");
+    let mut event = ChatEvent::new(opcode, body, ChannelName::System, include_raw)
+        .with_message(message_for(GameDialect::Titanium, &body[4..], include_raw));
+    event.message_type = Some(u32_at(body, 0));
+    Ok(event)
+}
+
+/// `EQMac`'s text from the world for one player, which the zone sizes to
+/// the text with no NUL; one ends it if it comes. Nothing in TAKP's or
+/// Quarm's world sends it today; the zones only relay it.
+fn eqmac_world_text(opcode: u16, body: &[u8], include_raw: bool) -> ChatEvent {
+    let text = message_for(GameDialect::EqMac, body, include_raw);
+    ChatEvent::new(opcode, body, ChannelName::System, include_raw).with_message(text)
+}
+
+/// An `EQMac` spell line another client sent, which TAKP and Quarm pass on
+/// as it came: the spawn it is about (16 bits), then the text.
+fn eqmac_spell_text(opcode: u16, body: &[u8], include_raw: bool) -> Result<ChatEvent> {
+    ensure!(body.len() > 2, "truncated SpellTextMessage");
+    let mut event = ChatEvent::new(opcode, body, ChannelName::System, include_raw)
+        .with_message(message_for(GameDialect::EqMac, &body[2..], include_raw));
+    event.source_spawn_id = nonzero_spawn(u16_at(body, 0));
+    Ok(event)
+}
+
+/// TAKP's spell line by string number: the caster (16 bits), the string
+/// (32), then its one argument, the caster's name, NUL-terminated.
+fn eqmac_spell_text_by_number(opcode: u16, body: &[u8], include_raw: bool) -> Result<ChatEvent> {
+    ensure!(body.len() > 6, "truncated SpellTextMessageStringID");
+    ensure!(
+        body[6..].contains(&0),
+        "unterminated SpellTextMessageStringID"
+    );
+    let caster_name = message_for(GameDialect::EqMac, &body[6..], include_raw);
+    let mut event = ChatEvent::new(opcode, body, ChannelName::System, include_raw);
+    event.string_id = Some(u32_at(body, 2));
+    event.arguments = Some(vec![caster_name]);
+    event.source_spawn_id = nonzero_spawn(u16_at(body, 0));
+    Ok(event)
+}
+
 fn u32_at(body: &[u8], offset: usize) -> u32 {
     u32::from_le_bytes(body[offset..offset + 4].try_into().unwrap())
 }
 
 fn u16_at(body: &[u8], offset: usize) -> u16 {
     u16::from_le_bytes(body[offset..offset + 2].try_into().unwrap())
+}
+
+/// A spawn a line names, None for 0.
+fn nonzero_spawn(spawn_id: u16) -> Option<u32> {
+    (spawn_id != 0).then_some(u32::from(spawn_id))
 }
 
 fn cstr(bytes: &[u8]) -> &[u8] {
@@ -508,9 +569,11 @@ pub struct ChatEvent {
     pub arguments: Option<Vec<Message>>,
     /// The message type the server gave a formatted, simple or special
     /// message (256 say, 257 tell, ... 335 system, as `EQEmu`'s `MT_*`
-    /// numbers them), by which the official client colours the line; None
-    /// for a channel message, whose channel says it, and where a
-    /// generation's layout is not checked.
+    /// numbers them), or coloured text's colour, below 256 for the consider
+    /// colours, by which the official client colours the line; None for a
+    /// channel message, whose channel says it, for `EQMac`'s spell and
+    /// multi-line text, which carry none, and where a generation's layout
+    /// is not checked.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub message_type: Option<u32>,
     /// What a special message's speaker does, by which the official client
@@ -530,6 +593,13 @@ pub struct ChatEvent {
     /// hailed a quest NPC, or 0 for none; None elsewhere.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub target_spawn_id: Option<u32>,
+    /// The spawn an `EQMac` spell line is about, as its sender names it: in
+    /// TAKP's lines by string number, the caster interrupted or regaining
+    /// concentration; in a line another player's client sent, the spawn
+    /// that client names, which is not checked. None for 0 and for every
+    /// other message.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_spawn_id: Option<u32>,
 }
 
 impl ChatEvent {
@@ -550,6 +620,7 @@ impl ChatEvent {
             journal_mode: None,
             language: None,
             target_spawn_id: None,
+            source_spawn_id: None,
         }
     }
 
@@ -651,8 +722,8 @@ pub fn parse_for(
                 GameDialect::Titanium => u32_at(body, 132),
                 GameDialect::EqMac => u32::from(u16::from_le_bytes([body[130], body[131]])),
             };
-            let name = match (protocol, channel) {
-                (GameDialect::Titanium, TITANIUM_TELL_ECHO) => ChannelName::TellEcho,
+            let name = match channel {
+                TELL_ECHO => ChannelName::TellEcho,
                 _ => channel_name(channel),
             };
             let mut event = ChatEvent::new(opcode, body, name, include_raw)
@@ -727,6 +798,12 @@ pub fn parse_for(
                 event
             }
         }
+        CommunicationOpcode::ColoredText => colored_text(opcode, body, include_raw)?,
+        CommunicationOpcode::MultiLineMessage => eqmac_world_text(opcode, body, include_raw),
+        CommunicationOpcode::SpellText => eqmac_spell_text(opcode, body, include_raw)?,
+        CommunicationOpcode::SpellTextStringId => {
+            eqmac_spell_text_by_number(opcode, body, include_raw)?
+        }
         CommunicationOpcode::Unknown(_) => return Ok(None),
     };
     Ok(Some(event))
@@ -779,14 +856,18 @@ mod tests {
             serde_json::to_value(ChannelName::TellEcho).unwrap(),
             "tell_echo"
         );
-        // The EQMac generation's channel 14 is not checked yet.
+        // TAKP echoes a tell on the same channel of the EQMac wire.
         let mut body = vec![0; MAC_CHANNEL_MESSAGE_HEADER];
+        body[..7].copy_from_slice(b"Example");
+        body[64..72].copy_from_slice(b"Examplar");
         body[130..132].copy_from_slice(&14u16.to_le_bytes());
         body.extend_from_slice(b"inc\0");
         let event = parse_for(GameDialect::EqMac, 0x0741, &body, false)
             .unwrap()
             .unwrap();
-        assert_eq!(event.channel_name, ChannelName::Unknown);
+        assert_eq!(event.channel_name, ChannelName::TellEcho);
+        assert_eq!(event.sender.as_deref(), Some("Examplar"));
+        assert_eq!(event.target.as_deref(), Some("Example"));
     }
 
     #[test]
@@ -1029,6 +1110,99 @@ mod tests {
             .unwrap();
         assert_eq!(event.sender.as_deref(), Some("Leader"));
         assert_eq!(event.message.unwrap().text, "Welcome");
+    }
+
+    #[test]
+    fn colored_system_text_is_not_silently_dropped() {
+        let mut body = 335_u32.to_le_bytes().to_vec();
+        body.extend_from_slice(b"A synthetic notification.\0");
+        let event = parse(0x0b2d, &body, false).unwrap().expect("colored text");
+        assert_eq!(event.channel_name, ChannelName::System);
+        assert_eq!(event.message_type, Some(335));
+        assert_eq!(event.message.unwrap().text, "A synthetic notification.");
+    }
+
+    #[test]
+    fn colored_text_preserves_unknown_colors_and_item_links() {
+        let mut body = u32::MAX.to_le_bytes().to_vec();
+        body.extend_from_slice(b"Found \x12");
+        body.extend_from_slice(&[b'0'; 45]);
+        body.extend_from_slice(b"Test Item\x12\0");
+        let event = parse(0x0b2d, &body, false).unwrap().unwrap();
+        assert_eq!(event.message_type, Some(u32::MAX));
+        let message = event.message.unwrap();
+        assert_eq!(message.text, "Found Test Item");
+        assert_eq!(message.item_links.len(), 1);
+        assert!(message.message_hex.is_none());
+        for length in 0..5 {
+            assert!(parse(0x0b2d, &body[..length], false).is_err());
+        }
+        assert!(parse(0x0b2d, &body[..body.len() - 1], false).is_err());
+        assert!(parse_for(GameDialect::EqMac, 0x0b2d, &body, false)
+            .unwrap()
+            .is_none());
+        let empty = parse(0x0b2d, &[0; 5], false).unwrap().unwrap();
+        assert_eq!(empty.message.unwrap().text, "");
+    }
+
+    #[test]
+    fn eqmac_world_and_spell_lines_read_as_system_text() {
+        let eqmac = |opcode: u16, body: &[u8]| parse_for(GameDialect::EqMac, opcode, body, false);
+        // The world's text for one player comes with no NUL, and ends at
+        // one if it comes.
+        let event = eqmac(0x1440, b"First line\nSecond line").unwrap().unwrap();
+        assert_eq!(event.channel_name, ChannelName::System);
+        assert_eq!((event.message_type, event.source_spawn_id), (None, None));
+        assert_eq!(event.message.unwrap().text, "First line\nSecond line");
+        let event = eqmac(0x1440, b"Ended\0").unwrap().unwrap();
+        assert_eq!(event.message.unwrap().text, "Ended");
+        let event = eqmac(0x1440, b"").unwrap().unwrap();
+        assert_eq!(event.message.unwrap().text, "");
+
+        // Another client's spell line: the spawn it is about, then the
+        // text.
+        let mut spell = 300_u16.to_le_bytes().to_vec();
+        spell.extend_from_slice(b"A synthetic spell line.\0");
+        let event = eqmac(0xd341, &spell).unwrap().unwrap();
+        assert_eq!(event.channel_name, ChannelName::System);
+        assert_eq!(
+            (event.source_spawn_id, event.message_type),
+            (Some(300), None)
+        );
+        assert_eq!(event.message.unwrap().text, "A synthetic spell line.");
+        spell[..2].copy_from_slice(&[0, 0]);
+        assert_eq!(
+            eqmac(0xd341, &spell).unwrap().unwrap().source_spawn_id,
+            None
+        );
+        for length in 0..3 {
+            assert!(eqmac(0xd341, &spell[..length]).is_err());
+        }
+
+        // TAKP's spell line by string number: the caster, the string, then
+        // the caster's name as its argument.
+        let mut by_number = 300_u16.to_le_bytes().to_vec();
+        by_number.extend_from_slice(&1234_u32.to_le_bytes());
+        by_number.extend_from_slice(b"Caster\0");
+        let event = eqmac(0x4142, &by_number).unwrap().unwrap();
+        assert_eq!(event.channel_name, ChannelName::System);
+        assert_eq!(
+            (event.source_spawn_id, event.string_id, event.message_type),
+            (Some(300), Some(1234), None)
+        );
+        let arguments = event.arguments.unwrap();
+        assert_eq!(arguments.len(), 1);
+        assert_eq!(arguments[0].text, "Caster");
+        assert!(event.message.is_none());
+        for length in 0..7 {
+            assert!(eqmac(0x4142, &by_number[..length]).is_err());
+        }
+        assert!(eqmac(0x4142, &by_number[..by_number.len() - 1]).is_err());
+
+        // Titanium reads none of them.
+        for opcode in [0x1440, 0xd341, 0x4142] {
+            assert!(parse(opcode, &by_number, false).unwrap().is_none());
+        }
     }
 
     #[test]

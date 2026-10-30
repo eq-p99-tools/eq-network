@@ -15,14 +15,15 @@ unknown wire values when doing so helps diagnostics or forward compatibility.
 Tests must use synthetic packet data. Never commit packet captures, live logs,
 account names, passwords, tokens, or environment files.
 
-Run the same checks as CI before opening a pull request:
+Pull request CI checks only formatting and dependency policy; the full suite
+runs on demand at milestones (Actions > CI > Run workflow). Run the full checks
+locally before opening a pull request:
 
 ```shell
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 RUSTDOCFLAGS="-D warnings" cargo doc --workspace --all-features --no-deps
 cargo test --workspace --all-targets --all-features
-cargo +1.88.0 check --workspace --all-targets
 ```
 
 Every unsafe block is forbidden at the workspace lint level. Dependencies must

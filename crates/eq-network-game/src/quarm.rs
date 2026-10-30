@@ -6,13 +6,16 @@
 
 use crate::{
     command::EncodedCommand,
-    world::{BaseAttributes, PlayerState, Position, SpawnKind, SpawnState, WorldEvent},
+    spells::SpellUpdate,
+    world::{
+        BaseAttributes, ItemHitPoints, PlayerState, Position, SpawnKind, SpawnState, WorldEvent,
+    },
     zoning::ZoneOffer,
 };
 use anyhow::{ensure, Context, Result};
 use zeroize::Zeroizing;
 
-const PROFILE_SIZE: usize = 8460;
+pub(crate) const PROFILE_SIZE: usize = 8460;
 const SPAWN_SIZE: usize = 224;
 
 /// The client's data rate, the first thing it sends a zone.
@@ -21,11 +24,13 @@ pub const ZONE_DATA_RATE: u16 = 0xe841;
 pub const ZONE_ENTRY: u16 = 0x2840;
 /// The player's profile.
 pub const ZONE_PLAYER_PROFILE: u16 = 0x3640;
-/// The zone's weather, after which the client asks for the zone.
+/// The zone's weather: as it admits the player, after which the client asks
+/// for the zone, and once the player is in the zone and whenever it changes.
 pub const ZONE_WEATHER: u16 = 0x3641;
 /// The client asking for the zone's description.
 pub const ZONE_REQUEST_NEW: u16 = 0x5d40;
-/// The zone's description.
+/// The zone's description: as it admits the player, and again whenever a GM
+/// command or a quest changes the zone.
 pub const ZONE_NEW: u16 = 0x5b40;
 /// The client asking for the zone's spawns.
 pub const ZONE_REQUEST_SPAWNS: u16 = 0x0a40;
@@ -39,16 +44,33 @@ pub const ZONE_SERVER_FILTER: u16 = 0xff41;
 pub const ZONE_CLIENT_UPDATE: u16 = 0xf340;
 /// A spawn appearance: the own spawn's ID, and the DLL version check.
 pub const ZONE_SPAWN_APPEARANCE: u16 = 0xf540;
-/// The client's logout once its camp timer completes, which the server
-/// also sends to log the character out.
+/// The client's logout once its camp timer completes. Neither TAKP's nor
+/// Quarm's zones send it; they end a logout with [`ZONE_LOGOUT_REPLY`].
 pub const ZONE_LOGOUT: u16 = 0x5041;
 /// The client starting to camp (`OP_Camp`).
 pub const ZONE_CAMP: u16 = 0x0742;
 /// The server's answer to a logout (`OP_LogoutReply`), which ends the zone
 /// connection.
 pub const ZONE_LOGOUT_REPLY: u16 = 0x5941;
+/// `OP_ZoneChange`: the client asking whether it may enter a zone, and the
+/// server's answer (TAKP `utils/patches/patch_Mac.conf` lists 0x40a3, its
+/// bytes swapped).
+pub const ZONE_CHANGE: u16 = 0xa340;
+/// `OP_SendZonepoints`: the zone's numbered destinations (0x40b4 swapped).
+pub const ZONE_POINTS: u16 = 0xb440;
+/// `OP_SaveOnZoneReq`: the client asking the zone it is leaving to save the
+/// player (0x4155 swapped).
+pub const ZONE_SAVE_ON_ZONE: u16 = 0x5541;
+/// `OP_DeleteSpawn`: the client taking its own spawn out of the zone it is
+/// leaving (0x4029 swapped).
+pub const ZONE_DEPART: u16 = 0x2940;
+/// `OP_Death`: someone in the zone died (0x404a swapped).
+pub const ZONE_DEATH: u16 = 0x4a40;
 /// The server asking the client to change zones.
 pub const ZONE_CHANGE_REQUEST: u16 = 0x4d41;
+/// `OP_GMGoto`, with which Quarm moves a dead player to their bind point
+/// (`zone/zoning.cpp`, `ZoneToBindPoint`; 0x406e swapped).
+pub const ZONE_TO_BIND: u16 = 0x6e40;
 
 // akplus-dll af2bd327, eqgame.cpp: DLL_VERSION and DLL_VERSION_MESSAGE_ID.
 // This announcement is independent of the optional gameplay feature handshakes.
@@ -118,6 +140,174 @@ pub fn zone_request(body: &[u8]) -> Result<ZoneOffer> {
         reason: word(body, 20),
         to_bind: false,
         solicited: true,
+    })
+}
+
+/// Quarm's move of a dead player to their bind point (`GMGoto_Struct`, 152
+/// bytes): the zone as the client numbers it at 132, then where to, y, x
+/// and z. The names at 0 and 64 are the player's own, Quarm leaves the
+/// success flag at 128 unset, and the move carries no heading. Quarm numbers
+/// the zone 185 when the client would otherwise take it for the zone it is
+/// in, and keeps the real one to itself.
+///
+/// # Errors
+/// Rejects another length, zone numbers beyond 16 bits and coordinates that
+/// are not finite.
+pub fn to_bind(body: &[u8]) -> Result<ZoneOffer> {
+    ensure!(body.len() == 152, "invalid Quarm move to bind length");
+    Ok(ZoneOffer {
+        zone_id: u16::try_from(word(body, 132)).context("EQMac zone ID out of range")?,
+        instance_id: 0,
+        position: Position {
+            x: float(body, 140)?,
+            y: float(body, 136)?,
+            z: float(body, 144)?,
+            heading: 0.0,
+        },
+        reason: 0,
+        to_bind: true,
+        solicited: true,
+    })
+}
+
+/// A death (`Death_Struct`, 20 bytes): who died, their killer and their
+/// corpse as 16-bit IDs, then the level, spell, skill, damage and whether a
+/// player died. `EQMac`'s death names no bind zone: the client knows its own
+/// from the profile ([`bind_point`]).
+///
+/// # Errors
+/// Rejects another length and a death of no one.
+pub fn death(body: &[u8]) -> Result<crate::zoning::Death> {
+    ensure!(body.len() == 20, "invalid EQMac death length");
+    Ok(crate::zoning::Death {
+        spawn_id: u32::from(valid_id(u32::from(short(body, 0)))?),
+        killer_id: u32::from(short(body, 2)),
+        corpse_id: u32::from(short(body, 4)),
+        bind_zone_id: 0,
+        corpse_name: None,
+    })
+}
+
+/// The player's first bind point, from their profile: the zone at 3784 and
+/// then y, x, z and heading at 3804, 3824, 3844 and 3864, each an array of
+/// five (TAKP `common/patches/mac_structs.h` `PlayerProfile_Struct`). The
+/// bind heading is on the 512 scale already, as TAKP writes it there
+/// (`common/patches/mac.cpp` `ENCODE(OP_PlayerProfile)`).
+///
+/// # Errors
+/// Rejects a profile that does not unpack, a zone beyond 16 bits, and a
+/// position that is not finite.
+pub fn bind_point(body: &[u8]) -> Result<crate::zoning::BindPoint> {
+    decoded_bind(&unpack(body, true)?)
+}
+
+/// The first bind point in an unpacked profile.
+fn decoded_bind(data: &[u8]) -> Result<crate::zoning::BindPoint> {
+    ensure!(
+        data.len() == PROFILE_SIZE,
+        "unexpected EQMac profile layout"
+    );
+    Ok(crate::zoning::BindPoint {
+        zone_id: u16::try_from(word(data, 3784)).context("EQMac bind zone out of range")?,
+        position: Position {
+            x: float(data, 3824)?,
+            y: float(data, 3804)?,
+            z: float(data, 3844)?,
+            heading: float(data, 3864)?,
+        },
+    })
+}
+
+/// The client asking whether it may enter a zone (`ZoneChange_Struct`, 76
+/// bytes: the name, the zone as 32 bits, the reason the server's request
+/// gave, and a zero outcome). `EQMac`'s request carries no position: TAKP
+/// finds the destination itself (`zone/zoning.cpp` `Handle_OP_ZoneChange`).
+///
+/// # Errors
+/// Rejects a name its field cannot hold.
+pub fn zone_change(character: &str, zone_id: u16, reason: u32) -> Result<EncodedCommand> {
+    ensure!(
+        !character.is_empty() && character.len() < 64 && !character.contains('\0'),
+        "invalid character name"
+    );
+    let mut body = vec![0; 76];
+    body[..character.len()].copy_from_slice(character.as_bytes());
+    body[64..68].copy_from_slice(&u32::from(zone_id).to_le_bytes());
+    body[68..72].copy_from_slice(&reason.to_le_bytes());
+    Ok(EncodedCommand {
+        opcode: ZONE_CHANGE,
+        body,
+    })
+}
+
+/// The server's answer to the client's request (`ZoneChange_Struct`): the
+/// name, the zone, and the outcome, one for a success; no instance and no
+/// position.
+///
+/// # Errors
+/// Rejects another length, an unterminated name and a zone beyond 16 bits.
+pub fn zone_answer(body: &[u8]) -> Result<crate::zoning::ZoneAnswer> {
+    ensure!(body.len() == 76, "invalid EQMac zone answer length");
+    Ok(crate::zoning::ZoneAnswer {
+        character: crate::zoning::name(&body[..64])?,
+        zone_id: u16::try_from(word(body, 64)).context("EQMac zone ID out of range")?,
+        instance_id: 0,
+        position: None,
+        success: i32::from_le_bytes(body[72..76].try_into()?),
+    })
+}
+
+/// The client asking the zone it is leaving to save the player. TAKP reads
+/// nothing in it (`zone/client_packet.cpp` `Handle_OP_Save`, whose comment
+/// says the payload is 192 bytes), so its 192 bytes stay zero (inferred:
+/// the official `EQMac` client's own body is unrecorded).
+#[must_use]
+pub fn save_on_zone() -> EncodedCommand {
+    EncodedCommand {
+        opcode: ZONE_SAVE_ON_ZONE,
+        body: vec![0; 192],
+    }
+}
+
+/// The client taking its own spawn out of the zone it is leaving, which
+/// TAKP waits for once the world approves the move (`zone/zoning.cpp`
+/// `HandleZoneTransferResponse`, then `Handle_OP_DeleteSpawn`): the spawn
+/// as 16 bits (`DeleteSpawn_Struct`).
+#[must_use]
+pub fn depart(spawn_id: u16) -> EncodedCommand {
+    EncodedCommand {
+        opcode: ZONE_DEPART,
+        body: spawn_id.to_le_bytes().to_vec(),
+    }
+}
+
+/// The skill a bleed-out report names: hand to hand, which TAKP itself
+/// names for a death from a tick (`zone/attack.cpp`
+/// `GenerateDeathPackets`). Inferred: the official client's is unrecorded.
+const BLED_OUT_SKILL: u8 = 28;
+
+/// The player's own report that they bled out (`Death_Struct`, 20 bytes,
+/// laid out as [`death`] reads it). TAKP leaves to the client the deaths it
+/// does not announce to the one who died, and takes this report without
+/// checking the player's HP (`zone/client_packet.cpp` `Handle_OP_Death`), so
+/// it goes out only for a player whose HP reached the server's threshold.
+/// Every field but the spawn is inferred until the official client's
+/// bleed-out is recorded: no killer, as `EQMacEmu` notes the official client
+/// names none for a bleed-out; no damage; no spell (0xFFFF, TAKP's
+/// `SPELL_UNKNOWN`); hand to hand (28), which TAKP itself names for a death
+/// from a tick; and no corpse, level or player flag.
+///
+/// # Errors
+/// Rejects a report without the player's spawn.
+pub fn bled_out(spawn_id: u16) -> Result<EncodedCommand> {
+    ensure!(spawn_id != 0, "a death report needs the player's spawn");
+    let mut body = vec![0; 20];
+    body[..2].copy_from_slice(&spawn_id.to_le_bytes());
+    body[8..10].copy_from_slice(&u16::MAX.to_le_bytes());
+    body[10] = BLED_OUT_SKILL;
+    Ok(EncodedCommand {
+        opcode: ZONE_DEATH,
+        body,
     })
 }
 
@@ -251,6 +441,34 @@ pub fn profile(body: &[u8], character: &str) -> Result<PlayerState> {
     decoded_profile(&data, character)
 }
 
+/// The player's group as the profile lists it each time a zone admits them
+/// (`mac_structs.h` `groupMembers`), with the leader unknown; None outside a
+/// group.
+///
+/// # Errors
+/// Rejects malformed compression and unexpected layouts.
+pub fn profile_group(body: &[u8]) -> Result<Option<crate::group::GroupUpdate>> {
+    let data = unpack(body, true)?;
+    decoded_group(&data)
+}
+
+/// Where the profile's six group places lie, the player's own among them.
+const PROFILE_GROUP: std::ops::Range<usize> = 5012..5396;
+
+fn decoded_group(data: &[u8]) -> Result<Option<crate::group::GroupUpdate>> {
+    ensure!(
+        data.len() == PROFILE_SIZE,
+        "unexpected EQMac profile layout"
+    );
+    let player = String::from_utf8_lossy(cstr(&data[6..70]));
+    Ok(crate::group::profile_members(&data[PROFILE_GROUP], &player))
+}
+
+/// Where the profile lists the player's languages: the 26 TAKP and Quarm
+/// fill (`MAX_PP_LANGUAGE`; `common/patches/mac.cpp` copies 26) of the
+/// field's room for 32, whose comment says the client uses the first 25.
+const PROFILE_LANGUAGES: std::ops::Range<usize> = 284..310;
+
 /// Projects validated profile fields without retaining the decompressed payload.
 fn decoded_profile(data: &[u8], character: &str) -> Result<PlayerState> {
     ensure!(
@@ -289,7 +507,11 @@ fn decoded_profile(data: &[u8], character: &str) -> Result<PlayerState> {
         endurance: None,
         skills: None,
         practice_points: None,
-        spell_refresh_ms: None,
+        languages: Some(data[PROFILE_LANGUAGES].to_vec()),
+        disciplines: None,
+        // What is left of each gem's reuse timer, in milliseconds
+        // (`spellSlotRefresh`).
+        spell_refresh_ms: Some(std::array::from_fn(|index| word(data, 4972 + index * 4))),
         memorized_spells: std::array::from_fn(|i| {
             let id = short(data, 2870 + i * 2);
             (id != 0 && id != u16::MAX).then_some(u32::from(id))
@@ -310,6 +532,46 @@ fn signed_attribute(data: &[u8], offset: usize) -> i32 {
     i32::from(i16::from_le_bytes([data[offset], data[offset + 1]]))
 }
 
+/// The player's buffs and spellbook from their profile, as the admission's
+/// buff table and book.
+///
+/// # Errors
+/// Rejects malformed compression and unexpected layouts.
+pub fn profile_spells(body: &[u8]) -> Result<Vec<WorldEvent>> {
+    decoded_spells(&unpack(body, true)?)
+}
+
+/// The buffs and spellbook in an unpacked profile.
+fn decoded_spells(data: &[u8]) -> Result<Vec<WorldEvent>> {
+    Ok(vec![
+        WorldEvent::BuffSnapshot(crate::buffs::eqmac_profile(data)?),
+        WorldEvent::SpellBook(crate::spells::SpellBook::eqmac_profile(data)?),
+    ])
+}
+
+/// The player's coins from their profile: those they carry, and those on
+/// the cursor and in the bank.
+///
+/// # Errors
+/// Rejects malformed compression, unexpected layouts and negative counts.
+pub fn profile_coins(body: &[u8]) -> Result<Vec<WorldEvent>> {
+    decoded_coins(&unpack(body, true)?)
+}
+
+/// The coins in an unpacked profile.
+fn decoded_coins(data: &[u8]) -> Result<Vec<WorldEvent>> {
+    let (cursor, bank) = crate::money::eqmac_elsewhere(data)?;
+    Ok(vec![
+        WorldEvent::Coins(crate::money::eqmac_coins(data)?),
+        WorldEvent::CoinsElsewhere {
+            cursor,
+            bank,
+            given: crate::world::Coins::default(),
+            offered: crate::world::Coins::default(),
+        },
+    ])
+}
+
 /// The separate, uncompressed own-character zone-entry projection.
 #[derive(Clone, Debug)]
 pub struct OwnSpawn {
@@ -321,6 +583,8 @@ pub struct OwnSpawn {
     pub walk_speed: f32,
     /// Protocol run speed, not world units per second.
     pub run_speed: f32,
+    /// How the player's gear and features look.
+    pub appearance: crate::appearance::Appearance,
 }
 
 /// Decode the own-character entry without retaining names or unused profile bytes.
@@ -343,7 +607,22 @@ pub fn own_spawn(body: &[u8], character: &str) -> Result<OwnSpawn> {
         size: nonnegative(body, 244)?,
         walk_speed: nonnegative(body, 260)?,
         run_speed: nonnegative(body, 264)?,
+        appearance: crate::appearance::eqmac_own_spawn(body),
     })
+}
+
+/// A spawn's class in the server's numbering, the one Titanium's spawns use,
+/// from the Mac client's: TAKP's patch sends a banker (40) as 16, a merchant
+/// (41) as 32 and the guildmaster classes (20 to 34) three lower
+/// (`common/patches/mac.cpp`, `ENCODE(OP_ZoneSpawns)`); the player classes
+/// pass as they are.
+const fn server_class(mac: u8) -> u8 {
+    match mac {
+        16 => 40,
+        17..=31 => mac + 3,
+        32 => 41,
+        other => other,
+    }
 }
 
 /// Decode a compressed initial or incremental spawn batch.
@@ -351,7 +630,14 @@ pub fn own_spawn(body: &[u8], character: &str) -> Result<OwnSpawn> {
 /// # Errors
 /// Rejects invalid compression, partial records, zero IDs, and invalid model sizes.
 pub fn spawns(body: &[u8]) -> Result<Vec<SpawnState>> {
-    let data = unpack(body, false)?;
+    decoded_spawns(&unpack(body, false)?)
+}
+
+/// The spawns in an unpacked batch (TAKP `common/patches/mac_structs.h`
+/// `Spawn_Struct`, 224 bytes each): among them the class at 87, in the Mac
+/// client's numbering and read back into the server's ([`server_class`]),
+/// and the level at 89.
+fn decoded_spawns(data: &[u8]) -> Result<Vec<SpawnState>> {
     ensure!(
         !data.is_empty() && data.len().is_multiple_of(SPAWN_SIZE),
         "partial EQMac spawn batch"
@@ -362,7 +648,7 @@ pub fn spawns(body: &[u8]) -> Result<Vec<SpawnState>> {
         .map(|record| {
             let spawn_id = valid_id(u32::from(short(record, 76)))?;
             Ok(SpawnState {
-                class: None,
+                class: Some(server_class(record[87])),
                 spawn_id,
                 name: String::from_utf8_lossy(cstr(&record[127..191])).into_owned(),
                 kind: match record[86] {
@@ -376,17 +662,21 @@ pub fn spawns(body: &[u8]) -> Result<Vec<SpawnState>> {
                 gender: u32::from(record[88]),
                 size: nonnegative(record, 28)?,
                 invisible: record[90] != 0,
-                appearance: crate::appearance::Appearance::default(),
+                appearance: crate::appearance::eqmac_spawn(record),
                 position: Position {
                     x: signed(record, 9),
                     y: signed(record, 7),
                     z: signed(record, 11) / 10.0,
                     heading: f32::from(record[5]) * 2.0,
                 },
-                // EQMac motion fields are not decoded yet.
+                // EQMac motion fields are not decoded yet, nor its speeds:
+                // the zone spawn record's offsets for them are unchecked (260
+                // and 264 are the own spawn record's).
                 velocity: [0.0; 3],
-                // Nor are its /who fields.
-                level: 0,
+                walk_speed: 0.0,
+                run_speed: 0.0,
+                level: record[89],
+                // Nor are its other /who fields.
                 listing: crate::listing::Listing::default(),
                 name_parts: crate::names::NameParts::default(),
                 pet_owner: None,
@@ -416,10 +706,21 @@ fn position(body: &[u8]) -> Result<WorldEvent> {
 ///
 /// # Errors
 /// Rejects malformed recognized packets, invalid IDs, and invalid health values.
+// One arm per opcode, so the match grows with each one decoded.
+#[allow(clippy::too_many_lines)]
 pub fn updates(opcode: u16, body: &[u8]) -> Result<Vec<WorldEvent>> {
     Ok(match opcode {
         0x5f41 | 0x6b42 => vec![WorldEvent::Spawns(spawns(body)?)],
         0xf340 => vec![position(body)?],
+        crate::merchant::EQMAC_REQUEST_OPCODE
+        | crate::merchant::EQMAC_DELETE_OPCODE
+        | crate::merchant::EQMAC_BUY_OPCODE
+        | crate::merchant::EQMAC_SELL_OPCODE
+        | crate::merchant::EQMAC_END_CONFIRM_OPCODE => crate::merchant::decode_eqmac(opcode, body)?
+            .unwrap_or_default()
+            .into_iter()
+            .map(WorldEvent::Merchant)
+            .collect(),
         0x9f40 => {
             ensure!(body.len() >= 4, "truncated EQMac movement batch");
             let count = usize::try_from(word(body, 0))?;
@@ -438,6 +739,12 @@ pub fn updates(opcode: u16, body: &[u8]) -> Result<Vec<WorldEvent>> {
             ensure!(body.len() == 2, "invalid EQMac despawn length");
             vec![WorldEvent::Despawn(valid_id(u32::from(short(body, 0)))?)]
         }
+        ZONE_DEATH => vec![WorldEvent::Death(death(body)?)],
+        ZONE_WEATHER => vec![WorldEvent::Weather(crate::clock::weather(body)?)],
+        // Quarm's zones send their part of the rules at every zone-in.
+        crate::rules::EQMAC_LOG_SERVER_OPCODE => {
+            vec![WorldEvent::Rules(crate::rules::eqmac_rules(body)?)]
+        }
         0xb240 => {
             ensure!(body.len() == 12, "invalid EQMac health length");
             let spawn_id = valid_id(word(body, 0))?;
@@ -447,22 +754,155 @@ pub fn updates(opcode: u16, body: &[u8]) -> Result<Vec<WorldEvent>> {
                 maximum > 0 && current <= maximum,
                 "invalid EQMac health values"
             );
+            // Right for others; the player's own update leaves out what
+            // items add, so the host takes the player's health from the hit
+            // points instead.
             let percent = u8::try_from(i64::from(current.max(0)) * 100 / i64::from(maximum))?;
             vec![
                 WorldEvent::HitPoints {
                     spawn_id,
                     current,
                     maximum,
-                    without_items: false,
+                    // Read as the player's own update, the only one with
+                    // real values: others' carry a percent over 100.
+                    items: ItemHitPoints::LeftOutOfCurrent,
                 },
                 WorldEvent::HealthPercent { spawn_id, percent },
             ]
         }
         0x7f41 => {
             ensure!(body.len() == 4, "invalid EQMac mana update");
-            vec![WorldEvent::Mana(u32::from(short(body, 0)))]
+            // The mana left and the spell, as the spell bar comes back: TAKP
+            // sends it only then (`Mob::SendSpellBarEnable`), so it ends
+            // every cast, whether the spell landed or not.
+            vec![
+                WorldEvent::Spell(SpellUpdate::Mana {
+                    spell_id: u32::from(short(body, 2)),
+                    keep_casting: false,
+                }),
+                WorldEvent::Mana(u32::from(short(body, 0))),
+            ]
         }
-        0xf540 => crate::world::appearance(body)?.into_iter().collect(),
+        0x1942 => {
+            // The player's own mana between casts (`Client::SendManaUpdate`):
+            // their spawn, then the mana.
+            ensure!(body.len() == 4, "invalid EQMac own mana update");
+            vec![WorldEvent::Mana(u32::from(short(body, 2)))]
+        }
+        crate::spells::EQMAC_BEGIN_OPCODE
+        | crate::spells::EQMAC_INTERRUPT_OPCODE
+        | crate::spells::EQMAC_MEMORIZE_OPCODE
+        | crate::spells::EQMAC_DELETE_OPCODE
+        | crate::spells::EQMAC_SWAP_OPCODE => crate::spells::decode_eqmac(opcode, body)?
+            .map(WorldEvent::Spell)
+            .into_iter()
+            .collect(),
+        crate::buffs::EQMAC_BUFF_OPCODE => {
+            vec![WorldEvent::Buff(crate::buffs::eqmac_update(body)?)]
+        }
+        crate::food::EQMAC_STAMINA_OPCODE => {
+            vec![WorldEvent::Nourishment(crate::food::eqmac_nourishment(
+                body,
+            )?)]
+        }
+        0xf540 => crate::appearance::update(body)?.into_iter().collect(),
+        crate::appearance::EQMAC_ILLUSION_OPCODE => vec![crate::appearance::eqmac_illusion(body)?],
+        crate::appearance::EQMAC_FACE_CHANGE_OPCODE => {
+            vec![crate::appearance::eqmac_face_change(body)?]
+        }
+        crate::corpses::EQMAC_POSITION_OPCODE => {
+            let (spawn_id, position) = crate::corpses::eqmac_position(body)?;
+            vec![WorldEvent::CorpseMoved { spawn_id, position }]
+        }
+        crate::effects::EQMAC_PLAY_SOUND_OPCODE => {
+            vec![WorldEvent::Effect(crate::effects::eqmac_sound(body)?)]
+        }
+        crate::effects::EQMAC_PROJECTILE_OPCODE => {
+            vec![WorldEvent::Effect(crate::effects::eqmac_projectile(body)?)]
+        }
+        crate::group::EQMAC_INVITE_OPCODE
+        | crate::group::EQMAC_INVITE2_OPCODE
+        | crate::group::EQMAC_FOLLOW_OPCODE
+        | crate::group::EQMAC_CANCEL_OPCODE
+        | crate::group::EQMAC_UPDATE_OPCODE => crate::group::decode_eqmac(opcode, body)?
+            .map(WorldEvent::Group)
+            .into_iter()
+            .collect(),
+        crate::combat::EQMAC_DAMAGE_OPCODE => {
+            vec![WorldEvent::Damage(crate::combat::eqmac_damage(body)?)]
+        }
+        crate::combat::EQMAC_ANIMATION_OPCODE => {
+            vec![WorldEvent::Animation(crate::combat::eqmac_animation(body)?)]
+        }
+        crate::control::EQMAC_STUN_OPCODE => vec![WorldEvent::Stun(crate::control::stun(body)?)],
+        crate::control::EQMAC_CHARM_OPCODE => {
+            vec![WorldEvent::Charm(crate::control::eqmac_charm(body)?)]
+        }
+        crate::control::EQMAC_FREEZE_OPCODE
+        | crate::control::EQMAC_UNFREEZE_OPCODE
+        | crate::control::EQMAC_RETURN_OPCODE => crate::control::eqmac_control(opcode, body)?
+            .map(WorldEvent::Controlled)
+            .into_iter()
+            .collect(),
+        crate::control::EQMAC_BERSERK_START_OPCODE | crate::control::EQMAC_BERSERK_END_OPCODE => {
+            crate::control::eqmac_berserk(opcode, body)?
+                .map(WorldEvent::Berserk)
+                .into_iter()
+                .collect()
+        }
+        crate::abilities::EQMAC_CANCEL_SNEAK_HIDE_OPCODE => {
+            ensure!(body.is_empty(), "invalid EQMac hide end length");
+            vec![WorldEvent::HideAndSneakEnded]
+        }
+        crate::disciplines::EQMAC_CHANGE_OPCODE => {
+            vec![WorldEvent::Discipline(crate::disciplines::eqmac_change(
+                body,
+            )?)]
+        }
+        crate::abilities::EQMAC_RESET_SKILL_OPCODE => {
+            vec![WorldEvent::SkillReady(crate::abilities::eqmac_reset_skill(
+                body,
+            )?)]
+        }
+        crate::targets::EQMAC_TARGET_COMMAND_OPCODE | crate::targets::EQMAC_TARGET_MOUSE_OPCODE => {
+            vec![WorldEvent::Target(crate::targets::eqmac_target(body)?)]
+        }
+        crate::rewards::EQMAC_REWARD_OPCODE => {
+            vec![WorldEvent::Reward(crate::rewards::eqmac_reward(body)?)]
+        }
+        crate::confirmations::EQMAC_SACRIFICE_OPCODE => {
+            vec![WorldEvent::SacrificeOffer(crate::confirmations::sacrifice(
+                body,
+            )?)]
+        }
+        crate::socials::EQMAC_YELL_OPCODE => vec![crate::socials::yell(body)?],
+        crate::socials::EQMAC_INSPECT_REQUEST_OPCODE => {
+            vec![crate::socials::eqmac_inspect_request(body)?]
+        }
+        crate::socials::EQMAC_REQUEST_DUEL_OPCODE => {
+            vec![WorldEvent::Duel(crate::socials::eqmac_challenge(body)?)]
+        }
+        crate::socials::EQMAC_DUEL_ACCEPT_OPCODE => {
+            vec![WorldEvent::Duel(crate::socials::eqmac_accepted(body)?)]
+        }
+        crate::socials::EQMAC_DUEL_RESPONSE_OPCODE => {
+            vec![WorldEvent::Duel(crate::socials::eqmac_refused(body)?)]
+        }
+        crate::guild::EQMAC_INVITE_OPCODE => {
+            vec![WorldEvent::Guild(crate::guild::invite(body)?)]
+        }
+        crate::guild::EQMAC_REMOVE_OPCODE => {
+            vec![WorldEvent::Guild(crate::guild::eqmac_removal(body)?)]
+        }
+        crate::names::EQMAC_TITLE_OPCODE => vec![crate::names::eqmac_title(body)?],
+        crate::names::EQMAC_GM_RENAME_OPCODE => vec![crate::names::eqmac_gm_rename(body)?],
+        crate::gm::EQMAC_KICK_OPCODE
+        | crate::gm::EQMAC_KILL_OPCODE
+        | crate::gm::EQMAC_BECOME_NPC_OPCODE
+        | crate::gm::EQMAC_PETITION_OPCODE => crate::gm::eqmac(opcode, body)?
+            .map(WorldEvent::Gm)
+            .into_iter()
+            .collect(),
         0x9941 => {
             ensure!(
                 body.len() == 4 && word(body, 0) <= 330,

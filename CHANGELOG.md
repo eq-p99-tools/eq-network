@@ -7,6 +7,176 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- `WorldEvent::CharacterCreation` says how the world took the character
+  (`creation::CreationOutcome`: `Created`, `NameRefused`,
+  `CreationRefused`, or `NotSent` when nothing went to the world) in place
+  of `accepted`. Both generations' worlds refuse a name and a creation with
+  the same one-byte reply, which the session now tells apart by when it
+  comes; a creation refused after its name was approved read as a refused
+  name before (seen on local TAKP).
+
+- The session's spawn table keeps a character's new last name
+  (`WorldEvent::LastName`, applied to the spawn of that name), which it
+  passed over before.
+
+- The session's spawn table keeps what each spawn's updates change: its
+  look, size, `/who` listing and level (`SpawnState::apply_listing`), and
+  whose pet it is, where before it kept the listing, the level and the
+  owner from the spawn records alone. A charm's owner comes only by
+  update, so the session refused pet commands for a charmed pet as if the
+  player had none (found reading the code; not checked live). A host
+  keeps a look or listing it holds apart from a spawn, as its own
+  player's, the same way with `Appearance::apply_update` and
+  `Listing::apply`, which keeps a guild rank only with a guild.
+
+- The message tables say what each generation's profile leaves unread
+  apart: `EQMac`'s skills, practice points and deity, which they had
+  counted as read, are planned with `EQMac`'s catch-up on the world, and
+  its profile has no leadership or tribute to list.
+
+- The message tables no longer list Titanium's `OP_RezzComplete`, which
+  `EQEmu` sends only to the world server, and list `EQMac`'s as TAKP's
+  alone, as Quarm too sends it only to the world server; it is planned
+  with `EQMac`'s catch-up on exchanges, since TAKP's client moves itself
+  to the corpse on it. `EQMac`'s `OP_Translocate` names TAKP as a sender
+  too.
+
+- Quarm's move of a dead player to their bind point (`OP_GMGoto`) is read
+  as a zone offer home. Quarm's session does not follow zones yet, so it
+  ends there, as it does on Quarm's other moves, where before it stayed on
+  in a zone the server had moved the player out of.
+- An `EQMac` session no longer reads the client's own logout
+  (`OP_Logout`), which neither TAKP nor Quarm sends; their logout reply
+  still ends the session. Titanium's `OP_PreLogoutReply` and Quarm's
+  shared bank offer are listed as left unread with nothing worth reading:
+  the first is empty, and the message after it says what it begins; only
+  Quarm's own client library answers the second.
+- A world's word that the zone being entered is down (`OP_ZoneUnavail`)
+  ends the attempt at once, on both generations, telling
+  `WorldEvent::ZoneUnavailable` with the zone's short name where the world
+  gives one, where before the world stage waited out its 60-second
+  handshake. The delay before the next attempt still applies.
+- Between zones, a Titanium world that names a character other than the
+  one in play (`OP_EnterWorld`) ends the attempt, as an `EQMac` world's
+  already did. From the character list, a name there is `EQEmu`'s
+  automatic login: it is told as a diagnostic, and the session keeps to
+  its own choice.
+- The login loops tell once, as a diagnostic, of each message they leave
+  unread and why, as the zone session does. `EQMac`'s `OP_ApproveWorld` is
+  listed as left unread with nothing in it worth reading, since TAKP and
+  Quarm always send it with an answer of 0 and no name.
+
+- A zone session now tells, as a diagnostic, of each inventory update the
+  zone sends once the player is admitted: what changed and in which slots
+  ("Zone sent an inventory update: the world container emptied"), so a log
+  shows the server's side of every change. A closed world container, whose
+  `OP_ClearObject` left no trace before, now shows.
+
+- A P99 login shows only P99's worlds from `EQEmu`'s public login server's
+  list: those whose lowercased name starts with "project 1999" or "an
+  interesting" (the "An Interesting Hole" test world), as the SSO login
+  proxy keeps them. Other worlds are hidden, and a configured world the
+  filter hides ends the login saying so. Every other server type is shown
+  the whole list.
+
+- Titanium door clicks now send 3 in the second byte and -1 as the held
+  item, and eating or drinking by hand sends -1 in the request's third
+  word, as the official client does (taken from #121). Eating on its own
+  still sends 0 there, since what the official client sends then is
+  unrecorded.
+
+- A configured world that TAKP's list shows down or locked ends the login
+  at once, as one on a Titanium list always has, instead of asking the
+  login server for it.
+
+- `Client::new` checks that a TAKP account and password fit `EQMac`'s
+  19-byte login fields, as it already did for Quarm, instead of the login
+  failing on them later.
+
+- A coin move that would leave a place holding more than 2,147,483,647
+  coins of a kind is refused before it goes out, on every server: TAKP
+  kicks for it, and `EQEmu`'s count would wrap.
+- `Message` gains `MerchantList`: a merchant's whole list, which replaces
+  what it listed before, as `EQMac`'s comes. The feature keeping the
+  merchant window tells the host the places gone and each item, as
+  `MerchantUpdate`s, so a host sees no new event.
+- Merchant trades, on every server: a purchase goes out only for an item
+  on the open merchant's list whose most possible cost the purse covers
+  (`EQEmu` charges what it lists; for a list quoted before the rate, a
+  price a copper higher times the rate, rounded up), since TAKP logs a
+  purchase it refuses for want of coins as a possible hack; a NO DROP item
+  is refused before a sale goes out, as both servers ignore it without a
+  word; a sale's echo adds its price to the purse, platinum first (TAKP
+  sends no money update after a sale, and `EQEmu`'s replaces the purse with
+  the same coins); and an echo of nothing bought ends a pending purchase as
+  refused at once (TAKP's answer to a refused purchase; `EQEmu` sends none).
+- `InventoryUpdate` gains `Used`: a unit or charge the server used up
+  without saying which, as TAKP's `OP_DeleteCharge` says it. Hosts that
+  match `InventoryUpdate` exhaustively need an arm for it.
+- A dead player on TAKP asks for their bind point once a death pause is
+  over, one value in the transfers feature, which is zero: at once, as
+  Adam chose. The official client's wait is unrecorded (inferred). A death
+  while a transfer is under way waits for its answer, and a second word of
+  the same death changes nothing.
+
+- A merchant's echo settles only the trade it answers. Echoes carry no
+  request id, so each is matched by its slot, and a sale's echo removes the
+  units only while the slot still holds the item that was offered, less what
+  earlier echoes removed from it. A sale released unanswered after the
+  three-second hold is remembered, so its echo still settles it if it comes
+  late; the release itself stays, because `EQEmu` answers a refused offer
+  with silence. An echo for an item the slot no longer holds, or one that
+  answers no trade, leaves the inventory untrusted
+  (`InventoryUpdate::Invalidated`) instead of removing what the slot holds
+  now, and a purchase's echo releases only its own purchase.
+- `Message` gains `PurseAdded`: coins the server added to the player's
+  purse without saying what the purse holds, as TAKP's money notices do.
+  The feature keeping the purse applies it, and a host hears the purse.
+
+- An item move from anywhere but the cursor itself waits for a cast to
+  end, exactly as `EQEmu` and TAKP require: both disconnect a player who
+  makes one during a cast that is not a bard song
+  (`Client::Handle_OP_MoveItem`, "Inventory desync"). The session let the
+  numbers 30 to 39 through, a range in which a move can only name the
+  cursor, so no move it sends changes. Both servers let a bard move items
+  while singing, but the session cannot tell a song from a spell, so a
+  bard waits too. That the official client refuses such a move, rather
+  than interrupting the cast, is inferred.
+
+- `WorldEvent::HitPoints` says which values leave out the HP equipped items
+  add with `items: ItemHitPoints`, in place of `without_items`. Titanium's
+  own update leaves them out of both (`LeftOut`). `EQMac`'s, as TAKP sends
+  it, leaves them out of the current alone and counts them in the maximum
+  (`LeftOutOfCurrent`), so a host adds item HP back to the current only.
+  It was read as counting them in both, which showed the player's HP low
+  whenever gear adds HP. The health percent that `EQMac`'s update also
+  gives is right for others, but for the player it leaves item HP out, so
+  a host should take the player's health from the hit points.
+
+- Zoning departs as the official client does. Once a zone approves a
+  transfer, the session sends `Request::SaveOnZone` and then
+  `Request::Depart` (`OP_SaveOnZoneReq`, then `OP_DeleteSpawn` for the
+  player's own spawn), and goes on to the world server when the zone
+  answers with a logout, the connection ends, or two seconds pass
+  (inferred). A repeated answer while the player departs only goes into the
+  diagnostics: `EQEmu` answers a move to another zone twice, and TAKP
+  answers a repeated request again. `Message::ZoneAnswer` now carries a
+  `zoning::ZoneAnswer`, read per client generation, and the zone session's
+  features hear when the connection ends (`Feature::connection_ended`).
+- TAKP lists zoning: `EQMac`'s zone change (76 bytes, no position), its
+  answer, the zone points, the save and the departure, and the world
+  stage's re-entry between zones (the login's zoning flag, then entering
+  the character the world names).
+- `EQMac` deaths: `OP_Death` (20 bytes) is read as `WorldEvent::Death`,
+  and the profile's first bind point as the new `Message::Bind`. A dead
+  player on TAKP asks for their bind point at once (the zone change for the
+  bind zone, with reason 10, `ZC_RepopToHomeAtDeath`), since TAKP holds
+  the move home until the client asks and removes a dead client that never
+  does; Titanium's servers still offer it (`transfers::Home`).
+- A tell's echo on channel 14 is `ChannelName::TellEcho` on the `EQMac`
+  wire too: TAKP echoes a delivered tell to its sender on
+  `ChatChannel_TellEcho` (14), as `EQEmu` does on Titanium's.
+
 - `WorldEvent::Entered` gains `choices`: what the session leaves to the
   player, none of it among `capabilities`. A server type may leave any
   feature it provides to the player where its own client keeps it off; a
@@ -19,6 +189,614 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   not, so `DeletingSpells` stays off on P99.
 
 ### Added
+
+- What game masters and the world tell the zone of a player, on both
+  generations: `WorldEvent::Gm` (`gm::GmNotice`). `Kicked` and `Killed`
+  name the player and the game master, None from the world, from
+  `OP_GMKick` and `OP_GMKill`: the world's reach only the player they name,
+  and a game master's `/kick` or `/kill` of a player in the zone reaches
+  everyone in it, the server leaving the named player's client to leave
+  or die. `BecameNpc` carries the highest level of player the server lets
+  attack the player, from `OP_GMBecomeNPC`, a game master's `/becomenpc`.
+  On `EQMac`, `Petition` carries a petition in the queue
+  (`gm::PetitionEntry`), or None for the empty queue's record, from
+  `OP_PetitionRefresh`, which TAKP and Quarm send game masters; its time
+  is read at either width a server's own time has. Nothing acts on a
+  notice yet. The message tables list `EQMac`'s `OP_PetitionCheckout` and
+  `OP_SoulMarkUpdate` as answers to requests eq-network never sends.
+  Hosts that match `WorldEvent` exhaustively need an arm for it.
+
+- `EQMac`'s renames of a player by a game master (`OP_GMNameChange`) read
+  as `WorldEvent::Renamed`, which the session names from the spawn with
+  the old name, as it does Titanium's. After TAKP's and Quarm's
+  `#set name`, both names are the new one, and the player returns under
+  it.
+
+- Titles, on both generations: `WorldEvent::NewTitles`, from Titanium's
+  `OP_NewTitlesAvailable` and `EQMac`'s empty `OP_SetTitle`, which the
+  servers send as the player earns titles to choose from; and
+  `WorldEvent::TitleChanged` (the spawn and a `names::TitleChange`), from
+  Titanium's `OP_SetTitleReply`, which `EQEmu` sends the whole zone with a
+  character's new title or suffix as it is set or cleared, and `EQMac`'s
+  8-byte `OP_SetTitle`, which names the character but says neither which
+  changed nor to what (`TitleChange::Unspecified`). The session's spawn
+  table keeps a title or suffix in the spawn's name parts. The message
+  tables list Titanium's `OP_SendTitleList` as an answer to a request
+  eq-network never sends. Hosts that match `WorldEvent` exhaustively need
+  arms for them.
+
+- Guilds: `WorldEvent::Guild` (`guild::GuildUpdate`). On Titanium, the
+  member list reads as `GuildUpdate::Members` (`guild::GuildMember`: each
+  member's name, level, class, rank, banker and alt flags, when they were
+  last on, their tribute as `guild::GuildTribute`, their public note, and
+  their zone, None while offline), from `OP_GuildMemberList`, which
+  `EQEmu` sends as the player enters a zone, when their list is out of
+  date, as they join and as they reload their interface. Members' changes
+  read as `MemberLocation` (a member entering a zone or leaving the game),
+  `MemberAdded`, `MemberRemoved`, `MemberLevel`, `MemberNote`, `MemberRank`
+  (a member's rank and banker and alt flags, or in the guild hall the
+  player's own banker flag) and `Disbanded`, from the messages `EQEmu`
+  sends the guild's members in the zone as the world tells of each; and
+  `MemberRenamed` and `Renamed`, from messages nothing in `EQEmu` sends
+  today. On both generations, an invitation to join the guild, or to take
+  a higher rank in it, reads as `Invite` (the inviter, the guild and the
+  rank offered), from `OP_GuildInvite`, which every server passes on from
+  the inviter's client; nothing answers it yet. On `EQMac`, a member's
+  removal reads as `MemberRemoved`, from `OP_GuildRemove`, which TAKP and
+  Quarm send only when a removal fails, with a line saying it succeeded.
+  The session keeps no roster. The message tables list Titanium's
+  `OP_GetGuildMOTDReply` and `EQMac`'s `OP_GuildAdded` as answers to
+  requests eq-network never sends. Hosts that match `WorldEvent`
+  exhaustively need an arm for it.
+
+- Duels, on both generations: `WorldEvent::Duel` (`socials::DuelUpdate`).
+  `Challenge` names the other player, from `OP_RequestDuel`, which every
+  server sends to the player challenged and, as their acceptance, to the
+  challenger; `Accepted` names the challenger and the one who accepted,
+  from `OP_DuelAccept` (Quarm's `OP_DuelResponse2`), which `EQEmu` and
+  Quarm send both players as a duel begins; and `Refused` names the other
+  player and why (`socials::DuelRefusal`: declined, dueling already, or
+  considering another challenge), from TAKP's `OP_DuelResponse`, which
+  passes on a client's answer turning a challenge down. Nothing answers a
+  challenge yet. Hosts that match `WorldEvent` exhaustively need an arm for
+  it.
+
+- What other players do to or for the player, on both generations: a yell
+  for help near the player (`WorldEvent::YellForHelp`, the yeller's spawn),
+  from `OP_YellForHelp`, which every server passes to those within 100 of
+  the yeller; and a request to inspect the player
+  (`WorldEvent::InspectRequest`, the inspector's spawn), from
+  `OP_InspectRequest`, which every server passes on for the player's client
+  to answer. Nothing answers it yet, so the inspector still sees no window.
+  On Titanium, a voice macro spoken to the player, their group or their
+  raid (`WorldEvent::VoiceMacro` with `socials::VoiceMacro`: the speaker, to
+  whom as `socials::VoiceKind`, the voice and the macro's number), from
+  `OP_VoiceMacroOut`. Hosts that match `WorldEvent` exhaustively need arms
+  for them.
+
+- Popups and marquees on Titanium: `WorldEvent::Popup` (`popups::Popup`:
+  the title, the text in the client's own markup, the buttons, how long it
+  stays open, None until the player closes it, and its number), from
+  `OP_OnLevelMessage`, which `EQEmu` sends for quests and game masters'
+  commands such as `#show version`; and `WorldEvent::Marquee`
+  (`popups::Marquee`: the message type that colours it, its priority, how
+  long it takes to fade in and out and how long it shows, and its text),
+  from `OP_Marquee`, which `EQEmu` sends for quests, bots, a spell effect
+  and the world's broadcasts. Nothing answers a popup yet. Hosts that
+  match `WorldEvent` exhaustively need arms for them.
+
+- Coloured text and `EQMac`'s spell and world lines, read as chat on
+  `ChannelName::System`, where before the session dropped them. On
+  Titanium, `OP_ColoredText`, with its colour in `ChatEvent::message_type`
+  (below 256 for the consider colours), which `EQEmu` sends for quests,
+  auras and expeditions and as a buff's fade line. On `EQMac`,
+  `OP_SpellTextMessage`, a spell line another player's client sends, which
+  TAKP and Quarm pass on to those near it; TAKP's
+  `OP_SpellTextMessageStringID`, another caster's interruption or regained
+  concentration by the official client's string number (`string_id`), with
+  the caster's name as its argument; and `OP_MultiLineMsg`, the world's
+  text for one player, which nothing in TAKP's or Quarm's world sends
+  today. The spell lines name the spawn they are about in a new field,
+  `ChatEvent::source_spawn_id`.
+
+- Effects the servers play: `WorldEvent::Effect` (`effects::Effect`). On
+  Titanium, a spell's nimbus on a spawn (`Effect::Nimbus`: the effect, the
+  spawn it plays from and the one it is drawn on, how long it plays and
+  how long its last part waits), from `OP_SpellEffect`, which `EQEmu`
+  sends to the zone as a spell with one lands, to a player zoning in for
+  each one a spawn carries, and for quests; particles on a spawn
+  (`Effect::Particles`: up to five `effects::Particle`s, each an effect and
+  the two values sent with it, kept as sent since `EQEmu`'s comments
+  disagree on what they do), from `OP_LevelAppearance`, which `EQEmu`
+  sends as an NPC rises in level and for the effects it keeps on a spawn;
+  a camera shake (`Effect::CameraShake`: how long and how hard), from
+  `OP_CameraEffect`, which a game master's `#camerashake` and quests send;
+  and a sound file to play (`Effect::Sound` with `effects::Cue::File`),
+  from `OP_PlayMP3`, which only quests send. On `EQMac`, a sound to play
+  by number (`Cue::Number`), from `OP_PlaySound`, which a game master's
+  `#playsound` and quests send. On both, a projectile (`Effect::Projectile`
+  with `effects::Projectile`: the spawn it flies from and the one it flies
+  at, where it starts, its velocity, its launch angle in 512ths of a turn
+  on both wires, its tilt and arc, the item, its type, the skill and the
+  model, and on `EQMac` its light and behavior), from Titanium's
+  `OP_SomeItemPacketMaybe` and `EQMac`'s `OP_Projectile`, which the
+  servers send to the players near an arrow, a thrown item, an NPC's
+  ranged attack or a spell's bolt (TAKP and Quarm send a bolt to the whole
+  zone). Hosts that match `WorldEvent` exhaustively need an arm for it.
+
+- Every kind of appearance update on a spawn, on both generations:
+  `WorldEvent::Appearance` (`appearance::AppearanceChange`), from the kinds
+  of `OP_SpawnAppearance` the session dropped: PvP, light, sneaking,
+  link-dead, fly mode (`appearance::FlyMode`), size, a player's name in an
+  NPC's color, an NPC's tint, show helm, a destructible NPC's damage state,
+  an area's regeneration, which comes to the player alone, kind 0 with its
+  value (`EQEmu`'s note says it makes the client keel over and go to its
+  bind point; unverified), and, as `Other`, the kinds no server sends on
+  its own, which a game master's `#appearance` can. A guild rank joins the
+  listing: `ListingChange::GuildRank` and `Listing::guild_rank`
+  (`listing::GuildRank`), from the update and from Titanium's spawn record.
+  A record naming no spawn is still left to the admission and Quarm's
+  handshakes, and a `/who` level past 255 is now the usual
+  unreadable-packet diagnostic, where before it was dropped. Hosts that
+  match `WorldEvent` or `ListingChange` exhaustively need arms for them,
+  and hosts that build `Listing` the field.
+- How a spawn shows beyond its gear, in `Appearance`: `light`,
+  `fly_mode`, `pvp`, `linkdead`, `sneaking`, `npc_name_color`, `npc_tint`
+  and `damage_state`, from Titanium's spawn record (light and fly mode)
+  and `EQMac`'s (PvP, light and fly mode) and kept current from appearance
+  updates by `SpawnState::apply_appearance`, which takes a new size too.
+  `EQMac`'s record marks every NPC link-dead and never marks sneaking, so
+  those two come from updates alone. Hosts that build `Appearance` without
+  `..Appearance::default()` need the fields.
+- What a spawn holds or suffers that shapes how it stands and moves, on
+  Titanium: `Appearance::states`, a set of `EQEmu`'s bits
+  (`appearance::SpawnStates`: a weapon in either hand, an instrument,
+  sheathed, aggressive, stunned), from the spawn record and from
+  `OP_PlayerStateAdd` and `OP_PlayerStateRemove`, read as
+  `AppearanceChange::StatesAdded` and `StatesRemoved`. `EQEmu` sends them
+  to the zone as a stun lands and ends, as an NPC turns aggressive or
+  takes up a looted weapon, and as another player says theirs changed.
+- Illusions and face changes, on both generations: a spawn taking on
+  another look, or its own again, as `AppearanceChange::Illusion`
+  (`appearance::Illusion`: the race, gender, body and helm textures, none
+  for a player race, whose gear shows, the size, 0 for the race's own,
+  and the face and hair as `appearance::Features`), from `OP_Illusion`;
+  and a face or hair change as `WorldEvent::FaceChanged`, from `EQEmu`'s
+  illusion of race -1 on Titanium, which names the spawn, and `EQMac`'s
+  `OP_FaceChange`, which TAKP and Quarm relay from a player to the whole
+  zone and which names no one but has both eyes' colors. The session's
+  spawn table takes an illusion's race, gender, size, face and hair, and a
+  named face change's face and hair. Hosts that match `WorldEvent`
+  exhaustively need an arm for `FaceChanged`.
+- A spawn's new name, on Titanium: `WorldEvent::Renamed` (the old name
+  and the new), from `OP_MobRename`, which `EQEmu` sends as an NPC's
+  corpse takes the server's name, from the one the client gives it, and
+  for the temporary names and renames of game masters, quests and pets'
+  owners. The record names no spawn: the session names it before anyone
+  hears it, from the spawn with the old name or the NPC corpse whose name
+  by `world::corpse_name` is the new one, and renames it in its table.
+  And a corpse's move, on `EQMac`: `WorldEvent::CorpseMoved` (the corpse
+  and where it lies, without a heading), from `OP_CorpsePosition`, which
+  TAKP and Quarm send as a corpse is summoned, returned or moved by a game
+  master, and on Quarm as it is dragged; the session's table moves it and
+  keeps its heading. Hosts that match `WorldEvent` exhaustively need arms
+  for both.
+
+- A quest's word on the player's base stats, on Titanium:
+  `WorldEvent::StatsChanged` (`stats::StatChange`: each stat by name, 0
+  for one the quest left alone), from `OP_IncreaseStats`, which `EQEmu`
+  sends for a quest's `setstat` and `incstat`. A value is the stat's new
+  value from the first and its rise from the second, which the record does
+  not tell apart, so the session changes nothing on it; the next profile
+  has the stats as the server keeps them. Hosts that match `WorldEvent`
+  exhaustively need an arm for it.
+- A skill's button ready again, on `EQMac`: `WorldEvent::SkillReady` (the
+  skill's number), from `OP_ResetSkill`, which TAKP and Quarm send for
+  Mend when the player pressed it too soon after a zone, since the official
+  client then starts its full wait anew, and for each skill with a
+  recovery timer on a GM's `#cleartimers`. Hosts that match `WorldEvent`
+  exhaustively need an arm for it.
+- The player's disciplines and reuse timers. On Titanium: the disciplines
+  the player knows (`WorldEvent::Disciplines`: a spell ID in each of the
+  list's 100 slots, 0 for an empty one), from `OP_DisciplineUpdate`, which
+  `EQEmu` sends once the zone has admitted a player who knows any and as
+  the list changes; a discipline reuse timer (`WorldEvent::DisciplineReuse`,
+  a `disciplines::Reuse`: the timer and how long until it is ready), from
+  `OP_DisciplineTimer`, whose copies at zone-in of timers 11 to 19 carry
+  `EQEmu`'s other reuse timers; and a reuse timer a group of spells shares
+  (`WorldEvent::LinkedReuse`), from `OP_LinkedReuse`. On `EQMac`: the
+  discipline the player began, or none as it ends
+  (`WorldEvent::Discipline`), from `OP_DisciplineChange`. Hosts that match
+  `WorldEvent` exhaustively need arms for the four.
+- The player's languages, on both generations: `PlayerState::languages`,
+  each language's skill by its number, from the profile (Titanium's 28,
+  and the 26 TAKP and Quarm fill of `EQMac`'s room for 32), kept current
+  from skill updates for skill 100 and up, which every server sends for a
+  language (`world::LANGUAGE_SKILLS`); `EQMac`'s skill updates wait for
+  its catch-up on the world. On Titanium, the profile's list of
+  the disciplines the player knows: `PlayerState::disciplines`, which
+  `EQEmu` leaves empty in the profile and the session keeps current from
+  `WorldEvent::Disciplines`. Hosts that build `PlayerState` need the two
+  fields.
+
+- The player's target as the server sets it, on both generations:
+  `WorldEvent::Target`, from `OP_TargetCommand` (`EQEmu`'s sense spells,
+  its corpse locator and Perl; TAKP's and Quarm's refusal of a mouse
+  target, which puts back the last one) and from TAKP's and Quarm's echo
+  of the player clearing their target (`OP_TargetMouse`, now listed); the
+  session's target follows it. On Titanium, whom the player's target
+  targets: `WorldEvent::TargetOfTarget`, from `OP_TargetHoTT`. Hosts that
+  match `WorldEvent` exhaustively need arms for both.
+- What a quest or a task gives the player, on both generations:
+  `WorldEvent::Reward` (`rewards::Reward`: the giver, the coins, the
+  experience and the items), from `EQEmu`'s quest reward, which rides
+  `OP_Sound`, and its coins alone (`OP_CashReward`, from a task or a
+  quest's `givecash`), and from TAKP's and Quarm's `OP_Reward`. Every
+  server adds the coins to the purse without a money update, so the
+  session adds them to the purse it keeps and tells the host the purse
+  they make (inferred: the official client's purse after a reward is
+  unrecorded). `EQEmu`'s fixed `OP_Sound` record, which gives nothing, is
+  `WorldEvent::Ding`: the sound the official client plays for a quest's
+  `ding`. Hosts that match `WorldEvent` exhaustively need arms for both.
+- Offers the player answers, on both generations, answered only on the
+  player's word: a sacrifice (`WorldEvent::SacrificeOffer`, naming its
+  caster) from `OP_Sacrifice`, answered with `GameCommand::AnswerSacrifice`,
+  and a translocate (`WorldEvent::TranslocateOffer`: the caster, the spell
+  and where it takes the player) from `OP_Translocate`, answered with
+  `GameCommand::AnswerTranslocate`. The answer repeats the offer with the
+  player's choice: 1 for yes, and 0 for no, but -1 for a translocate on
+  `EQMac` (inferred: what the official clients answer is unrecorded). An
+  answer with no offer waiting is refused (`WorldEvent::SacrificeRefused`,
+  `WorldEvent::TranslocateRefused`). `EQEmu` offers both
+  (`Capability::Sacrifice`, `Capability::Translocate`); P99, TAKP and Quarm
+  wait for their live checks. TAKP answers a yes to a translocate with the
+  offer again, which reads as the server's offer to move the player there;
+  it carries no heading, so the player faces heading 0 after it, and the
+  transfer request that follows gives reason 8 (both inferred). Hosts that
+  match `WorldEvent` exhaustively need arms for the four events.
+- A player becoming a corpse, on Titanium: `WorldEvent::BecameCorpse` (the
+  spawn, which the corpse keeps, and where it lies), from
+  `OP_BecomeCorpse`, which `EQEmu` sends the player just before word of
+  their death, and everyone else in the zone as a player leaves a corpse.
+  Hosts that match `WorldEvent` exhaustively need an arm for it.
+- Each character a world lists carries how it looks
+  (`CharacterChoice::look`, a `CharacterLook`): race, gender, class,
+  deity, its worn gear as a spawn's `Appearance` (armour materials and
+  tints, the held items' model numbers, face, hair and beard), eye colours
+  and, on Titanium, whether the world offers Go Home and the tutorial,
+  read from both generations' lists at the emulators' layouts. A server
+  type gives them only where its list is checked to carry them
+  (`EQEmu` and TAKP); elsewhere `look` is `None`, and an `EQMac` list's
+  level and zone stay `None` as before.
+
+- The server's hold on the player, on both generations, read from the
+  emulators' sources and not yet checked live: a stun
+  (`WorldEvent::Stun`: its length, or none as one ends) from `OP_Stun`; a
+  player's charm taking hold or ending, and the server giving a player
+  back the control it took for a charm or a fear (`WorldEvent::Charm`, a
+  `control::Charm`), from `OP_Charm`; and on `EQMac`, the server taking
+  the player's control and giving it back (`WorldEvent::Controlled`) from
+  `OP_FreezeClientControl`, `OP_UnfreezeClientControl` and
+  `OP_ReturnClientControl`, and a warrior going berserk and calming down
+  (`WorldEvent::Berserk`) from `OP_BerserkStart` and `OP_BerserkEnd`, which
+  the table now lists. `EQEmu` tells a Titanium client of its control
+  with the player's own posture, which the session already reads
+  (`PostureState::Frozen`). Hosts that match `WorldEvent` exhaustively
+  need arms for the four.
+- The push a hit or a spell gives, on both generations: `Damage` and
+  `SpellEffect` gain `push` (`combat::Push`: the force, the heading in
+  `Position`'s 512-unit turn and the pitch, as the server sends them),
+  none when the server sends no force and no pitch. Nothing applies it
+  yet. `Damage` and `SpellEffect` no longer implement `Eq`, since the push
+  is made of floats. A push that is not a finite number reads as none, and
+  the record carrying it still reads.
+- The spin a quest gives the player, on both generations:
+  `WorldEvent::Spun`, from `Mob::Spin`'s fixed record in `OP_Action`, which
+  the session now reads whole. `buffs::Action` says what an action is (a
+  spell's, the spin, or another kind), from `buffs::titanium_action` and
+  `buffs::eqmac_action`; `message::titanium` and `message::eqmac` read
+  `OP_Action` instead of `world::titanium_update` and `quarm::updates`.
+  No server is known to send an action of another kind: `Message` gains
+  `UnknownKind`, which the zone session drops, telling of each message's
+  kind once a session as a diagnostic that names only the opcode and the
+  kind. Hosts that match `WorldEvent` exhaustively need an arm for `Spun`.
+- The server's end of the player's hiding and sneaking, on both
+  generations: `WorldEvent::HideAndSneakEnded`, from `OP_CancelSneakHide`.
+  `Request` gains `Unhide`, which `abilities::titanium_unhide` encodes.
+  Hosts that match `WorldEvent` exhaustively need an arm for it.
+
+- The zone's weather, on both generations: `WorldEvent::Weather`
+  (`clock::Weather`: clear, or rain or snow with the server's intensity),
+  once the player is in the zone and whenever it changes.
+- The rest of the zone's header: `WorldEvent::ZoneDescription`
+  (`zones::ZoneDescription`: the long name, the zone's type, gravity, the
+  safe point, `max_z`, the underworld height, the nearest and farthest
+  clip, the experience multiplier and four sets of weather odds, with
+  `EQMac`'s music, sky lock and graveyard time), right after the zone's
+  sky, and both again whenever the server sends the header anew, as GM
+  commands and quests that change the zone do. `EQMac` sessions now read
+  the sky, fog and far clip from the zone header as Titanium's do, so
+  `WorldEvent::Sky` and `Entered.far_clip` come on TAKP and Quarm too.
+  Hosts that match `WorldEvent` exhaustively need arms for both new
+  events.
+
+- What a world tells of itself as the player logs in, on both
+  generations: its rules (`WorldEvent::Rules`, a `rules::WorldRules`: the
+  player-versus-player ruleset by the server's number, whether no-drop
+  items trade, and each generation's own flags) from `OP_LogServer`, which
+  Quarm's zones also send, with the zone's own ruleset, at every zone-in;
+  the expansions it lets the account play (`WorldEvent::Expansions`, a
+  `rules::Expansions` mask with `includes`) from `OP_ExpansionInfo`; and
+  its chat server (`WorldEvent::ChatServer`, a `channels::ChatServer`:
+  channels or mail, the host and port, and the world and character the
+  chat server knows the player by) from `OP_SetChatServer` and Titanium's
+  `OP_SetChatServer2`, which `EQEmu`'s zones send again when their chat
+  server reconnects. The offer's key is never read into a value, so
+  nothing told, kept or recorded carries it, and nothing connects to the
+  chat server. `EQMac` sessions now tell `WorldEvent::WorldName` too, from
+  their world's `OP_LogServer`. Hosts that match `WorldEvent` exhaustively
+  need arms for these and for `ZoneUnavailable`.
+
+- A record of every message each client generation's servers send: one
+  table per generation, one row per opcode, naming the message, the server
+  types that send it and the parts of the session that read it, or why it
+  is left unread (work still to come, an answer to a request eq-network
+  never sends, parked work, or nothing in it worth reading), taken from
+  `EQEmu`'s, TAKP's and Quarm's sources: Titanium's 258 messages, 156 of
+  them read, and `EQMac`'s 177, 110 read. A zone session now tells once, as
+  a diagnostic, of each message it leaves unread with the reason (but one
+  with nothing worth reading, and an empty one under opcode 0, where
+  `EQEmu` sends what Titanium has no opcode for, such as the empty
+  OP_FinishWindow pair after a container closes or a trade ends) and of
+  each the table does not list, where
+  before a message nothing read left no trace once the zone admitted the
+  player. A test holds each table to its generation's decoders over all
+  65,536 opcodes.
+
+- `SpawnState` gains `walk_speed` and `run_speed`: the spawn record's walk
+  and run speeds, server protocol values as `PlayerState`'s are, read from
+  Titanium spawn records at the offsets the player's own record uses. A
+  bad value is zero rather than dropping the spawn; `EQMac` spawns report
+  zero until their record's offsets are checked.
+- `world::ANIMATION_UNITS_PER_SECOND` is public: the units a second one
+  speed value moves, so a host can turn a record's speed into units.
+
+- `WorldEvent::Entered` gains `spell_landing_flag`: the effect flag of the
+  spell action that says a spell landed on its target, so a front end can
+  draw the landing. `EQEmu` sends 4 for each target (`Mob::SpellOnTarget`);
+  P99, Quarm and TAKP say None until each is checked (TAKP sends 4 only once
+  a buff takes hold). Front ends that build the event add the field.
+
+- Swings and the other one-shot motions the server asks clients to play:
+  `WorldEvent::Animation` (`combat::Animation`: the spawn, the servers'
+  animation number and the speed as a multiple of normal), from Titanium's
+  4-byte `OP_Animation` (`combat::animation`) and `EQMac`'s 12-byte one
+  (`combat::eqmac_animation`), read from `EQEmu`'s and TAKP's source and not
+  yet checked live. Both servers send one to every client near a spawn as
+  it swings, kicks or uses a monk attack, the player's own included. It
+  sends nothing and gives the player nothing to do, so it is read as
+  `OP_Damage` is: by each client generation's wire, for every server that
+  speaks it. The speed scale (Titanium's byte over 10, `EQMac`'s float as
+  sent) is inferred from the servers' defaults. A record of the wrong
+  length, an `EQMac` action outside 0 to 65535 or an `EQMac` speed that is
+  negative or not a number is the usual unreadable-packet diagnostic.
+  `Animation` is a new variant of the exhaustive `WorldEvent`.
+
+- Groups on TAKP (`Capability::Grouping`), read from EQMacEmu's source and
+  checked live with two characters. The `EQMac` client's group packets have Titanium's
+  layouts with their own opcodes (`group::eqmac_invite`, `eqmac_follow`,
+  `eqmac_decline`, `eqmac_disband` and `decode_eqmac`); its invitation is
+  193 bytes, the names and 65 more (zero, inferred). TAKP also has its own
+  ways: it removes a player from a group with a quiet update naming them,
+  read as `GroupUpdate::Left`, and lists the player's group in the profile
+  (`quarm::profile_group`) as each zone admits them, with the leader named
+  afterwards. The session tells the host a group listed before the
+  admission once the zone admits the player.
+- The login server's list, for the player to choose a world from. When no
+  world is configured (`ClientConfig::server` empty, which needs a command
+  queue), both client generations' logins send `WorldEvent::ServerSelection`
+  with each world's name, whether it is up, down or locked, its players
+  where the list gives them, and whether the list marks it preferred
+  (`servers::ServerChoice`), then play on the world the player picks with
+  `ClientCommand::SelectServer`. A world that is down or locked can't be
+  picked. A world the login server refuses comes back as
+  `WorldEvent::ServerRefused`, with Titanium's login string id or TAKP's
+  own words (`servers::ServerRefusal`), and the list stays up for another
+  choice. The login's 45-second limit pauses while the player chooses, as
+  the world's does at the character list, and records name the world
+  chosen. TAKP's list is read for each world's status and players as
+  EQMacEmu's login server writes them (`ServerStatus::eqmac`), inferred
+  until checked on a TAKP server. `ServerSelection`, `ServerRefused` and
+  `SelectServer` are new variants of the exhaustive `WorldEvent` and
+  `GameCommand`.
+
+- Eating and drinking on TAKP: `food::eqmac_nourishment` reads TAKP's
+  5-byte `OP_Stamina` (food and water as 16 bits, then a fatigue byte), and
+  `food::eqmac_consume` builds its 16-byte `OP_Consume` in `EQMac`'s slot
+  numbers, with the -1 TAKP's struct says the official client sends. TAKP's
+  session eats and drinks on its own once food or water falls below 3000,
+  where TAKP's own client does (`food::TAKP_HUNGRY`, inferred from TAKP's
+  `Client::Hungry`; `EQEmu`'s at 3000), and by hand.
+
+- Inspecting linked items on TAKP: `GameCommand::InspectItem` on the
+  `EQMac` wire sends `items::eqmac_request`'s 66-byte request
+  (`OP_ItemLinkResponse`: the item as 16 bits from the link's six decimal
+  digits, then 64 bytes for a name TAKP does not read), refusing say links
+  (IDs above 0x8000), for which TAKP has the player say the link's phrase.
+  The answer, the item's 360-byte record, is `WorldEvent::ItemDetails`
+  (`items::eqmac_response`).
+- Coin moves on TAKP, in its own packet (`money::EQMAC_MOVE_OPCODE`,
+  `CoinTransfer::encode_eqmac`): the same five signed words as Titanium's,
+  between the purse, the cursor, the bank beside a banker and the trade
+  window, converting as the server does (11 gold into platinum takes 10 and
+  adds 1). TAKP answers a move no more than `EQEmu` does, so the purse,
+  cursor and bank change when the move is sent, and the next profile
+  corrects them; coins still never leave the trade window.
+- Merchants on TAKP (`Capability::Trading`, beside its item moves; coin
+  moves and meals wait, as the inventory feature's allowances for the
+  server type say): buying and selling through TAKP's own packets. TAKP's
+  packets price trades before the merchant's rate
+  (`merchant::Quotes::BeforeRate`): the session tells each listed item at
+  the price TAKP charges, `int(price x rate)` a unit, and prices a sale's
+  echo, which carries no price, as TAKP added it to the purse,
+  `int(price / rate + 0.5)` a unit of the item the sale offered
+  (`Quotes::sale_price`, inferred), before the ledger and the host hear
+  them; an echo answering no sale the session remembers adds nothing, and
+  a list arriving with no window open is dropped. TAKP's whole list
+  (`merchant::eqmac_list`) replaces the last, as `Message::MerchantList`;
+  the session tells the host the places gone, then each item.
+  `MerchantOffers` stays off on TAKP, whose rule for what a merchant pays
+  is its own. Carries #104 until it merges.
+- TAKP's merchant packets, read and built as the merchant news and requests
+  Titanium's give, for the same merchant feature (nothing offered yet):
+  `merchant::eqmac_request`, `eqmac_end`, `eqmac_buy` and `eqmac_sell`
+  build `EQMac`'s 12-, 4- and 16-byte requests (`GameCommand::Shop`, `Buy`
+  and `Sell` on the `EQMac` wire), a sale naming the slot in `EQMac`'s
+  numbers; `merchant::decode_eqmac` reads the open answer and its rate,
+  the whole compressed list (each item through the `EQMac` item reader, its
+  price before the merchant's rate and no count), a place gone from the
+  list, the purchase and sale echoes (a refused purchase echoed with
+  nothing bought, a sale's echo pricing nothing, inferred) and the window's
+  closing; an open answer's rate that is not finite and above 0 is refused. The
+  unknown bytes, prices and player IDs TAKP never reads go as 0, and the
+  open request's rate as 1 (inferred).
+- Moving items on TAKP (`Capability::Inventory`, with no coins, merchants
+  or meals yet): `inventory::eqmac_move` encodes `EQMac`'s 12-byte
+  `OP_MoveItem` in `EQMac`'s slot numbers (`InventorySlot::to_eqmac`), and
+  `Inventory::plan_move_for` plans a move under a server type's
+  `MoveRules`. TAKP's keep bags, books and arrows out of more worn slots
+  and an instrument from either hand while the other is full, have no
+  charm slot, and make a move onto a cursor an unsettled move emptied wait,
+  as TAKP may refill it from a queue it said nothing of. TAKP answers a
+  move it refuses at once with a resync of its two slots, disconnecting a
+  player below status 10, and answers no move it accepts, so its session
+  moves one item at a time, stricter than the official client: each move
+  holds the inventory until it settles. `Inventory::plan_move` keeps
+  planning under `EQEmu`'s rules.
+
+- TAKP's inventory: `inventory::decode_eqmac` reads `EQMac`'s item packets
+  as TAKP sends them into the same `InventoryUpdate`s as Titanium's: the
+  full inventory (`OP_CharInventory`: 360-byte item records, compressed
+  with zlib behind a count that does not count them), an item put in a
+  slot (`OP_MerchantItemPacket`, which TAKP sends for every item it
+  places), an item onto the cursor (`OP_SummonedItem`), an emptied slot
+  (`OP_MoveItem`), and a unit or charge used up (`OP_DeleteCharge`), which
+  is the new `InventoryUpdate::Used`, as `EQMac` servers do not say whether
+  a stack unit or a charge went. Each item carries its statistics, worn
+  effect and level rules, so a host can count what TAKP's equipped items
+  add. `InventorySlot::from_eqmac` gives `EQMac`'s slots Titanium's
+  numbers (the cursor is 0 on `EQMac`, and bag contents one lower), and
+  `InventorySlot::is_held` names the slots an item update may fill. TAKP's
+  session follows the inventory but offers no `Capability::Inventory` yet:
+  moving items waits, as TAKP disconnects a player whose move it refuses.
+  `inventory::takp_item_hit_points` is the one count of what TAKP adds for
+  the player's items (`itembonuses.HP`, which its own HP update leaves out
+  of the current HP), for a host's gauge and a bleed-out check alike: the
+  worn items from ear to waist and the first food and the first drink
+  carried, by TAKP's equip, level and worn-effect rules, with a worn
+  effect's HP from the caller's spell data. It lists what it could not
+  settle (`UnsettledItem`): an inventory it cannot trust, a worn effect
+  without spell data, and an item above the player's required level, which
+  TAKP counts only for an account of status 80 or more.
+
+- TAKP's spell state, read from the `EQMac` wire as the events Titanium's
+  packets give (Quarm sends the same packets, unchecked there). The
+  profile gives the buffs (`buffs::eqmac_profile`), the 256-slot
+  spellbook (`SpellBook::eqmac_profile`) and each gem's reuse time left
+  (`PlayerState::spell_refresh_ms`). `spells::decode_eqmac` reads a cast
+  beginning, with its base cast time, which the player's focus effects can
+  shorten; an interruption; a gem's refresh, with no reuse adjustment; and
+  the spellbook's replies. `buffs::eqmac_spell_effect` reads a spell taking
+  hold and `buffs::eqmac_update` a buff's fade or corrected duration.
+  `OP_ManaChange`, which TAKP sends only as the spell bar comes back, ends
+  the cast (`SpellUpdate::Mana`, `keep_casting: false`) besides giving the
+  mana, and `OP_ManaUpdate` gives the player's mana between casts. TAKP's
+  server sends an interruption and a fade to the player alone without
+  naming anyone, so the session names the player in them. A fade names no
+  slot either (`buffs::UNKNOWN_SLOT`): a host finds the buff by its spell.
+  The book reaches a host once TAKP offers the spellbook.
+- Casting on TAKP (`Capability::Casting`): a memorized gem's spell
+  (`GameCommand::CastSpell` on the `EQMac` wire, `spells::eqmac_cast`) and
+  an item's click effect from a worn or general slot
+  (`Request::CastItem`, `spells::eqmac_item_cast`), in TAKP's 12-byte
+  `OP_CastSpell` with 16-bit fields and a CRC of 0 (inferred: TAKP never
+  reads it, and the official client's is unrecorded).
+  The cast is held, as on the other servers, until the spell bar comes back
+  or the cast is interrupted. A hold now also ends on a result for the
+  spell asked for when the server began a different one: TAKP begins a
+  Luclin port as spell 2935 and ends it naming the port.
+- TAKP's spellbook (`Capability::Spellbook`): memorizing, forgetting and
+  scribing in TAKP's own `OP_MemorizeSpell` (`spells::eqmac_memorize`,
+  `spells::eqmac_forget`, `spells::eqmac_scribe`), one change in flight at
+  a time as on every server; TAKP logs two in one server tick as a possible
+  hack. The book has TAKP's 256 slots, and a scribe past them is refused,
+  since TAKP would use the scroll up and scribe nothing. Moving a spell in
+  the book (`spells::eqmac_swap`, built) waits for its check on TAKP.
+  Deleting stays off: TAKP reports a deletion done even for an empty slot
+  and keeps the spell memorizable until the player zones.
+- TAKP's coins from the profile: those the player carries
+  (`money::eqmac_coins`, `WorldEvent::Coins`) and those on the cursor and
+  in the bank (`money::eqmac_elsewhere`, `WorldEvent::CoinsElsewhere`),
+  signed 32-bit counts where a negative one is refused. `EQMac` has no
+  shared bank. TAKP's money notice (`OP_TradeMoneyUpdate` from trader 0,
+  `money::eqmac_purse_addition`) says what it added to the purse, one kind
+  at a time; the session adds it (`Message::PurseAdded`) and tells the
+  purse it makes. TAKP never announces what it takes, and a notice naming
+  another trader is refused. All of it reaches a host through the
+  inventory feature, once TAKP offers it; loot coins and merchants come
+  with those features.
+- Reporting that the player bled out (`Capability::BleedingOut`, TAKP
+  only). TAKP announces no death to a player who bleeds out, nor to one
+  killed by a tick of damage or by their own hand, and waits for the
+  client's own report. As the zone admits the player,
+  `WorldEvent::DeathThreshold` tells a host the HP at or below which the
+  server takes the player as dead (-11 on TAKP), once the session counts
+  what the player's items add there. A host whose HP, with
+  what equipped items add, reaches it on the server's report, with no
+  death named for the player, sends `GameCommand::BledOut`, and the
+  session sends `Request::BledOut`, `EQMac`'s 20-byte `OP_Death` naming
+  the player (`quarm::bled_out`; Titanium sends none), only when the
+  server's last report with what the player's items add is at or below
+  the threshold. TAKP kills the player it names without checking their
+  HP, and its report leaves item HP out, so a living player in HP gear can
+  show the threshold: the session refuses the report while it does not
+  know the player's items, and counts what they add by the server type's
+  own rule. TAKP adds worn effects, the first food carried and a GM's
+  items below their level too, and its count comes with the `EQMac`
+  inventory, so until then TAKP takes no report at all and names no
+  threshold, and a host asks for none. A dead player's report is refused
+  too. Every field but the player's spawn is inferred
+  until the official client's bleed-out is recorded: no killer, damage or
+  spell, hand to hand (28), and no corpse, level or player flag. The
+  session then takes the player as dead just as if the server had said
+  so: every feature and the host hear one `WorldEvent::Death`, and the
+  transfers feature alone marks the player dead. `Capability::ALL` grows
+  to 36.
+
+- `EQMac` spawns say their class and level (TAKP's `Spawn_Struct` at 87
+  and 89), so a TAKP banker (class 40) is known as one, and a front end
+  can show levels.
+- The world's damage to the player (`Capability::EnvironmentalDamage`,
+  `EqEmu` only, and there falls alone): `GameCommand::EnvironmentalDamage`
+  reports the damage a host worked out, by its `hazards::Hazard` (falling,
+  drowning, lava or freezing), in its client generation's packet:
+  Titanium's 31-byte `OP_EnvDamage` (`hazards::titanium_damage`) or
+  `EQMac`'s 24-byte `OP_Damage` (`hazards::eqmac_damage`). The server takes
+  the amount as it is and applies its own reductions, such as `EQEmu`'s
+  fall damage reductions from spells, items and AAs, so a host leaves
+  those out. Each server type lists the hazards it takes from the client
+  and the session refuses the rest: `EQEmu` takes falls, while drowning,
+  lava and freezing wait until the official client's reports of them are
+  recorded. What the official clients put in the fields neither server
+  reads is unrecorded (inferred: the player's spawn, zeros, and
+  Titanium's constant 0xFFFF).
+
+- Targeting, considering and attacking on TAKP (`Capability::Targeting`
+  and `Capability::Combat`), in `EQMac`'s own packets: the target as a
+  16-bit spawn, TAKP's 24-byte consider request and answer
+  (`combat::eqmac_consider_request`, `eqmac_consideration`), the
+  auto-attack toggle, and its 24-byte damage records
+  (`combat::eqmac_damage`), whose types are Titanium's.
 
 - The server's regeneration tick (`Capability::ServerTicks`, `EqEmu` only):
   `WorldEvent::ServerTick` tells a front end that the tick landed just
@@ -397,6 +1175,59 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- `EQMac` spawns and the player's own zone entry carry their gear, tints,
+  face, hair and beard (`Appearance`), which were left at their defaults:
+  every `EQMac` character drew bare-headed and undressed, the player's own
+  helm hidden while the character list showed it (seen on local TAKP).
+  `Appearance::show_helm` is true on `EQMac`, since TAKP and Quarm send a
+  head material of 0 for a player who hides their helm.
+
+- A damage shield's record (`OP_Damage` of kinds 244 to 249,
+  `combat::DAMAGE_SHIELD_KINDS`) reads as the points the shield dealt,
+  `DamageOutcome::Hit`. Both servers send those points negated, so a
+  shield of 1 to 6 points read as a block, parry, riposte, dodge,
+  invulnerability or rune, and a larger one as an unknown code. A spell
+  that took hold and dealt nothing (kind 231, value 0) reads as the new
+  `DamageOutcome::Landed` rather than a miss, and TAKP's and Quarm's
+  lifetap record to its caster, which names the caster as both target and
+  source, as the new `DamageOutcome::Tapped` with the points taken. Hosts
+  that match `DamageOutcome` exhaustively need arms for both.
+- On `EQEmu`, a player whose hiding the server ended (a spell on them, a
+  trap, looting, an item's use or a trade) stayed hidden from the zone,
+  NPCs included, until they moved: `EQEmu` keeps the player hidden until
+  the client answers its `OP_CancelSneakHide`, which its source says the
+  Titanium client does, and the session never did. It now answers as
+  `EQEmu` expects, with the player's own appearance, invisibility 0
+  (`Request::Unhide`), on `EQEmu` alone, inferred from its source and not
+  yet checked live or against the official client. P99 hears nothing back
+  until its hiding is checked live there, and TAKP and Quarm end the
+  hiding themselves.
+- A zone's door table is no longer refused whole when it holds two or more
+  static objects. `EQEmu` lists each of a zone's static objects (an object
+  of type 0) in the door table with door ID 255, so that ID repeats, and
+  the decoder refused the table at the second one: the player got no doors
+  in that zone. The decoder now keeps every such record, still refuses any
+  other repeated ID, and takes tables of up to 500 doors, the most `EQEmu`
+  lists (it refused more than 256). `Doors` keeps every static object for
+  the admission snapshot, and `entries` the last one listed, as before; a
+  click on one is refused before it goes out, since nothing uses a static
+  object. Found reading `EQEmu`'s sources; which zones it hit is not known.
+- On Windows, a session no longer ends with "Overlapped I/O operation is in
+  progress" (os error 997) or its cancelled twin (995). std's sockets are
+  overlapped there, and their read timeout (`SO_RCVTIMEO`) leaves a socket
+  whose read timed out in an indeterminate state, so a read that only ran
+  out of time can come back as either error; both transports now treat it
+  as the timeout it is. Seen live twice in half an hour on an idle TAKP
+  session, and once on `EQEmu`; the cause is inferred from Microsoft's and
+  Rust's documentation, not reproduced on demand.
+- Vah Shir can equip what names their race: the move planner refused
+  every equip for race 130 as a race it did not know.
+
+- TAKP's bankers and merchants are known as such, so the bank and merchant
+  windows open at them. `EQMac` spawns now say their class in the server's
+  numbering, as Titanium's do: TAKP's patch sends a banker (40) as 16, a
+  merchant (41) as 32 and the guildmaster classes (20 to 34) three lower
+  (`common/patches/mac.cpp`, `ENCODE(OP_ZoneSpawns)`).
 - Combined transport packets (`OP_Combined`) give every part a one-byte
   length, as `EQEmu` does, so a part of exactly 255 bytes no longer ends the
   session with "invalid combined length". `build_combined` refuses parts
@@ -407,7 +1238,9 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Movement still requires calibration. Airborne movement (falls and jumps) is
   accepted only on stock EQEmu sessions, with provisional physics, until
-  official-client falls and jumps are measured; fall damage is not reported.
+  official-client falls and jumps are measured. Fall damage is reported only
+  there, as the host works it out; drowning, lava and freezing are not
+  reported anywhere yet.
   Complete server-specific buff reconciliation is not implemented.
 - Latest scribe-consumption reconciliation and fresh-key zoning changes have
   offline regression coverage but still need fresh live verification.

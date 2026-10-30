@@ -8,6 +8,7 @@
 
 use super::{
     admission::{Admission, EqMacAdmission, Handshake, TitaniumAdmission},
+    coverage::{self, ServerMessage},
     login::{self, Credentials},
     servers::Shield,
     world, CharacterSession, ZoneDestination,
@@ -15,7 +16,7 @@ use super::{
 use crate::chat::{self, ChatEvent};
 use crate::{
     assets::Assets,
-    client::{CancellationToken, ClientConfig, Events},
+    client::{CancellationToken, ClientCommand, ClientConfig, Events},
 };
 use anyhow::{bail, Result};
 use eq_network_game::{
@@ -25,7 +26,10 @@ use eq_network_game::{
     GameDialect,
 };
 use eq_network_transport::Transport;
-use std::{net::SocketAddr, sync::atomic::AtomicBool};
+use std::{
+    net::SocketAddr,
+    sync::{atomic::AtomicBool, mpsc::Receiver},
+};
 
 /// One client generation's zone packets.
 pub(super) trait Wire: Sync {
@@ -49,6 +53,13 @@ pub(super) trait Wire: Sync {
         Ok(None)
     }
 
+    /// What the session does with a message the generation's servers send,
+    /// from the generation's table; nothing for one no server is listed as
+    /// sending.
+    fn coverage(&self, _opcode: u16) -> Option<ServerMessage> {
+        None
+    }
+
     /// The packet that asks the server for what the session wants.
     ///
     /// # Errors
@@ -58,7 +69,9 @@ pub(super) trait Wire: Sync {
         bail!("this client generation cannot send {request:?} yet")
     }
 
-    /// Logs in the way the generation's client does: the session's
+    /// Logs in the way the generation's client does, playing on the
+    /// configured world or, when none is, the one the player chooses from
+    /// the login server's list through `commands`: the session's
     /// credentials and the world server's address.
     ///
     /// # Errors
@@ -68,6 +81,7 @@ pub(super) trait Wire: Sync {
         &self,
         _config: &ClientConfig,
         _stop: &CancellationToken,
+        _commands: Option<&Receiver<ClientCommand>>,
         _log: &mut Events<'_>,
     ) -> Result<(Credentials, String)> {
         bail!("this client generation cannot log in yet")
@@ -145,6 +159,10 @@ impl Wire for Titanium {
         chat::parse(opcode, body, include_raw)
     }
 
+    fn coverage(&self, opcode: u16) -> Option<ServerMessage> {
+        coverage::titanium(opcode)
+    }
+
     fn encode(&self, request: &Request, sender: Sender<'_>) -> Result<EncodedCommand> {
         request::titanium(request, sender)
     }
@@ -153,9 +171,10 @@ impl Wire for Titanium {
         &self,
         config: &ClientConfig,
         stop: &CancellationToken,
+        commands: Option<&Receiver<ClientCommand>>,
         log: &mut Events<'_>,
     ) -> Result<(Credentials, String)> {
-        login::titanium(config, stop, log)
+        login::titanium(config, stop, commands, log)
     }
 
     fn world(
@@ -216,6 +235,10 @@ impl Wire for EqMac {
         chat::parse_for(GameDialect::EqMac, opcode, body, include_raw)
     }
 
+    fn coverage(&self, opcode: u16) -> Option<ServerMessage> {
+        coverage::eqmac(opcode)
+    }
+
     fn encode(&self, request: &Request, sender: Sender<'_>) -> Result<EncodedCommand> {
         request::eqmac(request, sender)
     }
@@ -224,21 +247,23 @@ impl Wire for EqMac {
         &self,
         config: &ClientConfig,
         stop: &CancellationToken,
+        commands: Option<&Receiver<ClientCommand>>,
         log: &mut Events<'_>,
     ) -> Result<(Credentials, String)> {
-        login::eqmac::login(config, stop, log)
+        login::eqmac::login(config, stop, commands, log)
     }
 
-    /// `EQMac`'s world sends no manifest and stays the same between zones.
+    /// `EQMac`'s world sends no manifest; between zones it names the
+    /// character in play rather than listing them all.
     fn world(
         &self,
         context: &CharacterSession<'_>,
         _assets: &Assets,
         ip: &str,
-        (world_only, _zoning): (bool, bool),
+        flags: (bool, bool),
         log: &mut Events<'_>,
     ) -> Result<Option<ZoneDestination>> {
-        world::eqmac::world(context, ip, world_only, log)
+        world::eqmac::world(context, ip, flags, log)
     }
 
     fn handoff(
@@ -313,18 +338,68 @@ mod tests {
 
     #[test]
     fn each_generation_reads_its_own_layouts() {
-        use eq_network_game::quarm::ZONE_LOGOUT;
-        // Titanium's logout reply means nothing to EQMac, and EQMac's logout
-        // nothing to Titanium.
+        use eq_network_game::quarm::ZONE_LOGOUT_REPLY;
+        // Each generation's logout reply means nothing to the other.
         assert!(EqMac.messages(0x3cdc, &[]).is_empty());
         assert!(matches!(
-            EqMac.messages(ZONE_LOGOUT, &[])[..],
+            EqMac.messages(ZONE_LOGOUT_REPLY, &[])[..],
             [Message::LoggedOut]
         ));
-        assert!(Titanium.messages(ZONE_LOGOUT, &[]).is_empty());
+        assert!(Titanium.messages(ZONE_LOGOUT_REPLY, &[]).is_empty());
         // An opcode that carries no communication in either generation.
         assert!(EqMac.chat(0x0001, &[], false).unwrap().is_none());
         assert!(Titanium.chat(0x0001, &[], false).unwrap().is_none());
+    }
+
+    /// Bodies to probe a generation's decoders with: none, a byte, and
+    /// longer ones of two fills behind a plausible spawn id. Every decoder
+    /// makes something of a single byte, if only an unreadable message, so
+    /// the byte alone finds each one; the longer bodies are for a decoder
+    /// that passes over what is too short.
+    fn probes() -> Vec<Vec<u8>> {
+        let mut bodies = vec![Vec::new()];
+        for length in [1, 4, 16, 64, 256, 1024, 8192] {
+            for fill in [0, 0xff] {
+                let mut body = vec![fill; length];
+                if length >= 2 {
+                    body[..2].copy_from_slice(&7u16.to_le_bytes());
+                }
+                bodies.push(body);
+            }
+        }
+        bodies
+    }
+
+    /// Whether a generation's zone decoders make anything of an opcode: a
+    /// message, communication (or a malformed one), or an answer.
+    fn decodes(wire: &dyn Wire, opcode: u16, bodies: &[Vec<u8>]) -> bool {
+        bodies.iter().any(|body| {
+            !wire.messages(opcode, body).is_empty()
+                || !matches!(wire.chat(opcode, body, false), Ok(None))
+                || wire.answer(opcode, body).is_some()
+        })
+    }
+
+    #[test]
+    fn each_generation_lists_as_read_exactly_what_its_decoders_read() {
+        let bodies = probes();
+        for (generation, wire) in [("Titanium", &Titanium as &dyn Wire), ("EQMac", &EqMac)] {
+            for opcode in 0..=u16::MAX {
+                let listed = wire
+                    .coverage(opcode)
+                    .is_some_and(|message| message.readers().iter().any(|reader| reader.decodes()));
+                let decoded = decodes(wire, opcode, &bodies);
+                assert!(
+                    decoded == listed,
+                    "{generation} 0x{opcode:04x}: {}",
+                    if decoded {
+                        "its decoders read it, but its table does not list it read by them"
+                    } else {
+                        "its table lists it read by its decoders, which make nothing of it"
+                    }
+                );
+            }
+        }
     }
 
     #[test]

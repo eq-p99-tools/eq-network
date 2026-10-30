@@ -2,12 +2,21 @@
 mod actions;
 mod activation;
 mod banking;
+mod eqmac;
 mod titanium;
-pub use actions::{titanium_move, InventoryActor, InventoryMove, MoveQuantity, MOVE_OPCODE};
+pub use actions::{
+    titanium_move, InventoryActor, InventoryMove, MoveQuantity, MoveRules, MOVE_OPCODE,
+};
 pub use activation::{
     titanium_item_cast, ClickEffect, ClickKind, ItemActivation, ItemUse, CAST_OPCODE,
 };
 pub use banking::banker_in_range;
+pub(crate) use eqmac::details as eqmac_details;
+pub(crate) use eqmac::merchant_stock as eqmac_merchant_stock;
+pub use eqmac::{
+    decode as decode_eqmac, move_item as eqmac_move, takp_item_hit_points, ItemHitPointCount,
+    UnsettledItem, Wearer,
+};
 pub use titanium::decode;
 pub(crate) use titanium::{parse as parse_items, parse_at};
 
@@ -26,6 +35,45 @@ pub struct InventorySlot(pub i32);
 impl InventorySlot {
     /// The cursor, where a picked-up item rides.
     pub const CURSOR: Self = Self(30);
+
+    /// The address of an `EQMac` slot, which numbers the cursor 0 where
+    /// Titanium has the charm, has no charm, and numbers each bag's contents
+    /// one lower (TAKP `common/patches/mac_limits.h`); None for a number
+    /// `EQMac` does not use.
+    #[must_use]
+    pub const fn from_eqmac(slot: i32) -> Option<Self> {
+        match slot {
+            0 => Some(Self::CURSOR),
+            1..=29 | 2000..=2007 | 3000..=3007 | 4000..=4009 => Some(Self(slot)),
+            250..=339 | 2030..=2109 | 3030..=3109 => Some(Self(slot + 1)),
+            _ => None,
+        }
+    }
+
+    /// The `EQMac` number of this slot, the inverse of
+    /// [`InventorySlot::from_eqmac`]; None where `EQMac` has no such slot, as
+    /// for the charm.
+    #[must_use]
+    pub const fn to_eqmac(self) -> Option<i32> {
+        match self.0 {
+            30 => Some(0),
+            1..=29 | 2000..=2007 | 3000..=3007 | 4000..=4009 => Some(self.0),
+            251..=340 | 2031..=2110 | 3031..=3110 => Some(self.0 - 1),
+            _ => None,
+        }
+    }
+
+    /// Where the player's own items lie, which a server's item update may
+    /// name: worn, carried, on the cursor, in the bank or the shared bank,
+    /// and in a bag in any of them. Not the trade slots, nor the world
+    /// container's.
+    #[must_use]
+    pub const fn is_held(self) -> bool {
+        matches!(
+            self.0,
+            0..=30 | 251..=340 | 2000..=2015 | 2031..=2190 | 2500..=2501 | 2531..=2550
+        )
+    }
 
     /// Worn equipment, from the charm to the ammo slot.
     #[must_use]
@@ -227,6 +275,11 @@ pub enum InventoryUpdate {
     Cursor(Vec<InventoryItem>),
     /// Server explicitly removes a whole slot, including its container contents.
     Remove(InventorySlot),
+    /// A unit or charge the server used up from the item in a slot, which
+    /// stays there: a stack loses a unit and anything else a charge. `EQMac`
+    /// servers say no more (`OP_DeleteCharge`), where Titanium's say which
+    /// with [`InventoryUpdate::Consume`].
+    Used(InventorySlot),
     /// Units the server took without sending an item update, as for a sale: a
     /// stack loses `quantity` units and any other item leaves its slot.
     Deduct {
@@ -405,25 +458,8 @@ impl Inventory {
                 self.reconcile(slot, &[]);
                 self.remove(slot);
             }
-            InventoryUpdate::Deduct { slot, quantity } => {
-                if !self.items.contains_key(&slot) {
-                    // The server took something this projection does not have.
-                    self.stale = true;
-                    return;
-                }
-                // The server took what it held there, and this projection has an
-                // item there too: a prediction that put it there was right.
-                for covered in self.covered(slot) {
-                    self.unconfirmed.remove(&covered);
-                }
-                self.resolved();
-                match self.items.get_mut(&slot) {
-                    Some(item) if item.stack_count.is_some_and(|count| count > quantity) => {
-                        item.stack_count = item.stack_count.map(|count| count - quantity);
-                    }
-                    _ => self.remove(slot),
-                }
-            }
+            InventoryUpdate::Used(slot) => self.use_up(slot),
+            InventoryUpdate::Deduct { slot, quantity } => self.deduct(slot, quantity),
             InventoryUpdate::Invalidated => self.stale = true,
             InventoryUpdate::TradeEmptied => {
                 self.items.retain(|slot, _| !slot.is_in_trade());
@@ -440,6 +476,43 @@ impl Inventory {
                 self.unconfirmed.clear();
                 self.resolved();
             }
+        }
+    }
+
+    /// Units the server took from `slot` without an item update.
+    fn deduct(&mut self, slot: InventorySlot, quantity: u32) {
+        if !self.items.contains_key(&slot) {
+            // The server took something this projection does not have.
+            self.stale = true;
+            return;
+        }
+        // The server took what it held there, and this projection has an
+        // item there too: a prediction that put it there was right.
+        for covered in self.covered(slot) {
+            self.unconfirmed.remove(&covered);
+        }
+        self.resolved();
+        match self.items.get_mut(&slot) {
+            Some(item) if item.stack_count.is_some_and(|count| count > quantity) => {
+                item.stack_count = item.stack_count.map(|count| count - quantity);
+            }
+            _ => self.remove(slot),
+        }
+    }
+
+    /// A unit or charge the server used up from the item in `slot`, which
+    /// stays there.
+    fn use_up(&mut self, slot: InventorySlot) {
+        match self.items.get_mut(&slot) {
+            Some(item) => match item.stack_count {
+                Some(count) if count > 1 => item.stack_count = Some(count - 1),
+                // The server kept a stack this projection counts as one.
+                Some(_) => self.stale = true,
+                None if item.charges > 0 => item.charges -= 1,
+                None => (),
+            },
+            // The server used up what this projection does not have.
+            None => self.stale = true,
         }
     }
 

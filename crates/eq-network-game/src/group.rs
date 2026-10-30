@@ -14,6 +14,14 @@
 //! `DelMember`, `ChangeLeader` and `DisbandGroup` (`zone/groups.cpp`), and
 //! `ZoneDatabase::RefreshGroupFromDB` (`zone/zonedb.cpp`), which sends the
 //! full list.
+//!
+//! The `EQMac` client's packets have the same layouts but their own opcodes
+//! (TAKP `utils/patches/patch_Mac.conf`, whose opcodes are listed with their
+//! bytes swapped; its `common/patches/mac.cpp` translates none of these): the
+//! same structs in TAKP's `common/eq_packet_structs.h` and the same update
+//! actions, but for an invitation 65 bytes longer (`GroupInvite_Struct`,
+//! 193 bytes, which TAKP's `Handle_OP_GroupInvite2` requires and passes on
+//! to the invitee unchanged).
 use crate::command::EncodedCommand;
 use anyhow::{ensure, Result};
 use serde::Serialize;
@@ -33,6 +41,22 @@ pub const DISBAND_OPCODE: u16 = 0x0e76;
 /// `OP_GroupUpdate`: the server's word on the group.
 pub const UPDATE_OPCODE: u16 = 0x2dd6;
 
+/// `EQMac`'s `OP_GroupInvite` (0x203e swapped).
+pub const EQMAC_INVITE_OPCODE: u16 = 0x3e20;
+/// `EQMac`'s `OP_GroupInvite2` (0x4040), which TAKP passes on as
+/// `OP_GroupInvite`.
+pub const EQMAC_INVITE2_OPCODE: u16 = 0x4040;
+/// `EQMac`'s `OP_GroupFollow` (0x203d swapped).
+pub const EQMAC_FOLLOW_OPCODE: u16 = 0x3d20;
+/// `EQMac`'s `OP_GroupCancelInvite` (0x4041 swapped).
+pub const EQMAC_CANCEL_OPCODE: u16 = 0x4140;
+/// `EQMac`'s `OP_GroupDisband` (0x4044 swapped).
+pub const EQMAC_DISBAND_OPCODE: u16 = 0x4440;
+/// `EQMac`'s `OP_GroupUpdate` (0x2026 swapped).
+pub const EQMAC_UPDATE_OPCODE: u16 = 0x2620;
+/// How much longer `EQMac`'s invitation is than its two names.
+const EQMAC_INVITE_TAIL: usize = 65;
+
 /// The length of each name's field.
 const NAME: usize = 64;
 /// Where an update's parts lie: its action, the name of the one it is sent
@@ -51,6 +75,9 @@ const DISBANDED: u32 = 6;
 const UPDATED: u32 = 7;
 const NEW_LEADER: u32 = 8;
 const FIRST_INVITE: u32 = 9;
+/// `EQMac`'s quiet way out of a group (TAKP's `groupActDisband2`), which no
+/// `EQEmu` source sends.
+const OUT_QUIETLY: u32 = 5;
 
 /// News of groups: the server's word, and what the session sent for the
 /// player, which the server does not answer.
@@ -186,6 +213,124 @@ pub fn disband(player: &str) -> Result<EncodedCommand> {
     })
 }
 
+/// The packets the `EQMac` client sends for the same requests, with its own
+/// opcodes; its invitation carries 65 more bytes, zero (inferred: what the
+/// official client writes there is unrecorded, and TAKP passes it on
+/// unread).
+///
+/// # Errors
+/// Rejects a name its field cannot hold.
+pub fn eqmac_invite(player: &str, inviter: &str) -> Result<EncodedCommand> {
+    let mut body = names(player, inviter)?;
+    body.resize(NAME * 2 + EQMAC_INVITE_TAIL, 0);
+    Ok(EncodedCommand {
+        opcode: EQMAC_INVITE_OPCODE,
+        body,
+    })
+}
+
+/// `EQMac`'s joining of the inviter's group.
+///
+/// # Errors
+/// Rejects a name its field cannot hold.
+pub fn eqmac_follow(inviter: &str, player: &str) -> Result<EncodedCommand> {
+    Ok(EncodedCommand {
+        opcode: EQMAC_FOLLOW_OPCODE,
+        ..follow(inviter, player)?
+    })
+}
+
+/// `EQMac`'s declining of an invitation.
+///
+/// # Errors
+/// Rejects a name its field cannot hold.
+pub fn eqmac_decline(inviter: &str, player: &str) -> Result<EncodedCommand> {
+    Ok(EncodedCommand {
+        opcode: EQMAC_CANCEL_OPCODE,
+        ..decline(inviter, player)?
+    })
+}
+
+/// `EQMac`'s leaving or disbanding, decided by the server as Titanium's is.
+///
+/// # Errors
+/// Rejects a name its field cannot hold.
+pub fn eqmac_disband(player: &str) -> Result<EncodedCommand> {
+    Ok(EncodedCommand {
+        opcode: EQMAC_DISBAND_OPCODE,
+        ..disband(player)?
+    })
+}
+
+/// Decodes an `EQMac` group packet from the server, read as Titanium's of
+/// the same layout; None for any other opcode.
+///
+/// Two things TAKP sends say nothing new: the empty acceptance it sends as
+/// each zone admits a player in no group (`zone/client_packet.cpp`
+/// `CompleteConnect`), which the profile's empty group places have already
+/// said, and the quiet way out naming no one (`eqmac_update`).
+///
+/// # Errors
+/// Rejects a packet too short for its fields.
+pub fn decode_eqmac(opcode: u16, body: &[u8]) -> Result<Option<GroupUpdate>> {
+    let titanium = match opcode {
+        EQMAC_INVITE_OPCODE | EQMAC_INVITE2_OPCODE => INVITE_OPCODE,
+        EQMAC_FOLLOW_OPCODE if body.is_empty() => return Ok(None),
+        EQMAC_FOLLOW_OPCODE => FOLLOW_OPCODE,
+        EQMAC_CANCEL_OPCODE => CANCEL_OPCODE,
+        EQMAC_UPDATE_OPCODE => return eqmac_update(body),
+        _ => return Ok(None),
+    };
+    decode(titanium, body)
+}
+
+/// An `EQMac` `OP_GroupUpdate`: Titanium's, and a quiet way out
+/// (`GroupGeneric_Struct2`: the member, then a string for the client to
+/// show). Naming the player, it removes them from their group with the line
+/// this crate's `Left` stands for (TAKP `Group::DelMember`, string 12001).
+/// Naming no one, it withdraws an invitation as the player answers it
+/// (`Client::ClearGroupInvite`), which the session has already done, or
+/// ends a group as it becomes part of a raid (`Group::DisbandGroup(true)`),
+/// which waits for raids on `EQMac`.
+fn eqmac_update(body: &[u8]) -> Result<Option<GroupUpdate>> {
+    ensure!(body.len() >= MEMBER + NAME, "truncated group update");
+    if action(body) != OUT_QUIETLY {
+        return update(body);
+    }
+    let member = name(body, MEMBER);
+    Ok((!member.is_empty()).then_some(GroupUpdate::Left { member }))
+}
+
+/// What an update does, from a body long enough to hold it.
+fn action(body: &[u8]) -> u32 {
+    u32::from_le_bytes([
+        body[ACTION],
+        body[ACTION + 1],
+        body[ACTION + 2],
+        body[ACTION + 3],
+    ])
+}
+
+/// The player's group as the `EQMac` profile lists it, in its six places of
+/// 64 bytes, the player among them: the other members, with the leader
+/// unknown, or None outside a group. TAKP fills these places as each zone
+/// admits a grouped player (`Group::UpdatePlayer`) and names the leader only
+/// afterwards (`ZoneDatabase::RefreshGroupLeaderFromDB`).
+#[must_use]
+pub fn profile_members(places: &[u8], player: &str) -> Option<GroupUpdate> {
+    let members: Vec<String> = places
+        .as_chunks::<NAME>()
+        .0
+        .iter()
+        .map(|place| name(place, 0))
+        .filter(|member| !member.is_empty() && !member.eq_ignore_ascii_case(player))
+        .collect();
+    (!members.is_empty()).then(|| GroupUpdate::Members {
+        leader: String::new(),
+        members,
+    })
+}
+
 /// Decodes a Titanium group packet from the server; None for any other
 /// opcode, and for an update this crate does not read (the leader's
 /// leadership abilities).
@@ -220,13 +365,7 @@ pub fn decode(opcode: u16, body: &[u8]) -> Result<Option<GroupUpdate>> {
 /// An `OP_GroupUpdate`, by its action.
 fn update(body: &[u8]) -> Result<Option<GroupUpdate>> {
     ensure!(body.len() >= MEMBER + NAME, "truncated group update");
-    let action = u32::from_le_bytes([
-        body[ACTION],
-        body[ACTION + 1],
-        body[ACTION + 2],
-        body[ACTION + 3],
-    ]);
-    Ok(match action {
+    Ok(match action(body) {
         JOINED => Some(GroupUpdate::Joined {
             member: name(body, MEMBER),
         }),
@@ -261,6 +400,127 @@ mod tests {
     /// A name in its field, at a place in a body.
     fn put(body: &mut [u8], at: usize, text: &str) {
         body[at..at + text.len()].copy_from_slice(text.as_bytes());
+    }
+
+    #[test]
+    fn eqmac_sends_the_same_requests_with_its_own_opcodes() {
+        let invited = eqmac_invite("Friend", "Tester").unwrap();
+        assert_eq!(
+            (invited.opcode, invited.body.len()),
+            (EQMAC_INVITE_OPCODE, 193)
+        );
+        assert_eq!(
+            invited.body[..128],
+            invite("Friend", "Tester").unwrap().body
+        );
+        assert!(invited.body[128..].iter().all(|byte| *byte == 0));
+        let followed = eqmac_follow("Leader", "Tester").unwrap();
+        assert_eq!(
+            (followed.opcode, followed.body),
+            (
+                EQMAC_FOLLOW_OPCODE,
+                follow("Leader", "Tester").unwrap().body
+            )
+        );
+        let declined = eqmac_decline("Leader", "Tester").unwrap();
+        assert_eq!(
+            (declined.opcode, declined.body.len()),
+            (EQMAC_CANCEL_OPCODE, 129)
+        );
+        let left = eqmac_disband("Tester").unwrap();
+        assert_eq!(
+            (left.opcode, left.body),
+            (EQMAC_DISBAND_OPCODE, disband("Tester").unwrap().body)
+        );
+        assert!(eqmac_invite("", "Tester").is_err());
+    }
+
+    #[test]
+    fn eqmac_news_reads_as_titaniums() {
+        // TAKP passes the inviter's 193 bytes on to the invitee.
+        let mut invitation = vec![0; 193];
+        put(&mut invitation, 0, "Tester");
+        put(&mut invitation, 64, "Leader");
+        let invited = Some(GroupUpdate::Invited {
+            inviter: "Leader".into(),
+        });
+        assert_eq!(
+            decode_eqmac(EQMAC_INVITE_OPCODE, &invitation).unwrap(),
+            invited
+        );
+        assert_eq!(
+            decode_eqmac(EQMAC_INVITE2_OPCODE, &invitation).unwrap(),
+            invited
+        );
+        // The inviter hears they formed the group: GroupJoin_Struct, 388
+        // bytes, action 9.
+        let mut formed = vec![0; 388];
+        formed[..4].copy_from_slice(&9u32.to_le_bytes());
+        put(&mut formed, 4, "Leader");
+        put(&mut formed, 68, "Leader");
+        assert_eq!(
+            decode_eqmac(EQMAC_UPDATE_OPCODE, &formed).unwrap(),
+            Some(GroupUpdate::Formed)
+        );
+        // The full list: GroupUpdate_Struct, the leader at 388.
+        let mut list = vec![0; 708];
+        list[..4].copy_from_slice(&7u32.to_le_bytes());
+        put(&mut list, 68, "Friend");
+        put(&mut list, 388, "Leader");
+        assert_eq!(
+            decode_eqmac(EQMAC_UPDATE_OPCODE, &list).unwrap(),
+            Some(GroupUpdate::Members {
+                leader: "Leader".into(),
+                members: vec!["Friend".into()],
+            })
+        );
+        // Titanium's opcodes mean nothing on this wire, nor EQMac's on
+        // Titanium's.
+        assert_eq!(decode_eqmac(INVITE_OPCODE, &invitation).unwrap(), None);
+        assert_eq!(decode(EQMAC_INVITE_OPCODE, &invitation).unwrap(), None);
+        assert!(decode_eqmac(EQMAC_UPDATE_OPCODE, &formed[..100]).is_err());
+    }
+
+    #[test]
+    fn eqmac_has_its_own_ways_out_and_its_own_list() {
+        // The quiet way out (GroupGeneric_Struct2, 136 bytes, action 5)
+        // naming the player removes them; naming no one says nothing.
+        let mut removed = vec![0; 136];
+        removed[..4].copy_from_slice(&5u32.to_le_bytes());
+        put(&mut removed, 4, "Tester");
+        put(&mut removed, 68, "Tester");
+        removed[132..].copy_from_slice(&12001u32.to_le_bytes());
+        assert_eq!(
+            decode_eqmac(EQMAC_UPDATE_OPCODE, &removed).unwrap(),
+            Some(GroupUpdate::Left {
+                member: "Tester".into(),
+            })
+        );
+        let mut cleared = vec![0; 136];
+        cleared[..4].copy_from_slice(&5u32.to_le_bytes());
+        assert_eq!(decode_eqmac(EQMAC_UPDATE_OPCODE, &cleared).unwrap(), None);
+        assert!(decode_eqmac(EQMAC_UPDATE_OPCODE, &cleared[..100]).is_err());
+        // Titanium's servers send no such action.
+        assert_eq!(decode(UPDATE_OPCODE, &removed).unwrap(), None);
+        // The empty acceptance as a zone admits a player in no group.
+        assert_eq!(decode_eqmac(EQMAC_FOLLOW_OPCODE, &[]).unwrap(), None);
+        assert!(decode_eqmac(EQMAC_FOLLOW_OPCODE, &[0; 64]).is_err());
+        // The profile's six places, the player among them.
+        let mut places = vec![0; 384];
+        put(&mut places, 0, "Leader");
+        put(&mut places, 64, "tester");
+        put(&mut places, 192, "Friend");
+        assert_eq!(
+            profile_members(&places, "Tester"),
+            Some(GroupUpdate::Members {
+                leader: String::new(),
+                members: vec!["Leader".into(), "Friend".into()],
+            })
+        );
+        let mut alone = vec![0; 384];
+        put(&mut alone, 0, "Tester");
+        assert_eq!(profile_members(&alone, "Tester"), None);
+        assert_eq!(profile_members(&[0; 384], "Tester"), None);
     }
 
     #[test]

@@ -32,8 +32,17 @@ pub(super) fn rejected(command: &ClientCommand, reason: &str) -> Option<crate::w
 }
 
 enum Phase {
-    Awaiting { spell: u32, submitted: Instant },
-    Casting { spell: u32 },
+    Awaiting {
+        spell: u32,
+        submitted: Instant,
+    },
+    /// The server began a cast: the spell it names, and the one asked for,
+    /// which it can name differently. TAKP begins a Luclin port as spell
+    /// 2935 (`Mob::DoCastSpell`) and ends it naming the port.
+    Casting {
+        spell: u32,
+        requested: Option<u32>,
+    },
 }
 
 #[derive(Default)]
@@ -90,10 +99,15 @@ impl CastGuard {
         }
     }
 
-    fn spell(&self) -> Option<u32> {
+    /// Whether a result for this spell answers the cast held: the spell
+    /// requested, or the one the server began.
+    fn answers(&self, spell_id: u32) -> bool {
         match self.phase {
-            Some(Phase::Awaiting { spell, .. } | Phase::Casting { spell }) => Some(spell),
-            None => None,
+            Some(Phase::Awaiting { spell, .. }) => spell == spell_id,
+            Some(Phase::Casting { spell, requested }) => {
+                spell == spell_id || requested == Some(spell_id)
+            }
+            None => false,
         }
     }
 
@@ -112,6 +126,7 @@ impl CastGuard {
             } if caster_id == own_id => {
                 self.phase = Some(Phase::Casting {
                     spell: u32::from(spell_id),
+                    requested: self.pending(),
                 });
             }
             SpellUpdate::Interrupted { caster_id, .. } if caster_id == u32::from(own_id) => {
@@ -122,7 +137,7 @@ impl CastGuard {
                 keep_casting: false,
             }
             | SpellUpdate::BarRefresh { spell_id, .. }
-                if self.spell() == Some(spell_id) =>
+                if self.answers(spell_id) =>
             {
                 self.clear();
             }
@@ -348,6 +363,40 @@ mod tests {
     }
 
     #[test]
+    fn takps_wire_casts_a_gem_in_its_own_packet_and_the_spell_bar_ends_the_hold() {
+        let eqmac = &super::super::wire::EqMac;
+        let mut casting = Casting::default();
+        let mut world = World::new(5);
+        world.own_spawn = Some(7);
+        let mut player = testing::player(7);
+        player.memorized_spells[0] = Some(202);
+        world.player.admit(player);
+        let cast = ClientCommand::CastSpell {
+            session_id: 5,
+            gem: 0,
+            spell_id: 202,
+            target_id: 7,
+            created: Instant::now(),
+        };
+        let outcome = testing::run_on(eqmac, |out| casting.handle(&cast, &mut world, out));
+        outcome.result.unwrap();
+        assert_eq!(outcome.sent.len(), 1);
+        assert_eq!(outcome.sent[0].opcode, 0x7e41);
+        assert_eq!(
+            outcome.sent[0].body,
+            [0, 0, 202, 0, 255, 255, 7, 0, 0, 0, 0, 0]
+        );
+        assert!(casting.guard.active());
+        // TAKP's spell bar coming back, as the EQMac wire reads it.
+        for message in eq_network_game::message::eqmac(0x7f41, &[90, 0, 202, 0]) {
+            testing::run_on(eqmac, |out| casting.observe(&message, &mut world, out))
+                .result
+                .unwrap();
+        }
+        assert!(!casting.guard.active());
+    }
+
+    #[test]
     fn rejection_preserves_request_identity_without_changing_cast_exclusion() {
         let request = ClientCommand::CastSpell {
             session_id: 12,
@@ -505,6 +554,29 @@ mod tests {
             },
         );
         assert!(!guard.active());
+    }
+
+    #[test]
+    fn a_cast_begun_under_another_spell_ends_with_the_requested_ones_result() {
+        // TAKP begins a Luclin port as spell 2935 and ends it naming the port.
+        let begun_as = |spell_id| SpellUpdate::Began {
+            caster_id: 12,
+            spell_id,
+            duration_ms: 10_000,
+        };
+        let ended = |spell_id| SpellUpdate::Mana {
+            spell_id,
+            keep_casting: false,
+        };
+        for end in [73, 2935] {
+            let mut guard = CastGuard::default();
+            guard.submitted(73, Instant::now());
+            guard.observe(12, &begun_as(2935));
+            guard.observe(12, &ended(74));
+            assert!(guard.active());
+            guard.observe(12, &ended(end));
+            assert!(!guard.active());
+        }
     }
 
     #[test]

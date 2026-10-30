@@ -1,18 +1,27 @@
-//! The time of day in Norrath and how a zone's sky looks. Servers send the
-//! time as a zone admits the player and whenever someone changes it
-//! (`OP_TimeOfDay`); between those the clock runs on its own, a Norrath
-//! minute every three real seconds. A zone's header (`OP_NewZone`) names its
-//! sky and gives four fog colors and distances.
+//! The time of day in Norrath, how a zone's sky looks and its weather.
+//! Servers send the time as a zone admits the player and whenever someone
+//! changes it (`OP_TimeOfDay`); between those the clock runs on its own, a
+//! Norrath minute every three real seconds. A zone's header (`OP_NewZone`)
+//! names its sky and gives four fog colors and distances, at the same places
+//! in both generations. The weather (`OP_Weather`) comes once the player is
+//! in the zone and whenever it changes.
 //!
 //! Layout reference: `EQEmu`'s `TimeOfDay_Struct` and Titanium
-//! `NewZone_Struct` (`common/patches/titanium_structs.h`), and
+//! `NewZone_Struct` (`common/patches/titanium_structs.h`), TAKP's `EQMac`
+//! `NewZone_Struct` (`common/patches/mac_structs.h`), and
 //! `EQTime::GetCurrentEQTimeOfDay` (`common/eqtime.cpp`) for the calendar:
-//! hours 1 to 24 on the wire, 28 days to a month, 12 months to a year.
+//! hours 1 to 24 on the wire, 28 days to a month, 12 months to a year. The
+//! weather: `Zone::weatherSend` (`zone/zone.cpp`) in `EQEmu`, TAKP and Quarm.
 use anyhow::{ensure, Result};
 use serde::Serialize;
 
 /// `OP_TimeOfDay`: the time in Norrath.
 pub const TIME_OPCODE: u16 = 0x1580;
+/// Titanium's `OP_Weather`. `EQMac`'s is [`crate::quarm::ZONE_WEATHER`].
+pub const TITANIUM_WEATHER_OPCODE: u16 = 0x254d;
+/// The length of the zone-in weather `EQEmu` sends Titanium, which the
+/// client takes only as a step of its admission.
+const TITANIUM_ZONE_IN_WEATHER_LENGTH: usize = 12;
 /// Real seconds to a Norrath minute.
 pub const SECONDS_PER_MINUTE: u64 = 3;
 const MINUTES_PER_HOUR: u64 = 60;
@@ -127,6 +136,78 @@ pub fn titanium_zone_sky(new_zone: &[u8]) -> Option<ZoneSky> {
     })
 }
 
+/// Reads the sky and fog from an `EQMac` zone header, which keeps them where
+/// Titanium's does. None for any length but the header's 572 bytes.
+#[must_use]
+pub fn eqmac_zone_sky(new_zone: &[u8]) -> Option<ZoneSky> {
+    (new_zone.len() == crate::zones::EQMAC_HEADER_LENGTH)
+        .then(|| titanium_zone_sky(new_zone))
+        .flatten()
+}
+
+/// The weather in the player's zone.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Weather {
+    /// Neither rain nor snow.
+    Clear,
+    /// Rain, as strong as the server's number says.
+    Rain {
+        /// The server's intensity; above zero.
+        intensity: u32,
+    },
+    /// Snow, as strong as the server's number says.
+    Snow {
+        /// The server's intensity; above zero.
+        intensity: u32,
+    },
+    /// A kind of weather no server's source sends, as it came.
+    Unknown {
+        /// The server's kind: 0 is rain and 1 snow.
+        kind: u32,
+        /// The server's intensity.
+        intensity: u32,
+    },
+}
+
+/// Reads the weather both generations' zones send once the player is in
+/// the zone and whenever it changes (`Weather_Struct`, 8 bytes): the kind,
+/// 0 for rain and 1 for snow, then its intensity, which is 0 when the sky is
+/// clear.
+///
+/// # Errors
+/// Rejects any length but 8.
+pub fn weather(body: &[u8]) -> Result<Weather> {
+    ensure!(body.len() == 8, "invalid weather length");
+    let word = |offset: usize| {
+        u32::from_le_bytes([
+            body[offset],
+            body[offset + 1],
+            body[offset + 2],
+            body[offset + 3],
+        ])
+    };
+    Ok(match (word(0), word(4)) {
+        (_, 0) => Weather::Clear,
+        (0, intensity) => Weather::Rain { intensity },
+        (1, intensity) => Weather::Snow { intensity },
+        (kind, intensity) => Weather::Unknown { kind, intensity },
+    })
+}
+
+/// Reads Titanium's weather by opcode: none for another opcode, and none for
+/// the 12-byte zone-in form `EQEmu` sends first, which the admission takes
+/// as one of its steps.
+///
+/// # Errors
+/// Rejects any other length, as [`weather`] does.
+pub fn titanium_weather(opcode: u16, body: &[u8]) -> Result<Option<Weather>> {
+    if opcode != TITANIUM_WEATHER_OPCODE || body.len() == TITANIUM_ZONE_IN_WEATHER_LENGTH {
+        return Ok(None);
+    }
+    weather(body).map(Some)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -185,5 +266,47 @@ mod tests {
         );
         assert_eq!(sky.fog[1].color, [1, 1, 1]);
         assert!(titanium_zone_sky(&header[..474]).is_none());
+        // EQMac's header keeps them in the same places.
+        assert_eq!(eqmac_zone_sky(&header[..572]), Some(sky));
+        assert!(eqmac_zone_sky(&header).is_none());
+    }
+
+    #[test]
+    fn the_weather_is_clear_rain_or_snow_by_kind_and_intensity() {
+        let body = |kind: u32, intensity: u32| {
+            let mut body = kind.to_le_bytes().to_vec();
+            body.extend(intensity.to_le_bytes());
+            body
+        };
+        assert_eq!(weather(&body(0, 0)).unwrap(), Weather::Clear);
+        assert_eq!(weather(&body(1, 0)).unwrap(), Weather::Clear);
+        assert_eq!(
+            weather(&body(0, 5)).unwrap(),
+            Weather::Rain { intensity: 5 }
+        );
+        assert_eq!(
+            weather(&body(1, 10)).unwrap(),
+            Weather::Snow { intensity: 10 }
+        );
+        assert_eq!(
+            weather(&body(7, 3)).unwrap(),
+            Weather::Unknown {
+                kind: 7,
+                intensity: 3
+            }
+        );
+        assert!(weather(&[0; 7]).is_err());
+        // Titanium's zone-in form is the admission's; other opcodes are not
+        // the weather.
+        assert_eq!(
+            titanium_weather(TITANIUM_WEATHER_OPCODE, &body(0, 5)).unwrap(),
+            Some(Weather::Rain { intensity: 5 })
+        );
+        assert_eq!(
+            titanium_weather(TITANIUM_WEATHER_OPCODE, &[0; 12]).unwrap(),
+            None
+        );
+        assert!(titanium_weather(TITANIUM_WEATHER_OPCODE, &[0; 4]).is_err());
+        assert_eq!(titanium_weather(TIME_OPCODE, &body(0, 5)).unwrap(), None);
     }
 }

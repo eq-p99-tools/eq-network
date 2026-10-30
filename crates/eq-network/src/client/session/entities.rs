@@ -8,7 +8,9 @@ use super::{
 use anyhow::{ensure, Result};
 use eq_network_game::{
     message::Message,
-    world::{PostureState, SpawnState, WorldEvent},
+    names::TitleChange,
+    spells::SpellUpdate,
+    world::{PostureState, SpawnKind, SpawnState, WorldEvent},
     GameDialect,
 };
 use std::collections::BTreeMap;
@@ -72,6 +74,59 @@ impl Spawns {
                     spawn.appearance.apply(change);
                 }
             }
+            WorldEvent::Appearance { spawn_id, change } => {
+                if let Some(spawn) = self.0.get_mut(spawn_id) {
+                    spawn.apply_appearance(change);
+                }
+            }
+            WorldEvent::FaceChanged {
+                spawn_id: Some(spawn_id),
+                features,
+                ..
+            } => {
+                if let Some(spawn) = self.0.get_mut(spawn_id) {
+                    spawn.appearance.set_features(*features);
+                }
+            }
+            WorldEvent::Listing { spawn_id, change } => {
+                if let Some(spawn) = self.0.get_mut(spawn_id) {
+                    spawn.apply_listing(*change);
+                }
+            }
+            WorldEvent::PetOwner { spawn_id, owner } => {
+                if let Some(spawn) = self.0.get_mut(spawn_id) {
+                    spawn.pet_owner = *owner;
+                }
+            }
+            WorldEvent::Renamed {
+                spawn_id: Some(spawn_id),
+                new_name,
+                ..
+            } => {
+                if let Some(spawn) = self.0.get_mut(spawn_id) {
+                    spawn.name.clone_from(new_name);
+                }
+            }
+            WorldEvent::CorpseMoved { spawn_id, position } => {
+                if let Some(spawn) = self.0.get_mut(spawn_id) {
+                    let [x, y, z] = *position;
+                    (spawn.position.x, spawn.position.y, spawn.position.z) = (x, y, z);
+                }
+            }
+            WorldEvent::TitleChanged { spawn_id, change } => {
+                if let Some(spawn) = self.0.get_mut(spawn_id) {
+                    match change {
+                        TitleChange::Title(title) => spawn.name_parts.title.clone_from(title),
+                        TitleChange::Suffix(suffix) => spawn.name_parts.suffix.clone_from(suffix),
+                        TitleChange::Unspecified => (),
+                    }
+                }
+            }
+            WorldEvent::LastName { name, last_name } => {
+                if let Some(spawn) = self.0.values_mut().find(|spawn| spawn.name == *name) {
+                    spawn.name_parts.last_name.clone_from(last_name);
+                }
+            }
             _ => (),
         }
     }
@@ -82,7 +137,8 @@ impl Spawns {
 #[derive(Debug, Default)]
 pub(super) struct Entities {
     postures: BTreeMap<u16, PostureState>,
-    /// The client generation, whose rule names a corpse.
+    /// The client generation, whose rules name a corpse and say whom a
+    /// notice is about.
     dialect: GameDialect,
 }
 
@@ -93,13 +149,71 @@ impl Entities {
             ..Self::default()
         }
     }
+
+    /// Names the player in the notices `EQMac`'s server sends them alone
+    /// without naming anyone: a cast interruption (TAKP
+    /// `Mob::InterruptSpell`) and a buff's fade
+    /// (`Client::MakeBuffFadePacket`).
+    fn name_the_player(&self, event: &mut WorldEvent, world: &World) {
+        let (GameDialect::EqMac, Some(own)) = (self.dialect, world.own_spawn) else {
+            return;
+        };
+        match event {
+            WorldEvent::Spell(SpellUpdate::Interrupted { caster_id, .. }) if *caster_id == 0 => {
+                *caster_id = u32::from(own);
+            }
+            WorldEvent::Buff(update) if update.entity_id == 0 => {
+                update.entity_id = u32::from(own);
+            }
+            _ => (),
+        }
+    }
+
+    /// The spawn a rename is about, which the record does not name: the one
+    /// with the old name, or the NPC corpse whose name by the generation's
+    /// rule is the new one, as the server renames a corpse from the name the
+    /// client gives it to its own.
+    fn renamed(&self, world: &World, old_name: &str, new_name: &str) -> Option<u16> {
+        let spawns = &world.spawns;
+        spawns
+            .all()
+            .find(|spawn| spawn.name == old_name)
+            .or_else(|| {
+                spawns.all().find(|spawn| {
+                    spawn.kind == SpawnKind::NpcCorpse
+                        && eq_network_game::world::corpse_name(
+                            self.dialect,
+                            &spawn.name,
+                            spawn.kind,
+                            spawn.spawn_id,
+                        )
+                        .is_some_and(|name| name == new_name)
+                })
+            })
+            .map(|spawn| spawn.spawn_id)
+    }
 }
 
 impl Feature for Entities {
-    /// Names the corpse a death leaves, from the spawn that died, by the
-    /// client generation's rule, before any feature or the host hears it.
+    /// Names the corpse a death leaves, from the spawn that died, the spawn
+    /// a rename is about, and the player in the notices that leave them
+    /// unnamed, by the client generation's rules, before any feature or the
+    /// host hears it.
     fn explain(&mut self, message: &mut Message, world: &World) {
-        let Message::Event(WorldEvent::Death(death)) = message else {
+        let Message::Event(event) = message else {
+            return;
+        };
+        self.name_the_player(event, world);
+        if let WorldEvent::Renamed {
+            spawn_id: spawn_id @ None,
+            old_name,
+            new_name,
+        } = event
+        {
+            *spawn_id = self.renamed(world, old_name, new_name);
+            return;
+        }
+        let WorldEvent::Death(death) = event else {
             return;
         };
         let spawn = u16::try_from(death.spawn_id)
@@ -228,6 +342,283 @@ mod tests {
     }
 
     #[test]
+    fn the_table_keeps_what_appearance_listing_and_pet_updates_change() {
+        use eq_network_game::{
+            appearance::{AppearanceChange, FlyMode},
+            listing::{GuildRank, ListingChange},
+        };
+        let mut entities = Entities::default();
+        let mut world = World::new(5);
+        let spawns = vec![spawn(7, SpawnKind::Player), spawn(8, SpawnKind::Npc)];
+        entities
+            .admit(&event(WorldEvent::Spawns(spawns)), &mut world)
+            .unwrap();
+        // Before the admission and after it alike.
+        entities
+            .admit(
+                &event(WorldEvent::Appearance {
+                    spawn_id: 8,
+                    change: AppearanceChange::Size(9.0),
+                }),
+                &mut world,
+            )
+            .unwrap();
+        let updates = [
+            WorldEvent::Appearance {
+                spawn_id: 8,
+                change: AppearanceChange::FlyMode(FlyMode::Levitating),
+            },
+            WorldEvent::Appearance {
+                spawn_id: 8,
+                change: AppearanceChange::Light(4),
+            },
+            // Once-only kinds change nothing.
+            WorldEvent::Appearance {
+                spawn_id: 8,
+                change: AppearanceChange::Other { kind: 2, value: 1 },
+            },
+            WorldEvent::Listing {
+                spawn_id: 7,
+                change: ListingChange::Guild(Some(3)),
+            },
+            WorldEvent::Listing {
+                spawn_id: 7,
+                change: ListingChange::GuildRank(GuildRank::Officer),
+            },
+            WorldEvent::Listing {
+                spawn_id: 7,
+                change: ListingChange::Level(12),
+            },
+            WorldEvent::PetOwner {
+                spawn_id: 8,
+                owner: Some(7),
+            },
+            // News of a spawn the table has not seen is left alone.
+            WorldEvent::Appearance {
+                spawn_id: 9,
+                change: AppearanceChange::Pvp(true),
+            },
+        ];
+        for update in updates {
+            testing::run(|out| entities.observe(&event(update), &mut world, out))
+                .result
+                .unwrap();
+        }
+        let npc = world.spawns.visible(8).unwrap();
+        assert_eq!(npc.size, 9.0);
+        assert_eq!(
+            (npc.appearance.fly_mode, npc.appearance.light, npc.pet_owner),
+            (FlyMode::Levitating, 4, Some(7))
+        );
+        let player = world.spawns.visible(7).unwrap();
+        assert_eq!(
+            (
+                player.level,
+                player.listing.guild,
+                player.listing.guild_rank
+            ),
+            (12, Some(3), Some(GuildRank::Officer))
+        );
+        assert!(world.spawns.visible(9).is_none());
+    }
+
+    #[test]
+    fn illusions_and_named_face_changes_change_the_table() {
+        use eq_network_game::appearance::{AppearanceChange, Features, Illusion};
+        let mut entities = Entities::default();
+        let mut world = World::new(5);
+        let spawns = vec![spawn(7, SpawnKind::Player), spawn(8, SpawnKind::Player)];
+        entities
+            .admit(&event(WorldEvent::Spawns(spawns)), &mut world)
+            .unwrap();
+        let features = |face| Features {
+            face,
+            ..Features::default()
+        };
+        let updates = [
+            WorldEvent::Appearance {
+                spawn_id: 7,
+                change: AppearanceChange::Illusion(Illusion {
+                    race: 60,
+                    gender: 2,
+                    texture: None,
+                    helm_texture: None,
+                    size: 6.0,
+                    features: features(1),
+                }),
+            },
+            WorldEvent::FaceChanged {
+                spawn_id: Some(8),
+                features: features(3),
+                eye_colors: None,
+            },
+            // A face change that names no one changes no one.
+            WorldEvent::FaceChanged {
+                spawn_id: None,
+                features: features(5),
+                eye_colors: Some([1, 1]),
+            },
+        ];
+        for update in updates {
+            testing::run(|out| entities.observe(&event(update), &mut world, out))
+                .result
+                .unwrap();
+        }
+        let illusioned = world.spawns.visible(7).unwrap();
+        assert_eq!(
+            (
+                illusioned.race,
+                illusioned.gender,
+                illusioned.size,
+                illusioned.appearance.face
+            ),
+            (60, 2, 6.0, 1)
+        );
+        assert_eq!(world.spawns.visible(8).unwrap().appearance.face, 3);
+    }
+
+    #[test]
+    fn a_rename_names_its_spawn_and_renames_it_in_the_table() {
+        let mut entities = Entities::new(GameDialect::Titanium);
+        let mut world = World::new(5);
+        let mut npc = spawn(8, SpawnKind::NpcCorpse);
+        npc.name = "a_rat008".into();
+        let mut guard = spawn(9, SpawnKind::Npc);
+        guard.name = "Guard_Synth000".into();
+        entities
+            .admit(&event(WorldEvent::Spawns(vec![npc, guard])), &mut world)
+            .unwrap();
+        let named = |entities: &mut Entities, world: &World, old: &str, new: &str| {
+            let mut rename = event(WorldEvent::Renamed {
+                spawn_id: None,
+                old_name: old.into(),
+                new_name: new.into(),
+            });
+            entities.explain(&mut rename, world);
+            rename
+        };
+        // An NPC's corpse, from the name the client gave it to the server's.
+        let corpse = named(&mut entities, &world, "a_rat's_corpse8", "a_rat`s_corpse8");
+        assert!(matches!(
+            corpse,
+            Message::Event(WorldEvent::Renamed {
+                spawn_id: Some(8),
+                ..
+            })
+        ));
+        // A temporary name, by the name the spawn has.
+        let guard = named(&mut entities, &world, "Guard_Synth000", "Gate_Keeper");
+        assert!(matches!(
+            guard,
+            Message::Event(WorldEvent::Renamed {
+                spawn_id: Some(9),
+                ..
+            })
+        ));
+        // No one in the zone.
+        let nobody = named(&mut entities, &world, "Absent", "Elsewhere");
+        assert!(matches!(
+            nobody,
+            Message::Event(WorldEvent::Renamed { spawn_id: None, .. })
+        ));
+        for message in [corpse, guard, nobody] {
+            testing::run(|out| entities.observe(&message, &mut world, out))
+                .result
+                .unwrap();
+        }
+        assert_eq!(world.spawns.visible(8).unwrap().name, "a_rat`s_corpse8");
+        assert_eq!(world.spawns.visible(9).unwrap().name, "Gate_Keeper");
+    }
+
+    #[test]
+    fn the_table_keeps_titles_suffixes_and_last_names() {
+        let mut entities = Entities::default();
+        let mut world = World::new(5);
+        let mut player = spawn(7, SpawnKind::Player);
+        player.name = "Examplar".into();
+        entities
+            .admit(
+                &event(WorldEvent::Spawns(vec![player, spawn(8, SpawnKind::Npc)])),
+                &mut world,
+            )
+            .unwrap();
+        let updates = [
+            WorldEvent::TitleChanged {
+                spawn_id: 7,
+                change: TitleChange::Title("Exemplary".into()),
+            },
+            WorldEvent::TitleChanged {
+                spawn_id: 7,
+                change: TitleChange::Suffix("the Synthetic".into()),
+            },
+            WorldEvent::LastName {
+                name: "Examplar".into(),
+                last_name: "Exemplum".into(),
+            },
+            // EQMac's record says nothing of what changed.
+            WorldEvent::TitleChanged {
+                spawn_id: 7,
+                change: TitleChange::Unspecified,
+            },
+            // A cleared title is an empty one.
+            WorldEvent::TitleChanged {
+                spawn_id: 8,
+                change: TitleChange::Title(String::new()),
+            },
+            // No one in the zone has these.
+            WorldEvent::TitleChanged {
+                spawn_id: 9,
+                change: TitleChange::Title("Absent".into()),
+            },
+            WorldEvent::LastName {
+                name: "Absent".into(),
+                last_name: "Elsewhere".into(),
+            },
+        ];
+        for update in updates {
+            testing::run(|out| entities.observe(&event(update), &mut world, out))
+                .result
+                .unwrap();
+        }
+        assert_eq!(
+            world.spawns.visible(7).unwrap().name_parts,
+            eq_network_game::names::NameParts {
+                title: "Exemplary".into(),
+                last_name: "Exemplum".into(),
+                suffix: "the Synthetic".into(),
+            }
+        );
+        assert_eq!(
+            world.spawns.visible(8).unwrap().name_parts,
+            eq_network_game::names::NameParts::default()
+        );
+        assert_eq!(world.spawns.all().count(), 2);
+    }
+
+    #[test]
+    fn an_eqmac_corpse_moves_and_keeps_its_heading() {
+        let mut entities = Entities::new(GameDialect::EqMac);
+        let mut world = World::new(5);
+        let mut corpse = spawn(8, SpawnKind::PlayerCorpse);
+        corpse.position.heading = 128.0;
+        entities
+            .admit(&event(WorldEvent::Spawns(vec![corpse])), &mut world)
+            .unwrap();
+        let moved = event(WorldEvent::CorpseMoved {
+            spawn_id: 8,
+            position: [1.0, 2.0, 3.0],
+        });
+        testing::run(|out| entities.observe(&moved, &mut world, out))
+            .result
+            .unwrap();
+        let position = world.spawns.visible(8).unwrap().position;
+        assert_eq!(
+            [position.x, position.y, position.z, position.heading],
+            [1.0, 2.0, 3.0, 128.0]
+        );
+    }
+
+    #[test]
     fn a_death_names_its_corpse_by_the_generations_rule() {
         let mut world = World::new(5);
         world.spawns.0.insert(8, spawn(8, SpawnKind::Npc));
@@ -260,6 +651,53 @@ mod tests {
         // no corpse.
         assert_eq!(named(GameDialect::Titanium, 10), None);
         assert_eq!(named(GameDialect::EqMac, 8), None);
+    }
+
+    #[test]
+    fn eqmacs_unnamed_interruptions_and_fades_are_the_players_own() {
+        use eq_network_game::buffs::{BuffUpdate, UNKNOWN_SLOT};
+        let mut world = World::new(5);
+        world.own_spawn = Some(7);
+        let explained = |dialect, world: &World, event: WorldEvent| {
+            let mut message = Message::Event(event);
+            Entities::new(dialect).explain(&mut message, world);
+            match message {
+                Message::Event(event) => event,
+                _ => unreachable!("an event stays an event"),
+            }
+        };
+        let interrupted = |caster_id| {
+            WorldEvent::Spell(SpellUpdate::Interrupted {
+                caster_id,
+                message_id: 173,
+                caster_name: None,
+            })
+        };
+        let fade = |entity_id| {
+            WorldEvent::Buff(BuffUpdate {
+                spell_id: 42,
+                entity_id,
+                slot: UNKNOWN_SLOT,
+                buff: None,
+            })
+        };
+        assert_eq!(
+            explained(GameDialect::EqMac, &world, interrupted(0)),
+            interrupted(7)
+        );
+        assert_eq!(explained(GameDialect::EqMac, &world, fade(0)), fade(7));
+        // A notice that names someone keeps them, Titanium's keep theirs, and
+        // before the zone names the player there is no one to name.
+        assert_eq!(
+            explained(GameDialect::EqMac, &world, interrupted(9)),
+            interrupted(9)
+        );
+        assert_eq!(explained(GameDialect::Titanium, &world, fade(0)), fade(0));
+        world.own_spawn = None;
+        assert_eq!(
+            explained(GameDialect::EqMac, &world, interrupted(0)),
+            interrupted(0)
+        );
     }
 
     #[test]

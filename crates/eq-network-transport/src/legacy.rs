@@ -529,16 +529,31 @@ fn take_word(wire: &[u8], position: &mut usize, end: usize) -> Result<u16> {
     Ok(value)
 }
 
+/// Whether a read only ran out of time. On Windows, std's sockets are
+/// overlapped and the read timeout is `SO_RCVTIMEO`, which leaves a socket
+/// whose read timed out in an indeterminate state: the cancelled read can
+/// come back as `ERROR_IO_PENDING` (997) or `ERROR_OPERATION_ABORTED` (995)
+/// instead of `WSAETIMEDOUT`, and it is still only a timeout.
 fn timed_out(error: &io::Error) -> bool {
     matches!(
         error.kind(),
         io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
-    )
+    ) || (cfg!(windows) && matches!(error.raw_os_error(), Some(997 | 995)))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[cfg(windows)]
+    fn a_cancelled_overlapped_read_is_a_timeout() {
+        for code in [997, 995] {
+            assert!(timed_out(&io::Error::from_raw_os_error(code)));
+        }
+        // A reset connection is not.
+        assert!(!timed_out(&io::Error::from_raw_os_error(10054)));
+    }
 
     fn session() -> (OldSession, UdpSocket) {
         let peer = UdpSocket::bind("127.0.0.1:0").unwrap();

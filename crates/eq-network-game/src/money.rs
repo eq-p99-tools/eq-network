@@ -15,6 +15,9 @@ use serde::Serialize;
 
 /// `OP_MoveCoin`: coins moved between two places.
 pub const MOVE_OPCODE: u16 = 0x7657;
+/// `EQMac`'s `OP_MoveCoin` (TAKP `utils/patches/patch_Mac.conf` lists
+/// 0x412d, its bytes swapped).
+pub const EQMAC_MOVE_OPCODE: u16 = 0x2d41;
 
 /// A kind of coin.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
@@ -131,6 +134,28 @@ impl CoinTransfer {
     /// Rejects a move of nothing, one that stays where it is, and amounts the
     /// servers' signed field cannot carry.
     pub fn encode(&self) -> Result<EncodedCommand> {
+        Ok(EncodedCommand {
+            opcode: MOVE_OPCODE,
+            body: self.body()?,
+        })
+    }
+
+    /// `EQMac`'s packet for the move: the same five signed words, which
+    /// TAKP reads as they come (`MoveCoin_Struct`, untranslated by the Mac
+    /// patch; `Client::OPMoveCoin` numbers the places as Titanium's servers
+    /// do, with no shared bank).
+    ///
+    /// # Errors
+    /// Rejects what [`CoinTransfer::encode`] does.
+    pub fn encode_eqmac(&self) -> Result<EncodedCommand> {
+        Ok(EncodedCommand {
+            opcode: EQMAC_MOVE_OPCODE,
+            body: self.body()?,
+        })
+    }
+
+    /// Where from and to, the two kinds and the amount, as signed words.
+    fn body(self) -> Result<Vec<u8>> {
         ensure!(self.amount > 0, "move at least one coin");
         ensure!(
             self.from != self.to || self.coin != self.into,
@@ -147,10 +172,7 @@ impl CoinTransfer {
             body.extend_from_slice(&value.to_le_bytes());
         }
         body.extend_from_slice(&amount.to_le_bytes());
-        Ok(EncodedCommand {
-            opcode: MOVE_OPCODE,
-            body,
-        })
+        Ok(body)
     }
 }
 
@@ -197,7 +219,10 @@ impl Wallet {
     /// # Errors
     /// Refuses a move that moves nothing, or whose source does not hold
     /// what it takes or whose destination is not known yet; servers log
-    /// such a move as a possible hack.
+    /// such a move as a possible hack. Also refuses one that would leave a
+    /// place holding more of a kind than the servers' signed count can:
+    /// TAKP kicks for it (`Client::OPMoveCoin`), and `EQEmu`'s count would
+    /// wrap, since its overflow check compares in 64 bits.
     pub fn apply(&mut self, transfer: CoinTransfer) -> Result<(), &'static str> {
         let (taken, added) = transfer.amounts();
         if taken == 0 {
@@ -209,8 +234,14 @@ impl Wallet {
         {
             return Err("You do not have that many coins there");
         }
-        if self.get(transfer.to).is_none() {
+        let Some(destination) = self.get(transfer.to) else {
             return Err("Those coins are not known yet");
+        };
+        // TAKP counts the destination before the source gives anything up.
+        if u64::from(destination.of(transfer.into)) + u64::from(added)
+            > u64::from(i32::MAX.unsigned_abs())
+        {
+            return Err("That place cannot hold so many coins");
         }
         if let Some(from) = self.place(transfer.from) {
             *from.of_mut(transfer.coin) -= taken;
@@ -264,6 +295,19 @@ impl Wallet {
 }
 
 impl Coins {
+    /// A value in copper as servers add it to a purse
+    /// (`Client::AddMoneyToPP`): platinum first, then gold, silver and
+    /// copper.
+    #[must_use]
+    pub const fn from_copper(copper: u32) -> Self {
+        Self {
+            platinum: copper / 1000,
+            gold: copper % 1000 / 100,
+            silver: copper % 100 / 10,
+            copper: copper % 10,
+        }
+    }
+
     /// How many of one kind.
     #[must_use]
     pub const fn of(&self, coin: Coin) -> u32 {
@@ -317,9 +361,184 @@ pub fn titanium_elsewhere(profile: &[u8]) -> Result<(Coins, Coins)> {
     Ok((coins(4444), coins(13136)))
 }
 
+/// `EQMac`'s `OP_TradeMoneyUpdate`, which TAKP sends only to say what it
+/// added to the player's purse (`utils/patches/patch_Mac.conf` lists 0x413d,
+/// its bytes swapped).
+pub const EQMAC_PURSE_OPCODE: u16 = 0x3d41;
+
+/// Coins of one kind TAKP added to the player's purse
+/// (`TradeMoneyUpdate_Struct`, 8 bytes: the trader, the kind and the amount
+/// added), as `Client::SendClientMoneyUpdate` sends them from
+/// `Client::AddMoneyToPP`, one per kind: always trader 0, kind 3 for
+/// platinum down to 0 for copper. A trade partner's coins travel in
+/// `OP_TradeCoins`, so another trader is refused rather than guessed at.
+/// TAKP never announces coins it takes.
+///
+/// # Errors
+/// Rejects another length, a trader other than 0, an unknown kind and a
+/// negative amount.
+pub fn eqmac_purse_addition(body: &[u8]) -> Result<Coins> {
+    ensure!(body.len() == 8, "invalid EQMac money update length");
+    let trader = u16::from_le_bytes([body[0], body[1]]);
+    ensure!(
+        trader == 0,
+        "EQMac money update names trader {trader}, not the player's purse"
+    );
+    let coin = match u16::from_le_bytes([body[2], body[3]]) {
+        3 => Coin::Platinum,
+        2 => Coin::Gold,
+        1 => Coin::Silver,
+        0 => Coin::Copper,
+        kind => anyhow::bail!("unknown EQMac coin kind {kind}"),
+    };
+    let amount = u32::try_from(word(body, 4).cast_signed())
+        .map_err(|_| anyhow::anyhow!("negative EQMac money update"))?;
+    let mut coins = Coins::default();
+    *coins.of_mut(coin) = amount;
+    Ok(coins)
+}
+
+/// The coins the player carries, from `EQMac`'s unpacked profile: four
+/// signed 32-bit counts, platinum first, at 2924 (TAKP
+/// `common/patches/mac_structs.h` `PlayerProfile_Struct`).
+///
+/// # Errors
+/// Rejects a profile of another size and a count below zero.
+pub fn eqmac_coins(profile: &[u8]) -> Result<Coins> {
+    eqmac_coins_at(profile, 2924)
+}
+
+/// The coins on the cursor and in the bank, from `EQMac`'s unpacked
+/// profile: the bank's at 2940 and the cursor's at 2956, laid out as the
+/// carried ones. `EQMac` has no shared bank.
+///
+/// # Errors
+/// Rejects a profile of another size and a count below zero.
+pub fn eqmac_elsewhere(profile: &[u8]) -> Result<(Coins, Coins)> {
+    Ok((
+        eqmac_coins_at(profile, 2956)?,
+        eqmac_coins_at(profile, 2940)?,
+    ))
+}
+
+/// Four signed counts, platinum first, from `start` in `EQMac`'s profile.
+fn eqmac_coins_at(profile: &[u8], start: usize) -> Result<Coins> {
+    ensure!(
+        profile.len() == crate::quarm::PROFILE_SIZE,
+        "unexpected EQMac profile layout"
+    );
+    let coin = |index: usize| {
+        u32::try_from(word(profile, start + index * 4).cast_signed())
+            .map_err(|_| anyhow::anyhow!("negative EQMac coin count"))
+    };
+    Ok(Coins {
+        platinum: coin(0)?,
+        gold: coin(1)?,
+        silver: coin(2)?,
+        copper: coin(3)?,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn copper_is_added_platinum_first() {
+        assert_eq!(
+            Coins::from_copper(12_345),
+            Coins {
+                platinum: 12,
+                gold: 3,
+                silver: 4,
+                copper: 5
+            }
+        );
+        assert!(Coins::from_copper(0).is_empty());
+    }
+
+    #[test]
+    fn eqmacs_profile_says_what_is_carried_on_the_cursor_and_in_the_bank() {
+        let mut profile = vec![0; crate::quarm::PROFILE_SIZE];
+        let mut put = |start: usize, counts: [i32; 4]| {
+            for (index, count) in counts.into_iter().enumerate() {
+                let at = start + index * 4;
+                profile[at..at + 4].copy_from_slice(&count.to_le_bytes());
+            }
+        };
+        put(2924, [1, 2, 3, 4]);
+        put(2940, [50, 0, 0, 9]);
+        put(2956, [0, 7, 0, 0]);
+        let coins = |platinum, gold, silver, copper| Coins {
+            platinum,
+            gold,
+            silver,
+            copper,
+        };
+        assert_eq!(eqmac_coins(&profile).unwrap(), coins(1, 2, 3, 4));
+        assert_eq!(
+            eqmac_elsewhere(&profile).unwrap(),
+            (coins(0, 7, 0, 0), coins(50, 0, 0, 9))
+        );
+        profile[2936..2940].copy_from_slice(&(-1i32).to_le_bytes());
+        assert!(eqmac_coins(&profile).is_err());
+        assert!(eqmac_elsewhere(&profile[1..]).is_err());
+    }
+
+    #[test]
+    fn takp_says_what_it_added_to_the_purse_one_kind_at_a_time() {
+        let notice = |trader: u16, kind: u16, amount: i32| {
+            let mut body = [0; 8];
+            body[..2].copy_from_slice(&trader.to_le_bytes());
+            body[2..4].copy_from_slice(&kind.to_le_bytes());
+            body[4..].copy_from_slice(&amount.to_le_bytes());
+            body
+        };
+        let added = |coin: Coin, amount| {
+            let mut coins = Coins::default();
+            *coins.of_mut(coin) = amount;
+            coins
+        };
+        for (kind, coin) in [
+            (3, Coin::Platinum),
+            (2, Coin::Gold),
+            (1, Coin::Silver),
+            (0, Coin::Copper),
+        ] {
+            assert_eq!(
+                eqmac_purse_addition(&notice(0, kind, 12)).unwrap(),
+                added(coin, 12)
+            );
+        }
+        // Another trader, an unknown kind, a negative amount, another length.
+        assert!(eqmac_purse_addition(&notice(7, 3, 12)).is_err());
+        assert!(eqmac_purse_addition(&notice(0, 4, 12)).is_err());
+        assert!(eqmac_purse_addition(&notice(0, 3, -1)).is_err());
+        assert!(eqmac_purse_addition(&notice(0, 3, 12)[..7]).is_err());
+    }
+
+    #[test]
+    fn eqmacs_move_is_the_same_five_words_in_its_own_opcode() {
+        let transfer = CoinTransfer {
+            from: CoinPlace::Purse,
+            to: CoinPlace::Bank,
+            coin: Coin::Gold,
+            into: Coin::Platinum,
+            amount: 11,
+        };
+        let eqmac = transfer.encode_eqmac().unwrap();
+        assert_eq!(eqmac.opcode, EQMAC_MOVE_OPCODE);
+        assert_eq!(eqmac.body, transfer.encode().unwrap().body);
+        // TAKP takes 10 of the 11 gold and adds 1 platinum, as `amounts`
+        // counts.
+        assert_eq!(transfer.amounts(), (10, 1));
+        assert!(CoinTransfer {
+            amount: 0,
+            ..transfer
+        }
+        .encode_eqmac()
+        .is_err());
+    }
 
     #[test]
     fn a_move_is_five_signed_words_in_the_servers_numbering() {
@@ -415,6 +634,29 @@ mod tests {
             .unwrap();
         assert_eq!(wallet.bank.unwrap().of(Coin::Platinum), 1);
         assert_eq!(wallet.cursor.of(Coin::Gold), 1);
+        // Never more of a kind than the servers' signed count holds.
+        let mut full = Wallet {
+            purse: Some(Coins {
+                platinum: 1,
+                ..Coins::default()
+            }),
+            bank: Some(Coins {
+                platinum: i32::MAX.unsigned_abs(),
+                ..Coins::default()
+            }),
+            ..Wallet::default()
+        };
+        assert_eq!(
+            full.apply(CoinTransfer {
+                from: CoinPlace::Purse,
+                to: CoinPlace::Bank,
+                coin: Coin::Platinum,
+                into: Coin::Platinum,
+                amount: 1,
+            }),
+            Err("That place cannot hold so many coins")
+        );
+        assert_eq!(full.purse.unwrap().platinum, 1);
         // Too few to change kind, or to a place not known yet.
         let mut unknown = Wallet::default();
         assert!(unknown

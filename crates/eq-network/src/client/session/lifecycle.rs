@@ -13,7 +13,11 @@ enum Phase {
         started: Instant,
         dead: bool,
     },
-    HandedOff,
+    /// The zone approved the transfer and the player is leaving it, since
+    /// this moment.
+    Departing {
+        since: Instant,
+    },
 }
 
 /// A transfer denial restores the prior life state, never blindly enables input.
@@ -39,10 +43,19 @@ impl ZoneLifecycle {
         matches!(&self.phase, Phase::Transfer { started, .. }
             if now.saturating_duration_since(*started) >= Duration::from_secs(45))
     }
+    /// Whether the player is leaving the zone that approved their transfer.
+    pub(super) fn departing(&self) -> bool {
+        matches!(self.phase, Phase::Departing { .. })
+    }
+    /// Whether the player has been leaving for this long.
+    pub(super) fn departed(&self, now: Instant, wait: Duration) -> bool {
+        matches!(self.phase, Phase::Departing { since }
+            if now.saturating_duration_since(since) >= wait)
+    }
     pub(super) fn mark_dead(&mut self) {
         match &mut self.phase {
             Phase::Transfer { dead, .. } => *dead = true,
-            Phase::HandedOff => (),
+            Phase::Departing { .. } => (),
             _ => self.phase = Phase::Dead,
         }
     }
@@ -53,7 +66,7 @@ impl ZoneLifecycle {
             return Ok(false);
         }
         ensure!(
-            !matches!(self.phase, Phase::HandedOff),
+            !matches!(self.phase, Phase::Departing { .. }),
             "zone already handed off"
         );
         self.phase = Phase::Transfer {
@@ -63,14 +76,15 @@ impl ZoneLifecycle {
         };
         Ok(true)
     }
-    /// Called only after the response has been validated against the pending offer.
-    pub(super) fn finish(&mut self, approved: bool) -> Result<()> {
+    /// Called only after the response has been validated against the pending
+    /// offer; an approval starts the player's departure now.
+    pub(super) fn finish(&mut self, approved: bool, now: Instant) -> Result<()> {
         ensure!(
             self.pending().is_some(),
             "zone approval without a pending request"
         );
         self.phase = if approved {
-            Phase::HandedOff
+            Phase::Departing { since: now }
         } else if self.is_dead() {
             Phase::Dead
         } else {
@@ -113,21 +127,34 @@ mod tests {
         state.offer(offer(), now).unwrap();
         assert!(state.blocks_motion());
         state.mark_dead();
-        state.finish(false).unwrap();
+        state.finish(false, now).unwrap();
         assert!(state.is_dead() && state.blocks_motion());
         state.offer(offer(), now).unwrap();
-        state.finish(true).unwrap();
-        assert!(state.blocks_motion());
+        state.finish(true, now).unwrap();
+        assert!(state.blocks_motion() && state.departing());
         assert!(state.offer(offer(), now).is_err());
-        assert!(state.finish(true).is_err());
+        assert!(state.finish(true, now).is_err());
         assert!(!ZoneLifecycle::default().blocks_motion());
+    }
+    #[test]
+    fn a_departure_lasts_from_the_approval() {
+        let now = Instant::now();
+        let mut state = ZoneLifecycle::default();
+        let wait = Duration::from_secs(2);
+        assert!(!state.departing() && !state.departed(now, wait));
+        state.offer(offer(), now).unwrap();
+        assert!(!state.departing());
+        state.finish(true, now).unwrap();
+        assert!(state.departing());
+        assert!(!state.departed(now + Duration::from_millis(1999), wait));
+        assert!(state.departed(now + wait, wait));
     }
     #[test]
     fn denied_transfer_restores_alive_state_but_unsolicited_approval_is_rejected() {
         let mut state = ZoneLifecycle::default();
-        assert!(state.finish(true).is_err());
+        assert!(state.finish(true, Instant::now()).is_err());
         state.offer(offer(), Instant::now()).unwrap();
-        state.finish(false).unwrap();
+        state.finish(false, Instant::now()).unwrap();
         assert!(!state.blocks_motion());
         assert!(state.pending().is_none());
     }
