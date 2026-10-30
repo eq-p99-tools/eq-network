@@ -79,7 +79,9 @@ pub(in crate::client) fn titanium(opcode: u16) -> Option<ServerMessage> {
         0x10f4 => sent("OP_DelegateAbility", EQEMU, planned(Raids)),
         // P99's world answering the client's validation.
         0x1251 => sent("P99's validation result", P99, Read(&[World])),
-        // P99's zone refusing the client's validation.
+        // P99's zone refusing the client's validation: P99 only, never sent
+        // by EQEmu, and not in the official Titanium program (Titanium
+        // sitting 6; Settle results section 7).
         0x1252 => sent("P99's zone validation refusal", P99, Read(&[Admission])),
         0x12d6 => sent("OP_GroupInvite2", EQEMU, Read(&[Zone])),
         0x12e5 => sent("OP_Charm", EQEMU, Read(&[Zone])),
@@ -186,6 +188,8 @@ pub(in crate::client) fn titanium(opcode: u16) -> Option<ServerMessage> {
         0x3bc2 => sent("OP_ClickObject", EQEMU, Read(&[Zone])),
         0x3bcf => sent("OP_HPUpdate", EQEMU, Read(&[Zone])),
         0x3c25 => sent("OP_ApproveWorld", EQEMU, Read(&[World])),
+        // Sent by EQEmu as it ends a logout or a zoning; the official program
+        // doesn't read it and waits for the link to drop (Titanium sitting 6).
         0x3cdc => sent("OP_LogoutReply", EQEMU, Read(&[Zone])),
         // The answer to OP_RequestTitles.
         0x3e89 => sent("OP_SendTitleList", EQEMU, unasked(Social)),

@@ -4,7 +4,11 @@
 use crate::{inventory, spells, world::WorldEvent, zoning};
 use std::fmt;
 
-/// `OP_LogoutReply`: the server ends the session after a logout.
+/// `OP_LogoutReply`: the server ends the session after a logout. Sent by
+/// `EQEmu` (`zone/client_process.cpp`, `zone/client_packet.cpp`
+/// `Handle_OP_DeleteSpawn` and `Handle_OP_Logout`, each followed by a
+/// disconnect but the zoning one); the official Titanium program doesn't
+/// read it (Titanium sitting 6; Settle results section 7).
 const LOGOUT_REPLY_OPCODE: u16 = 0x3cdc;
 /// `OP_PlayerProfile`: the player's saved state, sent as the zone admits them.
 const PROFILE_OPCODE: u16 = 0x75df;

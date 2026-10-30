@@ -260,10 +260,13 @@ pub fn zone_answer(body: &[u8]) -> Result<crate::zoning::ZoneAnswer> {
     })
 }
 
-/// The client asking the zone it is leaving to save the player. TAKP reads
-/// nothing in it (`zone/client_packet.cpp` `Handle_OP_Save`, whose comment
-/// says the payload is 192 bytes), so its 192 bytes stay zero (inferred:
-/// the official `EQMac` client's own body is unrecorded).
+/// The client asking the zone it is leaving to save the player
+/// (`OP_SaveOnZoneReq`, 0x4155). The program sends its whole character
+/// block as it stands, 8,452 bytes (from the program, TAKP Batch 1 R5), which
+/// the session doesn't hold. TAKP reads nothing in it and checks no size
+/// (`zone/client_packet.cpp` `Handle_OP_SaveOnZoneReq`, `Handle_OP_Save`;
+/// Settle results sections 2 and 5), so 192 zero bytes go, as its comment
+/// on the payload says.
 #[must_use]
 pub fn save_on_zone() -> EncodedCommand {
     EncodedCommand {

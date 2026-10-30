@@ -19,6 +19,9 @@ const WEATHER_OPCODE: u16 = 0x254d;
 const SPAWN_OPCODE: u16 = 0x7213;
 const DESCRIPTION_OPCODE: u16 = 0x0920;
 const EXPERIENCE_OPCODE: u16 = 0x0587;
+/// P99's zone refusing the client's validation: P99 only, never sent by
+/// `EQEmu`, and not in the official Titanium program (Titanium sitting 6;
+/// Settle results section 7). Reading it only ends the admission.
 const REJECTED_OPCODE: u16 = 0x1252;
 /// The Titanium profile's length.
 const PROFILE_LENGTH: usize = 19592;
