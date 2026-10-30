@@ -1119,6 +1119,12 @@ impl ServerType for Takp {
         offer(shared::motion(false))
     }
 
+    /// The time of day, which TAKP sends as the zone admits the player
+    /// (`zone/client_packet.cpp`) and whenever it changes.
+    fn clock(&self, _setup: &Setup<'_>) -> Provided {
+        offer(shared::clock())
+    }
+
     /// Groups, with `EQMac`'s opcodes for Titanium's layouts (TAKP
     /// `zone/client_packet.cpp` `Handle_OP_GroupInvite2`, `GroupFollow`,
     /// `GroupCancelInvite`, `GroupDisband`), checked live there with two
@@ -1248,14 +1254,15 @@ mod tests {
     fn eqmac_servers_provide_the_features_built_for_them() {
         // Quarm and TAKP speak EQMac: they see the zone's spawns, keep the
         // player's record and talk. TAKP also casts, keeps the spellbook,
-        // camps, moves, zones, moves items and takes the client's report of
-        // a bleed-out; Quarm will once each is checked there.
+        // camps, moves, zones, moves items, keeps the time of day and takes
+        // the client's report of a bleed-out; Quarm will once each is
+        // checked there.
         let setup = Setup::new("Tester", AutoEat::default());
         let quarm = server_type(ServerProtocol::Quarm);
         assert_eq!(quarm.features(&setup).len(), 3);
         assert_eq!(offers(quarm), [Capability::Talking]);
         let takp = server_type(ServerProtocol::Takp);
-        assert_eq!(takp.features(&setup).len(), 13);
+        assert_eq!(takp.features(&setup).len(), 14);
         assert_eq!(
             offers(takp),
             [
