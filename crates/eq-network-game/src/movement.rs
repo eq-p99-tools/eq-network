@@ -1,9 +1,14 @@
 //! Titanium movement encoding and session-scoped displacement validation.
 
 mod carry;
+mod gate;
 mod session;
 mod speeds;
 pub use carry::{carry, Carried};
+pub use gate::{
+    UpdateGate, EQMAC_HEADING_STEP, EQMAC_REPEATS, EQMAC_SPEED_STEP, EQMAC_UPDATE_SPACING,
+    EQMAC_UPDATE_TICK,
+};
 pub use session::{
     titanium_jump, BackwardCalibration, MotionCalibration, MotionSession, StrafeCalibration,
     WalkCalibration,
@@ -82,9 +87,9 @@ pub const STATIONARY_HEARTBEAT: Duration = Duration::from_secs(1);
 /// The least time between two of the player's own position updates in the
 /// Titanium program: it sends one only after more than 280 ms since the last
 /// (from the program, Titanium sitting 6, T1; checklist 1.6). The program
-/// also sends only after a change flag is set, and whether anything sets it
-/// on a timer while the player stands still is unsure, so the stationary
-/// heartbeat stays as recorded on P99.
+/// also sends only after a change flag is set ([`UpdateGate::Changed`]), and
+/// whether anything sets it on a timer while the player stands still is
+/// unsure, so the stationary heartbeat stays as recorded on P99.
 pub const TITANIUM_POSITION_SPACING: Duration = Duration::from_millis(280);
 
 /// `OP_Jump` (Titanium): an empty notice that the character jumped. `EQEmu` only
@@ -294,7 +299,8 @@ impl MovementGuard {
 
     /// Lets a sample rise as the client generation's jump does after the
     /// session announces one ([`Self::jumped`]): starting at `speed` and
-    /// slowed by `gravity`, in units a second and a second squared.
+    /// slowed by `gravity`, in units a second and a second squared (the
+    /// jump read in Titanium sittings 8h and 8i and TAKP sitting 2).
     pub fn set_jump(&mut self, speed: f32, gravity: f32) {
         self.jump = Some((speed, gravity)).filter(|(speed, gravity)| {
             speed.is_finite() && *speed > 0.0 && gravity.is_finite() && *gravity >= 0.0

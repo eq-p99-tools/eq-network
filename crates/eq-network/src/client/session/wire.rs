@@ -81,9 +81,9 @@ pub(super) trait Wire: Sync {
         None
     }
 
-    /// The least time the generation's client leaves between two of the
-    /// player's own position updates; none where it is unread.
-    fn position_spacing(&self) -> Option<std::time::Duration> {
+    /// How the generation's client gates the player's own position
+    /// updates; none where it is unread.
+    fn update_gate(&self) -> Option<eq_network_game::movement::UpdateGate> {
         None
     }
 
@@ -225,8 +225,10 @@ impl Wire for Titanium {
         Some(eq_network_game::movement::JUMP_SPEED)
     }
 
-    fn position_spacing(&self) -> Option<std::time::Duration> {
-        Some(eq_network_game::movement::TITANIUM_POSITION_SPACING)
+    fn update_gate(&self) -> Option<eq_network_game::movement::UpdateGate> {
+        Some(eq_network_game::movement::UpdateGate::Changed {
+            spacing: eq_network_game::movement::TITANIUM_POSITION_SPACING,
+        })
     }
 
     fn speeds(&self) -> Option<SpeedRule> {
@@ -319,6 +321,12 @@ impl Wire for EqMac {
 
     fn jump_speed(&self) -> Option<f32> {
         Some(eq_network_game::movement::JUMP_SPEED)
+    }
+
+    fn update_gate(&self) -> Option<eq_network_game::movement::UpdateGate> {
+        Some(eq_network_game::movement::UpdateGate::Flagged {
+            pack: eq_network_game::quarm::client_update,
+        })
     }
 
     fn speeds(&self) -> Option<SpeedRule> {
