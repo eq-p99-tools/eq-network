@@ -236,9 +236,9 @@ pub fn eqmac(opcode: u16, body: &[u8]) -> Vec<Message> {
 }
 
 /// An `EQMac` exchange packet as the session takes it: an exchange event,
-/// or, for an item record no reader here takes yet, a rejection the zone
-/// session logs and drops, never an error that closes the session; None for
-/// other opcodes.
+/// an item record no reader here takes yet among them, which the session
+/// reports as a diagnostic, never an error that closes the session; None
+/// for other opcodes.
 fn eqmac_exchange(opcode: u16, body: &[u8]) -> Option<Message> {
     use crate::exchange::eqmac::{self, TradeItem, TradeMessage};
     Some(match eqmac::decode(opcode, body) {
@@ -246,12 +246,9 @@ fn eqmac_exchange(opcode: u16, body: &[u8]) -> Option<Message> {
         Ok(Some(TradeMessage::Update(update) | TradeMessage::Item(TradeItem::Read(update)))) => {
             Message::Event(WorldEvent::Exchange(update))
         }
-        Ok(Some(TradeMessage::Item(TradeItem::Unread { index, kind }))) => Message::Unreadable {
-            part: Part::World,
-            error: format!(
-                "their trade slot {index} holds a kind {kind} item record, which isn't read yet"
-            ),
-        },
+        Ok(Some(TradeMessage::Item(TradeItem::Unread { index, kind }))) => Message::Event(
+            WorldEvent::Exchange(crate::exchange::ExchangeUpdate::Unread { index, kind }),
+        ),
         Err(error) => unreadable(Part::World, &error),
     })
 }

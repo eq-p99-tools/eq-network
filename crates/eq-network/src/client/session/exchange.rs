@@ -309,6 +309,11 @@ impl Feature for Exchanges {
                     refused(world.session_id, "They are busy", out)?;
                 }
             }
+            WorldEvent::Exchange(ExchangeUpdate::Unread { index, kind }) => {
+                out.log.diagnostic(format!(
+                    "Their trade slot {index} holds a kind {kind} item record, which isn't read yet"
+                ))?;
+            }
             // The server undid both sides' clicks.
             WorldEvent::Exchange(ExchangeUpdate::AcceptsReset) => {
                 if let Some(exchange) = world
@@ -447,6 +452,18 @@ mod tests {
         let outcome = testing::run_on(wire, |out| exchanges.handle(&give, &mut world, out));
         outcome.result.unwrap();
         assert_eq!(outcome.sent, [eqmac::accept(NPC).unwrap()]);
+        assert_eq!(world.exchange.unwrap().stage, Stage::Accepted);
+        // A record in a layout not yet read is said, and keeps the window.
+        let unread = Message::Event(WorldEvent::Exchange(ExchangeUpdate::Unread {
+            index: 2,
+            kind: 1,
+        }));
+        let outcome = testing::run_on(wire, |out| exchanges.observe(&unread, &mut world, out));
+        outcome.result.unwrap();
+        assert!(matches!(
+            &outcome.events[..],
+            [ClientEvent::Diagnostic(said)] if said.contains("trade slot 2")
+        ));
         assert_eq!(world.exchange.unwrap().stage, Stage::Accepted);
         // The server undoing the clicks reopens Give.
         let reset = Message::Event(WorldEvent::Exchange(ExchangeUpdate::AcceptsReset));

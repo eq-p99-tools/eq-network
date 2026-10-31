@@ -22,9 +22,10 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     partner (`with`). `ExchangeUpdate` gains `AcceptsReset` (an accept
     taken back moves both sides to open again) and `Withdrawn`;
     `ExchangeUpdate::Busy` carries the refusal's reason. An item record the
-    program reads in a layout not yet decoded (276 and 264 bytes) is
-    reported as a diagnostic with its slot (eq-network's only log route;
-    the client logs it), and never closes the session.
+    program reads in a layout not yet decoded (276 and 264 bytes) arrives
+    as `ExchangeUpdate::Unread` with its slot, so the window shows the slot
+    taken, and the session reports it as a diagnostic (eq-network's only
+    log route; the client logs it). It never closes the session.
   - `CampStatus::Abandoned` says what ended the camp (`CampEnd`: standing,
     moving, or other), so the client can say the program's line for each.
   - The player's own update goes out as each generation's program lets it

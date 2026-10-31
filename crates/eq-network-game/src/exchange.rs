@@ -142,6 +142,15 @@ pub enum ExchangeUpdate {
         /// Their trade slot.
         index: u8,
     },
+    /// The other side put something in their trade slot `index` (0 to 7)
+    /// in an item record this library doesn't read yet (`EQMac`'s 276- and
+    /// 264-byte layouts): the slot is taken, and what fills it is unknown.
+    Unread {
+        /// Their trade slot.
+        index: u8,
+        /// The record's kind byte.
+        kind: u8,
+    },
     /// The other player put coins in the trade; the server tells them
     /// nothing else about them until the trade goes through.
     Coins {
