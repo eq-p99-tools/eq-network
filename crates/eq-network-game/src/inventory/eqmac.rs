@@ -228,6 +228,27 @@ pub(crate) fn merchant_stock(body: &[u8]) -> Result<Vec<(InventoryItem, u32, u32
 }
 
 /// One item record, as a packet of its own carries it.
+/// An item record the other player put in a trade, placed by the slot it
+/// names at +0xb8 (TAKP program read N4): one of their eight trade slots,
+/// as `place` finds it, at the official client's number for that place;
+/// None for anything else, such as their bag's contents. The record is
+/// read as an item's whole 360 bytes.
+///
+/// # Errors
+/// Rejects a short or malformed record.
+pub(crate) fn trade_view(
+    record: &[u8],
+    place: impl Fn(i16) -> Option<u8>,
+) -> Result<Option<(u8, InventoryItem)>> {
+    ensure!(record.len() == RECORD, "invalid EQMac item length");
+    let record = Record(record);
+    let Some(index) = place(record.short(184)) else {
+        return Ok(None);
+    };
+    let slot = InventorySlot(crate::exchange::THEIR_FIRST_SLOT + i32::from(index));
+    Ok(Some((index, item_at(&record, slot)?)))
+}
+
 fn single(body: &[u8]) -> Result<InventoryItem> {
     ensure!(body.len() == RECORD, "invalid EQMac item length");
     item(&Record(body))

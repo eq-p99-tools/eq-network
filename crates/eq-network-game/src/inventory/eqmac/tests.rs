@@ -494,3 +494,17 @@ fn moves_go_out_in_eqmac_numbers() {
     // EQMac has no charm slot.
     assert!(move_item(InventorySlot(0), InventorySlot::CURSOR, MoveQuantity::Whole).is_err());
 }
+
+#[test]
+fn an_item_the_other_player_offers_lands_in_their_trade_slot() {
+    let place = |slot: i16| (0..8).contains(&slot).then(|| u8::try_from(slot).unwrap());
+    let (index, item) = trade_view(&record(0, 1001, 2), place).unwrap().unwrap();
+    assert_eq!(index, 2);
+    assert_eq!(
+        item.slot,
+        InventorySlot(crate::exchange::THEIR_FIRST_SLOT + 2)
+    );
+    // Their bag's contents are not one of their slots.
+    assert_eq!(trade_view(&record(0, 1001, 31), place).unwrap(), None);
+    assert!(trade_view(&record(0, 1001, 2)[..300], place).is_err());
+}

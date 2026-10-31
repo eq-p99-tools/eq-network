@@ -7,6 +7,27 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- Batch 3b, from the official programs (Titanium sittings 8i and 9p, TAKP
+  read N4):
+  - The movement guard lets a sample rise as the client generation's jump
+    does once the session has announced one (`MovementGuard::jumped`,
+    `MotionSession::with_jump`, `Wire::jump_speed`): 44.55 units a second
+    less the zone's gravity (`movement::gravity_per_second`, 160 at the
+    default 0.4), over the next sample's whole interval and on to the top.
+    A correction ends it.
+  - TAKP gives to NPCs and trades in the `EQMac` window's own packets
+    (`exchange::eqmac`): `Exchanges` is offered there. The player half
+    rides the same packets and is not yet checked live (checklist 6.307,
+    6.308). `Request::AcceptTrade` and `Request::CancelTrade` name the
+    partner (`with`). `ExchangeUpdate` gains `AcceptsReset` (an accept
+    taken back moves both sides to open again) and `Withdrawn`;
+    `ExchangeUpdate::Busy` carries the refusal's reason. An item record the
+    program reads in a layout not yet decoded (276 and 264 bytes) is
+    reported as a diagnostic with its slot (eq-network's only log route;
+    the client logs it), and never closes the session.
+  - `CampStatus::Abandoned` says what ended the camp (`CampEnd`: standing,
+    moving, or other), so the client can say the program's line for each.
+
 - Batch 3a, from the official programs (Titanium sittings 8-9, TAKP sitting
   2 and the 10-31 roleplay read):
   - The movement guard holds a fall to 99 × the zone's gravity a step, 20

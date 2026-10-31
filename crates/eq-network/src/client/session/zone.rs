@@ -1479,6 +1479,7 @@ mod tests {
                 Capability::Spellbook,
                 Capability::Inventory,
                 Capability::Trading,
+                Capability::Giving,
                 Capability::Moving,
                 Capability::Falling,
                 Capability::Targeting,
