@@ -1242,6 +1242,13 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- The movement guard (`MovementGuard::accept`) and the wire velocity and
+  turn rate (`MotionSession`) measure a sample from the previous accepted
+  request's `created` stamp to its own, not from when each was processed,
+  so a sample delayed in processing is no longer refused (22-38% of the
+  player's steps were, on both wires). The 0.25 s cap, 0.05 s floor and
+  staleness check apply as before; the distance tolerance is 0.01 units,
+  for f32 rounding.
 - `EQMac` spawns and the player's own zone entry carry their gear, tints,
   face, hair and beard (`Appearance`), which were left at their defaults:
   every `EQMac` character drew bare-headed and undressed, the player's own
