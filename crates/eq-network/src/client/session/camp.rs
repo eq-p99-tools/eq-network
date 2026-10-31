@@ -17,7 +17,7 @@ use eq_network_game::{
     command::Posture,
     message::Message,
     request::Request,
-    world::{CampStatus, WorldEvent},
+    world::{CampEnd, CampStatus, WorldEvent},
 };
 use std::time::{Duration, Instant};
 
@@ -144,35 +144,33 @@ impl Feature for Camp {
         world: &mut World,
         out: &mut Out<'_, '_>,
     ) -> Result<()> {
-        let abandons = matches!(
-            command,
+        let by = match command {
             ClientCommand::SetPosture {
-                posture: Posture::Standing | Posture::Ducking,
+                posture: Posture::Standing,
                 ..
-            } | ClientCommand::Move(_)
-                | ClientCommand::CrossZoneLine { .. }
-                | ClientCommand::ClickDoor { .. }
-                | ClientCommand::PickUp { .. }
-        );
-        if abandons && self.cancel() {
+            } => CampEnd::Standing,
+            ClientCommand::Move(_) | ClientCommand::CrossZoneLine { .. } => CampEnd::Moving,
+            ClientCommand::SetPosture {
+                posture: Posture::Ducking,
+                ..
+            }
+            | ClientCommand::ClickDoor { .. }
+            | ClientCommand::PickUp { .. } => CampEnd::Other,
+            _ => return Ok(()),
+        };
+        if self.cancel() {
             // Only a Standing appearance stops the server's own camp timer (EQEmu
             // client_packet.cpp, OP_SpawnAppearance); without it the server logs the
             // character out of its group and guild 29 seconds after /camp. Moving,
             // ducking, opening a door or picking something up stands the camping
             // character up first.
-            let standing = matches!(
-                command,
-                ClientCommand::SetPosture {
-                    posture: Posture::Standing,
-                    ..
-                }
-            );
             let own_spawn = world.player.as_ref().map(|player| player.spawn_id);
-            if let (false, Some(spawn_id)) = (standing, own_spawn) {
+            if let (false, Some(spawn_id)) = (by == CampEnd::Standing, own_spawn) {
                 world.posture.set(spawn_id, Posture::Standing, out)?;
             }
-            out.log
-                .send(ClientEvent::World(WorldEvent::Camp(CampStatus::Abandoned)))?;
+            out.log.send(ClientEvent::World(WorldEvent::Camp(
+                CampStatus::Abandoned { by },
+            )))?;
         }
         Ok(())
     }
@@ -214,8 +212,9 @@ impl Feature for Camp {
             Message::Event(WorldEvent::Death(death))
                 if world.is_player(death.spawn_id) && self.cancel() =>
             {
-                out.log
-                    .send(ClientEvent::World(WorldEvent::Camp(CampStatus::Abandoned)))?;
+                out.log.send(ClientEvent::World(WorldEvent::Camp(
+                    CampStatus::Abandoned { by: CampEnd::Other },
+                )))?;
             }
             Message::LoggedOut if self.active() => {
                 out.log
@@ -298,10 +297,56 @@ mod tests {
             outcome.events[..],
             [
                 ClientEvent::World(WorldEvent::Posture { spawn_id: 7, .. }),
-                ClientEvent::World(WorldEvent::Camp(CampStatus::Abandoned)),
+                ClientEvent::World(WorldEvent::Camp(CampStatus::Abandoned {
+                    by: CampEnd::Other
+                })),
             ]
         ));
         assert!(!camp.active());
+    }
+
+    #[test]
+    fn an_abandoned_camp_says_whether_standing_or_moving_ended_it() {
+        let ended_by = |command: ClientCommand| {
+            let mut camp = Camp::default();
+            let mut world = World::new(5);
+            world.player.admit(testing::player(7));
+            camp.start(Instant::now());
+            let outcome = testing::run(|out| camp.notice(&command, &mut world, out));
+            outcome.result.unwrap();
+            outcome.events.into_iter().find_map(|event| match event {
+                ClientEvent::World(WorldEvent::Camp(CampStatus::Abandoned { by })) => Some(by),
+                _ => None,
+            })
+        };
+        let stand = ClientCommand::SetPosture {
+            session_id: 5,
+            spawn_id: 7,
+            posture: Posture::Standing,
+            created: Instant::now(),
+        };
+        let duck = ClientCommand::SetPosture {
+            session_id: 5,
+            spawn_id: 7,
+            posture: Posture::Ducking,
+            created: Instant::now(),
+        };
+        let step = ClientCommand::Move(eq_network_game::movement::MovementRequest {
+            mode: eq_network_game::movement::MovementMode::Forward,
+            session_id: 5,
+            position: eq_network_game::world::Position::default(),
+            created: Instant::now(),
+        });
+        let sit = ClientCommand::SetPosture {
+            session_id: 5,
+            spawn_id: 7,
+            posture: Posture::Sitting,
+            created: Instant::now(),
+        };
+        assert_eq!(ended_by(stand), Some(CampEnd::Standing));
+        assert_eq!(ended_by(step), Some(CampEnd::Moving));
+        assert_eq!(ended_by(duck), Some(CampEnd::Other));
+        assert_eq!(ended_by(sit), None);
     }
 
     #[test]
