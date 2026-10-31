@@ -131,7 +131,6 @@ pub struct MotionSession {
     position: Position,
     calibration: Option<MotionCalibration>,
     last_sent: Instant,
-    last_sample: Instant,
     moving: bool,
     suspended: bool,
     falls: bool,
@@ -217,7 +216,6 @@ impl MotionSession {
             position,
             calibration: None,
             last_sent: now,
-            last_sample: now,
             moving: false,
             suspended: false,
             falls: false,
@@ -235,7 +233,6 @@ impl MotionSession {
         value.validate()?;
         self.guard.set_speed(Some(value.units_per_second), now);
         self.calibration = Some(value);
-        self.last_sample = now;
         Ok(())
     }
 
@@ -283,7 +280,6 @@ impl MotionSession {
         self.held = None;
         self.moving = false;
         self.guard.correct(self.position, now);
-        self.last_sample = now;
     }
 
     /// Submits motion and commits position/counters only after transport success.
@@ -357,11 +353,10 @@ impl MotionSession {
         // Switching mode changes the per-sample limit without resetting input expiry
         // or granting a new time budget. The clone is committed only after send succeeds.
         guard.speed = Some(speed);
+        // The wire's velocity and turn rate cover the same interval the guard
+        // budgets: from the last accepted request's stamp to this one's.
+        let elapsed = guard.interval(request.created);
         let displacement = guard.accept(request, now)?;
-        let elapsed = now
-            .saturating_duration_since(self.last_sample)
-            .as_secs_f32()
-            .min(0.25);
         // Following a slope changes position Z without creating the airborne
         // velocity seen during a fall. Falls also leave that field zero: its wire
         // scale is unmeasured, so position Z alone carries the descent.
@@ -394,7 +389,6 @@ impl MotionSession {
         }
         self.guard = guard;
         self.position = request.position;
-        self.last_sample = now;
         self.moving = moving || turn != 0;
         Ok(())
     }
@@ -484,7 +478,6 @@ impl MotionSession {
         self.guard.correct(position, now);
         self.calibration = None;
         self.held = None;
-        self.last_sample = now;
         // Keep the pending stop deadline if the last transmitted sample was moving.
         Ok(())
     }

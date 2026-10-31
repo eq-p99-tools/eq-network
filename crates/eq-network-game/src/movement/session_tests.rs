@@ -516,9 +516,9 @@ fn queued_calibration_requires_valid_data_from_after_the_last_reset() {
         assert!(session.calibrate_fresh(invalid, now, now).is_err());
     }
     assert_eq!(session.calibration, Some(calibration));
-    assert_eq!(session.last_sample, start);
+    assert_eq!(session.guard.sampled, start);
     session.calibrate_fresh(calibration, now, now).unwrap();
-    assert_eq!(session.last_sample, now);
+    assert_eq!(session.guard.sampled, now);
 }
 #[test]
 fn a_spacing_holds_the_latest_sample_until_it_passes_and_stops_no_sooner() {
@@ -611,4 +611,29 @@ fn a_generation_may_fall_faster_than_the_provisional_limit() {
         .with_fall_speed(Some(super::super::EQMAC_FALL_SPEED));
     eqmac.send_move(&fall, now, |_| Ok(())).unwrap();
     assert_eq!(eqmac.position().z.to_bits(), (-20.0f32).to_bits());
+}
+#[test]
+fn the_wire_velocity_covers_the_stamp_interval_not_the_processing_one() {
+    let start = Instant::now();
+    let at = |ms| start + Duration::from_millis(ms);
+    let mut session = setup(start);
+    let mut sent = Vec::new();
+    // 0.6 units over a 100 ms stamp interval, processed 30 ms late.
+    session
+        .send_move_sample(&request(at(100), 0.6), at(130), |sample| {
+            sent.push(*sample);
+            Ok(())
+        })
+        .unwrap();
+    // Processed 75 ms after the first, stamped 100 ms after it.
+    session
+        .send_move_sample(&request(at(200), 1.2), at(205), |sample| {
+            sent.push(*sample);
+            Ok(())
+        })
+        .unwrap();
+    // 6 units per second at a velocity scale of 0.05.
+    for sample in sent {
+        assert!((sample.delta[0] - 0.3).abs() < 1e-4, "{sample:?}");
+    }
 }
