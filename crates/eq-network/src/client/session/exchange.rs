@@ -153,7 +153,9 @@ impl Exchanges {
         let (Some(exchange), true) = (open, admitted) else {
             return refused(session_id, "No trade window is open", out);
         };
-        out.request(&Request::AcceptTrade)?;
+        out.request(&Request::AcceptTrade {
+            with: exchange.with,
+        })?;
         exchange.stage = Stage::Accepted;
         Ok(())
     }
@@ -162,8 +164,10 @@ impl Exchanges {
     /// trade slots held comes back from the server.
     fn cancel(world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
         let admitted = world.player.as_ref().is_some();
-        if let (Some(_), true) = (world.exchange.0.take(), admitted) {
-            out.request(&Request::CancelTrade)?;
+        if let (Some(exchange), true) = (world.exchange.0.take(), admitted) {
+            out.request(&Request::CancelTrade {
+                with: exchange.with,
+            })?;
         }
         Ok(())
     }
@@ -202,18 +206,54 @@ impl Exchanges {
 
     /// Ends the exchange the server cancelled. `EQEmu` returns only the
     /// canceller's trade slots, so when another player closes the window this
-    /// side closes it too, to get back what it put in.
+    /// side closes it too, to get back what it put in; a generation whose
+    /// close always sends the cancel sends it for an NPC too
+    /// ([`exchange::WindowCloses`]).
     fn cancelled(world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
         let admitted = world.player.is_some();
         let Some(exchange) = world.exchange.0.take() else {
             return Ok(());
         };
-        match (exchange.partner, exchange.stage, admitted) {
-            (Partner::Player, Stage::Open | Stage::Accepted, true) => {
-                out.request(&Request::CancelTrade)
-            }
+        let answers =
+            exchange.partner == Partner::Player || out.wire.window_closes().cancel_for_any_partner;
+        match (answers, exchange.stage, admitted) {
+            (true, Stage::Open | Stage::Accepted, true) => out.request(&Request::CancelTrade {
+                with: exchange.with,
+            }),
             _ => Ok(()),
         }
+    }
+
+    /// Closes an open window whose partner has gone out of the generation's
+    /// reach, as its program does, with the cancel its close sends, and
+    /// tells the host it closed.
+    fn walked_away(world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
+        let Some(beyond) = out.wire.window_closes().beyond else {
+            return Ok(());
+        };
+        let (Some(exchange), Some((own_id, position))) = (*world.exchange, world.player_at())
+        else {
+            return Ok(());
+        };
+        let gone = matches!(exchange.stage, Stage::Open | Stage::Accepted)
+            && world.spawns.visible(exchange.with).is_some_and(|spawn| {
+                let distance = (position.x - spawn.position.x)
+                    .hypot(position.y - spawn.position.y)
+                    .hypot(position.z - spawn.position.z);
+                distance.is_finite() && distance > beyond
+            });
+        if !gone {
+            return Ok(());
+        }
+        world.exchange.0 = None;
+        out.request(&Request::CancelTrade {
+            with: exchange.with,
+        })?;
+        out.log.send(ClientEvent::World(WorldEvent::Exchange(
+            ExchangeUpdate::Cancelled {
+                by: u32::from(own_id),
+            },
+        )))
     }
 }
 
@@ -249,8 +289,10 @@ impl Feature for Exchanges {
         }
     }
 
-    /// Withdraws a request nobody answered.
+    /// Withdraws a request nobody answered, and closes a window whose
+    /// partner is out of reach.
     fn tick(&mut self, now: Instant, world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
+        Self::walked_away(world, out)?;
         let unanswered = world.exchange.is_some_and(|exchange| {
             let window = match exchange.partner {
                 Partner::Npc => ANSWER_WINDOW,
@@ -289,13 +331,34 @@ impl Feature for Exchanges {
             }
             WorldEvent::Exchange(ExchangeUpdate::Finished) => world.exchange.0 = None,
             WorldEvent::Exchange(ExchangeUpdate::Cancelled { .. }) => Self::cancelled(world, out)?,
-            WorldEvent::Exchange(ExchangeUpdate::Busy { by }) => {
+            WorldEvent::Exchange(ExchangeUpdate::Busy { by, reason }) => {
                 if world
                     .exchange
                     .is_some_and(|exchange| u32::from(exchange.with) == *by)
                 {
                     world.exchange.0 = None;
+                    if let Some(reason) = reason {
+                        out.log.diagnostic(format!(
+                            "Spawn {by} refused the trade, reason {reason:#04x}"
+                        ))?;
+                    }
                     refused(world.session_id, "They are busy", out)?;
+                }
+            }
+            WorldEvent::Exchange(ExchangeUpdate::Unread { index, kind }) => {
+                out.log.diagnostic(format!(
+                    "Their trade slot {index} holds a kind {kind} item record, which isn't read yet"
+                ))?;
+            }
+            // The server undid both sides' clicks.
+            WorldEvent::Exchange(ExchangeUpdate::AcceptsReset) => {
+                if let Some(exchange) = world
+                    .exchange
+                    .0
+                    .as_mut()
+                    .filter(|exchange| exchange.stage == Stage::Accepted)
+                {
+                    exchange.stage = Stage::Open;
                 }
             }
             WorldEvent::Exchange(ExchangeUpdate::Requested { from }) => {
@@ -401,6 +464,137 @@ mod tests {
         // One exchange at a time.
         let outcome = testing::run(|out| exchanges.handle(&offer(NPC), &mut world, out));
         assert_eq!(refusals(&outcome.events), ["Close the open trade first"]);
+    }
+
+    /// A world beside the NPC with its give window open.
+    fn giving_to_npc() -> World {
+        let mut world = beside_npc();
+        world.exchange.0 = Some(Exchange {
+            with: NPC,
+            partner: Partner::Npc,
+            stage: Stage::Open,
+        });
+        world
+    }
+
+    #[test]
+    fn the_mac_era_close_answers_the_servers_cancel_for_an_npc_too() {
+        use eq_network_game::exchange::eqmac;
+        let cancelled = Message::Event(WorldEvent::Exchange(ExchangeUpdate::Cancelled {
+            by: u32::from(NPC),
+        }));
+        let mut world = giving_to_npc();
+        let outcome = testing::run_on(&super::super::wire::EqMac, |out| {
+            Exchanges.observe(&cancelled, &mut world, out)
+        });
+        outcome.result.unwrap();
+        assert_eq!(outcome.sent, [eqmac::cancel(7, NPC).unwrap()]);
+        assert!(world.exchange.is_none());
+        // Titanium answers only another player's.
+        let mut world = giving_to_npc();
+        let outcome = testing::run(|out| Exchanges.observe(&cancelled, &mut world, out));
+        outcome.result.unwrap();
+        assert_eq!(outcome.sent, []);
+        assert!(world.exchange.is_none());
+    }
+
+    #[test]
+    fn the_mac_era_window_closes_once_the_partner_is_out_of_reach() {
+        use eq_network_game::exchange::eqmac;
+        let now = Instant::now();
+        let mut world = giving_to_npc();
+        // At 20 the window stays open.
+        let mut npc = testing::spawn(NPC, SpawnKind::Npc);
+        npc.position.x = exchange::REACH;
+        world.spawns.insert(npc.clone());
+        let tick = |world: &mut World, wire| {
+            let outcome = testing::run_on(wire, |out| Exchanges.tick(now, world, out));
+            assert!(outcome.result.is_ok());
+            outcome
+        };
+        let outcome = tick(&mut world, &super::super::wire::EqMac);
+        assert_eq!(outcome.sent, []);
+        assert!(world.exchange.is_some());
+        npc.position.x = exchange::REACH + 0.5;
+        world.spawns.insert(npc);
+        // Titanium's trade path is unread: nothing closes.
+        let outcome = tick(&mut world, &super::super::wire::Titanium);
+        assert_eq!(outcome.sent, []);
+        assert!(world.exchange.is_some());
+        let outcome = tick(&mut world, &super::super::wire::EqMac);
+        assert_eq!(outcome.sent, [eqmac::cancel(7, NPC).unwrap()]);
+        assert!(world.exchange.is_none());
+        assert!(matches!(
+            outcome.events[..],
+            [ClientEvent::World(WorldEvent::Exchange(
+                ExchangeUpdate::Cancelled { by: 7 }
+            ))]
+        ));
+    }
+
+    #[test]
+    fn eqmac_gives_in_its_own_packets_naming_the_npc() {
+        use eq_network_game::exchange::eqmac;
+        let wire = &super::super::wire::EqMac;
+        let mut exchanges = Exchanges;
+        let mut world = beside_npc();
+        let outcome = testing::run_on(wire, |out| exchanges.handle(&offer(NPC), &mut world, out));
+        outcome.result.unwrap();
+        assert_eq!(outcome.sent, [eqmac::request(7, NPC).unwrap()]);
+        let opened = Message::Event(WorldEvent::Exchange(ExchangeUpdate::Opened {
+            with: u32::from(NPC),
+        }));
+        testing::run_on(wire, |out| exchanges.observe(&opened, &mut world, out))
+            .result
+            .unwrap();
+        let give = ClientCommand::AcceptTrade {
+            session_id: 5,
+            created: Instant::now(),
+        };
+        let outcome = testing::run_on(wire, |out| exchanges.handle(&give, &mut world, out));
+        outcome.result.unwrap();
+        assert_eq!(outcome.sent, [eqmac::accept(NPC).unwrap()]);
+        assert_eq!(world.exchange.unwrap().stage, Stage::Accepted);
+        // A record in a layout not yet read is said, and keeps the window.
+        let unread = Message::Event(WorldEvent::Exchange(ExchangeUpdate::Unread {
+            index: 2,
+            kind: 1,
+        }));
+        let outcome = testing::run_on(wire, |out| exchanges.observe(&unread, &mut world, out));
+        outcome.result.unwrap();
+        assert!(matches!(
+            &outcome.events[..],
+            [ClientEvent::Diagnostic(said)] if said.contains("trade slot 2")
+        ));
+        assert_eq!(world.exchange.unwrap().stage, Stage::Accepted);
+        // The server undoing the clicks reopens Give.
+        let reset = Message::Event(WorldEvent::Exchange(ExchangeUpdate::AcceptsReset));
+        testing::run_on(wire, |out| exchanges.observe(&reset, &mut world, out))
+            .result
+            .unwrap();
+        assert_eq!(world.exchange.unwrap().stage, Stage::Open);
+        let close = ClientCommand::CancelTrade { session_id: 5 };
+        let outcome = testing::run_on(wire, |out| exchanges.handle(&close, &mut world, out));
+        outcome.result.unwrap();
+        assert_eq!(outcome.sent, [eqmac::cancel(7, NPC).unwrap()]);
+        assert!(world.exchange.is_none());
+    }
+
+    #[test]
+    fn a_refusal_names_its_reason_and_closes_the_request() {
+        let mut exchanges = Exchanges;
+        let mut world = beside_npc();
+        testing::run(|out| exchanges.handle(&offer(PLAYER), &mut world, out))
+            .result
+            .unwrap();
+        let refused = Message::Event(WorldEvent::Exchange(ExchangeUpdate::Busy {
+            by: u32::from(PLAYER),
+            reason: Some(0x62),
+        }));
+        let outcome = testing::run(|out| exchanges.observe(&refused, &mut world, out));
+        outcome.result.unwrap();
+        assert_eq!(refusals(&outcome.events), ["They are busy"]);
+        assert!(world.exchange.is_none());
     }
 
     #[test]

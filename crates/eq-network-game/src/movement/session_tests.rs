@@ -523,7 +523,9 @@ fn queued_calibration_requires_valid_data_from_after_the_last_reset() {
 #[test]
 fn a_spacing_holds_the_latest_sample_until_it_passes_and_stops_no_sooner() {
     let start = Instant::now();
-    let mut session = setup(start).with_spacing(Some(Duration::from_millis(280)));
+    let mut session = setup(start).with_gate(Some(UpdateGate::Changed {
+        spacing: Duration::from_millis(280),
+    }));
     let at = |ms| start + Duration::from_millis(ms);
     let mut sent = Vec::new();
     // The first sample goes out at once; the session began 300 ms earlier.
@@ -573,7 +575,9 @@ fn a_spacing_holds_the_latest_sample_until_it_passes_and_stops_no_sooner() {
 #[test]
 fn a_correction_drops_a_held_sample() {
     let start = Instant::now();
-    let mut session = setup(start).with_spacing(Some(Duration::from_millis(280)));
+    let mut session = setup(start).with_gate(Some(UpdateGate::Changed {
+        spacing: Duration::from_millis(280),
+    }));
     let at = |ms| start + Duration::from_millis(ms);
     session
         .send_move(&request(at(300), 0.5), at(300), |_| Ok(()))
@@ -613,6 +617,32 @@ fn a_generation_may_fall_faster_than_the_provisional_limit() {
     assert_eq!(eqmac.position().z.to_bits(), (-20.0f32).to_bits());
 }
 #[test]
+fn a_jump_rises_past_a_step_once_the_session_announces_it() {
+    let start = Instant::now();
+    let now = start + Duration::from_millis(50);
+    // The first 50 ms of a 44.55 u/s jump rise 2.03 units, past a step.
+    let mut rise = request(now, 0.0);
+    rise.mode = MovementMode::Fall;
+    rise.position.z = 2.03;
+    let jump = Some((
+        super::super::JUMP_SPEED,
+        super::super::gravity_per_second(None),
+    ));
+    let mut session = setup(start).with_falls(true).with_jump(jump);
+    assert!(session
+        .send_move(&rise, now, |_| panic!("no jump was announced"))
+        .is_err());
+    session.jumped();
+    session.send_move(&rise, now, |_| Ok(())).unwrap();
+    assert_eq!(session.position().z.to_bits(), 2.03f32.to_bits());
+    // Without the generation's jump read, the announcement admits nothing.
+    let mut unread = setup(start).with_falls(true);
+    unread.jumped();
+    assert!(unread
+        .send_move(&rise, now, |_| panic!("the jump is unread"))
+        .is_err());
+}
+#[test]
 fn the_wire_velocity_covers_the_stamp_interval_not_the_processing_one() {
     let start = Instant::now();
     let at = |ms| start + Duration::from_millis(ms);
@@ -636,4 +666,124 @@ fn the_wire_velocity_covers_the_stamp_interval_not_the_processing_one() {
     for sample in sent {
         assert!((sample.delta[0] - 0.3).abs() < 1e-4, "{sample:?}");
     }
+}
+
+fn mac_era(start: Instant) -> MotionSession {
+    setup(start).with_gate(Some(UpdateGate::Flagged {
+        pack: crate::quarm::client_update,
+    }))
+}
+
+/// Feeds a host sample (when `x` is some) and a pass of the gate at each
+/// 100 ms step from `from` to `to`, counting the updates that go out.
+fn passes(
+    session: &mut MotionSession,
+    start: Instant,
+    steps: std::ops::RangeInclusive<u64>,
+    x: impl Fn(u64) -> Option<f32>,
+) -> Vec<u64> {
+    let mut sent = Vec::new();
+    for step in steps {
+        let now = start + Duration::from_millis(step * 100);
+        if let Some(x) = x(step) {
+            // Every host sample is accepted: 100 ms apart is past the
+            // guard's 50 ms floor, and 0.5 units fits its budget.
+            session
+                .send_move_sample(&request(now, x), now, |_| {
+                    sent.push(step * 100);
+                    Ok(())
+                })
+                .unwrap();
+        }
+        if session
+            .tick_sample(now, |sample| {
+                crate::quarm::client_update(sample)?;
+                Ok(())
+            })
+            .unwrap()
+        {
+            sent.push(step * 100);
+        }
+    }
+    sent
+}
+
+#[test]
+fn the_mac_era_gate_sends_a_steady_run_once_a_second() {
+    let start = Instant::now();
+    let mut session = mac_era(start);
+    // Running straight at 5 units a second: the start goes out at once,
+    // then only the 1 s timer lets the next out, each more than 1000 ms on.
+    #[allow(clippy::cast_precision_loss)]
+    let sent = passes(&mut session, start, 1..=25, |step| Some(step as f32 * 0.5));
+    assert_eq!(sent, [100, 1200, 2300]);
+    // The stop is a speed change: due at once, out on the first pass more
+    // than 150 ms after the last update.
+    let stop = passes(&mut session, start, 26..=29, |_| None);
+    assert_eq!(stop, [2800]);
+}
+
+#[test]
+fn the_mac_era_gate_repeats_a_still_update_six_times_then_holds_it() {
+    let start = Instant::now();
+    let mut session = mac_era(start);
+    let sent = passes(&mut session, start, 1..=100, |_| None);
+    // The first, then six repeats a timer apart; then nothing.
+    assert_eq!(sent, [100, 1200, 2300, 3400, 4500, 5600, 6700]);
+    // Still due, so the first change goes out at once.
+    let moved = passes(&mut session, start, 101..=101, |_| Some(0.5));
+    assert_eq!(moved, [10_100]);
+}
+
+#[test]
+fn the_mac_era_gate_lets_a_turn_out_no_sooner_than_150_ms_after_the_last() {
+    let start = Instant::now();
+    let mut session = mac_era(start);
+    let at = |ms| start + Duration::from_millis(ms);
+    let mut sent = 0;
+    session
+        .tick_sample(at(100), |_| {
+            sent += 1;
+            Ok(())
+        })
+        .unwrap();
+    assert_eq!(sent, 1);
+    // A 3-unit turn 100 ms later is due at once but held by the spacing.
+    let mut turn = request(at(200), 0.0);
+    turn.position.heading = 3.0;
+    session
+        .send_move_sample(&turn, at(200), |_| panic!("inside 150 ms"))
+        .unwrap();
+    assert!(!session
+        .tick_sample(at(250), |_| panic!("at 150 ms"))
+        .unwrap());
+    assert!(session.tick_sample(at(251), |_| Ok(())).unwrap());
+}
+
+#[test]
+fn the_mac_era_gate_sends_after_a_jump_and_the_titanium_gate_skips_no_change() {
+    let start = Instant::now();
+    let at = |ms| start + Duration::from_millis(ms);
+    let mut session = mac_era(start).with_falls(true);
+    assert!(session.tick_sample(at(100), |_| Ok(())).unwrap());
+    // Nothing is due until the timer, unless a jump marks it.
+    assert!(!session.tick_sample(at(400), |_| panic!("not due")).unwrap());
+    session.jumped();
+    assert!(session.tick_sample(at(500), |_| Ok(())).unwrap());
+
+    let mut titanium = setup(start).with_gate(Some(UpdateGate::Changed {
+        spacing: Duration::from_millis(280),
+    }));
+    titanium
+        .send_move(&request(at(300), 0.5), at(300), |_| Ok(()))
+        .unwrap();
+    // Standing there is a change (the stop); standing there again isn't,
+    // so nothing is sent or held.
+    titanium
+        .send_move(&request(at(700), 0.5), at(700), |_| Ok(()))
+        .unwrap();
+    titanium
+        .send_move(&request(at(1100), 0.5), at(1100), |_| panic!("no change"))
+        .unwrap();
+    assert!(titanium.held.is_none());
 }

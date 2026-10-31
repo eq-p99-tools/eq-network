@@ -389,6 +389,19 @@ pub fn titanium_coins(profile: &[u8]) -> Result<Coins> {
     })
 }
 
+/// What abandoned a camp. The Titanium program says one line when standing
+/// (or a stun) ends a camp and another when moving does (sitting 9p, read).
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+pub enum CampEnd {
+    /// The player stood up.
+    Standing,
+    /// The player moved, or crossed a zone line.
+    Moving,
+    /// Ducking, a door, a pick-up or death: the program's line for these
+    /// is unread (6.309).
+    Other,
+}
+
 /// Progress of a camp request; the server confirms only the final logout.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub enum CampStatus {
@@ -400,8 +413,12 @@ pub enum CampStatus {
         /// Seconds left: 25, 20, 15, 10 or 5.
         seconds_left: u8,
     },
-    /// Standing or moving abandoned the attempt before logout.
-    Abandoned,
+    /// Something the player did, or death, abandoned the attempt before
+    /// logout.
+    Abandoned {
+        /// What ended it.
+        by: CampEnd,
+    },
     /// Preparation finished and `OP_Logout` was sent.
     LoggingOut,
     /// The zone connection ended; character selection follows.
@@ -679,6 +696,9 @@ pub enum WorldEvent {
         door_id: u8,
         /// Local rejection; None means submission to transport succeeded.
         error: Option<String>,
+        /// The program's string for the rejection, where it says one: 1462
+        /// for a door out of reach ([`crate::doors::OutOfReach`]).
+        string_id: Option<u32>,
     },
     /// Items on the ground and world containers.
     Objects(crate::objects::ObjectUpdate),

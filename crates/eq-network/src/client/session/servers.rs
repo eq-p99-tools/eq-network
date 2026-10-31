@@ -1244,6 +1244,14 @@ impl ServerType for Takp {
         offer(shared::translocate())
     }
 
+    /// Giving items to NPCs and trading with players, in the `EQMac`
+    /// program's packets ([`eq_network_game::exchange::eqmac`], TAKP program
+    /// read N4); not yet checked live, and the player half waits for a
+    /// two-character check.
+    fn exchange(&self, _setup: &Setup<'_>) -> Provided {
+        offer(shared::exchange())
+    }
+
     /// Groups, with `EQMac`'s opcodes for Titanium's layouts (TAKP
     /// `zone/client_packet.cpp` `Handle_OP_GroupInvite2`, `GroupFollow`,
     /// `GroupCancelInvite`, `GroupDisband`), checked live there with two
@@ -1382,7 +1390,7 @@ mod tests {
         assert_eq!(quarm.features(&setup).len(), 3);
         assert_eq!(offers(quarm), [Capability::Talking]);
         let takp = server_type(ServerProtocol::Takp);
-        assert_eq!(takp.features(&setup).len(), 17);
+        assert_eq!(takp.features(&setup).len(), 18);
         assert_eq!(
             offers(takp),
             [
@@ -1390,6 +1398,7 @@ mod tests {
                 Capability::Spellbook,
                 Capability::Inventory,
                 Capability::Trading,
+                Capability::Giving,
                 Capability::Moving,
                 Capability::Falling,
                 Capability::Targeting,

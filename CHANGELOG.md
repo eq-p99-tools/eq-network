@@ -7,6 +7,48 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- Batch 3b, from the official programs (Titanium sittings 8i and 9p, TAKP
+  read N4):
+  - The movement guard lets a sample rise as the client generation's jump
+    does once the session has announced one (`MovementGuard::jumped`,
+    `MotionSession::with_jump`, `Wire::jump_speed`): 44.55 units a second
+    less the zone's gravity (`movement::gravity_per_second`, 160 at the
+    default 0.4), over the next sample's whole interval and on to the top.
+    A correction ends it.
+  - TAKP gives to NPCs and trades in the `EQMac` window's own packets
+    (`exchange::eqmac`): `Exchanges` is offered there. The player half
+    rides the same packets and is not yet checked live (checklist 6.307,
+    6.308). `Request::AcceptTrade` and `Request::CancelTrade` name the
+    partner (`with`). `ExchangeUpdate` gains `AcceptsReset` (an accept
+    taken back moves both sides to open again) and `Withdrawn`;
+    `ExchangeUpdate::Busy` carries the refusal's reason. An item record the
+    program reads in a layout not yet decoded (276 and 264 bytes) arrives
+    as `ExchangeUpdate::Unread` with its slot, so the window shows the slot
+    taken, and the session reports it as a diagnostic (eq-network's only
+    log route; the client logs it). It never closes the session.
+    On TAKP (`Wire::window_closes`, `exchange::WindowCloses`; read N4 1d, 2
+    and 3d) the close answers the server's cancel for an NPC as well, and
+    a window whose partner is past 20 closes with a cancel and
+    `ExchangeUpdate::Cancelled` naming the player (checklist 6.311).
+  - `CampStatus::Abandoned` says what ended the camp (`CampEnd`: standing,
+    moving, or other), so the client can say the program's line for each.
+  - The player's own update goes out as each generation's program lets it
+    (`movement::UpdateGate`, `Wire::update_gate`, replacing
+    `with_spacing`): Titanium only after a change, more than 280 ms apart;
+    `EQMac` on its 1 s timer, a speed change of 0.2, a heading change of 2,
+    a turn or a jump, more than 150 ms apart, with an unchanged update
+    repeated 6 times and then held (TAKP gate read Q1, path A).
+  - Reach per generation (`reach::Reaches`, `Wire::reaches`; Titanium
+    sitting 8a, TAKP read T6 and T8): TAKP doors at 20 in 2-D, ground items
+    and containers under 20 in 3-D, merchants at most 20 in 3-D, and an open
+    container closed beyond 20 (`ObjectUpdate::Closed`); Bind Wound at 15
+    on both, with each program's line (12418 on Titanium, 420 on TAKP).
+    `Objects::check_open`, `check_pickup` and `Doors::check_click` take the
+    reach. A door out of reach reports string 1462
+    (`WorldEvent::DoorAction::string_id`, `doors::OutOfReach`). Neither
+    door reach counts its size terms (checklist 6.311); Titanium's merchant
+    and container reaches are unread (6.312).
+
 - Batch 3a, from the official programs (Titanium sittings 8-9, TAKP sitting
   2 and the 10-31 roleplay read):
   - The movement guard holds a fall to 99 × the zone's gravity a step, 20

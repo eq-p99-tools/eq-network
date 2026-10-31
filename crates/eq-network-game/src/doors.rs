@@ -76,6 +76,24 @@ pub enum DoorUpdate {
     },
 }
 
+/// A door clicked from out of reach: the program says string 1462 (both
+/// generations' reads) and sends nothing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct OutOfReach;
+
+impl OutOfReach {
+    /// The program's string for it.
+    pub const STRING: u32 = 1462;
+}
+
+impl std::fmt::Display for OutOfReach {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("door is out of reach")
+    }
+}
+
+impl std::error::Error for OutOfReach {}
+
 /// Zone-local door state. Unknown IDs never create synthetic doors.
 #[derive(Clone, Debug, Default)]
 pub struct Doors {
@@ -86,7 +104,8 @@ pub struct Doors {
 }
 
 impl Doors {
-    /// Local proximity policy for ordinary use, not a claim about server lock/key rules.
+    /// The program's base reach for a door, before its size terms
+    /// ([`crate::reach`]); not a claim about server lock/key rules.
     pub const USE_DISTANCE: f32 = 20.0;
 
     /// Encodes ordinary use after checking the current door table and player position.
@@ -100,7 +119,7 @@ impl Doors {
         player_id: u16,
         position: Position,
     ) -> Result<EncodedCommand> {
-        self.check_click(id, player_id, position)?;
+        self.check_click(id, player_id, position, crate::reach::TITANIUM.doors)?;
         Ok(titanium_click(id, player_id))
     }
 
@@ -111,19 +130,20 @@ impl Doors {
     /// # Errors
     /// Rejects static objects, unknown doors, invalid own IDs and non-finite or
     /// distant positions.
-    pub fn check_click(&self, id: u8, player_id: u16, position: Position) -> Result<()> {
+    pub fn check_click(
+        &self,
+        id: u8,
+        player_id: u16,
+        position: Position,
+        reach: crate::reach::Reach,
+    ) -> Result<()> {
         ensure!(id != STATIC_ID, "a static object cannot be used");
         let door = self
             .doors
             .get(&id)
             .ok_or_else(|| anyhow::anyhow!("door is no longer available"))?;
-        let distance = (position.x - door.position.x)
-            .hypot(position.y - door.position.y)
-            .hypot(position.z - door.position.z);
-        ensure!(
-            player_id != 0 && distance.is_finite() && distance <= Self::USE_DISTANCE,
-            "door is out of reach or player position is unavailable"
-        );
+        ensure!(player_id != 0, "player position is unavailable");
+        ensure!(reach.admits(position, door.position), OutOfReach);
         Ok(())
     }
     /// Current server-provided definitions in stable door-ID order. Static

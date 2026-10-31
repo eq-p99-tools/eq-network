@@ -223,6 +223,7 @@ pub fn eqmac(opcode: u16, body: &[u8]) -> Vec<Message> {
             |error| unreadable(Part::World, &error),
             Message::MerchantList,
         )],
+        _ if let Some(message) = eqmac_exchange(opcode, body) => vec![message],
         _ => match inventory::decode_eqmac(opcode, body) {
             Ok(Some(update)) => vec![Message::Event(WorldEvent::Inventory(update))],
             Err(error) => vec![unreadable(Part::Inventory, &error)],
@@ -232,6 +233,24 @@ pub fn eqmac(opcode: u16, body: &[u8]) -> Vec<Message> {
             ),
         },
     }
+}
+
+/// An `EQMac` exchange packet as the session takes it: an exchange event,
+/// an item record no reader here takes yet among them, which the session
+/// reports as a diagnostic, never an error that closes the session; None
+/// for other opcodes.
+fn eqmac_exchange(opcode: u16, body: &[u8]) -> Option<Message> {
+    use crate::exchange::eqmac::{self, TradeItem, TradeMessage};
+    Some(match eqmac::decode(opcode, body) {
+        Ok(None) => return None,
+        Ok(Some(TradeMessage::Update(update) | TradeMessage::Item(TradeItem::Read(update)))) => {
+            Message::Event(WorldEvent::Exchange(update))
+        }
+        Ok(Some(TradeMessage::Item(TradeItem::Unread { index, kind }))) => Message::Event(
+            WorldEvent::Exchange(crate::exchange::ExchangeUpdate::Unread { index, kind }),
+        ),
+        Err(error) => unreadable(Part::World, &error),
+    })
 }
 
 /// What the `EQMac` profile says beside what the admission reads of it: the

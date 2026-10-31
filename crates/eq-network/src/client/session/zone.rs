@@ -1369,6 +1369,7 @@ mod tests {
                 session_id: 5,
                 door_id: 3,
                 error: Some(reason),
+                ..
             }), ..] if reason == UNOFFERED
         ));
     }
@@ -1479,6 +1480,7 @@ mod tests {
                 Capability::Spellbook,
                 Capability::Inventory,
                 Capability::Trading,
+                Capability::Giving,
                 Capability::Moving,
                 Capability::Falling,
                 Capability::Targeting,

@@ -1,9 +1,14 @@
 //! Titanium movement encoding and session-scoped displacement validation.
 
 mod carry;
+mod gate;
 mod session;
 mod speeds;
 pub use carry::{carry, Carried};
+pub use gate::{
+    UpdateGate, EQMAC_HEADING_STEP, EQMAC_REPEATS, EQMAC_SPEED_STEP, EQMAC_UPDATE_SPACING,
+    EQMAC_UPDATE_TICK,
+};
 pub use session::{
     titanium_jump, BackwardCalibration, MotionCalibration, MotionSession, StrafeCalibration,
     WalkCalibration,
@@ -57,6 +62,24 @@ pub fn fall_speed(gravity: Option<f32>) -> f32 {
     99.0 * gravity * 20.0
 }
 
+/// The speed a jump starts at, in world units per second, on both client
+/// generations: the program adds 1.65 × the character's jump value (1.35)
+/// to the rising speed a 50 ms step (Titanium sittings 8h and 8i; TAKP
+/// sitting 2, M1), 44.55 units a second.
+pub const JUMP_SPEED: f32 = 1.65 * 1.35 * 20.0;
+
+/// A zone's gravity in world units per second squared: the header's +420
+/// field is the fall speed added each 50 ms step, so 160 at the default 0.4.
+/// A header the program would read as the default counts as it, as in
+/// [`fall_speed`].
+#[must_use]
+pub fn gravity_per_second(gravity: Option<f32>) -> f32 {
+    let gravity = gravity
+        .filter(|gravity| gravity.is_finite() && *gravity >= 0.0)
+        .unwrap_or(DEFAULT_GRAVITY);
+    gravity * 20.0 * 20.0
+}
+
 /// How often a standing character repeats its position. The official P99 client
 /// sends one about every 1.1 s (median of its recorded stationary updates).
 pub const STATIONARY_HEARTBEAT: Duration = Duration::from_secs(1);
@@ -64,9 +87,9 @@ pub const STATIONARY_HEARTBEAT: Duration = Duration::from_secs(1);
 /// The least time between two of the player's own position updates in the
 /// Titanium program: it sends one only after more than 280 ms since the last
 /// (from the program, Titanium sitting 6, T1; checklist 1.6). The program
-/// also sends only after a change flag is set, and whether anything sets it
-/// on a timer while the player stands still is unsure, so the stationary
-/// heartbeat stays as recorded on P99.
+/// also sends only after a change flag is set ([`UpdateGate::Changed`]), and
+/// whether anything sets it on a timer while the player stands still is
+/// unsure, so the stationary heartbeat stays as recorded on P99.
 pub const TITANIUM_POSITION_SPACING: Duration = Duration::from_millis(280);
 
 /// `OP_Jump` (Titanium): an empty notice that the character jumped. `EQEmu` only
@@ -238,6 +261,23 @@ pub struct MovementGuard {
     bounds: Option<MovementBounds>,
     /// The fastest descent a fall sample may claim, in world units per second.
     fall_speed: f32,
+    /// How a jump rises, where the client generation's jump is read: its
+    /// starting speed and the zone's gravity, in units a second and a second
+    /// squared.
+    jump: Option<(f32, f32)>,
+    /// When the latest jump the session announced started, until gravity
+    /// has spent its speed.
+    jumped_at: Option<JumpStart>,
+}
+
+/// When an announced jump started, for [`MovementGuard`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum JumpStart {
+    /// With the interval of the next sample: the client's step that
+    /// announces a jump already rises over its whole interval.
+    Next,
+    /// At this instant.
+    At(Instant),
 }
 
 impl MovementGuard {
@@ -252,7 +292,46 @@ impl MovementGuard {
             speed: None,
             bounds: None,
             fall_speed: MAX_FALL_SPEED,
+            jump: None,
+            jumped_at: None,
         }
+    }
+
+    /// Lets a sample rise as the client generation's jump does after the
+    /// session announces one ([`Self::jumped`]): starting at `speed` and
+    /// slowed by `gravity`, in units a second and a second squared (the
+    /// jump read in Titanium sittings 8h and 8i and TAKP sitting 2).
+    pub fn set_jump(&mut self, speed: f32, gravity: f32) {
+        self.jump = Some((speed, gravity)).filter(|(speed, gravity)| {
+            speed.is_finite() && *speed > 0.0 && gravity.is_finite() && *gravity >= 0.0
+        });
+    }
+
+    /// The session announced a jump: the next sample may rise as the jump
+    /// does over its whole interval, and the ones after it on, until gravity
+    /// has spent its speed.
+    pub fn jumped(&mut self) {
+        if self.jump.is_some() {
+            self.jumped_at = Some(JumpStart::Next);
+        }
+    }
+
+    /// How far the announced jump rises between `from` and `to` seconds
+    /// after it started: its speed less what gravity takes, and nothing
+    /// past the top.
+    fn jump_rise(&self, from: f32, to: f32) -> f32 {
+        let Some((speed, gravity)) = self.jump else {
+            return 0.0;
+        };
+        let height = |t: f32| {
+            let t = if gravity > 0.0 {
+                t.min(speed / gravity)
+            } else {
+                t
+            };
+            speed * t - gravity * t * t / 2.0
+        };
+        (height(to) - height(from)).max(0.0)
     }
 
     /// Lets a fall sample descend as fast as the client generation's own
@@ -292,6 +371,7 @@ impl MovementGuard {
         self.sampled = now;
         self.input_epoch = now;
         self.speed = None;
+        self.jumped_at = None;
     }
 
     /// Validates one fresh proposal. Failure never changes the accepted position.
@@ -336,12 +416,21 @@ impl MovementGuard {
             "movement exceeds elapsed-time budget"
         );
         // A fall may only descend, at most at terminal speed; grounded modes follow
-        // stairs and slopes one riser at a time.
+        // stairs and slopes one riser at a time. After a jump, any sample may
+        // also rise as far as the jump does over the sample's own interval.
+        let since_jump = self.jumped_at.map(|start| match start {
+            JumpStart::Next => (0.0, elapsed),
+            JumpStart::At(at) => {
+                let to = request.created.saturating_duration_since(at).as_secs_f32();
+                ((to - elapsed).max(0.0), to)
+            }
+        });
+        let rise = since_jump.map_or(0.0, |(from, to)| self.jump_rise(from, to));
         let vertical = if request.mode == MovementMode::Fall {
-            delta[2] <= MAX_GROUNDED_STEP
+            delta[2] <= MAX_GROUNDED_STEP + rise
                 && -delta[2] <= self.fall_speed * elapsed + MAX_GROUNDED_STEP
         } else {
-            delta[2].abs() <= MAX_GROUNDED_STEP
+            delta[2] <= MAX_GROUNDED_STEP + rise && -delta[2] <= MAX_GROUNDED_STEP
         };
         ensure!(
             vertical,
@@ -349,6 +438,18 @@ impl MovementGuard {
         );
         self.position = request.position;
         self.sampled = request.created;
+        // The jump started with this sample's interval; past the top it
+        // rises no more.
+        if let (Some((speed, gravity)), Some((_, to))) = (self.jump, since_jump) {
+            self.jumped_at = if gravity > 0.0 && to >= speed / gravity {
+                None
+            } else {
+                request
+                    .created
+                    .checked_sub(Duration::from_secs_f32(to))
+                    .map(JumpStart::At)
+            };
+        }
         Ok(delta)
     }
 
@@ -430,6 +531,73 @@ mod tests {
         request.position.z = -2.9;
         assert!(guard.accept(&request, later).is_err());
     }
+    fn rising(z: f32, created: Instant) -> MovementRequest {
+        MovementRequest {
+            mode: MovementMode::Fall,
+            session_id: 7,
+            position: Position {
+                z,
+                ..Position::default()
+            },
+            created,
+        }
+    }
+
+    fn jumping_guard(start: Instant) -> MovementGuard {
+        let mut guard = MovementGuard::new(7, Position::default(), start);
+        guard.set_speed(Some(30.0), start);
+        guard.set_jump(JUMP_SPEED, gravity_per_second(None));
+        guard
+    }
+
+    #[test]
+    fn a_jump_rises_as_its_speed_less_gravity_over_each_interval() {
+        let start = Instant::now();
+        let at = |ms| start + Duration::from_millis(ms);
+        let mut guard = jumping_guard(start);
+        // No jump announced: one step up only.
+        assert!(guard.accept(&rising(2.1, at(100)), at(100)).is_err());
+        // 0.1 s of a 44.55 u/s jump against 160 u/s² rises 3.655 units, and
+        // one step more is allowed.
+        guard.jumped();
+        assert!(guard.accept(&rising(5.7, at(100)), at(100)).is_err());
+        assert!(guard.accept(&rising(5.6, at(100)), at(100)).is_ok());
+        // From 0.1 s to 0.2 s it rises 2.055 more.
+        assert!(guard.accept(&rising(9.7, at(200)), at(200)).is_err());
+        assert!(guard.accept(&rising(9.6, at(200)), at(200)).is_ok());
+        // The top comes at 0.278 s: 0.2 s to 0.3 s rises 0.495 more.
+        assert!(guard.accept(&rising(12.2, at(300)), at(300)).is_err());
+        assert!(guard.accept(&rising(12.0, at(300)), at(300)).is_ok());
+        // Past the top, one step only.
+        assert!(guard.accept(&rising(14.1, at(400)), at(400)).is_err());
+        assert!(guard.accept(&rising(14.0, at(400)), at(400)).is_ok());
+    }
+
+    #[test]
+    fn a_correction_ends_the_jumps_rise() {
+        let start = Instant::now();
+        let at = |ms| start + Duration::from_millis(ms);
+        let mut guard = jumping_guard(start);
+        guard.jumped();
+        guard.correct(Position::default(), at(10));
+        guard.set_speed(Some(30.0), at(10));
+        assert!(guard.accept(&rising(3.0, at(110)), at(110)).is_err());
+        assert!(guard.accept(&rising(2.0, at(110)), at(110)).is_ok());
+    }
+
+    #[test]
+    fn without_a_read_jump_an_announcement_admits_no_rise() {
+        let start = Instant::now();
+        let now = start + Duration::from_millis(100);
+        let mut guard = MovementGuard::new(7, Position::default(), start);
+        guard.set_speed(Some(30.0), start);
+        guard.set_jump(f32::NAN, 160.0);
+        guard.jumped();
+        assert!(guard.accept(&rising(2.1, now), now).is_err());
+        assert!((gravity_per_second(None) - 160.0).abs() < 0.01);
+        assert!((JUMP_SPEED - 44.55).abs() < 0.01);
+    }
+
     fn forward(x: f32, created: Instant) -> MovementRequest {
         MovementRequest {
             mode: MovementMode::Forward,

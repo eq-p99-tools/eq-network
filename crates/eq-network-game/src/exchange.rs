@@ -23,6 +23,8 @@ use crate::{
 use anyhow::{ensure, Context, Result};
 use serde::Serialize;
 
+pub mod eqmac;
+
 /// `OP_TradeRequest`: one character asks another to trade.
 pub const REQUEST_OPCODE: u16 = 0x372f;
 /// `OP_TradeRequestAck`: the other side took the request, and the windows open.
@@ -55,6 +57,34 @@ const CANCEL_ACTION: u32 = 7;
 /// trade, in EQ units. A conservative client policy, like the banker's:
 /// `EQEmu` checks no distance, and P99's limit is not measured.
 pub const REACH: f32 = 20.0;
+
+/// How a client generation's program closes an open give or trade window.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct WindowCloses {
+    /// Whether closing it sends a cancel whatever the partner, including
+    /// after the server's own cancel; otherwise only for another player.
+    pub cancel_for_any_partner: bool,
+    /// The distance past which the window closes, with a cancel, where it
+    /// is read.
+    pub beyond: Option<f32>,
+}
+
+/// Titanium's trade path is unread: a cancel only answers another player's,
+/// and walking away closes nothing.
+pub const TITANIUM_CLOSES: WindowCloses = WindowCloses {
+    cancel_for_any_partner: false,
+    beyond: None,
+};
+
+/// The TAKP program (read N4, 1d, 2 and 3d): its close sends the cancel
+/// whenever a partner is set, the server's own cancel included, and it
+/// closes the window when the partner is farther than 20 plus a term
+/// (+0x90) whose value is unread, so this closes it no later
+/// (checklist 6.311).
+pub const EQMAC_CLOSES: WindowCloses = WindowCloses {
+    cancel_for_any_partner: true,
+    beyond: Some(REACH),
+};
 
 /// Who the player is exchanging with, which decides the window and its
 /// number of trade slots.
@@ -96,6 +126,9 @@ pub enum ExchangeUpdate {
         /// The side that clicked.
         by: u32,
     },
+    /// The server undid both sides' clicks, as the `EQMac` program takes an
+    /// accept naming no click (TAKP program read N4).
+    AcceptsReset,
     /// The exchange went through: the trade slots' items changed hands.
     Finished,
     /// A side closed the window, or the server did (at logout, the player's
@@ -106,10 +139,14 @@ pub enum ExchangeUpdate {
         /// packet for its recipient.
         by: u32,
     },
-    /// The other player could not trade.
+    /// The other side could not, or would not, trade.
     Busy {
-        /// The busy player.
+        /// The busy side.
         by: u32,
+        /// Why, where the wire says: `EQMac`'s refusal reason (0x62 and 0x63
+        /// from their trade setting, 1 busy; TAKP program read N4).
+        /// Titanium's busy packet says none.
+        reason: Option<u8>,
     },
     /// The player took another player's request, as the official client
     /// does on its own: the window is open. The session says this; no
@@ -126,6 +163,21 @@ pub enum ExchangeUpdate {
         index: u8,
         /// The item.
         item: Box<InventoryItem>,
+    },
+    /// The other player took the item out of their trade slot `index` (0 to
+    /// 7), as `EQMac` says it.
+    Withdrawn {
+        /// Their trade slot.
+        index: u8,
+    },
+    /// The other side put something in their trade slot `index` (0 to 7)
+    /// in an item record this library doesn't read yet (`EQMac`'s 276- and
+    /// 264-byte layouts): the slot is taken, and what fills it is unknown.
+    Unread {
+        /// Their trade slot.
+        index: u8,
+        /// The record's kind byte.
+        kind: u8,
     },
     /// The other player put coins in the trade; the server tells them
     /// nothing else about them until the trade goes through.
@@ -172,7 +224,10 @@ pub fn decode(opcode: u16, body: &[u8]) -> Result<Option<ExchangeUpdate>> {
         },
         ACCEPT_OPCODE => ExchangeUpdate::Accepted { by: word(body, 0) },
         CANCEL_OPCODE => ExchangeUpdate::Cancelled { by: word(body, 0) },
-        BUSY_OPCODE => ExchangeUpdate::Busy { by: word(body, 4) },
+        BUSY_OPCODE => ExchangeUpdate::Busy {
+            by: word(body, 4),
+            reason: None,
+        },
         // `TradeCoin_Struct`: the trader, the kind (one byte) and the amount.
         COINS_OPCODE => ExchangeUpdate::Coins {
             coin: Coin::from_wire(u32::from(body[4])).context("unknown coin kind")?,
@@ -314,7 +369,10 @@ mod tests {
         busy.extend_from_slice(&[1, 0xef, 0xff, 0xff]);
         assert_eq!(
             decode(BUSY_OPCODE, &busy).unwrap(),
-            Some(ExchangeUpdate::Busy { by: 42 })
+            Some(ExchangeUpdate::Busy {
+                by: 42,
+                reason: None
+            })
         );
         assert_eq!(decode(0x1234, &[]).unwrap(), None);
         assert!(decode(REQUEST_OPCODE, &[0; 7]).is_err());

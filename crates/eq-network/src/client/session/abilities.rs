@@ -202,7 +202,12 @@ impl Abilities {
     /// Whom the player would bandage, with the name the host hears (none for
     /// the player themselves), or why they cannot: their target if it is
     /// another player close by, and themselves without one.
-    fn bandage(&self, world: &World, now: Instant) -> Result<(u16, Option<String>), Refusal> {
+    fn bandage(
+        &self,
+        world: &World,
+        now: Instant,
+        reaches: &eq_network_game::reach::Reaches,
+    ) -> Result<(u16, Option<String>), Refusal> {
         let ((own_id, position), _) = self.usable(Ability::BindWound, world)?;
         if self.waiting(Ability::BindWound, now) {
             return Err("You are bandaging already".into());
@@ -233,16 +238,13 @@ impl Abilities {
                 Vec::new(),
             ));
         };
-        let apart = [
-            target.position.x - position.x,
-            target.position.y - position.y,
-            target.position.z - position.z,
-        ];
-        if apart.iter().map(|axis| axis * axis).sum::<f32>() > bind_wound::REACH.powi(2) {
+        // The program's own reach (Titanium s8a T8, TAKP T8), 15 units,
+        // inside the server's 20 ([`bind_wound::REACH`]).
+        if !reaches.bandage.admits(position, target.position) {
             let name = target.name.clone();
             return Err(Refusal::official(
                 format!("{name} is too far away to bandage"),
-                strings::TOO_FAR,
+                reaches.too_far_to_bandage,
                 vec![name],
             ));
         }
@@ -257,7 +259,7 @@ impl Abilities {
         now: Instant,
     ) -> Result<()> {
         if ability == Ability::BindWound {
-            return match self.bandage(world, now) {
+            return match self.bandage(world, now, out.wire.reaches()) {
                 Ok((spawn_id, target)) => {
                     self.send(session_id, ability, Some(spawn_id), out, now)?;
                     out.log.send(ClientEvent::World(WorldEvent::BindWound(
@@ -378,7 +380,8 @@ mod tests {
     }
 
     /// The warrior with a bandage in the bag in their first pack slot, beside
-    /// one player (46) ten units away and another (47) thirty units away.
+    /// one player (46) ten units away and another (47) sixteen units away,
+    /// past the program's 15 though inside the server's 20.
     fn bandager() -> World {
         let mut world = warrior();
         let mut bag = testing::item(22);
@@ -388,7 +391,7 @@ mod tests {
         let mut inventory = Inventory::default();
         inventory.apply(InventoryUpdate::Snapshot(vec![bag, bandage]));
         world.inventory = inventory.into();
-        for (id, x) in [(46, 10.0), (47, 30.0)] {
+        for (id, x) in [(46, 10.0), (47, 16.0)] {
             let mut player = testing::spawn(id, SpawnKind::Player);
             player.position = Position {
                 x,
@@ -557,7 +560,10 @@ mod tests {
         let outcome = try_ability(&mut Abilities::default(), &world, Ability::BindWound, now);
         assert_eq!(
             official(&outcome.events),
-            [(Some(strings::TOO_FAR), vec!["Spawn 47".to_owned()])]
+            [(
+                Some(eq_network_game::reach::TITANIUM.too_far_to_bandage),
+                vec!["Spawn 47".to_owned()]
+            )]
         );
         world.target = Target::from(46);
         let outcome = try_ability(&mut Abilities::default(), &world, Ability::BindWound, now);

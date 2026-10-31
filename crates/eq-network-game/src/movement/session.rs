@@ -1,5 +1,8 @@
 //! Zone-scoped movement submission with caller-supplied calibration.
-use super::{MovementGuard, MovementMode, MovementRequest, PositionPacket, JUMP_OPCODE};
+use super::{
+    gate::{Flags, UpdateGate},
+    MovementGuard, MovementMode, MovementRequest, PositionPacket, JUMP_OPCODE,
+};
 use crate::{command::EncodedCommand, world::Position};
 use anyhow::{ensure, Result};
 use std::time::{Duration, Instant};
@@ -134,21 +137,53 @@ pub struct MotionSession {
     moving: bool,
     suspended: bool,
     falls: bool,
-    /// The least time between two of the player's own updates, where the
-    /// client generation keeps one; see [`Self::with_spacing`].
-    spacing: Option<Duration>,
-    /// The latest accepted sample the spacing has not let out yet.
+    /// How the client generation gates its own update, where it is read;
+    /// see [`Self::with_gate`].
+    gate: Option<UpdateGate>,
+    /// The latest accepted sample the gate has not let out yet.
     held: Option<PositionPacket>,
+    /// The last update sent, without its sequence: Titanium's gate sends
+    /// only after a change.
+    last_update: Option<PositionPacket>,
+    /// The `EQMac` gate's pending flag and what it compares against.
+    flags: Flags,
+    /// When the host's latest sample was accepted.
+    last_input: Instant,
 }
+
+/// What the gate does with an accepted sample.
+enum Release {
+    Send,
+    Hold,
+    Unchanged,
+}
+
 impl MotionSession {
-    /// Sends the player's own position at most once per `spacing`: a sample
-    /// accepted sooner is held, and a later one replaces it, so the latest
-    /// goes out once the spacing has passed ([`Self::tick`]). Accepting a
-    /// sample is unchanged, so the host's own steps keep their pace.
+    /// Lets the player's own update out only as the client generation's
+    /// program would ([`UpdateGate`]): a sample the gate holds back is kept,
+    /// and a later one replaces it, so the latest goes out once the gate
+    /// opens ([`Self::tick`]). Accepting a sample is unchanged, so the
+    /// host's own steps keep their pace.
     #[must_use]
-    pub const fn with_spacing(mut self, spacing: Option<Duration>) -> Self {
-        self.spacing = spacing;
+    pub fn with_gate(mut self, gate: Option<UpdateGate>) -> Self {
+        // The program's resets clear the last update's time, so the first
+        // update after zoning in isn't held back (TAKP gate read Q1 6e).
+        if matches!(gate, Some(UpdateGate::Flagged { .. })) {
+            self.last_sent = self
+                .last_sent
+                .checked_sub(super::EQMAC_UPDATE_TICK)
+                .unwrap_or(self.last_sent);
+        }
+        self.gate = gate;
         self
+    }
+
+    /// The least time between two updates under a spacing gate.
+    fn spacing(&self) -> Duration {
+        match self.gate {
+            Some(UpdateGate::Changed { spacing }) => spacing,
+            _ => Duration::ZERO,
+        }
     }
 
     /// Lets fall samples descend as fast as the client generation's falls
@@ -159,6 +194,27 @@ impl MotionSession {
             self.guard.set_fall_speed(fall_speed);
         }
         self
+    }
+
+    /// Lets samples after a jump rise as the client generation's jump does,
+    /// where it is read: its starting speed and the zone's gravity, in units
+    /// a second and a second squared ([`MovementGuard::set_jump`]).
+    #[must_use]
+    pub fn with_jump(mut self, jump: Option<(f32, f32)>) -> Self {
+        if let Some((speed, gravity)) = jump {
+            self.guard.set_jump(speed, gravity);
+        }
+        self
+    }
+
+    /// The session announced a jump: the samples after it may rise as it
+    /// does ([`MovementGuard::jumped`]).
+    pub fn jumped(&mut self) {
+        self.guard.jumped();
+        // The `EQMac` program's jump marks an update due (Q1 6c).
+        if matches!(self.gate, Some(UpdateGate::Flagged { .. })) {
+            self.flags.raise();
+        }
     }
 
     /// Permits [`MovementMode::Fall`] samples, where the server type takes
@@ -219,8 +275,11 @@ impl MotionSession {
             moving: false,
             suspended: false,
             falls: false,
-            spacing: None,
+            gate: None,
             held: None,
+            last_update: None,
+            flags: Flags::default(),
+            last_input: now,
         })
     }
 
@@ -376,21 +435,58 @@ impl MotionSession {
             delta_heading: turn,
         };
         sample.check()?;
-        let spaced = self
-            .spacing
-            .is_some_and(|spacing| now.saturating_duration_since(self.last_sent) < spacing);
-        if spaced {
-            self.held = Some(sample);
-        } else {
-            send(&sample)?;
-            self.held = None;
-            self.last_sent = now;
-            self.sequence = self.sequence.wrapping_add(1);
+        let mut flags = self.flags.clone();
+        let release = self.release(&sample, &mut flags, now)?;
+        match release {
+            Release::Send => {
+                send(&sample)?;
+                self.held = None;
+                self.last_sent = now;
+                self.sequence = self.sequence.wrapping_add(1);
+                self.last_update = Some(PositionPacket {
+                    sequence: 0,
+                    ..sample
+                });
+            }
+            Release::Hold => self.held = Some(sample),
+            Release::Unchanged => self.held = None,
         }
+        self.flags = flags;
         self.guard = guard;
         self.position = request.position;
         self.moving = moving || turn != 0;
+        self.last_input = now;
         Ok(())
+    }
+
+    /// What the generation's gate does with an accepted sample at `now`;
+    /// `flags` is the `EQMac` gate's state, committed by the caller.
+    fn release(&self, sample: &PositionPacket, flags: &mut Flags, now: Instant) -> Result<Release> {
+        let since = now.saturating_duration_since(self.last_sent);
+        Ok(match self.gate {
+            None => Release::Send,
+            Some(UpdateGate::Changed { spacing }) => {
+                let unsequenced = PositionPacket {
+                    sequence: 0,
+                    ..*sample
+                };
+                if self.last_update == Some(unsequenced) {
+                    Release::Unchanged
+                } else if since < spacing {
+                    Release::Hold
+                } else {
+                    Release::Send
+                }
+            }
+            Some(UpdateGate::Flagged { pack }) => {
+                flags.observe(sample, now);
+                if flags.release(sample, since, pack)? {
+                    Release::Send
+                } else {
+                    Release::Hold
+                }
+            }
+        })
     }
 
     /// Sends a held sample once the spacing has passed, a stop after 250 ms
@@ -417,10 +513,13 @@ impl MotionSession {
         now: Instant,
         send: impl FnOnce(&PositionPacket) -> Result<()>,
     ) -> Result<bool> {
-        let spacing = self.spacing.unwrap_or_default();
+        let spacing = self.spacing();
         let since = now.saturating_duration_since(self.last_sent);
         if self.suspended {
             return Ok(false);
+        }
+        if let Some(UpdateGate::Flagged { pack }) = self.gate {
+            return self.tick_flagged(now, since, pack, send);
         }
         if let Some(held) = self.held {
             if since < spacing {
@@ -434,6 +533,10 @@ impl MotionSession {
             self.held = None;
             self.sequence = self.sequence.wrapping_add(1);
             self.last_sent = now;
+            self.last_update = Some(PositionPacket {
+                sequence: 0,
+                ..sample
+            });
             return Ok(true);
         }
         let interval = if self.moving {
@@ -457,7 +560,60 @@ impl MotionSession {
         self.sequence = self.sequence.wrapping_add(1);
         self.last_sent = now;
         self.moving = false;
+        self.last_update = Some(PositionPacket {
+            sequence: 0,
+            ..sample
+        });
         Ok(true)
+    }
+
+    /// The `EQMac` gate's pass: the timer and the stop mark an update due,
+    /// and the latest state goes out once the gate lets it.
+    fn tick_flagged(
+        &mut self,
+        now: Instant,
+        since: Duration,
+        pack: fn(&PositionPacket) -> Result<EncodedCommand>,
+        send: impl FnOnce(&PositionPacket) -> Result<()>,
+    ) -> Result<bool> {
+        // A move without input for 250 ms has stopped: its speed falls to 0,
+        // a change the program flags at once.
+        let stopped = self.moving
+            && now.saturating_duration_since(self.last_input) >= Duration::from_millis(250);
+        let still = PositionPacket {
+            spawn_id: self.spawn_id,
+            sequence: self.sequence,
+            position: self.position,
+            delta: [0.0; 3],
+            animation: 0,
+            delta_heading: 0,
+        };
+        let candidate = match self.held {
+            _ if stopped => still,
+            Some(held) => PositionPacket {
+                sequence: self.sequence,
+                ..held
+            },
+            // The latest move went out and the host's next has not come.
+            None if self.moving => return Ok(false),
+            None => still,
+        };
+        candidate.check()?;
+        let mut flags = self.flags.clone();
+        flags.observe(&candidate, now);
+        let released = flags.release(&candidate, since, pack)?;
+        if released {
+            send(&candidate)?;
+            self.held = None;
+            self.sequence = self.sequence.wrapping_add(1);
+            self.last_sent = now;
+        }
+        if stopped {
+            self.moving = false;
+            self.held = None;
+        }
+        self.flags = flags;
+        Ok(released)
     }
 
     /// Applies a server correction and revokes calibration and queued motion.

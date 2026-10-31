@@ -191,10 +191,18 @@ pub enum Request {
         /// Whether the player is busy with another trade.
         busy: bool,
     },
-    /// Accept the open trade.
-    AcceptTrade,
-    /// Close the open trade, or withdraw a request.
-    CancelTrade,
+    /// Accept the open trade with this partner, by spawn: `EQMac` names
+    /// them, Titanium the player.
+    AcceptTrade {
+        /// The other side.
+        with: u16,
+    },
+    /// Close the open trade, or withdraw a request, with this partner, by
+    /// spawn: `EQMac` names them, Titanium the player.
+    CancelTrade {
+        /// The other side.
+        with: u16,
+    },
     /// Use a door within reach.
     ClickDoor(u8),
     /// Pick an item up from the ground, by its drop.
@@ -390,8 +398,8 @@ pub fn titanium(request: &Request, sender: Sender<'_>) -> Result<EncodedCommand>
             exchange::acknowledge(sender.spawn(), *asker)?
         }
         Request::AnswerTrade { asker, busy: true } => exchange::busy(sender.spawn(), *asker)?,
-        Request::AcceptTrade => exchange::accept(sender.spawn())?,
-        Request::CancelTrade => exchange::cancel(sender.spawn())?,
+        Request::AcceptTrade { .. } => exchange::accept(sender.spawn())?,
+        Request::CancelTrade { .. } => exchange::cancel(sender.spawn())?,
         Request::ClickDoor(door_id) => doors::titanium_click(*door_id, sender.spawn()),
         // A click opens a world container as it picks an item up.
         Request::PickUp(drop_id) | Request::OpenContainer(drop_id) => {
@@ -526,6 +534,13 @@ pub fn eqmac(request: &Request, sender: Sender<'_>) -> Result<EncodedCommand> {
         Request::AnswerTranslocate { offer, accept } => {
             Ok(confirmations::eqmac_translocate_answer(offer, *accept))
         }
+        Request::Trade(with) => exchange::eqmac::request(sender.spawn(), *with),
+        Request::AnswerTrade { asker, busy: false } => {
+            exchange::eqmac::acknowledge(sender.spawn(), *asker)
+        }
+        Request::AnswerTrade { asker, busy: true } => exchange::eqmac::busy(sender.spawn(), *asker),
+        Request::AcceptTrade { with } => exchange::eqmac::accept(*with),
+        Request::CancelTrade { with } => exchange::eqmac::cancel(sender.spawn(), *with),
         _ => anyhow::bail!("the EQMac client cannot send {request:?} yet"),
     }
 }
@@ -539,6 +554,36 @@ mod tests {
         name: "Tester",
         spawn_id: Some(7),
     };
+
+    #[test]
+    fn eqmac_trades_in_its_own_bodies_naming_the_partner() {
+        assert_eq!(
+            eqmac(&Request::Trade(42), PLAYER).unwrap(),
+            exchange::eqmac::request(7, 42).unwrap()
+        );
+        let answer = |busy| Request::AnswerTrade { asker: 50, busy };
+        assert_eq!(
+            eqmac(&answer(false), PLAYER).unwrap(),
+            exchange::eqmac::acknowledge(7, 50).unwrap()
+        );
+        assert_eq!(
+            eqmac(&answer(true), PLAYER).unwrap(),
+            exchange::eqmac::busy(7, 50).unwrap()
+        );
+        assert_eq!(
+            eqmac(&Request::AcceptTrade { with: 42 }, PLAYER).unwrap(),
+            exchange::eqmac::accept(42).unwrap()
+        );
+        assert_eq!(
+            eqmac(&Request::CancelTrade { with: 42 }, PLAYER).unwrap(),
+            exchange::eqmac::cancel(7, 42).unwrap()
+        );
+        // Titanium names the player, whoever the partner is.
+        assert_eq!(
+            titanium(&Request::CancelTrade { with: 42 }, PLAYER).unwrap(),
+            exchange::cancel(7).unwrap()
+        );
+    }
 
     #[test]
     fn each_generation_moves_items_in_its_own_numbers() {
@@ -696,7 +741,7 @@ mod tests {
             spawn_id: None,
             ..PLAYER
         };
-        assert!(titanium(&Request::AcceptTrade, unspawned).is_err());
+        assert!(titanium(&Request::AcceptTrade { with: 42 }, unspawned).is_err());
         // Another player's request is taken, or answered as busy.
         let answer = |busy| Request::AnswerTrade { asker: 50, busy };
         assert_eq!(
@@ -707,7 +752,6 @@ mod tests {
             titanium(&answer(true), PLAYER).unwrap(),
             exchange::busy(7, 50).unwrap()
         );
-        assert!(eqmac(&answer(false), PLAYER).is_err());
     }
 
     #[test]

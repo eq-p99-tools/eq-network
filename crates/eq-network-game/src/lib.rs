@@ -88,6 +88,9 @@ pub mod popups;
 pub mod quarm;
 /// Raids: invitations, joining, leaving, and the server's word on the raid.
 pub mod raid;
+/// How far each client generation lets the player reach doors, objects,
+/// merchants and the one they bandage.
+pub mod reach;
 /// Being resurrected: the offer and the player's answer.
 pub mod resurrection;
 /// What a quest or a task gives the player.

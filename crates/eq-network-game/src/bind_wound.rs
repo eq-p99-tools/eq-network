@@ -35,7 +35,8 @@ pub mod strings {
     pub const NOT_A_PLAYER: u32 = 144;
     /// Refusing without a bandage.
     pub const NO_BANDAGES: u32 = 146;
-    /// Refusing a player too far away, who is its one argument.
+    /// Refusing a player too far away, who is its one argument: the TAKP
+    /// program's; Titanium's is 12418 ([`crate::reach::Reaches`]).
     pub const TOO_FAR: u32 = 420;
     /// Starting on the player themselves.
     pub const STARTED_ON_SELF: u32 = 12436;
