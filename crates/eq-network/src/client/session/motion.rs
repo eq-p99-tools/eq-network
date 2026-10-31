@@ -7,8 +7,12 @@ use super::{
 };
 use anyhow::Result;
 use eq_network_game::{
+    appearance::AppearanceChange,
     message::Message,
-    movement::{MotionSession, MovementRequest, PositionPacket, STATIONARY_HEARTBEAT},
+    movement::{
+        MotionCalibration, MotionSession, MovementRequest, PositionPacket, SpeedState,
+        STATIONARY_HEARTBEAT,
+    },
     request::Request,
     world::{PlayerState, Position, WorldEvent},
 };
@@ -131,8 +135,20 @@ impl Body {
     }
 }
 
-/// Takes the player's movement away until the client configures it again,
-/// after a correction, a death or a transfer.
+/// The player's movement at these speeds.
+fn granted(session_id: u64, speeds: &MotionCalibration, falls: bool) -> WorldEvent {
+    WorldEvent::MotionState {
+        session_id,
+        units_per_second: Some(speeds.units_per_second),
+        walk_units_per_second: speeds.walk.map(|value| value.units_per_second),
+        strafe_units_per_second: speeds.strafe.map(|value| value.units_per_second),
+        backward_units_per_second: speeds.backward.map(|value| value.units_per_second),
+        falls,
+    }
+}
+
+/// Takes the player's movement away until it is granted again, after a
+/// correction, a death or a transfer.
 pub(super) fn withdrawn(session_id: u64) -> WorldEvent {
     WorldEvent::MotionState {
         session_id,
@@ -151,6 +167,18 @@ pub(super) struct Motion {
     /// Whether the player may also jump: the generation's notice of a jump
     /// is known, and the server takes falls.
     jumps: bool,
+    /// The speed modifier the player's buffs give, once the host has
+    /// reported it; until then the session grants no movement itself.
+    modifier: Option<f32>,
+    /// Whether the player is sneaking, as the server last said: its
+    /// appearance update to the player, or its end of their hiding and
+    /// sneaking.
+    sneaking: bool,
+    /// The player's hit points and their maximum, as the server last
+    /// reported them. `EQMac`'s servers leave out what items add from the
+    /// current alone, so the player reads as more hurt than they are: the
+    /// slower side.
+    hit_points: Option<(i32, i32)>,
 }
 
 impl Motion {
@@ -158,7 +186,70 @@ impl Motion {
         Self {
             falls,
             jumps: falls && jumps,
+            modifier: None,
+            sneaking: false,
+            hit_points: None,
         }
+    }
+
+    /// Grants the player the speeds the generation's client allows, once
+    /// the host has reported the buffs' modifier, and keeps them in step
+    /// with what they depend on; the host hears of each change. Where the
+    /// generation's rule is unread, only a host's calibration grants them.
+    fn grant(&self, world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
+        let (Some(rule), Some(modifier), Some(player)) =
+            (out.wire.speeds(), self.modifier, world.player.as_ref())
+        else {
+            return Ok(());
+        };
+        let speeds = rule(&SpeedState {
+            run: player.run_speed,
+            walk: player.walk_speed,
+            hit_points: self.hit_points,
+            modifier,
+            sneaking: self.sneaking,
+        });
+        let Some(motion) = world.body.motion.as_mut() else {
+            return Ok(());
+        };
+        if motion.calibration() == speeds {
+            return Ok(());
+        }
+        let Some(speeds) = speeds else {
+            motion.withdraw();
+            return out
+                .log
+                .send(ClientEvent::World(withdrawn(world.session_id)));
+        };
+        match motion.calibrate(speeds, Instant::now()) {
+            Ok(()) => out.log.send(ClientEvent::World(granted(
+                world.session_id,
+                &speeds,
+                motion.falls(),
+            ))),
+            Err(error) => out
+                .log
+                .diagnostic(format!("Rejected movement speeds: {error}")),
+        }
+    }
+
+    /// Takes the host's report of the buffs' speed modifier.
+    fn modifier(
+        &mut self,
+        command: &ClientCommand,
+        world: &mut World,
+        out: &mut Out<'_, '_>,
+    ) -> Result<()> {
+        let ClientCommand::SpeedModifier { modifier, .. } = *command else {
+            return Ok(());
+        };
+        if !modifier.is_finite() {
+            return out
+                .log
+                .diagnostic("Rejected a speed modifier that is not a number".into());
+        }
+        self.modifier = Some(modifier);
+        self.grant(world, out)
     }
 
     /// Moves the player, standing them up first if they were sitting or
@@ -220,14 +311,11 @@ impl Motion {
                 .diagnostic("Rejected movement configuration: the player cannot move yet".into());
         };
         match motion.calibrate_fresh(*calibration, *created, Instant::now()) {
-            Ok(()) => out.log.send(ClientEvent::World(WorldEvent::MotionState {
-                session_id: world.session_id,
-                units_per_second: Some(calibration.units_per_second),
-                walk_units_per_second: calibration.walk.map(|value| value.units_per_second),
-                strafe_units_per_second: calibration.strafe.map(|value| value.units_per_second),
-                backward_units_per_second: calibration.backward.map(|value| value.units_per_second),
-                falls: motion.falls(),
-            })),
+            Ok(()) => out.log.send(ClientEvent::World(granted(
+                world.session_id,
+                calibration,
+                motion.falls(),
+            ))),
             Err(error) => out
                 .log
                 .diagnostic(format!("Rejected movement configuration: {error}")),
@@ -293,7 +381,7 @@ impl Feature for Motion {
                     .with_fall_speed(out.wire.fall_speed()),
             );
         }
-        Ok(())
+        self.grant(world, out)
     }
 
     fn owns(&self, command: &ClientCommand) -> bool {
@@ -302,6 +390,7 @@ impl Feature for Motion {
             ClientCommand::Move(_)
                 | ClientCommand::Jump { .. }
                 | ClientCommand::ConfigureMotion { .. }
+                | ClientCommand::SpeedModifier { .. }
                 | ClientCommand::SetPosture { .. }
         )
     }
@@ -316,15 +405,19 @@ impl Feature for Motion {
             ClientCommand::Move(request) => Self::step(request, world, out),
             ClientCommand::Jump { .. } => self.jump(world, out),
             ClientCommand::ConfigureMotion { .. } => Self::calibrate(command, world, out),
+            ClientCommand::SpeedModifier { .. } => self.modifier(command, world, out),
             _ => Self::stance(command, world, out),
         }
     }
 
-    /// Repeats the player's position while they may move.
+    /// Keeps the player's speeds in step, granting them again after a
+    /// correction or a refused transfer took them away, and repeats the
+    /// player's position while they may move.
     fn tick(&mut self, now: Instant, world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
         if !world.ready() || world.lifecycle.blocks_motion() {
             return Ok(());
         }
+        self.grant(world, out)?;
         world.body.heartbeat(now, out)
     }
 
@@ -349,6 +442,27 @@ impl Feature for Motion {
             }
             WorldEvent::Posture { spawn_id, posture } if world.is_player(*spawn_id) => {
                 world.posture.observed(*posture);
+                Ok(())
+            }
+            // What the player's speeds depend on; the next tick grants them.
+            WorldEvent::HitPoints {
+                spawn_id,
+                current,
+                maximum,
+                ..
+            } if world.is_player(*spawn_id) => {
+                self.hit_points = Some((*current, *maximum));
+                Ok(())
+            }
+            WorldEvent::Appearance {
+                spawn_id,
+                change: AppearanceChange::Sneaking(sneaking),
+            } if world.is_player(*spawn_id) => {
+                self.sneaking = *sneaking;
+                Ok(())
+            }
+            WorldEvent::HideAndSneakEnded => {
+                self.sneaking = false;
                 Ok(())
             }
             // The transfers feature stops the body when the player dies.
@@ -511,6 +625,152 @@ mod tests {
             .result
             .unwrap();
         assert_eq!(world.body.position(), Some(at(3.0)));
+    }
+
+    /// The speed each step granted, or None where it withdrew movement.
+    fn speeds(events: &[ClientEvent]) -> Vec<Option<f32>> {
+        events
+            .iter()
+            .filter_map(|event| match event {
+                ClientEvent::World(WorldEvent::MotionState {
+                    units_per_second, ..
+                }) => Some(*units_per_second),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn eqmac_grants_the_programs_speeds_once_the_host_reports_the_modifier() {
+        let eqmac: &'static dyn super::super::wire::Wire = &super::super::wire::EqMac;
+        let mut world = World::new(5);
+        world.own_spawn = Some(7);
+        let mut player = testing::player(7);
+        (player.run_speed, player.walk_speed) = (0.7, 0.46);
+        world.player.admit(player);
+        world.admitted = Some(Instant::now());
+        let mut motion = Motion::new(true, true);
+        let outcome = testing::run_on(eqmac, |out| motion.admitted(&mut world, out));
+        outcome.result.unwrap();
+        assert!(
+            speeds(&outcome.events).is_empty(),
+            "granted before the report"
+        );
+        let report = |modifier| ClientCommand::SpeedModifier {
+            session_id: 5,
+            modifier,
+        };
+        let outcome = testing::run_on(eqmac, |out| motion.handle(&report(0.0), &mut world, out));
+        outcome.result.unwrap();
+        let close = |granted: &[Option<f32>], expected: f32| matches!(granted, [Some(speed)] if (speed - expected).abs() < 0.05);
+        assert!(
+            close(&speeds(&outcome.events), 29.9),
+            "{:?}",
+            outcome.events
+        );
+        // The same speeds again tell the host nothing.
+        let now = Instant::now();
+        let outcome = testing::run_on(eqmac, |out| motion.tick(now, &mut world, out));
+        assert!(
+            speeds(&outcome.events).is_empty(),
+            "granted {:?}",
+            outcome.events
+        );
+        // Badly hurt, then sneaking, the player slows at the next tick.
+        let hurt = Message::Event(WorldEvent::HitPoints {
+            spawn_id: 7,
+            current: 40,
+            maximum: 500,
+            items: eq_network_game::world::ItemHitPoints::LeftOutOfCurrent,
+        });
+        testing::run_on(eqmac, |out| motion.observe(&hurt, &mut world, out))
+            .result
+            .unwrap();
+        let outcome = testing::run_on(eqmac, |out| motion.tick(now, &mut world, out));
+        assert!(
+            close(&speeds(&outcome.events), 14.9),
+            "{:?}",
+            outcome.events
+        );
+        let sneaking = Message::Event(WorldEvent::Appearance {
+            spawn_id: 7,
+            change: AppearanceChange::Sneaking(true),
+        });
+        testing::run_on(eqmac, |out| motion.observe(&sneaking, &mut world, out))
+            .result
+            .unwrap();
+        let outcome = testing::run_on(eqmac, |out| motion.tick(now, &mut world, out));
+        assert!(close(&speeds(&outcome.events), 4.9), "{:?}", outcome.events);
+        let ended = Message::Event(WorldEvent::HideAndSneakEnded);
+        testing::run_on(eqmac, |out| motion.observe(&ended, &mut world, out))
+            .result
+            .unwrap();
+        let outcome = testing::run_on(eqmac, |out| motion.tick(now, &mut world, out));
+        assert!(
+            close(&speeds(&outcome.events), 14.9),
+            "{:?}",
+            outcome.events
+        );
+        // A correction takes movement away, and the next tick grants it again.
+        let correction = Message::Event(WorldEvent::Position {
+            spawn_id: 7,
+            position: at(3.0),
+            velocity: [0.0; 3],
+        });
+        let outcome = testing::run_on(eqmac, |out| motion.observe(&correction, &mut world, out));
+        assert_eq!(speeds(&outcome.events), [None]);
+        let outcome = testing::run_on(eqmac, |out| motion.tick(now, &mut world, out));
+        assert!(
+            close(&speeds(&outcome.events), 14.9),
+            "{:?}",
+            outcome.events
+        );
+        // A root takes it away until it wears off.
+        let outcome = testing::run_on(eqmac, |out| {
+            motion.handle(&report(-1001.0), &mut world, out)
+        });
+        assert_eq!(speeds(&outcome.events), [None]);
+        let outcome = testing::run_on(eqmac, |out| motion.handle(&report(0.0), &mut world, out));
+        assert!(
+            close(&speeds(&outcome.events), 14.9),
+            "{:?}",
+            outcome.events
+        );
+        assert!(testing::run_on(eqmac, |out| {
+            motion.handle(&report(f32::NAN), &mut world, out)
+        })
+        .result
+        .is_ok());
+        assert_eq!(motion.modifier, Some(0.0));
+    }
+
+    #[test]
+    fn titanium_grants_no_speeds_of_its_own_while_its_rule_is_unread() {
+        let mut world = World::new(5);
+        world.own_spawn = Some(7);
+        world.player.admit(testing::player(7));
+        world.admitted = Some(Instant::now());
+        let mut motion = Motion::new(false, false);
+        testing::run(|out| motion.admitted(&mut world, out))
+            .result
+            .unwrap();
+        let report = ClientCommand::SpeedModifier {
+            session_id: 5,
+            modifier: 0.0,
+        };
+        let outcome = testing::run(|out| motion.handle(&report, &mut world, out));
+        outcome.result.unwrap();
+        assert!(
+            speeds(&outcome.events).is_empty(),
+            "granted {:?}",
+            outcome.events
+        );
+        let outcome = testing::run(|out| motion.tick(Instant::now(), &mut world, out));
+        assert!(
+            speeds(&outcome.events).is_empty(),
+            "granted {:?}",
+            outcome.events
+        );
     }
 
     #[test]

@@ -182,6 +182,7 @@ pub(super) fn needs(command: &ClientCommand) -> &'static [Resource] {
         | ClientCommand::DragCorpse { .. }
         | ClientCommand::DropCorpse { .. }
         | ClientCommand::ConfigureMotion { .. }
+        | ClientCommand::SpeedModifier { .. }
         | ClientCommand::AutoEat { .. }
         | ClientCommand::Move(_) => &[],
     }
@@ -350,6 +351,7 @@ fn refusal(command: &ClientCommand, reason: &str) -> Option<WorldEvent> {
         | ClientCommand::AutoAttack { .. }
         | ClientCommand::WhoAll { .. }
         | ClientCommand::ConfigureMotion { .. }
+        | ClientCommand::SpeedModifier { .. }
         | ClientCommand::AutoEat { .. }
         | ClientCommand::CloseContainer { .. }
         // The host sends a death report on its own; nobody waits on it.

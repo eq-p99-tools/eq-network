@@ -22,6 +22,7 @@ use anyhow::{bail, Result};
 use eq_network_game::{
     command::EncodedCommand,
     message::Message,
+    movement::{MotionCalibration, SpeedState},
     request::{self, Request, Sender},
     GameDialect,
 };
@@ -30,6 +31,9 @@ use std::{
     net::SocketAddr,
     sync::{atomic::AtomicBool, mpsc::Receiver},
 };
+
+/// How fast a client generation lets the player move.
+pub(super) type SpeedRule = fn(&SpeedState) -> Option<MotionCalibration>;
 
 /// One client generation's zone packets.
 pub(super) trait Wire: Sync {
@@ -72,6 +76,14 @@ pub(super) trait Wire: Sync {
     /// The least time the generation's client leaves between two of the
     /// player's own position updates; none where it is unread.
     fn position_spacing(&self) -> Option<std::time::Duration> {
+        None
+    }
+
+    /// How fast the generation's client lets the player move, from what the
+    /// session knows of them: None from the rule when the player can't
+    /// move. No rule where it is unread, and then only a host's
+    /// [`ClientCommand::ConfigureMotion`] grants movement.
+    fn speeds(&self) -> Option<SpeedRule> {
         None
     }
 
@@ -268,6 +280,10 @@ impl Wire for EqMac {
 
     fn fall_speed(&self) -> Option<f32> {
         Some(eq_network_game::movement::EQMAC_FALL_SPEED)
+    }
+
+    fn speeds(&self) -> Option<SpeedRule> {
+        Some(eq_network_game::movement::eqmac_speeds)
     }
 
     fn encode(&self, request: &Request, sender: Sender<'_>) -> Result<EncodedCommand> {
