@@ -615,6 +615,19 @@ pub enum WorldEvent {
     /// The world's chat server, for channels or mail, which the session
     /// does not connect to.
     ChatServer(crate::channels::ChatServer),
+    /// The session told the world what machine the player entered it on,
+    /// the official client's weekly [`crate::sysinfo`] report. The host
+    /// keeps the time it says: the next report is due a week after this
+    /// one, and the saved stamp is what the world's own client compares
+    /// against, so it belongs in the installed client's own
+    /// `eqclient.ini` (`[Defaults] LastSysInfoDate`).
+    ///
+    /// [`crate::sysinfo`]: crate::sysinfo::SysInfo
+    SystemInfoReported {
+        /// Whole seconds since the epoch, when the report went out; what
+        /// to save as the new stamp.
+        at: u64,
+    },
     /// The login server's worlds, for the player to choose one to play on;
     /// none has been entered yet. Only a login with no world configured
     /// lists them.
