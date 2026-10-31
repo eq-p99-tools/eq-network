@@ -42,8 +42,13 @@ pub const EQMAC_FALL_SPEED: f32 = 99.0 * DEFAULT_GRAVITY * 20.0;
 /// step an update the speed tends to 99 × gravity a step, 20 steps a
 /// second: 792 at the default 0.4. This is derived, not read: how many steps
 /// an update covers depends on the update rate the client emulates
-/// (checklist 6.294). A gravity that is negative or not a number counts as
-/// the default; a header of 0 pulls nothing, so a fall cannot speed up.
+/// (checklist 6.294).
+///
+/// The gravity is the zone header's +420 field as decoded, with no default of
+/// its own; `None` (no header yet) gives the program's default 0.4. A header
+/// of 0 is used as read, so a fall cannot speed up (Titanium sitting 8g:
+/// header 0 kept; the TAKP read R3 is silent on a zone's value). A negative or
+/// non-number header is unread on both programs and counts as the default.
 #[must_use]
 pub fn fall_speed(gravity: Option<f32>) -> f32 {
     let gravity = gravity
