@@ -8,7 +8,7 @@ pub use session::{
     titanium_jump, BackwardCalibration, MotionCalibration, MotionSession, StrafeCalibration,
     WalkCalibration,
 };
-pub use speeds::{eqmac as eqmac_speeds, SpeedState, Speeds};
+pub use speeds::{eqmac as eqmac_speeds, titanium as titanium_speeds, SpeedState, Speeds};
 
 use crate::{command::EncodedCommand, world::Position};
 use anyhow::{ensure, Result};

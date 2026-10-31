@@ -228,8 +228,19 @@ fn stationary_turns_encode_rate_and_expire_to_a_zero_rate_stop() {
             Ok(())
         })
         .unwrap());
+    // The rate is cut toward zero: 23.99 over 250 ms, 95.96 a second, sends
+    // 95.
+    let later = now + Duration::from_millis(350);
+    let mut slower = request(later, 0.0);
+    slower.position.heading = 488.0 + 23.99;
+    session
+        .send_move(&slower, later, |packet| {
+            assert_eq!((word(&packet.body, 20) >> 10) & 0x3ff, 95);
+            Ok(())
+        })
+        .unwrap();
     let before = session.position();
-    let mut snap = request(now + Duration::from_millis(350), 0.0);
+    let mut snap = request(now + Duration::from_millis(450), 0.0);
     snap.position.heading = 200.0;
     assert!(session
         .send_move(&snap, snap.created, |_| panic!(

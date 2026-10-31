@@ -833,32 +833,36 @@ mod tests {
     }
 
     #[test]
-    fn titanium_grants_no_speeds_of_its_own_while_its_rule_is_unread() {
+    fn titanium_grants_the_programs_speeds_with_its_own_wire_values() {
         let mut world = World::new(5);
         world.own_spawn = Some(7);
-        world.player.admit(testing::player(7));
+        let mut player = testing::player(7);
+        (player.run_speed, player.walk_speed, player.level) = (0.7, 0.46, 50);
+        world.player.admit(player);
         world.admitted = Some(Instant::now());
         let mut motion = Motion::new(false, false);
-        testing::run(|out| motion.admitted(&mut world, out))
-            .result
-            .unwrap();
-        let report = ClientCommand::SpeedInputs {
-            session_id: 5,
-            rate: 0,
-            weight: 0,
-            capacity: 100,
-        };
-        let outcome = testing::run(|out| motion.handle(&report, &mut world, out));
+        let outcome = testing::run(|out| motion.admitted(&mut world, out));
         outcome.result.unwrap();
         assert!(
             speeds(&outcome.events).is_empty(),
-            "granted {:?}",
-            outcome.events
+            "granted before the report"
         );
-        let outcome = testing::run(|out| motion.tick(Instant::now(), &mut world, out));
+        let outcome = testing::run(|out| motion.handle(&report(0, 50), &mut world, out));
+        outcome.result.unwrap();
+        assert!(granted(&outcome.events, 29.9), "{:?}", outcome.events);
+        let calibration = world.body.motion.as_ref().unwrap().calibration().unwrap();
+        // Forty times the input on the wire, cut toward zero, and the
+        // velocity in units a tick.
+        assert_eq!(calibration.animation, 28);
+        assert_eq!(calibration.walk.unwrap().animation, 18);
+        assert_eq!(calibration.backward.unwrap().animation, -18);
+        assert_eq!(calibration.strafe.unwrap().animation, 0);
+        assert!((calibration.velocity_scale - 0.05).abs() < f32::EPSILON);
+        // A slow takes no more than 65% of the run speed off.
+        let outcome = testing::run(|out| motion.handle(&report(-90, 50), &mut world, out));
         assert!(
-            speeds(&outcome.events).is_empty(),
-            "granted {:?}",
+            granted(&outcome.events, 0.245 * 42.667),
+            "{:?}",
             outcome.events
         );
     }

@@ -501,11 +501,17 @@ impl MotionSession {
 #[path = "session_tests.rs"]
 mod tests;
 
-/// Uses shortest-arc heading velocity; the observed steady turn field is in heading units/sec.
-#[allow(clippy::cast_possible_truncation)] // Rounded and checked against the signed wire range.
+/// The shortest-arc turn rate in heading units a second, cut toward zero.
+/// Titanium's program sends its turn rate per 50 ms tick times 20, cut to
+/// a whole number whatever the mode, so a full keyboard turn of 12 a tick
+/// sends 240 (the Titanium client update read of 10-31, and sitting 7); the
+/// cut is read from its conversion routine's shape only. Its mouse-turn path
+/// is unread, so a turn faster than the 10-bit field holds is refused, as
+/// before.
+#[allow(clippy::cast_possible_truncation)] // Cut and checked against the signed wire range.
 fn heading_velocity(from: f32, to: f32, elapsed: f32) -> Result<i16> {
     let difference = (to - from + 256.0).rem_euclid(512.0) - 256.0;
-    let rate = (difference / elapsed).round();
+    let rate = (difference / elapsed).trunc();
     ensure!(
         rate.is_finite() && (-512.0..=511.0).contains(&rate),
         "heading change exceeds wire turn rate"

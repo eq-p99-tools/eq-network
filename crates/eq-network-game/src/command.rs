@@ -627,6 +627,9 @@ pub enum GameCommand {
         spawn_id: Option<u16>,
     },
     /// Install independently measured motion values for this admission.
+    /// Both client generations work out their own speeds from
+    /// [`Self::SpeedInputs`], which replace these at its first report; this
+    /// stays for tests and for a generation whose rule is unread.
     ConfigureMotion {
         /// Current zone-admission identifier.
         session_id: u64,
