@@ -103,6 +103,8 @@ pub mod socials;
 pub mod spells;
 /// A quest's word on the player's base stats.
 pub mod stats;
+/// What machine the player enters the world on, as the world is told it.
+pub mod sysinfo;
 /// The player's target as the server sets it, and whom that target targets.
 pub mod targets;
 /// The server's regeneration tick and how often it comes.

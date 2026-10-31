@@ -240,6 +240,21 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- What the world is told of the machine it is entered on, on Titanium:
+  `sysinfo::SysInfo` and its `encode` build the 344-byte `OP_SystemInfo`
+  (0x1C4C) record, and a world connection that has taken the player in
+  sends it once a week (`sysinfo::REPORT_SECONDS`) while its server type
+  is listed for it (`servers.rs` `sends_system_info`, watched on P99
+  entering Green 2026-10-30; silent everywhere else until watched).
+  `ClientConfig::sysinfo` carries what the host knows of its machine —
+  none by default, which keeps a session silent as it always was. The
+  record's fixed words are what the official program sends, read from its
+  own gatherer and the wire around it; the two words dsetup answers with
+  read 0 on both, and the session tells the host when it spoke
+  (`WorldEvent::SystemInfoReported`) so the host can keep the stamp
+  (`[Defaults] LastSysInfoDate`) that decides the next week. Hosts that
+  match `WorldEvent` exhaustively need an arm for it.
+
 - What game masters and the world tell the zone of a player, on both
   generations: `WorldEvent::Gm` (`gm::GmNotice`). `Kicked` and `Killed`
   name the player and the game master, None from the world, from
