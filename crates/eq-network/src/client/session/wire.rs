@@ -199,6 +199,10 @@ impl Wire for Titanium {
         Some(eq_network_game::movement::TITANIUM_POSITION_SPACING)
     }
 
+    fn speeds(&self) -> Option<SpeedRule> {
+        Some(eq_network_game::movement::titanium_speeds)
+    }
+
     fn encode(&self, request: &Request, sender: Sender<'_>) -> Result<EncodedCommand> {
         request::titanium(request, sender)
     }

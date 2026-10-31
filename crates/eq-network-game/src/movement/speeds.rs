@@ -49,8 +49,13 @@ pub struct Speeds {
 /// the speed, so the speed settles at 0.8 / 0.375 a tick, 20 ticks a second
 /// (from the program, TAKP sitting 2 M1).
 pub(crate) const EQMAC_UNITS_PER_INPUT: f32 = 0.8 / 0.375 * 20.0;
-/// World units per second to the program's velocity, in units a tick.
-const EQMAC_VELOCITY_SCALE: f32 = 1.0 / 20.0;
+/// World units per second to the programs' velocity, in units a tick; both
+/// generations send it so (the Titanium client update read of 10-31).
+const VELOCITY_SCALE: f32 = 1.0 / 20.0;
+/// The least and most forward input the programs put on the wire: Titanium
+/// holds its record's input to these before it multiplies (the Titanium
+/// client update read of 10-31), and `EQMac`'s byte in tenths spans them.
+const WIRE_INPUTS: (f32, f32) = (-12.8, 12.7);
 /// The most the speed modifier adds, without the run-speed ability's ranks.
 const EQMAC_MODIFIER_CAP: f32 = 1.092_006;
 /// The movement rate at or below which the player is rooted (see
@@ -73,14 +78,28 @@ struct Generation {
     /// raises a slow to -65% (the Titanium speeds read of 10-31, part 3);
     /// TAKP's writer has no floor.
     rate_floor: Option<i16>,
-    /// The generation's velocity on the wire per unit a second.
-    velocity_scale: f32,
+    /// The animation field on the wire per unit of forward input: `EQMac`'s
+    /// speed byte is in tenths, Titanium's 10-bit field in fortieths.
+    animation_per_input: f32,
+    /// A zone where the program never slows the player: 151 on `EQMac`.
+    /// Titanium's two tests that hold the multiplier at 1 are unread, so it
+    /// slows the player everywhere, the slower side.
+    unslowed_zone: Option<u16>,
 }
 
 /// `EQMac`'s side of the table.
 const EQMAC: Generation = Generation {
     rate_floor: None,
-    velocity_scale: EQMAC_VELOCITY_SCALE,
+    animation_per_input: 10.0,
+    unslowed_zone: Some(EQMAC_UNSLOWED_ZONE),
+};
+
+/// Titanium's side of the table, from the Titanium speeds read and the
+/// Titanium client update read of 10-31.
+const TITANIUM: Generation = Generation {
+    rate_floor: Some(-65),
+    animation_per_input: 40.0,
+    unslowed_zone: None,
 };
 
 /// `EQMac`'s speeds, from the program (TAKP sitting 2 M1, "Speeds", and the
@@ -121,12 +140,13 @@ const EQMAC: Generation = Generation {
 /// at 0, running adds 0.01 per point of the base movement speed effect (271)
 /// instead, which is 0 until the session decodes the player's alternate
 /// advancement; and the cap rises 0.01 per point of effect 290, also 0 until
-/// then. The hit-point pair is read as a current and maximum that fits hit
+/// then. Its two tests that hold the multiplier at 1 are unread, so zone
+/// 151's exception is `EQMac`'s only. The hit-point pair is read as a current and maximum that fits hit
 /// points, as TAKP names it. Not taken from Titanium's read: ducking, the
 /// flag at +0x1b1 and its value at +0xec4, mounts, water (the session
-/// doesn't swim), the halved decay and model 141. Its values on the wire,
-/// the animation and the velocity's scale, are unread, so Titanium has no
-/// rule of its own yet.
+/// doesn't swim), the halved decay and model 141. Sneaking, which the
+/// Titanium read doesn't reach, takes `EQMac`'s rule, the slower side. Its
+/// values on the wire are [`titanium`]'s.
 ///
 /// What the session doesn't know, it takes the slower side of: the
 /// modifier's cap is the base one, as the run-speed ability's ranks aren't
@@ -138,6 +158,20 @@ const EQMAC: Generation = Generation {
 #[must_use]
 pub fn eqmac(state: &SpeedState) -> Speeds {
     speeds(EQMAC, state)
+}
+
+/// Titanium's speeds: [`eqmac`]'s rule with Titanium's three differences,
+/// and its own wire values. Its client update (the Titanium client update
+/// read of 10-31, writer 0x465244) carries the forward input times 40 in
+/// its 10-bit animation field, after holding the input to -12.8..12.7, so
+/// the defaults send 28 running, 18 walking, -18 backing and 0 strafing
+/// alone; the field moves with the multiplier and the modifier. Its deltas
+/// are the velocity in units a 50 ms tick. The heading delta, the turn rate
+/// in heading units a second, doesn't depend on the mode, and isn't part of
+/// this rule.
+#[must_use]
+pub fn titanium(state: &SpeedState) -> Speeds {
+    speeds(TITANIUM, state)
 }
 
 /// A generation's speeds (see [`eqmac`]).
@@ -157,7 +191,7 @@ fn motion(generation: Generation, state: &SpeedState) -> Option<MotionCalibratio
     if state.rate <= EQMAC_ROOTED {
         return None;
     }
-    let multiplier = multiplier(state);
+    let multiplier = multiplier(generation, state);
     let rate = generation
         .rate_floor
         .map_or(state.rate, |floor| state.rate.max(floor));
@@ -189,26 +223,30 @@ fn motion(generation: Generation, state: &SpeedState) -> Option<MotionCalibratio
     let strafing =
         state.walk * 0.5 * 2.0 * multiplier * if state.sneaking || slowed { 0.5 } else { 1.0 };
     let speed = |input: f32| input.abs() * EQMAC_UNITS_PER_INPUT;
-    // The program keeps the byte in tenths, cut toward zero.
-    #[allow(clippy::cast_possible_truncation)] // Held to a byte's range first.
-    let byte = |input: f32| (input * 10.0).clamp(-128.0, 127.0) as i16;
+    // The programs cut the field toward zero. Whether Titanium's conversion
+    // truncates is read from its routine's shape only (0x60e98c), and the
+    // product is taken in single precision.
+    #[allow(clippy::cast_possible_truncation)] // Held to the field's range first.
+    let byte = |input: f32| {
+        (input.clamp(WIRE_INPUTS.0, WIRE_INPUTS.1) * generation.animation_per_input) as i16
+    };
     let calibration = MotionCalibration {
         units_per_second: speed(running),
-        velocity_scale: generation.velocity_scale,
+        velocity_scale: VELOCITY_SCALE,
         animation: byte(running),
         walk: (walking > 0.0).then_some(WalkCalibration {
             units_per_second: speed(walking),
-            velocity_scale: generation.velocity_scale,
+            velocity_scale: VELOCITY_SCALE,
             animation: byte(walking),
         }),
         backward: (backing < 0.0).then_some(BackwardCalibration {
             units_per_second: speed(backing),
-            velocity_scale: generation.velocity_scale,
+            velocity_scale: VELOCITY_SCALE,
             animation: byte(backing),
         }),
         strafe: (strafing > 0.0).then_some(StrafeCalibration {
             units_per_second: speed(strafing),
-            velocity_scale: generation.velocity_scale,
+            velocity_scale: VELOCITY_SCALE,
             animation: 0,
         }),
     };
@@ -222,8 +260,8 @@ fn encumbered(state: &SpeedState) -> bool {
 
 /// The program's movement multiplier (see [`eqmac`]).
 #[allow(clippy::cast_precision_loss)] // Hit points and weights well within f32.
-fn multiplier(state: &SpeedState) -> f32 {
-    if state.zone_id == EQMAC_UNSLOWED_ZONE {
+fn multiplier(generation: Generation, state: &SpeedState) -> f32 {
+    if generation.unslowed_zone == Some(state.zone_id) {
         return 1.0;
     }
     let mut multiplier = match state.hit_points {
@@ -329,6 +367,47 @@ mod tests {
         // A root holds the player.
         assert_eq!(running(rate(-1000)), None);
         assert!(running(rate(-999)).is_some());
+    }
+
+    #[test]
+    fn titanium_sends_forty_times_the_input_and_slows_everywhere() {
+        let speeds = |state: SpeedState| titanium(&state).motion.unwrap();
+        let normal = speeds(player());
+        assert!(close(normal.units_per_second, 29.9));
+        assert_eq!(
+            (
+                normal.animation,
+                normal.walk.unwrap().animation,
+                normal.backward.unwrap().animation,
+                normal.strafe.unwrap().animation
+            ),
+            (28, 18, -18, 0)
+        );
+        // The field moves with the modifier: 0.7 + 0.28 sends 39.
+        assert_eq!(
+            speeds(SpeedState {
+                rate: 40,
+                ..player()
+            })
+            .animation,
+            39
+        );
+        // A slow to the least input sends 0.
+        let crawling = speeds(SpeedState {
+            rate: -65,
+            ..player()
+        })
+        .walk
+        .unwrap();
+        assert_eq!(crawling.animation, 0);
+        // Zone 151 slows a hurt player on Titanium.
+        let hurt = SpeedState {
+            hit_points: Some((40, 500)),
+            zone_id: 151,
+            ..player()
+        };
+        assert!(close(speeds(hurt).units_per_second, 29.9 / 2.0));
+        assert!(close(running(hurt).unwrap(), 29.9));
     }
 
     #[test]
