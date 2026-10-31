@@ -696,6 +696,9 @@ pub enum WorldEvent {
         door_id: u8,
         /// Local rejection; None means submission to transport succeeded.
         error: Option<String>,
+        /// The program's string for the rejection, where it says one: 1462
+        /// for a door out of reach ([`crate::doors::OutOfReach`]).
+        string_id: Option<u32>,
     },
     /// Items on the ground and world containers.
     Objects(crate::objects::ObjectUpdate),

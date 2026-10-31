@@ -1369,6 +1369,7 @@ mod tests {
                 session_id: 5,
                 door_id: 3,
                 error: Some(reason),
+                ..
             }), ..] if reason == UNOFFERED
         ));
     }

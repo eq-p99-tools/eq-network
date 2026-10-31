@@ -318,6 +318,7 @@ fn refusal(command: &ClientCommand, reason: &str) -> Option<WorldEvent> {
             session_id: *session_id,
             door_id: *door_id,
             error,
+            string_id: None,
         },
         ClientCommand::Camp { .. } => WorldEvent::Camp(CampStatus::Rejected(reason.into())),
         ClientCommand::SelectTarget {

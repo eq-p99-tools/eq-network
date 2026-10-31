@@ -81,6 +81,12 @@ pub(super) trait Wire: Sync {
         None
     }
 
+    /// How far the generation's client lets the player reach doors,
+    /// objects, merchants and the one they bandage.
+    fn reaches(&self) -> &'static eq_network_game::reach::Reaches {
+        &eq_network_game::reach::TITANIUM
+    }
+
     /// How the generation's client gates the player's own position
     /// updates; none where it is unread.
     fn update_gate(&self) -> Option<eq_network_game::movement::UpdateGate> {
@@ -321,6 +327,10 @@ impl Wire for EqMac {
 
     fn jump_speed(&self) -> Option<f32> {
         Some(eq_network_game::movement::JUMP_SPEED)
+    }
+
+    fn reaches(&self) -> &'static eq_network_game::reach::Reaches {
+        &eq_network_game::reach::EQMAC
     }
 
     fn update_gate(&self) -> Option<eq_network_game::movement::UpdateGate> {

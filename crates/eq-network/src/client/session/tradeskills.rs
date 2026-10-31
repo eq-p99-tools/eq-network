@@ -66,6 +66,8 @@ impl From<ContainerView> for OpenContainer {
 pub(super) struct Tradeskills {
     /// The container whose combine waits for the server's answer.
     combining: Option<InventorySlot>,
+    /// When the open container's reach was last checked.
+    reach_checked: Option<Instant>,
 }
 
 impl Feature for Tradeskills {
@@ -138,6 +140,11 @@ impl Feature for Tradeskills {
 
     /// Hears the server answer a combine, and open the container the player
     /// asked for or say that someone else is using it.
+    fn tick(&mut self, now: Instant, world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
+        let reach = out.wire.reaches().containers;
+        keep_in_reach((&mut self.reach_checked, reach), now, world, out)
+    }
+
     fn observe(
         &mut self,
         message: &Message,
@@ -167,7 +174,11 @@ fn open(drop_id: u32, world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
         world
             .player_at()
             .ok_or_else(|| anyhow!("player is unavailable"))
-            .and_then(|(spawn_id, position)| world.objects.check_open(drop_id, spawn_id, position))
+            .and_then(|(spawn_id, position)| {
+                world
+                    .objects
+                    .check_open(drop_id, spawn_id, position, out.wire.reaches().objects)
+            })
     };
     let error = match checked {
         Ok(()) => {
@@ -182,6 +193,42 @@ fn open(drop_id: u32, world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
         drop_id,
         error,
     }))
+}
+
+/// Closes the world container open for the player once they are out of the
+/// generation's reach of it, checked as often as its program checks
+/// ([`eq_network_game::reach::CONTAINER_CHECK`]), and tells the host.
+fn keep_in_reach(
+    (checked, reach): (&mut Option<Instant>, Option<eq_network_game::reach::Reach>),
+    now: Instant,
+    world: &mut World,
+    out: &mut Out<'_, '_>,
+) -> Result<()> {
+    let Some(reach) = reach else {
+        return Ok(());
+    };
+    if checked.is_some_and(|at| {
+        now.saturating_duration_since(at) <= eq_network_game::reach::CONTAINER_CHECK
+    }) {
+        return Ok(());
+    }
+    *checked = Some(now);
+    let Some(Container::Open(view)) = &world.container.0 else {
+        return Ok(());
+    };
+    let drop_id = view.drop_id;
+    let (Some(object), Some((_, position))) =
+        (world.objects.entries().get(&drop_id), world.player_at())
+    else {
+        return Ok(());
+    };
+    if reach.admits(position, object.position) {
+        return Ok(());
+    }
+    close(world, out)?;
+    out.log.send(ClientEvent::World(WorldEvent::Objects(
+        ObjectUpdate::Closed { drop_id },
+    )))
 }
 
 /// Closes the world container open for the player; the server puts what it
@@ -294,6 +341,53 @@ mod tests {
             drop_id: 5,
             created: Instant::now(),
         }
+    }
+
+    #[test]
+    fn a_mac_era_container_closes_once_the_player_is_out_of_reach() {
+        let (mut features, mut world) = at_forge();
+        command(&open_forge(), &mut features, &mut world);
+        hear(
+            ObjectUpdate::Container(view(true)),
+            &mut features,
+            &mut world,
+        );
+        let mut player = testing::player(7);
+        player.position.x = 20.0;
+        world.player.admit(player);
+        let start = Instant::now();
+        // TAKP's reach (its containers aren't encoded yet, so Titanium's
+        // packets carry the close here).
+        let reach = eq_network_game::reach::EQMAC.containers;
+        let mut checked = None;
+        let mut tick = |world: &mut World, reach, now| {
+            let outcome = testing::run(|out| keep_in_reach((&mut checked, reach), now, world, out));
+            assert!(outcome.result.is_ok());
+            outcome
+        };
+        // At 20 the container stays open.
+        let outcome = tick(&mut world, reach, start);
+        assert!(outcome.sent.is_empty() && world.container.is_open());
+        let mut player = testing::player(7);
+        player.position.x = 20.5;
+        world.player.admit(player);
+        // Titanium's reach is unread: it never closes one.
+        let soon = start + std::time::Duration::from_millis(500);
+        let outcome = tick(&mut world, None, soon);
+        assert!(outcome.sent.is_empty() && world.container.is_open());
+        // Checked again only more than 500 ms on, and then closed.
+        let outcome = tick(&mut world, reach, soon);
+        assert!(outcome.sent.is_empty() && world.container.is_open());
+        let later = start + std::time::Duration::from_millis(501);
+        let outcome = tick(&mut world, reach, later);
+        assert_eq!(outcome.sent.len(), 1);
+        assert!(!world.container.is_open());
+        assert!(matches!(
+            outcome.events[..],
+            [ClientEvent::World(WorldEvent::Objects(
+                ObjectUpdate::Closed { drop_id: 5 }
+            ))]
+        ));
     }
 
     #[test]

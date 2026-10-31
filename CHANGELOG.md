@@ -27,6 +27,22 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     the client logs it), and never closes the session.
   - `CampStatus::Abandoned` says what ended the camp (`CampEnd`: standing,
     moving, or other), so the client can say the program's line for each.
+  - The player's own update goes out as each generation's program lets it
+    (`movement::UpdateGate`, `Wire::update_gate`, replacing
+    `with_spacing`): Titanium only after a change, more than 280 ms apart;
+    `EQMac` on its 1 s timer, a speed change of 0.2, a heading change of 2,
+    a turn or a jump, more than 150 ms apart, with an unchanged update
+    repeated 6 times and then held (TAKP gate read Q1, path A).
+  - Reach per generation (`reach::Reaches`, `Wire::reaches`; Titanium
+    sitting 8a, TAKP read T6 and T8): TAKP doors at 20 in 2-D, ground items
+    and containers under 20 in 3-D, merchants at most 20 in 3-D, and an open
+    container closed beyond 20 (`ObjectUpdate::Closed`); Bind Wound at 15
+    on both, with each program's line (12418 on Titanium, 420 on TAKP).
+    `Objects::check_open`, `check_pickup` and `Doors::check_click` take the
+    reach. A door out of reach reports string 1462
+    (`WorldEvent::DoorAction::string_id`, `doors::OutOfReach`). Neither
+    door reach counts its size terms (checklist 6.311); Titanium's merchant
+    and container reaches are unread (6.312).
 
 - Batch 3a, from the official programs (Titanium sittings 8-9, TAKP sitting
   2 and the 10-31 roleplay read):

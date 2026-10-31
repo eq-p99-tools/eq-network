@@ -81,6 +81,7 @@ impl Feature for GroundObjects {
             *drop_id,
             world.player_at(),
             &world.inventory,
+            out.wire.reaches().objects,
         );
         let error = match checked {
             Ok(request) => {
@@ -139,6 +140,7 @@ fn pickup(
     drop_id: u32,
     player: Option<(u16, Position)>,
     inventory: &Inventory,
+    reach: eq_network_game::reach::Reach,
 ) -> Result<Request> {
     ensure!(
         inventory.received() && !inventory.stale(),
@@ -153,7 +155,7 @@ fn pickup(
         "put down the item on your cursor first"
     );
     let (spawn_id, position) = player.ok_or_else(|| anyhow!("player is unavailable"))?;
-    objects.check_pickup(drop_id, spawn_id, position)?;
+    objects.check_pickup(drop_id, spawn_id, position, reach)?;
     Ok(Request::PickUp(drop_id))
 }
 
@@ -218,16 +220,18 @@ mod tests {
         inventory
     }
 
+    const REACH: eq_network_game::reach::Reach = eq_network_game::reach::TITANIUM.objects;
+
     #[test]
     fn pickups_need_a_loaded_inventory_and_an_empty_cursor() {
         let objects = table();
         let player = Some((9, Position::default()));
         assert_eq!(
-            pickup(&objects, 71, player, &loaded(false)).unwrap(),
+            pickup(&objects, 71, player, &loaded(false), REACH).unwrap(),
             Request::PickUp(71)
         );
         let error = |player, inventory: &Inventory| {
-            pickup(&objects, 71, player, inventory)
+            pickup(&objects, 71, player, inventory, REACH)
                 .unwrap_err()
                 .to_string()
         };
@@ -248,9 +252,15 @@ mod tests {
         let mut inventory = loaded(false);
         inventory.apply(InventoryUpdate::Prediction(vec![item(InventorySlot(23))]));
         assert_eq!(
-            pickup(&objects, 71, Some((9, Position::default())), &inventory)
-                .unwrap_err()
-                .to_string(),
+            pickup(
+                &objects,
+                71,
+                Some((9, Position::default())),
+                &inventory,
+                REACH
+            )
+            .unwrap_err()
+            .to_string(),
             "wait for the last item move to settle"
         );
     }

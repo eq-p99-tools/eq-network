@@ -5,7 +5,7 @@ use super::{
 };
 use anyhow::{anyhow, ensure, Result};
 use eq_network_game::{
-    doors::DoorUpdate,
+    doors::{DoorUpdate, OutOfReach},
     message::Message,
     request::Request,
     world::{WorldEvent, WorldEvent::DoorAction},
@@ -31,7 +31,12 @@ impl Default for Doors {
 impl Doors {
     /// The request for a door in reach, clicked since the door table last
     /// changed.
-    fn click(&self, command: &ClientCommand, world: &World) -> Result<Request> {
+    fn click(
+        &self,
+        command: &ClientCommand,
+        world: &World,
+        reach: eq_network_game::reach::Reach,
+    ) -> Result<Request> {
         let ClientCommand::ClickDoor {
             door_id, created, ..
         } = command
@@ -42,7 +47,8 @@ impl Doors {
         let (spawn_id, position) = world
             .player_at()
             .ok_or_else(|| anyhow!("player is unavailable"))?;
-        self.table.check_click(*door_id, spawn_id, position)?;
+        self.table
+            .check_click(*door_id, spawn_id, position, reach)?;
         Ok(Request::ClickDoor(*door_id))
     }
 }
@@ -79,17 +85,23 @@ impl Feature for Doors {
         let ClientCommand::ClickDoor { door_id, .. } = command else {
             return Ok(());
         };
-        let error = match self.click(command, world) {
+        let (error, string_id) = match self.click(command, world, out.wire.reaches().doors) {
             Ok(request) => {
                 out.request(&request)?;
-                None
+                (None, None)
             }
-            Err(error) => Some(error.to_string()),
+            Err(error) => (
+                Some(error.to_string()),
+                error
+                    .downcast_ref::<OutOfReach>()
+                    .map(|_| OutOfReach::STRING),
+            ),
         };
         out.log.send(ClientEvent::World(DoorAction {
             session_id: world.session_id,
             door_id: *door_id,
             error,
+            string_id,
         }))
     }
 
@@ -115,6 +127,53 @@ mod tests {
     use super::*;
     use eq_network_game::{doors::Door, world::Position};
     use std::time::Duration;
+
+    #[test]
+    fn each_generation_reaches_a_door_as_its_program_does() {
+        let mut doors = Doors::default();
+        let spawn = WorldEvent::Doors(DoorUpdate::Spawn(vec![Door {
+            id: 1,
+            model: "DOOR".into(),
+            // 15 across and 15 up: 21.2 away, 15 on the ground.
+            position: Position {
+                x: 15.0,
+                z: 15.0,
+                ..Position::default()
+            },
+            incline: 0,
+            size: 100,
+            open_type: 0,
+            state_at_spawn: 0,
+            invert_state: 0,
+            parameter: 0,
+            action: None,
+        }]));
+        let mut world = World::new(5);
+        doors.admit(&Message::Event(spawn), &mut world).unwrap();
+        world.player.admit(testing::player(7));
+        let click = ClientCommand::ClickDoor {
+            session_id: 5,
+            door_id: 1,
+            created: Instant::now(),
+        };
+        let outcome = testing::run(|out| doors.handle(&click, &mut world, out));
+        outcome.result.unwrap();
+        assert_eq!(outcome.sent, []);
+        assert!(matches!(
+            outcome.events[..],
+            [ClientEvent::World(DoorAction {
+                string_id: Some(OutOfReach::STRING),
+                ..
+            })]
+        ));
+        // TAKP's reach is 2-D (its door click isn't encoded yet).
+        assert_eq!(
+            doors
+                .click(&click, &world, eq_network_game::reach::EQMAC.doors)
+                .unwrap(),
+            Request::ClickDoor(1)
+        );
+    }
 
     #[test]
     fn a_fresh_click_on_a_door_in_reach_sends_the_click_and_reports_it() {
@@ -176,7 +235,12 @@ mod tests {
             door_id: 1,
             created,
         };
-        let error = |command: &ClientCommand| doors.click(command, &world).unwrap_err().to_string();
+        let error = |command: &ClientCommand| {
+            doors
+                .click(command, &world, eq_network_game::reach::TITANIUM.doors)
+                .unwrap_err()
+                .to_string()
+        };
         let before = doors
             .changed_at
             .checked_sub(Duration::from_millis(1))

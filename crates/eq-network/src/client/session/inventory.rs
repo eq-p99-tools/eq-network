@@ -510,19 +510,36 @@ impl Belongings {
     }
 
     /// Opens or closes a merchant's window; only a merchant the player can
-    /// see will trade.
+    /// see will trade, and opens only within the generation's reach where
+    /// it is read (TAKP: 3-D, at most 20). Out of reach the program says
+    /// nothing of its own and considers the merchant instead; this session
+    /// only refuses.
     fn shop(command: &ClientCommand, world: &World, out: &mut Out<'_, '_>) -> Result<()> {
-        let ClientCommand::Shop { merchant_id, .. } = command else {
+        let ClientCommand::Shop {
+            merchant_id, open, ..
+        } = command
+        else {
             return Ok(());
         };
-        let merchant = world
+        let Some(merchant) = world
             .spawns
             .visible(*merchant_id)
-            .is_some_and(|spawn| spawn.kind == SpawnKind::Npc);
-        if !merchant {
+            .filter(|spawn| spawn.kind == SpawnKind::Npc)
+        else {
             return out
                 .log
                 .diagnostic("Rejected an unavailable merchant".into());
+        };
+        let reach = out.wire.reaches().merchants.filter(|_| *open);
+        let within = reach.is_none_or(|reach| {
+            world
+                .player_at()
+                .is_some_and(|(_, position)| reach.admits(position, merchant.position))
+        });
+        if !within {
+            return out
+                .log
+                .diagnostic("Rejected a merchant out of reach".into());
         }
         out.command(command).map(drop)
     }
@@ -762,6 +779,36 @@ mod tests {
         merchant::MerchantUpdate,
     };
     use testing::item;
+
+    #[test]
+    fn a_mac_era_merchant_opens_only_within_reach() {
+        let mut world = World::new(5);
+        world.player.admit(testing::player(7));
+        let mut merchant = testing::spawn(9, SpawnKind::Npc);
+        merchant.position.x = 20.5;
+        world.spawns.insert(merchant);
+        let shop = |open| ClientCommand::Shop {
+            session_id: 5,
+            merchant_id: 9,
+            own_id: 7,
+            open,
+            created: Instant::now(),
+        };
+        let run = |wire, command: &ClientCommand, world: &World| {
+            let outcome = testing::run_on(wire, |out| Belongings::shop(command, world, out));
+            outcome.result.unwrap();
+            outcome.sent.len()
+        };
+        // TAKP reaches a merchant 20 away in 3-D; Titanium's reach is unread.
+        assert_eq!(run(&super::super::wire::EqMac, &shop(true), &world), 0);
+        assert_eq!(run(&super::super::wire::Titanium, &shop(true), &world), 1);
+        // Closing is never refused.
+        assert_eq!(run(&super::super::wire::EqMac, &shop(false), &world), 1);
+        let mut merchant = testing::spawn(9, SpawnKind::Npc);
+        merchant.position.x = 20.0;
+        world.spawns.insert(merchant);
+        assert_eq!(run(&super::super::wire::EqMac, &shop(true), &world), 1);
+    }
 
     /// An inventory with one item moved to the cursor by an unanswered prediction.
     fn predicted() -> Inventory {

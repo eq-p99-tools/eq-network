@@ -95,6 +95,12 @@ pub enum ObjectUpdate {
     /// by someone else. Sessions that do not open containers close one that
     /// opens for them at once.
     Container(ContainerView),
+    /// The session closed the player's world container: they went out of
+    /// the generation's reach of it ([`crate::reach::Reaches::containers`]).
+    Closed {
+        /// The container closed.
+        drop_id: u32,
+    },
 }
 
 /// A world container's answer to a click (`ClickObjectAck_Struct`).
@@ -162,8 +168,8 @@ pub fn titanium_close(
 pub struct Objects(BTreeMap<u32, GroundObject>);
 
 impl Objects {
-    /// Local reach for picking items up, the same as for doors; not a claim
-    /// about server rules (`EQEmu` checks no distance).
+    /// The programs' reach for picking items up and opening world
+    /// containers ([`crate::reach`]); `EQEmu` checks no distance.
     pub const USE_DISTANCE: f32 = crate::doors::Doors::USE_DISTANCE;
 
     /// Current objects in stable ID order.
@@ -187,7 +193,9 @@ impl Objects {
             ObjectUpdate::Remove { drop_id, .. } => {
                 self.0.remove(drop_id);
             }
-            ObjectUpdate::Kept { .. } | ObjectUpdate::Container(_) => (),
+            ObjectUpdate::Kept { .. }
+            | ObjectUpdate::Container(_)
+            | ObjectUpdate::Closed { .. } => (),
         }
     }
 
@@ -208,7 +216,7 @@ impl Objects {
         player_id: u16,
         position: Position,
     ) -> Result<EncodedCommand> {
-        self.check_pickup(drop_id, player_id, position)?;
+        self.check_pickup(drop_id, player_id, position, crate::reach::TITANIUM.objects)?;
         Ok(titanium_pickup(drop_id, player_id))
     }
 
@@ -218,7 +226,13 @@ impl Objects {
     /// # Errors
     /// Rejects unknown objects, anything but a tradeskill container, invalid
     /// own IDs and non-finite or distant positions.
-    pub fn check_open(&self, drop_id: u32, player_id: u16, position: Position) -> Result<()> {
+    pub fn check_open(
+        &self,
+        drop_id: u32,
+        player_id: u16,
+        position: Position,
+        reach: crate::reach::Reach,
+    ) -> Result<()> {
         let object = self
             .0
             .get(&drop_id)
@@ -228,11 +242,8 @@ impl Objects {
             "that is not a tradeskill container"
         );
         ensure!(player_id != 0, "player is unavailable");
-        let distance = (position.x - object.position.x)
-            .hypot(position.y - object.position.y)
-            .hypot(position.z - object.position.z);
         ensure!(
-            distance.is_finite() && distance <= Self::USE_DISTANCE,
+            reach.admits(position, object.position),
             "too far away to use that"
         );
         Ok(())
@@ -243,7 +254,13 @@ impl Objects {
     /// # Errors
     /// Rejects unknown objects, fixtures, invalid own IDs and non-finite or
     /// distant positions.
-    pub fn check_pickup(&self, drop_id: u32, player_id: u16, position: Position) -> Result<()> {
+    pub fn check_pickup(
+        &self,
+        drop_id: u32,
+        player_id: u16,
+        position: Position,
+        reach: crate::reach::Reach,
+    ) -> Result<()> {
         let object = self
             .0
             .get(&drop_id)
@@ -253,11 +270,8 @@ impl Objects {
             "that cannot be picked up"
         );
         ensure!(player_id != 0, "player is unavailable");
-        let distance = (position.x - object.position.x)
-            .hypot(position.y - object.position.y)
-            .hypot(position.z - object.position.z);
         ensure!(
-            distance.is_finite() && distance <= Self::USE_DISTANCE,
+            reach.admits(position, object.position),
             "too far away to pick that up"
         );
         Ok(())
@@ -398,14 +412,22 @@ mod tests {
         objects.apply(&ObjectUpdate::Snapshot(vec![fixture(5, 17), fixture(6, 0)]));
         assert!(objects.entries()[&5].is_tradeskill_container());
         assert!(!objects.entries()[&6].is_tradeskill_container());
-        assert!(objects.check_open(5, 9, Position::default()).is_ok());
-        assert!(objects.check_open(6, 9, Position::default()).is_err());
-        assert!(objects.check_open(7, 9, Position::default()).is_err());
+        assert!(objects
+            .check_open(5, 9, Position::default(), crate::reach::TITANIUM.objects)
+            .is_ok());
+        assert!(objects
+            .check_open(6, 9, Position::default(), crate::reach::TITANIUM.objects)
+            .is_err());
+        assert!(objects
+            .check_open(7, 9, Position::default(), crate::reach::TITANIUM.objects)
+            .is_err());
         let far = Position {
             x: Objects::USE_DISTANCE + 1.0,
             ..Position::default()
         };
-        assert!(objects.check_open(5, 9, far).is_err());
+        assert!(objects
+            .check_open(5, 9, far, crate::reach::TITANIUM.objects)
+            .is_err());
     }
 
     #[test]
