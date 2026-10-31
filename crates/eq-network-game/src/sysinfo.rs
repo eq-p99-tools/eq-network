@@ -46,6 +46,17 @@ const ENGINE_FLAGS: [u8; 5] = [1, 1, 1, 0, 0];
 /// and on Windows. Nothing here computes them; they go out as observed.
 const OBSERVED_188: [u32; 2] = [0, 0];
 
+/// The OS block at offsets 196..212 (platform id, major, minor and
+/// service-pack major) and the service-pack string at 216: Windows XP
+/// Service Pack 2, the answers the official client got in the Windows
+/// capture, which runs it under that compatibility layer. Sent as a
+/// constant by Adam's choice (2026-10-31 06:29Z: cap the version at XP SP2
+/// so the report looks like a real client's), not this machine's system.
+const OS_VERSION: [u32; 4] = [2, 5, 1, 2];
+
+/// The service-pack string that goes with [`OS_VERSION`].
+const SERVICE_PACK: &str = "Service Pack 2";
+
 /// What the machine is, as the session reports it to the world.
 ///
 /// The host (the app) fills the fields it can see — the processor's brand
@@ -88,13 +99,6 @@ pub struct SysInfo {
     /// The display device's name (such as `\\.\DISPLAY1`), in a 33-byte
     /// field at offset 155, 32 at most and a NUL.
     pub device: String,
-    /// The operating system as it reports itself to the client, at offset
-    /// 196: platform id, major version, minor version and service-pack
-    /// major version.
-    pub os: [u32; 4],
-    /// The service-pack string, in a 128-byte field at offset 216, 127 at
-    /// most and a NUL.
-    pub service_pack: String,
     /// When the last report went out, in whole seconds since the epoch;
     /// zero says none ever did. The host keeps it and refreshes it when the
     /// session says it reported.
@@ -151,8 +155,10 @@ impl SysInfo {
         put_cut(&mut body, 123, 32, &self.adapter);
         put_cuts(&mut body, 155, 33, &self.device);
         body[188..196].clone_from_slice(&by_words(&OBSERVED_188));
-        body[196..212].clone_from_slice(&by_words(&self.os));
-        put_cuts(&mut body, 216, 128, &self.service_pack);
+        body[196..212].clone_from_slice(&by_words(&OS_VERSION));
+        // The service-pack string, in its 128-byte field: 127 at most and
+        // a NUL.
+        put_cuts(&mut body, 216, 128, SERVICE_PACK);
         EncodedCommand {
             opcode: OPCODE,
             body,
@@ -177,8 +183,6 @@ impl Default for SysInfo {
             formats: [0; 3],
             adapter: String::new(),
             device: String::new(),
-            os: [0; 4],
-            service_pack: String::new(),
             reported_at: 0,
         }
     }
@@ -229,8 +233,6 @@ mod tests {
             formats: [1, 0, 1],
             adapter: "Test Display Adapter".into(),
             device: "\\\\.\\DISPLAY1".into(),
-            os: [2, 10, 0, 1],
-            service_pack: "Test Pack".into(),
             reported_at: 0,
         }
     }
@@ -266,11 +268,11 @@ mod tests {
         assert_eq!(word(192), 0);
         assert_eq!(
             &packet.body[196..212],
-            &[2, 0, 0, 0, 10, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0]
+            &[2, 0, 0, 0, 5, 0, 0, 0, 1, 0, 0, 0, 2, 0, 0, 0]
         );
         assert_eq!(word(212), 0);
-        assert!(packet.body[216..].starts_with(b"Test Pack\0"));
-        assert!(packet.body[225..].iter().all(|&byte| byte == 0));
+        assert!(packet.body[216..].starts_with(b"Service Pack 2\0"));
+        assert!(packet.body[230..].iter().all(|&byte| byte == 0));
     }
 
     #[test]
@@ -279,8 +281,7 @@ mod tests {
         let packet = SysInfo {
             cpu: long.clone(),
             adapter: long.clone(),
-            device: long.clone(),
-            service_pack: long,
+            device: long,
             ..report()
         }
         .encode();
@@ -294,8 +295,6 @@ mod tests {
         assert_eq!(packet.body[155..187], [b'x'; 32]);
         assert_eq!(packet.body[187], 0, "the device name holds 32 and a NUL");
         assert_eq!(packet.body[188], 0);
-        assert_eq!(packet.body[216..343], [b'x'; 127]);
-        assert_eq!(packet.body[343], 0, "the service pack holds 127 and a NUL");
     }
 
     #[test]
