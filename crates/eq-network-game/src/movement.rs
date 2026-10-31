@@ -204,6 +204,10 @@ impl MovementBounds {
 pub struct MovementGuard {
     session_id: u64,
     position: Position,
+    /// The host's stamp on the last accepted request (or when speed was set
+    /// or corrected): a sample's budget runs from here to its own stamp, so
+    /// the time a sample waits before it is processed neither adds to nor
+    /// takes from what it may cover.
     sampled: Instant,
     input_epoch: Instant,
     speed: Option<f32>,
@@ -294,18 +298,17 @@ impl MovementGuard {
         let speed = self
             .speed
             .ok_or_else(|| anyhow::anyhow!("effective movement speed is not established"))?;
-        let elapsed = now
-            .saturating_duration_since(self.sampled)
-            .as_secs_f32()
-            .min(0.25);
+        let elapsed = self.interval(request.created);
         ensure!(elapsed >= 0.05, "movement samples arrive too frequently");
         let delta = [
             request.position.x - self.position.x,
             request.position.y - self.position.y,
             request.position.z - self.position.z,
         ];
+        // The tolerance covers f32 rounding in the distance and the stamps'
+        // conversion to seconds; it grants no extra time.
         ensure!(
-            delta[0].hypot(delta[1]) <= speed * elapsed + 0.001,
+            delta[0].hypot(delta[1]) <= speed * elapsed + 0.01,
             "movement exceeds elapsed-time budget"
         );
         // A fall may only descend, at most at terminal speed; grounded modes follow
@@ -321,8 +324,17 @@ impl MovementGuard {
             "vertical motion requires a supported movement mode"
         );
         self.position = request.position;
-        self.sampled = now;
+        self.sampled = request.created;
         Ok(delta)
+    }
+
+    /// The seconds a request stamped `created` covers since the last
+    /// accepted one, on the host's stamps, at most 0.25.
+    fn interval(&self, created: Instant) -> f32 {
+        created
+            .saturating_duration_since(self.sampled)
+            .as_secs_f32()
+            .min(0.25)
     }
 }
 
@@ -383,6 +395,57 @@ mod tests {
         request.position.z = -2.9;
         assert!(guard.accept(&request, later).is_err());
     }
+    fn forward(x: f32, created: Instant) -> MovementRequest {
+        MovementRequest {
+            mode: MovementMode::Forward,
+            session_id: 7,
+            position: Position {
+                x,
+                ..Position::default()
+            },
+            created,
+        }
+    }
+
+    #[test]
+    fn a_sample_processed_late_is_budgeted_on_its_stamps() {
+        let start = Instant::now();
+        let at = |ms| start + Duration::from_millis(ms);
+        let mut guard = MovementGuard::new(7, Position::default(), start);
+        guard.set_speed(Some(30.0), start);
+        // Stamped 100 ms after the last, processed 30 ms late: 3 units fit.
+        assert!(guard.accept(&forward(3.0, at(100)), at(130)).is_ok());
+        // The next is stamped 100 ms later but processed only 75 ms after the
+        // first; its stamps still cover the 3 units it moves.
+        assert!(guard.accept(&forward(6.0, at(200)), at(205)).is_ok());
+    }
+
+    #[test]
+    fn a_stamp_interval_too_short_for_the_distance_is_refused() {
+        let start = Instant::now();
+        let at = |ms| start + Duration::from_millis(ms);
+        let mut guard = MovementGuard::new(7, Position::default(), start);
+        guard.set_speed(Some(30.0), start);
+        assert!(guard.accept(&forward(3.0, at(100)), at(100)).is_ok());
+        // Processed 100 ms later, but stamped only 60 ms after the last: 1.8 units.
+        assert!(guard.accept(&forward(6.0, at(160)), at(200)).is_err());
+        assert!(guard.accept(&forward(4.8, at(160)), at(200)).is_ok());
+    }
+
+    #[test]
+    fn the_floor_and_cap_apply_to_the_stamp_interval() {
+        let start = Instant::now();
+        let at = |ms| start + Duration::from_millis(ms);
+        let mut guard = MovementGuard::new(7, Position::default(), start);
+        guard.set_speed(Some(30.0), start);
+        assert!(guard.accept(&forward(1.5, at(50)), at(50)).is_ok());
+        // Stamped 40 ms after the last, though processed 100 ms after it.
+        assert!(guard.accept(&forward(2.0, at(90)), at(150)).is_err());
+        // Stamped 400 ms after the last: the budget stops at 0.25 s, 7.5 units.
+        assert!(guard.accept(&forward(9.1, at(450)), at(450)).is_err());
+        assert!(guard.accept(&forward(9.0, at(450)), at(450)).is_ok());
+    }
+
     #[test]
     fn layout_keeps_axis_order_heading_and_signed_animation() {
         let packet = PositionPacket {
