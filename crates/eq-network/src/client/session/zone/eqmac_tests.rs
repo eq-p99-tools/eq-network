@@ -110,6 +110,7 @@ fn dll_version_precedes_zone_ready_and_answers_requests() {
                 stop: &worker_stop,
                 duration: None,
                 commands: None,
+                sysinfo_reported_at: std::cell::Cell::new(0),
             };
             run(
                 &context,
