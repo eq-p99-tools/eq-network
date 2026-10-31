@@ -167,7 +167,7 @@ fn backward_motion_has_its_own_budget_animation_and_transport_commit() {
             Ok(())
         })
         .unwrap();
-    for animation in [0, 1, -513] {
+    for animation in [1, -513] {
         let mut invalid = calibration;
         invalid.backward.as_mut().unwrap().animation = animation;
         assert!(invalid.validate().is_err());

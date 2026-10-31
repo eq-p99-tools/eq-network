@@ -172,6 +172,7 @@ fn updates_reject_partial_batches_and_preserve_negative_positions() {
             heading: 510.0,
         },
         velocity: [0.0; 3],
+        forward: 0.0,
     };
     assert_eq!(updates(0xf340, &update).unwrap(), vec![expected.clone()]);
     let mut batch = 2u32.to_le_bytes().to_vec();
@@ -638,10 +639,24 @@ fn a_position_update_lays_out_what_takp_reads() {
     let body = packet.body;
     assert_eq!(body.len(), 15);
     assert_eq!(&body[..5], &[7, 0, 24, 150, 0xfe]);
-    // y, x and z in tenths, each cut toward zero.
-    assert_eq!(i16::from_le_bytes([body[5], body[6]]), 456);
+    // y and x with a half added, and z in tenths, each cut toward zero:
+    // 457.4, -12.1 and 37.5.
+    assert_eq!(i16::from_le_bytes([body[5], body[6]]), 457);
     assert_eq!(i16::from_le_bytes([body[7], body[8]]), -12);
     assert_eq!(i16::from_le_bytes([body[9], body[10]]), 37);
+    // Below zero the half moves toward zero: -13 sends -12, and -0.7 sends 0.
+    let edge = client_update(&PositionPacket {
+        position: Position {
+            x: -0.7,
+            y: -13.0,
+            ..sample.position
+        },
+        ..sample
+    })
+    .unwrap()
+    .body;
+    assert_eq!(i16::from_le_bytes([edge[5], edge[6]]), -12);
+    assert_eq!(i16::from_le_bytes([edge[7], edge[8]]), 0);
     // TAKP unpacks the velocity: x from bits 22 to 31, z from 11 to 21 and
     // y from 0 to 10, each a signed count of sixteenths.
     let value = u32::from_le_bytes(body[11..15].try_into().unwrap());
@@ -669,6 +684,46 @@ fn a_position_update_lays_out_what_takp_reads() {
         ..sample
     })
     .is_err());
+}
+
+#[test]
+fn a_position_update_carries_its_motion_in_units_per_second() {
+    use crate::movement::PositionPacket;
+    let sample = PositionPacket {
+        spawn_id: 7,
+        sequence: 0,
+        position: Position {
+            x: 10.0,
+            y: 20.0,
+            z: 3.0,
+            heading: 300.0,
+        },
+        // Units per 50 ms tick, at the ends the program clamps them to.
+        delta: [-32.0, 63.0, -64.0],
+        animation: 7,
+        delta_heading: 0,
+    };
+    let body = client_update(&sample).unwrap().body;
+    let [WorldEvent::Position {
+        velocity, forward, ..
+    }] = &updates(0xf340, &body).unwrap()[..]
+    else {
+        panic!("expected one position");
+    };
+    // Twenty ticks a second.
+    assert_eq!(*velocity, [-640.0, 1260.0, -1280.0]);
+    // The speed byte is the forward input in tenths.
+    assert!((forward - 0.7).abs() < 1e-6, "{forward}");
+    let still = client_update(&PositionPacket {
+        delta: [0.0; 3],
+        ..sample
+    })
+    .unwrap()
+    .body;
+    let [WorldEvent::Position { velocity, .. }] = &updates(0xf340, &still).unwrap()[..] else {
+        panic!("expected one position");
+    };
+    assert_eq!(*velocity, [0.0; 3]);
 }
 
 #[test]

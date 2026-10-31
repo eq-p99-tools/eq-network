@@ -379,9 +379,10 @@ pub fn invisibility(spawn_id: u16, state: u32) -> Result<EncodedCommand> {
 
 /// The player's position (`OP_ClientUpdate`, TAKP's 15-byte
 /// `SpawnPositionUpdate_Struct`): the spawn, its speed, its heading in
-/// halves (0 to 255), its turn, where it stands as whole units (z in tenths,
-/// cut toward zero as the client cuts them), and its velocity packed as the
-/// client packs it: sixteenths, x in 10 bits, z and y in 11.
+/// halves (0 to 255), its turn, where it stands as whole units (y and x with
+/// a half added, z in tenths, each then cut toward zero as the client cuts
+/// them; from the program, TAKP sitting 2's gate read), and its velocity
+/// packed as the client packs it: sixteenths, x in 10 bits, z and y in 11.
 ///
 /// # Errors
 /// Refuses a sample [`PositionPacket::check`] refuses.
@@ -405,7 +406,7 @@ pub fn client_update(sample: &crate::movement::PositionPacket) -> Result<Encoded
     body.extend_from_slice(&small(sample.animation).to_le_bytes());
     body.push((position.heading.rem_euclid(512.0) / 2.0) as u8);
     body.extend_from_slice(&small(sample.delta_heading).to_le_bytes());
-    for value in [position.y, position.x, position.z * 10.0] {
+    for value in [position.y + 0.5, position.x + 0.5, position.z * 10.0] {
         body.extend_from_slice(&whole(value).to_le_bytes());
     }
     let [x, y, z] = sample.delta;
@@ -728,9 +729,36 @@ fn position(body: &[u8]) -> Result<WorldEvent> {
             z: signed(body, 9) / 10.0,
             heading: f32::from(body[3]) * 2.0,
         },
-        // EQMac motion fields are not decoded yet.
-        velocity: [0.0; 3],
+        velocity: velocity(word(body, 11)),
+        // The speed byte, the forward input in tenths.
+        forward: f32::from(body[2].cast_signed()) * 0.1,
     })
+}
+
+/// EQ units per second for one unit of a packed `EQMac` velocity: the
+/// program packs each velocity in sixteenths of a unit per tick, a tick
+/// being 50 ms (from the program, TAKP sitting 2: the pack routine of the
+/// gate read and the physics step's tick of M1). TAKP's server passes the
+/// value through as the client packed it (`SpawnPositionUpdate_Struct`,
+/// `common/eq_packet_structs.h`), so other players' updates carry the same
+/// units; its own updates for NPCs leave the velocity zero and give their
+/// speed in the animation byte instead.
+const PACKED_UNITS_PER_SECOND: f32 = 20.0 / 16.0;
+
+/// A position update's packed motion, in EQ units per second along X, Y and
+/// Z: y in the low 11 bits, z in the next 11 and x in the top 10, each
+/// signed, as [`client_update`] packs them and TAKP's
+/// `SpawnPositionUpdate_Struct` lays them out.
+fn velocity(packed: u32) -> [f32; 3] {
+    let field = |shift: u32, width: u32| {
+        // Shifting the field to the top and back extends its sign.
+        #[allow(clippy::cast_possible_wrap)]
+        let value = ((packed << (32 - shift - width)) as i32) >> (32 - width);
+        #[allow(clippy::cast_precision_loss)] // At most 11 bits.
+        let value = value as f32;
+        value * PACKED_UNITS_PER_SECOND
+    };
+    [field(22, 10), field(0, 11), field(11, 11)]
 }
 
 /// Decode ongoing entity and HUD packets; unknown opcodes produce no events.

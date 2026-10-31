@@ -1,10 +1,14 @@
 //! Titanium movement encoding and session-scoped displacement validation.
 
+mod carry;
 mod session;
+mod speeds;
+pub use carry::{carry, Carried};
 pub use session::{
     titanium_jump, BackwardCalibration, MotionCalibration, MotionSession, StrafeCalibration,
     WalkCalibration,
 };
+pub use speeds::{eqmac as eqmac_speeds, SpeedState, Speeds};
 
 use crate::{command::EncodedCommand, world::Position};
 use anyhow::{ensure, Result};

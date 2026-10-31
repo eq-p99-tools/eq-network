@@ -921,6 +921,11 @@ pub enum WorldEvent {
         /// when standing still or not reported. Clients carry it forward until
         /// the next report, as the official client does.
         velocity: [f32; 3],
+        /// The spawn's forward input at this report, as the generation's
+        /// program adds it along the heading each tick (see
+        /// [`carry`](crate::movement::carry)); `EQMac` sends it in tenths, and
+        /// Titanium doesn't send it, so 0 there.
+        forward: f32,
     },
     /// Current/max HP received from the server.
     HitPoints {
@@ -1306,6 +1311,16 @@ pub enum WorldEvent {
     /// ([`crate::abilities::titanium_unhide`]); TAKP and Quarm end both
     /// before they send it.
     HideAndSneakEnded,
+    /// The player started or stopped carrying more than they can, as the
+    /// generation's client counts it; once each way.
+    Encumbrance {
+        /// Current zone-admission identifier.
+        session_id: u64,
+        /// Whether they now carry too much.
+        encumbered: bool,
+        /// The official client's line for it, an `eqstr_us.txt` string ID.
+        string_id: u32,
+    },
     /// Own-character skill update; unknown skill IDs remain available to consumers.
     Skill {
         /// Protocol skill index (22 is dual wield); from
@@ -1710,6 +1725,7 @@ fn titanium_position(body: &[u8]) -> Result<WorldEvent> {
         spawn_id: u16::from_le_bytes([body[0], body[1]]),
         position,
         velocity,
+        forward: 0.0,
     })
 }
 
@@ -1777,6 +1793,7 @@ fn p99_compact_position(body: &[u8]) -> Result<WorldEvent> {
             heading: f32::from(u16::try_from(field(64) & 0xfff)?) / 4.0,
         },
         velocity: [0.0; 3],
+        forward: 0.0,
     })
 }
 
@@ -2001,6 +2018,7 @@ mod tests {
             spawn_id,
             position,
             velocity,
+            ..
         }) = titanium_update(0x14cb, &body).unwrap()
         else {
             panic!("position");
@@ -2058,6 +2076,7 @@ mod tests {
                     heading: 128.0,
                 },
                 velocity: [0.0; 3],
+                forward: 0.0,
             })
         );
         assert!(titanium_update(0x3a2b, &body[..11]).is_err());

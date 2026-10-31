@@ -731,6 +731,7 @@ mod tests {
                     spawn_id: 7,
                     position: Position::default(),
                     velocity: [0.0; 3],
+                    forward: 0.0,
                 }),
                 "Server corrected character position",
             ),

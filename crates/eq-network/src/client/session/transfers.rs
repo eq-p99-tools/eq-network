@@ -186,6 +186,7 @@ impl Transfers {
                 spawn_id: world.player.as_ref().map_or(0, |player| player.spawn_id),
                 position,
                 velocity: [0.0; 3],
+                forward: 0.0,
             }))?;
         }
         out.log
@@ -225,6 +226,7 @@ fn relocate(position: Position, world: &mut World, out: &mut Out<'_, '_>) -> Res
         spawn_id: world.player.as_ref().map_or(0, |player| player.spawn_id),
         position,
         velocity: [0.0; 3],
+        forward: 0.0,
     }))?;
     Ok(())
 }

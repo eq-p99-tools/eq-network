@@ -30,7 +30,8 @@ pub struct MotionCalibration {
     pub units_per_second: f32,
     /// Converts world velocity per second to wire velocity.
     pub velocity_scale: f32,
-    /// Signed animation/speed value for this mode.
+    /// Signed animation/speed value for this mode; 0 where the generation
+    /// sends none for a very slow move.
     pub animation: i16,
 }
 
@@ -42,7 +43,8 @@ pub struct BackwardCalibration {
     pub units_per_second: f32,
     /// Converts horizontal world velocity per second to wire velocity.
     pub velocity_scale: f32,
-    /// Negative signed 10-bit animation value observed when backing up.
+    /// Signed 10-bit animation value observed when backing up: negative, or
+    /// 0 for a very slow move.
     pub animation: i16,
 }
 
@@ -54,7 +56,8 @@ pub struct WalkCalibration {
     pub units_per_second: f32,
     /// Converts horizontal world velocity per second to wire velocity.
     pub velocity_scale: f32,
-    /// Positive signed 10-bit walking animation value.
+    /// Signed 10-bit walking animation value: positive, or 0 for a very
+    /// slow move.
     pub animation: i16,
 }
 
@@ -66,7 +69,7 @@ pub struct StrafeCalibration {
     pub units_per_second: f32,
     /// Converts horizontal world velocity per second to wire velocity.
     pub velocity_scale: f32,
-    /// Nonzero signed 10-bit animation observed while strafing.
+    /// Signed 10-bit animation observed while strafing; `EQMac` sends 0.
     pub animation: i16,
 }
 
@@ -81,7 +84,7 @@ impl MotionCalibration {
                 && self.units_per_second > 0.0
                 && self.velocity_scale.is_finite()
                 && self.velocity_scale > 0.0
-                && (1..=511).contains(&self.animation),
+                && (0..=511).contains(&self.animation),
             "invalid movement calibration"
         );
         if let Some(backward) = self.backward {
@@ -90,7 +93,7 @@ impl MotionCalibration {
                     && backward.units_per_second > 0.0
                     && backward.velocity_scale.is_finite()
                     && backward.velocity_scale > 0.0
-                    && (-512..=-1).contains(&backward.animation),
+                    && (-512..=0).contains(&backward.animation),
                 "invalid backward movement calibration"
             );
         }
@@ -101,7 +104,7 @@ impl MotionCalibration {
                     && walk.units_per_second <= self.units_per_second
                     && walk.velocity_scale.is_finite()
                     && walk.velocity_scale > 0.0
-                    && (1..=511).contains(&walk.animation),
+                    && (0..=511).contains(&walk.animation),
                 "invalid walking calibration"
             );
         }
@@ -111,8 +114,7 @@ impl MotionCalibration {
                     && strafe.units_per_second > 0.0
                     && strafe.velocity_scale.is_finite()
                     && strafe.velocity_scale > 0.0
-                    && (-512..=511).contains(&strafe.animation)
-                    && strafe.animation != 0,
+                    && (-512..=511).contains(&strafe.animation),
                 "invalid strafing calibration"
             );
         }
@@ -253,6 +255,19 @@ impl MotionSession {
             "stale movement calibration"
         );
         self.calibrate(value, now)
+    }
+
+    /// The speeds movement is granted at, if it is.
+    #[must_use]
+    pub const fn calibration(&self) -> Option<MotionCalibration> {
+        self.calibration
+    }
+
+    /// Takes the player's speeds away, as when they are rooted, until the
+    /// next calibration.
+    pub fn withdraw(&mut self) {
+        self.calibration = None;
+        self.held = None;
     }
 
     /// Latest accepted world position, without implying a server acknowledgment.
