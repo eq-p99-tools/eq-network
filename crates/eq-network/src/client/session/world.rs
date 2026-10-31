@@ -158,10 +158,11 @@ fn open_world(
 /// when all of these hold: the server type is one watched receiving it
 /// (today only P99; every other type, `EQEmu` included, keeps the silent
 /// default until its official client has been seen sending this), the host
-/// has something to say about its machine (`ClientConfig::sysinfo`, None
-/// until the app fills it), and the newest of the saved report's time and
-/// this session's own has aged past the week, the official gate itself
-/// (`eq_network_game::sysinfo::SysInfo::is_due`).
+/// measures its machine (`ClientConfig::sysinfo`, None until the app fills
+/// it), and the newest of the saved report's time and this session's own
+/// has aged past the week, the official gate itself
+/// (`eq_network_game::sysinfo::is_due`). The machine is measured only then,
+/// just before the record goes out.
 ///
 /// The send time leaves with the session, twice over: in the
 /// [`WorldEvent::SystemInfoReported`] the host uses to keep the stamp, and
@@ -181,14 +182,18 @@ fn report_the_machine(
     if !server.sends_system_info() {
         return Ok(());
     }
-    let Some(report) = context.config.sysinfo.as_ref() else {
+    let Some(machine) = context.config.sysinfo.as_ref() else {
         return Ok(());
     };
     let at = unix_seconds();
-    if !report.is_due(at, context.sysinfo_reported_at.get()) {
+    if !eq_network_game::sysinfo::is_due(
+        machine.last_reported(),
+        context.sysinfo_reported_at.get(),
+        at,
+    ) {
         return Ok(());
     }
-    let packet = report.encode();
+    let packet = machine.measure().encode();
     session.send(packet.opcode, &packet.body)?;
     context.sysinfo_reported_at.set(at);
     log.send(ClientEvent::World(WorldEvent::SystemInfoReported { at }))
@@ -598,7 +603,7 @@ pub(super) mod tests {
     #[test]
     fn the_world_owes_its_machine_account_once_a_week_and_only_to_p99() {
         use crate::client::{CancellationToken, ServerProtocol};
-        use eq_network_game::sysinfo::{SysInfo, OPCODE, RECORD_BYTES};
+        use eq_network_game::sysinfo::{Machine, SysInfo, OPCODE, RECORD_BYTES};
         use eq_network_transport::{Application, Transport};
 
         /// A connection that remembers what the client sent, body and all.
@@ -624,15 +629,28 @@ pub(super) mod tests {
             }
         }
 
-        let due = SysInfo {
-            cpu: "Test CPU".into(),
-            adapter: "Test Card".into(),
-            physical_mb: 1024,
-            virtual_mb: 2048,
-            ..SysInfo::default()
-        };
+        /// A machine never reported from, measured as a test machine.
+        #[derive(Debug)]
+        struct Fresh;
+
+        impl Machine for Fresh {
+            fn last_reported(&self) -> u64 {
+                0
+            }
+
+            fn measure(&self) -> SysInfo {
+                SysInfo {
+                    cpu: "Test CPU".into(),
+                    adapter: "Test Card".into(),
+                    physical_mb: 1024,
+                    virtual_mb: 2048,
+                    ..SysInfo::default()
+                }
+            }
+        }
+
         let mut config = ClientConfig::new("ACCOUNT", "PASSWORD", "Test Server", "Tester");
-        config.sysinfo = Some(due);
+        config.sysinfo = Some(std::sync::Arc::new(Fresh));
         let mut quiet = config.clone();
         quiet.sysinfo = None;
         let identity = ClientIdentity::new("example-device", "example-user");

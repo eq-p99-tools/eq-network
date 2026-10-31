@@ -57,13 +57,35 @@ const OS_VERSION: [u32; 4] = [2, 5, 1, 2];
 /// The service-pack string that goes with [`OS_VERSION`].
 const SERVICE_PACK: &str = "Service Pack 2";
 
-/// What the machine is, as the session reports it to the world.
-///
-/// The host (the app) fills the fields it can see — the processor's brand
-/// string, the display adapter's name, memory and display modes — with
-/// this machine's real values, and carries `reported_at`, the saved time
-/// of the last report (zero when there is none yet). The library owns
-/// when and whether the report goes out; the host owns persisting it.
+/// The host's side of the report: the saved time of the last one, and the
+/// machine as the host measures it when a report is due. The library owns
+/// when and whether the report goes out; the host owns measuring the
+/// machine and keeping the stamp.
+pub trait Machine: Send + Sync + std::fmt::Debug {
+    /// When the last report went out, as the host saved it, in whole
+    /// seconds since the epoch; zero when none ever did.
+    fn last_reported(&self) -> u64;
+
+    /// The machine as it stands now, measured just before the report goes
+    /// out, as the official client gathers its record just before sending.
+    fn measure(&self) -> SysInfo;
+}
+
+/// Whether the world is due this machine's account of itself: the official
+/// comparison, `REPORT_SECONDS < now - last`, where `last` is the newer of
+/// the host's saved stamp and `session`, the time this session itself sent
+/// one, which the session keeps so a zone crossing back through the world
+/// inside the week stays quiet even before the first report's stamp is
+/// saved. A report dated in the future is never due.
+#[must_use]
+pub const fn is_due(saved: u64, session: u64, now: u64) -> bool {
+    let last = if saved > session { saved } else { session };
+    now.saturating_sub(last) > REPORT_SECONDS
+}
+
+/// What the machine is, as the session reports it to the world: the
+/// fields the host measures. A field the host cannot measure stays zero or
+/// empty.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SysInfo {
     /// The processor's brand string, as the CPU reports it. Longer than
@@ -99,31 +121,9 @@ pub struct SysInfo {
     /// The display device's name (such as `\\.\DISPLAY1`), in a 33-byte
     /// field at offset 155, 32 at most and a NUL.
     pub device: String,
-    /// When the last report went out, in whole seconds since the epoch;
-    /// zero says none ever did. The host keeps it and refreshes it when the
-    /// session says it reported.
-    pub reported_at: u64,
 }
 
 impl SysInfo {
-    /// Whether the world is due this machine's account of itself: the
-    /// official comparison, `REPORT_SECONDS < now - last`, where `last`
-    /// is the newer of the saved stamp (`reported_at`, read back from the
-    /// host's `eqclient.ini`) and `last_report` — the time this session
-    /// itself sent one, which the session keeps so a zone crossing back
-    /// through the world inside the week stays quiet even before the
-    /// first report's stamp reaches disk. A report dated in the future is
-    /// never due.
-    #[must_use]
-    pub const fn is_due(&self, now: u64, last_report: u64) -> bool {
-        let last = if self.reported_at > last_report {
-            self.reported_at
-        } else {
-            last_report
-        };
-        now.saturating_sub(last) > REPORT_SECONDS
-    }
-
     /// The report as the world receives it: [`OPCODE`] and exactly
     /// [`RECORD_BYTES`] bytes, laid out as the captures show. Everything
     /// not written below goes out zero, as in both captures.
@@ -183,7 +183,6 @@ impl Default for SysInfo {
             formats: [0; 3],
             adapter: String::new(),
             device: String::new(),
-            reported_at: 0,
         }
     }
 }
@@ -233,7 +232,6 @@ mod tests {
             formats: [1, 0, 1],
             adapter: "Test Display Adapter".into(),
             device: "\\\\.\\DISPLAY1".into(),
-            reported_at: 0,
         }
     }
 
@@ -300,38 +298,25 @@ mod tests {
     #[test]
     fn the_report_is_due_a_week_less_a_second_after_the_last_one() {
         let now = 1_800_000_000;
-        let seen = |ago: u64| SysInfo {
-            reported_at: now - ago,
-            ..report()
-        };
-        assert!(seen(now).is_due(now, 0), "one never sent is due");
+        let saved = |ago: u64| is_due(now - ago, 0, now);
+        assert!(is_due(0, 0, now), "one never sent is due");
         assert!(
-            !seen(REPORT_SECONDS).is_due(now, 0),
+            !saved(REPORT_SECONDS),
             "exactly a week less one keeps quiet"
         );
+        assert!(saved(REPORT_SECONDS + 1), "a second past it speaks");
         assert!(
-            seen(REPORT_SECONDS + 1).is_due(now, 0),
-            "a second past it speaks"
-        );
-        assert!(
-            !SysInfo {
-                reported_at: now + 60,
-                ..report()
-            }
-            .is_due(now, 0),
+            !is_due(now + 60, 0, now),
             "a report from the future is not overdue"
         );
         // The session's own last send counts too, before the host's stamp
         // has caught up: a zone crossing back through the world inside the
         // week must not report twice…
         assert!(
-            !seen(now).is_due(now, now - 5),
+            !is_due(0, now - 5, now),
             "a report this session just sent is not due again"
         );
         // …and the saved stamp holds just as firmly the other way round.
-        assert!(
-            !seen(60).is_due(now, 0),
-            "a fresh stamp on disk keeps a new session quiet"
-        );
+        assert!(!saved(60), "a fresh stamp keeps a new session quiet");
     }
 }
