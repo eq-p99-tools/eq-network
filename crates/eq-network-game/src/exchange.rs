@@ -58,6 +58,34 @@ const CANCEL_ACTION: u32 = 7;
 /// `EQEmu` checks no distance, and P99's limit is not measured.
 pub const REACH: f32 = 20.0;
 
+/// How a client generation's program closes an open give or trade window.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct WindowCloses {
+    /// Whether closing it sends a cancel whatever the partner, including
+    /// after the server's own cancel; otherwise only for another player.
+    pub cancel_for_any_partner: bool,
+    /// The distance past which the window closes, with a cancel, where it
+    /// is read.
+    pub beyond: Option<f32>,
+}
+
+/// Titanium's trade path is unread: a cancel only answers another player's,
+/// and walking away closes nothing.
+pub const TITANIUM_CLOSES: WindowCloses = WindowCloses {
+    cancel_for_any_partner: false,
+    beyond: None,
+};
+
+/// The TAKP program (read N4, 1d, 2 and 3d): its close sends the cancel
+/// whenever a partner is set, the server's own cancel included, and it
+/// closes the window when the partner is farther than 20 plus a term
+/// (+0x90) whose value is unread, so this closes it no later
+/// (checklist 6.311).
+pub const EQMAC_CLOSES: WindowCloses = WindowCloses {
+    cancel_for_any_partner: true,
+    beyond: Some(REACH),
+};
+
 /// Who the player is exchanging with, which decides the window and its
 /// number of trade slots.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]

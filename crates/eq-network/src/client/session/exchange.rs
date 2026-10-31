@@ -206,20 +206,54 @@ impl Exchanges {
 
     /// Ends the exchange the server cancelled. `EQEmu` returns only the
     /// canceller's trade slots, so when another player closes the window this
-    /// side closes it too, to get back what it put in.
+    /// side closes it too, to get back what it put in; a generation whose
+    /// close always sends the cancel sends it for an NPC too
+    /// ([`exchange::WindowCloses`]).
     fn cancelled(world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
         let admitted = world.player.is_some();
         let Some(exchange) = world.exchange.0.take() else {
             return Ok(());
         };
-        match (exchange.partner, exchange.stage, admitted) {
-            (Partner::Player, Stage::Open | Stage::Accepted, true) => {
-                out.request(&Request::CancelTrade {
-                    with: exchange.with,
-                })
-            }
+        let answers =
+            exchange.partner == Partner::Player || out.wire.window_closes().cancel_for_any_partner;
+        match (answers, exchange.stage, admitted) {
+            (true, Stage::Open | Stage::Accepted, true) => out.request(&Request::CancelTrade {
+                with: exchange.with,
+            }),
             _ => Ok(()),
         }
+    }
+
+    /// Closes an open window whose partner has gone out of the generation's
+    /// reach, as its program does, with the cancel its close sends, and
+    /// tells the host it closed.
+    fn walked_away(world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
+        let Some(beyond) = out.wire.window_closes().beyond else {
+            return Ok(());
+        };
+        let (Some(exchange), Some((own_id, position))) = (*world.exchange, world.player_at())
+        else {
+            return Ok(());
+        };
+        let gone = matches!(exchange.stage, Stage::Open | Stage::Accepted)
+            && world.spawns.visible(exchange.with).is_some_and(|spawn| {
+                let distance = (position.x - spawn.position.x)
+                    .hypot(position.y - spawn.position.y)
+                    .hypot(position.z - spawn.position.z);
+                distance.is_finite() && distance > beyond
+            });
+        if !gone {
+            return Ok(());
+        }
+        world.exchange.0 = None;
+        out.request(&Request::CancelTrade {
+            with: exchange.with,
+        })?;
+        out.log.send(ClientEvent::World(WorldEvent::Exchange(
+            ExchangeUpdate::Cancelled {
+                by: u32::from(own_id),
+            },
+        )))
     }
 }
 
@@ -255,8 +289,10 @@ impl Feature for Exchanges {
         }
     }
 
-    /// Withdraws a request nobody answered.
+    /// Withdraws a request nobody answered, and closes a window whose
+    /// partner is out of reach.
     fn tick(&mut self, now: Instant, world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
+        Self::walked_away(world, out)?;
         let unanswered = world.exchange.is_some_and(|exchange| {
             let window = match exchange.partner {
                 Partner::Npc => ANSWER_WINDOW,
@@ -428,6 +464,72 @@ mod tests {
         // One exchange at a time.
         let outcome = testing::run(|out| exchanges.handle(&offer(NPC), &mut world, out));
         assert_eq!(refusals(&outcome.events), ["Close the open trade first"]);
+    }
+
+    /// A world beside the NPC with its give window open.
+    fn giving_to_npc() -> World {
+        let mut world = beside_npc();
+        world.exchange.0 = Some(Exchange {
+            with: NPC,
+            partner: Partner::Npc,
+            stage: Stage::Open,
+        });
+        world
+    }
+
+    #[test]
+    fn the_mac_era_close_answers_the_servers_cancel_for_an_npc_too() {
+        use eq_network_game::exchange::eqmac;
+        let cancelled = Message::Event(WorldEvent::Exchange(ExchangeUpdate::Cancelled {
+            by: u32::from(NPC),
+        }));
+        let mut world = giving_to_npc();
+        let outcome = testing::run_on(&super::super::wire::EqMac, |out| {
+            Exchanges.observe(&cancelled, &mut world, out)
+        });
+        outcome.result.unwrap();
+        assert_eq!(outcome.sent, [eqmac::cancel(7, NPC).unwrap()]);
+        assert!(world.exchange.is_none());
+        // Titanium answers only another player's.
+        let mut world = giving_to_npc();
+        let outcome = testing::run(|out| Exchanges.observe(&cancelled, &mut world, out));
+        outcome.result.unwrap();
+        assert_eq!(outcome.sent, []);
+        assert!(world.exchange.is_none());
+    }
+
+    #[test]
+    fn the_mac_era_window_closes_once_the_partner_is_out_of_reach() {
+        use eq_network_game::exchange::eqmac;
+        let now = Instant::now();
+        let mut world = giving_to_npc();
+        // At 20 the window stays open.
+        let mut npc = testing::spawn(NPC, SpawnKind::Npc);
+        npc.position.x = exchange::REACH;
+        world.spawns.insert(npc.clone());
+        let tick = |world: &mut World, wire| {
+            let outcome = testing::run_on(wire, |out| Exchanges.tick(now, world, out));
+            assert!(outcome.result.is_ok());
+            outcome
+        };
+        let outcome = tick(&mut world, &super::super::wire::EqMac);
+        assert_eq!(outcome.sent, []);
+        assert!(world.exchange.is_some());
+        npc.position.x = exchange::REACH + 0.5;
+        world.spawns.insert(npc);
+        // Titanium's trade path is unread: nothing closes.
+        let outcome = tick(&mut world, &super::super::wire::Titanium);
+        assert_eq!(outcome.sent, []);
+        assert!(world.exchange.is_some());
+        let outcome = tick(&mut world, &super::super::wire::EqMac);
+        assert_eq!(outcome.sent, [eqmac::cancel(7, NPC).unwrap()]);
+        assert!(world.exchange.is_none());
+        assert!(matches!(
+            outcome.events[..],
+            [ClientEvent::World(WorldEvent::Exchange(
+                ExchangeUpdate::Cancelled { by: 7 }
+            ))]
+        ));
     }
 
     #[test]

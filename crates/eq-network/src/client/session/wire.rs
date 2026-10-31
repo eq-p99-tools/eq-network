@@ -81,6 +81,11 @@ pub(super) trait Wire: Sync {
         None
     }
 
+    /// How the generation's client closes an open give or trade window.
+    fn window_closes(&self) -> eq_network_game::exchange::WindowCloses {
+        eq_network_game::exchange::TITANIUM_CLOSES
+    }
+
     /// How far the generation's client lets the player reach doors,
     /// objects, merchants and the one they bandage.
     fn reaches(&self) -> &'static eq_network_game::reach::Reaches {
@@ -331,6 +336,10 @@ impl Wire for EqMac {
 
     fn reaches(&self) -> &'static eq_network_game::reach::Reaches {
         &eq_network_game::reach::EQMAC
+    }
+
+    fn window_closes(&self) -> eq_network_game::exchange::WindowCloses {
+        eq_network_game::exchange::EQMAC_CLOSES
     }
 
     fn update_gate(&self) -> Option<eq_network_game::movement::UpdateGate> {

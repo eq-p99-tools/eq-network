@@ -26,6 +26,10 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     as `ExchangeUpdate::Unread` with its slot, so the window shows the slot
     taken, and the session reports it as a diagnostic (eq-network's only
     log route; the client logs it). It never closes the session.
+    On TAKP (`Wire::window_closes`, `exchange::WindowCloses`; read N4 1d, 2
+    and 3d) the close answers the server's cancel for an NPC as well, and
+    a window whose partner is past 20 closes with a cancel and
+    `ExchangeUpdate::Cancelled` naming the player (checklist 6.311).
   - `CampStatus::Abandoned` says what ended the camp (`CampEnd`: standing,
     moving, or other), so the client can say the program's line for each.
   - The player's own update goes out as each generation's program lets it
