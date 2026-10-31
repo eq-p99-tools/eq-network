@@ -361,7 +361,8 @@ impl Motion {
 
     /// Jumps where the server allows falls and the generation's notice of a
     /// jump is known.
-    fn jump(&self, world: &World, out: &mut Out<'_, '_>) -> Result<()> {
+    /// The samples after it may rise as the jump does.
+    fn jump(&self, world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
         let jump = world
             .body
             .motion
@@ -372,7 +373,13 @@ impl Motion {
             .and_then(|()| out.encode(&Request::Jump));
         match jump {
             // A failed send ends the admission like any other.
-            Ok(packet) => out.send(&packet),
+            Ok(packet) => {
+                out.send(&packet)?;
+                if let Some(motion) = world.body.motion.as_mut() {
+                    motion.jumped();
+                }
+                Ok(())
+            }
             Err(error) => out.log.diagnostic(format!("Rejected jump: {error}")),
         }
     }
@@ -415,7 +422,13 @@ impl Feature for Motion {
                 MotionSession::new(world.session_id, player.spawn_id, player.position, admitted)?
                     .with_falls(self.falls)
                     .with_spacing(out.wire.position_spacing())
-                    .with_fall_speed(out.wire.fall_speed(world.gravity)),
+                    .with_fall_speed(out.wire.fall_speed(world.gravity))
+                    .with_jump(out.wire.jump_speed().map(|speed| {
+                        (
+                            speed,
+                            eq_network_game::movement::gravity_per_second(world.gravity),
+                        )
+                    })),
             );
         }
         self.grant(world, out)

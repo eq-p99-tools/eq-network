@@ -613,6 +613,32 @@ fn a_generation_may_fall_faster_than_the_provisional_limit() {
     assert_eq!(eqmac.position().z.to_bits(), (-20.0f32).to_bits());
 }
 #[test]
+fn a_jump_rises_past_a_step_once_the_session_announces_it() {
+    let start = Instant::now();
+    let now = start + Duration::from_millis(50);
+    // The first 50 ms of a 44.55 u/s jump rise 2.03 units, past a step.
+    let mut rise = request(now, 0.0);
+    rise.mode = MovementMode::Fall;
+    rise.position.z = 2.03;
+    let jump = Some((
+        super::super::JUMP_SPEED,
+        super::super::gravity_per_second(None),
+    ));
+    let mut session = setup(start).with_falls(true).with_jump(jump);
+    assert!(session
+        .send_move(&rise, now, |_| panic!("no jump was announced"))
+        .is_err());
+    session.jumped();
+    session.send_move(&rise, now, |_| Ok(())).unwrap();
+    assert_eq!(session.position().z.to_bits(), 2.03f32.to_bits());
+    // Without the generation's jump read, the announcement admits nothing.
+    let mut unread = setup(start).with_falls(true);
+    unread.jumped();
+    assert!(unread
+        .send_move(&rise, now, |_| panic!("the jump is unread"))
+        .is_err());
+}
+#[test]
 fn the_wire_velocity_covers_the_stamp_interval_not_the_processing_one() {
     let start = Instant::now();
     let at = |ms| start + Duration::from_millis(ms);

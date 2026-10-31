@@ -161,6 +161,23 @@ impl MotionSession {
         self
     }
 
+    /// Lets samples after a jump rise as the client generation's jump does,
+    /// where it is read: its starting speed and the zone's gravity, in units
+    /// a second and a second squared ([`MovementGuard::set_jump`]).
+    #[must_use]
+    pub fn with_jump(mut self, jump: Option<(f32, f32)>) -> Self {
+        if let Some((speed, gravity)) = jump {
+            self.guard.set_jump(speed, gravity);
+        }
+        self
+    }
+
+    /// The session announced a jump: the samples after it may rise as it
+    /// does ([`MovementGuard::jumped`]).
+    pub fn jumped(&mut self) {
+        self.guard.jumped();
+    }
+
     /// Permits [`MovementMode::Fall`] samples, where the server type takes
     /// falls from the client.
     #[must_use]

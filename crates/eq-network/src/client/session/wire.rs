@@ -75,6 +75,12 @@ pub(super) trait Wire: Sync {
         None
     }
 
+    /// The speed the generation's client starts a jump at, in world units
+    /// per second; none where it is unread.
+    fn jump_speed(&self) -> Option<f32> {
+        None
+    }
+
     /// The least time the generation's client leaves between two of the
     /// player's own position updates; none where it is unread.
     fn position_spacing(&self) -> Option<std::time::Duration> {
@@ -215,6 +221,10 @@ impl Wire for Titanium {
         Some(eq_network_game::movement::fall_speed(gravity))
     }
 
+    fn jump_speed(&self) -> Option<f32> {
+        Some(eq_network_game::movement::JUMP_SPEED)
+    }
+
     fn position_spacing(&self) -> Option<std::time::Duration> {
         Some(eq_network_game::movement::TITANIUM_POSITION_SPACING)
     }
@@ -305,6 +315,10 @@ impl Wire for EqMac {
 
     fn fall_speed(&self, gravity: Option<f32>) -> Option<f32> {
         Some(eq_network_game::movement::fall_speed(gravity))
+    }
+
+    fn jump_speed(&self) -> Option<f32> {
+        Some(eq_network_game::movement::JUMP_SPEED)
     }
 
     fn speeds(&self) -> Option<SpeedRule> {
