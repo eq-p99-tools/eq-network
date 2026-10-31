@@ -394,6 +394,12 @@ pub fn titanium_coins(profile: &[u8]) -> Result<Coins> {
 pub enum CampStatus {
     /// `OP_Camp` was sent; logout follows after the preparation time.
     Preparing,
+    /// The camp goes on, with this many whole seconds left before the
+    /// logout: the program says so at 25, 20, 15, 10 and 5 (Titanium T18).
+    Countdown {
+        /// Seconds left: 25, 20, 15, 10 or 5.
+        seconds_left: u8,
+    },
     /// Standing or moving abandoned the attempt before logout.
     Abandoned,
     /// Preparation finished and `OP_Logout` was sent.
@@ -512,12 +518,15 @@ pub enum Capability {
     /// Jumping, where the client generation's notice of a jump is known and
     /// the server takes falls.
     Jumping,
+    /// Showing or hiding the player's helm to others, where the client
+    /// generation has the option (Titanium; the `EQMac` client has none).
+    ShowingHelm,
 }
 
 impl Capability {
     /// Every capability, in order: what a session offers when its server and
     /// client generation support everything.
-    pub const ALL: [Self; 40] = [
+    pub const ALL: [Self; 41] = [
         Self::Casting,
         Self::Spellbook,
         Self::Inventory,
@@ -558,6 +567,7 @@ impl Capability {
         Self::Translocate,
         Self::ServerTicks,
         Self::Jumping,
+        Self::ShowingHelm,
     ];
 }
 
@@ -1887,6 +1897,7 @@ mod tests {
             Capability::Translocate => 37,
             Capability::ServerTicks => 38,
             Capability::Jumping => 39,
+            Capability::ShowingHelm => 40,
         };
         for (index, capability) in Capability::ALL.into_iter().enumerate() {
             assert_eq!(place(capability), index, "{capability:?}");

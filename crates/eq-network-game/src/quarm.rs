@@ -49,6 +49,8 @@ pub const ZONE_SPAWN_APPEARANCE: u16 = 0xf540;
 pub const ZONE_LOGOUT: u16 = 0x5041;
 /// The client starting to camp (`OP_Camp`).
 pub const ZONE_CAMP: u16 = 0x0742;
+/// The player's jump.
+pub const ZONE_JUMP: u16 = 0x2040;
 /// The server's answer to a logout (`OP_LogoutReply`), which ends the zone
 /// connection.
 pub const ZONE_LOGOUT_REPLY: u16 = 0x5941;
@@ -321,6 +323,18 @@ pub fn bled_out(spawn_id: u16, level: u8) -> Result<EncodedCommand> {
         opcode: ZONE_DEATH,
         body,
     })
+}
+
+/// The client's notice that the player jumped, with no body: the `EQMac`
+/// program sends it as a jump begins (TAKP sitting 2, read; `0x4020` in
+/// the emulators' byte order). The server charges the jump's fatigue; the
+/// arc travels in position updates.
+#[must_use]
+pub fn jump() -> EncodedCommand {
+    EncodedCommand {
+        opcode: ZONE_JUMP,
+        body: Vec::new(),
+    }
 }
 
 /// The client starting to camp. TAKP reads nothing in it; the official

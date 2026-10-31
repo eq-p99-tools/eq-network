@@ -7,6 +7,30 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- Batch 3a, from the official programs (Titanium sittings 8-9, TAKP sitting
+  2 and the 10-31 roleplay read):
+  - The movement guard holds a fall to 99 × the zone's gravity a step, 20
+    steps a second (`movement::fall_speed`; 792 units a second at the
+    default 0.4), on both client generations, from the zone header's
+    gravity once it comes (`Wire::fall_speed` takes it). Derived, not read:
+    one step per update until the update rate is chosen (checklist 6.294).
+  - TAKP jumps: the `EQMac` notice (`quarm::jump`, no body) and
+    `Capability::Jumping`.
+  - `Anonymity` is the two-bit value both programs keep:
+    `Anonymity::AnonymousRoleplaying` is new. `/roleplay` flips the
+    roleplaying bit and keeps the anonymous one, and `/anonymous` writes 1,
+    or 0 when already anonymous. Neither refuses while the other is on.
+  - TAKP lists the player as anonymous or roleplaying
+    (`listing::eqmac_anonymity`); `/afk` is refused there until the `EQMac`
+    away update is read.
+  - The Titanium show-helm option: `ClientCommand::ShowHelm` sends
+    appearance type 43 on each change (`listing::titanium_show_helm`,
+    `Capability::ShowingHelm`), offered on `EQEmu`.
+  - TAKP answers translocates (`Capability::Translocate`).
+  - Camping reports `CampStatus::Countdown` at 25, 20, 15, 10 and 5 seconds
+    left; Titanium closes the zone connection 3 seconds after its logout
+    (`Wire::logout_close`), and other generations keep waiting 10 seconds.
+
 - From the official programs, read statically (TAKP Batch 1, Titanium
   sittings 5 and 6, and the Titanium login read L1 part one; servers'
   handling cited from `EQMacEmu` and `EQEmu`):

@@ -135,6 +135,8 @@ pub enum Request {
     SetAway(bool),
     /// Say how the player hides from `/who`.
     SetAnonymity(Anonymity),
+    /// Whether the player's helm shows to others.
+    ShowHelm(bool),
     /// Say the player is seen again, as a Titanium client answers the
     /// server's end of its hiding: its own appearance, invisibility 0
     /// ([`abilities::titanium_unhide`]).
@@ -369,6 +371,7 @@ pub fn titanium(request: &Request, sender: Sender<'_>) -> Result<EncodedCommand>
         Request::SetAnonymity(anonymity) => {
             listing::titanium_anonymity(sender.spawn(), *anonymity)?
         }
+        Request::ShowHelm(show) => listing::titanium_show_helm(sender.spawn(), *show)?,
         Request::Unhide => abilities::titanium_unhide(sender.spawn())?,
         Request::Random { low, high } => socials::random(*low, *high),
         Request::Emote(text) => socials::emote(text)?,
@@ -457,6 +460,10 @@ pub fn titanium(request: &Request, sender: Sender<'_>) -> Result<EncodedCommand>
 pub fn eqmac(request: &Request, sender: Sender<'_>) -> Result<EncodedCommand> {
     match request {
         Request::Camp => Ok(crate::quarm::camp()),
+        Request::Jump => Ok(crate::quarm::jump()),
+        Request::SetAnonymity(anonymity) => {
+            crate::listing::eqmac_anonymity(sender.spawn(), *anonymity)
+        }
         Request::Logout => Ok(crate::quarm::logout()),
         Request::Posture(posture) => crate::quarm::posture(sender.spawn(), *posture),
         Request::Position(sample) => crate::quarm::client_update(sample),
