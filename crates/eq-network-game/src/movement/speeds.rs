@@ -61,9 +61,27 @@ const EQMAC_SLOWEST: f32 = 0.01;
 /// The zone where the program never slows the player.
 const EQMAC_UNSLOWED_ZONE: u16 = 151;
 /// The official client's lines as the player starts and stops carrying too
-/// much.
+/// much; both generations' programs print the same two.
 const EQMAC_ENCUMBERED: u32 = 0x3068;
 const EQMAC_UNENCUMBERED: u32 = 0x3067;
+
+/// Where the generations' speed rules differ; the rest of [`eqmac`]'s rule
+/// is the same in both programs.
+#[derive(Clone, Copy, Debug)]
+struct Generation {
+    /// The least movement rate the modifier takes, above the root: Titanium
+    /// raises a slow to -65% (the Titanium speeds read of 10-31, part 3);
+    /// TAKP's writer has no floor.
+    rate_floor: Option<i16>,
+    /// The generation's velocity on the wire per unit a second.
+    velocity_scale: f32,
+}
+
+/// `EQMac`'s side of the table.
+const EQMAC: Generation = Generation {
+    rate_floor: None,
+    velocity_scale: EQMAC_VELOCITY_SCALE,
+};
 
 /// `EQMac`'s speeds, from the program (TAKP sitting 2 M1, "Speeds", and the
 /// TAKP speeds read of 10-31): the forward input is the profile's run speed,
@@ -92,6 +110,24 @@ const EQMAC_UNENCUMBERED: u32 = 0x3067;
 ///   0. An input of 0, from carrying twice the capacity or a slow that
 ///   takes it all, holds the player: None.
 ///
+/// Titanium's program reads the same (the Titanium speeds read of 10-31):
+/// the same 42.667 units a second per unit of input on the ground, the same
+/// root, floors, multiplier, encumbrance and lines, with backing up always on
+/// the walk speed and strafing alone at the base times the multiplier with
+/// no modifier. Its strafe rate is halved when the modifier is below 0 or
+/// the player ducks, or under a flag the read doesn't name (the read
+/// corrects sitting 7's reading of that test). It differs in three places:
+/// it raises a slow to -65% before working out the modifier; with the rate
+/// at 0, running adds 0.01 per point of the base movement speed effect (271)
+/// instead, which is 0 until the session decodes the player's alternate
+/// advancement; and the cap rises 0.01 per point of effect 290, also 0 until
+/// then. The hit-point pair is read as a current and maximum that fits hit
+/// points, as TAKP names it. Not taken from Titanium's read: ducking, the
+/// flag at +0x1b1 and its value at +0xec4, mounts, water (the session
+/// doesn't swim), the halved decay and model 141. Its values on the wire,
+/// the animation and the velocity's scale, are unread, so Titanium has no
+/// rule of its own yet.
+///
 /// What the session doesn't know, it takes the slower side of: the
 /// modifier's cap is the base one, as the run-speed ability's ranks aren't
 /// tracked (nor the small modifier the ability gives with no buffs), and
@@ -101,9 +137,14 @@ const EQMAC_UNENCUMBERED: u32 = 0x3067;
 /// move, and doesn't take swimming or mounts.
 #[must_use]
 pub fn eqmac(state: &SpeedState) -> Speeds {
+    speeds(EQMAC, state)
+}
+
+/// A generation's speeds (see [`eqmac`]).
+fn speeds(generation: Generation, state: &SpeedState) -> Speeds {
     let encumbered = encumbered(state);
     Speeds {
-        motion: eqmac_motion(state),
+        motion: motion(generation, state),
         encumbrance: Some(if encumbered {
             (true, EQMAC_ENCUMBERED)
         } else {
@@ -112,12 +153,15 @@ pub fn eqmac(state: &SpeedState) -> Speeds {
     }
 }
 
-fn eqmac_motion(state: &SpeedState) -> Option<MotionCalibration> {
+fn motion(generation: Generation, state: &SpeedState) -> Option<MotionCalibration> {
     if state.rate <= EQMAC_ROOTED {
         return None;
     }
     let multiplier = multiplier(state);
-    let modifier = (f32::from(state.rate) / 100.0 * state.run).min(EQMAC_MODIFIER_CAP);
+    let rate = generation
+        .rate_floor
+        .map_or(state.rate, |floor| state.rate.max(floor));
+    let modifier = (f32::from(rate) / 100.0 * state.run).min(EQMAC_MODIFIER_CAP);
     let slowed = modifier < 0.0;
     let walk = if state.sneaking {
         state.walk * 0.5
@@ -150,21 +194,21 @@ fn eqmac_motion(state: &SpeedState) -> Option<MotionCalibration> {
     let byte = |input: f32| (input * 10.0).clamp(-128.0, 127.0) as i16;
     let calibration = MotionCalibration {
         units_per_second: speed(running),
-        velocity_scale: EQMAC_VELOCITY_SCALE,
+        velocity_scale: generation.velocity_scale,
         animation: byte(running),
         walk: (walking > 0.0).then_some(WalkCalibration {
             units_per_second: speed(walking),
-            velocity_scale: EQMAC_VELOCITY_SCALE,
+            velocity_scale: generation.velocity_scale,
             animation: byte(walking),
         }),
         backward: (backing < 0.0).then_some(BackwardCalibration {
             units_per_second: speed(backing),
-            velocity_scale: EQMAC_VELOCITY_SCALE,
+            velocity_scale: generation.velocity_scale,
             animation: byte(backing),
         }),
         strafe: (strafing > 0.0).then_some(StrafeCalibration {
             units_per_second: speed(strafing),
-            velocity_scale: EQMAC_VELOCITY_SCALE,
+            velocity_scale: generation.velocity_scale,
             animation: 0,
         }),
     };
@@ -285,6 +329,25 @@ mod tests {
         // A root holds the player.
         assert_eq!(running(rate(-1000)), None);
         assert!(running(rate(-999)).is_some());
+    }
+
+    #[test]
+    fn a_generation_with_a_floor_slows_no_more_than_it() {
+        let floored = Generation {
+            rate_floor: Some(-65),
+            ..EQMAC
+        };
+        let at = |rate| {
+            speeds(floored, &SpeedState { rate, ..player() })
+                .motion
+                .map(|speeds| speeds.units_per_second)
+        };
+        // -65% of the run speed off the run speed leaves 0.245.
+        assert!(close(at(-65).unwrap(), 0.245 * 42.667));
+        assert!(close(at(-90).unwrap(), 0.245 * 42.667));
+        assert!(close(at(-999).unwrap(), 0.245 * 42.667));
+        // The root comes before the floor.
+        assert_eq!(at(-1000), None);
     }
 
     #[test]
