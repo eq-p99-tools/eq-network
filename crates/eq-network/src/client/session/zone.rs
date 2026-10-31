@@ -659,7 +659,7 @@ mod tests {
             // The login server's, before the world.
             ClientCommand::SelectServer { .. } => 70,
             ClientCommand::DropInvisibility { .. } => 71,
-            ClientCommand::SpeedModifier { .. } => 72,
+            ClientCommand::SpeedInputs { .. } => 72,
         }
     }
 
@@ -834,9 +834,11 @@ mod tests {
                 },
                 created,
             },
-            ClientCommand::SpeedModifier {
+            ClientCommand::SpeedInputs {
                 session_id,
-                modifier: 0.0,
+                rate: 0,
+                weight: 0,
+                capacity: 100,
             },
             ClientCommand::Move(MovementRequest {
                 mode: MovementMode::Forward,

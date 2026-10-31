@@ -730,6 +730,8 @@ fn position(body: &[u8]) -> Result<WorldEvent> {
             heading: f32::from(body[3]) * 2.0,
         },
         velocity: velocity(word(body, 11)),
+        // The speed byte, the forward input in tenths.
+        forward: f32::from(body[2].cast_signed()) * 0.1,
     })
 }
 

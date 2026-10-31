@@ -635,15 +635,22 @@ pub enum GameCommand {
         /// Creation time prevents queued configuration from surviving a reset.
         created: std::time::Instant,
     },
-    /// The speed modifier the player's buffs give, which the host works out
-    /// from the buffs and their spells; until the first report the player
-    /// cannot move on a server whose speeds the session works out itself.
-    SpeedModifier {
+    /// What the player's speeds depend on that the host works out itself:
+    /// the movement rate of their buffs and what they carry. Until the first
+    /// report the player cannot move on a server whose speeds the session
+    /// works out itself.
+    SpeedInputs {
         /// Current zone-admission identifier.
         session_id: u64,
-        /// The modifier, as the client generation's program adds it to the
-        /// player's forward input.
-        modifier: f32,
+        /// The movement rate the player's buffs add up to, in percent; -1000
+        /// or less roots the player.
+        rate: i16,
+        /// What the player carries, in whole units.
+        weight: u16,
+        /// What the player can carry before it slows them. 0 only before the
+        /// host has the player's profile, and then no one counts as carrying
+        /// too much; a 0 after that is a bug in the host.
+        capacity: u32,
     },
     /// Propose fresh motion for the current zone session.
     Move(crate::movement::MovementRequest),
@@ -726,7 +733,7 @@ impl GameCommand {
             | Self::DropCorpse { session_id, .. }
             | Self::SelectTarget { session_id, .. }
             | Self::ConfigureMotion { session_id, .. }
-            | Self::SpeedModifier { session_id, .. } => Some(*session_id),
+            | Self::SpeedInputs { session_id, .. } => Some(*session_id),
         }
     }
 
@@ -755,7 +762,7 @@ impl GameCommand {
             Self::SetPosture { .. }
             | Self::Move(_)
             | Self::ConfigureMotion { .. }
-            | Self::SpeedModifier { .. } => Capability::Moving,
+            | Self::SpeedInputs { .. } => Capability::Moving,
             // Only a server that takes falls from the client lets the player jump.
             Self::Jump { .. } => Capability::Jumping,
             Self::EnvironmentalDamage { .. } => Capability::EnvironmentalDamage,
@@ -833,7 +840,7 @@ impl GameCommand {
             | Self::AutoEat { .. }
             | Self::EnvironmentalDamage { .. }
             // The latest report stands however long it waited.
-            | Self::SpeedModifier { .. }
+            | Self::SpeedInputs { .. }
             | Self::WhoAll { .. }
             | Self::Pet { .. }
             | Self::AnswerResurrection { .. }
@@ -1054,7 +1061,7 @@ pub fn encode(
         | GameCommand::Jump { .. }
         | GameCommand::EnvironmentalDamage { .. }
         | GameCommand::ConfigureMotion { .. }
-        | GameCommand::SpeedModifier { .. }
+        | GameCommand::SpeedInputs { .. }
         | GameCommand::CrossZoneLine { .. }
         | GameCommand::Consume { .. }
         | GameCommand::AutoEat { .. }

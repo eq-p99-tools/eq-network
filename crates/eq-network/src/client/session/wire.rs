@@ -22,7 +22,7 @@ use anyhow::{bail, Result};
 use eq_network_game::{
     command::EncodedCommand,
     message::Message,
-    movement::{MotionCalibration, SpeedState},
+    movement::{SpeedState, Speeds},
     request::{self, Request, Sender},
     GameDialect,
 };
@@ -32,8 +32,9 @@ use std::{
     sync::{atomic::AtomicBool, mpsc::Receiver},
 };
 
-/// How fast a client generation lets the player move.
-pub(super) type SpeedRule = fn(&SpeedState) -> Option<MotionCalibration>;
+/// How fast a client generation lets the player move, and whether it counts
+/// them as carrying too much.
+pub(super) type SpeedRule = fn(&SpeedState) -> Speeds;
 
 /// One client generation's zone packets.
 pub(super) trait Wire: Sync {

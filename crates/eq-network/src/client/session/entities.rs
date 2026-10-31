@@ -63,6 +63,7 @@ impl Spawns {
                 spawn_id,
                 position,
                 velocity,
+                ..
             } => {
                 if let Some(spawn) = self.0.get_mut(spawn_id) {
                     spawn.position = *position;

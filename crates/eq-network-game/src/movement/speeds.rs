@@ -10,64 +10,115 @@ pub struct SpeedState {
     pub run: f32,
     /// The profile's walk speed, as `run`.
     pub walk: f32,
+    /// The player's level.
+    pub level: u8,
     /// The player's hit points and their maximum, as the server last
     /// reported them, once it has.
     pub hit_points: Option<(i32, i32)>,
-    /// The speed modifier the player's buffs give, as the host reports it.
-    pub modifier: f32,
+    /// The movement rate the player's buffs add up to, in percent, as the
+    /// host reports it; -1000 or less roots the player (see [`eqmac`]).
+    pub rate: i16,
+    /// What the player carries, in whole units, as the host reports it.
+    pub weight: u16,
+    /// What the player can carry before it slows them, as the host reports
+    /// it. 0 is only the guard before the host has the player's profile, and
+    /// counts no one as carrying too much; a 0 after the profile is in is a
+    /// bug in the host, not a weightless player.
+    pub capacity: u32,
     /// Whether the player is sneaking, as the server last said.
     pub sneaking: bool,
+    /// The zone the player is in.
+    pub zone_id: u16,
+}
+
+/// What a generation's client makes of the player's state: the speeds it
+/// lets them move at, and whether it counts them as carrying too much.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Speeds {
+    /// The speeds, or None while the player can't move.
+    pub motion: Option<MotionCalibration>,
+    /// Whether the player carries more than they can, and the official
+    /// client's line for the state, an `eqstr_us.txt` string ID, which it
+    /// prints once as the player enters it; None where the generation's
+    /// rule for it is unread.
+    pub encumbrance: Option<(bool, u32)>,
 }
 
 /// Forward input on normal ground per unit of steady speed, in units per
 /// second: the program adds 0.8 of the input each tick and keeps 0.625 of
 /// the speed, so the speed settles at 0.8 / 0.375 a tick, 20 ticks a second
 /// (from the program, TAKP sitting 2 M1).
-const EQMAC_UNITS_PER_INPUT: f32 = 0.8 / 0.375 * 20.0;
+pub(crate) const EQMAC_UNITS_PER_INPUT: f32 = 0.8 / 0.375 * 20.0;
 /// World units per second to the program's velocity, in units a tick.
 const EQMAC_VELOCITY_SCALE: f32 = 1.0 / 20.0;
 /// The most the speed modifier adds, without the run-speed ability's ranks.
 const EQMAC_MODIFIER_CAP: f32 = 1.092_006;
-/// Below this modifier the player is rooted.
-const EQMAC_ROOTED: f32 = -1000.0;
+/// The movement rate at or below which the player is rooted (see
+/// [`eqmac`]).
+const EQMAC_ROOTED: i16 = -1000;
 /// The least input a slowed player keeps.
 const EQMAC_SLOWEST: f32 = 0.01;
+/// The zone where the program never slows the player.
+const EQMAC_UNSLOWED_ZONE: u16 = 151;
+/// The official client's lines as the player starts and stops carrying too
+/// much.
+const EQMAC_ENCUMBERED: u32 = 0x3068;
+const EQMAC_UNENCUMBERED: u32 = 0x3067;
 
-/// `EQMac`'s speeds, from the program (TAKP sitting 2 M1, "Speeds"): the
-/// forward input is the profile's run speed, or its walk speed walking, times
-/// the movement multiplier, plus the buffs' speed modifier, and the player
-/// settles at [`EQMAC_UNITS_PER_INPUT`] units a second for each unit of it;
-/// 0.7 runs at 29.9 and 0.46 walks at 19.6. A slowed input under 0 moves at
-/// 0.01, and a modifier below -1000 roots the player: None. Sneaking, the
-/// input is half the walk speed, whether running or not. Backing up takes the
-/// walk speed, half sneaking, less the modifier. Strafing alone takes half
-/// the walk speed times twice the multiplier, halved again sneaking or
-/// slowed; the modifier doesn't add to it. The speed byte is the forward
-/// input in tenths, so strafing alone sends 0.
+/// `EQMac`'s speeds, from the program (TAKP sitting 2 M1, "Speeds", and the
+/// TAKP speeds read of 10-31): the forward input is the profile's run speed,
+/// or its walk speed walking, times the movement multiplier, plus the buffs'
+/// speed modifier, and the player settles at [`EQMAC_UNITS_PER_INPUT`] units
+/// a second for each unit of it; 0.7 runs at 29.9 and 0.46 walks at 19.6.
 ///
-/// What the session doesn't know, it takes the slower side of:
-/// - the movement multiplier's hit points drop (0.5 under a fifth of the
-///   maximum and 50, 0.75 under a third and 100) applies at every level,
-///   where the program applies it only above a level it compares with; its
-///   "33%" is taken as a third. Its weight term, which the program takes
-///   off when the player carries more than they can, is pending: the
-///   capacity it compares the weight with is unread, so an over-burdened
-///   player isn't slowed yet;
-/// - the modifier's cap is the base one, as the run-speed ability's ranks
-///   aren't tracked;
-/// - strafing takes the walk speed, where the program takes the run speed
-///   while running, since a strafe doesn't say which it is.
+/// - The modifier is the buffs' movement rate in percent of the run speed,
+///   held to 1.092006; a slowed input under 0 moves at 0.01, and a rate of
+///   -1000 or less roots the player. Two places in the program name the
+///   root: the input writer at 0x4caaba zeroes the input at -1000 or less,
+///   and the speed routine (M1 line 333) roots below -1000. They agree but
+///   at exactly -1000, where the writer's zeroed input decides, so -1000
+///   roots. That the rate the program reads is the buffs' total of spell
+///   effect 3 is read from its routine's entry only.
+/// - The multiplier is 0.5 below a fifth of the maximum hit points and 50,
+///   or 0.75 below 0.33 of it and 100, above level 3 (the program also
+///   compares with 0 under a character flag it sets elsewhere, unread); then
+///   less half of what the player carries beyond their capacity, in parts of
+///   it, never below 0; always 1 in zone 151.
+/// - Sneaking, the input is half the walk speed, whether running or not.
+///   Backing up takes the walk speed, half sneaking, less the modifier.
+///   Strafing alone takes half the walk speed times twice the multiplier,
+///   halved again sneaking or slowed; the modifier doesn't add to it.
+/// - The speed byte is the forward input in tenths, so strafing alone sends
+///   0. An input of 0, from carrying twice the capacity or a slow that
+///   takes it all, holds the player: None.
 ///
-/// Crouching, swimming and riding are left out: the session stands the
-/// player up to move, and doesn't take swimming or mounts.
+/// What the session doesn't know, it takes the slower side of: the
+/// modifier's cap is the base one, as the run-speed ability's ranks aren't
+/// tracked (nor the small modifier the ability gives with no buffs), and
+/// strafing takes the walk speed, where the program takes the run speed
+/// while running, since a strafe doesn't say which it is. Crouching,
+/// swimming and riding are left out: the session stands the player up to
+/// move, and doesn't take swimming or mounts.
 #[must_use]
-pub fn eqmac(state: &SpeedState) -> Option<MotionCalibration> {
-    if state.modifier < EQMAC_ROOTED {
+pub fn eqmac(state: &SpeedState) -> Speeds {
+    let encumbered = encumbered(state);
+    Speeds {
+        motion: eqmac_motion(state),
+        encumbrance: Some(if encumbered {
+            (true, EQMAC_ENCUMBERED)
+        } else {
+            (false, EQMAC_UNENCUMBERED)
+        }),
+    }
+}
+
+fn eqmac_motion(state: &SpeedState) -> Option<MotionCalibration> {
+    if state.rate <= EQMAC_ROOTED {
         return None;
     }
-    let multiplier = multiplier(state.hit_points);
-    let modifier = state.modifier.min(EQMAC_MODIFIER_CAP);
-    let slowed = state.modifier < 0.0;
+    let multiplier = multiplier(state);
+    let modifier = (f32::from(state.rate) / 100.0 * state.run).min(EQMAC_MODIFIER_CAP);
+    let slowed = modifier < 0.0;
     let walk = if state.sneaking {
         state.walk * 0.5
     } else {
@@ -101,12 +152,12 @@ pub fn eqmac(state: &SpeedState) -> Option<MotionCalibration> {
         units_per_second: speed(running),
         velocity_scale: EQMAC_VELOCITY_SCALE,
         animation: byte(running),
-        walk: Some(WalkCalibration {
+        walk: (walking > 0.0).then_some(WalkCalibration {
             units_per_second: speed(walking),
             velocity_scale: EQMAC_VELOCITY_SCALE,
             animation: byte(walking),
         }),
-        backward: Some(BackwardCalibration {
+        backward: (backing < 0.0).then_some(BackwardCalibration {
             units_per_second: speed(backing),
             velocity_scale: EQMAC_VELOCITY_SCALE,
             animation: byte(backing),
@@ -120,20 +171,35 @@ pub fn eqmac(state: &SpeedState) -> Option<MotionCalibration> {
     calibration.validate().ok().map(|()| calibration)
 }
 
-/// The program's movement multiplier from the player's hit points, at every
-/// level (see [`eqmac`]).
-fn multiplier(hit_points: Option<(i32, i32)>) -> f32 {
-    let Some((current, maximum)) = hit_points.filter(|(_, maximum)| *maximum > 0) else {
+/// Whether the player carries more than their capacity.
+fn encumbered(state: &SpeedState) -> bool {
+    state.capacity > 0 && u32::from(state.weight) > state.capacity
+}
+
+/// The program's movement multiplier (see [`eqmac`]).
+#[allow(clippy::cast_precision_loss)] // Hit points and weights well within f32.
+fn multiplier(state: &SpeedState) -> f32 {
+    if state.zone_id == EQMAC_UNSLOWED_ZONE {
         return 1.0;
-    };
-    let (current, maximum) = (i64::from(current), i64::from(maximum));
-    if current * 5 < maximum && current < 50 {
-        0.5
-    } else if current * 3 < maximum && current < 100 {
-        0.75
-    } else {
-        1.0
     }
+    let mut multiplier = match state.hit_points {
+        Some((current, maximum)) if current < maximum && maximum > 0 && state.level > 3 => {
+            let ratio = current as f32 / maximum as f32;
+            if ratio < 0.2 && current < 50 {
+                0.5
+            } else if ratio < 0.33 && current < 100 {
+                0.75
+            } else {
+                1.0
+            }
+        }
+        _ => 1.0,
+    };
+    if encumbered(state) {
+        let (weight, capacity) = (f32::from(state.weight), state.capacity as f32);
+        multiplier = (multiplier - (weight - capacity) / (2.0 * capacity)).max(0.0);
+    }
+    multiplier
 }
 
 #[cfg(test)]
@@ -144,9 +210,13 @@ mod tests {
         SpeedState {
             run: 0.7,
             walk: 0.46,
+            level: 50,
             hit_points: Some((500, 500)),
-            modifier: 0.0,
+            rate: 0,
+            weight: 50,
+            capacity: 100,
             sneaking: false,
+            zone_id: 1,
         }
     }
 
@@ -154,9 +224,15 @@ mod tests {
         (left - right).abs() < 0.05
     }
 
+    fn running(state: SpeedState) -> Option<f32> {
+        eqmac(&state).motion.map(|speeds| speeds.units_per_second)
+    }
+
     #[test]
     fn eqmac_runs_and_walks_as_fast_as_the_program() {
-        let speeds = eqmac(&player()).unwrap();
+        let speeds = eqmac(&player());
+        assert_eq!(speeds.encumbrance, Some((false, 0x3067)));
+        let speeds = speeds.motion.unwrap();
         assert!(close(speeds.units_per_second, 29.9), "{speeds:?}");
         assert_eq!(speeds.animation, 7);
         assert!((speeds.velocity_scale - 0.05).abs() < f32::EPSILON);
@@ -170,50 +246,87 @@ mod tests {
     }
 
     #[test]
-    fn eqmac_slows_a_hurt_snared_or_sneaking_player_and_roots_a_rooted_one() {
-        let at = |hit_points| {
-            eqmac(&SpeedState {
+    fn eqmac_slows_a_hurt_player_above_level_3() {
+        let at = |hit_points, level| {
+            running(SpeedState {
                 hit_points: Some(hit_points),
+                level,
                 ..player()
             })
             .unwrap()
-            .units_per_second
         };
-        assert!(close(at((49, 500)), 29.9 / 2.0));
-        assert!(close(at((99, 500)), 29.9 * 0.75));
-        // A third or more, or 100 and up, is unhurt.
-        assert!(close(at((167, 500)), 29.9));
-        assert!(close(at((100, 1000)), 29.9));
-        let snared = eqmac(&SpeedState {
-            modifier: -5.0,
-            ..player()
-        })
-        .unwrap();
-        assert!(close(snared.units_per_second, 0.43) && snared.animation == 0);
-        assert!(close(snared.backward.unwrap().units_per_second, 0.43));
+        assert!(close(at((49, 500), 50), 29.9 / 2.0));
+        assert!(close(at((99, 500), 50), 29.9 * 0.75));
+        assert!(close(at((99, 310), 50), 29.9 * 0.75));
+        // 0.33 of the maximum or more, or 100 and up, is unhurt.
+        assert!(close(at((99, 290), 50), 29.9));
+        assert!(close(at((100, 1000), 50), 29.9));
+        // So is anyone up to level 3.
+        assert!(close(at((49, 500), 3), 29.9));
+        assert!(close(at((49, 500), 4), 29.9 / 2.0));
+    }
+
+    #[test]
+    fn eqmac_speeds_follow_the_buffs_movement_rate() {
+        let rate = |rate| SpeedState { rate, ..player() };
+        // A snare takes 35% of the run speed off every input.
+        let snared = eqmac(&rate(-50)).motion.unwrap();
+        assert!(close(snared.units_per_second, 14.9));
+        assert!(close(snared.walk.unwrap().units_per_second, 4.7));
+        assert!(close(snared.backward.unwrap().units_per_second, 4.7));
         assert!(close(snared.strafe.unwrap().units_per_second, 9.8));
-        // A buff adds up to its cap.
-        let quick = eqmac(&SpeedState {
-            modifier: 5.0,
-            ..player()
-        })
-        .unwrap();
-        assert!(close(quick.units_per_second, (0.7 + 1.092) * 42.667));
+        // One past the walk speed leaves walking at its least.
+        let crawling = eqmac(&rate(-90)).motion.unwrap();
+        assert!(close(crawling.walk.unwrap().units_per_second, 0.43));
+        assert_eq!(crawling.walk.unwrap().animation, 0);
+        // A buff adds its rate, up to the cap.
+        assert!(close(running(rate(50)).unwrap(), 44.8));
+        assert!(close(running(rate(300)).unwrap(), (0.7 + 1.092) * 42.667));
+        // A root holds the player.
+        assert_eq!(running(rate(-1000)), None);
+        assert!(running(rate(-999)).is_some());
+    }
+
+    #[test]
+    fn eqmac_slows_a_sneaking_or_overloaded_player_except_in_zone_151() {
         let sneaking = eqmac(&SpeedState {
             sneaking: true,
             ..player()
         })
+        .motion
         .unwrap();
         assert!(close(sneaking.units_per_second, 9.8));
         assert!(close(sneaking.walk.unwrap().units_per_second, 9.8));
         assert!(close(sneaking.backward.unwrap().units_per_second, 9.8));
         assert!(close(sneaking.strafe.unwrap().units_per_second, 9.8));
-        assert_eq!(
-            eqmac(&SpeedState {
-                modifier: -1001.0,
-                ..player()
-            }),
-            None
-        );
+        let loaded = |weight| SpeedState { weight, ..player() };
+        let speeds = eqmac(&loaded(150));
+        assert_eq!(speeds.encumbrance, Some((true, 0x3068)));
+        assert!(close(speeds.motion.unwrap().units_per_second, 29.9 * 0.75));
+        assert_eq!(eqmac(&loaded(100)).encumbrance, Some((false, 0x3067)));
+        // Twice the capacity or more holds the player.
+        assert_eq!(running(loaded(300)), None);
+        // An unknown capacity slows no one.
+        assert!(close(
+            running(SpeedState {
+                capacity: 0,
+                ..loaded(300)
+            })
+            .unwrap(),
+            29.9
+        ));
+        let hurt_and_loaded = SpeedState {
+            hit_points: Some((40, 500)),
+            ..loaded(150)
+        };
+        assert!(close(running(hurt_and_loaded).unwrap(), 29.9 * 0.25));
+        assert!(close(
+            running(SpeedState {
+                zone_id: 151,
+                ..hurt_and_loaded
+            })
+            .unwrap(),
+            29.9
+        ));
     }
 }

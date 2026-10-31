@@ -172,6 +172,7 @@ fn updates_reject_partial_batches_and_preserve_negative_positions() {
             heading: 510.0,
         },
         velocity: [0.0; 3],
+        forward: 0.0,
     };
     assert_eq!(updates(0xf340, &update).unwrap(), vec![expected.clone()]);
     let mut batch = 2u32.to_le_bytes().to_vec();
@@ -703,11 +704,16 @@ fn a_position_update_carries_its_motion_in_units_per_second() {
         delta_heading: 0,
     };
     let body = client_update(&sample).unwrap().body;
-    let [WorldEvent::Position { velocity, .. }] = &updates(0xf340, &body).unwrap()[..] else {
+    let [WorldEvent::Position {
+        velocity, forward, ..
+    }] = &updates(0xf340, &body).unwrap()[..]
+    else {
         panic!("expected one position");
     };
     // Twenty ticks a second.
     assert_eq!(*velocity, [-640.0, 1260.0, -1280.0]);
+    // The speed byte is the forward input in tenths.
+    assert!((forward - 0.7).abs() < 1e-6, "{forward}");
     let still = client_update(&PositionPacket {
         delta: [0.0; 3],
         ..sample
