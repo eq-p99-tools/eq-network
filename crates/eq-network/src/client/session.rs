@@ -82,6 +82,7 @@ pub(super) fn run(
         stop,
         duration: options.zone_duration,
         commands,
+        sysinfo_reported_at: std::cell::Cell::new(0),
     };
     let mut destination =
         server
@@ -135,6 +136,12 @@ pub(in crate::client) struct CharacterSession<'a> {
     pub(in crate::client) stop: &'a CancellationToken,
     pub(in crate::client) duration: Option<Duration>,
     pub(in crate::client) commands: Option<&'a Receiver<ClientCommand>>,
+    /// The second the session last told the world what machine it runs on,
+    /// or zero when it never has: the official gatherer rereads its saved
+    /// stamp on every pass, so a zone crossing back through the world must
+    /// not report twice inside the week while the host is still saving the
+    /// first report's time.
+    pub(in crate::client) sysinfo_reported_at: std::cell::Cell<u64>,
 }
 
 /// Where the world sends the character next.

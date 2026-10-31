@@ -181,6 +181,18 @@ pub(super) trait ServerType: Sync {
         None
     }
 
+    /// Whether the session tells this world what machine the player
+    /// entered it on, the official client's weekly report
+    /// ([`eq_network_game::sysinfo`]) sent once after entering the world.
+    /// False until it is checked for this server type: the message is
+    /// identity traffic, and a server type joins the list only when its
+    /// official client has been watched sending it.
+    ///
+    /// [`eq_network_game::sysinfo`]: eq_network_game::sysinfo::SysInfo
+    fn sends_system_info(&self) -> bool {
+        false
+    }
+
     /// Runs the character's stay in a zone: the shared zone session, with
     /// the features this server type provides.
     ///
@@ -762,6 +774,17 @@ impl ServerType for Project1999 {
 
     fn profile_turn(&self) -> f32 {
         256.0
+    }
+
+    /// The official P99 client tells the world what machine it entered
+    /// the world on: the 344-byte report, its wire form and the week's
+    /// gate were all watched entering Green (2026-10-30), including the
+    /// stamp landing in the installed `eqclient.ini`. The same gatherer
+    /// sits in the program `EQEmu` worlds take, but no report has been
+    /// watched leaving for them yet, so `EQEmu` keeps the default until
+    /// one is; the `EQMac` types never showed it under wine.
+    fn sends_system_info(&self) -> bool {
+        true
     }
 
     fn creation(&self) -> Option<&'static dyn Creation> {
@@ -1534,6 +1557,26 @@ mod tests {
         assert!(server_type(ServerProtocol::EqEmu)
             .hide_answer(&setup)
             .is_some());
+    }
+
+    #[test]
+    fn only_p99_has_been_watched_taking_the_machines_weekly_account() {
+        // The report was read off the wire on P99 (2026-10-30), record and
+        // stamp together; the same gatherer sits in the program `EQEmu`
+        // worlds take, but no report has been watched leaving for them, so
+        // they keep the silent default until one is. Neither EQMac type
+        // ever showed it under wine either.
+        assert!(server_type(ServerProtocol::Project1999).sends_system_info());
+        for protocol in [
+            ServerProtocol::EqEmu,
+            ServerProtocol::Quarm,
+            ServerProtocol::Takp,
+        ] {
+            assert!(
+                !server_type(protocol).sends_system_info(),
+                "{protocol:?} lists a send nobody has watched"
+            );
+        }
     }
 
     #[test]

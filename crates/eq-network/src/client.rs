@@ -198,6 +198,17 @@ pub struct ClientConfig {
     /// What the session eats and drinks on its own for a hungry or thirsty
     /// player; by default nothing with modifiers.
     pub auto_eat: eq_network_game::food::AutoEat,
+    /// What this machine says about itself to the world, as the official
+    /// client says it once a week (see [`eq_network_game::sysinfo`]): the
+    /// processor and adapter, memory and display as the host measures
+    /// them, and the saved time of the last report. `None` — the default — reports
+    /// nothing: a host that has not looked at its own machine, or runs a
+    /// server type never watched sending the report, stays exactly as
+    /// silent as it always has been. A field the host cannot measure
+    /// stays zero or empty; none is invented.
+    ///
+    /// [`eq_network_game::sysinfo`]: eq_network_game::sysinfo::SysInfo
+    pub sysinfo: Option<eq_network_game::sysinfo::SysInfo>,
 }
 
 impl ClientConfig {
@@ -232,6 +243,7 @@ impl ClientConfig {
             reconnect_delay: Duration::from_secs(30),
             local_only: false,
             auto_eat: eq_network_game::food::AutoEat::default(),
+            sysinfo: None,
         }
     }
 

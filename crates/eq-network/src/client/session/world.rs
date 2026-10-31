@@ -153,6 +153,57 @@ fn open_world(
     Ok(shield)
 }
 
+/// The official client's weekly account of the machine the player enters
+/// the world on, sent just before it enters. The world should hear it only
+/// when all of these hold: the server type is one watched receiving it
+/// (today only P99; every other type, `EQEmu` included, keeps the silent
+/// default until its official client has been seen sending this), the host
+/// has something to say about its machine (`ClientConfig::sysinfo`, None
+/// until the app fills it), and the newest of the saved report's time and
+/// this session's own has aged past the week, the official gate itself
+/// (`eq_network_game::sysinfo::SysInfo::is_due`).
+///
+/// The send time leaves with the session, twice over: in the
+/// [`WorldEvent::SystemInfoReported`] the host uses to keep the stamp, and
+/// in the session's own memory, so a zone crossing back through the world
+/// inside the week stays quiet even before that stamp is saved.
+///
+/// [`WorldEvent::SystemInfoReported`]: crate::world::WorldEvent::SystemInfoReported
+///
+/// # Errors
+/// Returns an error when the send fails or the host's event handler fails.
+fn report_the_machine(
+    session: &mut dyn eq_network_transport::Transport,
+    server: &dyn servers::ServerType,
+    context: &CharacterSession<'_>,
+    log: &mut Events<'_>,
+) -> Result<()> {
+    if !server.sends_system_info() {
+        return Ok(());
+    }
+    let Some(report) = context.config.sysinfo.as_ref() else {
+        return Ok(());
+    };
+    let at = unix_seconds();
+    if !report.is_due(at, context.sysinfo_reported_at.get()) {
+        return Ok(());
+    }
+    let packet = report.encode();
+    session.send(packet.opcode, &packet.body)?;
+    context.sysinfo_reported_at.set(at);
+    log.send(ClientEvent::World(WorldEvent::SystemInfoReported { at }))
+}
+
+/// Whole seconds since the epoch, the clock the official report keeps its
+/// date and its week on. A clock that cannot tell says zero, which reads
+/// as no report ever sent.
+fn unix_seconds() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+}
+
 /// Sends the selected server name and starts the zone-handoff deadline.
 fn enter_character(
     session: &mut dyn eq_network_transport::Transport,
@@ -308,6 +359,11 @@ pub(super) fn titanium(
                     // verification is on, which it is not by default.
                     session.send(0x5072, &[0; 2056])?;
                 }
+                // Once a week, just before it enters the world, the
+                // official client tells this world what machine the player
+                // is on (the P99 capture of 2026-10-31: the record went out
+                // on this connection right before OP_EnterWorld).
+                report_the_machine(&mut session, server, context, log)?;
                 deadline = enter_character(&mut session, name, log)?;
                 entered = true;
             }
@@ -537,6 +593,99 @@ pub(super) mod tests {
         };
         assert!(message.contains("unknown.eqg") && message.contains("checksum 0"));
         assert!(!message.contains("absent.eqg"));
+    }
+
+    #[test]
+    fn the_world_owes_its_machine_account_once_a_week_and_only_to_p99() {
+        use crate::client::{CancellationToken, ServerProtocol};
+        use eq_network_game::sysinfo::{SysInfo, OPCODE, RECORD_BYTES};
+        use eq_network_transport::{Application, Transport};
+
+        /// A connection that remembers what the client sent, body and all.
+        #[derive(Default)]
+        struct Sent(Vec<(u16, Vec<u8>)>);
+
+        impl Transport for Sent {
+            fn send(&mut self, opcode: u16, body: &[u8]) -> Result<()> {
+                self.0.push((opcode, body.to_vec()));
+                Ok(())
+            }
+
+            fn receive(&mut self) -> Result<Option<Application>> {
+                Ok(None)
+            }
+
+            fn close(&mut self) -> Result<()> {
+                Ok(())
+            }
+
+            fn last_received_seconds(&self) -> u64 {
+                0
+            }
+        }
+
+        let due = SysInfo {
+            cpu: "Test CPU".into(),
+            adapter: "Test Card".into(),
+            physical_mb: 1024,
+            virtual_mb: 2048,
+            ..SysInfo::default()
+        };
+        let mut config = ClientConfig::new("ACCOUNT", "PASSWORD", "Test Server", "Tester");
+        config.sysinfo = Some(due);
+        let mut quiet = config.clone();
+        quiet.sysinfo = None;
+        let identity = ClientIdentity::new("example-device", "example-user");
+        let credentials = Credentials {
+            account: "ACCOUNT".into(),
+            key: *b"0123456789",
+        };
+        let stop = CancellationToken::default();
+        let context_for = |config: &ClientConfig| CharacterSession {
+            config: config.clone(),
+            identity: &identity,
+            credentials: &credentials,
+            stop: &stop,
+            duration: None,
+            commands: None,
+            sysinfo_reported_at: std::cell::Cell::new(0),
+        };
+        let mut received = Vec::new();
+        let mut handler = |event| {
+            received.push(event);
+            Ok(())
+        };
+        let mut log = Events::new(&config, &mut handler);
+        let p99 = servers::server_type(ServerProtocol::Project1999);
+        let mut wire = Sent::default();
+
+        // The official weekly report, owed: it goes out on the world
+        // connection as the 344-byte record the capture shows, once.
+        let entering = context_for(&config);
+        report_the_machine(&mut wire, p99, &entering, &mut log).unwrap();
+        // Back through the world inside the same week — the stamp on disk
+        // has not moved, the session's own memory has — stays quiet.
+        report_the_machine(&mut wire, p99, &entering, &mut log).unwrap();
+        // A server type never watched taking the report hears nothing,
+        // however due; and a host with nothing to say about its machine
+        // says nothing even to P99.
+        report_the_machine(
+            &mut wire,
+            servers::server_type(ServerProtocol::EqEmu),
+            &context_for(&config),
+            &mut log,
+        )
+        .unwrap();
+        report_the_machine(&mut wire, p99, &context_for(&quiet), &mut log).unwrap();
+
+        assert_eq!(wire.0.len(), 1, "one report, then the week's silence");
+        assert_eq!(wire.0[0].0, OPCODE);
+        assert_eq!(wire.0[0].1.len(), RECORD_BYTES);
+        assert_eq!(received.len(), 1);
+        assert!(matches!(
+            received[0],
+            ClientEvent::World(WorldEvent::SystemInfoReported { at }) if at > 1_700_000_000
+        ));
     }
 
     #[test]
