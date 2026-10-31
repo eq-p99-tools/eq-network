@@ -1,7 +1,13 @@
 //! Camping: the official client's 30-second timer between `OP_Camp` and `OP_Logout`.
 //!
 //! The server only starts its own camp timer when it receives `OP_Camp`; the client
-//! decides when to log out, and standing or moving abandons the attempt.
+//! decides when to log out, and standing or moving abandons the attempt. The
+//! Titanium program counts the 30 seconds from its `OP_Camp`, says how long
+//! is left at 25, 20, 15, 10 and 5, sends `OP_Logout` at 30 and closes the
+//! zone connection 3 seconds after that (sitting 9, T18 part one). The
+//! `EQMac` program's countdown and close are unread: the session counts the
+//! same marks there (the client words them as the generation does) and keeps
+//! waiting 10 seconds for the reply.
 use super::{
     feature::{Feature, Out, World},
     ClientCommand, ClientEvent, ZoneExit,
@@ -16,7 +22,11 @@ use eq_network_game::{
 use std::time::{Duration, Instant};
 
 const CAMP_DURATION: Duration = Duration::from_secs(30);
+/// How long the session waits for the logout's reply where the client
+/// generation's own wait is unread.
 const REPLY_TIMEOUT: Duration = Duration::from_secs(10);
+/// The seconds left at which the program says how long the camp has to go.
+const COUNTDOWN: [u8; 5] = [25, 20, 15, 10, 5];
 
 #[derive(Debug, Default)]
 enum Phase {
@@ -30,6 +40,8 @@ enum Phase {
 #[derive(Debug, Default)]
 pub(super) struct Camp {
     phase: Phase,
+    /// The last of [`COUNTDOWN`] already said for this camp.
+    said: Option<u8>,
 }
 
 impl Camp {
@@ -42,7 +54,26 @@ impl Camp {
     fn start(&mut self, now: Instant) {
         if matches!(self.phase, Phase::Idle) {
             self.phase = Phase::Preparing(now);
+            self.said = None;
         }
+    }
+
+    /// The countdown mark this tick passes, if one is due and not yet said:
+    /// the latest whose time has come, so a late tick skips none it should
+    /// not and says each at most once.
+    fn countdown_due(&mut self, now: Instant) -> Option<u8> {
+        let Phase::Preparing(started) = self.phase else {
+            return None;
+        };
+        let elapsed = now.saturating_duration_since(started);
+        let due = COUNTDOWN.into_iter().rev().find(|left| {
+            CAMP_DURATION.saturating_sub(Duration::from_secs(u64::from(*left))) <= elapsed
+        })?;
+        if self.said.is_some_and(|said| said <= due) {
+            return None;
+        }
+        self.said = Some(due);
+        Some(due)
     }
 
     /// Abandons preparation; returns false when nothing was being prepared.
@@ -73,10 +104,10 @@ impl Camp {
         matches!(self.phase, Phase::LoggingOut(_))
     }
 
-    /// Whether a sent logout has waited too long for its reply.
-    fn reply_overdue(&self, now: Instant) -> bool {
+    /// Whether a sent logout has waited `wait` for its reply.
+    fn reply_overdue(&self, now: Instant, wait: Duration) -> bool {
         matches!(self.phase, Phase::LoggingOut(sent)
-            if now.saturating_duration_since(sent) >= REPLY_TIMEOUT)
+            if now.saturating_duration_since(sent) >= wait)
     }
 }
 
@@ -149,13 +180,20 @@ impl Feature for Camp {
     /// Sends the logout once the camp timer completes, and gives up on a
     /// reply that never came.
     fn tick(&mut self, now: Instant, world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
+        if !self.logout_due(now) {
+            if let Some(seconds_left) = self.countdown_due(now) {
+                out.log.send(ClientEvent::World(WorldEvent::Camp(
+                    CampStatus::Countdown { seconds_left },
+                )))?;
+            }
+        }
         if self.logout_due(now) {
             out.request(&Request::Logout)?;
             self.logout_sent(now);
             out.log
                 .send(ClientEvent::World(WorldEvent::Camp(CampStatus::LoggingOut)))?;
         }
-        if self.reply_overdue(now) {
+        if self.reply_overdue(now, out.wire.logout_close().unwrap_or(REPLY_TIMEOUT)) {
             out.log
                 .send(ClientEvent::World(WorldEvent::Camp(CampStatus::Camped)))?;
             world.end(ZoneExit::CharacterSelect);
@@ -282,7 +320,32 @@ mod tests {
         camp.logout_sent(now + CAMP_DURATION);
         assert!(camp.logging_out() && !camp.logout_due(now + CAMP_DURATION));
         assert!(!camp.cancel());
-        assert!(!camp.reply_overdue(now + CAMP_DURATION + Duration::from_secs(9)));
-        assert!(camp.reply_overdue(now + CAMP_DURATION + REPLY_TIMEOUT));
+        let three = Duration::from_secs(3);
+        assert!(!camp.reply_overdue(now + CAMP_DURATION + Duration::from_secs(2), three));
+        assert!(camp.reply_overdue(now + CAMP_DURATION + three, three));
+        assert!(!camp.reply_overdue(now + CAMP_DURATION + Duration::from_secs(9), REPLY_TIMEOUT));
+        assert!(camp.reply_overdue(now + CAMP_DURATION + REPLY_TIMEOUT, REPLY_TIMEOUT));
+    }
+
+    #[test]
+    fn the_countdown_says_each_five_seconds_left_once() {
+        let now = Instant::now();
+        let mut camp = Camp::default();
+        assert_eq!(camp.countdown_due(now), None);
+        camp.start(now);
+        let at = |seconds| now + Duration::from_secs(seconds);
+        assert_eq!(camp.countdown_due(at(4)), None);
+        assert_eq!(camp.countdown_due(at(5)), Some(25));
+        assert_eq!(camp.countdown_due(at(6)), None);
+        // A late tick says the latest mark only.
+        assert_eq!(camp.countdown_due(at(16)), Some(15));
+        assert_eq!(camp.countdown_due(at(19)), None);
+        assert_eq!(camp.countdown_due(at(20)), Some(10));
+        assert_eq!(camp.countdown_due(at(25)), Some(5));
+        assert_eq!(camp.countdown_due(at(29)), None);
+        // A new camp counts again.
+        assert!(camp.cancel());
+        camp.start(at(40));
+        assert_eq!(camp.countdown_due(at(45)), Some(25));
     }
 }

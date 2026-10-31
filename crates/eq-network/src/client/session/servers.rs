@@ -36,7 +36,7 @@ use super::{
     hazards::Hazards,
     hiding::HideAnswer,
     inventory::{Allowances, Belongings},
-    listing::Listing,
+    listing::{Helm, Listing},
     looting::Looting,
     map::Map,
     motion::Motion,
@@ -395,6 +395,12 @@ pub(super) trait ServerType: Sync {
         None
     }
 
+    /// Showing or hiding the player's helm, where the client generation has
+    /// the option.
+    fn helm(&self, _setup: &Setup<'_>) -> Provided {
+        None
+    }
+
     /// Every feature the server type provides, in the order the zone session
     /// offers them each command, packet and timer.
     fn features(&self, setup: &Setup<'_>) -> Vec<Provision> {
@@ -435,6 +441,7 @@ pub(super) trait ServerType: Sync {
             self.raids(setup),
             self.hazards(setup),
             self.ticks(setup),
+            self.helm(setup),
         ]
         .into_iter()
         .flatten()
@@ -532,7 +539,7 @@ mod shared {
     use super::{
         Abilities, Ability, Allowances, Belongings, BleedingOut, Camp, Casting, Character, Clock,
         Combat, Corpses, Doors, Edits, Entities, Exchanges, Feature, GameDialect, GroundObjects,
-        Groups, Hazard, Hazards, HideAnswer, Home, ItemCount, Listing, Looting, Map, Marks,
+        Groups, Hazard, Hazards, Helm, HideAnswer, Home, ItemCount, Listing, Looting, Map, Marks,
         MerchantOffers, Motion, MoveRules, Pets, Quotes, Raids, Reading, Resurrection, Sacrifice,
         Setup, Socials, Spellbook, Talk, Targeting, Ticks, Tradeskills, Training, Transfers,
         Translocate, Who,
@@ -681,12 +688,17 @@ mod shared {
         Box::<Groups>::default()
     }
 
-    pub(super) fn listing() -> Box<dyn Feature> {
-        Box::<Listing>::default()
+    /// Away (where its update is known), anonymous and roleplaying.
+    pub(super) fn listing(away_known: bool) -> Box<dyn Feature> {
+        Box::new(Listing::new(away_known))
     }
 
     pub(super) fn socials() -> Box<dyn Feature> {
         Box::new(Socials)
+    }
+
+    pub(super) fn helm() -> Box<dyn Feature> {
+        Box::new(Helm)
     }
 
     pub(super) fn raids() -> Box<dyn Feature> {
@@ -1051,7 +1063,14 @@ impl ServerType for EqEmu {
 
     /// Checked live on `EQEmu` with two characters.
     fn listing(&self, _setup: &Setup<'_>) -> Provided {
-        offer(shared::listing())
+        offer(shared::listing(true))
+    }
+
+    /// The Titanium client's show-helm option (sitting 8f, read); `EQEmu`
+    /// takes appearance type 43 from the player's own spawn
+    /// (`Client::Handle_OP_SpawnAppearance`), not yet checked live.
+    fn helm(&self, _setup: &Setup<'_>) -> Provided {
+        offer(shared::helm())
     }
 
     /// Checked live on `EQEmu` with two characters.
@@ -1191,10 +1210,10 @@ impl ServerType for Takp {
 
     /// TAKP takes falls from the client, which the `EQMac` program works out
     /// under its own gravity (from the program, TAKP Batch 1 R3; checklist
-    /// 6.161) and reports as damage ([`Self::hazards`]). The `EQMac`
-    /// program's notice of a jump is unread, so the player does not jump.
+    /// 6.161) and reports as damage ([`Self::hazards`]), and jumps by the
+    /// program's notice (TAKP sitting 2).
     fn motion(&self, _setup: &Setup<'_>) -> Provided {
-        offer(shared::motion(true, false))
+        offer(shared::motion(true, true))
     }
 
     /// Falls, which TAKP takes from the client as the program reports them
@@ -1207,6 +1226,22 @@ impl ServerType for Takp {
     /// (`zone/client_packet.cpp`) and whenever it changes.
     fn clock(&self, _setup: &Setup<'_>) -> Provided {
         offer(shared::clock())
+    }
+
+    /// Anonymous and roleplaying, on the `EQMac` program's appearance update
+    /// (TAKP, read 10-31), not yet checked live. The away update is unread
+    /// on this client, so `/afk` is refused.
+    fn listing(&self, _setup: &Setup<'_>) -> Provided {
+        offer(shared::listing(false))
+    }
+
+    /// Answered only on the player's word. On a yes TAKP sends the offer
+    /// again with the answer 1 and the client moves itself, which the
+    /// session reads as the server's offer to move the player
+    /// ([`eq_network_game::confirmations`]); the client asks as the `EQMac`
+    /// program does (TAKP Batch 1 R8). Not yet checked live.
+    fn translocate(&self, _setup: &Setup<'_>) -> Provided {
+        offer(shared::translocate())
     }
 
     /// Groups, with `EQMac`'s opcodes for Titanium's layouts (TAKP
@@ -1338,16 +1373,16 @@ mod tests {
     fn eqmac_servers_provide_the_features_built_for_them() {
         // Quarm and TAKP speak EQMac: they see the zone's spawns, keep the
         // player's record and talk. TAKP also casts, keeps the spellbook,
-        // camps, moves and falls, zones, moves items, keeps the time of day
-        // and takes the client's reports of a fall and a bleed-out; Quarm
-        // will once each is
-        // checked there.
+        // camps, moves, falls and jumps, zones, moves items, keeps the time of
+        // day, lists the player as anonymous or roleplaying, answers
+        // translocates and takes the client's reports of a fall and a
+        // bleed-out; Quarm will once each is checked there.
         let setup = Setup::new("Tester", AutoEat::default());
         let quarm = server_type(ServerProtocol::Quarm);
         assert_eq!(quarm.features(&setup).len(), 3);
         assert_eq!(offers(quarm), [Capability::Talking]);
         let takp = server_type(ServerProtocol::Takp);
-        assert_eq!(takp.features(&setup).len(), 15);
+        assert_eq!(takp.features(&setup).len(), 17);
         assert_eq!(
             offers(takp),
             [
@@ -1363,8 +1398,11 @@ mod tests {
                 Capability::Camping,
                 Capability::Zoning,
                 Capability::Grouping,
+                Capability::Listing,
                 Capability::EnvironmentalDamage,
-                Capability::BleedingOut
+                Capability::BleedingOut,
+                Capability::Translocate,
+                Capability::Jumping
             ]
         );
         for server in [quarm, takp] {
@@ -1500,11 +1538,11 @@ mod tests {
         // spells, merchants' offers, groups, the player's listing, dice,
         // emotes, assisting, raids, the world's damage and the server's tick are checked on
         // EQEmu alone so far; only EQEmu waits for the answer to the end of
-        // hiding; and only EQEmu answers sacrifices and translocates, read
-        // from its source and not yet checked live.
+        // hiding; only EQEmu answers sacrifices, read from its source and not
+        // yet checked live; and only EQEmu takes the show-helm option.
         for (protocol, count) in [
             (ServerProtocol::Project1999, 21),
-            (ServerProtocol::EqEmu, 35),
+            (ServerProtocol::EqEmu, 36),
         ] {
             let server = server_type(protocol);
             let setup = Setup::new("Tester", AutoEat::default());
@@ -1528,6 +1566,7 @@ mod tests {
             Capability::Raiding,
             Capability::EnvironmentalDamage,
             Capability::ServerTicks,
+            Capability::ShowingHelm,
         ] {
             assert!(!offers(server_type(ServerProtocol::Project1999)).contains(&capability));
             assert!(offers(server_type(ServerProtocol::EqEmu)).contains(&capability));

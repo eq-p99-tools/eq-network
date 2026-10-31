@@ -7,9 +7,13 @@
 //! the last (`anon_toggle_timer`, `afk_toggle_timer`), measured between its
 //! own receipts, so the session refuses one within twice that of its own
 //! last send: jitter on the way cannot then make the server drop a change
-//! the session reported as made. The official client refuses `/anonymous` while
-//! roleplaying and `/roleplay` while anonymous (inferred from its having
-//! strings for them); `EQEmu` takes either.
+//! the session reported as made. `/roleplay` flips the roleplaying bit and
+//! keeps the anonymous one, and `/anonymous` sets anonymous or clears both,
+//! as both programs do (Titanium sitting 9l; TAKP, read 10-31): neither
+//! refuses one while the other is on.
+//!
+//! On a client generation whose away update is unread (the `EQMac` client),
+//! the session lists anonymity and roleplaying only.
 use super::{
     actions,
     feature::{Feature, Out, World},
@@ -24,11 +28,6 @@ use eq_network_game::{
 };
 use std::time::{Duration, Instant};
 
-/// The official client's strings for `/anonymous` while roleplaying and
-/// `/roleplay` while anonymous (`eqstr_us.txt`).
-const ANONYMOUS_WHILE_ROLEPLAYING: u32 = 13235;
-const ROLEPLAYING_WHILE_ANONYMOUS: u32 = 8873;
-
 /// How soon after a change of a kind the session sends another: twice the
 /// 250 ms the server waits between its receipts.
 const SETTLING: Duration = Duration::from_millis(500);
@@ -36,6 +35,8 @@ const SETTLING: Duration = Duration::from_millis(500);
 /// Away, anonymous and roleplaying, as the player turns them.
 #[derive(Default)]
 pub(super) struct Listing {
+    /// Whether the generation's away update is known, so `/afk` is sent.
+    away_known: bool,
     /// Whether the player is away, once a change says; until then, as the
     /// admission listed them.
     away: Option<bool>,
@@ -44,6 +45,16 @@ pub(super) struct Listing {
     /// When the session last sent a change of each kind.
     away_sent: Option<Instant>,
     anonymity_sent: Option<Instant>,
+}
+
+impl Listing {
+    /// The listing, with or without the away update.
+    pub(super) fn new(away_known: bool) -> Self {
+        Self {
+            away_known,
+            ..Self::default()
+        }
+    }
 }
 
 /// Whether a change sent then is too recent for the server to take another.
@@ -70,6 +81,9 @@ impl Listing {
         let wait = ("Wait a moment before changing that again.", None);
         match command {
             ClientCommand::ToggleAway { .. } => {
+                if !self.away_known {
+                    return Err(("Not available on this server", None));
+                }
                 if settling(self.away_sent, now) {
                     return Err(wait);
                 }
@@ -79,28 +93,13 @@ impl Listing {
                 if settling(self.anonymity_sent, now) {
                     return Err(wait);
                 }
-                let anonymous = matches!(command, ClientCommand::ToggleAnonymous { .. });
-                let (wanted, other, refusal) = if anonymous {
-                    (
-                        Anonymity::Anonymous,
-                        Anonymity::Roleplaying,
-                        ("Stop roleplaying first.", ANONYMOUS_WHILE_ROLEPLAYING),
-                    )
-                } else {
-                    (
-                        Anonymity::Roleplaying,
-                        Anonymity::Anonymous,
-                        ("Stop being anonymous first.", ROLEPLAYING_WHILE_ANONYMOUS),
-                    )
-                };
-                if anonymity == other {
-                    return Err((refusal.0, Some(refusal.1)));
-                }
-                Ok(ListingChange::Anonymity(if anonymity == wanted {
-                    Anonymity::Open
-                } else {
-                    wanted
-                }))
+                Ok(ListingChange::Anonymity(
+                    if matches!(command, ClientCommand::ToggleAnonymous { .. }) {
+                        anonymity.anonymous_toggled()
+                    } else {
+                        anonymity.roleplay_toggled()
+                    },
+                ))
             }
             _ => Err(("Not a listing command.", None)),
         }
@@ -180,6 +179,33 @@ impl Feature for Listing {
     }
 }
 
+/// The Titanium client's show-helm option: sent on every change of it, as
+/// the program sends it (sitting 8f). Nothing comes back; the server shows
+/// the helm, or not, to everyone else.
+pub(super) struct Helm;
+
+impl Feature for Helm {
+    fn capabilities(&self) -> Vec<crate::world::Capability> {
+        vec![crate::world::Capability::ShowingHelm]
+    }
+
+    fn owns(&self, command: &ClientCommand) -> bool {
+        matches!(command, ClientCommand::ShowHelm { .. })
+    }
+
+    fn handle(
+        &mut self,
+        command: &ClientCommand,
+        _world: &mut World,
+        out: &mut Out<'_, '_>,
+    ) -> Result<()> {
+        let ClientCommand::ShowHelm { show, .. } = *command else {
+            return Ok(());
+        };
+        out.request(&Request::ShowHelm(show))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::{feature::testing, ClientEvent};
@@ -216,7 +242,7 @@ mod tests {
 
     #[test]
     fn away_turns_on_and_off_and_waits_for_the_server_between() {
-        let mut feature = Listing::default();
+        let mut feature = Listing::new(true);
         let mut world = World::new(5);
         let away = ClientCommand::ToggleAway { session_id: 5 };
         let outcome = testing::run(|out| feature.handle(&away, &mut world, out));
@@ -238,13 +264,14 @@ mod tests {
     }
 
     #[test]
-    fn anonymous_and_roleplaying_each_wait_for_the_other_to_end() {
-        let mut feature = Listing::default();
+    fn roleplay_flips_its_bit_and_anonymous_sets_or_clears_both() {
+        let mut feature = Listing::new(true);
         let mut world = World::new(5);
         let anonymous = ClientCommand::ToggleAnonymous { session_id: 5 };
         let roleplay = ClientCommand::ToggleRoleplay { session_id: 5 };
         let sent =
             |anonymity| Outcome::Sent(vec![listing::titanium_anonymity(7, anonymity).unwrap()]);
+        // 0 → 1, then /roleplay 1 → 3, 3 → 1.
         assert_eq!(
             run(&mut feature, &mut world, &anonymous),
             sent(Anonymity::Anonymous)
@@ -252,13 +279,26 @@ mod tests {
         settle(&mut feature);
         assert_eq!(
             run(&mut feature, &mut world, &roleplay),
-            Outcome::Refused(Some(ROLEPLAYING_WHILE_ANONYMOUS))
+            sent(Anonymity::AnonymousRoleplaying)
         );
+        settle(&mut feature);
+        assert_eq!(
+            run(&mut feature, &mut world, &roleplay),
+            sent(Anonymity::Anonymous)
+        );
+        settle(&mut feature);
+        // /roleplay 1 → 3, then /anonymous from 3 writes 0.
+        assert_eq!(
+            run(&mut feature, &mut world, &roleplay),
+            sent(Anonymity::AnonymousRoleplaying)
+        );
+        settle(&mut feature);
         assert_eq!(
             run(&mut feature, &mut world, &anonymous),
             sent(Anonymity::Open)
         );
         settle(&mut feature);
+        // 0 → 2, and /anonymous from 2 writes 1.
         assert_eq!(
             run(&mut feature, &mut world, &roleplay),
             sent(Anonymity::Roleplaying)
@@ -266,9 +306,10 @@ mod tests {
         settle(&mut feature);
         assert_eq!(
             run(&mut feature, &mut world, &anonymous),
-            Outcome::Refused(Some(ANONYMOUS_WHILE_ROLEPLAYING))
+            sent(Anonymity::Anonymous)
         );
         // The server's word on the player counts too.
+        settle(&mut feature);
         world.own_spawn = Some(7);
         testing::run(|out| {
             feature.observe(
@@ -283,8 +324,52 @@ mod tests {
         .result
         .unwrap();
         assert_eq!(
-            run(&mut feature, &mut world, &anonymous),
-            sent(Anonymity::Anonymous)
+            run(&mut feature, &mut world, &roleplay),
+            sent(Anonymity::Roleplaying)
         );
+    }
+
+    #[test]
+    fn the_helm_option_sends_type_43_on_each_change() {
+        let mut world = World::new(5);
+        for show in [false, true] {
+            let outcome = testing::run(|out| {
+                Helm.handle(
+                    &ClientCommand::ShowHelm {
+                        session_id: 5,
+                        show,
+                    },
+                    &mut world,
+                    out,
+                )
+            });
+            assert_eq!(
+                outcome.sent,
+                [listing::titanium_show_helm(7, show).unwrap()]
+            );
+            assert_eq!(&outcome.sent[0].body[2..4], &43u16.to_le_bytes());
+        }
+    }
+
+    #[test]
+    fn a_generation_without_the_away_update_refuses_afk_and_lists_the_rest() {
+        let mut feature = Listing::new(false);
+        let mut world = World::new(5);
+        assert_eq!(
+            run(
+                &mut feature,
+                &mut world,
+                &ClientCommand::ToggleAway { session_id: 5 }
+            ),
+            Outcome::Refused(None)
+        );
+        assert!(matches!(
+            run(
+                &mut feature,
+                &mut world,
+                &ClientCommand::ToggleRoleplay { session_id: 5 }
+            ),
+            Outcome::Sent(_)
+        ));
     }
 }

@@ -550,6 +550,7 @@ fn admit(
                     crate::world::WorldEvent::ZoneDescription(description.clone()),
                 ))?;
             }
+            world.gravity = zone.description.as_ref().map(|zone| zone.gravity);
             features.admitted(world, out)?;
         }
         Err(error) => out
@@ -575,7 +576,7 @@ mod tests {
     };
 
     /// How many kinds of command there are.
-    const KINDS: usize = 73;
+    const KINDS: usize = 74;
 
     /// The kinds the login and world servers take, before any zone session.
     const BEFORE_ZONES: [usize; 3] = [0, 1, 70];
@@ -660,6 +661,7 @@ mod tests {
             ClientCommand::SelectServer { .. } => 70,
             ClientCommand::DropInvisibility { .. } => 71,
             ClientCommand::SpeedInputs { .. } => 72,
+            ClientCommand::ShowHelm { .. } => 73,
         }
     }
 
@@ -938,6 +940,10 @@ mod tests {
             ClientCommand::ToggleAway { session_id },
             ClientCommand::ToggleAnonymous { session_id },
             ClientCommand::ToggleRoleplay { session_id },
+            ClientCommand::ShowHelm {
+                session_id,
+                show: true,
+            },
             ClientCommand::Random {
                 session_id,
                 low: 1,
@@ -1439,15 +1445,29 @@ mod tests {
             Capability::Translocate,
             Capability::ServerTicks,
             Capability::Jumping,
+            Capability::ShowingHelm,
         ] {
             assert!(eqemu.contains(&capability));
             assert!(!p99.contains(&capability));
         }
-        assert_eq!(eqemu.len(), p99.len() + 19);
+        assert_eq!(eqemu.len(), p99.len() + 20);
+    }
+
+    #[test]
+    fn an_eqmac_zone_reports_everything_its_features_offer() {
+        use crate::world::Capability;
+        let features = |protocol| {
+            Features::new(
+                servers::server_type(protocol),
+                "Tester",
+                eq_network_game::food::AutoEat::default(),
+            )
+            .capabilities()
+        };
         // EQMac servers talk; TAKP also casts, keeps the spellbook, camps,
         // moves, falls and moves items, follows zone changes and takes the
-        // client's reports of a fall and a bleed-out, which Quarm does not
-        // yet.
+        // client's reports of a fall and a bleed-out, and TAKP jumps, lists
+        // anonymity and answers translocates, which Quarm does not yet.
         assert_eq!(
             features(crate::client::ServerProtocol::Quarm),
             [Capability::Talking]
@@ -1467,8 +1487,11 @@ mod tests {
                 Capability::Camping,
                 Capability::Zoning,
                 Capability::Grouping,
+                Capability::Listing,
                 Capability::EnvironmentalDamage,
-                Capability::BleedingOut
+                Capability::BleedingOut,
+                Capability::Translocate,
+                Capability::Jumping
             ]
         );
     }

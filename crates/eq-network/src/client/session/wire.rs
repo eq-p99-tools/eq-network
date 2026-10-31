@@ -68,15 +68,22 @@ pub(super) trait Wire: Sync {
         None
     }
 
-    /// The fastest the generation's client lets the player fall, in world
-    /// units per second; none where it is unread.
-    fn fall_speed(&self) -> Option<f32> {
+    /// The fastest the generation's client lets the player fall under the
+    /// zone's gravity (its header's, if it gave one), in world units per
+    /// second; none where it is unread.
+    fn fall_speed(&self, _gravity: Option<f32>) -> Option<f32> {
         None
     }
 
     /// The least time the generation's client leaves between two of the
     /// player's own position updates; none where it is unread.
     fn position_spacing(&self) -> Option<std::time::Duration> {
+        None
+    }
+
+    /// How long the generation's client waits after its logout before it
+    /// closes the zone connection itself, reply or not; none where unread.
+    fn logout_close(&self) -> Option<std::time::Duration> {
         None
     }
 
@@ -195,6 +202,19 @@ impl Wire for Titanium {
         coverage::titanium(opcode)
     }
 
+    /// The Titanium program closes the zone connection 3 seconds after its
+    /// `OP_Logout` (sitting 9, T18 part one).
+    fn logout_close(&self) -> Option<std::time::Duration> {
+        Some(std::time::Duration::from_secs(3))
+    }
+
+    /// No server checks a Titanium fall's speed (`EQEmu` reads no z in its
+    /// movement checks), so the guard holds it to the program's own fall
+    /// under the zone's gravity.
+    fn fall_speed(&self, gravity: Option<f32>) -> Option<f32> {
+        Some(eq_network_game::movement::fall_speed(gravity))
+    }
+
     fn position_spacing(&self) -> Option<std::time::Duration> {
         Some(eq_network_game::movement::TITANIUM_POSITION_SPACING)
     }
@@ -283,8 +303,8 @@ impl Wire for EqMac {
         coverage::eqmac(opcode)
     }
 
-    fn fall_speed(&self) -> Option<f32> {
-        Some(eq_network_game::movement::EQMAC_FALL_SPEED)
+    fn fall_speed(&self, gravity: Option<f32>) -> Option<f32> {
+        Some(eq_network_game::movement::fall_speed(gravity))
     }
 
     fn speeds(&self) -> Option<SpeedRule> {
@@ -375,7 +395,11 @@ mod tests {
             EqMac.encode(&Request::Camp, PLAYER).unwrap(),
             eq_network_game::quarm::camp()
         );
-        assert!(EqMac.encode(&Request::Jump, PLAYER).is_err());
+        assert_eq!(
+            EqMac.encode(&Request::Jump, PLAYER).unwrap(),
+            eq_network_game::quarm::jump()
+        );
+        assert!(EqMac.encode(&Request::ShowHelm(true), PLAYER).is_err());
     }
 
     #[test]

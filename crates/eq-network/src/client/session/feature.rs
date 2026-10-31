@@ -186,6 +186,8 @@ pub(in crate::client) struct World {
     pub(super) zone: (u16, u16),
     /// When the zone admitted the player, once it has.
     pub(super) admitted: Option<Instant>,
+    /// The zone's gravity from its header (`OP_NewZone` +420), once it came.
+    pub(super) gravity: Option<f32>,
     /// Application packets received in this zone session.
     pub(in crate::client) packets: u64,
     /// The zone's spawns, which only the entities feature changes.
@@ -221,6 +223,7 @@ impl World {
             lifecycle: ZoneLifecycle::default(),
             zone: (0, 0),
             admitted: None,
+            gravity: None,
             packets: 0,
             spawns: Spawns::default(),
             exchange: Exchanging::default(),

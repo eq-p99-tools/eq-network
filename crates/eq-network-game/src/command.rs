@@ -525,6 +525,14 @@ pub enum GameCommand {
         /// Current zone admission.
         session_id: u64,
     },
+    /// Show or hide the player's helm to others: the Titanium client's
+    /// option, sent on every change of it.
+    ShowHelm {
+        /// Current zone admission.
+        session_id: u64,
+        /// Whether the helm shows.
+        show: bool,
+    },
     /// Roll a die from the lowest to the highest number: `/random`.
     Random {
         /// Current zone admission.
@@ -717,6 +725,7 @@ impl GameCommand {
             | Self::ToggleAway { session_id }
             | Self::ToggleAnonymous { session_id }
             | Self::ToggleRoleplay { session_id }
+            | Self::ShowHelm { session_id, .. }
             | Self::Random { session_id, .. }
             | Self::Emote { session_id, .. }
             | Self::Assist { session_id, .. }
@@ -806,6 +815,7 @@ impl GameCommand {
             Self::ToggleAway { .. }
             | Self::ToggleAnonymous { .. }
             | Self::ToggleRoleplay { .. } => Capability::Listing,
+            Self::ShowHelm { .. } => Capability::ShowingHelm,
             Self::Random { .. } => Capability::Rolling,
             Self::Emote { .. } => Capability::Emoting,
             Self::Assist { .. } => Capability::Assisting,
@@ -857,6 +867,7 @@ impl GameCommand {
             | Self::ToggleAway { .. }
             | Self::ToggleAnonymous { .. }
             | Self::ToggleRoleplay { .. }
+            | Self::ShowHelm { .. }
             | Self::Random { .. }
             | Self::Emote { .. }
             | Self::Assist { .. }
@@ -1083,6 +1094,7 @@ pub fn encode(
         | GameCommand::ToggleAway { .. }
         | GameCommand::ToggleAnonymous { .. }
         | GameCommand::ToggleRoleplay { .. }
+        | GameCommand::ShowHelm { .. }
         | GameCommand::Random { .. }
         | GameCommand::Emote { .. }
         | GameCommand::Assist { .. }

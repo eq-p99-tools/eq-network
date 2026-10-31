@@ -20,18 +20,37 @@ use std::time::{Duration, Instant};
 pub const MAX_GROUNDED_STEP: f32 = 2.0;
 
 /// Fastest descent a [`MovementMode::Fall`] sample may claim, in world units per
-/// second. This is the client's provisional terminal speed, not a measured Titanium
-/// or server limit.
+/// second, until the session sets the generation's own ([`fall_speed`]): a
+/// provisional default, not a measured limit.
 pub const MAX_FALL_SPEED: f32 = 40.0;
 
-/// The fastest the `EQMac` program's falls go, in world units per second.
-/// The program pulls a falling body down by 0.4 per tick squared, a tick
-/// being 50 ms, and keeps 0.99 of its speed each frame in the air (from the
-/// program, TAKP Batch 1 R3; checklist 6.161), so at one frame a tick a fall
-/// tends to 39.6 units a tick. The air factor's frame is the program's own,
-/// so how fast the official client tends to fall depends on its frame rate
-/// (unsure).
-pub const EQMAC_FALL_SPEED: f32 = 39.6 * 20.0;
+/// The gravity both programs use until a zone's header gives its own: the
+/// fall speed added each 50 ms step (TAKP Batch 1 R3; Titanium sitting 8g,
+/// the header's +420 field, default 0.4).
+pub const DEFAULT_GRAVITY: f32 = 0.4;
+
+/// The fastest a fall goes at the default gravity, before a zone's header
+/// gives its own: [`fall_speed`] of none, 792 units a second.
+pub const EQMAC_FALL_SPEED: f32 = 99.0 * DEFAULT_GRAVITY * 20.0;
+
+/// The fastest a fall goes under a zone's gravity, in world units per
+/// second: the guard's limit for a fall sample on both client generations.
+///
+/// Both programs add the gravity (the fall speed gained each 50 ms step) and
+/// keep 0.99 of the vertical speed after each update (TAKP Batch 1 R3,
+/// checklist 6.161; Titanium sitting 8i), and neither caps a fall. At one
+/// step an update the speed tends to 99 × gravity a step, 20 steps a
+/// second: 792 at the default 0.4. This is derived, not read: how many steps
+/// an update covers depends on the update rate the client emulates
+/// (checklist 6.294). A gravity that is negative or not a number counts as
+/// the default; a header of 0 pulls nothing, so a fall cannot speed up.
+#[must_use]
+pub fn fall_speed(gravity: Option<f32>) -> f32 {
+    let gravity = gravity
+        .filter(|gravity| gravity.is_finite() && *gravity >= 0.0)
+        .unwrap_or(DEFAULT_GRAVITY);
+    99.0 * gravity * 20.0
+}
 
 /// How often a standing character repeats its position. The official P99 client
 /// sends one about every 1.1 s (median of its recorded stationary updates).
@@ -345,6 +364,17 @@ fn valid_position(p: Position) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_fall_tends_to_99_steps_of_the_zones_gravity() {
+        assert!((fall_speed(None) - 792.0).abs() < 0.01);
+        assert!((EQMAC_FALL_SPEED - 792.0).abs() < 0.01);
+        assert!((fall_speed(Some(0.8)) - 1584.0).abs() < 0.01);
+        // A header of 0 pulls nothing; a broken one counts as the default.
+        assert!(fall_speed(Some(0.0)).abs() < f32::EPSILON);
+        assert!((fall_speed(Some(-1.0)) - 792.0).abs() < 0.01);
+        assert!((fall_speed(Some(f32::NAN)) - 792.0).abs() < 0.01);
+    }
     #[test]
     fn grounded_stairs_allow_two_units_but_reject_larger_vertical_changes() {
         let start = Instant::now();

@@ -23,6 +23,7 @@ pub const APPEARANCE_OPCODE: u16 = 0x7c32;
 /// The appearance updates that say how `/who` lists a player.
 const ANONYMITY: u16 = 21;
 const AWAY: u16 = 24;
+const SHOW_HELM: u16 = 43;
 
 /// `OP_LFGAppearance`: a player started or stopped looking for a group.
 pub const LOOKING_OPCODE: u16 = 0x1a85;
@@ -31,7 +32,9 @@ pub const GUILDS_OPCODE: u16 = 0x6957;
 /// Each name in the guild list, and the heading before them.
 const GUILD_NAME_LENGTH: usize = 64;
 
-/// Whether a player hides from `/who`.
+/// Whether a player hides from `/who`. Both programs keep it as one value
+/// of two bits, 1 anonymous and 2 roleplaying, which can be set together
+/// (Titanium sitting 9l; TAKP, read 10-31).
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize)]
 pub enum Anonymity {
     /// Listed in full.
@@ -41,24 +44,55 @@ pub enum Anonymity {
     Anonymous,
     /// `/roleplay`: as anonymous, but the guild shows.
     Roleplaying,
+    /// Both bits: anonymous and roleplaying at once, which `/roleplay`
+    /// reaches from anonymous.
+    AnonymousRoleplaying,
 }
 
 impl Anonymity {
-    /// The servers' number for it: 1 anonymous, 2 roleplaying.
-    const fn from_wire(value: u32) -> Self {
-        match value {
+    /// The servers' number for it: bit 1 anonymous, bit 2 roleplaying.
+    #[must_use]
+    pub const fn from_wire(value: u32) -> Self {
+        match value & 3 {
             1 => Self::Anonymous,
             2 => Self::Roleplaying,
+            3 => Self::AnonymousRoleplaying,
             _ => Self::Open,
         }
     }
 
     /// Its number on the wire, as [`Anonymity::from_wire`] reads it.
-    const fn wire(self) -> u32 {
+    #[must_use]
+    pub const fn wire(self) -> u32 {
         match self {
             Self::Open => 0,
             Self::Anonymous => 1,
             Self::Roleplaying => 2,
+            Self::AnonymousRoleplaying => 3,
+        }
+    }
+
+    /// Whether the anonymous bit is set.
+    #[must_use]
+    pub const fn anonymous(self) -> bool {
+        self.wire() & 1 != 0
+    }
+
+    /// What `/roleplay` turns it into: the roleplaying bit flipped and the
+    /// anonymous bit kept (0→2, 1→3, 2→0, 3→1), as both programs do.
+    #[must_use]
+    pub const fn roleplay_toggled(self) -> Self {
+        Self::from_wire(self.wire() ^ 2)
+    }
+
+    /// What `/anonymous` turns it into: the program writes 1, or 0 when the
+    /// anonymous bit is already set, whatever the roleplaying bit was.
+    #[must_use]
+    pub const fn anonymous_toggled(self) -> Self {
+        if self.anonymous() {
+            Self::Open
+        } else {
+            Self::Anonymous
         }
     }
 }
@@ -84,6 +118,27 @@ pub(crate) fn update(spawn_id: u16, kind: u16, value: u32) -> Result<EncodedComm
 /// Rejects a zero spawn ID.
 pub fn titanium_away(spawn_id: u16, away: bool) -> Result<EncodedCommand> {
     update(spawn_id, AWAY, u32::from(away))
+}
+
+/// Says whether the player's helm shows to others: the Titanium client
+/// sends it on every change of its option (sitting 8f: type 43, 1 or 0).
+///
+/// # Errors
+/// Rejects a zero spawn ID.
+pub fn titanium_show_helm(spawn_id: u16, show: bool) -> Result<EncodedCommand> {
+    update(spawn_id, SHOW_HELM, u32::from(show))
+}
+
+/// Says how the player hides from `/who`, on the `EQMac` client's
+/// appearance update (`0x40f5`, the same 8 bytes: spawn, type 21, the
+/// combined value; TAKP read 10-31).
+///
+/// # Errors
+/// Rejects a zero spawn ID.
+pub fn eqmac_anonymity(spawn_id: u16, anonymity: Anonymity) -> Result<EncodedCommand> {
+    let mut command = update(spawn_id, ANONYMITY, anonymity.wire())?;
+    command.opcode = crate::quarm::ZONE_SPAWN_APPEARANCE;
+    Ok(command)
 }
 
 /// Says how the player hides from `/who`.
