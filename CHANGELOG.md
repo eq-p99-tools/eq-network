@@ -7,6 +7,21 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- Batch 3b-2, from the TAKP program (read R1 of 10-31):
+  - `EQMac` carries an NPC at the program's own pace between reports. While
+    an NPC moves, its horizontal speed keeps half as much each step, so it
+    settles at 2.327 units a second for each unit of the speed byte, which
+    is the server's pace. Before this it moved at a player's 4.267, ran
+    ahead of the server and was pulled back about once a second. Every
+    NPC is halved until the program's skip for linked NPCs is read
+    (checklist 6.316).
+  - The `EQMac` step runs once a call, as the program's frame loop runs it.
+    Each call updates the speed once and moves by it times the frame's
+    time in 50 ms spans, at most 3. The steady speed doesn't change; only
+    the climb to it after a report goes by frames.
+  - `Carried::reported` takes the spawn's kind. `Carried::pending` is
+    gone.
+
 - Batch 3b, from the official programs (Titanium sittings 8i and 9p, TAKP
   read N4):
   - The movement guard lets a sample rise as the client generation's jump
