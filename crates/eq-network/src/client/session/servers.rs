@@ -1062,6 +1062,11 @@ impl ServerType for Quarm {
         &EqMac
     }
 
+    /// As on TAKP, whose server Quarm's comes from ([`Takp`]).
+    fn spell_landing_flag(&self) -> Option<u8> {
+        Some(0)
+    }
+
     fn character(&self, _setup: &Setup<'_>) -> Provided {
         offer(shared::character())
     }
@@ -1086,6 +1091,20 @@ struct Takp;
 impl ServerType for Takp {
     fn wire(&self) -> &'static dyn Wire {
         &EqMac
+    }
+
+    /// TAKP's server sends the spell action with flag 0 as a spell lands, to
+    /// the target, the caster and everyone near (`EQMacEmu`
+    /// `zone/spells.cpp`:2755-2801, the flag at :2786), and flag 4 to the
+    /// target and the caster alone once it takes hold: a buff once it has a
+    /// slot (`zone/buffstacking.cpp`:820-830), any other spell after its
+    /// effects (`zone/spells.cpp`:3194-3210). The 0 goes out before the
+    /// server's region and stacking checks, so a landing can be drawn for a
+    /// spell that then fails to take hold. Inferred: whether the official
+    /// client draws the target's stage on the 0 or waits for the 4 is unread
+    /// (checklist 6.286).
+    fn spell_landing_flag(&self) -> Option<u8> {
+        Some(0)
     }
 
     fn creation(&self) -> Option<&'static dyn Creation> {
@@ -1275,21 +1294,21 @@ mod tests {
     }
 
     #[test]
-    fn only_eqemu_says_which_spell_action_is_a_landing_so_far() {
+    fn each_server_says_which_spell_action_is_a_landing_once_checked() {
         assert_eq!(
             server_type(ServerProtocol::EqEmu).spell_landing_flag(),
             Some(4)
         );
-        // P99 waits for a live look; TAKP sends flag 0 as a spell lands and
-        // flag 4 only once a buff takes hold, and the Mac client's own rule
-        // is unchecked.
-        for protocol in [
-            ServerProtocol::Project1999,
-            ServerProtocol::Quarm,
-            ServerProtocol::Takp,
-        ] {
-            assert_eq!(server_type(protocol).spell_landing_flag(), None);
+        // TAKP and Quarm send flag 0 as a spell lands, to everyone near, and
+        // flag 4 to the target and caster once it takes hold.
+        for protocol in [ServerProtocol::Quarm, ServerProtocol::Takp] {
+            assert_eq!(server_type(protocol).spell_landing_flag(), Some(0));
         }
+        // P99 waits for its own evidence.
+        assert_eq!(
+            server_type(ServerProtocol::Project1999).spell_landing_flag(),
+            None
+        );
     }
 
     #[test]
