@@ -153,21 +153,20 @@ fn open_world(
     Ok(shield)
 }
 
-/// The one export `dsetup.dll` was made for, in packet form: a weekly
-/// account of the machine the player entered the world on. The world
-/// should hear it only when all of these hold: the server type is one
-/// watched receiving it (today only P99 — every other type, `EQEmu`
-/// included, keeps the silent default until its official client has been
-/// seen sending this), the host has something to say about its machine
-/// (`ClientConfig::sysinfo`, None until the app fills it), and the newest
-/// of the saved report's time and this session's own has aged past the
-/// week, the official gate itself (`eq_network_game::sysinfo::SysInfo::is_due`).
+/// The official client's weekly account of the machine the player enters
+/// the world on, sent just before it enters. The world should hear it only
+/// when all of these hold: the server type is one watched receiving it
+/// (today only P99; every other type, `EQEmu` included, keeps the silent
+/// default until its official client has been seen sending this), the host
+/// has something to say about its machine (`ClientConfig::sysinfo`, None
+/// until the app fills it), and the newest of the saved report's time and
+/// this session's own has aged past the week, the official gate itself
+/// (`eq_network_game::sysinfo::SysInfo::is_due`).
 ///
 /// The send time leaves with the session, twice over: in the
-/// [`WorldEvent::SystemInfoReported`] the host uses to write the stamp
-/// where the official client writes it, and in the session's own memory,
-/// so a zone crossing back through the world inside the week stays quiet
-/// even before that stamp is on disk.
+/// [`WorldEvent::SystemInfoReported`] the host uses to keep the stamp, and
+/// in the session's own memory, so a zone crossing back through the world
+/// inside the week stays quiet even before that stamp is saved.
 ///
 /// [`WorldEvent::SystemInfoReported`]: crate::world::WorldEvent::SystemInfoReported
 ///
@@ -360,13 +359,13 @@ pub(super) fn titanium(
                     // verification is on, which it is not by default.
                     session.send(0x5072, &[0; 2056])?;
                 }
+                // Once a week, just before it enters the world, the
+                // official client tells this world what machine the player
+                // is on (the P99 capture of 2026-10-31: the record went out
+                // on this connection right before OP_EnterWorld).
+                report_the_machine(&mut session, server, context, log)?;
                 deadline = enter_character(&mut session, name, log)?;
                 entered = true;
-                // A few seconds after this point, once a week, the
-                // official client tells this world what machine the player
-                // entered it on. Send ours here: same connection, same
-                // moment in the login, and silent except where watched.
-                report_the_machine(&mut session, server, context, log)?;
             }
         }
         ensure!(
@@ -627,16 +626,10 @@ pub(super) mod tests {
 
         let due = SysInfo {
             cpu: "Test CPU".into(),
-            gpu: "Test Card".into(),
+            adapter: "Test Card".into(),
             physical_mb: 1024,
             virtual_mb: 2048,
-            color_depth: 32,
-            desktop_width: 1920,
-            desktop_height: 1080,
-            screen_width: 800,
-            screen_height: 600,
-            refresh_hz: 60,
-            reported_at: 0,
+            ..SysInfo::default()
         };
         let mut config = ClientConfig::new("ACCOUNT", "PASSWORD", "Test Server", "Tester");
         config.sysinfo = Some(due);

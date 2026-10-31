@@ -617,10 +617,8 @@ pub enum WorldEvent {
     ChatServer(crate::channels::ChatServer),
     /// The session told the world what machine the player entered it on,
     /// the official client's weekly [`crate::sysinfo`] report. The host
-    /// keeps the time it says: the next report is due a week after this
-    /// one, and the saved stamp is what the world's own client compares
-    /// against, so it belongs in the installed client's own
-    /// `eqclient.ini` (`[Defaults] LastSysInfoDate`).
+    /// keeps the time it says as the stamp the next week's gate compares
+    /// against (the official client's `[Defaults] LastSysInfoDate`).
     ///
     /// [`crate::sysinfo`]: crate::sysinfo::SysInfo
     SystemInfoReported {

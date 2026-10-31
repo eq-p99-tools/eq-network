@@ -200,13 +200,12 @@ pub struct ClientConfig {
     pub auto_eat: eq_network_game::food::AutoEat,
     /// What this machine says about itself to the world, as the official
     /// client says it once a week (see [`eq_network_game::sysinfo`]): the
-    /// processor and card names, memory and display measures, and the
-    /// saved time of the last report. `None` — the default — reports
+    /// processor and adapter, memory, display and operating system as the
+    /// host measures them, and the saved time of the last report. `None` — the default — reports
     /// nothing: a host that has not looked at its own machine, or runs a
     /// server type never watched sending the report, stays exactly as
-    /// silent as it always has been. Do not invent field values to fill
-    /// this in; only a live capture of the official client's own report
-    /// can say what belongs there.
+    /// silent as it always has been. A field the host cannot measure
+    /// stays zero or empty; none is invented.
     ///
     /// [`eq_network_game::sysinfo`]: eq_network_game::sysinfo::SysInfo
     pub sysinfo: Option<eq_network_game::sysinfo::SysInfo>,
