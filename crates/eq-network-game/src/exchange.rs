@@ -473,6 +473,7 @@ mod tests {
             gender: 0,
             position: Position::default(),
             velocity: [0.0; 3],
+            forward: 0.0,
             walk_speed: 0.0,
             run_speed: 0.0,
             size: 6.0,

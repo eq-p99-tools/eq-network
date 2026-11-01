@@ -243,6 +243,10 @@ pub struct SpawnState {
     /// Motion at the last report, in EQ units per second along X, Y and Z; zero
     /// when standing still or not reported.
     pub velocity: [f32; 3],
+    /// The spawn's forward input in the record, as
+    /// [`WorldEvent::Position`]'s `forward`; zero where the dialect's record
+    /// doesn't report it.
+    pub forward: f32,
     /// The record's walk speed, a server protocol value (`EQEmu` sends its walk
     /// speed value over 40), not world units per second; zero where the record
     /// holds none that is valid or the dialect does not report it.
@@ -318,7 +322,11 @@ pub fn titanium_spawns(body: &[u8]) -> Result<Vec<SpawnState>> {
             ensure!(size >= 0.0, "negative spawn size");
             let name = &record[7..71];
             let end = name.iter().position(|b| *b == 0).unwrap_or(name.len());
-            let (position, velocity) =
+            // Inferred: that the program takes a spawn record's motion
+            // block, its forward input among it, as it does an update's
+            // (checklist 6.327, which Decompile read R4 of spawn-record
+            // motion answers).
+            let (position, velocity, forward) =
                 titanium_motion([94, 98, 102, 106, 110].map(|at| word(record, at)))?;
             Ok(SpawnState {
                 class: Some(record[331]),
@@ -337,6 +345,7 @@ pub fn titanium_spawns(body: &[u8]) -> Result<Vec<SpawnState>> {
                 invisible: record[84] != 0,
                 position,
                 velocity,
+                forward,
                 // The same fields the own spawn record's are read from.
                 walk_speed: speed(record, 324),
                 run_speed: speed(record, 233),
@@ -965,7 +974,7 @@ pub enum WorldEvent {
         /// The spawn's forward input at this report, as the generation's
         /// program adds it along the heading each tick (see
         /// [`carry`](crate::movement::carry)); `EQMac` sends it in tenths, and
-        /// Titanium doesn't send it, so 0 there.
+        /// Titanium as its animation value, in fortieths.
         forward: f32,
     },
     /// Current/max HP received from the server.
@@ -1745,11 +1754,14 @@ fn money_update(body: &[u8]) -> Result<Coins> {
     })
 }
 
-/// EQ units per second for one unit of a Titanium motion delta, fitted on
-/// official-client P99 recordings: the median over 2,253 straight,
-/// constant-velocity stretches of NPC movement (10th to 90th percentile 0.1429
-/// to 0.1448). Newer `EQEmu` servers send no deltas.
-const DELTA_UNITS_PER_SECOND: f32 = 0.144;
+/// EQ units per second for one unit of a Titanium motion delta: the program
+/// reads each as 1/64 of a unit per 50 ms (Titanium read R2 of 10-31, the
+/// decoder 0x465304, 0x645ef8), so 20 / 64 a second.
+const DELTA_UNITS_PER_SECOND: f32 = 20.0 / 64.0;
+
+/// The Titanium program's forward input for one unit of a report's
+/// animation value: 1/40 (Titanium read R2 of 10-31, 0x641094).
+const ANIMATION_INPUT: f32 = 0.025;
 
 /// EQ units per second for one unit of a moving spawn's animation value, which
 /// is its speed: `EQEmu` moves NPCs `speed * 0.4 * 1.45` units per second
@@ -1761,18 +1773,23 @@ pub const ANIMATION_UNITS_PER_SECOND: f32 = 0.4 * 1.45;
 /// A server position update for another spawn.
 fn titanium_position(body: &[u8]) -> Result<WorldEvent> {
     ensure!(body.len() == 22, "invalid server position length");
-    let (position, velocity) = titanium_motion([2, 6, 10, 14, 18].map(|at| word(body, at)))?;
+    let (position, velocity, forward) =
+        titanium_motion([2, 6, 10, 14, 18].map(|at| word(body, at)))?;
     Ok(WorldEvent::Position {
         spawn_id: u16::from_le_bytes([body[0], body[1]]),
         position,
         velocity,
-        forward: 0.0,
+        forward,
     })
 }
 
 /// A Titanium position block: five words with the position, heading, animation
-/// and motion deltas, as in server position updates and spawn records.
-fn titanium_motion(words: [u32; 5]) -> Result<(Position, [f32; 3])> {
+/// and motion deltas, as in server position updates and spawn records. Gives
+/// the position, the velocity in EQ units per second from the deltas, and the
+/// forward input from the animation, as the program's decoder writes them
+/// (Titanium read R2 of 10-31, 0x465304). Newer `EQEmu` servers send no
+/// deltas, and their spawns move on their input alone.
+fn titanium_motion(words: [u32; 5]) -> Result<(Position, [f32; 3], f32)> {
     let position = Position {
         x: signed_position(words[0] >> 10),
         y: signed_position(words[1]),
@@ -1785,19 +1802,11 @@ fn titanium_motion(words: [u32; 5]) -> Result<(Position, [f32; 3])> {
         signed_bits(words[4], 0, 13),
     ];
     let animation = signed_bits(words[1], 19, 10);
-    Ok((position, velocity(position.heading, deltas, animation)))
-}
-
-/// Motion in EQ units per second: from a report's deltas, or, from servers that
-/// send none, from its animation speed along the heading.
-fn velocity(heading: f32, deltas: [i16; 3], animation: i16) -> [f32; 3] {
-    if deltas != [0; 3] {
-        return deltas.map(|delta| f32::from(delta) * DELTA_UNITS_PER_SECOND);
-    }
-    let speed = f32::from(animation) * ANIMATION_UNITS_PER_SECOND;
-    // Heading 0 faces +Y and a quarter turn (128) faces +X.
-    let angle = heading / 512.0 * std::f32::consts::TAU;
-    [angle.sin() * speed, angle.cos() * speed, 0.0]
+    Ok((
+        position,
+        deltas.map(|delta| f32::from(delta) * DELTA_UNITS_PER_SECOND),
+        f32::from(animation) * ANIMATION_INPUT,
+    ))
 }
 
 /// A two's complement bitfield of at most 16 bits.
@@ -2073,7 +2082,7 @@ mod tests {
         assert!(titanium_update(0x14cb, &body[..21]).is_err());
     }
     #[test]
-    fn position_updates_carry_motion_from_deltas_or_animation_speed() {
+    fn position_updates_carry_velocity_from_deltas_and_input_from_animation() {
         let motion = |deltas: [i32; 3], animation: i32, heading: u32| {
             let bits = |value: i32, width: u32| u32::try_from(value & ((1 << width) - 1)).unwrap();
             let mut body = [0; 22];
@@ -2081,22 +2090,30 @@ mod tests {
             body[10..14].copy_from_slice(&(bits(deltas[1], 13) << 19).to_le_bytes());
             body[14..18].copy_from_slice(&(bits(deltas[0], 13) | heading << 13).to_le_bytes());
             body[18..22].copy_from_slice(&bits(deltas[2], 13).to_le_bytes());
-            let Some(WorldEvent::Position { velocity, .. }) =
-                titanium_update(0x14cb, &body).unwrap()
+            let Some(WorldEvent::Position {
+                velocity, forward, ..
+            }) = titanium_update(0x14cb, &body).unwrap()
             else {
                 panic!("position");
             };
-            velocity
+            (velocity, forward)
         };
-        let close = |a: [f32; 3], b: [f32; 3]| a.iter().zip(b).all(|(a, b)| (a - b).abs() < 1e-3);
-        // P99 sends deltas: 0.144 units per second each.
-        assert!(close(motion([100, -50, 8], 20, 0), [14.4, -7.2, 1.152]));
-        // Newer EQEmu sends none: animation speed along the heading, here a
-        // quarter turn (128, sent as 512), which faces +X.
-        assert!(close(motion([0; 3], 20, 512), [11.6, 0.0, 0.0]));
-        assert!(close(motion([0; 3], 20, 0), [0.0, 11.6, 0.0]));
+        let close = |(velocity, forward): ([f32; 3], f32), (want, input): ([f32; 3], f32)| {
+            velocity.iter().zip(want).all(|(a, b)| (a - b).abs() < 1e-3)
+                && (forward - input).abs() < 1e-6
+        };
+        // P99 sends deltas, 1/64 of a unit per 50 ms each, and the animation
+        // value in fortieths of an input.
+        assert!(close(
+            motion([64, -32, 8], 20, 0),
+            ([20.0, -10.0, 2.5], 0.5)
+        ));
+        // Newer EQEmu sends no deltas, only the animation value, whatever
+        // the heading.
+        assert!(close(motion([0; 3], 20, 512), ([0.0; 3], 0.5)));
+        assert!(close(motion([0; 3], -8, 0), ([0.0; 3], -0.2)));
         // Standing still.
-        assert!(close(motion([0; 3], 0, 512), [0.0; 3]));
+        assert!(close(motion([0; 3], 0, 512), ([0.0; 3], 0.0)));
     }
     #[test]
     #[allow(clippy::float_cmp)] // Exactly representable fixed-point fixture values.
@@ -2342,6 +2359,10 @@ mod tests {
             record[340..344].copy_from_slice(&u32::try_from(index + 10).unwrap().to_le_bytes());
             record[94..98].copy_from_slice(&((0x7ffffu32 - 7) << 10).to_le_bytes());
             record[106..110].copy_from_slice(&(1024u32 << 13).to_le_bytes());
+            // An animation value of 12 on the first.
+            if index == 0 {
+                record[98..102].copy_from_slice(&(12u32 << 19).to_le_bytes());
+            }
             // A default NPC's walk and run, and a second record's bad speeds.
             let (walk, run) = if index == 0 {
                 (0.45f32, 1.25f32)
@@ -2378,6 +2399,9 @@ mod tests {
         );
         assert!((spawns[0].position.x + 1.0).abs() < 0.001);
         assert!((spawns[0].position.heading - 256.0).abs() < 0.001);
+        // The record's forward input, from its animation value.
+        assert!((spawns[0].forward - 0.3).abs() < 1e-6);
+        assert!(spawns[1].forward.abs() < 1e-6);
         assert!(titanium_spawns(&body[..769]).is_err());
         assert_eq!(
             titanium_update(0x55bc, &11u32.to_le_bytes()).unwrap(),

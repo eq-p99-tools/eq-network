@@ -719,6 +719,7 @@ fn decoded_spawns(data: &[u8]) -> Result<Vec<SpawnState>> {
                 // the zone spawn record's offsets for them are unchecked (260
                 // and 264 are the own spawn record's).
                 velocity: [0.0; 3],
+                forward: 0.0,
                 walk_speed: 0.0,
                 run_speed: 0.0,
                 level: record[89],

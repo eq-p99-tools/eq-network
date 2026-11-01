@@ -7,6 +7,25 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- Titanium carries other spawns with the program's own step (Titanium read R2
+  of 10-31), the same one as `EQMac`, from a per-generation table:
+  - A position update's motion deltas are 1/64 of a unit per 50 ms, 0.3125
+    units a second each, not the 0.144 fitted on P99's NPCs. That fit was
+    right for NPCs only because their halved damping takes them to their
+    input's pace within a call or two; P99's players were carried at under
+    half their speed and pulled forward at each report.
+  - Its animation value is the forward input, over 40
+    (`WorldEvent::Position::forward`, and the new `SpawnState::forward` for
+    a spawn record, inferred, checklist 6.327). It no longer becomes a
+    velocity along the heading, so a newer `EQEmu` NPC's velocity is zero
+    and it moves on its input alone, 0.582 units a second for each unit.
+  - `carry` keeps 0.625 of the speed each call, adds 0.8 of the input
+    along the heading, and halves an NPC's horizontal share while it moves,
+    as on `EQMac`. Titanium's ground values are inferred from TAKP's
+    (checklist 6.320), and so is halving every NPC (checklist 6.321). Races
+    0x48, 0x49 and 0x194 drop their vertical motion; Titanium has no stale
+    rule.
+
 - Batch 3b-2, from the TAKP program (read R1 of 10-31):
   - `EQMac` carries an NPC at the program's own pace between reports. While
     an NPC moves, its horizontal speed keeps half as much each step, so it

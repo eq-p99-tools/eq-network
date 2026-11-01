@@ -22,32 +22,69 @@ pub struct Carried {
     pub kind: SpawnKind,
 }
 
-/// The `EQMac` program's speed unit, units per 50 ms, in a second.
-const EQMAC_TICKS_PER_SECOND: f32 = 20.0;
-/// The most 50 ms spans one of its steps moves a spawn by: the program
-/// holds a frame's time, in those spans (elapsed ms × 0.02), to 3 (TAKP
-/// sitting 2 M1 line 283; TAKP read R1, 0x5e8510 and 0x5e8594).
-const EQMAC_MOST_SPANS: f32 = 3.0;
-/// How much of a spawn's speed each tick keeps on normal ground.
-const EQMAC_KEPT: f32 = 0.625;
-/// How much of a moving NPC's horizontal speed each tick keeps: half of
-/// [`EQMAC_KEPT`] (TAKP read R1 of 10-31: the step 0x54d964 halves it at
-/// 0x54e1d7 for a spawn of type 1 whose horizontal speed isn't zero).
-const EQMAC_NPC_KEPT: f32 = EQMAC_KEPT * 0.5;
-/// How much of its forward input each tick adds on normal ground.
-const EQMAC_ADDED: f32 = 0.8;
-/// How long the program carries a spawn that keeps a forward input without
-/// a report.
-const EQMAC_STALE: Duration = Duration::from_secs(12);
-/// The races whose reported vertical motion the `EQMac` program drops.
-const EQMAC_LEVEL_RACES: [u32; 2] = [0x48, 0x49];
+/// One client generation's step, as its program carries a spawn.
+struct Step {
+    /// The program's speed unit, units per 50 ms, in a second.
+    ticks_per_second: f32,
+    /// The most 50 ms spans one call moves a spawn by: the program holds a
+    /// frame's time, in those spans (elapsed ms × 0.02), to 3.
+    most_spans: f32,
+    /// How much of a spawn's speed each call keeps on normal ground.
+    kept: f32,
+    /// How much of that a moving NPC's horizontal speed keeps: half.
+    npc_share: f32,
+    /// How much of its forward input each call adds on normal ground.
+    added: f32,
+    /// How long the program carries a spawn that keeps a forward input
+    /// without a report; None where it has no such rule.
+    stale: Option<Duration>,
+    /// The races whose reported vertical motion the program drops.
+    level_races: &'static [u32],
+}
+
+/// `EQMac`, from TAKP sitting 2 M1 (line 283), the TAKP speeds read of
+/// 10-31 and TAKP read R1 of 10-31: the hold to 3 spans at 0x5e8510 and
+/// 0x5e8594, the NPC halving at 0x54e1d7 in the step 0x54d964.
+const EQMAC: Step = Step {
+    ticks_per_second: 20.0,
+    most_spans: 3.0,
+    kept: 0.625,
+    npc_share: 0.5,
+    added: 0.8,
+    stale: Some(Duration::from_secs(12)),
+    level_races: &[0x48, 0x49],
+};
+
+/// Titanium, from Titanium read R2 of 10-31: the step 0x4bfe0f (0.02 at
+/// 0x6410b8, 0.8 and 0.625 at 0x6431d8 and 0x643f7c, the NPC halving at
+/// 0x4c06f0-0x4c074e by 0x6410bc) and the decoder 0x465304 (the level
+/// races). Its ground path takes F and D from the physics block, whose
+/// values weren't traced; that they are 0.8 and 0.625, TAKP's, is inferred
+/// (checklist 6.320). It names no stale rule but for a marker report, which
+/// this client doesn't decode.
+const TITANIUM: Step = Step {
+    ticks_per_second: 20.0,
+    most_spans: 3.0,
+    kept: 0.625,
+    npc_share: 0.5,
+    added: 0.8,
+    stale: None,
+    level_races: &[0x48, 0x49, 0x194],
+};
+
+const fn step(dialect: GameDialect) -> &'static Step {
+    match dialect {
+        GameDialect::EqMac => &EQMAC,
+        GameDialect::Titanium => &TITANIUM,
+    }
+}
 
 impl Carried {
     /// A spawn as a report puts it, of this kind and race, in this
     /// generation. A report sets the position, heading, input and speed
-    /// outright, with no blending (TAKP read R1 (b)). `EQMac` drops the
-    /// vertical motion of races 0x48 and 0x49 (from the program, the TAKP
-    /// speeds read of 10-31).
+    /// outright, with no blending (TAKP read R1 (b), Titanium read R2 (a)).
+    /// Both programs drop the vertical motion of races 0x48 and 0x49, and
+    /// Titanium's of 0x194 too (the TAKP speeds read of 10-31, R2 (a)).
     #[must_use]
     pub fn reported(
         dialect: GameDialect,
@@ -58,7 +95,7 @@ impl Carried {
         forward: f32,
     ) -> Self {
         let mut velocity = velocity;
-        if dialect == GameDialect::EqMac && EQMAC_LEVEL_RACES.contains(&race) {
+        if step(dialect).level_races.contains(&race) {
             velocity[2] = 0.0;
         }
         Self {
@@ -75,78 +112,72 @@ impl Carried {
 /// does between the server's reports. The spawn faces its position's
 /// heading, as the last report gave it.
 ///
-/// - `EQMac`, from the program (TAKP sitting 2 M1, the TAKP speeds read of
-///   10-31 and TAKP read R1 of 10-31): the frame loop calls the step once a
-///   frame for each spawn (speeds read), and each call keeps 0.625 of the
-///   spawn's speed, adds 0.8 of its forward input along its heading, and
-///   moves it by the result times the frame's time in 50 ms spans, at most
-///   3 (R1: the speed update runs once a call and isn't scaled by time; the
-///   move is v × min(ms × 0.02, 3.0)). The program's speed is in units per
-///   50 ms, which is what M1's "20 a second" names, not a call rate. On the
-///   ground a player's spawn settles at 42.67 units a second for each unit
-///   of input, whatever the frame rate; only the climb to it after a report
-///   goes by frames.
+/// Both programs run the same step, once a frame for each spawn (TAKP
+/// sitting 2 M1, the TAKP speeds read and TAKP read R1 of 10-31; Titanium
+/// read R2 of 10-31). Each call keeps 0.625 of the spawn's speed, adds 0.8
+/// of its forward input along its heading, and moves it by the result
+/// times the frame's time in 50 ms spans, at most 3: the speed update runs
+/// once a call and isn't scaled by time; the move is v × min(ms × 0.02,
+/// 3.0). The programs' speed is in units per 50 ms, which is what M1's "20
+/// a second" names, not a call rate. On the ground a player's spawn settles
+/// at 42.67 units a second for each unit of input, whatever the frame rate;
+/// only the climb to it after a report goes by frames.
 ///
-///   An NPC keeps only half as much of its horizontal speed each call
-///   while that speed isn't zero (R1, 0x54e1d7: type 1, D × 0.5), so it
-///   settles at 23.27 units a second for each unit of input, the server's
-///   own pace (2.327 for each unit of the speed byte). Its vertical speed
-///   keeps 0.625 as before. That every NPC is halved is inferred: the
-///   program skips it for an NPC whose physics block links it to something
-///   (block+0x198, unread, probably a mount), which this client doesn't
-///   track (checklist 6.316).
+/// An NPC keeps only half as much of its horizontal speed each call while
+/// that speed isn't zero (TAKP 0x54e1d7, Titanium 0x4c06f0: type 1,
+/// D × 0.5), so it settles at 23.27 units a second for each unit of input,
+/// the servers' own pace: 2.327 for each unit of TAKP's speed byte, and
+/// 0.582 for each unit of Titanium's animation value. Its vertical speed
+/// keeps 0.625 as before. That every NPC is halved is inferred: TAKP skips
+/// it for an NPC whose physics block links it to something (block+0x198,
+/// unread, probably a mount; checklist 6.316), and Titanium for one whose
+/// block+0x160 is set, or while its byte 0x923798 is set and a per-spawn
+/// test holds (all unread; checklist 6.321). This client tracks none of
+/// them.
 ///
-///   A spawn whose last report is over 12 s old and that still has an
-///   input stays where it is. Left out: its heading rate, whose unit is
-///   unread, so the heading stays as reported; gravity, the ground and
-///   other media, which the host's floor handles; Z held within 5 units of
-///   a report for a spawn whose +0x10a is 2 (R1 (b); +0x10a unread,
-///   checklist 6.317) and for races 0x48 and 0x49 under a global the read
-///   doesn't name (checklist 6.318); a report that marks the spawn (0x42,
-///   0x42 and 0x12345678); and a player's spawn whose report the program
-///   applies only as a stop, under a flag of its own (R1 (b), block+0x190;
-///   checklist 6.319).
-/// - Titanium: on at the reported velocity for the whole frame; its client's
-///   own step is unread.
+/// On `EQMac`, a spawn whose last report is over 12 s old and that still
+/// has an input stays where it is. Left out: the heading rate, whose unit
+/// is unread on `EQMac` (Titanium's, 0.05 a 50 ms span, is read but not
+/// decoded yet), so the heading stays as reported; gravity, the ground and
+/// other media, which the host's floor handles; the reports that keep the
+/// old Z, which the host's floor handles too: within 5 units for a spawn
+/// whose +0x10a (`EQMac`, checklist 6.317) or +0x28c (Titanium) is 2, and
+/// for the level races under a global the reads don't name (checklist
+/// 6.318 and 6.322); a report that marks the spawn (0x42 in the input or
+/// animation); and an `EQMac` player's spawn whose report the program
+/// applies only as a stop, under a flag of its own (R1 (b), block+0x190;
+/// checklist 6.319).
 pub fn carry(dialect: GameDialect, spawn: &mut Carried, elapsed: Duration) {
     spawn.since_report = spawn.since_report.saturating_add(elapsed);
-    if dialect == GameDialect::EqMac {
-        eqmac_step(spawn, elapsed);
-    } else {
-        let seconds = elapsed.as_secs_f32();
-        spawn.position.x += spawn.velocity[0] * seconds;
-        spawn.position.y += spawn.velocity[1] * seconds;
-        spawn.position.z += spawn.velocity[2] * seconds;
-    }
-}
-
-/// One call of the `EQMac` program's step (see [`carry`]).
-fn eqmac_step(spawn: &mut Carried, elapsed: Duration) {
-    if spawn.since_report > EQMAC_STALE && spawn.forward != 0.0 {
+    let step = step(dialect);
+    if step
+        .stale
+        .is_some_and(|stale| spawn.since_report > stale && spawn.forward != 0.0)
+    {
         return;
     }
-    let spans = (elapsed.as_secs_f32() * EQMAC_TICKS_PER_SECOND).min(EQMAC_MOST_SPANS);
+    let spans = (elapsed.as_secs_f32() * step.ticks_per_second).min(step.most_spans);
     // Heading 0 faces +Y and a quarter turn (128) faces +X.
     let angle = spawn.position.heading / 512.0 * std::f32::consts::TAU;
-    let push = spawn.forward * EQMAC_ADDED;
+    let push = spawn.forward * step.added;
     let push = [angle.sin() * push, angle.cos() * push, 0.0];
-    // The program's speed is in units per 50 ms.
-    let mut speed = spawn.velocity.map(|value| value / EQMAC_TICKS_PER_SECOND);
-    // The program tests the horizontal speed before it keeps any.
-    #[allow(clippy::float_cmp, reason = "the program tests for exactly zero")]
+    // The programs' speed is in units per 50 ms.
+    let mut speed = spawn.velocity.map(|value| value / step.ticks_per_second);
+    // The programs test the horizontal speed before they keep any.
+    #[allow(clippy::float_cmp, reason = "the programs test for exactly zero")]
     let horizontal = if spawn.kind == SpawnKind::Npc && (speed[0] != 0.0 || speed[1] != 0.0) {
-        EQMAC_NPC_KEPT
+        step.kept * step.npc_share
     } else {
-        EQMAC_KEPT
+        step.kept
     };
     for (index, (value, push)) in speed.iter_mut().zip(push).enumerate() {
-        let kept = if index < 2 { horizontal } else { EQMAC_KEPT };
+        let kept = if index < 2 { horizontal } else { step.kept };
         *value = *value * kept + push;
     }
     spawn.position.x += speed[0] * spans;
     spawn.position.y += speed[1] * spans;
     spawn.position.z += speed[2] * spans;
-    spawn.velocity = speed.map(|value| value * EQMAC_TICKS_PER_SECOND);
+    spawn.velocity = speed.map(|value| value * step.ticks_per_second);
 }
 
 #[cfg(test)]
@@ -249,22 +280,28 @@ mod tests {
         assert_eq!(boat.velocity, [1.0, 2.0, 0.0]);
     }
 
-    /// Walks an NPC as the TAKP server moves one and reports it, carrying
-    /// it at `fps` frames a second between reports, and gives how far the
-    /// carried spawn is from each report as it lands. The server moves it
-    /// 2.32 units a second for each unit of the speed byte (`EQMacEmu`
-    /// `zone/mob_movement_manager.cpp`, `MoveToCommand`: frame time ×
-    /// speed × 0.4 × 1.45, with the byte at a quarter of the speed in
-    /// `zone/waypoints.cpp`, `SetRunAnimation`), and reports it each 10
-    /// units it moves, with the forward input and no velocity.
-    fn misses(kind: SpawnKind, byte: u8, fps: u32) -> Vec<f32> {
-        let speed = 2.32 * f32::from(byte);
+    /// How a server walks a spawn north and reports it: at `speed` units a
+    /// second, each `spacing` units, with this velocity and forward input in
+    /// each report.
+    struct Walk {
+        dialect: GameDialect,
+        kind: SpawnKind,
+        speed: f32,
+        spacing: f32,
+        velocity: [f32; 3],
+        forward: f32,
+    }
+
+    /// Walks a spawn as `walk` says, carrying it at `fps` frames a second
+    /// between reports, and gives how far the carried spawn is from each
+    /// report as it lands.
+    fn walk_misses(walk: &Walk, fps: u32) -> Vec<f32> {
         let frame = Duration::from_secs(1) / fps;
-        let between = 10.0 / speed;
+        let between = walk.spacing / walk.speed;
         let report = |y: f32| {
             Carried::reported(
-                GameDialect::EqMac,
-                kind,
+                walk.dialect,
+                walk.kind,
                 1,
                 Position {
                     x: 0.0,
@@ -272,21 +309,41 @@ mod tests {
                     z: 0.0,
                     heading: 0.0,
                 },
-                [0.0; 3],
-                f32::from(byte) / 10.0,
+                walk.velocity,
+                walk.forward,
             )
         };
         let mut spawn = report(0.0);
         let mut misses = Vec::new();
         for leg in 1..=12_u8 {
-            let next = 10.0 * f32::from(leg);
+            let next = walk.spacing * f32::from(leg);
             while (spawn.since_report + frame).as_secs_f32() <= between {
-                carry(GameDialect::EqMac, &mut spawn, frame);
+                carry(walk.dialect, &mut spawn, frame);
             }
             misses.push(spawn.position.y - next);
             spawn = report(next);
         }
         misses
+    }
+
+    /// Walks an NPC as the TAKP server moves one and reports it. The server
+    /// moves it 2.32 units a second for each unit of the speed byte
+    /// (`EQMacEmu` `zone/mob_movement_manager.cpp`, `MoveToCommand`: frame
+    /// time × speed × 0.4 × 1.45, with the byte at a quarter of the speed
+    /// in `zone/waypoints.cpp`, `SetRunAnimation`), and reports it each 10
+    /// units it moves, with the forward input and no velocity.
+    fn misses(kind: SpawnKind, byte: u8, fps: u32) -> Vec<f32> {
+        walk_misses(
+            &Walk {
+                dialect: GameDialect::EqMac,
+                kind,
+                speed: 2.32 * f32::from(byte),
+                spacing: 10.0,
+                velocity: [0.0; 3],
+                forward: f32::from(byte) / 10.0,
+            },
+            fps,
+        )
     }
 
     #[test]
@@ -379,25 +436,144 @@ mod tests {
         assert_eq!(reported.since_report, Duration::ZERO);
     }
 
-    #[test]
-    fn titanium_carries_a_spawn_on_at_its_reported_velocity() {
-        let mut spawn = Carried::reported(
+    /// A Titanium report's motion for an animation value and deltas in u/s,
+    /// as the decoder gives it: the input is the animation over 40.
+    fn titanium(kind: SpawnKind, race: u32, velocity: [f32; 3], animation: f32) -> Carried {
+        Carried::reported(
             GameDialect::Titanium,
-            SpawnKind::Npc,
-            0x48,
+            kind,
+            race,
             Position::default(),
-            [10.0, -4.0, 2.0],
+            velocity,
+            animation / 40.0,
+        )
+    }
+
+    #[test]
+    fn titanium_relaxes_a_p99_npc_from_its_deltas_to_its_animations_pace() {
+        // P99 packs an NPC's deltas at about 2.2 times its speed in the
+        // program's unit; an animation value of 20 is 11.64 a second.
+        let steady = 0.582 * 20.0;
+        for millis in [7, 16, 33] {
+            let mut spawn = titanium(SpawnKind::Npc, 1, [0.0, 2.2 * steady, 0.0], 20.0);
+            for _ in 0..3 {
+                carry(
+                    GameDialect::Titanium,
+                    &mut spawn,
+                    Duration::from_millis(millis),
+                );
+            }
+            // Within 4 % after three calls, whatever their length.
+            assert!(
+                (spawn.velocity[1] / steady - 1.0).abs() < 0.04,
+                "{millis} ms: {spawn:?}"
+            );
+            for _ in 0..30 {
+                carry(
+                    GameDialect::Titanium,
+                    &mut spawn,
+                    Duration::from_millis(millis),
+                );
+            }
+            assert!((spawn.velocity[1] - 11.636).abs() < 0.01, "{spawn:?}");
+        }
+        // Reported as P99 walks it, each 10 units, it lands near each report.
+        for fps in [30, 60, 144] {
+            let misses = walk_misses(
+                &Walk {
+                    dialect: GameDialect::Titanium,
+                    kind: SpawnKind::Npc,
+                    speed: steady,
+                    spacing: 10.0,
+                    velocity: [0.0, 2.2 * steady, 0.0],
+                    forward: 0.5,
+                },
+                fps,
+            );
+            assert!(
+                misses.iter().all(|miss| miss.abs() <= 1.5),
+                "{fps} fps: {misses:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn titanium_carries_a_player_at_the_speed_its_deltas_give() {
+        // A running player, 42.67 a second for each unit of input: its
+        // deltas give its speed, and its input settles there.
+        let speed = 42.667 * 1.05;
+        for fps in [30, 60, 144] {
+            let misses = walk_misses(
+                &Walk {
+                    dialect: GameDialect::Titanium,
+                    kind: SpawnKind::Player,
+                    speed,
+                    spacing: 30.0,
+                    velocity: [0.0, speed, 0.0],
+                    forward: 1.05,
+                },
+                fps,
+            );
+            assert!(
+                misses.iter().all(|miss| miss.abs() <= 1.5),
+                "{fps} fps: {misses:?}"
+            );
+        }
+        // A player's speed keeps the full damping: from its deltas alone it
+        // slows, to 62.5 % after one call.
+        let mut spawn = titanium(SpawnKind::Player, 1, [0.0, 20.0, 0.0], 0.0);
+        carry(GameDialect::Titanium, &mut spawn, Duration::from_millis(50));
+        assert!((spawn.velocity[1] - 12.5).abs() < 0.001, "{spawn:?}");
+    }
+
+    #[test]
+    fn titanium_carries_an_eqemu_npc_on_its_animation_alone() {
+        // Newer EQEmu sends no deltas; it moves an NPC 0.58 a second for
+        // each unit of its animation value and reports it at each path
+        // node, here 40 units apart.
+        for animation in [10_u8, 20, 28] {
+            for fps in [30, 60, 144] {
+                let misses = walk_misses(
+                    &Walk {
+                        dialect: GameDialect::Titanium,
+                        kind: SpawnKind::Npc,
+                        speed: 0.58 * f32::from(animation),
+                        spacing: 40.0,
+                        velocity: [0.0; 3],
+                        forward: f32::from(animation) / 40.0,
+                    },
+                    fps,
+                );
+                assert!(
+                    misses.iter().all(|miss| miss.abs() <= 1.5),
+                    "animation {animation}, {fps} fps: {misses:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn titanium_keeps_level_races_and_has_no_stale_rule() {
+        for race in [0x48, 0x49, 0x194] {
+            assert_eq!(
+                titanium(SpawnKind::Npc, race, [1.0, 2.0, 3.0], 0.0).velocity,
+                [1.0, 2.0, 0.0]
+            );
+        }
+        // 0x194 keeps its vertical motion on EQMac.
+        let mac = Carried::reported(
+            GameDialect::EqMac,
+            SpawnKind::Npc,
+            0x194,
+            Position::default(),
+            [1.0, 2.0, 3.0],
             0.0,
         );
-        carry(
-            GameDialect::Titanium,
-            &mut spawn,
-            Duration::from_millis(500),
-        );
-        assert_eq!(
-            (spawn.position.x, spawn.position.y, spawn.position.z),
-            (5.0, -2.0, 1.0)
-        );
-        assert_eq!(spawn.velocity, [10.0, -4.0, 2.0]);
+        assert_eq!(mac.velocity, [1.0, 2.0, 3.0]);
+        // Over 12 s without a report, a Titanium walker keeps walking.
+        let mut spawn = titanium(SpawnKind::Npc, 1, [0.0; 3], 20.0);
+        spawn.since_report = Duration::from_secs(13);
+        carry(GameDialect::Titanium, &mut spawn, Duration::from_millis(50));
+        assert!(spawn.position.y > 0.0, "{spawn:?}");
     }
 }
