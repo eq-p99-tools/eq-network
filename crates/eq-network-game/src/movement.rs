@@ -19,19 +19,19 @@ use crate::{command::EncodedCommand, world::Position};
 use anyhow::{ensure, Result};
 use std::time::{Duration, Instant};
 
-/// Maximum grounded stair adjustment per 50 ms program step, in world units.
-/// This accommodates two-unit classic zone risers; it is a client collision policy,
-/// not a measured server limit or permission to encode falling as grounded motion.
-/// Ours, per step: what bounds a climb in one of the program's steps is
-/// unread (checklist 6.339; the read is 6.344).
+/// Maximum grounded stair adjustment per sample, in world units, where the
+/// session has no climb of the player's own ([`MovementGuard::set_climb`]),
+/// and the most a grounded sample may descend. This accommodates two-unit
+/// classic zone risers; it is a client collision policy, not a measured
+/// server limit or permission to encode falling as grounded motion.
 pub const MAX_GROUNDED_STEP: f32 = 2.0;
 
 /// The program steps a player once per 50 ms update (R-s; the gravity is
 /// "a 50 ms step", [`DEFAULT_GRAVITY`]).
 pub const PROGRAM_STEP_SECONDS: f32 = 0.05;
 
-/// How many program steps `seconds` spans, at least one: the climb budget's
-/// count. A sample of exactly n steps counts n, not n + 1 from `f32`
+/// How many program steps `seconds` spans, at least one: the count of a
+/// climb's budget ([`climb_reach`]). A sample of exactly n steps counts n, not n + 1 from `f32`
 /// rounding in the seconds.
 #[must_use]
 pub fn program_steps(seconds: f32) -> u32 {
@@ -45,14 +45,14 @@ pub fn program_steps(seconds: f32) -> u32 {
     steps
 }
 
-/// How far a grounded walk may rise or descend over `steps` program steps:
-/// one riser a step ([`MAX_GROUNDED_STEP`], checklist 6.339). The guard and
+/// How far a grounded walk may rise over `steps` program steps, climbing
+/// at most `per_step` in each ([`MovementGuard::set_climb`]). The guard and
 /// eq-client's walk count the same budget.
 #[must_use]
-pub fn grounded_reach(steps: u32) -> f32 {
+pub fn climb_reach(per_step: f32, steps: u32) -> f32 {
     #[allow(clippy::cast_precision_loss)] // At most a few steps.
     let steps = steps.max(1) as f32;
-    MAX_GROUNDED_STEP * steps
+    per_step * steps
 }
 
 /// Fastest descent a [`MovementMode::Fall`] sample may claim, in world units per
@@ -292,6 +292,10 @@ pub struct MovementGuard {
     bounds: Option<MovementBounds>,
     /// The fastest descent a fall sample may claim, in world units per second.
     fall_speed: f32,
+    /// How far a grounded sample may rise in each program step it spans,
+    /// in world units: the player's own climb once the session sets it
+    /// ([`Self::set_climb`]), else [`MAX_GROUNDED_STEP`].
+    climb: Option<f32>,
     /// How a jump rises, where the client generation's jump is read: its
     /// starting speed and the zone's gravity, in units a second and a second
     /// squared.
@@ -323,6 +327,7 @@ impl MovementGuard {
             speed: None,
             bounds: None,
             fall_speed: MAX_FALL_SPEED,
+            climb: None,
             jump: None,
             jumped_at: None,
         }
@@ -363,6 +368,20 @@ impl MovementGuard {
             speed * t - gravity * t * t / 2.0
         };
         (height(to) - height(from)).max(0.0)
+    }
+
+    /// Lets a grounded sample rise `per_step` in each 50 ms program step it
+    /// spans, the player's own climb: in both programs a step stands the
+    /// feet on whatever floor the sweep from the spawn's origin finds, a
+    /// stand height above them (Titanium 0x48a6f2 / 0x48a0fc, TAKP
+    /// 0x4b3a84; read 6.344), so a climb's pace does not depend on how long a
+    /// sample is. Until it is set, a sample rises one riser,
+    /// [`MAX_GROUNDED_STEP`], however long it is. A value that is not a
+    /// positive number is ignored.
+    pub fn set_climb(&mut self, per_step: f32) {
+        if per_step.is_finite() && per_step > 0.0 {
+            self.climb = Some(per_step);
+        }
     }
 
     /// Lets a fall sample descend as fast as the client generation's own
@@ -446,10 +465,11 @@ impl MovementGuard {
             delta[0].hypot(delta[1]) <= speed * elapsed + 0.01,
             "movement exceeds elapsed-time budget"
         );
-        // A fall may only descend, at most at terminal speed; grounded modes follow
-        // stairs and slopes one riser a program step, so a climb's pace does not
-        // depend on how long the sample is. After a jump, any sample may
-        // also rise as far as the jump does over the sample's own interval.
+        // A fall may only descend, at most at terminal speed; grounded modes climb
+        // the player's own reach a program step ([`Self::set_climb`]) and come
+        // down at most a riser, past which the client's walk falls. After a
+        // jump, any sample may also rise as far as the jump does over the
+        // sample's own interval.
         let since_jump = self.jumped_at.map(|start| match start {
             JumpStart::Next => (0.0, elapsed),
             JumpStart::At(at) => {
@@ -462,8 +482,10 @@ impl MovementGuard {
             delta[2] <= MAX_GROUNDED_STEP + rise
                 && -delta[2] <= self.fall_speed * elapsed + MAX_GROUNDED_STEP
         } else {
-            let reach = grounded_reach(program_steps(elapsed));
-            delta[2] <= reach + rise && -delta[2] <= reach
+            let climb = self.climb.map_or(MAX_GROUNDED_STEP, |per_step| {
+                climb_reach(per_step, program_steps(elapsed))
+            });
+            delta[2] <= climb + rise && -delta[2] <= MAX_GROUNDED_STEP
         };
         ensure!(
             vertical,
@@ -517,7 +539,7 @@ mod tests {
     #[test]
     fn grounded_stairs_allow_two_units_but_reject_larger_vertical_changes() {
         let start = Instant::now();
-        let now = start + Duration::from_millis(50);
+        let now = start + Duration::from_millis(100);
         let mut guard = MovementGuard::new(7, Position::default(), start);
         guard.set_speed(Some(30.0), start);
         let mut request = MovementRequest {
@@ -536,7 +558,7 @@ mod tests {
     }
 
     #[test]
-    fn a_grounded_climb_gets_one_riser_a_program_step() {
+    fn a_grounded_climb_gets_the_players_reach_a_program_step() {
         let start = Instant::now();
         let now = start + Duration::from_millis(250);
         let mut guard = MovementGuard::new(7, Position::default(), start);
@@ -546,22 +568,31 @@ mod tests {
             session_id: 7,
             position: Position {
                 x: 1.0,
-                z: 10.1,
+                z: 2.1,
                 ..Position::default()
             },
             created: now,
         };
-        // A quarter second is five steps: up to 10 units, and no more.
+        // Without the player's climb, one riser a sample however long.
         assert!(guard.accept(&request, now).is_err());
-        request.position.z = 10.0;
+        // A human's Titanium reach, 3.15 a step: a quarter second is five
+        // steps, so up to 15.75 units, and no more.
+        guard.set_climb(3.15);
+        request.position.z = 15.8;
+        assert!(guard.accept(&request, now).is_err());
+        request.position.z = 15.75;
         assert!(guard.accept(&request, now).is_ok());
-        // Down a grounded slope the same.
+        // Coming down stays one riser; past it the client's walk falls.
         let later = now + Duration::from_millis(250);
         request.created = later;
-        request.position.z = -0.1;
+        request.position.z = 13.7;
         assert!(guard.accept(&request, later).is_err());
-        request.position.z = 0.0;
+        request.position.z = 13.75;
         assert!(guard.accept(&request, later).is_ok());
+        // A climb that is not a positive number is ignored.
+        guard.set_climb(f32::NAN);
+        guard.set_climb(0.0);
+        assert_eq!(guard.climb, Some(3.15));
     }
 
     #[test]
@@ -573,8 +604,8 @@ mod tests {
         assert_eq!(program_steps(0.051), 2);
         assert_eq!(program_steps(0.0), 1);
         assert_eq!(program_steps(f32::NAN), 1);
-        assert!((grounded_reach(3) - 6.0).abs() < f32::EPSILON);
-        assert!((grounded_reach(0) - MAX_GROUNDED_STEP).abs() < f32::EPSILON);
+        assert!((climb_reach(3.0, 3) - 9.0).abs() < f32::EPSILON);
+        assert!((climb_reach(2.5, 0) - 2.5).abs() < f32::EPSILON);
     }
 
     #[test]

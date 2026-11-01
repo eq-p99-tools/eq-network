@@ -20,13 +20,18 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
-- The movement guard holds a grounded sample to one riser
-  (`MAX_GROUNDED_STEP`, 2 units) a 50 ms program step, not one a sample, so
-  a climb's pace no longer depends on how long each sample is (a quarter
-  second sample on a 25° hill climbed at a fifth of the run). New
-  `movement::program_steps` and `movement::grounded_reach` give the budget,
-  for eq-client's walk to count the same. The 2 units a step is ours, not
-  read (checklist 6.339; the read is 6.344). The fall rule is unchanged.
+- The movement guard lets a grounded sample rise the player's own climb in
+  each 50 ms program step it spans, once the host sends it with the new
+  `ClimbReach` command (`MotionSession::set_climb`), instead of one riser
+  a sample whatever its length: a quarter-second sample on a 25° hill
+  climbed at a fifth of the run. In both programs a step stands the feet
+  on the floor the sweep from the spawn's origin finds, a stand height
+  above them, so a step climbs up to that height less the sweep's radius
+  (read 6.344: Titanium 0x48a6f2 / 0x48a0fc, TAKP 0x4b3a84). Until the
+  host sends a climb, a grounded sample rises `MAX_GROUNDED_STEP` as
+  before; descents and the fall rule are unchanged. New
+  `movement::program_steps` and `movement::climb_reach` give the budget,
+  for eq-client's walk to count the same.
 
 - P99 now offers falls and reports fall damage (`OP_EnvDamage` type 252) by
   the Titanium program's rules. In the program the floor is whatever surface

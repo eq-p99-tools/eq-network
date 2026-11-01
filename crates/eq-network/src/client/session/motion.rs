@@ -206,6 +206,26 @@ impl Motion {
         }
     }
 
+    /// Takes the host's word on how far the player's body climbs a step in
+    /// this admission, for the movement guard.
+    fn climb(command: &ClientCommand, world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
+        let ClientCommand::ClimbReach { per_step, .. } = *command else {
+            return Ok(());
+        };
+        let Some(motion) = world.body.motion.as_mut() else {
+            return out
+                .log
+                .diagnostic("Rejected a climb: the player cannot move yet".into());
+        };
+        if !(per_step.is_finite() && per_step > 0.0) {
+            return out
+                .log
+                .diagnostic(format!("Rejected a climb of {per_step} a step"));
+        }
+        motion.set_climb(per_step);
+        Ok(())
+    }
+
     /// Grants the player the speeds the generation's client allows, once
     /// the host has reported what they depend on, and keeps them in step;
     /// the host hears of each change, and of the player starting or stopping
@@ -441,6 +461,7 @@ impl Feature for Motion {
                 | ClientCommand::Jump { .. }
                 | ClientCommand::ConfigureMotion { .. }
                 | ClientCommand::SpeedInputs { .. }
+                | ClientCommand::ClimbReach { .. }
                 | ClientCommand::SetPosture { .. }
         )
     }
@@ -456,6 +477,7 @@ impl Feature for Motion {
             ClientCommand::Jump { .. } => self.jump(world, out),
             ClientCommand::ConfigureMotion { .. } => Self::calibrate(command, world, out),
             ClientCommand::SpeedInputs { .. } => self.inputs(command, world, out),
+            ClientCommand::ClimbReach { .. } => Self::climb(command, world, out),
             _ => Self::stance(command, world, out),
         }
     }
@@ -843,6 +865,31 @@ mod tests {
         let events = step(report(0, 100));
         assert_eq!(encumbrance(&events), [(false, 0x3067)]);
         assert!(granted(&events, 29.9), "{events:?}");
+    }
+
+    #[test]
+    fn the_hosts_climb_goes_to_the_guard_of_an_admitted_player_only() {
+        let climb = |per_step| ClientCommand::ClimbReach {
+            session_id: 5,
+            per_step,
+        };
+        let mut world = World::new(5);
+        world.own_spawn = Some(7);
+        world.player.admit(testing::player(7));
+        let mut motion = Motion::new(true, false);
+        // Before the admission there is no guard to tell.
+        let outcome = testing::run(|out| motion.handle(&climb(3.15), &mut world, out));
+        outcome.result.unwrap();
+        assert!(matches!(outcome.events[..], [ClientEvent::Diagnostic(_)]));
+        world.admitted = Some(Instant::now());
+        testing::run(|out| motion.admitted(&mut world, out))
+            .result
+            .unwrap();
+        let outcome = testing::run(|out| motion.handle(&climb(3.15), &mut world, out));
+        outcome.result.unwrap();
+        assert!(outcome.events.is_empty(), "{:?}", outcome.events);
+        let outcome = testing::run(|out| motion.handle(&climb(f32::NAN), &mut world, out));
+        assert!(matches!(outcome.events[..], [ClientEvent::Diagnostic(_)]));
     }
 
     #[test]

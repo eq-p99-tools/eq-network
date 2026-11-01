@@ -196,6 +196,12 @@ impl MotionSession {
         self
     }
 
+    /// Lets a grounded sample climb `per_step` in each program step it spans,
+    /// the player's own climb ([`MovementGuard::set_climb`]).
+    pub fn set_climb(&mut self, per_step: f32) {
+        self.guard.set_climb(per_step);
+    }
+
     /// Lets samples after a jump rise as the client generation's jump does,
     /// where it is read: its starting speed and the zone's gravity, in units
     /// a second and a second squared ([`MovementGuard::set_jump`]).
