@@ -7,6 +7,14 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `zones::ZoneDescription::classic_model_scale_flag`: the word at offset 592
+  of Titanium's `OP_NewZone`, as it came. While it is not zero the Titanium
+  program draws the classic character models at 1/1.3 of their usual scale
+  and rescales every spawn when it changes between zones (program read N1b:
+  copied at 0x45bff5, used by 0x47a0e9). `EQMac` has no such rule, so its
+  headers leave it None. A new public field: code that builds a
+  `ZoneDescription` by hand adds it.
+
 - `movement::between_reports` and `movement::ZBetween`: where each client
   generation puts a carried spawn's height between the server's reports, as
   a field of its step's table. Both are `ZBetween::OnFloor`, standing a

@@ -604,6 +604,13 @@ pub struct ZoneDescription {
     /// the server moves it to the zone's graveyard, when it has one
     /// (`zone/corpse.cpp`).
     pub graveyard_minutes: Option<u16>,
+    /// Titanium: the word at offset 592, as it came. The Titanium program
+    /// copies it at zone-in (0x45bff5, into its zone block at 0x9239e0 +
+    /// 0x250) and, while it is not zero, draws the classic character models
+    /// at 1/1.3 of their usual scale (0x47a0e9), rescaling every spawn when
+    /// it changes between zones (Titanium program read N1b). The emulators'
+    /// structs leave this offset unnamed. `EQMac` has no such rule: None.
+    pub classic_model_scale_flag: Option<u32>,
 }
 
 /// One of a zone's sets of weather odds.
@@ -633,9 +640,9 @@ pub struct ZoneMusic {
 /// Reads a Titanium zone header: the long name at 96, the type at 374,
 /// gravity at 420, the weather odds from 425, then from 488 the experience
 /// multiplier, the safe point (y, x, z), `max_z`, the underworld and the
-/// minimum and maximum clip. The character's name at 0, and the zone's
-/// number and instance and a second copy of its short name past 600, are
-/// left unread.
+/// minimum and maximum clip, and the classic model scale flag at 592. The
+/// character's name at 0, and the zone's number and instance and a second
+/// copy of its short name past 600, are left unread.
 ///
 /// # Errors
 /// Rejects a header shorter than Titanium's 700 bytes, and values that are
@@ -645,7 +652,15 @@ pub fn titanium_description(header: &[u8]) -> Result<ZoneDescription> {
         header.len() >= TITANIUM_HEADER_LENGTH,
         "truncated zone header"
     );
-    description(header, 488)
+    Ok(ZoneDescription {
+        classic_model_scale_flag: Some(u32::from_le_bytes([
+            header[592],
+            header[593],
+            header[594],
+            header[595],
+        ])),
+        ..description(header, 488)?
+    })
 }
 
 /// Reads an `EQMac` zone header (572 bytes), which keeps the first fields
@@ -716,6 +731,7 @@ fn description(header: &[u8], from: usize) -> Result<ZoneDescription> {
         music: None,
         sky_lock: None,
         graveyard_minutes: None,
+        classic_model_scale_flag: None,
     })
 }
 
@@ -789,12 +805,28 @@ mod tests {
             music: None,
             sky_lock: None,
             graveyard_minutes: None,
+            classic_model_scale_flag: None,
         };
         // EQEmu sends Titanium more than its 700 bytes.
-        let titanium = header(740, 488);
-        assert_eq!(titanium_description(&titanium).unwrap(), expected);
-        assert_eq!(titanium_description(&titanium[..700]).unwrap(), expected);
+        let mut titanium = header(740, 488);
+        let titanium_expected = ZoneDescription {
+            classic_model_scale_flag: Some(0),
+            ..expected.clone()
+        };
+        assert_eq!(titanium_description(&titanium).unwrap(), titanium_expected);
+        assert_eq!(
+            titanium_description(&titanium[..700]).unwrap(),
+            titanium_expected
+        );
         assert!(titanium_description(&titanium[..699]).is_err());
+        // The classic model scale flag comes as it was sent.
+        titanium[592..596].copy_from_slice(&1u32.to_le_bytes());
+        assert_eq!(
+            titanium_description(&titanium)
+                .unwrap()
+                .classic_model_scale_flag,
+            Some(1)
+        );
         let mut eqmac = header(572, 484);
         eqmac[476..482].copy_from_slice(&[4, 0, 21, 0, 0, 0]);
         eqmac[540] = 1;
