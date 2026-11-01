@@ -9,10 +9,14 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - `movement::between_reports` and `movement::ZBetween`: where each client
   generation puts a carried spawn's height between the server's reports, as
-  a field of its step's table. Both are `ZBetween::OnFloor`, standing it on
-  the floor the host finds, which is what eq-client already did, now written
-  down. Inferred: neither program's ground path is read for a carried spawn
-  (checklist 6.335).
+  a field of its step's table. Both are `ZBetween::OnFloor`, standing a
+  spawn on the ground on the floor the host finds, which is what eq-client
+  already did. Read for Titanium (R-z: the gravity path from init 0x4850a0,
+  the landing check 0x48b6c5 snapping feet up to the floor each step) and in
+  part for `EQMac` (on-ground 0x50ba07, floor 0x4b3a84, landing 0x4b479e;
+  the gravity flag's setters untraced). The program lags the floor a little
+  going downhill, falling under gravity (checklist 6.335). Which spawns keep
+  their carried height instead, by movement mode, is checklist 6.337.
 
 ### Changed
 

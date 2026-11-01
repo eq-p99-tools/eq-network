@@ -45,7 +45,12 @@ struct Step {
 }
 
 /// Where a generation's client puts a spawn's height between the server's
-/// reports of it.
+/// reports of it. In the program the choice is made per spawn, by its
+/// movement mode: a levitating spawn (appearance 19), race 0x8d, a carrier
+/// and the zone 0x47 case skip gravity and keep their carried height. This
+/// table holds each generation's rule for a spawn on the ground; which
+/// spawns keep their carried height, and how this client learns the mode,
+/// is checklist 6.337.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ZBetween {
     /// At its carried height: the report's, moved on by its vertical
@@ -88,11 +93,19 @@ const TITANIUM: Step = Step {
     between_reports: ZBetween::OnFloor,
 };
 
-/// Where the generation's client puts a spawn's height between reports.
-/// Both stand it on the floor under it: inferred, since neither program's
-/// ground path is read for a carried spawn (checklist 6.335). P99 sends no
-/// vertical motion for a walking NPC while its height follows its path, so
-/// a spawn left at its carried height would hang at each report's height.
+/// Where the generation's client puts a spawn on the ground between
+/// reports. Both stand it on the floor under it. Titanium is read (R-z,
+/// 11-01): every spawn starts on the gravity path (0x4850a0), its height
+/// falls under the zone's gravity, and the landing check 0x48b6c5 snaps its
+/// feet up to the floor finder's height each step. `EQMac` is read in part:
+/// the same pieces are read (on-ground 0x50ba07, floor 0x4b3a84, landing
+/// 0x4b479e, the gravity gate at block + 0x90), but not what sets the
+/// gravity flag. The program's height goes up to the floor at once and down
+/// under gravity, so a spawn walking downhill lags behind the floor a
+/// little; a host that stands it on the floor at once in both directions
+/// differs by that lag (checklist 6.335). P99 sends no vertical motion for
+/// a walking NPC while its height follows its path, so a spawn left at its
+/// carried height would hang at each report's height.
 #[must_use]
 pub const fn between_reports(dialect: GameDialect) -> ZBetween {
     step(dialect).between_reports
