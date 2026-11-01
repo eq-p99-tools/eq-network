@@ -758,8 +758,17 @@ const TAKP_HAZARDS: [Hazard; 1] = [Hazard::Falling];
 /// SSO login proxy keeps them.
 const P99_WORLD_PREFIXES: [&str; 2] = ["project 1999", "an interesting"];
 
+/// The hazards P99 takes from the client so far: falls. The Titanium
+/// program works a fall's damage out itself (0x420dec) and reports it as
+/// `OP_EnvDamage` type 252 from the player's own spawn (sitting 6, T2;
+/// R-s). P99's own module hooks that routine and is not read, so that
+/// P99's server takes our report as it takes the official client's is
+/// inferred (recording checklist item 6.332).
+const P99_HAZARDS: [Hazard; 1] = [Hazard::Falling];
+
 /// Project 1999: Titanium with V62 protection and 256-unit saved headings.
-/// Jumps and falls wait until they are measured on P99.
+/// Falls follow the Titanium program (6.332); jumps wait until they are
+/// measured on P99.
 struct Project1999;
 
 impl ServerType for Project1999 {
@@ -821,8 +830,19 @@ impl ServerType for Project1999 {
         offer(shared::inventory(setup))
     }
 
+    /// The Titanium program's floor is whatever surface lies under the
+    /// player, at any angle, and a step its floor drops away from falls
+    /// (0x48a0fc, 0x48a2f4, 0x48b6c5; R-s), so P99 takes falls with the
+    /// program's rules (sittings 6, 8g-8i; P99's own module present, not
+    /// read). Jumps stay off until measured there (recording checklist
+    /// item 1.3).
     fn motion(&self, _setup: &Setup<'_>) -> Provided {
-        offer(shared::motion(false, false))
+        offer(shared::motion(true, false))
+    }
+
+    /// Falls only (6.332).
+    fn hazards(&self, _setup: &Setup<'_>) -> Provided {
+        offer(shared::hazards(&P99_HAZARDS, false))
     }
 
     fn character(&self, _setup: &Setup<'_>) -> Provided {
@@ -1494,7 +1514,11 @@ mod tests {
         assert!(p99.protect(&[0; 10]).is_err());
         assert!((p99.profile_turn() - 256.0).abs() < f32::EPSILON);
         assert!(!p99.start_choice());
-        assert!(!offers(p99).contains(&Capability::Falling));
+        // Falls and their damage follow the Titanium program (6.332);
+        // jumps wait until measured on P99.
+        assert!(offers(p99).contains(&Capability::Falling));
+        assert!(offers(p99).contains(&Capability::EnvironmentalDamage));
+        assert!(!offers(p99).contains(&Capability::Jumping));
         let eqemu = server_type(ServerProtocol::EqEmu);
         assert_eq!(
             eqemu.wire().encode(&Request::Camp, SENDER).unwrap(),
@@ -1545,12 +1569,13 @@ mod tests {
     fn p99_and_eqemu_provide_every_feature_one_each() {
         // Training, resurrection, reading, tradeskills, the map, deleting
         // spells, merchants' offers, groups, the player's listing, dice,
-        // emotes, assisting, raids, the world's damage and the server's tick are checked on
-        // EQEmu alone so far; only EQEmu waits for the answer to the end of
+        // emotes, assisting, raids and the server's tick are checked on
+        // EQEmu alone so far; P99 takes falls' damage by the Titanium
+        // program (6.332); only EQEmu waits for the answer to the end of
         // hiding; only EQEmu answers sacrifices, read from its source and not
         // yet checked live; and only EQEmu takes the show-helm option.
         for (protocol, count) in [
-            (ServerProtocol::Project1999, 21),
+            (ServerProtocol::Project1999, 22),
             (ServerProtocol::EqEmu, 36),
         ] {
             let server = server_type(protocol);
@@ -1573,7 +1598,6 @@ mod tests {
             Capability::Emoting,
             Capability::Assisting,
             Capability::Raiding,
-            Capability::EnvironmentalDamage,
             Capability::ServerTicks,
             Capability::ShowingHelm,
         ] {
