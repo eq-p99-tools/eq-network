@@ -4,7 +4,7 @@ mod carry;
 mod gate;
 mod session;
 mod speeds;
-pub use carry::{carry, Carried};
+pub use carry::{between_reports, carry, Carried, ZBetween};
 pub use gate::{
     UpdateGate, EQMAC_HEADING_STEP, EQMAC_REPEATS, EQMAC_SPEED_STEP, EQMAC_UPDATE_SPACING,
     EQMAC_UPDATE_TICK,
