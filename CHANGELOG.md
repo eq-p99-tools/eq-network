@@ -20,6 +20,13 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- P99 now offers falls and reports fall damage (`OP_EnvDamage` type 252) by
+  the Titanium program's rules. In the program the floor is whatever surface
+  lies under the player, at any angle, and a step whose floor drops away
+  falls (read R-s of 11-01), so a P99 player can now walk off a cliff or
+  down a steep face. That P99's server takes the report as it takes the
+  official client's is inferred (checklist 6.332). Jumps are still off.
+
 - Titanium carries other spawns with the program's own step (Titanium read R2
   of 10-31), the same one as `EQMac`, from a per-generation table:
   - A position update's motion deltas are 1/64 of a unit per 50 ms, 0.3125
