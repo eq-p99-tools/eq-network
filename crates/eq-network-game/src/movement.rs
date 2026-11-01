@@ -19,10 +19,41 @@ use crate::{command::EncodedCommand, world::Position};
 use anyhow::{ensure, Result};
 use std::time::{Duration, Instant};
 
-/// Maximum grounded stair adjustment per sample, in world units.
+/// Maximum grounded stair adjustment per 50 ms program step, in world units.
 /// This accommodates two-unit classic zone risers; it is a client collision policy,
 /// not a measured server limit or permission to encode falling as grounded motion.
+/// Ours, per step: what bounds a climb in one of the program's steps is
+/// unread (checklist 6.339; the read is 6.344).
 pub const MAX_GROUNDED_STEP: f32 = 2.0;
+
+/// The program steps a player once per 50 ms update (R-s; the gravity is
+/// "a 50 ms step", [`DEFAULT_GRAVITY`]).
+pub const PROGRAM_STEP_SECONDS: f32 = 0.05;
+
+/// How many program steps `seconds` spans, at least one: the climb budget's
+/// count. A sample of exactly n steps counts n, not n + 1 from `f32`
+/// rounding in the seconds.
+#[must_use]
+pub fn program_steps(seconds: f32) -> u32 {
+    if !seconds.is_finite() || seconds <= 0.0 {
+        return 1;
+    }
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)] // Clamped.
+    let steps = (seconds / PROGRAM_STEP_SECONDS - 1e-3)
+        .ceil()
+        .clamp(1.0, 1e6) as u32;
+    steps
+}
+
+/// How far a grounded walk may rise or descend over `steps` program steps:
+/// one riser a step ([`MAX_GROUNDED_STEP`], checklist 6.339). The guard and
+/// eq-client's walk count the same budget.
+#[must_use]
+pub fn grounded_reach(steps: u32) -> f32 {
+    #[allow(clippy::cast_precision_loss)] // At most a few steps.
+    let steps = steps.max(1) as f32;
+    MAX_GROUNDED_STEP * steps
+}
 
 /// Fastest descent a [`MovementMode::Fall`] sample may claim, in world units per
 /// second, until the session sets the generation's own ([`fall_speed`]): a
@@ -416,7 +447,8 @@ impl MovementGuard {
             "movement exceeds elapsed-time budget"
         );
         // A fall may only descend, at most at terminal speed; grounded modes follow
-        // stairs and slopes one riser at a time. After a jump, any sample may
+        // stairs and slopes one riser a program step, so a climb's pace does not
+        // depend on how long the sample is. After a jump, any sample may
         // also rise as far as the jump does over the sample's own interval.
         let since_jump = self.jumped_at.map(|start| match start {
             JumpStart::Next => (0.0, elapsed),
@@ -430,7 +462,8 @@ impl MovementGuard {
             delta[2] <= MAX_GROUNDED_STEP + rise
                 && -delta[2] <= self.fall_speed * elapsed + MAX_GROUNDED_STEP
         } else {
-            delta[2] <= MAX_GROUNDED_STEP + rise && -delta[2] <= MAX_GROUNDED_STEP
+            let reach = grounded_reach(program_steps(elapsed));
+            delta[2] <= reach + rise && -delta[2] <= reach
         };
         ensure!(
             vertical,
@@ -484,7 +517,7 @@ mod tests {
     #[test]
     fn grounded_stairs_allow_two_units_but_reject_larger_vertical_changes() {
         let start = Instant::now();
-        let now = start + Duration::from_millis(100);
+        let now = start + Duration::from_millis(50);
         let mut guard = MovementGuard::new(7, Position::default(), start);
         guard.set_speed(Some(30.0), start);
         let mut request = MovementRequest {
@@ -500,6 +533,48 @@ mod tests {
         assert!(guard.accept(&request, now).is_err());
         request.position.z = 2.0;
         assert!(guard.accept(&request, now).is_ok());
+    }
+
+    #[test]
+    fn a_grounded_climb_gets_one_riser_a_program_step() {
+        let start = Instant::now();
+        let now = start + Duration::from_millis(250);
+        let mut guard = MovementGuard::new(7, Position::default(), start);
+        guard.set_speed(Some(30.0), start);
+        let mut request = MovementRequest {
+            mode: MovementMode::Forward,
+            session_id: 7,
+            position: Position {
+                x: 1.0,
+                z: 10.1,
+                ..Position::default()
+            },
+            created: now,
+        };
+        // A quarter second is five steps: up to 10 units, and no more.
+        assert!(guard.accept(&request, now).is_err());
+        request.position.z = 10.0;
+        assert!(guard.accept(&request, now).is_ok());
+        // Down a grounded slope the same.
+        let later = now + Duration::from_millis(250);
+        request.created = later;
+        request.position.z = -0.1;
+        assert!(guard.accept(&request, later).is_err());
+        request.position.z = 0.0;
+        assert!(guard.accept(&request, later).is_ok());
+    }
+
+    #[test]
+    fn whole_steps_count_once_and_a_part_step_counts_whole() {
+        assert_eq!(program_steps(0.05), 1);
+        assert_eq!(program_steps(0.1), 2);
+        assert_eq!(program_steps(0.15), 3);
+        assert_eq!(program_steps(0.25), 5);
+        assert_eq!(program_steps(0.051), 2);
+        assert_eq!(program_steps(0.0), 1);
+        assert_eq!(program_steps(f32::NAN), 1);
+        assert!((grounded_reach(3) - 6.0).abs() < f32::EPSILON);
+        assert!((grounded_reach(0) - MAX_GROUNDED_STEP).abs() < f32::EPSILON);
     }
 
     #[test]

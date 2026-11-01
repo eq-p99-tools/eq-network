@@ -20,6 +20,14 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- The movement guard holds a grounded sample to one riser
+  (`MAX_GROUNDED_STEP`, 2 units) a 50 ms program step, not one a sample, so
+  a climb's pace no longer depends on how long each sample is (a quarter
+  second sample on a 25° hill climbed at a fifth of the run). New
+  `movement::program_steps` and `movement::grounded_reach` give the budget,
+  for eq-client's walk to count the same. The 2 units a step is ours, not
+  read (checklist 6.339; the read is 6.344). The fall rule is unchanged.
+
 - P99 now offers falls and reports fall damage (`OP_EnvDamage` type 252) by
   the Titanium program's rules. In the program the floor is whatever surface
   lies under the player, at any angle, and a step whose floor drops away
