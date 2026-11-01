@@ -787,3 +787,23 @@ fn the_mac_era_gate_sends_after_a_jump_and_the_titanium_gate_skips_no_change() {
         .unwrap();
     assert!(titanium.held.is_none());
 }
+#[test]
+fn a_grounded_climb_rises_the_bodys_reach_each_step_once_set() {
+    let start = Instant::now();
+    let now = start + Duration::from_millis(250);
+    // Five steps at a human's Titanium reach of 3.15 are 15.75 units.
+    let mut climb = request(now, 1.0);
+    climb.position.z = 15.75;
+    let mut session = setup(start);
+    assert!(session
+        .send_move(&climb, now, |_| panic!("no climb was set"))
+        .is_err());
+    session.set_climb(3.15);
+    let mut over = request(now, 1.0);
+    over.position.z = 15.8;
+    assert!(session
+        .send_move(&over, now, |_| panic!("past the body's reach"))
+        .is_err());
+    session.send_move(&climb, now, |_| Ok(())).unwrap();
+    assert_eq!(session.position().z.to_bits(), 15.75f32.to_bits());
+}

@@ -663,6 +663,19 @@ pub enum GameCommand {
         /// too much; a 0 after that is a bug in the host.
         capacity: u32,
     },
+    /// How far the player's body climbs in one 50 ms program step, in world
+    /// units, which the host works out from the player's model and the
+    /// client generation's floor sweep: the session's movement guard lets a
+    /// grounded sample rise that far in each step it spans
+    /// ([`crate::movement::MovementGuard::set_climb`]). Until the host sends
+    /// one, a grounded sample rises one riser.
+    ClimbReach {
+        /// Current zone-admission identifier.
+        session_id: u64,
+        /// The climb a step, in world units; a value that is not a positive
+        /// number is ignored.
+        per_step: f32,
+    },
     /// Propose fresh motion for the current zone session.
     Move(crate::movement::MovementRequest),
 }
@@ -745,7 +758,8 @@ impl GameCommand {
             | Self::DropCorpse { session_id, .. }
             | Self::SelectTarget { session_id, .. }
             | Self::ConfigureMotion { session_id, .. }
-            | Self::SpeedInputs { session_id, .. } => Some(*session_id),
+            | Self::SpeedInputs { session_id, .. }
+            | Self::ClimbReach { session_id, .. } => Some(*session_id),
         }
     }
 
@@ -774,7 +788,8 @@ impl GameCommand {
             Self::SetPosture { .. }
             | Self::Move(_)
             | Self::ConfigureMotion { .. }
-            | Self::SpeedInputs { .. } => Capability::Moving,
+            | Self::SpeedInputs { .. }
+            | Self::ClimbReach { .. } => Capability::Moving,
             // Only a server that takes falls from the client lets the player jump.
             Self::Jump { .. } => Capability::Jumping,
             Self::EnvironmentalDamage { .. } => Capability::EnvironmentalDamage,
@@ -854,6 +869,7 @@ impl GameCommand {
             | Self::EnvironmentalDamage { .. }
             // The latest report stands however long it waited.
             | Self::SpeedInputs { .. }
+            | Self::ClimbReach { .. }
             | Self::WhoAll { .. }
             | Self::Pet { .. }
             | Self::AnswerResurrection { .. }
@@ -1076,6 +1092,7 @@ pub fn encode(
         | GameCommand::EnvironmentalDamage { .. }
         | GameCommand::ConfigureMotion { .. }
         | GameCommand::SpeedInputs { .. }
+        | GameCommand::ClimbReach { .. }
         | GameCommand::CrossZoneLine { .. }
         | GameCommand::Consume { .. }
         | GameCommand::AutoEat { .. }
