@@ -105,7 +105,7 @@ const TITANIUM: Generation = Generation {
 /// `EQMac`'s speeds, from the program (TAKP sitting 2 M1, "Speeds", and the
 /// TAKP speeds read of 10-31): the forward input is the profile's run speed,
 /// or its walk speed walking, times the movement multiplier, plus the buffs'
-/// speed modifier, and the player settles at [`EQMAC_UNITS_PER_INPUT`] units
+/// speed modifier, and the player settles at `EQMAC_UNITS_PER_INPUT` units
 /// a second for each unit of it; 0.7 runs at 29.9 and 0.46 walks at 19.6.
 ///
 /// - The modifier is the buffs' movement rate in percent of the run speed,
