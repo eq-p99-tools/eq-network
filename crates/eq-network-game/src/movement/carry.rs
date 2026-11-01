@@ -40,6 +40,20 @@ struct Step {
     stale: Option<Duration>,
     /// The races whose reported vertical motion the program drops.
     level_races: &'static [u32],
+    /// Where a spawn's height comes from between reports.
+    between_reports: ZBetween,
+}
+
+/// Where a generation's client puts a spawn's height between the server's
+/// reports of it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ZBetween {
+    /// At its carried height: the report's, moved on by its vertical
+    /// motion.
+    Carried,
+    /// On the floor under it, which the host finds, as a client whose step
+    /// stands a carried spawn on its ground.
+    OnFloor,
 }
 
 /// `EQMac`, from TAKP sitting 2 M1 (line 283), the TAKP speeds read of
@@ -53,6 +67,7 @@ const EQMAC: Step = Step {
     added: 0.8,
     stale: Some(Duration::from_secs(12)),
     level_races: &[0x48, 0x49],
+    between_reports: ZBetween::OnFloor,
 };
 
 /// Titanium, from Titanium read R2 of 10-31: the step 0x4bfe0f (0.02 at
@@ -70,7 +85,18 @@ const TITANIUM: Step = Step {
     added: 0.8,
     stale: None,
     level_races: &[0x48, 0x49, 0x194],
+    between_reports: ZBetween::OnFloor,
 };
+
+/// Where the generation's client puts a spawn's height between reports.
+/// Both stand it on the floor under it: inferred, since neither program's
+/// ground path is read for a carried spawn (checklist 6.335). P99 sends no
+/// vertical motion for a walking NPC while its height follows its path, so
+/// a spawn left at its carried height would hang at each report's height.
+#[must_use]
+pub const fn between_reports(dialect: GameDialect) -> ZBetween {
+    step(dialect).between_reports
+}
 
 const fn step(dialect: GameDialect) -> &'static Step {
     match dialect {
@@ -575,5 +601,12 @@ mod tests {
         spawn.since_report = Duration::from_secs(13);
         carry(GameDialect::Titanium, &mut spawn, Duration::from_millis(50));
         assert!(spawn.position.y > 0.0, "{spawn:?}");
+    }
+
+    #[test]
+    fn both_generations_stand_a_carried_spawn_on_its_floor() {
+        for dialect in [GameDialect::EqMac, GameDialect::Titanium] {
+            assert_eq!(between_reports(dialect), ZBetween::OnFloor);
+        }
     }
 }
