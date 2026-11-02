@@ -123,6 +123,7 @@ impl Selection {
     pub fn new(
         characters: Vec<CharacterChoice>,
         configured: &str,
+        creation: Option<eq_network_game::creation::Rules>,
         log: &mut Events<'_>,
     ) -> Result<(Self, Option<String>)> {
         let selected = if configured.is_empty() {
@@ -144,6 +145,7 @@ impl Selection {
         log.send(ClientEvent::World(WorldEvent::CharacterSelection {
             selection_id: selection.id,
             characters: selection.characters.clone(),
+            creation,
         }))?;
         Ok((selection, selected))
     }

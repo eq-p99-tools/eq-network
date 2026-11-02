@@ -685,6 +685,8 @@ pub enum WorldEvent {
         selection_id: u64,
         /// Occupied server slots, possibly empty on a new account.
         characters: Vec<crate::characters::CharacterChoice>,
+        /// Creation offered by this server policy, scoped to this list.
+        creation: Option<crate::creation::Rules>,
     },
     /// Local item-use validation/submission result, not proof that its effect landed.
     ItemUseAction {

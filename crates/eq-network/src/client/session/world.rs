@@ -346,12 +346,18 @@ pub(super) fn titanium(
     let mut tutorial_pending = false;
     loop {
         ensure!(!stop.is_cancelled(), "shutdown requested");
+        ensure!(
+            !creating.as_ref().is_some_and(Creating::expired),
+            "Character creation timed out. Reconnect to check whether the character was created."
+        );
         if !entered {
             match selection
                 .as_ref()
                 .and_then(|list: &crate::client::selection::Selection| list.poll(context.commands))
             {
-                Some(crate::client::selection::Choice::Enter(name)) => chosen = Some(name),
+                Some(crate::client::selection::Choice::Enter(name)) if creating.is_none() => {
+                    chosen = Some(name);
+                }
                 Some(crate::client::selection::Choice::Create(character)) if creating.is_none() => {
                     creating = Creating::start(server.creation(), character, &mut session, log)?;
                 }
@@ -421,6 +427,7 @@ pub(super) fn titanium(
                         let (list, automatic) = crate::client::selection::Selection::new(
                             entries,
                             &config.character,
+                            server.creation().map(super::creation::Creation::rules),
                             log,
                         )?;
                         selection = Some(list);
@@ -468,13 +475,17 @@ pub(super) fn titanium(
             WorldOpcode::CharacterList
                 if accepted && !entered && creating.as_ref().is_some_and(Creating::requested) =>
             {
+                let entries = character_list(server, config.protocol.into(), &packet.body)?;
                 if let Some(attempt) = creating.take() {
                     tutorial_pending |= server.start_choice();
-                    attempt.created(log)?;
+                    attempt.created(&entries, log)?;
                 }
-                let entries = character_list(server, config.protocol.into(), &packet.body)?;
-                let (list, automatic) =
-                    crate::client::selection::Selection::new(entries, &config.character, log)?;
+                let (list, automatic) = crate::client::selection::Selection::new(
+                    entries,
+                    "",
+                    server.creation().map(super::creation::Creation::rules),
+                    log,
+                )?;
                 selection = Some(list);
                 chosen = automatic;
             }
@@ -483,8 +494,12 @@ pub(super) fn titanium(
             }
             WorldOpcode::CharacterList if accepted && !entered && selection.is_none() => {
                 let entries = character_list(server, config.protocol.into(), &packet.body)?;
-                let (list, automatic) =
-                    crate::client::selection::Selection::new(entries, &config.character, log)?;
+                let (list, automatic) = crate::client::selection::Selection::new(
+                    entries,
+                    &config.character,
+                    server.creation().map(super::creation::Creation::rules),
+                    log,
+                )?;
                 selection = Some(list);
                 chosen = automatic;
             }

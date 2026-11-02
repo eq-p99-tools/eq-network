@@ -8,6 +8,9 @@ use crate::command::EncodedCommand;
 use anyhow::{ensure, Context, Result};
 use serde::Serialize;
 
+mod choices;
+pub use choices::{City, Rules, CLASSES, DEITIES, RACES};
+
 /// `OP_ApproveName`: the requested name, race, class and deity; answered with one byte.
 pub const APPROVE_NAME_OPCODE: u16 = 0x3ea6;
 /// `OP_CharacterCreate`: the 80-byte creation request for the approved name.
@@ -70,6 +73,8 @@ pub struct NewCharacter {
     pub start_zone: u32,
     /// Final stats including the spent bonus points.
     pub stats: [u32; 7],
+    /// Classic face index. Other cosmetic features use their defaults.
+    pub face: u8,
 }
 
 const BASE_RACE: [[u32; 7]; 16] = [
@@ -156,6 +161,7 @@ impl NewCharacter {
             deity,
             start_zone,
             stats,
+            face: 0,
         })
     }
 
@@ -164,6 +170,7 @@ impl NewCharacter {
     /// # Errors
     /// Rejects names or stats the server would refuse.
     pub fn validate(&self) -> Result<()> {
+        ensure!(self.gender <= 1 && self.face < 8, "invalid gender or face");
         let bytes = self.name.as_bytes();
         ensure!(
             (4..=15).contains(&bytes.len())
@@ -197,7 +204,7 @@ impl NewCharacter {
         Ok(body)
     }
 
-    /// Encodes the 80-byte creation request; appearance uses the default face and hair.
+    /// Encodes the 80-byte creation request; hair and eyes use defaults.
     ///
     /// # Errors
     /// Rejects invalid characters.
@@ -212,6 +219,7 @@ impl NewCharacter {
         put(20, self.race);
         put(24, self.start_zone);
         put(32, self.deity);
+        put(64, u32::from(self.face));
         for (index, stat) in self.stats.iter().enumerate() {
             put(36 + index * 4, *stat);
         }
@@ -262,6 +270,8 @@ impl NewCharacter {
         put(138, &u16::try_from(self.race)?.to_le_bytes());
         put(140, &u16::try_from(self.class)?.to_le_bytes());
         put(144, &[1]);
+        put(174, &[self.face]);
+        put(5428, &[self.face]);
         // The record keeps STR, STA, CHA, DEX, INT, AGI and WIS in that
         // order; this one's stats run STR, STA, AGI, DEX, WIS, INT, CHA.
         for (offset, stat) in [
@@ -332,6 +342,23 @@ pub fn eqmac_request(character: &NewCharacter) -> Result<EncodedCommand> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn face_and_gender_survive_both_creation_layouts() {
+        let mut character =
+            NewCharacter::with_points_in("Testhero", (1, 1, 1), (396, 1), 1).unwrap();
+        character.face = 7;
+        let titanium = character.create_request().unwrap();
+        let eqmac = character.eqmac_create_request().unwrap();
+        assert_eq!(&titanium[16..20], &1u32.to_le_bytes());
+        assert_eq!(&titanium[64..68], &7u32.to_le_bytes());
+        assert_eq!((eqmac[136], eqmac[174], eqmac[5428]), (1, 7, 7));
+        character.gender = 2;
+        assert!(character.name_approval().is_err());
+        character.gender = 0;
+        character.face = 8;
+        assert!(character.eqmac_name_approval().is_err());
+    }
 
     #[test]
     fn human_cleric_spends_every_point_and_encodes_titanium_layouts() {
