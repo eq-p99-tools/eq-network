@@ -57,6 +57,17 @@ pub enum GameCommand {
         /// Requested name, race, class, deity, start zone and stats.
         character: crate::creation::NewCharacter,
     },
+    /// Ask the world for a character name suggestion (Titanium).
+    GenerateName {
+        /// Identity supplied with the character list.
+        selection_id: u64,
+        /// Frontend identity, returned with the answer.
+        request_id: u64,
+        /// Player race.
+        race: u32,
+        /// Male (0) or female (1).
+        gender: u32,
+    },
     /// Exchange two book slots after checking both expected contents.
     SwapSpell {
         /// Current zone admission.
@@ -687,6 +698,7 @@ impl GameCommand {
         match self {
             Self::SelectServer { .. }
             | Self::SelectCharacter { .. }
+            | Self::GenerateName { .. }
             | Self::CreateCharacter { .. }
             | Self::SendChat(_) => None,
             Self::UseItem(request) => Some(request.session_id),
@@ -772,6 +784,7 @@ impl GameCommand {
         Some(match self {
             Self::SelectServer { .. }
             | Self::SelectCharacter { .. }
+            | Self::GenerateName { .. }
             | Self::CreateCharacter { .. } => return None,
             Self::ScribeSpell { .. } | Self::ForgetSpell { .. } | Self::MemorizeSpell { .. } => {
                 Capability::Spellbook
@@ -860,6 +873,7 @@ impl GameCommand {
         match self {
             Self::SelectServer { .. }
             | Self::SelectCharacter { .. }
+            | Self::GenerateName { .. }
             | Self::CreateCharacter { .. }
             | Self::SendChat(_)
             | Self::InspectItem { .. }
@@ -1045,7 +1059,9 @@ pub fn encode(
         GameCommand::SelectServer { .. } => {
             anyhow::bail!("choosing a world requires the login controller")
         }
-        GameCommand::SelectCharacter { .. } | GameCommand::CreateCharacter { .. } => {
+        GameCommand::SelectCharacter { .. }
+        | GameCommand::CreateCharacter { .. }
+        | GameCommand::GenerateName { .. } => {
             anyhow::bail!("character selection requires the world controller")
         }
         GameCommand::CastSpell {

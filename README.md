@@ -26,7 +26,7 @@ for their check on P99:
 | `EqEmu` | Titanium, for a stock `EQEmu` server | Moving, jumping and falling (and a fall's damage), targeting, combat, casting and the spellbook (deleting and moving its spells too), the inventory and bank, merchants and what they pay, handing items to NPCs and trading with players, looting, chat, camping, doors, items on the ground, zoning, abilities, `/who`, corpses and consent, pets, training, resurrection, reading, tradeskill containers, groups and raids, `/afk`, `/anonymous` and `/roleplay`, `/random`, `/emote` and `/assist`, the map, the time of day and the server's regeneration tick |
 | `Project1999` | Titanium with P99's V62 protection | As `EqEmu`, except what waits to be checked on P99: jumping and falling, fishing and binding wounds, deleting the spellbook's spells, what merchants pay, training, resurrection, reading, tradeskills, groups and raids, `/afk`, `/anonymous` and `/roleplay`, `/random`, `/emote` and `/assist`, and the regeneration tick. The map is left to the player, as P99's own client keeps it off. The world is told what machine the player entered on, once a week, when the host carries it (`ClientConfig::sysinfo`) — watched entering Green 2026-10-30 |
 | `Takp` | Windows TAKP/`EQMac`, for a stock TAKP server | Character creation, entering the world, chat, moving, targeting, considering and attacking, casting and the spellbook (not yet deleting or moving its spells), zoning and camping, groups, moving items and coins (the bank's beside a banker), buying and selling at merchants (not yet what a merchant pays), and eating and drinking |
-| `Quarm` | Windows TAKP/`EQMac` | Entering the world and chat; Quarm's features follow once they are checked on TAKP |
+| `Quarm` | Windows TAKP/`EQMac` | Character creation (source-derived), entering the world and chat |
 
 The table follows [`servers.rs`](crates/eq-network/src/client/session/servers.rs),
 which decides. A front end goes by the capabilities its own session reports, from
@@ -152,3 +152,33 @@ MIT. See [LICENSE](LICENSE).
 
 This project is not affiliated with Daybreak Game Company, Project 1999, The
 Al'Kabor Project, or Project Quarm.
+
+### Character creation choices
+
+`WorldEvent::CharacterSelection.creation` offers a list-scoped `creation::Rules`
+policy: classic P99, Titanium EQEmu, or EQMac TAKP/Quarm. Frontends use its race,
+class, deity and starting-city choices with the world's expansion and PvP reports.
+Titanium sends a city-choice index; EQMac sends the actual starting zone. The
+server remains authoritative, including custom database restrictions.
+
+`NewCharacter.face` is the base face. `cosmetics` holds hair, beard, eye and tattoo
+choices. `Rules::appearance(race, gender)` offers valid controls, reconciles race
+changes and composes the packed face detail for each wire format. Zero cosmetics
+retain the default look for existing callers. `tutorial` opts into the Titanium
+world's tutorial for the created character's first entry.
+
+`ClientCommand::GenerateName` and `WorldEvent::NameSuggestion` carry both list and
+request identities. Titanium uses the world's 72-byte name request; EQMac policies
+select `creation::names::local`, because their worlds have no mapped opcode for
+that request. The local phonemes are original data, not the official client tables.
+Suggestions do not reserve names. World requests are single-flight; after a timeout,
+a late response must be consumed before another request can go out.
+Name approval precedes creation, and success requires the new name in a refreshed
+list. A 60-second unanswered attempt ends the connection: reconnect to inspect
+whether it succeeded before retrying. The wire has no request ID for late replies.
+
+The Quarm path was checked independently against
+[`SecretsOTheP/EQMacEmu`'s world handlers](https://github.com/SecretsOTheP/EQMacEmu/blob/main/world/client.cpp)
+and [creation record](https://github.com/SecretsOTheP/EQMacEmu/blob/main/common/eq_packet_structs.h).
+Its 76-byte approval body, 8452-byte creation body and refusal/list sequence match
+this codec. This source and synthetic-test evidence is not a live creation check.

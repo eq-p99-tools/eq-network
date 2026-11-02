@@ -12,6 +12,25 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Protocol notes document the verified opcode and remaining capture gaps;
   sessions do not send speculative history keepalives.
 
+- Character-list creation policies (`creation::Rules`) with era/expansion-aware
+  races, classes, deities and generation-specific starting cities for P99,
+  Titanium EQEmu, TAKP and Quarm. Quarm creation is source-derived from its own
+  world handlers; this does not claim a new live check.
+- Complete creation appearance policies and packet fields: base face, packed
+  head detail, hair, beard, both eyes and barbarian tattoos, including absent
+  attachment sentinels and race-specific palettes. `NewCharacter.tutorial`
+  controls Titanium's first-entry tutorial preference.
+- Name suggestions: Titanium world requests and local generation for EQMac
+  policies, with stale-reply guards and single-flight timeout handling.
+  API migration: `NewCharacter` literals add `face: 0`,
+  `cosmetics: Cosmetics::default()` and `tutorial: false`; `CharacterSelection`
+  builders add `creation: Option<creation::Rules>`. Exhaustive command/event
+  matches add `GenerateName` / `NameSuggestion`.
+  These are unreleased API changes, not a compatible published 0.1.x patch.
+- Creation timeout recovery: after 60 seconds without completion, reconnect
+  before retrying. Success requires the requested name in the refreshed list;
+  that list waits for explicit character selection instead of automatic entry.
+
 - `zones::ZoneDescription::classic_model_scale_flag`: the word at offset 592
   of Titanium's `OP_NewZone`, as it came. While it is not zero the Titanium
   program draws the classic character models at 1/1.3 of their usual scale
