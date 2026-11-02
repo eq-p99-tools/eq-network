@@ -2,6 +2,9 @@
 //! the same steps: the world approves the name, then creates the character
 //! and sends the new character list. A server type says whether it creates
 //! characters, and its client generation builds the packets.
+pub(super) mod names;
+pub(super) mod start;
+
 use super::{ClientEvent, Events};
 use anyhow::{Context, Result};
 use eq_network_game::{
@@ -10,9 +13,12 @@ use eq_network_game::{
     world::WorldEvent,
 };
 use eq_network_transport::Transport;
+use std::time::{Duration, Instant};
 
 /// How a client generation asks the world for a new character.
 pub(super) trait Creation: Sync {
+    /// Choices offered to a frontend before zone admission.
+    fn rules(&self) -> creation::Rules;
     /// Asks the world to approve the character's name.
     ///
     /// # Errors
@@ -30,6 +36,9 @@ pub(super) trait Creation: Sync {
 pub(super) struct Titanium;
 
 impl Creation for Titanium {
+    fn rules(&self) -> creation::Rules {
+        creation::Rules::Titanium
+    }
     fn approval(&self, character: &NewCharacter) -> Result<EncodedCommand> {
         creation::titanium_approval(character)
     }
@@ -39,10 +48,28 @@ impl Creation for Titanium {
     }
 }
 
+/// P99 uses Titanium packets with classic creation choices.
+pub(super) struct Classic;
+
+impl Creation for Classic {
+    fn rules(&self) -> creation::Rules {
+        creation::Rules::Classic
+    }
+    fn approval(&self, character: &NewCharacter) -> Result<EncodedCommand> {
+        Titanium.approval(character)
+    }
+    fn request(&self, character: &NewCharacter) -> Result<EncodedCommand> {
+        Titanium.request(character)
+    }
+}
+
 /// `EQMac`'s creation packets, which TAKP takes.
 pub(super) struct EqMac;
 
 impl Creation for EqMac {
+    fn rules(&self) -> creation::Rules {
+        creation::Rules::EqMac
+    }
     fn approval(&self, character: &NewCharacter) -> Result<EncodedCommand> {
         creation::eqmac_approval(character)
     }
@@ -58,9 +85,15 @@ pub(super) struct Creating {
     character: NewCharacter,
     /// Whether the world approved the name and the creation request went out.
     requested: bool,
+    started: Instant,
 }
 
 impl Creating {
+    /// The character and first-entry preference belonging to this attempt.
+    pub(super) fn start_choice(&self) -> (String, bool) {
+        (self.character.name.clone(), self.character.tutorial)
+    }
+
     /// Asks the world to approve the name of the character the player chose;
     /// refuses the character at once when the server type creates none, or
     /// the world would refuse it.
@@ -75,7 +108,28 @@ impl Creating {
     ) -> Result<Option<Self>> {
         let approval = creation
             .context("this server does not create characters yet")
-            .and_then(|creation| Ok((creation, creation.approval(&character)?)));
+            .and_then(|creation| {
+                anyhow::ensure!(
+                    creation
+                        .rules()
+                        .classes(character.race, None)
+                        .iter()
+                        .any(|(class, _)| *class == character.class),
+                    "race or class is not offered by this server policy"
+                );
+                anyhow::ensure!(
+                    creation
+                        .rules()
+                        .appearance(character.race, character.gender)
+                        .accepts(&character),
+                    "appearance is not offered by this server policy"
+                );
+                anyhow::ensure!(
+                    !character.tutorial || creation.rules().offers_tutorial(),
+                    "tutorial is not offered by this server policy"
+                );
+                Ok((creation, creation.approval(&character)?))
+            });
         match approval {
             Ok((creation, packet)) => {
                 session.send(packet.opcode, &packet.body)?;
@@ -83,6 +137,7 @@ impl Creating {
                     creation,
                     character,
                     requested: false,
+                    started: Instant::now(),
                 }))
             }
             Err(error) => {
@@ -126,11 +181,23 @@ impl Creating {
         self.requested
     }
 
+    /// A missing reply requires reconnecting, because name approval has no
+    /// request identity with which to distinguish a late reply from a retry.
+    pub(super) fn expired(&self) -> bool {
+        self.started.elapsed() >= Duration::from_secs(60)
+    }
+
     /// Tells the host the world created the character.
     ///
     /// # Errors
     /// Returns an error when the host's event handler fails.
-    pub(super) fn created(self, log: &mut Events<'_>) -> Result<()> {
+    pub(super) fn created(
+        self,
+        entries: &[eq_network_game::characters::CharacterChoice],
+        log: &mut Events<'_>,
+    ) -> Result<()> {
+        anyhow::ensure!(entries.iter().any(|entry| entry.name.eq_ignore_ascii_case(&self.character.name)),
+            "The refreshed character list did not confirm creation. Reconnect to check whether the character was created.");
         told(self.character.name, CreationOutcome::Created, log)
     }
 }
@@ -206,12 +273,24 @@ mod tests {
             .unwrap()
             .expect("the name goes to the world");
         assert!(!attempt.requested());
+        assert!(!attempt.expired());
         let attempt = attempt
             .answered(&[1], &mut kept, &mut log)
             .unwrap()
             .expect("an approved name sends the creation");
         assert!(attempt.requested());
-        attempt.created(&mut log).unwrap();
+        attempt
+            .created(
+                &[eq_network_game::characters::CharacterChoice {
+                    slot: 0,
+                    name: "Testcleric".into(),
+                    level: Some(1),
+                    zone_id: Some(2),
+                    look: None,
+                }],
+                &mut log,
+            )
+            .unwrap();
         drop(log);
         let sent: Vec<(u16, usize)> = kept.0.iter().map(|(op, body)| (*op, body.len())).collect();
         assert_eq!(
@@ -222,6 +301,26 @@ mod tests {
             outcomes(&events),
             [("Testcleric".into(), CreationOutcome::Created)]
         );
+    }
+
+    #[test]
+    fn an_unconfirmed_list_never_reports_success_and_timeout_requires_reconnect() {
+        let config = ClientConfig::new("ACCOUNT", "PASSWORD", "Test Server", "");
+        let mut events = Vec::new();
+        let mut handler = |event| {
+            events.push(event);
+            Ok(())
+        };
+        let mut log = Events::new(&config, &mut handler);
+        let mut kept = Kept::default();
+        let mut attempt = Creating::start(Some(&EqMac), cleric(), &mut kept, &mut log)
+            .unwrap()
+            .unwrap();
+        attempt.started = Instant::now().checked_sub(Duration::from_secs(61)).unwrap();
+        assert!(attempt.expired());
+        assert!(attempt.created(&[], &mut log).is_err());
+        drop(log);
+        assert_eq!(outcomes(&events), [] as [(String, CreationOutcome); 0]);
     }
 
     #[test]

@@ -37,6 +37,7 @@ const WORLD_ZONE_SERVER: u16 = 0x0480;
 
 /// `EQMac`'s world stage: authenticate to the `MacPC` world server, choose a
 /// character, and follow its handoff.
+#[allow(clippy::too_many_lines)]
 pub(in crate::client::session) fn world(
     context: &CharacterSession<'_>,
     ip: &str,
@@ -59,12 +60,20 @@ pub(in crate::client::session) fn world(
     let mut creating: Option<Creating> = None;
     loop {
         ensure!(!stop.is_cancelled(), "shutdown requested");
+        ensure!(
+            !creating.as_ref().is_some_and(Creating::expired),
+            "Character creation timed out. Reconnect to check whether the character was created."
+        );
         if !entered {
             match selection
                 .as_ref()
                 .and_then(|list: &Selection| list.poll(context.commands))
             {
-                Some(Choice::Enter(name)) => chosen = Some(name),
+                // EQMac's official generator is local; never send Titanium's opcode.
+                Some(Choice::GenerateName(list, request, _, _)) => {
+                    super::super::creation::names::answer(list, request, None, log)?;
+                }
+                Some(Choice::Enter(name)) if creating.is_none() => chosen = Some(name),
                 Some(Choice::Create(character)) if creating.is_none() => {
                     creating = Creating::start(server.creation(), character, &mut session, log)?;
                 }
@@ -115,8 +124,9 @@ pub(in crate::client::session) fn world(
                         || creating.as_ref().is_some_and(Creating::requested)) =>
             {
                 let entries = super::character_list(server, config.protocol.into(), &packet.body)?;
+                let after_creation = creating.is_some();
                 if let Some(attempt) = creating.take() {
-                    attempt.created(log)?;
+                    attempt.created(&entries, log)?;
                 } else {
                     log.send(ClientEvent::Progress(ConnectionStage::SelectingCharacter))?;
                     if world_only {
@@ -124,7 +134,18 @@ pub(in crate::client::session) fn world(
                         return Ok(None);
                     }
                 }
-                let (list, automatic) = Selection::new(entries, &config.character, log)?;
+                let (list, automatic) = Selection::new(
+                    entries,
+                    if after_creation {
+                        ""
+                    } else {
+                        &config.character
+                    },
+                    server
+                        .creation()
+                        .map(super::super::creation::Creation::rules),
+                    log,
+                )?;
                 selection = Some(list);
                 chosen = automatic;
             }

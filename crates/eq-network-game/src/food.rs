@@ -145,21 +145,26 @@ pub fn decode(opcode: u16, body: &[u8]) -> Result<Option<Nourishment>> {
     }))
 }
 
-/// How fed and watered TAKP says the player is (`Stamina_Struct`, packed:
-/// food and water as 16 bits each, from 0 to 32000, then a fatigue byte this
-/// leaves out; `Client::SendStaminaUpdate`, `zone/client.cpp`). TAKP sends it
-/// as food and water go down, as fatigue changes, and after every bite.
+/// Decodes TAKP and Quarm's food and water counts from `Stamina_Struct`.
+///
+/// Both use signed 16-bit counts followed by fatigue. Quarm additionally
+/// sends three bytes from `Client::SendStaminaUpdate`; those bytes do not
+/// contribute to nourishment. Only the known five- and eight-byte layouts
+/// are accepted.
 ///
 /// # Errors
 /// Rejects a malformed length.
 pub fn eqmac_nourishment(body: &[u8]) -> Result<Nourishment> {
-    let [food_low, food_high, water_low, water_high, _fatigue] = *body else {
+    let ([food_low, food_high, water_low, water_high, _fatigue], tail) = body
+        .split_first_chunk::<5>()
+        .context("invalid EQMac stamina length")?;
+    if !matches!(tail.len(), 0 | 3) {
         anyhow::bail!("invalid EQMac stamina length");
-    };
+    }
     let amount = |low, high| u32::try_from(i16::from_le_bytes([low, high]).max(0)).unwrap_or(0);
     Ok(Nourishment {
-        food: amount(food_low, food_high),
-        water: amount(water_low, water_high),
+        food: amount(*food_low, *food_high),
+        water: amount(*water_low, *water_high),
     })
 }
 
@@ -221,6 +226,23 @@ pub fn eqmac_consume(slot: InventorySlot, meal: Meal, by_hand: bool) -> Result<E
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn quarm_stamina_extension_is_not_part_of_the_food_or_water_count() {
+        // Synthetic values in Quarm's packed Stamina_Struct layout.
+        let body = [0xc4, 0x09, 0x00, 0x7d, 40, 0, 1, 1];
+        assert_eq!(
+            eqmac_nourishment(&body).unwrap(),
+            Nourishment {
+                food: 2500,
+                water: 32_000
+            }
+        );
+        for length in [0, 1, 2, 3, 4, 6, 7] {
+            assert!(eqmac_nourishment(&body[..length]).is_err());
+        }
+        assert!(eqmac_nourishment(&[0; 9]).is_err());
+    }
 
     #[test]
     fn takp_reports_food_and_drink_in_16_bits_and_takes_bites_in_its_numbers() {

@@ -2,6 +2,7 @@
 
 mod carry;
 mod gate;
+pub mod history;
 mod session;
 mod speeds;
 pub use carry::{between_reports, carry, Carried, ZBetween};

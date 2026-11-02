@@ -809,7 +809,7 @@ impl ServerType for Project1999 {
     }
 
     fn creation(&self) -> Option<&'static dyn Creation> {
-        Some(&creation::Titanium)
+        Some(&creation::Classic)
     }
 
     fn casting(&self, _setup: &Setup<'_>) -> Provided {
@@ -1120,6 +1120,12 @@ impl ServerType for EqEmu {
 struct Quarm;
 
 impl ServerType for Quarm {
+    // Quarm's HandleNameApprovalPacket and HandleCharacterCreatePacket use
+    // the same EQMac bodies and replies as TAKP. Source-derived; not a live test.
+    fn creation(&self) -> Option<&'static dyn Creation> {
+        Some(&creation::EqMac)
+    }
+
     fn wire(&self) -> &'static dyn Wire {
         &EqMac
     }
@@ -1465,8 +1471,10 @@ mod tests {
             approval(ServerProtocol::Takp),
             Some(eq_network_game::creation::EQMAC_APPROVE_NAME_OPCODE)
         );
-        // Not yet checked on Quarm.
-        assert_eq!(approval(ServerProtocol::Quarm), None);
+        assert_eq!(
+            approval(ServerProtocol::Quarm),
+            Some(eq_network_game::creation::EQMAC_APPROVE_NAME_OPCODE)
+        );
     }
 
     #[test]
