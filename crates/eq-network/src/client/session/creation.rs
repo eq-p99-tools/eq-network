@@ -2,6 +2,9 @@
 //! the same steps: the world approves the name, then creates the character
 //! and sends the new character list. A server type says whether it creates
 //! characters, and its client generation builds the packets.
+pub(super) mod names;
+pub(super) mod start;
+
 use super::{ClientEvent, Events};
 use anyhow::{Context, Result};
 use eq_network_game::{
@@ -86,6 +89,11 @@ pub(super) struct Creating {
 }
 
 impl Creating {
+    /// The character and first-entry preference belonging to this attempt.
+    pub(super) fn start_choice(&self) -> (String, bool) {
+        (self.character.name.clone(), self.character.tutorial)
+    }
+
     /// Asks the world to approve the name of the character the player chose;
     /// refuses the character at once when the server type creates none, or
     /// the world would refuse it.
@@ -108,6 +116,17 @@ impl Creating {
                         .iter()
                         .any(|(class, _)| *class == character.class),
                     "race or class is not offered by this server policy"
+                );
+                anyhow::ensure!(
+                    creation
+                        .rules()
+                        .appearance(character.race, character.gender)
+                        .accepts(&character),
+                    "appearance is not offered by this server policy"
+                );
+                anyhow::ensure!(
+                    !character.tutorial || creation.rules().offers_tutorial(),
+                    "tutorial is not offered by this server policy"
                 );
                 Ok((creation, creation.approval(&character)?))
             });

@@ -133,6 +133,12 @@ pub struct City {
 }
 
 impl Rules {
+    /// Whether creation can opt into the tutorial instead of the home city.
+    #[must_use]
+    pub const fn offers_tutorial(self) -> bool {
+        matches!(self, Self::Titanium)
+    }
+
     /// Packet generation used by these choices.
     #[must_use]
     pub const fn dialect(self) -> GameDialect {

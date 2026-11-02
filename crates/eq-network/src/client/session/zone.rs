@@ -588,7 +588,7 @@ mod tests {
         match command {
             // The world server's, before any zone session.
             ClientCommand::SelectCharacter { .. } => 0,
-            ClientCommand::CreateCharacter { .. } => 1,
+            ClientCommand::CreateCharacter { .. } | ClientCommand::GenerateName { .. } => 1,
             ClientCommand::SwapSpell { .. } => 2,
             ClientCommand::UseItem(_) => 3,
             ClientCommand::ClickDoor { .. } => 4,

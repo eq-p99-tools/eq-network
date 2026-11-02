@@ -11,9 +11,16 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   races, classes, deities and generation-specific starting cities for P99,
   Titanium EQEmu, TAKP and Quarm. Quarm creation is source-derived from its own
   world handlers; this does not claim a new live check.
-- `NewCharacter.face`, encoded in Titanium and both EQMac face fields.
-  API migration: struct literals add `face: 0`; `CharacterSelection` builders
-  and exhaustive field patterns add `creation: Option<creation::Rules>`.
+- Complete creation appearance policies and packet fields: base face, packed
+  head detail, hair, beard, both eyes and barbarian tattoos, including absent
+  attachment sentinels and race-specific palettes. `NewCharacter.tutorial`
+  controls Titanium's first-entry tutorial preference.
+- Name suggestions: Titanium world requests and local generation for EQMac
+  policies, with stale-reply guards and single-flight timeout handling.
+  API migration: `NewCharacter` literals add `face: 0`,
+  `cosmetics: Cosmetics::default()` and `tutorial: false`; `CharacterSelection`
+  builders add `creation: Option<creation::Rules>`. Exhaustive command/event
+  matches add `GenerateName` / `NameSuggestion`.
   These are unreleased API changes, not a compatible published 0.1.x patch.
 - Creation timeout recovery: after 60 seconds without completion, reconnect
   before retrying. Success requires the requested name in the refreshed list;

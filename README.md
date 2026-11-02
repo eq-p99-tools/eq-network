@@ -161,7 +161,18 @@ class, deity and starting-city choices with the world's expansion and PvP report
 Titanium sends a city-choice index; EQMac sends the actual starting zone. The
 server remains authoritative, including custom database restrictions.
 
-`NewCharacter.face` selects a classic face; other cosmetics default to zero.
+`NewCharacter.face` is the base face. `cosmetics` holds hair, beard, eye and tattoo
+choices. `Rules::appearance(race, gender)` offers valid controls, reconciles race
+changes and composes the packed face detail for each wire format. Zero cosmetics
+retain the default look for existing callers. `tutorial` opts into the Titanium
+world's tutorial for the created character's first entry.
+
+`ClientCommand::GenerateName` and `WorldEvent::NameSuggestion` carry both list and
+request identities. Titanium uses the world's 72-byte name request; EQMac policies
+select `creation::names::local`, because their worlds have no mapped opcode for
+that request. The local phonemes are original data, not the official client tables.
+Suggestions do not reserve names. World requests are single-flight; after a timeout,
+a late response must be consumed before another request can go out.
 Name approval precedes creation, and success requires the new name in a refreshed
 list. A 60-second unanswered attempt ends the connection: reconnect to inspect
 whether it succeeded before retrying. The wire has no request ID for late replies.

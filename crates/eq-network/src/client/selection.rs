@@ -100,6 +100,8 @@ pub(super) enum Choice {
     Enter(String),
     /// Create a new character first.
     Create(eq_network_game::creation::NewCharacter),
+    /// List-scoped name request, carrying frontend identity, race and gender.
+    GenerateName(u64, u64, u32, u32),
 }
 
 #[cfg(test)]
@@ -108,7 +110,7 @@ impl Choice {
     fn entered(self) -> Option<String> {
         match self {
             Self::Enter(name) => Some(name),
-            Self::Create(_) => None,
+            Self::Create(_) | Self::GenerateName(..) => None,
         }
     }
 }
@@ -165,6 +167,14 @@ impl Selection {
                     .iter()
                     .find(|entry| entry.slot == slot)
                     .map(|entry| Choice::Enter(entry.name.clone()))
+            }
+            ClientCommand::GenerateName {
+                selection_id,
+                request_id,
+                race,
+                gender,
+            } if selection_id == self.id => {
+                Some(Choice::GenerateName(selection_id, request_id, race, gender))
             }
             ClientCommand::CreateCharacter {
                 selection_id,

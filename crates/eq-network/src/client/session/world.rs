@@ -31,6 +31,7 @@ enum WorldOpcode {
     CharacterList,
     ZoneHandoff,
     ApproveName,
+    NameSuggestion,
     Guilds,
     EnterWorld,
     ZoneUnavailable,
@@ -46,6 +47,7 @@ impl From<u16> for WorldOpcode {
             0x4513 => Self::CharacterList,
             0x61b6 => Self::ZoneHandoff,
             0x3ea6 => Self::ApproveName,
+            eq_network_game::creation::names::OPCODE => Self::NameSuggestion,
             eq_network_game::listing::GUILDS_OPCODE => Self::Guilds,
             0x7cba => Self::EnterWorld,
             TITANIUM_UNAVAILABLE_OPCODE => Self::ZoneUnavailable,
@@ -341,20 +343,34 @@ pub(super) fn titanium(
     let mut chosen = None;
     // A creation awaiting the world's approval of its name, or its new list.
     let mut creating: Option<Creating> = None;
+    let mut suggestions = super::creation::names::Suggestions::default();
     // Stock EQEmu marks a world session that created a character as bound for the
     // tutorial until the client sends OP_World_Client_CRC1 (world/client.cpp).
-    let mut tutorial_pending = false;
+    let mut start_choice = super::creation::start::StartChoice::default();
     loop {
         ensure!(!stop.is_cancelled(), "shutdown requested");
         ensure!(
             !creating.as_ref().is_some_and(Creating::expired),
             "Character creation timed out. Reconnect to check whether the character was created."
         );
+        suggestions.tick(log)?;
         if !entered {
             match selection
                 .as_ref()
                 .and_then(|list: &crate::client::selection::Selection| list.poll(context.commands))
             {
+                Some(crate::client::selection::Choice::GenerateName(
+                    list,
+                    request,
+                    race,
+                    gender,
+                )) => {
+                    if creating.is_none() {
+                        suggestions.request((list, request, race, gender), &mut session, log)?;
+                    } else {
+                        super::creation::names::answer(list, request, None, log)?;
+                    }
+                }
                 Some(crate::client::selection::Choice::Enter(name)) if creating.is_none() => {
                     chosen = Some(name);
                 }
@@ -364,12 +380,7 @@ pub(super) fn titanium(
                 _ => (),
             }
             if let Some(name) = chosen.as_ref() {
-                if std::mem::take(&mut tutorial_pending) {
-                    // The official client sends it unless "Start Tutorial" was
-                    // chosen; stock EQEmu checks its contents only when checksum
-                    // verification is on, which it is not by default.
-                    session.send(0x5072, &[0; 2056])?;
-                }
+                start_choice.enter(name, &mut session)?;
                 // Once a week, just before it enters the world, the
                 // official client tells this world what machine the player
                 // is on (the P99 capture of 2026-10-31: the record went out
@@ -395,6 +406,7 @@ pub(super) fn titanium(
             packet.body.len()
         ))?;
         match WorldOpcode::from(packet.opcode) {
+            WorldOpcode::NameSuggestion => suggestions.receive(&packet.body, log)?,
             WorldOpcode::EnterWorld => named(&packet.body, &config.character, zoning, log)?,
             WorldOpcode::ZoneUnavailable => {
                 let error = unavailable(&packet.body, log)?;
@@ -477,7 +489,7 @@ pub(super) fn titanium(
             {
                 let entries = character_list(server, config.protocol.into(), &packet.body)?;
                 if let Some(attempt) = creating.take() {
-                    tutorial_pending |= server.start_choice();
+                    start_choice.created(server.start_choice(), attempt.start_choice());
                     attempt.created(&entries, log)?;
                 }
                 let (list, automatic) = crate::client::selection::Selection::new(

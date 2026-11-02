@@ -624,6 +624,15 @@ pub enum WorldEvent {
     BuffSnapshot(Vec<Option<crate::buffs::Buff>>),
     /// A server-owned slot replacement or fade for an entity.
     Buff(crate::buffs::BuffUpdate),
+    /// A name suggestion, or no suggestion when refused, malformed or timed out.
+    NameSuggestion {
+        /// Character list the request belongs to.
+        selection_id: u64,
+        /// Frontend request identity.
+        request_id: u64,
+        /// Suggested name; never evidence of approval or reservation.
+        name: Option<String>,
+    },
     /// The server's answer to a character creation request.
     CharacterCreation {
         /// Requested name.

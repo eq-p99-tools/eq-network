@@ -69,6 +69,10 @@ pub(in crate::client::session) fn world(
                 .as_ref()
                 .and_then(|list: &Selection| list.poll(context.commands))
             {
+                // EQMac's official generator is local; never send Titanium's opcode.
+                Some(Choice::GenerateName(list, request, _, _)) => {
+                    super::super::creation::names::answer(list, request, None, log)?;
+                }
                 Some(Choice::Enter(name)) if creating.is_none() => chosen = Some(name),
                 Some(Choice::Create(character)) if creating.is_none() => {
                     creating = Creating::start(server.creation(), character, &mut session, log)?;

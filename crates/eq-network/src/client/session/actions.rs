@@ -121,6 +121,7 @@ pub(super) fn needs(command: &ClientCommand) -> &'static [Resource] {
         | ClientCommand::Combine { .. } => &[Inventory],
         ClientCommand::SelectServer { .. }
         | ClientCommand::SelectCharacter { .. }
+        | ClientCommand::GenerateName { .. }
         | ClientCommand::CreateCharacter { .. }
         | ClientCommand::ClickDoor { .. }
         | ClientCommand::CrossZoneLine { .. }
@@ -339,6 +340,7 @@ fn refusal(command: &ClientCommand, reason: &str) -> Option<WorldEvent> {
         }
         ClientCommand::SelectServer { .. }
         | ClientCommand::SelectCharacter { .. }
+        | ClientCommand::GenerateName { .. }
         | ClientCommand::CreateCharacter { .. }
         | ClientCommand::SetPosture { .. }
         | ClientCommand::SendChat(_)

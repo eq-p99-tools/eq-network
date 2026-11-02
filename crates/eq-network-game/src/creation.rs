@@ -8,7 +8,10 @@ use crate::command::EncodedCommand;
 use anyhow::{ensure, Context, Result};
 use serde::Serialize;
 
+pub mod appearance;
 mod choices;
+pub mod names;
+pub use appearance::Cosmetics;
 pub use choices::{City, Rules, CLASSES, DEITIES, RACES};
 
 /// `OP_ApproveName`: the requested name, race, class and deity; answered with one byte.
@@ -73,8 +76,12 @@ pub struct NewCharacter {
     pub start_zone: u32,
     /// Final stats including the spent bonus points.
     pub stats: [u32; 7],
-    /// Classic face index. Other cosmetic features use their defaults.
+    /// Base face index, independently of Luclin head detail.
     pub face: u8,
+    /// Hair, eyes, beard and tattoo choices.
+    pub cosmetics: Cosmetics,
+    /// Start the newly created character in the tutorial where this policy supports it.
+    pub tutorial: bool,
 }
 
 const BASE_RACE: [[u32; 7]; 16] = [
@@ -153,7 +160,7 @@ impl NewCharacter {
         let (mut stats, points) =
             base_stats(race, class).context("unknown race or class for creation")?;
         *stats.get_mut(primary).context("unknown stat")? += points;
-        Ok(Self {
+        let character = Self {
             name: name.into(),
             race,
             class,
@@ -162,7 +169,10 @@ impl NewCharacter {
             start_zone,
             stats,
             face: 0,
-        })
+            cosmetics: Cosmetics::default(),
+            tutorial: false,
+        };
+        Ok(character)
     }
 
     /// Checks the name and stat rules the server enforces.
@@ -170,7 +180,10 @@ impl NewCharacter {
     /// # Errors
     /// Rejects names or stats the server would refuse.
     pub fn validate(&self) -> Result<()> {
-        ensure!(self.gender <= 1 && self.face < 8, "invalid gender or face");
+        ensure!(
+            self.gender <= 1 && self.face <= if self.race == 330 { 9 } else { 7 },
+            "invalid gender or face"
+        );
         let bytes = self.name.as_bytes();
         ensure!(
             (4..=15).contains(&bytes.len())
@@ -204,22 +217,35 @@ impl NewCharacter {
         Ok(body)
     }
 
-    /// Encodes the 80-byte creation request; hair and eyes use defaults.
+    /// Encodes the 80-byte creation request including all cosmetic fields.
     ///
     /// # Errors
     /// Rejects invalid characters.
     pub fn create_request(&self) -> Result<[u8; 80]> {
         self.validate()?;
+        ensure!(
+            Rules::Titanium
+                .appearance(self.race, self.gender)
+                .accepts(self),
+            "invalid Titanium appearance"
+        );
         let mut body = [0; 80];
         let mut put = |offset: usize, value: u32| {
             body[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
         };
         put(0, self.class);
+        put(4, u32::from(self.cosmetics.hair_style));
+        put(8, u32::from(self.cosmetics.beard));
+        put(12, u32::from(self.cosmetics.beard_color));
+        put(28, u32::from(self.cosmetics.hair_color));
+        put(68, u32::from(self.cosmetics.eye_color_1));
+        put(72, u32::from(self.cosmetics.eye_color_2));
         put(16, self.gender);
         put(20, self.race);
         put(24, self.start_zone);
         put(32, self.deity);
-        put(64, u32::from(self.face));
+        put(64, u32::from(appearance::wire_face(self)));
+        put(76, u32::from(self.tutorial));
         for (index, stat) in self.stats.iter().enumerate() {
             put(36 + index * 4, *stat);
         }
@@ -254,12 +280,22 @@ impl NewCharacter {
     /// Encodes `EQMac`'s 8452-byte creation request. The client places the
     /// character itself; this one asks for the start zone's safe point,
     /// which TAKP's zones use for a position of -1 on every axis, and leaves
-    /// the face, hair and bind points at their defaults.
+    /// the bind points at their defaults.
     ///
     /// # Errors
     /// Rejects invalid characters.
     pub fn eqmac_create_request(&self) -> Result<Vec<u8>> {
         self.validate_eqmac()?;
+        ensure!(
+            !self.tutorial,
+            "this client generation has no tutorial start"
+        );
+        ensure!(
+            Rules::EqMac
+                .appearance(self.race, self.gender)
+                .accepts(self),
+            "invalid EQMac appearance"
+        );
         let mut body = vec![0; EQMAC_CREATE_SIZE];
         let mut put = |offset: usize, bytes: &[u8]| {
             body[offset..offset + bytes.len()].copy_from_slice(bytes);
@@ -271,7 +307,13 @@ impl NewCharacter {
         put(140, &u16::try_from(self.class)?.to_le_bytes());
         put(144, &[1]);
         put(174, &[self.face]);
-        put(5428, &[self.face]);
+        put(5422, &[self.cosmetics.hair_color]);
+        put(5423, &[self.cosmetics.beard_color]);
+        put(5424, &[self.cosmetics.eye_color_1]);
+        put(5425, &[self.cosmetics.eye_color_2]);
+        put(5426, &[self.cosmetics.hair_style]);
+        put(5427, &[self.cosmetics.beard]);
+        put(5428, &[appearance::wire_face(self)]);
         // The record keeps STR, STA, CHA, DEX, INT, AGI and WIS in that
         // order; this one's stats run STR, STA, AGI, DEX, WIS, INT, CHA.
         for (offset, stat) in [
