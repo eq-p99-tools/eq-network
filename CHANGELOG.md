@@ -7,6 +7,9 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- Preserve P99 and Quarm character-selection appearance instead of stripping
+  it; Quarm also retains the supplied level and zone. P99 is capture-checked,
+  Quarm source-checked; public visual validation remains outstanding.
 - Decode Quarm's eight-byte stamina update alongside TAKP's five-byte form,
   preserving the shared food/water counts and rejecting other lengths.
 

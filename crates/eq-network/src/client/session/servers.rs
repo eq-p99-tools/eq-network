@@ -812,6 +812,12 @@ impl ServerType for Project1999 {
         Some(&creation::Classic)
     }
 
+    /// Recorded Titanium lists agree with the following profiles and own
+    /// spawns, including worn materials and tints. See the parity evidence.
+    fn character_preview(&self) -> bool {
+        true
+    }
+
     fn casting(&self, _setup: &Setup<'_>) -> Provided {
         offer(shared::casting())
     }
@@ -1124,6 +1130,13 @@ impl ServerType for Quarm {
     // the same EQMac bodies and replies as TAKP. Source-derived; not a live test.
     fn creation(&self) -> Option<&'static dyn Creation> {
         Some(&creation::EqMac)
+    }
+
+    /// Quarm's `GetCharSelectInfo` fills the shared 1,620-byte character
+    /// list, including level, zone and equipment. Source-derived; no live
+    /// preview certification is implied (see `docs/public-server-gaps.md`).
+    fn character_preview(&self) -> bool {
+        true
     }
 
     fn wire(&self) -> &'static dyn Wire {
@@ -1544,25 +1557,91 @@ mod tests {
         let listed = |protocol| server_type(protocol).character_preview();
         assert!(listed(ServerProtocol::EqEmu));
         assert!(listed(ServerProtocol::Takp));
-        assert!(!listed(ServerProtocol::Project1999));
-        assert!(!listed(ServerProtocol::Quarm));
+        assert!(listed(ServerProtocol::Project1999));
+        assert!(listed(ServerProtocol::Quarm));
+        assert!(!Empty.character_preview());
         let mut body = vec![0; 1620];
         body[..7].copy_from_slice(b"Example");
         body[640] = 30;
         body[660..662].copy_from_slice(&330u16.to_le_bytes());
-        for (protocol, kept) in [(ServerProtocol::Takp, true), (ServerProtocol::Quarm, false)] {
+        for protocol in [ServerProtocol::Takp, ServerProtocol::Quarm] {
             let entries = super::super::world::character_list(
                 server_type(protocol),
                 GameDialect::EqMac,
                 &body,
             )
             .unwrap();
-            assert_eq!(entries[0].level.is_some(), kept, "{protocol:?}");
+            assert_eq!(entries[0].level, Some(30), "{protocol:?}");
             assert_eq!(
                 entries[0].look.map(|look| look.race),
-                kept.then_some(330),
+                Some(330),
                 "{protocol:?}"
             );
+        }
+    }
+
+    #[test]
+    fn public_previews_keep_equipment_and_sparse_slots_without_relaxing_validation() {
+        // Independent wire offsets: Titanium's name/race arrays and Quarm's
+        // common CharacterSelect_Struct. Only synthetic names and values.
+        for (protocol, dialect, size, name, level, zone, race, width, gear, tint, primary) in [
+            (
+                ServerProtocol::Project1999,
+                GameDialect::Titanium,
+                1704,
+                1024,
+                1694,
+                964,
+                0,
+                4,
+                420,
+                40,
+                912,
+            ),
+            (
+                ServerProtocol::Quarm,
+                GameDialect::EqMac,
+                1620,
+                0,
+                640,
+                680,
+                660,
+                2,
+                740,
+                1100,
+                1480,
+            ),
+        ] {
+            let mut body = vec![0; size];
+            let slot = 3;
+            body[name + slot * 64..name + slot * 64 + 7].copy_from_slice(b"Example");
+            body[level + slot] = 17;
+            body[zone + slot * 4..zone + slot * 4 + 4].copy_from_slice(&22u32.to_le_bytes());
+            body[race + slot * width..race + (slot + 1) * width]
+                .copy_from_slice(&128u32.to_le_bytes()[..width]);
+            body[gear + (slot * 9 + 1) * 4..gear + (slot * 9 + 2) * 4]
+                .copy_from_slice(&2u32.to_le_bytes());
+            body[tint + (slot * 9 + 1) * 4..tint + (slot * 9 + 2) * 4]
+                .copy_from_slice(&[0x10, 0x20, 0xc0, 0xff]);
+            body[primary + slot * 4..primary + (slot + 1) * 4]
+                .copy_from_slice(&240u32.to_le_bytes());
+            let read = |body: &[u8]| {
+                super::super::world::character_list(server_type(protocol), dialect, body)
+            };
+            let entries = read(&body).unwrap();
+            assert_eq!(entries.len(), 1);
+            assert_eq!(
+                (entries[0].slot, entries[0].level, entries[0].zone_id),
+                (3, Some(17), Some(22))
+            );
+            let look = entries[0].look.unwrap();
+            assert_eq!(look.race, 128);
+            assert_eq!(look.appearance.materials[1], 2);
+            assert_eq!(look.appearance.materials[7], 240);
+            assert_eq!(look.appearance.tints[1], Some([0xc0, 0x20, 0x10]));
+            assert!(read(&body[..size - 1]).is_err());
+            body[name..name + 7].copy_from_slice(b"example");
+            assert!(read(&body).is_err(), "duplicate names remain invalid");
         }
     }
 

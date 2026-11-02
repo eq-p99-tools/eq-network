@@ -33,6 +33,10 @@ which decides. A front end goes by the capabilities its own session reports, fro
 the revision of this library its lockfile resolves. [API and integration
 contracts](API-CONTRACT.md) says how features, commands and their answers behave.
 
+P99 and Quarm character lists retain appearance for selection previews. The
+[public-server gap report](docs/public-server-gaps.md) separates implemented,
+disabled, unverified and server-restricted features, with the evidence for each.
+
 ## Crates
 
 | Crate | Responsibility |
