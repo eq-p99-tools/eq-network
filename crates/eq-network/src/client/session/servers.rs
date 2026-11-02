@@ -193,6 +193,22 @@ pub(super) trait ServerType: Sync {
         false
     }
 
+    /// Whether the session keeps the zone's anti-cheat window alive with
+    /// the client's own movement-history keepalive
+    /// ([`eq_network_game::movement`]'s `HISTORY_OPCODE`, empty body — the
+    /// only form the shared program was read sending, from its command
+    /// dispatcher at `titanium/eqgame.exe 0x41f4a0`): a player the server
+    /// sees moving while the client stays silent reads as ghosted, and
+    /// that is what the GM-facing `POSSIBLE_HACK` log fills with. The
+    /// send is the program's generation behavior — the 2005 exe never
+    /// varies it by server — but the listing obeys the rule like
+    /// everything else: false until the server type's side has been read.
+    ///
+    /// [`eq_network_game::movement`]: eq_network_game::movement::history
+    fn sends_movement_history(&self) -> bool {
+        false
+    }
+
     /// Runs the character's stay in a zone: the shared zone session, with
     /// the features this server type provides.
     ///
@@ -570,9 +586,11 @@ mod shared {
     }
 
     /// Moving, with or without the falls the server takes, and jumps where
-    /// it takes falls and the generation's notice of a jump is known.
-    pub(super) fn motion(falls: bool, jumps: bool) -> Box<dyn Feature> {
-        Box::new(Motion::new(falls, jumps))
+    /// it takes falls and the generation's notice of a jump is known;
+    /// `history` is the server type's word on whether the zone wants the
+    /// client's own movement claims (see [`ServerType::sends_movement_history`]).
+    pub(super) fn motion(falls: bool, jumps: bool, history: bool) -> Box<dyn Feature> {
+        Box::new(Motion::new(falls, jumps, history))
     }
 
     pub(super) fn character() -> Box<dyn Feature> {
@@ -808,6 +826,18 @@ impl ServerType for Project1999 {
         true
     }
 
+    /// The claiming side is the shared program — the 2005 exe reports its
+    /// own movements to any Titanium zone, P99 included; the server side
+    /// was read from the lineage this fork descends from (handler at
+    /// `zone/client_packet.cpp:204`, window at `zone/cheat_manager.cpp:334`
+    /// and `:233-237`) but not yet watched in P99's own zone log. The live
+    /// check this listing owes: move around a Green zone and find the
+    /// arrivals (or the telling absence of `[MQGhost]` complaints) server
+    /// side.
+    fn sends_movement_history(&self) -> bool {
+        true
+    }
+
     fn creation(&self) -> Option<&'static dyn Creation> {
         Some(&creation::Titanium)
     }
@@ -837,7 +867,7 @@ impl ServerType for Project1999 {
     /// read). Jumps stay off until measured there (recording checklist
     /// item 1.3).
     fn motion(&self, _setup: &Setup<'_>) -> Provided {
-        offer(shared::motion(true, false))
+        offer(shared::motion(true, false, self.sends_movement_history()))
     }
 
     /// Falls only (6.332).
@@ -961,8 +991,19 @@ impl ServerType for EqEmu {
         offer(shared::inventory(setup))
     }
 
+    /// The stock server's zone is exactly the source read here: it
+    /// registers the handler (`zone/client_packet.cpp:204`) and re-arms
+    /// its ghost window from every arrival (`zone/cheat_manager.cpp:334`,
+    /// judged at `:233-237`); the client that answers is the shared
+    /// program. Read from source, not yet watched as an arriving log
+    /// line — the local-server check is a moving player producing no
+    /// `POSSIBLE_HACK` ghost complaints.
+    fn sends_movement_history(&self) -> bool {
+        true
+    }
+
     fn motion(&self, _setup: &Setup<'_>) -> Provided {
-        offer(shared::motion(true, true))
+        offer(shared::motion(true, true, self.sends_movement_history()))
     }
 
     fn character(&self, _setup: &Setup<'_>) -> Provided {
@@ -1233,7 +1274,7 @@ impl ServerType for Takp {
     /// 6.161) and reports as damage ([`Self::hazards`]), and jumps by the
     /// program's notice (TAKP sitting 2).
     fn motion(&self, _setup: &Setup<'_>) -> Provided {
-        offer(shared::motion(true, true))
+        offer(shared::motion(true, true, self.sends_movement_history()))
     }
 
     /// Falls, which TAKP takes from the client as the program reports them
@@ -1647,6 +1688,31 @@ mod tests {
             assert!(
                 !server_type(protocol).sends_system_info(),
                 "{protocol:?} lists a send nobody has watched"
+            );
+        }
+    }
+
+    #[test]
+    fn only_titanium_servers_have_been_read_taking_the_movement_history() {
+        // The sending program is the shared Titanium exe — the opcode
+        // appears once in it, as an empty send from the command dispatcher
+        // at 0x41f4a0 — and both Titanium servers register the handler
+        // that re-arms the ghost window from it (`client_packet.cpp:204`,
+        // `cheat_manager.cpp:334`). The EQMac program never mentions the
+        // value (there it is only ASCII in strings) and the EQMac zone has
+        // no opcode entry at all, so those types keep the silent default
+        // forever unless a program read says otherwise. The log lines
+        // themselves remain owed: one watched arrival per server type.
+        for protocol in [ServerProtocol::Project1999, ServerProtocol::EqEmu] {
+            assert!(
+                server_type(protocol).sends_movement_history(),
+                "{protocol:?} should take the keepalive its zone registers"
+            );
+        }
+        for protocol in [ServerProtocol::Quarm, ServerProtocol::Takp] {
+            assert!(
+                !server_type(protocol).sends_movement_history(),
+                "{protocol:?} lists a send its program never makes"
             );
         }
     }
