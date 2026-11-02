@@ -78,6 +78,22 @@ existing motion-guard tests cover rise limits and correction resets. Quarm tests
 exercise sit/camp/logout/reply and cancellation through its actual feature set,
 without a movement grant. Public-server validation remains open for all three.
 
+Quarm now also offers the existing EQMac ground movement, turn, jump, fall,
+environmental damage and zone-transfer features. A read-only inventory feature
+retains authoritative inventory/coin state for carried weight without granting
+item moves, merchant actions or automatic consumption. Assembly tests exercise
+the Mac position/jump wire, correction, and bind requests after server-reported
+death. This does not close swimming, boats, pad teleport detection or the
+client-reported bleed-out gap.
+
+The source check at `c2cd265` covers `Handle_OP_ClientUpdate` (15/16-byte input),
+`Handle_OP_Jump` (fatigue), `Handle_OP_Damage` (fall damage), and `zone/zoning.cpp`
+(zone change and bind). `SpawnPositionUpdate_Struct` is the same 15-byte packed
+layout already used for TAKP. `ENCODE(OP_CharInventory)` uses tagged 360-byte
+Mac items. Movement timing and physics are inherited from the existing client
+analysis cited in `movement/gate.rs` and `movement/speeds.rs`; public Quarm
+compatibility still needs live evidence.
+
 `Capability::Posture` now governs `SetPosture`; `Moving` governs locomotion.
 Consumers must update stance controls rather than advertise walking to enable
 camping. All four server policies offer posture.
@@ -110,7 +126,7 @@ separately so a new capability is not mistaken for live verification.
 | Inventory / bank / coin moves | Offered | Disabled; EQMac codecs/reducers exist | Quarm needs its own policy/evidence. Item dropping/destruction and shared-bank actions lack desktop paths; server applicability must be checked separately. |
 | Merchants / trade / give | Offered, some scenarios unverified | Disabled | Quotes offered by merchants are a separate missing policy on P99. Two-player trade needs distinct coverage from NPC giving. |
 | Casting / spellbook / click effects | Offered; book moving enabled | Disabled | Quarm port of casting and authoritative bar recovery; P99 spell-action landing flag remains unset. Public scenario coverage for resisted casts, interruption, clicks, scribing and memorization. |
-| Cooldowns / buffs / resource bars | Partial | Partial | Linked reuse groups, Quarm saved gem cooldowns, complete effective resource denominators, buff replacement ambiguity and item-effect accounting. Unknown values must remain distinguishable from zero. |
+| Cooldowns / buffs / resource bars | Partial | Partial | Linked reuse groups, complete effective resource denominators, buff replacement ambiguity and item-effect accounting. Quarm saved gem cooldowns are already decoded from profile offset 4972 and covered by synthetic tests; public behavior still needs verification. Unknown values must remain distinguishable from zero. |
 | Target / consider / combat | Offered | Disabled | Quarm codecs exist in TAKP paths, but policy and live combat/death coverage are missing. |
 | Abilities | Most offered; fishing and bind wound excluded | Disabled | Evidence for each unavailable action, including resource/reuse and failure responses. |
 | Loot / corpses / consent | Offered | Disabled | Quarm loot, corpse commands, own-corpse recovery and NPC loot flow. |
@@ -167,9 +183,10 @@ raids” classification is justified.
 - Empty admission messages and known ignored/no-op packets are tracked
   separately; they must not inflate a count of wholly missing gameplay.
 
-## Deferred live verification
+## Live verification queue
 
-No live tests are part of this batch. When explicitly resumed, record exact
+Live checks are now authorized, but have not yet been performed for these
+changes. Record exact
 client/library revisions and test one scenario at a time: selection appearance;
 creation/rejection/entry; stationary, forward/back/strafe, jump/land; boundary,
 teleport, refusal and death/bind; then camp/reconnect. For Quarm, establish safe

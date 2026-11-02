@@ -1143,6 +1143,35 @@ impl ServerType for EqEmu {
 struct Quarm;
 
 impl ServerType for Quarm {
+    /// Retains the authoritative load for movement without granting item,
+    /// coin or merchant actions. Quarm's Mac inventory encoder uses the
+    /// shared 360-byte item records and tagged inventory list.
+    fn inventory(&self, setup: &Setup<'_>) -> Provided {
+        offer(shared::inventory_under(
+            MoveRules::Takp,
+            Quotes::of(GameDialect::EqMac),
+            Allowances::default(),
+            setup,
+        ))
+    }
+
+    /// Quarm reads the same `EQMac` position/jump packets as TAKP. Speeds,
+    /// collision and airborne rules remain the generation's existing rules.
+    fn motion(&self, _setup: &Setup<'_>) -> Provided {
+        offer(shared::motion(true, true))
+    }
+
+    /// Quarm's damage handler takes falling damage after the `EQMac` notice.
+    fn hazards(&self, _setup: &Setup<'_>) -> Provided {
+        offer(shared::hazards(&TAKP_HAZARDS, true))
+    }
+
+    /// Client-requested boundaries and bind entry use Quarm's `EQMac` world
+    /// re-entry, with the same offer/refusal/correction lifecycle as TAKP.
+    fn transfers(&self, setup: &Setup<'_>) -> Provided {
+        offer(shared::transfers(setup, Home::Asked))
+    }
+
     /// Quarm handles camp and logout using the shared `EQMac` packets.
     /// The timer/cancellation flow is tested offline; public validation is pending.
     fn camp(&self, _setup: &Setup<'_>) -> Provided {
@@ -1449,20 +1478,22 @@ mod tests {
 
     #[test]
     fn eqmac_servers_provide_the_features_built_for_them() {
-        // Quarm and TAKP speak EQMac: they see the zone's spawns, keep the
-        // player's record, talk, change stance and camp. TAKP also casts and keeps the spellbook,
-        // moves, falls and jumps, zones, moves items, keeps the time of
-        // day, lists the player as anonymous or roleplaying, answers
-        // translocates and takes the client's reports of a fall and a
-        // bleed-out; Quarm will once each is checked there.
+        // Quarm shares TAKP's movement, falls, jumps, zone handoff and
+        // posture/camp lifecycle. Its inventory observer grants no item
+        // actions; the remaining features still await their own evidence.
         let setup = Setup::new("Tester", AutoEat::default());
         let quarm = server_type(ServerProtocol::Quarm);
-        assert_eq!(quarm.features(&setup).len(), 5);
+        assert_eq!(quarm.features(&setup).len(), 9);
         assert_eq!(
             offers(quarm),
             [
+                Capability::Moving,
+                Capability::Falling,
                 Capability::Talking,
                 Capability::Camping,
+                Capability::Zoning,
+                Capability::EnvironmentalDamage,
+                Capability::Jumping,
                 Capability::Posture
             ]
         );

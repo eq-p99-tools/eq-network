@@ -1469,15 +1469,18 @@ mod tests {
             )
             .capabilities()
         };
-        // EQMac servers talk, change stance and camp; TAKP also casts and keeps the spellbook,
-        // moves, falls and moves items, follows zone changes and takes the
-        // client's reports of a fall and a bleed-out, and TAKP jumps, lists
-        // anonymity and answers translocates, which Quarm does not yet.
+        // Both EQMac policies move, jump, fall, zone and camp. TAKP also
+        // offers the item, spell and social actions checked there.
         assert_eq!(
             features(crate::client::ServerProtocol::Quarm),
             [
+                Capability::Moving,
+                Capability::Falling,
                 Capability::Talking,
                 Capability::Camping,
+                Capability::Zoning,
+                Capability::EnvironmentalDamage,
+                Capability::Jumping,
                 Capability::Posture
             ]
         );
@@ -1514,6 +1517,11 @@ mod tests {
         let server = servers::server_type(crate::client::ServerProtocol::Quarm);
         let mut features =
             Features::new(server, "Tester", eq_network_game::food::AutoEat::default());
+        // Keep proving that posture and camping do not depend on movement,
+        // even though the full Quarm policy now provides movement too.
+        features
+            .provided
+            .retain(|feature| !feature.capabilities().contains(&Capability::Moving));
         assert!(!features.capabilities().contains(&Capability::Moving));
         let mut world = World::new(5);
         world.own_spawn = Some(7);
@@ -1561,7 +1569,7 @@ mod tests {
     }
 
     #[test]
-    fn quarm_standing_cancels_camp_without_enabling_movement() {
+    fn quarm_standing_cancels_camp() {
         use super::super::feature::testing;
         use eq_network_game::{
             command::Posture,
@@ -1576,6 +1584,7 @@ mod tests {
         world.player.admit(testing::player(7));
         world.admitted = Some(Instant::now());
         let output = testing::run_on(server.wire(), |out| -> Result<()> {
+            features.admitted(&mut world, out)?;
             features.handle(
                 &ClientCommand::Camp {
                     session_id: 5,
@@ -1611,3 +1620,6 @@ mod tests {
 
 #[cfg(test)]
 mod eqmac_tests;
+
+#[cfg(test)]
+mod quarm_tests;

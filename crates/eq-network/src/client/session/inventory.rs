@@ -301,10 +301,16 @@ fn change(update: InventoryUpdate, world: &mut World, out: &mut Out<'_, '_>) -> 
         .send(ClientEvent::World(WorldEvent::Inventory(update)))
 }
 
-/// What a server type lets the player do with their belongings beside
-/// moving items, each as checked on that kind of server.
+/// What a server type lets the player do with their belongings. With no
+/// allowances, the feature only follows the server's inventory and coins.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "Independent server permissions, not mutually exclusive states"
+)]
 pub(super) struct Allowances {
+    /// Moving items. An observer still keeps authoritative inventory state.
+    pub(super) items: bool,
     /// Moving coins between the purse, the cursor, the bank and a trade.
     pub(super) coins: bool,
     /// Buying and selling at merchants.
@@ -314,8 +320,9 @@ pub(super) struct Allowances {
 }
 
 impl Allowances {
-    /// Coins, merchants and meals.
+    /// Items, coins, merchants and meals.
     pub(super) const ALL: Self = Self {
+        items: true,
         coins: true,
         merchants: true,
         meals: true,
@@ -324,7 +331,7 @@ impl Allowances {
 
 /// The player's belongings and the changes to them in flight.
 pub(super) struct Belongings {
-    /// What the player may do with them beside moving items.
+    /// What the player may do with them.
     allows: Allowances,
     /// The server type's rules for item moves.
     rules: MoveRules,
@@ -548,7 +555,10 @@ impl Belongings {
 impl Feature for Belongings {
     fn capabilities(&self) -> Vec<crate::world::Capability> {
         use crate::world::Capability;
-        let mut offered = vec![Capability::Inventory];
+        let mut offered = Vec::new();
+        if self.allows.items {
+            offered.push(Capability::Inventory);
+        }
         if self.allows.merchants {
             offered.push(Capability::Trading);
         }
@@ -616,7 +626,7 @@ impl Feature for Belongings {
 
     fn owns(&self, command: &ClientCommand) -> bool {
         match command {
-            ClientCommand::MoveInventory(_) => true,
+            ClientCommand::MoveInventory(_) => self.allows.items,
             ClientCommand::MoveCoins { .. } => self.allows.coins,
             ClientCommand::Shop { .. } | ClientCommand::Buy { .. } | ClientCommand::Sell { .. } => {
                 self.allows.merchants
@@ -632,6 +642,9 @@ impl Feature for Belongings {
         world: &mut World,
         out: &mut Out<'_, '_>,
     ) -> Result<()> {
+        if !self.owns(command) {
+            return Ok(());
+        }
         match command {
             ClientCommand::MoveInventory(request) => self.move_item(request, world, out),
             ClientCommand::MoveCoins { .. } => Self::move_coins(command, world, out),
@@ -779,6 +792,100 @@ mod tests {
         merchant::MerchantUpdate,
     };
     use testing::item;
+
+    #[test]
+    fn an_observer_keeps_inventory_and_coins_without_sending_actions() {
+        use eq_network_game::{command::EncodedCommand, food::Nourishment, world::Capability};
+        let (mut belongings, mut world) = fed(6000, 6000);
+        belongings.allows = Allowances::default();
+        assert_eq!(belongings.capabilities(), Vec::<Capability>::new());
+        let coins = Coins {
+            copper: 123,
+            ..Coins::default()
+        };
+        belongings
+            .admit(&Message::Event(WorldEvent::Coins(coins)), &mut world)
+            .unwrap();
+        let output = testing::run_on(&super::super::wire::EqMac, |out| -> Result<()> {
+            belongings.admitted(&mut world, out)?;
+            belongings.observe(
+                &Message::Event(WorldEvent::Nourishment(Nourishment { food: 0, water: 0 })),
+                &mut world,
+                out,
+            )?;
+            let consume = ClientCommand::Consume {
+                session_id: 5,
+                slot: InventorySlot(22),
+                created: Instant::now(),
+            };
+            assert!(!belongings.owns(&consume));
+            belongings.handle(&consume, &mut world, out)?;
+            let move_item = ClientCommand::MoveInventory(InventoryMove {
+                session_id: 5,
+                revision: world.inventory.revision(),
+                from: InventorySlot(22),
+                to: InventorySlot::CURSOR,
+                quantity: MoveQuantity::Whole,
+                created: Instant::now(),
+            });
+            assert!(!belongings.owns(&move_item));
+            belongings.handle(&move_item, &mut world, out)?;
+            belongings.tick(Instant::now() + Duration::from_secs(60), &mut world, out)
+        });
+        output.result.unwrap();
+        assert_eq!(output.sent, Vec::<EncodedCommand>::new());
+        assert_eq!(output.unreliable, Vec::<EncodedCommand>::new());
+        assert!(world.inventory.received());
+        assert!(!world.inventory.stale());
+        assert_eq!(world.inventory.items().len(), 4);
+        assert_eq!(world.coins.purse, Some(coins));
+        assert!(output.events.iter().any(|event| matches!(event,
+            ClientEvent::World(WorldEvent::Inventory(InventoryUpdate::Snapshot(items))) if items.len() == 4)));
+        assert!(output.events.iter().any(|event| matches!(event,
+            ClientEvent::World(WorldEvent::Coins(reported)) if *reported == coins)));
+        let output = testing::run(|out| -> Result<()> {
+            belongings.observe(
+                &Message::Event(WorldEvent::Inventory(InventoryUpdate::Remove(
+                    InventorySlot(22),
+                ))),
+                &mut world,
+                out,
+            )?;
+            assert_eq!(world.inventory.items().len(), 3);
+            belongings.observe(
+                &Message::Event(WorldEvent::Inventory(InventoryUpdate::Invalidated)),
+                &mut world,
+                out,
+            )
+        });
+        output.result.unwrap();
+        assert!(world.inventory.stale());
+        assert_eq!(output.sent, Vec::<EncodedCommand>::new());
+    }
+
+    #[test]
+    fn an_observer_distinguishes_an_empty_snapshot_from_no_inventory() {
+        let mut belongings = Belongings::under(
+            MoveRules::Takp,
+            Quotes::of(eq_network_game::GameDialect::EqMac),
+            Allowances::default(),
+            eq_network_game::food::AutoEat::default(),
+        );
+        let mut world = World::new(5);
+        assert!(!world.inventory.received());
+        belongings
+            .admit(
+                &Message::Event(WorldEvent::Inventory(InventoryUpdate::Snapshot(vec![]))),
+                &mut world,
+            )
+            .unwrap();
+        let output = testing::run(|out| belongings.admitted(&mut world, out));
+        output.result.unwrap();
+        assert!(world.inventory.received());
+        assert!(!world.inventory.stale());
+        assert!(output.events.iter().any(|event| matches!(event,
+            ClientEvent::World(WorldEvent::Inventory(InventoryUpdate::Snapshot(items))) if items.is_empty())));
+    }
 
     #[test]
     fn a_mac_era_merchant_opens_only_within_reach() {
