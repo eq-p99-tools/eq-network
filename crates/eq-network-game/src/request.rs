@@ -311,15 +311,6 @@ pub enum Request {
     },
     /// Where the player is: a position sample.
     Position(PositionPacket),
-    /// Where the client says it went: the empty movement-history keepalive.
-    /// The shape the shared Titanium program was read sending (its command
-    /// dispatcher sends [`crate::movement::HISTORY_OPCODE`] with a null,
-    /// zero-length body) and the only packet that re-arms the zone's ghost
-    /// window (the server's `zone/cheat_manager.cpp:334`, before its size
-    /// check). Session telemetry beside the position samples, never a
-    /// player command; an `EQMac` zone registers no handler for it, so the
-    /// `EQMac` dispatcher leaves it refused.
-    MovementHistory,
     /// The player jumped.
     Jump,
     /// The world hurt the player: the damage the client worked out.
@@ -458,7 +449,6 @@ pub fn titanium(request: &Request, sender: Sender<'_>) -> Result<EncodedCommand>
             by_hand,
         } => food::consume(*slot, *meal, *by_hand),
         Request::Position(sample) => sample.packet()?,
-        Request::MovementHistory => movement::history(&[]),
         Request::Jump => movement::titanium_jump(),
         Request::EnvironmentalDamage { hazard, amount } => {
             hazards::titanium_damage(sender.spawn(), *hazard, *amount)?
@@ -698,10 +688,6 @@ mod tests {
         assert_eq!(
             titanium(&Request::Posture(Posture::Sitting), PLAYER).unwrap(),
             command::titanium_posture(7, Posture::Sitting).unwrap()
-        );
-        assert_eq!(
-            titanium(&Request::MovementHistory, PLAYER).unwrap(),
-            crate::movement::history(&[])
         );
         assert_eq!(
             titanium(

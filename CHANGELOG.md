@@ -7,26 +7,10 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
-- `Request::MovementHistory` and the `movement` history codec: the client's
-  empty `0x6177` keepalive (`OP_FloatListThing`), the one packet that re-arms
-  the zone's 70-second ghost window (`zone/cheat_manager.cpp:334`, judged at
-  `:233-237`; handler registered at `zone/client_packet.cpp:204`). Confirmed
-  from both ends: the shared Titanium program sends it — with no body — from
-  a single command dispatcher site (`titanium/eqgame.exe 0x41f4a0`), and the
-  server re-arms before it ever checks the size, so the empty packet fully
-  satisfies it; a mover whose window ran out is what earns the GM-facing
-  `[MQGhost]` line in `POSSIBLE_HACK`. The session sends it unreliably,
-  paced while the position keeps changing (`HISTORY_KEEPALIVE`, inferred
-  pacing — the official trigger is a command, not a clock) and leading the
-  movement updates within the tick, so a resting player's first step
-  re-arms before the server sees it. Offered for `Project1999` and `EqEmu`
-  via `sends_movement_history` (both server sides read from source; one
-  watched arrival per type still owed); never for the `EQMac` types — its
-  program never mentions the opcode and its zone cannot even map it. The
-  17-byte entries the server can parse (`Y`, `X`, `Z`, cause, clock, packed
-  — `eq_packet_structs.h:6362`) exist as `HistoryEntry` with tests, kept
-  byte-exact for a Windows capture comparison rather than sent: the 2005
-  program was never seen to fill them.
+- `movement::history::Record` decodes Titanium's 17-byte movement-history
+  records, preserving separate clock/sequence fields and unknown causes.
+  Protocol notes document the verified opcode and remaining capture gaps;
+  sessions do not send speculative history keepalives.
 
 - `zones::ZoneDescription::classic_model_scale_flag`: the word at offset 592
   of Titanium's `OP_NewZone`, as it came. While it is not zero the Titanium

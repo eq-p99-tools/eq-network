@@ -11,7 +11,7 @@ use eq_network_game::{
     message::Message,
     movement::{
         MotionCalibration, MotionSession, MovementRequest, PositionPacket, SpeedState,
-        HISTORY_KEEPALIVE, STATIONARY_HEARTBEAT,
+        STATIONARY_HEARTBEAT,
     },
     request::Request,
     world::{PlayerState, Position, WorldEvent},
@@ -29,14 +29,6 @@ pub(super) struct Body {
     stationary: PositionPacket,
     /// When the stationary heartbeat last went out.
     last_sent: Instant,
-    /// When the empty movement-history keepalive last went out; in the past
-    /// at first, so a player who can move earns the first at once.
-    last_history: Instant,
-    /// Where the player stood when the keepalive last went out: unchanged
-    /// means the zone cannot be seeing a mover either, and the program's
-    /// own silence (its send is a command dispatch, not a timer) is matched
-    /// by staying quiet too.
-    last_history_from: Option<Position>,
 }
 
 impl Default for Body {
@@ -55,11 +47,6 @@ impl Default for Body {
             last_sent: Instant::now()
                 .checked_sub(STATIONARY_HEARTBEAT)
                 .unwrap_or_else(Instant::now),
-            // Likewise the keepalive: the first move earns it at once.
-            last_history: Instant::now()
-                .checked_sub(HISTORY_KEEPALIVE)
-                .unwrap_or_else(Instant::now),
-            last_history_from: None,
         }
     }
 }
@@ -130,14 +117,8 @@ impl Body {
     }
 
     /// Repeats the player's position as the server expects: the movement
-    /// session's own updates, or the stationary heartbeat without one. The
-    /// anti-cheat keepalive (where the server type asks for it) leads, so
-    /// on the tick a resting player starts moving the window is re-armed
-    /// before the server is allowed to see the position change.
-    fn heartbeat(&mut self, now: Instant, out: &mut Out<'_, '_>, history: bool) -> Result<()> {
-        if history {
-            self.report_history(now, out)?;
-        }
+    /// session's own updates, or the stationary heartbeat without one.
+    fn heartbeat(&mut self, now: Instant, out: &mut Out<'_, '_>) -> Result<()> {
         if let Some(motion) = self.motion.as_mut() {
             motion.tick_sample(now, |sample| {
                 out.request_unreliable(&Request::Position(*sample))
@@ -150,36 +131,6 @@ impl Body {
         out.request_unreliable(&Request::Position(self.stationary))?;
         self.stationary.sequence = self.stationary.sequence.wrapping_add(1);
         self.last_sent = now;
-        Ok(())
-    }
-
-    /// The zone's cheat manager re-arms a 70-second window on every arrival
-    /// of the client's movement history, and blames a mover whose window
-    /// has run out (server source: `zone/cheat_manager.cpp:334` for the
-    /// re-arm, `:233-237` for the blame; handler registered at
-    /// `zone/client_packet.cpp:204`). The re-arm happens before the server
-    /// checks the body's size, and the shared program's own send — read in
-    /// its command dispatcher, `titanium/eqgame.exe 0x41f4a0` — is exactly
-    /// this packet with no body at all; the entry array the server can
-    /// parse is something that client never fills (see the codec module's
-    /// note on [`eq_network_game::movement::HistoryEntry`]). So: an empty,
-    /// unreliable send, paced only while the position keeps changing —
-    /// closer to the server's own condition for blame than to any burst,
-    /// and silent when a standing player would draw none. The interval is
-    /// inferred (the official trigger is a command, not a clock); a Windows
-    /// capture comparison is what would move it, and it is one named
-    /// constant for exactly that reason.
-    fn report_history(&mut self, now: Instant, out: &mut Out<'_, '_>) -> Result<()> {
-        if now.saturating_duration_since(self.last_history) < HISTORY_KEEPALIVE {
-            return Ok(());
-        }
-        let here = self.motion.as_ref().map(MotionSession::position);
-        if here.is_none() || here == self.last_history_from {
-            return Ok(());
-        }
-        out.request_unreliable(&Request::MovementHistory)?;
-        self.last_history = now;
-        self.last_history_from = here;
         Ok(())
     }
 }
@@ -219,7 +170,6 @@ struct SpeedInputs {
 }
 
 /// The player's movement and stance.
-#[allow(clippy::struct_excessive_bools)] // Falls, jumps, sneaking and the history keepalive are distinct per-server-type policies.
 pub(super) struct Motion {
     /// Whether the server lets the player fall.
     falls: bool,
@@ -237,10 +187,6 @@ pub(super) struct Motion {
     /// appearance update to the player, or its end of their hiding and
     /// sneaking.
     sneaking: bool,
-    /// Whether this server type wants the client's empty movement-history
-    /// keepalive while the player moves (the server type's
-    /// `sends_movement_history`, carried in at construction).
-    history: bool,
     /// The player's hit points and their maximum, as the server last
     /// reported them. `EQMac`'s servers leave out what items add from the
     /// current alone, so the player reads as more hurt than they are: the
@@ -249,14 +195,13 @@ pub(super) struct Motion {
 }
 
 impl Motion {
-    pub(super) const fn new(falls: bool, jumps: bool, history: bool) -> Self {
+    pub(super) const fn new(falls: bool, jumps: bool) -> Self {
         Self {
             falls,
             jumps: falls && jumps,
             inputs: None,
             encumbered: None,
             sneaking: false,
-            history,
             hit_points: None,
         }
     }
@@ -545,7 +490,7 @@ impl Feature for Motion {
             return Ok(());
         }
         self.grant(world, out)?;
-        world.body.heartbeat(now, out, self.history)
+        world.body.heartbeat(now, out)
     }
 
     /// The server's corrections and its reports of the player's stance, and
@@ -653,7 +598,7 @@ mod tests {
         world.admitted = Some(Instant::now());
         world.body.own(7);
         world.body.place(at(1.0));
-        let mut motion = Motion::new(false, false, false);
+        let mut motion = Motion::new(false, false);
         let now = Instant::now();
         let outcome = testing::run(|out| motion.tick(now, &mut world, out));
         outcome.result.unwrap();
@@ -682,70 +627,6 @@ mod tests {
     }
 
     #[test]
-    fn a_moving_player_earns_the_zones_empty_movement_history() {
-        // The zone's ghost window is re-armed only by this packet; the
-        // program's own form is empty (its dispatcher at 0x41f4a0 is the
-        // only sender in the binary), it goes out unreliable before the
-        // movement it protects, it stays quiet while the position does not
-        // change — the server sees no mover either then — and a server type
-        // that never asked is never bothered.
-        let now = Instant::now();
-        let mut world = World::new(5);
-        world.admitted = Some(now);
-        world.body.own(7);
-        world.body.place(at(1.0));
-        world
-            .body
-            .admit(MotionSession::new(12, 7, at(1.0), now).unwrap());
-        let mut motion = Motion::new(true, true, true);
-        let history = eq_network_game::movement::HISTORY_OPCODE;
-        // A hair past the seeded interval, so "due" cannot hinge on how
-        // long the test took to build the world.
-        let due = now.checked_add(HISTORY_KEEPALIVE).unwrap_or(now);
-        let outcome = testing::run(|out| motion.tick(due, &mut world, out));
-        outcome.result.unwrap();
-        let sent: Vec<_> = outcome
-            .unreliable
-            .iter()
-            .filter(|packet| packet.opcode == history)
-            .collect();
-        assert_eq!(sent.len(), 1, "the first move earns one keepalive");
-        assert_eq!(
-            sent[0].body,
-            [] as [u8; 0],
-            "the program sends it with no entries at all"
-        );
-        let outcome = testing::run(|out| motion.tick(due, &mut world, out));
-        assert!(
-            !outcome.unreliable.iter().any(|p| p.opcode == history),
-            "not due twice at once"
-        );
-        let outcome = testing::run(|out| motion.tick(due + HISTORY_KEEPALIVE, &mut world, out));
-        assert!(
-            !outcome.unreliable.iter().any(|p| p.opcode == history),
-            "an unchanged position is not a mover"
-        );
-        // The session's place changes with the server's correction: after
-        // that, the mover is re-armed within the interval.
-        let mut player = testing::player(7);
-        world.body.correct(&mut player, at(64.0), due).unwrap();
-        let outcome = testing::run(|out| motion.tick(due + 2 * HISTORY_KEEPALIVE, &mut world, out));
-        assert!(
-            outcome.unreliable.iter().any(|p| p.opcode == history),
-            "a mover after the interval must re-arm the window"
-        );
-        // A mover again, but where the server type never asked: the flag,
-        // not the schedule, keeps the peace.
-        world.body.correct(&mut player, at(128.0), due).unwrap();
-        let mut quiet = Motion::new(true, true, false);
-        let outcome = testing::run(|out| quiet.tick(due + 3 * HISTORY_KEEPALIVE, &mut world, out));
-        assert!(
-            !outcome.unreliable.iter().any(|p| p.opcode == history),
-            "a server that never asked hears nothing"
-        );
-    }
-
-    #[test]
     fn a_calibration_made_on_hearing_of_the_admission_is_fresh() {
         let now = Instant::now();
         let mut world = World::new(5);
@@ -765,7 +646,7 @@ mod tests {
             },
             created: now.checked_sub(Duration::from_millis(5)).unwrap(),
         };
-        let mut motion = Motion::new(false, false, false);
+        let mut motion = Motion::new(false, false);
         testing::run(|out| motion.admitted(&mut world, out))
             .result
             .unwrap();
@@ -786,7 +667,7 @@ mod tests {
         world.own_spawn = Some(7);
         world.player.admit(testing::player(7));
         world.admitted = Some(Instant::now());
-        let mut motion = Motion::new(false, false, false);
+        let mut motion = Motion::new(false, false);
         testing::run(|out| motion.admitted(&mut world, out))
             .result
             .unwrap();
@@ -843,7 +724,7 @@ mod tests {
         (player.run_speed, player.walk_speed, player.level) = (0.7, 0.46, 50);
         world.player.admit(player);
         world.admitted = Some(Instant::now());
-        let mut motion = Motion::new(true, true, false);
+        let mut motion = Motion::new(true, true);
         let outcome = testing::run_on(EQMAC, |out| motion.admitted(&mut world, out));
         outcome.result.unwrap();
         assert!(
@@ -995,7 +876,7 @@ mod tests {
         let mut world = World::new(5);
         world.own_spawn = Some(7);
         world.player.admit(testing::player(7));
-        let mut motion = Motion::new(true, false, false);
+        let mut motion = Motion::new(true, false);
         // Before the admission there is no guard to tell.
         let outcome = testing::run(|out| motion.handle(&climb(3.15), &mut world, out));
         outcome.result.unwrap();
@@ -1019,7 +900,7 @@ mod tests {
         (player.run_speed, player.walk_speed, player.level) = (0.7, 0.46, 50);
         world.player.admit(player);
         world.admitted = Some(Instant::now());
-        let mut motion = Motion::new(false, false, false);
+        let mut motion = Motion::new(false, false);
         let outcome = testing::run(|out| motion.admitted(&mut world, out));
         outcome.result.unwrap();
         assert!(
@@ -1051,7 +932,7 @@ mod tests {
         let mut world = World::new(5);
         world.own_spawn = Some(7);
         world.player.admit(testing::player(7));
-        let mut motion = Motion::new(false, false, false);
+        let mut motion = Motion::new(false, false);
         let sit = |spawn_id| ClientCommand::SetPosture {
             session_id: 5,
             spawn_id,
@@ -1086,7 +967,7 @@ mod tests {
         world.own_spawn = Some(7);
         world.player.admit(testing::player(7));
         world.admitted = Some(Instant::now());
-        let mut motion = Motion::new(false, false, false);
+        let mut motion = Motion::new(false, false);
         testing::run(|out| motion.admitted(&mut world, out))
             .result
             .unwrap();

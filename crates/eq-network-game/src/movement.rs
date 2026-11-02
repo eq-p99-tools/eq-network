@@ -2,6 +2,7 @@
 
 mod carry;
 mod gate;
+pub mod history;
 mod session;
 mod speeds;
 pub use carry::{between_reports, carry, Carried, ZBetween};
@@ -115,18 +116,6 @@ pub fn gravity_per_second(gravity: Option<f32>) -> f32 {
 /// sends one about every 1.1 s (median of its recorded stationary updates).
 pub const STATIONARY_HEARTBEAT: Duration = Duration::from_secs(1);
 
-/// How long between the client's empty movement-history keepalives while
-/// the player is moving: the zone re-arms a 70-second window on every
-/// [`HISTORY_OPCODE`] arrival (the server's `zone/cheat_manager.cpp:334`)
-/// and blames a silent player as a ghost only while its own view says
-/// they moved (`MovementCheck`, `:233-237`). Twenty seconds keeps three
-/// chances inside the window. The official client's own trigger is a
-/// command dispatch, not a timer — a periodic empty packet is the closest
-/// shape we can defend without a capture, and the interval is deliberately
-/// one named constant so a Windows capture comparison changes exactly one
-/// line. Inferred.
-pub const HISTORY_KEEPALIVE: Duration = Duration::from_secs(20);
-
 /// The least time between two of the player's own position updates in the
 /// Titanium program: it sends one only after more than 280 ms since the last
 /// (from the program, Titanium sitting 6, T1; checklist 1.6). The program
@@ -142,97 +131,6 @@ pub const JUMP_OPCODE: u16 = 0x0797;
 /// `OP_ClientUpdate` (Titanium): the player's position, sent unreliably since
 /// the next one replaces it.
 pub const POSITION_OPCODE: u16 = 0x14cb;
-
-/// `OP_FloatListThing` (Titanium): the official client's movement-history
-/// keepalive. Confirmed in the client's own decompile: the command
-/// dispatcher (`titanium/eqgame.exe 0x41f4a0`, command code `0x35`) sends it
-/// through the normal game-connection send routine with a null pointer and
-/// zero length — an empty body is the only form the 2005 program emits, and
-/// this packet is the only thing that code path sends. The server side is
-/// equally confirmed from source: the zone registers the handler
-/// (`zone/client_packet.cpp:204`) and re-arms a 70-second window on arrival
-/// (`zone/cheat_manager.cpp:334`) *before* its own size check, so the empty
-/// packet fully satisfies it; when that window expires while the server has
-/// seen the position change, the GM-facing `POSSIBLE_HACK` log fills with
-/// `[MQGhost] … caught not sending the proper packets` (`MovementCheck`,
-/// `:233-237`). The handler also walks an optional run of 17-byte entries —
-/// `Y`, `X`, `Z`, a one-byte cause, a four-byte clock, packed
-/// (`common/eq_packet_structs.h:6362` inside the `pack(1)` region) — of
-/// which only two causes have branches (`ZoneLine` sets the port exemption;
-/// `TeleportA` beside a predecessor arms the absolute-warp log); the shared
-/// program was never seen to fill any of that, so [`HistoryEntry`] exists
-/// for capture comparison rather than for sending. The `EQMac` client has no
-/// part in this: `takp/eqmac.exe` mentions `0x6177` nowhere but as ASCII
-/// inside unrelated strings, and its zone registers no handler (its opcode
-/// list has no entry at all), so the `EQMac` dispatcher rejects the request.
-pub const HISTORY_OPCODE: u16 = 0x6177;
-
-/// One cause of a reported position, as the server names them
-/// (`UpdateMovementType` in `zone/cheat_manager.h:30-39`, Titanium-era
-/// values). Only two causes have server branches and this client sends
-/// neither's entries today; the variants exist so a Windows capture that
-/// *does* show claims can be reproduced without re-deriving the table, and
-/// a cause no capture shows should be deleted rather than defended.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum HistoryKind {
-    /// The player's own motion settling where it stopped: the server has
-    /// no branch for it — its work is re-arming the window, which the
-    /// packet's arrival alone already does.
-    #[default]
-    Collision = 1,
-    /// A zone line the player crossed on foot: the server's port exemption
-    /// for the moments after. The official client's dispatcher is not known
-    /// to send entries at all, so this claim is ours to keep or lose.
-    ZoneLine = 4,
-}
-
-/// One movement-history entry: where the client says the player went, and
-/// under whose cause. Sent today only by the server's parser; kept tested
-/// and byte-exact for the capture comparison, not wired into the session.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct HistoryEntry {
-    /// Where the player ended up, in server coordinates.
-    pub position: Position,
-    /// What the client blames for the move.
-    pub kind: HistoryKind,
-    /// The client's own clock for the entry. The server reads the position
-    /// and the cause only — no branch touches the stamp — so this is the
-    /// host's monotonic milliseconds since the session began, labelled
-    /// inferred: what the official clock scale is awaits a capture.
-    pub timestamp: u32,
-}
-
-impl HistoryEntry {
-    /// The 17 packed bytes, in the server's own field order: `Y`, `X`,
-    /// `Z`, cause, clock — `Y` first is the layout, not a mistake, and a
-    /// reordered entry would have the anti-cheat walking players into
-    /// walls along the X axis.
-    #[must_use]
-    pub fn encode(self) -> [u8; 17] {
-        let mut entry = [0; 17];
-        entry[0..4].copy_from_slice(&self.position.y.to_le_bytes());
-        entry[4..8].copy_from_slice(&self.position.x.to_le_bytes());
-        entry[8..12].copy_from_slice(&self.position.z.to_le_bytes());
-        entry[12] = self.kind as u8;
-        entry[13..17].copy_from_slice(&self.timestamp.to_le_bytes());
-        entry
-    }
-}
-
-/// The movement-history packet: a run of claims, whole entries only, since
-/// the server walks the body by `size / 17`. The session's keepalive uses
-/// the empty form — the only shape the shared program was read sending.
-#[must_use]
-pub fn history(entries: &[HistoryEntry]) -> EncodedCommand {
-    let mut body = Vec::with_capacity(entries.len() * 17);
-    for entry in entries {
-        body.extend_from_slice(&entry.encode());
-    }
-    EncodedCommand {
-        opcode: HISTORY_OPCODE,
-        body,
-    }
-}
 
 /// Locomotion mode used to choose measured motion parameters.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -638,46 +536,6 @@ mod tests {
         assert!(fall_speed(Some(0.0)).abs() < f32::EPSILON);
         assert!((fall_speed(Some(-1.0)) - 792.0).abs() < 0.01);
         assert!((fall_speed(Some(f32::NAN)) - 792.0).abs() < 0.01);
-    }
-
-    #[test]
-    fn a_history_entry_is_y_then_x_then_z_then_cause_then_clock() {
-        // The server's own field order (`UpdateMovementEntry`, packed):
-        // Y first is not a typo to fix, and the cause byte at offset 12
-        // is the only byte the zone's switch reads.
-        let entry = HistoryEntry {
-            position: Position {
-                x: 1.0,
-                y: 2.0,
-                z: 3.0,
-                heading: 0.0,
-            },
-            kind: HistoryKind::ZoneLine,
-            timestamp: 0x0bad_c0de,
-        };
-        assert_eq!(
-            history(std::slice::from_ref(&entry)),
-            EncodedCommand {
-                opcode: HISTORY_OPCODE,
-                body: vec![
-                    0x00, 0x00, 0x00, 0x40, // y = 2.0, first
-                    0x00, 0x00, 0x80, 0x3f, // x = 1.0, second
-                    0x00, 0x00, 0x40, 0x40, // z = 3.0
-                    4,    // the cause the zone exempts for
-                    0xde, 0xc0, 0xad, 0x0b, // a clock the zone never reads
-                ],
-            }
-        );
-        // Whole entries only: the server walks the body by size / 17.
-        assert_eq!(history(&[entry, entry]).body.len(), 34);
-        assert_eq!(history(&[]).body, [] as [u8; 0]);
-        // The other offered cause differs by that one byte alone.
-        let kept = HistoryEntry {
-            kind: HistoryKind::Collision,
-            ..entry
-        };
-        assert_eq!(kept.encode()[12], 1);
-        assert_eq!(&kept.encode()[..12], &entry.encode()[..12]);
     }
     #[test]
     fn grounded_stairs_allow_two_units_but_reject_larger_vertical_changes() {
