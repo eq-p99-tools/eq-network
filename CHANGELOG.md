@@ -5,6 +5,11 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- Decode Quarm's eight-byte stamina update alongside TAKP's five-byte form,
+  preserving the shared food/water counts and rejecting other lengths.
+
 ### Added
 
 - `movement::history::Record` decodes Titanium's 17-byte movement-history
