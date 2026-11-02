@@ -7,6 +7,9 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- Enable P99's existing bounded jump path after checking eight archived
+  official-client jump notices; precise physics remains client-code-derived,
+  and live custom-client validation is still pending.
 - Preserve P99 and Quarm character-selection appearance instead of stripping
   it; Quarm also retains the supplied level and zone. P99 is capture-checked,
   Quarm source-checked; public visual validation remains outstanding.

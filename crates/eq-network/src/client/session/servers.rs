@@ -767,8 +767,8 @@ const P99_WORLD_PREFIXES: [&str; 2] = ["project 1999", "an interesting"];
 const P99_HAZARDS: [Hazard; 1] = [Hazard::Falling];
 
 /// Project 1999: Titanium with V62 protection and 256-unit saved headings.
-/// Falls follow the Titanium program (6.332); jumps wait until they are
-/// measured on P99.
+/// Falls and jumps follow the Titanium program; recorded P99 jump notices
+/// match its empty packet (see `docs/public-server-gaps.md`).
 struct Project1999;
 
 impl ServerType for Project1999 {
@@ -840,10 +840,12 @@ impl ServerType for Project1999 {
     /// player, at any angle, and a step its floor drops away from falls
     /// (0x48a0fc, 0x48a2f4, 0x48b6c5; R-s), so P99 takes falls with the
     /// program's rules (sittings 6, 8g-8i; P99's own module present, not
-    /// read). Jumps stay off until measured there (recording checklist
-    /// item 1.3).
+    /// read). Eight recorded official P99 jumps use the existing empty
+    /// notice and position updates. Their timing does not independently
+    /// establish the arc: the shared client-derived physics remains an
+    /// inference until a custom-client jump is checked there.
     fn motion(&self, _setup: &Setup<'_>) -> Provided {
-        offer(shared::motion(true, false))
+        offer(shared::motion(true, true))
     }
 
     /// Falls only (6.332).
@@ -1535,11 +1537,11 @@ mod tests {
         assert!(p99.protect(&[0; 10]).is_err());
         assert!((p99.profile_turn() - 256.0).abs() < f32::EPSILON);
         assert!(!p99.start_choice());
-        // Falls and their damage follow the Titanium program (6.332);
-        // jumps wait until measured on P99.
+        // Falls and jumps follow the Titanium program; recorded P99 jump
+        // notices use the same opcode and empty body.
         assert!(offers(p99).contains(&Capability::Falling));
         assert!(offers(p99).contains(&Capability::EnvironmentalDamage));
-        assert!(!offers(p99).contains(&Capability::Jumping));
+        assert!(offers(p99).contains(&Capability::Jumping));
         let eqemu = server_type(ServerProtocol::EqEmu);
         assert_eq!(
             eqemu.wire().encode(&Request::Camp, SENDER).unwrap(),
@@ -1549,6 +1551,47 @@ mod tests {
         assert!((eqemu.profile_turn() - 512.0).abs() < f32::EPSILON);
         assert!(eqemu.start_choice());
         assert!(offers(eqemu).contains(&Capability::Falling));
+    }
+
+    #[test]
+    fn p99_jump_uses_the_recorded_notice_only_after_motion_admission() {
+        use super::super::{
+            feature::{testing, World},
+            ClientCommand,
+        };
+        use std::time::Instant;
+        let server = server_type(ServerProtocol::Project1999);
+        let mut feature = server
+            .motion(&Setup::new("Tester", AutoEat::default()))
+            .unwrap()
+            .feature;
+        let mut world = World::new(5);
+        let jump = ClientCommand::Jump {
+            session_id: 5,
+            created: Instant::now(),
+        };
+        let before = testing::run(|out| feature.handle(&jump, &mut world, out));
+        before.result.unwrap();
+        assert_eq!(
+            before.sent,
+            Vec::<eq_network_game::command::EncodedCommand>::new()
+        );
+        world.own_spawn = Some(7);
+        world.player.admit(testing::player(7));
+        world.admitted = Some(Instant::now());
+        testing::run(|out| feature.admitted(&mut world, out))
+            .result
+            .unwrap();
+        let sent = testing::run(|out| feature.handle(&jump, &mut world, out));
+        sent.result.unwrap();
+        assert_eq!(sent.sent.len(), 1);
+        // Literal capture-derived framing; no recorded payload or identity.
+        assert_eq!(sent.sent[0].opcode, 0x0797);
+        assert_eq!(sent.sent[0].body, Vec::<u8>::new());
+        assert_eq!(
+            sent.unreliable,
+            Vec::<eq_network_game::command::EncodedCommand>::new()
+        );
     }
 
     #[test]

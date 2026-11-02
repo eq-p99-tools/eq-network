@@ -1423,7 +1423,7 @@ mod tests {
             assert!(p99.contains(&capability), "{capability:?}");
         }
         assert!(p99.contains(&Capability::Falling));
-        assert!(!p99.contains(&Capability::Jumping));
+        assert!(p99.contains(&Capability::Jumping));
         assert!(!p99.contains(&Capability::Training));
         let eqemu = features(crate::client::ServerProtocol::EqEmu);
         assert!(eqemu.contains(&Capability::Falling));
@@ -1450,14 +1450,13 @@ mod tests {
             Capability::Sacrifice,
             Capability::Translocate,
             Capability::ServerTicks,
-            Capability::Jumping,
             Capability::ShowingHelm,
         ] {
             assert!(eqemu.contains(&capability));
             assert!(!p99.contains(&capability));
         }
         assert!(p99.contains(&Capability::EnvironmentalDamage));
-        assert_eq!(eqemu.len(), p99.len() + 18);
+        assert_eq!(eqemu.len(), p99.len() + 17);
     }
 
     #[test]
