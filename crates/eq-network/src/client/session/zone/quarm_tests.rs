@@ -32,6 +32,65 @@ fn admitted() -> (Features, World) {
 }
 
 #[test]
+fn quarm_targets_visible_spawns_and_follows_server_changes_without_attacking() {
+    use eq_network_game::world::SpawnKind;
+    let server = servers::server_type(ServerProtocol::Quarm);
+    let (mut features, mut world) = admitted();
+    assert!(features.capabilities().contains(&Capability::Targeting));
+    assert!(!features.capabilities().contains(&Capability::Combat));
+    world.spawns.insert(testing::spawn(8, SpawnKind::Npc));
+    let mut hidden = testing::spawn(9, SpawnKind::Npc);
+    hidden.invisible = true;
+    world.spawns.insert(hidden);
+    for spawn_id in [Some(7), Some(8), None] {
+        let output = testing::run_on(server.wire(), |out| {
+            features.handle(
+                &ClientCommand::SelectTarget {
+                    session_id: 5,
+                    spawn_id,
+                },
+                &mut world,
+                out,
+            )
+        });
+        assert!(output.result.unwrap());
+        assert_eq!(output.sent.len(), 1);
+        assert_eq!(output.sent[0].opcode, 0x6241);
+        assert_eq!(output.sent[0].body, spawn_id.unwrap_or(0).to_le_bytes());
+        assert_eq!(*world.target, spawn_id);
+    }
+    for spawn_id in [9, 10] {
+        let output = testing::run_on(server.wire(), |out| {
+            features.handle(
+                &ClientCommand::SelectTarget {
+                    session_id: 5,
+                    spawn_id: Some(spawn_id),
+                },
+                &mut world,
+                out,
+            )
+        });
+        assert!(output.result.unwrap());
+        assert_eq!(output.sent.len(), 0);
+        assert_eq!(*world.target, None);
+        assert!(output
+            .events
+            .iter()
+            .any(|event| matches!(event, ClientEvent::World(WorldEvent::TargetRejected { .. }))));
+    }
+    let output = testing::run_on(server.wire(), |out| {
+        features.observe(
+            &Message::Event(WorldEvent::Target(Some(7))),
+            &mut world,
+            out,
+        )
+    });
+    output.result.unwrap();
+    assert_eq!(*world.target, Some(7));
+    assert_eq!(output.sent.len(), 0);
+}
+
+#[test]
 fn quarm_moves_and_jumps_with_eqmac_packets_and_obeys_corrections() {
     let server = servers::server_type(ServerProtocol::Quarm);
     let (mut features, mut world) = admitted();

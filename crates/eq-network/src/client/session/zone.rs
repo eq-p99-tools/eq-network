@@ -1476,6 +1476,7 @@ mod tests {
             [
                 Capability::Moving,
                 Capability::Falling,
+                Capability::Targeting,
                 Capability::Talking,
                 Capability::Camping,
                 Capability::Zoning,

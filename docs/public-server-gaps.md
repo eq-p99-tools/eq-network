@@ -86,6 +86,13 @@ the Mac position/jump wire, correction, and bind requests after server-reported
 death. This does not close swimming, boats, pad teleport detection or the
 client-reported bleed-out gap.
 
+Quarm target selection/clearing is also enabled independently of combat.
+Its source handlers `Handle_OP_TargetMouse`/`Handle_OP_TargetCommand` at the
+same revision read a two-byte `ClientTarget_Struct` and echo clears or restore
+server-selected targets. Synthetic tests check the exact wire, self/NPC/clear,
+hidden/missing rejection and server changes. Live targeting remains unverified;
+this does not enable attacks or considering.
+
 The source check at `c2cd265` covers `Handle_OP_ClientUpdate` (15/16-byte input),
 `Handle_OP_Jump` (fatigue), `Handle_OP_Damage` (fall damage), and `zone/zoning.cpp`
 (zone change and bind). `SpawnPositionUpdate_Struct` is the same 15-byte packed

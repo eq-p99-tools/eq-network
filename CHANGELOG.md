@@ -7,6 +7,9 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- Enable Quarm target selection and clearing through the existing EQMac
+  feature, retaining visibility checks and authoritative server changes.
+  Combat remains disabled; selecting a target does not enable attacks.
 - Enable Quarm's shared EQMac ground movement, turns, jumps, falls, zone
   handoffs and return to bind after a server-reported death. Follow its
   inventory and coins for carried weight without offering item actions.

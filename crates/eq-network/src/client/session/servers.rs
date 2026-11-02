@@ -1143,6 +1143,12 @@ impl ServerType for EqEmu {
 struct Quarm;
 
 impl ServerType for Quarm {
+    /// Quarm's `Handle_OP_TargetMouse` uses the shared two-byte target ID
+    /// and echoes clears; `TargetCommand` reports server picks/refusals.
+    fn targeting(&self, _setup: &Setup<'_>) -> Provided {
+        offer(shared::targeting())
+    }
+
     /// Retains the authoritative load for movement without granting item,
     /// coin or merchant actions. Quarm's Mac inventory encoder uses the
     /// shared 360-byte item records and tagged inventory list.
@@ -1483,12 +1489,13 @@ mod tests {
         // actions; the remaining features still await their own evidence.
         let setup = Setup::new("Tester", AutoEat::default());
         let quarm = server_type(ServerProtocol::Quarm);
-        assert_eq!(quarm.features(&setup).len(), 9);
+        assert_eq!(quarm.features(&setup).len(), 10);
         assert_eq!(
             offers(quarm),
             [
                 Capability::Moving,
                 Capability::Falling,
+                Capability::Targeting,
                 Capability::Talking,
                 Capability::Camping,
                 Capability::Zoning,
