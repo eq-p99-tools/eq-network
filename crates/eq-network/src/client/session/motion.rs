@@ -403,23 +403,6 @@ impl Motion {
             Err(error) => out.log.diagnostic(format!("Rejected jump: {error}")),
         }
     }
-
-    /// Sits, stands or crouches; the server never echoes the player's own
-    /// stance, so it is reported here.
-    fn stance(command: &ClientCommand, world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
-        let ClientCommand::SetPosture {
-            spawn_id, posture, ..
-        } = *command
-        else {
-            return Ok(());
-        };
-        if !world.is_player(spawn_id) {
-            return out
-                .log
-                .diagnostic("Rejected a posture for another spawn".into());
-        }
-        world.posture.set(spawn_id, posture, out)
-    }
 }
 
 impl Feature for Motion {
@@ -462,7 +445,6 @@ impl Feature for Motion {
                 | ClientCommand::ConfigureMotion { .. }
                 | ClientCommand::SpeedInputs { .. }
                 | ClientCommand::ClimbReach { .. }
-                | ClientCommand::SetPosture { .. }
         )
     }
 
@@ -478,7 +460,7 @@ impl Feature for Motion {
             ClientCommand::ConfigureMotion { .. } => Self::calibrate(command, world, out),
             ClientCommand::SpeedInputs { .. } => self.inputs(command, world, out),
             ClientCommand::ClimbReach { .. } => Self::climb(command, world, out),
-            _ => Self::stance(command, world, out),
+            _ => Ok(()),
         }
     }
 
@@ -511,10 +493,6 @@ impl Feature for Motion {
                 world.correct_own(*position, Instant::now())?;
                 out.log
                     .send(ClientEvent::World(withdrawn(world.session_id)))
-            }
-            WorldEvent::Posture { spawn_id, posture } if world.is_player(*spawn_id) => {
-                world.posture.observed(*posture);
-                Ok(())
             }
             // What the player's speeds depend on; the next tick grants them.
             WorldEvent::HitPoints {
@@ -550,7 +528,6 @@ impl Feature for Motion {
 mod tests {
     use super::super::feature::testing;
     use super::*;
-    use eq_network_game::{command, world::PostureState};
     use std::time::Duration;
 
     fn at(x: f32) -> Position {
@@ -924,40 +901,6 @@ mod tests {
             granted(&outcome.events, 0.245 * 42.667),
             "{:?}",
             outcome.events
-        );
-    }
-
-    #[test]
-    fn the_player_stance_goes_out_and_is_reported_since_the_server_never_echoes_it() {
-        let mut world = World::new(5);
-        world.own_spawn = Some(7);
-        world.player.admit(testing::player(7));
-        let mut motion = Motion::new(false, false);
-        let sit = |spawn_id| ClientCommand::SetPosture {
-            session_id: 5,
-            spawn_id,
-            posture: command::Posture::Sitting,
-            created: Instant::now(),
-        };
-        let outcome = testing::run(|out| motion.handle(&sit(7), &mut world, out));
-        outcome.result.unwrap();
-        assert_eq!(
-            outcome.sent,
-            [command::titanium_posture(7, command::Posture::Sitting).unwrap()]
-        );
-        assert!(matches!(
-            outcome.events[..],
-            [ClientEvent::World(WorldEvent::Posture {
-                spawn_id: 7,
-                posture: PostureState::Sitting
-            })]
-        ));
-        let outcome = testing::run(|out| motion.handle(&sit(8), &mut world, out));
-        outcome.result.unwrap();
-        assert!(
-            outcome.sent.is_empty(),
-            "expected nothing sent, got {:?}",
-            outcome.sent
         );
     }
 

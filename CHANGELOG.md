@@ -7,6 +7,10 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- Offer Quarm camping with independent sitting/standing/ducking. Posture
+  commands now require `Capability::Posture`, which all four policies provide;
+  consumers must stop using `Moving` to gate stance controls. Quarm still does
+  not offer locomotion. Its camp flow is source-derived and offline-tested.
 - Enable P99's existing bounded jump path after checking eight archived
   official-client jump notices; precise physics remains client-code-derived,
   and live custom-client validation is still pending.

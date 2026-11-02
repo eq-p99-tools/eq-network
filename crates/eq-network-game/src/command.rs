@@ -798,8 +798,8 @@ impl GameCommand {
             Self::ClickDoor { .. } => Capability::Doors,
             Self::PickUp { .. } => Capability::GroundItems,
             Self::CrossZoneLine { .. } => Capability::Zoning,
-            Self::SetPosture { .. }
-            | Self::Move(_)
+            Self::SetPosture { .. } => Capability::Posture,
+            Self::Move(_)
             | Self::ConfigureMotion { .. }
             | Self::SpeedInputs { .. }
             | Self::ClimbReach { .. } => Capability::Moving,

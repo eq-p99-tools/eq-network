@@ -454,7 +454,7 @@ pub enum Capability {
     Trading,
     /// Handing items to NPCs and trading with other players.
     Giving,
-    /// Walking, running, sitting and standing.
+    /// Walking and running.
     Moving,
     /// Falling, which the server takes from the client.
     Falling,
@@ -547,12 +547,14 @@ pub enum Capability {
     /// Showing or hiding the player's helm to others, where the client
     /// generation has the option (Titanium; the `EQMac` client has none).
     ShowingHelm,
+    /// Sitting, standing and ducking, independently of locomotion.
+    Posture,
 }
 
 impl Capability {
     /// Every capability, in order: what a session offers when its server and
     /// client generation support everything.
-    pub const ALL: [Self; 41] = [
+    pub const ALL: [Self; 42] = [
         Self::Casting,
         Self::Spellbook,
         Self::Inventory,
@@ -594,6 +596,7 @@ impl Capability {
         Self::ServerTicks,
         Self::Jumping,
         Self::ShowingHelm,
+        Self::Posture,
     ];
 }
 
@@ -1938,6 +1941,7 @@ mod tests {
             Capability::ServerTicks => 38,
             Capability::Jumping => 39,
             Capability::ShowingHelm => 40,
+            Capability::Posture => 41,
         };
         for (index, capability) in Capability::ALL.into_iter().enumerate() {
             assert_eq!(place(capability), index, "{capability:?}");

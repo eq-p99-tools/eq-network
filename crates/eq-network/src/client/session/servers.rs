@@ -43,6 +43,7 @@ use super::{
     objects::GroundObjects,
     offers::MerchantOffers,
     pets::Pets,
+    posture::Stances,
     raids::Raids,
     reading::Reading,
     resurrection::Resurrection,
@@ -224,9 +225,14 @@ pub(super) trait ServerType: Sync {
         None
     }
 
-    /// How the player moves: walking, running and stance, and on some
+    /// How the player moves: walking, running, and on some
     /// servers jumps and falls.
     fn motion(&self, _setup: &Setup<'_>) -> Provided {
+        None
+    }
+
+    /// Sitting, standing and ducking, separate from walking.
+    fn posture(&self, _setup: &Setup<'_>) -> Provided {
         None
     }
 
@@ -409,6 +415,7 @@ pub(super) trait ServerType: Sync {
             self.spellbook(setup),
             self.inventory(setup),
             self.motion(setup),
+            self.posture(setup),
             self.character(setup),
             self.entities(setup),
             self.targeting(setup),
@@ -772,6 +779,10 @@ const P99_HAZARDS: [Hazard; 1] = [Hazard::Falling];
 struct Project1999;
 
 impl ServerType for Project1999 {
+    fn posture(&self, _setup: &Setup<'_>) -> Provided {
+        offer(Box::new(Stances))
+    }
+
     fn wire(&self) -> &'static dyn Wire {
         &Titanium
     }
@@ -929,6 +940,10 @@ impl ServerType for Project1999 {
 struct EqEmu;
 
 impl ServerType for EqEmu {
+    fn posture(&self, _setup: &Setup<'_>) -> Provided {
+        offer(Box::new(Stances))
+    }
+
     fn wire(&self) -> &'static dyn Wire {
         &Titanium
     }
@@ -1128,6 +1143,16 @@ impl ServerType for EqEmu {
 struct Quarm;
 
 impl ServerType for Quarm {
+    /// Quarm handles camp and logout using the shared `EQMac` packets.
+    /// The timer/cancellation flow is tested offline; public validation is pending.
+    fn camp(&self, _setup: &Setup<'_>) -> Provided {
+        offer(shared::camp())
+    }
+
+    fn posture(&self, _setup: &Setup<'_>) -> Provided {
+        offer(Box::new(Stances))
+    }
+
     // Quarm's HandleNameApprovalPacket and HandleCharacterCreatePacket use
     // the same EQMac bodies and replies as TAKP. Source-derived; not a live test.
     fn creation(&self) -> Option<&'static dyn Creation> {
@@ -1172,6 +1197,10 @@ const TAKP_DEATH_THRESHOLD: i32 = -11;
 struct Takp;
 
 impl ServerType for Takp {
+    fn posture(&self, _setup: &Setup<'_>) -> Provided {
+        offer(Box::new(Stances))
+    }
+
     fn wire(&self) -> &'static dyn Wire {
         &EqMac
     }
@@ -1421,17 +1450,24 @@ mod tests {
     #[test]
     fn eqmac_servers_provide_the_features_built_for_them() {
         // Quarm and TAKP speak EQMac: they see the zone's spawns, keep the
-        // player's record and talk. TAKP also casts, keeps the spellbook,
-        // camps, moves, falls and jumps, zones, moves items, keeps the time of
+        // player's record, talk, change stance and camp. TAKP also casts and keeps the spellbook,
+        // moves, falls and jumps, zones, moves items, keeps the time of
         // day, lists the player as anonymous or roleplaying, answers
         // translocates and takes the client's reports of a fall and a
         // bleed-out; Quarm will once each is checked there.
         let setup = Setup::new("Tester", AutoEat::default());
         let quarm = server_type(ServerProtocol::Quarm);
-        assert_eq!(quarm.features(&setup).len(), 3);
-        assert_eq!(offers(quarm), [Capability::Talking]);
+        assert_eq!(quarm.features(&setup).len(), 5);
+        assert_eq!(
+            offers(quarm),
+            [
+                Capability::Talking,
+                Capability::Camping,
+                Capability::Posture
+            ]
+        );
         let takp = server_type(ServerProtocol::Takp);
-        assert_eq!(takp.features(&setup).len(), 18);
+        assert_eq!(takp.features(&setup).len(), 19);
         assert_eq!(
             offers(takp),
             [
@@ -1452,7 +1488,8 @@ mod tests {
                 Capability::EnvironmentalDamage,
                 Capability::BleedingOut,
                 Capability::Translocate,
-                Capability::Jumping
+                Capability::Jumping,
+                Capability::Posture
             ]
         );
         for server in [quarm, takp] {
@@ -1705,8 +1742,8 @@ mod tests {
         // hiding; only EQEmu answers sacrifices, read from its source and not
         // yet checked live; and only EQEmu takes the show-helm option.
         for (protocol, count) in [
-            (ServerProtocol::Project1999, 22),
-            (ServerProtocol::EqEmu, 36),
+            (ServerProtocol::Project1999, 23),
+            (ServerProtocol::EqEmu, 37),
         ] {
             let server = server_type(protocol);
             let setup = Setup::new("Tester", AutoEat::default());

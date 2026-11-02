@@ -69,6 +69,26 @@ client-code analysis documented in `movement.rs`. Reusing those rules is an
 explicit inference about P99's patched client. Do not relax speed, admission,
 correction, climb or fall guards to make a test pass.
 
+### Changes completed in this stack
+
+All three fixes above are implemented. Preview-policy tests preserve sparse
+slots, equipment, level and zone while retaining malformed/duplicate rejection.
+P99 jump tests check the recorded empty notice and admission prerequisite;
+existing motion-guard tests cover rise limits and correction resets. Quarm tests
+exercise sit/camp/logout/reply and cancellation through its actual feature set,
+without a movement grant. Public-server validation remains open for all three.
+
+`Capability::Posture` now governs `SetPosture`; `Moving` governs locomotion.
+Consumers must update stance controls rather than advertise walking to enable
+camping. All four server policies offer posture.
+
+Quarm source evidence: `Handle_OP_Camp` starts a 35-second server fallback;
+`Handle_OP_Logout` saves, clears the active account, replies and disconnects.
+The reused client countdown is 30 seconds, with a 10-second EQMac reply timeout;
+that client timing is inherited/inferred, not measured on public Quarm.
+`Handle_OP_SpawnAppearance` processes sitting/standing and cancels camping when
+standing. See [the inspected handlers](https://github.com/SecretsOTheP/EQMacEmu/blob/c2cd2651045ab063b236b08f3a9e83cbf10289e9/zone/client_packet.cpp).
+
 ## Confirmed implementation and policy gaps
 
 This table records the baseline above; the first three fixes are called out
@@ -96,6 +116,7 @@ separately so a new capability is not mistaken for live verification.
 | Loot / corpses / consent | Offered | Disabled | Quarm loot, corpse commands, own-corpse recovery and NPC loot flow. |
 | Doors / ground objects | Offered | Disabled even in richer TAKP policy | EQMac decoding and interaction evidence; rendering a local marker is not a pickup implementation. |
 | Groups | Disabled | Disabled; TAKP implementation exists | Invitation, refusal, roster changes, leader changes, zoning and disband checks on each. |
+| Raid group-leader removal | No policy offers it; generic EQEmu lacks the handler | No verified implementation | Remains a gap unless the specific public server proves it inapplicable. |
 | Raids | Disabled; native raid-window restriction reported below | Disabled | Quarm has raid handlers and opcodes: this is a gap, not an established Quarm restriction. |
 | Pets | Offered | Disabled | Public verification of supported commands; EQMac wire/action integration. |
 | Training / reading / tradeskills | Disabled | Disabled | Generic client paths exist; verify/implement each dialect's packets and eligibility. |

@@ -72,3 +72,11 @@ Applications using a Git branch still resolve a specific commit in their
 lockfile changes and that combination passes checks. Coordinate related open PRs
 before advancing the pin. Never commit credentials, raw game captures, extracted
 assets, or identifying account data as fixtures; construct synthetic records.
+
+## Independent posture and locomotion
+
+`GameCommand::SetPosture` requires `Capability::Posture`. `Moving` covers
+locomotion and its speed inputs; it must not be required for sitting, standing
+or ducking. All current server policies offer posture, including Quarm while
+its locomotion remains disabled. Hosts should gate stance buttons and hotkeys
+using the command capability, and send the usual sit then camp sequence.
