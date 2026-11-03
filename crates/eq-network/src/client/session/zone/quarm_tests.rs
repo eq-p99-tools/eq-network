@@ -1,4 +1,6 @@
 //! The Quarm feature assembly, using synthetic state and an in-memory wire.
+mod spells;
+
 use super::super::feature::testing;
 use super::*;
 use crate::client::ServerProtocol;

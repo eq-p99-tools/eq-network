@@ -77,6 +77,6 @@ assets, or identifying account data as fixtures; construct synthetic records.
 
 `GameCommand::SetPosture` requires `Capability::Posture`. `Moving` covers
 locomotion and its speed inputs; it must not be required for sitting, standing
-or ducking. All current server policies offer posture, including Quarm while
-its locomotion remains disabled. Hosts should gate stance buttons and hotkeys
+or ducking. All current server policies offer posture independently of
+movement readiness. Hosts should gate stance buttons and hotkeys
 using the command capability, and send the usual sit then camp sequence.

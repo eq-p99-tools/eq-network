@@ -96,6 +96,24 @@ hidden/missing rejection and server changes. Public Quarm self-targeting was
 exercised; NPC targeting and clearing remain unverified. This does not enable
 attacks or considering.
 
+Quarm casting and the basic spellbook now reuse the checked EQMac paths: gem
+casts, item click effects, scribing, memorizing and forgetting. Its own
+[`Handle_OP_CastSpell`](https://github.com/SecretsOTheP/EQMacEmu/blob/c2cd2651045ab063b236b08f3a9e83cbf10289e9/zone/client_packet.cpp#L2921)
+and [`OPMemorizeSpell`](https://github.com/SecretsOTheP/EQMacEmu/blob/c2cd2651045ab063b236b08f3a9e83cbf10289e9/zone/client_process.cpp#L1361)
+use the same layouts and authoritative replies as TAKP. Casts remain held until
+matching replies or interruptions; a silent unacknowledged request allows a
+manual retry after five seconds, with no automatic resend. Server class, level,
+zone and expansion restrictions remain authoritative. The existing zero cast
+CRC remains an inference; the inspected handler does not read that field.
+
+Six additional synthetic Quarm assembly tests cover exact gem/item cast bytes,
+stale inventory/gem/target refusal, reply/interruption handling, memorizing and
+forgetting without optimistic gem changes, cancellation on standing and scribing
+with authoritative scroll consumption. Item click effects use the observed
+inventory without granting item moves or merchants. Moving/deleting book
+entries and skills/abilities remain disabled. These spell actions have not been
+tested on public Quarm; the available live character is not a spell caster.
+
 The source check at `c2cd265` covers `Handle_OP_ClientUpdate` (15/16-byte input),
 `Handle_OP_Jump` (fatigue), `Handle_OP_Damage` (fall damage), and `zone/zoning.cpp`
 (zone change and bind). `SpawnPositionUpdate_Struct` is the same 15-byte packed
@@ -159,6 +177,11 @@ Creation slot counts were addressed by the now-merged
 AltGr, free-camera settings and script fixes. The integration build includes it.
 The steep-slope correction in client #323 is already in the inspected baseline.
 
+Skills/abilities need more than a Quarm policy change: TAKP has no abilities
+provision either, and `request::eqmac` does not encode `Request::Ability` yet.
+Its `ResetSkill` decoder also needs to be connected to the ability recovery
+controller before those controls can reflect the server's resets.
+
 ## Unsupported or inapplicable facilities
 
 These entries are retained for visibility. Their scope matters: an unavailable
@@ -201,6 +224,10 @@ desktop integration based on `9be679a` passed a native Windows build, formatting
 strict workspace/all-target Clippy and 1,299 tests; 32 ignored asset/live probes
 were excluded from that count. Fixtures published here are synthetic.
 
+The subsequent Quarm spell-support change passed all 797 networking tests,
+including six new assembly scenarios. This is offline validation; the earlier
+public session did not run the newly enabled spell actions.
+
 - Local TAKP using Quarm policy rendered the character-selection preview.
   Further local checks stopped when Docker was shut down.
 - Public Quarm rendered the preview and admitted the character. Authoritative
@@ -220,9 +247,10 @@ were excluded from that count. Fixtures published here are synthetic.
 Still open: P99 preview/jump in the integrated client; public creation, rejection
 and refresh; Quarm NPC target/clear, walking/turning, camp cancellation and the
 desktop-exit transition; boundary/teleport/refusal and death/bind paths; reconnect
-position persistence and unusual movement states. Check one scenario at a time
-and respect public account reconnect cooldowns. The operator has confirmed safe
-Quarm parking. Existing local EQEmu/TAKP success is useful evidence, but does not
+position persistence and unusual movement states; Quarm gem/item casting,
+interruption and spellbook actions on a suitable character. Check one scenario
+at a time and respect public account reconnect cooldowns. The operator has
+confirmed safe Quarm parking. Existing local EQEmu/TAKP success is useful evidence, but does not
 certify public P99/Quarm.
 
 Keep raw captures, session keys, credentials, names, positions and installed

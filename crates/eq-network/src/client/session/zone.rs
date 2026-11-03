@@ -1469,11 +1469,13 @@ mod tests {
             )
             .capabilities()
         };
-        // Both EQMac policies move, jump, fall, zone and camp. TAKP also
-        // offers the item, spell and social actions checked there.
+        // Both EQMac policies move, jump, fall, zone, camp and cast spells.
+        // TAKP also offers the item and social actions checked there.
         assert_eq!(
             features(crate::client::ServerProtocol::Quarm),
             [
+                Capability::Casting,
+                Capability::Spellbook,
                 Capability::Moving,
                 Capability::Falling,
                 Capability::Targeting,

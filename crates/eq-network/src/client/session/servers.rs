@@ -1143,6 +1143,20 @@ impl ServerType for EqEmu {
 struct Quarm;
 
 impl ServerType for Quarm {
+    /// Quarm's cast handler reads the shared 12-byte `EQMac` request and
+    /// answers through its spell bar and interruption messages. Its own
+    /// class, zone and expansion restrictions remain authoritative.
+    fn casting(&self, _setup: &Setup<'_>) -> Provided {
+        offer(shared::casting())
+    }
+
+    /// Quarm's `OPMemorizeSpell` handles scribing, memorizing and forgetting
+    /// with the shared book packet. Moving and deleting book entries remain
+    /// unchecked, as on TAKP (see `docs/public-server-gaps.md`).
+    fn spellbook(&self, _setup: &Setup<'_>) -> Provided {
+        offer(shared::spellbook(Edits::default()))
+    }
+
     /// Quarm's `Handle_OP_TargetMouse` uses the shared two-byte target ID
     /// and echoes clears; `TargetCommand` reports server picks/refusals.
     fn targeting(&self, _setup: &Setup<'_>) -> Provided {
@@ -1485,14 +1499,16 @@ mod tests {
     #[test]
     fn eqmac_servers_provide_the_features_built_for_them() {
         // Quarm shares TAKP's movement, falls, jumps, zone handoff and
-        // posture/camp lifecycle. Its inventory observer grants no item
-        // actions; the remaining features still await their own evidence.
+        // posture/camp lifecycle, casting and basic spellbook. Its inventory
+        // observer grants no item moves; other features await their evidence.
         let setup = Setup::new("Tester", AutoEat::default());
         let quarm = server_type(ServerProtocol::Quarm);
-        assert_eq!(quarm.features(&setup).len(), 10);
+        assert_eq!(quarm.features(&setup).len(), 12);
         assert_eq!(
             offers(quarm),
             [
+                Capability::Casting,
+                Capability::Spellbook,
                 Capability::Moving,
                 Capability::Falling,
                 Capability::Targeting,
