@@ -137,7 +137,7 @@ fn eqmac_skill_changes_update_eligibility_without_releasing_recovery() {
         );
         let used = use_ability(protocol, &mut features, &mut world, Ability::Mend);
         assert!(used.result.unwrap());
-        assert_eq!(used.sent, [eqmac::encode(Ability::Mend, None).unwrap()]);
+        assert_eq!(used.sent, [eqmac::encode(Ability::Mend, None, 7).unwrap()]);
         let update = receive(
             protocol,
             &mut features,
@@ -175,7 +175,7 @@ fn eqmac_abilities_admit_and_send_every_supported_action_without_claiming_succes
             if ability == Ability::FeignDeath {
                 expected.push(eqmac::feign_posture(7).unwrap());
             }
-            expected.push(eqmac::encode(ability, Some(42)).unwrap());
+            expected.push(eqmac::encode(ability, Some(42), 7).unwrap());
             assert_eq!(output.sent, expected, "{protocol:?} {ability:?}");
             assert_eq!(
                 output.unreliable,

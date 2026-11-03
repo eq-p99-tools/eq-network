@@ -470,7 +470,9 @@ pub fn titanium(request: &Request, sender: Sender<'_>) -> Result<EncodedCommand>
 /// Refuses every other request, and a command the generation cannot carry.
 pub fn eqmac(request: &Request, sender: Sender<'_>) -> Result<EncodedCommand> {
     match request {
-        Request::Ability { ability, target } => abilities::eqmac::encode(*ability, *target),
+        Request::Ability { ability, target } => {
+            abilities::eqmac::encode(*ability, *target, sender.spawn())
+        }
         Request::FeignDeathPosture => abilities::eqmac::feign_posture(sender.spawn()),
         Request::Camp => Ok(crate::quarm::camp()),
         Request::Jump => Ok(crate::quarm::jump()),

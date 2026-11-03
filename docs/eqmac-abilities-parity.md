@@ -58,7 +58,7 @@ source-compatible requests, not newly captured official-client packets.
 | Fishing (55) | `0b36`, empty | Known opcode `8f41`, empty handler input | **Gap:** resource, location, delayed completion and refusal flow not ported; refused | None offered |
 | Bind Wound (9) | `601d`, 8 bytes | Known `9340`, target `u16`, type `u8`, reserved byte | **Gap:** 4-byte request/reply and consumption/completion flow not ported; refused | None offered |
 | Mend (32) | `14ef`, empty | `9d41`, empty | Monk, qualified skill (zero permitted); HP is never predicted | 360 |
-| Feign Death (25) | `7489`, empty | `ac40`, empty | Monk, qualified skill; intentional lying posture before attempt, no success assertion | 10 |
+| Feign Death (25) | `7489`, empty | `ac40`, 6 bytes: own spawn id, zero word, two zero bytes (program 0x4bdf2f) | Monk, qualified skill; intentional lying posture before attempt, no success assertion | 10 |
 | Sense Heading (40) | `05ac`, empty | `8741`, empty | Qualified skill, including zero; existing consumer displays heading locally | 2 |
 
 The new `abilities::eqmac` module owns packet layouts, eligibility, reset

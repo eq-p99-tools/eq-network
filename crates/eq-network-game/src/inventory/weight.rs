@@ -25,9 +25,12 @@ impl Inventory {
     /// bag's reduction with the bag itself in full, coins at 1/40 each less
     /// the best purse in a general slot, held to 32,766. It also takes off
     /// a weight-reduction effect (221), which this sum does not, so the
-    /// client reads heavier, the slower side. The `EQMac` program's sum is
-    /// unread. Bank/trade/queued cursor items do not count. Predictions
-    /// that preserve the total remain usable.
+    /// client reads heavier, the slower side. The `EQMac` program's sum
+    /// (0x4bbb78) is the same but for the effect and augments: a stack once,
+    /// each bag content at the bag's reduction in floating point (the exact
+    /// value this tenths sum reaches by reducing the bag's aggregate), coins
+    /// at 1/40 less the best purse, held to 32,766. Bank/trade/queued cursor
+    /// items do not count. Predictions that preserve the total remain usable.
     ///
     /// # Errors
     /// Rejects missing/stale state, malformed bags and weight-changing predictions.

@@ -78,11 +78,17 @@ pub fn known(ability: Ability, skills: &[u32], race: u32, class: Option<u32>) ->
 
 /// Encode an ability without implying that it succeeded. `CombatAbility` has
 /// a 16-bit target, two zero reserved bytes, attack 100 and a 32-bit skill.
-/// Taunt carries only the 16-bit target. Untargeted handlers read no body.
+/// Taunt carries only the 16-bit target. Feign Death carries the program's
+/// six bytes: the player's spawn id `own`, a word that is always zero (the
+/// `EQMac` program's skill dispatcher 0x4bdf2f, feign case, copies a global
+/// only its self-damage path writes, and always with 0), a zero byte and a
+/// byte the program leaves unwritten, 0 here. The other untargeted handlers
+/// read no body.
 ///
 /// # Errors
-/// Rejects unimplemented abilities and targeted requests without a target.
-pub fn encode(ability: Ability, target: Option<u16>) -> Result<EncodedCommand> {
+/// Rejects unimplemented abilities, targeted requests without a target and
+/// a feign without the player's spawn.
+pub fn encode(ability: Ability, target: Option<u16>, own: u16) -> Result<EncodedCommand> {
     ensure!(
         SUPPORTED.contains(&ability),
         "unsupported EQMac ability: {ability:?}"
@@ -107,7 +113,12 @@ pub fn encode(ability: Ability, target: Option<u16>) -> Result<EncodedCommand> {
         Ability::Sneak => 0x8541,
         Ability::Forage => 0x9440,
         Ability::Mend => 0x9d41,
-        Ability::FeignDeath => 0xac40,
+        Ability::FeignDeath => {
+            ensure!(own != 0, "feign death needs the player's spawn");
+            body.extend(own.to_le_bytes());
+            body.extend([0; 4]);
+            0xac40
+        }
         Ability::SenseHeading => 0x8741,
         _ => bail!("unsupported EQMac ability: {ability:?}"),
     };
@@ -200,20 +211,35 @@ mod tests {
             );
             assert_eq!(request::titanium(&request, sender).unwrap().opcode, 0x5ee8);
             for target in [None, Some(0)] {
-                assert!(encode(ability, target).is_err());
+                assert!(encode(ability, target, 7).is_err());
             }
         }
         assert_eq!(
-            encode(Ability::Taunt, Some(0x1234)).unwrap(),
+            encode(Ability::Taunt, Some(0x1234), 7).unwrap(),
             EncodedCommand {
                 opcode: 0x3b41,
                 body: vec![0x34, 0x12],
             }
         );
-        assert!(encode(Ability::Taunt, None).is_err());
+        assert!(encode(Ability::Taunt, None, 7).is_err());
+        // The program's feign body: own spawn id, a zero word, two zero bytes.
+        assert_eq!(
+            request::eqmac(
+                &Request::Ability {
+                    ability: Ability::FeignDeath,
+                    target: None,
+                },
+                sender
+            )
+            .unwrap(),
+            EncodedCommand {
+                opcode: 0xac40,
+                body: vec![7, 0, 0, 0, 0, 0],
+            }
+        );
+        assert!(encode(Ability::FeignDeath, None, 0).is_err());
         for (ability, opcode) in [
             (Ability::Mend, 0x9d41),
-            (Ability::FeignDeath, 0xac40),
             (Ability::Hide, 0x8641),
             (Ability::Sneak, 0x8541),
             (Ability::Forage, 0x9440),
