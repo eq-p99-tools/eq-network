@@ -66,7 +66,7 @@ mod tests {
         // EQMac's generation carries no such answer.
         let mut world = World::new(5);
         let ended = Message::Event(WorldEvent::HideAndSneakEnded);
-        let outcome = testing::run_on(&super::super::wire::EqMac::Takp, |out| {
+        let outcome = testing::run_on(&super::super::wire::EqMac, |out| {
             HideAnswer.observe(&ended, &mut world, out)
         });
         outcome.result.unwrap();

@@ -17,6 +17,13 @@ pub(super) struct Doors {
     table: eq_network_game::doors::Doors,
     /// When the table last gained or lost doors; older clicks are stale.
     changed_at: Instant,
+    interaction: Interaction,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Interaction {
+    Enabled,
+    DefinitionsOnly,
 }
 
 impl Default for Doors {
@@ -24,11 +31,21 @@ impl Default for Doors {
         Self {
             table: eq_network_game::doors::Doors::default(),
             changed_at: Instant::now(),
+            interaction: Interaction::Enabled,
         }
     }
 }
 
 impl Doors {
+    /// Keeps the admission's definitions and server actions without offering
+    /// or sending clicks whose generation-specific fields/guards are unread.
+    pub(super) fn definitions_only() -> Self {
+        Self {
+            interaction: Interaction::DefinitionsOnly,
+            ..Self::default()
+        }
+    }
+
     /// The request for a door in reach, clicked since the door table last
     /// changed.
     fn click(
@@ -37,6 +54,10 @@ impl Doors {
         world: &World,
         reach: eq_network_game::reach::Reach,
     ) -> Result<Request> {
+        ensure!(
+            self.interaction == Interaction::Enabled,
+            "door interaction is not available"
+        );
         let ClientCommand::ClickDoor {
             door_id, created, ..
         } = command
@@ -56,7 +77,10 @@ impl Doors {
 impl Feature for Doors {
     fn capabilities(&self) -> Vec<crate::world::Capability> {
         use crate::world::Capability;
-        vec![Capability::Doors]
+        match self.interaction {
+            Interaction::Enabled => vec![Capability::Doors],
+            Interaction::DefinitionsOnly => Vec::new(),
+        }
     }
 
     fn admit(&mut self, message: &Message, _world: &mut World) -> Result<()> {
@@ -73,7 +97,8 @@ impl Feature for Doors {
     }
 
     fn owns(&self, command: &ClientCommand) -> bool {
-        matches!(command, ClientCommand::ClickDoor { .. })
+        self.interaction == Interaction::Enabled
+            && matches!(command, ClientCommand::ClickDoor { .. })
     }
 
     fn handle(

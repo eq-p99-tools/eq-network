@@ -1,12 +1,17 @@
-//! Titanium corpse looting: request, listing, item transfer and completion.
+//! Corpse looting: request, listing, item transfer and completion.
 //!
-//! The server answers a request with `OP_MoneyOnCorpse`, one loot-view item packet per
+//! Titanium answers a request with `OP_MoneyOnCorpse`, one loot-view item packet per
 //! item, and an echo of the request. Each item request is echoed back as its
 //! acknowledgement; the item itself then arrives as an ordinary inventory update.
+//! `loot::eqmac` keeps its unconditional item-receipt echo distinct from delivery.
 use crate::inventory::InventoryItem;
 use crate::world::Coins;
 use anyhow::{ensure, Result};
 use serde::Serialize;
+
+/// `EQMac` loot packets, whose slots are already zero-based and whose item
+/// echo acknowledges receipt even when the server later refuses the item.
+pub mod eqmac;
 
 /// `OP_LootRequest`, a four-byte corpse ID in both directions.
 pub const REQUEST_OPCODE: u16 = 0x6f90;
@@ -86,7 +91,17 @@ pub enum LootUpdate {
         /// False when the server refused the item.
         accepted: bool,
     },
-    /// The loot window closed.
+    /// The `EQMac` server received an item request. This is sent before its
+    /// permission and item checks, so it does not establish item delivery.
+    /// Only ordinary inventory updates establish what the player received.
+    Acknowledged {
+        /// The requested place on the corpse, from 0.
+        place: u16,
+    },
+    /// The loot window closed: the server's completion message, or the
+    /// session's own close when the corpse view ends with the player's
+    /// death, a zone change, a logout or the corpse's despawn, since the
+    /// server sends no completion for those.
     Closed,
 }
 

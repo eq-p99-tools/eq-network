@@ -61,7 +61,11 @@ use super::{
 };
 use crate::p99::{self, WorldCodec};
 use eq_network_game::{
-    abilities::Ability, hazards::Hazard, inventory::MoveRules, merchant::Quotes, GameDialect,
+    abilities::Ability,
+    hazards::Hazard,
+    inventory::{ItemRules, MoveRules},
+    merchant::Quotes,
+    GameDialect,
 };
 
 /// What a zone session builds its features with.
@@ -131,6 +135,18 @@ fn leave_to_player(feature: Box<dyn Feature>) -> Provided {
 pub(super) trait ServerType: Sync {
     /// The client generation's packets the server speaks.
     fn wire(&self) -> &'static dyn Wire;
+
+    /// How the server interprets shared `EQMac` inventory records. This
+    /// affects decoding only; offering inventory actions is independent.
+    fn item_rules(&self) -> ItemRules {
+        ItemRules::Takp
+    }
+
+    /// Spell-ID registration and replay, if this server sends them. This
+    /// policy delivers facts only; installed snapshots remain host-owned.
+    fn spell_tables(&self) -> Option<&'static dyn super::spell_tables::Policy> {
+        None
+    }
 
     /// Protects a world connection, from the login body sent to it: P99's
     /// world approval, encrypted file manifests and checksum answers, and
@@ -604,7 +620,7 @@ mod shared {
     }
 
     pub(super) fn looting() -> Box<dyn Feature> {
-        Box::new(Looting)
+        Box::<Looting>::default()
     }
 
     pub(super) fn exchange() -> Box<dyn Feature> {
@@ -633,6 +649,14 @@ mod shared {
 
     pub(super) fn ground_items() -> Box<dyn Feature> {
         Box::<GroundObjects>::default()
+    }
+
+    pub(super) fn eqmac_doors() -> Box<dyn Feature> {
+        Box::new(Doors::definitions_only())
+    }
+
+    pub(super) fn eqmac_ground_items() -> Box<dyn Feature> {
+        Box::new(GroundObjects::for_generation(GameDialect::EqMac))
     }
 
     pub(super) fn transfers(setup: &Setup<'_>, home: Home) -> Box<dyn Feature> {
@@ -782,6 +806,10 @@ const P99_HAZARDS: [Hazard; 1] = [Hazard::Falling];
 struct Project1999;
 
 impl ServerType for Project1999 {
+    fn spell_tables(&self) -> Option<&'static dyn super::spell_tables::Policy> {
+        Some(&super::spell_tables::P99)
+    }
+
     fn posture(&self, _setup: &Setup<'_>) -> Provided {
         offer(Box::new(Stances))
     }
@@ -1146,6 +1174,35 @@ impl ServerType for EqEmu {
 struct Quarm;
 
 impl ServerType for Quarm {
+    /// Quarm's own source establishes definitions/actions, separately from
+    /// click support. No Doors capability or click sender is offered yet.
+    fn doors(&self, _setup: &Setup<'_>) -> Provided {
+        offer(shared::eqmac_doors())
+    }
+
+    /// Ground placement/click layouts and cursor delivery were checked in
+    /// Quarm's own source. Server restrictions remain authoritative; no live
+    /// compatibility is inferred from the shared generation.
+    fn ground_items(&self, _setup: &Setup<'_>) -> Provided {
+        offer(shared::eqmac_ground_items())
+    }
+
+    /// Quarm handles normal attack toggles and consideration with the shared
+    /// `EQMac` layouts; only server records report combat outcomes.
+    fn combat(&self, _setup: &Setup<'_>) -> Provided {
+        offer(shared::combat(true))
+    }
+
+    /// Quarm's source-derived corpse flow uses the existing inventory owner
+    /// for delivery and coins. Public-server validation remains pending.
+    fn looting(&self, _setup: &Setup<'_>) -> Provided {
+        offer(Box::new(Looting::requiring_empty_cursor()))
+    }
+
+    fn item_rules(&self) -> ItemRules {
+        ItemRules::Quarm
+    }
+
     /// Quarm's cast handler reads the shared 12-byte `EQMac` request and
     /// answers through its spell bar and interruption messages. Its own
     /// class, zone and expansion restrictions remain authoritative.
@@ -1231,7 +1288,7 @@ impl ServerType for Quarm {
     }
 
     fn wire(&self) -> &'static dyn Wire {
-        &EqMac::Quarm
+        &EqMac
     }
 
     /// As on TAKP, whose server Quarm's comes from ([`Takp`]).
@@ -1261,6 +1318,18 @@ const TAKP_DEATH_THRESHOLD: i32 = -11;
 struct Takp;
 
 impl ServerType for Takp {
+    /// Definitions/actions from TAKP's door producer; unverified interaction
+    /// remains unavailable while admission still replays the server state.
+    fn doors(&self, _setup: &Setup<'_>) -> Provided {
+        offer(shared::eqmac_doors())
+    }
+
+    /// Ground pickups using TAKP's own placement/click layouts, with item
+    /// delivery applied solely by the existing inventory feature.
+    fn ground_items(&self, _setup: &Setup<'_>) -> Provided {
+        offer(shared::eqmac_ground_items())
+    }
+
     /// The same verified packets and eligibility as Quarm; no blanket ALL grant.
     fn abilities(&self, _setup: &Setup<'_>) -> Provided {
         offer(shared::abilities(
@@ -1273,7 +1342,7 @@ impl ServerType for Takp {
     }
 
     fn wire(&self) -> &'static dyn Wire {
-        &EqMac::Takp
+        &EqMac
     }
 
     /// TAKP's server sends the spell action with flag 0 as a spell lands, to
@@ -1501,6 +1570,65 @@ mod tests {
     }
 
     #[test]
+    fn eqmac_item_decoding_uses_the_server_policy_and_keeps_raw_restrictions() {
+        use eq_network_game::{
+            inventory::{EqMacStackFlag, InventoryUpdate},
+            message::{Message, Part},
+            world::WorldEvent,
+        };
+
+        let mut record = vec![0; 360];
+        record[..14].copy_from_slice(b"Synthetic item");
+        record[175] = 1;
+        record[176] = 1;
+        record[180..182].copy_from_slice(&42u16.to_le_bytes());
+        record[184..186].copy_from_slice(&22u16.to_le_bytes());
+        record[246] = 20;
+        record[253] = 14;
+        record[278] = 7;
+        for (flag, raw_flag, quarm_stack) in [
+            (0, EqMacStackFlag::Unstackable, None),
+            (1, EqMacStackFlag::Stackable, Some(7)),
+            (3, EqMacStackFlag::Effect, None),
+            (2, EqMacStackFlag::Unknown(2), None),
+        ] {
+            record[276] = flag;
+            for gm_flag in [0i8, -1, 42] {
+                record[247] = gm_flag.to_le_bytes()[0];
+                for (protocol, rules, stack) in [
+                    (ServerProtocol::Takp, ItemRules::Takp, Some(7)),
+                    (ServerProtocol::Quarm, ItemRules::Quarm, quarm_stack),
+                ] {
+                    let server = server_type(protocol);
+                    assert_eq!(server.item_rules(), rules);
+                    assert_eq!(server.wire().dialect(), GameDialect::EqMac);
+                    let messages = server.wire().messages(0x3140, &record, server.item_rules());
+                    let [Message::Event(WorldEvent::Inventory(InventoryUpdate::Set(items)))] =
+                        messages.as_slice()
+                    else {
+                        panic!("{messages:?}")
+                    };
+                    assert_eq!(items[0].stack_count, stack);
+                    assert_eq!(items[0].charges, if stack.is_some() { 0 } else { 7 });
+                    assert_eq!(items[0].rules.stack_size, 20);
+                    let raw = items[0].rules.eqmac.unwrap();
+                    assert_eq!(raw.stack_flag, raw_flag);
+                    assert_eq!(raw.gm_flag, gm_flag);
+                    assert!(matches!(
+                        server
+                            .wire()
+                            .messages(0x3140, &record[..359], server.item_rules())[..],
+                        [Message::Unreadable {
+                            part: Part::Inventory,
+                            ..
+                        }]
+                    ));
+                }
+            }
+        }
+    }
+
+    #[test]
     fn each_server_says_which_spell_action_is_a_landing_once_checked() {
         assert_eq!(
             server_type(ServerProtocol::EqEmu).spell_landing_flag(),
@@ -1525,7 +1653,7 @@ mod tests {
         // personal inventory actions. Other features await their own evidence.
         let setup = Setup::new("Tester", AutoEat::default());
         let quarm = server_type(ServerProtocol::Quarm);
-        assert_eq!(quarm.features(&setup).len(), 13);
+        assert_eq!(quarm.features(&setup).len(), 17);
         assert_eq!(
             offers(quarm),
             [
@@ -1535,8 +1663,11 @@ mod tests {
                 Capability::Moving,
                 Capability::Falling,
                 Capability::Targeting,
+                Capability::Combat,
+                Capability::Looting,
                 Capability::Talking,
                 Capability::Camping,
+                Capability::GroundItems,
                 Capability::Zoning,
                 Capability::Abilities,
                 Capability::EnvironmentalDamage,
@@ -1545,7 +1676,7 @@ mod tests {
             ]
         );
         let takp = server_type(ServerProtocol::Takp);
-        assert_eq!(takp.features(&setup).len(), 20);
+        assert_eq!(takp.features(&setup).len(), 22);
         assert_eq!(
             offers(takp),
             [
@@ -1560,6 +1691,7 @@ mod tests {
                 Capability::Combat,
                 Capability::Talking,
                 Capability::Camping,
+                Capability::GroundItems,
                 Capability::Zoning,
                 Capability::Abilities,
                 Capability::Grouping,
@@ -1704,6 +1836,7 @@ mod tests {
         let report = ClientCommand::SpeedInputs {
             session_id: 5,
             revision: 1,
+            report_id: 1,
             state: eq_network_game::movement::SpeedInputState::Ready(
                 eq_network_game::movement::SpeedInputs {
                     rate: 0,

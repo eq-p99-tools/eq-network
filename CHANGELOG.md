@@ -36,6 +36,21 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- A grant after a fresh movement calibration carries its
+  `WorldEvent::SpeedInputsAccepted` receipt again. A same-zone relocation
+  (an in-zone teleport), a server correction or a refused transfer's rewind
+  withdraw the host's movement and clear the calibration without asking for
+  the inputs again; the receipt was only re-sent when its contents changed,
+  so a host that treats a withdrawal as ending its receipt waited for one
+  that never came while the player already moved.
+- Send valid inventory moves immediately in submission order on TAKP and
+  Quarm, retaining ordered unresolved predictions without treating silence as
+  acceptance. Preserve slot, container, fit, stack and restricted-item guards;
+  contradictory EQMac corrections require a fresh snapshot.
+
+- Reject ground pickup requests made before an object's current placement,
+  including IDs reused after disappearance, through the existing object owner.
+
 - Reconcile a scroll the server deleted after a confirmed scribe with the
   move that put it on the cursor, so a second scribe is not read as a
   correction and a current movement grant is recovered without re-entry.
@@ -45,7 +60,7 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   "cannot train" and "untrained" sentinels.
 - Enable Quarm target selection and clearing through the existing EQMac
   feature, retaining visibility checks and authoritative server changes.
-  Combat remains disabled; selecting a target does not enable attacks.
+  Target selection alone sends no attack request; combat is offered separately.
 - Enable Quarm's shared EQMac ground movement, turns, jumps, falls, zone
   handoffs and return to bind after a server-reported death. Follow its
   inventory and coins for carried weight without offering item actions.
@@ -65,6 +80,57 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   preserving the shared food/water counts and rejecting other lengths.
 
 ### Added
+
+- Add source-derived EQMac loot open/close, money, listing and item-receipt
+  codecs, and offer Quarm looting through its server policy and existing
+  inventory owner. Live validation remains pending.
+- Track corpse access through grant, listing and server completion; reject
+  stale or unlisted item requests and avoid duplicate coin grants. Preserve
+  ordinary inventory deliveries after close, without predicting loot success.
+- **Breaking:** `LootUpdate::Acknowledged` is a new variant of an exhaustive
+  enum, so downstream matches need an arm: an EQMac receipt echo is not a successful item
+  transfer. Document source evidence, limitations and controlled review checks
+  in `docs/eqmac-looting.md`.
+
+- Typed local speed-input acceptance receipts, including unchanged-speed
+  acceptance and the current positive-grant outcome. Hosts supply an opaque
+  `report_id` on `GameCommand::SpeedInputs` and handle
+  `WorldEvent::SpeedInputsAccepted`. Receipts echo the admission, revision,
+  report identity and exact ready inputs; they never replace movement guards
+  or acknowledge a remote packet. This is an unreleased breaking API change.
+
+- Quarm offers normal attack and consider through the shared EQMac combat
+  owner. `combat::CombatRequest`, `CombatRequestStatus` and
+  `WorldEvent::CombatRequest` distinguish transport submission from local
+  refusal, including stale-admission and policy refusals. Self-consider is
+  supported; unavailable spawns and inactive admissions are refused. Server
+  consideration, damage and animation remain authoritative; no attack result
+  or acceptance acknowledgment is synthesized. Validation is source-derived
+  and synthetic; controlled live verification remains outstanding.
+
+- `inventory::ItemRules`, `inventory::decode_eqmac_with` and
+  `message::eqmac_with` let server policy select TAKP or Quarm item
+  stackability while sharing one EQMac generation wire. Existing decoder
+  entry points, raw stack/GM observations and inventory actions retain
+  their behavior.
+
+- EQMac door and ground-object codecs with bounded compressed door tables,
+  raw state/actions, generation-specific refusal sentinels and typed updates.
+  The established eight-byte pickup request uses the EQMac opcode; object
+  messages never fabricate inventory. TAKP and Quarm policies offer ground
+  pickups and replay door definitions/actions while leaving door clicks
+  unavailable; see `docs/eqmac-world-objects.md` for sender limits.
+  A generation-selected EQMac result controller suppresses unresolved duplicate
+  pickups and holds unknown incoming inventory until separate authoritative
+  results arrive, without optimistic items or timeout retries. The established
+  Titanium result behavior is preserved.
+
+- Typed P99 spell-table registration/replay decoding and ordered
+  `WorldEvent::SpellTable` delivery across world and zone transports,
+  including before profile admission. Complete shape and registry-ID
+  validation produce explicit unavailable events for malformed tables;
+  order and duplicates are retained. Installed snapshots and selective
+  definition application remain host-owned, with no new game requests.
 
 - Quarm casting, gem memorization and spellbook reading through the shared
   `EQMac` features, without book moves or deletion; item casts use the

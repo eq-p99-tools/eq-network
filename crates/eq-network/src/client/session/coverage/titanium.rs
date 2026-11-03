@@ -2,7 +2,7 @@
 
 use super::{
     planned, sent, unasked, Part,
-    Reader::{Admission, Chat, Login, World, Zone},
+    Reader::{Admission, Chat, Login, SpellTables, World, Zone},
     Reading::{Partly, Read, Unread},
     Reason::{Needless, Planned, Unmapped},
     ServerMessage,
@@ -77,6 +77,8 @@ pub(in crate::client) fn titanium(opcode: u16) -> Option<ServerMessage> {
         0x1022 => sent("OP_DzChooseZone", EQEMU, planned(LaterSystems)),
         0x1035 => sent("OP_RezzRequest", EQEMU, Read(&[Zone])),
         0x10f4 => sent("OP_DelegateAbility", EQEMU, planned(Raids)),
+        0x1234 => sent("P99's spell-definition replay", P99, Read(&[SpellTables])),
+        0x1235 => sent("P99's spell-source registration", P99, Read(&[World])),
         // P99's world answering the client's validation.
         0x1251 => sent("P99's validation result", P99, Read(&[World])),
         // P99's zone refusing the client's validation: P99 only, never sent

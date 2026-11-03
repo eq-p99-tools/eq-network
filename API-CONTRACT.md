@@ -1,5 +1,22 @@
 # API and integration contracts
 
+## Quarm loot receipt and delivery
+
+`LootUpdate::Acknowledged { place }` is a new exhaustive-enum variant and
+requires downstream match updates in the next minor pre-1.0 release. EQMac
+servers echo item requests before checking whether they can deliver them.
+Consumers must not treat this event as `Taken { accepted: true }`: ordinary
+`InventoryUpdate` events establish received items, including late deliveries
+after the loot window closes. No destination or successful transfer is
+predicted by the loot feature. The existing inventory feature owns items and
+coin grants. See `docs/eqmac-looting.md` for evidence and remaining live checks.
+
+The loot controller correlates a visible corpse request, successful grant and
+completed listing in one admission. It refuses stale-session commands, places
+outside that listing and repeat requests for a place already submitted. Close
+waits for the server's completion; death, zoning, corpse removal and reconnect
+discard access state. No timeout or receipt echo fabricates item delivery.
+
 ## Public API evolution
 
 The published 0.1.x line and the repository's unreleased development head are
@@ -17,6 +34,35 @@ releasing; the workspace version alone is not evidence of compatibility.
   newtype where it prevents meaningful mixing; avoid wrappers without an invariant.
 
 ## Feature ownership and recovery
+
+Inventory moves do not hold the inventory while awaiting another move's reply.
+`MoveRules::settles_by_silence()` preserves the legacy Titanium refusal window;
+both EQMac policies require authoritative evidence and never settle on a timer.
+`Inventory::unresolved_predictions()` counts ordered changed-slot projections
+whose uncertainty remains, not positive move acknowledgments. A covering slot
+update resolves only its slots across affected projections; it never confirms
+an unrelated move by order. EQMac contradictions invalidate until `Snapshot`.
+See [inventory prediction semantics](docs/inventory-move-predictions.md).
+
+`doors::eqmac::decode` and `objects::eqmac::decode` expose EQMac layouts through
+the existing typed door/object updates; `message::eqmac` routes them on the
+generation wire. `objects::eqmac::pickup` and `request::eqmac(Request::PickUp)`
+encode the established EQMac click body. Server policy still controls whether
+the session offers pickup or door interaction. This adds no event variants or
+inventory writer. EQMac's refusal sentinel becomes the existing
+`ObjectUpdate::Kept`, which identifies the actor but cannot identify the object.
+`ObjectAction { error: None }` still means transport submission, and disappearance
+still means visibility changed; only authoritative item packets grant inventory.
+Requests older than an object's replacement are refused without a send. See
+[the evidence and activation limits](docs/eqmac-world-objects.md).
+One unresolved EQMac pickup holds inventory actions until its refusal or matching
+own removal plus authoritative cursor
+delivery. This request correlation does not settle item moves, infer item
+identity from a model, or authorize replay on timeout.
+The result rule is selected through the generation interface; the established
+Titanium path is preserved. TAKP and Quarm offer `GroundItems` with this rule.
+Their door definitions/actions are replayed at admission, but no `Doors`
+capability, door-click command owner or unverified door sender is enabled.
 
 One feature owns each command and its state. Wire generation determines layout;
 server policy determines availability. New features start absent, and a frontend
@@ -55,6 +101,24 @@ timeout never authorizes resending a non-idempotent action.
 
 ## Validation and release integration
 
+Normal combat requests emit `WorldEvent::CombatRequest { session_id, request,
+status }`. `combat::CombatRequest` distinguishes `Consider { target_id }` from
+`AutoAttack { enabled }`; `CombatRequestStatus::Sent` means transport submission
+only. `Refused(reason)` means nothing was sent, including an expired request,
+an obsolete admission or a server policy that does not offer combat. The reason
+is display text; applications must use the status variant for control flow.
+Exhaustive `WorldEvent` matches must add the new event. These are unreleased
+API additions, not a compatible published patch.
+
+No authoritative autoattack acknowledgment exists on the inspected EQMac path.
+A host may display its requested toggle separately; it must not label `Sent`
+as server-confirmed combat, a hit or a successful consideration. Only existing
+`Consideration`, `Damage` and `Animation` events carry server results. A consider
+answer names its own target; it must not be applied to whichever target the host
+has since selected. Unknown con/damage values remain observable. Neither target
+range nor weapon eligibility is recalculated by the normal toggle owner.
+See [combat evidence and limits](docs/quarm-combat.md).
+
 This library workspace intentionally does not commit `Cargo.lock`. CI resolves
 dependencies for each toolchain: stable format, Clippy, tests and docs on Linux;
 native tests on Windows. These checks
@@ -91,3 +155,89 @@ player still, which is the slow side, never zero load. Hosts should surface the
 `SpeedInputUnavailable` reason to the player. Exhaustive matches add
 `SpeedInputsRequired` and `SkillReset`; `ItemPlacement` literals add `eqmac`
 and `bag_weight_reduction`.
+
+## EQMac inventory decoding policy
+
+`inventory::ItemRules` selects the server's interpretation of the shared EQMac
+item layout. `Takp` derives stackability from item type and maximum charges;
+`Quarm` uses the flag at byte 276 and retains the same stack-capacity rule.
+`inventory::decode_eqmac_with(opcode, body, rules)` and
+`message::eqmac_with(opcode, body, rules)` accept that policy explicitly. The
+session obtains it from its server type and uses one EQMac generation wire.
+
+These APIs are additive. `inventory::decode_eqmac` and `message::eqmac` keep
+TAKP semantics; `inventory::decode_quarm` and `message::quarm` keep Quarm
+semantics. Both policies retain raw stack and GM observations in
+`inventory::EqMacItemRules`, including unknown values. Decoding policy does
+not enable inventory capabilities, grant a move, or change pacing, prediction
+or reconciliation. Existing move rules remain responsible for validation.
+
+## Movement-input acceptance
+
+`GameCommand::SpeedInputs` carries the current admission, the opaque revision
+from `WorldEvent::SpeedInputsRequired`, an opaque host `report_id`, and a typed
+ready/unavailable state. Give each new logical report a fresh report identity;
+retain that identity when retrying a full local queue. Recovery to identical
+ready values after an unavailable report is a new report. Neither identity is
+a wire counter, and consumers must not derive movement permission from it.
+
+After normal admission/revision validation and generation-rule evaluation,
+`WorldEvent::SpeedInputsAccepted(SpeedInputAcceptance)` echoes the exact ready
+inputs and report identity with `granted`. A new report is acknowledged even
+when its numeric calibration is unchanged. A later change in the accepted
+report's grant publishes a new outcome; unchanged ticks do not repeat it.
+Unavailable or obsolete reports never produce a ready acceptance. `granted`
+is false without a current positive calibration or while lifecycle blocks
+movement. This is a local session receipt, not a remote server acknowledgement.
+
+Keep this receipt separate from `MotionState`, which alone carries movement
+speeds. Withdrawals, input requirements and admission/lifecycle resets invalidate
+cached acceptance. A frontend may clear a waiting status only for the exact
+posted admission/revision/report/input identity with a current positive grant;
+a cached prior speed, successful enqueue, or mismatching receipt is insufficient.
+
+Migration: add `report_id` to speed-input command literals and handle the new
+world-event variant in exhaustive matches. This changes the unreleased public
+API and requires downstream validation; it is not a compatible 0.1.x patch.
+
+## P99 spell-table facts and host providers
+
+`spell_tables::decode` reads variable-length P99 source-ID registration and
+destination/source replay records. `SpellId` validates the known 10,000-entry
+registry domain for these messages only. Counts, full lengths and every ID
+are validated before output allocation. Entry order and duplicates are kept;
+an error returns no valid prefix. The packets carry IDs, not definition values.
+
+`WorldEvent::SpellTable(spell_tables::Event)` is a new exhaustive-enum variant;
+consumers must handle it. The P99 server policy emits complete tables or typed
+unavailability directly from world and zone receive paths, before ordinary
+profile/admission filtering. Other server policies do not consume these opcodes.
+A failed event callback remains a session failure. No packets are sent for
+these messages, and no capabilities or motion rules change.
+
+An event's run ID/revision describes network order, not an installed-provider
+epoch. It spans successive world/zone transports in one attempt; zone context
+already names the admission session before its profile arrives. A new network
+attempt may start new ordering without clearing the host's provider snapshots.
+The run ID formatted as sixteen lower-case hexadecimal digits equals that
+attempt's `SessionStatus.session_id`. The actual Connecting notification follows
+the run reset; a host binds a successor from that lifecycle fact, never merely
+from a new run ID appearing in table data. Producer epoch/policy must already
+be captured before enqueue so a stale Connecting cannot rebind a replacement.
+
+The host owns its installed-spell provider, typed cached projections, effective
+definitions and a separate epoch/policy binding on its event bridge. Under the
+chosen lifecycle policy, snapshots survive zone/world transport reconnects in
+the same logical provider lifetime. Explicit provider replacement starts a new
+epoch requiring actual registration and must not leak overlays to another
+installation or server policy. This is an application lifecycle policy, not
+a claim that every native teardown path was established.
+
+Registration snapshots a first-seen source's CURRENT effective projection;
+duplicates do not refresh it. Replay uses cached source projections in wire
+order, retains destination ID/text and every excluded field, and must validate
+the entire batch before atomically publishing changes. It must not copy an
+entire source definition, chase live aliases or restore omitted destinations. Missing
+source data and malformed events must surface as unavailable, never a silent
+fallback or partial application. Hosts must route these facts before their
+own player/profile gates. This networking API applies no installed definitions.

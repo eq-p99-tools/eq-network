@@ -122,6 +122,8 @@ pub(super) enum Reader {
     /// The world server's: validation, the character list and the handoff
     /// to a zone.
     World,
+    /// Server-policy spell tables delivered outside profile admission gates.
+    SpellTables,
     /// The zone's admission of the player.
     Admission,
     /// The generation's decoders, whose messages every zone feature hears
@@ -709,7 +711,7 @@ mod tests {
         for opcode in [
             0x5900, 0x5200, 0xf340, 0x0001, 0x5900, 0x5200, 0xf340, 0x0001,
         ] {
-            unheard.tell(&EqMac::Takp, opcode, 4, &mut log).unwrap();
+            unheard.tell(&EqMac, opcode, 4, &mut log).unwrap();
         }
         drop(log);
         assert_eq!(

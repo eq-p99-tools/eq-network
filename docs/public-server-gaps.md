@@ -94,8 +94,10 @@ Its source handlers `Handle_OP_TargetMouse`/`Handle_OP_TargetCommand` at the
 same revision read a two-byte `ClientTarget_Struct` and echo clears or restore
 server-selected targets. Synthetic tests check the exact wire, self/NPC/clear,
 hidden/missing rejection and server changes. Public Quarm self-targeting was
-exercised; NPC targeting and clearing remain unverified. This does not enable
-attacks or considering.
+exercised; NPC targeting and clearing remain unverified. The separate normal
+combat follow-up now offers attack toggles and considering with typed local
+submission/refusal events; only server records supply assessments and outcomes.
+See [combat evidence and controlled live checklist](quarm-combat.md).
 
 Quarm casting and the basic spellbook now reuse the checked EQMac paths: gem
 casts, item click effects, scribing, memorizing and forgetting. Its own
@@ -118,8 +120,9 @@ tested on public Quarm; the available live character is not a spell caster.
 The combined follow-up also offers the source-backed EQMac ability subset on
 Quarm and TAKP, with per-ability eligibility, recovery and server reset handling.
 Frenzy is inapplicable in the inspected EQMac dispatcher; fishing, bind wound
-and pickpocket remain unfinished. Ordinary autoattack/considering remains a
-separate Quarm gap. See [ability evidence and limits](eqmac-abilities-parity.md).
+and pickpocket remain unfinished. Ordinary autoattack/considering is offered
+by the separate source-backed combat owner; live compatibility remains
+unverified. See [ability evidence and limits](eqmac-abilities-parity.md).
 
 Quarm inventory uses its wire stack flag independently of TAKP's rule, validates
 placement and banker proximity, and keeps item predictions unconfirmed after
@@ -167,11 +170,15 @@ called out separately so a new capability is not mistaken for live verification.
 State after the 2026-11-03 stack, for a reader of the table: the Quarm
 "Disabled" baseline rows for previews, walking/running, jump/fall, zoning,
 death/return to bind, camping/posture, inventory/coin moves (guarded, no
-merchants or meals), casting/spellbook (no book edits), targeting (no combat)
+merchants or meals), casting/spellbook (no book edits), targeting
 and abilities (the supported subset) are now offered by policy, and P99 jumps
 are enabled. P99 previews are capture-checked. Everything else in "What
 remains" still stands, and the live evidence for the new rows is only what the
 validation sections below record.
+
+The separate combat follow-up additionally offers Quarm normal attack toggles
+and considering. Its local request events are not server acknowledgments and
+it adds no live combat/death evidence to this report.
 
 | Area | P99 baseline | Quarm baseline | What remains |
 | --- | --- | --- | --- |
@@ -190,10 +197,10 @@ validation sections below record.
 | Merchants / trade / give | Offered, some scenarios unverified | Disabled | Quotes offered by merchants are a separate missing policy on P99. Two-player trade needs distinct coverage from NPC giving. |
 | Casting / spellbook / click effects | Offered; book moving enabled | Disabled | Quarm port of casting and authoritative bar recovery; P99 spell-action landing flag remains unset. Public scenario coverage for resisted casts, interruption, clicks, scribing and memorization. |
 | Cooldowns / buffs / resource bars | Partial | Partial | Linked reuse groups, complete effective resource denominators, buff replacement ambiguity and item-effect accounting. Quarm saved gem cooldowns are already decoded from profile offset 4972 and covered by synthetic tests; public behavior still needs verification. Unknown values must remain distinguishable from zero. |
-| Target / consider / combat | Offered | Disabled | Quarm codecs exist in TAKP paths, but policy and live combat/death coverage are missing. |
+| Target / consider / combat | Offered | Offered by policy (2026-11-03 stack); live unverified | Quarm attack, consider and death coverage still need the attended live check. |
 | Abilities | Most offered; fishing and bind wound excluded | Disabled | Evidence for each unavailable action, including resource/reuse and failure responses. |
-| Loot / corpses / consent | Offered | Disabled | Quarm loot, corpse commands, own-corpse recovery and NPC loot flow. |
-| Doors / ground objects | Offered | Disabled even in richer TAKP policy | EQMac decoding and interaction evidence; rendering a local marker is not a pickup implementation. |
+| Loot / corpses / consent | Offered | Manual looting offered by policy (2026-11-03 stack); live unverified | Quarm corpse commands, own-corpse recovery and the NPC loot flow still need the attended live check; no automatic loot-all. |
+| Doors / ground objects | Offered | Source-backed ground pickups and receive-only door state on both TAKP/Quarm | Door interaction stays disabled pending ordinary padding/type/state review. Pickups use authoritative inventory delivery and retain ambiguous outstanding requests; see [protocol evidence and live checklist](eqmac-world-objects.md). A map marker never grants an item. |
 | Groups | Disabled | Disabled; TAKP implementation exists | Invitation, refusal, roster changes, leader changes, zoning and disband checks on each. |
 | Raid group-leader removal | No policy offers it; generic EQEmu lacks the handler | No verified implementation | Remains a gap unless the specific public server proves it inapplicable. |
 | Raids | Disabled; native raid-window restriction reported below | Disabled | Quarm has raid handlers and opcodes: this is a gap, not an established Quarm restriction. |

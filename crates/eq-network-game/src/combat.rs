@@ -10,6 +10,33 @@
 use anyhow::{ensure, Context, Result};
 use serde::Serialize;
 
+/// A normal combat request made by the host, separate from its server result.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[non_exhaustive]
+pub enum CombatRequest {
+    /// Ask the server to assess this spawn.
+    Consider {
+        /// The spawn to assess.
+        target_id: u16,
+    },
+    /// Change the normal melee attack toggle; the server chooses every swing.
+    AutoAttack {
+        /// Whether normal melee attacks are requested.
+        enabled: bool,
+    },
+}
+
+/// Local disposition of a combat request, never a server acknowledgment.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[non_exhaustive]
+pub enum CombatRequestStatus {
+    /// Submitted to transport. This proves neither acceptance nor a hit; a
+    /// consider answer, damage or animation arrives independently from the server.
+    Sent,
+    /// Nothing was sent. The reason is for display, not for automatic retries.
+    Refused(String),
+}
+
 /// `OP_Consider`, sent by the client and echoed with the server's assessment.
 pub const CONSIDER_OPCODE: u16 = 0x65ca;
 /// `OP_AutoAttack`: a four-byte toggle whose first byte is 1 (on) or 0 (off).

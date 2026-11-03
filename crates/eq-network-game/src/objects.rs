@@ -1,4 +1,4 @@
-//! Titanium ground objects: items lying on the ground and world containers.
+//! Ground objects: items lying on the ground and world containers.
 //!
 //! Layouts follow `EQEmu`'s Titanium `Object_Struct` (`OP_GroundSpawn`),
 //! `ClickObject_Struct` (`OP_ClickObject`) and `ClickObjectAck_Struct`
@@ -7,6 +7,8 @@ use crate::{command::EncodedCommand, world::Position};
 use anyhow::{anyhow, ensure, Result};
 use serde::Serialize;
 use std::collections::BTreeMap;
+
+pub mod eqmac;
 
 /// `OP_GroundSpawn`: an object appears.
 pub const SPAWN_OPCODE: u16 = 0x0f47;
@@ -22,7 +24,8 @@ const CONTAINER_LENGTH: usize = 92;
 /// reliably: P99 sends object type 0 for everything, containers included.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 pub enum ObjectKind {
-    /// An item model (`IT` and a number): a dropped item or ground spawn to pick up.
+    /// An item-model candidate (`IT` and a number), not a grant or proof
+    /// that the server permits this player to pick it up.
     Item,
     /// Any other model, such as a forge: a world container or fixture.
     Fixture,
@@ -37,8 +40,8 @@ pub struct GroundObject {
     pub model: String,
     /// EQ coordinates of the object's base, and its 0..512 heading.
     pub position: Position,
-    /// `EQEmu`'s object type: 0 or 1 for items and tradeskill kinds from 10 up.
-    /// Dropped items and ground spawns carry 0, as does everything on P99.
+    /// Raw server object type. `EQEmu` uses 0 or 1 for items and tradeskill
+    /// kinds from 10 up; P99 and `EQMac` can also send 0 for fixtures.
     pub object_type: u32,
 }
 
@@ -51,7 +54,8 @@ impl GroundObject {
             && u8::try_from(self.object_type).is_ok_and(crate::tradeskills::combines)
     }
 
-    /// Whether this is an item to pick up or a fixture.
+    /// Whether this is an item-model candidate or a fixture. Server-side
+    /// eligibility and authoritative inventory delivery are separate.
     #[must_use]
     pub fn kind(&self) -> ObjectKind {
         if self.object_type <= 1 && is_item_model(&self.model) {
@@ -85,8 +89,10 @@ pub enum ObjectUpdate {
         /// Spawn ID of whoever picked it up; None when it decayed or was removed.
         taken_by: Option<u32>,
     },
-    /// A pickup the server refused, so the object stays: `EQEmu` echoes the
-    /// click with drop ID 0 when a quest keeps the item.
+    /// A refused pickup without an object ID: Titanium uses drop
+    /// ID 0, `EQMac` uses `u32::MAX`. Neither reply identifies the object or
+    /// gives an inventory item. A refusal neither removes nor restores a
+    /// table entry; it does not prove the object is still present.
     Kept {
         /// Spawn ID of the player who clicked.
         player_id: u32,

@@ -1,4 +1,8 @@
-//! Quarm's rejection path is a resync followed by a disconnect, not a move ACK.
+//! `EQMac` rejection recovery is a resync followed by a disconnect, not a move ACK.
+//! Both `EQMac` servers do it the same way: Quarm (`SecretsOTheP` c2cd265,
+//! `docs/quarm-inventory-parity.md`) and TAKP (`EQMacEmu/Server` e517d0b,
+//! `zone/inventory.cpp` `Client::SwapItemResync`, line 1561), so
+//! `MoveRules::Takp` and `MoveRules::Quarm` share this module.
 use eq_network_game::inventory::{Inventory, InventoryUpdate};
 
 /// Whether a server replacement contradicts any locally predicted slot it

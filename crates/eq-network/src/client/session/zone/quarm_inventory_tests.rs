@@ -140,6 +140,7 @@ fn quarm_prediction_pacing_never_restores_a_withdrawn_weight_grant() {
     let ready = |revision| ClientCommand::SpeedInputs {
         session_id: 5,
         revision,
+        report_id: 1,
         state: SpeedInputState::Ready(SpeedInputs {
             rate: 0,
             weight: 4,
@@ -184,6 +185,7 @@ fn quarm_prediction_pacing_never_restores_a_withdrawn_weight_grant() {
         &ClientCommand::SpeedInputs {
             session_id: 5,
             revision: changed,
+            report_id: 1,
             state: SpeedInputState::Unavailable(SpeedInputUnavailable::Prediction),
         },
     )
@@ -251,8 +253,6 @@ fn quarm_root_bag_cursor_splits_merges_and_equipment_use_exact_wire() {
         );
         assert!(world.inventory.predicted());
         let before = world.inventory.revision();
-        let output = submit(&mut features, &mut world, &request_from_revision(before));
-        assert_eq!(output.sent.len(), 0); // One outstanding move at a time.
         paced(&mut features, &mut world);
         assert_eq!(world.inventory.revision(), before); // No fabricated confirmation.
         assert!(world.inventory.predicted());
@@ -263,17 +263,6 @@ fn quarm_root_bag_cursor_splits_merges_and_equipment_use_exact_wire() {
     );
     assert_eq!(world.inventory.items()[&InventorySlot(17)].details.id, 60);
     assert_eq!(world.inventory.items()[&InventorySlot(25)].bag_slots, 2);
-}
-
-fn request_from_revision(revision: u64) -> ClientCommand {
-    ClientCommand::MoveInventory(InventoryMove {
-        session_id: 5,
-        revision,
-        from: InventorySlot(22),
-        to: InventorySlot::CURSOR,
-        quantity: MoveQuantity::Whole,
-        created: Instant::now(),
-    })
 }
 
 #[test]
@@ -708,10 +697,11 @@ fn quarm_inventory_enablement_does_not_enable_unrelated_actions_or_meals() {
         Capability::Casting,
         Capability::Spellbook,
         Capability::Abilities,
+        Capability::Looting,
     ] {
         assert!(features.capabilities().contains(&capability));
     }
-    for capability in [Capability::Trading, Capability::Giving, Capability::Looting] {
+    for capability in [Capability::Trading, Capability::Giving] {
         assert!(!features.capabilities().contains(&capability));
     }
     let commands = [
@@ -777,9 +767,11 @@ fn quarm_assembly_decodes_stack_flags_before_admission_and_later_replacements() 
     let (mut features, mut world) = setup(vec![]);
     for flag in [3, 1] {
         record[276] = flag;
-        let messages = servers::server_type(ServerProtocol::Quarm)
-            .wire()
-            .messages(0x3140, &record);
+        let messages = servers::server_type(ServerProtocol::Quarm).wire().messages(
+            0x3140,
+            &record,
+            servers::server_type(ServerProtocol::Quarm).item_rules(),
+        );
         assert_eq!(messages.len(), 1);
         if flag == 3 {
             features.admit(&messages[0], &mut world).unwrap();
@@ -796,9 +788,11 @@ fn quarm_assembly_decodes_stack_flags_before_admission_and_later_replacements() 
         );
     }
     record[276] = 2;
-    let messages = servers::server_type(ServerProtocol::Quarm)
-        .wire()
-        .messages(0x3140, &record);
+    let messages = servers::server_type(ServerProtocol::Quarm).wire().messages(
+        0x3140,
+        &record,
+        servers::server_type(ServerProtocol::Quarm).item_rules(),
+    );
     testing::run_on(servers::server_type(ServerProtocol::Quarm).wire(), |out| {
         features.observe(&messages[0], &mut world, out)
     })

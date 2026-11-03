@@ -94,10 +94,17 @@ const STACK: u32 = 20;
 /// weapons, arrows, type 28, fishing bait and alcohol.
 const STACKING_TYPES: [u8; 9] = [14, 15, 17, 18, 19, 27, 28, 37, 38];
 
-/// Shared record layout, different source-of-truth for stackability.
-#[derive(Clone, Copy)]
-enum ItemRules {
+/// How a server interprets the shared `EQMac` inventory record.
+///
+/// The client generation owns the record layout; the server policy chooses
+/// the source of stackability. Both policies retain the raw stack and GM
+/// flags in [`EqMacItemRules`] without granting permission to move an item.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum ItemRules {
+    /// TAKP derives stackability from item type and maximum charges.
     Takp,
+    /// Quarm uses byte 276 for stackability, retaining TAKP's capacity rule.
     Quarm,
 }
 
@@ -125,7 +132,17 @@ pub fn decode_quarm(opcode: u16, body: &[u8]) -> Result<Option<InventoryUpdate>>
     decode_with(opcode, body, ItemRules::Quarm)
 }
 
-fn decode_with(opcode: u16, body: &[u8], rules: ItemRules) -> Result<Option<InventoryUpdate>> {
+/// What an `EQMac` inventory packet says under the server's item rules.
+///
+/// Use [`decode`] for TAKP or [`decode_quarm`] for Quarm when the policy is
+/// fixed. The same rules apply to full inventories, placed items and cursor
+/// refills. Non-inventory opcodes return `None` under either policy.
+///
+/// # Errors
+/// Rejects malformed packets as [`decode`] does. The rules change only the
+/// interpretation of stackability; raw GM and unknown stack flags remain
+/// available for validation by the server's move rules.
+pub fn decode_with(opcode: u16, body: &[u8], rules: ItemRules) -> Result<Option<InventoryUpdate>> {
     match opcode {
         INVENTORY_OPCODE => Ok(Some(InventoryUpdate::Snapshot(inventory(body, rules)?))),
         PLACED_OPCODE | ITEM_OPCODE | BOOK_OPCODE | CONTAINER_OPCODE => {
@@ -315,12 +332,27 @@ fn single(body: &[u8], rules: ItemRules) -> Result<InventoryItem> {
 fn item(record: &Record<'_>, rules: ItemRules) -> Result<InventoryItem> {
     let slot = InventorySlot::from_eqmac(i32::from(record.short(184)))
         .context("unknown EQMac inventory slot")?;
-    item_at_for(record, slot, rules)
+    super::eqmac_record_at(record.0, slot, rules)
 }
 
 /// An item record as an item at `slot`.
 fn item_at(record: &Record<'_>, slot: InventorySlot) -> Result<InventoryItem> {
-    item_at_for(record, slot, ItemRules::Takp)
+    super::eqmac_record_at(record.0, slot, ItemRules::Takp)
+}
+
+/// Reads one shared item record under the server's rules at the caller's
+/// slot. View decoders own their slot interpretation; reading a record does
+/// not place an item in the player's inventory or acknowledge its delivery.
+///
+/// # Errors
+/// Rejects a record that is not exactly 360 bytes or has malformed fields.
+pub(crate) fn record_at(
+    body: &[u8],
+    slot: InventorySlot,
+    rules: ItemRules,
+) -> Result<InventoryItem> {
+    ensure!(body.len() == RECORD, "invalid EQMac item length");
+    item_at_for(&Record(body), slot, rules)
 }
 
 /// Reads the common layout using the selected server's stack semantics.

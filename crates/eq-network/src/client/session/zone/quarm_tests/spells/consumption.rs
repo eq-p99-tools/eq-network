@@ -36,9 +36,16 @@ fn reply(
     opcode: u16,
     body: &[u8],
 ) -> Vec<ClientEvent> {
-    let wire = servers::server_type(ServerProtocol::Quarm).wire();
+    let server = servers::server_type(ServerProtocol::Quarm);
+    let wire = server.wire();
     let output = testing::run_on(wire, |out| {
-        hear(wire.messages(opcode, body), features, world, out, true)
+        hear(
+            wire.messages(opcode, body, server.item_rules()),
+            features,
+            world,
+            out,
+            true,
+        )
     });
     assert!(output.result.unwrap().is_none());
     mirror(host, &output.events);
@@ -165,6 +172,7 @@ fn two_scribes_consume_only_their_scrolls_and_recover_a_current_movement_grant()
         let command = ClientCommand::SpeedInputs {
             session_id: 5,
             revision,
+            report_id: 1,
             state: SpeedInputState::Ready(SpeedInputs {
                 rate: 0,
                 weight: u16::try_from(weight / 10).unwrap(),

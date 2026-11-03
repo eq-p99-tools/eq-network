@@ -397,6 +397,15 @@ pub(super) fn titanium(
         let Some(mut packet) = session.receive()? else {
             continue;
         };
+        if super::spell_tables::receive(
+            server,
+            eq_network_game::spell_tables::Stage::World,
+            packet.opcode,
+            &packet.body,
+            log,
+        )? {
+            continue;
+        }
         if let Some(event) = chat::parse(packet.opcode, &packet.body, config.include_raw)? {
             log.record("", RecordEvent::Chat(event))?;
         }

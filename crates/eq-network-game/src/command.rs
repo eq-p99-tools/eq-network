@@ -665,6 +665,10 @@ pub enum GameCommand {
         session_id: u64,
         /// Echo the latest `WorldEvent::SpeedInputsRequired` revision.
         revision: u64,
+        /// Opaque host identity for this logical report. Retries reuse it;
+        /// changing the state or revision requires a fresh identity, including
+        /// recovery to identical values after an unavailable report.
+        report_id: u64,
         /// Complete inputs or explicit withdrawal, never guessed zeroes.
         state: crate::movement::SpeedInputState,
     },
@@ -985,10 +989,27 @@ fn encode_cast(
     }
 }
 
-/// `EQMac`'s merchant requests (`crate::merchant`'s `eqmac_*`); looting is
-/// not built for it yet.
+/// `EQMac`'s corpse and merchant requests, in the generation's layouts.
 fn encode_eqmac_trade(command: &GameCommand) -> Result<EncodedCommand> {
     let (opcode, body) = match command {
+        GameCommand::Loot { corpse_id, .. } => (
+            crate::loot::eqmac::REQUEST_OPCODE,
+            crate::loot::eqmac::request(*corpse_id)?.to_vec(),
+        ),
+        GameCommand::LootItem {
+            corpse_id,
+            own_id,
+            place,
+            auto,
+            ..
+        } => (
+            crate::loot::eqmac::ITEM_OPCODE,
+            crate::loot::eqmac::item_request(*corpse_id, *own_id, *place, *auto)?.to_vec(),
+        ),
+        GameCommand::EndLoot { corpse_id, .. } => (
+            crate::loot::eqmac::END_OPCODE,
+            crate::loot::eqmac::request(*corpse_id)?.to_vec(),
+        ),
         GameCommand::Shop {
             merchant_id,
             own_id,
@@ -1026,7 +1047,7 @@ fn encode_eqmac_trade(command: &GameCommand) -> Result<EncodedCommand> {
             crate::merchant::EQMAC_SELL_OPCODE,
             crate::merchant::eqmac_sell(*merchant_id, *own_id, *slot, *quantity)?.to_vec(),
         ),
-        _ => anyhow::bail!("looting is not implemented for the EQMac client"),
+        _ => anyhow::bail!("not an EQMac corpse or merchant command"),
     };
     Ok(EncodedCommand { opcode, body })
 }
@@ -1440,12 +1461,11 @@ mod tests {
     #[test]
     fn corpse_and_merchant_commands_use_each_generations_opcodes() {
         let created = std::time::Instant::now();
-        // EQMac's merchant requests, in its own opcodes and lengths; its
-        // looting is not built.
+        // Each generation's corpse and merchant opcodes and lengths.
         let eqmac = [
-            None,
-            None,
-            None,
+            Some((0x4e40, 2)),
+            Some((0xa040, 12)),
+            Some((0x4f40, 2)),
             Some((0x0b40, 12)),
             Some((0x3740, 4)),
             Some((0x3540, 16)),

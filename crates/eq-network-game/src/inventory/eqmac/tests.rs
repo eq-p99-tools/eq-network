@@ -2,6 +2,57 @@ use super::*;
 use crate::books::Book;
 
 #[test]
+fn rule_aware_view_reader_uses_the_views_slot_without_delivering_an_item() {
+    let mut food = record(0, 80, i16::MAX);
+    food[246] = 20;
+    food[253] = 14;
+    food[276] = 3;
+    food[278] = 12;
+    let view_slot = InventorySlot(crate::exchange::THEIR_FIRST_SLOT);
+    for (rules, stack) in [(ItemRules::Takp, Some(12)), (ItemRules::Quarm, None)] {
+        let item = super::super::eqmac_record_at(&food, view_slot, rules).unwrap();
+        assert_eq!(item.slot, view_slot);
+        assert_eq!(item.stack_count, stack);
+        assert!(super::super::eqmac_record_at(&food[..359], view_slot, rules).is_err());
+        assert!(super::super::eqmac_record_at(&[0; 361], view_slot, rules).is_err());
+        // The unrelated record slot is invalid for actual inventory delivery.
+        assert!(decode_with(PLACED_OPCODE, &food, rules).is_err());
+    }
+}
+
+#[test]
+fn selected_item_rules_apply_to_snapshots_and_cursor_refills() {
+    let mut food = record(0, 80, 22);
+    food[246] = 20;
+    food[253] = 14;
+    food[276] = 3;
+    food[278] = 12;
+    food[247] = 255;
+    for (rules, stack, charges) in [(ItemRules::Takp, Some(12), 0), (ItemRules::Quarm, None, 12)] {
+        put(&mut food, 184, &22i16.to_le_bytes());
+        let Some(InventoryUpdate::Snapshot(items)) =
+            decode_with(INVENTORY_OPCODE, &inventory_body(&[food.clone()]), rules).unwrap()
+        else {
+            panic!()
+        };
+        assert_eq!(items[0].stack_count, stack);
+        assert_eq!(items[0].charges, charges);
+        assert_eq!(items[0].rules.eqmac.unwrap().gm_flag, -1);
+
+        put(&mut food, 184, &0i16.to_le_bytes());
+        let Some(InventoryUpdate::Cursor(items)) =
+            decode_with(SUMMONED_OPCODE, &food, rules).unwrap()
+        else {
+            panic!()
+        };
+        assert_eq!(items[0].slot, InventorySlot::CURSOR);
+        assert_eq!(items[0].stack_count, stack);
+        assert_eq!(items[0].charges, charges);
+        assert_eq!(items[0].rules.eqmac.unwrap().gm_flag, -1);
+    }
+}
+
+#[test]
 fn quarm_uses_the_wire_stack_flag_and_keeps_charge_sentinels_and_gm_restrictions() {
     let mut food = record(0, 80, 22);
     food[246] = 20;

@@ -4,7 +4,7 @@ mod carry;
 mod gate;
 pub mod history;
 mod inputs;
-pub use inputs::{SpeedInputState, SpeedInputUnavailable, SpeedInputs};
+pub use inputs::{SpeedInputAcceptance, SpeedInputState, SpeedInputUnavailable, SpeedInputs};
 mod session;
 mod speeds;
 pub use carry::{between_reports, carry, Carried, ZBetween};

@@ -621,6 +621,10 @@ pub enum ItemHitPoints {
 /// wildcard arm.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub enum WorldEvent {
+    /// P99 spell-table facts, delivered in world/zone receive order even
+    /// before profile admission. Installed definitions and provider epochs
+    /// remain host-owned; unavailable updates must not fall back silently.
+    SpellTable(crate::spell_tables::Event),
     /// A server spell action; icon flags do not establish an authoritative buff slot.
     SpellEffect(crate::buffs::SpellEffect),
     /// Admission buff slots; holes retain their original indexes.
@@ -789,6 +793,10 @@ pub enum WorldEvent {
         /// Opaque revision to echo in `GameCommand::SpeedInputs`.
         revision: u64,
     },
+    /// The local session accepted exact ready inputs and evaluated their grant,
+    /// including when numeric speeds did not change. This never grants movement
+    /// by itself; consumers still honor `MotionState` and lifecycle withdrawals.
+    SpeedInputsAccepted(crate::movement::SpeedInputAcceptance),
     /// Local session movement gate; None clears pending input and disables walking.
     MotionState {
         /// Current zone admission.
@@ -1031,6 +1039,17 @@ pub enum WorldEvent {
     },
     /// The server's assessment of a considered entity.
     Consideration(crate::combat::Consideration),
+    /// Local submission or refusal of a normal combat request. A sent toggle
+    /// does not establish authoritative attack state or predict any result;
+    /// only the server's consideration, damage and animation records report those.
+    CombatRequest {
+        /// The zone admission the request was made for.
+        session_id: u64,
+        /// What the host requested.
+        request: crate::combat::CombatRequest,
+        /// Whether it was submitted or refused locally.
+        status: crate::combat::CombatRequestStatus,
+    },
     /// Camp progress for the current admission.
     Camp(CampStatus),
     /// Carried coins, from admission or a server money update.

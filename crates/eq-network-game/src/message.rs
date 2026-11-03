@@ -169,24 +169,27 @@ pub fn titanium(opcode: u16, body: &[u8]) -> Vec<Message> {
 /// character out, its request that the client move, Quarm's move of a dead
 /// player to their bind point and TAKP's word that a translocate the player
 /// accepted lets them go, a translocate's offer, the server's answer to the
-/// client's request, the zone's numbered destinations, the zone's header,
+/// client's request, the zone's doors and ground objects, numbered destinations and header,
 /// and the player's bind point from their profile.
 #[must_use]
 pub fn eqmac(opcode: u16, body: &[u8]) -> Vec<Message> {
-    eqmac_with(opcode, body, inventory::decode_eqmac)
+    eqmac_with(opcode, body, inventory::ItemRules::Takp)
 }
 
 /// Quarm's `EQMac` messages, with its flag-based inventory stackability.
 #[must_use]
 pub fn quarm(opcode: u16, body: &[u8]) -> Vec<Message> {
-    eqmac_with(opcode, body, inventory::decode_quarm)
+    eqmac_with(opcode, body, inventory::ItemRules::Quarm)
 }
 
-fn eqmac_with(
-    opcode: u16,
-    body: &[u8],
-    inventory: fn(u16, &[u8]) -> anyhow::Result<Option<crate::inventory::InventoryUpdate>>,
-) -> Vec<Message> {
+/// An `EQMac` zone packet's messages under the server's item rules.
+///
+/// All servers share the generation's packet layouts. Only inventory
+/// stackability is interpreted by `item_rules`; other messages and malformed
+/// packet diagnostics are read as by [`eqmac`]. The fixed-policy entry points
+/// [`eqmac`] and [`quarm`] retain their existing behavior.
+#[must_use]
+pub fn eqmac_with(opcode: u16, body: &[u8], item_rules: inventory::ItemRules) -> Vec<Message> {
     match opcode {
         crate::quarm::ZONE_LOGOUT_REPLY => vec![Message::LoggedOut],
         crate::quarm::ZONE_CHANGE_REQUEST => vec![crate::quarm::zone_request(body).map_or_else(
@@ -237,8 +240,10 @@ fn eqmac_with(
             |error| unreadable(Part::World, &error),
             Message::MerchantList,
         )],
+        _ if let Some(message) = eqmac_loot(opcode, body, item_rules) => vec![message],
+        _ if let Some(message) = eqmac_objects(opcode, body) => vec![message],
         _ if let Some(message) = eqmac_exchange(opcode, body) => vec![message],
-        _ => match inventory(opcode, body) {
+        _ => match inventory::decode_eqmac_with(opcode, body, item_rules) {
             Ok(Some(update)) => vec![Message::Event(WorldEvent::Inventory(update))],
             Err(error) => vec![unreadable(Part::Inventory, &error)],
             Ok(None) => crate::quarm::updates(opcode, body).map_or_else(
@@ -246,6 +251,32 @@ fn eqmac_with(
                 |events| events.into_iter().map(Message::Event).collect(),
             ),
         },
+    }
+}
+
+/// Corpse views are decoded before inventory packets, so their places can
+/// never be mistaken for carried slots.
+fn eqmac_loot(opcode: u16, body: &[u8], rules: inventory::ItemRules) -> Option<Message> {
+    match crate::loot::eqmac::decode(opcode, body, rules) {
+        Ok(Some(update)) => Some(Message::Event(WorldEvent::Loot(update))),
+        Ok(None) => None,
+        Err(error) => Some(unreadable(Part::World, &error)),
+    }
+}
+
+/// The generation's door/object news. Layout failures are world diagnostics,
+/// never an inventory grant or a partially applied object table.
+fn eqmac_objects(opcode: u16, body: &[u8]) -> Option<Message> {
+    let decoded = match crate::doors::eqmac::decode(opcode, body) {
+        Ok(Some(update)) => Ok(Some(WorldEvent::Doors(update))),
+        Ok(None) => crate::objects::eqmac::decode(opcode, body)
+            .map(|update| update.map(WorldEvent::Objects)),
+        Err(error) => Err(error),
+    };
+    match decoded {
+        Ok(Some(event)) => Some(Message::Event(event)),
+        Ok(None) => None,
+        Err(error) => Some(unreadable(Part::World, &error)),
     }
 }
 

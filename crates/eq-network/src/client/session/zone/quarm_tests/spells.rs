@@ -35,9 +35,16 @@ fn cast(spell_id: u32, target_id: u16) -> ClientCommand {
 
 /// Feed wire replies through the same explanation and observation path as a zone.
 fn receive(features: &mut Features, world: &mut World, opcode: u16, body: &[u8]) {
-    let wire = servers::server_type(ServerProtocol::Quarm).wire();
+    let server = servers::server_type(ServerProtocol::Quarm);
+    let wire = server.wire();
     let output = testing::run_on(wire, |out| {
-        hear(wire.messages(opcode, body), features, world, out, true)
+        hear(
+            wire.messages(opcode, body, server.item_rules()),
+            features,
+            world,
+            out,
+            true,
+        )
     });
     assert!(output.result.unwrap().is_none());
     assert_eq!(output.sent.len(), 0);

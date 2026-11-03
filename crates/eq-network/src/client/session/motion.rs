@@ -10,8 +10,8 @@ use eq_network_game::{
     appearance::AppearanceChange,
     message::Message,
     movement::{
-        MotionCalibration, MotionSession, MovementRequest, PositionPacket, SpeedInputState,
-        SpeedInputs, SpeedState, STATIONARY_HEARTBEAT,
+        MotionCalibration, MotionSession, MovementRequest, PositionPacket, SpeedInputAcceptance,
+        SpeedInputState, SpeedInputs, SpeedState, STATIONARY_HEARTBEAT,
     },
     request::Request,
     world::{PlayerState, Position, WorldEvent},
@@ -171,6 +171,8 @@ pub(super) struct Motion {
     /// movement rate, the weight carried and the capacity), once it has
     /// sent one; until then the session grants no movement itself.
     inputs: Option<SpeedInputs>,
+    input_report_id: Option<u64>,
+    accepted_inputs: Option<SpeedInputAcceptance>,
     revision: u64,
     fatigue: Option<u8>,
     belongings: Option<(
@@ -203,6 +205,8 @@ impl Motion {
             jumps: falls && jumps,
             spell_landing,
             inputs: None,
+            input_report_id: None,
+            accepted_inputs: None,
             revision: 0,
             fatigue: None,
             belongings: None,
@@ -238,10 +242,18 @@ impl Motion {
     /// carrying too much. Where the generation's rule is unread, only a
     /// host's calibration grants them.
     fn grant(&mut self, world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
+        let granted = self.apply_grant(world, out)?;
+        self.acknowledge_inputs(world, out, granted)
+    }
+
+    /// Evaluate the existing movement rule, distinguishing successful current
+    /// calibration from missing, withdrawn or rejected calibration. Receipt
+    /// bookkeeping must not infer success from a prior positive calibration.
+    fn apply_grant(&mut self, world: &mut World, out: &mut Out<'_, '_>) -> Result<bool> {
         let (Some(rule), Some(inputs), Some(player)) =
             (out.wire.speeds(), self.inputs, world.player.as_ref())
         else {
-            return Ok(());
+            return Ok(false);
         };
         let speeds = rule(&SpeedState {
             run: player.run_speed,
@@ -268,24 +280,66 @@ impl Motion {
             self.encumbered = Some(encumbered);
         }
         let Some(motion) = world.body.motion.as_mut() else {
-            return Ok(());
+            return Ok(false);
         };
         if motion.calibration() == speeds.motion {
-            return Ok(());
+            return Ok(speeds.motion.is_some());
         }
         let Some(speeds) = speeds.motion else {
-            return self.withdraw_input(world, out);
+            self.withdraw_input(world, out)?;
+            return Ok(false);
         };
         match motion.calibrate(speeds, Instant::now()) {
-            Ok(()) => out.log.send(ClientEvent::World(granted(
-                world.session_id,
-                &speeds,
-                motion.falls(),
-            ))),
-            Err(error) => out
-                .log
-                .diagnostic(format!("Rejected movement speeds: {error}")),
+            Ok(()) => {
+                // A fresh calibration follows a withdrawal the host heard: a
+                // correction, a same-zone relocation or a refused transfer's
+                // rewind lose the calibration without asking for the inputs
+                // again. The host's receipt died with that withdrawal, so the
+                // grant carries the receipt again.
+                self.accepted_inputs = None;
+                out.log.send(ClientEvent::World(granted(
+                    world.session_id,
+                    &speeds,
+                    motion.falls(),
+                )))?;
+                Ok(true)
+            }
+            Err(error) => {
+                out.log
+                    .diagnostic(format!("Rejected movement speeds: {error}"))?;
+                Ok(false)
+            }
         }
+    }
+
+    /// Publish exact accepted-report identity even when calibration is unchanged.
+    /// A later change in its grant publishes, and so does every fresh
+    /// calibration; identical ticks stay quiet.
+    fn acknowledge_inputs(
+        &mut self,
+        world: &World,
+        out: &mut Out<'_, '_>,
+        granted: bool,
+    ) -> Result<()> {
+        let (Some(inputs), Some(report_id)) = (self.inputs, self.input_report_id) else {
+            self.accepted_inputs = None;
+            return Ok(());
+        };
+        let accepted = SpeedInputAcceptance {
+            session_id: world.session_id,
+            revision: self.revision,
+            report_id,
+            inputs,
+            granted: granted && world.ready() && !world.lifecycle.blocks_motion(),
+        };
+        if self.accepted_inputs != Some(accepted) {
+            out.log
+                .send(ClientEvent::World(WorldEvent::SpeedInputsAccepted(
+                    accepted,
+                )))?;
+            self.accepted_inputs = Some(accepted);
+        }
+        Ok(())
     }
 
     /// Takes the host's report of what the player's speeds depend on.
@@ -297,16 +351,23 @@ impl Motion {
     ) -> Result<()> {
         self.refresh_belongings(world, out)?;
         let ClientCommand::SpeedInputs {
-            revision, state, ..
+            session_id,
+            revision,
+            report_id,
+            state,
         } = *command
         else {
             return Ok(());
         };
-        if revision != self.revision {
+        if session_id != world.session_id || revision != self.revision {
             return out
                 .log
                 .diagnostic("Rejected obsolete movement inputs".into());
         }
+        self.input_report_id = match state {
+            SpeedInputState::Ready(_) => Some(report_id),
+            SpeedInputState::Unavailable(_) => None,
+        };
         self.inputs = match state {
             SpeedInputState::Ready(inputs) => Some(inputs),
             SpeedInputState::Unavailable(_) => {
@@ -318,7 +379,8 @@ impl Motion {
     }
 
     /// Withdraws input while retaining bounded passive descent and heartbeats.
-    fn withdraw_input(&self, world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
+    fn withdraw_input(&mut self, world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
+        self.accepted_inputs = None;
         if let Some(motion) = world.body.motion.as_mut() {
             motion.withdraw();
         }
@@ -332,6 +394,7 @@ impl Motion {
     /// Invalidates queued reports and requests a calculation from the new state.
     fn require_inputs(&mut self, world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
         self.inputs = None;
+        self.input_report_id = None;
         self.revision = self.revision.wrapping_add(1);
         self.withdraw_input(world, out)?;
         world.happened(Message::Event(WorldEvent::SpeedInputsRequired {
@@ -603,9 +666,11 @@ impl Feature for Motion {
                 Ok(())
             }
             // The transfers feature stops the body when the player dies.
-            WorldEvent::Death(death) if world.is_player(death.spawn_id) => out
-                .log
-                .send(ClientEvent::World(withdrawn(world.session_id))),
+            WorldEvent::Death(death) if world.is_player(death.spawn_id) => {
+                self.accepted_inputs = None;
+                out.log
+                    .send(ClientEvent::World(withdrawn(world.session_id)))
+            }
             _ => Ok(()),
         }
     }
@@ -772,7 +837,7 @@ mod tests {
             .collect()
     }
 
-    const EQMAC: &dyn super::super::wire::Wire = &super::super::wire::EqMac::Takp;
+    const EQMAC: &dyn super::super::wire::Wire = &super::super::wire::EqMac;
 
     /// An `EQMac` player, level 50, admitted and not yet granted speeds.
     fn eqmac_admitted() -> (World, Motion) {
@@ -798,12 +863,166 @@ mod tests {
         ClientCommand::SpeedInputs {
             session_id: 5,
             revision: 1,
+            report_id: 1,
             state: SpeedInputState::Ready(SpeedInputs {
                 rate,
                 weight,
                 capacity: 100,
             }),
         }
+    }
+
+    fn acceptances(events: &[ClientEvent]) -> Vec<SpeedInputAcceptance> {
+        events
+            .iter()
+            .filter_map(|event| match event {
+                ClientEvent::World(WorldEvent::SpeedInputsAccepted(accepted)) => Some(*accepted),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn accepted_reports_are_identified_even_when_the_calibration_is_unchanged() {
+        use super::super::servers;
+        use crate::client::ServerProtocol;
+
+        for protocol in [
+            ServerProtocol::EqEmu,
+            ServerProtocol::Project1999,
+            ServerProtocol::Takp,
+            ServerProtocol::Quarm,
+        ] {
+            let wire = servers::server_type(protocol).wire();
+            let (mut world, mut motion) = eqmac_admitted();
+            for (report_id, weight) in [(11, 0), (12, 1), (13, 0)] {
+                let inputs = SpeedInputs {
+                    rate: 0,
+                    weight,
+                    capacity: 100,
+                };
+                let report = ClientCommand::SpeedInputs {
+                    session_id: 5,
+                    revision: 1,
+                    report_id,
+                    state: SpeedInputState::Ready(inputs),
+                };
+                let outcome = testing::run_on(wire, |out| motion.handle(&report, &mut world, out));
+                outcome.result.unwrap();
+                assert_eq!(
+                    acceptances(&outcome.events),
+                    [SpeedInputAcceptance {
+                        session_id: 5,
+                        revision: 1,
+                        report_id,
+                        inputs,
+                        granted: true,
+                    }]
+                );
+                if report_id != 11 {
+                    assert_eq!(speeds(&outcome.events), Vec::<Option<f32>>::new());
+                }
+                assert!(outcome.sent.is_empty() && outcome.unreliable.is_empty());
+                let tick =
+                    testing::run_on(wire, |out| motion.tick(Instant::now(), &mut world, out));
+                tick.result.unwrap();
+                assert_eq!(
+                    acceptances(&tick.events),
+                    Vec::<SpeedInputAcceptance>::new()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn unavailable_root_and_obsolete_reports_cannot_acknowledge_a_positive_grant() {
+        use eq_network_game::movement::SpeedInputUnavailable;
+
+        let (mut world, mut motion) = eqmac_admitted();
+        let unavailable = ClientCommand::SpeedInputs {
+            session_id: 5,
+            revision: 1,
+            report_id: 21,
+            state: SpeedInputState::Unavailable(SpeedInputUnavailable::Effects),
+        };
+        let output = testing::run_on(EQMAC, |out| motion.handle(&unavailable, &mut world, out));
+        output.result.unwrap();
+        assert_eq!(
+            acceptances(&output.events),
+            Vec::<SpeedInputAcceptance>::new()
+        );
+        let mut rooted = report(-1000, 0);
+        if let ClientCommand::SpeedInputs { report_id, .. } = &mut rooted {
+            *report_id = 22;
+        }
+        let output = testing::run_on(EQMAC, |out| motion.handle(&rooted, &mut world, out));
+        output.result.unwrap();
+        assert!(matches!(
+            acceptances(&output.events)[..],
+            [SpeedInputAcceptance {
+                report_id: 22,
+                granted: false,
+                ..
+            }]
+        ));
+        for (session_id, revision) in [(4, 1), (5, 0)] {
+            let stale = ClientCommand::SpeedInputs {
+                session_id,
+                revision,
+                report_id: 23,
+                state: SpeedInputState::Ready(SpeedInputs {
+                    rate: 0,
+                    weight: 0,
+                    capacity: 100,
+                }),
+            };
+            let output = testing::run_on(EQMAC, |out| motion.handle(&stale, &mut world, out));
+            output.result.unwrap();
+            assert_eq!(
+                acceptances(&output.events),
+                Vec::<SpeedInputAcceptance>::new()
+            );
+            assert!(world.body.motion.as_ref().unwrap().calibration().is_none());
+        }
+        let output = testing::run_on(EQMAC, |out| motion.handle(&report(0, 0), &mut world, out));
+        output.result.unwrap();
+        assert!(matches!(
+            acceptances(&output.events)[..],
+            [SpeedInputAcceptance { granted: true, .. }]
+        ));
+    }
+
+    #[test]
+    fn an_accepted_report_receives_its_later_positive_grant_without_reposting() {
+        let (mut world, mut motion) = eqmac_admitted();
+        let mut player = world.player.as_ref().unwrap().clone();
+        player.run_speed = f32::NAN;
+        world.player.admit(player);
+        let output = testing::run_on(EQMAC, |out| motion.handle(&report(0, 0), &mut world, out));
+        output.result.unwrap();
+        assert!(matches!(
+            acceptances(&output.events)[..],
+            [SpeedInputAcceptance { granted: false, .. }]
+        ));
+        let mut player = world.player.as_ref().unwrap().clone();
+        player.run_speed = 0.7;
+        world.player.admit(player);
+        let output = testing::run_on(EQMAC, |out| motion.tick(Instant::now(), &mut world, out));
+        output.result.unwrap();
+        assert!(matches!(
+            acceptances(&output.events)[..],
+            [SpeedInputAcceptance {
+                report_id: 1,
+                granted: true,
+                ..
+            }]
+        ));
+        let output = testing::run_on(EQMAC, |out| motion.tick(Instant::now(), &mut world, out));
+        output.result.unwrap();
+        assert_eq!(
+            acceptances(&output.events),
+            Vec::<SpeedInputAcceptance>::new()
+        );
     }
 
     /// Whether a step granted the one speed, near `expected`.
@@ -880,6 +1099,7 @@ mod tests {
         let fresh_report = |rate| ClientCommand::SpeedInputs {
             session_id: 5,
             revision: 2,
+            report_id: 1,
             state: SpeedInputState::Ready(SpeedInputs {
                 rate,
                 weight: 50,
@@ -1047,6 +1267,7 @@ mod tests {
         let unavailable = ClientCommand::SpeedInputs {
             session_id: 5,
             revision: 1,
+            report_id: 1,
             state: SpeedInputState::Unavailable(SpeedInputUnavailable::Inventory),
         };
         let output = testing::run_on(EQMAC, |out| motion.handle(&unavailable, &mut world, out));
@@ -1080,6 +1301,7 @@ mod tests {
         let current = ClientCommand::SpeedInputs {
             session_id: 5,
             revision: 2,
+            report_id: 1,
             state: SpeedInputState::Ready(SpeedInputs {
                 rate: 0,
                 weight: 10,
@@ -1104,6 +1326,42 @@ mod tests {
             .unwrap();
         assert!(world.body.motion.as_ref().unwrap().calibration().is_none());
         assert_eq!(motion.revision, 3);
+    }
+
+    /// A same-zone relocation or a refused transfer's rewind corrects the
+    /// player without asking for the inputs again, after telling the host its
+    /// movement was withdrawn. The grant that follows the fresh calibration
+    /// carries its receipt again, so the host's wait for one ends; a tick
+    /// that changes nothing stays quiet.
+    #[test]
+    fn a_fresh_calibration_after_a_correction_reissues_the_receipt() {
+        let (mut world, mut motion) = eqmac_admitted();
+        let receipts = |events: &[ClientEvent]| -> Vec<(bool, bool)> {
+            events
+                .iter()
+                .filter_map(|event| match event {
+                    ClientEvent::World(WorldEvent::MotionState {
+                        units_per_second, ..
+                    }) => Some((false, units_per_second.is_some())),
+                    ClientEvent::World(WorldEvent::SpeedInputsAccepted(accepted)) => {
+                        Some((true, accepted.granted))
+                    }
+                    _ => None,
+                })
+                .collect()
+        };
+        let outcome = testing::run_on(EQMAC, |out| motion.handle(&report(0, 50), &mut world, out));
+        outcome.result.unwrap();
+        assert_eq!(receipts(&outcome.events), [(false, true), (true, true)]);
+        let outcome = testing::run_on(EQMAC, |out| motion.tick(Instant::now(), &mut world, out));
+        outcome.result.unwrap();
+        assert_eq!(receipts(&outcome.events), []);
+        world.correct_own(at(1.0), Instant::now()).unwrap();
+        assert!(world.body.motion.as_ref().unwrap().calibration().is_none());
+        let outcome = testing::run_on(EQMAC, |out| motion.tick(Instant::now(), &mut world, out));
+        outcome.result.unwrap();
+        assert_eq!(receipts(&outcome.events), [(false, true), (true, true)]);
+        assert_eq!(motion.revision, 1);
     }
 
     /// A spell landing on the player asks for the speed inputs again by the

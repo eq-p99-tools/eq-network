@@ -349,6 +349,15 @@ pub(super) fn run(
         if let Some(shield) = shield.as_ref() {
             shield.spawns(packet.opcode, &mut packet.body, &credentials.key)?;
         }
+        if super::spell_tables::receive(
+            server,
+            eq_network_game::spell_tables::Stage::Zone { session_id },
+            packet.opcode,
+            &packet.body,
+            log,
+        )? {
+            continue;
+        }
         // What the generation's client answers by itself, at any time.
         if let Some(reply) = server.wire().answer(packet.opcode, &packet.body) {
             session.send(reply.opcode, &reply.body)?;
@@ -395,7 +404,9 @@ pub(super) fn run(
         let messages = unheard.sift(
             server.wire(),
             packet.opcode,
-            server.wire().messages(packet.opcode, &packet.body),
+            server
+                .wire()
+                .messages(packet.opcode, &packet.body, server.item_rules()),
             log,
         )?;
         let speaker = sender(&config.character, &world);
@@ -855,6 +866,7 @@ mod tests {
             ClientCommand::SpeedInputs {
                 session_id,
                 revision: 1,
+                report_id: 1,
                 state: eq_network_game::movement::SpeedInputState::Ready(
                     eq_network_game::movement::SpeedInputs {
                         rate: 0,
@@ -1222,7 +1234,7 @@ mod tests {
             position: crate::world::Position::default(),
         };
         let outcome = testing::run(|out| -> Result<()> {
-            out.wire = &wire::EqMac::Takp;
+            out.wire = &wire::EqMac;
             assert!(hear(
                 vec![Message::Bind(bind)],
                 &mut features,
@@ -1500,8 +1512,11 @@ mod tests {
                 Capability::Moving,
                 Capability::Falling,
                 Capability::Targeting,
+                Capability::Combat,
+                Capability::Looting,
                 Capability::Talking,
                 Capability::Camping,
+                Capability::GroundItems,
                 Capability::Zoning,
                 Capability::Abilities,
                 Capability::EnvironmentalDamage,
@@ -1523,6 +1538,7 @@ mod tests {
                 Capability::Combat,
                 Capability::Talking,
                 Capability::Camping,
+                Capability::GroundItems,
                 Capability::Zoning,
                 Capability::Abilities,
                 Capability::Grouping,
@@ -1648,6 +1664,9 @@ mod tests {
 mod eqmac_tests;
 
 #[cfg(test)]
+mod world_object_tests;
+
+#[cfg(test)]
 mod quarm_tests;
 
 #[cfg(test)]
@@ -1655,3 +1674,12 @@ mod ability_tests;
 
 #[cfg(test)]
 mod quarm_inventory_tests;
+
+#[cfg(test)]
+mod item_move_tests;
+
+#[cfg(test)]
+mod combat_tests;
+
+#[cfg(test)]
+mod loot_tests;
