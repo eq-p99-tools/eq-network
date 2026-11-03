@@ -190,13 +190,18 @@ pub(super) struct Motion {
     /// current alone, so the player reads as more hurt than they are: the
     /// slower side.
     hit_points: Option<(i32, i32)>,
+    /// The spell action flag that says a spell landed on its target, as the
+    /// server type says ([`ServerType::spell_landing_flag`](super::servers::ServerType::spell_landing_flag)); none where it
+    /// is unchecked, and then no action is taken as a landing.
+    spell_landing: Option<u8>,
 }
 
 impl Motion {
-    pub(super) const fn new(falls: bool, jumps: bool) -> Self {
+    pub(super) const fn new(falls: bool, jumps: bool, spell_landing: Option<u8>) -> Self {
         Self {
             falls,
             jumps: falls && jumps,
+            spell_landing,
             inputs: None,
             revision: 0,
             fatigue: None,
@@ -561,8 +566,12 @@ impl Feature for Motion {
             WorldEvent::Buff(update) if world.is_player(update.entity_id) => {
                 self.require_inputs(world, out)
             }
+            // A spell landing on the player, by the server type's flag.
             WorldEvent::SpellEffect(effect)
-                if world.is_player(effect.target_id) && effect.effect_flag == 4 =>
+                if world.is_player(effect.target_id)
+                    && self
+                        .spell_landing
+                        .is_some_and(|flag| flag == effect.effect_flag) =>
             {
                 self.require_inputs(world, out)
             }
@@ -653,7 +662,7 @@ mod tests {
         world.admitted = Some(Instant::now());
         world.body.own(7);
         world.body.place(at(1.0));
-        let mut motion = Motion::new(false, false);
+        let mut motion = Motion::new(false, false, None);
         let now = Instant::now();
         let outcome = testing::run(|out| motion.tick(now, &mut world, out));
         outcome.result.unwrap();
@@ -701,7 +710,7 @@ mod tests {
             },
             created: now.checked_sub(Duration::from_millis(5)).unwrap(),
         };
-        let mut motion = Motion::new(false, false);
+        let mut motion = Motion::new(false, false, None);
         testing::run(|out| motion.admitted(&mut world, out))
             .result
             .unwrap();
@@ -716,7 +725,7 @@ mod tests {
         world.own_spawn = Some(7);
         world.player.admit(testing::player(7));
         world.admitted = Some(Instant::now());
-        let mut motion = Motion::new(false, false);
+        let mut motion = Motion::new(false, false, None);
         testing::run(|out| motion.admitted(&mut world, out))
             .result
             .unwrap();
@@ -773,7 +782,7 @@ mod tests {
         (player.run_speed, player.walk_speed, player.level) = (0.7, 0.46, 50);
         world.player.admit(player);
         world.admitted = Some(Instant::now());
-        let mut motion = Motion::new(true, true);
+        let mut motion = Motion::new(true, true, None);
         let outcome = testing::run_on(EQMAC, |out| motion.admitted(&mut world, out));
         outcome.result.unwrap();
         assert!(
@@ -939,7 +948,7 @@ mod tests {
         let mut world = World::new(5);
         world.own_spawn = Some(7);
         world.player.admit(testing::player(7));
-        let mut motion = Motion::new(true, false);
+        let mut motion = Motion::new(true, false, None);
         // Before the admission there is no guard to tell.
         let outcome = testing::run(|out| motion.handle(&climb(3.15), &mut world, out));
         outcome.result.unwrap();
@@ -963,7 +972,7 @@ mod tests {
         (player.run_speed, player.walk_speed, player.level) = (0.7, 0.46, 50);
         world.player.admit(player);
         world.admitted = Some(Instant::now());
-        let mut motion = Motion::new(false, false);
+        let mut motion = Motion::new(false, false, None);
         let outcome = testing::run(|out| motion.admitted(&mut world, out));
         outcome.result.unwrap();
         assert!(
@@ -996,7 +1005,7 @@ mod tests {
         world.own_spawn = Some(7);
         world.player.admit(testing::player(7));
         world.admitted = Some(Instant::now());
-        let mut motion = Motion::new(false, false);
+        let mut motion = Motion::new(false, false, None);
         testing::run(|out| motion.admitted(&mut world, out))
             .result
             .unwrap();
@@ -1095,5 +1104,60 @@ mod tests {
             .unwrap();
         assert!(world.body.motion.as_ref().unwrap().calibration().is_none());
         assert_eq!(motion.revision, 3);
+    }
+
+    /// A spell landing on the player asks for the speed inputs again by the
+    /// server type's landing flag, not a fixed one: 4 where the server type
+    /// says 4, nothing where it is unchecked.
+    #[test]
+    fn a_spell_landing_asks_for_inputs_again_by_the_server_types_flag() {
+        use eq_network_game::buffs::SpellEffect;
+        let landing = |effect_flag| {
+            Message::Event(WorldEvent::SpellEffect(SpellEffect {
+                target_id: 7,
+                caster_id: 7,
+                caster_level: 50,
+                instrument_modifier: 10,
+                spell_id: 278,
+                spell_level: 50,
+                effect_flag,
+                push: None,
+            }))
+        };
+        let granted_again = |motion: &mut Motion, world: &mut World| {
+            testing::run_on(EQMAC, |out| motion.handle(&report(0, 50), world, out))
+                .result
+                .unwrap();
+            assert!(world.body.motion.as_ref().unwrap().calibration().is_some());
+        };
+        let (mut world, mut motion) = eqmac_admitted();
+        motion.spell_landing = Some(4);
+        granted_again(&mut motion, &mut world);
+        let revision = motion.revision;
+        // Another flag is not a landing.
+        testing::run_on(EQMAC, |out| motion.observe(&landing(0), &mut world, out))
+            .result
+            .unwrap();
+        assert_eq!(motion.revision, revision);
+        assert!(world.body.motion.as_ref().unwrap().calibration().is_some());
+        let output = testing::run_on(EQMAC, |out| motion.observe(&landing(4), &mut world, out));
+        output.result.unwrap();
+        assert_eq!(speeds(&output.events), [None]);
+        assert_eq!(motion.revision, revision + 1);
+        assert!(world.body.motion.as_ref().unwrap().calibration().is_none());
+        assert!(world.take_news().iter().any(|message| matches!(
+            message,
+            Message::Event(WorldEvent::SpeedInputsRequired { revision: asked, .. })
+                if *asked == revision + 1
+        )));
+        // Unchecked for the server type: no action is a landing.
+        let (mut world, mut motion) = eqmac_admitted();
+        granted_again(&mut motion, &mut world);
+        let revision = motion.revision;
+        testing::run_on(EQMAC, |out| motion.observe(&landing(4), &mut world, out))
+            .result
+            .unwrap();
+        assert_eq!(motion.revision, revision);
+        assert!(world.body.motion.as_ref().unwrap().calibration().is_some());
     }
 }

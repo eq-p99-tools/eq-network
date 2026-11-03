@@ -5,8 +5,44 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- **Breaking:** `GameCommand::SpeedInputs` now carries `revision` and a
+  `movement::SpeedInputState` (`Ready(SpeedInputs)` or
+  `Unavailable(SpeedInputUnavailable)`) instead of bare rate, weight and
+  capacity. The session asks for them with the new
+  `WorldEvent::SpeedInputsRequired { session_id, revision }` on admission and
+  whenever a position correction, level, buff, own spell landing (by the
+  server type's landing flag), `EQMac` fatigue, inventory revision or coin
+  change could alter them; until the host answers the current revision it
+  withdraws walking, turning and jumping, keeps bounded passive descent and
+  heartbeats, and rejects an older revision. `ConfigureMotion` is refused on
+  every current wire. An unknown input is never taken as zero.
+- **Breaking:** `GameCommand::SetPosture` requires the new
+  `Capability::Posture` (`Capability::ALL` grows to 42). `Moving` covers
+  locomotion only; hosts gating stance controls on it must switch.
+- **Breaking:** `WorldEvent::SkillReset(abilities::eqmac::SkillReset)` is a
+  new variant carrying `EQMac`'s raw eight-byte skill reset; `SkillReady`
+  still follows only a zero timer.
+- **Breaking:** `items::ItemPlacement` gains `eqmac: Option<EqMacItemRules>`
+  (Quarm's stack and GM flags) and `bag_weight_reduction: u8`; literals and
+  exhaustive matches must add them. `inventory::MoveRules::Quarm` joins the
+  rules.
+- `EQMac` legacy transport starts outgoing reliable sequences at ARQ 2 and
+  no longer rewinds delivery on a retransmitted `SEQStart` at the same ARQ,
+  so the server's cumulative acknowledgement reaches the first packet and an
+  idle world session is kept. Keepalive, retry (3 s, ten attempts) and
+  silence (60 s) timers are unchanged.
+
 ### Fixed
 
+- Reconcile a scroll the server deleted after a confirmed scribe with the
+  move that put it on the cursor, so a second scribe is not read as a
+  correction and a current movement grant is recovered without re-entry.
+- Decode the full 100-word `EQMac` profile skill block and the eight-byte
+  skill update, so Quarm and TAKP offer the abilities the character has
+  trained and gate the off-hand by the trained skill. 254 and 255 remain the
+  "cannot train" and "untrained" sentinels.
 - Enable Quarm target selection and clearing through the existing EQMac
   feature, retaining visibility checks and authoritative server changes.
   Combat remains disabled; selecting a target does not enable attacks.
@@ -30,6 +66,25 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Quarm casting, gem memorization and spellbook reading through the shared
+  `EQMac` features, without book moves or deletion; item casts use the
+  current inventory and never predict charge consumption. Source-derived
+  from Quarm's cast and memorize handlers.
+- Typed `EQMac` abilities (`abilities::eqmac`): fifteen supported abilities
+  with per-ability opcodes and bodies, class and skill-rank gates, a shared
+  strike recovery released only by the server's reset, melee range 16 units
+  for strikes and taunt, and Tiger Claw reuse 6 s. Offered on Quarm and TAKP.
+  Feign Death sends the lying appearance before the feign notice; that order
+  is a source-based inference awaiting an official-client comparison.
+- Guarded Quarm inventory and coin moves (`MoveRules::Quarm`): a prediction
+  stays unsettled until a covering authoritative update, a contradicting
+  replacement invalidates until a fresh snapshot, and no absent bank reads as
+  zero. `Inventory::carried_weight_tenths` ports the servers'
+  `CalcCurrentWeight` (a stack counts once, `EQMac` reduces each bag's
+  contents, Titanium each item, coins at a quarter) and reports
+  `WeightUnavailable` instead of guessing.
+- `food::eqmac_profile` reads hunger, thirst and fatigue from the `EQMac`
+  profile; the `Nourishment` fatigue feeds the speed inputs.
 - `movement::history::Record` decodes Titanium's 17-byte movement-history
   records, preserving separate clock/sequence fields and unknown causes.
   Protocol notes document the verified opcode and remaining capture gaps;

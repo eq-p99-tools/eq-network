@@ -189,7 +189,8 @@ pub fn titanium_profile(profile: &[u8]) -> Result<Nourishment> {
 }
 
 /// Food, water and fatigue from the unpacked `EQMac` profile. Offsets follow
-/// Quarm's `Mac::PlayerProfile_Struct` (3416, 3420, 4962).
+/// Quarm's `Mac::PlayerProfile_Struct`: `hunger_level` 3416,
+/// `thirst_level` 3420, `fatigue` 4962.
 ///
 /// # Errors
 /// Rejects a truncated profile. Negative food/water counts retain the empty meaning.

@@ -164,6 +164,15 @@ standing. See [the inspected handlers](https://github.com/SecretsOTheP/EQMacEmu/
 This table records the baseline above; completed fixes and follow-up checks are
 called out separately so a new capability is not mistaken for live verification.
 
+State after the 2026-11-03 stack, for a reader of the table: the Quarm
+"Disabled" baseline rows for previews, walking/running, jump/fall, zoning,
+death/return to bind, camping/posture, inventory/coin moves (guarded, no
+merchants or meals), casting/spellbook (no book edits), targeting (no combat)
+and abilities (the supported subset) are now offered by policy, and P99 jumps
+are enabled. P99 previews are capture-checked. Everything else in "What
+remains" still stands, and the live evidence for the new rows is only what the
+validation sections below record.
+
 | Area | P99 baseline | Quarm baseline | What remains |
 | --- | --- | --- | --- |
 | Login / continued admission / chat | Exercised previously | Exercised previously | Compatibility is scenario-specific. The follow-up Quarm session decoded extended stamina without a warning; broader scenarios remain open. |

@@ -577,9 +577,12 @@ mod shared {
     }
 
     /// Moving, with or without the falls the server takes, and jumps where
-    /// it takes falls and the generation's notice of a jump is known.
-    pub(super) fn motion(falls: bool, jumps: bool) -> Box<dyn Feature> {
-        Box::new(Motion::new(falls, jumps))
+    /// it takes falls and the generation's notice of a jump is known;
+    /// `spell_landing` is the server type's
+    /// [`spell_landing_flag`](ServerType::spell_landing_flag), on which the
+    /// player's speed inputs are asked for again.
+    pub(super) fn motion(falls: bool, jumps: bool, spell_landing: Option<u8>) -> Box<dyn Feature> {
+        Box::new(Motion::new(falls, jumps, spell_landing))
     }
 
     pub(super) fn character() -> Box<dyn Feature> {
@@ -856,7 +859,7 @@ impl ServerType for Project1999 {
     /// establish the arc: the shared client-derived physics remains an
     /// inference until a custom-client jump is checked there.
     fn motion(&self, _setup: &Setup<'_>) -> Provided {
-        offer(shared::motion(true, true))
+        offer(shared::motion(true, true, self.spell_landing_flag()))
     }
 
     /// Falls only (6.332).
@@ -985,7 +988,7 @@ impl ServerType for EqEmu {
     }
 
     fn motion(&self, _setup: &Setup<'_>) -> Provided {
-        offer(shared::motion(true, true))
+        offer(shared::motion(true, true, self.spell_landing_flag()))
     }
 
     fn character(&self, _setup: &Setup<'_>) -> Provided {
@@ -1190,7 +1193,7 @@ impl ServerType for Quarm {
     /// Quarm reads the same `EQMac` position/jump packets as TAKP. Speeds,
     /// collision and airborne rules remain the generation's existing rules.
     fn motion(&self, _setup: &Setup<'_>) -> Provided {
-        offer(shared::motion(true, true))
+        offer(shared::motion(true, true, self.spell_landing_flag()))
     }
 
     /// Quarm's damage handler takes falling damage after the `EQMac` notice.
@@ -1351,7 +1354,7 @@ impl ServerType for Takp {
     /// 6.161) and reports as damage ([`Self::hazards`]), and jumps by the
     /// program's notice (TAKP sitting 2).
     fn motion(&self, _setup: &Setup<'_>) -> Provided {
-        offer(shared::motion(true, true))
+        offer(shared::motion(true, true, self.spell_landing_flag()))
     }
 
     /// Falls, which TAKP takes from the client as the program reports them

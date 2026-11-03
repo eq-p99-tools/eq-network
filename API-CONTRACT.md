@@ -80,3 +80,14 @@ locomotion and its speed inputs; it must not be required for sitting, standing
 or ducking. All current server policies offer posture independently of
 movement readiness. Hosts should gate stance buttons and hotkeys
 using the command capability, and send the usual sit then camp sequence.
+
+## Movement inputs are the host's, by revision
+
+The session grants no walking, turning or jumping until the host answers the
+latest `WorldEvent::SpeedInputsRequired` revision with `GameCommand::SpeedInputs`.
+A host answers every request, with `SpeedInputState::Unavailable` and its
+reason when it cannot yet calculate; an unanswered or older revision keeps the
+player still, which is the slow side, never zero load. Hosts should surface the
+`SpeedInputUnavailable` reason to the player. Exhaustive matches add
+`SpeedInputsRequired` and `SkillReset`; `ItemPlacement` literals add `eqmac`
+and `bag_weight_reduction`.

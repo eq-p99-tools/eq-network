@@ -16,7 +16,11 @@ pub enum WeightUnavailable {
 impl Inventory {
     /// Total carried weight in tenths, including this many carried coins. A stack counts
     /// once; `EQMac` reduces the sum of each bag's contents, Titanium reduces
-    /// each item (the respective servers' `Client::CalcCurrentWeight`). Bank/trade/queued cursor
+    /// each item (the respective servers' `Client::CalcCurrentWeight`:
+    /// `EQMacEmu` `zone/client_mods.cpp` at c2cd265 from line 985, `EQEmu`
+    /// `zone/client_mods.cpp` at 4aceae1; see
+    /// `docs/movement-input-readiness.md`). This is the servers' rule; the
+    /// official programs' own sums are unread. Bank/trade/queued cursor
     /// items do not count. Predictions that preserve the total remain usable.
     ///
     /// # Errors
