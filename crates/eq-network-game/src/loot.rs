@@ -98,7 +98,10 @@ pub enum LootUpdate {
         /// The requested place on the corpse, from 0.
         place: u16,
     },
-    /// The loot window closed.
+    /// The loot window closed: the server's completion message, or the
+    /// session's own close when the corpse view ends with the player's
+    /// death, a zone change, a logout or the corpse's despawn, since the
+    /// server sends no completion for those.
     Closed,
 }
 

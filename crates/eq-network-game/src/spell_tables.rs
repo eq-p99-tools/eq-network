@@ -2,8 +2,12 @@
 //!
 //! Registration names source spell IDs to snapshot; replay names destination
 //! and cached source IDs. Neither packet carries numeric definition values.
-//! Native handlers 0x1000efc0 and 0x1000ef00 use two-byte and four-byte entries,
-//! respectively. The 10,000-entry registry is initialized by 0x4c7481.
+//! The official-client captures show two-byte registration entries and
+//! four-byte replay entries behind a four-byte count; that the replay pairs
+//! read destination first, then the cached source, is an inference from
+//! that layout (recording checklist 6.375), to be confirmed on a server that
+//! sends a table whose effect is visible. The 10,000-entry registry is
+//! initialized by the program at 0x4c7481.
 //! A host owns its installed definitions, snapshots and selective projection;
 //! decoding these records never changes a spell or an installed file.
 use serde::Serialize;

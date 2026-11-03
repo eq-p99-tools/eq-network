@@ -1,18 +1,5 @@
 # Changelog
 
-## Unreleased: Quarm corpse access
-
-- Add source-derived EQMac loot open/close, money, listing and item-receipt
-  codecs, and offer Quarm looting through its server policy and existing
-  inventory owner. Live validation remains pending.
-- Track corpse access through grant, listing and server completion; reject
-  stale or unlisted item requests and avoid duplicate coin grants. Preserve
-  ordinary inventory deliveries after close, without predicting loot success.
-- Add `LootUpdate::Acknowledged`, an exhaustive-enum API change requiring
-  downstream match updates: an EQMac receipt echo is not a successful item
-  transfer. Document source evidence, limitations and controlled review checks
-  in `docs/eqmac-looting.md`.
-
 This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
@@ -86,6 +73,17 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   preserving the shared food/water counts and rejecting other lengths.
 
 ### Added
+
+- Add source-derived EQMac loot open/close, money, listing and item-receipt
+  codecs, and offer Quarm looting through its server policy and existing
+  inventory owner. Live validation remains pending.
+- Track corpse access through grant, listing and server completion; reject
+  stale or unlisted item requests and avoid duplicate coin grants. Preserve
+  ordinary inventory deliveries after close, without predicting loot success.
+- **Breaking:** `LootUpdate::Acknowledged` is a new variant of an exhaustive
+  enum, so downstream matches need an arm: an EQMac receipt echo is not a successful item
+  transfer. Document source evidence, limitations and controlled review checks
+  in `docs/eqmac-looting.md`.
 
 - Typed local speed-input acceptance receipts, including unchanged-speed
   acceptance and the current positive-grant outcome. Hosts supply an opaque

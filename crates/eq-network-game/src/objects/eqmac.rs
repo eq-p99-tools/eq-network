@@ -152,7 +152,7 @@ mod tests {
             assert!(decode(SPAWN_OPCODE, &body[..length]).is_err());
         }
         for padding in [1, 2] {
-            // The client's opposite-direction drop has224 bytes; that does
+            // The client's opposite-direction drop has 224 bytes; that does
             // not make it a server placement. IDs/model remain valid here.
             assert!(decode(SPAWN_OPCODE, &[body.as_slice(), &vec![0; padding]].concat()).is_err());
         }
