@@ -1,4 +1,5 @@
 //! Quarm's spell requests and authoritative replies through its actual features.
+mod consumption;
 use super::*;
 use eq_network_game::{command::Posture, inventory::InventorySlot, spells::SpellBook};
 

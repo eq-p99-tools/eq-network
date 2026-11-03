@@ -248,4 +248,154 @@ mod tests {
             Ok(0)
         );
     }
+
+    #[test]
+    fn consumption_reconciles_the_moved_item_without_settling_an_independent_move() {
+        for destination in [22, 25, 2000] {
+            let mut scroll = item(22, 30);
+            scroll.scroll_spell = Some(73);
+            let mut other = item(24, 70);
+            other.details.id = 2;
+            let mut inventory = Inventory::default();
+            inventory.apply(InventoryUpdate::Snapshot(vec![
+                scroll.clone(),
+                other.clone(),
+            ]));
+            scroll.slot = InventorySlot::CURSOR;
+            inventory.apply(InventoryUpdate::Prediction(vec![
+                scroll.clone(),
+                other.clone(),
+            ]));
+            other.slot = InventorySlot(destination);
+            inventory.apply(InventoryUpdate::Prediction(vec![scroll, other]));
+            inventory.apply(InventoryUpdate::Consume {
+                slot: InventorySlot::CURSOR,
+                charge: false,
+            });
+            assert!(inventory.predicted());
+            assert!(!inventory.stale());
+            assert_eq!(
+                inventory
+                    .prediction_origins()
+                    .map(|(slot, _)| slot.0)
+                    .collect::<Vec<_>>(),
+                if destination == 22 {
+                    vec![22, 24]
+                } else {
+                    vec![24, destination]
+                }
+            );
+            assert_eq!(
+                inventory.carried_weight_tenths(crate::GameDialect::EqMac, 0),
+                if destination == 2000 {
+                    Err(WeightUnavailable::Prediction)
+                } else {
+                    Ok(70)
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn consumption_does_not_guess_through_stacks_swaps_or_ambiguous_bulk_changes() {
+        for case in 0..3 {
+            let mut first = item(22, 30);
+            let mut second = item(23, 70);
+            let mut inventory = Inventory::default();
+            if case == 0 {
+                first.stack_count = Some(1);
+            }
+            if case == 1 {
+                second.slot = InventorySlot::CURSOR;
+            }
+            if case == 2 {
+                second = item(23, 30);
+            }
+            inventory.apply(InventoryUpdate::Snapshot(vec![
+                first.clone(),
+                second.clone(),
+            ]));
+            first.slot = InventorySlot::CURSOR;
+            let after = match case {
+                0 => vec![first, second],
+                1 => {
+                    second.slot = InventorySlot(22);
+                    vec![first, second]
+                }
+                _ => vec![first], // Cannot choose which of two identical originals moved.
+            };
+            inventory.apply(InventoryUpdate::Prediction(after));
+            inventory.apply(InventoryUpdate::Consume {
+                slot: InventorySlot::CURSOR,
+                charge: false,
+            });
+            assert!(inventory.predicted());
+            assert_eq!(
+                inventory.carried_weight_tenths(crate::GameDialect::EqMac, 0),
+                Err(WeightUnavailable::Prediction)
+            );
+        }
+    }
+
+    #[test]
+    fn whole_item_chains_and_known_queue_refills_preserve_weight_without_global_settlement() {
+        let mut inventory = Inventory::default();
+        inventory.apply(InventoryUpdate::Snapshot(vec![item(22, 30)]));
+        for slot in [30, 23, 30] {
+            inventory.apply(InventoryUpdate::Prediction(vec![item(slot, 30)]));
+        }
+        let mut queued = item(30, 40);
+        queued.details.id = 2;
+        inventory.apply(InventoryUpdate::Cursor(vec![queued]));
+        inventory.apply(InventoryUpdate::Consume {
+            slot: InventorySlot::CURSOR,
+            charge: false,
+        });
+        assert_eq!(inventory.items()[&InventorySlot::CURSOR].details.id, 2);
+        assert_eq!(inventory.queued().count(), 0);
+        assert_eq!(
+            inventory.carried_weight_tenths(crate::GameDialect::EqMac, 0),
+            Ok(40)
+        );
+        // The intermediate slot's history is not a separate server confirmation.
+        assert!(inventory.predicted());
+        assert_eq!(
+            inventory
+                .prediction_origins()
+                .map(|(slot, _)| slot.0)
+                .collect::<Vec<_>>(),
+            vec![23]
+        );
+    }
+
+    #[test]
+    fn matching_replacement_preserves_the_trace_but_a_correction_remains_uncertain() {
+        for matching in [true, false] {
+            let mut inventory = Inventory::default();
+            inventory.apply(InventoryUpdate::Snapshot(vec![item(22, 30)]));
+            inventory.apply(InventoryUpdate::Prediction(vec![item(30, 30)]));
+            inventory.apply(InventoryUpdate::Set(vec![item(
+                30,
+                if matching { 30 } else { 40 },
+            )]));
+            inventory.apply(InventoryUpdate::Consume {
+                slot: InventorySlot::CURSOR,
+                charge: false,
+            });
+            assert_eq!(inventory.predicted(), !matching);
+            assert_eq!(
+                inventory.carried_weight_tenths(crate::GameDialect::EqMac, 0),
+                if matching {
+                    Ok(0)
+                } else {
+                    Err(WeightUnavailable::Inventory)
+                }
+            );
+            inventory.apply(InventoryUpdate::Snapshot(vec![]));
+            assert_eq!(
+                inventory.carried_weight_tenths(crate::GameDialect::EqMac, 0),
+                Ok(0)
+            );
+        }
+    }
 }
