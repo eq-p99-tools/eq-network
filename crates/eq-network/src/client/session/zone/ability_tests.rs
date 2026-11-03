@@ -86,9 +86,16 @@ fn receive(
     opcode: u16,
     body: &[u8],
 ) -> testing::Outcome<Result<Option<ZoneExit>>> {
-    let wire = servers::server_type(protocol).wire();
+    let server = servers::server_type(protocol);
+    let wire = server.wire();
     testing::run_on(wire, |out| {
-        hear(wire.messages(opcode, body), features, world, out, true)
+        hear(
+            wire.messages(opcode, body, server.item_rules()),
+            features,
+            world,
+            out,
+            true,
+        )
     })
 }
 

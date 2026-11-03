@@ -66,6 +66,12 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `inventory::ItemRules`, `inventory::decode_eqmac_with` and
+  `message::eqmac_with` let server policy select TAKP or Quarm item
+  stackability while sharing one EQMac generation wire. Existing decoder
+  entry points, raw stack/GM observations and inventory actions retain
+  their behavior.
+
 - Quarm casting, gem memorization and spellbook reading through the shared
   `EQMac` features, without book moves or deletion; item casts use the
   current inventory and never predict charge consumption. Source-derived

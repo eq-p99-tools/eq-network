@@ -61,7 +61,11 @@ use super::{
 };
 use crate::p99::{self, WorldCodec};
 use eq_network_game::{
-    abilities::Ability, hazards::Hazard, inventory::MoveRules, merchant::Quotes, GameDialect,
+    abilities::Ability,
+    hazards::Hazard,
+    inventory::{ItemRules, MoveRules},
+    merchant::Quotes,
+    GameDialect,
 };
 
 /// What a zone session builds its features with.
@@ -131,6 +135,12 @@ fn leave_to_player(feature: Box<dyn Feature>) -> Provided {
 pub(super) trait ServerType: Sync {
     /// The client generation's packets the server speaks.
     fn wire(&self) -> &'static dyn Wire;
+
+    /// How the server interprets shared `EQMac` inventory records. This
+    /// affects decoding only; offering inventory actions is independent.
+    fn item_rules(&self) -> ItemRules {
+        ItemRules::Takp
+    }
 
     /// Protects a world connection, from the login body sent to it: P99's
     /// world approval, encrypted file manifests and checksum answers, and
@@ -1146,6 +1156,10 @@ impl ServerType for EqEmu {
 struct Quarm;
 
 impl ServerType for Quarm {
+    fn item_rules(&self) -> ItemRules {
+        ItemRules::Quarm
+    }
+
     /// Quarm's cast handler reads the shared 12-byte `EQMac` request and
     /// answers through its spell bar and interruption messages. Its own
     /// class, zone and expansion restrictions remain authoritative.
@@ -1231,7 +1245,7 @@ impl ServerType for Quarm {
     }
 
     fn wire(&self) -> &'static dyn Wire {
-        &EqMac::Quarm
+        &EqMac
     }
 
     /// As on TAKP, whose server Quarm's comes from ([`Takp`]).
@@ -1273,7 +1287,7 @@ impl ServerType for Takp {
     }
 
     fn wire(&self) -> &'static dyn Wire {
-        &EqMac::Takp
+        &EqMac
     }
 
     /// TAKP's server sends the spell action with flag 0 as a spell lands, to
@@ -1498,6 +1512,65 @@ mod tests {
         assert!(!empty.start_choice());
         assert!(empty.creation().is_none());
         assert_eq!(empty.spell_landing_flag(), None);
+    }
+
+    #[test]
+    fn eqmac_item_decoding_uses_the_server_policy_and_keeps_raw_restrictions() {
+        use eq_network_game::{
+            inventory::{EqMacStackFlag, InventoryUpdate},
+            message::{Message, Part},
+            world::WorldEvent,
+        };
+
+        let mut record = vec![0; 360];
+        record[..14].copy_from_slice(b"Synthetic item");
+        record[175] = 1;
+        record[176] = 1;
+        record[180..182].copy_from_slice(&42u16.to_le_bytes());
+        record[184..186].copy_from_slice(&22u16.to_le_bytes());
+        record[246] = 20;
+        record[253] = 14;
+        record[278] = 7;
+        for (flag, raw_flag, quarm_stack) in [
+            (0, EqMacStackFlag::Unstackable, None),
+            (1, EqMacStackFlag::Stackable, Some(7)),
+            (3, EqMacStackFlag::Effect, None),
+            (2, EqMacStackFlag::Unknown(2), None),
+        ] {
+            record[276] = flag;
+            for gm_flag in [0i8, -1, 42] {
+                record[247] = gm_flag.to_le_bytes()[0];
+                for (protocol, rules, stack) in [
+                    (ServerProtocol::Takp, ItemRules::Takp, Some(7)),
+                    (ServerProtocol::Quarm, ItemRules::Quarm, quarm_stack),
+                ] {
+                    let server = server_type(protocol);
+                    assert_eq!(server.item_rules(), rules);
+                    assert_eq!(server.wire().dialect(), GameDialect::EqMac);
+                    let messages = server.wire().messages(0x3140, &record, server.item_rules());
+                    let [Message::Event(WorldEvent::Inventory(InventoryUpdate::Set(items)))] =
+                        messages.as_slice()
+                    else {
+                        panic!("{messages:?}")
+                    };
+                    assert_eq!(items[0].stack_count, stack);
+                    assert_eq!(items[0].charges, if stack.is_some() { 0 } else { 7 });
+                    assert_eq!(items[0].rules.stack_size, 20);
+                    let raw = items[0].rules.eqmac.unwrap();
+                    assert_eq!(raw.stack_flag, raw_flag);
+                    assert_eq!(raw.gm_flag, gm_flag);
+                    assert!(matches!(
+                        server
+                            .wire()
+                            .messages(0x3140, &record[..359], server.item_rules())[..],
+                        [Message::Unreadable {
+                            part: Part::Inventory,
+                            ..
+                        }]
+                    ));
+                }
+            }
+        }
     }
 
     #[test]

@@ -173,7 +173,7 @@ mod tests {
         })
         .result
         .unwrap();
-        let outcome = testing::run_on(&super::super::wire::EqMac::Takp, |out| {
+        let outcome = testing::run_on(&super::super::wire::EqMac, |out| {
             feature.handle(
                 &ClientCommand::AnswerTranslocate {
                     session_id: 5,

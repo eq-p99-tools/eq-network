@@ -136,7 +136,7 @@ mod tests {
         let mut feature = Hazards::new(&[Hazard::Falling], true);
         let mut world = World::new(5);
         let outcome = testing::run(|out| {
-            out.wire = &super::super::wire::EqMac::Takp;
+            out.wire = &super::super::wire::EqMac;
             feature.handle(&report(Hazard::Falling, 160), &mut world, out)
         });
         outcome.result.unwrap();

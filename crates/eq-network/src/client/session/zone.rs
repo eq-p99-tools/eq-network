@@ -395,7 +395,9 @@ pub(super) fn run(
         let messages = unheard.sift(
             server.wire(),
             packet.opcode,
-            server.wire().messages(packet.opcode, &packet.body),
+            server
+                .wire()
+                .messages(packet.opcode, &packet.body, server.item_rules()),
             log,
         )?;
         let speaker = sender(&config.character, &world);
@@ -1222,7 +1224,7 @@ mod tests {
             position: crate::world::Position::default(),
         };
         let outcome = testing::run(|out| -> Result<()> {
-            out.wire = &wire::EqMac::Takp;
+            out.wire = &wire::EqMac;
             assert!(hear(
                 vec![Message::Bind(bind)],
                 &mut features,

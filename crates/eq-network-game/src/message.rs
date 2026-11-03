@@ -173,20 +173,23 @@ pub fn titanium(opcode: u16, body: &[u8]) -> Vec<Message> {
 /// and the player's bind point from their profile.
 #[must_use]
 pub fn eqmac(opcode: u16, body: &[u8]) -> Vec<Message> {
-    eqmac_with(opcode, body, inventory::decode_eqmac)
+    eqmac_with(opcode, body, inventory::ItemRules::Takp)
 }
 
 /// Quarm's `EQMac` messages, with its flag-based inventory stackability.
 #[must_use]
 pub fn quarm(opcode: u16, body: &[u8]) -> Vec<Message> {
-    eqmac_with(opcode, body, inventory::decode_quarm)
+    eqmac_with(opcode, body, inventory::ItemRules::Quarm)
 }
 
-fn eqmac_with(
-    opcode: u16,
-    body: &[u8],
-    inventory: fn(u16, &[u8]) -> anyhow::Result<Option<crate::inventory::InventoryUpdate>>,
-) -> Vec<Message> {
+/// An `EQMac` zone packet's messages under the server's item rules.
+///
+/// All servers share the generation's packet layouts. Only inventory
+/// stackability is interpreted by `item_rules`; other messages and malformed
+/// packet diagnostics are read as by [`eqmac`]. The fixed-policy entry points
+/// [`eqmac`] and [`quarm`] retain their existing behavior.
+#[must_use]
+pub fn eqmac_with(opcode: u16, body: &[u8], item_rules: inventory::ItemRules) -> Vec<Message> {
     match opcode {
         crate::quarm::ZONE_LOGOUT_REPLY => vec![Message::LoggedOut],
         crate::quarm::ZONE_CHANGE_REQUEST => vec![crate::quarm::zone_request(body).map_or_else(
@@ -238,7 +241,7 @@ fn eqmac_with(
             Message::MerchantList,
         )],
         _ if let Some(message) = eqmac_exchange(opcode, body) => vec![message],
-        _ => match inventory(opcode, body) {
+        _ => match inventory::decode_eqmac_with(opcode, body, item_rules) {
             Ok(Some(update)) => vec![Message::Event(WorldEvent::Inventory(update))],
             Err(error) => vec![unreadable(Part::Inventory, &error)],
             Ok(None) => crate::quarm::updates(opcode, body).map_or_else(

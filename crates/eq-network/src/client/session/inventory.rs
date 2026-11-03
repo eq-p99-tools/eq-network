@@ -854,7 +854,7 @@ mod tests {
         belongings
             .admit(&Message::Event(WorldEvent::Coins(coins)), &mut world)
             .unwrap();
-        let output = testing::run_on(&super::super::wire::EqMac::Takp, |out| -> Result<()> {
+        let output = testing::run_on(&super::super::wire::EqMac, |out| -> Result<()> {
             belongings.admitted(&mut world, out)?;
             belongings.observe(
                 &Message::Event(WorldEvent::Nourishment(Nourishment {
@@ -959,23 +959,14 @@ mod tests {
             outcome.sent.len()
         };
         // TAKP reaches a merchant 20 away in 3-D; Titanium's reach is unread.
-        assert_eq!(
-            run(&super::super::wire::EqMac::Takp, &shop(true), &world),
-            0
-        );
+        assert_eq!(run(&super::super::wire::EqMac, &shop(true), &world), 0);
         assert_eq!(run(&super::super::wire::Titanium, &shop(true), &world), 1);
         // Closing is never refused.
-        assert_eq!(
-            run(&super::super::wire::EqMac::Takp, &shop(false), &world),
-            1
-        );
+        assert_eq!(run(&super::super::wire::EqMac, &shop(false), &world), 1);
         let mut merchant = testing::spawn(9, SpawnKind::Npc);
         merchant.position.x = 20.0;
         world.spawns.insert(merchant);
-        assert_eq!(
-            run(&super::super::wire::EqMac::Takp, &shop(true), &world),
-            1
-        );
+        assert_eq!(run(&super::super::wire::EqMac, &shop(true), &world), 1);
     }
 
     /// An inventory with one item moved to the cursor by an unanswered prediction.
@@ -1295,7 +1286,7 @@ mod tests {
         belongings.admit(&snapshot, &mut world).unwrap();
         world.own_spawn = Some(7);
         world.player.admit(testing::player(7));
-        testing::run_on(&super::super::wire::EqMac::Takp, |out| {
+        testing::run_on(&super::super::wire::EqMac, |out| {
             belongings.admitted(&mut world, out)
         })
         .result
@@ -1305,7 +1296,7 @@ mod tests {
 
     #[test]
     fn on_takp_a_merchant_is_told_at_its_charge_and_a_purchase_waits_for_coins_to_cover_it() {
-        let eqmac = &super::super::wire::EqMac::Takp;
+        let eqmac = &super::super::wire::EqMac;
         let (mut belongings, mut world) = admitted_on_takp();
         let purse = |copper| Message::Event(WorldEvent::Coins(Coins::from_copper(copper)));
         testing::run(|out| belongings.observe(&purse(253), &mut world, out))
@@ -1440,7 +1431,7 @@ mod tests {
             stray,
             Message::Event(WorldEvent::Merchant(MerchantUpdate::Sold { price: 0, .. }))
         ));
-        let eqmac = &super::super::wire::EqMac::Takp;
+        let eqmac = &super::super::wire::EqMac;
         testing::run_on(eqmac, |out| belongings.handle(&sell, &mut world, out))
             .result
             .unwrap();
@@ -1576,7 +1567,7 @@ mod tests {
         };
         let pick_up = request(&world, 23, 30);
         assert!(belongings.owns(&pick_up));
-        let outcome = testing::run_on(&super::super::wire::EqMac::Takp, |out| {
+        let outcome = testing::run_on(&super::super::wire::EqMac, |out| {
             belongings.handle(&pick_up, &mut world, out)
         });
         outcome.result.unwrap();
@@ -1616,12 +1607,12 @@ mod tests {
             }))
         };
         // TAKP's own client waits until below 3000.
-        let outcome = testing::run_on(&super::super::wire::EqMac::Takp, |out| {
+        let outcome = testing::run_on(&super::super::wire::EqMac, |out| {
             belongings.observe(&report(3000), &mut world, out)
         });
         outcome.result.unwrap();
         assert!(outcome.sent.is_empty(), "sent {:?}", outcome.sent);
-        let outcome = testing::run_on(&super::super::wire::EqMac::Takp, |out| {
+        let outcome = testing::run_on(&super::super::wire::EqMac, |out| {
             belongings.observe(&report(2999), &mut world, out)
         });
         outcome.result.unwrap();
@@ -1896,7 +1887,7 @@ mod tests {
             money::{Coin, CoinPlace, CoinTransfer, EQMAC_MOVE_OPCODE},
             world::SpawnKind,
         };
-        let eqmac = &super::super::wire::EqMac::Takp;
+        let eqmac = &super::super::wire::EqMac;
         let (mut belongings, mut world) = admitted_on_takp();
         let purse = Message::Event(WorldEvent::Coins(Coins {
             gold: 12,

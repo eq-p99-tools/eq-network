@@ -185,7 +185,7 @@ mod tests {
     /// already lies, when the program's posture setter sends nothing.
     #[test]
     fn the_feign_posture_goes_out_once_until_the_player_stands_again() {
-        const EQMAC: &dyn super::super::wire::Wire = &super::super::wire::EqMac::Takp;
+        const EQMAC: &dyn super::super::wire::Wire = &super::super::wire::EqMac;
         let mut posture = OwnPosture::default();
         let outcome = testing::run_on(EQMAC, |out| posture.lie_for_feign(7, out));
         outcome.result.unwrap();

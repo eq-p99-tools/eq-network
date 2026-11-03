@@ -91,3 +91,19 @@ player still, which is the slow side, never zero load. Hosts should surface the
 `SpeedInputUnavailable` reason to the player. Exhaustive matches add
 `SpeedInputsRequired` and `SkillReset`; `ItemPlacement` literals add `eqmac`
 and `bag_weight_reduction`.
+
+## EQMac inventory decoding policy
+
+`inventory::ItemRules` selects the server's interpretation of the shared EQMac
+item layout. `Takp` derives stackability from item type and maximum charges;
+`Quarm` uses the flag at byte 276 and retains the same stack-capacity rule.
+`inventory::decode_eqmac_with(opcode, body, rules)` and
+`message::eqmac_with(opcode, body, rules)` accept that policy explicitly. The
+session obtains it from its server type and uses one EQMac generation wire.
+
+These APIs are additive. `inventory::decode_eqmac` and `message::eqmac` keep
+TAKP semantics; `inventory::decode_quarm` and `message::quarm` keep Quarm
+semantics. Both policies retain raw stack and GM observations in
+`inventory::EqMacItemRules`, including unknown values. Decoding policy does
+not enable inventory capabilities, grant a move, or change pacing, prediction
+or reconciliation. Existing move rules remain responsible for validation.

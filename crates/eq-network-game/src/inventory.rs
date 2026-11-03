@@ -14,10 +14,12 @@ pub use activation::{
 pub use banking::banker_in_range;
 pub(crate) use eqmac::details as eqmac_details;
 pub(crate) use eqmac::merchant_stock as eqmac_merchant_stock;
+pub(crate) use eqmac::record_at as eqmac_record_at;
 pub(crate) use eqmac::trade_view as eqmac_trade_view;
 pub use eqmac::{
-    decode as decode_eqmac, decode_quarm, move_item as eqmac_move, takp_item_hit_points,
-    EqMacItemRules, EqMacStackFlag, ItemHitPointCount, UnsettledItem, Wearer,
+    decode as decode_eqmac, decode_quarm, decode_with as decode_eqmac_with,
+    move_item as eqmac_move, takp_item_hit_points, EqMacItemRules, EqMacStackFlag,
+    ItemHitPointCount, ItemRules, UnsettledItem, Wearer,
 };
 pub use titanium::decode;
 pub(crate) use titanium::{parse as parse_items, parse_at};

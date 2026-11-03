@@ -36,9 +36,16 @@ fn reply(
     opcode: u16,
     body: &[u8],
 ) -> Vec<ClientEvent> {
-    let wire = servers::server_type(ServerProtocol::Quarm).wire();
+    let server = servers::server_type(ServerProtocol::Quarm);
+    let wire = server.wire();
     let output = testing::run_on(wire, |out| {
-        hear(wire.messages(opcode, body), features, world, out, true)
+        hear(
+            wire.messages(opcode, body, server.item_rules()),
+            features,
+            world,
+            out,
+            true,
+        )
     });
     assert!(output.result.unwrap().is_none());
     mirror(host, &output.events);

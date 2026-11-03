@@ -484,7 +484,7 @@ mod tests {
             by: u32::from(NPC),
         }));
         let mut world = giving_to_npc();
-        let outcome = testing::run_on(&super::super::wire::EqMac::Takp, |out| {
+        let outcome = testing::run_on(&super::super::wire::EqMac, |out| {
             Exchanges.observe(&cancelled, &mut world, out)
         });
         outcome.result.unwrap();
@@ -512,7 +512,7 @@ mod tests {
             assert!(outcome.result.is_ok());
             outcome
         };
-        let outcome = tick(&mut world, &super::super::wire::EqMac::Takp);
+        let outcome = tick(&mut world, &super::super::wire::EqMac);
         assert_eq!(outcome.sent, []);
         assert!(world.exchange.is_some());
         npc.position.x = exchange::REACH + 0.5;
@@ -521,7 +521,7 @@ mod tests {
         let outcome = tick(&mut world, &super::super::wire::Titanium);
         assert_eq!(outcome.sent, []);
         assert!(world.exchange.is_some());
-        let outcome = tick(&mut world, &super::super::wire::EqMac::Takp);
+        let outcome = tick(&mut world, &super::super::wire::EqMac);
         assert_eq!(outcome.sent, [eqmac::cancel(7, NPC).unwrap()]);
         assert!(world.exchange.is_none());
         assert!(matches!(
@@ -535,7 +535,7 @@ mod tests {
     #[test]
     fn eqmac_gives_in_its_own_packets_naming_the_npc() {
         use eq_network_game::exchange::eqmac;
-        let wire = &super::super::wire::EqMac::Takp;
+        let wire = &super::super::wire::EqMac;
         let mut exchanges = Exchanges;
         let mut world = beside_npc();
         let outcome = testing::run_on(wire, |out| exchanges.handle(&offer(NPC), &mut world, out));

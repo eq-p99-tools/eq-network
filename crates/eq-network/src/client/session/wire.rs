@@ -42,8 +42,13 @@ pub(super) trait Wire: Sync {
     fn dialect(&self) -> GameDialect;
 
     /// What a zone packet says; nothing where the generation does not read
-    /// the packet yet.
-    fn messages(&self, _opcode: u16, _body: &[u8]) -> Vec<Message> {
+    /// the packet yet. Shared inventory layouts use the server's item rules.
+    fn messages(
+        &self,
+        _opcode: u16,
+        _body: &[u8],
+        _item_rules: eq_network_game::inventory::ItemRules,
+    ) -> Vec<Message> {
         Vec::new()
     }
 
@@ -207,7 +212,12 @@ impl Wire for Titanium {
         GameDialect::Titanium
     }
 
-    fn messages(&self, opcode: u16, body: &[u8]) -> Vec<Message> {
+    fn messages(
+        &self,
+        opcode: u16,
+        body: &[u8],
+        _item_rules: eq_network_game::inventory::ItemRules,
+    ) -> Vec<Message> {
         eq_network_game::message::titanium(opcode, body)
     }
 
@@ -302,23 +312,20 @@ impl Wire for Titanium {
 }
 
 /// The `EQMac` client's packets, which Project Quarm and TAKP speak.
-pub(super) enum EqMac {
-    /// TAKP's original item stackability rules.
-    Takp,
-    /// Quarm's item stack flags; the rest of the wire remains shared.
-    Quarm,
-}
+pub(super) struct EqMac;
 
 impl Wire for EqMac {
     fn dialect(&self) -> GameDialect {
         GameDialect::EqMac
     }
 
-    fn messages(&self, opcode: u16, body: &[u8]) -> Vec<Message> {
-        match self {
-            Self::Takp => eq_network_game::message::eqmac(opcode, body),
-            Self::Quarm => eq_network_game::message::quarm(opcode, body),
-        }
+    fn messages(
+        &self,
+        opcode: u16,
+        body: &[u8],
+        item_rules: eq_network_game::inventory::ItemRules,
+    ) -> Vec<Message> {
+        eq_network_game::message::eqmac_with(opcode, body, item_rules)
     }
 
     /// Quarm's DLL version checks.
@@ -420,6 +427,7 @@ impl Wire for EqMac {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use eq_network_game::inventory::ItemRules;
 
     /// A player with a spawn.
     const PLAYER: Sender<'static> = Sender {
@@ -430,7 +438,7 @@ mod tests {
     #[test]
     fn titanium_reads_what_the_titanium_decoders_read() {
         // A logout reply: the server ends the session.
-        let read = Titanium.messages(0x3cdc, &[]);
+        let read = Titanium.messages(0x3cdc, &[], ItemRules::Takp);
         assert!(matches!(read.as_slice(), [Message::LoggedOut]), "{read:?}");
     }
 
@@ -441,16 +449,14 @@ mod tests {
             eq_network_game::command::titanium_camp()
         );
         assert_eq!(
-            EqMac::Takp.encode(&Request::Camp, PLAYER).unwrap(),
+            EqMac.encode(&Request::Camp, PLAYER).unwrap(),
             eq_network_game::quarm::camp()
         );
         assert_eq!(
-            EqMac::Takp.encode(&Request::Jump, PLAYER).unwrap(),
+            EqMac.encode(&Request::Jump, PLAYER).unwrap(),
             eq_network_game::quarm::jump()
         );
-        assert!(EqMac::Takp
-            .encode(&Request::ShowHelm(true), PLAYER)
-            .is_err());
+        assert!(EqMac.encode(&Request::ShowHelm(true), PLAYER).is_err());
     }
 
     #[test]
@@ -460,21 +466,23 @@ mod tests {
             OutboundChat::Say("Hail".into()),
         ));
         assert_eq!(Titanium.encode(&say, PLAYER).unwrap().opcode, 0x1004);
-        assert_eq!(EqMac::Takp.encode(&say, PLAYER).unwrap().opcode, 0x0741);
+        assert_eq!(EqMac.encode(&say, PLAYER).unwrap().opcode, 0x0741);
     }
 
     #[test]
     fn each_generation_reads_its_own_layouts() {
         use eq_network_game::quarm::ZONE_LOGOUT_REPLY;
         // Each generation's logout reply means nothing to the other.
-        assert!(EqMac::Takp.messages(0x3cdc, &[]).is_empty());
+        assert!(EqMac.messages(0x3cdc, &[], ItemRules::Takp).is_empty());
         assert!(matches!(
-            EqMac::Takp.messages(ZONE_LOGOUT_REPLY, &[])[..],
+            EqMac.messages(ZONE_LOGOUT_REPLY, &[], ItemRules::Takp)[..],
             [Message::LoggedOut]
         ));
-        assert!(Titanium.messages(ZONE_LOGOUT_REPLY, &[]).is_empty());
+        assert!(Titanium
+            .messages(ZONE_LOGOUT_REPLY, &[], ItemRules::Takp)
+            .is_empty());
         // An opcode that carries no communication in either generation.
-        assert!(EqMac::Takp.chat(0x0001, &[], false).unwrap().is_none());
+        assert!(EqMac.chat(0x0001, &[], false).unwrap().is_none());
         assert!(Titanium.chat(0x0001, &[], false).unwrap().is_none());
     }
 
@@ -501,7 +509,7 @@ mod tests {
     /// message, communication (or a malformed one), or an answer.
     fn decodes(wire: &dyn Wire, opcode: u16, bodies: &[Vec<u8>]) -> bool {
         bodies.iter().any(|body| {
-            !wire.messages(opcode, body).is_empty()
+            !wire.messages(opcode, body, ItemRules::Takp).is_empty()
                 || !matches!(wire.chat(opcode, body, false), Ok(None))
                 || wire.answer(opcode, body).is_some()
         })
@@ -510,10 +518,7 @@ mod tests {
     #[test]
     fn each_generation_lists_as_read_exactly_what_its_decoders_read() {
         let bodies = probes();
-        for (generation, wire) in [
-            ("Titanium", &Titanium as &dyn Wire),
-            ("EQMac", &EqMac::Takp),
-        ] {
+        for (generation, wire) in [("Titanium", &Titanium as &dyn Wire), ("EQMac", &EqMac)] {
             for opcode in 0..=u16::MAX {
                 let listed = wire
                     .coverage(opcode)
@@ -536,7 +541,7 @@ mod tests {
     fn only_eqmac_answers_version_checks_by_itself() {
         use eq_network_game::quarm::{dll_version_message, ZONE_SPAWN_APPEARANCE};
         let check = [0, 0, 0, 1, 0, 0, 4, 0];
-        let reply = EqMac::Takp.answer(ZONE_SPAWN_APPEARANCE, &check).unwrap();
+        let reply = EqMac.answer(ZONE_SPAWN_APPEARANCE, &check).unwrap();
         assert_eq!(reply.body, dll_version_message(true));
         assert!(Titanium.answer(ZONE_SPAWN_APPEARANCE, &check).is_none());
     }

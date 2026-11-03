@@ -777,9 +777,11 @@ fn quarm_assembly_decodes_stack_flags_before_admission_and_later_replacements() 
     let (mut features, mut world) = setup(vec![]);
     for flag in [3, 1] {
         record[276] = flag;
-        let messages = servers::server_type(ServerProtocol::Quarm)
-            .wire()
-            .messages(0x3140, &record);
+        let messages = servers::server_type(ServerProtocol::Quarm).wire().messages(
+            0x3140,
+            &record,
+            servers::server_type(ServerProtocol::Quarm).item_rules(),
+        );
         assert_eq!(messages.len(), 1);
         if flag == 3 {
             features.admit(&messages[0], &mut world).unwrap();
@@ -796,9 +798,11 @@ fn quarm_assembly_decodes_stack_flags_before_admission_and_later_replacements() 
         );
     }
     record[276] = 2;
-    let messages = servers::server_type(ServerProtocol::Quarm)
-        .wire()
-        .messages(0x3140, &record);
+    let messages = servers::server_type(ServerProtocol::Quarm).wire().messages(
+        0x3140,
+        &record,
+        servers::server_type(ServerProtocol::Quarm).item_rules(),
+    );
     testing::run_on(servers::server_type(ServerProtocol::Quarm).wire(), |out| {
         features.observe(&messages[0], &mut world, out)
     })
