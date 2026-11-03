@@ -169,7 +169,7 @@ pub fn titanium(opcode: u16, body: &[u8]) -> Vec<Message> {
 /// character out, its request that the client move, Quarm's move of a dead
 /// player to their bind point and TAKP's word that a translocate the player
 /// accepted lets them go, a translocate's offer, the server's answer to the
-/// client's request, the zone's numbered destinations, the zone's header,
+/// client's request, the zone's doors and ground objects, numbered destinations and header,
 /// and the player's bind point from their profile.
 #[must_use]
 pub fn eqmac(opcode: u16, body: &[u8]) -> Vec<Message> {
@@ -241,6 +241,7 @@ pub fn eqmac_with(opcode: u16, body: &[u8], item_rules: inventory::ItemRules) ->
             Message::MerchantList,
         )],
         _ if let Some(message) = eqmac_loot(opcode, body, item_rules) => vec![message],
+        _ if let Some(message) = eqmac_objects(opcode, body) => vec![message],
         _ if let Some(message) = eqmac_exchange(opcode, body) => vec![message],
         _ => match inventory::decode_eqmac_with(opcode, body, item_rules) {
             Ok(Some(update)) => vec![Message::Event(WorldEvent::Inventory(update))],
@@ -258,6 +259,22 @@ pub fn eqmac_with(opcode: u16, body: &[u8], item_rules: inventory::ItemRules) ->
 fn eqmac_loot(opcode: u16, body: &[u8], rules: inventory::ItemRules) -> Option<Message> {
     match crate::loot::eqmac::decode(opcode, body, rules) {
         Ok(Some(update)) => Some(Message::Event(WorldEvent::Loot(update))),
+        Ok(None) => None,
+        Err(error) => Some(unreadable(Part::World, &error)),
+    }
+}
+
+/// The generation's door/object news. Layout failures are world diagnostics,
+/// never an inventory grant or a partially applied object table.
+fn eqmac_objects(opcode: u16, body: &[u8]) -> Option<Message> {
+    let decoded = match crate::doors::eqmac::decode(opcode, body) {
+        Ok(Some(update)) => Ok(Some(WorldEvent::Doors(update))),
+        Ok(None) => crate::objects::eqmac::decode(opcode, body)
+            .map(|update| update.map(WorldEvent::Objects)),
+        Err(error) => Err(error),
+    };
+    match decoded {
+        Ok(Some(event)) => Some(Message::Event(event)),
         Ok(None) => None,
         Err(error) => Some(unreadable(Part::World, &error)),
     }

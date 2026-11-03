@@ -44,6 +44,26 @@ update resolves only its slots across affected projections; it never confirms
 an unrelated move by order. EQMac contradictions invalidate until `Snapshot`.
 See [inventory prediction semantics](docs/inventory-move-predictions.md).
 
+`doors::eqmac::decode` and `objects::eqmac::decode` expose EQMac layouts through
+the existing typed door/object updates; `message::eqmac` routes them on the
+generation wire. `objects::eqmac::pickup` and `request::eqmac(Request::PickUp)`
+encode the established EQMac click body. Server policy still controls whether
+the session offers pickup or door interaction. This adds no event variants or
+inventory writer. EQMac's refusal sentinel becomes the existing
+`ObjectUpdate::Kept`, which identifies the actor but cannot identify the object.
+`ObjectAction { error: None }` still means transport submission, and disappearance
+still means visibility changed; only authoritative item packets grant inventory.
+Requests older than an object's replacement are refused without a send. See
+[the evidence and activation limits](docs/eqmac-world-objects.md).
+One unresolved EQMac pickup holds inventory actions until its refusal or matching
+own removal plus authoritative cursor
+delivery. This request correlation does not settle item moves, infer item
+identity from a model, or authorize replay on timeout.
+The result rule is selected through the generation interface; the established
+Titanium path is preserved. TAKP and Quarm offer `GroundItems` with this rule.
+Their door definitions/actions are replayed at admission, but no `Doors`
+capability, door-click command owner or unverified door sender is enabled.
+
 One feature owns each command and its state. Wire generation determines layout;
 server policy determines availability. New features start absent, and a frontend
 must honor the session's offered capabilities and explicit player choices.

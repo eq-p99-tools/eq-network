@@ -1,4 +1,6 @@
-//! Titanium door definitions and server movement instructions.
+//! Door definitions and server movement instructions.
+
+pub mod eqmac;
 use crate::{command::EncodedCommand, world::Position};
 use anyhow::{ensure, Result};
 use serde::Serialize;

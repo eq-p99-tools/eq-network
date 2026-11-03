@@ -200,7 +200,7 @@ it adds no live combat/death evidence to this report.
 | Target / consider / combat | Offered | Disabled | Quarm codecs exist in TAKP paths, but policy and live combat/death coverage are missing. |
 | Abilities | Most offered; fishing and bind wound excluded | Disabled | Evidence for each unavailable action, including resource/reuse and failure responses. |
 | Loot / corpses / consent | Offered | Disabled | Quarm loot, corpse commands, own-corpse recovery and NPC loot flow. |
-| Doors / ground objects | Offered | Disabled even in richer TAKP policy | EQMac decoding and interaction evidence; rendering a local marker is not a pickup implementation. |
+| Doors / ground objects | Offered | Source-backed ground pickups and receive-only door state on both TAKP/Quarm | Door interaction stays disabled pending ordinary padding/type/state review. Pickups use authoritative inventory delivery and retain ambiguous outstanding requests; see [protocol evidence and live checklist](eqmac-world-objects.md). A map marker never grants an item. |
 | Groups | Disabled | Disabled; TAKP implementation exists | Invitation, refusal, roster changes, leader changes, zoning and disband checks on each. |
 | Raid group-leader removal | No policy offers it; generic EQEmu lacks the handler | No verified implementation | Remains a gap unless the specific public server proves it inapplicable. |
 | Raids | Disabled; native raid-window restriction reported below | Disabled | Quarm has raid handlers and opcodes: this is a gap, not an established Quarm restriction. |

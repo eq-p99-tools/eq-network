@@ -1506,6 +1506,7 @@ mod tests {
                 Capability::Looting,
                 Capability::Talking,
                 Capability::Camping,
+                Capability::GroundItems,
                 Capability::Zoning,
                 Capability::Abilities,
                 Capability::EnvironmentalDamage,
@@ -1527,6 +1528,7 @@ mod tests {
                 Capability::Combat,
                 Capability::Talking,
                 Capability::Camping,
+                Capability::GroundItems,
                 Capability::Zoning,
                 Capability::Abilities,
                 Capability::Grouping,
@@ -1650,6 +1652,9 @@ mod tests {
 
 #[cfg(test)]
 mod eqmac_tests;
+
+#[cfg(test)]
+mod world_object_tests;
 
 #[cfg(test)]
 mod quarm_tests;

@@ -53,6 +53,10 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Quarm, retaining ordered unresolved predictions without treating silence as
   acceptance. Preserve slot, container, fit, stack and restricted-item guards;
   contradictory EQMac corrections require a fresh snapshot.
+
+- Reject ground pickup requests made before an object's current placement,
+  including IDs reused after disappearance, through the existing object owner.
+
 - Reconcile a scroll the server deleted after a confirmed scribe with the
   move that put it on the cursor, so a second scribe is not read as a
   correction and a current movement grant is recovered without re-entry.
@@ -97,6 +101,17 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   stackability while sharing one EQMac generation wire. Existing decoder
   entry points, raw stack/GM observations and inventory actions retain
   their behavior.
+
+- EQMac door and ground-object codecs with bounded compressed door tables,
+  raw state/actions, generation-specific refusal sentinels and typed updates.
+  The established eight-byte pickup request uses the EQMac opcode; object
+  messages never fabricate inventory. TAKP and Quarm policies offer ground
+  pickups and replay door definitions/actions while leaving door clicks
+  unavailable; see `docs/eqmac-world-objects.md` for sender limits.
+  A generation-selected EQMac result controller suppresses unresolved duplicate
+  pickups and holds unknown incoming inventory until separate authoritative
+  results arrive, without optimistic items or timeout retries. The established
+  Titanium result behavior is preserved.
 
 - Quarm casting, gem memorization and spellbook reading through the shared
   `EQMac` features, without book moves or deletion; item casts use the

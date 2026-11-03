@@ -645,6 +645,14 @@ mod shared {
         Box::<GroundObjects>::default()
     }
 
+    pub(super) fn eqmac_doors() -> Box<dyn Feature> {
+        Box::new(Doors::definitions_only())
+    }
+
+    pub(super) fn eqmac_ground_items() -> Box<dyn Feature> {
+        Box::new(GroundObjects::for_generation(GameDialect::EqMac))
+    }
+
     pub(super) fn transfers(setup: &Setup<'_>, home: Home) -> Box<dyn Feature> {
         Box::new(Transfers::new(setup.character, home))
     }
@@ -1156,6 +1164,19 @@ impl ServerType for EqEmu {
 struct Quarm;
 
 impl ServerType for Quarm {
+    /// Quarm's own source establishes definitions/actions, separately from
+    /// click support. No Doors capability or click sender is offered yet.
+    fn doors(&self, _setup: &Setup<'_>) -> Provided {
+        offer(shared::eqmac_doors())
+    }
+
+    /// Ground placement/click layouts and cursor delivery were checked in
+    /// Quarm's own source. Server restrictions remain authoritative; no live
+    /// compatibility is inferred from the shared generation.
+    fn ground_items(&self, _setup: &Setup<'_>) -> Provided {
+        offer(shared::eqmac_ground_items())
+    }
+
     /// Quarm handles normal attack toggles and consideration with the shared
     /// `EQMac` layouts; only server records report combat outcomes.
     fn combat(&self, _setup: &Setup<'_>) -> Provided {
@@ -1287,6 +1308,18 @@ const TAKP_DEATH_THRESHOLD: i32 = -11;
 struct Takp;
 
 impl ServerType for Takp {
+    /// Definitions/actions from TAKP's door producer; unverified interaction
+    /// remains unavailable while admission still replays the server state.
+    fn doors(&self, _setup: &Setup<'_>) -> Provided {
+        offer(shared::eqmac_doors())
+    }
+
+    /// Ground pickups using TAKP's own placement/click layouts, with item
+    /// delivery applied solely by the existing inventory feature.
+    fn ground_items(&self, _setup: &Setup<'_>) -> Provided {
+        offer(shared::eqmac_ground_items())
+    }
+
     /// The same verified packets and eligibility as Quarm; no blanket ALL grant.
     fn abilities(&self, _setup: &Setup<'_>) -> Provided {
         offer(shared::abilities(
@@ -1610,7 +1643,7 @@ mod tests {
         // personal inventory actions. Other features await their own evidence.
         let setup = Setup::new("Tester", AutoEat::default());
         let quarm = server_type(ServerProtocol::Quarm);
-        assert_eq!(quarm.features(&setup).len(), 15);
+        assert_eq!(quarm.features(&setup).len(), 17);
         assert_eq!(
             offers(quarm),
             [
@@ -1624,6 +1657,7 @@ mod tests {
                 Capability::Looting,
                 Capability::Talking,
                 Capability::Camping,
+                Capability::GroundItems,
                 Capability::Zoning,
                 Capability::Abilities,
                 Capability::EnvironmentalDamage,
@@ -1632,7 +1666,7 @@ mod tests {
             ]
         );
         let takp = server_type(ServerProtocol::Takp);
-        assert_eq!(takp.features(&setup).len(), 20);
+        assert_eq!(takp.features(&setup).len(), 22);
         assert_eq!(
             offers(takp),
             [
@@ -1647,6 +1681,7 @@ mod tests {
                 Capability::Combat,
                 Capability::Talking,
                 Capability::Camping,
+                Capability::GroundItems,
                 Capability::Zoning,
                 Capability::Abilities,
                 Capability::Grouping,
