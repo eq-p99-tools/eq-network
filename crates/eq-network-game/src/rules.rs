@@ -52,7 +52,7 @@ impl LanguageZeroSelector {
 pub struct WorldRules {
     /// Titanium's received language-zero selector, including a received
     /// zero. None means the message/field is absent or its generation's
-    /// mapping is unverified; it never stands in for the PvP ruleset.
+    /// mapping is unverified; it never stands in for the `PvP` ruleset.
     pub language_zero_selector: Option<LanguageZeroSelector>,
     /// The world's player-versus-player ruleset, by the server's own number;
     /// zero for none. Quarm's zones send 1 where the zone itself allows it.
