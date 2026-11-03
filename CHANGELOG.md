@@ -43,6 +43,12 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the inputs again; the receipt was only re-sent when its contents changed,
   so a host that treats a withdrawal as ending its receipt waited for one
   that never came while the player already moved.
+- Scope unresolved EQMac ground-pickup waits to further pickups so unrelated
+  inventory actions can continue. Cancel the wait on foreign/unattributed object
+  removal, an authoritative inventory snapshot or a three-second local expiry,
+  preserving ambiguity so late results cannot settle a newer pickup. No automatic
+  retry, inventory grant or move acknowledgement follows cancellation.
+
 - Send valid inventory moves immediately in submission order on TAKP and
   Quarm, retaining ordered unresolved predictions without treating silence as
   acceptance. Preserve slot, container, fit, stack and restricted-item guards;

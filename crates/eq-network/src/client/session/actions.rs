@@ -58,6 +58,8 @@ pub(super) enum Resource {
     Spellbook,
     /// Inventory contents, including the cursor.
     Inventory,
+    /// Another request to pick an item up from the ground.
+    GroundPickup,
 }
 
 /// Resources held right now, each with the reason shown to a refused command.
@@ -88,7 +90,7 @@ impl Held {
 /// What a command needs exclusively. Every command is named, so a new one is
 /// a decision here.
 pub(super) fn needs(command: &ClientCommand) -> &'static [Resource] {
-    use Resource::{Casting, Inventory, Spellbook};
+    use Resource::{Casting, GroundPickup, Inventory, Spellbook};
     match command {
         ClientCommand::CastSpell { .. } => &[Casting],
         // `EQEmu` ignores a strike during a cast; bards may strike while they
@@ -109,9 +111,10 @@ pub(super) fn needs(command: &ClientCommand) -> &'static [Resource] {
         ClientCommand::MoveInventory(request) if request.from != InventorySlot::CURSOR => {
             &[Casting, Inventory]
         }
-        // A picked-up item lands on the cursor; Give hands the trade slots over.
+        // A pickup needs the cursor and its own duplicate-request gate.
+        ClientCommand::PickUp { .. } => &[Inventory, GroundPickup],
+        // Give hands the trade slots over.
         ClientCommand::MoveInventory(_)
-        | ClientCommand::PickUp { .. }
         | ClientCommand::Buy { .. }
         | ClientCommand::Sell { .. }
         | ClientCommand::Consume { .. }

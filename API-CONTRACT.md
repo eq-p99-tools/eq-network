@@ -86,10 +86,17 @@ inventory writer. EQMac's refusal sentinel becomes the existing
 still means visibility changed; only authoritative item packets grant inventory.
 Requests older than an object's replacement are refused without a send. See
 [the evidence and activation limits](docs/eqmac-world-objects.md).
-One unresolved EQMac pickup holds inventory actions until its refusal or matching
-own removal plus authoritative cursor
-delivery. This request correlation does not settle item moves, infer item
-identity from a model, or authorize replay on timeout.
+One unresolved EQMac pickup holds only further pickup requests; unrelated
+inventory actions retain their existing guards. Another actor's or unattributed
+removal of the pending object, an authoritative inventory snapshot, or a
+three-second local wait expiry cancels that hold without acknowledging success,
+granting an item, settling a move, or sending a retry. Expiry is a local
+duplicate-suppression bound, not a server response guarantee. After cancellation,
+constant-size admission-scoped state records that late untagged/cursor results
+cannot uniquely answer a newer pickup, even with a reused object ID. The newer
+wait can still be cancelled by an authoritative snapshot or its own expiry;
+ambiguous removal packets cannot cancel it. Only a new admission restores unique
+result attribution.
 The result rule is selected through the generation interface; the established
 Titanium path is preserved. TAKP and Quarm offer `GroundItems` with this rule.
 Their door definitions/actions are replayed at admission, but no `Doors`

@@ -105,7 +105,7 @@ fn a_new_eqmac_zone_replays_empty_state_and_never_reuses_an_old_object() {
 }
 
 #[test]
-fn eqmac_policy_routes_pickups_and_foreign_removal_keeps_our_request_unsettled() {
+fn eqmac_policy_routes_pickups_and_foreign_removal_cancels_the_wait() {
     for protocol in [ServerProtocol::Takp, ServerProtocol::Quarm] {
         let wire = servers::server_type(protocol).wire();
         let (mut features, mut world) = staged(protocol);
@@ -140,11 +140,8 @@ fn eqmac_policy_routes_pickups_and_foreign_removal_keeps_our_request_unsettled()
         assert_eq!(outcome.sent, []);
         assert!(world.objects.entries().is_empty());
         assert!(world.inventory.items().is_empty());
-        assert!(features
-            .holds(&world, Instant::now())
-            .iter()
-            .any(|(resource, _)| *resource == actions::Resource::Inventory));
-        // A same-session snapshot cannot erase attribution uncertainty.
+        assert_eq!(features.holds(&world, Instant::now()), []);
+        // A snapshot is authoritative inventory state, not pickup success.
         let outcome = testing::run_on(wire, |out| {
             hear(
                 read(protocol, 0xf641, &[0, 0]),
@@ -155,10 +152,7 @@ fn eqmac_policy_routes_pickups_and_foreign_removal_keeps_our_request_unsettled()
             )
         });
         assert!(outcome.result.unwrap().is_none());
-        assert!(features
-            .holds(&world, Instant::now())
-            .iter()
-            .any(|(resource, _)| *resource == actions::Resource::Inventory));
+        assert_eq!(features.holds(&world, Instant::now()), []);
         let denied = [u32::MAX.to_le_bytes(), 7_u32.to_le_bytes()].concat();
         let outcome = testing::run_on(wire, |out| {
             hear(
@@ -255,6 +249,151 @@ fn projected_empty_cursor_allows_pickup_without_acknowledging_prior_moves() {
         });
         assert!(outcome.result.unwrap().is_none());
         assert_eq!(world.inventory.unresolved_predictions(), 1);
+        assert_eq!(features.holds(&world, Instant::now()), []);
+    }
+}
+
+#[test]
+fn pending_eqmac_pickup_allows_inventory_moves_and_cancellation_preserves_their_ledger() {
+    use eq_network_game::inventory::{InventoryMove, InventorySlot, InventoryUpdate, MoveQuantity};
+    for protocol in [ServerProtocol::Takp, ServerProtocol::Quarm] {
+        let wire = servers::server_type(protocol).wire();
+        let (mut features, mut world) = staged(protocol);
+        let mut player = testing::player(7);
+        player.class = Some(1);
+        player.race = 1;
+        player.level = 10;
+        world.player.admit(player);
+        world.own_spawn = Some(7);
+        features
+            .admit(
+                &Message::Event(WorldEvent::Inventory(InventoryUpdate::Snapshot(vec![
+                    testing::item(22),
+                ]))),
+                &mut world,
+            )
+            .unwrap();
+        world.admitted = Some(Instant::now());
+        let pickup = ClientCommand::PickUp {
+            session_id: 5,
+            drop_id: 71,
+            created: Instant::now(),
+        };
+        let outcome = testing::run_on(wire, |out| features.handle(&pickup, &mut world, out));
+        assert!(outcome.result.unwrap());
+        assert_eq!(
+            outcome.sent,
+            [eq_network_game::objects::eqmac::pickup(71, 7)]
+        );
+        assert!(features.refusal(&pickup, &world, Instant::now()).is_some());
+        assert_eq!(
+            features
+                .holds(&world, Instant::now())
+                .iter()
+                .map(|(resource, _)| *resource)
+                .collect::<Vec<_>>(),
+            [actions::Resource::GroundPickup]
+        );
+
+        let movement = ClientCommand::MoveInventory(InventoryMove {
+            session_id: 5,
+            revision: world.inventory.revision(),
+            from: InventorySlot(22),
+            to: InventorySlot(23),
+            quantity: MoveQuantity::Whole,
+            created: Instant::now(),
+        });
+        assert_eq!(features.refusal(&movement, &world, Instant::now()), None);
+        let outcome = testing::run_on(wire, |out| features.handle(&movement, &mut world, out));
+        assert!(outcome.result.unwrap());
+        assert_eq!(outcome.sent.len(), 1);
+        assert_eq!(world.inventory.unresolved_predictions(), 1);
+        assert!(!world.inventory.items().contains_key(&InventorySlot(22)));
+        assert!(world.inventory.items().contains_key(&InventorySlot(23)));
+        let gone = [71_u32.to_le_bytes(), 9_u32.to_le_bytes()].concat();
+        let outcome = testing::run_on(wire, |out| {
+            hear(
+                read(protocol, 0x2b40, &gone),
+                &mut features,
+                &mut world,
+                out,
+                true,
+            )
+        });
+        assert!(outcome.result.unwrap().is_none());
+        assert_eq!(outcome.sent, []);
+        assert_eq!(features.holds(&world, Instant::now()), []);
+        assert_eq!(
+            world.inventory.unresolved_predictions(),
+            1,
+            "pickup cancellation is not an inventory move acknowledgement"
+        );
+    }
+}
+
+#[test]
+fn eqmac_snapshot_cancels_the_wait_without_making_a_late_refusal_answer_a_new_pickup() {
+    for protocol in [ServerProtocol::Takp, ServerProtocol::Quarm] {
+        let wire = servers::server_type(protocol).wire();
+        let (mut features, mut world) = staged(protocol);
+        world.player.admit(testing::player(7));
+        world.own_spawn = Some(7);
+        world.admitted = Some(Instant::now());
+        testing::run_on(wire, |out| features.admitted(&mut world, out))
+            .result
+            .unwrap();
+        let pickup = || ClientCommand::PickUp {
+            session_id: 5,
+            drop_id: 71,
+            created: Instant::now(),
+        };
+        let outcome = testing::run_on(wire, |out| features.handle(&pickup(), &mut world, out));
+        assert!(outcome.result.unwrap());
+        let outcome = testing::run_on(wire, |out| {
+            hear(
+                read(protocol, 0xf641, &[0, 0]),
+                &mut features,
+                &mut world,
+                out,
+                true,
+            )
+        });
+        assert!(outcome.result.unwrap().is_none());
+        assert_eq!(outcome.sent, []);
+        assert_eq!(features.holds(&world, Instant::now()), []);
+        assert!(world.inventory.items().is_empty());
+        let outcome = testing::run_on(wire, |out| features.handle(&pickup(), &mut world, out));
+        assert!(outcome.result.unwrap());
+        assert_eq!(
+            outcome.sent,
+            [eq_network_game::objects::eqmac::pickup(71, 7)]
+        );
+        let refused = [u32::MAX.to_le_bytes(), 7_u32.to_le_bytes()].concat();
+        let outcome = testing::run_on(wire, |out| {
+            hear(
+                read(protocol, 0x2b40, &refused),
+                &mut features,
+                &mut world,
+                out,
+                true,
+            )
+        });
+        assert!(outcome.result.unwrap().is_none());
+        assert!(features
+            .refusal(&pickup(), &world, Instant::now())
+            .is_some());
+        // The local bound eventually cancels, without another outbound request.
+        let outcome = testing::run_on(wire, |out| {
+            features.tick(Instant::now() + Duration::from_secs(3), &mut world, out)
+        });
+        outcome.result.unwrap();
+        assert!(
+            outcome
+                .sent
+                .iter()
+                .all(|packet| packet.opcode != eq_network_game::objects::eqmac::CLICK_OPCODE),
+            "other features may heartbeat, but the pickup is never retried"
+        );
         assert_eq!(features.holds(&world, Instant::now()), []);
     }
 }

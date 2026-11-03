@@ -14,10 +14,17 @@ use eq_network_game::{
     request::Request,
     world::{Position, WorldEvent},
 };
-use std::{collections::BTreeMap, time::Instant};
+use std::{
+    collections::BTreeMap,
+    time::{Duration, Instant},
+};
 
 /// Where a picked-up item arrives.
 const CURSOR: InventorySlot = InventorySlot(30);
+
+/// Bounds local duplicate suppression, not the server's response time. Expiry
+/// cancels the wait without retrying or deciding whether an item was delivered.
+const PICKUP_WINDOW: Duration = Duration::from_secs(3);
 
 /// Keeps the zone's object table and picks items up.
 #[derive(Debug)]
@@ -63,6 +70,7 @@ impl PickupResults {
                 player_id: u32::from(player_id),
                 removed: false,
                 delivered: false,
+                expires: Instant::now() + PICKUP_WINDOW,
             }),
         }
     }
@@ -79,6 +87,10 @@ pub(super) struct ZoneObjects {
     /// The click reply cannot identify a refused object, so only one pickup
     /// may be unresolved. This is not a predicted item or a move acknowledgement.
     pickup: Option<Pickup>,
+    /// A cancelled request can still produce untagged refusal/cursor packets.
+    /// One bit preserves that ambiguity without accumulating stale requests.
+    /// Only a new admission restores unique attribution.
+    ambiguous_pickup_results: bool,
 }
 
 /// Visibility and inventory arrive independently, in either order.
@@ -88,6 +100,7 @@ struct Pickup {
     player_id: u32,
     removed: bool,
     delivered: bool,
+    expires: Instant,
 }
 
 impl std::ops::Deref for ZoneObjects {
@@ -140,15 +153,27 @@ impl ZoneObjects {
         Ok(())
     }
 
-    /// Only a matching server result ends the unresolved click. The separate
-    /// inventory owner applies an item; this owner only records that it arrived.
+    /// Cancels duplicate suppression, without acknowledging or granting an item.
+    fn cancel_pickup(&mut self) {
+        if self.pickup.take().is_some() {
+            self.ambiguous_pickup_results = true;
+        }
+    }
+
+    /// Records matching result facts while attribution is unique. After a
+    /// cancellation, an old refusal or cursor packet cannot settle a new click.
+    /// The inventory owner alone applies authoritative item updates.
     fn pickup_news(&mut self, event: &WorldEvent) {
+        if matches!(event, WorldEvent::Inventory(InventoryUpdate::Snapshot(_))) {
+            self.cancel_pickup();
+            return;
+        }
         let Some(pickup) = &mut self.pickup else {
             return;
         };
         match event {
             WorldEvent::Objects(ObjectUpdate::Kept { player_id })
-                if *player_id == pickup.player_id =>
+                if *player_id == pickup.player_id && !self.ambiguous_pickup_results =>
             {
                 self.pickup = None;
                 return;
@@ -156,9 +181,15 @@ impl ZoneObjects {
             WorldEvent::Objects(ObjectUpdate::Remove { drop_id, taken_by })
                 if *drop_id == pickup.drop_id =>
             {
+                // A placement can reuse a cancelled request's ID. Without a
+                // request tag even a named removal may belong to that old use.
+                if self.ambiguous_pickup_results {
+                    return;
+                }
                 if *taken_by != Some(pickup.player_id) {
-                    // Visibility alone cannot answer our click: a later
-                    // unidentified refusal could otherwise settle a newer one.
+                    // This cancels our wait, not the server request. Keep its
+                    // attribution ambiguity separate from the next pickup.
+                    self.cancel_pickup();
                     return;
                 }
                 pickup.removed = true;
@@ -170,7 +201,7 @@ impl ZoneObjects {
             }
             _ => (),
         }
-        if pickup.removed && pickup.delivered {
+        if !self.ambiguous_pickup_results && pickup.removed && pickup.delivered {
             self.pickup = None;
         }
     }
@@ -199,8 +230,7 @@ impl Feature for GroundObjects {
         matches!(command, ClientCommand::PickUp { .. })
     }
 
-    /// The incoming cursor item is still unknown until its authoritative
-    /// delivery. A timeout never authorizes a retry or invents an empty cursor.
+    /// Only further pickups wait; unrelated inventory actions keep their owners.
     fn holds(&self, world: &World, _now: Instant) -> Vec<(super::actions::Resource, &'static str)> {
         world
             .objects
@@ -208,12 +238,28 @@ impl Feature for GroundObjects {
             .as_ref()
             .map(|_| {
                 (
-                    super::actions::Resource::Inventory,
+                    super::actions::Resource::GroundPickup,
                     "Wait for the ground pickup result",
                 )
             })
             .into_iter()
             .collect()
+    }
+
+    /// A silent server cannot leave a local request waiting for the whole zone.
+    /// Cancelling sends nothing and preserves ambiguity about any later reply.
+    fn tick(&mut self, now: Instant, world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
+        if world
+            .objects
+            .pickup
+            .as_ref()
+            .is_some_and(|pickup| now >= pickup.expires)
+        {
+            world.objects.cancel_pickup();
+            out.log
+                .diagnostic("Ground pickup wait ended; its result is still unknown".into())?;
+        }
+        Ok(())
     }
 
     /// Picks up an item from the ground.
