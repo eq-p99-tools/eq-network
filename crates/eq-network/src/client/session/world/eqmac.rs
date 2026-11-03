@@ -27,7 +27,10 @@ use eq_network_game::{
     rules,
     zoning::EQMAC_UNAVAILABLE_OPCODE,
 };
-use std::time::{Duration, Instant};
+use std::{
+    net::SocketAddr,
+    time::{Duration, Instant},
+};
 use zeroize::Zeroizing;
 
 const WORLD_LOGIN: u16 = 0x5818;
@@ -37,7 +40,6 @@ const WORLD_ZONE_SERVER: u16 = 0x0480;
 
 /// `EQMac`'s world stage: authenticate to the `MacPC` world server, choose a
 /// character, and follow its handoff.
-#[allow(clippy::too_many_lines)]
 pub(in crate::client::session) fn world(
     context: &CharacterSession<'_>,
     ip: &str,
@@ -45,11 +47,25 @@ pub(in crate::client::session) fn world(
     log: &mut Events<'_>,
 ) -> Result<Option<ZoneDestination>> {
     let config = &context.config;
-    let stop = context.stop;
-    let mut session = OldSession::connect_cancellable(
+    world_at(
+        context,
         crate::client::endpoint(ip, 9000, config.local_only)?,
-        stop.flag(),
-    )?;
+        (world_only, zoning),
+        log,
+    )
+}
+
+/// Runs the world lifecycle at a resolved endpoint, including idle selection.
+#[allow(clippy::too_many_lines)]
+fn world_at(
+    context: &CharacterSession<'_>,
+    address: SocketAddr,
+    (world_only, zoning): (bool, bool),
+    log: &mut Events<'_>,
+) -> Result<Option<ZoneDestination>> {
+    let config = &context.config;
+    let stop = context.stop;
+    let mut session = OldSession::connect_cancellable(address, stop.flag())?;
     session.send(WORLD_LOGIN, &*world_login(context.credentials, zoning)?)?;
     let server = servers::server_type(config.protocol);
     let mut deadline = Instant::now() + Duration::from_secs(60);
@@ -170,6 +186,9 @@ pub(in crate::client::session) fn world(
         }
     }
 }
+
+#[cfg(test)]
+mod transport_tests;
 
 /// Tells the host what the world says of itself, as TAKP's and Quarm's
 /// worlds send it: its short name and rules, the expansions it lets the
