@@ -81,16 +81,17 @@ impl EqMacAdmission {
 
     /// The admitted player: their profile, placed where their own spawn
     /// stands, under the spawn the zone named.
-    fn player(&self, spawn_id: u16, spawn: &quarm::OwnSpawn) -> Result<PlayerState> {
-        let mut player =
-            quarm::profile(self.profile.as_deref().unwrap_or_default(), &self.character)?;
+    fn player(&self, spawn_id: u16, spawn: &quarm::OwnSpawn) -> Result<(PlayerState, Option<u16>)> {
+        let profile = self.profile.as_deref().unwrap_or_default();
+        let mut player = quarm::profile(profile, &self.character)?;
+        let zone_id = quarm::profile_zone(profile)?;
         player.spawn_id = spawn_id;
         player.position = spawn.position;
         player.size = spawn.size;
         player.walk_speed = spawn.walk_speed;
         player.run_speed = spawn.run_speed;
         player.appearance = spawn.appearance;
-        Ok(player)
+        Ok((player, zone_id))
     }
 }
 
@@ -189,7 +190,12 @@ impl Admission for EqMacAdmission {
         ) else {
             return Ok(None);
         };
-        let player = self.player(spawn_id, spawn);
+        let player = self.player(spawn_id, spawn).map(|(player, zone_id)| {
+            // Only a validated admission profile establishes this identity.
+            // Its current zone is independent of the bind point or zone name.
+            world.zone = (zone_id.unwrap_or(0), 0);
+            player
+        });
         world.admitted = Some(Instant::now());
         self.step = Step::Admitted;
         Ok(self.zone.take().map(|zone| (player, zone)))
@@ -204,6 +210,9 @@ mod tests {
 
     /// The codec crate's synthetic, encrypted profile for "Example".
     const PROFILE: &str = "ae05f5a6083907c71a8fa0b9df18601d2fadb4d6b80a3099d83162b5c95015d3bd8bd662ad969f16538260e8249c5a9d1c78803e51a3f8d3d48f5ca3fb28b2bff7a48403366d5c880b3422059ae86574971744def74907496b270882";
+
+    /// The same synthetic profile, with current zone321 and a distinct bind4.
+    const PROFILE_ZONE: &str = "72e17a744e4e1a7acdc3985de0f38d18f66dc5a5e7207c9f131aa3358db866e6a92da79cb3e49521d4ae6b3c6790e4add73ad9b79babb128e264a328ca71e3fdb05525a573f0a7eb57952d0707e213ed9812b21cee0157d7881400e0bf3b98361bc1b108c8";
 
     /// A connection that remembers what the client sent.
     #[derive(Default)]
@@ -225,6 +234,99 @@ mod tests {
 
         fn last_received_seconds(&self) -> u64 {
             0
+        }
+    }
+
+    /// Run the production handshake with synthetic wire packets, not world edits.
+    fn admitted_profile(profile: &str) -> World {
+        let config = ClientConfig::new("ACCOUNT", "PASSWORD", "Test Server", "Example");
+        let mut handler = |_| Ok(());
+        let mut log = Events::new(&config, &mut handler);
+        let mut wire = Recorded::default();
+        let mut world = World::new(5);
+        let mut shield = None;
+        let mut checksums = [];
+        let mut handshake = Handshake {
+            session: &mut wire,
+            shield: &mut shield,
+            key: &[],
+            checksums: &mut checksums,
+            log: &mut log,
+        };
+        let mut admission = EqMacAdmission::start("Example", &mut handshake).unwrap();
+        let mut own = [0; 356];
+        own[5..12].copy_from_slice(b"Example");
+        own[80..84].copy_from_slice(&42.0f32.to_le_bytes());
+        let mut description = [0; 572];
+        description[64..71].copy_from_slice(b"example");
+        for (opcode, body) in [
+            (ZONE_PLAYER_PROFILE, hex::decode(profile).unwrap()),
+            (ZONE_ENTRY, own.to_vec()),
+            (ZONE_SPAWN_APPEARANCE, vec![0, 0, 16, 0, 7, 0, 0, 0]),
+            (ZONE_WEATHER, Vec::new()),
+            (ZONE_NEW, description.to_vec()),
+            (ZONE_EXPERIENCE_READY, Vec::new()),
+            (ZONE_AVATAR_READY, Vec::new()),
+        ] {
+            if let Some((player, _)) = admission
+                .read(
+                    &mut Application { opcode, body },
+                    &mut world,
+                    &mut handshake,
+                )
+                .unwrap()
+            {
+                world.player.admit(player.unwrap());
+            }
+        }
+        assert!(world.ready());
+        world
+    }
+
+    #[test]
+    fn the_admitted_profile_supplies_zone_line_identity_and_zero_stays_unknown() {
+        use crate::client::session::{
+            feature::{testing, Feature},
+            motion::Motion,
+            transfers::{Home, Transfers},
+            wire::EqMac,
+            ClientCommand,
+        };
+        use eq_network_game::{world::WorldEvent, zoning::ZoneLineDestination};
+
+        for (profile, zone_id) in [(PROFILE_ZONE, 321), (PROFILE, 0)] {
+            let mut world = admitted_profile(profile);
+            assert_eq!(world.zone, (zone_id, 0));
+            let mut motion = Motion::new(false, false, None);
+            testing::run_on(&EqMac, |out| motion.admitted(&mut world, out))
+                .result
+                .unwrap();
+            let mut transfers = Transfers::new("Example", Home::Offered);
+            let request = ClientCommand::CrossZoneLine {
+                session_id: world.session_id,
+                destination: ZoneLineDestination::Absolute {
+                    zone_id: 4,
+                    position: world.body.position().unwrap(),
+                },
+                position: world.body.position().unwrap(),
+                created: Instant::now(),
+            };
+            let outcome =
+                testing::run_on(&EqMac, |out| transfers.handle(&request, &mut world, out));
+            outcome.result.unwrap();
+            if zone_id == 0 {
+                assert_eq!(outcome.sent, Vec::new());
+                assert!(world.lifecycle.pending().is_none());
+                assert!(matches!(
+                    outcome.events.as_slice(),
+                    [ClientEvent::World(WorldEvent::ZoneLineRejected { reason, .. })]
+                        if reason == "zone identity is unavailable"
+                ));
+            } else {
+                // The shared wire harness speaks as Tester.
+                assert_eq!(outcome.sent, [quarm::zone_change("Tester", 4, 0).unwrap()]);
+                assert_eq!(world.lifecycle.pending().unwrap().zone_id, 4);
+            }
         }
     }
 

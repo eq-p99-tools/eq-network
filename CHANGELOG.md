@@ -45,6 +45,9 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- EQMac admission records the profile's current zone identity before handling
+  zone-line requests. Unknown zero stays unavailable and oversized IDs are
+  rejected; bind points and zone names do not supply guessed identities.
 - A grant after a fresh movement calibration carries its
   `WorldEvent::SpeedInputsAccepted` receipt again. A same-zone relocation
   (an in-zone teleport), a server correction or a refused transfer's rewind

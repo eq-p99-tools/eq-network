@@ -94,6 +94,16 @@ Installed data remains the source of text. Complete `WorldRules` literals
 must add the field or use its default for absence; this source API addition
 requires downstream consumer validation before publication.
 
+## EQMac admission zone identity
+
+`quarm::profile_zone` reads the current zone from the supported encrypted
+profile. Zero returns `None`; malformed layouts and values outside the
+transfer interface's `u16` range are errors, never truncated aliases. The
+bind point and zone-description name do not substitute for missing identity.
+EQMac admission commits the validated current zone with no instance field
+before zone-line commands can run. Unknown identity retains the existing
+transfer refusal. No transfer packet layout or server policy changes.
+
 ## Quarm loot receipt and delivery
 
 `LootUpdate::Acknowledged { place }` is a new exhaustive-enum variant and
