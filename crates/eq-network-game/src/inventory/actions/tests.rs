@@ -2,6 +2,55 @@ use super::*;
 use crate::{inventory::ItemPlacement, items::ItemDetails};
 use std::cell::Cell;
 
+#[test]
+fn quarm_rejects_untrustworthy_stacks_gm_items_and_orphaned_bag_contents() {
+    for (count, capacity, gm) in [
+        (Some(0), 20, false),
+        (Some(21), 20, false),
+        (Some(5), 0, false),
+        (None, 1, true),
+    ] {
+        let mut source = item(22, count, 0);
+        source.rules.stack_size = capacity;
+        source.rules.eqmac = Some(crate::inventory::EqMacItemRules {
+            stack_flag: crate::inventory::EqMacStackFlag::Unstackable,
+            gm_flag: if gm { -1 } else { 0 },
+        });
+        let state = state(vec![source]);
+        assert!(state
+            .plan_move_for(MoveRules::Quarm, &request(&state, 22, 30), actor())
+            .is_err());
+    }
+    let state = state(vec![item(251, Some(3), 0)]);
+    assert!(state
+        .plan_move_for(MoveRules::Quarm, &request(&state, 251, 30), actor())
+        .is_err());
+}
+
+#[test]
+fn quarm_reuses_eqmac_placement_checks_for_bags_quivers_and_equipment() {
+    for (mut source, destination) in [
+        (item(30, None, 2), 13),
+        (item(30, None, 0), 0),
+        (item(30, None, 0), 11),
+    ] {
+        if destination == 11 {
+            source.rules.item_type = 27;
+            source.details.slots = 1 << 11;
+        }
+        let state = state(vec![source]);
+        assert!(state
+            .plan_move_for(MoveRules::Quarm, &request(&state, 30, destination), actor())
+            .is_err());
+    }
+    let mut quiver = item(22, None, 2);
+    quiver.rules.bag_type = 2;
+    let state = state(vec![quiver, item(30, None, 0)]);
+    assert!(state
+        .plan_move_for(MoveRules::Quarm, &request(&state, 30, 251), actor())
+        .is_err());
+}
+
 fn item(slot: i32, count: Option<u32>, bag: u8) -> InventoryItem {
     InventoryItem {
         activation: crate::inventory::ItemActivation::default(),

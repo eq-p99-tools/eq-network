@@ -15,8 +15,8 @@ pub(crate) use eqmac::details as eqmac_details;
 pub(crate) use eqmac::merchant_stock as eqmac_merchant_stock;
 pub(crate) use eqmac::trade_view as eqmac_trade_view;
 pub use eqmac::{
-    decode as decode_eqmac, move_item as eqmac_move, takp_item_hit_points, ItemHitPointCount,
-    UnsettledItem, Wearer,
+    decode as decode_eqmac, decode_quarm, move_item as eqmac_move, takp_item_hit_points,
+    EqMacItemRules, EqMacStackFlag, ItemHitPointCount, UnsettledItem, Wearer,
 };
 pub use titanium::decode;
 pub(crate) use titanium::{parse as parse_items, parse_at};
@@ -212,9 +212,11 @@ impl InventorySlot {
     }
 }
 
-/// Placement constraints from the Titanium static item definition.
+/// Placement constraints from the server's item definition.
 #[derive(Clone, Debug, Default, PartialEq, Serialize)]
 pub struct ItemPlacement {
+    /// Common-item `EQMac` restrictions, retaining unknown values for inspection.
+    pub eqmac: Option<EqMacItemRules>,
     /// Maximum stack quantity from the server definition; zero means unknown.
     pub stack_size: u32,
     /// Item size category.

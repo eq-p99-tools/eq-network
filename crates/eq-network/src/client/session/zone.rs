@@ -111,6 +111,23 @@ impl Features {
             .collect()
     }
 
+    /// The admitted library worker's action gate, independent of host UI state.
+    fn refusal(
+        &self,
+        command: &ClientCommand,
+        world: &World,
+        now: Instant,
+    ) -> Option<&'static str> {
+        if world.lifecycle.is_dead() {
+            return Some("The player is dead");
+        }
+        if !world.ready() || world.lifecycle.pending().is_some() {
+            return Some("The player is between zones");
+        }
+        actions::stale(command, world.session_id, now)
+            .or_else(|| actions::Held::new(self.holds(world, now)).conflict(command))
+    }
+
     /// Lets every feature hear a command, then has its owner carry it out;
     /// true when a feature owns it.
     fn handle(
@@ -281,9 +298,7 @@ pub(super) fn run(
                     // Stale commands, and commands that need what an action in
                     // flight holds, are refused here and nowhere else.
                     let now = Instant::now();
-                    let refusal = actions::stale(&command, session_id, now).or_else(|| {
-                        actions::Held::new(features.holds(&world, now)).conflict(&command)
-                    });
+                    let refusal = features.refusal(&command, &world, now);
                     if let Some(reason) = refusal {
                         actions::refuse(&command, reason, log)?;
                         continue;
@@ -1202,7 +1217,7 @@ mod tests {
             position: crate::world::Position::default(),
         };
         let outcome = testing::run(|out| -> Result<()> {
-            out.wire = &wire::EqMac;
+            out.wire = &wire::EqMac::Takp;
             assert!(hear(
                 vec![Message::Bind(bind)],
                 &mut features,
@@ -1469,13 +1484,14 @@ mod tests {
             )
             .capabilities()
         };
-        // Both EQMac policies move, jump, fall, zone, camp and cast spells.
-        // TAKP also offers the item and social actions checked there.
+        // Both EQMac policies move, jump, fall, zone, camp, cast spells and
+        // move inventory. TAKP also offers the social actions checked there.
         assert_eq!(
             features(crate::client::ServerProtocol::Quarm),
             [
                 Capability::Casting,
                 Capability::Spellbook,
+                Capability::Inventory,
                 Capability::Moving,
                 Capability::Falling,
                 Capability::Targeting,
@@ -1631,3 +1647,6 @@ mod quarm_tests;
 
 #[cfg(test)]
 mod ability_tests;
+
+#[cfg(test)]
+mod quarm_inventory_tests;

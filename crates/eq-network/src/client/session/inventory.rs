@@ -3,7 +3,8 @@
 //! feature changes the inventory that every feature reads.
 //!
 //! A move is predicted as soon as it is sent and settles once the server has
-//! let it stand; a trade holds the inventory until the merchant echoes it.
+//! let it stand; Quarm retains predictions even after its pacing delay. A
+//! trade holds the inventory until the merchant echoes it.
 //! Items handed over in a give or trade window leave the trade slots when the
 //! window closes, which servers do not say item by item.
 //!
@@ -13,6 +14,7 @@
 //! servers do, and takes each money update as the truth about the purse.
 mod meals;
 mod merchant;
+mod quarm;
 
 use super::{
     actions::Resource,
@@ -372,7 +374,7 @@ impl Belongings {
     ) -> Self {
         let hungry = match rules {
             MoveRules::EqEmu => eq_network_game::food::HUNGRY,
-            MoveRules::Takp => eq_network_game::food::TAKP_HUNGRY,
+            MoveRules::Takp | MoveRules::Quarm => eq_network_game::food::TAKP_HUNGRY,
         };
         Self {
             allows,
@@ -589,23 +591,19 @@ impl Feature for Belongings {
         tell_coins(world, true, out)
     }
 
-    /// A sold item leaves only when the merchant echoes the sale. Under
-    /// TAKP's rules one move is in flight at a time, which is ours and
-    /// stricter than the official client, which moves items without
-    /// waiting: TAKP answers only a refused move, so a move is answered once
-    /// it settles, and holding the next keeps a resync from landing on top
-    /// of other predictions. A move onto a cursor TAKP may still refill
-    /// (from a queue it said nothing of) waits with it.
+    /// Holds the inventory for merchant replies and paces Mac item moves.
+    /// This conservative delay reduces overlap with resyncs and hidden cursor
+    /// refills; it cannot prove acceptance. Quarm releases only the hold after
+    /// the delay, retaining its predictions for authoritative reconciliation.
     fn holds(&self, _world: &World, now: Instant) -> Vec<(Resource, &'static str)> {
         let mut holds = Vec::new();
         if self.trades.active() {
             holds.push((Resource::Inventory, "Wait for the merchant to answer"));
         }
-        if self.rules == MoveRules::Takp && self.settlement.in_flight(now) {
-            holds.push((
-                Resource::Inventory,
-                "Wait for the server to settle the last move",
-            ));
+        if matches!(self.rules, MoveRules::Takp | MoveRules::Quarm)
+            && self.settlement.in_flight(now)
+        {
+            holds.push((Resource::Inventory, "Wait for the last item move"));
         }
         holds
     }
@@ -669,11 +667,16 @@ impl Feature for Belongings {
         }
     }
 
-    /// Settles moves the server let stand, and releases a trade the merchant
-    /// never answered.
+    /// Releases pacing holds, legacy settlements and unanswered merchant trades.
+    /// Quarm never turns an elapsed delay into an inventory confirmation.
     fn tick(&mut self, now: Instant, world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
-        // Servers answer only a refused move, so silence settles the rest.
-        if let Some(update) = self.settlement.due(&world.inventory, now) {
+        if self.rules == MoveRules::Quarm {
+            // A pacing delay is not proof of acceptance. Keep prediction
+            // origins and any correction/invalidation until server updates.
+            if !self.settlement.in_flight(now) {
+                self.settlement.0 = None;
+            }
+        } else if let Some(update) = self.settlement.due(&world.inventory, now) {
             change(update, world, out)?;
         }
         if self.trades.expire(now) {
@@ -727,7 +730,15 @@ impl Feature for Belongings {
         }
         match message {
             Message::Event(WorldEvent::Inventory(update)) => {
+                let resync =
+                    self.rules == MoveRules::Quarm && quarm::contradicts(&world.inventory, update);
                 world.inventory.0.apply(update.clone());
+                if resync {
+                    // Quarm's resync sends temporary items, incomplete bag
+                    // roots and then disconnects ordinary clients. Only a new
+                    // snapshot can restore safe action state, never a timer.
+                    change(InventoryUpdate::Invalidated, world, out)?;
+                }
                 out.log.diagnostic(told(update))?;
             }
             // A whole list: the places gone, then each item, told as the
@@ -806,7 +817,7 @@ mod tests {
         belongings
             .admit(&Message::Event(WorldEvent::Coins(coins)), &mut world)
             .unwrap();
-        let output = testing::run_on(&super::super::wire::EqMac, |out| -> Result<()> {
+        let output = testing::run_on(&super::super::wire::EqMac::Takp, |out| -> Result<()> {
             belongings.admitted(&mut world, out)?;
             belongings.observe(
                 &Message::Event(WorldEvent::Nourishment(Nourishment { food: 0, water: 0 })),
@@ -907,14 +918,23 @@ mod tests {
             outcome.sent.len()
         };
         // TAKP reaches a merchant 20 away in 3-D; Titanium's reach is unread.
-        assert_eq!(run(&super::super::wire::EqMac, &shop(true), &world), 0);
+        assert_eq!(
+            run(&super::super::wire::EqMac::Takp, &shop(true), &world),
+            0
+        );
         assert_eq!(run(&super::super::wire::Titanium, &shop(true), &world), 1);
         // Closing is never refused.
-        assert_eq!(run(&super::super::wire::EqMac, &shop(false), &world), 1);
+        assert_eq!(
+            run(&super::super::wire::EqMac::Takp, &shop(false), &world),
+            1
+        );
         let mut merchant = testing::spawn(9, SpawnKind::Npc);
         merchant.position.x = 20.0;
         world.spawns.insert(merchant);
-        assert_eq!(run(&super::super::wire::EqMac, &shop(true), &world), 1);
+        assert_eq!(
+            run(&super::super::wire::EqMac::Takp, &shop(true), &world),
+            1
+        );
     }
 
     /// An inventory with one item moved to the cursor by an unanswered prediction.
@@ -1224,7 +1244,7 @@ mod tests {
         belongings.admit(&snapshot, &mut world).unwrap();
         world.own_spawn = Some(7);
         world.player.admit(testing::player(7));
-        testing::run_on(&super::super::wire::EqMac, |out| {
+        testing::run_on(&super::super::wire::EqMac::Takp, |out| {
             belongings.admitted(&mut world, out)
         })
         .result
@@ -1234,7 +1254,7 @@ mod tests {
 
     #[test]
     fn on_takp_a_merchant_is_told_at_its_charge_and_a_purchase_waits_for_coins_to_cover_it() {
-        let eqmac = &super::super::wire::EqMac;
+        let eqmac = &super::super::wire::EqMac::Takp;
         let (mut belongings, mut world) = admitted_on_takp();
         let purse = |copper| Message::Event(WorldEvent::Coins(Coins::from_copper(copper)));
         testing::run(|out| belongings.observe(&purse(253), &mut world, out))
@@ -1369,7 +1389,7 @@ mod tests {
             stray,
             Message::Event(WorldEvent::Merchant(MerchantUpdate::Sold { price: 0, .. }))
         ));
-        let eqmac = &super::super::wire::EqMac;
+        let eqmac = &super::super::wire::EqMac::Takp;
         testing::run_on(eqmac, |out| belongings.handle(&sell, &mut world, out))
             .result
             .unwrap();
@@ -1505,7 +1525,7 @@ mod tests {
         };
         let pick_up = request(&world, 23, 30);
         assert!(belongings.owns(&pick_up));
-        let outcome = testing::run_on(&super::super::wire::EqMac, |out| {
+        let outcome = testing::run_on(&super::super::wire::EqMac::Takp, |out| {
             belongings.handle(&pick_up, &mut world, out)
         });
         outcome.result.unwrap();
@@ -1524,7 +1544,7 @@ mod tests {
         let held = Held::new(belongings.holds(&world, Instant::now()));
         assert_eq!(
             held.conflict(&put_down),
-            Some("Wait for the server to settle the last move")
+            Some("Wait for the last item move")
         );
         let later = Instant::now() + REFUSAL_WINDOW;
         assert_eq!(
@@ -1540,12 +1560,12 @@ mod tests {
         let report =
             |food| Message::Event(WorldEvent::Nourishment(Nourishment { food, water: 6000 }));
         // TAKP's own client waits until below 3000.
-        let outcome = testing::run_on(&super::super::wire::EqMac, |out| {
+        let outcome = testing::run_on(&super::super::wire::EqMac::Takp, |out| {
             belongings.observe(&report(3000), &mut world, out)
         });
         outcome.result.unwrap();
         assert!(outcome.sent.is_empty(), "sent {:?}", outcome.sent);
-        let outcome = testing::run_on(&super::super::wire::EqMac, |out| {
+        let outcome = testing::run_on(&super::super::wire::EqMac::Takp, |out| {
             belongings.observe(&report(2999), &mut world, out)
         });
         outcome.result.unwrap();
@@ -1809,7 +1829,7 @@ mod tests {
             money::{Coin, CoinPlace, CoinTransfer, EQMAC_MOVE_OPCODE},
             world::SpawnKind,
         };
-        let eqmac = &super::super::wire::EqMac;
+        let eqmac = &super::super::wire::EqMac::Takp;
         let (mut belongings, mut world) = admitted_on_takp();
         let purse = Message::Event(WorldEvent::Coins(Coins {
             gold: 12,

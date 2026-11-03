@@ -121,7 +121,7 @@ pub(in crate::client::session) fn login(
                 }
                 choice.refused(ServerRefusal::Text(message), log)?;
             }
-            _ => unheard.tell(&EqMac, packet.opcode, packet.body.len(), log)?,
+            _ => unheard.tell(&EqMac::Takp, packet.opcode, packet.body.len(), log)?,
         }
     }
 }

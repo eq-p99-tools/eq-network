@@ -691,7 +691,7 @@ mod tests {
             .collect()
     }
 
-    const EQMAC: &dyn super::super::wire::Wire = &super::super::wire::EqMac;
+    const EQMAC: &dyn super::super::wire::Wire = &super::super::wire::EqMac::Takp;
 
     /// An `EQMac` player, level 50, admitted and not yet granted speeds.
     fn eqmac_admitted() -> (World, Motion) {

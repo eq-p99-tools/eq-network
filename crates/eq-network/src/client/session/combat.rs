@@ -72,7 +72,7 @@ mod tests {
             created: Instant::now(),
         };
         let outcome = testing::run(|out| {
-            out.wire = &super::super::wire::EqMac;
+            out.wire = &super::super::wire::EqMac::Takp;
             combat.handle(&attack, &mut world, out)
         });
         outcome.result.unwrap();

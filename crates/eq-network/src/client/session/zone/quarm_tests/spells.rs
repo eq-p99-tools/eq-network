@@ -134,7 +134,7 @@ fn item_casts_use_current_inventory_without_predicting_charge_consumption() {
     assert_eq!(sent[0].opcode, 0x7e41);
     assert_eq!(sent[0].body, [10, 0, 202, 0, 22, 0, 7, 0, 0, 0, 0, 0]);
     assert_eq!(world.inventory.items()[&slot].charges, 2);
-    assert!(!features.capabilities().contains(&Capability::Inventory));
+    assert!(features.capabilities().contains(&Capability::Inventory));
 }
 
 #[test]
@@ -242,7 +242,7 @@ fn standing_cancels_a_waiting_memorization_without_enabling_unchecked_book_edits
 fn scribing_uses_read_only_inventory_and_waits_for_authoritative_scroll_consumption() {
     let wire = servers::server_type(ServerProtocol::Quarm).wire();
     let (mut features, mut world) = caster();
-    assert!(!features.capabilities().contains(&Capability::Inventory));
+    assert!(features.capabilities().contains(&Capability::Inventory));
     let mut scroll = testing::item(30);
     scroll.scroll_spell = Some(73);
     testing::run_on(wire, |out| {

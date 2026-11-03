@@ -169,6 +169,7 @@ impl<'a> Parser<'a> {
             },
             book: crate::books::Book::from_item(fields[0], fields[100], fields[102]),
             rules: ItemPlacement {
+                eqmac: None,
                 stack_size: number(131)?,
                 size: u8::try_from(number(8)?)?,
                 bag_size: u8::try_from(number(98)?)?,

@@ -1170,14 +1170,19 @@ impl ServerType for Quarm {
         offer(shared::targeting())
     }
 
-    /// Retains the authoritative load for movement without granting item,
-    /// coin or merchant actions. Quarm's Mac inventory encoder uses the
-    /// shared 360-byte item records and tagged inventory list.
+    /// Quarm's own move handlers accept the shared `EQMac` item/coin layouts.
+    /// Keep the same inventory owner used for movement, with placement and
+    /// banker checks, independent of merchants, meals and exchanges.
     fn inventory(&self, setup: &Setup<'_>) -> Provided {
         offer(shared::inventory_under(
-            MoveRules::Takp,
+            MoveRules::Quarm,
             Quotes::of(GameDialect::EqMac),
-            Allowances::default(),
+            Allowances {
+                items: true,
+                coins: true,
+                merchants: false,
+                meals: false,
+            },
             setup,
         ))
     }
@@ -1223,7 +1228,7 @@ impl ServerType for Quarm {
     }
 
     fn wire(&self) -> &'static dyn Wire {
-        &EqMac
+        &EqMac::Quarm
     }
 
     /// As on TAKP, whose server Quarm's comes from ([`Takp`]).
@@ -1265,7 +1270,7 @@ impl ServerType for Takp {
     }
 
     fn wire(&self) -> &'static dyn Wire {
-        &EqMac
+        &EqMac::Takp
     }
 
     /// TAKP's server sends the spell action with flag 0 as a spell lands, to
@@ -1513,8 +1518,8 @@ mod tests {
     #[test]
     fn eqmac_servers_provide_the_features_built_for_them() {
         // Quarm shares TAKP's movement, falls, jumps, zone handoff and
-        // posture/camp lifecycle, abilities, casting and basic spellbook. Its inventory
-        // observer grants no item moves; other features await their evidence.
+        // posture/camp lifecycle, abilities, casting, basic spellbook and
+        // personal inventory actions. Other features await their own evidence.
         let setup = Setup::new("Tester", AutoEat::default());
         let quarm = server_type(ServerProtocol::Quarm);
         assert_eq!(quarm.features(&setup).len(), 13);
@@ -1523,6 +1528,7 @@ mod tests {
             [
                 Capability::Casting,
                 Capability::Spellbook,
+                Capability::Inventory,
                 Capability::Moving,
                 Capability::Falling,
                 Capability::Targeting,

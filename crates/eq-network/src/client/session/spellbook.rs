@@ -605,7 +605,7 @@ mod tests {
 
     #[test]
     fn takps_256_slot_book_memorizes_in_takps_own_packets() {
-        let eqmac = &super::super::wire::EqMac;
+        let eqmac = &super::super::wire::EqMac::Takp;
         // TAKP's unpacked profile, spell 73 in the book's first slot.
         let mut profile = vec![0; 8460];
         profile[1846..1848].copy_from_slice(&73i16.to_le_bytes());

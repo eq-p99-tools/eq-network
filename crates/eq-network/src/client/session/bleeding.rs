@@ -220,7 +220,7 @@ mod tests {
     /// Runs a step against the `EQMac` wire, which carries the report.
     fn eqmac<R>(step: impl FnOnce(&mut Out<'_, '_>) -> R) -> testing::Outcome<R> {
         testing::run(|out| {
-            out.wire = &wire::EqMac;
+            out.wire = &wire::EqMac::Takp;
             step(out)
         })
     }

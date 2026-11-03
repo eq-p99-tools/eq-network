@@ -709,7 +709,7 @@ mod tests {
         for opcode in [
             0x5900, 0x5200, 0xf340, 0x0001, 0x5900, 0x5200, 0xf340, 0x0001,
         ] {
-            unheard.tell(&EqMac, opcode, 4, &mut log).unwrap();
+            unheard.tell(&EqMac::Takp, opcode, 4, &mut log).unwrap();
         }
         drop(log);
         assert_eq!(

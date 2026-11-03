@@ -97,7 +97,7 @@ fn quarm_moves_and_jumps_with_eqmac_packets_and_obeys_corrections() {
     let server = servers::server_type(ServerProtocol::Quarm);
     let (mut features, mut world) = admitted();
     assert!(features.capabilities().contains(&Capability::Moving));
-    assert!(!features.capabilities().contains(&Capability::Inventory));
+    assert!(features.capabilities().contains(&Capability::Inventory));
     let mut position = world.body.position().unwrap();
     let report = ClientCommand::SpeedInputs {
         session_id: 5,
