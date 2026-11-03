@@ -1,5 +1,22 @@
 # API and integration contracts
 
+## Quarm loot receipt and delivery
+
+`LootUpdate::Acknowledged { place }` is a new exhaustive-enum variant and
+requires downstream match updates in the next minor pre-1.0 release. EQMac
+servers echo item requests before checking whether they can deliver them.
+Consumers must not treat this event as `Taken { accepted: true }`: ordinary
+`InventoryUpdate` events establish received items, including late deliveries
+after the loot window closes. No destination or successful transfer is
+predicted by the loot feature. The existing inventory feature owns items and
+coin grants. See `docs/eqmac-looting.md` for evidence and remaining live checks.
+
+The loot controller correlates a visible corpse request, successful grant and
+completed listing in one admission. It refuses stale-session commands, places
+outside that listing and repeat requests for a place already submitted. Close
+waits for the server's completion; death, zoning, corpse removal and reconnect
+discard access state. No timeout or receipt echo fabricates item delivery.
+
 ## Public API evolution
 
 The published 0.1.x line and the repository's unreleased development head are

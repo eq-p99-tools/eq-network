@@ -614,7 +614,7 @@ mod shared {
     }
 
     pub(super) fn looting() -> Box<dyn Feature> {
-        Box::new(Looting)
+        Box::<Looting>::default()
     }
 
     pub(super) fn exchange() -> Box<dyn Feature> {
@@ -1162,6 +1162,12 @@ impl ServerType for Quarm {
         offer(shared::combat(true))
     }
 
+    /// Quarm's source-derived corpse flow uses the existing inventory owner
+    /// for delivery and coins. Public-server validation remains pending.
+    fn looting(&self, _setup: &Setup<'_>) -> Provided {
+        offer(Box::new(Looting::requiring_empty_cursor()))
+    }
+
     fn item_rules(&self) -> ItemRules {
         ItemRules::Quarm
     }
@@ -1604,7 +1610,7 @@ mod tests {
         // personal inventory actions. Other features await their own evidence.
         let setup = Setup::new("Tester", AutoEat::default());
         let quarm = server_type(ServerProtocol::Quarm);
-        assert_eq!(quarm.features(&setup).len(), 14);
+        assert_eq!(quarm.features(&setup).len(), 15);
         assert_eq!(
             offers(quarm),
             [
@@ -1615,6 +1621,7 @@ mod tests {
                 Capability::Falling,
                 Capability::Targeting,
                 Capability::Combat,
+                Capability::Looting,
                 Capability::Talking,
                 Capability::Camping,
                 Capability::Zoning,

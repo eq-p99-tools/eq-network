@@ -240,6 +240,7 @@ pub fn eqmac_with(opcode: u16, body: &[u8], item_rules: inventory::ItemRules) ->
             |error| unreadable(Part::World, &error),
             Message::MerchantList,
         )],
+        _ if let Some(message) = eqmac_loot(opcode, body, item_rules) => vec![message],
         _ if let Some(message) = eqmac_exchange(opcode, body) => vec![message],
         _ => match inventory::decode_eqmac_with(opcode, body, item_rules) {
             Ok(Some(update)) => vec![Message::Event(WorldEvent::Inventory(update))],
@@ -249,6 +250,16 @@ pub fn eqmac_with(opcode: u16, body: &[u8], item_rules: inventory::ItemRules) ->
                 |events| events.into_iter().map(Message::Event).collect(),
             ),
         },
+    }
+}
+
+/// Corpse views are decoded before inventory packets, so their places can
+/// never be mistaken for carried slots.
+fn eqmac_loot(opcode: u16, body: &[u8], rules: inventory::ItemRules) -> Option<Message> {
+    match crate::loot::eqmac::decode(opcode, body, rules) {
+        Ok(Some(update)) => Some(Message::Event(WorldEvent::Loot(update))),
+        Ok(None) => None,
+        Err(error) => Some(unreadable(Part::World, &error)),
     }
 }
 

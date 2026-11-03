@@ -695,10 +695,11 @@ fn quarm_inventory_enablement_does_not_enable_unrelated_actions_or_meals() {
         Capability::Casting,
         Capability::Spellbook,
         Capability::Abilities,
+        Capability::Looting,
     ] {
         assert!(features.capabilities().contains(&capability));
     }
-    for capability in [Capability::Trading, Capability::Giving, Capability::Looting] {
+    for capability in [Capability::Trading, Capability::Giving] {
         assert!(!features.capabilities().contains(&capability));
     }
     let commands = [

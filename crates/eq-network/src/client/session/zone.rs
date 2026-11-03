@@ -1503,6 +1503,7 @@ mod tests {
                 Capability::Falling,
                 Capability::Targeting,
                 Capability::Combat,
+                Capability::Looting,
                 Capability::Talking,
                 Capability::Camping,
                 Capability::Zoning,
@@ -1664,3 +1665,6 @@ mod item_move_tests;
 
 #[cfg(test)]
 mod combat_tests;
+
+#[cfg(test)]
+mod loot_tests;
