@@ -854,9 +854,14 @@ mod tests {
             },
             ClientCommand::SpeedInputs {
                 session_id,
-                rate: 0,
-                weight: 0,
-                capacity: 100,
+                revision: 1,
+                state: eq_network_game::movement::SpeedInputState::Ready(
+                    eq_network_game::movement::SpeedInputs {
+                        rate: 0,
+                        weight: 0,
+                        capacity: 100,
+                    },
+                ),
             },
             ClientCommand::Move(MovementRequest {
                 mode: MovementMode::Forward,

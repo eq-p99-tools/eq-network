@@ -101,9 +101,14 @@ fn quarm_moves_and_jumps_with_eqmac_packets_and_obeys_corrections() {
     let mut position = world.body.position().unwrap();
     let report = ClientCommand::SpeedInputs {
         session_id: 5,
-        rate: 0,
-        weight: 0,
-        capacity: 100,
+        revision: 1,
+        state: eq_network_game::movement::SpeedInputState::Ready(
+            eq_network_game::movement::SpeedInputs {
+                rate: 0,
+                weight: 0,
+                capacity: 100,
+            },
+        ),
     };
     let output = testing::run_on(server.wire(), |out| {
         features.handle(&report, &mut world, out)

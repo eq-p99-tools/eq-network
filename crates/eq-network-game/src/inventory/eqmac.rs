@@ -392,6 +392,7 @@ fn item_at_for(
             size: record.byte(177),
             bag_size: if container { record.byte(271) } else { 0 },
             bag_type: if container { record.byte(268) } else { 0 },
+            bag_weight_reduction: if container { record.byte(272) } else { 0 },
             item_type,
             deity_mask: record.word(348),
         },

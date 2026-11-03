@@ -272,6 +272,10 @@ fn eqmac_exchange(opcode: u16, body: &[u8]) -> Option<Message> {
 fn eqmac_profile(body: &[u8]) -> Vec<Message> {
     let mut messages = events(Part::Spells, crate::quarm::profile_spells(body));
     messages.extend(events(Part::World, crate::quarm::profile_coins(body)));
+    messages.push(crate::quarm::profile_nourishment(body).map_or_else(
+        |error| unreadable(Part::World, &error),
+        |value| Message::Event(WorldEvent::Nourishment(value)),
+    ));
     messages.push(
         crate::quarm::bind_point(body)
             .map_or_else(|error| unreadable(Part::World, &error), Message::Bind),
@@ -571,6 +575,7 @@ mod tests {
             eqmac(0x5741, &[0xb8, 0x0b, 0x70, 0x17, 0])[..],
             [Message::Event(WorldEvent::Nourishment(
                 crate::food::Nourishment {
+                    fatigue: Some(0),
                     food: 3000,
                     water: 6000
                 }
@@ -709,7 +714,11 @@ mod tests {
                 Message::Unreadable {
                     part: Part::World,
                     ..
-                }
+                },
+                Message::Unreadable {
+                    part: Part::World,
+                    ..
+                },
             ]
         ));
     }

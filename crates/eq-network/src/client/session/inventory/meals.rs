@@ -66,6 +66,11 @@ impl Meals {
         self.auto_eat = auto_eat;
     }
 
+    /// Latest authoritative nourishment, including admission fatigue.
+    pub(super) const fn snapshot(&self) -> Option<Nourishment> {
+        self.last
+    }
+
     /// Notes how fed and watered the profile says the player is.
     pub(super) fn admit(&mut self, nourishment: Nourishment) {
         self.last = Some(nourishment);

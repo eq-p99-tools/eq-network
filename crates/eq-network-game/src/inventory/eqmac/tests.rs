@@ -327,11 +327,13 @@ fn bags_and_books_read_their_own_middles() {
     bag[268] = 5;
     bag[269] = 8;
     bag[271] = 2;
+    bag[272] = 65;
     // What sits where a common item keeps its type and statistics.
     bag[253] = 0x55;
     bag[240] = 0x55;
     let item = single_item(CONTAINER_OPCODE, &bag);
     assert_eq!(item.bag_slots, 8);
+    assert_eq!(item.rules.bag_weight_reduction, 65);
     assert_eq!(
         (
             item.rules.bag_type,

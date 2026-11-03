@@ -4,6 +4,7 @@ mod activation;
 mod banking;
 mod eqmac;
 mod titanium;
+mod weight;
 pub use actions::{
     titanium_move, InventoryActor, InventoryMove, MoveQuantity, MoveRules, MOVE_OPCODE,
 };
@@ -20,6 +21,7 @@ pub use eqmac::{
 };
 pub use titanium::decode;
 pub(crate) use titanium::{parse as parse_items, parse_at};
+pub use weight::WeightUnavailable;
 
 use crate::items::ItemDetails;
 use serde::Serialize;
@@ -225,6 +227,8 @@ pub struct ItemPlacement {
     pub bag_size: u8,
     /// Container specialization (for example a quiver).
     pub bag_type: u8,
+    /// Percentage of contents' weight removed by the container (0..=100).
+    pub bag_weight_reduction: u8,
     /// Item category, including weapon handedness.
     pub item_type: u8,
     /// Deity restrictions; zero is unrestricted.

@@ -807,3 +807,49 @@ fn a_grounded_climb_rises_the_bodys_reach_each_step_once_set() {
     session.send_move(&climb, now, |_| Ok(())).unwrap();
     assert_eq!(session.position().z.to_bits(), 15.75f32.to_bits());
 }
+
+#[test]
+fn withdrawn_input_allows_only_fresh_vertical_descent_and_no_jump() {
+    let start = Instant::now();
+    let mut session = setup(start).with_falls(true);
+    session.withdraw();
+    let epoch = Instant::now();
+    assert!(session.check_jump().is_err());
+    let mut falling = request(epoch + Duration::from_millis(100), 0.0);
+    falling.mode = MovementMode::Fall;
+    falling.position.z = -1.0;
+    let now = falling.created;
+    for position in [
+        Position {
+            x: 0.001,
+            ..falling.position
+        },
+        Position {
+            heading: 1.0,
+            ..falling.position
+        },
+        Position {
+            z: 0.001,
+            ..falling.position
+        },
+    ] {
+        let bad = MovementRequest {
+            position,
+            ..falling
+        };
+        assert!(session
+            .send_move(&bad, now, |_| panic!("input while withdrawn"))
+            .is_err());
+    }
+    session.send_move(&falling, now, |_| Ok(())).unwrap();
+    let before = session.position();
+    session
+        .calibrate(setup(start).calibration().unwrap(), now)
+        .unwrap();
+    let stale = request(start, 0.3);
+    assert!(session
+        .send_move(&stale, now, |_| panic!("stale input restored"))
+        .is_err());
+    assert_eq!(session.position(), before);
+    assert!(session.check_jump().is_ok());
+}

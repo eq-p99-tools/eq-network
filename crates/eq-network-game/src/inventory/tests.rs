@@ -395,6 +395,7 @@ pub(crate) fn wire(
     fields[11] = "500".into();
     fields[21] = "-3".into();
     fields[97] = bag.to_string();
+    fields[99] = "55".into();
     fields[131] = if stack { "100" } else { "0" }.into();
     fields[133] = u8::from(stack).to_string();
     fields[154] = if id == 301 { "73" } else { "-1" }.into();
@@ -617,6 +618,12 @@ fn snapshot_decodes_equipment_bags_stack_quantities_and_unlimited_charges() {
     assert_eq!(inventory.items[&InventorySlot(13)].charges, -1);
     assert_eq!(inventory.items[&InventorySlot(13)].scroll_spell, None);
     assert_eq!(inventory.items[&InventorySlot(22)].bag_slots, 8);
+    assert_eq!(
+        inventory.items[&InventorySlot(22)]
+            .rules
+            .bag_weight_reduction,
+        55
+    );
     assert_eq!(
         inventory.items[&InventorySlot(253)].details.name,
         "Test item 42"

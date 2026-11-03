@@ -254,6 +254,10 @@ impl MotionSession {
     /// Rejects jumps on sessions without falls.
     pub fn check_jump(&self) -> Result<()> {
         ensure!(self.falls, "jumping is not enabled for this server");
+        ensure!(
+            !self.suspended && self.calibration.is_some(),
+            "player input is withdrawn"
+        );
         Ok(())
     }
 
@@ -330,6 +334,7 @@ impl MotionSession {
     pub fn withdraw(&mut self) {
         self.calibration = None;
         self.held = None;
+        self.guard.correct(self.position, Instant::now());
     }
 
     /// Latest accepted world position, without implying a server acknowledgment.
@@ -367,6 +372,10 @@ impl MotionSession {
     /// # Errors
     /// Rejects stale, uncalibrated, suspended, excessive or invalid motion,
     /// and propagates whatever `send` returns.
+    #[allow(
+        clippy::float_cmp,
+        reason = "Withdrawn input must preserve coordinates exactly, without drift credit"
+    )]
     pub fn send_move_sample(
         &mut self,
         request: &MovementRequest,
@@ -378,42 +387,55 @@ impl MotionSession {
             request.mode != MovementMode::Fall || self.falls,
             "falling is not enabled for this server"
         );
-        let calibration = self
-            .calibration
-            .ok_or_else(|| anyhow::anyhow!("movement is not calibrated"))?;
+        // Without player input, only an in-place descent is allowed. No fake
+        // calibration, turn, climb, or horizontal rounding allowance is granted.
+        if self.calibration.is_none() {
+            ensure!(
+                request.mode == MovementMode::Fall
+                    && request.position.x == self.position.x
+                    && request.position.y == self.position.y
+                    && request.position.heading == self.position.heading
+                    && request.position.z <= self.position.z,
+                "player input is withdrawn; only vertical descent is allowed"
+            );
+        }
         let mut guard = self.guard.clone();
-        let (speed, velocity_scale, animation) = match request.mode {
-            MovementMode::Strafe => {
-                let strafe = calibration
-                    .strafe
-                    .ok_or_else(|| anyhow::anyhow!("strafing is not calibrated"))?;
-                (
-                    strafe.units_per_second,
-                    strafe.velocity_scale,
-                    strafe.animation,
-                )
+        let (speed, velocity_scale, animation) = if let Some(calibration) = self.calibration {
+            match request.mode {
+                MovementMode::Strafe => {
+                    let strafe = calibration
+                        .strafe
+                        .ok_or_else(|| anyhow::anyhow!("strafing is not calibrated"))?;
+                    (
+                        strafe.units_per_second,
+                        strafe.velocity_scale,
+                        strafe.animation,
+                    )
+                }
+                MovementMode::Walk => {
+                    let walk = calibration
+                        .walk
+                        .ok_or_else(|| anyhow::anyhow!("walking is not calibrated"))?;
+                    (walk.units_per_second, walk.velocity_scale, walk.animation)
+                }
+                MovementMode::Forward | MovementMode::Fall => (
+                    calibration.units_per_second,
+                    calibration.velocity_scale,
+                    calibration.animation,
+                ),
+                MovementMode::Backward => {
+                    let backward = calibration
+                        .backward
+                        .ok_or_else(|| anyhow::anyhow!("backward movement is not calibrated"))?;
+                    (
+                        backward.units_per_second,
+                        backward.velocity_scale,
+                        backward.animation,
+                    )
+                }
             }
-            MovementMode::Walk => {
-                let walk = calibration
-                    .walk
-                    .ok_or_else(|| anyhow::anyhow!("walking is not calibrated"))?;
-                (walk.units_per_second, walk.velocity_scale, walk.animation)
-            }
-            MovementMode::Forward | MovementMode::Fall => (
-                calibration.units_per_second,
-                calibration.velocity_scale,
-                calibration.animation,
-            ),
-            MovementMode::Backward => {
-                let backward = calibration
-                    .backward
-                    .ok_or_else(|| anyhow::anyhow!("backward movement is not calibrated"))?;
-                (
-                    backward.units_per_second,
-                    backward.velocity_scale,
-                    backward.animation,
-                )
-            }
+        } else {
+            (0.0, 0.0, 0)
         };
         // Switching mode changes the per-sample limit without resetting input expiry
         // or granting a new time budget. The clone is committed only after send succeeds.

@@ -20,10 +20,8 @@ pub struct SpeedState {
     pub rate: i16,
     /// What the player carries, in whole units, as the host reports it.
     pub weight: u16,
-    /// What the player can carry before it slows them, as the host reports
-    /// it. 0 is only the guard before the host has the player's profile, and
-    /// counts no one as carrying too much; a 0 after the profile is in is a
-    /// bug in the host, not a weightless player.
+    /// Effective carrying capacity. Zero means no encumbrance in this formula,
+    /// never unavailable input; availability is handled by `SpeedInputState`.
     pub capacity: u32,
     /// Whether the player is sneaking, as the server last said.
     pub sneaking: bool,

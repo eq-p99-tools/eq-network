@@ -781,6 +781,14 @@ pub enum WorldEvent {
     },
     /// Server inventory snapshot or incremental update.
     Inventory(crate::inventory::InventoryUpdate),
+    /// Recalculate host-owned inputs after admission or an authoritative change.
+    /// Reports for any older revision are refused, even in the same admission.
+    SpeedInputsRequired {
+        /// Current zone admission.
+        session_id: u64,
+        /// Opaque revision to echo in `GameCommand::SpeedInputs`.
+        revision: u64,
+    },
     /// Local session movement gate; None clears pending input and disables walking.
     MotionState {
         /// Current zone admission.

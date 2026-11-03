@@ -588,7 +588,12 @@ impl Feature for Belongings {
         for update in admission {
             change(update, world, out)?;
         }
-        tell_coins(world, true, out)
+        tell_coins(world, true, out)?;
+        if let Some(nourishment) = self.meals.snapshot() {
+            out.log
+                .send(ClientEvent::World(WorldEvent::Nourishment(nourishment)))?;
+        }
+        Ok(())
     }
 
     /// Holds the inventory for merchant replies and paces Mac item moves.
@@ -820,7 +825,11 @@ mod tests {
         let output = testing::run_on(&super::super::wire::EqMac::Takp, |out| -> Result<()> {
             belongings.admitted(&mut world, out)?;
             belongings.observe(
-                &Message::Event(WorldEvent::Nourishment(Nourishment { food: 0, water: 0 })),
+                &Message::Event(WorldEvent::Nourishment(Nourishment {
+                    fatigue: None,
+                    food: 0,
+                    water: 0,
+                })),
                 &mut world,
                 out,
             )?;
@@ -1013,7 +1022,11 @@ mod tests {
         belongings.admit(&snapshot, &mut world).unwrap();
         belongings
             .admit(
-                &Message::Event(WorldEvent::Nourishment(Nourishment { food, water })),
+                &Message::Event(WorldEvent::Nourishment(Nourishment {
+                    fatigue: None,
+                    food,
+                    water,
+                })),
                 &mut world,
             )
             .unwrap();
@@ -1029,8 +1042,13 @@ mod tests {
     fn a_hungry_or_thirsty_player_eats_and_drinks_what_they_carry() {
         use eq_network_game::food::{consume, Meal, Nourishment};
         let (mut belongings, mut world) = fed(6000, 6000);
-        let hungry =
-            |food, water| Message::Event(WorldEvent::Nourishment(Nourishment { food, water }));
+        let hungry = |food, water| {
+            Message::Event(WorldEvent::Nourishment(Nourishment {
+                fatigue: None,
+                food,
+                water,
+            }))
+        };
         // Fed and watered: nothing happens.
         let outcome = testing::run(|out| belongings.observe(&hungry(3001, 6000), &mut world, out));
         assert!(outcome.sent.is_empty(), "sent {:?}", outcome.sent);
@@ -1089,6 +1107,7 @@ mod tests {
         });
         world.inventory.0.apply(InventoryUpdate::Set(vec![ration]));
         let hungry = Message::Event(WorldEvent::Nourishment(Nourishment {
+            fatigue: None,
             food: 2000,
             water: 6000,
         }));
@@ -1557,8 +1576,13 @@ mod tests {
     fn on_takp_the_session_eats_below_3000_in_takps_numbers() {
         use eq_network_game::food::{eqmac_consume, Meal, Nourishment};
         let (mut belongings, mut world) = admitted_on_takp();
-        let report =
-            |food| Message::Event(WorldEvent::Nourishment(Nourishment { food, water: 6000 }));
+        let report = |food| {
+            Message::Event(WorldEvent::Nourishment(Nourishment {
+                fatigue: None,
+                food,
+                water: 6000,
+            }))
+        };
         // TAKP's own client waits until below 3000.
         let outcome = testing::run_on(&super::super::wire::EqMac::Takp, |out| {
             belongings.observe(&report(3000), &mut world, out)

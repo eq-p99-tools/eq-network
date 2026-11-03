@@ -546,6 +546,7 @@ fn the_profile_says_the_buffs_the_book_and_each_gems_reuse_left() {
             Message::Event(WorldEvent::SpellBook(book)),
             Message::Event(WorldEvent::Coins(carried)),
             Message::Event(WorldEvent::CoinsElsewhere { cursor, bank, .. }),
+            Message::Event(WorldEvent::Nourishment(_)),
             Message::Bind(_),
         ] if buffs.iter().all(Option::is_none)
             && book.slots().iter().all(Option::is_none)

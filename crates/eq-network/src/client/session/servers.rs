@@ -1690,9 +1690,26 @@ mod tests {
             Vec::<eq_network_game::command::EncodedCommand>::new()
         );
         world.own_spawn = Some(7);
-        world.player.admit(testing::player(7));
+        let mut player = testing::player(7);
+        player.run_speed = 0.7;
+        player.walk_speed = 0.46;
+        world.player.admit(player);
         world.admitted = Some(Instant::now());
         testing::run(|out| feature.admitted(&mut world, out))
+            .result
+            .unwrap();
+        let report = ClientCommand::SpeedInputs {
+            session_id: 5,
+            revision: 1,
+            state: eq_network_game::movement::SpeedInputState::Ready(
+                eq_network_game::movement::SpeedInputs {
+                    rate: 0,
+                    weight: 0,
+                    capacity: 100,
+                },
+            ),
+        };
+        testing::run(|out| feature.handle(&report, &mut world, out))
             .result
             .unwrap();
         let sent = testing::run(|out| feature.handle(&jump, &mut world, out));

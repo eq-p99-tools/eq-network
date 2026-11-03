@@ -618,6 +618,14 @@ fn decoded_coins(data: &[u8]) -> Result<Vec<WorldEvent>> {
     ])
 }
 
+/// Admission nourishment and fatigue from the validated `EQMac` profile.
+///
+/// # Errors
+/// Rejects malformed compression, profile layouts or truncated fields.
+pub fn profile_nourishment(body: &[u8]) -> Result<crate::food::Nourishment> {
+    crate::food::eqmac_profile(&unpack(body, true)?)
+}
+
 /// The separate, uncompressed own-character zone-entry projection.
 #[derive(Clone, Debug)]
 pub struct OwnSpawn {
