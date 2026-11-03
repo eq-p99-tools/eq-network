@@ -107,19 +107,26 @@ observing disappearance or receiving another player's click does not create
 an item. Item arrivals use the existing EQMac item decoder and inventory owner,
 including `OP_SummonedItem` for the cursor. No prediction ledger is added here.
 
-The generation-selected EQMac object owner permits one unresolved pickup, since a refusal cannot name
-its object. It holds inventory actions while the incoming cursor item is
-unknown. An own refusal clears the request. An own removal waits for the separate
-cursor delivery, in either arrival order. This is conservative request
-correlation, not a claim about the official client's click rate or an item-move
-acknowledgement. Silence retains the hold until an answer or a new zone session;
-no timer releases it or retries an uncertain pickup. A fresh object placement,
-removal by another actor or another actor's refusal cannot answer the pending
-request: a later refusal has no object ID and must not clear a newer click.
-An inventory snapshot in the same session is not a request-stream barrier:
-it cannot prove that an old untagged refusal will never arrive. Only a new
-session/admission unconditionally resets this attribution uncertainty. The
-known inventory is not invalidated merely because pickup attribution is unknown.
+The generation-selected EQMac object owner permits one pending pickup and
+holds only further pickups, not inventory moves or other inventory actions.
+While result attribution is unique, an own refusal ends the wait and an own
+removal plus separate authoritative cursor delivery ends it in either order.
+Neither completion rule creates an item or acknowledges an inventory move.
+
+Removal by another actor (or with no actor), an authoritative inventory snapshot,
+or three seconds of local waiting cancels the pending wait. Cancellation is
+neither success nor a claim that the server abandoned the request. The timer
+bounds local duplicate suppression; it is not an official-client cadence or a
+server response guarantee, and it sends no automatic retry.
+
+A cancelled request may still produce an old untagged refusal or cursor packet.
+One admission-scoped ambiguity bit retains that fact without accumulating
+cancelled request records. Those packets, including old named removals, cannot
+end a newer wait after a placement reuses the old ID. Later waits remain bounded
+and may also be cancelled by an authoritative snapshot; ambiguous removals do
+not cancel them. Only a new session/admission restores unique
+result attribution. Authoritative item packets still go through the one
+inventory owner; pickup cancellation never invalidates otherwise known items.
 The established Titanium result behavior is preserved.
 
 ## Availability and remaining work

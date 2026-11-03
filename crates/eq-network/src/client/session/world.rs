@@ -840,6 +840,7 @@ pub(super) mod tests {
             rules::Expansions,
         };
         let mut settings = [0_u8; 264];
+        settings[..4].copy_from_slice(&0x8000_0000_u32.to_le_bytes());
         settings[8] = 1;
         settings[32..41].copy_from_slice(b"testworld");
         let events = heard(|log| {
@@ -869,6 +870,7 @@ pub(super) mod tests {
                 ClientEvent::Diagnostic(unreadable),
             ] if short_name == "testworld"
                 && rules.no_drop_trades
+                && rules.language_zero_selector == Some(eq_network_game::rules::LanguageZeroSelector(0x8000_0000))
                 && unreadable == "Chat server offer unreadable: incomplete chat server offer"
         ));
     }

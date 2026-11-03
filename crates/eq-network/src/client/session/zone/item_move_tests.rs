@@ -30,6 +30,7 @@ fn setup(protocol: ServerProtocol, items: Vec<InventoryItem>) -> (Features, Worl
 
 fn command(world: &World, from: i32, to: i32, quantity: MoveQuantity) -> ClientCommand {
     ClientCommand::MoveInventory(InventoryMove {
+        sequence: None,
         session_id: world.session_id,
         revision: world.inventory.revision(),
         from: InventorySlot(from),
@@ -241,4 +242,300 @@ fn matching_stack_swap_sends_nothing_but_an_explicit_merge_still_works() {
             Some(7)
         );
     }
+}
+
+/// Select all moves from a host projection before the worker sees any of them.
+#[test]
+fn projected_commands_enqueue_before_feedback_and_send_in_order() {
+    use eq_network_game::inventory::{Inventory, InventoryActor, MoveSequence};
+    for protocol in [
+        ServerProtocol::Takp,
+        ServerProtocol::Quarm,
+        ServerProtocol::EqEmu,
+    ] {
+        let (mut features, mut world) = setup(protocol, vec![stack(22, 12)]);
+        let mut projected: Inventory = (*world.inventory).clone();
+        let actor = InventoryActor {
+            bank_access: false,
+            deity: None,
+            dual_wield: None,
+            class: Some(1),
+            race: 1,
+            level: 60,
+            trade_slots: 0,
+            trade_no_drop: false,
+            world_container: false,
+        };
+        let mut commands = Vec::new();
+        for (index, (from, to)) in [(22, 30), (30, 23), (23, 30), (30, 24)]
+            .into_iter()
+            .enumerate()
+        {
+            let id = u64::try_from(index).unwrap() + 1;
+            let request = InventoryMove {
+                session_id: world.session_id,
+                revision: projected.revision(),
+                sequence: Some(MoveSequence {
+                    id,
+                    after: (id > 1).then_some(id - 1),
+                }),
+                from: InventorySlot(from),
+                to: InventorySlot(to),
+                quantity: MoveQuantity::Whole,
+                created: Instant::now(),
+            };
+            projected.apply(projected.plan_move(&request, actor).unwrap());
+            commands.push(ClientCommand::MoveInventory(request));
+        }
+        for request in &commands {
+            let outcome = submit(protocol, &mut features, &mut world, request);
+            outcome.result.unwrap();
+            assert_eq!(outcome.sent.len(), 1, "{protocol:?}: {:?}", outcome.events);
+            assert!(matches!(
+                outcome.events[..],
+                [ClientEvent::World(WorldEvent::InventoryAction {
+                    sequence: Some(_),
+                    update: Some(InventoryUpdate::Prediction(_)),
+                    error: None,
+                    ..
+                })]
+            ));
+        }
+        assert_eq!(*world.inventory, projected);
+        assert_eq!(
+            submit(protocol, &mut features, &mut world, &commands[3]).sent,
+            []
+        );
+    }
+}
+
+#[test]
+fn rejected_predecessor_cannot_alias_a_later_revision_and_a_fresh_sequence_recovers() {
+    use eq_network_game::inventory::MoveSequence;
+    let protocol = ServerProtocol::Takp;
+    let (mut features, mut world) = setup(protocol, vec![stack(22, 12)]);
+    let ClientCommand::MoveInventory(mut rejected) = command(&world, 22, 30, MoveQuantity::Whole)
+    else {
+        unreachable!()
+    };
+    rejected.sequence = Some(MoveSequence { id: 1, after: None });
+    // An intervening authoritative change invalidates the first request.
+    observe(
+        protocol,
+        &mut features,
+        &mut world,
+        InventoryUpdate::Set(vec![stack(23, 4)]),
+    );
+    assert_eq!(
+        submit(
+            protocol,
+            &mut features,
+            &mut world,
+            &ClientCommand::MoveInventory(rejected)
+        )
+        .sent,
+        []
+    );
+    let ClientCommand::MoveInventory(mut descendant) = command(&world, 23, 30, MoveQuantity::Whole)
+    else {
+        unreachable!()
+    };
+    // Its revision is now exactly current, but its predecessor never submitted.
+    descendant.sequence = Some(MoveSequence {
+        id: 2,
+        after: Some(1),
+    });
+    assert_eq!(
+        submit(
+            protocol,
+            &mut features,
+            &mut world,
+            &ClientCommand::MoveInventory(descendant)
+        )
+        .sent,
+        []
+    );
+    let ClientCommand::MoveInventory(mut fresh) = command(&world, 23, 30, MoveQuantity::Whole)
+    else {
+        unreachable!()
+    };
+    fresh.sequence = Some(MoveSequence { id: 3, after: None });
+    assert_eq!(
+        submit(
+            protocol,
+            &mut features,
+            &mut world,
+            &ClientCommand::MoveInventory(fresh)
+        )
+        .sent
+        .len(),
+        1
+    );
+}
+
+#[test]
+fn transport_failure_reports_no_submitted_prediction_and_leaves_inventory_unchanged() {
+    use super::super::feature::{Out, Sink};
+    use eq_network_game::{command::EncodedCommand, inventory::MoveSequence};
+    #[derive(Default)]
+    struct FailingSink(usize);
+    impl Sink for FailingSink {
+        fn send(&mut self, _packet: &EncodedCommand) -> Result<()> {
+            self.0 += 1;
+            anyhow::bail!("Synthetic transport failure")
+        }
+        fn send_unreliable(&mut self, _packet: &EncodedCommand) -> Result<()> {
+            panic!("Item moves must use reliable transport")
+        }
+        fn last_received_seconds(&self) -> u64 {
+            0
+        }
+    }
+    for protocol in [
+        ServerProtocol::Takp,
+        ServerProtocol::Quarm,
+        ServerProtocol::EqEmu,
+    ] {
+        let (mut features, mut world) = setup(protocol, vec![stack(22, 12)]);
+        let original = (*world.inventory).clone();
+        let ClientCommand::MoveInventory(mut request) =
+            command(&world, 22, 30, MoveQuantity::Whole)
+        else {
+            unreachable!()
+        };
+        request.sequence = Some(MoveSequence { id: 1, after: None });
+        let mut sink = FailingSink::default();
+        let outcome = testing::run_on(servers::server_type(protocol).wire(), |out| {
+            features.handle(
+                &ClientCommand::MoveInventory(request),
+                &mut world,
+                &mut Out {
+                    sink: &mut sink,
+                    log: out.log,
+                    wire: out.wire,
+                    sender: out.sender,
+                },
+            )
+        });
+        assert!(outcome.result.is_err());
+        assert_eq!(sink.0, 1);
+        assert_eq!(*world.inventory, original);
+        assert!(!outcome.events.iter().any(|event| matches!(
+            event,
+            ClientEvent::World(WorldEvent::InventoryAction { error: None, .. })
+        )));
+    }
+}
+
+#[test]
+fn eqmac_partial_slot_observations_do_not_retire_affecting_equipment_history() {
+    use eq_network_game::items::{EquipmentRules, ItemBonuses};
+    for protocol in [ServerProtocol::Takp, ServerProtocol::Quarm] {
+        let mut original = testing::item(24);
+        original.details.equipment = Some(EquipmentRules::default());
+        original.details.bonuses = Some(ItemBonuses {
+            strength: 7,
+            ..ItemBonuses::default()
+        });
+        original.details.slots = u32::MAX;
+        original.details.classes = u32::MAX;
+        original.details.races = u32::MAX;
+        assert_unknown_equipment_actor_refused(protocol, &original);
+        let (mut features, mut world) = setup(protocol, vec![original.clone()]);
+        // The generic zero-profile fixture cannot equip items. This case needs
+        // an explicitly eligible actor, without changing the production guards.
+        let mut player = testing::player(7);
+        player.class = Some(1);
+        player.race = 1;
+        player.level = 60;
+        world.player.admit(player);
+        for (from, to) in [(24, 30), (30, 13), (13, 30), (30, 24)] {
+            let revision = world.inventory.revision();
+            let request = command(&world, from, to, MoveQuantity::Whole);
+            let outcome = submit(protocol, &mut features, &mut world, &request);
+            assert!(outcome.result.unwrap());
+            let mut moved = original.clone();
+            moved.slot = InventorySlot(to);
+            assert!(
+                matches!(
+                    &outcome.events[..],
+                    [ClientEvent::World(WorldEvent::InventoryAction {
+                        session_id: 5,
+                        revision: actual_revision,
+                        sequence: None,
+                        update: Some(InventoryUpdate::Prediction(items)),
+                        error: None,
+                    })] if *actual_revision == revision && items.as_slice() == [moved]
+                ),
+                "{protocol:?} {from}->{to}: {:?}",
+                outcome.events
+            );
+            assert_eq!(outcome.sent.len(), 1, "{protocol:?} {from}->{to}");
+            assert_eq!(outcome.sent[0].opcode, 0x2c41);
+            let body = [from, to, 0]
+                .map(|slot| if slot == 30 { 0 } else { slot })
+                .into_iter()
+                .flat_map(i32::to_le_bytes)
+                .collect::<Vec<_>>();
+            assert_eq!(outcome.sent[0].body, body, "{protocol:?} {from}->{to}");
+        }
+        assert_eq!(world.inventory.unresolved_predictions(), 4);
+        assert!(world.inventory.equipment_stats_uncertain());
+        for update in [
+            InventoryUpdate::Remove(InventorySlot(13)),
+            InventoryUpdate::Set(vec![original.clone()]),
+            InventoryUpdate::Remove(InventorySlot::CURSOR),
+        ] {
+            observe(protocol, &mut features, &mut world, update);
+        }
+        assert!(!world.inventory.stale());
+        assert!(!world.inventory.predicted());
+        assert!(world.inventory.equipment_stats_uncertain());
+        testing::run_on(servers::server_type(protocol).wire(), |out| {
+            features.tick(Instant::now() + Duration::from_secs(60), &mut world, out)
+        })
+        .result
+        .unwrap();
+        assert!(world.inventory.equipment_stats_uncertain());
+        observe(
+            protocol,
+            &mut features,
+            &mut world,
+            InventoryUpdate::Snapshot(vec![original]),
+        );
+        assert!(!world.inventory.equipment_stats_uncertain());
+    }
+}
+
+/// The original fixture must report its eligibility refusal, without a packet
+/// or a prediction for the failed cursor-to-primary move.
+fn assert_unknown_equipment_actor_refused(protocol: ServerProtocol, original: &InventoryItem) {
+    let (mut features, mut world) = setup(protocol, vec![original.clone()]);
+    assert_eq!(world.player.as_ref().unwrap().class, None);
+    assert_eq!(world.player.as_ref().unwrap().race, 0);
+    let carried = command(&world, 24, 30, MoveQuantity::Whole);
+    let outcome = submit(protocol, &mut features, &mut world, &carried);
+    assert!(outcome.result.unwrap());
+    assert_eq!(outcome.sent.len(), 1, "{protocol:?}: {:?}", outcome.events);
+    let before = world.inventory.clone();
+    let revision = before.revision();
+    let equip = command(&world, 30, 13, MoveQuantity::Whole);
+    let outcome = submit(protocol, &mut features, &mut world, &equip);
+    assert!(outcome.result.unwrap());
+    assert_eq!(outcome.sent, [], "{protocol:?}: {:?}", outcome.events);
+    assert!(
+        matches!(
+            &outcome.events[..],
+            [ClientEvent::World(WorldEvent::InventoryAction {
+                session_id: 5,
+                revision: actual_revision,
+                sequence: None,
+                update: None,
+                error: Some(error),
+            })] if *actual_revision == revision && error == "Character class is not known"
+        ),
+        "{protocol:?}: {:?}",
+        outcome.events
+    );
+    assert_eq!(*world.inventory, before);
 }

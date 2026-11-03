@@ -487,6 +487,32 @@ pub fn profile(body: &[u8], character: &str) -> Result<PlayerState> {
     decoded_profile(&data, character)
 }
 
+/// The current zone named by the encrypted `EQMac` profile, not its bind point.
+/// Zero leaves the identity unknown. The layout has no instance field.
+///
+/// # Errors
+/// Rejects malformed compression, unexpected layouts and zone IDs that the
+/// supported transfer interface cannot represent; an ID is never truncated.
+/// The field is `zone_id` at 3444 of `PlayerProfile_Struct` (TAKP
+/// `common/patches/mac_structs.h`), 340 bytes before the bind zones at 3784.
+pub fn profile_zone(body: &[u8]) -> Result<Option<u16>> {
+    let data = unpack(body, true)?;
+    decoded_profile_zone(&data)
+}
+
+fn decoded_profile_zone(data: &[u8]) -> Result<Option<u16>> {
+    ensure!(
+        data.len() == PROFILE_SIZE,
+        "unexpected EQMac profile layout"
+    );
+    match word(data, 3444) {
+        0 => Ok(None),
+        zone => u16::try_from(zone)
+            .map(Some)
+            .context("EQMac current zone out of range"),
+    }
+}
+
 /// The player's group as the profile lists it each time a zone admits them
 /// (`mac_structs.h` `groupMembers`), with the leader unknown; None outside a
 /// group.

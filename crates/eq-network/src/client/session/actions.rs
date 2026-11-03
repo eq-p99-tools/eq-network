@@ -58,6 +58,8 @@ pub(super) enum Resource {
     Spellbook,
     /// Inventory contents, including the cursor.
     Inventory,
+    /// Another request to pick an item up from the ground.
+    GroundPickup,
 }
 
 /// Resources held right now, each with the reason shown to a refused command.
@@ -88,7 +90,7 @@ impl Held {
 /// What a command needs exclusively. Every command is named, so a new one is
 /// a decision here.
 pub(super) fn needs(command: &ClientCommand) -> &'static [Resource] {
-    use Resource::{Casting, Inventory, Spellbook};
+    use Resource::{Casting, GroundPickup, Inventory, Spellbook};
     match command {
         ClientCommand::CastSpell { .. } => &[Casting],
         // `EQEmu` ignores a strike during a cast; bards may strike while they
@@ -109,9 +111,10 @@ pub(super) fn needs(command: &ClientCommand) -> &'static [Resource] {
         ClientCommand::MoveInventory(request) if request.from != InventorySlot::CURSOR => {
             &[Casting, Inventory]
         }
-        // A picked-up item lands on the cursor; Give hands the trade slots over.
+        // A pickup needs the cursor and its own duplicate-request gate.
+        ClientCommand::PickUp { .. } => &[Inventory, GroundPickup],
+        // Give hands the trade slots over.
         ClientCommand::MoveInventory(_)
-        | ClientCommand::PickUp { .. }
         | ClientCommand::Buy { .. }
         | ClientCommand::Sell { .. }
         | ClientCommand::Consume { .. }
@@ -251,6 +254,9 @@ fn refusal(command: &ClientCommand, reason: &str) -> Option<WorldEvent> {
         ClientCommand::Consider { .. } | ClientCommand::AutoAttack { .. } => {
             return super::combat::rejected(command, reason);
         }
+        ClientCommand::Loot { .. }
+        | ClientCommand::LootItem { .. }
+        | ClientCommand::EndLoot { .. } => return super::looting::rejected(command, reason),
         ClientCommand::UseItem(request) => WorldEvent::ItemUseAction {
             session_id: request.session_id,
             request_id: request.request_id,
@@ -259,6 +265,8 @@ fn refusal(command: &ClientCommand, reason: &str) -> Option<WorldEvent> {
         ClientCommand::MoveInventory(request) => WorldEvent::InventoryAction {
             session_id: request.session_id,
             revision: request.revision,
+            sequence: request.sequence,
+            update: None,
             error,
         },
         ClientCommand::Buy { session_id, .. }
@@ -348,9 +356,6 @@ fn refusal(command: &ClientCommand, reason: &str) -> Option<WorldEvent> {
         | ClientCommand::SetPosture { .. }
         | ClientCommand::SendChat(_)
         | ClientCommand::InspectItem { .. }
-        | ClientCommand::Loot { .. }
-        | ClientCommand::LootItem { .. }
-        | ClientCommand::EndLoot { .. }
         | ClientCommand::Shop { .. }
         | ClientCommand::CancelTrade { .. }
         | ClientCommand::Jump { .. }
@@ -580,6 +585,7 @@ mod tests {
 
     fn moving(from: i32, to: i32) -> ClientCommand {
         ClientCommand::MoveInventory(eq_network_game::inventory::InventoryMove {
+            sequence: None,
             session_id: 1,
             revision: 1,
             from: InventorySlot(from),

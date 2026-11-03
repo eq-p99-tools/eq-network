@@ -7,11 +7,74 @@ use super::{
 };
 use anyhow::Result;
 use eq_network_game::{
-    loot::{LootResponse, LootUpdate},
+    loot::{LootRequest, LootRequestStatus, LootResponse, LootUpdate},
     message::Message,
     world::{SpawnKind, WorldEvent},
 };
 use std::collections::BTreeSet;
+
+/// Retains original host context even when shared validation rejects a command.
+fn disposition(command: &ClientCommand, status: LootRequestStatus) -> Option<WorldEvent> {
+    let (session_id, request) = match *command {
+        ClientCommand::Loot {
+            session_id,
+            corpse_id,
+            ..
+        } => (session_id, LootRequest::Open { corpse_id }),
+        ClientCommand::LootItem {
+            session_id,
+            corpse_id,
+            own_id,
+            place,
+            auto,
+            ..
+        } => (
+            session_id,
+            LootRequest::Item {
+                corpse_id,
+                own_id,
+                place,
+                auto,
+            },
+        ),
+        ClientCommand::EndLoot {
+            session_id,
+            corpse_id,
+        } => (session_id, LootRequest::Close { corpse_id }),
+        _ => return None,
+    };
+    Some(WorldEvent::LootRequest {
+        session_id,
+        created: command.created(),
+        request,
+        status,
+    })
+}
+
+/// Shared and feature-local refusals use one typed event plus the existing diagnostic.
+pub(super) fn rejected(command: &ClientCommand, reason: &str) -> Option<WorldEvent> {
+    disposition(command, LootRequestStatus::Refused(reason.into()))
+}
+
+/// Encoding refusal is local; transport failure is not falsely reported as unsent.
+fn submit(command: &ClientCommand, out: &mut Out<'_, '_>) -> Result<bool> {
+    let packet = match out.encode_command(command) {
+        Ok(packet) => packet,
+        Err(error) => {
+            actions::refuse(
+                command,
+                &format!("Rejected invalid outbound client command: {error}"),
+                out.log,
+            )?;
+            return Ok(false);
+        }
+    };
+    out.send(&packet)?;
+    if let Some(event) = disposition(command, LootRequestStatus::Sent) {
+        out.log.send(ClientEvent::World(event))?;
+    }
+    Ok(true)
+}
 
 /// Loots corpses.
 #[derive(Default)]
@@ -94,11 +157,9 @@ impl Feature for Looting {
                 matches!(spawn.kind, SpawnKind::NpcCorpse | SpawnKind::PlayerCorpse)
             });
             if !corpse {
-                return out
-                    .log
-                    .diagnostic("Rejected looting an unavailable corpse".into());
+                return actions::refuse(command, "Rejected looting an unavailable corpse", out.log);
             }
-            if out.command(command)? {
+            if submit(command, out)? {
                 self.corpse = Some(Corpse {
                     id: corpse_id,
                     listing: Listing::Requested,
@@ -146,7 +207,7 @@ impl Feature for Looting {
                         out.log,
                     );
                 }
-                if out.command(command)? {
+                if submit(command, out)? {
                     // Do not send the same non-idempotent request again.
                     // An echo does not put the item in the inventory.
                     corpse.submitted.insert(place);
@@ -156,7 +217,7 @@ impl Feature for Looting {
                 if corpse.id != corpse_id || corpse.closing {
                     return actions::refuse(command, "That corpse is not open.", out.log);
                 }
-                if out.command(command)? {
+                if submit(command, out)? {
                     corpse.closing = true;
                 }
             }

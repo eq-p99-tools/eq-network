@@ -12,6 +12,15 @@ pub enum MoveQuantity {
     /// Transfer this many units into an empty slot or matching stack.
     Count(NonZeroU32),
 }
+/// Local ordering identity, independent of server acknowledgments.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize)]
+pub struct MoveSequence {
+    /// Strictly increasing request identity within one admission.
+    pub id: u64,
+    /// The preceding queued move whose local submission this move depends on.
+    /// None starts a sequence from an observed worker snapshot.
+    pub after: Option<u64>,
+}
 /// One UI intent bound to the admission and inventory revision it was selected from.
 #[derive(Clone, Debug, PartialEq)]
 pub struct InventoryMove {
@@ -19,6 +28,8 @@ pub struct InventoryMove {
     pub session_id: u64,
     /// Inventory revision observed when selecting the source.
     pub revision: u64,
+    /// Ordered local projection lineage; None for callers using worker snapshots.
+    pub sequence: Option<MoveSequence>,
     /// Occupied carried, equipment, or accessible personal-bank slot.
     pub from: InventorySlot,
     /// Supported destination; cursor moves may swap occupied slots when access permits.
@@ -166,6 +177,7 @@ impl Inventory {
                 continue;
             };
             let request = InventoryMove {
+                sequence: None,
                 session_id: 0,
                 revision: self.revision,
                 from: InventorySlot(30),
@@ -182,6 +194,7 @@ impl Inventory {
                 continue;
             }
             let request = InventoryMove {
+                sequence: None,
                 session_id: 0,
                 revision: self.revision,
                 from: InventorySlot(30),

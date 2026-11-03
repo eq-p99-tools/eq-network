@@ -152,13 +152,121 @@ pub struct MotionSession {
 }
 
 /// What the gate does with an accepted sample.
+#[derive(Clone, Copy)]
 enum Release {
     Send,
     Hold,
     Unchanged,
 }
 
+/// One locally checked candidate, tied to the only movement owner until it
+/// is submitted or dropped. Its sample and release decision cannot be replaced
+/// by a later request, nor committed against a different admission.
+struct PreparedMove<'a> {
+    owner: &'a mut MotionSession,
+    guard: MovementGuard,
+    flags: Flags,
+    sample: PositionPacket,
+    release: Release,
+    now: Instant,
+    moving: bool,
+}
+
+impl PreparedMove<'_> {
+    /// A checked candidate is accepted only here: held/unchanged candidates
+    /// commit locally, and an immediate send commits after its callback succeeds.
+    /// External callback side effects are never rolled back by this owner.
+    fn submit(self, send: impl FnOnce(&PositionPacket) -> Result<()>) -> Result<()> {
+        let Self {
+            owner,
+            guard,
+            flags,
+            sample,
+            release,
+            now,
+            moving,
+        } = self;
+        match release {
+            Release::Send => {
+                send(&sample)?;
+                owner.held = None;
+                owner.last_sent = now;
+                owner.sequence = owner.sequence.wrapping_add(1);
+                owner.last_update = Some(PositionPacket {
+                    sequence: 0,
+                    ..sample
+                });
+            }
+            Release::Hold => owner.held = Some(sample),
+            Release::Unchanged => owner.held = None,
+        }
+        owner.flags = flags;
+        owner.guard = guard;
+        owner.position = sample.position;
+        owner.moving = moving;
+        owner.last_input = now;
+        Ok(())
+    }
+}
+
 impl MotionSession {
+    /// Whether movement or its real stop still awaits local submission.
+    /// Stationary heartbeat repeats do not hold an action behind a stop.
+    /// This only observes this movement owner; it never forces an update or
+    /// establishes a server acknowledgement.
+    #[must_use]
+    pub fn stop_pending(&self) -> bool {
+        self.moving
+            || self.held.as_ref().is_some_and(Self::moving_update)
+            || self.last_update.as_ref().is_some_and(Self::moving_update)
+    }
+
+    /// Whether a command can finish this owner's pending stop: the same
+    /// admission, a newer host stamp, and exactly its current point/heading.
+    /// Normal submission still validates it; a refusal is not a sent stop.
+    #[must_use]
+    pub fn is_trailing_stop(&self, request: &MovementRequest) -> bool {
+        self.stop_pending()
+            && !self.suspended
+            && request.session_id == self.guard.session_id
+            && request.created > self.guard.sampled
+            && request.position == self.position
+    }
+
+    /// Opaque equality context for a pending stop, invalidated by calibration,
+    /// correction, withdrawal or a new owner. It is not a wire or server token.
+    #[must_use]
+    pub const fn stop_context(&self) -> Option<(u64, Instant)> {
+        if self.suspended || self.calibration.is_none() {
+            None
+        } else {
+            Some((self.guard.session_id, self.guard.input_epoch))
+        }
+    }
+
+    /// Whether the expected trailing stop was accepted by this owner. A held
+    /// accepted stop is distinct from its successful transport; callers still
+    /// wait until [`Self::stop_pending`] is false.
+    #[must_use]
+    pub fn accepted_stop(&self, created: Instant) -> bool {
+        self.guard.sampled == created
+            && !self.moving
+            && self
+                .held
+                .as_ref()
+                .is_none_or(|sample| !Self::moving_update(sample))
+    }
+
+    #[allow(
+        clippy::float_cmp,
+        reason = "A submitted stop has exact zero wire fields, not an epsilon distance"
+    )]
+    fn moving_update(sample: &PositionPacket) -> bool {
+        sample.animation != 0
+            || sample.delta_heading != 0
+            || sample.delta.iter().any(|value| *value != 0.0)
+    }
+
     /// Lets the player's own update out only as the client generation's
     /// program would ([`UpdateGate`]): a sample the gate holds back is kept,
     /// and a later one replaces it, so the latest goes out once the gate
@@ -372,16 +480,28 @@ impl MotionSession {
     /// # Errors
     /// Rejects stale, uncalibrated, suspended, excessive or invalid motion,
     /// and propagates whatever `send` returns.
-    #[allow(
-        clippy::float_cmp,
-        reason = "Withdrawn input must preserve coordinates exactly, without drift credit"
-    )]
     pub fn send_move_sample(
         &mut self,
         request: &MovementRequest,
         now: Instant,
         send: impl FnOnce(&PositionPacket) -> Result<()>,
     ) -> Result<()> {
+        self.prepare_move_sample(request, now)?.submit(send)
+    }
+
+    /// Materialize and check exactly one immutable sample and release decision.
+    /// No owner state changes before submission. The exclusive owner borrow
+    /// prevents re-entrant motion changes during the existing send callback.
+    /// Body/scene authority is not owned or certified by this local plan.
+    #[allow(
+        clippy::float_cmp,
+        reason = "Withdrawn input must preserve coordinates exactly, without drift credit"
+    )]
+    fn prepare_move_sample(
+        &mut self,
+        request: &MovementRequest,
+        now: Instant,
+    ) -> Result<PreparedMove<'_>> {
         ensure!(!self.suspended, "movement session is suspended");
         ensure!(
             request.mode != MovementMode::Fall || self.falls,
@@ -465,26 +585,15 @@ impl MotionSession {
         sample.check()?;
         let mut flags = self.flags.clone();
         let release = self.release(&sample, &mut flags, now)?;
-        match release {
-            Release::Send => {
-                send(&sample)?;
-                self.held = None;
-                self.last_sent = now;
-                self.sequence = self.sequence.wrapping_add(1);
-                self.last_update = Some(PositionPacket {
-                    sequence: 0,
-                    ..sample
-                });
-            }
-            Release::Hold => self.held = Some(sample),
-            Release::Unchanged => self.held = None,
-        }
-        self.flags = flags;
-        self.guard = guard;
-        self.position = request.position;
-        self.moving = moving || turn != 0;
-        self.last_input = now;
-        Ok(())
+        Ok(PreparedMove {
+            owner: self,
+            guard,
+            flags,
+            sample,
+            release,
+            now,
+            moving: moving || turn != 0,
+        })
     }
 
     /// What the generation's gate does with an accepted sample at `now`;
@@ -635,6 +744,10 @@ impl MotionSession {
             self.held = None;
             self.sequence = self.sequence.wrapping_add(1);
             self.last_sent = now;
+            self.last_update = Some(PositionPacket {
+                sequence: 0,
+                ..candidate
+            });
         }
         if stopped {
             self.moving = false;

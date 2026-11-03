@@ -13,6 +13,16 @@
 use serde::Serialize;
 use std::fmt;
 
+/// Which installed-spell provider the selected network policy requires.
+/// This is available before any packets or profile are received.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+pub enum ProviderPolicy {
+    /// Use installed definitions without source registration or replay.
+    Installed,
+    /// Cache first-current sources and apply ordered zone replay tables.
+    Project1999,
+}
+
 /// World registration of source spell IDs.
 pub const REGISTRATION_OPCODE: u16 = 0x1235;
 /// Zone replay of cached sources into destination spell IDs.

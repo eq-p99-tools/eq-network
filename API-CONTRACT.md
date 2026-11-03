@@ -1,5 +1,147 @@
 # API and integration contracts
 
+## Typed spell-provider policy and attempt identity
+
+`Client::spell_table_policy()` returns `ProviderPolicy` before connecting,
+resolved through the same selected server policy that owns table emission.
+Hosts bind this value when creating their producer; no protocol-name branch
+or first-table ordering assumption is needed. Other policies retain installed
+definitions without inheriting a replay overlay.
+
+`SessionStatus::run_id: Option<u64>` carries the numeric attempt ID shared with
+`spell_tables::Context::run_id`. A real Connecting notification establishes
+the attempt; a table's ID alone cannot rebind the host. It remains stable
+across world/zone transports and changes on an actual retry. Provider epoch
+is independent and source snapshots survive same-provider transport changes.
+
+The string-taking `SessionStatus::new(state, session_id)` is already present in
+the [v0.1.2 release source](https://github.com/eq-p99-tools/eq-network/blob/v0.1.2/crates/eq-network/src/client.rs).
+Its signature and display label are preserved. It leaves `run_id` unknown;
+`with_run_id(id)` supplies independently known identity. The extensible status
+struct gains an additive field; display-only serialization omits that field.
+There is no text parsing, hashing, default numeric ID or fabricated authority.
+The production emitter always supplies Some from the attempt's sequence owner.
+
+Known consumers checked here are the network production status emitter, network
+synthetic lifecycle tests, and the graphical client's three bridge fixtures.
+The latter now supply explicit typed IDs. The older standalone logger defines
+its own status type rather than calling this constructor. Other external
+consumers remain compatible with the old string constructor but must opt into
+typed identity before using it as run authority. Hosts must treat an unknown
+ID as unavailable for identity-dependent actions, without aborting chat or
+other connection processing. `session_id` remains display/logging text only.
+
+## Equipment contribution uncertainty
+
+`Inventory::equipment_stats_uncertain()` tracks stat-bearing equipment histories
+whose decoded direct bonuses or worn effects might change. Only readable rules,
+explicitly zero direct bonuses and no worn effect establish neutrality. Affecting
+or missing metadata stays uncertain through all intermediate local moves, even
+when final placement equals its origin. Partial slot records carry no operation
+revision and cannot retire this history, even when matching current placement.
+A full `Snapshot` or existing policy-driven `Settled` starts a new contribution
+baseline; this adds no EQMac settlement timer. Existing origins and ordered
+predictions keep their slot-coverage behavior independently. The gap for affecting
+or unreadable equipment remains conservative until such a baseline. The accessor
+never establishes carried weight, receipt or server acceptance. It must be used
+with a received, non-stale model whose complete history was recorded from its
+baseline; cloning preserves that history, endpoint reconstruction does not.
+
+## Ordered host inventory projections
+
+`InventoryMove::sequence` optionally names a monotonically increasing local
+request and its preceding queued move. Snapshot-based callers set it to `None`.
+Projected callers advance the same `Inventory` planner locally after enqueue,
+retain exact revision checks, and submit commands in order. A failed predecessor
+cannot authorize a descendant whose revision happens to match a later update.
+These identities are admission-local host metadata and add no wire fields.
+
+`WorldEvent::InventoryAction` now carries the echoed sequence and an optional
+post-send prediction. Apply that prediction once on successful local submission;
+the worker no longer emits it as a separate `WorldEvent::Inventory` event.
+Refusals have no prediction. Neither a local result nor the ordering identity
+confirms server acceptance. Downstream request literals and event matches must
+be migrated; this is a breaking development API change for the next minor
+pre-1.0 release. Authoritative inventory updates remain ordinary inventory
+events, with existing uncertainty, correction and snapshot rules unchanged.
+
+## Local loot request disposition
+
+`WorldEvent::LootRequest` adds an exhaustive event variant. Its `LootRequest`
+describes the original open, item or close action, retaining corpse ID and every
+item-request parameter; `session_id` is the requested admission, even for a stale
+command. `created` echoes the original open/item creation `Instant` for local host
+correlation. Close has no creation time in its existing command. The process-local
+`created` field is omitted from serialized event logs; it is not a wire timestamp
+or a new transaction identifier.
+
+`LootRequestStatus::Refused` means nothing was sent. Shared admission/freshness/
+policy checks, corpse/list/cursor guards and generation encoding all use this
+single result path. The existing diagnostic is retained once for logging; hosts
+should handle the typed result once rather than also presenting the diagnostic.
+`Sent` follows successful transport submission only and proves no server
+acceptance, inventory delivery or coin change. Transport failure remains an error,
+without fabricating either disposition.
+
+Hosts should match the admission, original action and available creation time
+before clearing a pending request, and keep stale results from changing a newer
+request. Local refusal must not retire an item-view row, fabricate a closed
+corpse or trigger an automatic retry. Server `LootUpdate::Opened` denials,
+`Taken { accepted: false }`, EQMac receipt echoes and completion remain on their
+existing server-update path; an unqualified completion does not identify a cause.
+Ordinary inventory/coin events remain the only holdings authority. No packet,
+capability, inventory owner or automatic EQMac loot-all behavior changes here.
+
+## Language-zero name selector
+
+`WorldRules::language_zero_selector: Option<rules::LanguageZeroSelector>`
+retains the complete received Titanium `OP_LogServer` first dword. The
+wrapper's zero/nonzero test chooses between installed language-name strings;
+no broader server feature is inferred. `None` is absence, while
+`Some(LanguageZeroSelector(0))` is a received zero. Consumers must not use the
+separate PvP or no-drop-trading values as substitutes.
+
+The existing `WorldEvent::Rules` route carries this field. The EQMac decoder
+leaves it absent pending verified wire mapping. Consumers retain the setting
+with the same world's rules across zone/character admissions, replace it on
+a received value, and clear it when that rules owner starts a new session.
+An absent field in a later partial rules copy does not erase a received value.
+Installed data remains the source of text. Complete `WorldRules` literals
+must add the field or use its default for absence; this source API addition
+requires downstream consumer validation before publication.
+
+## EQMac admission zone identity
+
+`quarm::profile_zone` reads the current zone from the supported encrypted
+profile. Zero returns `None`; malformed layouts and values outside the
+transfer interface's `u16` range are errors, never truncated aliases. The
+bind point and zone-description name do not substitute for missing identity.
+EQMac admission commits the validated current zone with no instance field
+before zone-line commands can run. Unknown identity retains the existing
+transfer refusal. No transfer packet layout or server policy changes.
+
+## Camping and the movement owner's pending stop
+
+`MotionSession::stop_pending` observes movement, a held moving update, and a
+last moving submission whose real stop has not yet succeeded. Stationary
+heartbeat repeats do not block camping. `is_trailing_stop` classifies a newer
+same-admission request at the owner's exact point/heading; normal guard,
+codec and submission checks still apply. Neither method sends traffic or
+establishes a server acknowledgement.
+
+`stop_context` supplies an equality-only admission/input-epoch guard for a
+waiting intent. `accepted_stop` observes the real committed request stamp,
+so a rejected trailing stop cannot later start camping on an idle heartbeat.
+An accepted held stop still waits for its actual submission. These queries
+do not infer success from the host's `MotionSent` notification.
+
+Camp retains its own waiting intent while the existing paced stop is pending,
+then starts its countdown only after camp submission succeeds. New movement,
+refusal, withdrawal or admission/lifecycle loss cancels that waiting intent.
+The established motion timer precedes the camp timer. Official stop/camp
+ordering remains unverified under recording checklist 6.380; no spacing,
+repeat, wire format or movement authority changes.
+
 ## Quarm loot receipt and delivery
 
 `LootUpdate::Acknowledged { place }` is a new exhaustive-enum variant and
@@ -55,10 +197,17 @@ inventory writer. EQMac's refusal sentinel becomes the existing
 still means visibility changed; only authoritative item packets grant inventory.
 Requests older than an object's replacement are refused without a send. See
 [the evidence and activation limits](docs/eqmac-world-objects.md).
-One unresolved EQMac pickup holds inventory actions until its refusal or matching
-own removal plus authoritative cursor
-delivery. This request correlation does not settle item moves, infer item
-identity from a model, or authorize replay on timeout.
+One unresolved EQMac pickup holds only further pickup requests; unrelated
+inventory actions retain their existing guards. Another actor's or unattributed
+removal of the pending object, an authoritative inventory snapshot, or a
+three-second local wait expiry cancels that hold without acknowledging success,
+granting an item, settling a move, or sending a retry. Expiry is a local
+duplicate-suppression bound, not a server response guarantee. After cancellation,
+constant-size admission-scoped state records that late untagged/cursor results
+cannot uniquely answer a newer pickup, even with a reused object ID. The newer
+wait can still be cancelled by an authoritative snapshot or its own expiry;
+ambiguous removal packets cannot cancel it. Only a new admission restores unique
+result attribution.
 The result rule is selected through the generation interface; the established
 Titanium path is preserved. TAKP and Quarm offer `GroundItems` with this rule.
 Their door definitions/actions are replayed at admission, but no `Doors`
@@ -94,6 +243,11 @@ Use typed refusal/validation reasons where an application needs a behavioral
 decision. Applications must not parse a diagnostic sentence to decide whether
 to retry or replay an action. Preserve unknown wire values when they are useful
 for forward compatibility; reject malformed lengths and invalid domain values.
+
+Incoming world-update rejection diagnostics retain the original reason and
+append `opcode` and `payload_len` for passive diagnosis. The length covers the
+application body only, excluding opcode and transport framing. No body bytes are
+added; message counts, typed events and decoder acceptance rules are unchanged.
 
 Report a refusal only where the server refused, or where its silence is how it
 refuses, and never treat transport send success as authoritative completion. A
@@ -241,3 +395,15 @@ entire source definition, chase live aliases or restore omitted destinations. Mi
 source data and malformed events must surface as unavailable, never a silent
 fallback or partial application. Hosts must route these facts before their
 own player/profile gates. This networking API applies no installed definitions.
+
+## Checked local movement preparation
+
+`MotionSession::send_move_sample` keeps its existing signature and result
+semantics. Internally it prepares one checked candidate while exclusively
+borrowing its owner. Validation and the generation release decision precede
+any send. Held and unchanged candidates commit locally without sending;
+immediate candidates commit movement only after the existing send callback
+succeeds. A checked candidate is not yet an accepted move or a server receipt.
+Dropping it or failing the callback leaves motion state untouched; external
+callback effects cannot be rolled back. No public observer/transaction API is
+introduced, and the private plan certifies no external body or scene identity.

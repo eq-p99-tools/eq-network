@@ -1,5 +1,24 @@
 # Inventory move predictions
 
+## Host enqueue and worker submission
+
+A host may queue several moves without waiting for worker feedback. It plans
+each against the preceding local projection using the same inventory model,
+and applies that projection only after enqueue succeeds. Commands retain exact
+inventory revisions and carry an optional `MoveSequence`: a fresh increasing
+identity plus the preceding queued identity. The worker checks both revision
+and predecessor before sending. A refused predecessor prevents dependent moves
+from becoming valid merely because an unrelated update advances the revision.
+
+The worker reports its prediction inside `WorldEvent::InventoryAction`, once,
+after transport submission. A host keeps its worker replica separate from the
+temporary enqueue overlay, consumes results in order, and discards speculative
+descendants on a refusal or intervening authoritative inventory change. It
+drains outstanding local results before beginning recovery from the worker's
+latest snapshot; it never retries the rejected sequence automatically. Scribing,
+item activation and other operations with different prerequisites keep their
+own guards. No local queue result changes the server-evidence rules below.
+
 Offline program reads identify EQMac's move routine at `0x422b1c` and
 Titanium's at `0x51a9a8`: a valid move updates the local projection and sends
 immediately, without a pending-move gate or pacing timer. Whole moves retain

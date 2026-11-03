@@ -17,6 +17,85 @@ fn replay() -> Vec<u8> {
 }
 
 #[test]
+fn public_provider_accessor_uses_the_emitting_policy_before_receiving_anything() {
+    use crate::client::{Client, ClientIdentity};
+    for (protocol, expected) in [
+        (ServerProtocol::Project1999, ProviderPolicy::Project1999),
+        (ServerProtocol::EqEmu, ProviderPolicy::Installed),
+        (ServerProtocol::Quarm, ProviderPolicy::Installed),
+        (ServerProtocol::Takp, ProviderPolicy::Installed),
+    ] {
+        let config = ClientConfig::for_protocol(
+            protocol,
+            "EXAMPLE_ACCOUNT",
+            "EXAMPLE_PASSWORD",
+            "Test",
+            "Tester",
+        );
+        let client = Client::new(
+            config,
+            ClientIdentity::new("example-device", "example-user"),
+        )
+        .unwrap();
+        assert_eq!(client.spell_table_policy(), expected);
+        let emits = super::super::servers::server_type(protocol)
+            .spell_tables()
+            .is_some();
+        assert_eq!(
+            emits,
+            client.spell_table_policy() == ProviderPolicy::Project1999
+        );
+    }
+}
+
+#[test]
+fn numeric_status_identity_is_independent_of_its_display_label() {
+    use crate::client::{ConnectionState, SessionStatus};
+    // The released string-taking constructor remains display-only and compatible.
+    let legacy = SessionStatus::new(
+        ConnectionState::Connecting,
+        "a display label, not hexadecimal",
+    );
+    assert_eq!(legacy.run_id, None);
+    assert!(serde_json::to_value(&legacy)
+        .unwrap()
+        .get("run_id")
+        .is_none());
+    let status = legacy.with_run_id(17);
+    let json = serde_json::to_value(&status).unwrap();
+    assert_eq!(json["run_id"], 17);
+    assert_eq!(status.run_id, Some(17));
+    let config = ClientConfig::new("EXAMPLE_ACCOUNT", "EXAMPLE_PASSWORD", "Test", "Tester");
+    let mut received = Vec::new();
+    let mut handler = |event| {
+        received.push(event);
+        Ok(())
+    };
+    let mut log = Events::new(&config, &mut handler);
+    log.spell_tables = Sequence::new(17);
+    log.session_id.clone_from(&status.session_id);
+    let server = super::super::servers::server_type(ServerProtocol::Project1999);
+    for stage in [Stage::World, Stage::Zone { session_id: 31 }] {
+        log.status(ConnectionState::Zoning, 0, None).unwrap();
+        let (opcode, body) = match stage {
+            Stage::World => (spell_tables::REGISTRATION_OPCODE, registration()),
+            _ => (spell_tables::REPLAY_OPCODE, replay()),
+        };
+        receive(server, stage, opcode, &body, &mut log).unwrap();
+    }
+    drop(log);
+    for pair in received.as_chunks::<2>().0 {
+        let [ClientEvent::Status(status), ClientEvent::World(WorldEvent::SpellTable(table))] = pair
+        else {
+            panic!()
+        };
+        assert_eq!(status.run_id, Some(17));
+        assert_eq!(status.run_id, Some(table.context.run_id));
+        assert_eq!(status.session_id, "a display label, not hexadecimal");
+    }
+}
+
+#[test]
 fn actual_attempt_reset_binds_table_run_to_the_connecting_status_identity() {
     use crate::client::ConnectionState;
     let server = super::super::servers::server_type(ServerProtocol::Project1999);
@@ -46,6 +125,7 @@ fn actual_attempt_reset_binds_table_run_to_the_connecting_status_identity() {
             panic!()
         };
         assert_eq!(status.state, ConnectionState::Connecting);
+        assert_eq!(status.run_id, Some(event.context.run_id));
         assert_eq!(status.session_id, format!("{:016x}", event.context.run_id));
         assert_eq!(event.context.revision, 1);
     }

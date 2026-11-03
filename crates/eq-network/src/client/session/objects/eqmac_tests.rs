@@ -152,7 +152,7 @@ fn eqmac_pickups_need_current_objects_in_reach_and_authoritative_item_packets() 
 }
 
 #[test]
-fn cursor_delivery_can_precede_disappearance_but_silence_never_retries() {
+fn cursor_delivery_can_precede_disappearance_without_granting_an_item_twice() {
     let protocol = ServerProtocol::Takp;
     let wire = servers::server_type(protocol).wire();
     let mut world = World::new(5);
@@ -187,11 +187,6 @@ fn cursor_delivery_can_precede_disappearance_but_silence_never_retries() {
     );
     assert_eq!(world.inventory.items()[&CURSOR].details.id, 1234);
     assert_eq!(objects.holds(&world, Instant::now()).len(), 1);
-    let later = Instant::now() + std::time::Duration::from_secs(60);
-    let outcome = testing::run_on(wire, |out| objects.tick(later, &mut world, out));
-    outcome.result.unwrap();
-    assert_eq!(outcome.sent, []);
-    assert_eq!(objects.holds(&world, later).len(), 1);
     receive(
         protocol,
         eqmac::CLICK_OPCODE,
@@ -200,56 +195,169 @@ fn cursor_delivery_can_precede_disappearance_but_silence_never_retries() {
         &mut belongings,
         &mut world,
     );
-    assert_eq!(objects.holds(&world, later), []);
+    assert_eq!(objects.holds(&world, Instant::now()), []);
+}
+
+#[derive(Clone, Copy)]
+enum Cancellation {
+    Foreign,
+    Unattributed,
+    Snapshot,
+    Expiry,
+}
+
+/// Cancels through the real wire owners or production timer, with no retry.
+fn cancel_pending(
+    protocol: ServerProtocol,
+    cancellation: Cancellation,
+    objects: &mut GroundObjects,
+    belongings: &mut Belongings,
+    world: &mut World,
+) {
+    match cancellation {
+        Cancellation::Foreign | Cancellation::Unattributed => receive(
+            protocol,
+            eqmac::CLICK_OPCODE,
+            &[
+                71_u32.to_le_bytes(),
+                (if matches!(cancellation, Cancellation::Foreign) {
+                    9_u32
+                } else {
+                    0
+                })
+                .to_le_bytes(),
+            ]
+            .concat(),
+            objects,
+            belongings,
+            world,
+        ),
+        Cancellation::Snapshot => receive(protocol, 0xf641, &[0, 0], objects, belongings, world),
+        Cancellation::Expiry => {
+            let wire = servers::server_type(protocol).wire();
+            let expires = world.objects.pickup.as_ref().unwrap().expires;
+            let before = expires.checked_sub(Duration::from_nanos(1)).unwrap();
+            let outcome = testing::run_on(wire, |out| objects.tick(before, world, out));
+            outcome.result.unwrap();
+            assert_eq!(objects.holds(world, before).len(), 1);
+            let outcome = testing::run_on(wire, |out| objects.tick(expires, world, out));
+            outcome.result.unwrap();
+            assert_eq!(outcome.sent, [], "expiry never retries");
+            let outcome = testing::run_on(wire, |out| {
+                objects.tick(expires + PICKUP_WINDOW, world, out)
+            });
+            outcome.result.unwrap();
+            assert_eq!(outcome.sent, []);
+            assert!(outcome.events.is_empty(), "expiry is reported only once");
+        }
+    }
 }
 
 #[test]
-fn another_actors_removal_cannot_acknowledge_our_click_or_a_newer_request() {
-    let protocol = ServerProtocol::Takp;
-    let wire = servers::server_type(protocol).wire();
-    let mut world = World::new(5);
-    world.player.admit(testing::player(7));
-    let mut inventory = Inventory::default();
-    inventory.apply(InventoryUpdate::Snapshot(Vec::new()));
-    world.inventory = inventory.into();
-    let mut objects = GroundObjects::for_generation(eq_network_game::GameDialect::EqMac);
-    for id in [71, 72] {
-        for message in read(
-            protocol,
-            eqmac::SPAWN_OPCODE,
-            &placement(id, b"IT63_ACTORDEF", 1.0),
-        ) {
-            objects.admit(&message, &mut world).unwrap();
+fn cancellation_releases_the_wait_but_old_results_cannot_settle_a_new_pickup() {
+    for protocol in [ServerProtocol::Takp, ServerProtocol::Quarm] {
+        for cancellation in [
+            Cancellation::Foreign,
+            Cancellation::Unattributed,
+            Cancellation::Snapshot,
+            Cancellation::Expiry,
+        ] {
+            for next_id in [71, 72] {
+                let wire = servers::server_type(protocol).wire();
+                let mut world = World::new(5);
+                world.player.admit(testing::player(7));
+                let mut objects =
+                    GroundObjects::for_generation(eq_network_game::GameDialect::EqMac);
+                let mut belongings = Belongings::new(eq_network_game::food::AutoEat::default());
+                receive(
+                    protocol,
+                    0xf641,
+                    &[0, 0],
+                    &mut objects,
+                    &mut belongings,
+                    &mut world,
+                );
+                for id in [71, 72] {
+                    receive(
+                        protocol,
+                        eqmac::SPAWN_OPCODE,
+                        &placement(id, b"IT63_ACTORDEF", 1.0),
+                        &mut objects,
+                        &mut belongings,
+                        &mut world,
+                    );
+                }
+                let outcome =
+                    testing::run_on(wire, |out| objects.handle(&command(71), &mut world, out));
+                outcome.result.unwrap();
+                assert_eq!(outcome.sent, [eqmac::pickup(71, 7)]);
+                cancel_pending(
+                    protocol,
+                    cancellation,
+                    &mut objects,
+                    &mut belongings,
+                    &mut world,
+                );
+                assert_eq!(objects.holds(&world, Instant::now()), []);
+                assert!(
+                    world.inventory.items().is_empty(),
+                    "cancellation grants no item"
+                );
+                receive(
+                    protocol,
+                    eqmac::SPAWN_OPCODE,
+                    &placement(next_id, b"IT63_ACTORDEF", 1.0),
+                    &mut objects,
+                    &mut belongings,
+                    &mut world,
+                );
+                let outcome = testing::run_on(wire, |out| {
+                    objects.handle(&command(next_id), &mut world, out)
+                });
+                outcome.result.unwrap();
+                assert_eq!(outcome.sent, [eqmac::pickup(next_id, 7)]);
+
+                // Even a reused ID cannot make old named/untagged result facts
+                // uniquely attributable to this new pickup.
+                for (drop_id, player_id) in [(u32::MAX, 7_u32), (71, 7), (71, 9), (71, 0)] {
+                    receive(
+                        protocol,
+                        eqmac::CLICK_OPCODE,
+                        &[drop_id.to_le_bytes(), player_id.to_le_bytes()].concat(),
+                        &mut objects,
+                        &mut belongings,
+                        &mut world,
+                    );
+                    assert_eq!(objects.holds(&world, Instant::now()).len(), 1);
+                }
+                receive(
+                    protocol,
+                    0x7841,
+                    &cursor_item(),
+                    &mut objects,
+                    &mut belongings,
+                    &mut world,
+                );
+                assert_eq!(world.inventory.items()[&CURSOR].details.id, 1234);
+                assert_eq!(
+                    objects.holds(&world, Instant::now()).len(),
+                    1,
+                    "an old cursor packet cannot complete the newer pickup"
+                );
+                let expires = world.objects.pickup.as_ref().unwrap().expires;
+                let outcome = testing::run_on(wire, |out| objects.tick(expires, &mut world, out));
+                outcome.result.unwrap();
+                assert_eq!(outcome.sent, []);
+                assert_eq!(objects.holds(&world, expires), []);
+                assert!(
+                    world.objects.pickup.is_none(),
+                    "stale requests are discarded"
+                );
+                assert!(world.objects.ambiguous_pickup_results);
+                assert_eq!(objects.holds(&World::new(6), Instant::now()), []);
+            }
         }
     }
-    let outcome = testing::run_on(wire, |out| objects.handle(&command(71), &mut world, out));
-    outcome.result.unwrap();
-    assert_eq!(outcome.sent.len(), 1);
-    for (id, player) in [(72_u32, 7_u32), (71, 9)] {
-        for message in read(
-            protocol,
-            eqmac::CLICK_OPCODE,
-            &[id.to_le_bytes(), player.to_le_bytes()].concat(),
-        ) {
-            testing::run_on(wire, |out| objects.observe(&message, &mut world, out))
-                .result
-                .unwrap();
-        }
-        assert_eq!(objects.holds(&world, Instant::now()).len(), 1);
-    }
-    // Even a replacement cannot make another request safe before our answer.
-    for message in read(
-        protocol,
-        eqmac::SPAWN_OPCODE,
-        &placement(72, b"IT63_ACTORDEF", 1.0),
-    ) {
-        objects.admit(&message, &mut world).unwrap();
-    }
-    let duplicate = testing::run_on(wire, |out| objects.handle(&command(72), &mut world, out));
-    duplicate.result.unwrap();
-    assert_eq!(duplicate.sent, []);
-    assert!(world.inventory.items().is_empty());
-    assert_eq!(objects.holds(&World::new(6), Instant::now()), []);
 }
 
 #[test]

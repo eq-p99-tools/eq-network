@@ -67,6 +67,30 @@ impl Body {
         self.motion.as_ref().map(MotionSession::position)
     }
 
+    /// The existing movement owner's stop state; None means no such owner.
+    pub(super) fn stop_pending(&self) -> Option<bool> {
+        self.motion.as_ref().map(MotionSession::stop_pending)
+    }
+
+    /// Classify only against the actual movement owner's committed state.
+    pub(super) fn is_trailing_stop(&self, request: &MovementRequest) -> bool {
+        self.motion
+            .as_ref()
+            .is_some_and(|motion| motion.is_trailing_stop(request))
+    }
+
+    /// Equality context from the current movement owner, never a host receipt.
+    pub(super) fn stop_context(&self) -> Option<(u64, Instant)> {
+        self.motion.as_ref().and_then(MotionSession::stop_context)
+    }
+
+    /// Whether the owner's normal submission accepted this trailing stop.
+    pub(super) fn accepted_stop(&self, created: Instant) -> bool {
+        self.motion
+            .as_ref()
+            .is_some_and(|motion| motion.accepted_stop(created))
+    }
+
     /// Starts movement for the admitted player.
     #[cfg(test)]
     pub(super) fn admit(&mut self, motion: MotionSession) {
@@ -118,7 +142,7 @@ impl Body {
 
     /// Repeats the player's position as the server expects: the movement
     /// session's own updates, or the stationary heartbeat without one.
-    fn heartbeat(&mut self, now: Instant, out: &mut Out<'_, '_>) -> Result<()> {
+    pub(super) fn heartbeat(&mut self, now: Instant, out: &mut Out<'_, '_>) -> Result<()> {
         if let Some(motion) = self.motion.as_mut() {
             motion.tick_sample(now, |sample| {
                 out.request_unreliable(&Request::Position(*sample))

@@ -23,7 +23,14 @@ fn record(slot: u16, id: u16, spell: u16, weight: u8) -> Vec<u8> {
 
 fn mirror(host: &mut Inventory, events: &[ClientEvent]) {
     for event in events {
-        if let ClientEvent::World(WorldEvent::Inventory(update)) = event {
+        if let ClientEvent::World(
+            WorldEvent::Inventory(update)
+            | WorldEvent::InventoryAction {
+                update: Some(update),
+                ..
+            },
+        ) = event
+        {
             host.apply(update.clone());
         }
     }
@@ -88,6 +95,7 @@ fn prepare(
 ) -> Vec<u8> {
     let wire = servers::server_type(ServerProtocol::Quarm).wire();
     let command = ClientCommand::MoveInventory(InventoryMove {
+        sequence: None,
         session_id: 5,
         revision: world.inventory.revision(),
         from: InventorySlot(from),

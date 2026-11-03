@@ -404,9 +404,12 @@ pub(super) fn run(
         let messages = unheard.sift(
             server.wire(),
             packet.opcode,
-            server
-                .wire()
-                .messages(packet.opcode, &packet.body, server.item_rules()),
+            read_messages(
+                server.wire(),
+                packet.opcode,
+                &packet.body,
+                server.item_rules(),
+            ),
             log,
         )?;
         let speaker = sender(&config.character, &world);
@@ -458,6 +461,30 @@ fn sender<'a>(name: &'a str, world: &World) -> eq_network_game::request::Sender<
 /// How many messages the session's own news may add while one step is
 /// heard, before the features are taken to answer each other without end.
 const MOST_NEWS: usize = 16;
+
+/// Keeps opcode and body length on existing world rejection diagnostics.
+/// The decoder's reason and message count are preserved; no body is logged.
+fn read_messages(
+    wire: &dyn super::wire::Wire,
+    opcode: u16,
+    body: &[u8],
+    item_rules: eq_network_game::inventory::ItemRules,
+) -> Vec<Message> {
+    let mut messages = wire.messages(opcode, body, item_rules);
+    for message in &mut messages {
+        if let Message::Unreadable {
+            part: eq_network_game::message::Part::World,
+            error,
+        } = message
+        {
+            *error = format!(
+                "{error} (opcode=0x{opcode:04x}, payload_len={})",
+                body.len()
+            );
+        }
+    }
+    messages
+}
 
 /// Lets every feature hear messages, the zone's or what the session itself
 /// made happen ([`World::happened`]), in order, what a message makes happen
@@ -772,6 +799,7 @@ mod tests {
                 created,
             },
             ClientCommand::MoveInventory(InventoryMove {
+                sequence: None,
                 session_id,
                 revision: 1,
                 from: InventorySlot(22),
@@ -1683,3 +1711,6 @@ mod combat_tests;
 
 #[cfg(test)]
 mod loot_tests;
+
+#[cfg(test)]
+mod diagnostic_tests;

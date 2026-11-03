@@ -7,6 +7,22 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Breaking:** inventory move requests can carry ordered local projection
+  identities: `InventoryMove` gains `sequence: Option<MoveSequence>`, and
+  `WorldEvent::InventoryAction` gains `sequence` and
+  `update: Option<InventoryUpdate>`. Local move results atomically carry the
+  worker's prediction in that `update` instead of emitting a separate
+  `WorldEvent::Inventory` prediction event. Exact revision and predecessor
+  checks reject stale dependent moves without treating local submission as a
+  server acknowledgment.
+
+- **Breaking:** `WorldRules` gains optional `language_zero_selector`; complete
+  struct literals must initialize it or use `..WorldRules::default()` for
+  absence.
+
+- Prepare one checked movement candidate inside its existing owner before
+  committing a sent, held or unchanged sample. Preserve public method
+  signatures, generation gates, wire delivery and failure behavior.
 - **Breaking:** `GameCommand::SpeedInputs` now carries `revision` and a
   `movement::SpeedInputState` (`Ready(SpeedInputs)` or
   `Unavailable(SpeedInputUnavailable)`) instead of bare rate, weight and
@@ -36,6 +52,24 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- EQMac admission records the profile's current zone identity before handling
+  zone-line requests. Unknown zero stays unavailable and oversized IDs are
+  rejected; bind points and zone names do not supply guessed identities.
+
+- Defer a camp requested just after movement until the existing motion owner
+  submits its real paced stop. A trailing stationary stop can finish the
+  pending intent; new movement or a failed/refused stop cannot start camping.
+  Official ordering remains unverified (recording checklist 6.380).
+
+- Keep contribution readiness through equipment predictions only when all
+  affected definitions explicitly have zero direct bonuses and no worn effect.
+  Retain affecting or unreadable intermediate equipment uncertainty until
+  a full authoritative baseline, including after a local round trip or matching
+  partial slot update. Existing protocol settlement policy is unchanged.
+
+- Preserve the original world-update rejection reason while appending the
+  received opcode and application payload length to its existing diagnostic.
+  Packet bodies are not added, and decoder acceptance rules are unchanged.
 - A grant after a fresh movement calibration carries its
   `WorldEvent::SpeedInputsAccepted` receipt again. A same-zone relocation
   (an in-zone teleport), a server correction or a refused transfer's rewind
@@ -43,6 +77,12 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the inputs again; the receipt was only re-sent when its contents changed,
   so a host that treats a withdrawal as ending its receipt waited for one
   that never came while the player already moved.
+- Scope unresolved EQMac ground-pickup waits to further pickups so unrelated
+  inventory actions can continue. Cancel the wait on foreign/unattributed object
+  removal, an authoritative inventory snapshot or a three-second local expiry,
+  preserving ambiguity so late results cannot settle a newer pickup. No automatic
+  retry, inventory grant or move acknowledgement follows cancellation.
+
 - Send valid inventory moves immediately in submission order on TAKP and
   Quarm, retaining ordered unresolved predictions without treating silence as
   acceptance. Preserve slot, container, fit, stack and restricted-item guards;
@@ -80,6 +120,25 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   preserving the shared food/water counts and rejecting other lengths.
 
 ### Added
+
+- Expose `Client::spell_table_policy()` and `ProviderPolicy` from the same
+  network policy that emits spell tables, before the first event arrives.
+- Add optional numeric `SessionStatus::run_id`, matching spell-table context
+  across world/zone transports, and `with_run_id`. Network statuses always
+  supply it. Preserve the released string-taking constructor as display-only;
+  an unknown ID stays unknown and is never reconstructed from its label.
+
+- **Breaking:** Add `LootRequest`, `LootRequestStatus` and the exhaustive
+  `WorldEvent::LootRequest` variant for local open/item/close submission and
+  refusal, including shared validation and generation-encoding refusal. Preserve
+  original admission/action parameters and process-local creation time for host
+  correlation, with one typed result and the existing refusal diagnostic. Consumer
+  integration is required in the next minor pre-1.0 release. Server loot denials
+  and receipts remain separate from local disposition and inventory delivery.
+
+- Preserve Titanium's raw `OP_LogServer` language-zero name selector in
+  `WorldRules::language_zero_selector`, distinguishing an absent field from
+  received zero. The EQMac mapping remains absent until independently verified.
 
 - Add source-derived EQMac loot open/close, money, listing and item-receipt
   codecs, and offer Quarm looting through its server policy and existing

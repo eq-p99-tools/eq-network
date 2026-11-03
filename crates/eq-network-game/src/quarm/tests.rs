@@ -3,6 +3,24 @@
 use super::*;
 
 #[test]
+fn profile_zone_preserves_unknown_and_does_not_use_the_bind_point() {
+    let mut data = vec![0; PROFILE_SIZE];
+    data[3440..3444].copy_from_slice(&17u32.to_le_bytes());
+    data[3448..3452].copy_from_slice(&19u32.to_le_bytes());
+    data[3784..3788].copy_from_slice(&4u32.to_le_bytes());
+    assert_eq!(decoded_profile_zone(&data).unwrap(), None);
+    for zone in [321, u16::MAX] {
+        data[3444..3448].copy_from_slice(&u32::from(zone).to_le_bytes());
+        assert_eq!(decoded_profile_zone(&data).unwrap(), Some(zone));
+    }
+    data[3444..3448].copy_from_slice(&70_000u32.to_le_bytes());
+    assert!(decoded_profile_zone(&data).is_err());
+    assert!(decoded_profile_zone(&data[..3448]).is_err());
+    assert!(profile_zone(&[0; 4]).is_err());
+    assert_eq!(profile_zone(&hex::decode(PROFILE).unwrap()).unwrap(), None);
+}
+
+#[test]
 fn profile_skills_preserve_all_words_and_eligibility_sentinels() {
     use crate::abilities::{eqmac, Ability};
     let mut data = vec![0; PROFILE_SIZE];
