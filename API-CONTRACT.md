@@ -244,6 +244,11 @@ decision. Applications must not parse a diagnostic sentence to decide whether
 to retry or replay an action. Preserve unknown wire values when they are useful
 for forward compatibility; reject malformed lengths and invalid domain values.
 
+Incoming world-update rejection diagnostics retain the original reason and
+append `opcode` and `payload_len` for passive diagnosis. The length covers the
+application body only, excluding opcode and transport framing. No body bytes are
+added; message counts, typed events and decoder acceptance rules are unchanged.
+
 Report a refusal only where the server refused, or where its silence is how it
 refuses, and never treat transport send success as authoritative completion. A
 timeout never authorizes resending a non-idempotent action.

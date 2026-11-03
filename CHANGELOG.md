@@ -63,6 +63,10 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Retain affecting or unreadable intermediate equipment uncertainty until
   a full authoritative baseline, including after a local round trip or matching
   partial slot update. Existing protocol settlement policy is unchanged.
+
+- Preserve the original world-update rejection reason while appending the
+  received opcode and application payload length to its existing diagnostic.
+  Packet bodies are not added, and decoder acceptance rules are unchanged.
 - A grant after a fresh movement calibration carries its
   `WorldEvent::SpeedInputsAccepted` receipt again. A same-zone relocation
   (an in-zone teleport), a server correction or a refused transfer's rewind
