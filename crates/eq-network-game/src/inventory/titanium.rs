@@ -169,10 +169,12 @@ impl<'a> Parser<'a> {
             },
             book: crate::books::Book::from_item(fields[0], fields[100], fields[102]),
             rules: ItemPlacement {
+                eqmac: None,
                 stack_size: number(131)?,
                 size: u8::try_from(number(8)?)?,
                 bag_size: u8::try_from(number(98)?)?,
                 bag_type: u8::try_from(number(96)?)?,
+                bag_weight_reduction: u8::try_from(number(99)?)?,
                 item_type: u8::try_from(number(56)?)?,
                 deity_mask: number(31)?,
             },

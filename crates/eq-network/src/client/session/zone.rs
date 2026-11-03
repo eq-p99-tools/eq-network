@@ -111,6 +111,23 @@ impl Features {
             .collect()
     }
 
+    /// The admitted library worker's action gate, independent of host UI state.
+    fn refusal(
+        &self,
+        command: &ClientCommand,
+        world: &World,
+        now: Instant,
+    ) -> Option<&'static str> {
+        if world.lifecycle.is_dead() {
+            return Some("The player is dead");
+        }
+        if !world.ready() || world.lifecycle.pending().is_some() {
+            return Some("The player is between zones");
+        }
+        actions::stale(command, world.session_id, now)
+            .or_else(|| actions::Held::new(self.holds(world, now)).conflict(command))
+    }
+
     /// Lets every feature hear a command, then has its owner carry it out;
     /// true when a feature owns it.
     fn handle(
@@ -281,9 +298,7 @@ pub(super) fn run(
                     // Stale commands, and commands that need what an action in
                     // flight holds, are refused here and nowhere else.
                     let now = Instant::now();
-                    let refusal = actions::stale(&command, session_id, now).or_else(|| {
-                        actions::Held::new(features.holds(&world, now)).conflict(&command)
-                    });
+                    let refusal = features.refusal(&command, &world, now);
                     if let Some(reason) = refusal {
                         actions::refuse(&command, reason, log)?;
                         continue;
@@ -839,9 +854,14 @@ mod tests {
             },
             ClientCommand::SpeedInputs {
                 session_id,
-                rate: 0,
-                weight: 0,
-                capacity: 100,
+                revision: 1,
+                state: eq_network_game::movement::SpeedInputState::Ready(
+                    eq_network_game::movement::SpeedInputs {
+                        rate: 0,
+                        weight: 0,
+                        capacity: 100,
+                    },
+                ),
             },
             ClientCommand::Move(MovementRequest {
                 mode: MovementMode::Forward,
@@ -1046,8 +1066,7 @@ mod tests {
             let needed = command
                 .capability()
                 .expect("a zone command needs a capability");
-            // A feature may own a command its server type does not offer,
-            // as P99's motion owns the jump it does not take.
+            // A feature may own an optional command without offering it.
             let mut offered = false;
             for features in &servers {
                 let owners: Vec<_> = features
@@ -1203,7 +1222,7 @@ mod tests {
             position: crate::world::Position::default(),
         };
         let outcome = testing::run(|out| -> Result<()> {
-            out.wire = &wire::EqMac;
+            out.wire = &wire::EqMac::Takp;
             assert!(hear(
                 vec![Message::Bind(bind)],
                 &mut features,
@@ -1423,7 +1442,7 @@ mod tests {
             assert!(p99.contains(&capability), "{capability:?}");
         }
         assert!(p99.contains(&Capability::Falling));
-        assert!(!p99.contains(&Capability::Jumping));
+        assert!(p99.contains(&Capability::Jumping));
         assert!(!p99.contains(&Capability::Training));
         let eqemu = features(crate::client::ServerProtocol::EqEmu);
         assert!(eqemu.contains(&Capability::Falling));
@@ -1450,14 +1469,13 @@ mod tests {
             Capability::Sacrifice,
             Capability::Translocate,
             Capability::ServerTicks,
-            Capability::Jumping,
             Capability::ShowingHelm,
         ] {
             assert!(eqemu.contains(&capability));
             assert!(!p99.contains(&capability));
         }
         assert!(p99.contains(&Capability::EnvironmentalDamage));
-        assert_eq!(eqemu.len(), p99.len() + 18);
+        assert_eq!(eqemu.len(), p99.len() + 17);
     }
 
     #[test]
@@ -1471,13 +1489,25 @@ mod tests {
             )
             .capabilities()
         };
-        // EQMac servers talk; TAKP also casts, keeps the spellbook, camps,
-        // moves, falls and moves items, follows zone changes and takes the
-        // client's reports of a fall and a bleed-out, and TAKP jumps, lists
-        // anonymity and answers translocates, which Quarm does not yet.
+        // Both EQMac policies move, jump, fall, zone, camp, cast spells and
+        // move inventory. TAKP also offers the social actions checked there.
         assert_eq!(
             features(crate::client::ServerProtocol::Quarm),
-            [Capability::Talking]
+            [
+                Capability::Casting,
+                Capability::Spellbook,
+                Capability::Inventory,
+                Capability::Moving,
+                Capability::Falling,
+                Capability::Targeting,
+                Capability::Talking,
+                Capability::Camping,
+                Capability::Zoning,
+                Capability::Abilities,
+                Capability::EnvironmentalDamage,
+                Capability::Jumping,
+                Capability::Posture
+            ]
         );
         assert_eq!(
             features(crate::client::ServerProtocol::Takp),
@@ -1494,16 +1524,134 @@ mod tests {
                 Capability::Talking,
                 Capability::Camping,
                 Capability::Zoning,
+                Capability::Abilities,
                 Capability::Grouping,
                 Capability::Listing,
                 Capability::EnvironmentalDamage,
                 Capability::BleedingOut,
                 Capability::Translocate,
-                Capability::Jumping
+                Capability::Jumping,
+                Capability::Posture
             ]
         );
+    }
+
+    #[test]
+    fn quarm_can_sit_camp_and_return_to_selection_without_locomotion() {
+        use super::super::feature::testing;
+        use eq_network_game::{command::Posture, quarm, world::Capability};
+        let server = servers::server_type(crate::client::ServerProtocol::Quarm);
+        let mut features =
+            Features::new(server, "Tester", eq_network_game::food::AutoEat::default());
+        // Keep proving that posture and camping do not depend on movement,
+        // even though the full Quarm policy now provides movement too.
+        features
+            .provided
+            .retain(|feature| !feature.capabilities().contains(&Capability::Moving));
+        assert!(!features.capabilities().contains(&Capability::Moving));
+        let mut world = World::new(5);
+        world.own_spawn = Some(7);
+        world.player.admit(testing::player(7));
+        world.admitted = Some(Instant::now());
+        let sit = ClientCommand::SetPosture {
+            session_id: 5,
+            spawn_id: 7,
+            posture: Posture::Sitting,
+            created: Instant::now(),
+        };
+        let camp = ClientCommand::Camp {
+            session_id: 5,
+            created: Instant::now(),
+        };
+        let before = Instant::now();
+        let output = testing::run_on(server.wire(), |out| -> Result<()> {
+            features.admitted(&mut world, out)?;
+            assert!(features.handle(&sit, &mut world, out)?);
+            assert!(features.handle(&camp, &mut world, out)?);
+            // A duplicate request cannot reset the countdown or send twice.
+            assert!(features.handle(&camp, &mut world, out)?);
+            features.tick(before + Duration::from_secs(29), &mut world, out)
+        });
+        output.result.unwrap();
+        assert_eq!(
+            output.sent,
+            [quarm::posture(7, Posture::Sitting).unwrap(), quarm::camp()]
+        );
+        assert_eq!(
+            output.unreliable,
+            Vec::<eq_network_game::command::EncodedCommand>::new()
+        );
+        assert!(world.body.position().is_none());
+        let output = testing::run_on(server.wire(), |out| {
+            features.tick(Instant::now() + Duration::from_secs(31), &mut world, out)
+        });
+        output.result.unwrap();
+        assert_eq!(output.sent, [quarm::logout()]);
+        let output = testing::run_on(server.wire(), |out| {
+            features.observe(&Message::LoggedOut, &mut world, out)
+        });
+        output.result.unwrap();
+        assert!(matches!(world.exit(), Some(ZoneExit::CharacterSelect)));
+    }
+
+    #[test]
+    fn quarm_standing_cancels_camp() {
+        use super::super::feature::testing;
+        use eq_network_game::{
+            command::Posture,
+            quarm,
+            world::{CampStatus, WorldEvent},
+        };
+        let server = servers::server_type(crate::client::ServerProtocol::Quarm);
+        let mut features =
+            Features::new(server, "Tester", eq_network_game::food::AutoEat::default());
+        let mut world = World::new(5);
+        world.own_spawn = Some(7);
+        world.player.admit(testing::player(7));
+        world.admitted = Some(Instant::now());
+        let output = testing::run_on(server.wire(), |out| -> Result<()> {
+            features.admitted(&mut world, out)?;
+            features.handle(
+                &ClientCommand::Camp {
+                    session_id: 5,
+                    created: Instant::now(),
+                },
+                &mut world,
+                out,
+            )?;
+            features.handle(
+                &ClientCommand::SetPosture {
+                    session_id: 5,
+                    spawn_id: 7,
+                    posture: Posture::Standing,
+                    created: Instant::now(),
+                },
+                &mut world,
+                out,
+            )?;
+            features.tick(Instant::now() + Duration::from_secs(40), &mut world, out)
+        });
+        output.result.unwrap();
+        assert_eq!(
+            output.sent,
+            [quarm::camp(), quarm::posture(7, Posture::Standing).unwrap()]
+        );
+        assert!(output.events.iter().any(|event| matches!(
+            event,
+            ClientEvent::World(WorldEvent::Camp(CampStatus::Abandoned { .. }))
+        )));
+        assert!(world.exit().is_none());
     }
 }
 
 #[cfg(test)]
 mod eqmac_tests;
+
+#[cfg(test)]
+mod quarm_tests;
+
+#[cfg(test)]
+mod ability_tests;
+
+#[cfg(test)]
+mod quarm_inventory_tests;

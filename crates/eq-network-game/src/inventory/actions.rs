@@ -99,6 +99,22 @@ pub enum MoveRules {
     /// (`ZoneDatabase::SaveCursor`, `zone/zonedb.cpp`), so a move onto a
     /// cursor that a move just emptied waits for that move to settle.
     Takp,
+    /// Quarm's source-checked `EQMac` placement rules. The session serializes
+    /// moves but keeps their predictions unconfirmed: silence is not an ACK.
+    /// Direct trade/world-container moves remain outside this policy.
+    Quarm,
+}
+
+impl MoveRules {
+    /// Whether the reported rank establishes training under this policy.
+    fn trained_skill(self, value: Option<u32>) -> bool {
+        value
+            .and_then(|value| match self {
+                Self::EqEmu => Some(value),
+                Self::Takp | Self::Quarm => crate::abilities::eqmac::skill_rank(value),
+            })
+            .is_some_and(|rank| rank > 0)
+    }
 }
 
 impl Inventory {
@@ -232,8 +248,8 @@ impl Inventory {
             !request.from.is_trade(),
             "Cancel the trade to take an item back"
         );
-        if rules == MoveRules::Takp {
-            self.check_takp_move(request)?;
+        if matches!(rules, MoveRules::Takp | MoveRules::Quarm) {
+            self.check_eqmac_move(rules, request)?;
         }
         if request.to.is_trade() {
             check_trade(request, self.items.contains_key(&request.to))?;
@@ -256,19 +272,15 @@ impl Inventory {
             .items
             .get(&request.from)
             .context("Source slot is empty")?;
+        if rules == MoveRules::Quarm {
+            self.check_quarm_source(request, source)?;
+        }
+        self.check_source_container(request.from)?;
         if let Some(destination) = self.items.get(&request.to) {
             if let MoveQuantity::Count(amount) = request.quantity {
                 return self.plan_merge(rules, request, source, destination, amount.get(), actor);
             }
             return self.plan_cursor_swap(rules, request, source, destination, actor);
-        }
-        if let Some((parent, index)) = request.from.parent() {
-            ensure!(
-                self.items
-                    .get(&parent)
-                    .is_some_and(|bag| index < bag.bag_slots),
-                "Source container is not known"
-            );
         }
         ensure!(
             !self.items.keys().any(|slot| slot
@@ -523,7 +535,7 @@ impl Inventory {
                         && stat.value > i32::from(actor.level)),
                 "Your level is too low for this item"
             );
-            if rules == MoveRules::Takp {
+            if matches!(rules, MoveRules::Takp | MoveRules::Quarm) {
                 self.check_takp_worn(slot, item)?;
             }
             if slot.0 == 13 && matches!(item.rules.item_type, 1 | 4 | 35) {
@@ -540,7 +552,7 @@ impl Inventory {
                 if matches!(item.rules.item_type, 0 | 2 | 3 | 45) {
                     ensure!(
                         matches!(actor.class, Some(1 | 4 | 7 | 8 | 9 | 15))
-                            && actor.dual_wield.is_some_and(|skill| skill > 0),
+                            && rules.trained_skill(actor.dual_wield),
                         "A trained dual-wield skill is required for an off-hand weapon"
                     );
                 }
@@ -557,19 +569,64 @@ impl Inventory {
     }
 }
 impl Inventory {
-    /// What TAKP needs of any move: slots it numbers, and a cursor that no
-    /// unsettled move emptied, which TAKP may yet refill.
-    fn check_takp_move(&self, request: &InventoryMove) -> Result<()> {
+    /// An observed child can only move while its containing bag is known.
+    fn check_source_container(&self, slot: InventorySlot) -> Result<()> {
+        if let Some((parent, index)) = slot.parent() {
+            ensure!(
+                self.items
+                    .get(&parent)
+                    .is_some_and(|bag| index < bag.bag_slots),
+                "Source container is not known"
+            );
+        }
+        Ok(())
+    }
+
+    /// Both Mac policies require encodable slots. TAKP's legacy settlement
+    /// gate is in the projection; Quarm paces moves in the session so origins
+    /// survive the delay without permanently locking an emptied cursor.
+    fn check_eqmac_move(&self, rules: MoveRules, request: &InventoryMove) -> Result<()> {
         ensure!(
             request.from.to_eqmac().is_some() && request.to.to_eqmac().is_some(),
             "This server has no such slot"
         );
         ensure!(
-            request.to != InventorySlot::CURSOR
+            rules == MoveRules::Quarm
+                || request.to != InventorySlot::CURSOR
                 || self.items.contains_key(&InventorySlot::CURSOR)
                 || !self.unconfirmed.contains_key(&InventorySlot::CURSOR),
             "Wait for the server to settle the last move"
         );
+        Ok(())
+    }
+
+    /// Rejects malformed observed quantities and inaccessible containers before
+    /// Quarm can enter its disconnecting resynchronization path.
+    fn check_quarm_source(&self, request: &InventoryMove, source: &InventoryItem) -> Result<()> {
+        for item in [Some(source), self.items.get(&request.to)]
+            .into_iter()
+            .flatten()
+        {
+            if let Some(mac) = item.rules.eqmac {
+                ensure!(mac.gm_flag == 0, "Restricted or unknown GM item flag");
+                ensure!(
+                    !matches!(mac.stack_flag, super::EqMacStackFlag::Unknown(_)),
+                    "Unknown item stack flag"
+                );
+            }
+        }
+        ensure!(
+            [request.from, request.to]
+                .iter()
+                .all(|slot| { slot.is_held() && !slot.is_in_cursor_bag() }),
+            "This inventory action is not supported on Quarm"
+        );
+        if let Some(count) = source.stack_count {
+            ensure!(
+                count > 0 && source.rules.stack_size > 0 && count <= source.rules.stack_size,
+                "Invalid or unknown stack quantity"
+            );
+        }
         Ok(())
     }
 

@@ -43,6 +43,7 @@ use super::{
     objects::GroundObjects,
     offers::MerchantOffers,
     pets::Pets,
+    posture::Stances,
     raids::Raids,
     reading::Reading,
     resurrection::Resurrection,
@@ -224,9 +225,14 @@ pub(super) trait ServerType: Sync {
         None
     }
 
-    /// How the player moves: walking, running and stance, and on some
+    /// How the player moves: walking, running, and on some
     /// servers jumps and falls.
     fn motion(&self, _setup: &Setup<'_>) -> Provided {
+        None
+    }
+
+    /// Sitting, standing and ducking, separate from walking.
+    fn posture(&self, _setup: &Setup<'_>) -> Provided {
         None
     }
 
@@ -409,6 +415,7 @@ pub(super) trait ServerType: Sync {
             self.spellbook(setup),
             self.inventory(setup),
             self.motion(setup),
+            self.posture(setup),
             self.character(setup),
             self.entities(setup),
             self.targeting(setup),
@@ -570,9 +577,12 @@ mod shared {
     }
 
     /// Moving, with or without the falls the server takes, and jumps where
-    /// it takes falls and the generation's notice of a jump is known.
-    pub(super) fn motion(falls: bool, jumps: bool) -> Box<dyn Feature> {
-        Box::new(Motion::new(falls, jumps))
+    /// it takes falls and the generation's notice of a jump is known;
+    /// `spell_landing` is the server type's
+    /// [`spell_landing_flag`](ServerType::spell_landing_flag), on which the
+    /// player's speed inputs are asked for again.
+    pub(super) fn motion(falls: bool, jumps: bool, spell_landing: Option<u8>) -> Box<dyn Feature> {
+        Box::new(Motion::new(falls, jumps, spell_landing))
     }
 
     pub(super) fn character() -> Box<dyn Feature> {
@@ -767,11 +777,15 @@ const P99_WORLD_PREFIXES: [&str; 2] = ["project 1999", "an interesting"];
 const P99_HAZARDS: [Hazard; 1] = [Hazard::Falling];
 
 /// Project 1999: Titanium with V62 protection and 256-unit saved headings.
-/// Falls follow the Titanium program (6.332); jumps wait until they are
-/// measured on P99.
+/// Falls and jumps follow the Titanium program; recorded P99 jump notices
+/// match its empty packet (see `docs/public-server-gaps.md`).
 struct Project1999;
 
 impl ServerType for Project1999 {
+    fn posture(&self, _setup: &Setup<'_>) -> Provided {
+        offer(Box::new(Stances))
+    }
+
     fn wire(&self) -> &'static dyn Wire {
         &Titanium
     }
@@ -812,6 +826,12 @@ impl ServerType for Project1999 {
         Some(&creation::Classic)
     }
 
+    /// Recorded Titanium lists agree with the following profiles and own
+    /// spawns, including worn materials and tints. See the parity evidence.
+    fn character_preview(&self) -> bool {
+        true
+    }
+
     fn casting(&self, _setup: &Setup<'_>) -> Provided {
         offer(shared::casting())
     }
@@ -834,10 +854,12 @@ impl ServerType for Project1999 {
     /// player, at any angle, and a step its floor drops away from falls
     /// (0x48a0fc, 0x48a2f4, 0x48b6c5; R-s), so P99 takes falls with the
     /// program's rules (sittings 6, 8g-8i; P99's own module present, not
-    /// read). Jumps stay off until measured there (recording checklist
-    /// item 1.3).
+    /// read). Eight recorded official P99 jumps use the existing empty
+    /// notice and position updates. Their timing does not independently
+    /// establish the arc: the shared client-derived physics remains an
+    /// inference until a custom-client jump is checked there.
     fn motion(&self, _setup: &Setup<'_>) -> Provided {
-        offer(shared::motion(true, false))
+        offer(shared::motion(true, true, self.spell_landing_flag()))
     }
 
     /// Falls only (6.332).
@@ -921,6 +943,10 @@ impl ServerType for Project1999 {
 struct EqEmu;
 
 impl ServerType for EqEmu {
+    fn posture(&self, _setup: &Setup<'_>) -> Provided {
+        offer(Box::new(Stances))
+    }
+
     fn wire(&self) -> &'static dyn Wire {
         &Titanium
     }
@@ -962,7 +988,7 @@ impl ServerType for EqEmu {
     }
 
     fn motion(&self, _setup: &Setup<'_>) -> Provided {
-        offer(shared::motion(true, true))
+        offer(shared::motion(true, true, self.spell_landing_flag()))
     }
 
     fn character(&self, _setup: &Setup<'_>) -> Provided {
@@ -1120,14 +1146,92 @@ impl ServerType for EqEmu {
 struct Quarm;
 
 impl ServerType for Quarm {
+    /// Quarm's cast handler reads the shared 12-byte `EQMac` request and
+    /// answers through its spell bar and interruption messages. Its own
+    /// class, zone and expansion restrictions remain authoritative.
+    fn casting(&self, _setup: &Setup<'_>) -> Provided {
+        offer(shared::casting())
+    }
+
+    /// Quarm's `OPMemorizeSpell` handles scribing, memorizing and forgetting
+    /// with the shared book packet. Moving and deleting book entries remain
+    /// unchecked, as on TAKP (see `docs/public-server-gaps.md`).
+    fn spellbook(&self, _setup: &Setup<'_>) -> Provided {
+        offer(shared::spellbook(Edits::default()))
+    }
+
+    /// Source-backed `EQMac` abilities, with Frenzy and unfinished exchanges excluded.
+    fn abilities(&self, _setup: &Setup<'_>) -> Provided {
+        offer(shared::abilities(
+            &eq_network_game::abilities::eqmac::SUPPORTED,
+        ))
+    }
+
+    /// Quarm's `Handle_OP_TargetMouse` uses the shared two-byte target ID
+    /// and echoes clears; `TargetCommand` reports server picks/refusals.
+    fn targeting(&self, _setup: &Setup<'_>) -> Provided {
+        offer(shared::targeting())
+    }
+
+    /// Quarm's own move handlers accept the shared `EQMac` item/coin layouts.
+    /// Keep the same inventory owner used for movement, with placement and
+    /// banker checks, independent of merchants, meals and exchanges.
+    fn inventory(&self, setup: &Setup<'_>) -> Provided {
+        offer(shared::inventory_under(
+            MoveRules::Quarm,
+            Quotes::of(GameDialect::EqMac),
+            Allowances {
+                items: true,
+                coins: true,
+                merchants: false,
+                meals: false,
+            },
+            setup,
+        ))
+    }
+
+    /// Quarm reads the same `EQMac` position/jump packets as TAKP. Speeds,
+    /// collision and airborne rules remain the generation's existing rules.
+    fn motion(&self, _setup: &Setup<'_>) -> Provided {
+        offer(shared::motion(true, true, self.spell_landing_flag()))
+    }
+
+    /// Quarm's damage handler takes falling damage after the `EQMac` notice.
+    fn hazards(&self, _setup: &Setup<'_>) -> Provided {
+        offer(shared::hazards(&TAKP_HAZARDS, true))
+    }
+
+    /// Client-requested boundaries and bind entry use Quarm's `EQMac` world
+    /// re-entry, with the same offer/refusal/correction lifecycle as TAKP.
+    fn transfers(&self, setup: &Setup<'_>) -> Provided {
+        offer(shared::transfers(setup, Home::Asked))
+    }
+
+    /// Quarm handles camp and logout using the shared `EQMac` packets.
+    /// The timer/cancellation flow is tested offline; public validation is pending.
+    fn camp(&self, _setup: &Setup<'_>) -> Provided {
+        offer(shared::camp())
+    }
+
+    fn posture(&self, _setup: &Setup<'_>) -> Provided {
+        offer(Box::new(Stances))
+    }
+
     // Quarm's HandleNameApprovalPacket and HandleCharacterCreatePacket use
     // the same EQMac bodies and replies as TAKP. Source-derived; not a live test.
     fn creation(&self) -> Option<&'static dyn Creation> {
         Some(&creation::EqMac)
     }
 
+    /// Quarm's `GetCharSelectInfo` fills the shared 1,620-byte character
+    /// list, including level, zone and equipment. Source-derived; no live
+    /// preview certification is implied (see `docs/public-server-gaps.md`).
+    fn character_preview(&self) -> bool {
+        true
+    }
+
     fn wire(&self) -> &'static dyn Wire {
-        &EqMac
+        &EqMac::Quarm
     }
 
     /// As on TAKP, whose server Quarm's comes from ([`Takp`]).
@@ -1157,8 +1261,19 @@ const TAKP_DEATH_THRESHOLD: i32 = -11;
 struct Takp;
 
 impl ServerType for Takp {
+    /// The same verified packets and eligibility as Quarm; no blanket ALL grant.
+    fn abilities(&self, _setup: &Setup<'_>) -> Provided {
+        offer(shared::abilities(
+            &eq_network_game::abilities::eqmac::SUPPORTED,
+        ))
+    }
+
+    fn posture(&self, _setup: &Setup<'_>) -> Provided {
+        offer(Box::new(Stances))
+    }
+
     fn wire(&self) -> &'static dyn Wire {
-        &EqMac
+        &EqMac::Takp
     }
 
     /// TAKP's server sends the spell action with flag 0 as a spell lands, to
@@ -1239,7 +1354,7 @@ impl ServerType for Takp {
     /// 6.161) and reports as damage ([`Self::hazards`]), and jumps by the
     /// program's notice (TAKP sitting 2).
     fn motion(&self, _setup: &Setup<'_>) -> Provided {
-        offer(shared::motion(true, true))
+        offer(shared::motion(true, true, self.spell_landing_flag()))
     }
 
     /// Falls, which TAKP takes from the client as the program reports them
@@ -1405,18 +1520,32 @@ mod tests {
 
     #[test]
     fn eqmac_servers_provide_the_features_built_for_them() {
-        // Quarm and TAKP speak EQMac: they see the zone's spawns, keep the
-        // player's record and talk. TAKP also casts, keeps the spellbook,
-        // camps, moves, falls and jumps, zones, moves items, keeps the time of
-        // day, lists the player as anonymous or roleplaying, answers
-        // translocates and takes the client's reports of a fall and a
-        // bleed-out; Quarm will once each is checked there.
+        // Quarm shares TAKP's movement, falls, jumps, zone handoff and
+        // posture/camp lifecycle, abilities, casting, basic spellbook and
+        // personal inventory actions. Other features await their own evidence.
         let setup = Setup::new("Tester", AutoEat::default());
         let quarm = server_type(ServerProtocol::Quarm);
-        assert_eq!(quarm.features(&setup).len(), 3);
-        assert_eq!(offers(quarm), [Capability::Talking]);
+        assert_eq!(quarm.features(&setup).len(), 13);
+        assert_eq!(
+            offers(quarm),
+            [
+                Capability::Casting,
+                Capability::Spellbook,
+                Capability::Inventory,
+                Capability::Moving,
+                Capability::Falling,
+                Capability::Targeting,
+                Capability::Talking,
+                Capability::Camping,
+                Capability::Zoning,
+                Capability::Abilities,
+                Capability::EnvironmentalDamage,
+                Capability::Jumping,
+                Capability::Posture
+            ]
+        );
         let takp = server_type(ServerProtocol::Takp);
-        assert_eq!(takp.features(&setup).len(), 18);
+        assert_eq!(takp.features(&setup).len(), 20);
         assert_eq!(
             offers(takp),
             [
@@ -1432,12 +1561,14 @@ mod tests {
                 Capability::Talking,
                 Capability::Camping,
                 Capability::Zoning,
+                Capability::Abilities,
                 Capability::Grouping,
                 Capability::Listing,
                 Capability::EnvironmentalDamage,
                 Capability::BleedingOut,
                 Capability::Translocate,
-                Capability::Jumping
+                Capability::Jumping,
+                Capability::Posture
             ]
         );
         for server in [quarm, takp] {
@@ -1522,11 +1653,11 @@ mod tests {
         assert!(p99.protect(&[0; 10]).is_err());
         assert!((p99.profile_turn() - 256.0).abs() < f32::EPSILON);
         assert!(!p99.start_choice());
-        // Falls and their damage follow the Titanium program (6.332);
-        // jumps wait until measured on P99.
+        // Falls and jumps follow the Titanium program; recorded P99 jump
+        // notices use the same opcode and empty body.
         assert!(offers(p99).contains(&Capability::Falling));
         assert!(offers(p99).contains(&Capability::EnvironmentalDamage));
-        assert!(!offers(p99).contains(&Capability::Jumping));
+        assert!(offers(p99).contains(&Capability::Jumping));
         let eqemu = server_type(ServerProtocol::EqEmu);
         assert_eq!(
             eqemu.wire().encode(&Request::Camp, SENDER).unwrap(),
@@ -1539,30 +1670,154 @@ mod tests {
     }
 
     #[test]
+    fn p99_jump_uses_the_recorded_notice_only_after_motion_admission() {
+        use super::super::{
+            feature::{testing, World},
+            ClientCommand,
+        };
+        use std::time::Instant;
+        let server = server_type(ServerProtocol::Project1999);
+        let mut feature = server
+            .motion(&Setup::new("Tester", AutoEat::default()))
+            .unwrap()
+            .feature;
+        let mut world = World::new(5);
+        let jump = ClientCommand::Jump {
+            session_id: 5,
+            created: Instant::now(),
+        };
+        let before = testing::run(|out| feature.handle(&jump, &mut world, out));
+        before.result.unwrap();
+        assert_eq!(
+            before.sent,
+            Vec::<eq_network_game::command::EncodedCommand>::new()
+        );
+        world.own_spawn = Some(7);
+        let mut player = testing::player(7);
+        player.run_speed = 0.7;
+        player.walk_speed = 0.46;
+        world.player.admit(player);
+        world.admitted = Some(Instant::now());
+        testing::run(|out| feature.admitted(&mut world, out))
+            .result
+            .unwrap();
+        let report = ClientCommand::SpeedInputs {
+            session_id: 5,
+            revision: 1,
+            state: eq_network_game::movement::SpeedInputState::Ready(
+                eq_network_game::movement::SpeedInputs {
+                    rate: 0,
+                    weight: 0,
+                    capacity: 100,
+                },
+            ),
+        };
+        testing::run(|out| feature.handle(&report, &mut world, out))
+            .result
+            .unwrap();
+        let sent = testing::run(|out| feature.handle(&jump, &mut world, out));
+        sent.result.unwrap();
+        assert_eq!(sent.sent.len(), 1);
+        // Literal capture-derived framing; no recorded payload or identity.
+        assert_eq!(sent.sent[0].opcode, 0x0797);
+        assert_eq!(sent.sent[0].body, Vec::<u8>::new());
+        assert_eq!(
+            sent.unreliable,
+            Vec::<eq_network_game::command::EncodedCommand>::new()
+        );
+    }
+
+    #[test]
     fn character_looks_are_kept_only_where_the_list_is_checked_to_carry_them() {
         use eq_network_game::GameDialect;
         let listed = |protocol| server_type(protocol).character_preview();
         assert!(listed(ServerProtocol::EqEmu));
         assert!(listed(ServerProtocol::Takp));
-        assert!(!listed(ServerProtocol::Project1999));
-        assert!(!listed(ServerProtocol::Quarm));
+        assert!(listed(ServerProtocol::Project1999));
+        assert!(listed(ServerProtocol::Quarm));
+        assert!(!Empty.character_preview());
         let mut body = vec![0; 1620];
         body[..7].copy_from_slice(b"Example");
         body[640] = 30;
         body[660..662].copy_from_slice(&330u16.to_le_bytes());
-        for (protocol, kept) in [(ServerProtocol::Takp, true), (ServerProtocol::Quarm, false)] {
+        for protocol in [ServerProtocol::Takp, ServerProtocol::Quarm] {
             let entries = super::super::world::character_list(
                 server_type(protocol),
                 GameDialect::EqMac,
                 &body,
             )
             .unwrap();
-            assert_eq!(entries[0].level.is_some(), kept, "{protocol:?}");
+            assert_eq!(entries[0].level, Some(30), "{protocol:?}");
             assert_eq!(
                 entries[0].look.map(|look| look.race),
-                kept.then_some(330),
+                Some(330),
                 "{protocol:?}"
             );
+        }
+    }
+
+    #[test]
+    fn public_previews_keep_equipment_and_sparse_slots_without_relaxing_validation() {
+        // Independent wire offsets: Titanium's name/race arrays and Quarm's
+        // common CharacterSelect_Struct. Only synthetic names and values.
+        for (protocol, dialect, size, name, level, zone, race, width, gear, tint, primary) in [
+            (
+                ServerProtocol::Project1999,
+                GameDialect::Titanium,
+                1704,
+                1024,
+                1694,
+                964,
+                0,
+                4,
+                420,
+                40,
+                912,
+            ),
+            (
+                ServerProtocol::Quarm,
+                GameDialect::EqMac,
+                1620,
+                0,
+                640,
+                680,
+                660,
+                2,
+                740,
+                1100,
+                1480,
+            ),
+        ] {
+            let mut body = vec![0; size];
+            let slot = 3;
+            body[name + slot * 64..name + slot * 64 + 7].copy_from_slice(b"Example");
+            body[level + slot] = 17;
+            body[zone + slot * 4..zone + slot * 4 + 4].copy_from_slice(&22u32.to_le_bytes());
+            body[race + slot * width..race + (slot + 1) * width]
+                .copy_from_slice(&128u32.to_le_bytes()[..width]);
+            body[gear + (slot * 9 + 1) * 4..gear + (slot * 9 + 2) * 4]
+                .copy_from_slice(&2u32.to_le_bytes());
+            body[tint + (slot * 9 + 1) * 4..tint + (slot * 9 + 2) * 4]
+                .copy_from_slice(&[0x10, 0x20, 0xc0, 0xff]);
+            body[primary + slot * 4..primary + (slot + 1) * 4]
+                .copy_from_slice(&240u32.to_le_bytes());
+            let read = |body: &[u8]| {
+                super::super::world::character_list(server_type(protocol), dialect, body)
+            };
+            let entries = read(&body).unwrap();
+            assert_eq!(entries.len(), 1);
+            assert_eq!(
+                (entries[0].slot, entries[0].level, entries[0].zone_id),
+                (3, Some(17), Some(22))
+            );
+            let look = entries[0].look.unwrap();
+            assert_eq!(look.race, 128);
+            assert_eq!(look.appearance.materials[1], 2);
+            assert_eq!(look.appearance.materials[7], 240);
+            assert_eq!(look.appearance.tints[1], Some([0xc0, 0x20, 0x10]));
+            assert!(read(&body[..size - 1]).is_err());
+            body[name..name + 7].copy_from_slice(b"example");
+            assert!(read(&body).is_err(), "duplicate names remain invalid");
         }
     }
 
@@ -1583,8 +1838,8 @@ mod tests {
         // hiding; only EQEmu answers sacrifices, read from its source and not
         // yet checked live; and only EQEmu takes the show-helm option.
         for (protocol, count) in [
-            (ServerProtocol::Project1999, 22),
-            (ServerProtocol::EqEmu, 36),
+            (ServerProtocol::Project1999, 23),
+            (ServerProtocol::EqEmu, 37),
         ] {
             let server = server_type(protocol);
             let setup = Setup::new("Tester", AutoEat::default());

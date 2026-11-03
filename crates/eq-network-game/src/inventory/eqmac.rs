@@ -22,6 +22,41 @@ use crate::items::{EquipmentRules, ItemBonuses, ItemDetails, ItemStat, WornEffec
 use anyhow::{anyhow, bail, ensure, Context, Result};
 use std::collections::BTreeMap;
 
+/// The common item's stack flag, distinct from TAKP's derived stackability.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize)]
+#[non_exhaustive]
+pub enum EqMacStackFlag {
+    /// Wire value zero: not stackable on Quarm.
+    Unstackable,
+    /// Wire value one: stackable on Quarm.
+    Stackable,
+    /// Wire value three: a spell-effect item, not stackable on Quarm.
+    Effect,
+    /// An unrecognized value; retain the observation but do not move the item.
+    Unknown(u8),
+}
+
+impl EqMacStackFlag {
+    fn of(value: u8) -> Self {
+        match value {
+            0 => Self::Unstackable,
+            1 => Self::Stackable,
+            3 => Self::Effect,
+            unknown => Self::Unknown(unknown),
+        }
+    }
+}
+
+/// Source fields needed to validate Quarm moves without discarding observations.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize)]
+#[non_exhaustive]
+pub struct EqMacItemRules {
+    /// The record's stack flag at byte 276.
+    pub stack_flag: EqMacStackFlag,
+    /// Signed GM flag at byte 247. Minus one is restricted; unknown values stay raw.
+    pub gm_flag: i8,
+}
+
 /// `OP_CharInventory`: everything the player holds, as the zone admits them.
 const INVENTORY_OPCODE: u16 = 0xf641;
 /// `OP_MerchantItemPacket`: an item now in a slot. TAKP sends it for every
@@ -59,6 +94,13 @@ const STACK: u32 = 20;
 /// weapons, arrows, type 28, fishing bait and alcohol.
 const STACKING_TYPES: [u8; 9] = [14, 15, 17, 18, 19, 27, 28, 37, 38];
 
+/// Shared record layout, different source-of-truth for stackability.
+#[derive(Clone, Copy)]
+enum ItemRules {
+    Takp,
+    Quarm,
+}
+
 /// What TAKP's item packet says about the inventory: the full inventory, an
 /// item in a slot or onto the cursor, an emptied slot, or a unit or charge
 /// used up. Merchant, loot, trade, world container and linked item views
@@ -69,17 +111,32 @@ const STACKING_TYPES: [u8; 9] = [14, 15, 17, 18, 19, 27, 28, 37, 38];
 /// number, bag contents outside their bag, and a summoned item anywhere but
 /// the cursor.
 pub fn decode(opcode: u16, body: &[u8]) -> Result<Option<InventoryUpdate>> {
+    decode_with(opcode, body, ItemRules::Takp)
+}
+
+/// Quarm's inventory records. Unlike TAKP, Quarm's `ItemInstance::IsStackable`
+/// uses the database stackable flag sent at byte 276; its loader still derives
+/// stack capacity from item type and maximum charges.
+///
+/// # Errors
+/// Rejects malformed records as [`decode`] does. Unknown stack flags remain
+/// inspectable in [`EqMacItemRules`] and are rejected by Quarm's move planner.
+pub fn decode_quarm(opcode: u16, body: &[u8]) -> Result<Option<InventoryUpdate>> {
+    decode_with(opcode, body, ItemRules::Quarm)
+}
+
+fn decode_with(opcode: u16, body: &[u8], rules: ItemRules) -> Result<Option<InventoryUpdate>> {
     match opcode {
-        INVENTORY_OPCODE => Ok(Some(InventoryUpdate::Snapshot(inventory(body)?))),
+        INVENTORY_OPCODE => Ok(Some(InventoryUpdate::Snapshot(inventory(body, rules)?))),
         PLACED_OPCODE | ITEM_OPCODE | BOOK_OPCODE | CONTAINER_OPCODE => {
-            let item = single(body)?;
+            let item = single(body, rules)?;
             Ok(item
                 .slot
                 .is_held()
                 .then(|| InventoryUpdate::Set(vec![item])))
         }
         SUMMONED_OPCODE => {
-            let item = single(body)?;
+            let item = single(body, rules)?;
             ensure!(
                 item.slot == InventorySlot::CURSOR,
                 "summoned item is not on cursor"
@@ -144,7 +201,7 @@ pub fn move_item(
 /// 255, so the records say how many there are: tagged records, compressed
 /// with zlib. An empty inventory comes as two zero bytes, uncompressed. Bag
 /// contents are records of their own, at their own slots.
-fn inventory(body: &[u8]) -> Result<Vec<InventoryItem>> {
+fn inventory(body: &[u8], rules: ItemRules) -> Result<Vec<InventoryItem>> {
     if body == [0, 0] {
         return Ok(Vec::new());
     }
@@ -164,7 +221,7 @@ fn inventory(body: &[u8]) -> Result<Vec<InventoryItem>> {
                 u16::from_be_bytes([tagged[0], tagged[1]]) == record.class()?.opcode(),
                 "EQMac inventory record tagged for another class"
             );
-            item(&record)
+            item(&record, rules)
         })
         .collect::<Result<Vec<_>>>()?;
     let bags: BTreeMap<_, _> = items
@@ -249,20 +306,29 @@ pub(crate) fn trade_view(
     Ok(Some((index, item_at(&record, slot)?)))
 }
 
-fn single(body: &[u8]) -> Result<InventoryItem> {
+fn single(body: &[u8], rules: ItemRules) -> Result<InventoryItem> {
     ensure!(body.len() == RECORD, "invalid EQMac item length");
-    item(&Record(body))
+    item(&Record(body), rules)
 }
 
 /// An item record as an item in the slot it names.
-fn item(record: &Record<'_>) -> Result<InventoryItem> {
+fn item(record: &Record<'_>, rules: ItemRules) -> Result<InventoryItem> {
     let slot = InventorySlot::from_eqmac(i32::from(record.short(184)))
         .context("unknown EQMac inventory slot")?;
-    item_at(record, slot)
+    item_at_for(record, slot, rules)
 }
 
 /// An item record as an item at `slot`.
 fn item_at(record: &Record<'_>, slot: InventorySlot) -> Result<InventoryItem> {
+    item_at_for(record, slot, ItemRules::Takp)
+}
+
+/// Reads the common layout using the selected server's stack semantics.
+fn item_at_for(
+    record: &Record<'_>,
+    slot: InventorySlot,
+    rules: ItemRules,
+) -> Result<InventoryItem> {
     let class = record.class()?;
     let details = definition(record)?;
     let common = class == Class::Common;
@@ -273,7 +339,12 @@ fn item_at(record: &Record<'_>, slot: InventorySlot) -> Result<InventoryItem> {
     } else {
         0
     };
-    let stackable = common && maximum_charges > 0 && STACKING_TYPES.contains(&item_type);
+    let stack_capacity = common && maximum_charges > 0 && STACKING_TYPES.contains(&item_type);
+    let stackable = match rules {
+        ItemRules::Takp => stack_capacity,
+        ItemRules::Quarm if common => record.byte(276) == 1,
+        ItemRules::Quarm => false,
+    };
     // A stack's quantity where anything else keeps its charges (-1 for
     // unlimited).
     let charges = i32::from(record.signed_byte(278));
@@ -313,10 +384,15 @@ fn item_at(record: &Record<'_>, slot: InventorySlot) -> Result<InventoryItem> {
             &record.text(231, 30),
         ),
         rules: ItemPlacement {
-            stack_size: if stackable { STACK } else { 1 },
+            eqmac: common.then(|| EqMacItemRules {
+                stack_flag: EqMacStackFlag::of(record.byte(276)),
+                gm_flag: record.signed_byte(247),
+            }),
+            stack_size: if stack_capacity { STACK } else { 1 },
             size: record.byte(177),
             bag_size: if container { record.byte(271) } else { 0 },
             bag_type: if container { record.byte(268) } else { 0 },
+            bag_weight_reduction: if container { record.byte(272) } else { 0 },
             item_type,
             deity_mask: record.word(348),
         },

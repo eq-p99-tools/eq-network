@@ -646,9 +646,8 @@ pub enum GameCommand {
         spawn_id: Option<u16>,
     },
     /// Install independently measured motion values for this admission.
-    /// Both client generations work out their own speeds from
-    /// [`Self::SpeedInputs`], which replace these at its first report; this
-    /// stays for tests and for a generation whose rule is unread.
+    /// Generations with a known speed rule reject this override and require
+    /// [`Self::SpeedInputs`]. This is only for a generation whose rule is unread.
     ConfigureMotion {
         /// Current zone-admission identifier.
         session_id: u64,
@@ -664,15 +663,10 @@ pub enum GameCommand {
     SpeedInputs {
         /// Current zone-admission identifier.
         session_id: u64,
-        /// The movement rate the player's buffs add up to, in percent; -1000
-        /// or less roots the player.
-        rate: i16,
-        /// What the player carries, in whole units.
-        weight: u16,
-        /// What the player can carry before it slows them. 0 only before the
-        /// host has the player's profile, and then no one counts as carrying
-        /// too much; a 0 after that is a bug in the host.
-        capacity: u32,
+        /// Echo the latest `WorldEvent::SpeedInputsRequired` revision.
+        revision: u64,
+        /// Complete inputs or explicit withdrawal, never guessed zeroes.
+        state: crate::movement::SpeedInputState,
     },
     /// How far the player's body climbs in one 50 ms program step, in world
     /// units, which the host works out from the player's model and the
@@ -798,8 +792,8 @@ impl GameCommand {
             Self::ClickDoor { .. } => Capability::Doors,
             Self::PickUp { .. } => Capability::GroundItems,
             Self::CrossZoneLine { .. } => Capability::Zoning,
-            Self::SetPosture { .. }
-            | Self::Move(_)
+            Self::SetPosture { .. } => Capability::Posture,
+            Self::Move(_)
             | Self::ConfigureMotion { .. }
             | Self::SpeedInputs { .. }
             | Self::ClimbReach { .. } => Capability::Moving,

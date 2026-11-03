@@ -4,6 +4,7 @@ mod activation;
 mod banking;
 mod eqmac;
 mod titanium;
+mod weight;
 pub use actions::{
     titanium_move, InventoryActor, InventoryMove, MoveQuantity, MoveRules, MOVE_OPCODE,
 };
@@ -15,11 +16,12 @@ pub(crate) use eqmac::details as eqmac_details;
 pub(crate) use eqmac::merchant_stock as eqmac_merchant_stock;
 pub(crate) use eqmac::trade_view as eqmac_trade_view;
 pub use eqmac::{
-    decode as decode_eqmac, move_item as eqmac_move, takp_item_hit_points, ItemHitPointCount,
-    UnsettledItem, Wearer,
+    decode as decode_eqmac, decode_quarm, move_item as eqmac_move, takp_item_hit_points,
+    EqMacItemRules, EqMacStackFlag, ItemHitPointCount, UnsettledItem, Wearer,
 };
 pub use titanium::decode;
 pub(crate) use titanium::{parse as parse_items, parse_at};
+pub use weight::WeightUnavailable;
 
 use crate::items::ItemDetails;
 use serde::Serialize;
@@ -212,9 +214,11 @@ impl InventorySlot {
     }
 }
 
-/// Placement constraints from the Titanium static item definition.
+/// Placement constraints from the server's item definition.
 #[derive(Clone, Debug, Default, PartialEq, Serialize)]
 pub struct ItemPlacement {
+    /// Common-item `EQMac` restrictions, retaining unknown values for inspection.
+    pub eqmac: Option<EqMacItemRules>,
     /// Maximum stack quantity from the server definition; zero means unknown.
     pub stack_size: u32,
     /// Item size category.
@@ -223,6 +227,8 @@ pub struct ItemPlacement {
     pub bag_size: u8,
     /// Container specialization (for example a quiver).
     pub bag_type: u8,
+    /// Percentage of contents' weight removed by the container (0..=100).
+    pub bag_weight_reduction: u8,
     /// Item category, including weapon handedness.
     pub item_type: u8,
     /// Deity restrictions; zero is unrestricted.
@@ -317,6 +323,9 @@ pub struct Inventory {
     revision: u64,
     predicted: bool,
     unconfirmed: BTreeMap<InventorySlot, Option<InventoryItem>>,
+    /// Origins of plain whole-item relocations, separate from slot confirmation.
+    #[serde(skip)]
+    relocations: BTreeMap<InventorySlot, InventorySlot>,
     correcting: bool,
 }
 
@@ -335,7 +344,8 @@ impl Inventory {
     /// Slots changed by pending predictions and their contents before the first change.
     /// An empty origin is retained too: predicted removal or insertion is not confirmation.
     /// Origins remain until a covering server update, a settlement or a complete
-    /// snapshot arrives.
+    /// snapshot arrives. Authoritative consumption also removes a consumed item's
+    /// traced origin without confirming independent moves.
     pub fn prediction_origins(
         &self,
     ) -> impl Iterator<Item = (InventorySlot, Option<&InventoryItem>)> {
@@ -389,10 +399,12 @@ impl Inventory {
     }
 
     fn change(&mut self, update: InventoryUpdate) {
+        self.retain_relocations(&update);
         match update {
             InventoryUpdate::Prediction(items) => {
                 let next: BTreeMap<_, _> =
                     items.into_iter().map(|item| (item.slot, item)).collect();
+                self.trace_relocation(&next);
                 for slot in self.items.keys().chain(next.keys()) {
                     if self.items.get(slot) != next.get(slot) {
                         self.unconfirmed
@@ -403,19 +415,27 @@ impl Inventory {
                 self.items = next;
                 self.predicted = !self.unconfirmed.is_empty();
             }
-            InventoryUpdate::Consume { slot, charge } => match self.items.get_mut(&slot) {
-                Some(item) if charge => {
-                    if item.charges > 0 {
-                        item.charges -= 1;
+            InventoryUpdate::Consume { slot, charge } => {
+                let consumed = self
+                    .items
+                    .get(&slot)
+                    .filter(|item| !charge && item.stack_count.is_none() && item.bag_slots == 0)
+                    .cloned();
+                match self.items.get_mut(&slot) {
+                    Some(item) if charge => {
+                        if item.charges > 0 {
+                            item.charges -= 1;
+                        }
                     }
+                    Some(item) if item.stack_count.is_some_and(|count| count > 1) => {
+                        item.stack_count = item.stack_count.map(|count| count - 1);
+                    }
+                    Some(_) => self.remove(slot),
+                    None if charge => self.stale = true,
+                    None => (),
                 }
-                Some(item) if item.stack_count.is_some_and(|count| count > 1) => {
-                    item.stack_count = item.stack_count.map(|count| count - 1);
-                }
-                Some(_) => self.remove(slot),
-                None if charge => self.stale = true,
-                None => (),
-            },
+                self.reconcile_consumed(slot, consumed.as_ref());
+            }
             InventoryUpdate::Snapshot(items) => {
                 self.items = items.into_iter().map(|item| (item.slot, item)).collect();
                 self.queued.clear();
@@ -575,6 +595,8 @@ impl Inventory {
         }
     }
 }
+
+mod prediction;
 
 #[cfg(test)]
 pub(crate) mod tests;

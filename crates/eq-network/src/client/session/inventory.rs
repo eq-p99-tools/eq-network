@@ -3,7 +3,8 @@
 //! feature changes the inventory that every feature reads.
 //!
 //! A move is predicted as soon as it is sent and settles once the server has
-//! let it stand; a trade holds the inventory until the merchant echoes it.
+//! let it stand; Quarm retains predictions even after its pacing delay. A
+//! trade holds the inventory until the merchant echoes it.
 //! Items handed over in a give or trade window leave the trade slots when the
 //! window closes, which servers do not say item by item.
 //!
@@ -13,6 +14,7 @@
 //! servers do, and takes each money update as the truth about the purse.
 mod meals;
 mod merchant;
+mod quarm;
 
 use super::{
     actions::Resource,
@@ -89,9 +91,14 @@ fn tell_coins(world: &World, purse: bool, out: &mut Out<'_, '_>) -> Result<()> {
             out.log.send(ClientEvent::World(WorldEvent::Coins(coins)))?;
         }
     }
+    // The profile supplies cursor and bank together. Do not turn an absent
+    // profile projection into known empty coins for movement or banking.
+    let Some(bank) = coins.bank else {
+        return Ok(());
+    };
     out.log.send(ClientEvent::World(WorldEvent::CoinsElsewhere {
         cursor: coins.cursor,
-        bank: coins.bank.unwrap_or_default(),
+        bank,
         given: coins.given,
         offered: coins.offered,
     }))
@@ -301,10 +308,16 @@ fn change(update: InventoryUpdate, world: &mut World, out: &mut Out<'_, '_>) -> 
         .send(ClientEvent::World(WorldEvent::Inventory(update)))
 }
 
-/// What a server type lets the player do with their belongings beside
-/// moving items, each as checked on that kind of server.
+/// What a server type lets the player do with their belongings. With no
+/// allowances, the feature only follows the server's inventory and coins.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "Independent server permissions, not mutually exclusive states"
+)]
 pub(super) struct Allowances {
+    /// Moving items. An observer still keeps authoritative inventory state.
+    pub(super) items: bool,
     /// Moving coins between the purse, the cursor, the bank and a trade.
     pub(super) coins: bool,
     /// Buying and selling at merchants.
@@ -314,8 +327,9 @@ pub(super) struct Allowances {
 }
 
 impl Allowances {
-    /// Coins, merchants and meals.
+    /// Items, coins, merchants and meals.
     pub(super) const ALL: Self = Self {
+        items: true,
         coins: true,
         merchants: true,
         meals: true,
@@ -324,7 +338,7 @@ impl Allowances {
 
 /// The player's belongings and the changes to them in flight.
 pub(super) struct Belongings {
-    /// What the player may do with them beside moving items.
+    /// What the player may do with them.
     allows: Allowances,
     /// The server type's rules for item moves.
     rules: MoveRules,
@@ -365,7 +379,7 @@ impl Belongings {
     ) -> Self {
         let hungry = match rules {
             MoveRules::EqEmu => eq_network_game::food::HUNGRY,
-            MoveRules::Takp => eq_network_game::food::TAKP_HUNGRY,
+            MoveRules::Takp | MoveRules::Quarm => eq_network_game::food::TAKP_HUNGRY,
         };
         Self {
             allows,
@@ -548,7 +562,10 @@ impl Belongings {
 impl Feature for Belongings {
     fn capabilities(&self) -> Vec<crate::world::Capability> {
         use crate::world::Capability;
-        let mut offered = vec![Capability::Inventory];
+        let mut offered = Vec::new();
+        if self.allows.items {
+            offered.push(Capability::Inventory);
+        }
         if self.allows.merchants {
             offered.push(Capability::Trading);
         }
@@ -576,26 +593,27 @@ impl Feature for Belongings {
         for update in admission {
             change(update, world, out)?;
         }
-        tell_coins(world, true, out)
+        tell_coins(world, true, out)?;
+        if let Some(nourishment) = self.meals.snapshot() {
+            out.log
+                .send(ClientEvent::World(WorldEvent::Nourishment(nourishment)))?;
+        }
+        Ok(())
     }
 
-    /// A sold item leaves only when the merchant echoes the sale. Under
-    /// TAKP's rules one move is in flight at a time, which is ours and
-    /// stricter than the official client, which moves items without
-    /// waiting: TAKP answers only a refused move, so a move is answered once
-    /// it settles, and holding the next keeps a resync from landing on top
-    /// of other predictions. A move onto a cursor TAKP may still refill
-    /// (from a queue it said nothing of) waits with it.
+    /// Holds the inventory for merchant replies and paces Mac item moves.
+    /// This conservative delay reduces overlap with resyncs and hidden cursor
+    /// refills; it cannot prove acceptance. Quarm releases only the hold after
+    /// the delay, retaining its predictions for authoritative reconciliation.
     fn holds(&self, _world: &World, now: Instant) -> Vec<(Resource, &'static str)> {
         let mut holds = Vec::new();
         if self.trades.active() {
             holds.push((Resource::Inventory, "Wait for the merchant to answer"));
         }
-        if self.rules == MoveRules::Takp && self.settlement.in_flight(now) {
-            holds.push((
-                Resource::Inventory,
-                "Wait for the server to settle the last move",
-            ));
+        if matches!(self.rules, MoveRules::Takp | MoveRules::Quarm)
+            && self.settlement.in_flight(now)
+        {
+            holds.push((Resource::Inventory, "Wait for the last item move"));
         }
         holds
     }
@@ -616,7 +634,7 @@ impl Feature for Belongings {
 
     fn owns(&self, command: &ClientCommand) -> bool {
         match command {
-            ClientCommand::MoveInventory(_) => true,
+            ClientCommand::MoveInventory(_) => self.allows.items,
             ClientCommand::MoveCoins { .. } => self.allows.coins,
             ClientCommand::Shop { .. } | ClientCommand::Buy { .. } | ClientCommand::Sell { .. } => {
                 self.allows.merchants
@@ -632,6 +650,9 @@ impl Feature for Belongings {
         world: &mut World,
         out: &mut Out<'_, '_>,
     ) -> Result<()> {
+        if !self.owns(command) {
+            return Ok(());
+        }
         match command {
             ClientCommand::MoveInventory(request) => self.move_item(request, world, out),
             ClientCommand::MoveCoins { .. } => Self::move_coins(command, world, out),
@@ -656,11 +677,16 @@ impl Feature for Belongings {
         }
     }
 
-    /// Settles moves the server let stand, and releases a trade the merchant
-    /// never answered.
+    /// Releases pacing holds, legacy settlements and unanswered merchant trades.
+    /// Quarm never turns an elapsed delay into an inventory confirmation.
     fn tick(&mut self, now: Instant, world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
-        // Servers answer only a refused move, so silence settles the rest.
-        if let Some(update) = self.settlement.due(&world.inventory, now) {
+        if self.rules == MoveRules::Quarm {
+            // A pacing delay is not proof of acceptance. Keep prediction
+            // origins and any correction/invalidation until server updates.
+            if !self.settlement.in_flight(now) {
+                self.settlement.0 = None;
+            }
+        } else if let Some(update) = self.settlement.due(&world.inventory, now) {
             change(update, world, out)?;
         }
         if self.trades.expire(now) {
@@ -714,7 +740,15 @@ impl Feature for Belongings {
         }
         match message {
             Message::Event(WorldEvent::Inventory(update)) => {
+                let resync =
+                    self.rules == MoveRules::Quarm && quarm::contradicts(&world.inventory, update);
                 world.inventory.0.apply(update.clone());
+                if resync {
+                    // Quarm's resync sends temporary items, incomplete bag
+                    // roots and then disconnects ordinary clients. Only a new
+                    // snapshot can restore safe action state, never a timer.
+                    change(InventoryUpdate::Invalidated, world, out)?;
+                }
                 out.log.diagnostic(told(update))?;
             }
             // A whole list: the places gone, then each item, told as the
@@ -781,6 +815,131 @@ mod tests {
     use testing::item;
 
     #[test]
+    fn an_unknown_cursor_and_bank_are_not_reported_as_empty_coins() {
+        let (_, mut world) = admitted();
+        world.coins.0.purse = Some(Coins::default());
+        let output = testing::run(|out| tell_coins(&world, true, out));
+        output.result.unwrap();
+        assert!(matches!(
+            output.events[..],
+            [ClientEvent::World(WorldEvent::Coins(_))]
+        ));
+        coins_news(
+            &Message::Event(WorldEvent::CoinsElsewhere {
+                cursor: Coins::default(),
+                bank: Coins::default(),
+                given: Coins::default(),
+                offered: Coins::default(),
+            }),
+            &mut world.coins.0,
+        );
+        let output = testing::run(|out| tell_coins(&world, false, out));
+        output.result.unwrap();
+        assert!(matches!(
+            output.events[..],
+            [ClientEvent::World(WorldEvent::CoinsElsewhere { .. })]
+        ));
+    }
+
+    #[test]
+    fn an_observer_keeps_inventory_and_coins_without_sending_actions() {
+        use eq_network_game::{command::EncodedCommand, food::Nourishment, world::Capability};
+        let (mut belongings, mut world) = fed(6000, 6000);
+        belongings.allows = Allowances::default();
+        assert_eq!(belongings.capabilities(), Vec::<Capability>::new());
+        let coins = Coins {
+            copper: 123,
+            ..Coins::default()
+        };
+        belongings
+            .admit(&Message::Event(WorldEvent::Coins(coins)), &mut world)
+            .unwrap();
+        let output = testing::run_on(&super::super::wire::EqMac::Takp, |out| -> Result<()> {
+            belongings.admitted(&mut world, out)?;
+            belongings.observe(
+                &Message::Event(WorldEvent::Nourishment(Nourishment {
+                    fatigue: None,
+                    food: 0,
+                    water: 0,
+                })),
+                &mut world,
+                out,
+            )?;
+            let consume = ClientCommand::Consume {
+                session_id: 5,
+                slot: InventorySlot(22),
+                created: Instant::now(),
+            };
+            assert!(!belongings.owns(&consume));
+            belongings.handle(&consume, &mut world, out)?;
+            let move_item = ClientCommand::MoveInventory(InventoryMove {
+                session_id: 5,
+                revision: world.inventory.revision(),
+                from: InventorySlot(22),
+                to: InventorySlot::CURSOR,
+                quantity: MoveQuantity::Whole,
+                created: Instant::now(),
+            });
+            assert!(!belongings.owns(&move_item));
+            belongings.handle(&move_item, &mut world, out)?;
+            belongings.tick(Instant::now() + Duration::from_secs(60), &mut world, out)
+        });
+        output.result.unwrap();
+        assert_eq!(output.sent, Vec::<EncodedCommand>::new());
+        assert_eq!(output.unreliable, Vec::<EncodedCommand>::new());
+        assert!(world.inventory.received());
+        assert!(!world.inventory.stale());
+        assert_eq!(world.inventory.items().len(), 4);
+        assert_eq!(world.coins.purse, Some(coins));
+        assert!(output.events.iter().any(|event| matches!(event,
+            ClientEvent::World(WorldEvent::Inventory(InventoryUpdate::Snapshot(items))) if items.len() == 4)));
+        assert!(output.events.iter().any(|event| matches!(event,
+            ClientEvent::World(WorldEvent::Coins(reported)) if *reported == coins)));
+        let output = testing::run(|out| -> Result<()> {
+            belongings.observe(
+                &Message::Event(WorldEvent::Inventory(InventoryUpdate::Remove(
+                    InventorySlot(22),
+                ))),
+                &mut world,
+                out,
+            )?;
+            assert_eq!(world.inventory.items().len(), 3);
+            belongings.observe(
+                &Message::Event(WorldEvent::Inventory(InventoryUpdate::Invalidated)),
+                &mut world,
+                out,
+            )
+        });
+        output.result.unwrap();
+        assert!(world.inventory.stale());
+        assert_eq!(output.sent, Vec::<EncodedCommand>::new());
+    }
+
+    #[test]
+    fn an_observer_distinguishes_an_empty_snapshot_from_no_inventory() {
+        let mut belongings = Belongings::under(
+            MoveRules::Takp,
+            Quotes::of(eq_network_game::GameDialect::EqMac),
+            Allowances::default(),
+            eq_network_game::food::AutoEat::default(),
+        );
+        let mut world = World::new(5);
+        assert!(!world.inventory.received());
+        belongings
+            .admit(
+                &Message::Event(WorldEvent::Inventory(InventoryUpdate::Snapshot(vec![]))),
+                &mut world,
+            )
+            .unwrap();
+        let output = testing::run(|out| belongings.admitted(&mut world, out));
+        output.result.unwrap();
+        assert!(world.inventory.received());
+        assert!(!world.inventory.stale());
+        assert!(output.events.iter().any(|event| matches!(event,
+            ClientEvent::World(WorldEvent::Inventory(InventoryUpdate::Snapshot(items))) if items.is_empty())));
+    }
+
+    #[test]
     fn a_mac_era_merchant_opens_only_within_reach() {
         let mut world = World::new(5);
         world.player.admit(testing::player(7));
@@ -800,14 +959,23 @@ mod tests {
             outcome.sent.len()
         };
         // TAKP reaches a merchant 20 away in 3-D; Titanium's reach is unread.
-        assert_eq!(run(&super::super::wire::EqMac, &shop(true), &world), 0);
+        assert_eq!(
+            run(&super::super::wire::EqMac::Takp, &shop(true), &world),
+            0
+        );
         assert_eq!(run(&super::super::wire::Titanium, &shop(true), &world), 1);
         // Closing is never refused.
-        assert_eq!(run(&super::super::wire::EqMac, &shop(false), &world), 1);
+        assert_eq!(
+            run(&super::super::wire::EqMac::Takp, &shop(false), &world),
+            1
+        );
         let mut merchant = testing::spawn(9, SpawnKind::Npc);
         merchant.position.x = 20.0;
         world.spawns.insert(merchant);
-        assert_eq!(run(&super::super::wire::EqMac, &shop(true), &world), 1);
+        assert_eq!(
+            run(&super::super::wire::EqMac::Takp, &shop(true), &world),
+            1
+        );
     }
 
     /// An inventory with one item moved to the cursor by an unanswered prediction.
@@ -886,7 +1054,11 @@ mod tests {
         belongings.admit(&snapshot, &mut world).unwrap();
         belongings
             .admit(
-                &Message::Event(WorldEvent::Nourishment(Nourishment { food, water })),
+                &Message::Event(WorldEvent::Nourishment(Nourishment {
+                    fatigue: None,
+                    food,
+                    water,
+                })),
                 &mut world,
             )
             .unwrap();
@@ -902,8 +1074,13 @@ mod tests {
     fn a_hungry_or_thirsty_player_eats_and_drinks_what_they_carry() {
         use eq_network_game::food::{consume, Meal, Nourishment};
         let (mut belongings, mut world) = fed(6000, 6000);
-        let hungry =
-            |food, water| Message::Event(WorldEvent::Nourishment(Nourishment { food, water }));
+        let hungry = |food, water| {
+            Message::Event(WorldEvent::Nourishment(Nourishment {
+                fatigue: None,
+                food,
+                water,
+            }))
+        };
         // Fed and watered: nothing happens.
         let outcome = testing::run(|out| belongings.observe(&hungry(3001, 6000), &mut world, out));
         assert!(outcome.sent.is_empty(), "sent {:?}", outcome.sent);
@@ -962,6 +1139,7 @@ mod tests {
         });
         world.inventory.0.apply(InventoryUpdate::Set(vec![ration]));
         let hungry = Message::Event(WorldEvent::Nourishment(Nourishment {
+            fatigue: None,
             food: 2000,
             water: 6000,
         }));
@@ -1117,7 +1295,7 @@ mod tests {
         belongings.admit(&snapshot, &mut world).unwrap();
         world.own_spawn = Some(7);
         world.player.admit(testing::player(7));
-        testing::run_on(&super::super::wire::EqMac, |out| {
+        testing::run_on(&super::super::wire::EqMac::Takp, |out| {
             belongings.admitted(&mut world, out)
         })
         .result
@@ -1127,7 +1305,7 @@ mod tests {
 
     #[test]
     fn on_takp_a_merchant_is_told_at_its_charge_and_a_purchase_waits_for_coins_to_cover_it() {
-        let eqmac = &super::super::wire::EqMac;
+        let eqmac = &super::super::wire::EqMac::Takp;
         let (mut belongings, mut world) = admitted_on_takp();
         let purse = |copper| Message::Event(WorldEvent::Coins(Coins::from_copper(copper)));
         testing::run(|out| belongings.observe(&purse(253), &mut world, out))
@@ -1262,7 +1440,7 @@ mod tests {
             stray,
             Message::Event(WorldEvent::Merchant(MerchantUpdate::Sold { price: 0, .. }))
         ));
-        let eqmac = &super::super::wire::EqMac;
+        let eqmac = &super::super::wire::EqMac::Takp;
         testing::run_on(eqmac, |out| belongings.handle(&sell, &mut world, out))
             .result
             .unwrap();
@@ -1398,7 +1576,7 @@ mod tests {
         };
         let pick_up = request(&world, 23, 30);
         assert!(belongings.owns(&pick_up));
-        let outcome = testing::run_on(&super::super::wire::EqMac, |out| {
+        let outcome = testing::run_on(&super::super::wire::EqMac::Takp, |out| {
             belongings.handle(&pick_up, &mut world, out)
         });
         outcome.result.unwrap();
@@ -1417,7 +1595,7 @@ mod tests {
         let held = Held::new(belongings.holds(&world, Instant::now()));
         assert_eq!(
             held.conflict(&put_down),
-            Some("Wait for the server to settle the last move")
+            Some("Wait for the last item move")
         );
         let later = Instant::now() + REFUSAL_WINDOW;
         assert_eq!(
@@ -1430,15 +1608,20 @@ mod tests {
     fn on_takp_the_session_eats_below_3000_in_takps_numbers() {
         use eq_network_game::food::{eqmac_consume, Meal, Nourishment};
         let (mut belongings, mut world) = admitted_on_takp();
-        let report =
-            |food| Message::Event(WorldEvent::Nourishment(Nourishment { food, water: 6000 }));
+        let report = |food| {
+            Message::Event(WorldEvent::Nourishment(Nourishment {
+                fatigue: None,
+                food,
+                water: 6000,
+            }))
+        };
         // TAKP's own client waits until below 3000.
-        let outcome = testing::run_on(&super::super::wire::EqMac, |out| {
+        let outcome = testing::run_on(&super::super::wire::EqMac::Takp, |out| {
             belongings.observe(&report(3000), &mut world, out)
         });
         outcome.result.unwrap();
         assert!(outcome.sent.is_empty(), "sent {:?}", outcome.sent);
-        let outcome = testing::run_on(&super::super::wire::EqMac, |out| {
+        let outcome = testing::run_on(&super::super::wire::EqMac::Takp, |out| {
             belongings.observe(&report(2999), &mut world, out)
         });
         outcome.result.unwrap();
@@ -1664,6 +1847,17 @@ mod tests {
     ) {
         use eq_network_game::money::{Coin, CoinTransfer};
         let (mut belongings, mut world) = admitted();
+        belongings
+            .admit(
+                &Message::Event(WorldEvent::CoinsElsewhere {
+                    cursor: Coins::default(),
+                    bank: Coins::default(),
+                    given: Coins::default(),
+                    offered: Coins::default(),
+                }),
+                &mut world,
+            )
+            .unwrap();
         let purse = Message::Event(WorldEvent::Coins(Coins {
             gold: 5,
             ..Coins::default()
@@ -1702,7 +1896,7 @@ mod tests {
             money::{Coin, CoinPlace, CoinTransfer, EQMAC_MOVE_OPCODE},
             world::SpawnKind,
         };
-        let eqmac = &super::super::wire::EqMac;
+        let eqmac = &super::super::wire::EqMac::Takp;
         let (mut belongings, mut world) = admitted_on_takp();
         let purse = Message::Event(WorldEvent::Coins(Coins {
             gold: 12,
@@ -1953,14 +2147,11 @@ mod tests {
         });
         assert!(matches!(
             looted.events[..],
-            [
-                ClientEvent::World(WorldEvent::Coins(Coins {
-                    platinum: 1,
-                    silver: 3,
-                    ..
-                })),
-                ClientEvent::World(WorldEvent::CoinsElsewhere { .. })
-            ]
+            [ClientEvent::World(WorldEvent::Coins(Coins {
+                platinum: 1,
+                silver: 3,
+                ..
+            }))]
         ));
         testing::run(|out| {
             belongings.observe(
@@ -2010,10 +2201,7 @@ mod tests {
         outcome.result.unwrap();
         assert!(matches!(
             outcome.events[..],
-            [
-                ClientEvent::World(WorldEvent::Coins(Coins { gold: 7, .. })),
-                ClientEvent::World(WorldEvent::CoinsElsewhere { .. })
-            ]
+            [ClientEvent::World(WorldEvent::Coins(Coins { gold: 7, .. }))]
         ));
     }
 
@@ -2044,14 +2232,11 @@ mod tests {
         outcome.result.unwrap();
         assert!(matches!(
             outcome.events[..],
-            [
-                ClientEvent::World(WorldEvent::Coins(Coins {
-                    gold: 7,
-                    copper: 3,
-                    ..
-                })),
-                ClientEvent::World(WorldEvent::CoinsElsewhere { .. })
-            ]
+            [ClientEvent::World(WorldEvent::Coins(Coins {
+                gold: 7,
+                copper: 3,
+                ..
+            }))]
         ));
         // A reward with no coins leaves the purse alone.
         let outcome =

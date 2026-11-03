@@ -477,7 +477,7 @@ fn unpack(body: &[u8], profile: bool) -> Result<Zeroizing<Vec<u8>>> {
         .map_err(|_| anyhow::anyhow!("invalid or oversized EQMac compressed payload"))
 }
 
-/// Decode only the rendering fields of the encrypted player profile.
+/// Decode the supported player-state fields of the encrypted profile.
 ///
 /// # Errors
 /// Rejects malformed compression, unexpected layouts, and a different character.
@@ -515,6 +515,12 @@ fn decoded_group(data: &[u8]) -> Result<Option<crate::group::GroupUpdate>> {
 /// field's room for 32, whose comment says the client uses the first 25.
 const PROFILE_LANGUAGES: std::ops::Range<usize> = 284..310;
 
+/// The 100 packed 16-bit skill words in TAKP and Quarm's Mac profile.
+/// The following 25 innate-skill words are a separate table. Preserve raw
+/// values, including zero and unavailable/untrained/unknown sentinels;
+/// ability eligibility, not the wire decoder, decides what can be used.
+const PROFILE_SKILLS: std::ops::Range<usize> = 2988..3188;
+
 /// Projects validated profile fields without retaining the decompressed payload.
 fn decoded_profile(data: &[u8], character: &str) -> Result<PlayerState> {
     ensure!(
@@ -551,7 +557,14 @@ fn decoded_profile(data: &[u8], character: &str) -> Result<PlayerState> {
         mana: u32::from(short(data, 158)),
         // EQMac uses fatigue, not Titanium endurance; no equivalent value is supplied.
         endurance: None,
-        skills: None,
+        skills: Some(
+            data[PROFILE_SKILLS]
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .map(|value| u32::from(u16::from_le_bytes(*value)))
+                .collect(),
+        ),
         practice_points: None,
         languages: Some(data[PROFILE_LANGUAGES].to_vec()),
         disciplines: None,
@@ -616,6 +629,14 @@ fn decoded_coins(data: &[u8]) -> Result<Vec<WorldEvent>> {
             offered: crate::world::Coins::default(),
         },
     ])
+}
+
+/// Admission nourishment and fatigue from the validated `EQMac` profile.
+///
+/// # Errors
+/// Rejects malformed compression, profile layouts or truncated fields.
+pub fn profile_nourishment(body: &[u8]) -> Result<crate::food::Nourishment> {
+    crate::food::eqmac_profile(&unpack(body, true)?)
 }
 
 /// The separate, uncompressed own-character zone-entry projection.
@@ -934,10 +955,21 @@ pub fn updates(opcode: u16, body: &[u8]) -> Result<Vec<WorldEvent>> {
                 body,
             )?)]
         }
+        0x8941 => {
+            // OP_SkillUpdate: the shared eight-byte SkillUpdate_Struct.
+            ensure!(body.len() == 8, "invalid EQMac skill update length");
+            vec![WorldEvent::Skill {
+                skill_id: word(body, 0),
+                value: word(body, 4),
+            }]
+        }
         crate::abilities::EQMAC_RESET_SKILL_OPCODE => {
-            vec![WorldEvent::SkillReady(crate::abilities::eqmac_reset_skill(
-                body,
-            )?)]
+            let reset = crate::abilities::eqmac::reset_skill(body)?;
+            let mut events = vec![WorldEvent::SkillReset(reset)];
+            if reset.timer == 0 {
+                events.push(WorldEvent::SkillReady(u32::from(reset.skill)));
+            }
+            events
         }
         crate::targets::EQMAC_TARGET_COMMAND_OPCODE | crate::targets::EQMAC_TARGET_MOUSE_OPCODE => {
             vec![WorldEvent::Target(crate::targets::eqmac_target(body)?)]

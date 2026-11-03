@@ -10,8 +10,8 @@ use eq_network_game::{
     appearance::AppearanceChange,
     message::Message,
     movement::{
-        MotionCalibration, MotionSession, MovementRequest, PositionPacket, SpeedState,
-        STATIONARY_HEARTBEAT,
+        MotionCalibration, MotionSession, MovementRequest, PositionPacket, SpeedInputState,
+        SpeedInputs, SpeedState, STATIONARY_HEARTBEAT,
     },
     request::Request,
     world::{PlayerState, Position, WorldEvent},
@@ -160,15 +160,6 @@ pub(super) fn withdrawn(session_id: u64) -> WorldEvent {
     }
 }
 
-/// What the host reports of the player's speeds (see
-/// [`ClientCommand::SpeedInputs`]).
-#[derive(Clone, Copy)]
-struct SpeedInputs {
-    rate: i16,
-    weight: u16,
-    capacity: u32,
-}
-
 /// The player's movement and stance.
 pub(super) struct Motion {
     /// Whether the server lets the player fall.
@@ -180,6 +171,13 @@ pub(super) struct Motion {
     /// movement rate, the weight carried and the capacity), once it has
     /// sent one; until then the session grants no movement itself.
     inputs: Option<SpeedInputs>,
+    revision: u64,
+    fatigue: Option<u8>,
+    belongings: Option<(
+        u64,
+        Option<eq_network_game::world::Coins>,
+        eq_network_game::world::Coins,
+    )>,
     /// Whether the player carried too much at the last grant, so the
     /// official client's line goes out once each way.
     encumbered: Option<bool>,
@@ -192,14 +190,22 @@ pub(super) struct Motion {
     /// current alone, so the player reads as more hurt than they are: the
     /// slower side.
     hit_points: Option<(i32, i32)>,
+    /// The spell action flag that says a spell landed on its target, as the
+    /// server type says ([`ServerType::spell_landing_flag`](super::servers::ServerType::spell_landing_flag)); none where it
+    /// is unchecked, and then no action is taken as a landing.
+    spell_landing: Option<u8>,
 }
 
 impl Motion {
-    pub(super) const fn new(falls: bool, jumps: bool) -> Self {
+    pub(super) const fn new(falls: bool, jumps: bool, spell_landing: Option<u8>) -> Self {
         Self {
             falls,
             jumps: falls && jumps,
+            spell_landing,
             inputs: None,
+            revision: 0,
+            fatigue: None,
+            belongings: None,
             encumbered: None,
             sneaking: false,
             hit_points: None,
@@ -268,10 +274,7 @@ impl Motion {
             return Ok(());
         }
         let Some(speeds) = speeds.motion else {
-            motion.withdraw();
-            return out
-                .log
-                .send(ClientEvent::World(withdrawn(world.session_id)));
+            return self.withdraw_input(world, out);
         };
         match motion.calibrate(speeds, Instant::now()) {
             Ok(()) => out.log.send(ClientEvent::World(granted(
@@ -292,21 +295,68 @@ impl Motion {
         world: &mut World,
         out: &mut Out<'_, '_>,
     ) -> Result<()> {
+        self.refresh_belongings(world, out)?;
         let ClientCommand::SpeedInputs {
-            rate,
-            weight,
-            capacity,
-            ..
+            revision, state, ..
         } = *command
         else {
             return Ok(());
         };
-        self.inputs = Some(SpeedInputs {
-            rate,
-            weight,
-            capacity,
-        });
+        if revision != self.revision {
+            return out
+                .log
+                .diagnostic("Rejected obsolete movement inputs".into());
+        }
+        self.inputs = match state {
+            SpeedInputState::Ready(inputs) => Some(inputs),
+            SpeedInputState::Unavailable(_) => {
+                self.withdraw_input(world, out)?;
+                None
+            }
+        };
         self.grant(world, out)
+    }
+
+    /// Withdraws input while retaining bounded passive descent and heartbeats.
+    fn withdraw_input(&self, world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
+        if let Some(motion) = world.body.motion.as_mut() {
+            motion.withdraw();
+        }
+        let mut event = withdrawn(world.session_id);
+        if let WorldEvent::MotionState { falls, .. } = &mut event {
+            *falls = self.falls && !world.lifecycle.blocks_motion();
+        }
+        out.log.send(ClientEvent::World(event))
+    }
+
+    /// Invalidates queued reports and requests a calculation from the new state.
+    fn require_inputs(&mut self, world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
+        self.inputs = None;
+        self.revision = self.revision.wrapping_add(1);
+        self.withdraw_input(world, out)?;
+        world.happened(Message::Event(WorldEvent::SpeedInputsRequired {
+            session_id: world.session_id,
+            revision: self.revision,
+        }));
+        Ok(())
+    }
+
+    /// Inventory/coin owners also publish predictions, settlements and rewards
+    /// directly. Compare their state before accepting input and on every tick.
+    fn refresh_belongings(&mut self, world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
+        if world.body.motion.is_none() {
+            return Ok(());
+        }
+        let current = (
+            world.inventory.revision(),
+            world.coins.purse,
+            world.coins.cursor,
+        );
+        if self.belongings == Some(current) {
+            return Ok(());
+        }
+        self.belongings = Some(current);
+        self.require_inputs(world, out)
     }
 
     /// Moves the player, standing them up first if they were sitting or
@@ -354,6 +404,11 @@ impl Motion {
     /// Takes the client's measured movement speeds; until then the player
     /// cannot move.
     fn calibrate(command: &ClientCommand, world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
+        if out.wire.speeds().is_some() {
+            return out
+                .log
+                .diagnostic("Movement requires current SpeedInputs for this generation".into());
+        }
         let ClientCommand::ConfigureMotion {
             calibration,
             created,
@@ -403,23 +458,6 @@ impl Motion {
             Err(error) => out.log.diagnostic(format!("Rejected jump: {error}")),
         }
     }
-
-    /// Sits, stands or crouches; the server never echoes the player's own
-    /// stance, so it is reported here.
-    fn stance(command: &ClientCommand, world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
-        let ClientCommand::SetPosture {
-            spawn_id, posture, ..
-        } = *command
-        else {
-            return Ok(());
-        };
-        if !world.is_player(spawn_id) {
-            return out
-                .log
-                .diagnostic("Rejected a posture for another spawn".into());
-        }
-        world.posture.set(spawn_id, posture, out)
-    }
 }
 
 impl Feature for Motion {
@@ -430,6 +468,13 @@ impl Feature for Motion {
             (true, false) => vec![Capability::Moving, Capability::Falling],
             _ => vec![Capability::Moving],
         }
+    }
+
+    fn admit(&mut self, message: &Message, _world: &mut World) -> Result<()> {
+        if let Message::Event(WorldEvent::Nourishment(value)) = message {
+            self.fatigue = value.fatigue;
+        }
+        Ok(())
     }
 
     /// Movement starts from the moment the zone admitted the player, before
@@ -451,7 +496,12 @@ impl Feature for Motion {
                     })),
             );
         }
-        self.grant(world, out)
+        self.belongings = Some((
+            world.inventory.revision(),
+            world.coins.purse,
+            world.coins.cursor,
+        ));
+        self.require_inputs(world, out)
     }
 
     fn owns(&self, command: &ClientCommand) -> bool {
@@ -462,7 +512,6 @@ impl Feature for Motion {
                 | ClientCommand::ConfigureMotion { .. }
                 | ClientCommand::SpeedInputs { .. }
                 | ClientCommand::ClimbReach { .. }
-                | ClientCommand::SetPosture { .. }
         )
     }
 
@@ -472,13 +521,14 @@ impl Feature for Motion {
         world: &mut World,
         out: &mut Out<'_, '_>,
     ) -> Result<()> {
+        self.refresh_belongings(world, out)?;
         match command {
             ClientCommand::Move(request) => Self::step(request, world, out),
             ClientCommand::Jump { .. } => self.jump(world, out),
             ClientCommand::ConfigureMotion { .. } => Self::calibrate(command, world, out),
             ClientCommand::SpeedInputs { .. } => self.inputs(command, world, out),
             ClientCommand::ClimbReach { .. } => Self::climb(command, world, out),
-            _ => Self::stance(command, world, out),
+            _ => Ok(()),
         }
     }
 
@@ -489,6 +539,7 @@ impl Feature for Motion {
         if !world.ready() || world.lifecycle.blocks_motion() {
             return Ok(());
         }
+        self.refresh_belongings(world, out)?;
         self.grant(world, out)?;
         world.body.heartbeat(now, out)
     }
@@ -505,16 +556,30 @@ impl Feature for Motion {
             return Ok(());
         };
         match event {
+            WorldEvent::Nourishment(value) if value.fatigue != self.fatigue => {
+                self.fatigue = value.fatigue;
+                self.require_inputs(world, out)
+            }
+            WorldEvent::Level { .. } | WorldEvent::BuffSnapshot(_) => {
+                self.require_inputs(world, out)
+            }
+            WorldEvent::Buff(update) if world.is_player(update.entity_id) => {
+                self.require_inputs(world, out)
+            }
+            // A spell landing on the player, by the server type's flag.
+            WorldEvent::SpellEffect(effect)
+                if world.is_player(effect.target_id)
+                    && self
+                        .spell_landing
+                        .is_some_and(|flag| flag == effect.effect_flag) =>
+            {
+                self.require_inputs(world, out)
+            }
             WorldEvent::Position {
                 spawn_id, position, ..
             } if world.is_player(*spawn_id) => {
                 world.correct_own(*position, Instant::now())?;
-                out.log
-                    .send(ClientEvent::World(withdrawn(world.session_id)))
-            }
-            WorldEvent::Posture { spawn_id, posture } if world.is_player(*spawn_id) => {
-                world.posture.observed(*posture);
-                Ok(())
+                self.require_inputs(world, out)
             }
             // What the player's speeds depend on; the next tick grants them.
             WorldEvent::HitPoints {
@@ -550,7 +615,6 @@ impl Feature for Motion {
 mod tests {
     use super::super::feature::testing;
     use super::*;
-    use eq_network_game::{command, world::PostureState};
     use std::time::Duration;
 
     fn at(x: f32) -> Position {
@@ -598,7 +662,7 @@ mod tests {
         world.admitted = Some(Instant::now());
         world.body.own(7);
         world.body.place(at(1.0));
-        let mut motion = Motion::new(false, false);
+        let mut motion = Motion::new(false, false, None);
         let now = Instant::now();
         let outcome = testing::run(|out| motion.tick(now, &mut world, out));
         outcome.result.unwrap();
@@ -627,7 +691,7 @@ mod tests {
     }
 
     #[test]
-    fn a_calibration_made_on_hearing_of_the_admission_is_fresh() {
+    fn a_manual_calibration_cannot_bypass_authoritative_inputs() {
         let now = Instant::now();
         let mut world = World::new(5);
         world.own_spawn = Some(7);
@@ -646,19 +710,13 @@ mod tests {
             },
             created: now.checked_sub(Duration::from_millis(5)).unwrap(),
         };
-        let mut motion = Motion::new(false, false);
+        let mut motion = Motion::new(false, false, None);
         testing::run(|out| motion.admitted(&mut world, out))
             .result
             .unwrap();
         let outcome = testing::run(|out| motion.handle(&configure, &mut world, out));
         outcome.result.unwrap();
-        assert!(matches!(
-            outcome.events[..],
-            [ClientEvent::World(WorldEvent::MotionState {
-                units_per_second: Some(_),
-                ..
-            })]
-        ));
+        assert!(matches!(outcome.events[..], [ClientEvent::Diagnostic(_)]));
     }
 
     #[test]
@@ -667,7 +725,7 @@ mod tests {
         world.own_spawn = Some(7);
         world.player.admit(testing::player(7));
         world.admitted = Some(Instant::now());
-        let mut motion = Motion::new(false, false);
+        let mut motion = Motion::new(false, false, None);
         testing::run(|out| motion.admitted(&mut world, out))
             .result
             .unwrap();
@@ -714,7 +772,7 @@ mod tests {
             .collect()
     }
 
-    const EQMAC: &dyn super::super::wire::Wire = &super::super::wire::EqMac;
+    const EQMAC: &dyn super::super::wire::Wire = &super::super::wire::EqMac::Takp;
 
     /// An `EQMac` player, level 50, admitted and not yet granted speeds.
     fn eqmac_admitted() -> (World, Motion) {
@@ -724,11 +782,11 @@ mod tests {
         (player.run_speed, player.walk_speed, player.level) = (0.7, 0.46, 50);
         world.player.admit(player);
         world.admitted = Some(Instant::now());
-        let mut motion = Motion::new(true, true);
+        let mut motion = Motion::new(true, true, None);
         let outcome = testing::run_on(EQMAC, |out| motion.admitted(&mut world, out));
         outcome.result.unwrap();
         assert!(
-            speeds(&outcome.events).is_empty(),
+            speeds(&outcome.events).iter().all(Option::is_none),
             "granted before the report"
         );
         (world, motion)
@@ -739,9 +797,12 @@ mod tests {
     fn report(rate: i16, weight: u16) -> ClientCommand {
         ClientCommand::SpeedInputs {
             session_id: 5,
-            rate,
-            weight,
-            capacity: 100,
+            revision: 1,
+            state: SpeedInputState::Ready(SpeedInputs {
+                rate,
+                weight,
+                capacity: 100,
+            }),
         }
     }
 
@@ -805,7 +866,7 @@ mod tests {
             "{:?}",
             outcome.events
         );
-        // A correction takes movement away, and the next tick grants it again.
+        // A correction takes movement away until a fresh revision is reported.
         let correction = Message::Event(WorldEvent::Position {
             spawn_id: 7,
             position: at(3.0),
@@ -815,17 +876,28 @@ mod tests {
         let outcome = testing::run_on(eqmac, |out| motion.observe(&correction, &mut world, out));
         assert_eq!(speeds(&outcome.events), [None]);
         let outcome = testing::run_on(eqmac, |out| motion.tick(now, &mut world, out));
-        assert!(
-            close(&speeds(&outcome.events), 14.9),
-            "{:?}",
-            outcome.events
-        );
+        assert_eq!(speeds(&outcome.events), Vec::<Option<f32>>::new());
+        let fresh_report = |rate| ClientCommand::SpeedInputs {
+            session_id: 5,
+            revision: 2,
+            state: SpeedInputState::Ready(SpeedInputs {
+                rate,
+                weight: 50,
+                capacity: 100,
+            }),
+        };
+        let outcome = testing::run_on(eqmac, |out| {
+            motion.handle(&fresh_report(0), &mut world, out)
+        });
+        assert!(close(&speeds(&outcome.events), 14.9));
         // A root takes it away until it wears off.
         let outcome = testing::run_on(eqmac, |out| {
-            motion.handle(&report(-1000, 50), &mut world, out)
+            motion.handle(&fresh_report(-1000), &mut world, out)
         });
         assert_eq!(speeds(&outcome.events), [None]);
-        let outcome = testing::run_on(eqmac, |out| motion.handle(&report(0, 50), &mut world, out));
+        let outcome = testing::run_on(eqmac, |out| {
+            motion.handle(&fresh_report(0), &mut world, out)
+        });
         assert!(
             close(&speeds(&outcome.events), 14.9),
             "{:?}",
@@ -876,7 +948,7 @@ mod tests {
         let mut world = World::new(5);
         world.own_spawn = Some(7);
         world.player.admit(testing::player(7));
-        let mut motion = Motion::new(true, false);
+        let mut motion = Motion::new(true, false, None);
         // Before the admission there is no guard to tell.
         let outcome = testing::run(|out| motion.handle(&climb(3.15), &mut world, out));
         outcome.result.unwrap();
@@ -900,11 +972,11 @@ mod tests {
         (player.run_speed, player.walk_speed, player.level) = (0.7, 0.46, 50);
         world.player.admit(player);
         world.admitted = Some(Instant::now());
-        let mut motion = Motion::new(false, false);
+        let mut motion = Motion::new(false, false, None);
         let outcome = testing::run(|out| motion.admitted(&mut world, out));
         outcome.result.unwrap();
         assert!(
-            speeds(&outcome.events).is_empty(),
+            speeds(&outcome.events).iter().all(Option::is_none),
             "granted before the report"
         );
         let outcome = testing::run(|out| motion.handle(&report(0, 50), &mut world, out));
@@ -928,46 +1000,12 @@ mod tests {
     }
 
     #[test]
-    fn the_player_stance_goes_out_and_is_reported_since_the_server_never_echoes_it() {
-        let mut world = World::new(5);
-        world.own_spawn = Some(7);
-        world.player.admit(testing::player(7));
-        let mut motion = Motion::new(false, false);
-        let sit = |spawn_id| ClientCommand::SetPosture {
-            session_id: 5,
-            spawn_id,
-            posture: command::Posture::Sitting,
-            created: Instant::now(),
-        };
-        let outcome = testing::run(|out| motion.handle(&sit(7), &mut world, out));
-        outcome.result.unwrap();
-        assert_eq!(
-            outcome.sent,
-            [command::titanium_posture(7, command::Posture::Sitting).unwrap()]
-        );
-        assert!(matches!(
-            outcome.events[..],
-            [ClientEvent::World(WorldEvent::Posture {
-                spawn_id: 7,
-                posture: PostureState::Sitting
-            })]
-        ));
-        let outcome = testing::run(|out| motion.handle(&sit(8), &mut world, out));
-        outcome.result.unwrap();
-        assert!(
-            outcome.sent.is_empty(),
-            "expected nothing sent, got {:?}",
-            outcome.sent
-        );
-    }
-
-    #[test]
     fn the_player_dying_withdraws_movement_and_stops_the_body() {
         let mut world = World::new(5);
         world.own_spawn = Some(7);
         world.player.admit(testing::player(7));
         world.admitted = Some(Instant::now());
-        let mut motion = Motion::new(false, false);
+        let mut motion = Motion::new(false, false, None);
         testing::run(|out| motion.admitted(&mut world, out))
             .result
             .unwrap();
@@ -997,5 +1035,129 @@ mod tests {
             "expected no unreliable packet, got {:?}",
             outcome.unreliable
         );
+    }
+    #[test]
+    fn input_withdrawal_revision_correction_and_coin_recovery() {
+        use eq_network_game::{money::Wallet, movement::SpeedInputUnavailable, world::Coins};
+        let (mut world, mut motion) = eqmac_admitted();
+        testing::run_on(EQMAC, |out| motion.handle(&report(0, 0), &mut world, out))
+            .result
+            .unwrap();
+        assert!(world.body.motion.as_ref().unwrap().calibration().is_some());
+        let unavailable = ClientCommand::SpeedInputs {
+            session_id: 5,
+            revision: 1,
+            state: SpeedInputState::Unavailable(SpeedInputUnavailable::Inventory),
+        };
+        let output = testing::run_on(EQMAC, |out| motion.handle(&unavailable, &mut world, out));
+        output.result.unwrap();
+        assert!(output.events.iter().any(|event| matches!(
+            event,
+            ClientEvent::World(WorldEvent::MotionState {
+                units_per_second: None,
+                falls: true,
+                ..
+            })
+        )));
+        testing::run_on(EQMAC, |out| motion.tick(Instant::now(), &mut world, out))
+            .result
+            .unwrap();
+        assert!(world.body.motion.as_ref().unwrap().calibration().is_none());
+        world.coins = Wallet {
+            purse: Some(Coins {
+                copper: 400,
+                ..Coins::default()
+            }),
+            ..Wallet::default()
+        }
+        .into();
+        // An old ready report cannot revive the old grant after the coin change.
+        testing::run_on(EQMAC, |out| motion.handle(&report(0, 0), &mut world, out))
+            .result
+            .unwrap();
+        assert_eq!(motion.revision, 2);
+        assert!(world.body.motion.as_ref().unwrap().calibration().is_none());
+        let current = ClientCommand::SpeedInputs {
+            session_id: 5,
+            revision: 2,
+            state: SpeedInputState::Ready(SpeedInputs {
+                rate: 0,
+                weight: 10,
+                capacity: 100,
+            }),
+        };
+        testing::run_on(EQMAC, |out| motion.handle(&current, &mut world, out))
+            .result
+            .unwrap();
+        assert!(world.body.motion.as_ref().unwrap().calibration().is_some());
+        let correction = Message::Event(WorldEvent::Position {
+            spawn_id: 7,
+            position: at(1.0),
+            velocity: [0.0; 3],
+            forward: 0.0,
+        });
+        testing::run_on(EQMAC, |out| motion.observe(&correction, &mut world, out))
+            .result
+            .unwrap();
+        testing::run_on(EQMAC, |out| motion.handle(&current, &mut world, out))
+            .result
+            .unwrap();
+        assert!(world.body.motion.as_ref().unwrap().calibration().is_none());
+        assert_eq!(motion.revision, 3);
+    }
+
+    /// A spell landing on the player asks for the speed inputs again by the
+    /// server type's landing flag, not a fixed one: 4 where the server type
+    /// says 4, nothing where it is unchecked.
+    #[test]
+    fn a_spell_landing_asks_for_inputs_again_by_the_server_types_flag() {
+        use eq_network_game::buffs::SpellEffect;
+        let landing = |effect_flag| {
+            Message::Event(WorldEvent::SpellEffect(SpellEffect {
+                target_id: 7,
+                caster_id: 7,
+                caster_level: 50,
+                instrument_modifier: 10,
+                spell_id: 278,
+                spell_level: 50,
+                effect_flag,
+                push: None,
+            }))
+        };
+        let granted_again = |motion: &mut Motion, world: &mut World| {
+            testing::run_on(EQMAC, |out| motion.handle(&report(0, 50), world, out))
+                .result
+                .unwrap();
+            assert!(world.body.motion.as_ref().unwrap().calibration().is_some());
+        };
+        let (mut world, mut motion) = eqmac_admitted();
+        motion.spell_landing = Some(4);
+        granted_again(&mut motion, &mut world);
+        let revision = motion.revision;
+        // Another flag is not a landing.
+        testing::run_on(EQMAC, |out| motion.observe(&landing(0), &mut world, out))
+            .result
+            .unwrap();
+        assert_eq!(motion.revision, revision);
+        assert!(world.body.motion.as_ref().unwrap().calibration().is_some());
+        let output = testing::run_on(EQMAC, |out| motion.observe(&landing(4), &mut world, out));
+        output.result.unwrap();
+        assert_eq!(speeds(&output.events), [None]);
+        assert_eq!(motion.revision, revision + 1);
+        assert!(world.body.motion.as_ref().unwrap().calibration().is_none());
+        assert!(world.take_news().iter().any(|message| matches!(
+            message,
+            Message::Event(WorldEvent::SpeedInputsRequired { revision: asked, .. })
+                if *asked == revision + 1
+        )));
+        // Unchecked for the server type: no action is a landing.
+        let (mut world, mut motion) = eqmac_admitted();
+        granted_again(&mut motion, &mut world);
+        let revision = motion.revision;
+        testing::run_on(EQMAC, |out| motion.observe(&landing(4), &mut world, out))
+            .result
+            .unwrap();
+        assert_eq!(motion.revision, revision);
+        assert!(world.body.motion.as_ref().unwrap().calibration().is_some());
     }
 }

@@ -49,6 +49,8 @@ impl Sender<'_> {
 /// What the zone session asks of the server.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Request {
+    /// Lie down for an `EQMac` feign attempt; this does not assert success.
+    FeignDeathPosture,
     /// Start the server's camp timer.
     Camp,
     /// Log the camped character out.
@@ -427,6 +429,7 @@ pub fn titanium(request: &Request, sender: Sender<'_>) -> Result<EncodedCommand>
         Request::EnvironmentalNotice { .. }
         | Request::AttackNotice { .. }
         | Request::DropInvisibility(_)
+        | Request::FeignDeathPosture
         | Request::BledOut { .. } => anyhow::bail!("the Titanium client cannot send {request:?}"),
         Request::Memorize { gem, spell_id } => spells::titanium_memorize(*gem, *spell_id),
         Request::Forget { gem, spell_id } => spells::titanium_forget(*gem, *spell_id),
@@ -467,6 +470,10 @@ pub fn titanium(request: &Request, sender: Sender<'_>) -> Result<EncodedCommand>
 /// Refuses every other request, and a command the generation cannot carry.
 pub fn eqmac(request: &Request, sender: Sender<'_>) -> Result<EncodedCommand> {
     match request {
+        Request::Ability { ability, target } => {
+            abilities::eqmac::encode(*ability, *target, sender.spawn())
+        }
+        Request::FeignDeathPosture => abilities::eqmac::feign_posture(sender.spawn()),
         Request::Camp => Ok(crate::quarm::camp()),
         Request::Jump => Ok(crate::quarm::jump()),
         Request::SetAnonymity(anonymity) => {

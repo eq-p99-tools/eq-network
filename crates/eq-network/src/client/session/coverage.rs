@@ -252,7 +252,7 @@ const TITANIUM_PROFILE: &[Part] = &[
 /// What the session leaves unread of `EQMac`'s profile.
 const EQMAC_PROFILE: &[Part] = &[
     Part(
-        "skills, practice points and deity",
+        "practice points and deity",
         Reason::Planned(Step::EqMacWorld),
     ),
     Part(
@@ -508,12 +508,6 @@ const DISCIPLINE_TIMER: &[Part] = &[Part(
          zone/client.cpp Client::SendDisciplineTimers)",
     ),
 )];
-/// What the session leaves unread of `EQMac`'s word that a skill's button
-/// is ready again.
-const RESET_SKILL: &[Part] = &[Part(
-    "the timer",
-    Reason::Needless("every server sends 0 (TAKP's and Quarm's Client::ResetSkill)"),
-)];
 /// What the session leaves unread of `EQMac`'s log-server settings.
 const LOG_SERVER: &[Part] = &[Part(
     "the error-reporting server's address, port, password and e-mail",
@@ -715,7 +709,7 @@ mod tests {
         for opcode in [
             0x5900, 0x5200, 0xf340, 0x0001, 0x5900, 0x5200, 0xf340, 0x0001,
         ] {
-            unheard.tell(&EqMac, opcode, 4, &mut log).unwrap();
+            unheard.tell(&EqMac::Takp, opcode, 4, &mut log).unwrap();
         }
         drop(log);
         assert_eq!(

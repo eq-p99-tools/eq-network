@@ -60,26 +60,34 @@ impl ScribeConsumption {
         })
     }
 
-    /// Consumes the receipt on the next inventory update, never on a later retry.
-    /// A changed inventory, stackable scroll, or unmatched response stays conservative.
+    /// A queued cursor refill may precede removal (`SaveCursor` runs before the
+    /// deletion packet). Preserve the receipt across that addition only; all
+    /// other intervening inventory changes discard it, never authorize a retry.
     pub fn reconcile(&mut self, inventory: &Inventory, update: InventoryUpdate) -> InventoryUpdate {
-        let Some(receipt) = self.0.take() else {
+        let Some(mut receipt) = self.0.take() else {
             return update;
         };
         let cursor = InventorySlot(30);
         if receipt.confirmed.is_some()
             && inventory.revision() == receipt.revision
             && !inventory.stale()
-            && update == InventoryUpdate::Remove(cursor)
             && inventory.items().get(&cursor).is_some_and(|item| {
                 item.scroll_spell == Some(receipt.spell_id)
                     && item.stack_count.is_none()
                     && item.bag_slots == 0
             })
         {
-            InventoryUpdate::Consume {
-                slot: cursor,
-                charge: false,
+            match update {
+                InventoryUpdate::Remove(slot) if slot == cursor => InventoryUpdate::Consume {
+                    slot: cursor,
+                    charge: false,
+                },
+                InventoryUpdate::Cursor(_) => {
+                    receipt.revision = receipt.revision.wrapping_add(1);
+                    self.0 = Some(receipt);
+                    update
+                }
+                _ => update,
             }
         } else {
             update
@@ -163,7 +171,7 @@ pub(super) mod tests {
         assert_eq!(worker, host);
         assert!(!worker.items().contains_key(&InventorySlot(30)));
         assert!(!worker.stale());
-        assert!(worker.predicted()); // No invented confirmation of preceding storage moves.
+        assert!(!worker.predicted()); // Only the consumed scroll's plain pickup is resolved.
         assert_eq!(
             tracker.reconcile(&worker, InventoryUpdate::Remove(InventorySlot(30))),
             InventoryUpdate::Remove(InventorySlot(30))

@@ -104,6 +104,8 @@ pub enum Shortage {
 /// How fed and watered the player is, as the server counts it.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize)]
 pub struct Nourishment {
+    /// `EQMac` fatigue; Titanium does not supply this value.
+    pub fatigue: Option<u8>,
     /// Food.
     pub food: u32,
     /// Drink.
@@ -140,6 +142,7 @@ pub fn decode(opcode: u16, body: &[u8]) -> Result<Option<Nourishment>> {
     }
     ensure!(body.len() == 8, "invalid stamina length");
     Ok(Some(Nourishment {
+        fatigue: None,
         food: word(body, 0),
         water: word(body, 4),
     }))
@@ -155,7 +158,7 @@ pub fn decode(opcode: u16, body: &[u8]) -> Result<Option<Nourishment>> {
 /// # Errors
 /// Rejects a malformed length.
 pub fn eqmac_nourishment(body: &[u8]) -> Result<Nourishment> {
-    let ([food_low, food_high, water_low, water_high, _fatigue], tail) = body
+    let ([food_low, food_high, water_low, water_high, fatigue], tail) = body
         .split_first_chunk::<5>()
         .context("invalid EQMac stamina length")?;
     if !matches!(tail.len(), 0 | 3) {
@@ -163,6 +166,7 @@ pub fn eqmac_nourishment(body: &[u8]) -> Result<Nourishment> {
     }
     let amount = |low, high| u32::try_from(i16::from_le_bytes([low, high]).max(0)).unwrap_or(0);
     Ok(Nourishment {
+        fatigue: Some(*fatigue),
         food: amount(*food_low, *food_high),
         water: amount(*water_low, *water_high),
     })
@@ -178,8 +182,33 @@ pub fn titanium_profile(profile: &[u8]) -> Result<Nourishment> {
         "profile too short for food and drink"
     );
     Ok(Nourishment {
+        fatigue: None,
         food: word(profile, 5004),
         water: word(profile, 5000),
+    })
+}
+
+/// Food, water and fatigue from the unpacked `EQMac` profile. Offsets follow
+/// Quarm's `Mac::PlayerProfile_Struct`: `hunger_level` 3416,
+/// `thirst_level` 3420, `fatigue` 4962.
+///
+/// # Errors
+/// Rejects a truncated profile. Negative food/water counts retain the empty meaning.
+pub fn eqmac_profile(profile: &[u8]) -> Result<Nourishment> {
+    ensure!(profile.len() > 4962, "profile too short for EQMac fatigue");
+    let amount = |offset| {
+        let bytes = [
+            profile[offset],
+            profile[offset + 1],
+            profile[offset + 2],
+            profile[offset + 3],
+        ];
+        u32::try_from(i32::from_le_bytes(bytes).max(0)).unwrap_or(0)
+    };
+    Ok(Nourishment {
+        food: amount(3416),
+        water: amount(3420),
+        fatigue: Some(profile[4962]),
     })
 }
 
@@ -228,12 +257,30 @@ mod tests {
     use super::*;
 
     #[test]
+    fn eqmac_profile_preserves_fatigue_and_separate_food_counts() {
+        let mut profile = vec![0; 8460];
+        profile[3416..3420].copy_from_slice(&1200i32.to_le_bytes());
+        profile[3420..3424].copy_from_slice(&1300i32.to_le_bytes());
+        profile[4962] = 70;
+        assert_eq!(
+            eqmac_profile(&profile).unwrap(),
+            Nourishment {
+                food: 1200,
+                water: 1300,
+                fatigue: Some(70)
+            }
+        );
+        assert!(eqmac_profile(&profile[..4962]).is_err());
+    }
+
+    #[test]
     fn quarm_stamina_extension_is_not_part_of_the_food_or_water_count() {
         // Synthetic values in Quarm's packed Stamina_Struct layout.
         let body = [0xc4, 0x09, 0x00, 0x7d, 40, 0, 1, 1];
         assert_eq!(
             eqmac_nourishment(&body).unwrap(),
             Nourishment {
+                fatigue: Some(40),
                 food: 2500,
                 water: 32_000
             }
@@ -252,6 +299,7 @@ mod tests {
         assert_eq!(
             eqmac_nourishment(&body).unwrap(),
             Nourishment {
+                fatigue: Some(40),
                 food: 2500,
                 water: 32_000
             }
@@ -284,6 +332,7 @@ mod tests {
         assert_eq!(
             decode(STAMINA_OPCODE, &body).unwrap(),
             Some(Nourishment {
+                fatigue: None,
                 food: 2500,
                 water: 6000
             })
@@ -296,6 +345,7 @@ mod tests {
         assert_eq!(
             titanium_profile(&profile).unwrap(),
             Nourishment {
+                fatigue: None,
                 food: 5000,
                 water: 4000
             }

@@ -3,6 +3,86 @@
 use super::*;
 
 #[test]
+fn profile_skills_preserve_all_words_and_eligibility_sentinels() {
+    use crate::abilities::{eqmac, Ability};
+    let mut data = vec![0; PROFILE_SIZE];
+    data[6..13].copy_from_slice(b"Example");
+    data[142..144].copy_from_slice(&1u16.to_le_bytes());
+    data[144..146].copy_from_slice(&7u16.to_le_bytes());
+    let mut expected = vec![255u32; 100];
+    for (skill, value) in [
+        (0, 0x1234u16),
+        (25, 254),
+        (29, u16::MAX),
+        (30, 57),
+        (32, 0),
+        (40, 0),
+        (42, 12),
+        (52, 253),
+        (99, 0xabcd),
+    ] {
+        expected[skill] = u32::from(value);
+    }
+    for (skill, value) in expected.iter().enumerate() {
+        let offset = 2988 + skill * 2;
+        data[offset..offset + 2].copy_from_slice(&u16::try_from(*value).unwrap().to_le_bytes());
+    }
+    // Adjacent currency and innate-skill words are not part of this table.
+    data[2986..2988].copy_from_slice(&0xfaceu16.to_le_bytes());
+    data[3188..3190].copy_from_slice(&0xbeefu16.to_le_bytes());
+    let player = decoded_profile(&data, "Example").unwrap();
+    assert_eq!(player.skills.as_ref(), Some(&expected));
+    let offered: Vec<_> = Ability::ALL
+        .into_iter()
+        .filter(|ability| {
+            eqmac::known(
+                *ability,
+                player.skills.as_deref().unwrap(),
+                player.race,
+                player.class,
+            )
+        })
+        .collect();
+    assert_eq!(
+        offered,
+        [
+            Ability::Kick,
+            Ability::Sneak,
+            Ability::Mend,
+            Ability::SenseHeading
+        ]
+    );
+    assert!(decoded_profile(&data[..3188], "Example").is_err());
+    assert!(decoded_profile(&data, "Other").is_err());
+    data.push(0);
+    assert!(decoded_profile(&data, "Example").is_err());
+}
+
+#[test]
+fn eqmac_skill_changes_reach_both_policies_without_truncating_unknown_values() {
+    use crate::message::{self, Message};
+    for (skill_id, value) in [
+        (30u32, 58u32),
+        (25, 254),
+        (100, 42),
+        (u32::MAX, 0x1234_5678),
+    ] {
+        let mut body = skill_id.to_le_bytes().to_vec();
+        body.extend(value.to_le_bytes());
+        for messages in [message::eqmac(0x8941, &body), message::quarm(0x8941, &body)] {
+            assert!(matches!(
+                &messages[..],
+                [Message::Event(WorldEvent::Skill { skill_id: id, value: rank })]
+                    if *id == skill_id && *rank == value
+            ));
+        }
+    }
+    for length in [0, 1, 7, 9, 12] {
+        assert!(updates(0x8941, &vec![0; length]).is_err());
+    }
+}
+
+#[test]
 fn profile_attributes_preserve_signed_width_and_field_order() {
     let mut data = vec![0; PROFILE_SIZE];
     data[6..13].copy_from_slice(b"Example");
@@ -87,6 +167,7 @@ fn synthetic_profile_decrypts_and_projects_only_known_fields() {
         }
     );
     assert_eq!(player.memorized_spells[..2], [Some(42), None]);
+    assert_eq!(player.skills, Some(vec![0; 100]));
     assert!(profile(&wire, "Other").is_err());
     assert!(spawns(&wire).is_err());
     let mut broken = wire.clone();
@@ -482,7 +563,14 @@ fn a_skills_button_is_ready_again() {
     let body = [32, 0, 0, 0, 0, 0, 0, 0];
     assert_eq!(
         updates(0x3d42, &body).unwrap(),
-        [WorldEvent::SkillReady(32)]
+        [
+            WorldEvent::SkillReset(crate::abilities::eqmac::SkillReset {
+                skill: 32,
+                padding: 0,
+                timer: 0
+            }),
+            WorldEvent::SkillReady(32)
+        ]
     );
     assert!(updates(0x3d42, &body[..4]).is_err());
 }
@@ -539,6 +627,7 @@ fn the_profile_says_the_buffs_the_book_and_each_gems_reuse_left() {
             Message::Event(WorldEvent::SpellBook(book)),
             Message::Event(WorldEvent::Coins(carried)),
             Message::Event(WorldEvent::CoinsElsewhere { cursor, bank, .. }),
+            Message::Event(WorldEvent::Nourishment(_)),
             Message::Bind(_),
         ] if buffs.iter().all(Option::is_none)
             && book.slots().iter().all(Option::is_none)

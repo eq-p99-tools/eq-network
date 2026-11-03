@@ -277,12 +277,24 @@ impl Feature for Entities {
         &mut self,
         message: &Message,
         world: &mut World,
-        _out: &mut Out<'_, '_>,
+        out: &mut Out<'_, '_>,
     ) -> Result<()> {
         let Message::Event(event) = message else {
             return Ok(());
         };
         world.spawns.apply(event);
+        if self.dialect == GameDialect::EqMac && matches!(event, WorldEvent::HideAndSneakEnded) {
+            if let Some(spawn_id) = world.own_spawn {
+                let ended = WorldEvent::Appearance {
+                    spawn_id,
+                    change: eq_network_game::appearance::AppearanceChange::Sneaking(false),
+                };
+                world.spawns.apply(&ended);
+                out.log.send(ClientEvent::World(ended))?;
+            }
+            // Visibility has its own authoritative appearance update. A
+            // sneak-only cancellation need not break spell invisibility.
+        }
         if let WorldEvent::Death(death) = event {
             if let Some(spawn) = u16::try_from(death.spawn_id)
                 .ok()

@@ -1,6 +1,73 @@
 use super::*;
 use crate::books::Book;
 
+#[test]
+fn quarm_uses_the_wire_stack_flag_and_keeps_charge_sentinels_and_gm_restrictions() {
+    let mut food = record(0, 80, 22);
+    food[246] = 20;
+    food[253] = 14;
+    food[278] = 7;
+    for (flag, stack) in [(0, None), (1, Some(7)), (3, None)] {
+        food[276] = flag;
+        let Some(InventoryUpdate::Set(items)) = decode_quarm(PLACED_OPCODE, &food).unwrap() else {
+            panic!()
+        };
+        assert_eq!(items[0].stack_count, stack);
+        assert_eq!(items[0].charges, if stack.is_some() { 0 } else { 7 });
+        assert_eq!(items[0].rules.stack_size, 20);
+        // TAKP deliberately retains its own source-derived rule.
+        assert_eq!(single_item(PLACED_OPCODE, &food).stack_count, Some(7));
+    }
+    food[276] = 3;
+    food[278] = 255;
+    food[247] = 255;
+    let Some(InventoryUpdate::Set(items)) = decode_quarm(PLACED_OPCODE, &food).unwrap() else {
+        panic!()
+    };
+    assert_eq!(items[0].charges, -1);
+    assert_eq!(items[0].rules.eqmac.unwrap().gm_flag, -1);
+    food[276] = 2;
+    let Some(InventoryUpdate::Set(items)) = decode_quarm(PLACED_OPCODE, &food).unwrap() else {
+        panic!()
+    };
+    assert_eq!(
+        items[0].rules.eqmac.unwrap().stack_flag,
+        EqMacStackFlag::Unknown(2)
+    );
+    assert_eq!(items[0].charges, -1);
+}
+
+#[test]
+fn quarm_full_inventory_and_refill_use_the_same_stack_rules() {
+    let mut food = record(0, 80, 22);
+    food[246] = 20;
+    food[253] = 14;
+    food[276] = 1;
+    food[278] = 12;
+    let Some(InventoryUpdate::Snapshot(items)) =
+        decode_quarm(INVENTORY_OPCODE, &inventory_body(&[food.clone()])).unwrap()
+    else {
+        panic!()
+    };
+    assert_eq!(items[0].stack_count, Some(12));
+    put(&mut food, 184, &0i16.to_le_bytes());
+    let Some(InventoryUpdate::Cursor(items)) = decode_quarm(SUMMONED_OPCODE, &food).unwrap() else {
+        panic!()
+    };
+    assert_eq!(items[0].slot, InventorySlot::CURSOR);
+    assert_eq!(items[0].stack_count, Some(12));
+    let removed = [0, 0, 0, 0, 255, 255, 255, 255, 255, 255, 255, 255];
+    assert_eq!(
+        decode_quarm(MOVE_OPCODE, &removed).unwrap(),
+        Some(InventoryUpdate::Remove(InventorySlot::CURSOR))
+    );
+    assert!(decode_quarm(MOVE_OPCODE, &removed[..11]).is_err());
+    assert_eq!(
+        decode_quarm(MOVE_OPCODE, &[0; 12]).unwrap(),
+        Some(InventoryUpdate::Invalidated)
+    );
+}
+
 /// A record of a made-up item of `class`, with `id`, in `EQMac` slot `slot`.
 fn record(class: i16, id: i16, slot: i16) -> Vec<u8> {
     let mut record = vec![0; RECORD];
@@ -260,11 +327,13 @@ fn bags_and_books_read_their_own_middles() {
     bag[268] = 5;
     bag[269] = 8;
     bag[271] = 2;
+    bag[272] = 65;
     // What sits where a common item keeps its type and statistics.
     bag[253] = 0x55;
     bag[240] = 0x55;
     let item = single_item(CONTAINER_OPCODE, &bag);
     assert_eq!(item.bag_slots, 8);
+    assert_eq!(item.rules.bag_weight_reduction, 65);
     assert_eq!(
         (
             item.rules.bag_type,

@@ -2,6 +2,55 @@ use super::*;
 use crate::{inventory::ItemPlacement, items::ItemDetails};
 use std::cell::Cell;
 
+#[test]
+fn quarm_rejects_untrustworthy_stacks_gm_items_and_orphaned_bag_contents() {
+    for (count, capacity, gm) in [
+        (Some(0), 20, false),
+        (Some(21), 20, false),
+        (Some(5), 0, false),
+        (None, 1, true),
+    ] {
+        let mut source = item(22, count, 0);
+        source.rules.stack_size = capacity;
+        source.rules.eqmac = Some(crate::inventory::EqMacItemRules {
+            stack_flag: crate::inventory::EqMacStackFlag::Unstackable,
+            gm_flag: if gm { -1 } else { 0 },
+        });
+        let state = state(vec![source]);
+        assert!(state
+            .plan_move_for(MoveRules::Quarm, &request(&state, 22, 30), actor())
+            .is_err());
+    }
+    let state = state(vec![item(251, Some(3), 0)]);
+    assert!(state
+        .plan_move_for(MoveRules::Quarm, &request(&state, 251, 30), actor())
+        .is_err());
+}
+
+#[test]
+fn quarm_reuses_eqmac_placement_checks_for_bags_quivers_and_equipment() {
+    for (mut source, destination) in [
+        (item(30, None, 2), 13),
+        (item(30, None, 0), 0),
+        (item(30, None, 0), 11),
+    ] {
+        if destination == 11 {
+            source.rules.item_type = 27;
+            source.details.slots = 1 << 11;
+        }
+        let state = state(vec![source]);
+        assert!(state
+            .plan_move_for(MoveRules::Quarm, &request(&state, 30, destination), actor())
+            .is_err());
+    }
+    let mut quiver = item(22, None, 2);
+    quiver.rules.bag_type = 2;
+    let state = state(vec![quiver, item(30, None, 0)]);
+    assert!(state
+        .plan_move_for(MoveRules::Quarm, &request(&state, 30, 251), actor())
+        .is_err());
+}
+
 fn item(slot: i32, count: Option<u32>, bag: u8) -> InventoryItem {
     InventoryItem {
         activation: crate::inventory::ItemActivation::default(),
@@ -589,36 +638,59 @@ fn deity_masks_admit_matching_followers_and_both_agnostic_identifiers() {
 
 #[test]
 fn offhand_weapons_require_trained_skill_and_preserve_two_handed_exclusion() {
-    for item_type in [0, 2, 3, 45] {
-        let mut weapon = item(30, None, 0);
-        weapon.rules.item_type = item_type;
-        let mut inventory = state(vec![weapon]);
-        let action = request(&inventory, 30, 14);
-        for skill in [None, Some(0)] {
+    for rules in [MoveRules::EqEmu, MoveRules::Takp, MoveRules::Quarm] {
+        for item_type in [0, 2, 3, 45] {
+            let mut weapon = item(30, None, 0);
+            weapon.rules.item_type = item_type;
+            let mut inventory = state(vec![weapon]);
+            let action = request(&inventory, 30, 14);
+            for (skill, eqmac_allowed, titanium_allowed) in [
+                (None, false, false),
+                (Some(0), false, false),
+                (Some(1), true, true),
+                (Some(252), true, true),
+                (Some(253), false, true),
+                (Some(254), false, true),
+                (Some(255), false, true),
+                (Some(300), false, true),
+                (Some(65535), false, true),
+            ] {
+                assert_eq!(
+                    inventory
+                        .plan_move_for(
+                            rules,
+                            &action,
+                            InventoryActor {
+                                dual_wield: skill,
+                                ..actor()
+                            }
+                        )
+                        .is_ok(),
+                    if rules == MoveRules::EqEmu {
+                        titanium_allowed
+                    } else {
+                        eqmac_allowed
+                    },
+                    "{rules:?}, item type {item_type}, skill {skill:?}"
+                );
+            }
+            let trained = InventoryActor {
+                dual_wield: Some(1),
+                ..actor()
+            };
+            assert!(inventory.plan_move_for(rules, &action, trained).is_ok());
+            let mut primary = item(13, None, 0);
+            primary.rules.item_type = 1;
+            inventory.apply(InventoryUpdate::Set(vec![primary]));
             assert!(inventory
-                .plan_move(
-                    &action,
-                    InventoryActor {
-                        dual_wield: skill,
-                        ..actor()
-                    }
-                )
+                .plan_move_for(rules, &request(&inventory, 30, 14), trained)
                 .is_err());
         }
-        let trained = InventoryActor {
-            dual_wield: Some(1),
-            ..actor()
-        };
-        assert!(inventory.plan_move(&action, trained).is_ok());
-        let mut primary = item(13, None, 0);
-        primary.rules.item_type = 1;
-        inventory.apply(InventoryUpdate::Set(vec![primary]));
-        assert!(inventory
-            .plan_move(&request(&inventory, 30, 14), trained)
-            .is_err());
+        let shield = state(vec![item(30, None, 0)]);
+        assert!(shield
+            .plan_move_for(rules, &request(&shield, 30, 14), actor())
+            .is_ok());
     }
-    let shield = state(vec![item(30, None, 0)]);
-    assert!(shield.plan_move(&request(&shield, 30, 14), actor()).is_ok());
 }
 
 #[test]

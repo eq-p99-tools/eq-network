@@ -454,7 +454,7 @@ pub enum Capability {
     Trading,
     /// Handing items to NPCs and trading with other players.
     Giving,
-    /// Walking, running, sitting and standing.
+    /// Walking and running.
     Moving,
     /// Falling, which the server takes from the client.
     Falling,
@@ -547,12 +547,14 @@ pub enum Capability {
     /// Showing or hiding the player's helm to others, where the client
     /// generation has the option (Titanium; the `EQMac` client has none).
     ShowingHelm,
+    /// Sitting, standing and ducking, independently of locomotion.
+    Posture,
 }
 
 impl Capability {
     /// Every capability, in order: what a session offers when its server and
     /// client generation support everything.
-    pub const ALL: [Self; 41] = [
+    pub const ALL: [Self; 42] = [
         Self::Casting,
         Self::Spellbook,
         Self::Inventory,
@@ -594,6 +596,7 @@ impl Capability {
         Self::ServerTicks,
         Self::Jumping,
         Self::ShowingHelm,
+        Self::Posture,
     ];
 }
 
@@ -778,6 +781,14 @@ pub enum WorldEvent {
     },
     /// Server inventory snapshot or incremental update.
     Inventory(crate::inventory::InventoryUpdate),
+    /// Recalculate host-owned inputs after admission or an authoritative change.
+    /// Reports for any older revision are refused, even in the same admission.
+    SpeedInputsRequired {
+        /// Current zone admission.
+        session_id: u64,
+        /// Opaque revision to echo in `GameCommand::SpeedInputs`.
+        revision: u64,
+    },
     /// Local session movement gate; None clears pending input and disables walking.
     MotionState {
         /// Current zone admission.
@@ -1398,6 +1409,10 @@ pub enum WorldEvent {
     /// skill: `EQMac`'s servers' word, before the official client's own
     /// wait ends ([`crate::abilities::eqmac_reset_skill`]).
     SkillReady(u32),
+    /// The complete `EQMac` skill reset, including unknown timer values.
+    /// A zero timer is also emitted as `SkillReady`; nonzero timers do not
+    /// release recovery because their units and meaning are not established.
+    SkillReset(crate::abilities::eqmac::SkillReset),
     /// The disciplines the player knows, by spell ID, in the list's 100
     /// slots, 0 for an empty one: `EQEmu`'s list once the zone has admitted
     /// a player who knows any, and as it changes ([`crate::disciplines`]).
@@ -1938,6 +1953,7 @@ mod tests {
             Capability::ServerTicks => 38,
             Capability::Jumping => 39,
             Capability::ShowingHelm => 40,
+            Capability::Posture => 41,
         };
         for (index, capability) in Capability::ALL.into_iter().enumerate() {
             assert_eq!(place(capability), index, "{capability:?}");

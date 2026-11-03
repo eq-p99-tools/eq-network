@@ -387,7 +387,7 @@ mod tests {
 
     #[test]
     fn takps_wire_casts_a_gem_in_its_own_packet_and_the_spell_bar_ends_the_hold() {
-        let eqmac = &super::super::wire::EqMac;
+        let eqmac = &super::super::wire::EqMac::Takp;
         let mut casting = Casting::default();
         let mut world = World::new(5);
         world.own_spawn = Some(7);

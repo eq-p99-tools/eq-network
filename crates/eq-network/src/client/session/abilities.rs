@@ -5,7 +5,7 @@
 //! It refuses a bandaging too where the server would take the bandage for
 //! nothing (no one it could bandage, or a player too far away) or answer as
 //! if the player had moved (no bandage at all).
-//! It keeps each recovery timer, as long as the server's at most, and tells
+//! It keeps the generation's unmodified recovery waits and tells
 //! the host which abilities are offered and when a timer starts.
 use super::{
     feature::{Feature, Out, World},
@@ -13,11 +13,13 @@ use super::{
 };
 use anyhow::Result;
 use eq_network_game::{
-    abilities::{in_melee_range, player_size, Ability, Body, Recovery},
+    abilities::{eqmac, in_melee_range, player_size, Ability, Body, Recovery},
+    appearance::AppearanceChange,
     bind_wound::{self, strings, BindWoundUpdate},
     message::Message,
     request::Request,
-    world::{PlayerState, Position, SpawnKind, WorldEvent},
+    world::{PlayerState, Position, PostureState, SpawnKind, WorldEvent},
+    GameDialect,
 };
 use std::{collections::BTreeMap, time::Instant};
 
@@ -27,6 +29,8 @@ pub(super) struct Abilities {
     listed: &'static [Ability],
     /// When each timer the player started runs out.
     ready: BTreeMap<Recovery, Instant>,
+    /// Set only by the server's own appearance or cancellation.
+    sneaking: bool,
 }
 
 impl Default for Abilities {
@@ -93,6 +97,7 @@ const OUT_OF_REACH: u32 = 124;
 /// Why the player cannot use the ability on their target, if they cannot.
 fn target_refusal(
     ability: Ability,
+    dialect: GameDialect,
     world: &World,
     (own_id, position, player): (u16, Position, &PlayerState),
 ) -> Option<Refusal> {
@@ -118,8 +123,12 @@ fn target_refusal(
         return Some("You cannot use that on your target".into());
     }
     // Taunt reaches 150 units, and the server says so itself beyond that.
-    if !ability.strikes() {
+    if dialect == GameDialect::Titanium && !ability.strikes() {
         return None;
+    }
+    if dialect == GameDialect::EqMac {
+        return (!eqmac::in_melee_range(position, target.position))
+            .then(|| Refusal::official("Your target is out of reach", OUT_OF_REACH, Vec::new()));
     }
     // The player's own spawn carries the size the server gave them by race,
     // which counts for reach.
@@ -153,6 +162,7 @@ impl Abilities {
         Self {
             listed,
             ready: BTreeMap::new(),
+            sneaking: false,
         }
     }
 
@@ -162,6 +172,7 @@ impl Abilities {
         &self,
         ability: Ability,
         world: &'w World,
+        dialect: GameDialect,
     ) -> Result<((u16, Position), &'w PlayerState), Refusal> {
         if !self.listed.contains(&ability) {
             return Err("Not available on this server".into());
@@ -170,7 +181,12 @@ impl Abilities {
             return Err("Not in the zone yet".into());
         };
         let skills = player.skills.as_deref().unwrap_or_default();
-        if !ability.known(skills, player.race) {
+        let known = match dialect {
+            GameDialect::Titanium => ability.known(skills, player.race),
+            GameDialect::EqMac => eqmac::known(ability, skills, player.race, player.class),
+            _ => false,
+        };
+        if !known {
             return Err("You do not have that ability".into());
         }
         Ok((at, player))
@@ -186,10 +202,21 @@ impl Abilities {
 
     /// The target the ability's packet names, which only a strike or taunt
     /// needs, or why the player cannot use it now.
-    fn aim(&self, ability: Ability, world: &World, now: Instant) -> Result<Option<u16>, Refusal> {
-        let ((own_id, position), player) = self.usable(ability, world)?;
+    fn aim(
+        &self,
+        ability: Ability,
+        world: &World,
+        now: Instant,
+        dialect: GameDialect,
+    ) -> Result<Option<u16>, Refusal> {
+        let ((own_id, position), player) = self.usable(ability, world, dialect)?;
+        if dialect == GameDialect::EqMac {
+            self.eqmac_refusal(ability, world, player)?;
+        }
         if ability.at_target() {
-            if let Some(refusal) = target_refusal(ability, world, (own_id, position, player)) {
+            if let Some(refusal) =
+                target_refusal(ability, dialect, world, (own_id, position, player))
+            {
                 return Err(refusal);
             }
         }
@@ -197,6 +224,42 @@ impl Abilities {
             return Err("Ability recovery time not yet met.".into());
         }
         Ok(*world.target)
+    }
+
+    /// Refuse known `EQMac` prerequisites before sending or changing posture.
+    fn eqmac_refusal(
+        &self,
+        ability: Ability,
+        world: &World,
+        player: &PlayerState,
+    ) -> Result<(), Refusal> {
+        if ability == Ability::Forage && world.posture.current() == Some(PostureState::Sitting) {
+            return Err("You must stand to forage".into());
+        }
+        if ability == Ability::Sneak && self.sneaking {
+            return Err("You are already sneaking".into());
+        }
+        let equipment = match ability {
+            Ability::Bash if ![2, 9, 10].contains(&player.race) => {
+                Some((14, 8, "You need a shield to bash"))
+            }
+            Ability::Backstab => Some((13, 2, "You need a piercing weapon to backstab")),
+            _ => None,
+        };
+        if let Some((slot, item_type, reason)) = equipment {
+            let inventory = &world.inventory;
+            if !inventory.received() || inventory.stale() {
+                return Err("Equipment is not known yet".into());
+            }
+            if inventory
+                .items()
+                .get(&eq_network_game::inventory::InventorySlot(slot))
+                .is_none_or(|item| item.rules.item_type != item_type)
+            {
+                return Err(reason.into());
+            }
+        }
+        Ok(())
     }
 
     /// Whom the player would bandage, with the name the host hears (none for
@@ -208,7 +271,8 @@ impl Abilities {
         now: Instant,
         reaches: &eq_network_game::reach::Reaches,
     ) -> Result<(u16, Option<String>), Refusal> {
-        let ((own_id, position), _) = self.usable(Ability::BindWound, world)?;
+        let ((own_id, position), _) =
+            self.usable(Ability::BindWound, world, GameDialect::Titanium)?;
         if self.waiting(Ability::BindWound, now) {
             return Err("You are bandaging already".into());
         }
@@ -254,7 +318,7 @@ impl Abilities {
     fn use_ability(
         &mut self,
         (session_id, ability): (u64, Ability),
-        world: &World,
+        world: &mut World,
         out: &mut Out<'_, '_>,
         now: Instant,
     ) -> Result<()> {
@@ -269,8 +333,17 @@ impl Abilities {
                 Err(refusal) => refuse(session_id, ability, refusal, out),
             };
         }
-        match self.aim(ability, world, now) {
-            Ok(target) => self.send(session_id, ability, target, out, now),
+        match self.aim(ability, world, now, out.wire.dialect()) {
+            Ok(target) => {
+                if ability == Ability::FeignDeath && out.wire.dialect() == GameDialect::EqMac {
+                    // All refusals precede this intentional stance change.
+                    // Lying is visible even when the feign roll fails.
+                    world
+                        .posture
+                        .lie_for_feign(world.own_spawn.unwrap_or(0), out)?;
+                }
+                self.send(session_id, ability, target, out, now)
+            }
             Err(refusal) => refuse(session_id, ability, refusal, out),
         }
     }
@@ -314,17 +387,38 @@ impl Feature for Abilities {
         matches!(command, ClientCommand::UseAbility { .. })
     }
 
-    /// A bandaging that ended frees the next at once.
+    /// Authoritative reset frees the shared recovery group, not just the
+    /// named button. Stealth cancellation changes state, never cooldowns.
+    fn admit(&mut self, message: &Message, world: &mut World) -> Result<()> {
+        match message {
+            Message::Event(WorldEvent::BindWound(BindWoundUpdate::Ended(_))) => {
+                self.ready.remove(&Recovery::BindWound);
+            }
+            Message::Event(WorldEvent::SkillReady(skill)) => {
+                if let Some(recovery) = Ability::from_skill(*skill)
+                    .filter(|ability| self.listed.contains(ability))
+                    .and_then(Ability::recovery)
+                {
+                    self.ready.remove(&recovery);
+                }
+            }
+            Message::Event(WorldEvent::Appearance {
+                spawn_id,
+                change: AppearanceChange::Sneaking(on),
+            }) if world.is_player(*spawn_id) => self.sneaking = *on,
+            Message::Event(WorldEvent::HideAndSneakEnded) => self.sneaking = false,
+            _ => (),
+        }
+        Ok(())
+    }
+
     fn observe(
         &mut self,
         message: &Message,
-        _world: &mut World,
+        world: &mut World,
         _out: &mut Out<'_, '_>,
     ) -> Result<()> {
-        if let Message::Event(WorldEvent::BindWound(BindWoundUpdate::Ended(_))) = message {
-            self.ready.remove(&Recovery::BindWound);
-        }
-        Ok(())
+        self.admit(message, world)
     }
 
     fn handle(
@@ -431,7 +525,7 @@ mod tests {
 
     fn try_ability(
         abilities: &mut Abilities,
-        world: &World,
+        world: &mut World,
         ability: Ability,
         now: Instant,
     ) -> testing::Outcome<Result<()>> {
@@ -449,7 +543,7 @@ mod tests {
             [ClientEvent::World(WorldEvent::AbilitiesOffered(offered))] if offered == &LISTED
         ));
         // Anyone could fish, but this server type does not list it.
-        let outcome = try_ability(&mut abilities, &world, Ability::Fishing, Instant::now());
+        let outcome = try_ability(&mut abilities, &mut world, Ability::Fishing, Instant::now());
         assert!(outcome.sent.is_empty(), "sent {:?}", outcome.sent);
         assert_eq!(refused(&outcome.events), ["Not available on this server"]);
     }
@@ -459,7 +553,7 @@ mod tests {
         let mut abilities = Abilities::default();
         let mut world = warrior();
         let now = Instant::now();
-        let outcome = try_ability(&mut abilities, &world, Ability::Kick, now);
+        let outcome = try_ability(&mut abilities, &mut world, Ability::Kick, now);
         assert!(
             outcome.sent.is_empty(),
             "no target, sent {:?}",
@@ -467,12 +561,12 @@ mod tests {
         );
         assert_eq!(refused(&outcome.events), ["Select a target for that first"]);
         world.target = super::super::targeting::Target::from(43);
-        let outcome = try_ability(&mut abilities, &world, Ability::Kick, now);
+        let outcome = try_ability(&mut abilities, &mut world, Ability::Kick, now);
         assert_eq!(refused(&outcome.events), ["Your target is out of reach"]);
-        let outcome = try_ability(&mut abilities, &world, Ability::Bash, now);
+        let outcome = try_ability(&mut abilities, &mut world, Ability::Bash, now);
         assert_eq!(refused(&outcome.events), ["You do not have that ability"]);
         world.target = super::super::targeting::Target::from(42);
-        let outcome = try_ability(&mut abilities, &world, Ability::Kick, now);
+        let outcome = try_ability(&mut abilities, &mut world, Ability::Kick, now);
         assert_eq!(outcome.sent, [Ability::Kick.encode(42)]);
         assert!(matches!(
             outcome.events[..],
@@ -498,23 +592,23 @@ mod tests {
         near.size = 6.0;
         world.spawns.insert(near);
         world.target = super::super::targeting::Target::from(45);
-        let outcome = try_ability(&mut Abilities::default(), &world, Ability::Kick, now);
+        let outcome = try_ability(&mut Abilities::default(), &mut world, Ability::Kick, now);
         assert_eq!(refused(&outcome.events), ["Your target is out of reach"]);
         world.player.corrected().unwrap().race = 12;
-        let outcome = try_ability(&mut Abilities::default(), &world, Ability::Kick, now);
+        let outcome = try_ability(&mut Abilities::default(), &mut world, Ability::Kick, now);
         assert_eq!(outcome.sent, [Ability::Kick.encode(45)]);
         // Taunt reaches past melee range, but never another player.
         world.target = super::super::targeting::Target::from(43);
-        let outcome = try_ability(&mut Abilities::default(), &world, Ability::Taunt, now);
+        let outcome = try_ability(&mut Abilities::default(), &mut world, Ability::Taunt, now);
         assert_eq!(outcome.sent, [Ability::Taunt.encode(43)]);
         world.spawns.insert(testing::spawn(46, SpawnKind::Player));
         world.target = super::super::targeting::Target::from(46);
-        let outcome = try_ability(&mut Abilities::default(), &world, Ability::Taunt, now);
+        let outcome = try_ability(&mut Abilities::default(), &mut world, Ability::Taunt, now);
         assert_eq!(
             refused(&outcome.events),
             ["You cannot use that on your target"]
         );
-        let outcome = try_ability(&mut Abilities::default(), &world, Ability::Kick, now);
+        let outcome = try_ability(&mut Abilities::default(), &mut world, Ability::Kick, now);
         assert_eq!(outcome.sent, [Ability::Kick.encode(46)]);
     }
 
@@ -524,7 +618,7 @@ mod tests {
         // Without a bandage the server would answer as if the player moved.
         let outcome = try_ability(
             &mut Abilities::default(),
-            &warrior(),
+            &mut warrior(),
             Ability::BindWound,
             now,
         );
@@ -535,7 +629,12 @@ mod tests {
         );
         // With one and no target, the player bandages themselves.
         let mut world = bandager();
-        let outcome = try_ability(&mut Abilities::default(), &world, Ability::BindWound, now);
+        let outcome = try_ability(
+            &mut Abilities::default(),
+            &mut world,
+            Ability::BindWound,
+            now,
+        );
         assert_eq!(outcome.sent, [bind_wound::encode(7)]);
         assert!(matches!(
             &outcome.events[..],
@@ -551,13 +650,23 @@ mod tests {
         ));
         // An NPC is not for bandaging, nor a player out of reach.
         world.target = Target::from(42);
-        let outcome = try_ability(&mut Abilities::default(), &world, Ability::BindWound, now);
+        let outcome = try_ability(
+            &mut Abilities::default(),
+            &mut world,
+            Ability::BindWound,
+            now,
+        );
         assert_eq!(
             official(&outcome.events),
             [(Some(strings::NOT_A_PLAYER), vec![])]
         );
         world.target = Target::from(47);
-        let outcome = try_ability(&mut Abilities::default(), &world, Ability::BindWound, now);
+        let outcome = try_ability(
+            &mut Abilities::default(),
+            &mut world,
+            Ability::BindWound,
+            now,
+        );
         assert_eq!(
             official(&outcome.events),
             [(
@@ -566,7 +675,12 @@ mod tests {
             )]
         );
         world.target = Target::from(46);
-        let outcome = try_ability(&mut Abilities::default(), &world, Ability::BindWound, now);
+        let outcome = try_ability(
+            &mut Abilities::default(),
+            &mut world,
+            Ability::BindWound,
+            now,
+        );
         assert_eq!(outcome.sent, [bind_wound::encode(46)]);
         assert!(outcome.events.iter().any(|event| matches!(
             event,
@@ -581,10 +695,10 @@ mod tests {
         let mut abilities = Abilities::default();
         let mut world = bandager();
         let now = Instant::now();
-        try_ability(&mut abilities, &world, Ability::BindWound, now)
+        try_ability(&mut abilities, &mut world, Ability::BindWound, now)
             .result
             .unwrap();
-        let outcome = try_ability(&mut abilities, &world, Ability::BindWound, now);
+        let outcome = try_ability(&mut abilities, &mut world, Ability::BindWound, now);
         assert!(outcome.sent.is_empty(), "sent {:?}", outcome.sent);
         assert_eq!(refused(&outcome.events), ["You are bandaging already"]);
         // The server's answer that it ended frees the next at once.
@@ -594,7 +708,7 @@ mod tests {
         testing::run(|out| abilities.observe(&ended, &mut world, out))
             .result
             .unwrap();
-        let outcome = try_ability(&mut abilities, &world, Ability::BindWound, now);
+        let outcome = try_ability(&mut abilities, &mut world, Ability::BindWound, now);
         assert_eq!(outcome.sent, [bind_wound::encode(7)]);
     }
 
@@ -604,25 +718,25 @@ mod tests {
         let mut world = warrior();
         world.target = super::super::targeting::Target::from(42);
         let now = Instant::now();
-        try_ability(&mut abilities, &world, Ability::Kick, now)
+        try_ability(&mut abilities, &mut world, Ability::Kick, now)
             .result
             .unwrap();
-        let outcome = try_ability(&mut abilities, &world, Ability::Kick, now);
+        let outcome = try_ability(&mut abilities, &mut world, Ability::Kick, now);
         assert!(outcome.sent.is_empty(), "sent {:?}", outcome.sent);
         assert_eq!(
             refused(&outcome.events),
             ["Ability recovery time not yet met."]
         );
         // Taunt waits on its own timer.
-        let outcome = try_ability(&mut abilities, &world, Ability::Taunt, now);
+        let outcome = try_ability(&mut abilities, &mut world, Ability::Taunt, now);
         assert_eq!(outcome.sent, [Ability::Taunt.encode(42)]);
         // The official client waits longer than the emulator's own timer.
         let emulator = now + Duration::from_secs(4);
-        let outcome = try_ability(&mut abilities, &world, Ability::Kick, emulator);
+        let outcome = try_ability(&mut abilities, &mut world, Ability::Kick, emulator);
         assert!(outcome.sent.is_empty(), "sent {:?}", outcome.sent);
         let outcome = try_ability(
             &mut abilities,
-            &world,
+            &mut world,
             Ability::Kick,
             now + Ability::Kick.reuse(GameDialect::Titanium),
         );
@@ -632,9 +746,9 @@ mod tests {
         let mut world = warrior();
         world.player.corrected().unwrap().race = 2;
         world.target = super::super::targeting::Target::from(42);
-        let outcome = try_ability(&mut Abilities::default(), &world, Ability::Bash, now);
+        let outcome = try_ability(&mut Abilities::default(), &mut world, Ability::Bash, now);
         assert_eq!(outcome.sent, [Ability::Bash.encode(42)]);
-        let outcome = try_ability(&mut Abilities::default(), &world, Ability::Hide, now);
+        let outcome = try_ability(&mut Abilities::default(), &mut world, Ability::Hide, now);
         assert_eq!(refused(&outcome.events), ["You do not have that ability"]);
     }
 }

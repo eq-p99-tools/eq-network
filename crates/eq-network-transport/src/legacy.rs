@@ -58,6 +58,7 @@ pub struct OldSession {
     next_asq: u8,
     next_fragment: u16,
     sent_start: bool,
+    received_start: Option<u16>,
     last_received_arq: Option<u16>,
     ack_pending: bool,
     last_ack: Instant,
@@ -88,10 +89,14 @@ impl OldSession {
         Ok(Self {
             socket,
             next_sequence: 0,
-            next_arq: 0,
+            // EQOldStream omits ARSP zero and drops SEQStart at its current
+            // expected ARQ (initially one). Two establishes an acknowledgeable
+            // origin with the startup flag retained for EQMac login services.
+            next_arq: 2,
             next_asq: 0,
             next_fragment: 0,
             sent_start: false,
+            received_start: None,
             last_received_arq: None,
             ack_pending: false,
             last_ack: Instant::now(),
@@ -314,7 +319,10 @@ impl OldSession {
         let Some(arq) = packet.arq else {
             return self.deliver(packet);
         };
-        if packet.header_a & A_SEQUENCE_START != 0 {
+        if packet.header_a & A_SEQUENCE_START != 0 && self.received_start != Some(arq) {
+            // A retransmitted start belongs to the same reliable stream;
+            // it must not rewind delivery or discard buffered successors.
+            self.received_start = Some(arq);
             if self.last_received_arq.is_some() {
                 self.reorder.clear();
             }
@@ -572,13 +580,14 @@ mod tests {
         let mut wire = [0; 64];
         let length = peer.recv(&mut wire).unwrap();
         assert_eq!(length, 14);
+        assert_eq!(&wire[..length - 4], &[0x32, 0, 0, 0, 0, 2, 0, 0, 0x59, 0]);
         assert_eq!(
-            &wire[..length],
-            &[0x32, 0, 0, 0, 0, 0, 0, 0, 0x59, 0, 0xe4, 0xf5, 0xdc, 0x6e]
+            &wire[length - 4..length],
+            crc32fast::hash(&wire[..length - 4]).to_be_bytes()
         );
         let decoded = decode(&wire[..length]).unwrap();
         assert_eq!(decoded.opcode, Some(0x5900));
-        assert_eq!(decoded.arq, Some(0));
+        assert_eq!(decoded.arq, Some(2));
     }
 
     #[test]
@@ -613,8 +622,95 @@ mod tests {
         session.send(0x5900, &[]).unwrap();
         session.send(0x0100, &[0; 40]).unwrap();
         assert_eq!(session.pending.len(), 2);
+        session.acknowledge(3);
+        assert!(session.pending.is_empty());
+    }
+
+    #[test]
+    fn cumulative_ack_and_retry_keep_the_reliable_sequence_across_wraparound() {
+        let (mut session, peer) = session();
+        session.next_arq = u16::MAX;
+        for opcode in [0x5818, 0x8b40, 0x0180] {
+            session.send(opcode, &[]).unwrap();
+        }
+        let mut wire = [0; 64];
+        for arq in [u16::MAX, 0, 1] {
+            let length = peer.recv(&mut wire).unwrap();
+            assert_eq!(decode(&wire[..length]).unwrap().arq, Some(arq));
+        }
+        let original = session.pending[0].wire.clone();
+        session.pending[0].sent = Instant::now().checked_sub(Duration::from_secs(3)).unwrap();
+        assert!(session.receive().unwrap().is_none());
+        let length = peer.recv(&mut wire).unwrap();
+        assert_eq!(&wire[..length], original);
+        assert_eq!(session.pending[0].attempts, 2);
+        assert_eq!(session.next_arq, 2);
+        // Zero is a valid cumulative ACK after wraparound, even though this
+        // server's startup cannot emit it before a nonzero client request.
+        session.acknowledge(0);
+        assert_eq!(session.pending.len(), 1);
+        assert_eq!(session.pending[0].arq, 1);
+        session.acknowledge(u16::MAX); // stale ACK cannot retire sequence one
+        assert_eq!(session.pending.len(), 1);
         session.acknowledge(1);
         assert!(session.pending.is_empty());
+    }
+
+    #[test]
+    fn duplicate_start_does_not_rewind_delivery_or_lose_buffered_successors() {
+        let (mut sender, _peer) = session();
+        let start = sender.frame(
+            A_SEQUENCE_START | A_ARQ,
+            Some(10),
+            None,
+            Some(0xc341),
+            &[1],
+            false,
+        );
+        let future = sender.frame(A_ARQ, Some(12), None, Some(0x4740), &[3], false);
+        let missing = sender.frame(A_ARQ, Some(11), None, Some(0xd841), &[2], false);
+        let (mut receiver, _peer) = session();
+        for wire in [&start, &future, &start, &missing] {
+            receiver.process(decode(wire).unwrap()).unwrap();
+        }
+        assert_eq!(
+            receiver
+                .applications
+                .drain(..)
+                .map(|packet| packet.opcode)
+                .collect::<Vec<_>>(),
+            [0xc341, 0xd841, 0x4740]
+        );
+        assert_eq!(receiver.last_received_arq, Some(12));
+        assert!(receiver.ack_pending);
+        // A distinct sequence start may establish a new reliable origin.
+        let restart = sender.frame(
+            A_SEQUENCE_START | A_ARQ,
+            Some(100),
+            None,
+            Some(0x0710),
+            &[4],
+            false,
+        );
+        receiver.process(decode(&restart).unwrap()).unwrap();
+        assert_eq!(receiver.last_received_arq, Some(100));
+        assert_eq!(receiver.applications.pop_front().unwrap().opcode, 0x0710);
+        assert!(receiver.reorder.is_empty());
+    }
+
+    #[test]
+    fn unacknowledged_requests_still_exhaust_the_existing_retry_budget() {
+        let (mut session, _peer) = session();
+        session.send(0x5818, &[]).unwrap();
+        for _ in 1..10 {
+            session.pending[0].sent = Instant::now().checked_sub(Duration::from_secs(3)).unwrap();
+            assert!(session.receive().unwrap().is_none());
+        }
+        session.pending[0].sent = Instant::now().checked_sub(Duration::from_secs(3)).unwrap();
+        assert_eq!(
+            session.receive().unwrap_err().to_string(),
+            "server did not acknowledge a packet"
+        );
     }
 
     #[test]
@@ -627,7 +723,7 @@ mod tests {
         session
             .process(Decoded {
                 header_a: 0,
-                arsp: Some(0),
+                arsp: Some(2),
                 resend_before: None,
                 selective_ack: vec![0x80],
                 arq: None,
@@ -637,7 +733,7 @@ mod tests {
             })
             .unwrap();
         assert_eq!(session.pending.len(), 1);
-        assert_eq!(session.pending[0].arq, 2);
+        assert_eq!(session.pending[0].arq, 4);
         assert!(session.pending[0].sent < third_sent);
     }
 
@@ -645,6 +741,7 @@ mod tests {
     fn server_style_stream_can_start_at_arq_zero_without_sequence_start() {
         let (mut sender, peer) = session();
         sender.sent_start = true;
+        sender.next_arq = 0;
         sender.send(0xdd41, b"Welcome\0").unwrap();
         let mut wire = [0; 64];
         let length = peer.recv(&mut wire).unwrap();
