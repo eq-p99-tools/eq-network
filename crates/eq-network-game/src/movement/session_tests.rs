@@ -1,6 +1,45 @@
 use super::*;
 
 #[test]
+fn camp_stop_query_requires_submission_and_does_not_wait_on_heartbeats() {
+    let start = Instant::now();
+    let at = |ms| start + Duration::from_millis(ms);
+    let mut motion = mac_era(start);
+    motion
+        .send_move_sample(&request(at(100), 0.5), at(100), |_| Ok(()))
+        .unwrap();
+    assert!(motion.stop_pending());
+    let context = motion.stop_context();
+    let stop = request(at(200), 0.5);
+    assert!(motion.is_trailing_stop(&stop));
+    assert!(!motion.is_trailing_stop(&request(at(100), 0.5)));
+    assert!(!motion.is_trailing_stop(&request(at(200), 0.6)));
+    let mut foreign = stop.clone();
+    foreign.session_id += 1;
+    assert!(!motion.is_trailing_stop(&foreign));
+    motion
+        .send_move_sample(&stop, at(200), |_| panic!("stop bypassed spacing"))
+        .unwrap();
+    assert!(motion.accepted_stop(at(200)));
+    assert!(motion.stop_pending());
+    assert_eq!(motion.stop_context(), context);
+    assert!(!motion
+        .tick_sample(at(250), |_| panic!("early stop"))
+        .unwrap());
+    assert!(motion
+        .tick_sample(at(251), |_| anyhow::bail!("synthetic transport failure"))
+        .is_err());
+    assert!(motion.stop_pending());
+    assert!(motion.tick_sample(at(251), |_| Ok(())).unwrap());
+    assert!(!motion.stop_pending());
+    assert!(!motion.is_trailing_stop(&stop));
+    motion.tick_sample(at(1300), |_| Ok(())).unwrap();
+    assert!(!motion.stop_pending(), "stationary repeats are not a stop");
+    motion.withdraw();
+    assert_eq!(motion.stop_context(), None);
+}
+
+#[test]
 #[allow(
     clippy::float_cmp,
     reason = "Exact equality verifies unchanged or explicitly assigned state"

@@ -104,6 +104,28 @@ EQMac admission commits the validated current zone with no instance field
 before zone-line commands can run. Unknown identity retains the existing
 transfer refusal. No transfer packet layout or server policy changes.
 
+## Camping and the movement owner's pending stop
+
+`MotionSession::stop_pending` observes movement, a held moving update, and a
+last moving submission whose real stop has not yet succeeded. Stationary
+heartbeat repeats do not block camping. `is_trailing_stop` classifies a newer
+same-admission request at the owner's exact point/heading; normal guard,
+codec and submission checks still apply. Neither method sends traffic or
+establishes a server acknowledgement.
+
+`stop_context` supplies an equality-only admission/input-epoch guard for a
+waiting intent. `accepted_stop` observes the real committed request stamp,
+so a rejected trailing stop cannot later start camping on an idle heartbeat.
+An accepted held stop still waits for its actual submission. These queries
+do not infer success from the host's `MotionSent` notification.
+
+Camp retains its own waiting intent while the existing paced stop is pending,
+then starts its countdown only after camp submission succeeds. New movement,
+refusal, withdrawal or admission/lifecycle loss cancels that waiting intent.
+The established motion timer precedes the camp timer. Official stop/camp
+ordering remains unverified under recording checklist6.380; no spacing,
+repeat, wire format or movement authority changes.
+
 ## Quarm loot receipt and delivery
 
 `LootUpdate::Acknowledged { place }` is a new exhaustive-enum variant and

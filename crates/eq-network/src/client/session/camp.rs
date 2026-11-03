@@ -8,6 +8,10 @@
 //! `EQMac` program's countdown and close are unread: the session counts the
 //! same marks there (the client words them as the generation does) and keeps
 //! waiting 10 seconds for the reply.
+//!
+//! Recording checklist6.380: a camp requested just after walking waits for
+//! the existing paced stop to be submitted before the camp packet. Official
+//! stop/camp ordering is unverified; no rate, wire field or ACK is invented.
 use super::{
     feature::{Feature, Out, World},
     ClientCommand, ClientEvent, ZoneExit,
@@ -32,6 +36,12 @@ const COUNTDOWN: [u8; 5] = [25, 20, 15, 10, 5];
 enum Phase {
     #[default]
     Idle,
+    WaitingForStop {
+        session_id: u64,
+        admitted: Option<Instant>,
+        motion_context: (u64, Instant),
+        stop: Option<Instant>,
+    },
     Preparing(Instant),
     LoggingOut(Instant),
 }
@@ -48,6 +58,40 @@ impl Camp {
     /// Whether a camp or logout is in progress.
     fn active(&self) -> bool {
         !matches!(self.phase, Phase::Idle)
+    }
+
+    /// Keep the intent local until this admission's existing stop has gone.
+    fn request(&mut self, now: Instant, world: &World, out: &mut Out<'_, '_>) -> Result<()> {
+        if self.active() {
+            return Ok(());
+        }
+        if world.body.stop_pending() == Some(true) {
+            let Some(motion_context) = world.body.stop_context() else {
+                return out
+                    .log
+                    .send(ClientEvent::World(WorldEvent::Camp(CampStatus::Rejected(
+                        "Movement must settle before camping".into(),
+                    ))));
+            };
+            self.phase = Phase::WaitingForStop {
+                session_id: world.session_id,
+                admitted: world.admitted,
+                motion_context,
+                stop: None,
+            };
+            return Ok(());
+        }
+        self.submit(now, out)
+    }
+
+    /// Only successful local camp submission starts the countdown. An error
+    /// leaves no deferred intent that a caller could accidentally replay.
+    fn submit(&mut self, now: Instant, out: &mut Out<'_, '_>) -> Result<()> {
+        self.phase = Phase::Idle;
+        out.request(&Request::Camp)?;
+        self.start(now);
+        out.log
+            .send(ClientEvent::World(WorldEvent::Camp(CampStatus::Preparing)))
     }
 
     /// Starts the timer after `OP_Camp` was handed to transport.
@@ -79,7 +123,10 @@ impl Camp {
     /// Abandons preparation; returns false when nothing was being prepared.
     /// A logout already sent cannot be taken back.
     fn cancel(&mut self) -> bool {
-        if matches!(self.phase, Phase::Preparing(_)) {
+        if matches!(
+            self.phase,
+            Phase::WaitingForStop { .. } | Phase::Preparing(_)
+        ) {
             self.phase = Phase::Idle;
             true
         } else {
@@ -111,6 +158,10 @@ impl Camp {
     }
 }
 
+#[cfg(test)]
+#[path = "camp_stop_tests.rs"]
+mod stop_tests;
+
 impl Feature for Camp {
     fn capabilities(&self) -> Vec<crate::world::Capability> {
         use crate::world::Capability;
@@ -125,16 +176,14 @@ impl Feature for Camp {
     fn handle(
         &mut self,
         command: &ClientCommand,
-        _world: &mut World,
+        world: &mut World,
         out: &mut Out<'_, '_>,
     ) -> Result<()> {
-        if !matches!(command, ClientCommand::Camp { .. }) || self.active() {
+        if !matches!(command, ClientCommand::Camp { session_id, .. } if *session_id == world.session_id)
+        {
             return Ok(());
         }
-        out.request(&Request::Camp)?;
-        self.start(Instant::now());
-        out.log
-            .send(ClientEvent::World(WorldEvent::Camp(CampStatus::Preparing)))
+        self.request(Instant::now(), world, out)
     }
 
     /// Standing up, ducking or moving abandons a camp still being prepared.
@@ -144,12 +193,36 @@ impl Feature for Camp {
         world: &mut World,
         out: &mut Out<'_, '_>,
     ) -> Result<()> {
+        let waiting = matches!(self.phase, Phase::WaitingForStop { .. });
+        if let (
+            Phase::WaitingForStop {
+                session_id,
+                admitted,
+                motion_context,
+                ..
+            },
+            ClientCommand::Move(request),
+        ) = (&self.phase, command)
+        {
+            if *session_id == world.session_id
+                && *admitted == world.admitted
+                && Some(*motion_context) == world.body.stop_context()
+                && world.body.is_trailing_stop(request)
+            {
+                if let Phase::WaitingForStop { stop, .. } = &mut self.phase {
+                    *stop = Some(request.created);
+                }
+                // Its normal owner must still validate/encode/submit it.
+                return Ok(());
+            }
+        }
         let by = match command {
             ClientCommand::SetPosture {
                 posture: Posture::Standing,
                 ..
             } => CampEnd::Standing,
             ClientCommand::Move(_) | ClientCommand::CrossZoneLine { .. } => CampEnd::Moving,
+            ClientCommand::Jump { .. } if waiting => CampEnd::Moving,
             ClientCommand::SetPosture {
                 posture: Posture::Ducking,
                 ..
@@ -165,7 +238,7 @@ impl Feature for Camp {
             // ducking, opening a door or picking something up stands the camping
             // character up first.
             let own_spawn = world.player.as_ref().map(|player| player.spawn_id);
-            if let (false, Some(spawn_id)) = (by == CampEnd::Standing, own_spawn) {
+            if let (false, Some(spawn_id)) = (waiting || by == CampEnd::Standing, own_spawn) {
                 world.posture.set(spawn_id, Posture::Standing, out)?;
             }
             out.log.send(ClientEvent::World(WorldEvent::Camp(
@@ -178,6 +251,30 @@ impl Feature for Camp {
     /// Sends the logout once the camp timer completes, and gives up on a
     /// reply that never came.
     fn tick(&mut self, now: Instant, world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
+        if let Phase::WaitingForStop {
+            session_id,
+            admitted,
+            motion_context,
+            stop,
+        } = self.phase
+        {
+            if session_id != world.session_id
+                || admitted != world.admitted
+                || !world.ready()
+                || world.lifecycle.blocks_motion()
+                || world.body.stop_context() != Some(motion_context)
+                || stop.is_some_and(|created| !world.body.accepted_stop(created))
+            {
+                self.cancel();
+                return Ok(());
+            }
+            if world.body.stop_pending() == Some(true) {
+                return Ok(());
+            }
+            // Motion's timer runs before Camp's. A failed stop propagates
+            // before this point and cannot advance the countdown.
+            self.submit(now, out)?;
+        }
         if !self.logout_due(now) {
             if let Some(seconds_left) = self.countdown_due(now) {
                 out.log.send(ClientEvent::World(WorldEvent::Camp(
@@ -209,6 +306,11 @@ impl Feature for Camp {
         out: &mut Out<'_, '_>,
     ) -> Result<()> {
         match message {
+            Message::Event(WorldEvent::ZoneTransfer(_))
+                if matches!(self.phase, Phase::WaitingForStop { .. }) =>
+            {
+                self.cancel();
+            }
             Message::Event(WorldEvent::Death(death))
                 if world.is_player(death.spawn_id) && self.cancel() =>
             {

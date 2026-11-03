@@ -52,6 +52,11 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - EQMac admission records the profile's current zone identity before handling
   zone-line requests. Unknown zero stays unavailable and oversized IDs are
   rejected; bind points and zone names do not supply guessed identities.
+
+- Defer a camp requested just after movement until the existing motion owner
+  submits its real paced stop. A trailing stationary stop can finish the
+  pending intent; new movement or a failed/refused stop cannot start camping.
+  Official ordering remains unverified (recording checklist6.380).
 - A grant after a fresh movement calibration carries its
   `WorldEvent::SpeedInputsAccepted` receipt again. A same-zone relocation
   (an in-zone teleport), a server correction or a refused transfer's rewind
