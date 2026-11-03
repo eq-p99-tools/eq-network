@@ -29,11 +29,31 @@ const EQMAC_WORLD_LENGTH: usize = 244;
 /// The length of the rules Quarm's zones send (`RuleSets_Struct`).
 const EQMAC_ZONE_LENGTH: usize = 24;
 
+/// The raw world setting selecting language zero's name. Titanium's
+/// `OP_LogServer` copies word zero at 0x45c3d9/0x45c3e6; its language-name
+/// routine tests that word at 0x4925b1. Only zero versus nonzero is read
+/// here; other meanings of the value are not inferred.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(transparent)]
+pub struct LanguageZeroSelector(pub u32);
+
+impl LanguageZeroSelector {
+    /// Whether the program chooses the alternate installed name string.
+    #[must_use]
+    pub const fn alternate_name(self) -> bool {
+        self.0 != 0
+    }
+}
+
 /// A world's rules, as far as it tells the client of them. Each generation's
 /// copy carries its own set beside the two every copy carries; what a copy
 /// does not carry is `None`.
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize)]
 pub struct WorldRules {
+    /// Titanium's received language-zero selector, including a received
+    /// zero. None means the message/field is absent or its generation's
+    /// mapping is unverified; it never stands in for the PvP ruleset.
+    pub language_zero_selector: Option<LanguageZeroSelector>,
     /// The world's player-versus-player ruleset, by the server's own number;
     /// zero for none. Quarm's zones send 1 where the zone itself allows it.
     pub pvp: u32,
@@ -65,7 +85,8 @@ pub struct WorldRules {
 }
 
 /// Reads Titanium's log-server settings (`EQEmu`'s `LogServer_Struct`, 264
-/// bytes): the player-versus-player ruleset at 4 and no-drop trading at 8, one byte each,
+/// bytes): the raw language-zero name selector at 0, then the
+/// player-versus-player ruleset at 4 and no-drop trading at 8, one byte each,
 /// then one byte each from 260 for the petition window, voice macros, mail
 /// and the tutorial's way home turned off. The world's short name at 32 is
 /// [`crate::world::titanium_world_name`]'s.
@@ -78,6 +99,7 @@ pub fn titanium_rules(body: &[u8]) -> Result<WorldRules> {
         "invalid log-server settings length"
     );
     Ok(WorldRules {
+        language_zero_selector: Some(LanguageZeroSelector(word(body, 0))),
         pvp: u32::from(body[4]),
         no_drop_trades: body[8] != 0,
         petition_window: Some(body[260] != 0),
@@ -180,6 +202,7 @@ mod tests {
         assert_eq!(
             titanium_rules(&body).unwrap(),
             WorldRules {
+                language_zero_selector: Some(LanguageZeroSelector(0)),
                 pvp: 2,
                 no_drop_trades: true,
                 petition_window: Some(true),
@@ -196,6 +219,35 @@ mod tests {
         );
         assert!(titanium_rules(&body[..263]).is_err());
         assert!(titanium_rules(&[0; 265]).is_err());
+    }
+
+    #[test]
+    fn titanium_language_zero_selector_preserves_the_complete_received_word() {
+        assert_eq!(WorldRules::default().language_zero_selector, None);
+        for raw in [0_u32, 1, 0x100, 0x8000_0000, u32::MAX] {
+            let mut body = [0_u8; 264];
+            body[..4].copy_from_slice(&raw.to_le_bytes());
+            // Contradict the name choice with both nearby settings.
+            body[4] = u8::from(raw == 0);
+            body[8] = u8::from(raw == 0);
+            let rules = titanium_rules(&body).unwrap();
+            let selector = rules.language_zero_selector.unwrap();
+            assert_eq!(selector.0, raw);
+            assert_eq!(selector.alternate_name(), raw != 0);
+            assert_eq!(rules.pvp, u32::from(raw == 0));
+        }
+        for length in [0, 3, 263, 265] {
+            assert!(titanium_rules(&vec![0; length]).is_err());
+        }
+    }
+
+    #[test]
+    fn eqmac_copies_never_supply_an_unverified_language_zero_selector() {
+        for length in [24, 244] {
+            let mut body = vec![0; length];
+            body[..4].copy_from_slice(&u32::MAX.to_le_bytes());
+            assert_eq!(eqmac_rules(&body).unwrap().language_zero_selector, None);
+        }
     }
 
     #[test]

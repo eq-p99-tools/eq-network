@@ -76,6 +76,24 @@ existing server-update path; an unqualified completion does not identify a cause
 Ordinary inventory/coin events remain the only holdings authority. No packet,
 capability, inventory owner or automatic EQMac loot-all behavior changes here.
 
+## Language-zero name selector
+
+`WorldRules::language_zero_selector: Option<rules::LanguageZeroSelector>`
+retains the complete received Titanium `OP_LogServer` first dword. The
+wrapper's zero/nonzero test chooses between installed language-name strings;
+no broader server feature is inferred. `None` is absence, while
+`Some(LanguageZeroSelector(0))` is a received zero. Consumers must not use the
+separate PvP or no-drop-trading values as substitutes.
+
+The existing `WorldEvent::Rules` route carries this field. The EQMac decoder
+leaves it absent pending verified wire mapping. Consumers retain the setting
+with the same world's rules across zone/character admissions, replace it on
+a received value, and clear it when that rules owner starts a new session.
+An absent field in a later partial rules copy does not erase a received value.
+Installed data remains the source of text. Complete `WorldRules` literals
+must add the field or use its default for absence; this source API addition
+requires downstream consumer validation before publication.
+
 ## Quarm loot receipt and delivery
 
 `LootUpdate::Acknowledged { place }` is a new exhaustive-enum variant and

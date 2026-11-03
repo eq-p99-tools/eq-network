@@ -12,6 +12,10 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   instead of emitting a separate inventory prediction event. Exact revision
   and predecessor checks reject stale dependent moves without treating local
   submission as a server acknowledgment.
+
+- **Breaking:** `WorldRules` gains optional `language_zero_selector`; complete
+  struct literals must initialize it or use `..WorldRules::default()` for
+  absence.
 - **Breaking:** `GameCommand::SpeedInputs` now carries `revision` and a
   `movement::SpeedInputState` (`Ready(SpeedInputs)` or
   `Unavailable(SpeedInputUnavailable)`) instead of bare rate, weight and
@@ -106,6 +110,10 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   correlation, with one typed result and the existing refusal diagnostic. Consumer
   integration is required in the next minor pre-1.0 release. Server loot denials
   and receipts remain separate from local disposition and inventory delivery.
+
+- Preserve Titanium's raw `OP_LogServer` language-zero name selector in
+  `WorldRules::language_zero_selector`, distinguishing an absent field from
+  received zero. The EQMac mapping remains absent until independently verified.
 
 - Add source-derived EQMac loot open/close, money, listing and item-receipt
   codecs, and offer Quarm looting through its server policy and existing
