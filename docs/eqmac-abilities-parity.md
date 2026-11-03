@@ -125,8 +125,10 @@ The [appearance handler](https://github.com/SecretsOTheP/EQMacEmu/blob/c2cd26510
 separately accepts animation 115 (lying), interrupts casting and excludes
 the sender from its broadcast. After all local refusals, this client sends
 that posture and reports the intentional local stance, then sends FeignDeath.
-This ordering is a source-based client inference awaiting an official-client
-wire comparison. Lying does **not** mean a successful feign; server failure
+This ordering is the `EQMac` program's (skill dispatcher 0x4bdf2f, feign-death
+case: posture setter 0x50be3c sends the lying appearance, then the feign
+notice goes out); the setter sends nothing when the player already lies, and
+the client does the same. Lying does **not** mean a successful feign; server failure
 chat remains authoritative, and ordinary stand/sit/duck clears server feign.
 An ability refused for eligibility or recovery sends neither packet.
 

@@ -70,7 +70,13 @@ pub(super) struct OwnPosture(Option<PostureState>);
 impl OwnPosture {
     /// Reports the requested lying posture, without asserting feign success.
     /// `EQMac` accepts the stance but excludes the sender from its broadcast.
+    /// The `EQMac` program's posture setter (0x50be3c, from the feign-death
+    /// case of its skill dispatcher 0x4bdf2f) returns at once when the
+    /// player already lies, so nothing is sent then.
     pub(super) fn lie_for_feign(&mut self, spawn_id: u16, out: &mut Out<'_, '_>) -> Result<()> {
+        if self.0 == Some(PostureState::Lying) {
+            return Ok(());
+        }
         out.request(&Request::FeignDeathPosture)?;
         self.0 = Some(PostureState::Lying);
         out.log.send(ClientEvent::World(WorldEvent::Posture {
@@ -173,6 +179,28 @@ mod tests {
             "expected nothing sent, got {:?}",
             outcome.sent
         );
+    }
+
+    /// The lying appearance goes out before a feign unless the player
+    /// already lies, when the program's posture setter sends nothing.
+    #[test]
+    fn the_feign_posture_goes_out_once_until_the_player_stands_again() {
+        const EQMAC: &dyn super::super::wire::Wire = &super::super::wire::EqMac::Takp;
+        let mut posture = OwnPosture::default();
+        let outcome = testing::run_on(EQMAC, |out| posture.lie_for_feign(7, out));
+        outcome.result.unwrap();
+        assert_eq!(
+            outcome.sent,
+            [eq_network_game::abilities::eqmac::feign_posture(7).unwrap()]
+        );
+        assert_eq!(posture.current(), Some(PostureState::Lying));
+        let outcome = testing::run_on(EQMAC, |out| posture.lie_for_feign(7, out));
+        outcome.result.unwrap();
+        assert!(outcome.sent.is_empty() && outcome.events.is_empty());
+        posture.observed(PostureState::Standing);
+        let outcome = testing::run_on(EQMAC, |out| posture.lie_for_feign(7, out));
+        outcome.result.unwrap();
+        assert_eq!(outcome.sent.len(), 1);
     }
 
     #[test]

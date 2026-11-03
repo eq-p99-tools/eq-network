@@ -19,9 +19,15 @@ impl Inventory {
     /// each item (the respective servers' `Client::CalcCurrentWeight`:
     /// `EQMacEmu` `zone/client_mods.cpp` at c2cd265 from line 985, `EQEmu`
     /// `zone/client_mods.cpp` at 4aceae1; see
-    /// `docs/movement-input-readiness.md`). This is the servers' rule; the
-    /// official programs' own sums are unread. Bank/trade/queued cursor
-    /// items do not count. Predictions that preserve the total remain usable.
+    /// `docs/movement-input-readiness.md`). The Titanium program's own sum
+    /// (0x41bb06, stored by the stat recompute 0x4212b3) agrees: slots 0
+    /// through 30 only, a stack's weight once, each bag content at the
+    /// bag's reduction with the bag itself in full, coins at 1/40 each less
+    /// the best purse in a general slot, held to 32,766. It also takes off
+    /// a weight-reduction effect (221), which this sum does not, so the
+    /// client reads heavier, the slower side. The `EQMac` program's sum is
+    /// unread. Bank/trade/queued cursor items do not count. Predictions
+    /// that preserve the total remain usable.
     ///
     /// # Errors
     /// Rejects missing/stale state, malformed bags and weight-changing predictions.

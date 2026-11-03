@@ -74,8 +74,8 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   with per-ability opcodes and bodies, class and skill-rank gates, a shared
   strike recovery released only by the server's reset, melee range 16 units
   for strikes and taunt, and Tiger Claw reuse 6 s. Offered on Quarm and TAKP.
-  Feign Death sends the lying appearance before the feign notice; that order
-  is a source-based inference awaiting an official-client comparison.
+  Feign Death sends the lying appearance before the feign notice unless the
+  player already lies, as the `EQMac` program does.
 - Guarded Quarm inventory and coin moves (`MoveRules::Quarm`): a prediction
   stays unsettled until a covering authoritative update, a contradicting
   replacement invalidates until a fresh snapshot, and no absent bank reads as
