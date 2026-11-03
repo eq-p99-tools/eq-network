@@ -81,9 +81,10 @@ without a movement grant. The public Quarm preview was subsequently exercised;
 P99 preview/jump and a controlled camp/cancellation check remain open.
 
 Quarm now also offers the existing EQMac ground movement, turn, jump, fall,
-environmental damage and zone-transfer features. A read-only inventory feature
-retains authoritative inventory/coin state for carried weight without granting
-item moves, merchant actions or automatic consumption. Assembly tests exercise
+environmental damage and zone-transfer features. The shared inventory owner
+retains inventory/coin state and now offers guarded item/coin moves, including
+personal banking, under Quarm's own policy. Merchants, automatic consumption
+and exchanges remain disabled. Assembly tests exercise
 the Mac position/jump wire, correction, and bind requests after server-reported
 death. This does not close swimming, boats, pad teleport detection or the
 client-reported bleed-out gap.
@@ -110,9 +111,34 @@ Six additional synthetic Quarm assembly tests cover exact gem/item cast bytes,
 stale inventory/gem/target refusal, reply/interruption handling, memorizing and
 forgetting without optimistic gem changes, cancellation on standing and scribing
 with authoritative scroll consumption. Item click effects use the observed
-inventory without granting item moves or merchants. Moving/deleting book
-entries and skills/abilities remain disabled. These spell actions have not been
+inventory independently of the separate item-move capability. Moving/deleting
+book entries remain disabled. These spell actions have not been
 tested on public Quarm; the available live character is not a spell caster.
+
+The combined follow-up also offers the source-backed EQMac ability subset on
+Quarm and TAKP, with per-ability eligibility, recovery and server reset handling.
+Frenzy is inapplicable in the inspected EQMac dispatcher; fishing, bind wound
+and pickpocket remain unfinished. Ordinary autoattack/considering remains a
+separate Quarm gap. See [ability evidence and limits](eqmac-abilities-parity.md).
+
+Quarm inventory uses its wire stack flag independently of TAKP's rule, validates
+placement and banker proximity, and keeps item predictions unconfirmed after
+the two-second pacing delay. Contradictory corrections block item actions until
+a complete snapshot. Coin transfers update a local ledger without fabricating
+server acceptance. Banking/refusal tests belong on isolated disposable state;
+see [inventory evidence and the deferred matrix](quarm-inventory-parity.md).
+
+Movement now uses explicit ready/unavailable inputs and revision challenges.
+Carried load includes generation-specific bag reduction, stack and coin rules;
+effective STR includes supported equipment, food, spell effects and EQMac
+fatigue. Missing or uncertain inputs withdraw movement, turning and jumping,
+while bounded passive descent and stationary heartbeats remain. Corrections
+cannot reuse old reports. Weight-preserving ordinary cursor moves can retain a
+defensible load without becoming authoritative; weight/STR-changing predictions
+wait for recovery. These changes preserve the existing numeric speed formulas.
+Unsupported formulas/instruments and additional stat modifiers remain explicit
+limits in [movement readiness](movement-input-readiness.md). This is offline
+implementation, not new public-server compatibility evidence.
 
 The source check at `c2cd265` covers `Handle_OP_ClientUpdate` (15/16-byte input),
 `Handle_OP_Jump` (fatigue), `Handle_OP_Damage` (fall damage), and `zone/zoning.cpp`
@@ -177,10 +203,9 @@ Creation slot counts were addressed by the now-merged
 AltGr, free-camera settings and script fixes. The integration build includes it.
 The steep-slope correction in client #323 is already in the inspected baseline.
 
-Skills/abilities need more than a Quarm policy change: TAKP has no abilities
-provision either, and `request::eqmac` does not encode `Request::Ability` yet.
-Its `ResetSkill` decoder also needs to be connected to the ability recovery
-controller before those controls can reflect the server's resets.
+The baseline ability codec/recovery gaps above are addressed for the supported
+subset by the combined follow-up. The individual remaining exclusions and
+live-check prerequisites are recorded in `eqmac-abilities-parity.md`.
 
 ## Unsupported or inapplicable facilities
 
@@ -227,6 +252,17 @@ were excluded from that count. Fixtures published here are synthetic.
 The subsequent Quarm spell-support change passed all 797 networking tests,
 including six new assembly scenarios. This is offline validation; the earlier
 public session did not run the newly enabled spell actions.
+
+The combined spell/ability/inventory/movement-input stack passed 832 native
+Windows workspace/all-target/all-feature tests, strict Clippy, formatting and
+warnings-as-errors API documentation. The combined regression retains all four
+Quarm provisions and verifies that inventory pacing never restores a withdrawn
+weight grant. The matching desktop validation belongs to its integration PR.
+
+The historical live observations below belong to the earlier revisions recorded
+above. They do not validate the later spell, ability, inventory or movement-input
+changes. Exact combined heads are recorded in the integration PRs;
+the later live batch remains pending.
 
 - Local TAKP using Quarm policy rendered the character-selection preview.
   Further local checks stopped when Docker was shut down.

@@ -18,6 +18,8 @@ fn setup(items: Vec<InventoryItem>) -> (Features, World) {
     player.class = Some(1);
     player.race = 1;
     player.level = 10;
+    player.run_speed = 0.7;
+    player.walk_speed = 0.46;
     world.player.admit(player);
     world.own_spawn = Some(7);
     world.admitted = Some(Instant::now());
@@ -99,6 +101,123 @@ fn bag(slot: i32) -> InventoryItem {
 
 fn words(values: &[u32]) -> Vec<u8> {
     values.iter().flat_map(|v| v.to_le_bytes()).collect()
+}
+
+fn input_revision(world: &mut World) -> u64 {
+    world
+        .take_news()
+        .into_iter()
+        .filter_map(|message| match message {
+            Message::Event(WorldEvent::SpeedInputsRequired { revision, .. }) => Some(revision),
+            _ => None,
+        })
+        .next_back()
+        .expect("new input revision")
+}
+
+#[test]
+fn quarm_prediction_pacing_never_restores_a_withdrawn_weight_grant() {
+    use eq_network_game::{
+        inventory::WeightUnavailable,
+        movement::{SpeedInputState, SpeedInputUnavailable, SpeedInputs},
+        GameDialect,
+    };
+    let mut plain = testing::item(22);
+    plain.details.weight_tenths = 40;
+    let mut container = bag(23);
+    container.details.weight_tenths = 0;
+    container.rules.bag_weight_reduction = 50;
+    let snapshot = vec![plain, container];
+    let (mut features, mut world) = setup(snapshot.clone());
+    for capability in [
+        Capability::Inventory,
+        Capability::Abilities,
+        Capability::Casting,
+        Capability::Spellbook,
+    ] {
+        assert!(features.capabilities().contains(&capability));
+    }
+    let ready = |revision| ClientCommand::SpeedInputs {
+        session_id: 5,
+        revision,
+        state: SpeedInputState::Ready(SpeedInputs {
+            rate: 0,
+            weight: 4,
+            capacity: 100,
+        }),
+    };
+    let initial = input_revision(&mut world);
+    submit(&mut features, &mut world, &ready(initial))
+        .result
+        .unwrap();
+    assert!(world.body.motion_mut().unwrap().calibration().is_some());
+    // Ordinary cursor pickup preserves weight without confirming the prediction.
+    let pickup = request(&world, 22, 30, None);
+    assert_eq!(submit(&mut features, &mut world, &pickup).sent.len(), 1);
+    paced(&mut features, &mut world);
+    let cursor_revision = input_revision(&mut world);
+    assert!(world.inventory.predicted());
+    assert_eq!(
+        world.inventory.carried_weight_tenths(GameDialect::EqMac, 0),
+        Ok(40)
+    );
+    submit(&mut features, &mut world, &ready(cursor_revision))
+        .result
+        .unwrap();
+    assert!(world.body.motion_mut().unwrap().calibration().is_some());
+    // Putting it inside a reduction bag changes weight; pacing grants nothing.
+    let reduce = request(&world, 30, 261, None);
+    assert_eq!(submit(&mut features, &mut world, &reduce).sent.len(), 1);
+    paced(&mut features, &mut world);
+    let changed = input_revision(&mut world);
+    assert_eq!(
+        world.inventory.carried_weight_tenths(GameDialect::EqMac, 0),
+        Err(WeightUnavailable::Prediction)
+    );
+    submit(&mut features, &mut world, &ready(cursor_revision))
+        .result
+        .unwrap();
+    assert!(world.body.motion_mut().unwrap().calibration().is_none());
+    submit(
+        &mut features,
+        &mut world,
+        &ClientCommand::SpeedInputs {
+            session_id: 5,
+            revision: changed,
+            state: SpeedInputState::Unavailable(SpeedInputUnavailable::Prediction),
+        },
+    )
+    .result
+    .unwrap();
+    paced(&mut features, &mut world);
+    assert!(world.body.motion_mut().unwrap().calibration().is_none());
+    assert!(world.inventory.predicted());
+    // A contradiction stays unusable after pacing; only the full snapshot recovers.
+    observe(
+        &mut features,
+        &mut world,
+        InventoryUpdate::Set(vec![testing::item(22)]),
+    );
+    paced(&mut features, &mut world);
+    assert_eq!(
+        world.inventory.carried_weight_tenths(GameDialect::EqMac, 0),
+        Err(WeightUnavailable::Inventory)
+    );
+    observe(
+        &mut features,
+        &mut world,
+        InventoryUpdate::Snapshot(snapshot),
+    );
+    paced(&mut features, &mut world);
+    let recovered = input_revision(&mut world);
+    assert_eq!(
+        world.inventory.carried_weight_tenths(GameDialect::EqMac, 0),
+        Ok(40)
+    );
+    submit(&mut features, &mut world, &ready(recovered))
+        .result
+        .unwrap();
+    assert!(world.body.motion_mut().unwrap().calibration().is_some());
 }
 
 #[test]
@@ -625,7 +744,11 @@ fn quarm_inventory_enablement_does_not_enable_unrelated_actions_or_meals() {
     }
     let output = testing::run_on(servers::server_type(ServerProtocol::Quarm).wire(), |out| {
         features.observe(
-            &Message::Event(WorldEvent::Nourishment(Nourishment { food: 0, water: 0 })),
+            &Message::Event(WorldEvent::Nourishment(Nourishment {
+                fatigue: Some(0),
+                food: 0,
+                water: 0,
+            })),
             &mut world,
             out,
         )
