@@ -60,6 +60,8 @@ use zeroize::Zeroizing;
 
 /// Typed work submitted by the host while a character is connected.
 pub use eq_network_game::command::GameCommand as ClientCommand;
+/// The selected network policy's installed-spell provider contract.
+pub use eq_network_game::spell_tables::ProviderPolicy;
 
 /// Wire protocol and client family used by a server.
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
@@ -403,7 +405,12 @@ pub struct SessionStatus {
     pub state: ConnectionState,
     /// Unix timestamp when the status was emitted.
     pub timestamp: i64,
-    /// Unique identifier for the current process-level session.
+    /// Opaque numeric attempt identity, matching spell-table event context.
+    /// Connecting establishes an actual start; world/zone transports retain it.
+    /// Imported/display-only statuses can lack this authority.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub run_id: Option<u64>,
+    /// Display/logging label for the attempt. Use `run_id` for typed identity.
     pub session_id: String,
     /// Current short zone name, if known.
     pub zone: String,
@@ -416,18 +423,28 @@ pub struct SessionStatus {
 }
 
 impl SessionStatus {
-    /// Create an empty status snapshot for a connection state and session.
+    /// Create a display-only status snapshot. The label does not establish
+    /// numeric attempt identity; use [`Self::with_run_id`] when it is known.
     #[must_use]
     pub fn new(state: ConnectionState, session_id: impl Into<String>) -> Self {
         Self {
             state,
             timestamp: chrono::Utc::now().timestamp(),
+            run_id: None,
             session_id: session_id.into(),
             zone: String::new(),
             messages: 0,
             packets: 0,
             last_received_seconds: None,
         }
+    }
+
+    /// Attach an explicitly known numeric attempt identity without deriving
+    /// it from the display label. Network-produced statuses always carry it.
+    #[must_use]
+    pub const fn with_run_id(mut self, run_id: u64) -> Self {
+        self.run_id = Some(run_id);
+        self
     }
 
     /// Replace the timestamp, primarily for imported or synthetic events.
@@ -610,6 +627,14 @@ pub struct Client {
 }
 
 impl Client {
+    /// The installed-spell provider required by the same selected server
+    /// policy that emits spell-table facts. Available before connection so
+    /// hosts need no protocol-name branch or first-packet latch.
+    #[must_use]
+    pub fn spell_table_policy(&self) -> ProviderPolicy {
+        session::spell_tables::provider_policy(self.config.protocol)
+    }
+
     /// Validate settings and use the checksum inventory bundled with the crate.
     ///
     /// # Errors
@@ -819,6 +844,7 @@ impl<'a> Events<'a> {
         self.send(ClientEvent::Status(SessionStatus {
             state,
             timestamp: chrono::Utc::now().timestamp(),
+            run_id: Some(self.spell_tables.run_id()),
             session_id: self.session_id.clone(),
             zone: self.zone.clone(),
             messages: self.messages,

@@ -1,5 +1,36 @@
 # API and integration contracts
 
+## Typed spell-provider policy and attempt identity
+
+`Client::spell_table_policy()` returns `ProviderPolicy` before connecting,
+resolved through the same selected server policy that owns table emission.
+Hosts bind this value when creating their producer; no protocol-name branch
+or first-table ordering assumption is needed. Other policies retain installed
+definitions without inheriting a replay overlay.
+
+`SessionStatus::run_id: Option<u64>` carries the numeric attempt ID shared with
+`spell_tables::Context::run_id`. A real Connecting notification establishes
+the attempt; a table's ID alone cannot rebind the host. It remains stable
+across world/zone transports and changes on an actual retry. Provider epoch
+is independent and source snapshots survive same-provider transport changes.
+
+The string-taking `SessionStatus::new(state, session_id)` is already present in
+the [v0.1.2 release source](https://github.com/eq-p99-tools/eq-network/blob/v0.1.2/crates/eq-network/src/client.rs).
+Its signature and display label are preserved. It leaves `run_id` unknown;
+`with_run_id(id)` supplies independently known identity. The extensible status
+struct gains an additive field; display-only serialization omits that field.
+There is no text parsing, hashing, default numeric ID or fabricated authority.
+The production emitter always supplies Some from the attempt's sequence owner.
+
+Known consumers checked here are the network production status emitter, network
+synthetic lifecycle tests, and the graphical client's three bridge fixtures.
+The latter now supply explicit typed IDs. The older standalone logger defines
+its own status type rather than calling this constructor. Other external
+consumers remain compatible with the old string constructor but must opt into
+typed identity before using it as run authority. Hosts must treat an unknown
+ID as unavailable for identity-dependent actions, without aborting chat or
+other connection processing. `session_id` remains display/logging text only.
+
 ## Quarm loot receipt and delivery
 
 `LootUpdate::Acknowledged { place }` is a new exhaustive-enum variant and

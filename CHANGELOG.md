@@ -81,6 +81,13 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Expose `Client::spell_table_policy()` and `ProviderPolicy` from the same
+  network policy that emits spell tables, before the first event arrives.
+- Add optional numeric `SessionStatus::run_id`, matching spell-table context
+  across world/zone transports, and `with_run_id`. Network statuses always
+  supply it. Preserve the released string-taking constructor as display-only;
+  an unknown ID stays unknown and is never reconstructed from its label.
+
 - Add source-derived EQMac loot open/close, money, listing and item-receipt
   codecs, and offer Quarm looting through its server policy and existing
   inventory owner. Live validation remains pending.

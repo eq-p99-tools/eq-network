@@ -2,12 +2,14 @@
 use super::{servers::ServerType, ClientEvent, Events};
 use anyhow::{Context as _, Result};
 use eq_network_game::{
-    spell_tables::{self, Context, Event, Kind, Stage, Unavailable, Update},
+    spell_tables::{self, Context, Event, Kind, ProviderPolicy, Stage, Unavailable, Update},
     world::WorldEvent,
 };
 
 /// A server policy's interpretation of its spell-table messages.
 pub(super) trait Policy: Sync {
+    /// The installed provider semantics required by this emitting policy.
+    fn provider_policy(&self) -> ProviderPolicy;
     /// A complete update or visible failure; `None` for another opcode.
     fn read(&self, stage: Stage, opcode: u16, body: &[u8]) -> Option<Update>;
 }
@@ -16,6 +18,10 @@ pub(super) trait Policy: Sync {
 pub(super) struct P99;
 
 impl Policy for P99 {
+    fn provider_policy(&self) -> ProviderPolicy {
+        ProviderPolicy::Project1999
+    }
+
     fn read(&self, stage: Stage, opcode: u16, body: &[u8]) -> Option<Update> {
         let kind = Kind::from_opcode(opcode)?;
         if !matches!(
@@ -38,6 +44,15 @@ impl Policy for P99 {
     }
 }
 
+/// Resolve provider semantics from the same optional owner as packet emission.
+pub(in crate::client) fn provider_policy(
+    protocol: crate::client::ServerProtocol,
+) -> ProviderPolicy {
+    super::servers::server_type(protocol)
+        .spell_tables()
+        .map_or(ProviderPolicy::Installed, Policy::provider_policy)
+}
+
 /// One network attempt's ordering, shared across its world/zone transports.
 /// This carries no installed data and is not the host's provider epoch.
 pub(in crate::client) struct Sequence {
@@ -46,6 +61,11 @@ pub(in crate::client) struct Sequence {
 }
 
 impl Sequence {
+    /// The numeric attempt identity shared with status notifications.
+    pub(in crate::client) const fn run_id(&self) -> u64 {
+        self.run_id
+    }
+
     /// Start an attempt's table ordering.
     pub(in crate::client) const fn new(run_id: u64) -> Self {
         Self {
