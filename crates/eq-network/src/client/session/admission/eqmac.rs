@@ -211,7 +211,7 @@ mod tests {
     /// The codec crate's synthetic, encrypted profile for "Example".
     const PROFILE: &str = "ae05f5a6083907c71a8fa0b9df18601d2fadb4d6b80a3099d83162b5c95015d3bd8bd662ad969f16538260e8249c5a9d1c78803e51a3f8d3d48f5ca3fb28b2bff7a48403366d5c880b3422059ae86574971744def74907496b270882";
 
-    /// The same synthetic profile, with current zone321 and a distinct bind4.
+    /// The same synthetic profile, with current zone 321 and a distinct bind 4.
     const PROFILE_ZONE: &str = "72e17a744e4e1a7acdc3985de0f38d18f66dc5a5e7207c9f131aa3358db866e6a92da79cb3e49521d4ae6b3c6790e4add73ad9b79babb128e264a328ca71e3fdb05525a573f0a7eb57952d0707e213ed9812b21cee0157d7881400e0bf3b98361bc1b108c8";
 
     /// A connection that remembers what the client sent.

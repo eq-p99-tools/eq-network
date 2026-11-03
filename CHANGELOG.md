@@ -8,10 +8,13 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Changed
 
 - **Breaking:** inventory move requests can carry ordered local projection
-  identities. Local move results atomically carry the worker's prediction
-  instead of emitting a separate inventory prediction event. Exact revision
-  and predecessor checks reject stale dependent moves without treating local
-  submission as a server acknowledgment.
+  identities: `InventoryMove` gains `sequence: Option<MoveSequence>`, and
+  `WorldEvent::InventoryAction` gains `sequence` and
+  `update: Option<InventoryUpdate>`. Local move results atomically carry the
+  worker's prediction in that `update` instead of emitting a separate
+  `WorldEvent::Inventory` prediction event. Exact revision and predecessor
+  checks reject stale dependent moves without treating local submission as a
+  server acknowledgment.
 
 - **Breaking:** `WorldRules` gains optional `language_zero_selector`; complete
   struct literals must initialize it or use `..WorldRules::default()` for
@@ -56,7 +59,7 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Defer a camp requested just after movement until the existing motion owner
   submits its real paced stop. A trailing stationary stop can finish the
   pending intent; new movement or a failed/refused stop cannot start camping.
-  Official ordering remains unverified (recording checklist6.380).
+  Official ordering remains unverified (recording checklist 6.380).
 
 - Keep contribution readiness through equipment predictions only when all
   affected definitions explicitly have zero direct bonuses and no worn effect.

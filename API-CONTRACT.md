@@ -139,7 +139,7 @@ Camp retains its own waiting intent while the existing paced stop is pending,
 then starts its countdown only after camp submission succeeds. New movement,
 refusal, withdrawal or admission/lifecycle loss cancels that waiting intent.
 The established motion timer precedes the camp timer. Official stop/camp
-ordering remains unverified under recording checklist6.380; no spacing,
+ordering remains unverified under recording checklist 6.380; no spacing,
 repeat, wire format or movement authority changes.
 
 ## Quarm loot receipt and delivery

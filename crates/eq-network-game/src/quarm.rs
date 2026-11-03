@@ -493,6 +493,8 @@ pub fn profile(body: &[u8], character: &str) -> Result<PlayerState> {
 /// # Errors
 /// Rejects malformed compression, unexpected layouts and zone IDs that the
 /// supported transfer interface cannot represent; an ID is never truncated.
+/// The field is `zone_id` at 3444 of `PlayerProfile_Struct` (TAKP
+/// `common/patches/mac_structs.h`), 340 bytes before the bind zones at 3784.
 pub fn profile_zone(body: &[u8]) -> Result<Option<u16>> {
     let data = unpack(body, true)?;
     decoded_profile_zone(&data)

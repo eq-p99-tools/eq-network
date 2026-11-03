@@ -9,7 +9,7 @@
 //! same marks there (the client words them as the generation does) and keeps
 //! waiting 10 seconds for the reply.
 //!
-//! Recording checklist6.380: a camp requested just after walking waits for
+//! Recording checklist 6.380: a camp requested just after walking waits for
 //! the existing paced stop to be submitted before the camp packet. Official
 //! stop/camp ordering is unverified; no rate, wire field or ACK is invented.
 use super::{

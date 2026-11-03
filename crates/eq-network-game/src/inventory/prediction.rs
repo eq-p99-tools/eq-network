@@ -22,6 +22,9 @@ impl Inventory {
             .filter(|slot| self.items.get(slot) != next.get(slot))
             .collect();
         for slot in &changed {
+            // Charm through waist: the slots whose items' statistics and worn
+            // effects the servers apply (EQEmu `BONUS_BEGIN`..`BONUS_STAT_END`);
+            // the ammo slot (21) contributes skill modifiers only.
             if (0..=20).contains(&slot.0)
                 && [self.items.get(slot), next.get(slot)]
                     .into_iter()
