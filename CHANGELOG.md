@@ -99,6 +99,14 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   supply it. Preserve the released string-taking constructor as display-only;
   an unknown ID stays unknown and is never reconstructed from its label.
 
+- **Breaking:** Add `LootRequest`, `LootRequestStatus` and the exhaustive
+  `WorldEvent::LootRequest` variant for local open/item/close submission and
+  refusal, including shared validation and generation-encoding refusal. Preserve
+  original admission/action parameters and process-local creation time for host
+  correlation, with one typed result and the existing refusal diagnostic. Consumer
+  integration is required in the next minor pre-1.0 release. Server loot denials
+  and receipts remain separate from local disposition and inventory delivery.
+
 - Add source-derived EQMac loot open/close, money, listing and item-receipt
   codecs, and offer Quarm looting through its server policy and existing
   inventory owner. Live validation remains pending.

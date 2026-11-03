@@ -1086,6 +1086,20 @@ pub enum WorldEvent {
     /// The sound the official client plays for a quest's `ding`
     /// ([`Sound::Ding`](crate::rewards::Sound::Ding)).
     Ding,
+    /// Local disposition of an original loot action. Server denials remain
+    /// loot updates, and only ordinary inventory/coin updates establish holdings.
+    LootRequest {
+        /// Admission named by the original command, including stale commands.
+        session_id: u64,
+        /// Original local creation time for open/item requests; close has none.
+        /// This process-local correlation value is omitted from serialized logs.
+        #[serde(skip)]
+        created: Option<std::time::Instant>,
+        /// Original action and its corpse/player/place/placement parameters.
+        request: crate::loot::LootRequest,
+        /// Whether the action reached transport or was refused locally.
+        status: crate::loot::LootRequestStatus,
+    },
     /// Corpse loot session changes.
     Loot(crate::loot::LootUpdate),
     /// Merchant window changes.

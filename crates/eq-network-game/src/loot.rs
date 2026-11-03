@@ -32,6 +32,43 @@ pub const ITEM_PACKET_KIND: u32 = 0x66;
 /// inferred from that numbering and every live loot so far.
 const FIRST_CORPSE_SLOT: u16 = 22;
 
+/// The original host action, separate from the server's loot updates.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[non_exhaustive]
+pub enum LootRequest {
+    /// Ask to open this corpse.
+    Open {
+        /// The requested corpse.
+        corpse_id: u16,
+    },
+    /// Ask for one listed place on this corpse.
+    Item {
+        /// The requested corpse.
+        corpse_id: u16,
+        /// The player named by the request.
+        own_id: u16,
+        /// The corpse-view place, from zero.
+        place: u16,
+        /// Whether the request asks for automatic inventory placement.
+        auto: bool,
+    },
+    /// Ask to close this corpse.
+    Close {
+        /// The requested corpse.
+        corpse_id: u16,
+    },
+}
+
+/// Local request disposition, never server acceptance or item delivery.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[non_exhaustive]
+pub enum LootRequestStatus {
+    /// Submitted to transport; server loot and inventory updates follow separately.
+    Sent,
+    /// Nothing was sent. The display reason does not authorize an automatic retry.
+    Refused(String),
+}
+
 /// Why a corpse can or cannot be looted.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 pub enum LootResponse {

@@ -254,6 +254,9 @@ fn refusal(command: &ClientCommand, reason: &str) -> Option<WorldEvent> {
         ClientCommand::Consider { .. } | ClientCommand::AutoAttack { .. } => {
             return super::combat::rejected(command, reason);
         }
+        ClientCommand::Loot { .. }
+        | ClientCommand::LootItem { .. }
+        | ClientCommand::EndLoot { .. } => return super::looting::rejected(command, reason),
         ClientCommand::UseItem(request) => WorldEvent::ItemUseAction {
             session_id: request.session_id,
             request_id: request.request_id,
@@ -353,9 +356,6 @@ fn refusal(command: &ClientCommand, reason: &str) -> Option<WorldEvent> {
         | ClientCommand::SetPosture { .. }
         | ClientCommand::SendChat(_)
         | ClientCommand::InspectItem { .. }
-        | ClientCommand::Loot { .. }
-        | ClientCommand::LootItem { .. }
-        | ClientCommand::EndLoot { .. }
         | ClientCommand::Shop { .. }
         | ClientCommand::CancelTrade { .. }
         | ClientCommand::Jump { .. }

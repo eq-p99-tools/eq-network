@@ -49,6 +49,33 @@ be migrated; this is a breaking development API change for the next minor
 pre-1.0 release. Authoritative inventory updates remain ordinary inventory
 events, with existing uncertainty, correction and snapshot rules unchanged.
 
+## Local loot request disposition
+
+`WorldEvent::LootRequest` adds an exhaustive event variant. Its `LootRequest`
+describes the original open, item or close action, retaining corpse ID and every
+item-request parameter; `session_id` is the requested admission, even for a stale
+command. `created` echoes the original open/item creation `Instant` for local host
+correlation. Close has no creation time in its existing command. The process-local
+`created` field is omitted from serialized event logs; it is not a wire timestamp
+or a new transaction identifier.
+
+`LootRequestStatus::Refused` means nothing was sent. Shared admission/freshness/
+policy checks, corpse/list/cursor guards and generation encoding all use this
+single result path. The existing diagnostic is retained once for logging; hosts
+should handle the typed result once rather than also presenting the diagnostic.
+`Sent` follows successful transport submission only and proves no server
+acceptance, inventory delivery or coin change. Transport failure remains an error,
+without fabricating either disposition.
+
+Hosts should match the admission, original action and available creation time
+before clearing a pending request, and keep stale results from changing a newer
+request. Local refusal must not retire an item-view row, fabricate a closed
+corpse or trigger an automatic retry. Server `LootUpdate::Opened` denials,
+`Taken { accepted: false }`, EQMac receipt echoes and completion remain on their
+existing server-update path; an unqualified completion does not identify a cause.
+Ordinary inventory/coin events remain the only holdings authority. No packet,
+capability, inventory owner or automatic EQMac loot-all behavior changes here.
+
 ## Quarm loot receipt and delivery
 
 `LootUpdate::Acknowledged { place }` is a new exhaustive-enum variant and

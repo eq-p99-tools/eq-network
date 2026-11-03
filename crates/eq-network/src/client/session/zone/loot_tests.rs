@@ -1,5 +1,7 @@
 //! Synthetic packets through the real generation decoder, zone dispatcher,
 //! corpse controller and inventory owner, selected by Quarm's server policy.
+mod request_results;
+
 use super::*;
 use crate::client::{
     session::{feature::testing, wire::EqMac},
