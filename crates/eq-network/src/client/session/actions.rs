@@ -262,6 +262,8 @@ fn refusal(command: &ClientCommand, reason: &str) -> Option<WorldEvent> {
         ClientCommand::MoveInventory(request) => WorldEvent::InventoryAction {
             session_id: request.session_id,
             revision: request.revision,
+            sequence: request.sequence,
+            update: None,
             error,
         },
         ClientCommand::Buy { session_id, .. }
@@ -583,6 +585,7 @@ mod tests {
 
     fn moving(from: i32, to: i32) -> ClientCommand {
         ClientCommand::MoveInventory(eq_network_game::inventory::InventoryMove {
+            sequence: None,
             session_id: 1,
             revision: 1,
             from: InventorySlot(from),

@@ -37,6 +37,7 @@ fn setup(items: Vec<InventoryItem>) -> (Features, World) {
 
 fn request(world: &World, from: i32, to: i32, count: Option<u32>) -> ClientCommand {
     ClientCommand::MoveInventory(InventoryMove {
+        sequence: None,
         session_id: world.session_id,
         revision: world.inventory.revision(),
         from: InventorySlot(from),

@@ -176,6 +176,7 @@ fn container_correction_resolves_children_and_snapshot_resets_all_uncertainty() 
 
 fn move_item(state: &mut Inventory, from: i32, to: i32) {
     let request = InventoryMove {
+        sequence: None,
         session_id: 0,
         revision: state.revision(),
         from: InventorySlot(from),

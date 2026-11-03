@@ -7,6 +7,11 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Breaking:** inventory move requests can carry ordered local projection
+  identities. Local move results atomically carry the worker's prediction
+  instead of emitting a separate inventory prediction event. Exact revision
+  and predecessor checks reject stale dependent moves without treating local
+  submission as a server acknowledgment.
 - **Breaking:** `GameCommand::SpeedInputs` now carries `revision` and a
   `movement::SpeedInputState` (`Ready(SpeedInputs)` or
   `Unavailable(SpeedInputUnavailable)`) instead of bare rate, weight and

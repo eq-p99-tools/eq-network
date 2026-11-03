@@ -191,6 +191,7 @@ fn projected_empty_cursor_allows_pickup_without_acknowledging_prior_moves() {
             .unwrap();
         world.admitted = Some(Instant::now());
         let movement = ClientCommand::MoveInventory(InventoryMove {
+            sequence: None,
             session_id: 5,
             revision: world.inventory.revision(),
             from: InventorySlot::CURSOR,
@@ -296,6 +297,7 @@ fn pending_eqmac_pickup_allows_inventory_moves_and_cancellation_preserves_their_
         );
 
         let movement = ClientCommand::MoveInventory(InventoryMove {
+            sequence: None,
             session_id: 5,
             revision: world.inventory.revision(),
             from: InventorySlot(22),

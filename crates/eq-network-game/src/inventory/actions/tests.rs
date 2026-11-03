@@ -426,6 +426,7 @@ fn state(items: Vec<InventoryItem>) -> Inventory {
 }
 fn request(state: &Inventory, from: i32, to: i32) -> InventoryMove {
     InventoryMove {
+        sequence: None,
         session_id: 7,
         revision: state.revision(),
         from: InventorySlot(from),

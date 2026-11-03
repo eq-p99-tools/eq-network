@@ -37,6 +37,7 @@ mod tests {
     fn item_coin_merchant_and_meal_permissions_are_independent() {
         let commands = [
             ClientCommand::MoveInventory(InventoryMove {
+                sequence: None,
                 session_id: 5,
                 revision: 0,
                 from: InventorySlot(22),

@@ -6,7 +6,8 @@ mod eqmac;
 mod titanium;
 mod weight;
 pub use actions::{
-    titanium_move, InventoryActor, InventoryMove, MoveQuantity, MoveRules, MOVE_OPCODE,
+    titanium_move, InventoryActor, InventoryMove, MoveQuantity, MoveRules, MoveSequence,
+    MOVE_OPCODE,
 };
 pub use activation::{
     titanium_item_cast, ClickEffect, ClickKind, ItemActivation, ItemUse, CAST_OPCODE,

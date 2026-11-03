@@ -329,12 +329,36 @@ impl Allowances {
     };
 }
 
+/// Fences local projection descendants after a failed submission.
+#[derive(Default)]
+struct MoveOrder {
+    seen: u64,
+    accepted: Option<u64>,
+}
+
+impl MoveOrder {
+    fn check(&mut self, request: &InventoryMove) -> Result<()> {
+        let Some(sequence) = request.sequence else {
+            return Ok(());
+        };
+        anyhow::ensure!(sequence.id > self.seen, "Item move was already processed");
+        self.seen = sequence.id;
+        anyhow::ensure!(
+            sequence.after.is_none() || sequence.after == self.accepted,
+            "The preceding item move was not submitted; select the item again"
+        );
+        Ok(())
+    }
+}
+
 /// The player's belongings and the changes to them in flight.
 pub(super) struct Belongings {
     /// What the player may do with them.
     allows: Allowances,
     /// The server type's rules for item moves.
     rules: MoveRules,
+    /// Local queue lineage, scoped to this admission's inventory owner.
+    moves: MoveOrder,
     /// Moves waiting to settle.
     settlement: Settlement,
     /// A purchase or sale waiting for the merchant.
@@ -377,6 +401,7 @@ impl Belongings {
         Self {
             allows,
             rules,
+            moves: MoveOrder::default(),
             settlement: Settlement::default(),
             trades: MerchantTrades::default(),
             merchant: OpenMerchant::default(),
@@ -394,42 +419,45 @@ impl Belongings {
         out: &mut Out<'_, '_>,
     ) -> Result<()> {
         let now = Instant::now();
-        let planned = actor(world)
-            .context("Character equipment data is unavailable")
-            .and_then(|actor| world.inventory.0.plan_move_for(self.rules, request, actor))
-            .and_then(|update| {
-                let packet = out.encode(&Request::MoveItem {
-                    from: request.from,
-                    to: request.to,
-                    quantity: request.quantity,
-                })?;
-                Ok((update, packet))
-            });
+        let planned = self.moves.check(request).and_then(|()| {
+            actor(world)
+                .context("Character equipment data is unavailable")
+                .and_then(|actor| world.inventory.0.plan_move_for(self.rules, request, actor))
+                .and_then(|update| {
+                    let packet = out.encode(&Request::MoveItem {
+                        from: request.from,
+                        to: request.to,
+                        quantity: request.quantity,
+                    })?;
+                    Ok((update, packet))
+                })
+        });
         let result = match planned {
             Ok((update, packet)) => {
                 // A failed send ends the admission; an uncertain move is
                 // never retried.
                 out.send(&packet)?;
                 world.inventory.0.apply(update.clone());
+                self.moves.accepted = request.sequence.map(|sequence| sequence.id);
                 Ok(update)
             }
             Err(error) => Err(error),
         };
-        let error = match result {
+        let (update, error) = match result {
             Ok(update) => {
                 if self.rules.settles_by_silence() {
                     self.settlement.sent(now);
                 }
-                out.log
-                    .send(ClientEvent::World(WorldEvent::Inventory(update)))?;
-                None
+                (Some(update), None)
             }
-            Err(error) => Some(error.to_string()),
+            Err(error) => (None, Some(error.to_string())),
         };
         out.log
             .send(ClientEvent::World(WorldEvent::InventoryAction {
                 session_id: request.session_id,
                 revision: request.revision,
+                sequence: request.sequence,
+                update,
                 error,
             }))
     }
@@ -583,6 +611,7 @@ impl Feature for Belongings {
     /// Reports the inventory, replayed from empty so that the host's copy and
     /// this one count the same revisions.
     fn admitted(&mut self, world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
+        self.moves = MoveOrder::default();
         let admission = world.inventory.admission_updates();
         world.inventory = Carried::default();
         for update in admission {
@@ -857,6 +886,7 @@ mod tests {
             assert!(!belongings.owns(&consume));
             belongings.handle(&consume, &mut world, out)?;
             let move_item = ClientCommand::MoveInventory(InventoryMove {
+                sequence: None,
                 session_id: 5,
                 revision: world.inventory.revision(),
                 from: InventorySlot(22),
@@ -1180,7 +1210,13 @@ mod tests {
         events
             .iter()
             .filter_map(|event| match event {
-                ClientEvent::World(WorldEvent::Inventory(update)) => Some(update),
+                ClientEvent::World(
+                    WorldEvent::Inventory(update)
+                    | WorldEvent::InventoryAction {
+                        update: Some(update),
+                        ..
+                    },
+                ) => Some(update),
                 _ => None,
             })
             .collect()
@@ -1541,6 +1577,7 @@ mod tests {
         }
         let request = |world: &World, from: i32, to: i32| {
             ClientCommand::MoveInventory(InventoryMove {
+                sequence: None,
                 session_id: 5,
                 revision: world.inventory.revision(),
                 from: InventorySlot(from),
@@ -1613,6 +1650,7 @@ mod tests {
     fn a_move_is_predicted_when_sent_and_settles_when_the_server_lets_it_stand() {
         let (mut belongings, mut world) = admitted();
         let request = ClientCommand::MoveInventory(InventoryMove {
+            sequence: None,
             session_id: 5,
             revision: world.inventory.revision(),
             from: InventorySlot(22),
@@ -1626,10 +1664,11 @@ mod tests {
         assert_eq!(outcome.sent[0].opcode, MOVE_OPCODE);
         assert!(matches!(
             outcome.events[..],
-            [
-                ClientEvent::World(WorldEvent::Inventory(InventoryUpdate::Prediction(_))),
-                ClientEvent::World(WorldEvent::InventoryAction { error: None, .. })
-            ]
+            [ClientEvent::World(WorldEvent::InventoryAction {
+                update: Some(InventoryUpdate::Prediction(_)),
+                error: None,
+                ..
+            })]
         ));
         assert!(world.inventory.predicted());
         let later = Instant::now() + REFUSAL_WINDOW;
@@ -1768,6 +1807,7 @@ mod tests {
         let (mut belongings, mut world) = admitted();
         let pick_up = |world: &World, from, to| {
             ClientCommand::MoveInventory(InventoryMove {
+                sequence: None,
                 session_id: 5,
                 revision: world.inventory.revision(),
                 from: InventorySlot(from),

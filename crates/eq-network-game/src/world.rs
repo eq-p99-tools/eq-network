@@ -780,6 +780,11 @@ pub enum WorldEvent {
         session_id: u64,
         /// Inventory revision the request referenced.
         revision: u64,
+        /// Local projection identity echoed from the request, never a wire ACK.
+        sequence: Option<crate::inventory::MoveSequence>,
+        /// The worker's post-send prediction, applied exactly once by the host.
+        /// None on refusal. This replaces a separate Inventory prediction event.
+        update: Option<crate::inventory::InventoryUpdate>,
         /// Validation failure; None means the request was handed to transport.
         error: Option<String>,
     },

@@ -31,6 +31,24 @@ typed identity before using it as run authority. Hosts must treat an unknown
 ID as unavailable for identity-dependent actions, without aborting chat or
 other connection processing. `session_id` remains display/logging text only.
 
+## Ordered host inventory projections
+
+`InventoryMove::sequence` optionally names a monotonically increasing local
+request and its preceding queued move. Snapshot-based callers set it to `None`.
+Projected callers advance the same `Inventory` planner locally after enqueue,
+retain exact revision checks, and submit commands in order. A failed predecessor
+cannot authorize a descendant whose revision happens to match a later update.
+These identities are admission-local host metadata and add no wire fields.
+
+`WorldEvent::InventoryAction` now carries the echoed sequence and an optional
+post-send prediction. Apply that prediction once on successful local submission;
+the worker no longer emits it as a separate `WorldEvent::Inventory` event.
+Refusals have no prediction. Neither a local result nor the ordering identity
+confirms server acceptance. Downstream request literals and event matches must
+be migrated; this is a breaking development API change for the next minor
+pre-1.0 release. Authoritative inventory updates remain ordinary inventory
+events, with existing uncertainty, correction and snapshot rules unchanged.
+
 ## Quarm loot receipt and delivery
 
 `LootUpdate::Acknowledged { place }` is a new exhaustive-enum variant and

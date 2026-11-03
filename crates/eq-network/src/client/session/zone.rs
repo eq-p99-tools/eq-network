@@ -772,6 +772,7 @@ mod tests {
                 created,
             },
             ClientCommand::MoveInventory(InventoryMove {
+                sequence: None,
                 session_id,
                 revision: 1,
                 from: InventorySlot(22),
