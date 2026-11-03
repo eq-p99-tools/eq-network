@@ -291,6 +291,12 @@ impl Motion {
         };
         match motion.calibrate(speeds, Instant::now()) {
             Ok(()) => {
+                // A fresh calibration follows a withdrawal the host heard: a
+                // correction, a same-zone relocation or a refused transfer's
+                // rewind lose the calibration without asking for the inputs
+                // again. The host's receipt died with that withdrawal, so the
+                // grant carries the receipt again.
+                self.accepted_inputs = None;
                 out.log.send(ClientEvent::World(granted(
                     world.session_id,
                     &speeds,
@@ -307,7 +313,8 @@ impl Motion {
     }
 
     /// Publish exact accepted-report identity even when calibration is unchanged.
-    /// A later change in its grant also publishes; identical ticks stay quiet.
+    /// A later change in its grant publishes, and so does every fresh
+    /// calibration; identical ticks stay quiet.
     fn acknowledge_inputs(
         &mut self,
         world: &World,
@@ -1319,6 +1326,42 @@ mod tests {
             .unwrap();
         assert!(world.body.motion.as_ref().unwrap().calibration().is_none());
         assert_eq!(motion.revision, 3);
+    }
+
+    /// A same-zone relocation or a refused transfer's rewind corrects the
+    /// player without asking for the inputs again, after telling the host its
+    /// movement was withdrawn. The grant that follows the fresh calibration
+    /// carries its receipt again, so the host's wait for one ends; a tick
+    /// that changes nothing stays quiet.
+    #[test]
+    fn a_fresh_calibration_after_a_correction_reissues_the_receipt() {
+        let (mut world, mut motion) = eqmac_admitted();
+        let receipts = |events: &[ClientEvent]| -> Vec<(bool, bool)> {
+            events
+                .iter()
+                .filter_map(|event| match event {
+                    ClientEvent::World(WorldEvent::MotionState {
+                        units_per_second, ..
+                    }) => Some((false, units_per_second.is_some())),
+                    ClientEvent::World(WorldEvent::SpeedInputsAccepted(accepted)) => {
+                        Some((true, accepted.granted))
+                    }
+                    _ => None,
+                })
+                .collect()
+        };
+        let outcome = testing::run_on(EQMAC, |out| motion.handle(&report(0, 50), &mut world, out));
+        outcome.result.unwrap();
+        assert_eq!(receipts(&outcome.events), [(false, true), (true, true)]);
+        let outcome = testing::run_on(EQMAC, |out| motion.tick(Instant::now(), &mut world, out));
+        outcome.result.unwrap();
+        assert_eq!(receipts(&outcome.events), []);
+        world.correct_own(at(1.0), Instant::now()).unwrap();
+        assert!(world.body.motion.as_ref().unwrap().calibration().is_none());
+        let outcome = testing::run_on(EQMAC, |out| motion.tick(Instant::now(), &mut world, out));
+        outcome.result.unwrap();
+        assert_eq!(receipts(&outcome.events), [(false, true), (true, true)]);
+        assert_eq!(motion.revision, 1);
     }
 
     /// A spell landing on the player asks for the speed inputs again by the

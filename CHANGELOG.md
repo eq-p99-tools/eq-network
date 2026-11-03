@@ -36,6 +36,13 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- A grant after a fresh movement calibration carries its
+  `WorldEvent::SpeedInputsAccepted` receipt again. A same-zone relocation
+  (an in-zone teleport), a server correction or a refused transfer's rewind
+  withdraw the host's movement and clear the calibration without asking for
+  the inputs again; the receipt was only re-sent when its contents changed,
+  so a host that treats a withdrawal as ending its receipt waited for one
+  that never came while the player already moved.
 - Send valid inventory moves immediately in submission order on TAKP and
   Quarm, retaining ordered unresolved predictions without treating silence as
   acceptance. Preserve slot, container, fit, stack and restricted-item guards;
