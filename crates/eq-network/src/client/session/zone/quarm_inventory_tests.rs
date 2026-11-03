@@ -140,6 +140,7 @@ fn quarm_prediction_pacing_never_restores_a_withdrawn_weight_grant() {
     let ready = |revision| ClientCommand::SpeedInputs {
         session_id: 5,
         revision,
+        report_id: 1,
         state: SpeedInputState::Ready(SpeedInputs {
             rate: 0,
             weight: 4,
@@ -184,6 +185,7 @@ fn quarm_prediction_pacing_never_restores_a_withdrawn_weight_grant() {
         &ClientCommand::SpeedInputs {
             session_id: 5,
             revision: changed,
+            report_id: 1,
             state: SpeedInputState::Unavailable(SpeedInputUnavailable::Prediction),
         },
     )

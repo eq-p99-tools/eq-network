@@ -171,3 +171,31 @@ semantics. Both policies retain raw stack and GM observations in
 `inventory::EqMacItemRules`, including unknown values. Decoding policy does
 not enable inventory capabilities, grant a move, or change pacing, prediction
 or reconciliation. Existing move rules remain responsible for validation.
+
+## Movement-input acceptance
+
+`GameCommand::SpeedInputs` carries the current admission, the opaque revision
+from `WorldEvent::SpeedInputsRequired`, an opaque host `report_id`, and a typed
+ready/unavailable state. Give each new logical report a fresh report identity;
+retain that identity when retrying a full local queue. Recovery to identical
+ready values after an unavailable report is a new report. Neither identity is
+a wire counter, and consumers must not derive movement permission from it.
+
+After normal admission/revision validation and generation-rule evaluation,
+`WorldEvent::SpeedInputsAccepted(SpeedInputAcceptance)` echoes the exact ready
+inputs and report identity with `granted`. A new report is acknowledged even
+when its numeric calibration is unchanged. A later change in the accepted
+report's grant publishes a new outcome; unchanged ticks do not repeat it.
+Unavailable or obsolete reports never produce a ready acceptance. `granted`
+is false without a current positive calibration or while lifecycle blocks
+movement. This is a local session receipt, not a remote server acknowledgement.
+
+Keep this receipt separate from `MotionState`, which alone carries movement
+speeds. Withdrawals, input requirements and admission/lifecycle resets invalidate
+cached acceptance. A frontend may clear a waiting status only for the exact
+posted admission/revision/report/input identity with a current positive grant;
+a cached prior speed, successful enqueue, or mismatching receipt is insufficient.
+
+Migration: add `report_id` to speed-input command literals and handle the new
+world-event variant in exhaustive matches. This changes the unreleased public
+API and requires downstream validation; it is not a compatible 0.1.x patch.

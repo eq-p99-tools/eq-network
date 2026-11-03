@@ -857,6 +857,7 @@ mod tests {
             ClientCommand::SpeedInputs {
                 session_id,
                 revision: 1,
+                report_id: 1,
                 state: eq_network_game::movement::SpeedInputState::Ready(
                     eq_network_game::movement::SpeedInputs {
                         rate: 0,

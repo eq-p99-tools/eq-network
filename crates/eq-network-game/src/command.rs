@@ -665,6 +665,10 @@ pub enum GameCommand {
         session_id: u64,
         /// Echo the latest `WorldEvent::SpeedInputsRequired` revision.
         revision: u64,
+        /// Opaque host identity for this logical report. Retries reuse it;
+        /// changing the state or revision requires a fresh identity, including
+        /// recovery to identical values after an unavailable report.
+        report_id: u64,
         /// Complete inputs or explicit withdrawal, never guessed zeroes.
         state: crate::movement::SpeedInputState,
     },

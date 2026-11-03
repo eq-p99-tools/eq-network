@@ -87,6 +87,13 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Typed local speed-input acceptance receipts, including unchanged-speed
+  acceptance and the current positive-grant outcome. Hosts supply an opaque
+  `report_id` on `GameCommand::SpeedInputs` and handle
+  `WorldEvent::SpeedInputsAccepted`. Receipts echo the admission, revision,
+  report identity and exact ready inputs; they never replace movement guards
+  or acknowledge a remote packet. This is an unreleased breaking API change.
+
 - Quarm offers normal attack and consider through the shared EQMac combat
   owner. `combat::CombatRequest`, `CombatRequestStatus` and
   `WorldEvent::CombatRequest` distinguish transport submission from local

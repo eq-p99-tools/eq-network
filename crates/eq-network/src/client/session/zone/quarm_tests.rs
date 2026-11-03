@@ -102,6 +102,7 @@ fn quarm_moves_and_jumps_with_eqmac_packets_and_obeys_corrections() {
     let report = ClientCommand::SpeedInputs {
         session_id: 5,
         revision: 1,
+        report_id: 1,
         state: eq_network_game::movement::SpeedInputState::Ready(
             eq_network_game::movement::SpeedInputs {
                 rate: 0,

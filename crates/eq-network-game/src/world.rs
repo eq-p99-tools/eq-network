@@ -789,6 +789,10 @@ pub enum WorldEvent {
         /// Opaque revision to echo in `GameCommand::SpeedInputs`.
         revision: u64,
     },
+    /// The local session accepted exact ready inputs and evaluated their grant,
+    /// including when numeric speeds did not change. This never grants movement
+    /// by itself; consumers still honor `MotionState` and lifecycle withdrawals.
+    SpeedInputsAccepted(crate::movement::SpeedInputAcceptance),
     /// Local session movement gate; None clears pending input and disables walking.
     MotionState {
         /// Current zone admission.
