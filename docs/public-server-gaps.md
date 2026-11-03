@@ -4,9 +4,10 @@ Inspection date: 2026-11-02. Baselines: networking
 [`6ae8956`](https://github.com/eq-p99-tools/eq-network/tree/6ae8956068415fa30934485ccdae1a102757b50c)
 and desktop client
 [`c03fb30`](https://github.com/eq-p99-tools/eq-client/tree/c03fb30f191808840e7ee4eedfb540956bea7663).
-This is a code, source and saved-capture inspection. **No new live connections,
-desktop interaction, character creation or movement were performed.** Other
-agents' changes may supersede this snapshot.
+The initial inventory is a code, source and saved-capture inspection. The
+follow-up implementation and limited live checks are recorded separately below;
+they do not certify every interaction. Other agents' changes may supersede this
+snapshot.
 
 ## What counts as a gap
 
@@ -34,7 +35,7 @@ turning on its movement capability.
 
 | Priority | Confirmed defect | Change / remaining verification |
 | --- | --- | --- |
-| 1 | P99 and Quarm selection previews are discarded by policy despite the existing decoders. Quarm also loses level and zone. | Preserve their decoded appearance. P99 capture comparison and Quarm source layout support this; current-client public visual checks remain outstanding. |
+| 1 | P99 and Quarm selection previews are discarded by policy despite the existing decoders. Quarm also loses level and zone. | Preserve their decoded appearance. P99 capture comparison and Quarm source layout support this; a public Quarm preview rendered, while P99's integrated-client check remains outstanding. |
 | 2 | P99 jumping is disabled with a comment that it has not been measured, although archived official-client traffic includes jumps. | Enable the existing bounded jump path after checking the saved notices and motion. Keep client-code-derived physics and capture evidence distinct; a live custom-client jump remains unverified. |
 | 3 | Quarm has no graceful camping action; sitting/standing is coupled to movement, blocking reuse of camp controls. | Separate posture control from locomotion and enable Quarm camping using its own handlers and wire format. Test cancellation, timer, reply and admission boundaries offline; public logout verification remains outstanding. |
 
@@ -76,7 +77,8 @@ slots, equipment, level and zone while retaining malformed/duplicate rejection.
 P99 jump tests check the recorded empty notice and admission prerequisite;
 existing motion-guard tests cover rise limits and correction resets. Quarm tests
 exercise sit/camp/logout/reply and cancellation through its actual feature set,
-without a movement grant. Public-server validation remains open for all three.
+without a movement grant. The public Quarm preview was subsequently exercised;
+P99 preview/jump and a controlled camp/cancellation check remain open.
 
 Quarm now also offers the existing EQMac ground movement, turn, jump, fall,
 environmental damage and zone-transfer features. A read-only inventory feature
@@ -90,16 +92,17 @@ Quarm target selection/clearing is also enabled independently of combat.
 Its source handlers `Handle_OP_TargetMouse`/`Handle_OP_TargetCommand` at the
 same revision read a two-byte `ClientTarget_Struct` and echo clears or restore
 server-selected targets. Synthetic tests check the exact wire, self/NPC/clear,
-hidden/missing rejection and server changes. Live targeting remains unverified;
-this does not enable attacks or considering.
+hidden/missing rejection and server changes. Public Quarm self-targeting was
+exercised; NPC targeting and clearing remain unverified. This does not enable
+attacks or considering.
 
 The source check at `c2cd265` covers `Handle_OP_ClientUpdate` (15/16-byte input),
 `Handle_OP_Jump` (fatigue), `Handle_OP_Damage` (fall damage), and `zone/zoning.cpp`
 (zone change and bind). `SpawnPositionUpdate_Struct` is the same 15-byte packed
 layout already used for TAKP. `ENCODE(OP_CharInventory)` uses tagged 360-byte
 Mac items. Movement timing and physics are inherited from the existing client
-analysis cited in `movement/gate.rs` and `movement/speeds.rs`; public Quarm
-compatibility still needs live evidence.
+analysis cited in `movement/gate.rs` and `movement/speeds.rs`; the limited public
+Quarm checks below do not establish full movement compatibility.
 
 `Capability::Posture` now governs `SetPosture`; `Moving` governs locomotion.
 Consumers must update stance controls rather than advertise walking to enable
@@ -114,12 +117,12 @@ standing. See [the inspected handlers](https://github.com/SecretsOTheP/EQMacEmu/
 
 ## Confirmed implementation and policy gaps
 
-This table records the baseline above; the first three fixes are called out
-separately so a new capability is not mistaken for live verification.
+This table records the baseline above; completed fixes and follow-up checks are
+called out separately so a new capability is not mistaken for live verification.
 
 | Area | P99 baseline | Quarm baseline | What remains |
 | --- | --- | --- | --- |
-| Login / continued admission / chat | Exercised previously | Exercised previously | Compatibility is scenario-specific. Final Quarm extended-stamina change needs a public retest. |
+| Login / continued admission / chat | Exercised previously | Exercised previously | Compatibility is scenario-specific. The follow-up Quarm session decoded extended stamina without a warning; broader scenarios remain open. |
 | Character creation | UI, rules, codecs and synthetic tests exist | UI, rules, codecs and own-server source checks exist | Create/reject/refresh/enter on each public server; Quarm account-specific mule limits and live expansion settings need verification. |
 | Character deletion | No client action | No client action | Typed request, confirmation, response handling and stale-list safeguards; do not treat this as server-unsupported. |
 | Character previews | Disabled by policy | Disabled; level/zone stripped too | Fix 1, followed by public visual checks and broader model/gear coverage. |
@@ -151,9 +154,9 @@ separately so a new capability is not mistaken for live verification.
 | Local map/editor/help/free camera | Available independently of gameplay policy | Same | Target actions still need targeting capability. Existing local UI checks do not certify the whole public-server gameplay matrix. |
 | Art/UI completeness | Partial | Partial | Assets come from user installs; model variants, equipment tints, animations and UI coverage remain incomplete. |
 
-Creation slot counts are already being addressed by
+Creation slot counts were addressed by the now-merged
 [client PR #325](https://github.com/eq-p99-tools/eq-client/pull/325), alongside
-AltGr, free-camera settings and script fixes. This effort does not duplicate it.
+AltGr, free-camera settings and script fixes. The integration build includes it.
 The steep-slope correction in client #323 is already in the inspected baseline.
 
 ## Unsupported or inapplicable facilities
@@ -190,15 +193,37 @@ raids” classification is justified.
 - Empty admission messages and known ignored/no-op packets are tracked
   separately; they must not inflate a count of wholly missing gameplay.
 
+## Follow-up validation, 2026-11-02
+
+The combined networking code at `d713d0b4` passed 791 tests, formatting, strict
+workspace/all-target/all-feature Clippy and warnings-as-errors API docs. The
+desktop integration based on `9be679a` passed a native Windows build, formatting,
+strict workspace/all-target Clippy and 1,299 tests; 32 ignored asset/live probes
+were excluded from that count. Fixtures published here are synthetic.
+
+- Local TAKP using Quarm policy rendered the character-selection preview.
+  Further local checks stopped when Docker was shut down.
+- Public Quarm rendered the preview and admitted the character. Authoritative
+  inventory/coin state, self-targeting, brief forward/backward/lateral motion,
+  jump/landing and incoming guild chat were exercised. No movement-proposal
+  rejection or stamina decoding warning was logged; HP increased during those
+  checks. Local acceptance is not an independent server-side speed measurement
+  or proof of position persistence after reconnecting.
+- The operator subsequently moved the character to a safer area and closed the
+  client. They reported that `/camp desktop` appeared to return to selection.
+  The log records a desktop-camp exit and application status 0; the visible
+  transition still needs a focused retest. This is an unresolved observation,
+  not a reproduced destination-loss defect.
+
 ## Live verification queue
 
-Live checks are now authorized, but have not yet been performed for these
-changes. Record exact
-client/library revisions and test one scenario at a time: selection appearance;
-creation/rejection/entry; stationary, forward/back/strafe, jump/land; boundary,
-teleport, refusal and death/bind; then camp/reconnect. For Quarm, establish safe
-parking first. Respect public account reconnect cooldowns. Existing local
-EQEmu/TAKP success is useful evidence, but does not certify public P99/Quarm.
+Still open: P99 preview/jump in the integrated client; public creation, rejection
+and refresh; Quarm NPC target/clear, walking/turning, camp cancellation and the
+desktop-exit transition; boundary/teleport/refusal and death/bind paths; reconnect
+position persistence and unusual movement states. Check one scenario at a time
+and respect public account reconnect cooldowns. The operator has confirmed safe
+Quarm parking. Existing local EQEmu/TAKP success is useful evidence, but does not
+certify public P99/Quarm.
 
 Keep raw captures, session keys, credentials, names, positions and installed
 assets private. Publish only synthetic tests, aggregate findings and source
