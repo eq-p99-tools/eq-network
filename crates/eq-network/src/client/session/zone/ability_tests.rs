@@ -113,6 +113,53 @@ fn refused(output: testing::Outcome<Result<bool>>) {
 }
 
 #[test]
+fn eqmac_skill_changes_update_eligibility_without_releasing_recovery() {
+    for protocol in SERVERS {
+        let (mut features, mut world) = setup(protocol, 7);
+        world.player.corrected().unwrap().skills.as_mut().unwrap()[32] = 254;
+        refused(use_ability(
+            protocol,
+            &mut features,
+            &mut world,
+            Ability::Mend,
+        ));
+        let update = receive(
+            protocol,
+            &mut features,
+            &mut world,
+            0x8941,
+            &[32, 0, 0, 0, 0, 0, 0, 0],
+        );
+        update.result.unwrap();
+        assert_eq!(
+            world.player.as_ref().unwrap().skills.as_ref().unwrap()[32],
+            0
+        );
+        let used = use_ability(protocol, &mut features, &mut world, Ability::Mend);
+        assert!(used.result.unwrap());
+        assert_eq!(used.sent, [eqmac::encode(Ability::Mend, None).unwrap()]);
+        let update = receive(
+            protocol,
+            &mut features,
+            &mut world,
+            0x8941,
+            &[32, 0, 0, 0, 1, 0, 0, 0],
+        );
+        update.result.unwrap();
+        assert_eq!(
+            world.player.as_ref().unwrap().skills.as_ref().unwrap()[32],
+            1
+        );
+        refused(use_ability(
+            protocol,
+            &mut features,
+            &mut world,
+            Ability::Mend,
+        ));
+    }
+}
+
+#[test]
 fn eqmac_abilities_admit_and_send_every_supported_action_without_claiming_success() {
     for protocol in SERVERS {
         for ability in eqmac::SUPPORTED {

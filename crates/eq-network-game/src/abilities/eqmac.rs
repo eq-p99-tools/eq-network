@@ -27,6 +27,19 @@ pub const SUPPORTED: [Ability; 15] = [
     Ability::SenseHeading,
 ];
 
+/// An `EQMac` skill's numeric rank, including an eligible zero rank.
+/// Values 254 (untrained) and 255 (unavailable) are sentinels; 253 and
+/// larger values are unknown. Callers that need training must also require
+/// a positive rank. Other client generations must use their own rules.
+#[must_use]
+pub const fn skill_rank(value: u32) -> Option<u32> {
+    if value <= 252 {
+        Some(value)
+    } else {
+        None
+    }
+}
+
 /// Whether the profile admits this ability. Values 254 (untrained or below
 /// level) and 255 (unavailable) are not ranks; 253 and larger unknown values
 /// are also refused. Zero is usable where the handler accepts an unpracticed
@@ -42,9 +55,9 @@ pub fn known(ability: Ability, skills: &[u32], race: u32, class: Option<u32>) ->
     let Some(&rank) = skills.get(ability.skill() as usize) else {
         return false;
     };
-    if rank > 252 {
+    let Some(rank) = skill_rank(rank) else {
         return false;
-    }
+    };
     match ability {
         Ability::Kick => matches!(class, Some(1 | 4 | 7 | 15)),
         Ability::Bash => matches!(class, Some(1 | 2 | 3 | 5)),

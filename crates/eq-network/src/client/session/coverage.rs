@@ -252,7 +252,7 @@ const TITANIUM_PROFILE: &[Part] = &[
 /// What the session leaves unread of `EQMac`'s profile.
 const EQMAC_PROFILE: &[Part] = &[
     Part(
-        "skills, practice points and deity",
+        "practice points and deity",
         Reason::Planned(Step::EqMacWorld),
     ),
     Part(

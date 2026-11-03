@@ -105,6 +105,18 @@ pub enum MoveRules {
     Quarm,
 }
 
+impl MoveRules {
+    /// Whether the reported rank establishes training under this policy.
+    fn trained_skill(self, value: Option<u32>) -> bool {
+        value
+            .and_then(|value| match self {
+                Self::EqEmu => Some(value),
+                Self::Takp | Self::Quarm => crate::abilities::eqmac::skill_rank(value),
+            })
+            .is_some_and(|rank| rank > 0)
+    }
+}
+
 impl Inventory {
     /// Selects the next carried destination, filling compatible stacks before empty slots.
     /// Re-evaluate after every submitted move; never cache a sequence across revisions.
@@ -540,7 +552,7 @@ impl Inventory {
                 if matches!(item.rules.item_type, 0 | 2 | 3 | 45) {
                     ensure!(
                         matches!(actor.class, Some(1 | 4 | 7 | 8 | 9 | 15))
-                            && actor.dual_wield.is_some_and(|skill| skill > 0),
+                            && rules.trained_skill(actor.dual_wield),
                         "A trained dual-wield skill is required for an off-hand weapon"
                     );
                 }

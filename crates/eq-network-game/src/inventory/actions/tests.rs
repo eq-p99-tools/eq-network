@@ -638,36 +638,59 @@ fn deity_masks_admit_matching_followers_and_both_agnostic_identifiers() {
 
 #[test]
 fn offhand_weapons_require_trained_skill_and_preserve_two_handed_exclusion() {
-    for item_type in [0, 2, 3, 45] {
-        let mut weapon = item(30, None, 0);
-        weapon.rules.item_type = item_type;
-        let mut inventory = state(vec![weapon]);
-        let action = request(&inventory, 30, 14);
-        for skill in [None, Some(0)] {
+    for rules in [MoveRules::EqEmu, MoveRules::Takp, MoveRules::Quarm] {
+        for item_type in [0, 2, 3, 45] {
+            let mut weapon = item(30, None, 0);
+            weapon.rules.item_type = item_type;
+            let mut inventory = state(vec![weapon]);
+            let action = request(&inventory, 30, 14);
+            for (skill, eqmac_allowed, titanium_allowed) in [
+                (None, false, false),
+                (Some(0), false, false),
+                (Some(1), true, true),
+                (Some(252), true, true),
+                (Some(253), false, true),
+                (Some(254), false, true),
+                (Some(255), false, true),
+                (Some(300), false, true),
+                (Some(65535), false, true),
+            ] {
+                assert_eq!(
+                    inventory
+                        .plan_move_for(
+                            rules,
+                            &action,
+                            InventoryActor {
+                                dual_wield: skill,
+                                ..actor()
+                            }
+                        )
+                        .is_ok(),
+                    if rules == MoveRules::EqEmu {
+                        titanium_allowed
+                    } else {
+                        eqmac_allowed
+                    },
+                    "{rules:?}, item type {item_type}, skill {skill:?}"
+                );
+            }
+            let trained = InventoryActor {
+                dual_wield: Some(1),
+                ..actor()
+            };
+            assert!(inventory.plan_move_for(rules, &action, trained).is_ok());
+            let mut primary = item(13, None, 0);
+            primary.rules.item_type = 1;
+            inventory.apply(InventoryUpdate::Set(vec![primary]));
             assert!(inventory
-                .plan_move(
-                    &action,
-                    InventoryActor {
-                        dual_wield: skill,
-                        ..actor()
-                    }
-                )
+                .plan_move_for(rules, &request(&inventory, 30, 14), trained)
                 .is_err());
         }
-        let trained = InventoryActor {
-            dual_wield: Some(1),
-            ..actor()
-        };
-        assert!(inventory.plan_move(&action, trained).is_ok());
-        let mut primary = item(13, None, 0);
-        primary.rules.item_type = 1;
-        inventory.apply(InventoryUpdate::Set(vec![primary]));
-        assert!(inventory
-            .plan_move(&request(&inventory, 30, 14), trained)
-            .is_err());
+        let shield = state(vec![item(30, None, 0)]);
+        assert!(shield
+            .plan_move_for(rules, &request(&shield, 30, 14), actor())
+            .is_ok());
     }
-    let shield = state(vec![item(30, None, 0)]);
-    assert!(shield.plan_move(&request(&shield, 30, 14), actor()).is_ok());
 }
 
 #[test]

@@ -175,7 +175,7 @@ pub(in crate::client) fn eqmac(opcode: u16) -> Option<ServerMessage> {
         0x8041 => sent("OP_SpecialMesg", EQMAC, Read(&[Chat])),
         0x8241 => sent("OP_MemorizeSpell", EQMAC, Read(&[Zone])),
         0x8800 => sent("OP_LoginComplete", TAKP, Read(&[Login])),
-        0x8941 => sent("OP_SkillUpdate", EQMAC, planned(EqMacWorld)),
+        0x8941 => sent("OP_SkillUpdate", EQMAC, Read(&[Zone])),
         0x8b40 => sent("OP_ApproveName", EQMAC, Read(&[World])),
         0x8c41 => sent("OP_GMBecomeNPC", EQMAC, Partly(&[Zone], BECOME_NPC)),
         0x8e40 => sent("OP_MoveDoor", EQMAC, planned(EqMacWorld)),
