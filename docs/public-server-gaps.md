@@ -253,7 +253,7 @@ The subsequent Quarm spell-support change passed all 797 networking tests,
 including six new assembly scenarios. This is offline validation; the earlier
 public session did not run the newly enabled spell actions.
 
-The combined spell/ability/inventory/movement-input stack passed 832 native
+The combined spell/ability/inventory/movement-input stack passed 833 native
 Windows workspace/all-target/all-feature tests, strict Clippy, formatting and
 warnings-as-errors API documentation. The combined regression retains all four
 Quarm provisions and verifies that inventory pacing never restores a withdrawn

@@ -38,6 +38,8 @@ non-stale inventory. It includes equipment, general slots, their contents,
 the current cursor and cursor bag; excludes bank, trade and queued cursor items;
 and counts a stack's item weight once. `coins` counts carried denominations,
 not their copper value. Coins contribute `coins / 4` tenths.
+An absent cursor/bank profile projection is not published as empty coins; a
+purse-only update cannot make the host's complete carried coin state ready.
 
 Titanium reduces each bag child separately; EQMac reduces the aggregate bag
 contents. EQMac coin-purse items 17201..17230 reduce coin weight only in general

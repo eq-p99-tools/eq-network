@@ -91,9 +91,14 @@ fn tell_coins(world: &World, purse: bool, out: &mut Out<'_, '_>) -> Result<()> {
             out.log.send(ClientEvent::World(WorldEvent::Coins(coins)))?;
         }
     }
+    // The profile supplies cursor and bank together. Do not turn an absent
+    // profile projection into known empty coins for movement or banking.
+    let Some(bank) = coins.bank else {
+        return Ok(());
+    };
     out.log.send(ClientEvent::World(WorldEvent::CoinsElsewhere {
         cursor: coins.cursor,
-        bank: coins.bank.unwrap_or_default(),
+        bank,
         given: coins.given,
         offered: coins.offered,
     }))
@@ -808,6 +813,33 @@ mod tests {
         merchant::MerchantUpdate,
     };
     use testing::item;
+
+    #[test]
+    fn an_unknown_cursor_and_bank_are_not_reported_as_empty_coins() {
+        let (_, mut world) = admitted();
+        world.coins.0.purse = Some(Coins::default());
+        let output = testing::run(|out| tell_coins(&world, true, out));
+        output.result.unwrap();
+        assert!(matches!(
+            output.events[..],
+            [ClientEvent::World(WorldEvent::Coins(_))]
+        ));
+        coins_news(
+            &Message::Event(WorldEvent::CoinsElsewhere {
+                cursor: Coins::default(),
+                bank: Coins::default(),
+                given: Coins::default(),
+                offered: Coins::default(),
+            }),
+            &mut world.coins.0,
+        );
+        let output = testing::run(|out| tell_coins(&world, false, out));
+        output.result.unwrap();
+        assert!(matches!(
+            output.events[..],
+            [ClientEvent::World(WorldEvent::CoinsElsewhere { .. })]
+        ));
+    }
 
     #[test]
     fn an_observer_keeps_inventory_and_coins_without_sending_actions() {
@@ -1815,6 +1847,17 @@ mod tests {
     ) {
         use eq_network_game::money::{Coin, CoinTransfer};
         let (mut belongings, mut world) = admitted();
+        belongings
+            .admit(
+                &Message::Event(WorldEvent::CoinsElsewhere {
+                    cursor: Coins::default(),
+                    bank: Coins::default(),
+                    given: Coins::default(),
+                    offered: Coins::default(),
+                }),
+                &mut world,
+            )
+            .unwrap();
         let purse = Message::Event(WorldEvent::Coins(Coins {
             gold: 5,
             ..Coins::default()
@@ -2104,14 +2147,11 @@ mod tests {
         });
         assert!(matches!(
             looted.events[..],
-            [
-                ClientEvent::World(WorldEvent::Coins(Coins {
-                    platinum: 1,
-                    silver: 3,
-                    ..
-                })),
-                ClientEvent::World(WorldEvent::CoinsElsewhere { .. })
-            ]
+            [ClientEvent::World(WorldEvent::Coins(Coins {
+                platinum: 1,
+                silver: 3,
+                ..
+            }))]
         ));
         testing::run(|out| {
             belongings.observe(
@@ -2161,10 +2201,7 @@ mod tests {
         outcome.result.unwrap();
         assert!(matches!(
             outcome.events[..],
-            [
-                ClientEvent::World(WorldEvent::Coins(Coins { gold: 7, .. })),
-                ClientEvent::World(WorldEvent::CoinsElsewhere { .. })
-            ]
+            [ClientEvent::World(WorldEvent::Coins(Coins { gold: 7, .. }))]
         ));
     }
 
@@ -2195,14 +2232,11 @@ mod tests {
         outcome.result.unwrap();
         assert!(matches!(
             outcome.events[..],
-            [
-                ClientEvent::World(WorldEvent::Coins(Coins {
-                    gold: 7,
-                    copper: 3,
-                    ..
-                })),
-                ClientEvent::World(WorldEvent::CoinsElsewhere { .. })
-            ]
+            [ClientEvent::World(WorldEvent::Coins(Coins {
+                gold: 7,
+                copper: 3,
+                ..
+            }))]
         ));
         // A reward with no coins leaves the purse alone.
         let outcome =
