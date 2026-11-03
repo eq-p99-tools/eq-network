@@ -1157,6 +1157,13 @@ impl ServerType for Quarm {
         offer(shared::spellbook(Edits::default()))
     }
 
+    /// Source-backed `EQMac` abilities, with Frenzy and unfinished exchanges excluded.
+    fn abilities(&self, _setup: &Setup<'_>) -> Provided {
+        offer(shared::abilities(
+            &eq_network_game::abilities::eqmac::SUPPORTED,
+        ))
+    }
+
     /// Quarm's `Handle_OP_TargetMouse` uses the shared two-byte target ID
     /// and echoes clears; `TargetCommand` reports server picks/refusals.
     fn targeting(&self, _setup: &Setup<'_>) -> Provided {
@@ -1246,6 +1253,13 @@ const TAKP_DEATH_THRESHOLD: i32 = -11;
 struct Takp;
 
 impl ServerType for Takp {
+    /// The same verified packets and eligibility as Quarm; no blanket ALL grant.
+    fn abilities(&self, _setup: &Setup<'_>) -> Provided {
+        offer(shared::abilities(
+            &eq_network_game::abilities::eqmac::SUPPORTED,
+        ))
+    }
+
     fn posture(&self, _setup: &Setup<'_>) -> Provided {
         offer(Box::new(Stances))
     }
@@ -1499,11 +1513,11 @@ mod tests {
     #[test]
     fn eqmac_servers_provide_the_features_built_for_them() {
         // Quarm shares TAKP's movement, falls, jumps, zone handoff and
-        // posture/camp lifecycle, casting and basic spellbook. Its inventory
+        // posture/camp lifecycle, abilities, casting and basic spellbook. Its inventory
         // observer grants no item moves; other features await their evidence.
         let setup = Setup::new("Tester", AutoEat::default());
         let quarm = server_type(ServerProtocol::Quarm);
-        assert_eq!(quarm.features(&setup).len(), 12);
+        assert_eq!(quarm.features(&setup).len(), 13);
         assert_eq!(
             offers(quarm),
             [
@@ -1515,13 +1529,14 @@ mod tests {
                 Capability::Talking,
                 Capability::Camping,
                 Capability::Zoning,
+                Capability::Abilities,
                 Capability::EnvironmentalDamage,
                 Capability::Jumping,
                 Capability::Posture
             ]
         );
         let takp = server_type(ServerProtocol::Takp);
-        assert_eq!(takp.features(&setup).len(), 19);
+        assert_eq!(takp.features(&setup).len(), 20);
         assert_eq!(
             offers(takp),
             [
@@ -1537,6 +1552,7 @@ mod tests {
                 Capability::Talking,
                 Capability::Camping,
                 Capability::Zoning,
+                Capability::Abilities,
                 Capability::Grouping,
                 Capability::Listing,
                 Capability::EnvironmentalDamage,

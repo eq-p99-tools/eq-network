@@ -1482,6 +1482,7 @@ mod tests {
                 Capability::Talking,
                 Capability::Camping,
                 Capability::Zoning,
+                Capability::Abilities,
                 Capability::EnvironmentalDamage,
                 Capability::Jumping,
                 Capability::Posture
@@ -1502,6 +1503,7 @@ mod tests {
                 Capability::Talking,
                 Capability::Camping,
                 Capability::Zoning,
+                Capability::Abilities,
                 Capability::Grouping,
                 Capability::Listing,
                 Capability::EnvironmentalDamage,
@@ -1626,3 +1628,6 @@ mod eqmac_tests;
 
 #[cfg(test)]
 mod quarm_tests;
+
+#[cfg(test)]
+mod ability_tests;

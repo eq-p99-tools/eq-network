@@ -68,6 +68,21 @@ impl Feature for Stances {
 pub(super) struct OwnPosture(Option<PostureState>);
 
 impl OwnPosture {
+    /// Reports the requested lying posture, without asserting feign success.
+    /// `EQMac` accepts the stance but excludes the sender from its broadcast.
+    pub(super) fn lie_for_feign(&mut self, spawn_id: u16, out: &mut Out<'_, '_>) -> Result<()> {
+        out.request(&Request::FeignDeathPosture)?;
+        self.0 = Some(PostureState::Lying);
+        out.log.send(ClientEvent::World(WorldEvent::Posture {
+            spawn_id,
+            posture: PostureState::Lying,
+        }))
+    }
+
+    /// The last requested or server-reported stance.
+    pub(super) fn current(&self) -> Option<PostureState> {
+        self.0
+    }
     /// Notes a stance the server reported for the player.
     pub(super) fn observed(&mut self, posture: PostureState) {
         self.0 = Some(posture);

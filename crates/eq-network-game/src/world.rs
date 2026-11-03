@@ -1401,6 +1401,10 @@ pub enum WorldEvent {
     /// skill: `EQMac`'s servers' word, before the official client's own
     /// wait ends ([`crate::abilities::eqmac_reset_skill`]).
     SkillReady(u32),
+    /// The complete `EQMac` skill reset, including unknown timer values.
+    /// A zero timer is also emitted as `SkillReady`; nonzero timers do not
+    /// release recovery because their units and meaning are not established.
+    SkillReset(crate::abilities::eqmac::SkillReset),
     /// The disciplines the player knows, by spell ID, in the list's 100
     /// slots, 0 for an empty one: `EQEmu`'s list once the zone has admitted
     /// a player who knows any, and as it changes ([`crate::disciplines`]).

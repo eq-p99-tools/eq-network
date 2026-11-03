@@ -482,7 +482,14 @@ fn a_skills_button_is_ready_again() {
     let body = [32, 0, 0, 0, 0, 0, 0, 0];
     assert_eq!(
         updates(0x3d42, &body).unwrap(),
-        [WorldEvent::SkillReady(32)]
+        [
+            WorldEvent::SkillReset(crate::abilities::eqmac::SkillReset {
+                skill: 32,
+                padding: 0,
+                timer: 0
+            }),
+            WorldEvent::SkillReady(32)
+        ]
     );
     assert!(updates(0x3d42, &body[..4]).is_err());
 }

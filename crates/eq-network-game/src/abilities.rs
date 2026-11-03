@@ -22,6 +22,8 @@ use crate::{command::EncodedCommand, GameDialect};
 use serde::Serialize;
 use std::time::Duration;
 
+pub mod eqmac;
+
 /// `OP_CombatAbility`: a strike at the target.
 pub const COMBAT_OPCODE: u16 = 0x5ee8;
 /// `OP_Taunt`.
@@ -270,15 +272,21 @@ impl Ability {
     /// aren't hasted. Alternate abilities shorten Feign Death and Hide.
     ///
     /// This library tracks neither the focus, haste nor alternate
-    /// abilities, so it waits the full time: slower than an official client
-    /// with them, never faster. On `EQMac`, Frenzy keeps `EQEmu`'s time
+    /// abilities, so it keeps the unmodified waits. `EQMac` Tiger Claw is
+    /// raised to the server's six-second unhasted floor. Server slowing can
+    /// extend strike recovery further; the server remains authoritative.
+    /// On `EQMac`, Frenzy keeps `EQEmu`'s time
     /// (its `features.h` time less the second its handlers take off), as
     /// the TAKP read doesn't list it.
     #[must_use]
     pub const fn reuse(self, dialect: GameDialect) -> Duration {
         Duration::from_millis(match self {
             Self::SenseHeading => 2_000,
-            Self::TigerClaw => 5_500,
+            Self::TigerClaw => match dialect {
+                GameDialect::Titanium => 5_500,
+                // The EQMac server's unhasted floor is 7 - 1 seconds.
+                GameDialect::EqMac => 6_000,
+            },
             Self::EagleStrike | Self::Taunt => 6_000,
             Self::DragonPunch => 6_200,
             Self::Kick | Self::Bash => 8_000,
@@ -357,10 +365,16 @@ pub fn titanium_unhide(spawn_id: u16) -> anyhow::Result<EncodedCommand> {
 /// bits, two bytes of padding and a timer every server leaves 0.
 ///
 /// # Errors
-/// Rejects any length other than 8 bytes.
+/// Rejects any length other than 8 bytes or a nonzero, unestablished timer.
+/// Use [`eqmac::reset_skill`] to retain that complete raw record.
 pub fn eqmac_reset_skill(body: &[u8]) -> anyhow::Result<u32> {
-    anyhow::ensure!(body.len() == 8, "invalid skill reset length");
-    Ok(u32::from(u16::from_le_bytes([body[0], body[1]])))
+    let reset = eqmac::reset_skill(body)?;
+    anyhow::ensure!(
+        reset.timer == 0,
+        "unknown skill reset timer: {}",
+        reset.timer
+    );
+    Ok(u32::from(reset.skill))
 }
 
 /// Whether a melee ability reaches the target, as `EQEmu` decides
@@ -555,7 +569,7 @@ mod tests {
             (Ability::FlyingKick, 8_500),
             (Ability::Kick, 8_000),
             (Ability::RoundKick, 8_500),
-            (Ability::TigerClaw, 5_500),
+            (Ability::TigerClaw, 6_000),
             (Ability::BindWound, 10_000),
             (Ability::Taunt, 6_000),
             (Ability::FeignDeath, 10_000),

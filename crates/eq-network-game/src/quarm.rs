@@ -935,9 +935,12 @@ pub fn updates(opcode: u16, body: &[u8]) -> Result<Vec<WorldEvent>> {
             )?)]
         }
         crate::abilities::EQMAC_RESET_SKILL_OPCODE => {
-            vec![WorldEvent::SkillReady(crate::abilities::eqmac_reset_skill(
-                body,
-            )?)]
+            let reset = crate::abilities::eqmac::reset_skill(body)?;
+            let mut events = vec![WorldEvent::SkillReset(reset)];
+            if reset.timer == 0 {
+                events.push(WorldEvent::SkillReady(u32::from(reset.skill)));
+            }
+            events
         }
         crate::targets::EQMAC_TARGET_COMMAND_OPCODE | crate::targets::EQMAC_TARGET_MOUSE_OPCODE => {
             vec![WorldEvent::Target(crate::targets::eqmac_target(body)?)]

@@ -205,13 +205,10 @@ fn memorizing_and_forgetting_wait_for_the_server_before_changing_the_gem() {
 fn standing_cancels_a_waiting_memorization_without_enabling_unchecked_book_edits() {
     let wire = servers::server_type(ServerProtocol::Quarm).wire();
     let (mut features, mut world) = caster();
-    for capability in [
-        Capability::MovingSpells,
-        Capability::DeletingSpells,
-        Capability::Abilities,
-    ] {
+    for capability in [Capability::MovingSpells, Capability::DeletingSpells] {
         assert!(!features.capabilities().contains(&capability));
     }
+    assert!(features.capabilities().contains(&Capability::Abilities));
     send(
         &mut features,
         &mut world,
