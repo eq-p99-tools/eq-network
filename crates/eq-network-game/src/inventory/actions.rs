@@ -96,16 +96,25 @@ pub enum MoveRules {
     /// (`Client::SwapItemResync`, `zone/inventory.cpp`), and answers no move
     /// it accepts. It also hands the player an item it queued behind the
     /// cursor only once the cursor empties, saying nothing of it before
-    /// (`ZoneDatabase::SaveCursor`, `zone/zonedb.cpp`), so a move onto a
-    /// cursor that a move just emptied waits for that move to settle.
+    /// (`ZoneDatabase::SaveCursor`, `zone/zonedb.cpp`). Moves remain ungated.
     Takp,
-    /// Quarm's source-checked `EQMac` placement rules. The session serializes
-    /// moves but keeps their predictions unconfirmed: silence is not an ACK.
+    /// Quarm's source-checked `EQMac` placement rules. Moves go out immediately
+    /// and remain unconfirmed: silence is not an ACK.
     /// Direct trade/world-container moves remain outside this policy.
     Quarm,
 }
 
 impl MoveRules {
+    /// Legacy Titanium refusal window. `EQMac` has no generic positive move
+    /// acknowledgment: elapsed time never confirms its inventory predictions.
+    #[must_use]
+    pub const fn settles_by_silence(self) -> bool {
+        match self {
+            Self::EqEmu => true,
+            Self::Takp | Self::Quarm => false,
+        }
+    }
+
     /// Whether the reported rank establishes training under this policy.
     fn trained_skill(self, value: Option<u32>) -> bool {
         value
@@ -249,7 +258,7 @@ impl Inventory {
             "Cancel the trade to take an item back"
         );
         if matches!(rules, MoveRules::Takp | MoveRules::Quarm) {
-            self.check_eqmac_move(rules, request)?;
+            Self::check_eqmac_move(request)?;
         }
         if request.to.is_trade() {
             check_trade(request, self.items.contains_key(&request.to))?;
@@ -582,20 +591,12 @@ impl Inventory {
         Ok(())
     }
 
-    /// Both Mac policies require encodable slots. TAKP's legacy settlement
-    /// gate is in the projection; Quarm paces moves in the session so origins
-    /// survive the delay without permanently locking an emptied cursor.
-    fn check_eqmac_move(&self, rules: MoveRules, request: &InventoryMove) -> Result<()> {
+    /// Both Mac policies require encodable slots. The program's move routine
+    /// has no pending-move gate (`EQMac` 0x422b1c).
+    fn check_eqmac_move(request: &InventoryMove) -> Result<()> {
         ensure!(
             request.from.to_eqmac().is_some() && request.to.to_eqmac().is_some(),
             "This server has no such slot"
-        );
-        ensure!(
-            rules == MoveRules::Quarm
-                || request.to != InventorySlot::CURSOR
-                || self.items.contains_key(&InventorySlot::CURSOR)
-                || !self.unconfirmed.contains_key(&InventorySlot::CURSOR),
-            "Wait for the server to settle the last move"
         );
         Ok(())
     }

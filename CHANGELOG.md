@@ -36,6 +36,10 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- Send valid inventory moves immediately in submission order on TAKP and
+  Quarm, retaining ordered unresolved predictions without treating silence as
+  acceptance. Preserve slot, container, fit, stack and restricted-item guards;
+  contradictory EQMac corrections require a fresh snapshot.
 - Reconcile a scroll the server deleted after a confirmed scribe with the
   move that put it on the cursor, so a second scribe is not read as a
   correction and a current movement grant is recovered without re-entry.

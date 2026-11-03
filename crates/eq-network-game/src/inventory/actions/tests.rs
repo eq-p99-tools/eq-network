@@ -743,29 +743,17 @@ fn takp_keeps_bags_arrows_and_instruments_out_of_slots_it_refuses() {
 }
 
 #[test]
-fn on_takp_a_move_onto_a_cursor_a_move_emptied_waits_until_it_settles() {
+fn on_takp_a_cursor_emptied_by_a_move_can_take_the_next_item_immediately() {
     let mut state = state(vec![item(22, None, 0), item(23, None, 0)]);
-    for (from, to) in [(22, 30), (30, 24)] {
+    for (from, to) in [(22, 30), (30, 24), (23, 30)] {
         let update = state
             .plan_move_for(MoveRules::Takp, &request(&state, from, to), actor())
             .unwrap();
         state.apply(update);
     }
-    // TAKP may be handing over an item it queued behind the cursor.
-    let next = request(&state, 23, 30);
-    assert_eq!(
-        state
-            .plan_move_for(MoveRules::Takp, &next, actor())
-            .unwrap_err()
-            .to_string(),
-        "Wait for the server to settle the last move"
-    );
-    assert!(state
-        .plan_move_for(MoveRules::EqEmu, &next, actor())
-        .is_ok());
-    state.apply(InventoryUpdate::Settled);
-    let next = request(&state, 23, 30);
-    assert!(state.plan_move_for(MoveRules::Takp, &next, actor()).is_ok());
+    assert!(state.predicted());
+    assert!(!state.stale());
+    assert_eq!(state.unresolved_predictions(), 3);
 }
 
 #[test]

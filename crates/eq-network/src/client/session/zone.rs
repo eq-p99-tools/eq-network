@@ -1657,3 +1657,6 @@ mod ability_tests;
 
 #[cfg(test)]
 mod quarm_inventory_tests;
+
+#[cfg(test)]
+mod item_move_tests;

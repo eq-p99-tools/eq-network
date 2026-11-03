@@ -18,6 +18,15 @@ releasing; the workspace version alone is not evidence of compatibility.
 
 ## Feature ownership and recovery
 
+Inventory moves do not hold the inventory while awaiting another move's reply.
+`MoveRules::settles_by_silence()` preserves the legacy Titanium refusal window;
+both EQMac policies require authoritative evidence and never settle on a timer.
+`Inventory::unresolved_predictions()` counts ordered changed-slot projections
+whose uncertainty remains, not positive move acknowledgments. A covering slot
+update resolves only its slots across affected projections; it never confirms
+an unrelated move by order. EQMac contradictions invalidate until `Snapshot`.
+See [inventory prediction semantics](docs/inventory-move-predictions.md).
+
 One feature owns each command and its state. Wire generation determines layout;
 server policy determines availability. New features start absent, and a frontend
 must honor the session's offered capabilities and explicit player choices.

@@ -27,7 +27,7 @@ pub use weight::WeightUnavailable;
 
 use crate::items::ItemDetails;
 use serde::Serialize;
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 /// The cursor; items pushed onto it queue behind the one shown there.
 const CURSOR: InventorySlot = InventorySlot::CURSOR;
@@ -325,6 +325,10 @@ pub struct Inventory {
     revision: u64,
     predicted: bool,
     unconfirmed: BTreeMap<InventorySlot, Option<InventoryItem>>,
+    /// Unresolved changed slots for each prediction, in submission order.
+    /// This is evidence bookkeeping, never a queue that delays sending.
+    #[serde(skip)]
+    predictions: VecDeque<BTreeSet<InventorySlot>>,
     /// Origins of plain whole-item relocations, separate from slot confirmation.
     #[serde(skip)]
     relocations: BTreeMap<InventorySlot, InventorySlot>,
@@ -341,6 +345,14 @@ impl Inventory {
     #[must_use]
     pub const fn predicted(&self) -> bool {
         self.predicted
+    }
+
+    /// Number of local predictions with slots still awaiting server evidence.
+    /// A covering update resolves only those slots, across all affected entries;
+    /// it is not a positive acknowledgment of any individual move.
+    #[must_use]
+    pub fn unresolved_predictions(&self) -> usize {
+        self.predictions.len()
     }
 
     /// Slots changed by pending predictions and their contents before the first change.
@@ -403,20 +415,7 @@ impl Inventory {
     fn change(&mut self, update: InventoryUpdate) {
         self.retain_relocations(&update);
         match update {
-            InventoryUpdate::Prediction(items) => {
-                let next: BTreeMap<_, _> =
-                    items.into_iter().map(|item| (item.slot, item)).collect();
-                self.trace_relocation(&next);
-                for slot in self.items.keys().chain(next.keys()) {
-                    if self.items.get(slot) != next.get(slot) {
-                        self.unconfirmed
-                            .entry(*slot)
-                            .or_insert_with(|| self.items.get(slot).cloned());
-                    }
-                }
-                self.items = next;
-                self.predicted = !self.unconfirmed.is_empty();
-            }
+            InventoryUpdate::Prediction(items) => self.predict(items),
             InventoryUpdate::Consume { slot, charge } => {
                 let consumed = self
                     .items
@@ -445,6 +444,7 @@ impl Inventory {
                 self.predicted = false;
                 self.stale = false;
                 self.unconfirmed.clear();
+                self.predictions.clear();
                 self.correcting = false;
             }
             InventoryUpdate::Set(items) => {
@@ -591,6 +591,12 @@ impl Inventory {
 
     /// Ends a correction once no prediction is left unconfirmed.
     fn resolved(&mut self) {
+        // Evidence is slot-specific and may arrive out of order. Retain the
+        // original prediction order without guessing which move was accepted.
+        for prediction in &mut self.predictions {
+            prediction.retain(|slot| self.unconfirmed.contains_key(slot));
+        }
+        self.predictions.retain(|prediction| !prediction.is_empty());
         self.predicted = !self.unconfirmed.is_empty();
         if !self.predicted {
             self.correcting = false;

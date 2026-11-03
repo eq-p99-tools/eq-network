@@ -1,4 +1,4 @@
-//! Quarm's rejection path is a resync followed by a disconnect, not a move ACK.
+//! `EQMac` rejection recovery is a resync followed by a disconnect, not a move ACK.
 use eq_network_game::inventory::{Inventory, InventoryUpdate};
 
 /// Whether a server replacement contradicts any locally predicted slot it

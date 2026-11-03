@@ -2,8 +2,8 @@
 //! player's item moves and the merchant trades that change it. Only this
 //! feature changes the inventory that every feature reads.
 //!
-//! A move is predicted as soon as it is sent and settles once the server has
-//! let it stand; Quarm retains predictions even after its pacing delay. A
+//! Each move is sent and predicted immediately in submission order. `EQMac`
+//! retains uncertainty until authoritative evidence arrives; silence is no ACK. A
 //! trade holds the inventory until the merchant echoes it.
 //! Items handed over in a give or trade window leave the trade slots when the
 //! window closes, which servers do not say item by item.
@@ -14,7 +14,7 @@
 //! servers do, and takes each money update as the truth about the purse.
 mod meals;
 mod merchant;
-mod quarm;
+mod resync;
 
 use super::{
     actions::Resource,
@@ -202,13 +202,6 @@ impl Settlement {
     /// Notes a move sent at `now`; every move restarts the wait.
     fn sent(&mut self, now: Instant) {
         self.0 = Some(now);
-    }
-
-    /// Whether the last move sent is still unanswered at `now`: the server
-    /// has not refused it, and the window to refuse it has not passed.
-    fn in_flight(&self, now: Instant) -> bool {
-        self.0
-            .is_some_and(|sent| now.saturating_duration_since(sent) < REFUSAL_WINDOW)
     }
 
     /// The settling update, once the last move has gone unrefused for the window
@@ -424,7 +417,9 @@ impl Belongings {
         };
         let error = match result {
             Ok(update) => {
-                self.settlement.sent(now);
+                if self.rules.settles_by_silence() {
+                    self.settlement.sent(now);
+                }
                 out.log
                     .send(ClientEvent::World(WorldEvent::Inventory(update)))?;
                 None
@@ -601,21 +596,14 @@ impl Feature for Belongings {
         Ok(())
     }
 
-    /// Holds the inventory for merchant replies and paces Mac item moves.
-    /// This conservative delay reduces overlap with resyncs and hidden cursor
-    /// refills; it cannot prove acceptance. Quarm releases only the hold after
-    /// the delay, retaining its predictions for authoritative reconciliation.
-    fn holds(&self, _world: &World, now: Instant) -> Vec<(Resource, &'static str)> {
-        let mut holds = Vec::new();
+    /// Only a merchant reply holds the inventory. Neither generation's move
+    /// routine waits for a previous item move (`EQMac` 0x422b1c, Titanium 0x51a9a8).
+    fn holds(&self, _world: &World, _now: Instant) -> Vec<(Resource, &'static str)> {
         if self.trades.active() {
-            holds.push((Resource::Inventory, "Wait for the merchant to answer"));
+            vec![(Resource::Inventory, "Wait for the merchant to answer")]
+        } else {
+            Vec::new()
         }
-        if matches!(self.rules, MoveRules::Takp | MoveRules::Quarm)
-            && self.settlement.in_flight(now)
-        {
-            holds.push((Resource::Inventory, "Wait for the last item move"));
-        }
-        holds
     }
 
     /// Closing a give or trade window empties the trade slots: the server
@@ -677,17 +665,13 @@ impl Feature for Belongings {
         }
     }
 
-    /// Releases pacing holds, legacy settlements and unanswered merchant trades.
-    /// Quarm never turns an elapsed delay into an inventory confirmation.
+    /// Retains the legacy Titanium refusal window. `EQMac` predictions await
+    /// server evidence, regardless of how long or how many moves ago they arose.
     fn tick(&mut self, now: Instant, world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
-        if self.rules == MoveRules::Quarm {
-            // A pacing delay is not proof of acceptance. Keep prediction
-            // origins and any correction/invalidation until server updates.
-            if !self.settlement.in_flight(now) {
-                self.settlement.0 = None;
+        if self.rules.settles_by_silence() {
+            if let Some(update) = self.settlement.due(&world.inventory, now) {
+                change(update, world, out)?;
             }
-        } else if let Some(update) = self.settlement.due(&world.inventory, now) {
-            change(update, world, out)?;
         }
         if self.trades.expire(now) {
             merchant_refused(world, "The merchant did not accept that offer.", out)?;
@@ -740,12 +724,12 @@ impl Feature for Belongings {
         }
         match message {
             Message::Event(WorldEvent::Inventory(update)) => {
-                let resync =
-                    self.rules == MoveRules::Quarm && quarm::contradicts(&world.inventory, update);
+                let resync = !self.rules.settles_by_silence()
+                    && resync::contradicts(&world.inventory, update);
                 world.inventory.0.apply(update.clone());
                 if resync {
-                    // Quarm's resync sends temporary items, incomplete bag
-                    // roots and then disconnects ordinary clients. Only a new
+                    // EQMac resyncs can send temporary items, incomplete bag
+                    // roots and then disconnect ordinary clients. Only a new
                     // snapshot can restore safe action state, never a timer.
                     change(InventoryUpdate::Invalidated, world, out)?;
                 }
@@ -1581,13 +1565,16 @@ mod tests {
             )
             .unwrap()]
         );
-        // The next move waits for TAKP to settle this one.
+        // The next move goes out immediately, while the earlier one is uncertain.
         let put_down = request(&world, 30, 24);
         let held = Held::new(belongings.holds(&world, Instant::now()));
-        assert_eq!(
-            held.conflict(&put_down),
-            Some("Wait for the last item move")
-        );
+        assert_eq!(held.conflict(&put_down), None);
+        let outcome = testing::run_on(&super::super::wire::EqMac, |out| {
+            belongings.handle(&put_down, &mut world, out)
+        });
+        outcome.result.unwrap();
+        assert_eq!(outcome.sent.len(), 1);
+        assert_eq!(world.inventory.unresolved_predictions(), 2);
         let later = Instant::now() + REFUSAL_WINDOW;
         assert_eq!(
             Held::new(belongings.holds(&world, later)).conflict(&put_down),

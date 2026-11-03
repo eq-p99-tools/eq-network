@@ -956,3 +956,77 @@ fn deductions_shrink_stacks_and_remove_whole_items() {
     });
     assert!(state.stale());
 }
+
+#[test]
+fn ordered_predictions_keep_independent_slots_when_later_evidence_arrives_first() {
+    let mut state = Inventory::default();
+    state.apply(
+        decode(0x5394, wire(22, 42, 0, false, 0, &[]).as_bytes())
+            .unwrap()
+            .unwrap(),
+    );
+    move_item(&mut state, 22, 30);
+    move_item(&mut state, 30, 23);
+    move_item(&mut state, 23, 30);
+    move_item(&mut state, 30, 24);
+    let slots = |values: &[i32]| {
+        values
+            .iter()
+            .copied()
+            .map(InventorySlot)
+            .collect::<BTreeSet<_>>()
+    };
+    assert_eq!(
+        state.predictions.iter().cloned().collect::<Vec<_>>(),
+        vec![
+            slots(&[22, 30]),
+            slots(&[30, 23]),
+            slots(&[23, 30]),
+            slots(&[30, 24])
+        ]
+    );
+    let final_item = state.items[&InventorySlot(24)].clone();
+    state.apply(InventoryUpdate::Set(vec![final_item.clone()]));
+    state.apply(InventoryUpdate::Set(vec![final_item])); // Idempotent replacement.
+    assert_eq!(state.unresolved_predictions(), 4);
+    state.apply(InventoryUpdate::Remove(InventorySlot(30)));
+    assert_eq!(
+        state.predictions.iter().cloned().collect::<Vec<_>>(),
+        vec![slots(&[22]), slots(&[23]), slots(&[23])]
+    );
+    state.apply(InventoryUpdate::Remove(InventorySlot(23)));
+    assert_eq!(state.unresolved_predictions(), 1);
+    state.apply(InventoryUpdate::Remove(InventorySlot(22)));
+    assert_eq!(state.unresolved_predictions(), 0);
+    assert!(!state.predicted());
+}
+
+#[test]
+fn consumption_after_multiple_relocations_keeps_independent_prediction_uncertainty() {
+    let mut state = Inventory::default();
+    let items = [
+        wire(22, 42, 0, false, 0, &[]),
+        wire(23, 43, 0, false, 0, &[]),
+    ]
+    .concat();
+    state.apply(decode(0x5394, items.as_bytes()).unwrap().unwrap());
+    for (from, to) in [(22, 30), (30, 24), (23, 30)] {
+        move_item(&mut state, from, to);
+    }
+    state.apply(InventoryUpdate::Consume {
+        slot: InventorySlot(24),
+        charge: false,
+    });
+    assert!(!state.items.contains_key(&InventorySlot(24)));
+    assert!(!state
+        .prediction_origins()
+        .any(|(slot, _)| slot == InventorySlot(22)));
+    assert!(state
+        .prediction_origins()
+        .any(|(slot, _)| slot == InventorySlot(23)));
+    assert!(state.predicted());
+    state.apply(InventoryUpdate::Snapshot(Vec::new()));
+    assert_eq!(state.unresolved_predictions(), 0);
+    assert!(!state.predicted());
+    assert!(!state.stale());
+}

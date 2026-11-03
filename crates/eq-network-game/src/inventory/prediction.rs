@@ -9,6 +9,30 @@ fn same_item(left: &InventoryItem, right: &InventoryItem) -> bool {
 }
 
 impl Inventory {
+    /// Records every changed-slot projection in send order without turning it
+    /// into server authority or delaying the next move.
+    pub(super) fn predict(&mut self, items: Vec<InventoryItem>) {
+        let next: BTreeMap<_, _> = items.into_iter().map(|item| (item.slot, item)).collect();
+        self.trace_relocation(&next);
+        let changed: BTreeSet<_> = self
+            .items
+            .keys()
+            .chain(next.keys())
+            .copied()
+            .filter(|slot| self.items.get(slot) != next.get(slot))
+            .collect();
+        for slot in &changed {
+            self.unconfirmed
+                .entry(*slot)
+                .or_insert_with(|| self.items.get(slot).cloned());
+        }
+        if !changed.is_empty() {
+            self.predictions.push_back(changed);
+        }
+        self.items = next;
+        self.predicted = !self.unconfirmed.is_empty();
+    }
+
     /// Matching replacements preserve a trace; conflicting or quantity-changing
     /// updates break it. Never discard independent traces just because another
     /// item changed. The slot-origin uncertainty itself is reconciled separately.

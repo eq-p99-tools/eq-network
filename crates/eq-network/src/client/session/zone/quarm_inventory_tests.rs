@@ -251,8 +251,6 @@ fn quarm_root_bag_cursor_splits_merges_and_equipment_use_exact_wire() {
         );
         assert!(world.inventory.predicted());
         let before = world.inventory.revision();
-        let output = submit(&mut features, &mut world, &request_from_revision(before));
-        assert_eq!(output.sent.len(), 0); // One outstanding move at a time.
         paced(&mut features, &mut world);
         assert_eq!(world.inventory.revision(), before); // No fabricated confirmation.
         assert!(world.inventory.predicted());
@@ -263,17 +261,6 @@ fn quarm_root_bag_cursor_splits_merges_and_equipment_use_exact_wire() {
     );
     assert_eq!(world.inventory.items()[&InventorySlot(17)].details.id, 60);
     assert_eq!(world.inventory.items()[&InventorySlot(25)].bag_slots, 2);
-}
-
-fn request_from_revision(revision: u64) -> ClientCommand {
-    ClientCommand::MoveInventory(InventoryMove {
-        session_id: 5,
-        revision,
-        from: InventorySlot(22),
-        to: InventorySlot::CURSOR,
-        quantity: MoveQuantity::Whole,
-        created: Instant::now(),
-    })
 }
 
 #[test]
