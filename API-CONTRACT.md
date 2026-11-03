@@ -31,6 +31,22 @@ typed identity before using it as run authority. Hosts must treat an unknown
 ID as unavailable for identity-dependent actions, without aborting chat or
 other connection processing. `session_id` remains display/logging text only.
 
+## Equipment contribution uncertainty
+
+`Inventory::equipment_stats_uncertain()` tracks stat-bearing equipment histories
+whose decoded direct bonuses or worn effects might change. Only readable rules,
+explicitly zero direct bonuses and no worn effect establish neutrality. Affecting
+or missing metadata stays uncertain through all intermediate local moves, even
+when final placement equals its origin. Partial slot records carry no operation
+revision and cannot retire this history, even when matching current placement.
+A full `Snapshot` or existing policy-driven `Settled` starts a new contribution
+baseline; this adds no EQMac settlement timer. Existing origins and ordered
+predictions keep their slot-coverage behavior independently. The gap for affecting
+or unreadable equipment remains conservative until such a baseline. The accessor
+never establishes carried weight, receipt or server acceptance. It must be used
+with a received, non-stale model whose complete history was recorded from its
+baseline; cloning preserves that history, endpoint reconstruction does not.
+
 ## Ordered host inventory projections
 
 `InventoryMove::sequence` optionally names a monotonically increasing local

@@ -145,6 +145,188 @@ mod tests {
         }
     }
 
+    fn planned_move(inventory: &mut Inventory, rules: super::super::MoveRules, from: i32, to: i32) {
+        let request = super::super::InventoryMove {
+            session_id: 1,
+            revision: inventory.revision(),
+            sequence: None,
+            from: InventorySlot(from),
+            to: InventorySlot(to),
+            quantity: super::super::MoveQuantity::Whole,
+            created: std::time::Instant::now(),
+        };
+        let actor = super::super::InventoryActor {
+            bank_access: false,
+            deity: None,
+            dual_wield: None,
+            class: Some(1),
+            race: 1,
+            level: 60,
+            trade_slots: 0,
+            trade_no_drop: false,
+            world_container: false,
+        };
+        let update = inventory.plan_move_for(rules, &request, actor).unwrap();
+        inventory.apply(update);
+    }
+
+    #[test]
+    fn stat_neutral_equipment_history_preserves_weight_without_confirming_moves() {
+        use super::super::MoveRules;
+        for rules in [MoveRules::EqEmu, MoveRules::Takp, MoveRules::Quarm] {
+            let original = item(24, 37);
+            let mut inventory = Inventory::default();
+            inventory.apply(InventoryUpdate::Snapshot(vec![original.clone()]));
+            for (from, to) in [(24, 30), (30, 13), (13, 30), (30, 24)] {
+                planned_move(&mut inventory, rules, from, to);
+                assert_eq!(
+                    inventory.carried_weight_tenths(crate::GameDialect::EqMac, 0),
+                    Ok(37)
+                );
+                assert!(!inventory.equipment_stats_uncertain());
+                assert!(inventory.predicted());
+            }
+            assert_eq!(inventory.items()[&InventorySlot(24)], original);
+            assert_eq!(inventory.unresolved_predictions(), 4);
+            assert!(inventory
+                .prediction_origins()
+                .any(|(slot, origin)| slot == InventorySlot(13) && origin.is_none()));
+        }
+    }
+
+    #[test]
+    fn affecting_and_missing_equipment_history_survives_local_round_trips() {
+        use super::super::MoveRules;
+        for kind in 0..5 {
+            let mut original = item(24, 37);
+            match kind {
+                0 => original.details.bonuses.as_mut().unwrap().strength = 7,
+                1 => original.details.bonuses.as_mut().unwrap().strength = -7,
+                2 => original.details.bonuses = None,
+                3 => original.details.equipment = None,
+                _ => {
+                    original.details.equipment.as_mut().unwrap().worn =
+                        Some(crate::items::WornEffect {
+                            spell_id: 777,
+                            effect_type: 2,
+                            level: 1,
+                            level2: 1,
+                        });
+                }
+            }
+            let mut inventory = Inventory::default();
+            inventory.apply(InventoryUpdate::Snapshot(vec![original.clone()]));
+            planned_move(&mut inventory, MoveRules::Quarm, 24, 30);
+            planned_move(&mut inventory, MoveRules::Quarm, 30, 13);
+            assert!(inventory.equipment_stats_uncertain());
+            planned_move(&mut inventory, MoveRules::Quarm, 13, 30);
+            planned_move(&mut inventory, MoveRules::Quarm, 30, 24);
+            assert_eq!(inventory.items()[&InventorySlot(24)], original);
+            assert!(inventory.equipment_stats_uncertain());
+            assert!(inventory.predicted());
+            // Matching carried evidence does not acknowledge the equipment slot.
+            inventory.apply(InventoryUpdate::Set(vec![original.clone()]));
+            assert!(inventory.equipment_stats_uncertain());
+            // A partial record has no request revision: even matching equipment
+            // coverage cannot establish that every pending prefix has completed.
+            inventory.apply(InventoryUpdate::Remove(InventorySlot(13)));
+            assert!(inventory.equipment_stats_uncertain());
+            assert!(inventory.predicted());
+            inventory.apply(InventoryUpdate::Snapshot(vec![original]));
+            assert!(!inventory.equipment_stats_uncertain());
+            assert!(!inventory.predicted());
+        }
+    }
+
+    #[test]
+    fn original_affecting_equipment_out_and_back_does_not_erase_intermediate_uncertainty() {
+        use super::super::MoveRules;
+        for strength in [-7, 7] {
+            let mut original = item(13, 37);
+            original.details.bonuses.as_mut().unwrap().strength = strength;
+            let mut inventory = Inventory::default();
+            inventory.apply(InventoryUpdate::Snapshot(vec![original.clone()]));
+            planned_move(&mut inventory, MoveRules::Quarm, 13, 30);
+            assert!(inventory.equipment_stats_uncertain());
+            planned_move(&mut inventory, MoveRules::Quarm, 30, 13);
+            assert_eq!(inventory.items()[&InventorySlot(13)], original);
+            assert!(inventory.equipment_stats_uncertain());
+            assert!(inventory.predicted());
+            // The same slot value could be an older report. Retain the history
+            // until a complete authoritative baseline, without inferring ACKs.
+            inventory.apply(InventoryUpdate::Set(vec![original.clone()]));
+            assert!(inventory.equipment_stats_uncertain());
+            assert!(inventory.predicted());
+            inventory.apply(InventoryUpdate::Snapshot(vec![original]));
+            assert!(!inventory.equipment_stats_uncertain());
+        }
+    }
+
+    #[test]
+    fn older_partial_slot_coverage_cannot_clear_a_newer_affecting_origin_or_clone() {
+        use super::super::MoveRules;
+        let mut original = item(13, 37);
+        original.details.bonuses.as_mut().unwrap().strength = 7;
+        let mut inventory = Inventory::default();
+        inventory.apply(InventoryUpdate::Snapshot(vec![original.clone()]));
+        planned_move(&mut inventory, MoveRules::Quarm, 13, 30);
+        planned_move(&mut inventory, MoveRules::Quarm, 30, 13);
+        inventory.apply(InventoryUpdate::Set(vec![original.clone()]));
+        assert!(!inventory
+            .prediction_origins()
+            .any(|(slot, _)| slot == InventorySlot(13)));
+        assert!(inventory.equipment_stats_uncertain());
+
+        let mut tail = inventory.clone();
+        planned_move(&mut tail, MoveRules::Quarm, 13, 30);
+        planned_move(&mut tail, MoveRules::Quarm, 30, 13);
+        assert!(tail
+            .prediction_origins()
+            .any(|(slot, _)| slot == InventorySlot(13)));
+        // This indistinguishable old value covers the newer origin under the
+        // legacy slot journal, but cannot certify its contribution history.
+        tail.apply(InventoryUpdate::Set(vec![original.clone()]));
+        tail.apply(InventoryUpdate::Remove(InventorySlot::CURSOR));
+        assert!(!tail.predicted());
+        assert!(tail.equipment_stats_uncertain());
+        assert!(inventory.equipment_stats_uncertain());
+        tail.apply(InventoryUpdate::Snapshot(vec![original]));
+        assert!(!tail.equipment_stats_uncertain());
+        assert!(inventory.equipment_stats_uncertain());
+    }
+
+    #[test]
+    fn correction_and_reset_need_a_full_baseline_before_affecting_history_retires() {
+        use super::super::MoveRules;
+        let mut original = item(24, 37);
+        original.details.bonuses.as_mut().unwrap().strength = -7;
+        let mut inventory = Inventory::default();
+        inventory.apply(InventoryUpdate::Snapshot(vec![original.clone()]));
+        planned_move(&mut inventory, MoveRules::Quarm, 24, 30);
+        planned_move(&mut inventory, MoveRules::Quarm, 30, 13);
+        inventory.apply(InventoryUpdate::Remove(InventorySlot(13)));
+        inventory.apply(InventoryUpdate::Invalidated);
+        inventory.apply(InventoryUpdate::Set(vec![original.clone()]));
+        inventory.apply(InventoryUpdate::Remove(InventorySlot::CURSOR));
+        assert!(inventory.stale());
+        assert!(inventory.equipment_stats_uncertain());
+        let pending = inventory.clone();
+        inventory.apply(InventoryUpdate::Snapshot(vec![original]));
+        assert!(!inventory.stale());
+        assert!(!inventory.equipment_stats_uncertain());
+        assert!(pending.stale());
+        assert!(pending.equipment_stats_uncertain());
+
+        let mut unadmitted = Inventory::default();
+        unadmitted.apply(InventoryUpdate::Set(vec![item(13, 37)]));
+        assert!(!unadmitted.received());
+        // No recorded complete baseline means false cannot establish readiness.
+        assert_eq!(
+            unadmitted.carried_weight_tenths(crate::GameDialect::EqMac, 0),
+            Err(WeightUnavailable::Inventory)
+        );
+    }
+
     #[test]
     fn generations_round_bags_separately_and_eqmac_coin_purses_follow_predictions() {
         use crate::GameDialect::{EqMac, Titanium};

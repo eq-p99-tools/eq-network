@@ -57,6 +57,12 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   submits its real paced stop. A trailing stationary stop can finish the
   pending intent; new movement or a failed/refused stop cannot start camping.
   Official ordering remains unverified (recording checklist6.380).
+
+- Keep contribution readiness through equipment predictions only when all
+  affected definitions explicitly have zero direct bonuses and no worn effect.
+  Retain affecting or unreadable intermediate equipment uncertainty until
+  a full authoritative baseline, including after a local round trip or matching
+  partial slot update. Existing protocol settlement policy is unchanged.
 - A grant after a fresh movement calibration carries its
   `WorldEvent::SpeedInputsAccepted` receipt again. A same-zone relocation
   (an in-zone teleport), a server correction or a refused transfer's rewind

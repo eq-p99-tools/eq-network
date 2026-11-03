@@ -426,3 +426,116 @@ fn transport_failure_reports_no_submitted_prediction_and_leaves_inventory_unchan
         )));
     }
 }
+
+#[test]
+fn eqmac_partial_slot_observations_do_not_retire_affecting_equipment_history() {
+    use eq_network_game::items::{EquipmentRules, ItemBonuses};
+    for protocol in [ServerProtocol::Takp, ServerProtocol::Quarm] {
+        let mut original = testing::item(24);
+        original.details.equipment = Some(EquipmentRules::default());
+        original.details.bonuses = Some(ItemBonuses {
+            strength: 7,
+            ..ItemBonuses::default()
+        });
+        original.details.slots = u32::MAX;
+        original.details.classes = u32::MAX;
+        original.details.races = u32::MAX;
+        assert_unknown_equipment_actor_refused(protocol, &original);
+        let (mut features, mut world) = setup(protocol, vec![original.clone()]);
+        // The generic zero-profile fixture cannot equip items. This case needs
+        // an explicitly eligible actor, without changing the production guards.
+        let mut player = testing::player(7);
+        player.class = Some(1);
+        player.race = 1;
+        player.level = 60;
+        world.player.admit(player);
+        for (from, to) in [(24, 30), (30, 13), (13, 30), (30, 24)] {
+            let revision = world.inventory.revision();
+            let request = command(&world, from, to, MoveQuantity::Whole);
+            let outcome = submit(protocol, &mut features, &mut world, &request);
+            assert!(outcome.result.unwrap());
+            let mut moved = original.clone();
+            moved.slot = InventorySlot(to);
+            assert!(
+                matches!(
+                    &outcome.events[..],
+                    [ClientEvent::World(WorldEvent::InventoryAction {
+                        session_id: 5,
+                        revision: actual_revision,
+                        sequence: None,
+                        update: Some(InventoryUpdate::Prediction(items)),
+                        error: None,
+                    })] if *actual_revision == revision && items.as_slice() == [moved]
+                ),
+                "{protocol:?} {from}->{to}: {:?}",
+                outcome.events
+            );
+            assert_eq!(outcome.sent.len(), 1, "{protocol:?} {from}->{to}");
+            assert_eq!(outcome.sent[0].opcode, 0x2c41);
+            let body = [from, to, 0]
+                .map(|slot| if slot == 30 { 0 } else { slot })
+                .into_iter()
+                .flat_map(i32::to_le_bytes)
+                .collect::<Vec<_>>();
+            assert_eq!(outcome.sent[0].body, body, "{protocol:?} {from}->{to}");
+        }
+        assert_eq!(world.inventory.unresolved_predictions(), 4);
+        assert!(world.inventory.equipment_stats_uncertain());
+        for update in [
+            InventoryUpdate::Remove(InventorySlot(13)),
+            InventoryUpdate::Set(vec![original.clone()]),
+            InventoryUpdate::Remove(InventorySlot::CURSOR),
+        ] {
+            observe(protocol, &mut features, &mut world, update);
+        }
+        assert!(!world.inventory.stale());
+        assert!(!world.inventory.predicted());
+        assert!(world.inventory.equipment_stats_uncertain());
+        testing::run_on(servers::server_type(protocol).wire(), |out| {
+            features.tick(Instant::now() + Duration::from_secs(60), &mut world, out)
+        })
+        .result
+        .unwrap();
+        assert!(world.inventory.equipment_stats_uncertain());
+        observe(
+            protocol,
+            &mut features,
+            &mut world,
+            InventoryUpdate::Snapshot(vec![original]),
+        );
+        assert!(!world.inventory.equipment_stats_uncertain());
+    }
+}
+
+/// The original fixture must report its eligibility refusal, without a packet
+/// or a prediction for the failed cursor-to-primary move.
+fn assert_unknown_equipment_actor_refused(protocol: ServerProtocol, original: &InventoryItem) {
+    let (mut features, mut world) = setup(protocol, vec![original.clone()]);
+    assert_eq!(world.player.as_ref().unwrap().class, None);
+    assert_eq!(world.player.as_ref().unwrap().race, 0);
+    let carried = command(&world, 24, 30, MoveQuantity::Whole);
+    let outcome = submit(protocol, &mut features, &mut world, &carried);
+    assert!(outcome.result.unwrap());
+    assert_eq!(outcome.sent.len(), 1, "{protocol:?}: {:?}", outcome.events);
+    let before = world.inventory.clone();
+    let revision = before.revision();
+    let equip = command(&world, 30, 13, MoveQuantity::Whole);
+    let outcome = submit(protocol, &mut features, &mut world, &equip);
+    assert!(outcome.result.unwrap());
+    assert_eq!(outcome.sent, [], "{protocol:?}: {:?}", outcome.events);
+    assert!(
+        matches!(
+            &outcome.events[..],
+            [ClientEvent::World(WorldEvent::InventoryAction {
+                session_id: 5,
+                revision: actual_revision,
+                sequence: None,
+                update: None,
+                error: Some(error),
+            })] if *actual_revision == revision && error == "Character class is not known"
+        ),
+        "{protocol:?}: {:?}",
+        outcome.events
+    );
+    assert_eq!(*world.inventory, before);
+}

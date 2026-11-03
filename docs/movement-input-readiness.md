@@ -49,6 +49,22 @@ are unavailable. Pending item moves are usable only if reconstructing the
 prediction origins produces the same total, including coin-purse effects.
 This method does not make predictions authoritative or settle them on a timer.
 
+Equipment contribution uncertainty is independent of carried weight. The inventory
+owner remembers every stat-bearing slot whose unresolved history included nonzero
+direct bonuses, a worn effect or missing metadata. Such a history stays gated
+after a local round trip; equal final placement and silence cannot erase it.
+Partial slot records carry no request revision and cannot retire affecting
+history for a potentially newer pending move. A full snapshot (or the existing
+policy-driven settlement where already supported) starts a new contribution
+baseline. EQMac adds no timer; affecting/unknown equipment can remain unavailable
+until a new snapshot. This deliberately does not claim general equipment
+readiness. All transitions must have been recorded by this owner from the
+baseline; its clone carries them, while endpoint reconstruction is no proof.
+Known rules with explicitly zero direct bonuses and no worn effect are neutral
+across that history, so they do not require withholding unchanged contributions.
+This proof does not confirm a move, fill in missing definitions, establish load,
+or grant movement without the session's normal input acceptance and calibration.
+
 The item decoders retain bag weight reduction (EQMac byte 272; Titanium serialized
 field 99). `Nourishment::fatigue` is optional: EQMac stamina/profile packets
 preserve it; Titanium leaves it absent. The EQMac profile offsets are hunger 3416,

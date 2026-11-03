@@ -330,6 +330,11 @@ pub struct Inventory {
     /// This is evidence bookkeeping, never a queue that delays sending.
     #[serde(skip)]
     predictions: VecDeque<BTreeSet<InventorySlot>>,
+    /// Slots whose history included affecting or unreadable equipment since
+    /// the last full snapshot or existing policy-driven settlement. Unversioned
+    /// partial updates cannot certify which pending prefix the server applied.
+    #[serde(skip)]
+    equipment_uncertainty: BTreeSet<InventorySlot>,
     /// Origins of plain whole-item relocations, separate from slot confirmation.
     #[serde(skip)]
     relocations: BTreeMap<InventorySlot, InventorySlot>,
@@ -354,6 +359,19 @@ impl Inventory {
     #[must_use]
     pub fn unresolved_predictions(&self) -> usize {
         self.predictions.len()
+    }
+
+    /// Whether any unresolved stat-bearing equipment history may change item
+    /// bonuses or a worn effect. Only explicitly decoded zero bonuses with known
+    /// equipment rules and no worn effect are neutral. This includes intermediate
+    /// moves: returning to the original slots does not clear an affecting history.
+    /// Unversioned partial slot updates cannot retire it; a full snapshot or
+    /// existing policy-driven settlement starts a new contribution baseline.
+    /// False does not confirm inventory placement or establish carried weight.
+    /// Callers must still require a received, non-stale inventory.
+    #[must_use]
+    pub fn equipment_stats_uncertain(&self) -> bool {
+        !self.equipment_uncertainty.is_empty()
     }
 
     /// Slots changed by pending predictions and their contents before the first change.
@@ -446,6 +464,7 @@ impl Inventory {
                 self.stale = false;
                 self.unconfirmed.clear();
                 self.predictions.clear();
+                self.equipment_uncertainty.clear();
                 self.correcting = false;
             }
             InventoryUpdate::Set(items) => {
@@ -498,6 +517,7 @@ impl Inventory {
             }
             InventoryUpdate::Settled => {
                 self.unconfirmed.clear();
+                self.equipment_uncertainty.clear();
                 self.resolved();
             }
         }
