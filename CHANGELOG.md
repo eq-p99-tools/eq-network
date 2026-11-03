@@ -120,6 +120,13 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   results arrive, without optimistic items or timeout retries. The established
   Titanium result behavior is preserved.
 
+- Typed P99 spell-table registration/replay decoding and ordered
+  `WorldEvent::SpellTable` delivery across world and zone transports,
+  including before profile admission. Complete shape and registry-ID
+  validation produce explicit unavailable events for malformed tables;
+  order and duplicates are retained. Installed snapshots and selective
+  definition application remain host-owned, with no new game requests.
+
 - Quarm casting, gem memorization and spellbook reading through the shared
   `EQMac` features, without book moves or deletion; item casts use the
   current inventory and never predict charge consumption. Source-derived

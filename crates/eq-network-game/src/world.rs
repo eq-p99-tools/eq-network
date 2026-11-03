@@ -621,6 +621,10 @@ pub enum ItemHitPoints {
 /// wildcard arm.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub enum WorldEvent {
+    /// P99 spell-table facts, delivered in world/zone receive order even
+    /// before profile admission. Installed definitions and provider epochs
+    /// remain host-owned; unavailable updates must not fall back silently.
+    SpellTable(crate::spell_tables::Event),
     /// A server spell action; icon flags do not establish an authoritative buff slot.
     SpellEffect(crate::buffs::SpellEffect),
     /// Admission buff slots; holes retain their original indexes.

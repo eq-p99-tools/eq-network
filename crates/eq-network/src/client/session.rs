@@ -34,6 +34,7 @@ mod reading;
 mod resurrection;
 mod servers;
 mod socials;
+pub(super) mod spell_tables;
 mod spellbook;
 mod talk;
 mod targeting;

@@ -102,6 +102,8 @@ pub mod servers;
 /// Rolling dice, emoting and assisting; and other players' yells for help,
 /// voice macros, requests to inspect the player and duels.
 pub mod socials;
+/// P99 spell-ID registration and cached-definition replay records and events.
+pub mod spell_tables;
 /// Server-driven spellbook and casting notifications.
 pub mod spells;
 /// A quest's word on the player's base stats.

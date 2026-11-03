@@ -122,6 +122,8 @@ pub(super) enum Reader {
     /// The world server's: validation, the character list and the handoff
     /// to a zone.
     World,
+    /// Server-policy spell tables delivered outside profile admission gates.
+    SpellTables,
     /// The zone's admission of the player.
     Admission,
     /// The generation's decoders, whose messages every zone feature hears

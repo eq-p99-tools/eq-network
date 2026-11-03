@@ -771,6 +771,8 @@ struct Events<'a> {
     /// The world played on: the configured one, or the player's choice.
     server: String,
     character: String,
+    /// Typed spell-table ordering across this attempt's world/zone connections.
+    spell_tables: session::spell_tables::Sequence,
 }
 
 impl<'a> Events<'a> {
@@ -786,11 +788,14 @@ impl<'a> Events<'a> {
             messages: 0,
             server: config.server.clone(),
             character: config.character.clone(),
+            spell_tables: session::spell_tables::Sequence::new(rand::random()),
         }
     }
 
     fn reset(&mut self) {
-        self.session_id = format!("{:016x}", rand::random::<u64>());
+        let run_id = rand::random::<u64>();
+        self.session_id = format!("{run_id:016x}");
+        self.spell_tables = session::spell_tables::Sequence::new(run_id);
         self.zone.clear();
         self.messages = 0;
         self.server.clone_from(&self.config.server);

@@ -349,6 +349,15 @@ pub(super) fn run(
         if let Some(shield) = shield.as_ref() {
             shield.spawns(packet.opcode, &mut packet.body, &credentials.key)?;
         }
+        if super::spell_tables::receive(
+            server,
+            eq_network_game::spell_tables::Stage::Zone { session_id },
+            packet.opcode,
+            &packet.body,
+            log,
+        )? {
+            continue;
+        }
         // What the generation's client answers by itself, at any time.
         if let Some(reply) = server.wire().answer(packet.opcode, &packet.body) {
             session.send(reply.opcode, &reply.body)?;

@@ -199,3 +199,45 @@ a cached prior speed, successful enqueue, or mismatching receipt is insufficient
 Migration: add `report_id` to speed-input command literals and handle the new
 world-event variant in exhaustive matches. This changes the unreleased public
 API and requires downstream validation; it is not a compatible 0.1.x patch.
+
+## P99 spell-table facts and host providers
+
+`spell_tables::decode` reads variable-length P99 source-ID registration and
+destination/source replay records. `SpellId` validates the known 10,000-entry
+registry domain for these messages only. Counts, full lengths and every ID
+are validated before output allocation. Entry order and duplicates are kept;
+an error returns no valid prefix. The packets carry IDs, not definition values.
+
+`WorldEvent::SpellTable(spell_tables::Event)` is a new exhaustive-enum variant;
+consumers must handle it. The P99 server policy emits complete tables or typed
+unavailability directly from world and zone receive paths, before ordinary
+profile/admission filtering. Other server policies do not consume these opcodes.
+A failed event callback remains a session failure. No packets are sent for
+these messages, and no capabilities or motion rules change.
+
+An event's run ID/revision describes network order, not an installed-provider
+epoch. It spans successive world/zone transports in one attempt; zone context
+already names the admission session before its profile arrives. A new network
+attempt may start new ordering without clearing the host's provider snapshots.
+The run ID formatted as sixteen lower-case hexadecimal digits equals that
+attempt's `SessionStatus.session_id`. The actual Connecting notification follows
+the run reset; a host binds a successor from that lifecycle fact, never merely
+from a new run ID appearing in table data. Producer epoch/policy must already
+be captured before enqueue so a stale Connecting cannot rebind a replacement.
+
+The host owns its installed-spell provider, typed cached projections, effective
+definitions and a separate epoch/policy binding on its event bridge. Under the
+chosen lifecycle policy, snapshots survive zone/world transport reconnects in
+the same logical provider lifetime. Explicit provider replacement starts a new
+epoch requiring actual registration and must not leak overlays to another
+installation or server policy. This is an application lifecycle policy, not
+a claim that every native teardown path was established.
+
+Registration snapshots a first-seen source's CURRENT effective projection;
+duplicates do not refresh it. Replay uses cached source projections in wire
+order, retains destination ID/text and every excluded field, and must validate
+the entire batch before atomically publishing changes. It must not copy an
+entire source definition, chase live aliases or restore omitted destinations. Missing
+source data and malformed events must surface as unavailable, never a silent
+fallback or partial application. Hosts must route these facts before their
+own player/profile gates. This networking API applies no installed definitions.

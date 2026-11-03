@@ -142,6 +142,12 @@ pub(super) trait ServerType: Sync {
         ItemRules::Takp
     }
 
+    /// Spell-ID registration and replay, if this server sends them. This
+    /// policy delivers facts only; installed snapshots remain host-owned.
+    fn spell_tables(&self) -> Option<&'static dyn super::spell_tables::Policy> {
+        None
+    }
+
     /// Protects a world connection, from the login body sent to it: P99's
     /// world approval, encrypted file manifests and checksum answers, and
     /// spawns encrypted with the login session key.
@@ -800,6 +806,10 @@ const P99_HAZARDS: [Hazard; 1] = [Hazard::Falling];
 struct Project1999;
 
 impl ServerType for Project1999 {
+    fn spell_tables(&self) -> Option<&'static dyn super::spell_tables::Policy> {
+        Some(&super::spell_tables::P99)
+    }
+
     fn posture(&self, _setup: &Setup<'_>) -> Provided {
         offer(Box::new(Stances))
     }
