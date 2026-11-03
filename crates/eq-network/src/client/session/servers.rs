@@ -1156,6 +1156,12 @@ impl ServerType for EqEmu {
 struct Quarm;
 
 impl ServerType for Quarm {
+    /// Quarm handles normal attack toggles and consideration with the shared
+    /// `EQMac` layouts; only server records report combat outcomes.
+    fn combat(&self, _setup: &Setup<'_>) -> Provided {
+        offer(shared::combat(true))
+    }
+
     fn item_rules(&self) -> ItemRules {
         ItemRules::Quarm
     }
@@ -1598,7 +1604,7 @@ mod tests {
         // personal inventory actions. Other features await their own evidence.
         let setup = Setup::new("Tester", AutoEat::default());
         let quarm = server_type(ServerProtocol::Quarm);
-        assert_eq!(quarm.features(&setup).len(), 13);
+        assert_eq!(quarm.features(&setup).len(), 14);
         assert_eq!(
             offers(quarm),
             [
@@ -1608,6 +1614,7 @@ mod tests {
                 Capability::Moving,
                 Capability::Falling,
                 Capability::Targeting,
+                Capability::Combat,
                 Capability::Talking,
                 Capability::Camping,
                 Capability::Zoning,

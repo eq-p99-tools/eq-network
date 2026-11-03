@@ -248,6 +248,9 @@ fn refusal(command: &ClientCommand, reason: &str) -> Option<WorldEvent> {
     let error = Some(reason.to_owned());
     Some(match command {
         ClientCommand::CastSpell { .. } => return casting::rejected(command, reason),
+        ClientCommand::Consider { .. } | ClientCommand::AutoAttack { .. } => {
+            return super::combat::rejected(command, reason);
+        }
         ClientCommand::UseItem(request) => WorldEvent::ItemUseAction {
             session_id: request.session_id,
             request_id: request.request_id,
@@ -345,7 +348,6 @@ fn refusal(command: &ClientCommand, reason: &str) -> Option<WorldEvent> {
         | ClientCommand::SetPosture { .. }
         | ClientCommand::SendChat(_)
         | ClientCommand::InspectItem { .. }
-        | ClientCommand::Consider { .. }
         | ClientCommand::Loot { .. }
         | ClientCommand::LootItem { .. }
         | ClientCommand::EndLoot { .. }
@@ -354,7 +356,6 @@ fn refusal(command: &ClientCommand, reason: &str) -> Option<WorldEvent> {
         | ClientCommand::Jump { .. }
         | ClientCommand::EnvironmentalDamage { .. }
         | ClientCommand::DropInvisibility { .. }
-        | ClientCommand::AutoAttack { .. }
         | ClientCommand::WhoAll { .. }
         | ClientCommand::ConfigureMotion { .. }
         | ClientCommand::SpeedInputs { .. }

@@ -39,7 +39,7 @@ fn quarm_targets_visible_spawns_and_follows_server_changes_without_attacking() {
     let server = servers::server_type(ServerProtocol::Quarm);
     let (mut features, mut world) = admitted();
     assert!(features.capabilities().contains(&Capability::Targeting));
-    assert!(!features.capabilities().contains(&Capability::Combat));
+    assert!(features.capabilities().contains(&Capability::Combat));
     world.spawns.insert(testing::spawn(8, SpawnKind::Npc));
     let mut hidden = testing::spawn(9, SpawnKind::Npc);
     hidden.invisible = true;

@@ -1031,6 +1031,17 @@ pub enum WorldEvent {
     },
     /// The server's assessment of a considered entity.
     Consideration(crate::combat::Consideration),
+    /// Local submission or refusal of a normal combat request. A sent toggle
+    /// does not establish authoritative attack state or predict any result;
+    /// only the server's consideration, damage and animation records report those.
+    CombatRequest {
+        /// The zone admission the request was made for.
+        session_id: u64,
+        /// What the host requested.
+        request: crate::combat::CombatRequest,
+        /// Whether it was submitted or refused locally.
+        status: crate::combat::CombatRequestStatus,
+    },
     /// Camp progress for the current admission.
     Camp(CampStatus),
     /// Carried coins, from admission or a server money update.

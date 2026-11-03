@@ -64,6 +64,24 @@ timeout never authorizes resending a non-idempotent action.
 
 ## Validation and release integration
 
+Normal combat requests emit `WorldEvent::CombatRequest { session_id, request,
+status }`. `combat::CombatRequest` distinguishes `Consider { target_id }` from
+`AutoAttack { enabled }`; `CombatRequestStatus::Sent` means transport submission
+only. `Refused(reason)` means nothing was sent, including an expired request,
+an obsolete admission or a server policy that does not offer combat. The reason
+is display text; applications must use the status variant for control flow.
+Exhaustive `WorldEvent` matches must add the new event. These are unreleased
+API additions, not a compatible published patch.
+
+No authoritative autoattack acknowledgment exists on the inspected EQMac path.
+A host may display its requested toggle separately; it must not label `Sent`
+as server-confirmed combat, a hit or a successful consideration. Only existing
+`Consideration`, `Damage` and `Animation` events carry server results. A consider
+answer names its own target; it must not be applied to whichever target the host
+has since selected. Unknown con/damage values remain observable. Neither target
+range nor weapon eligibility is recalculated by the normal toggle owner.
+See [combat evidence and limits](docs/quarm-combat.md).
+
 This library workspace intentionally does not commit `Cargo.lock`. CI resolves
 dependencies for each toolchain: stable format, Clippy, tests and docs on Linux;
 native tests on Windows. These checks

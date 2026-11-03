@@ -1502,6 +1502,7 @@ mod tests {
                 Capability::Moving,
                 Capability::Falling,
                 Capability::Targeting,
+                Capability::Combat,
                 Capability::Talking,
                 Capability::Camping,
                 Capability::Zoning,
@@ -1660,3 +1661,6 @@ mod quarm_inventory_tests;
 
 #[cfg(test)]
 mod item_move_tests;
+
+#[cfg(test)]
+mod combat_tests;

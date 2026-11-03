@@ -49,7 +49,7 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   "cannot train" and "untrained" sentinels.
 - Enable Quarm target selection and clearing through the existing EQMac
   feature, retaining visibility checks and authoritative server changes.
-  Combat remains disabled; selecting a target does not enable attacks.
+  Target selection alone sends no attack request; combat is offered separately.
 - Enable Quarm's shared EQMac ground movement, turns, jumps, falls, zone
   handoffs and return to bind after a server-reported death. Follow its
   inventory and coins for carried weight without offering item actions.
@@ -69,6 +69,15 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   preserving the shared food/water counts and rejecting other lengths.
 
 ### Added
+
+- Quarm offers normal attack and consider through the shared EQMac combat
+  owner. `combat::CombatRequest`, `CombatRequestStatus` and
+  `WorldEvent::CombatRequest` distinguish transport submission from local
+  refusal, including stale-admission and policy refusals. Self-consider is
+  supported; unavailable spawns and inactive admissions are refused. Server
+  consideration, damage and animation remain authoritative; no attack result
+  or acceptance acknowledgment is synthesized. Validation is source-derived
+  and synthetic; controlled live verification remains outstanding.
 
 - `inventory::ItemRules`, `inventory::decode_eqmac_with` and
   `message::eqmac_with` let server policy select TAKP or Quarm item
