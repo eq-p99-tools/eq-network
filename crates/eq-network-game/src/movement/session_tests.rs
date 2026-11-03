@@ -853,3 +853,114 @@ fn withdrawn_input_allows_only_fresh_vertical_descent_and_no_jump() {
     assert_eq!(session.position(), before);
     assert!(session.check_jump().is_ok());
 }
+
+#[test]
+#[allow(clippy::float_cmp, reason = "Exact checked and assigned positions")]
+fn prepared_move_drop_preserves_owner_and_rejects_a_foreign_admission() {
+    let start = Instant::now();
+    let now = start + Duration::from_millis(100);
+    let mut session = setup(start);
+    let motion = request(now, 0.5);
+    let mut foreign = motion.clone();
+    foreign.session_id += 1;
+    assert!(session.prepare_move_sample(&foreign, now).is_err());
+    {
+        let prepared = session.prepare_move_sample(&motion, now).unwrap();
+        assert_eq!(prepared.sample.position, motion.position);
+        assert_eq!(prepared.sample.sequence, 0);
+        assert!(matches!(prepared.release, Release::Send));
+    }
+    assert_eq!(session.position(), Position::default());
+    assert_eq!(session.sequence, 0);
+    assert_eq!(session.last_sent, start);
+    // Dropping a checked candidate did not consume its guard time budget.
+    session
+        .send_move_sample(&motion, now, |sample| {
+            assert_eq!(sample.position, motion.position);
+            assert_eq!(sample.sequence, 0);
+            Ok(())
+        })
+        .unwrap();
+}
+
+#[test]
+#[allow(clippy::float_cmp, reason = "Exact checked and assigned positions")]
+fn prepared_held_sample_commits_locally_then_releases_the_same_sample() {
+    let start = Instant::now();
+    let now = start + Duration::from_millis(100);
+    let mut session = setup(start).with_gate(Some(UpdateGate::Changed {
+        spacing: Duration::from_millis(280),
+    }));
+    let motion = request(now, 0.5);
+    let prepared = session.prepare_move_sample(&motion, now).unwrap();
+    assert!(matches!(prepared.release, Release::Hold));
+    let expected = prepared.sample;
+    prepared
+        .submit(|_| panic!("held acceptance must not send"))
+        .unwrap();
+    assert_eq!(session.position(), expected.position);
+    assert_eq!(session.sequence, 0);
+    assert_eq!(session.last_sent, start);
+    session
+        .tick_sample(start + Duration::from_millis(280), |sample| {
+            assert_eq!(*sample, expected);
+            Ok(())
+        })
+        .unwrap();
+    assert_eq!(session.sequence, 1);
+}
+
+#[test]
+#[allow(clippy::float_cmp, reason = "Exact checked and assigned positions")]
+fn unchanged_candidate_accepts_input_once_without_a_send_or_extra_budget() {
+    let start = Instant::now();
+    let mut session = setup(start).with_gate(Some(UpdateGate::Changed {
+        spacing: Duration::from_millis(50),
+    }));
+    let first = start + Duration::from_millis(100);
+    let still = request(first, 0.0);
+    session.send_move_sample(&still, first, |_| Ok(())).unwrap();
+    let now = first + Duration::from_millis(100);
+    let next = request(now, 0.0);
+    let prepared = session.prepare_move_sample(&next, now).unwrap();
+    assert!(matches!(prepared.release, Release::Unchanged));
+    assert_eq!(prepared.sample.position, next.position);
+    prepared
+        .submit(|_| panic!("unchanged sample must not send"))
+        .unwrap();
+    assert_eq!(session.sequence, 1);
+    assert_eq!(session.last_sent, first);
+    assert_eq!(session.last_input, now);
+    assert!(session
+        .send_move_sample(&next, now, |_| panic!("duplicate input stamp"))
+        .is_err());
+}
+
+#[test]
+#[allow(clippy::float_cmp, reason = "Exact checked and assigned positions")]
+fn failed_prepared_send_preserves_motion_without_undoing_external_effects() {
+    let start = Instant::now();
+    let now = start + Duration::from_millis(100);
+    let mut session = setup(start);
+    let motion = request(now, 0.5);
+    let mut external_effects = Vec::new();
+    assert!(session
+        .send_move_sample(&motion, now, |sample| {
+            external_effects.push(sample.position);
+            anyhow::bail!("synthetic terminal execution failure")
+        })
+        .is_err());
+    assert_eq!(external_effects, [motion.position]);
+    assert_eq!(session.position(), Position::default());
+    assert_eq!(session.sequence, 0);
+    assert_eq!(session.last_sent, start);
+    assert_eq!(session.last_input, start);
+    // Test-only inspection of preserved state; session-level execution errors
+    // may still require terminal teardown rather than a production retry.
+    session
+        .send_move_sample(&motion, now, |sample| {
+            assert_eq!(sample.sequence, 0);
+            Ok(())
+        })
+        .unwrap();
+}

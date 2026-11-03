@@ -16,6 +16,10 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **Breaking:** `WorldRules` gains optional `language_zero_selector`; complete
   struct literals must initialize it or use `..WorldRules::default()` for
   absence.
+
+- Prepare one checked movement candidate inside its existing owner before
+  committing a sent, held or unchanged sample. Preserve public method
+  signatures, generation gates, wire delivery and failure behavior.
 - **Breaking:** `GameCommand::SpeedInputs` now carries `revision` and a
   `movement::SpeedInputState` (`Ready(SpeedInputs)` or
   `Unavailable(SpeedInputUnavailable)`) instead of bare rate, weight and

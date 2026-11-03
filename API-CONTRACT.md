@@ -352,3 +352,15 @@ entire source definition, chase live aliases or restore omitted destinations. Mi
 source data and malformed events must surface as unavailable, never a silent
 fallback or partial application. Hosts must route these facts before their
 own player/profile gates. This networking API applies no installed definitions.
+
+## Checked local movement preparation
+
+`MotionSession::send_move_sample` keeps its existing signature and result
+semantics. Internally it prepares one checked candidate while exclusively
+borrowing its owner. Validation and the generation release decision precede
+any send. Held and unchanged candidates commit locally without sending;
+immediate candidates commit movement only after the existing send callback
+succeeds. A checked candidate is not yet an accepted move or a server receipt.
+Dropping it or failing the callback leaves motion state untouched; external
+callback effects cannot be rolled back. No public observer/transaction API is
+introduced, and the private plan certifies no external body or scene identity.

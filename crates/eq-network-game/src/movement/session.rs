@@ -152,10 +152,61 @@ pub struct MotionSession {
 }
 
 /// What the gate does with an accepted sample.
+#[derive(Clone, Copy)]
 enum Release {
     Send,
     Hold,
     Unchanged,
+}
+
+/// One locally checked candidate, tied to the only movement owner until it
+/// is submitted or dropped. Its sample and release decision cannot be replaced
+/// by a later request, nor committed against a different admission.
+struct PreparedMove<'a> {
+    owner: &'a mut MotionSession,
+    guard: MovementGuard,
+    flags: Flags,
+    sample: PositionPacket,
+    release: Release,
+    now: Instant,
+    moving: bool,
+}
+
+impl PreparedMove<'_> {
+    /// A checked candidate is accepted only here: held/unchanged candidates
+    /// commit locally, and an immediate send commits after its callback succeeds.
+    /// External callback side effects are never rolled back by this owner.
+    fn submit(self, send: impl FnOnce(&PositionPacket) -> Result<()>) -> Result<()> {
+        let Self {
+            owner,
+            guard,
+            flags,
+            sample,
+            release,
+            now,
+            moving,
+        } = self;
+        match release {
+            Release::Send => {
+                send(&sample)?;
+                owner.held = None;
+                owner.last_sent = now;
+                owner.sequence = owner.sequence.wrapping_add(1);
+                owner.last_update = Some(PositionPacket {
+                    sequence: 0,
+                    ..sample
+                });
+            }
+            Release::Hold => owner.held = Some(sample),
+            Release::Unchanged => owner.held = None,
+        }
+        owner.flags = flags;
+        owner.guard = guard;
+        owner.position = sample.position;
+        owner.moving = moving;
+        owner.last_input = now;
+        Ok(())
+    }
 }
 
 impl MotionSession {
@@ -372,16 +423,28 @@ impl MotionSession {
     /// # Errors
     /// Rejects stale, uncalibrated, suspended, excessive or invalid motion,
     /// and propagates whatever `send` returns.
-    #[allow(
-        clippy::float_cmp,
-        reason = "Withdrawn input must preserve coordinates exactly, without drift credit"
-    )]
     pub fn send_move_sample(
         &mut self,
         request: &MovementRequest,
         now: Instant,
         send: impl FnOnce(&PositionPacket) -> Result<()>,
     ) -> Result<()> {
+        self.prepare_move_sample(request, now)?.submit(send)
+    }
+
+    /// Materialize and check exactly one immutable sample and release decision.
+    /// No owner state changes before submission. The exclusive owner borrow
+    /// prevents re-entrant motion changes during the existing send callback.
+    /// Body/scene authority is not owned or certified by this local plan.
+    #[allow(
+        clippy::float_cmp,
+        reason = "Withdrawn input must preserve coordinates exactly, without drift credit"
+    )]
+    fn prepare_move_sample(
+        &mut self,
+        request: &MovementRequest,
+        now: Instant,
+    ) -> Result<PreparedMove<'_>> {
         ensure!(!self.suspended, "movement session is suspended");
         ensure!(
             request.mode != MovementMode::Fall || self.falls,
@@ -465,26 +528,15 @@ impl MotionSession {
         sample.check()?;
         let mut flags = self.flags.clone();
         let release = self.release(&sample, &mut flags, now)?;
-        match release {
-            Release::Send => {
-                send(&sample)?;
-                self.held = None;
-                self.last_sent = now;
-                self.sequence = self.sequence.wrapping_add(1);
-                self.last_update = Some(PositionPacket {
-                    sequence: 0,
-                    ..sample
-                });
-            }
-            Release::Hold => self.held = Some(sample),
-            Release::Unchanged => self.held = None,
-        }
-        self.flags = flags;
-        self.guard = guard;
-        self.position = request.position;
-        self.moving = moving || turn != 0;
-        self.last_input = now;
-        Ok(())
+        Ok(PreparedMove {
+            owner: self,
+            guard,
+            flags,
+            sample,
+            release,
+            now,
+            moving: moving || turn != 0,
+        })
     }
 
     /// What the generation's gate does with an accepted sample at `now`;
