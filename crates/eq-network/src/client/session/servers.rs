@@ -222,6 +222,13 @@ pub(super) trait ServerType: Sync {
         false
     }
 
+    /// Whether this server policy recognizes P99 list notices and supports
+    /// the separately opted-in presence reply. Recognition is source-backed;
+    /// deployed server acceptance remains unverified.
+    fn answers_list_polls(&self) -> bool {
+        false
+    }
+
     /// Runs the character's stay in a zone: the shared zone session, with
     /// the features this server type provides.
     ///
@@ -890,6 +897,10 @@ impl ServerType for Project1999 {
     /// watched leaving for them yet, so `EQEmu` keeps the default until
     /// one is; the `EQMac` types never showed it under wine.
     fn sends_system_info(&self) -> bool {
+        true
+    }
+
+    fn answers_list_polls(&self) -> bool {
         true
     }
 
@@ -2189,6 +2200,21 @@ mod tests {
             assert!(
                 !server_type(protocol).sends_system_info(),
                 "{protocol:?} lists a send nobody has watched"
+            );
+        }
+    }
+
+    #[test]
+    fn only_p99_offers_the_opt_in_list_presence_reply() {
+        assert!(server_type(ServerProtocol::Project1999).answers_list_polls());
+        for protocol in [
+            ServerProtocol::EqEmu,
+            ServerProtocol::Quarm,
+            ServerProtocol::Takp,
+        ] {
+            assert!(
+                !server_type(protocol).answers_list_polls(),
+                "{protocol:?} offers a P99-only list reply"
             );
         }
     }

@@ -282,6 +282,24 @@ impl MovementBounds {
     }
 }
 
+/// Explicit movement departures, all disabled by default. These are local
+/// policy choices, not native movement rules or detection guarantees.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize)]
+pub struct MovementOptions {
+    /// Permit fresh voluntary motion while stunned. Other stun gates remain.
+    pub walk_while_stunned: bool,
+    /// Increase forward running speed by [`Self::RUN_BOOST`].
+    pub run_boost: bool,
+    /// Permit vertical travel within the current mode's elapsed speed budget.
+    pub fly: bool,
+}
+
+impl MovementOptions {
+    /// The explicit 10% run increase. This is application policy, with no
+    /// assertion about server acceptance or movement detection thresholds.
+    pub const RUN_BOOST: f32 = 1.1;
+}
+
 /// Validates proposed motion without trusting render-frame timing or accumulating idle credit.
 #[derive(Clone, Debug)]
 pub struct MovementGuard {
@@ -294,6 +312,7 @@ pub struct MovementGuard {
     sampled: Instant,
     input_epoch: Instant,
     speed: Option<f32>,
+    flying: bool,
     bounds: Option<MovementBounds>,
     /// The fastest descent a fall sample may claim, in world units per second.
     fall_speed: f32,
@@ -330,6 +349,7 @@ impl MovementGuard {
             sampled: now,
             input_epoch: now,
             speed: None,
+            flying: false,
             bounds: None,
             fall_speed: MAX_FALL_SPEED,
             climb: None,
@@ -483,7 +503,9 @@ impl MovementGuard {
             }
         });
         let rise = since_jump.map_or(0.0, |(from, to)| self.jump_rise(from, to));
-        let vertical = if request.mode == MovementMode::Fall {
+        let vertical = if self.flying {
+            delta[2].abs() <= speed * elapsed + 0.01
+        } else if request.mode == MovementMode::Fall {
             delta[2] <= MAX_GROUNDED_STEP + rise
                 && -delta[2] <= self.fall_speed * elapsed + MAX_GROUNDED_STEP
         } else {

@@ -134,6 +134,7 @@ pub(super) fn needs(command: &ClientCommand) -> &'static [Resource] {
         | ClientCommand::InspectItem { .. }
         | ClientCommand::Consider { .. }
         | ClientCommand::Camp { .. }
+        | ClientCommand::ExitAtOnce { .. }
         // A death holds nothing: whatever was under way ends with it.
         | ClientCommand::BledOut { .. }
         | ClientCommand::Loot { .. }
@@ -191,6 +192,9 @@ pub(super) fn needs(command: &ClientCommand) -> &'static [Resource] {
         | ClientCommand::SpeedInputs { .. }
         | ClientCommand::ClimbReach { .. }
         | ClientCommand::AutoEat { .. }
+        | ClientCommand::AnswerListPolls { .. }
+        | ClientCommand::SetMovementOptions { .. }
+        | ClientCommand::SetBookOptions { .. }
         | ClientCommand::Move(_) => &[],
     }
 }
@@ -338,7 +342,12 @@ fn refusal(command: &ClientCommand, reason: &str) -> Option<WorldEvent> {
             error,
             string_id: None,
         },
-        ClientCommand::Camp { .. } => WorldEvent::Camp(CampStatus::Rejected(reason.into())),
+        ClientCommand::SetMovementOptions { session_id, request_id, .. } => WorldEvent::MovementOptionsRefused {
+            session_id: *session_id,
+            request_id: *request_id,
+            reason: reason.into(),
+        },
+        ClientCommand::Camp { .. } | ClientCommand::ExitAtOnce { .. } => WorldEvent::Camp(CampStatus::Rejected(reason.into())),
         ClientCommand::SelectTarget {
             session_id,
             request_id,
@@ -374,6 +383,8 @@ fn refusal(command: &ClientCommand, reason: &str) -> Option<WorldEvent> {
         | ClientCommand::SpeedInputs { .. }
         | ClientCommand::ClimbReach { .. }
         | ClientCommand::AutoEat { .. }
+        | ClientCommand::AnswerListPolls { .. }
+        | ClientCommand::SetBookOptions { .. }
         | ClientCommand::CloseContainer { .. }
         // The host sends a death report on its own; nobody waits on it.
         | ClientCommand::BledOut { .. }

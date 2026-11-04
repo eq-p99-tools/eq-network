@@ -133,6 +133,7 @@ pub struct MotionSession {
     sequence: u16,
     position: Position,
     calibration: Option<MotionCalibration>,
+    options: super::MovementOptions,
     last_sent: Instant,
     moving: bool,
     suspended: bool,
@@ -389,6 +390,7 @@ impl MotionSession {
             sequence: 0,
             position,
             calibration: None,
+            options: super::MovementOptions::default(),
             last_sent: now,
             moving: false,
             suspended: false,
@@ -399,6 +401,34 @@ impl MotionSession {
             flags: Flags::default(),
             last_input: now,
         })
+    }
+
+    /// Current explicit movement choices for this admission.
+    #[must_use]
+    pub const fn options(&self) -> super::MovementOptions {
+        self.options
+    }
+
+    /// Applies caller-stamped choices without granting speed or reusing queued
+    /// input. The accepted position, sample time and fixed bounds remain.
+    ///
+    /// # Errors
+    /// Refuses choices made before the latest reset or accepted sample. The
+    /// caller also checks the command's future/expiry and session identity.
+    pub fn set_options(&mut self, options: super::MovementOptions, created: Instant) -> Result<()> {
+        ensure!(
+            created >= self.guard.input_epoch && created >= self.guard.sampled,
+            "movement options predate the current motion state"
+        );
+        if self.options == options {
+            return Ok(());
+        }
+        self.stop_voluntary();
+        self.options = options;
+        self.guard.flying = options.fly;
+        self.guard.input_epoch = created;
+        self.guard.jumped_at = None;
+        Ok(())
     }
 
     /// Enables an independently measured movement mode for this admission.
@@ -606,6 +636,13 @@ impl MotionSession {
         };
         // Switching mode changes the per-sample limit without resetting input expiry
         // or granting a new time budget. The clone is committed only after send succeeds.
+        let speed = if self.options.run_boost
+            && matches!(request.mode, MovementMode::Forward | MovementMode::Fall)
+        {
+            speed * super::MovementOptions::RUN_BOOST
+        } else {
+            speed
+        };
         guard.speed = Some(speed);
         // The wire's velocity and turn rate cover the same interval the guard
         // budgets: from the last accepted request's stamp to this one's.

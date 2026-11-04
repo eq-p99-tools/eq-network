@@ -5,7 +5,32 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- Default-off P99 list presence replies (`ClientConfig::answer_list_polls`,
+  `ClientCommand::AnswerListPolls`, `Capability::AnsweringListPolls`). Runtime
+  disable cancels an owed reply. Only server-driven presence polls schedule
+  the five-byte reply; population notices never join a list or become a
+  captcha. The 3..=60 second delay is application policy. Source layouts and
+  synthetic tests do not establish deployed server acceptance or timing.
+
+- Explicit admission-scoped movement and spellbook choices:
+  `movement::MovementOptions`, `ClientCommand::SetMovementOptions`, and
+  `ClientCommand::SetBookOptions`. All departures start off. Stun movement
+  retains transition freshness; a 10% forward-run increase and bounded
+  vertical movement retain the ordinary movement guards. Memorizing without
+  automatic sitting skips the local preparation delay and retains reply
+  handling; server acceptance remains unverified.
+- `ClientCommand::ExitAtOnce` submits ordinary Logout without camp preparation
+  and uses the existing reply/close lifecycle. Server acceptance and cleanup
+  remain unverified on deployed public servers.
+
 ### Changed
+
+- **Breaking:** the exhaustive `ClientCommand` enum gains `AnswerListPolls`,
+  `SetMovementOptions`, `SetBookOptions` and `ExitAtOnce`. New local worker
+  feedback is `WorldEvent::MovementOptionsApplied` / `MovementOptionsRefused`;
+  these are separate from server replies and speed-input grants.
 
 - Keep movement load conservatively bounded through known carried-stack splits
   and merges, including independently refused or partial moves. Placement stays

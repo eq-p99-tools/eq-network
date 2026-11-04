@@ -199,7 +199,10 @@ impl Feature for Camp {
     }
 
     fn owns(&self, command: &ClientCommand) -> bool {
-        matches!(command, ClientCommand::Camp { .. })
+        matches!(
+            command,
+            ClientCommand::Camp { .. } | ClientCommand::ExitAtOnce { .. }
+        )
     }
 
     /// Starts camping.
@@ -209,11 +212,23 @@ impl Feature for Camp {
         world: &mut World,
         out: &mut Out<'_, '_>,
     ) -> Result<()> {
-        if !matches!(command, ClientCommand::Camp { session_id, .. } if *session_id == world.session_id)
-        {
-            return Ok(());
+        match command {
+            ClientCommand::Camp { session_id, .. } if *session_id == world.session_id => {
+                self.request(Instant::now(), world, out)
+            }
+            ClientCommand::ExitAtOnce { session_id, .. } if *session_id == world.session_id => {
+                if !matches!(self.phase, Phase::LoggingOut(_)) {
+                    // An explicit departure: no automatic sitting, Camp packet
+                    // or countdown, but the same Logout and reply owner.
+                    out.request(&Request::Logout)?;
+                    self.logout_sent(Instant::now());
+                    out.log
+                        .send(ClientEvent::World(WorldEvent::Camp(CampStatus::LoggingOut)))?;
+                }
+                Ok(())
+            }
+            _ => Ok(()),
         }
-        self.request(Instant::now(), world, out)
     }
 
     /// Standing up, ducking or moving abandons a camp still being prepared.
@@ -385,6 +400,31 @@ mod tests {
         assert_eq!(outcome.sent, [command::titanium_logout()]);
         let outcome = testing::run(|out| camp.observe(&Message::LoggedOut, &mut world, out));
         outcome.result.unwrap();
+        assert!(matches!(world.exit(), Some(ZoneExit::CharacterSelect)));
+    }
+
+    #[test]
+    fn immediate_exit_sends_only_logout_once_then_uses_the_existing_reply_owner() {
+        let mut camp = Camp::default();
+        let mut world = World::new(5);
+        let command = ClientCommand::ExitAtOnce {
+            session_id: 5,
+            created: Instant::now(),
+        };
+        let output = testing::run(|out| {
+            camp.handle(&command, &mut world, out)?;
+            camp.handle(&command, &mut world, out)
+        });
+        output.result.unwrap();
+        assert_eq!(output.sent, [command::titanium_logout()]);
+        assert!(camp.logging_out());
+        assert!(matches!(
+            output.events[..],
+            [ClientEvent::World(WorldEvent::Camp(CampStatus::LoggingOut))]
+        ));
+        assert!(world.exit().is_none(), "submission is not a server reply");
+        let output = testing::run(|out| camp.observe(&Message::LoggedOut, &mut world, out));
+        output.result.unwrap();
         assert!(matches!(world.exit(), Some(ZoneExit::CharacterSelect)));
     }
 

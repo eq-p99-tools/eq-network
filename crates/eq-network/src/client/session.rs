@@ -22,6 +22,7 @@ mod hazards;
 mod hiding;
 mod inventory;
 mod lifecycle;
+pub(super) mod list_poll;
 mod listing;
 pub(super) mod login;
 mod looting;
@@ -93,6 +94,7 @@ pub(super) fn run(
         duration: options.zone_duration,
         commands,
         sysinfo_reported_at: std::cell::Cell::new(0),
+        answer_list_polls: std::cell::Cell::new(config.answer_list_polls),
     };
     let mut destination =
         server
@@ -152,6 +154,8 @@ pub(in crate::client) struct CharacterSession<'a> {
     /// not report twice inside the week while the host is still saving the
     /// first report's time.
     pub(in crate::client) sysinfo_reported_at: std::cell::Cell<u64>,
+    /// Current opt-in, retained across zone crossings but not reconnections.
+    pub(in crate::client) answer_list_polls: std::cell::Cell<bool>,
 }
 
 /// Where the world sends the character next.

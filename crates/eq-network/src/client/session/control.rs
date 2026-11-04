@@ -75,15 +75,18 @@ impl OwnControl {
         }
     }
 
-    /// The existing motion guard still checks identity, time and vertical
-    /// bounds. A stun grants no turn, horizontal displacement or new jump.
+    /// Explicit opt-in skips only the active stun's motion restriction.
+    /// Input queued before a stun transition remains stale in either mode.
     pub(super) fn motion_refusal(
         &self,
         request: &MovementRequest,
         passive: bool,
+        allow_stunned: bool,
     ) -> Option<&'static str> {
         let refusal = self.input_refusal(request.created)?;
-        if self.stunned() && self.changed.is_none_or(|changed| request.created > changed) && passive
+        if self.stunned()
+            && self.changed.is_none_or(|changed| request.created > changed)
+            && (passive || allow_stunned)
         {
             None
         } else {

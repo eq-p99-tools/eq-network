@@ -613,3 +613,79 @@ metadata/identity prerequisites without changing any inventory.
 successful craft or item-move acknowledgment. Components, returned tools and
 products require separate authoritative inventory updates. See
 [the source contract and limits](docs/p99-manual-combines.md).
+
+## Optional list presence replies
+
+`ClientConfig::answer_list_polls` starts false. P99 offers
+`Capability::AnsweringListPolls`; the choice does not enable itself from that
+capability. `ClientCommand::AnswerListPolls { session_id, enabled }` changes
+future reply policy for the current connection, retaining it across zone
+crossings. A new connection starts from its config. A stale admission cannot
+change the choice. Disabling cancels an owed reply before its send, including
+while dead or zoning. Death, transfer, disconnect and a fresh zone owner drop
+any owed answer; re-enabling never answers an earlier poll.
+
+Mode 1 reports population and never joins a list automatically. Mode 2 alone
+schedules one presence reply when enabled and admitted. A newer list message
+replaces or invalidates an older owed answer, including unreadable messages.
+The reply is sent once after a uniformly selected whole-second delay in
+3..=60 seconds, on the next loop turn. This is application policy, not native
+timing or evidence of server acceptance. No periodic keepalive, fabricated
+captcha chat, successful queue membership or delivery receipt is inferred.
+Only diagnostic events are produced by this handler.
+
+## Explicit session control options
+
+`movement::MovementOptions` starts with all fields false. The admission-scoped
+`SetMovementOptions { session_id, request_id, options, created }` command keeps ordinary movement
+unchanged when off. `walk_while_stunned` permits fresh movement input during a
+current stun without clearing it or admitting pre-transition input; casting,
+items and jumping retain their independent stun gates. `run_boost` raises
+only forward-running/Fall horizontal speed by `MovementOptions::RUN_BOOST`
+(1.1); other calibrated modes keep their speeds. Calibration events retain
+the unmodified source-derived speeds. The host applies the same explicit
+multiplier when proposing running movement. `fly` permits ascent/descent
+within the current mode's elapsed speed budget. These options never bypass
+session identity, input freshness, finite coordinates, fixed bounds, current
+known speed, corrections, death or transfer gates. Changes invalidate pre-toggle queued input using the caller stamp, preserve
+the accepted sample time for same-frame FIFO movement, and keep the ordinary
+paced stop. None represents a native movement
+rule, safe server threshold or detection guarantee.
+
+`SetBookOptions { session_id, memorize_without_sitting }` is an explicit
+memorization departure: no automatic sitting and no local five-second
+preparation. Scribing retains its existing posture and delay. Spell ownership,
+current book, gem, inventory, action holds, stun and server-reply handling
+remain. A changed option cancels pending preparation rather than converting
+it in flight. A new admission starts with default book and movement choices,
+so a frontend reapplies its saved options after admission.
+
+The native Titanium memorization sender (`0x556b72`) owns a variable local
+countdown before sending ordinary mode-1 `OP_MemorizeSpell`; skipping our
+local timer is an application departure. The inspected public
+[EQEmu request handler](https://github.com/EQEmu/EQEmu/blob/4aceae18b94ffaafc08e2b17bc41cd72c77f795d/zone/client_process.cpp#L1145)
+checks packet/spell/class/level/ownership and does not reject on posture or
+preparation time. Its
+[timing detector](https://github.com/EQEmu/EQEmu/blob/4aceae18b94ffaafc08e2b17bc41cd72c77f795d/zone/cheat_manager.cpp#L318)
+can record a rule-gated fast-memorization event; the packet handler then calls
+the normal action handler. This does not establish deployed server behavior,
+absence of monitoring or safe timing. Confirmation still requires server
+book/gem state; public-server acceptance remains unverified.
+
+`ExitAtOnce { session_id, created }` is an explicit immediate departure. It
+sends the ordinary Logout request without Camp, automatic sitting or the
+countdown, then uses the same reply/close owner as normal camping. It does
+not bypass admission, life state, session identity or freshness checks and
+never resends while already logging out. Neither submission nor the local
+close timeout establishes deployed server acceptance. Public-server behavior
+and server-side cleanup remain live-validation items.
+
+Movement policy changes report `MovementOptionsApplied { session_id,
+request_id, options }` after local installation or `MovementOptionsRefused {
+session_id, request_id, reason }` on refusal. The host gates opt-in motion on
+confirmed local worker policy and matches its own request identity; enqueue
+alone establishes nothing. Identical reassertions can produce feedback but
+never reset input epochs. These events are not server acknowledgments and
+never imply a movement speed grant. Expired changes can be retried with a new
+identity and caller stamp without accepting old motion or reasserting policy
+on every render frame.

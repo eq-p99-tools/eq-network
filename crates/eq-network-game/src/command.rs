@@ -392,6 +392,40 @@ pub enum GameCommand {
         /// What the session may eat and drink on its own.
         auto_eat: crate::food::AutoEat,
     },
+    /// Explicit movement departures. Defaults preserve ordinary movement.
+    SetMovementOptions {
+        /// Current zone admission.
+        session_id: u64,
+        /// Caller identity returned in local application/refusal feedback.
+        request_id: u64,
+        /// Choices applied only after the movement prerequisites are known.
+        options: crate::movement::MovementOptions,
+        /// Caller stamp: subsequent same-frame movement keeps its elapsed budget.
+        created: std::time::Instant,
+    },
+    /// Change the automatic sitting and local preparation delay for memorization.
+    SetBookOptions {
+        /// Current zone admission.
+        session_id: u64,
+        /// Memorize without automatic sitting or local delay; scribing is unchanged.
+        memorize_without_sitting: bool,
+    },
+    /// Send the ordinary logout without the camp preparation/countdown.
+    /// Server acceptance is not implied; the ordinary reply lifecycle applies.
+    ExitAtOnce {
+        /// Current zone admission.
+        session_id: u64,
+        /// Reject expired requests rather than replaying an immediate logout.
+        created: std::time::Instant,
+    },
+    /// Enable or disable automatic P99 list presence replies. Disabling
+    /// cancels an owed reply, including while dead or transferring zones.
+    AnswerListPolls {
+        /// Current zone admission.
+        session_id: u64,
+        /// Whether future presence polls may be answered automatically.
+        enabled: bool,
+    },
     /// Use an ability on the unchanged expected target, or on the player.
     UseAbility {
         /// Current zone admission.
@@ -751,6 +785,10 @@ impl GameCommand {
             Self::EnvironmentalDamage { .. } => "EnvironmentalDamage",
             Self::Consume { .. } => "Consume",
             Self::AutoEat { .. } => "AutoEat",
+            Self::AnswerListPolls { .. } => "AnswerListPolls",
+            Self::SetMovementOptions { .. } => "SetMovementOptions",
+            Self::SetBookOptions { .. } => "SetBookOptions",
+            Self::ExitAtOnce { .. } => "ExitAtOnce",
             Self::UseAbility { .. } => "UseAbility",
             Self::Consent { .. } => "Consent",
             Self::SummonCorpse { .. } => "SummonCorpse",
@@ -837,6 +875,10 @@ impl GameCommand {
             | Self::AutoAttack { session_id, .. }
             | Self::Consume { session_id, .. }
             | Self::AutoEat { session_id, .. }
+            | Self::AnswerListPolls { session_id, .. }
+            | Self::SetMovementOptions { session_id, .. }
+            | Self::SetBookOptions { session_id, .. }
+            | Self::ExitAtOnce { session_id, .. }
             | Self::UseAbility { session_id, .. }
             | Self::WhoAll { session_id, .. }
             | Self::Pet { session_id, .. }
@@ -892,6 +934,7 @@ impl GameCommand {
             Self::ScribeSpell { .. } | Self::ForgetSpell { .. } | Self::MemorizeSpell { .. } => {
                 Capability::Spellbook
             }
+            Self::SetBookOptions { .. } => Capability::Spellbook,
             Self::DeleteSpell { .. } => Capability::DeletingSpells,
             Self::SwapSpell { .. } => Capability::MovingSpells,
             // An item's click effect is a cast.
@@ -903,6 +946,7 @@ impl GameCommand {
             Self::CrossZoneLine { .. } => Capability::Zoning,
             Self::SetPosture { .. } => Capability::Posture,
             Self::Move(_)
+            | Self::SetMovementOptions { .. }
             | Self::ConfigureMotion { .. }
             | Self::SpeedInputs { .. }
             | Self::ClimbReach { .. } => Capability::Moving,
@@ -911,9 +955,10 @@ impl GameCommand {
             Self::EnvironmentalDamage { .. } => Capability::EnvironmentalDamage,
             Self::MoveInventory(_) => Capability::Inventory,
             Self::Consume { .. } | Self::AutoEat { .. } => Capability::Meals,
+            Self::AnswerListPolls { .. } => Capability::AnsweringListPolls,
             Self::SendChat(_) | Self::InspectItem { .. } => Capability::Talking,
             Self::Consider { .. } | Self::AutoAttack { .. } => Capability::Combat,
-            Self::Camp { .. } => Capability::Camping,
+            Self::Camp { .. } | Self::ExitAtOnce { .. } => Capability::Camping,
             Self::BledOut { .. } => Capability::BleedingOut,
             Self::Loot { .. } | Self::LootItem { .. } | Self::EndLoot { .. } => Capability::Looting,
             Self::Shop { .. } | Self::Buy { .. } | Self::Sell { .. } => Capability::Trading,
@@ -982,6 +1027,8 @@ impl GameCommand {
             | Self::EndLoot { .. }
             | Self::CancelTrade { .. }
             | Self::AutoEat { .. }
+            | Self::AnswerListPolls { .. }
+            | Self::SetBookOptions { .. }
             | Self::EnvironmentalDamage { .. }
             // The latest report stands however long it waited.
             | Self::SpeedInputs { .. }
@@ -1033,6 +1080,7 @@ impl GameCommand {
             | Self::SetPosture { created, .. }
             | Self::Consider { created, .. }
             | Self::Camp { created, .. }
+            | Self::ExitAtOnce { created, .. }
             | Self::BledOut { created, .. }
             | Self::Loot { created, .. }
             | Self::LootItem { created, .. }
@@ -1049,7 +1097,8 @@ impl GameCommand {
             | Self::Training { created, .. }
             | Self::ReadItem { created, .. }
             | Self::Combine { created, .. }
-            | Self::ConfigureMotion { created, .. } => Some(*created),
+            | Self::ConfigureMotion { created, .. }
+            | Self::SetMovementOptions { created, .. } => Some(*created),
         }
     }
 }
@@ -1232,6 +1281,10 @@ pub fn encode(
         | GameCommand::CrossZoneLine { .. }
         | GameCommand::Consume { .. }
         | GameCommand::AutoEat { .. }
+        | GameCommand::AnswerListPolls { .. }
+        | GameCommand::SetMovementOptions { .. }
+        | GameCommand::SetBookOptions { .. }
+        | GameCommand::ExitAtOnce { .. }
         | GameCommand::UseAbility { .. }
         | GameCommand::WhoAll { .. }
         | GameCommand::Pet { .. }

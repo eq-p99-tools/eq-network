@@ -557,12 +557,14 @@ pub enum Capability {
     /// Opening, closing and combining in a world container, independently
     /// of carried manual combines ([`Capability::Tradeskills`]).
     WorldContainers,
+    /// Opt-in automatic P99 list presence replies, independently of joining.
+    AnsweringListPolls,
 }
 
 impl Capability {
     /// Every capability, in order: what a session offers when its server and
     /// client generation support everything.
-    pub const ALL: [Self; 44] = [
+    pub const ALL: [Self; 45] = [
         Self::Casting,
         Self::Spellbook,
         Self::Inventory,
@@ -607,6 +609,7 @@ impl Capability {
         Self::Posture,
         Self::Meals,
         Self::WorldContainers,
+        Self::AnsweringListPolls,
     ];
 }
 
@@ -1100,6 +1103,25 @@ pub enum WorldEvent {
         request: crate::combat::CombatRequest,
         /// Whether it was submitted or refused locally.
         status: crate::combat::CombatRequestStatus,
+    },
+    /// The local session installed explicit movement policy. This is not a
+    /// server acknowledgment or a new speed grant.
+    MovementOptionsApplied {
+        /// Current zone admission.
+        session_id: u64,
+        /// Identity of the caller's option request.
+        request_id: u64,
+        /// Policy now installed in the movement owner.
+        options: crate::movement::MovementOptions,
+    },
+    /// The local session refused an option request; prior policy remains.
+    MovementOptionsRefused {
+        /// Admission from the request.
+        session_id: u64,
+        /// Identity of the caller's option request.
+        request_id: u64,
+        /// Why it was not installed.
+        reason: String,
     },
     /// Camp progress for the current admission.
     Camp(CampStatus),
@@ -2065,6 +2087,7 @@ mod tests {
             Capability::Posture => 41,
             Capability::Meals => 42,
             Capability::WorldContainers => 43,
+            Capability::AnsweringListPolls => 44,
         };
         for (index, capability) in Capability::ALL.into_iter().enumerate() {
             assert_eq!(place(capability), index, "{capability:?}");

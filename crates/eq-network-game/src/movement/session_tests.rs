@@ -1087,3 +1087,109 @@ fn failed_prepared_send_preserves_motion_without_undoing_external_effects() {
         })
         .unwrap();
 }
+
+#[test]
+fn run_boost_is_explicit_and_disabling_restores_the_original_budget() {
+    let start = Instant::now();
+    let now = start + Duration::from_millis(100);
+    let proposal = request(now, 0.65);
+    let mut normal = setup(start);
+    assert!(normal.send_move(&proposal, now, |_| Ok(())).is_err());
+    let mut boosted = setup(start);
+    boosted
+        .set_options(
+            super::super::MovementOptions {
+                run_boost: true,
+                ..Default::default()
+            },
+            start,
+        )
+        .unwrap();
+    boosted.send_move(&proposal, now, |_| Ok(())).unwrap();
+    boosted
+        .set_options(super::super::MovementOptions::default(), now)
+        .unwrap();
+    let later = now + Duration::from_millis(100);
+    assert!(boosted
+        .send_move(&request(later, 1.30), later, |_| Ok(()))
+        .is_err());
+    assert_eq!(boosted.position().x, 0.65);
+}
+
+#[test]
+fn flying_changes_only_the_vertical_gate_and_still_needs_current_valid_motion() {
+    let start = Instant::now();
+    let now = start + Duration::from_millis(100);
+    let mut proposal = request(now, 0.0);
+    proposal.position.z = 2.5;
+    let mut session = setup(start);
+    let mut calibration = session.calibration().unwrap();
+    calibration.units_per_second = 30.0;
+    session.calibrate(calibration, start).unwrap();
+    assert!(session.send_move(&proposal, now, |_| Ok(())).is_err());
+    session
+        .set_options(
+            super::super::MovementOptions {
+                fly: true,
+                ..Default::default()
+            },
+            start,
+        )
+        .unwrap();
+    let mut foreign = proposal.clone();
+    foreign.session_id = 99;
+    assert!(session.send_move(&foreign, now, |_| Ok(())).is_err());
+    let mut excessive = proposal.clone();
+    excessive.position.z = 3.1;
+    assert!(session.send_move(&excessive, now, |_| Ok(())).is_err());
+    let mut invalid = proposal.clone();
+    invalid.position.z = f32::NAN;
+    assert!(session.send_move(&invalid, now, |_| Ok(())).is_err());
+    session.guard.bounds = Some(super::super::MovementBounds::new([-1.0; 3], [1.0; 3]).unwrap());
+    assert!(session.send_move(&proposal, now, |_| Ok(())).is_err());
+    session.guard.bounds = None;
+    session.send_move(&proposal, now, |_| Ok(())).unwrap();
+    let later = now + Duration::from_millis(100);
+    let mut descent = request(later, 0.0);
+    descent.position.z = 0.0;
+    session.send_move(&descent, later, |_| Ok(())).unwrap();
+    session.withdraw();
+    let mut no_speed = request(later + Duration::from_millis(100), 0.0);
+    no_speed.position.z = 1.0;
+    assert!(session
+        .send_move(&no_speed, no_speed.created, |_| Ok(()))
+        .is_err());
+}
+
+#[test]
+fn caller_stamped_options_preserve_same_frame_motion_without_idle_credit() {
+    let start = Instant::now();
+    let caller = start + Duration::from_millis(100);
+    let processing = caller + Duration::from_millis(25);
+    let mut session = setup(start);
+    let options = super::super::MovementOptions {
+        run_boost: true,
+        ..Default::default()
+    };
+    session.set_options(options, caller).unwrap();
+    let stale = request(caller.checked_sub(Duration::from_millis(1)).unwrap(), 0.2);
+    assert!(session.send_move(&stale, processing, |_| Ok(())).is_err());
+    session
+        .send_move(&request(caller, 0.65), processing, |_| Ok(()))
+        .unwrap();
+    assert!(session
+        .set_options(
+            super::super::MovementOptions::default(),
+            caller.checked_sub(Duration::from_millis(1)).unwrap()
+        )
+        .is_err());
+    let later = caller + Duration::from_millis(100);
+    assert!(session
+        .send_move(
+            &request(later, 1.4),
+            processing + Duration::from_millis(100),
+            |_| Ok(())
+        )
+        .is_err());
+    assert_eq!(session.position().x, 0.65);
+}

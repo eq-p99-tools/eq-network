@@ -111,6 +111,7 @@ fn dll_version_precedes_zone_ready_and_answers_requests() {
                 duration: None,
                 commands: None,
                 sysinfo_reported_at: std::cell::Cell::new(0),
+                answer_list_polls: std::cell::Cell::new(false),
             };
             run(
                 &context,

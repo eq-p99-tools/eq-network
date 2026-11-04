@@ -476,10 +476,11 @@ impl Motion {
                 .diagnostic("Rejected movement: the player cannot move yet".into());
         };
         let (to, from) = (request.position, motion.position());
-        if let Some(reason) = world
-            .control
-            .motion_refusal(request, motion.is_passive(request))
-        {
+        if let Some(reason) = world.control.motion_refusal(
+            request,
+            motion.is_passive(request),
+            motion.options().walk_while_stunned,
+        ) {
             return out.log.send(ClientEvent::World(WorldEvent::MotionSent {
                 session_id: world.session_id,
                 position: from,
@@ -487,7 +488,8 @@ impl Motion {
             }));
         }
         if let (true, Some(player)) = (
-            !world.control.stunned() && (to.x, to.y, to.z) != (from.x, from.y, from.z),
+            (!world.control.stunned() || motion.options().walk_while_stunned)
+                && (to.x, to.y, to.z) != (from.x, from.y, from.z),
             world.player.as_ref(),
         ) {
             world.posture.stand_to_move(player.spawn_id, out)?;
@@ -633,6 +635,7 @@ impl Feature for Motion {
                 | ClientCommand::ConfigureMotion { .. }
                 | ClientCommand::SpeedInputs { .. }
                 | ClientCommand::ClimbReach { .. }
+                | ClientCommand::SetMovementOptions { .. }
         )
     }
 
@@ -649,6 +652,30 @@ impl Feature for Motion {
             ClientCommand::ConfigureMotion { .. } => Self::calibrate(command, world, out),
             ClientCommand::SpeedInputs { .. } => self.inputs(command, world, out),
             ClientCommand::ClimbReach { .. } => Self::climb(command, world, out),
+            ClientCommand::SetMovementOptions {
+                session_id,
+                request_id,
+                options,
+                created,
+            } if *session_id == world.session_id => {
+                let result = world
+                    .body
+                    .motion
+                    .as_mut()
+                    .ok_or_else(|| anyhow::anyhow!("The player cannot move yet"))
+                    .and_then(|motion| motion.set_options(*options, *created));
+                match result {
+                    Ok(()) => {
+                        out.log
+                            .send(ClientEvent::World(WorldEvent::MovementOptionsApplied {
+                                session_id: world.session_id,
+                                request_id: *request_id,
+                                options: *options,
+                            }))
+                    }
+                    Err(error) => super::actions::refuse(command, &error.to_string(), out.log),
+                }
+            }
             _ => Ok(()),
         }
     }

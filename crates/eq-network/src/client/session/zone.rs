@@ -21,6 +21,7 @@ struct Features {
     /// The spell action flag that says a spell landed, as the server type
     /// says.
     spell_landing_flag: Option<u8>,
+    answers_list_polls: bool,
 }
 
 impl Features {
@@ -50,6 +51,7 @@ impl Features {
             provided: features,
             choices,
             spell_landing_flag: server.spell_landing_flag(),
+            answers_list_polls: server.answers_list_polls(),
         }
     }
 
@@ -62,6 +64,9 @@ impl Features {
             .flat_map(|feature| feature.capabilities())
             .filter(|capability| !self.choices.contains(capability))
             .collect();
+        if self.answers_list_polls {
+            capabilities.push(crate::world::Capability::AnsweringListPolls);
+        }
         capabilities.sort_unstable();
         capabilities.dedup();
         capabilities
@@ -121,7 +126,7 @@ impl Features {
         if world.lifecycle.is_dead() {
             return Some("The player is dead");
         }
-        if !world.ready() || world.lifecycle.pending().is_some() {
+        if !world.ready() || world.lifecycle.blocks_motion() {
             return Some("The player is between zones");
         }
         actions::stale(command, world.session_id, now)
@@ -228,6 +233,7 @@ pub(super) fn run(
     let session_id = rand::random();
     let mut world = World::new(session_id);
     let mut unheard = Unheard::new(Stage::Zone);
+    let mut list_replies = super::list_poll::Replies::default();
     let mut features = Features::new(server, &config.character, config.auto_eat);
     let follows_zones = features
         .capabilities()
@@ -277,57 +283,74 @@ pub(super) fn run(
             session.close()?;
             return Ok(exit);
         }
-        if world.lifecycle.blocks_motion() {
-            if let Some(commands) = context.commands {
-                // Death and zone transfers hold every command; each is refused,
-                // so that whoever waits on one hears why.
-                let reason = if world.lifecycle.is_dead() {
-                    "The player is dead"
-                } else {
-                    "The player is between zones"
-                };
-                for command in commands.try_iter().take(64) {
-                    actions::refuse(&command, reason, log)?;
+        let mut commands = Vec::new();
+        if world.ready() || world.lifecycle.blocks_motion() {
+            if let Some(queue) = context.commands {
+                for command in queue.try_iter().take(64) {
+                    if !list_replies.configure(
+                        server,
+                        &command,
+                        session_id,
+                        &context.answer_list_polls,
+                        log,
+                    )? {
+                        commands.push(command);
+                    }
                 }
             }
         }
-        if world.ready() && !world.lifecycle.is_dead() && world.lifecycle.pending().is_none() {
-            if let Some(commands) = context.commands {
-                // Bound each pass so continuous producers cannot starve receive/ACK work.
-                for command in commands.try_iter().take(64) {
-                    // Stale commands, and commands that need what an action in
-                    // flight holds, are refused here and nowhere else.
-                    let now = Instant::now();
-                    let refusal = features.refusal(&command, &world, now);
-                    if let Some(reason) = refusal {
-                        actions::refuse(&command, reason, log)?;
-                        continue;
-                    }
-                    let speaker = sender(&config.character, &world);
-                    let (handled, exit) = {
-                        let mut out = Out {
-                            sink: &mut session,
-                            log: &mut *log,
-                            wire: server.wire(),
-                            sender: speaker,
-                        };
-                        let handled = features.handle(&command, &mut world, &mut out)?;
-                        (
-                            handled,
-                            settle(&mut features, &mut world, &mut out, follows_zones)?,
-                        )
+        // Apply opt-outs before any due send. Death and transfers invalidate
+        // a queued reply; a fresh admission never inherits one.
+        let may_reply =
+            context.answer_list_polls.get() && world.ready() && !world.lifecycle.blocks_motion();
+        list_replies.tick(Instant::now(), may_reply, &mut session, log)?;
+        if world.lifecycle.blocks_motion() {
+            // Death and zone transfers hold every command; each is refused,
+            // so that whoever waits on one hears why.
+            let reason = if world.lifecycle.is_dead() {
+                "The player is dead"
+            } else {
+                "The player is between zones"
+            };
+            for command in &commands {
+                actions::refuse(command, reason, log)?;
+            }
+        }
+        if world.ready() && !world.lifecycle.blocks_motion() {
+            // The command batch is bounded above to preserve receive/ACK work.
+            for command in &commands {
+                // Stale commands, and commands that need what an action in
+                // flight holds, are refused here and nowhere else.
+                let now = Instant::now();
+                let refusal = features.refusal(command, &world, now);
+                if let Some(reason) = refusal {
+                    actions::refuse(command, reason, log)?;
+                    continue;
+                }
+                let speaker = sender(&config.character, &world);
+                let (handled, exit) = {
+                    let mut out = Out {
+                        sink: &mut session,
+                        log: &mut *log,
+                        wire: server.wire(),
+                        sender: speaker,
                     };
-                    if let Some(exit) = exit {
-                        session.close()?;
-                        return Ok(exit);
-                    }
-                    if !handled {
-                        unoffered(&command, log)?;
-                    }
-                    // Commands wait while the player is dead or zoning.
-                    if world.lifecycle.is_dead() || world.lifecycle.pending().is_some() {
-                        break;
-                    }
+                    let handled = features.handle(command, &mut world, &mut out)?;
+                    (
+                        handled,
+                        settle(&mut features, &mut world, &mut out, follows_zones)?,
+                    )
+                };
+                if let Some(exit) = exit {
+                    session.close()?;
+                    return Ok(exit);
+                }
+                if !handled {
+                    unoffered(command, log)?;
+                }
+                // Commands wait while the player is dead or zoning.
+                if world.lifecycle.blocks_motion() {
+                    break;
                 }
             }
         }
@@ -354,6 +377,16 @@ pub(super) fn run(
             eq_network_game::spell_tables::Stage::Zone { session_id },
             packet.opcode,
             &packet.body,
+            log,
+        )? {
+            continue;
+        }
+        if list_replies.observe(
+            server,
+            may_reply,
+            packet.opcode,
+            &packet.body,
+            Instant::now(),
             log,
         )? {
             continue;
@@ -629,7 +662,7 @@ mod tests {
     };
 
     /// How many kinds of command there are.
-    const KINDS: usize = 76;
+    const KINDS: usize = 80;
 
     /// The kinds the login and world servers take, before any zone session.
     const BEFORE_ZONES: [usize; 4] = [0, 1, 70, 75];
@@ -683,6 +716,10 @@ mod tests {
             ClientCommand::DropCorpse { .. } => 39,
             ClientCommand::Pet { .. } => 40,
             ClientCommand::AutoEat { .. } => 41,
+            ClientCommand::AnswerListPolls { .. } => 76,
+            ClientCommand::SetMovementOptions { .. } => 77,
+            ClientCommand::SetBookOptions { .. } => 78,
+            ClientCommand::ExitAtOnce { .. } => 79,
             ClientCommand::Training { .. } => 42,
             ClientCommand::AnswerResurrection { .. } => 43,
             ClientCommand::ReadItem { .. } => 44,
@@ -944,6 +981,24 @@ mod tests {
                 slot: InventorySlot(22),
                 created,
             },
+            ClientCommand::AnswerListPolls {
+                session_id,
+                enabled: false,
+            },
+            ClientCommand::SetMovementOptions {
+                session_id,
+                request_id: 1,
+                options: eq_network_game::movement::MovementOptions::default(),
+                created,
+            },
+            ClientCommand::SetBookOptions {
+                session_id,
+                memorize_without_sitting: false,
+            },
+            ClientCommand::ExitAtOnce {
+                session_id,
+                created,
+            },
             ClientCommand::AutoEat {
                 session_id,
                 auto_eat: eq_network_game::food::AutoEat::Anything,
@@ -1117,6 +1172,11 @@ mod tests {
         })
         .collect();
         for command in zone_commands() {
+            if matches!(command, ClientCommand::AnswerListPolls { .. }) {
+                // Session control is owned before the gameplay feature gates.
+                assert!(servers.iter().any(|features| features.answers_list_polls));
+                continue;
+            }
             let needed = command
                 .capability()
                 .expect("a zone command needs a capability");
@@ -1167,6 +1227,56 @@ mod tests {
                     .any(|feature| feature.owns(&selection)));
             }
         }
+    }
+
+    #[test]
+    fn immediate_exit_and_option_requests_keep_life_session_and_freshness_gates() {
+        use super::super::feature::testing;
+        let features = Features::new(
+            servers::server_type(crate::client::ServerProtocol::EqEmu),
+            "Tester",
+            eq_network_game::food::AutoEat::default(),
+        );
+        let now = Instant::now();
+        let mut world = World::new(5);
+        world.player.admit(testing::player(7));
+        world.own_spawn = Some(7);
+        world.admitted = Some(now);
+        let exit = ClientCommand::ExitAtOnce {
+            session_id: 5,
+            created: now,
+        };
+        assert_eq!(features.refusal(&exit, &world, now), None);
+        assert!(features
+            .refusal(&exit, &world, now + Duration::from_secs(1))
+            .is_some());
+        let foreign = ClientCommand::ExitAtOnce {
+            session_id: 6,
+            created: now,
+        };
+        assert!(features.refusal(&foreign, &world, now).is_some());
+        world.lifecycle.mark_dead();
+        assert!(features.refusal(&exit, &world, now).is_some());
+        let options = ClientCommand::SetMovementOptions {
+            session_id: 5,
+            request_id: 7,
+            options: eq_network_game::movement::MovementOptions::default(),
+            created: now,
+        };
+        let reason = features.refusal(&options, &world, now).unwrap();
+        let output = testing::run(|out| actions::refuse(&options, reason, out.log));
+        output.result.unwrap();
+        assert_eq!(output.sent, []);
+        assert!(matches!(
+            output.events.first(),
+            Some(ClientEvent::World(
+                crate::world::WorldEvent::MovementOptionsRefused {
+                    session_id: 5,
+                    request_id: 7,
+                    ..
+                }
+            ))
+        ));
     }
 
     #[test]
@@ -1349,6 +1459,7 @@ mod tests {
             ],
             choices: Vec::new(),
             spell_landing_flag: None,
+            answers_list_polls: false,
         };
         let (world, outcome) = bleed_out(features);
         outcome.result.unwrap();
@@ -1414,6 +1525,7 @@ mod tests {
             provided: vec![Box::new(Echo)],
             choices: Vec::new(),
             spell_landing_flag: None,
+            answers_list_polls: false,
         };
         let mut world = World::new(5);
         world.admitted = Some(Instant::now());
@@ -1578,6 +1690,7 @@ mod tests {
             provided: Vec::new(),
             choices: Vec::new(),
             spell_landing_flag: None,
+            answers_list_polls: false,
         };
         let click = ClientCommand::ClickDoor {
             session_id: 5,
@@ -1683,7 +1796,9 @@ mod tests {
             assert!(!p99.contains(&capability));
         }
         assert!(p99.contains(&Capability::EnvironmentalDamage));
-        assert_eq!(eqemu.len(), p99.len() + 15);
+        assert!(p99.contains(&Capability::AnsweringListPolls));
+        assert!(!eqemu.contains(&Capability::AnsweringListPolls));
+        assert_eq!(eqemu.len(), p99.len() + 14);
     }
 
     #[test]

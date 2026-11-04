@@ -2,7 +2,7 @@
 
 use super::{
     planned, sent, unasked, Part,
-    Reader::{Admission, Chat, Login, SpellTables, World, Zone},
+    Reader::{Admission, Chat, ListPolls, Login, SpellTables, World, Zone},
     Reading::{Partly, Read, Unread},
     Reason::{Needless, Planned, Unmapped},
     ServerMessage,
@@ -85,6 +85,12 @@ pub(in crate::client) fn titanium(opcode: u16) -> Option<ServerMessage> {
         // by EQEmu, and not in the official Titanium program (Titanium
         // sitting 6; Settle results section 7).
         0x1252 => sent("P99's zone validation refusal", P99, Read(&[Admission])),
+        // P99 list notices are decoded even when automatic replies are off.
+        0x1253 => sent(
+            "P99's list notice or presence poll",
+            P99,
+            Read(&[ListPolls]),
+        ),
         0x12d6 => sent("OP_GroupInvite2", EQEMU, Read(&[Zone])),
         0x12e5 => sent("OP_Charm", EQEMU, Read(&[Zone])),
         0x1306 => sent("OP_GMZoneRequest", EQEMU, unasked(Social)),
