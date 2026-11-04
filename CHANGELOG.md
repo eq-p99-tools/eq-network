@@ -53,13 +53,18 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Fixed
 
 - EQMac admission records the profile's current zone identity before handling
-  zone-line requests. Unknown zero stays unavailable and oversized IDs are
-  rejected; bind points and zone names do not supply guessed identities.
+  zone-line requests. Zero and oversized IDs stay unknown without failing an
+  otherwise valid admission; bind points and zone names do not supply guessed
+  identities. Transfers still refuse unknown current-zone identity.
 
 - Defer a camp requested just after movement until the existing motion owner
   submits its real paced stop. A trailing stationary stop can finish the
   pending intent; new movement or a failed/refused stop cannot start camping.
   Official ordering remains unverified (recording checklist 6.380).
+
+- Report a typed abandoned outcome when a waiting camp loses its admission
+  or movement context, or a zone transfer arrives. Clear the intent before
+  notifying, so overlapping events cannot repeat it or start a countdown.
 
 - Keep contribution readiness through equipment predictions only when all
   affected definitions explicitly have zero direct bonuses and no worn effect.

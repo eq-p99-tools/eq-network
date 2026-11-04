@@ -2,12 +2,12 @@
 use super::*;
 use crate::client::session::{
     feature::{testing, Sink},
-    wire::{EqMac, Wire},
+    wire::{EqMac, Titanium, Wire},
 };
 use crate::client::{ClientConfig, Events};
 use eq_network_game::{
     command::EncodedCommand,
-    movement::{MotionCalibration, MotionSession, MovementMode, MovementRequest, UpdateGate},
+    movement::{MotionCalibration, MotionSession, MovementMode, MovementRequest, PositionPacket},
     quarm,
     request::Sender,
     world::Position,
@@ -75,6 +75,18 @@ fn at(start: Instant, ms: u64) -> Instant {
     start + Duration::from_millis(ms)
 }
 
+fn assert_abandoned(events: &[ClientEvent]) {
+    assert!(
+        matches!(
+            events,
+            [ClientEvent::World(WorldEvent::Camp(
+                CampStatus::Abandoned { by: CampEnd::Other }
+            ))]
+        ),
+        "{events:?}"
+    );
+}
+
 fn request(created: Instant, position: Position) -> ClientCommand {
     ClientCommand::Move(MovementRequest {
         session_id: 5,
@@ -104,11 +116,13 @@ fn move_owner(
 }
 
 fn walking(start: Instant) -> World {
+    walking_on(start, &EqMac, 100)
+}
+
+fn walking_on(start: Instant, wire: &'static dyn Wire, first_ms: u64) -> World {
     let mut motion = MotionSession::new(5, 7, Position::default(), start)
         .unwrap()
-        .with_gate(Some(UpdateGate::Flagged {
-            pack: quarm::client_update,
-        }));
+        .with_gate(wire.update_gate());
     motion
         .calibrate(
             MotionCalibration {
@@ -128,14 +142,14 @@ fn walking(start: Instant) -> World {
     world.own_spawn = Some(7);
     world.body.admit(motion);
     let command = request(
-        at(start, 100),
+        at(start, first_ms),
         Position {
             x: 0.5,
             ..Position::default()
         },
     );
-    with_out(&EqMac, &mut Recording::default(), |out| {
-        move_owner(&mut world, &command, at(start, 100), out)
+    with_out(wire, &mut Recording::default(), |out| {
+        move_owner(&mut world, &command, at(start, first_ms), out)
     })
     .0
     .unwrap();
@@ -373,7 +387,7 @@ fn failed_camp_encoding_or_transport_leaves_no_timer_or_replayable_intent() {
 #[test]
 fn admission_withdrawal_correction_and_owner_replacement_cancel_pending_camp() {
     let start = Instant::now();
-    for boundary in 0..6 {
+    for boundary in 0..8 {
         let (mut world, mut camp) = queued(start);
         match boundary {
             0 => world = World::new(6),
@@ -393,15 +407,23 @@ fn admission_withdrawal_correction_and_owner_replacement_cancel_pending_camp() {
                 replacement.calibrate(calibration, at(start, 150)).unwrap();
                 world.body.admit(replacement);
             }
+            6 => world.admitted = None,
+            7 => world.lifecycle.mark_dead(),
             _ => unreachable!(),
         }
         let mut sink = Recording::default();
-        with_out(&EqMac, &mut sink, |out| {
+        let (result, events) = with_out(&EqMac, &mut sink, |out| {
             camp.tick(at(start, 350), &mut world, out)
-        })
-        .0
-        .unwrap();
+        });
+        result.unwrap();
+        assert_abandoned(&events);
         assert!(!camp.active());
+        assert_eq!(sink.order, Vec::new());
+        let (result, events) = with_out(&EqMac, &mut sink, |out| {
+            camp.tick(at(start, 351), &mut world, out)
+        });
+        result.unwrap();
+        assert!(events.is_empty());
         assert_eq!(sink.order, Vec::new());
     }
 }
@@ -430,17 +452,21 @@ fn real_death_or_zone_offer_discards_waiting_without_submitting_camp() {
     ] {
         let (mut world, mut camp) = queued(start);
         let mut sink = Recording::default();
-        with_out(&EqMac, &mut sink, |out| {
-            camp.observe(&Message::Event(event), &mut world, out)
-        })
-        .0
-        .unwrap();
+        let message = Message::Event(event);
+        let (result, events) = with_out(&EqMac, &mut sink, |out| {
+            camp.observe(&message, &mut world, out)
+        });
+        result.unwrap();
+        assert_abandoned(&events);
         assert!(!camp.active());
-        with_out(&EqMac, &mut sink, |out| {
+        let (result, events) = with_out(&EqMac, &mut sink, |out| {
+            camp.observe(&message, &mut world, out)?;
+            world.lifecycle.mark_dead();
+            camp.tick(at(start, 349), &mut world, out)?;
             pass(&mut camp, &mut world, at(start, 350), out)
-        })
-        .0
-        .unwrap();
+        });
+        result.unwrap();
+        assert!(events.is_empty(), "overlapping cancellation: {events:?}");
         assert!(sink
             .order
             .iter()
@@ -467,6 +493,253 @@ fn withdrawn_motion_cannot_turn_a_new_camp_into_an_unguarded_submission() {
             _
         )))]
     ));
+}
+
+#[test]
+fn invalidation_clears_waiting_before_a_failed_notification_and_never_replays() {
+    let start = Instant::now();
+    let (mut world, mut camp) = queued(start);
+    world.body.suspend();
+    let config = ClientConfig::new("ACCOUNT", "PASSWORD", "Test Server", "Tester");
+    let mut sink = Recording::default();
+    let mut calls = 0;
+    let result = {
+        let mut handler = |event| {
+            assert_abandoned(&[event]);
+            calls += 1;
+            anyhow::bail!("synthetic notification failure")
+        };
+        let mut log = Events::new(&config, &mut handler);
+        camp.tick(
+            at(start, 350),
+            &mut world,
+            &mut Out {
+                wire: &EqMac,
+                sink: &mut sink,
+                log: &mut log,
+                sender: Sender {
+                    name: "Tester",
+                    spawn_id: Some(7),
+                },
+            },
+        )
+    };
+    assert!(result.is_err());
+    assert_eq!(calls, 1);
+    assert!(!camp.active());
+    let (result, events) = with_out(&EqMac, &mut sink, |out| {
+        world.lifecycle.mark_dead();
+        camp.tick(at(start, 500), &mut world, out)
+    });
+    result.unwrap();
+    assert!(events.is_empty());
+    assert_eq!(sink.order, Vec::new());
+}
+
+#[test]
+fn overlapping_invalidation_transfer_and_death_notify_once_in_either_order() {
+    use eq_network_game::zoning::{Death, ZoneOffer};
+    let start = Instant::now();
+    for invalidate_first in [true, false] {
+        let (mut world, mut camp) = queued(start);
+        let mut sink = Recording::default();
+        let (result, events) = with_out(&EqMac, &mut sink, |out| {
+            if invalidate_first {
+                world.body.suspend();
+                camp.tick(at(start, 350), &mut world, out)?;
+            }
+            camp.observe(
+                &Message::Event(WorldEvent::ZoneTransfer(ZoneOffer {
+                    zone_id: 4,
+                    instance_id: 0,
+                    position: Position::default(),
+                    reason: 0,
+                    to_bind: false,
+                    solicited: true,
+                })),
+                &mut world,
+                out,
+            )?;
+            camp.observe(
+                &Message::Event(WorldEvent::Death(Death {
+                    spawn_id: 7,
+                    killer_id: 0,
+                    corpse_id: 0,
+                    bind_zone_id: 0,
+                    corpse_name: None,
+                })),
+                &mut world,
+                out,
+            )?;
+            world.lifecycle.mark_dead();
+            camp.tick(at(start, 351), &mut world, out)
+        });
+        result.unwrap();
+        assert_abandoned(&events);
+        assert!(!camp.active());
+        assert_eq!(sink.order, Vec::new());
+    }
+}
+
+fn titanium_queued(start: Instant) -> (World, Camp) {
+    let world = walking_on(start, &Titanium, 300);
+    let mut camp = Camp::default();
+    let mut sink = Recording::default();
+    let (result, events) = with_out(&Titanium, &mut sink, |out| {
+        camp.request(at(start, 333), &world, out)
+    });
+    result.unwrap();
+    assert!(events.is_empty());
+    assert_eq!(sink.order, Vec::new());
+    assert!(matches!(camp.phase, Phase::WaitingForStop { .. }));
+    (world, camp)
+}
+
+fn titanium_stop(world: &mut World, camp: &mut Camp, start: Instant) {
+    let stop = request(at(start, 400), world.body.position().unwrap());
+    let mut sink = Recording::default();
+    let (result, events) = with_out(&Titanium, &mut sink, |out| {
+        camp.notice(&stop, world, out)?;
+        move_owner(world, &stop, at(start, 400), out)
+    });
+    result.unwrap();
+    assert!(events.is_empty());
+    assert!(sink.order.is_empty(), "Changed gate must hold the stop");
+    assert_eq!(world.body.stop_pending(), Some(true));
+}
+
+#[test]
+fn titanium_changed_submits_the_paced_stop_before_camp_and_starts_the_timer_then() {
+    let start = Instant::now();
+    let (mut world, mut camp) = titanium_queued(start);
+    titanium_stop(&mut world, &mut camp, start);
+    let mut sink = Recording::default();
+    let (result, events) = with_out(&Titanium, &mut sink, |out| {
+        pass(&mut camp, &mut world, at(start, 579), out)
+    });
+    result.unwrap();
+    assert_eq!(sink.order, Vec::new());
+    assert!(events.is_empty());
+    let (result, events) = with_out(&Titanium, &mut sink, |out| {
+        pass(&mut camp, &mut world, at(start, 580), out)
+    });
+    result.unwrap();
+    let stop = PositionPacket {
+        spawn_id: 7,
+        sequence: 1,
+        position: world.body.position().unwrap(),
+        delta: [0.0; 3],
+        animation: 0,
+        delta_heading: 0,
+    }
+    .packet()
+    .unwrap();
+    assert_eq!(
+        sink.order,
+        [
+            (false, stop),
+            (true, eq_network_game::command::titanium_camp())
+        ]
+    );
+    assert!(matches!(
+        events.as_slice(),
+        [ClientEvent::World(WorldEvent::Camp(CampStatus::Preparing))]
+    ));
+    assert!(!camp.logout_due(at(start, 30_579)));
+    assert!(camp.logout_due(at(start, 30_580)));
+    let (result, events) = with_out(&Titanium, &mut sink, |out| {
+        pass(&mut camp, &mut world, at(start, 1_580), out)
+    });
+    result.unwrap();
+    assert!(events.is_empty());
+    assert_eq!(
+        sink.order.len(),
+        3,
+        "ordinary stationary heartbeat continues"
+    );
+    assert!(!sink.order[2].0);
+    assert_eq!(world.body.stop_pending(), Some(false));
+    assert!(matches!(camp.phase, Phase::Preparing(_)));
+}
+
+struct RefuseTitaniumPosition;
+
+impl Wire for RefuseTitaniumPosition {
+    fn dialect(&self) -> GameDialect {
+        GameDialect::Titanium
+    }
+    fn encode(&self, request: &Request, sender: Sender<'_>) -> Result<EncodedCommand> {
+        if matches!(request, Request::Position(_)) {
+            anyhow::bail!("synthetic Titanium position codec refusal");
+        }
+        Titanium.encode(request, sender)
+    }
+}
+
+#[test]
+fn titanium_changed_failed_stop_never_submits_camp_or_starts_its_timer() {
+    let start = Instant::now();
+    for wire in [&RefuseTitaniumPosition as &dyn Wire, &Titanium] {
+        let (mut world, mut camp) = titanium_queued(start);
+        titanium_stop(&mut world, &mut camp, start);
+        let mut sink = Recording {
+            fail_stop: true,
+            ..Recording::default()
+        };
+        let (result, events) = with_out(wire, &mut sink, |out| {
+            pass(&mut camp, &mut world, at(start, 580), out)
+        });
+        assert!(result.is_err());
+        assert!(events.is_empty());
+        assert!(sink.order.iter().all(|(reliable, _)| !reliable));
+        assert_eq!(world.body.stop_pending(), Some(true));
+        let (result, events) = with_out(&Titanium, &mut sink, |out| {
+            camp.tick(at(start, 600), &mut world, out)
+        });
+        result.unwrap();
+        assert!(events.is_empty());
+        assert!(matches!(camp.phase, Phase::WaitingForStop { .. }));
+        assert!(!camp.logout_due(at(start, 31_000)));
+    }
+}
+
+#[test]
+fn titanium_changed_refused_stop_or_new_movement_cancels_before_camp() {
+    let start = Instant::now();
+    for refused in [true, false] {
+        let (mut world, mut camp) = titanium_queued(start);
+        let command = request(
+            at(start, if refused { 320 } else { 400 }),
+            Position {
+                x: if refused { 0.5 } else { 0.6 },
+                ..Position::default()
+            },
+        );
+        let mut sink = Recording::default();
+        let (result, events) = with_out(&Titanium, &mut sink, |out| {
+            camp.notice(&command, &mut world, out)?;
+            if refused {
+                assert!(move_owner(&mut world, &command, at(start, 333), out).is_err());
+                camp.tick(at(start, 333), &mut world, out)?;
+            }
+            Ok::<_, anyhow::Error>(())
+        });
+        result.unwrap();
+        assert!(matches!(
+            events.as_slice(),
+            [ClientEvent::World(WorldEvent::Camp(
+                CampStatus::Abandoned { .. }
+            ))]
+        ));
+        assert!(!camp.active());
+        assert_eq!(sink.order, Vec::new());
+        let (result, events) = with_out(&Titanium, &mut sink, |out| {
+            pass(&mut camp, &mut world, at(start, 580), out)
+        });
+        result.unwrap();
+        assert!(events.is_empty());
+        assert!(sink.order.iter().all(|(reliable, _)| !reliable));
+    }
 }
 
 #[test]

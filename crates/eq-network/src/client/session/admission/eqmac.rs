@@ -214,6 +214,9 @@ mod tests {
     /// The same synthetic profile, with current zone 321 and a distinct bind 4.
     const PROFILE_ZONE: &str = "72e17a744e4e1a7acdc3985de0f38d18f66dc5a5e7207c9f131aa3358db866e6a92da79cb3e49521d4ae6b3c6790e4add73ad9b79babb128e264a328ca71e3fdb05525a573f0a7eb57952d0707e213ed9812b21cee0157d7881400e0bf3b98361bc1b108c8";
 
+    /// The same synthetic profile, with unrepresentable current zone 70000 and bind 4.
+    const PROFILE_ZONE_UNKNOWN: &str = "f72425a992f31887d3977ec9661b7d83908d407bae54ac5bcba0032b4ac0a8c079852dfd5240c5dca93139f3ca5b19666288bfeff8f0e41933556e60b7563aa605d2003a4aeb5df71bdf4fa55668a072a9db041022d540945b3df48ac984564f5e6f03a7ea0908";
+
     /// A connection that remembers what the client sent.
     #[derive(Default)]
     struct Recorded(Vec<(u16, Vec<u8>)>);
@@ -284,7 +287,7 @@ mod tests {
     }
 
     #[test]
-    fn the_admitted_profile_supplies_zone_line_identity_and_zero_stays_unknown() {
+    fn the_admitted_profile_supplies_zone_line_identity_and_preserves_unknown() {
         use crate::client::session::{
             feature::{testing, Feature},
             motion::Motion,
@@ -294,7 +297,7 @@ mod tests {
         };
         use eq_network_game::{world::WorldEvent, zoning::ZoneLineDestination};
 
-        for (profile, zone_id) in [(PROFILE_ZONE, 321), (PROFILE, 0)] {
+        for (profile, zone_id) in [(PROFILE_ZONE, 321), (PROFILE, 0), (PROFILE_ZONE_UNKNOWN, 0)] {
             let mut world = admitted_profile(profile);
             assert_eq!(world.zone, (zone_id, 0));
             let mut motion = Motion::new(false, false, None);

@@ -407,7 +407,8 @@ pub enum CampEnd {
     /// The player moved, or crossed a zone line.
     Moving,
     /// Ducking, a door, a pick-up or death: the program's line for these
-    /// is unread (6.309).
+    /// is unread (6.309). Also local loss of a waiting request's admission
+    /// or movement context, with no verified client wording.
     Other,
 }
 
@@ -422,8 +423,8 @@ pub enum CampStatus {
         /// Seconds left: 25, 20, 15, 10 or 5.
         seconds_left: u8,
     },
-    /// Something the player did, or death, abandoned the attempt before
-    /// logout.
+    /// A player action, death or lost admission/movement context abandoned
+    /// the attempt before logout, possibly before `OP_Camp` was submitted.
     Abandoned {
         /// What ended it.
         by: CampEnd,

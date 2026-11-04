@@ -113,10 +113,11 @@ requires downstream consumer validation before publication.
 ## EQMac admission zone identity
 
 `quarm::profile_zone` reads the current zone from the supported encrypted
-profile. Zero returns `None`; malformed layouts and values outside the
-transfer interface's `u16` range are errors, never truncated aliases. The
+profile. Zero or a value outside the transfer interface's `u16` range returns
+`None`, never a truncated alias. Malformed compression/layouts remain errors. The
 bind point and zone-description name do not substitute for missing identity.
-EQMac admission commits the validated current zone with no instance field
+EQMac admission keeps an otherwise valid profile when its current zone is
+unknown, and commits representable current zones with no instance field
 before zone-line commands can run. Unknown identity retains the existing
 transfer refusal. No transfer packet layout or server policy changes.
 
@@ -138,6 +139,11 @@ do not infer success from the host's `MotionSent` notification.
 Camp retains its own waiting intent while the existing paced stop is pending,
 then starts its countdown only after camp submission succeeds. New movement,
 refusal, withdrawal or admission/lifecycle loss cancels that waiting intent.
+Cancellation reports `CampStatus::Abandoned { by: CampEnd::Other }` when its
+admission/movement context is lost or a transfer arrives. It clears the local
+intent before notification, so overlapping invalidation/transfer/death events
+report once and a failing callback leaves no intent to replay. Player actions
+retain their existing typed causes; no cancellation sends a camp packet.
 The established motion timer precedes the camp timer. Official stop/camp
 ordering remains unverified under recording checklist 6.380; no spacing,
 repeat, wire format or movement authority changes.

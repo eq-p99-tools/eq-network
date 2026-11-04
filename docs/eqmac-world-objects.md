@@ -127,6 +127,11 @@ and may also be cancelled by an authoritative snapshot; ambiguous removals do
 not cancel them. Only a new session/admission restores unique
 result attribution. Authoritative item packets still go through the one
 inventory owner; pickup cancellation never invalidates otherwise known items.
+Consequently, after attribution is lost, each later pickup may retain its local
+hold for the full three seconds. Elapsed time and cursor arrival cannot prove
+that an older untagged result belongs to that later request. Each deadline uses
+the action owner's successful submission time, rather than the age of a queued
+UI intent; expiry remains local cancellation and sends no retry.
 The established Titanium result behavior is preserved.
 
 ## Availability and remaining work

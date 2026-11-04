@@ -94,6 +94,18 @@ impl Camp {
             .send(ClientEvent::World(WorldEvent::Camp(CampStatus::Preparing)))
     }
 
+    /// A lost waiting context ends this local request, even before a camp
+    /// packet was sent. Clear it first so overlapping events or a failing
+    /// notification cannot report or replay it again.
+    fn abandon_wait(&mut self, out: &mut Out<'_, '_>) -> Result<()> {
+        if matches!(self.phase, Phase::WaitingForStop { .. }) && self.cancel() {
+            out.log.send(ClientEvent::World(WorldEvent::Camp(
+                CampStatus::Abandoned { by: CampEnd::Other },
+            )))?;
+        }
+        Ok(())
+    }
+
     /// Starts the timer after `OP_Camp` was handed to transport.
     fn start(&mut self, now: Instant) {
         if matches!(self.phase, Phase::Idle) {
@@ -265,8 +277,7 @@ impl Feature for Camp {
                 || world.body.stop_context() != Some(motion_context)
                 || stop.is_some_and(|created| !world.body.accepted_stop(created))
             {
-                self.cancel();
-                return Ok(());
+                return self.abandon_wait(out);
             }
             if world.body.stop_pending() == Some(true) {
                 return Ok(());
@@ -309,7 +320,7 @@ impl Feature for Camp {
             Message::Event(WorldEvent::ZoneTransfer(_))
                 if matches!(self.phase, Phase::WaitingForStop { .. }) =>
             {
-                self.cancel();
+                self.abandon_wait(out)?;
             }
             Message::Event(WorldEvent::Death(death))
                 if world.is_player(death.spawn_id) && self.cancel() =>
