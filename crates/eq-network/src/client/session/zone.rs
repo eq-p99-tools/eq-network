@@ -1060,7 +1060,9 @@ mod tests {
             },
             ClientCommand::ReadItem {
                 session_id,
+                revision: 0,
                 slot: InventorySlot(23),
+                created,
             },
             ClientCommand::Combine {
                 session_id,
@@ -1645,6 +1647,7 @@ mod tests {
         }
         assert!(p99.contains(&Capability::Falling));
         assert!(p99.contains(&Capability::Jumping));
+        assert!(p99.contains(&Capability::Reading));
         assert!(!p99.contains(&Capability::Training));
         let eqemu = features(crate::client::ServerProtocol::EqEmu);
         assert!(eqemu.contains(&Capability::Falling));
@@ -1677,7 +1680,7 @@ mod tests {
             assert!(!p99.contains(&capability));
         }
         assert!(p99.contains(&Capability::EnvironmentalDamage));
-        assert_eq!(eqemu.len(), p99.len() + 16);
+        assert_eq!(eqemu.len(), p99.len() + 15);
     }
 
     #[test]
@@ -2019,6 +2022,9 @@ mod quarm_inventory_tests;
 
 #[cfg(test)]
 mod item_move_tests;
+
+#[cfg(test)]
+mod reading_tests;
 
 #[cfg(test)]
 mod combat_tests;

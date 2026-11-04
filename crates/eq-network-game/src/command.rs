@@ -457,8 +457,12 @@ pub enum GameCommand {
     ReadItem {
         /// Current zone admission.
         session_id: u64,
+        /// Worker inventory revision observed when selecting the readable item.
+        revision: u64,
         /// Where the item is carried.
         slot: crate::inventory::InventorySlot,
+        /// Reject delayed selections rather than reading a replacement item.
+        created: std::time::Instant,
     },
     /// Combine what a carried tradeskill container holds.
     Combine {
@@ -1008,7 +1012,6 @@ impl GameCommand {
             | Self::RaidMove { .. }
             | Self::RaidMakeLeader { .. }
             | Self::RaidRemove { .. }
-            | Self::ReadItem { .. }
             | Self::CloseContainer { .. }
             | Self::Consent { .. }
             | Self::SummonCorpse { .. }
@@ -1045,6 +1048,7 @@ impl GameCommand {
             | Self::Consume { created, .. }
             | Self::UseAbility { created, .. }
             | Self::Training { created, .. }
+            | Self::ReadItem { created, .. }
             | Self::Combine { created, .. }
             | Self::ConfigureMotion { created, .. } => Some(*created),
         }

@@ -12,6 +12,14 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   changes as outgoing requests. Targeted abilities must name the unchanged
   target version they were requested for; stale or unresolved intent is refused.
 
+- Offer source-checked P99 note/book reading through the ordinary inventory
+  action. Retain Titanium's Book flag separately from EQMac's BookType rule;
+  refuse invalid metadata, stale selections and unsupported text kinds instead
+  of opening a guessed note. Only received server text supplies a read result.
+- **Breaking:** `GameCommand::ReadItem` now requires `revision` and `created`.
+  Select from the submitted worker inventory and retain the enqueue time.
+  See `docs/p99-reading.md` for the wire contract and remaining live checks.
+
 - **Breaking:** add `Capability::Meals` for consuming food/drink and choosing
   automatic meals, separate from inventory moves. Inventory owners offer it
   only when their existing meal policy handles those commands.

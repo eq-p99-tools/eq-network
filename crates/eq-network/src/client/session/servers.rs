@@ -831,6 +831,12 @@ impl ServerType for Project1999 {
         offer(Box::new(Groups::titanium()))
     }
 
+    /// Titanium's native inventory read path and a recorded P99 note exchange
+    /// agree on window 0xff, kind and NUL-terminated item-derived text name.
+    fn reading(&self, _setup: &Setup<'_>) -> Provided {
+        offer(shared::reading())
+    }
+
     fn inventory_move_rules(&self) -> Option<MoveRules> {
         Some(MoveRules::EqEmu)
     }
@@ -2093,7 +2099,7 @@ mod tests {
 
     #[test]
     fn p99_and_eqemu_provide_every_feature_one_each() {
-        // Training, resurrection, reading, tradeskills, the map, deleting
+        // Training, resurrection, tradeskills, the map, deleting
         // spells, merchants' offers, the player's listing, dice,
         // emotes, assisting, raids and the server's tick are checked on
         // EQEmu alone so far; P99 takes falls' damage by the Titanium
@@ -2102,7 +2108,7 @@ mod tests {
         // yet checked live; and only EQEmu takes the show-helm option.
         // P99 also retains the verified own-player stun timer.
         for (protocol, count) in [
-            (ServerProtocol::Project1999, 25),
+            (ServerProtocol::Project1999, 26),
             (ServerProtocol::EqEmu, 37),
         ] {
             let server = server_type(protocol);
@@ -2114,7 +2120,6 @@ mod tests {
             Capability::Resurrection,
             Capability::Sacrifice,
             Capability::Translocate,
-            Capability::Reading,
             Capability::Tradeskills,
             Capability::Map,
             Capability::DeletingSpells,
@@ -2131,9 +2136,10 @@ mod tests {
             assert!(offers(server_type(ServerProtocol::EqEmu)).contains(&capability));
         }
         assert!(offers(server_type(ServerProtocol::Project1999)).contains(&Capability::Grouping));
-        // Moving the book's spells is checked on both.
+        // Reading and moving the book's spells are offered on both.
         for protocol in [ServerProtocol::Project1999, ServerProtocol::EqEmu] {
             assert!(offers(server_type(protocol)).contains(&Capability::MovingSpells));
+            assert!(offers(server_type(protocol)).contains(&Capability::Reading));
         }
     }
 

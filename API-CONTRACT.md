@@ -1,5 +1,15 @@
 # API and integration contracts
 
+## P99 readable items
+
+`GameCommand::ReadItem { session_id, revision, slot, created }` now binds the
+intent to the worker inventory revision and enqueue time. `Book::from_item`
+preserves numeric kind values rather than coercing nonzero flags into a book.
+Actual Titanium item decoding retains unsupported read metadata for refusal or
+rejects malformed numeric fields. Titanium text decoding requires a supported
+note/book kind and terminating NUL. Submission does not supply `BookText`;
+supported server text opens the result. See `docs/p99-reading.md`.
+
 ## Meal command availability
 
 `Capability::Meals` is separate from `Inventory`: it gates `Consume` and

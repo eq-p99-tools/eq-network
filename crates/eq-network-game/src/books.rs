@@ -10,7 +10,7 @@
 //! `EQMac` uses `BookRequest_Struct` and `BookText_Struct` from TAKP/Quarm
 //! `common/eq_packet_structs.h`: a kind byte without Titanium's window byte.
 use crate::command::EncodedCommand;
-use anyhow::{ensure, Result};
+use anyhow::{ensure, Context, Result};
 use serde::Serialize;
 
 /// `OP_ReadBook`: the request for a text, and the text that answers it.
@@ -41,16 +41,28 @@ pub struct Book {
 
 impl Book {
     /// What an item's definition says it reads as, from its item class,
-    /// its book flag and its text name: an item of the readable class with
-    /// a text opens the book window when flagged as a book and the note
-    /// window otherwise, as the Tattered Notes new characters carry do.
-    /// None for anything else.
+    /// its numeric Book flag and text name. Zero selects a note, one a book;
+    /// other numeric values stay unsupported rather than becoming a book.
+    /// None for an invalid flag, another class or an absent text name.
     #[must_use]
     pub fn from_item(class: &str, flag: &str, file: &str) -> Option<Self> {
         if class.trim() != READABLE_CLASS {
             return None;
         }
-        Self::with_file(u8::from(flag.trim() != "0"), file)
+        Self::with_file(flag.trim().parse().ok()?, file)
+    }
+
+    /// Retain a Titanium readable item's exact metadata so a malformed or
+    /// unsupported read can be refused rather than silently becoming a note.
+    /// Titanium selects the kind from `Book`; `EQMac` uses `BookType`.
+    pub(crate) fn from_titanium_item(class: &str, flag: &str, file: &str) -> Result<Option<Self>> {
+        if class.trim() != READABLE_CLASS {
+            return Ok(None);
+        }
+        Ok(Some(Self {
+            kind: flag.trim().parse().context("invalid Titanium book flag")?,
+            file: file.to_owned(),
+        }))
     }
 
     /// `EQMac`'s native text request uses the `BookType` byte at item offset 228,
@@ -89,10 +101,17 @@ pub struct BookText {
 /// Encodes asking for a readable item's text, in a window of its own.
 ///
 /// # Errors
-/// Rejects a text name too long for servers to read.
+/// Rejects unsupported kinds and invalid, missing or overlong text names.
 pub fn titanium_request(book: &Book) -> Result<EncodedCommand> {
+    // Native inventory invocation passes window 0xff (0x51a53c), and
+    // 0x4b1db0 uses the Book byte for note/book, not the signed BookType.
+    ensure!(book.kind <= 1, "unsupported Titanium readable item kind");
     ensure!(
-        !book.file.is_empty() && book.file.len() <= MAX_FILE && book.file.is_ascii(),
+        !book.file.is_empty()
+            && book.file != "0"
+            && book.file.len() <= MAX_FILE
+            && book.file.is_ascii()
+            && !book.file.contains('\0'),
         "not a book a server can find"
     );
     let mut body = vec![NEW_WINDOW, book.kind];
@@ -108,14 +127,17 @@ pub fn titanium_request(book: &Book) -> Result<EncodedCommand> {
 /// up to its NUL.
 ///
 /// # Errors
-/// Rejects a body too short to hold the window and the kind.
+/// Rejects unsupported kinds, missing terminators and truncated headers/text.
 pub fn titanium_text(body: &[u8]) -> Result<BookText> {
-    ensure!(body.len() >= 2, "invalid book text length");
+    ensure!(body.len() >= 3, "invalid book text length");
+    // Native 0x45c617 routes 0/1 to note/book; type 2 is item information.
+    // The window byte is not consulted for these two fixed windows.
+    ensure!(body[1] <= 1, "unsupported Titanium text kind");
     let text = &body[2..];
     let end = text
         .iter()
         .position(|byte| *byte == 0)
-        .unwrap_or(text.len());
+        .context("unterminated Titanium book text")?;
     Ok(BookText {
         kind: body[1],
         text: String::from_utf8_lossy(&text[..end]).into_owned(),
@@ -176,6 +198,75 @@ pub fn decode(opcode: u16, body: &[u8]) -> Result<Option<BookText>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn titanium_reads_preserve_metadata_and_refuse_unsupported_or_invalid_names() {
+        for kind in [0, 1] {
+            let book = Book::from_titanium_item("2", &kind.to_string(), "SyntheticText")
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                titanium_request(&book).unwrap().body,
+                [vec![0xff, kind], b"SyntheticText\0".to_vec()].concat()
+            );
+        }
+        assert!(Book::from_titanium_item("2", "unknown", "Text").is_err());
+        for flag in [2, 255] {
+            let book = Book::from_titanium_item("2", &flag.to_string(), "Text")
+                .unwrap()
+                .unwrap();
+            assert_eq!(book.kind, flag);
+            assert!(titanium_request(&book).is_err());
+        }
+        for file in ["", "0", "a\0b", "\u{e9}", "twentycharacterslong!"] {
+            let book = Book::from_titanium_item("2", "0", file).unwrap().unwrap();
+            assert_eq!(book.file, file);
+            assert!(titanium_request(&book).is_err(), "{file:?}");
+        }
+        let book = Book::from_titanium_item("2", "0", " Text ")
+            .unwrap()
+            .unwrap();
+        assert_eq!(titanium_request(&book).unwrap().body, b"\xff\0 Text \0");
+        let book = Book {
+            kind: 1,
+            file: "x".repeat(MAX_FILE),
+        };
+        assert_eq!(titanium_request(&book).unwrap().body.len(), MAX_FILE + 3);
+    }
+
+    #[test]
+    fn titanium_text_uses_supported_kind_and_terminator_not_a_guessed_window() {
+        for kind in [0, 1] {
+            for window in [0, 7, 255] {
+                let body = [vec![window, kind], b"Synthetic`text\0ignored".to_vec()].concat();
+                assert_eq!(
+                    titanium_text(&body).unwrap(),
+                    BookText {
+                        kind,
+                        text: "Synthetic`text".into()
+                    }
+                );
+                assert_eq!(titanium_text(&[window, kind, 0]).unwrap().text, "");
+            }
+        }
+        for body in [
+            &[][..],
+            &[255][..],
+            &[255, 0][..],
+            &[255, 1, b'x'][..],
+            &[255, 2, 0][..],
+            &[0, 255, 0][..],
+        ] {
+            assert!(titanium_text(body).is_err(), "{body:?}");
+            assert!(matches!(
+                crate::message::titanium(READ_OPCODE, body).as_slice(),
+                [crate::message::Message::Unreadable {
+                    part: crate::message::Part::World,
+                    ..
+                }]
+            ));
+        }
+    }
 
     #[test]
     fn eqmac_requests_and_replies_have_no_titanium_window_byte() {
