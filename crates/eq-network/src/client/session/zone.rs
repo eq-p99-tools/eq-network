@@ -877,6 +877,7 @@ mod tests {
                 created,
             },
             ClientCommand::SelectTarget {
+                request_id: 1,
                 session_id,
                 spawn_id: None,
             },
@@ -933,6 +934,7 @@ mod tests {
                 created,
             },
             ClientCommand::UseAbility {
+                target: None,
                 session_id,
                 ability: eq_network_game::abilities::Ability::Kick,
                 created,
@@ -1874,3 +1876,6 @@ mod loot_tests;
 
 #[cfg(test)]
 mod diagnostic_tests;
+
+#[cfg(test)]
+mod target_tests;

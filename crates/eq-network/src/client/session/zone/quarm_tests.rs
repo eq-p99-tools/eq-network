@@ -172,10 +172,11 @@ fn quarm_targets_visible_spawns_and_follows_server_changes_without_attacking() {
     let mut hidden = testing::spawn(9, SpawnKind::Npc);
     hidden.invisible = true;
     world.spawns.insert(hidden);
-    for spawn_id in [Some(7), Some(8), None] {
+    for (request_id, spawn_id) in (1..).zip([Some(7), Some(8), None]) {
         let output = testing::run_on(server.wire(), |out| {
             features.handle(
                 &ClientCommand::SelectTarget {
+                    request_id,
                     session_id: 5,
                     spawn_id,
                 },
@@ -189,10 +190,11 @@ fn quarm_targets_visible_spawns_and_follows_server_changes_without_attacking() {
         assert_eq!(output.sent[0].body, spawn_id.unwrap_or(0).to_le_bytes());
         assert_eq!(*world.target, spawn_id);
     }
-    for spawn_id in [9, 10] {
+    for (request_id, spawn_id) in (4..).zip([9, 10]) {
         let output = testing::run_on(server.wire(), |out| {
             features.handle(
                 &ClientCommand::SelectTarget {
+                    request_id,
                     session_id: 5,
                     spawn_id: Some(spawn_id),
                 },

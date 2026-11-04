@@ -694,6 +694,7 @@ mod tests {
         // Commands that leave the player seated change nothing.
         let (mut spellbook, mut world) = memorizing();
         let target = ClientCommand::SelectTarget {
+            request_id: 1,
             session_id: 5,
             spawn_id: Some(9),
         };

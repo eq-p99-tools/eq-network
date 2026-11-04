@@ -469,6 +469,7 @@ mod tests {
         let mut trades = MerchantTrades::default();
         trades.sent(
             &ClientCommand::SelectTarget {
+                request_id: 1,
                 session_id: 1,
                 spawn_id: None,
             },

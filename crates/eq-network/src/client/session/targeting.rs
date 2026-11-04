@@ -5,19 +5,43 @@ use super::{
     ClientCommand, ClientEvent,
 };
 use anyhow::Result;
-use eq_network_game::{message::Message, world::WorldEvent};
+use eq_network_game::{message::Message, targets::TargetState, world::WorldEvent};
 
 /// The spawn the server holds as the player's target: the last one sent, or
 /// the one the server set since. Every feature reads it; only the targeting
 /// feature changes it.
 #[derive(Clone, Copy, Debug, Default)]
-pub(super) struct Target(Option<u16>);
+pub(super) struct Target {
+    state: TargetState,
+    request_id: u64,
+    /// Only a never-seen server selection may bind on its first spawn.
+    awaiting_spawn: bool,
+}
+
+impl Target {
+    pub(super) const fn state(&self) -> TargetState {
+        self.state
+    }
+
+    fn set(&mut self, spawn_id: Option<u16>, available: bool, awaiting_spawn: bool) {
+        self.state = TargetState {
+            revision: self
+                .state
+                .revision
+                .checked_add(1)
+                .expect("target revision exhausted"),
+            spawn_id,
+            available,
+        };
+        self.awaiting_spawn = awaiting_spawn;
+    }
+}
 
 impl std::ops::Deref for Target {
     type Target = Option<u16>;
 
     fn deref(&self) -> &Option<u16> {
-        &self.0
+        &self.state.spawn_id
     }
 }
 
@@ -25,12 +49,64 @@ impl std::ops::Deref for Target {
 #[cfg(test)]
 impl From<u16> for Target {
     fn from(spawn_id: u16) -> Self {
-        Self(Some(spawn_id))
+        Self {
+            state: TargetState {
+                spawn_id: Some(spawn_id),
+                ..TargetState::default()
+            },
+            ..Self::default()
+        }
     }
 }
 
 /// Picks and clears the player's target.
 pub(super) struct Targeting;
+
+impl Targeting {
+    /// Runs after the entity owner has applied this event. Replacing a known
+    /// incarnation never silently acquires the replacement under its ID.
+    fn apply(event: &WorldEvent, world: &mut World) -> bool {
+        if let WorldEvent::Target(id) = event {
+            let available = id.is_none_or(|id| world.visible(id));
+            let unseen = id.is_some_and(|id| {
+                !world.is_player(id) && !world.spawns.all().any(|spawn| spawn.spawn_id == id)
+            });
+            world.target.set(*id, available, unseen);
+            return true;
+        }
+        if world.owns_death(event) {
+            world.target.set(None, true, false);
+            return true;
+        }
+        let Some(id) = *world.target else {
+            return false;
+        };
+        if world.is_player(id) {
+            return false;
+        }
+        let available = match event {
+            WorldEvent::Spawns(spawns) if spawns.iter().any(|spawn| spawn.spawn_id == id) => {
+                world.target.awaiting_spawn && world.visible(id)
+            }
+            WorldEvent::Despawn(gone) if *gone == id => false,
+            WorldEvent::Visibility {
+                spawn_id,
+                invisible: true,
+            } if *spawn_id == id => false,
+            _ => return false,
+        };
+        world.target.set(Some(id), available, false);
+        true
+    }
+
+    fn publish(world: &World, out: &mut Out<'_, '_>) -> Result<()> {
+        out.log.send(ClientEvent::World(WorldEvent::TargetChanged {
+            session_id: world.session_id,
+            request_id: world.target.request_id,
+            state: world.target.state(),
+        }))
+    }
+}
 
 impl Feature for Targeting {
     fn capabilities(&self) -> Vec<crate::world::Capability> {
@@ -52,27 +128,62 @@ impl Feature for Targeting {
     ) -> Result<()> {
         let ClientCommand::SelectTarget {
             session_id,
+            request_id,
             spawn_id,
         } = *command
         else {
             return Ok(());
         };
+        let fresh = session_id == world.session_id && request_id > world.target.request_id;
+        if fresh {
+            world.target.request_id = request_id;
+        }
         let available = spawn_id.is_none_or(|id| world.visible(id));
-        if !available {
+        if !available || !fresh {
             out.log
                 .send(ClientEvent::World(WorldEvent::TargetRejected {
                     session_id,
+                    request_id,
                     spawn_id,
-                    reason: "Target is invisible or unavailable".into(),
+                    state: Some(world.target.state()),
+                    reason: if fresh {
+                        "Target is invisible or unavailable"
+                    } else {
+                        "Target choice is stale"
+                    }
+                    .into(),
                 }))?;
             return out.log.diagnostic("Rejected an unavailable target".into());
         }
         if out.command(command)? {
-            world.target.0 = spawn_id;
+            world.target.set(spawn_id, true, false);
+            out.log.send(ClientEvent::World(WorldEvent::TargetSent {
+                session_id,
+                request_id,
+                state: world.target.state(),
+            }))?;
+        } else {
             out.log
-                .send(ClientEvent::World(WorldEvent::TargetSent(spawn_id)))?;
+                .send(ClientEvent::World(WorldEvent::TargetRejected {
+                    session_id,
+                    request_id,
+                    spawn_id,
+                    state: Some(world.target.state()),
+                    reason: "Target request could not be encoded".into(),
+                }))?;
         }
         Ok(())
+    }
+
+    fn admit(&mut self, message: &Message, world: &mut World) -> Result<()> {
+        if let Message::Event(event) = message {
+            Self::apply(event, world);
+        }
+        Ok(())
+    }
+
+    fn admitted(&mut self, world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
+        Self::publish(world, out)
     }
 
     /// Follows the target the server sets: a spell's or a quest's pick, or
@@ -83,8 +194,17 @@ impl Feature for Targeting {
         world: &mut World,
         _out: &mut Out<'_, '_>,
     ) -> Result<()> {
-        if let Message::Event(WorldEvent::Target(spawn_id)) = message {
-            world.target.0 = *spawn_id;
+        let Message::Event(event) = message else {
+            return Ok(());
+        };
+        if Self::apply(event, world) {
+            // The host must see the entity change before this projection,
+            // so it can bind its own incarnation of a newly arrived spawn.
+            world.happened(Message::Event(WorldEvent::TargetChanged {
+                session_id: world.session_id,
+                request_id: world.target.request_id,
+                state: world.target.state(),
+            }));
         }
         Ok(())
     }
@@ -96,8 +216,9 @@ mod tests {
     use super::*;
     use eq_network_game::world::SpawnKind;
 
-    fn target(spawn_id: Option<u16>) -> ClientCommand {
+    fn target(request_id: u64, spawn_id: Option<u16>) -> ClientCommand {
         ClientCommand::SelectTarget {
+            request_id,
             session_id: 5,
             spawn_id,
         }
@@ -126,18 +247,21 @@ mod tests {
         let mut hidden = testing::spawn(9, SpawnKind::Npc);
         hidden.invisible = true;
         world.spawns.insert(hidden);
-        for spawn_id in [Some(7), Some(8), None] {
-            let outcome = testing::run(|out| targeting.handle(&target(spawn_id), &mut world, out));
+        for (request_id, spawn_id) in (1..).zip([Some(7), Some(8), None]) {
+            let outcome = testing::run(|out| {
+                targeting.handle(&target(request_id, spawn_id), &mut world, out)
+            });
             outcome.result.unwrap();
             assert_eq!(outcome.sent.len(), 1);
             assert!(matches!(
                 outcome.events[..],
-                [ClientEvent::World(WorldEvent::TargetSent(sent))] if sent == spawn_id
+                [ClientEvent::World(WorldEvent::TargetSent { state, .. })] if state.spawn_id == spawn_id
             ));
         }
-        for spawn_id in [9, 10] {
-            let outcome =
-                testing::run(|out| targeting.handle(&target(Some(spawn_id)), &mut world, out));
+        for (request_id, spawn_id) in (4..).zip([9, 10]) {
+            let outcome = testing::run(|out| {
+                targeting.handle(&target(request_id, Some(spawn_id)), &mut world, out)
+            });
             outcome.result.unwrap();
             assert!(
                 outcome.sent.is_empty(),

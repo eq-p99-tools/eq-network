@@ -7,6 +7,11 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Breaking:** correlate target selections and their admission-scoped results.
+  Publish session target identity and availability without reflecting server
+  changes as outgoing requests. Targeted abilities must name the unchanged
+  target version they were requested for; stale or unresolved intent is refused.
+
 - **Breaking:** add `Capability::Meals` for consuming food/drink and choosing
   automatic meals, separate from inventory moves. Inventory owners offer it
   only when their existing meal policy handles those commands.

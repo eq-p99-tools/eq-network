@@ -392,13 +392,15 @@ pub enum GameCommand {
         /// What the session may eat and drink on its own.
         auto_eat: crate::food::AutoEat,
     },
-    /// Use an ability: a strike or taunt at the server-side target, or one
-    /// on the player.
+    /// Use an ability on the unchanged expected target, or on the player.
     UseAbility {
         /// Current zone admission.
         session_id: u64,
         /// The ability.
         ability: crate::abilities::Ability,
+        /// Target state displayed when requested. Targeted actions require
+        /// an available, unchanged session projection.
+        target: Option<crate::targets::TargetState>,
         /// Reject delayed actions instead of replaying them after a stall.
         created: std::time::Instant,
     },
@@ -644,6 +646,8 @@ pub enum GameCommand {
     SelectTarget {
         /// Connection identifier supplied by zone admission.
         session_id: u64,
+        /// Host selection sequence; correlates results with pending intent.
+        request_id: u64,
         /// None clears the target; zero is not a valid selected spawn.
         spawn_id: Option<u16>,
     },
@@ -1502,6 +1506,7 @@ mod tests {
     #[test]
     fn targeting_uses_each_generations_mouse_target_and_id_width() {
         let command = GameCommand::SelectTarget {
+            request_id: 1,
             session_id: 9,
             spawn_id: Some(513),
         };
@@ -1511,6 +1516,7 @@ mod tests {
         let packet = encode(GameDialect::EqMac, &command, "Example").unwrap();
         assert_eq!((packet.opcode, packet.body), (0x6241, vec![1, 2]));
         let clear = GameCommand::SelectTarget {
+            request_id: 1,
             session_id: 9,
             spawn_id: None,
         };

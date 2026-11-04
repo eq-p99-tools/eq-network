@@ -876,11 +876,30 @@ pub enum WorldEvent {
         reason: crate::zoning::ZoneRejection,
     },
     /// Selection request was handed to transport; this is not a server acknowledgment.
-    TargetSent(Option<u16>),
+    TargetSent {
+        /// Admission in which this choice was sent.
+        session_id: u64,
+        /// Host choice whose submission completed.
+        request_id: u64,
+        /// Session target after submission, not server acceptance.
+        state: crate::targets::TargetState,
+    },
+    /// Admission-scoped session projection of a server-directed target or
+    /// a change to the selected incarnation. Never echo this as a request.
+    TargetChanged {
+        /// Current admission.
+        session_id: u64,
+        /// Last local choice processed before this update.
+        request_id: u64,
+        /// Raw ID, availability and command-freshness revision.
+        state: crate::targets::TargetState,
+    },
     /// The player's target as the server set it, or none: `EQEmu` as a sense
     /// spell or a corpse locator picks a spawn, TAKP and Quarm as they refuse
     /// a mouse target, putting back the last one, and as they echo the
     /// player's clearing of it ([`crate::targets`]).
+    /// This raw decoder fact has no admission identity; hosts consume the
+    /// session's [`Self::TargetChanged`] projection instead.
     Target(Option<u16>),
     /// Whom the player's target targets, or no one (`EQEmu`).
     TargetOfTarget(Option<u16>),
@@ -888,8 +907,12 @@ pub enum WorldEvent {
     TargetRejected {
         /// Admission that originated the request.
         session_id: u64,
+        /// Host choice rejected locally.
+        request_id: u64,
         /// Requested selection, or clearing the current target.
         spawn_id: Option<u16>,
+        /// Still-current session target, when the target owner supplied it.
+        state: Option<crate::targets::TargetState>,
         /// Validation reason; this is not a server rejection packet.
         reason: String,
     },

@@ -436,6 +436,7 @@ mod tests {
         assert!(guard.blocks(&request));
         assert!(rejected(
             &ClientCommand::SelectTarget {
+                request_id: 1,
                 session_id: 12,
                 spawn_id: Some(7)
             },
@@ -675,6 +676,7 @@ mod tests {
             created,
         }));
         assert!(!guard.blocks(&ClientCommand::SelectTarget {
+            request_id: 1,
             session_id: 1,
             spawn_id: Some(13)
         }));

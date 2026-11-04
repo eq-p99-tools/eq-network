@@ -69,6 +69,7 @@ fn use_ability(
     testing::run_on(servers::server_type(protocol).wire(), |out| {
         features.handle(
             &ClientCommand::UseAbility {
+                target: Some(world.target.state()),
                 session_id: 5,
                 ability,
                 created: Instant::now(),

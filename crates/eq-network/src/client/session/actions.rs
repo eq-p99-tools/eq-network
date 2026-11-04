@@ -341,10 +341,13 @@ fn refusal(command: &ClientCommand, reason: &str) -> Option<WorldEvent> {
         ClientCommand::Camp { .. } => WorldEvent::Camp(CampStatus::Rejected(reason.into())),
         ClientCommand::SelectTarget {
             session_id,
+            request_id,
             spawn_id,
         } => WorldEvent::TargetRejected {
             session_id: *session_id,
+            request_id: *request_id,
             spawn_id: *spawn_id,
+            state: None,
             reason: reason.into(),
         },
         ClientCommand::ScribeSpell { .. }
@@ -621,6 +624,7 @@ mod tests {
         assert!(casting.conflict(&memorize()).is_some());
         assert_eq!(
             casting.conflict(&ClientCommand::SelectTarget {
+                request_id: 1,
                 session_id: 1,
                 spawn_id: Some(7)
             }),
