@@ -144,6 +144,11 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Add `ProviderPolicy::requires_server_tables()` so hosts can follow the
   network-owned registration/replay requirement without matching policy names.
+- Decode `EQMac` wear changes into the existing typed appearance updates,
+  including held item models, removal and tint changes. Validate its 12-byte
+  layout independently of Titanium's 9-byte layout; retain strict spawn and
+  texture-slot validation.
+
 - Expose `Client::spell_table_policy()` and `ProviderPolicy` from the same
   network policy that emits spell tables, before the first event arrives.
 - Add optional numeric `SessionStatus::run_id`, matching spell-table context

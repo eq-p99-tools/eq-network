@@ -13,6 +13,22 @@ changes any server allowance.
 `GameCommand::name()` returns its exhaustive variant name as a static string,
 without command fields. Shared refusal diagnostics use that name; their
 structured result events retain the original reason and request identity.
+## EQMac wear updates
+
+`appearance::EQMAC_WEAR_CHANGE_OPCODE` and `eqmac_wear_change` decode the
+12-byte `EQMac` record into the existing `WearChange`/`WorldEvent::WearChange`.
+The shared EQMac message path delivers it for TAKP and Quarm. The player's
+record and named spawns apply the received slot's material/model and tint;
+zero selects bare armor or an empty held slot. Hosts consuming the typed event need
+no new event variant. A visible equipment update does not acknowledge an
+inventory move or create an inventory item.
+
+The slot is byte 2, the 16-bit material/model is at 4, and the tint is at 8;
+alignment bytes are ignored. Length must be exactly 12, the spawn ID nonzero,
+and the texture slot 0 through 8. Titanium retains its separate 9-byte codec
+and slot validation. See TAKP's
+[`WearChange_Struct`](https://github.com/EQMacEmu/Server/blob/e517d0bdbca302d94ff6979cd6c6028ddf2b9a4f/common/eq_packet_structs.h)
+and [`Mob::GetEquipmentMaterial`/`SendWearChange`](https://github.com/EQMacEmu/Server/blob/e517d0bdbca302d94ff6979cd6c6028ddf2b9a4f/zone/mob.cpp).
 
 ## Typed spell-provider policy and attempt identity
 

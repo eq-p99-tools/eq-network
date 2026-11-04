@@ -924,6 +924,11 @@ pub fn updates(opcode: u16, body: &[u8]) -> Result<Vec<WorldEvent>> {
             )?)]
         }
         0xf540 => crate::appearance::update(body)?.into_iter().collect(),
+        crate::appearance::EQMAC_WEAR_CHANGE_OPCODE => {
+            vec![WorldEvent::WearChange(
+                crate::appearance::eqmac_wear_change(body)?,
+            )]
+        }
         ZONE_TIME_OF_DAY => vec![WorldEvent::TimeOfDay(crate::clock::decode_eqmac(body)?)],
         crate::appearance::EQMAC_ILLUSION_OPCODE => vec![crate::appearance::eqmac_illusion(body)?],
         crate::appearance::EQMAC_FACE_CHANGE_OPCODE => {

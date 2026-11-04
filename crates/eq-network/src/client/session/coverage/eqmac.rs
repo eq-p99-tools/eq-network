@@ -182,7 +182,7 @@ pub(in crate::client) fn eqmac(opcode: u16) -> Option<ServerMessage> {
         // The petition a game master checks out, answering their own OP_PetitionCheckout.
         0x8e41 => sent("OP_PetitionCheckout", EQMAC, unasked(Social)),
         0x9140 => sent("OP_Illusion", EQMAC, Partly(&[Zone], EQMAC_ILLUSION)),
-        0x9240 => sent("OP_WearChange", EQMAC, planned(EqMacWorld)),
+        0x9240 => sent("OP_WearChange", EQMAC, Read(&[Zone])),
         0x9241 => sent("OP_GuildsList", EQMAC, planned(EqMacWorld)),
         0x9340 => sent("OP_Bind_Wound", EQMAC, planned(EqMacWorld)),
         0x9841 => sent("OP_LevelUpdate", EQMAC, planned(EqMacWorld)),
