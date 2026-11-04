@@ -1,10 +1,15 @@
-//! `EQMac`'s counted, compressed door table and server actions.
+//! `EQMac`'s ordinary click, counted door table and server-selected actions.
 //!
 //! TAKP and Quarm use `Door_Struct` and `DoorSpawns_Struct` from
 //! `common/eq_packet_structs.h`, filled by `EntityList::SendZoneDoorsBulk`.
 //! See `docs/eqmac-world-objects.md` for the independently inspected revisions.
 
+mod hinge;
+
+pub use hinge::{ordinary, Hinge};
+
 use super::{Door, DoorUpdate, STATIC_ID};
+use crate::command::EncodedCommand;
 use crate::world::Position;
 use anyhow::{anyhow, ensure, Result};
 use std::collections::BTreeSet;
@@ -15,9 +20,29 @@ pub const SPAWN_OPCODE: u16 = 0xf741;
 pub const REMOVE_OPCODE: u16 = 0x9b40;
 /// `OP_MoveDoor`: the server's action on one door.
 pub const MOVE_OPCODE: u16 = 0x8e40;
+/// `OP_ClickDoor`: ordinary use with no held item or skill argument.
+pub const CLICK_OPCODE: u16 = 0x8d40;
 
 const RECORD: usize = 44;
 const MAX_DOORS: usize = 255;
+
+/// Encodes an ordinary door click after the owner checks its current definition,
+/// motion, reach and empty cursor. The request does not predict a door action.
+/// Byte 1 is deterministic zero for unwritten padding; the meaningful trailing
+/// word is the player's ID, not padding. Item-specific interactions are separate.
+///
+/// # Errors
+/// Rejects static objects and an unknown player ID.
+pub fn click(id: u8, player_id: u16) -> Result<EncodedCommand> {
+    ensure!(id != STATIC_ID, "a static object cannot be used");
+    ensure!(player_id != 0, "player position is unavailable");
+    let mut body = vec![id, 0, 0, 0, 0xff, 0xff, 0, 0];
+    body[6..8].copy_from_slice(&player_id.to_le_bytes());
+    Ok(EncodedCommand {
+        opcode: CLICK_OPCODE,
+        body,
+    })
+}
 
 /// Reads `EQMac` door definitions, removal and actions without changing a table.
 /// An entire malformed table is rejected before any definition is exposed.
@@ -157,6 +182,19 @@ mod tests {
         state.apply(&decode(REMOVE_OPCODE, &[]).unwrap().unwrap());
         assert!(state.entries().is_empty());
         assert_eq!(decode(0x4c24, &body).unwrap(), None);
+    }
+
+    #[test]
+    fn an_ordinary_click_preserves_player_identity_and_the_no_item_sentinel() {
+        assert_eq!(
+            click(7, 0x1234).unwrap(),
+            EncodedCommand {
+                opcode: 0x8d40,
+                body: vec![7, 0, 0, 0, 0xff, 0xff, 0x34, 0x12],
+            }
+        );
+        assert!(click(255, 7).is_err());
+        assert!(click(7, 0).is_err());
     }
 
     #[test]

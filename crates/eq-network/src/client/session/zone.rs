@@ -1511,14 +1511,49 @@ mod tests {
     }
 
     #[test]
+    fn ordinary_eqmac_doors_compose_with_reading_and_inventory_features() {
+        use crate::client::ServerProtocol;
+        use eq_network_game::{food::AutoEat, world::Capability};
+        for protocol in [ServerProtocol::Quarm, ServerProtocol::Takp] {
+            let features =
+                Features::new(servers::server_type(protocol), "Tester", AutoEat::default());
+            for capability in [
+                Capability::Doors,
+                Capability::Reading,
+                Capability::Inventory,
+                Capability::Trading,
+                Capability::Meals,
+            ] {
+                assert!(
+                    features.capabilities().contains(&capability),
+                    "{protocol:?} {capability:?}"
+                );
+            }
+            let click = ClientCommand::ClickDoor {
+                session_id: 5,
+                door_id: 3,
+                created: Instant::now(),
+            };
+            assert_eq!(
+                features
+                    .provided
+                    .iter()
+                    .filter(|feature| feature.owns(&click))
+                    .count(),
+                1
+            );
+        }
+    }
+
+    #[test]
     fn a_command_no_feature_takes_is_refused_as_unavailable() {
         use crate::client::session::feature::testing;
-        // Quarm opens no doors yet.
-        let mut features = Features::new(
-            servers::server_type(crate::client::ServerProtocol::Quarm),
-            "Tester",
-            eq_network_game::food::AutoEat::default(),
-        );
+        // No owner is installed in this fixture, independently of server offers.
+        let mut features = Features {
+            provided: Vec::new(),
+            choices: Vec::new(),
+            spell_landing_flag: None,
+        };
         let click = ClientCommand::ClickDoor {
             session_id: 5,
             door_id: 3,
@@ -1650,6 +1685,7 @@ mod tests {
                 Capability::Looting,
                 Capability::Talking,
                 Capability::Camping,
+                Capability::Doors,
                 Capability::GroundItems,
                 Capability::Zoning,
                 Capability::Abilities,
@@ -1674,6 +1710,7 @@ mod tests {
                 Capability::Combat,
                 Capability::Talking,
                 Capability::Camping,
+                Capability::Doors,
                 Capability::GroundItems,
                 Capability::Zoning,
                 Capability::Abilities,

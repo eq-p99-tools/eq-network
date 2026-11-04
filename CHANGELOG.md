@@ -24,6 +24,13 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   discarding unrelated predictions. `Inventory::carried_weight_is_conservative()`
   distinguishes this bound. Affecting intermediate mass histories stay unknown
   until a full inventory baseline or existing policy settlement.
+- Offer guarded ordinary EQMac door use on TAKP and Quarm. Encode the
+  source-backed eight-byte no-held-item request and player ID; retain server
+  authority for locks, scripts and movability. Shared ordinary hinge motion
+  guards clicks during movement and models native ten/twenty-second local
+  return timing without predicting acceptance or sending retries. Specialized
+  and unknown mechanisms remain visible without use. Additive APIs:
+  `doors::eqmac::{click, ordinary, Hinge}`.
 
 - **Breaking:** inventory move requests can carry ordered local projection
   identities: `InventoryMove` gains `sequence: Option<MoveSequence>`, and

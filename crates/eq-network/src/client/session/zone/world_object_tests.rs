@@ -42,12 +42,12 @@ fn staged(protocol: ServerProtocol) -> (Features, World) {
 }
 
 #[test]
-fn eqmac_admission_replays_doors_but_offers_only_evidenced_ground_interaction() {
+fn eqmac_admission_replays_state_and_offers_guarded_ordinary_door_use() {
     for protocol in [ServerProtocol::Takp, ServerProtocol::Quarm] {
         let wire = servers::server_type(protocol).wire();
         let (mut features, mut world) = staged(protocol);
         assert!(features.capabilities().contains(&Capability::GroundItems));
-        assert!(!features.capabilities().contains(&Capability::Doors));
+        assert!(features.capabilities().contains(&Capability::Doors));
         let outcome = testing::run_on(wire, |out| features.admitted(&mut world, out));
         outcome.result.unwrap();
         assert_eq!(outcome.sent, []);
@@ -64,17 +64,49 @@ fn eqmac_admission_replays_doors_but_offers_only_evidenced_ground_interaction() 
             created: Instant::now(),
         };
         let outcome = testing::run_on(wire, |out| features.handle(&click, &mut world, out));
-        assert!(!outcome.result.unwrap());
+        assert!(outcome.result.unwrap());
+        assert_eq!(
+            outcome.sent,
+            [eq_network_game::doors::eqmac::click(3, 7).unwrap()]
+        );
+        // The closing action immediately after spawn can leave the hinge at
+        // its placed pose. A subsequent received opening really starts motion.
+        let outcome = testing::run_on(wire, |out| -> Result<()> {
+            for message in read(protocol, 0x8e40, &[3, 2]) {
+                features.observe(&message, &mut world, out)?;
+            }
+            Ok(())
+        });
+        outcome.result.unwrap();
         assert_eq!(outcome.sent, []);
-        assert!(wire
-            .encode(
+        let outcome = testing::run_on(wire, |out| features.handle(&click, &mut world, out));
+        assert!(outcome.result.unwrap());
+        assert_eq!(outcome.sent, []);
+        assert!(
+            matches!(outcome.events.as_slice(), [ClientEvent::World(WorldEvent::DoorAction { error: Some(reason), .. })] if reason == "door is moving")
+        );
+        // Ordinary use waits for the local hinge to settle.
+        let outcome = testing::run_on(wire, |out| {
+            features.tick(Instant::now() + Duration::from_millis(800), &mut world, out)
+        });
+        outcome.result.unwrap();
+        let outcome = testing::run_on(wire, |out| features.handle(&click, &mut world, out));
+        assert!(outcome.result.unwrap());
+        assert_eq!(
+            outcome.sent,
+            [eq_network_game::doors::eqmac::click(3, 7).unwrap()]
+        );
+        assert_eq!(
+            wire.encode(
                 &eq_network_game::request::Request::ClickDoor(3),
                 eq_network_game::request::Sender {
                     name: "Tester",
                     spawn_id: Some(7)
                 }
             )
-            .is_err());
+            .unwrap(),
+            eq_network_game::doors::eqmac::click(3, 7).unwrap()
+        );
     }
 }
 

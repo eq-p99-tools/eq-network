@@ -1,16 +1,19 @@
 //! Doors: the zone's door table and the player's clicks on them.
+#[cfg(test)]
+mod eqmac_tests;
 use super::{
     feature::{Feature, Out, World},
     ClientCommand, ClientEvent,
 };
 use anyhow::{anyhow, ensure, Result};
 use eq_network_game::{
-    doors::{DoorUpdate, OutOfReach},
+    doors::{eqmac, DoorUpdate, OutOfReach},
+    inventory::InventorySlot,
     message::Message,
     request::Request,
     world::{WorldEvent, WorldEvent::DoorAction},
 };
-use std::time::Instant;
+use std::{collections::BTreeMap, time::Instant};
 
 /// The zone's doors in this admission.
 pub(super) struct Doors {
@@ -18,12 +21,14 @@ pub(super) struct Doors {
     /// When the table last gained or lost doors; older clicks are stale.
     changed_at: Instant,
     interaction: Interaction,
+    /// Local ordinary-hinge motion; sending a request never changes it.
+    hinges: BTreeMap<u8, eqmac::Hinge>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Interaction {
-    Enabled,
-    DefinitionsOnly,
+    Titanium,
+    EqMacOrdinary,
 }
 
 impl Default for Doors {
@@ -31,18 +36,50 @@ impl Default for Doors {
         Self {
             table: eq_network_game::doors::Doors::default(),
             changed_at: Instant::now(),
-            interaction: Interaction::Enabled,
+            interaction: Interaction::Titanium,
+            hinges: BTreeMap::new(),
         }
     }
 }
 
 impl Doors {
-    /// Keeps the admission's definitions and server actions without offering
-    /// or sending clicks whose generation-specific fields/guards are unread.
-    pub(super) fn definitions_only() -> Self {
+    /// Offers ordinary hinged doors whose request, motion and guards are read.
+    /// Specialized or unknown mechanisms remain definitions without use.
+    pub(super) fn eqmac() -> Self {
         Self {
-            interaction: Interaction::DefinitionsOnly,
+            interaction: Interaction::EqMacOrdinary,
             ..Self::default()
+        }
+    }
+
+    fn apply(&mut self, update: &DoorUpdate, now: Instant) {
+        self.table.apply(update);
+        if self.interaction != Interaction::EqMacOrdinary {
+            return;
+        }
+        match update {
+            DoorUpdate::RemoveAll => self.hinges.clear(),
+            DoorUpdate::Spawn(doors) => {
+                for door in doors {
+                    if let Some(hinge) = eqmac::Hinge::new(door, now) {
+                        self.hinges.insert(door.id, hinge);
+                    } else {
+                        self.hinges.remove(&door.id);
+                    }
+                }
+            }
+            DoorUpdate::Move { id, action } => {
+                let door = self.table.entries().get(id);
+                if let Some(door) = door.filter(|door| eqmac::ordinary(door)) {
+                    if let Some(hinge) = self.hinges.get_mut(id) {
+                        hinge.action(*action, now);
+                    } else if let Some(hinge) = eqmac::Hinge::new(door, now) {
+                        self.hinges.insert(*id, hinge);
+                    }
+                } else {
+                    self.hinges.remove(id);
+                }
+            }
         }
     }
 
@@ -54,10 +91,6 @@ impl Doors {
         world: &World,
         reach: eq_network_game::reach::Reach,
     ) -> Result<Request> {
-        ensure!(
-            self.interaction == Interaction::Enabled,
-            "door interaction is not available"
-        );
         let ClientCommand::ClickDoor {
             door_id, created, ..
         } = command
@@ -70,6 +103,32 @@ impl Doors {
             .ok_or_else(|| anyhow!("player is unavailable"))?;
         self.table
             .check_click(*door_id, spawn_id, position, reach)?;
+        if self.interaction == Interaction::EqMacOrdinary {
+            let door = self
+                .table
+                .entries()
+                .get(door_id)
+                .ok_or_else(|| anyhow!("door is no longer available"))?;
+            ensure!(
+                eqmac::ordinary(door),
+                "this door mechanism is not supported"
+            );
+            ensure!(
+                world.inventory.received() && !world.inventory.stale(),
+                "the inventory is not loaded"
+            );
+            ensure!(
+                !world.inventory.items().contains_key(&InventorySlot::CURSOR),
+                "put down the item on your cursor first"
+            );
+            let mut hinge = self
+                .hinges
+                .get(door_id)
+                .cloned()
+                .ok_or_else(|| anyhow!("door motion is unavailable"))?;
+            hinge.tick(Instant::now());
+            ensure!(hinge.settled(), "door is moving");
+        }
         Ok(Request::ClickDoor(*door_id))
     }
 }
@@ -77,15 +136,12 @@ impl Doors {
 impl Feature for Doors {
     fn capabilities(&self) -> Vec<crate::world::Capability> {
         use crate::world::Capability;
-        match self.interaction {
-            Interaction::Enabled => vec![Capability::Doors],
-            Interaction::DefinitionsOnly => Vec::new(),
-        }
+        vec![Capability::Doors]
     }
 
     fn admit(&mut self, message: &Message, _world: &mut World) -> Result<()> {
         if let Message::Event(WorldEvent::Doors(update)) = message {
-            self.table.apply(update);
+            self.apply(update, Instant::now());
         }
         Ok(())
     }
@@ -97,8 +153,7 @@ impl Feature for Doors {
     }
 
     fn owns(&self, command: &ClientCommand) -> bool {
-        self.interaction == Interaction::Enabled
-            && matches!(command, ClientCommand::ClickDoor { .. })
+        matches!(command, ClientCommand::ClickDoor { .. })
     }
 
     fn handle(
@@ -140,7 +195,14 @@ impl Feature for Doors {
             if matches!(update, DoorUpdate::Spawn(_) | DoorUpdate::RemoveAll) {
                 self.changed_at = Instant::now();
             }
-            self.table.apply(update);
+            self.apply(update, Instant::now());
+        }
+        Ok(())
+    }
+
+    fn tick(&mut self, now: Instant, _world: &mut World, _out: &mut Out<'_, '_>) -> Result<()> {
+        for hinge in self.hinges.values_mut() {
+            hinge.tick(now);
         }
         Ok(())
     }
@@ -191,7 +253,7 @@ mod tests {
                 ..
             })]
         ));
-        // TAKP's reach is 2-D (its door click isn't encoded yet).
+        // EQMac's conservative base door reach is 2-D.
         assert_eq!(
             doors
                 .click(&click, &world, eq_network_game::reach::EQMAC.doors)

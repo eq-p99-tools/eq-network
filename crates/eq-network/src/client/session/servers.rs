@@ -658,7 +658,7 @@ mod shared {
     }
 
     pub(super) fn eqmac_doors() -> Box<dyn Feature> {
-        Box::new(Doors::definitions_only())
+        Box::new(Doors::eqmac())
     }
 
     pub(super) fn eqmac_ground_items() -> Box<dyn Feature> {
@@ -1720,6 +1720,7 @@ mod tests {
                 Capability::Looting,
                 Capability::Talking,
                 Capability::Camping,
+                Capability::Doors,
                 Capability::GroundItems,
                 Capability::Zoning,
                 Capability::Abilities,
@@ -1746,6 +1747,7 @@ mod tests {
                 Capability::Combat,
                 Capability::Talking,
                 Capability::Camping,
+                Capability::Doors,
                 Capability::GroundItems,
                 Capability::Zoning,
                 Capability::Abilities,

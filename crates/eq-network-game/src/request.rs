@@ -461,7 +461,8 @@ pub fn titanium(request: &Request, sender: Sender<'_>) -> Result<EncodedCommand>
 }
 
 /// The `EQMac` client's packet for a request from this sender: camping,
-/// logging out, its stance and position, the world's damage, ground pickups, item moves,
+/// logging out, its stance and position, the world's damage, ordinary door use,
+/// ground pickups, item moves,
 /// eating and drinking, an item's click, the spellbook's changes but
 /// deleting, the answers to a sacrifice and a translocate, and the host
 /// commands its generation encodes so far: chat and casting from a gem.
@@ -520,6 +521,7 @@ pub fn eqmac(request: &Request, sender: Sender<'_>) -> Result<EncodedCommand> {
             crate::inventory::eqmac_move(*from, *to, *quantity)
         }
         Request::PickUp(drop_id) => Ok(objects::eqmac::pickup(*drop_id, sender.spawn())),
+        Request::ClickDoor(door_id) => doors::eqmac::click(*door_id, sender.spawn()),
         Request::Consume {
             slot,
             meal,

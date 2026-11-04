@@ -324,8 +324,17 @@ ambiguous removal packets cannot cancel it. Only a new admission restores unique
 result attribution.
 The result rule is selected through the generation interface; the established
 Titanium path is preserved. TAKP and Quarm offer `GroundItems` with this rule.
-Their door definitions/actions are replayed at admission, but no `Doors`
-capability, door-click command owner or unverified door sender is enabled.
+Their door definitions/actions are replayed at admission. Both offer `Doors`
+with a click owner restricted to ordinary EQMac types 0--8 and the documented
+definition, empty-cursor, freshness, motion and reach guards. Hidden server
+locks, movability and scripts retain authority; submission is not an opening.
+Additive APIs `doors::eqmac::click` and `request::eqmac(Request::ClickDoor)`
+encode the eight-byte ordinary no-held-item request with the player's ID.
+`doors::eqmac::ordinary` identifies supported definitions, and `Hinge` exposes
+their local motion/return clocks for the network guard and frontend pose.
+Only received definitions/actions set those targets; a click predicts no state.
+Specialized or unknown mechanisms remain visible without ordinary use. No
+event variants or definition fields change.
 
 One feature owns each command and its state. Wire generation determines layout;
 server policy determines availability. New features start absent, and a frontend
