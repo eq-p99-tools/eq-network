@@ -8,6 +8,7 @@ mod character;
 mod clock;
 mod combat;
 mod confirmations;
+mod control;
 mod corpses;
 mod coverage;
 mod creation;

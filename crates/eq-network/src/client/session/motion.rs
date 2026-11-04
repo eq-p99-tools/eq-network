@@ -110,6 +110,14 @@ impl Body {
         }
     }
 
+    /// Preserve physics and calibration while replacing paced voluntary
+    /// motion with its normal stationary stop.
+    pub(super) fn stop_voluntary(&mut self) {
+        if let Some(motion) = self.motion.as_mut() {
+            motion.stop_voluntary();
+        }
+    }
+
     /// Lets a player who stays after a refused transfer stand and move again.
     pub(super) fn resume(&mut self, now: Instant) {
         if let Some(motion) = self.motion.as_mut() {
@@ -453,21 +461,40 @@ impl Motion {
     /// Moves the player, standing them up first if they were sitting or
     /// crouched; a refused move undoes the host's prediction.
     fn step(request: &MovementRequest, world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
+        Self::step_at(request, Instant::now(), world, out)
+    }
+
+    fn step_at(
+        request: &MovementRequest,
+        now: Instant,
+        world: &mut World,
+        out: &mut Out<'_, '_>,
+    ) -> Result<()> {
         let Some(motion) = world.body.motion.as_mut() else {
             return out
                 .log
                 .diagnostic("Rejected movement: the player cannot move yet".into());
         };
         let (to, from) = (request.position, motion.position());
+        if let Some(reason) = world
+            .control
+            .motion_refusal(request, motion.is_passive(request))
+        {
+            return out.log.send(ClientEvent::World(WorldEvent::MotionSent {
+                session_id: world.session_id,
+                position: from,
+                refused: Some(reason.into()),
+            }));
+        }
         if let (true, Some(player)) = (
-            (to.x, to.y, to.z) != (from.x, from.y, from.z),
+            !world.control.stunned() && (to.x, to.y, to.z) != (from.x, from.y, from.z),
             world.player.as_ref(),
         ) {
             world.posture.stand_to_move(player.spawn_id, out)?;
         }
         let mut transport_failed = false;
         let (wire, sender, sink) = (out.wire, out.sender, &mut *out.sink);
-        let result = motion.send_move_sample(request, Instant::now(), |sample| {
+        let result = motion.send_move_sample(request, now, |sample| {
             // A sample the generation cannot carry is refused like any other;
             // only a failed send ends the admission.
             let packet = wire.encode(&Request::Position(*sample), sender)?;
@@ -528,7 +555,10 @@ impl Motion {
     /// Jumps where the server allows falls and the generation's notice of a
     /// jump is known.
     /// The samples after it may rise as the jump does.
-    fn jump(&self, world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
+    fn jump(&self, created: Instant, world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
+        if let Some(reason) = world.control.input_refusal(created) {
+            return out.log.diagnostic(format!("Rejected jump: {reason}"));
+        }
         let jump = world
             .body
             .motion
@@ -615,7 +645,7 @@ impl Feature for Motion {
         self.refresh_belongings(world, out)?;
         match command {
             ClientCommand::Move(request) => Self::step(request, world, out),
-            ClientCommand::Jump { .. } => self.jump(world, out),
+            ClientCommand::Jump { created, .. } => self.jump(*created, world, out),
             ClientCommand::ConfigureMotion { .. } => Self::calibrate(command, world, out),
             ClientCommand::SpeedInputs { .. } => self.inputs(command, world, out),
             ClientCommand::ClimbReach { .. } => Self::climb(command, world, out),
@@ -717,6 +747,10 @@ impl Feature for Motion {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "motion_stun_tests.rs"]
+mod stun_tests;
 
 #[cfg(test)]
 mod tests {

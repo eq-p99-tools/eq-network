@@ -451,6 +451,53 @@ impl MotionSession {
         self.position
     }
 
+    /// Stops voluntary motion at the current owner point without revoking
+    /// speed prerequisites, a prior jump, gravity or server corrections.
+    /// Replace any paced moving update with its stationary stop; the normal
+    /// update gate still decides when that existing position sample is sent.
+    pub fn stop_voluntary(&mut self) {
+        if self.stop_pending() {
+            self.held = Some(PositionPacket {
+                spawn_id: self.spawn_id,
+                sequence: self.sequence,
+                position: self.position,
+                delta: [0.0; 3],
+                animation: 0,
+                delta_heading: 0,
+            });
+        }
+        self.moving = false;
+    }
+
+    /// Whether a proposal contains only passive vertical motion. A rise
+    /// must fit a jump already announced by this owner; no new climb or
+    /// jump allowance is created. Normal sample checks still apply.
+    #[must_use]
+    #[allow(
+        clippy::float_cmp,
+        reason = "Passive movement preserves exact horizontal coordinates and heading"
+    )]
+    pub fn is_passive(&self, request: &MovementRequest) -> bool {
+        if request.position.x != self.position.x
+            || request.position.y != self.position.y
+            || request.position.heading != self.position.heading
+        {
+            return false;
+        }
+        let elapsed = self.guard.interval(request.created);
+        let rise = self.guard.jumped_at.map_or(0.0, |start| {
+            let (from, to) = match start {
+                super::JumpStart::Next => (0.0, elapsed),
+                super::JumpStart::At(at) => {
+                    let to = request.created.saturating_duration_since(at).as_secs_f32();
+                    ((to - elapsed).max(0.0), to)
+                }
+            };
+            self.guard.jump_rise(from, to)
+        });
+        request.position.z <= self.position.z + rise
+    }
+
     /// Resumes stationary heartbeats after a denied transfer; walking stays disabled.
     pub fn resume_stationary(&mut self, now: Instant) {
         self.suspended = false;

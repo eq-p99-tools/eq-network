@@ -2,7 +2,10 @@
 //! player on `EQMac`'s servers, and a warrior's berserk.
 //!
 //! A stun (`OP_Stun`) comes only to the stunned player, with its length, and
-//! ends with a stun of 0; one that runs out sends nothing. A charm
+//! may receive 0 from a server trying to end it; one that runs out sends
+//! nothing. Received zero is not a portable release rule: Titanium's
+//! own-player handler clamps it to one second and ignores it during an
+//! active stun. The session interprets the raw value for its server. A charm
 //! (`OP_Charm`) comes to the whole zone as a player's charm takes hold or
 //! ends, and as the server gives a player back the control it took for a
 //! charm or a fear. `EQMac`'s servers say when they take the player's
@@ -24,7 +27,7 @@ use anyhow::{bail, ensure, Context, Result};
 use serde::Serialize;
 use std::time::Duration;
 
-/// `OP_Stun`: a stun's length in milliseconds, or 0 as one ends.
+/// `OP_Stun`: the raw stun length in milliseconds, including zero.
 pub const STUN_OPCODE: u16 = 0x1e51;
 /// `EQMac`'s `OP_Stun`, the same four bytes.
 pub const EQMAC_STUN_OPCODE: u16 = 0x5b41;
@@ -42,6 +45,17 @@ pub const EQMAC_RETURN_OPCODE: u16 = 0xb040;
 pub const EQMAC_BERSERK_START_OPCODE: u16 = 0xa941;
 /// `EQMac`'s `OP_BerserkEnd`: the berserk ends.
 pub const EQMAC_BERSERK_END_OPCODE: u16 = 0xaa41;
+
+/// The session's established own-player stun state, separate from roots,
+/// death, charm and other control conditions. Absence of a projected state
+/// means that this admission has not established these semantics.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+pub enum StunState {
+    /// No stun timer is active.
+    Clear,
+    /// The verified own-player stun timer is active.
+    Stunned,
+}
 
 /// The length of `EQMac`'s freeze and unfreeze: the player's own name, which
 /// the session has from its entry, in 65 bytes.
@@ -62,7 +76,8 @@ pub struct Charm {
     pub charmed: bool,
 }
 
-/// Decodes a stun, on either generation: its length, or none as one ends.
+/// Decodes a stun on either generation: its length, or None for received zero.
+/// This raw value does not itself establish the client's release behavior.
 ///
 /// `EQEmu` sends every stun to the player, even one shorter than the stun
 /// it keeps running, and TAKP and Quarm every one, though they don't chain
@@ -162,7 +177,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn stuns_carry_their_length_and_zero_ends_one() {
+    fn stuns_carry_their_length_and_preserve_received_zero() {
         assert_eq!(
             stun(&2500u32.to_le_bytes()).unwrap(),
             Some(Duration::from_millis(2500))

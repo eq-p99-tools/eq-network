@@ -146,6 +146,20 @@ impl Camp {
         }
     }
 
+    /// Titanium's play loop abandons preparation while its own stun holds
+    /// control (0x422198, string 12683). It does not undo a submitted logout
+    /// or manufacture a Standing appearance for this cause.
+    fn stunned(&mut self, world: &World, out: &mut Out<'_, '_>) -> Result<()> {
+        if world.control.stunned() && self.cancel() {
+            out.log.send(ClientEvent::World(WorldEvent::Camp(
+                CampStatus::Abandoned {
+                    by: CampEnd::Stunned,
+                },
+            )))?;
+        }
+        Ok(())
+    }
+
     /// Whether the preparation time has elapsed and `OP_Logout` should be sent.
     fn logout_due(&self, now: Instant) -> bool {
         matches!(self.phase, Phase::Preparing(started)
@@ -173,6 +187,10 @@ impl Camp {
 #[cfg(test)]
 #[path = "camp_stop_tests.rs"]
 mod stop_tests;
+
+#[cfg(test)]
+#[path = "camp_stun_tests.rs"]
+mod stun_tests;
 
 impl Feature for Camp {
     fn capabilities(&self) -> Vec<crate::world::Capability> {
@@ -263,6 +281,7 @@ impl Feature for Camp {
     /// Sends the logout once the camp timer completes, and gives up on a
     /// reply that never came.
     fn tick(&mut self, now: Instant, world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
+        self.stunned(world, out)?;
         if let Phase::WaitingForStop {
             session_id,
             admitted,
@@ -316,6 +335,7 @@ impl Feature for Camp {
         world: &mut World,
         out: &mut Out<'_, '_>,
     ) -> Result<()> {
+        self.stunned(world, out)?;
         match message {
             Message::Event(WorldEvent::ZoneTransfer(_))
                 if matches!(self.phase, Phase::WaitingForStop { .. }) =>

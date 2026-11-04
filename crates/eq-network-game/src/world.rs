@@ -404,6 +404,8 @@ pub fn titanium_coins(profile: &[u8]) -> Result<Coins> {
 pub enum CampEnd {
     /// The player stood up.
     Standing,
+    /// The admitted player's stun interrupted preparation.
+    Stunned,
     /// The player moved, or crossed a zone line.
     Moving,
     /// Ducking, a door, a pick-up or death: the program's line for these
@@ -1438,9 +1440,20 @@ pub enum WorldEvent {
     /// A one-shot motion for a nearby spawn, the player's own included, such
     /// as a swing as an attack goes out.
     Animation(crate::combat::Animation),
-    /// A stun on the player begins, for this long, or ends (`None`). One
-    /// that runs out sends nothing; see [`crate::control::stun`].
+    /// A raw own-player stun duration, or received zero (`None`). Zero is
+    /// not a portable release rule; see [`crate::control::stun`].
     Stun(Option<std::time::Duration>),
+    /// The session's interpreted own-player stun state. Revisions increase
+    /// within this admission, including expiry, so a delayed projection
+    /// cannot restore an old hold or release.
+    OwnStun {
+        /// The admission that owns this state.
+        session_id: u64,
+        /// Monotonic state revision within this admission.
+        revision: u64,
+        /// A verified stun state, not generic control ownership.
+        state: crate::control::StunState,
+    },
     /// A player's charm takes hold or ends, or the server gives a player
     /// back the control it took for a charm or a fear.
     Charm(crate::control::Charm),

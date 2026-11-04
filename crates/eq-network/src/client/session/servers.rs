@@ -26,6 +26,7 @@ use super::{
     clock::Clock,
     combat::Combat,
     confirmations::{Sacrifice, Translocate},
+    control::Stuns,
     corpses::Corpses,
     creation::{self, Creation},
     doors::Doors,
@@ -258,6 +259,11 @@ pub(super) trait ServerType: Sync {
         None
     }
 
+    /// Own-player stun semantics, only where the native handler is verified.
+    fn control(&self, _setup: &Setup<'_>) -> Provided {
+        None
+    }
+
     /// Sitting, standing and ducking, separate from walking.
     fn posture(&self, _setup: &Setup<'_>) -> Provided {
         None
@@ -438,6 +444,7 @@ pub(super) trait ServerType: Sync {
     /// offers them each command, packet and timer.
     fn features(&self, setup: &Setup<'_>) -> Vec<Provision> {
         [
+            self.control(setup),
             self.casting(setup),
             self.spellbook(setup),
             self.inventory(setup),
@@ -912,6 +919,10 @@ impl ServerType for Project1999 {
     /// Falls only (6.332).
     fn hazards(&self, _setup: &Setup<'_>) -> Provided {
         offer(shared::hazards(&P99_HAZARDS, false))
+    }
+
+    fn control(&self, _setup: &Setup<'_>) -> Provided {
+        offer(Box::new(Stuns))
     }
 
     fn character(&self, _setup: &Setup<'_>) -> Provided {
@@ -1594,6 +1605,22 @@ mod tests {
         }
     }
 
+    #[test]
+    fn only_verified_p99_policy_enables_own_stun_interpretation() {
+        let setup = Setup::new("Tester", AutoEat::default());
+        assert!(server_type(ServerProtocol::Project1999)
+            .control(&setup)
+            .is_some());
+        for protocol in [
+            ServerProtocol::EqEmu,
+            ServerProtocol::Takp,
+            ServerProtocol::Quarm,
+        ] {
+            assert!(server_type(protocol).control(&setup).is_none());
+        }
+        assert!(Empty.control(&setup).is_none());
+    }
+
     /// What a server type's features let the player do, each once: what it
     /// offers, or else what it leaves to the player.
     fn listed(server: &dyn ServerType, choices: bool) -> Vec<Capability> {
@@ -2066,8 +2093,9 @@ mod tests {
         // program (6.332); only EQEmu waits for the answer to the end of
         // hiding; only EQEmu answers sacrifices, read from its source and not
         // yet checked live; and only EQEmu takes the show-helm option.
+        // P99 also retains the verified own-player stun timer.
         for (protocol, count) in [
-            (ServerProtocol::Project1999, 23),
+            (ServerProtocol::Project1999, 24),
             (ServerProtocol::EqEmu, 37),
         ] {
             let server = server_type(protocol);

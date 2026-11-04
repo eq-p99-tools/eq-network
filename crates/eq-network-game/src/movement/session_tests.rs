@@ -1,6 +1,90 @@
 use super::*;
 
 #[test]
+fn stopping_voluntary_motion_replaces_a_paced_update_and_keeps_calibration_and_jump() {
+    let start = Instant::now();
+    let at = |ms| start + Duration::from_millis(ms);
+    let mut motion = setup(start)
+        .with_gate(Some(UpdateGate::Changed {
+            spacing: Duration::from_millis(280),
+        }))
+        .with_jump(Some((44.55, 400.0)));
+    motion
+        .send_move_sample(&request(at(300), 0.5), at(300), |_| Ok(()))
+        .unwrap();
+    motion
+        .send_move_sample(&request(at(400), 1.0), at(400), |_| {
+            panic!("paced update escaped")
+        })
+        .unwrap();
+    motion.jumped();
+    let calibration = motion.calibration();
+    motion.stop_voluntary();
+    assert_eq!(motion.calibration(), calibration);
+    let mut rising = request(at(500), 1.0);
+    rising.position.z = 1.0;
+    assert!(motion.is_passive(&rising));
+    let mut turning = rising.clone();
+    turning.position.heading = 1.0;
+    assert!(!motion.is_passive(&turning));
+    assert!(!motion
+        .tick_sample(at(579), |_| panic!("stop bypassed pacing"))
+        .unwrap());
+    assert!(motion
+        .tick_sample(at(580), |_| anyhow::bail!("synthetic transport failure"))
+        .is_err());
+    assert!(motion.stop_pending());
+    assert!(motion
+        .tick_sample(at(580), |sample| {
+            assert_eq!(sample.position, motion_position(1.0));
+            assert_eq!(sample.delta, [0.0; 3]);
+            assert_eq!((sample.animation, sample.delta_heading), (0, 0));
+            Ok(())
+        })
+        .unwrap());
+    assert!(!motion.stop_pending());
+    assert_eq!(motion.calibration(), calibration);
+    let mut ordinary = setup(start);
+    assert!(!ordinary.is_passive(&request(at(100), 0.1)));
+    rising.position = Position {
+        z: 0.1,
+        ..Position::default()
+    };
+    assert!(!ordinary.is_passive(&rising));
+    ordinary.stop_voluntary();
+    assert_eq!(ordinary.position(), Position::default());
+}
+
+fn motion_position(x: f32) -> Position {
+    Position {
+        x,
+        ..Position::default()
+    }
+}
+
+#[test]
+fn passive_jump_ceiling_uses_representable_world_coordinates_without_extra_rise() {
+    let start = Instant::now();
+    let now = start + Duration::from_millis(100);
+    for z in [0.0, 1000.0, 20000.0] {
+        let position = Position {
+            z,
+            ..Position::default()
+        };
+        let mut motion = MotionSession::new(11, 7, position, start)
+            .unwrap()
+            .with_jump(Some((44.55, 400.0)));
+        motion.jumped();
+        let ceiling = z + motion.guard.jump_rise(0.0, 0.1);
+        let mut candidate = request(now, 0.0);
+        candidate.position.z = ceiling;
+        assert!(motion.is_passive(&candidate));
+        candidate.position.z = ceiling.next_up();
+        assert!(!motion.is_passive(&candidate));
+    }
+}
+
+#[test]
 fn camp_stop_query_requires_submission_and_does_not_wait_on_heartbeats() {
     let start = Instant::now();
     let at = |ms| start + Duration::from_millis(ms);

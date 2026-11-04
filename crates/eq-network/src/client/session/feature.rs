@@ -8,6 +8,7 @@
 use super::{
     actions::Resource,
     character::PlayerRecord,
+    control::OwnControl,
     entities::Spawns,
     exchange::Exchanging,
     inventory::{Carried, Ledger},
@@ -170,6 +171,9 @@ pub(in crate::client) struct World {
     pub(super) player: PlayerRecord,
     /// How the player's position reaches the server.
     pub(super) body: Body,
+    /// This admission's own-player stun owner; independent of lifecycle,
+    /// speed prerequisites and unresolved charm/fear ownership.
+    pub(super) control: OwnControl,
     /// The player's inventory, which only the inventory feature changes.
     pub(super) inventory: Carried,
     /// The player's coins, which only the inventory feature changes.
@@ -215,6 +219,7 @@ impl World {
             session_id,
             player: PlayerRecord::default(),
             body: Body::default(),
+            control: OwnControl::default(),
             inventory: Carried::default(),
             coins: Ledger::default(),
             own_spawn: None,
