@@ -27,6 +27,11 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- Interpret received own-player stuns on stock Titanium `EQEmu` using the
+  existing Titanium timer, including zero, overlap and admission boundaries.
+  Malformed packets remain rejected. Synthetic receive-path tests do not
+  establish live server receipt or movement acceptance.
+
 - **Breaking:** the exhaustive `ClientCommand` enum gains `AnswerListPolls`,
   `SetMovementOptions`, `SetBookOptions` and `ExitAtOnce`. New local worker
   feedback is `WorldEvent::MovementOptionsApplied` / `MovementOptionsRefused`;

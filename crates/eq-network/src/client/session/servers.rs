@@ -1089,6 +1089,12 @@ impl ServerType for EqEmu {
         offer(shared::motion(true, true, self.spell_landing_flag()))
     }
 
+    /// `Client::Stun` sends Titanium's four-byte duration to the same native
+    /// handler used on P99; zero retains that handler's minimum/overlap rules.
+    fn control(&self, _setup: &Setup<'_>) -> Provided {
+        offer(Box::new(Stuns))
+    }
+
     fn character(&self, _setup: &Setup<'_>) -> Provided {
         offer(shared::character())
     }
@@ -1638,16 +1644,12 @@ mod tests {
     }
 
     #[test]
-    fn only_verified_p99_policy_enables_own_stun_interpretation() {
+    fn only_verified_titanium_policies_enable_own_stun_interpretation() {
         let setup = Setup::new("Tester", AutoEat::default());
-        assert!(server_type(ServerProtocol::Project1999)
-            .control(&setup)
-            .is_some());
-        for protocol in [
-            ServerProtocol::EqEmu,
-            ServerProtocol::Takp,
-            ServerProtocol::Quarm,
-        ] {
+        for protocol in [ServerProtocol::Project1999, ServerProtocol::EqEmu] {
+            assert!(server_type(protocol).control(&setup).is_some());
+        }
+        for protocol in [ServerProtocol::Takp, ServerProtocol::Quarm] {
             assert!(server_type(protocol).control(&setup).is_none());
         }
         assert!(Empty.control(&setup).is_none());
@@ -2125,10 +2127,10 @@ mod tests {
         // program (6.332); only EQEmu waits for the answer to the end of
         // hiding; only EQEmu answers sacrifices, read from its source and not
         // yet checked live; and only EQEmu takes the show-helm option.
-        // P99 also retains the verified own-player stun timer.
+        // Both Titanium policies retain the verified own-player stun timer.
         for (protocol, count) in [
             (ServerProtocol::Project1999, 27),
-            (ServerProtocol::EqEmu, 37),
+            (ServerProtocol::EqEmu, 38),
         ] {
             let server = server_type(protocol);
             let setup = Setup::new("Tester", AutoEat::default());

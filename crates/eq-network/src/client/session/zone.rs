@@ -2187,3 +2187,6 @@ mod manual_combine_tests;
 
 #[cfg(test)]
 mod terminal_tests;
+
+#[cfg(test)]
+mod stun_tests;

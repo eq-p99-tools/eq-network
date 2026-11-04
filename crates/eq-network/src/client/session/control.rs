@@ -2,7 +2,8 @@
 //! 0x417839 even for zero: an idle ordinary player gets at least 1,000 ms,
 //! and an active timer ignores overlapping requests. The play loop at
 //! 0x422198 expires it strictly after its deadline. P99's receive dispatcher
-//! passes this opcode through. This is not TAKP, charm, fear or mez policy.
+//! passes this opcode through; stock `EQEmu` sends the same Titanium duration.
+//! This is not TAKP, charm, fear or mez policy.
 use super::{
     feature::{Feature, Out, World},
     ClientEvent,
@@ -103,7 +104,7 @@ impl OwnControl {
     }
 }
 
-/// Enabled only by a server policy with the verified Titanium/P99 handler.
+/// Enabled only by server policies with the verified Titanium handler.
 pub(super) struct Stuns;
 
 impl Stuns {
