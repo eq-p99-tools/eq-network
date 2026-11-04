@@ -728,6 +728,10 @@ mod shared {
         Box::<Tradeskills>::default()
     }
 
+    pub(super) fn carried_combines() -> Box<dyn Feature> {
+        Box::new(Tradeskills::carried())
+    }
+
     pub(super) fn map() -> Box<dyn Feature> {
         Box::new(Map)
     }
@@ -835,6 +839,10 @@ impl ServerType for Project1999 {
     /// agree on window 0xff, kind and NUL-terminated item-derived text name.
     fn reading(&self, _setup: &Setup<'_>) -> Provided {
         offer(shared::reading())
+    }
+
+    fn tradeskills(&self, _setup: &Setup<'_>) -> Provided {
+        offer(shared::carried_combines())
     }
 
     fn inventory_move_rules(&self) -> Option<MoveRules> {
@@ -2099,7 +2107,7 @@ mod tests {
 
     #[test]
     fn p99_and_eqemu_provide_every_feature_one_each() {
-        // Training, resurrection, tradeskills, the map, deleting
+        // Training, resurrection, world containers, the map, deleting
         // spells, merchants' offers, the player's listing, dice,
         // emotes, assisting, raids and the server's tick are checked on
         // EQEmu alone so far; P99 takes falls' damage by the Titanium
@@ -2108,7 +2116,7 @@ mod tests {
         // yet checked live; and only EQEmu takes the show-helm option.
         // P99 also retains the verified own-player stun timer.
         for (protocol, count) in [
-            (ServerProtocol::Project1999, 26),
+            (ServerProtocol::Project1999, 27),
             (ServerProtocol::EqEmu, 37),
         ] {
             let server = server_type(protocol);
@@ -2120,7 +2128,7 @@ mod tests {
             Capability::Resurrection,
             Capability::Sacrifice,
             Capability::Translocate,
-            Capability::Tradeskills,
+            Capability::WorldContainers,
             Capability::Map,
             Capability::DeletingSpells,
             Capability::MerchantOffers,
@@ -2136,10 +2144,11 @@ mod tests {
             assert!(offers(server_type(ServerProtocol::EqEmu)).contains(&capability));
         }
         assert!(offers(server_type(ServerProtocol::Project1999)).contains(&Capability::Grouping));
-        // Reading and moving the book's spells are offered on both.
+        // Reading, moving book spells and carried combines are offered on both.
         for protocol in [ServerProtocol::Project1999, ServerProtocol::EqEmu] {
             assert!(offers(server_type(protocol)).contains(&Capability::MovingSpells));
             assert!(offers(server_type(protocol)).contains(&Capability::Reading));
+            assert!(offers(server_type(protocol)).contains(&Capability::Tradeskills));
         }
     }
 

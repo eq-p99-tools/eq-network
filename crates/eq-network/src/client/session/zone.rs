@@ -1655,6 +1655,9 @@ mod tests {
         assert!(eqemu.contains(&Capability::Resurrection));
         assert!(eqemu.contains(&Capability::Reading));
         assert!(eqemu.contains(&Capability::Tradeskills));
+        assert!(p99.contains(&Capability::Tradeskills));
+        assert!(eqemu.contains(&Capability::WorldContainers));
+        assert!(!p99.contains(&Capability::WorldContainers));
         assert!(eqemu.contains(&Capability::Map));
         assert!(eqemu.contains(&Capability::DeletingSpells));
         assert!(eqemu.contains(&Capability::MovingSpells));
@@ -2037,3 +2040,6 @@ mod diagnostic_tests;
 
 #[cfg(test)]
 mod target_tests;
+
+#[cfg(test)]
+mod manual_combine_tests;

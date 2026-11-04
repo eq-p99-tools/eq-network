@@ -575,3 +575,23 @@ succeeds. A checked candidate is not yet an accepted move or a server receipt.
 Dropping it or failing the callback leaves motion state untouched; external
 callback effects cannot be rolled back. No public observer/transaction API is
 introduced, and the private plan certifies no external body or scene identity.
+
+## Carried combines and world containers
+
+**Breaking:** `Capability::WorldContainers` is a new variant and
+`Capability::ALL` grows from43 to44. `Tradeskills` offers carried manual
+combines; `OpenContainer`, `CloseContainer` and `Combine(WORLD_CONTAINER)`
+require `WorldContainers`. `tradeskills::combine_capability` supplies the
+same distinction to frontends. EQEmu offers both; P99 offers carried combines
+only, with no change to the current TAKP/Quarm offers. Exhaustive capability
+matches and station controls must handle the new variant.
+
+`titanium_combine` retains its signature but writes the native full32-bit
+slot, replacing the old invented high-word sentinel, and rejects nonpack,
+nonworld slots. No EQMac combine encoding is introduced. Additive
+`tradeskills::{check_carried, CarriedRefusal}` exposes the source-backed local
+metadata/identity prerequisites without changing any inventory.
+`CombineUpdate::Answered` means a received local transaction reset, not a
+successful craft or item-move acknowledgment. Components, returned tools and
+products require separate authoritative inventory updates. See
+[the source contract and limits](docs/p99-manual-combines.md).

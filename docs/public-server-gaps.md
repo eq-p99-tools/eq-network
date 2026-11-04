@@ -164,6 +164,12 @@ standing. See [the inspected handlers](https://github.com/SecretsOTheP/EQMacEmu/
 
 ## Confirmed implementation and policy gaps
 
+The carried manual-combine follow-up now offers P99's source-backed carried
+path, independently of world containers. Native request bytes and local
+prerequisites are implemented; live success/refusal and result ordering remain
+unverified. World-station discovery/open/close/combine remains a client gap,
+not a server-unsupported facility. See [carried combine evidence and limits](p99-manual-combines.md).
+
 This table records the baseline above; completed fixes and follow-up checks are
 called out separately so a new capability is not mistaken for live verification.
 

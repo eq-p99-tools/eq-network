@@ -958,9 +958,8 @@ impl GameCommand {
             | Self::RaidMakeLeader { .. }
             | Self::RaidRemove { .. } => Capability::Raiding,
             Self::ReadItem { .. } => Capability::Reading,
-            Self::Combine { .. } | Self::OpenContainer { .. } | Self::CloseContainer { .. } => {
-                Capability::Tradeskills
-            }
+            Self::Combine { container, .. } => crate::tradeskills::combine_capability(*container),
+            Self::OpenContainer { .. } | Self::CloseContainer { .. } => Capability::WorldContainers,
             Self::Consent { .. }
             | Self::SummonCorpse { .. }
             | Self::DragCorpse { .. }

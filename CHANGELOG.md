@@ -20,6 +20,15 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Select from the submitted worker inventory and retain the enqueue time.
   See `docs/p99-reading.md` for the wire contract and remaining live checks.
 
+- **Breaking:** separate carried combines from world-station actions with
+  `Capability::WorldContainers` (`ALL` grows to44). P99 offers only carried
+  manual combines, with current container, component, identity and cursor
+  guards. EQEmu keeps both offers; TAKP/Quarm are unchanged. Titanium's
+  four-byte combine request writes the full native slot with a zero upper
+  word, replacing the invented tribute sentinel. A received reset clears
+  only the local gate; consumption/products remain authoritative inventory
+  news. Additive `tradeskills::{combine_capability, check_carried, CarriedRefusal}`.
+
 - **Breaking:** add `Capability::Meals` for consuming food/drink and choosing
   automatic meals, separate from inventory moves. Inventory owners offer it
   only when their existing meal policy handles those commands.

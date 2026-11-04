@@ -1,0 +1,339 @@
+//! Carried combines through the actual P99 policy, wire and inventory owner.
+use super::*;
+use crate::client::{session::feature::testing, ServerProtocol};
+use eq_network_game::{
+    food::AutoEat,
+    inventory::{Inventory, InventorySlot, InventoryUpdate},
+    tradeskills::{CombineUpdate, WORLD_CONTAINER},
+    world::{Capability, WorldEvent},
+};
+
+fn setup() -> (Features, World) {
+    setup_in(5)
+}
+
+fn setup_in(session_id: u64) -> (Features, World) {
+    let mut features = Features::new(
+        servers::server_type(ServerProtocol::Project1999),
+        "Tester",
+        AutoEat::default(),
+    );
+    let mut world = World::new(session_id);
+    world.player.admit(testing::player(7));
+    world.own_spawn = Some(7);
+    world.admitted = Some(Instant::now());
+    let mut kit = testing::item(23);
+    kit.bag_slots = 10;
+    kit.rules.bag_type = 16;
+    let mut inventory = Inventory::default();
+    inventory.apply(InventoryUpdate::Snapshot(vec![kit, testing::item(261)]));
+    world.inventory = inventory.into();
+    testing::run(|out| features.admitted(&mut world, out))
+        .result
+        .unwrap();
+    (features, world)
+}
+
+fn combine(slot: InventorySlot) -> ClientCommand {
+    ClientCommand::Combine {
+        session_id: 5,
+        container: slot,
+        created: Instant::now(),
+    }
+}
+
+fn hear_packets(features: &mut Features, world: &mut World, opcode: u16, body: &[u8]) {
+    let server = servers::server_type(ServerProtocol::Project1999);
+    let outcome = testing::run_on(server.wire(), |out| -> Result<()> {
+        for message in server.wire().messages(opcode, body, server.item_rules()) {
+            features.observe(&message, world, out)?;
+        }
+        Ok(())
+    });
+    outcome.result.unwrap();
+    assert!(outcome
+        .sent
+        .iter()
+        .all(|packet| packet.opcode != eq_network_game::tradeskills::COMBINE_OPCODE));
+}
+
+#[test]
+fn p99_handles_carried_combines_but_owns_no_station_action() {
+    let (mut features, mut world) = setup();
+    assert!(features.capabilities().contains(&Capability::Tradeskills));
+    assert!(!features
+        .capabilities()
+        .contains(&Capability::WorldContainers));
+    for command in [
+        ClientCommand::OpenContainer {
+            session_id: 5,
+            drop_id: 71,
+            created: Instant::now(),
+        },
+        ClientCommand::CloseContainer { session_id: 5 },
+        combine(WORLD_CONTAINER),
+    ] {
+        assert_eq!(command.capability(), Some(Capability::WorldContainers));
+        // The session dispatches through the actual provider, then reports
+        // unowned commands with its existing refusal path.
+        let outcome = testing::run(|out| -> Result<bool> {
+            let handled = features.handle(&command, &mut world, out)?;
+            if !handled {
+                unoffered(&command, out.log)?;
+            }
+            Ok(handled)
+        });
+        assert!(!outcome.result.unwrap());
+        assert_eq!(outcome.sent, []);
+        assert!(outcome.events.iter().any(
+            |event| matches!(event, ClientEvent::Diagnostic(reason) if reason.contains(UNOFFERED))
+        ));
+        match command {
+            ClientCommand::OpenContainer { .. } => assert!(matches!(
+                outcome.events.first(),
+                Some(ClientEvent::World(WorldEvent::ObjectAction {
+                    session_id: 5,
+                    drop_id: 71,
+                    error: Some(reason),
+                })) if reason == UNOFFERED
+            )),
+            ClientCommand::Combine { .. } => assert!(matches!(
+                outcome.events.first(),
+                Some(ClientEvent::World(WorldEvent::CombineRefused {
+                    session_id: 5,
+                    reason,
+                    ..
+                })) if reason == UNOFFERED
+            )),
+            _ => assert_eq!(outcome.events.len(), 1),
+        }
+    }
+    let before = world.inventory.items().clone();
+    let outcome = testing::run(|out| features.handle(&combine(InventorySlot(23)), &mut world, out));
+    assert!(outcome.result.unwrap());
+    assert_eq!(
+        outcome.sent,
+        [eq_network_game::tradeskills::titanium_combine(InventorySlot(23)).unwrap()]
+    );
+    assert!(outcome.events.iter().any(|event| matches!(
+        event,
+        ClientEvent::World(WorldEvent::Combine(CombineUpdate::Started(InventorySlot(
+            23
+        ))))
+    )));
+    assert_eq!(world.inventory.items(), &before);
+    assert_eq!(features.holds(&world, Instant::now()).len(), 1);
+    assert!(features
+        .refusal(&combine(InventorySlot(23)), &world, Instant::now())
+        .is_some());
+}
+
+#[test]
+fn p99_and_eqemu_providers_send_the_exact_native_four_byte_carried_slot() {
+    for protocol in [ServerProtocol::Project1999, ServerProtocol::EqEmu] {
+        let server = servers::server_type(protocol);
+        let mut features = Features::new(server, "Tester", AutoEat::default());
+        let (_, mut world) = setup();
+        let outcome = testing::run_on(server.wire(), |out| {
+            features.handle(&combine(InventorySlot(23)), &mut world, out)
+        });
+        assert!(outcome.result.unwrap(), "{protocol:?}");
+        assert_eq!(outcome.sent.len(), 1, "{protocol:?}");
+        assert_eq!(outcome.sent[0].opcode, 0x0b40, "{protocol:?}");
+        assert_eq!(outcome.sent[0].body, [23, 0, 0, 0], "{protocol:?}");
+    }
+}
+
+#[test]
+fn a_received_reset_releases_the_gate_without_consuming_or_creating_items() {
+    let (mut features, mut world) = setup();
+    testing::run(|out| features.handle(&combine(InventorySlot(23)), &mut world, out))
+        .result
+        .unwrap();
+    let before = world.inventory.items().clone();
+    let outcome = testing::run(|out| {
+        features.tick(Instant::now() + Duration::from_secs(60), &mut world, out)
+    });
+    outcome.result.unwrap();
+    assert!(outcome
+        .sent
+        .iter()
+        .all(|packet| packet.opcode != eq_network_game::tradeskills::COMBINE_OPCODE));
+    assert_ne!(features.holds(&world, Instant::now()), []);
+    hear_packets(&mut features, &mut world, 0x0b40, &[1]);
+    assert_ne!(features.holds(&world, Instant::now()), []);
+    hear_packets(&mut features, &mut world, 0x0b40, &[]);
+    assert_eq!(features.holds(&world, Instant::now()), []);
+    assert_eq!(world.inventory.items(), &before);
+    // Failed recipes can reset the same gate with no item updates. Nothing
+    // here treats that reset, local submission or silence as a successful craft.
+    assert!(!world.inventory.items().contains_key(&InventorySlot::CURSOR));
+    // Only an actual server inventory mutation consumes a component.
+    let consumed = [
+        261_u32.to_le_bytes(),
+        u32::MAX.to_le_bytes(),
+        u32::MAX.to_le_bytes(),
+    ]
+    .concat();
+    hear_packets(&mut features, &mut world, 0x4d81, &consumed);
+    assert!(!world.inventory.items().contains_key(&InventorySlot(261)));
+    assert!(world.inventory.items().contains_key(&InventorySlot(23)));
+    let outcome = testing::run(|out| {
+        features.observe(
+            &Message::Event(WorldEvent::Inventory(InventoryUpdate::Cursor(vec![
+                testing::item(30),
+            ]))),
+            &mut world,
+            out,
+        )
+    });
+    outcome.result.unwrap();
+    assert_eq!(outcome.sent, []);
+    assert!(world.inventory.items().contains_key(&InventorySlot::CURSOR));
+}
+
+#[test]
+fn the_current_container_and_components_are_rechecked_before_sending() {
+    for case in 0..4 {
+        let (mut features, mut world) = setup();
+        let mut items = world
+            .inventory
+            .items()
+            .values()
+            .cloned()
+            .collect::<Vec<_>>();
+        match case {
+            0 => items.retain(|item| item.slot != InventorySlot(261)),
+            1 => items.push(testing::item(30)),
+            2 => {
+                items
+                    .iter_mut()
+                    .find(|item| item.slot == InventorySlot(261))
+                    .unwrap()
+                    .stack_count = Some(2);
+            }
+            _ => {
+                items
+                    .iter_mut()
+                    .find(|item| item.slot == InventorySlot(23))
+                    .unwrap()
+                    .rules
+                    .bag_type = 5;
+            }
+        }
+        let mut inventory = Inventory::default();
+        inventory.apply(InventoryUpdate::Snapshot(items));
+        world.inventory = inventory.into();
+        let before = world.inventory.items().clone();
+        let outcome =
+            testing::run(|out| features.handle(&combine(InventorySlot(23)), &mut world, out));
+        assert!(outcome.result.unwrap());
+        assert_eq!(outcome.sent, []);
+        assert!(matches!(
+            outcome.events.as_slice(),
+            [ClientEvent::World(WorldEvent::CombineRefused { .. })]
+        ));
+        assert_eq!(world.inventory.items(), &before);
+        assert_eq!(features.holds(&world, Instant::now()), []);
+    }
+    let (mut features, mut world) = setup();
+    let old = combine(InventorySlot(23));
+    let changed = Message::Event(WorldEvent::Inventory(InventoryUpdate::Set(vec![
+        testing::item(261),
+    ])));
+    testing::run(|out| features.observe(&changed, &mut world, out))
+        .result
+        .unwrap();
+    let outcome = testing::run(|out| features.handle(&old, &mut world, out));
+    assert!(outcome.result.unwrap());
+    assert_eq!(outcome.sent, []);
+    assert!(
+        matches!(outcome.events.as_slice(), [ClientEvent::World(WorldEvent::CombineRefused { reason, .. })]
+        if reason == "The inventory changed since that combine was requested")
+    );
+}
+
+#[test]
+fn a_combine_reset_never_confirms_an_unrelated_inventory_projection() {
+    let (mut features, mut world) = setup();
+    let mut items = world
+        .inventory
+        .items()
+        .values()
+        .cloned()
+        .collect::<Vec<_>>();
+    items.push(testing::item(22));
+    let mut inventory = Inventory::default();
+    inventory.apply(InventoryUpdate::Snapshot(items.clone()));
+    items
+        .iter_mut()
+        .find(|item| item.slot == InventorySlot(22))
+        .unwrap()
+        .slot = InventorySlot(24);
+    inventory.apply(InventoryUpdate::Prediction(items));
+    assert!(inventory.predicted());
+    let unresolved = inventory.unresolved_predictions();
+    assert!(unresolved > 0);
+    world.inventory = inventory.into();
+    let outcome = testing::run(|out| features.handle(&combine(InventorySlot(23)), &mut world, out));
+    assert!(outcome.result.unwrap());
+    assert_eq!(outcome.sent.len(), 1);
+    hear_packets(&mut features, &mut world, 0x0b40, &[]);
+    assert_eq!(features.holds(&world, Instant::now()), []);
+    assert!(world.inventory.predicted());
+    assert_eq!(world.inventory.unresolved_predictions(), unresolved);
+}
+
+#[test]
+fn a_new_admission_drops_a_pending_combine_and_other_profiles_keep_their_offers() {
+    let (mut features, mut world) = setup();
+    testing::run(|out| features.handle(&combine(InventorySlot(23)), &mut world, out))
+        .result
+        .unwrap();
+    assert_ne!(features.holds(&world, Instant::now()), []);
+    let (fresh, world) = setup_in(6);
+    assert_eq!(fresh.holds(&world, Instant::now()), []);
+    assert_eq!(
+        fresh.refusal(&combine(InventorySlot(23)), &world, Instant::now()),
+        Some("That was meant for an earlier zone visit")
+    );
+    for (protocol, carried, station) in [
+        (ServerProtocol::Project1999, true, false),
+        (ServerProtocol::EqEmu, true, true),
+        (ServerProtocol::Quarm, false, false),
+        (ServerProtocol::Takp, false, false),
+    ] {
+        let server = servers::server_type(protocol);
+        let mut features = Features::new(server, "Tester", AutoEat::default());
+        let caps = features.capabilities();
+        assert_eq!(
+            caps.contains(&Capability::Tradeskills),
+            carried,
+            "{protocol:?}"
+        );
+        assert_eq!(
+            caps.contains(&Capability::WorldContainers),
+            station,
+            "{protocol:?}"
+        );
+        if !carried {
+            let (_, mut world) = setup();
+            for command in [
+                combine(InventorySlot(23)),
+                combine(WORLD_CONTAINER),
+                ClientCommand::OpenContainer {
+                    session_id: 5,
+                    drop_id: 71,
+                    created: Instant::now(),
+                },
+                ClientCommand::CloseContainer { session_id: 5 },
+            ] {
+                let outcome = testing::run_on(server.wire(), |out| {
+                    features.handle(&command, &mut world, out)
+                });
+                assert!(!outcome.result.unwrap(), "{protocol:?}");
+                assert!(outcome.sent.is_empty(), "{protocol:?}");
+            }
+        }
+    }
+}
