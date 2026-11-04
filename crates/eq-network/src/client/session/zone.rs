@@ -1656,7 +1656,8 @@ mod tests {
                 Capability::Reading,
                 Capability::EnvironmentalDamage,
                 Capability::Jumping,
-                Capability::Posture
+                Capability::Posture,
+                Capability::Meals
             ]
         );
         assert_eq!(
