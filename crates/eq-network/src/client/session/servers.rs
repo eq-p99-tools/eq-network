@@ -1261,7 +1261,11 @@ impl ServerType for Quarm {
     /// Client-requested boundaries and bind entry use Quarm's `EQMac` world
     /// re-entry, with the same offer/refusal/correction lifecycle as TAKP.
     fn transfers(&self, setup: &Setup<'_>) -> Provided {
-        offer(shared::transfers(setup, Home::Asked))
+        // Quarm zone/worldserver.cpp substitutes 185 for a same-zone bind
+        // approval. TAKP and ordinary zone-line replies retain exact identity.
+        offer(Box::new(
+            Transfers::new(setup.character, Home::Asked).with_same_zone_bind_reply(185),
+        ))
     }
 
     /// Quarm handles camp and logout using the shared `EQMac` packets.
@@ -1840,6 +1844,7 @@ mod tests {
             report_id: 1,
             state: eq_network_game::movement::SpeedInputState::Ready(
                 eq_network_game::movement::SpeedInputs {
+                    eqmac_fatigue: None,
                     rate: 0,
                     weight: 0,
                     capacity: 100,

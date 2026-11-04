@@ -836,6 +836,13 @@ pub enum WorldEvent {
     ItemDetails(crate::items::ItemDetails),
     /// Server death notification; consumers compare its ID with their own spawn.
     Death(crate::zoning::Death),
+    /// The server's death-only bind path identifies the player's death,
+    /// without a death packet or any killer/corpse details. Never creates a
+    /// corpse or a kill record; only the named admission's lifecycle changes.
+    DeathBind {
+        /// Admission receiving the server's death-only bind offer.
+        session_id: u64,
+    },
     /// A corpse moved, on `EQMac`: summoned, returned, a game master's
     /// `#summon`, and on Quarm all the while it is dragged.
     CorpseMoved {

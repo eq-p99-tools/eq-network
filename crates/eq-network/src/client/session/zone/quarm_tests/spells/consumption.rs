@@ -182,6 +182,7 @@ fn two_scribes_consume_only_their_scrolls_and_recover_a_current_movement_grant()
             revision,
             report_id: 1,
             state: SpeedInputState::Ready(SpeedInputs {
+                eqmac_fatigue: None,
                 rate: 0,
                 weight: u16::try_from(weight / 10).unwrap(),
                 capacity: 90,

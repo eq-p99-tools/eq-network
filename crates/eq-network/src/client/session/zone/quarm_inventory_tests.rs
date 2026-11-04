@@ -2,6 +2,7 @@
 use super::super::feature::testing;
 use super::*;
 use crate::client::ServerProtocol;
+use eq_network_game::GameDialect;
 use eq_network_game::{
     food::AutoEat,
     inventory::{InventoryItem, InventoryMove, InventorySlot, InventoryUpdate, MoveQuantity},
@@ -121,7 +122,6 @@ fn quarm_prediction_pacing_never_restores_a_withdrawn_weight_grant() {
     use eq_network_game::{
         inventory::WeightUnavailable,
         movement::{SpeedInputState, SpeedInputUnavailable, SpeedInputs},
-        GameDialect,
     };
     let mut plain = testing::item(22);
     plain.details.weight_tenths = 40;
@@ -143,6 +143,7 @@ fn quarm_prediction_pacing_never_restores_a_withdrawn_weight_grant() {
         revision,
         report_id: 1,
         state: SpeedInputState::Ready(SpeedInputs {
+            eqmac_fatigue: None,
             rate: 0,
             weight: 4,
             capacity: 100,

@@ -897,6 +897,7 @@ mod tests {
                 report_id: 1,
                 state: eq_network_game::movement::SpeedInputState::Ready(
                     eq_network_game::movement::SpeedInputs {
+                        eqmac_fatigue: None,
                         rate: 0,
                         weight: 0,
                         capacity: 100,

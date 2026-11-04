@@ -308,7 +308,7 @@ impl Feature for Casting {
                     }))?;
                 }
             }
-            Message::Event(WorldEvent::Death(death)) if world.is_player(death.spawn_id) => {
+            Message::Event(event) if world.owns_death(event) => {
                 self.guard.clear();
             }
             _ => (),

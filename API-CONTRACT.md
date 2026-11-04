@@ -130,6 +130,24 @@ Installed data remains the source of text. Complete `WorldRules` literals
 must add the field or use its default for absence; this source API addition
 requires downstream consumer validation before publication.
 
+## Session-owned EQMac fatigue
+
+`SpeedInputs` adds optional `eqmac_fatigue: Option<EqMacFatigueInputs>` with
+signed unpenalized `strength: i64` and effective `stamina: Option<u8>`.
+Existing rate, weight and final capacity (including the explicit zero sentinel)
+retain their meaning. Only EQMac with this component derives capacity from
+current session fatigue; legacy absent components retain the existing host
+refresh/withdrawal path. Other generations use final capacity directly.
+
+Known stamina is capped to 1..=255; missing/zero stamina or missing fatigue
+retains the conservative maximum ten-point penalty. Subtract with saturation
+before the final 1..=255 cap. Known nonpositive strength never becomes the
+zero/no-encumbrance sentinel. The host supplies one proven prerequisite
+baseline and a stable conservative fallback capacity. Session-derived
+capacity does not rewrite the exact accepted host report or its receipt.
+Unchanged fatigue/derived speed stays quiet; true prerequisite invalidation,
+root, correction, death and transfers retain their guards.
+
 ## EQMac admission zone identity
 
 `quarm::profile_zone` reads the current zone from the supported encrypted
@@ -140,6 +158,20 @@ EQMac admission keeps an otherwise valid profile when its current zone is
 unknown, and commits representable current zones with no instance field
 before zone-line commands can run. Unknown identity retains the existing
 transfer refusal. No transfer packet layout or server policy changes.
+
+## Quarm death-bind handoff
+
+Quarm's source-defined death-only bind offer produces admission-scoped
+`WorldEvent::DeathBind` before the transfer. It carries lifecycle knowledge,
+not a death packet: no killer, corpse or kill credit is synthesized. Ordinary
+death packets retain their full details. Duplicate bind offers do not repeat
+death or departure; dead state survives an approved departure. This
+classification is enabled by the Quarm provider, not generic bind offers.
+
+For Quarm only, approval of a solicited pending bind transfer to the exact
+current zone accepts its documented reply stand-in 185. Character, instance
+and success checks remain; normal transfers and other profiles retain exact
+destination validation. The stand-in is not stored as the real destination.
 
 ## Camping and the movement owner's pending stop
 

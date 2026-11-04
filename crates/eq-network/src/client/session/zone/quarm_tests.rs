@@ -1,6 +1,134 @@
 //! The Quarm feature assembly, using synthetic state and an in-memory wire.
 mod spells;
 
+#[test]
+fn only_quarms_death_bind_path_classifies_death_and_stale_notices_do_not() {
+    for protocol in [ServerProtocol::Quarm, ServerProtocol::Takp] {
+        let server = servers::server_type(protocol);
+        let (_, mut world) = admitted();
+        let mut features = Features::new(server, "Tester", AutoEat::default());
+        world.zone = (2, 0);
+        testing::run_on(server.wire(), |out| features.admitted(&mut world, out))
+            .result
+            .unwrap();
+        world.take_news();
+        let offer = eq_network_game::zoning::ZoneOffer {
+            zone_id: 2,
+            instance_id: 0,
+            position: Position::default(),
+            reason: 0,
+            to_bind: protocol == ServerProtocol::Takp,
+            solicited: true,
+        };
+        let output = testing::run_on(server.wire(), |out| {
+            hear(
+                vec![
+                    Message::Event(WorldEvent::DeathBind { session_id: 999 }),
+                    Message::ZoneOffer(offer),
+                ],
+                &mut features,
+                &mut world,
+                out,
+                true,
+            )
+        });
+        output.result.unwrap();
+        assert!(!world.lifecycle.is_dead());
+        assert!(output.events.iter().all(|event| !matches!(
+            event,
+            ClientEvent::World(WorldEvent::DeathBind { session_id: 5 })
+        )));
+    }
+}
+
+#[test]
+fn quarm_death_bind_without_a_death_packet_notifies_before_transfer_and_follows_approval() {
+    use eq_network_game::zoning::ZoneAnswer;
+    for packet_first in [false, true] {
+        let server = servers::server_type(ServerProtocol::Quarm);
+        let (mut features, mut world) = admitted();
+        world.zone = (2, 0);
+        let mut body = [0; 152];
+        body[132..136].copy_from_slice(&2u32.to_le_bytes());
+        let offer = eq_network_game::quarm::to_bind(&body).unwrap();
+        let mut messages = Vec::new();
+        if packet_first {
+            messages.push(Message::Event(WorldEvent::Death(Death {
+                spawn_id: 7,
+                killer_id: 8,
+                corpse_id: 7,
+                bind_zone_id: 0,
+                corpse_name: None,
+            })));
+        }
+        messages.push(Message::ZoneOffer(offer.clone()));
+        messages.push(Message::ZoneOffer(offer.clone()));
+        let output = testing::run_on(server.wire(), |out| {
+            hear(messages, &mut features, &mut world, out, true)
+        });
+        output.result.unwrap();
+        assert!(world.lifecycle.is_dead());
+        assert!(world.lifecycle.blocks_motion());
+        assert_eq!(world.lifecycle.pending(), Some(&offer));
+        assert_eq!(
+            output.sent.len(),
+            1,
+            "duplicate offer sends no second request"
+        );
+        let deaths: Vec<_> = output
+            .events
+            .iter()
+            .enumerate()
+            .filter_map(|(index, event)| {
+                matches!(
+                    event,
+                    ClientEvent::World(WorldEvent::Death(_) | WorldEvent::DeathBind { .. })
+                )
+                .then_some(index)
+            })
+            .collect();
+        assert_eq!(deaths.len(), 1);
+        assert_eq!(
+            output
+                .events
+                .iter()
+                .filter(|event| matches!(event, ClientEvent::World(WorldEvent::DeathBind { .. })))
+                .count(),
+            usize::from(!packet_first)
+        );
+        let transfer = output
+            .events
+            .iter()
+            .position(|event| matches!(event, ClientEvent::World(WorldEvent::ZoneTransfer(_))))
+            .unwrap();
+        assert!(deaths[0] < transfer);
+        let answer = Message::ZoneAnswer(ZoneAnswer {
+            character: "Tester".into(),
+            zone_id: 185,
+            instance_id: 0,
+            position: None,
+            success: 1,
+        });
+        let output = testing::run_on(server.wire(), |out| {
+            hear(vec![answer], &mut features, &mut world, out, true)
+        });
+        output.result.unwrap();
+        assert!(world.lifecycle.departing());
+        assert_eq!(output.sent.len(), 2);
+        let output = testing::run_on(server.wire(), |out| {
+            hear(
+                vec![Message::ZoneOffer(offer)],
+                &mut features,
+                &mut world,
+                out,
+                true,
+            )
+        });
+        output.result.unwrap();
+        assert_eq!(output.sent, Vec::new());
+    }
+}
+
 use super::super::feature::testing;
 use super::*;
 use crate::client::ServerProtocol;
@@ -105,6 +233,7 @@ fn quarm_moves_and_jumps_with_eqmac_packets_and_obeys_corrections() {
         report_id: 1,
         state: eq_network_game::movement::SpeedInputState::Ready(
             eq_network_game::movement::SpeedInputs {
+                eqmac_fatigue: None,
                 rate: 0,
                 weight: 0,
                 capacity: 100,

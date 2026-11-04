@@ -59,6 +59,15 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- Re-evaluate EQMac fatigue from current host strength/stamina prerequisites
+  in the session, avoiding an unnecessary withdrawal and host round trip on
+  each stamina tick. Optional `EqMacFatigueInputs` preserves legacy capacity
+  semantics and conservative unknowns; real readiness losses still withdraw.
+- Follow Quarm's same-zone death-bind approval without treating its documented
+  reply stand-in as an unsolicited destination change. Report bind-only death
+  knowledge before transfer without inventing killer/corpse details, retain
+  dead state through departure and ignore duplicate departure offers.
+
 - EQMac admission records the profile's current zone identity before handling
   zone-line requests. Zero and oversized IDs stay unknown without failing an
   otherwise valid admission; bind points and zone names do not supply guessed

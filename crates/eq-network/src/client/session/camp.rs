@@ -322,9 +322,7 @@ impl Feature for Camp {
             {
                 self.abandon_wait(out)?;
             }
-            Message::Event(WorldEvent::Death(death))
-                if world.is_player(death.spawn_id) && self.cancel() =>
-            {
+            Message::Event(event) if world.owns_death(event) && self.cancel() => {
                 out.log.send(ClientEvent::World(WorldEvent::Camp(
                     CampStatus::Abandoned { by: CampEnd::Other },
                 )))?;

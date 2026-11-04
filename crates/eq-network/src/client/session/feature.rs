@@ -276,6 +276,16 @@ impl World {
         self.news.push(message);
     }
 
+    /// Own death knowledge, separate from packet details used by corpse owners.
+    pub(super) fn owns_death(&self, event: &eq_network_game::world::WorldEvent) -> bool {
+        use eq_network_game::world::WorldEvent;
+        match event {
+            WorldEvent::Death(death) => self.is_player(death.spawn_id),
+            WorldEvent::DeathBind { session_id } => *session_id == self.session_id,
+            _ => false,
+        }
+    }
+
     /// What the session made happen since the loop last asked, in order.
     pub(super) fn take_news(&mut self) -> Vec<Message> {
         std::mem::take(&mut self.news)
