@@ -11,6 +11,7 @@ mod confirmations;
 mod corpses;
 mod coverage;
 mod creation;
+mod deletion;
 mod doors;
 mod entities;
 mod exchange;

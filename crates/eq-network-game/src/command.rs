@@ -57,6 +57,8 @@ pub enum GameCommand {
         /// Requested name, race, class, deity, start zone and stats.
         character: crate::creation::NewCharacter,
     },
+    /// Delete an explicitly named and confirmed identity from the current list.
+    DeleteCharacter(crate::deletion::Request),
     /// Ask the world for a character name suggestion (Titanium).
     GenerateName {
         /// Identity supplied with the character list.
@@ -697,6 +699,7 @@ impl GameCommand {
         match self {
             Self::SelectServer { .. } => "SelectServer",
             Self::SelectCharacter { .. } => "SelectCharacter",
+            Self::DeleteCharacter(_) => "DeleteCharacter",
             Self::CreateCharacter { .. } => "CreateCharacter",
             Self::GenerateName { .. } => "GenerateName",
             Self::SwapSpell { .. } => "SwapSpell",
@@ -781,6 +784,7 @@ impl GameCommand {
             Self::SelectServer { .. }
             | Self::SelectCharacter { .. }
             | Self::GenerateName { .. }
+            | Self::DeleteCharacter(_)
             | Self::CreateCharacter { .. }
             | Self::SendChat(_) => None,
             Self::UseItem(request) => Some(request.session_id),
@@ -867,6 +871,7 @@ impl GameCommand {
             Self::SelectServer { .. }
             | Self::SelectCharacter { .. }
             | Self::GenerateName { .. }
+            | Self::DeleteCharacter(_)
             | Self::CreateCharacter { .. } => return None,
             Self::ScribeSpell { .. } | Self::ForgetSpell { .. } | Self::MemorizeSpell { .. } => {
                 Capability::Spellbook
@@ -955,6 +960,7 @@ impl GameCommand {
             Self::SelectServer { .. }
             | Self::SelectCharacter { .. }
             | Self::GenerateName { .. }
+            | Self::DeleteCharacter(_)
             | Self::CreateCharacter { .. }
             | Self::SendChat(_)
             | Self::InspectItem { .. }
@@ -1158,6 +1164,7 @@ pub fn encode(
             anyhow::bail!("choosing a world requires the login controller")
         }
         GameCommand::SelectCharacter { .. }
+        | GameCommand::DeleteCharacter(_)
         | GameCommand::CreateCharacter { .. }
         | GameCommand::GenerateName { .. } => {
             anyhow::bail!("character selection requires the world controller")

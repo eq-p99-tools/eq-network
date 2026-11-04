@@ -629,10 +629,10 @@ mod tests {
     };
 
     /// How many kinds of command there are.
-    const KINDS: usize = 75;
+    const KINDS: usize = 76;
 
     /// The kinds the login and world servers take, before any zone session.
-    const BEFORE_ZONES: [usize; 3] = [0, 1, 70];
+    const BEFORE_ZONES: [usize; 4] = [0, 1, 70, 75];
 
     /// Which kind of command this is. A new command is a compile error here
     /// until it has a number, and then a test failure until the list below
@@ -641,6 +641,7 @@ mod tests {
         match command {
             // The world server's, before any zone session.
             ClientCommand::SelectCharacter { .. } => 0,
+            ClientCommand::DeleteCharacter(_) => 75,
             ClientCommand::CreateCharacter { .. } | ClientCommand::GenerateName { .. } => 1,
             ClientCommand::SwapSpell { .. } => 2,
             ClientCommand::UseItem(_) => 3,
@@ -1126,6 +1127,18 @@ mod tests {
             );
         }
         for selection in [
+            ClientCommand::DeleteCharacter(
+                eq_network_game::deletion::Request::new(
+                    eq_network_game::deletion::Scope {
+                        connection_id: 1,
+                        selection_id: 1,
+                    },
+                    1,
+                    "Disposable",
+                    "Disposable",
+                )
+                .unwrap(),
+            ),
             ClientCommand::SelectServer {
                 selection_id: 1,
                 index: 0,

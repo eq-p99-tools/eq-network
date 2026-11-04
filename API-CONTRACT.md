@@ -70,6 +70,41 @@ non-plain arrivals and ambiguous occupied-cursor traces cannot start this rebase
 unsupported changes to rebased slots invalidate the bound. No new silence
 timer, packet meaning or per-move acknowledgement is introduced.
 
+## Named character deletion at world selection
+
+`WorldEvent::CharacterSelection` now requires the actual `connection_id` and
+`deletion: Option<deletion::Rules>`. Each world connection has a checked,
+process-monotonic generation; each published list has a fresh monotonic identity.
+Hosts must preserve both in `deletion::Scope`, invalidate unanswered confirmations
+on any new list, and invalidate all prior intents on reconnect. Do not invent a
+default scope. `GameCommand::DeleteCharacter(Request)` requires a positive local
+request ID, an encodable name and an exact repeated confirmation. The world owner
+checks that scope, capability, exact unique listed identity and selection-stage
+ownership before sending. IDs and confirmation text are never wire fields.
+
+`WorldEvent::CharacterDeletion(Update)` carries the full original request and
+`Progress`: `NotSent(Refusal)`, `Pending(Option<Observation>)`,
+`Unconfirmed { reason, observation }`, or `ObservedAbsent { scope }`. An observation
+names the received list and connection. Still present is not a correlated refusal;
+absent is not a deletion ACK, causal success or database purge. No transport send,
+silence, timeout or disconnect establishes absence. Exact intent replays never
+resend. Ambiguous attempts hold creation/entry; the host must retain explicit
+Back/Disconnect recovery. Ending the connection reports unconfirmed. The frontend
+may report `NotSent(QueueUnavailable)` if it could not enqueue a request at all.
+Exhaustive command/event matches and complete selection literals must migrate.
+
+Pinned public source: [EQEmu world handler](https://github.com/EQEmu/EQEmu/blob/4aceae18b94ffaafc08e2b17bc41cd72c77f795d/world/client.cpp),
+[TAKP world handler](https://github.com/EQMacEmu/Server/blob/e517d0bdbca302d94ff6979cd6c6028ddf2b9a4f/world/client.cpp),
+and [Quarm world handler](https://github.com/SecretsOTheP/EQMacEmu/blob/c2cd2651045ab063b236b08f3a9e83cbf10289e9/world/client.cpp)
+refresh the character list after an ownership-checked operation, without a
+correlated deletion response. TAKP/Quarm may mark instead of purge characters.
+The native request is the selected ASCII name followed by NUL, not a padded
+64-byte record (Titanium sender address 0x4f0e94; EQMac sender 0x53b21b). Titanium
+uses application opcode 0x26c9. The library's big-endian legacy application writer
+uses 0x5a40, producing bytes 5a40; current TAKP spells the host opcode 0x405a and
+writes it little-endian. P99 server internals and live behavior are unverified;
+its policy uses the evidenced Titanium request with observation-only outcomes.
+
 ## Typed spell-provider policy and attempt identity
 
 `Client::spell_table_policy()` returns `ProviderPolicy` before connecting,

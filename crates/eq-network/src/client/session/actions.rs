@@ -125,6 +125,7 @@ pub(super) fn needs(command: &ClientCommand) -> &'static [Resource] {
         ClientCommand::SelectServer { .. }
         | ClientCommand::SelectCharacter { .. }
         | ClientCommand::GenerateName { .. }
+        | ClientCommand::DeleteCharacter(_)
         | ClientCommand::CreateCharacter { .. }
         | ClientCommand::ClickDoor { .. }
         | ClientCommand::CrossZoneLine { .. }
@@ -250,6 +251,10 @@ pub(super) fn refuse_naming(
 fn refusal(command: &ClientCommand, reason: &str) -> Option<WorldEvent> {
     let error = Some(reason.to_owned());
     Some(match command {
+        ClientCommand::DeleteCharacter(request) => WorldEvent::CharacterDeletion(eq_network_game::deletion::Update {
+            request: request.clone(),
+            progress: eq_network_game::deletion::Progress::NotSent(eq_network_game::deletion::Refusal::NotAtSelection),
+        }),
         ClientCommand::CastSpell { .. } => return casting::rejected(command, reason),
         ClientCommand::Consider { .. } | ClientCommand::AutoAttack { .. } => {
             return super::combat::rejected(command, reason);

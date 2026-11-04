@@ -31,6 +31,16 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   return timing without predicting acceptance or sending retries. Specialized
   and unknown mechanisms remain visible without use. Additive APIs:
   `doors::eqmac::{click, ordinary, Hinge}`.
+- **Breaking:** character-selection events require `connection_id` and
+  `deletion: Option<deletion::Rules>`. Consumers must preserve the actual
+  connection/list scope. New `GameCommand::DeleteCharacter(Request)` and
+  `WorldEvent::CharacterDeletion(Update)` variants use exact named confirmation
+  and one world-stage owner on all four checked server policies. The request
+  sends only the native NUL-terminated name. Results distinguish local refusal,
+  pending, unconfirmed, and absence observed in a specific refreshed list;
+  absence is not a correlated deletion acknowledgment or proof of database purge.
+  A pending/uncertain attempt blocks entry/creation until a fresh absence
+  observation or explicit disconnect; it never automatically retries.
 
 - **Breaking:** inventory move requests can carry ordered local projection
   identities: `InventoryMove` gains `sequence: Option<MoveSequence>`, and

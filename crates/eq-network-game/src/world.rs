@@ -699,14 +699,20 @@ pub enum WorldEvent {
         /// Why, in the login server's terms.
         refusal: crate::servers::ServerRefusal,
     },
+    /// Local character-deletion lifecycle and received-list observations, not an ACK.
+    CharacterDeletion(crate::deletion::Update),
     /// Available characters for this world connection; no zone has been entered.
     CharacterSelection {
+        /// Process-monotonic world connection generation, distinct from list identity.
+        connection_id: u64,
         /// Fresh identity invalidates choices queued for an older connection.
         selection_id: u64,
         /// Occupied server slots, possibly empty on a new account.
         characters: Vec<crate::characters::CharacterChoice>,
         /// Creation offered by this server policy, scoped to this list.
         creation: Option<crate::creation::Rules>,
+        /// Deletion offered by this server policy, scoped to this exact list.
+        deletion: Option<crate::deletion::Rules>,
     },
     /// Local item-use validation/submission result, not proof that its effect landed.
     ItemUseAction {

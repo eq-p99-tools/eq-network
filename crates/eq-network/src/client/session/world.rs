@@ -324,6 +324,28 @@ pub(super) fn titanium(
     (world_only, zoning): (bool, bool),
     log: &mut Events<'_>,
 ) -> Result<Option<ZoneDestination>> {
+    let mut deletion = super::deletion::Owner::new()?;
+    let result = titanium_owned(
+        context,
+        assets,
+        ip,
+        (world_only, zoning),
+        &mut deletion,
+        log,
+    );
+    let ended = deletion.ended(log);
+    result.and_then(|value| ended.map(|()| value))
+}
+
+#[allow(clippy::too_many_lines)]
+fn titanium_owned(
+    context: &CharacterSession<'_>,
+    assets: &Assets,
+    ip: &str,
+    (world_only, zoning): (bool, bool),
+    deletion: &mut super::deletion::Owner,
+    log: &mut Events<'_>,
+) -> Result<Option<ZoneDestination>> {
     let config = &context.config;
     let credentials = context.credentials;
     let stop = context.stop;
@@ -353,6 +375,7 @@ pub(super) fn titanium(
             !creating.as_ref().is_some_and(Creating::expired),
             "Character creation timed out. Reconnect to check whether the character was created."
         );
+        deletion.tick(log)?;
         suggestions.tick(log)?;
         if !entered {
             match selection
@@ -365,17 +388,32 @@ pub(super) fn titanium(
                     race,
                     gender,
                 )) => {
-                    if creating.is_none() {
+                    if creating.is_none() && !deletion.blocked() {
                         suggestions.request((list, request, race, gender), &mut session, log)?;
                     } else {
                         super::creation::names::answer(list, request, None, log)?;
                     }
                 }
-                Some(crate::client::selection::Choice::Enter(name)) if creating.is_none() => {
+                Some(crate::client::selection::Choice::Enter(name))
+                    if creating.is_none() && !deletion.blocked() =>
+                {
                     chosen = Some(name);
                 }
-                Some(crate::client::selection::Choice::Create(character)) if creating.is_none() => {
+                Some(crate::client::selection::Choice::Create(character))
+                    if creating.is_none() && !deletion.blocked() =>
+                {
                     creating = Creating::start(server.creation(), character, &mut session, log)?;
+                }
+                Some(crate::client::selection::Choice::Delete(request)) => {
+                    if let Some(list) = selection.as_ref() {
+                        deletion.request(
+                            request,
+                            list,
+                            creating.is_some() || chosen.is_some(),
+                            &mut session,
+                            log,
+                        )?;
+                    }
                 }
                 _ => (),
             }
@@ -449,8 +487,11 @@ pub(super) fn titanium(
                             entries,
                             &config.character,
                             server.creation().map(super::creation::Creation::rules),
+                            deletion.connection_id(),
+                            server.deletion(),
                             log,
                         )?;
+                        deletion.observe(&list, log)?;
                         selection = Some(list);
                         chosen = automatic;
                     }
@@ -505,22 +546,32 @@ pub(super) fn titanium(
                     entries,
                     "",
                     server.creation().map(super::creation::Creation::rules),
+                    deletion.connection_id(),
+                    server.deletion(),
                     log,
                 )?;
+                deletion.observe(&list, log)?;
                 selection = Some(list);
                 chosen = automatic;
             }
             WorldOpcode::CharacterList if !accepted && !entered => {
                 early_list = Some(packet.body.clone());
             }
-            WorldOpcode::CharacterList if accepted && !entered && selection.is_none() => {
+            WorldOpcode::CharacterList if accepted && !entered && creating.is_none() => {
                 let entries = character_list(server, config.protocol.into(), &packet.body)?;
                 let (list, automatic) = crate::client::selection::Selection::new(
                     entries,
-                    &config.character,
+                    if selection.is_none() {
+                        &config.character
+                    } else {
+                        ""
+                    },
                     server.creation().map(super::creation::Creation::rules),
+                    deletion.connection_id(),
+                    server.deletion(),
                     log,
                 )?;
+                deletion.observe(&list, log)?;
                 selection = Some(list);
                 chosen = automatic;
             }

@@ -189,6 +189,11 @@ pub(super) trait ServerType: Sync {
         None
     }
 
+    /// Native deletion request offered before zone admission; outcomes are list observations.
+    fn deletion(&self) -> Option<eq_network_game::deletion::Rules> {
+        None
+    }
+
     /// Whether the world's character list is checked to carry each
     /// character's look, and on `EQMac` its level and zone, as the client
     /// generation's list lays them out; a front end draws a character at
@@ -864,6 +869,10 @@ impl ServerType for Project1999 {
         Some(&creation::Classic)
     }
 
+    fn deletion(&self) -> Option<eq_network_game::deletion::Rules> {
+        Some(eq_network_game::deletion::Rules::Titanium)
+    }
+
     /// Recorded Titanium lists agree with the following profiles and own
     /// spawns, including worn materials and tints. See the parity evidence.
     fn character_preview(&self) -> bool {
@@ -1012,6 +1021,10 @@ impl ServerType for EqEmu {
 
     fn creation(&self) -> Option<&'static dyn Creation> {
         Some(&creation::Titanium)
+    }
+
+    fn deletion(&self) -> Option<eq_network_game::deletion::Rules> {
+        Some(eq_network_game::deletion::Rules::Titanium)
     }
 
     fn casting(&self, _setup: &Setup<'_>) -> Provided {
@@ -1307,6 +1320,10 @@ impl ServerType for Quarm {
         Some(&creation::EqMac)
     }
 
+    fn deletion(&self) -> Option<eq_network_game::deletion::Rules> {
+        Some(eq_network_game::deletion::Rules::EqMac)
+    }
+
     /// Quarm's `GetCharSelectInfo` fills the shared 1,620-byte character
     /// list, including level, zone and equipment. Source-derived; no live
     /// preview certification is implied (see `docs/public-server-gaps.md`).
@@ -1397,6 +1414,10 @@ impl ServerType for Takp {
 
     fn creation(&self) -> Option<&'static dyn Creation> {
         Some(&creation::EqMac)
+    }
+
+    fn deletion(&self) -> Option<eq_network_game::deletion::Rules> {
+        Some(eq_network_game::deletion::Rules::EqMac)
     }
 
     /// Its list fills each character's look, level and zone
@@ -1594,6 +1615,20 @@ mod tests {
     }
 
     #[test]
+    fn deletion_is_explicit_for_each_checked_native_generation() {
+        use crate::client::ServerProtocol;
+        use eq_network_game::deletion::Rules;
+        for (protocol, expected) in [
+            (ServerProtocol::Project1999, Rules::Titanium),
+            (ServerProtocol::EqEmu, Rules::Titanium),
+            (ServerProtocol::Takp, Rules::EqMac),
+            (ServerProtocol::Quarm, Rules::EqMac),
+        ] {
+            assert_eq!(server_type(protocol).deletion(), Some(expected));
+        }
+    }
+
+    #[test]
     fn a_new_server_type_starts_with_every_feature_off() {
         let empty: &dyn ServerType = &Empty;
         let setup = Setup::new("Tester", AutoEat::default());
@@ -1603,6 +1638,7 @@ mod tests {
         assert!((empty.profile_turn() - 512.0).abs() < f32::EPSILON);
         assert!(!empty.start_choice());
         assert!(empty.creation().is_none());
+        assert!(empty.deletion().is_none());
         assert_eq!(empty.spell_landing_flag(), None);
     }
 
