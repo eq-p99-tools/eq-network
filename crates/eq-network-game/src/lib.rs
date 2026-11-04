@@ -32,6 +32,8 @@ pub mod control;
 pub mod corpses;
 /// Titanium character creation requests and stat rules.
 pub mod creation;
+/// List-scoped character deletion intents, native requests and observed outcomes.
+pub mod deletion;
 /// The player's disciplines and their reuse timers, and the reuse timers
 /// groups of spells share.
 pub mod disciplines;

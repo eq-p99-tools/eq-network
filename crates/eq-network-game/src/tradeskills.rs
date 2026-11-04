@@ -2,13 +2,17 @@
 //! mixing bowl or any other tradeskill container carried in a pack slot
 //! combines what it holds when the player asks.
 //!
-//! The Titanium client sends `OP_TradeSkillCombine` with `NewCombine_Struct`:
-//! the container's slot and a guild tribute slot, 16 bits each. `EQEmu`
-//! answers with the same opcode and no body once it has judged the combine
-//! (`Object::HandleCombine`, `zone/tradeskills.cpp`), whatever the verdict:
-//! after a success the components leave the container and what was made
-//! arrives on the cursor only after that answer. The verdict itself arrives
-//! as an ordinary message.
+//! The Titanium client sends `OP_TradeSkillCombine` with a four-byte slot.
+//! Its sender writes the whole word; the upper half is zero for ordinary
+//! carried slots, rather than an invented no-tribute sentinel. `EQEmu`
+//! answers with the same opcode and no body to reset the local transaction
+//! gate (`Object::HandleCombine`, `zone/tradeskills.cpp`). The native receiver
+//! only resets that gate: it establishes neither a verdict nor consumption.
+//! Separate inventory updates supply components and products, and ordinary
+//! server messages supply the verdict.
+mod titanium;
+pub use titanium::{check_carried, CarriedRefusal};
+
 use crate::{
     command::EncodedCommand,
     inventory::{InventoryItem, InventorySlot},
@@ -27,19 +31,26 @@ pub const WORLD_CONTAINER: InventorySlot = InventorySlot(1000);
 /// the cursor holds an item or coins: a combine's product lands there.
 pub const HANDS_FULL: u32 = 12024;
 
-/// The guild tribute slot a combine names when there is none. `EQEmu` only
-/// logs it; what the official client sends here is unrecorded.
-const NO_TRIBUTE_SLOT: i16 = -1;
-
 /// Where a combine stands.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 pub enum CombineUpdate {
     /// The session asked the server to combine what the container in this
     /// pack slot holds.
     Started(InventorySlot),
-    /// The server judged the combine. What it made and used up arrives as
-    /// inventory news, and its verdict as a message.
+    /// A received transaction reset. This does not establish success or
+    /// consumption; items and the verdict arrive separately.
     Answered,
+}
+
+/// The offer needed for combining in this location. World stations are
+/// separate from carried manual combines, even on the same wire generation.
+#[must_use]
+pub const fn combine_capability(container: InventorySlot) -> crate::world::Capability {
+    if container.0 == WORLD_CONTAINER.0 {
+        crate::world::Capability::WorldContainers
+    } else {
+        crate::world::Capability::Tradeskills
+    }
 }
 
 /// Whether a container of this bag type combines what it holds: the
@@ -96,15 +107,15 @@ pub fn can_combine_in(item: &InventoryItem) -> bool {
 /// Titanium's `OP_TradeSkillCombine` for the container in a pack slot.
 ///
 /// # Errors
-/// Rejects a slot that does not fit the packet's 16 bits.
+/// Rejects anything other than a carried pack or the open world container.
 pub fn titanium_combine(container: InventorySlot) -> Result<EncodedCommand> {
-    let slot = i16::try_from(container.0)?;
-    let mut body = Vec::with_capacity(4);
-    body.extend(slot.to_le_bytes());
-    body.extend(NO_TRIBUTE_SLOT.to_le_bytes());
+    ensure!(
+        container.is_pack() || container == WORLD_CONTAINER,
+        "a combine needs a carried pack or an open world container"
+    );
     Ok(EncodedCommand {
         opcode: COMBINE_OPCODE,
-        body,
+        body: container.0.to_le_bytes().to_vec(),
     })
 }
 
@@ -125,11 +136,17 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_combine_names_its_container_and_no_tribute_slot() {
+    fn a_combine_writes_the_entire_native_slot_word() {
         let combine = titanium_combine(InventorySlot(23)).unwrap();
         assert_eq!(combine.opcode, 0x0b40);
-        assert_eq!(combine.body, [23, 0, 0xff, 0xff]);
-        assert!(titanium_combine(InventorySlot(40_000)).is_err());
+        assert_eq!(combine.body, [23, 0, 0, 0]);
+        assert_eq!(
+            titanium_combine(WORLD_CONTAINER).unwrap().body,
+            [0xe8, 3, 0, 0]
+        );
+        for slot in [-1, 0, 21, 30, 251, 2000, 40_000] {
+            assert!(titanium_combine(InventorySlot(slot)).is_err());
+        }
     }
 
     #[test]

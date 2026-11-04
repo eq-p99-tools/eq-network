@@ -110,6 +110,14 @@ impl Body {
         }
     }
 
+    /// Preserve physics and calibration while replacing paced voluntary
+    /// motion with its normal stationary stop.
+    pub(super) fn stop_voluntary(&mut self) {
+        if let Some(motion) = self.motion.as_mut() {
+            motion.stop_voluntary();
+        }
+    }
+
     /// Lets a player who stays after a refused transfer stand and move again.
     pub(super) fn resume(&mut self, now: Instant) {
         if let Some(motion) = self.motion.as_mut() {
@@ -286,7 +294,11 @@ impl Motion {
             hit_points: self.hit_points,
             rate: inputs.rate,
             weight: inputs.weight,
-            capacity: inputs.capacity,
+            capacity: if out.wire.dialect() == eq_network_game::GameDialect::EqMac {
+                inputs.eqmac_capacity(self.fatigue)
+            } else {
+                inputs.capacity
+            },
             sneaking: self.sneaking,
             zone_id: world.zone.0,
         });
@@ -449,21 +461,40 @@ impl Motion {
     /// Moves the player, standing them up first if they were sitting or
     /// crouched; a refused move undoes the host's prediction.
     fn step(request: &MovementRequest, world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
+        Self::step_at(request, Instant::now(), world, out)
+    }
+
+    fn step_at(
+        request: &MovementRequest,
+        now: Instant,
+        world: &mut World,
+        out: &mut Out<'_, '_>,
+    ) -> Result<()> {
         let Some(motion) = world.body.motion.as_mut() else {
             return out
                 .log
                 .diagnostic("Rejected movement: the player cannot move yet".into());
         };
         let (to, from) = (request.position, motion.position());
+        if let Some(reason) = world
+            .control
+            .motion_refusal(request, motion.is_passive(request))
+        {
+            return out.log.send(ClientEvent::World(WorldEvent::MotionSent {
+                session_id: world.session_id,
+                position: from,
+                refused: Some(reason.into()),
+            }));
+        }
         if let (true, Some(player)) = (
-            (to.x, to.y, to.z) != (from.x, from.y, from.z),
+            !world.control.stunned() && (to.x, to.y, to.z) != (from.x, from.y, from.z),
             world.player.as_ref(),
         ) {
             world.posture.stand_to_move(player.spawn_id, out)?;
         }
         let mut transport_failed = false;
         let (wire, sender, sink) = (out.wire, out.sender, &mut *out.sink);
-        let result = motion.send_move_sample(request, Instant::now(), |sample| {
+        let result = motion.send_move_sample(request, now, |sample| {
             // A sample the generation cannot carry is refused like any other;
             // only a failed send ends the admission.
             let packet = wire.encode(&Request::Position(*sample), sender)?;
@@ -524,7 +555,10 @@ impl Motion {
     /// Jumps where the server allows falls and the generation's notice of a
     /// jump is known.
     /// The samples after it may rise as the jump does.
-    fn jump(&self, world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
+    fn jump(&self, created: Instant, world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
+        if let Some(reason) = world.control.input_refusal(created) {
+            return out.log.diagnostic(format!("Rejected jump: {reason}"));
+        }
         let jump = world
             .body
             .motion
@@ -611,7 +645,7 @@ impl Feature for Motion {
         self.refresh_belongings(world, out)?;
         match command {
             ClientCommand::Move(request) => Self::step(request, world, out),
-            ClientCommand::Jump { .. } => self.jump(world, out),
+            ClientCommand::Jump { created, .. } => self.jump(*created, world, out),
             ClientCommand::ConfigureMotion { .. } => Self::calibrate(command, world, out),
             ClientCommand::SpeedInputs { .. } => self.inputs(command, world, out),
             ClientCommand::ClimbReach { .. } => Self::climb(command, world, out),
@@ -645,7 +679,21 @@ impl Feature for Motion {
         match event {
             WorldEvent::Nourishment(value) if value.fatigue != self.fatigue => {
                 self.fatigue = value.fatigue;
-                self.require_inputs(world, out)
+                if out.wire.dialect() == eq_network_game::GameDialect::EqMac
+                    && self
+                        .inputs
+                        .is_none_or(|inputs| inputs.eqmac_fatigue.is_none())
+                {
+                    return self.require_inputs(world, out);
+                }
+                // Fatigue belongs to this session. The current host report
+                // already carries its strength/stamina prerequisites; only
+                // genuine prerequisite changes require another host revision.
+                self.refresh_belongings(world, out)?;
+                if world.ready() && !world.lifecycle.blocks_motion() {
+                    self.grant(world, out)?;
+                }
+                Ok(())
             }
             WorldEvent::Level { .. } | WorldEvent::BuffSnapshot(_) => {
                 self.require_inputs(world, out)
@@ -690,7 +738,7 @@ impl Feature for Motion {
                 Ok(())
             }
             // The transfers feature stops the body when the player dies.
-            WorldEvent::Death(death) if world.is_player(death.spawn_id) => {
+            event if world.owns_death(event) => {
                 self.accepted_inputs = None;
                 out.log
                     .send(ClientEvent::World(withdrawn(world.session_id)))
@@ -699,6 +747,10 @@ impl Feature for Motion {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "motion_stun_tests.rs"]
+mod stun_tests;
 
 #[cfg(test)]
 mod tests {
@@ -872,6 +924,17 @@ mod tests {
         world.player.admit(player);
         world.admitted = Some(Instant::now());
         let mut motion = Motion::new(true, true, None);
+        motion
+            .admit(
+                &Message::Event(WorldEvent::Nourishment(
+                    eq_network_game::food::Nourishment {
+                        fatigue: Some(0),
+                        ..Default::default()
+                    },
+                )),
+                &mut world,
+            )
+            .unwrap();
         let outcome = testing::run_on(EQMAC, |out| motion.admitted(&mut world, out));
         outcome.result.unwrap();
         assert!(
@@ -889,11 +952,139 @@ mod tests {
             revision: 1,
             report_id: 1,
             state: SpeedInputState::Ready(SpeedInputs {
+                eqmac_fatigue: Some(eq_network_game::movement::EqMacFatigueInputs {
+                    strength: 100,
+                    stamina: Some(100),
+                }),
                 rate,
                 weight,
                 capacity: 100,
             }),
         }
+    }
+
+    #[test]
+    fn fatigue_ticks_reuse_current_prerequisites_without_withdrawal_or_new_revision() {
+        let (mut world, mut motion) = eqmac_admitted();
+        let command = report(0, 95);
+        testing::run_on(EQMAC, |out| motion.inputs(&command, &mut world, out))
+            .result
+            .unwrap();
+        world.take_news();
+        let receipt = motion.accepted_inputs;
+        let context = world.body.stop_context();
+        for fatigue in [1, 2, 100] {
+            let outcome = testing::run_on(EQMAC, |out| {
+                motion.observe(
+                    &Message::Event(WorldEvent::Nourishment(
+                        eq_network_game::food::Nourishment {
+                            fatigue: Some(fatigue),
+                            ..Default::default()
+                        },
+                    )),
+                    &mut world,
+                    out,
+                )
+            });
+            outcome.result.unwrap();
+            assert!(outcome.events.is_empty(), "{:#?}", outcome.events);
+            assert!(world.take_news().is_empty());
+            assert_eq!(motion.revision, 1);
+            assert_eq!(world.body.stop_context(), context);
+        }
+        let event = Message::Event(WorldEvent::Nourishment(
+            eq_network_game::food::Nourishment {
+                fatigue: Some(110),
+                ..Default::default()
+            },
+        ));
+        let outcome = testing::run_on(EQMAC, |out| motion.observe(&event, &mut world, out));
+        outcome.result.unwrap();
+        assert_eq!(motion.revision, 1);
+        assert!(world.take_news().is_empty());
+        assert!(speeds(&outcome.events).iter().all(Option::is_some));
+        assert_eq!(
+            motion.accepted_inputs, receipt,
+            "derived capacity is not a host report"
+        );
+        assert!(world.body.motion.as_ref().unwrap().calibration().is_some());
+        assert!(
+            !speeds(&outcome.events).is_empty(),
+            "changed capacity changes speed"
+        );
+        let outcome = testing::run_on(EQMAC, |out| motion.observe(&event, &mut world, out));
+        outcome.result.unwrap();
+        assert!(outcome.events.is_empty());
+    }
+
+    #[test]
+    fn fatigue_cannot_restore_root_missing_prerequisites_or_a_dead_session() {
+        for boundary in 0..3 {
+            let (mut world, mut motion) = eqmac_admitted();
+            let command = report(if boundary == 0 { -1000 } else { 0 }, 0);
+            testing::run_on(EQMAC, |out| motion.inputs(&command, &mut world, out))
+                .result
+                .unwrap();
+            if boundary == 1 {
+                testing::run_on(EQMAC, |out| motion.require_inputs(&mut world, out))
+                    .result
+                    .unwrap();
+            } else if boundary == 2 {
+                world.died();
+            }
+            let outcome = testing::run_on(EQMAC, |out| {
+                motion.observe(
+                    &Message::Event(WorldEvent::Nourishment(
+                        eq_network_game::food::Nourishment {
+                            fatigue: Some(1),
+                            ..Default::default()
+                        },
+                    )),
+                    &mut world,
+                    out,
+                )
+            });
+            outcome.result.unwrap();
+            assert!(speeds(&outcome.events).iter().all(Option::is_none));
+            if boundary == 2 {
+                assert!(world.lifecycle.blocks_motion());
+            } else {
+                assert!(world.body.motion.as_ref().unwrap().calibration().is_none());
+            }
+        }
+    }
+
+    #[test]
+    fn eqmac_without_fatigue_prerequisites_keeps_legacy_withdrawal_and_capacity() {
+        let (mut world, mut motion) = eqmac_admitted();
+        let mut command = report(0, 0);
+        if let ClientCommand::SpeedInputs {
+            state: SpeedInputState::Ready(inputs),
+            ..
+        } = &mut command
+        {
+            inputs.eqmac_fatigue = None;
+        }
+        testing::run_on(EQMAC, |out| motion.inputs(&command, &mut world, out))
+            .result
+            .unwrap();
+        let outcome = testing::run_on(EQMAC, |out| {
+            motion.observe(
+                &Message::Event(WorldEvent::Nourishment(
+                    eq_network_game::food::Nourishment {
+                        fatigue: Some(1),
+                        ..Default::default()
+                    },
+                )),
+                &mut world,
+                out,
+            )
+        });
+        outcome.result.unwrap();
+        assert_eq!(motion.revision, 2);
+        assert_eq!(speeds(&outcome.events), [None]);
+        assert!(motion.inputs.is_none());
+        assert!(world.body.motion.as_ref().unwrap().calibration().is_none());
     }
 
     fn acceptances(events: &[ClientEvent]) -> Vec<SpeedInputAcceptance> {
@@ -921,6 +1112,7 @@ mod tests {
             let (mut world, mut motion) = eqmac_admitted();
             for (report_id, weight) in [(11, 0), (12, 1), (13, 0)] {
                 let inputs = SpeedInputs {
+                    eqmac_fatigue: None,
                     rate: 0,
                     weight,
                     capacity: 100,
@@ -995,6 +1187,7 @@ mod tests {
                 revision,
                 report_id: 23,
                 state: SpeedInputState::Ready(SpeedInputs {
+                    eqmac_fatigue: None,
                     rate: 0,
                     weight: 0,
                     capacity: 100,
@@ -1125,6 +1318,7 @@ mod tests {
             revision: 2,
             report_id: 1,
             state: SpeedInputState::Ready(SpeedInputs {
+                eqmac_fatigue: None,
                 rate,
                 weight: 50,
                 capacity: 100,
@@ -1241,6 +1435,24 @@ mod tests {
             "{:?}",
             outcome.events
         );
+        let mut sentinel = report(0, u16::MAX);
+        if let ClientCommand::SpeedInputs {
+            state: SpeedInputState::Ready(inputs),
+            ..
+        } = &mut sentinel
+        {
+            inputs.capacity = 0;
+            inputs.eqmac_fatigue = Some(eq_network_game::movement::EqMacFatigueInputs {
+                strength: i64::MIN,
+                stamina: None,
+            });
+        }
+        let outcome = testing::run(|out| motion.handle(&sentinel, &mut world, out));
+        outcome.result.unwrap();
+        assert!(
+            granted(&outcome.events, 29.9),
+            "Titanium keeps its zero sentinel and ignores EQMac inputs"
+        );
     }
 
     #[test]
@@ -1327,6 +1539,7 @@ mod tests {
             revision: 2,
             report_id: 1,
             state: SpeedInputState::Ready(SpeedInputs {
+                eqmac_fatigue: None,
                 rate: 0,
                 weight: 10,
                 capacity: 100,

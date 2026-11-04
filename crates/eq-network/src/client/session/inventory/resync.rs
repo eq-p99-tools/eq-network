@@ -8,6 +8,11 @@ use eq_network_game::inventory::{Inventory, InventoryUpdate};
 /// Whether a server replacement contradicts any locally predicted slot it
 /// covers. A resync's root-only bag packet cannot certify its contents.
 pub(super) fn contradicts(inventory: &Inventory, update: &InventoryUpdate) -> bool {
+    // The reducer alone owns the narrow arrival proof. A new cursor item can
+    // extend a mass bound without contradicting or confirming other slots.
+    if inventory.can_rebase_cursor_arrival(update) {
+        return false;
+    }
     let (root, items) = match update {
         InventoryUpdate::Set(items) => {
             let Some(item) = items.first() else {

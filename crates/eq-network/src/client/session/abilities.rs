@@ -430,11 +430,30 @@ impl Feature for Abilities {
         let ClientCommand::UseAbility {
             session_id,
             ability,
+            target,
             ..
         } = *command
         else {
             return Ok(());
         };
+        if session_id != world.session_id {
+            return refuse(
+                session_id,
+                ability,
+                "Ability belongs to another admission".into(),
+                out,
+            );
+        }
+        if (ability.at_target() || ability == Ability::BindWound)
+            && target.is_none_or(|target| !target.available || target != world.target.state())
+        {
+            return refuse(
+                session_id,
+                ability,
+                "Target changed or is not ready; choose it again".into(),
+                out,
+            );
+        }
         self.use_ability((session_id, ability), world, out, Instant::now())
     }
 }

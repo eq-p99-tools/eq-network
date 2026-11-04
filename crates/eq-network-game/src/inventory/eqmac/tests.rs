@@ -404,7 +404,8 @@ fn bags_and_books_read_their_own_middles() {
     assert!(decode(PLACED_OPCODE, &bag).is_err());
 
     let mut book = record(2, 82, 24);
-    book[230] = 1;
+    book[228] = 1;
+    book[230] = 0;
     put(&mut book, 231, b"SynthText\0");
     let item = single_item(BOOK_OPCODE, &book);
     assert_eq!(
@@ -415,8 +416,12 @@ fn bags_and_books_read_their_own_middles() {
         })
     );
     assert_eq!(item.bag_slots, 0);
-    book[230] = 0;
+    book[228] = 0;
+    book[230] = 1;
     assert_eq!(single_item(PLACED_OPCODE, &book).book.unwrap().kind, 0);
+    // The native client sends the raw BookType byte; Book is a separate flag.
+    book[228] = 2;
+    assert_eq!(single_item(PLACED_OPCODE, &book).book.unwrap().kind, 2);
     // Only class 2 reads.
     let mut note = record(0, 83, 25);
     put(&mut note, 231, b"SynthText\0");

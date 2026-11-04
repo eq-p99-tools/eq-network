@@ -49,6 +49,13 @@ fn first(inventory: &Inventory, meal: Meal, auto_eat: AutoEat) -> Option<Invento
     })
 }
 
+/// A move of the item or its containing bag has no consumption authority.
+fn known_slot(inventory: &Inventory, slot: InventorySlot) -> bool {
+    !inventory.prediction_origins().any(|(changed, _)| {
+        changed == slot || slot.parent().is_some_and(|(parent, _)| parent == changed)
+    })
+}
+
 impl Meals {
     /// Meals for a player whose server's own client eats or drinks at
     /// `hungry` or less.
@@ -82,6 +89,7 @@ impl Meals {
     pub(super) fn nourished(
         &mut self,
         nourishment: Nourishment,
+        can_consume: bool,
         world: &mut World,
         out: &mut Out<'_, '_>,
     ) -> Result<()> {
@@ -90,13 +98,18 @@ impl Meals {
             self.bites -= 1;
             return Ok(());
         }
+        if !can_consume || !world.inventory.received() || world.inventory.stale() {
+            return Ok(());
+        }
         let (mut food, mut water) = (None, None);
         for meal in [Meal::Food, Meal::Drink] {
             if nourishment.of(meal) > self.hungry {
                 continue;
             }
             if let Some(slot) = first(&world.inventory, meal, self.auto_eat) {
-                self.eat(slot, meal, false, world, out)?;
+                if known_slot(&world.inventory, slot) {
+                    self.eat(slot, meal, false, world, out)?;
+                }
                 continue;
             }
             let shortage = if first(&world.inventory, meal, AutoEat::Anything).is_some() {
@@ -126,6 +139,12 @@ impl Meals {
         world: &mut World,
         out: &mut Out<'_, '_>,
     ) -> Result<Option<(&'static str, Option<u32>)>> {
+        if !world.inventory.received() || world.inventory.stale() {
+            return Ok(Some(("Wait for a current inventory snapshot", None)));
+        }
+        if !known_slot(&world.inventory, slot) {
+            return Ok(Some(("Wait for that item's moves to be confirmed", None)));
+        }
         let Some(meal) = world
             .inventory
             .items()

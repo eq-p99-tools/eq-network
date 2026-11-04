@@ -152,6 +152,54 @@ mod tests {
     use super::*;
 
     #[test]
+    fn eqmac_wear_changes_stage_for_the_player_then_replace_and_clear_held_models() {
+        use eq_network_game::appearance::{Appearance, TextureSlot, EQMAC_WEAR_CHANGE_OPCODE};
+        let mut character = Character::default();
+        let mut world = World::new(5);
+        world.own_spawn = Some(7);
+        let packet = |spawn_id: u16, slot: u8, material: u16| {
+            let mut body = [0; 12];
+            body[..2].copy_from_slice(&spawn_id.to_le_bytes());
+            body[2] = slot;
+            body[4..6].copy_from_slice(&material.to_le_bytes());
+            eq_network_game::message::eqmac(EQMAC_WEAR_CHANGE_OPCODE, &body)
+        };
+        for (spawn_id, slot, model) in [(7, 7, 31), (8, 7, 55), (7, 8, 205)] {
+            for message in packet(spawn_id, slot, model) {
+                character.admit(&message, &mut world).unwrap();
+            }
+        }
+        let mut player = testing::player(7);
+        player.appearance.materials[TextureSlot::Chest.index()] = 3;
+        character.shape(&mut player);
+        assert_eq!(player.appearance.material(TextureSlot::Primary), 31);
+        assert_eq!(player.appearance.material(TextureSlot::Secondary), 205);
+        assert_eq!(player.appearance.material(TextureSlot::Chest), 3);
+        world.player.admit(player);
+        for (spawn_id, slot, model) in [(8, 8, 88), (7, 7, 0), (7, 8, 42)] {
+            for message in packet(spawn_id, slot, model) {
+                let outcome = testing::run_on(&super::super::wire::EqMac, |out| {
+                    character.observe(&message, &mut world, out)
+                });
+                outcome.result.unwrap();
+                assert_eq!(
+                    outcome.sent,
+                    [] as [eq_network_game::command::EncodedCommand; 0]
+                );
+                assert!(outcome.events.is_empty());
+            }
+        }
+        let look = &world.player.as_ref().unwrap().appearance;
+        assert_eq!(look.material(TextureSlot::Primary), 0);
+        assert_eq!(look.material(TextureSlot::Secondary), 42);
+        assert_eq!(look.material(TextureSlot::Chest), 3);
+        // Staging is consumed, not carried to another admitted record.
+        let mut next = testing::player(7);
+        character.shape(&mut next);
+        assert_eq!(next.appearance, Appearance::default());
+    }
+
+    #[test]
     fn the_server_fills_and_clears_the_players_gems() {
         use eq_network_game::spells::SpellUpdate;
         let mut character = Character::default();

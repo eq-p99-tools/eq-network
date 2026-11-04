@@ -62,7 +62,8 @@ impl GroundObjects {
 
 impl PickupResults {
     /// Only the separately evidenced result path introduces a pending pickup.
-    fn sent(&self, drop_id: u32, player_id: u16) -> Option<Pickup> {
+    /// The caller supplies the successful submission time, not the UI intent's age.
+    fn sent(&self, drop_id: u32, player_id: u16, now: Instant) -> Option<Pickup> {
         match self {
             Self::Existing => None,
             Self::SeparateCursorDelivery => Some(Pickup {
@@ -70,7 +71,7 @@ impl PickupResults {
                 player_id: u32::from(player_id),
                 removed: false,
                 delivered: false,
-                expires: Instant::now() + PICKUP_WINDOW,
+                expires: now + PICKUP_WINDOW,
             }),
         }
     }
@@ -293,7 +294,7 @@ impl Feature for GroundObjects {
                     .player_at()
                     .ok_or_else(|| anyhow!("player is unavailable"))?;
                 out.request(&request)?;
-                world.objects.pickup = self.results.sent(*drop_id, player_id);
+                world.objects.pickup = self.results.sent(*drop_id, player_id, Instant::now());
                 None
             }
             Err(error) => Some(error.to_string()),

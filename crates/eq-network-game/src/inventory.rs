@@ -338,6 +338,17 @@ pub struct Inventory {
     /// Origins of plain whole-item relocations, separate from slot confirmation.
     #[serde(skip)]
     relocations: BTreeMap<InventorySlot, InventorySlot>,
+    /// Property-only baseline for plain carried relocations followed by a new
+    /// cursor arrival. Placement origins remain unresolved. Cursor queue
+    /// alternatives can only make this weight bound heavier than the server.
+    #[serde(skip)]
+    weight_rebased: BTreeSet<InventorySlot>,
+    /// An affecting transition invalidated the narrow arrival weight proof.
+    #[serde(skip)]
+    weight_history_uncertain: bool,
+    /// Conserved units in a finite root-slot footprint, not confirmed placement.
+    #[serde(skip)]
+    stack_weight: Option<stack_weight::StackWeightBound>,
     correcting: bool,
 }
 
@@ -426,12 +437,16 @@ impl Inventory {
             let Some(next) = self.queued.pop_front() else {
                 break;
             };
+            self.rebase_arriving_items(&next);
             self.items
                 .extend(next.into_iter().map(|item| (item.slot, item)));
         }
     }
 
     fn change(&mut self, update: InventoryUpdate) {
+        self.observe_stack_weight(&update);
+        let arrival = self.rebase_cursor_arrival(&update);
+        self.observe_rebased_weight(&update, arrival);
         self.retain_relocations(&update);
         match update {
             InventoryUpdate::Prediction(items) => self.predict(items),
@@ -465,6 +480,9 @@ impl Inventory {
                 self.unconfirmed.clear();
                 self.predictions.clear();
                 self.equipment_uncertainty.clear();
+                self.weight_rebased.clear();
+                self.weight_history_uncertain = false;
+                self.stack_weight = None;
                 self.correcting = false;
             }
             InventoryUpdate::Set(items) => {
@@ -477,7 +495,11 @@ impl Inventory {
                     return;
                 }
                 if let Some(root) = items.first() {
-                    self.reconcile(root.slot, &items);
+                    if arrival {
+                        self.cover_arrival(root.slot);
+                    } else {
+                        self.reconcile(root.slot, &items);
+                    }
                     self.remove(root.slot);
                 }
                 for item in items {
@@ -518,6 +540,9 @@ impl Inventory {
             InventoryUpdate::Settled => {
                 self.unconfirmed.clear();
                 self.equipment_uncertainty.clear();
+                self.weight_rebased.clear();
+                self.weight_history_uncertain = false;
+                self.stack_weight = None;
                 self.resolved();
             }
         }
@@ -621,11 +646,15 @@ impl Inventory {
         self.predicted = !self.unconfirmed.is_empty();
         if !self.predicted {
             self.correcting = false;
+            self.weight_rebased.clear();
+            self.stack_weight = None;
         }
     }
 }
 
+mod arrivals;
 mod prediction;
+mod stack_weight;
 
 #[cfg(test)]
 pub(crate) mod tests;

@@ -14,6 +14,26 @@ pub enum WeightUnavailable {
 }
 
 impl Inventory {
+    /// Coin-free weight establishes the item contribution; exactly one hundred
+    /// coin-weight units distinguishes every decoded purse reduction percent.
+    /// Together these prove equality for every coin count, in both dialects.
+    pub(super) fn preserves_weight(&self, next: &BTreeMap<InventorySlot, InventoryItem>) -> bool {
+        let before: BTreeMap<_, _> = self
+            .items
+            .iter()
+            .map(|(&slot, item)| (slot, item))
+            .collect();
+        let after: BTreeMap<_, _> = next.iter().map(|(&slot, item)| (slot, item)).collect();
+        [crate::GameDialect::EqMac, crate::GameDialect::Titanium]
+            .into_iter()
+            .all(|generation| {
+                [0, 400].into_iter().all(|coins| {
+                    total(&before, generation, coins)
+                        .is_ok_and(|weight| total(&after, generation, coins) == Ok(weight))
+                })
+            })
+    }
+
     /// Total carried weight in tenths, including this many carried coins. A stack counts
     /// once; `EQMac` reduces the sum of each bag's contents, Titanium reduces
     /// each item (the respective servers' `Client::CalcCurrentWeight`:
@@ -31,9 +51,16 @@ impl Inventory {
     /// value this tenths sum reaches by reducing the bag's aggregate), coins
     /// at 1/40 less the best purse, held to 32,766. Bank/trade/queued cursor
     /// items do not count. Predictions that preserve the total remain usable.
+    /// A new cursor arrival after a plain carried relocation retains placement
+    /// uncertainty while using a conservative mass bound: an alternative where
+    /// that arrival is still queued weighs less, never more. This does not
+    /// establish the relocated item's endpoint or acknowledge a move.
+    /// Known root-stack splits/merges can instead bound all conserved units by
+    /// their finite touched-slot footprint, including independent refused or
+    /// partial moves. Repeating the same edges adds no weight penalty.
     ///
     /// # Errors
-    /// Rejects missing/stale state, malformed bags and weight-changing predictions.
+    /// Rejects missing/stale state, malformed bags and unbounded affecting history.
     pub fn carried_weight_tenths(
         &self,
         generation: crate::GameDialect,
@@ -44,9 +71,20 @@ impl Inventory {
         }
         let current: BTreeMap<_, _> = self.items().iter().map(|(&s, i)| (s, i)).collect();
         let weight = total(&current, generation, coins)?;
+        if self.weight_history_uncertain {
+            return Err(WeightUnavailable::Prediction);
+        }
+        if let Some(bound) = self.stack_weight.as_ref().filter(|bound| bound.active()) {
+            return bound
+                .weight(&self.items, weight)
+                .ok_or(WeightUnavailable::Prediction);
+        }
         if self.predicted() {
             let mut before = current;
             for (slot, origin) in self.prediction_origins() {
+                if self.weight_rebased.contains(&slot) {
+                    continue;
+                }
                 if let Some(item) = origin {
                     before.insert(slot, item);
                 } else {
@@ -146,6 +184,16 @@ mod tests {
     }
 
     fn planned_move(inventory: &mut Inventory, rules: super::super::MoveRules, from: i32, to: i32) {
+        planned_move_with_bank(inventory, rules, from, to, false);
+    }
+
+    fn planned_move_with_bank(
+        inventory: &mut Inventory,
+        rules: super::super::MoveRules,
+        from: i32,
+        to: i32,
+        bank_access: bool,
+    ) {
         let request = super::super::InventoryMove {
             session_id: 1,
             revision: inventory.revision(),
@@ -156,7 +204,7 @@ mod tests {
             created: std::time::Instant::now(),
         };
         let actor = super::super::InventoryActor {
-            bank_access: false,
+            bank_access,
             deity: None,
             dual_wield: None,
             class: Some(1),
@@ -168,6 +216,278 @@ mod tests {
         };
         let update = inventory.plan_move_for(rules, &request, actor).unwrap();
         inventory.apply(update);
+    }
+
+    #[test]
+    fn arrival_after_cursor_history_keeps_the_new_item_in_the_weight_baseline() {
+        use super::super::MoveRules;
+        let mut outcomes = Vec::new();
+        for rules in [MoveRules::Takp, MoveRules::Quarm] {
+            for cursor in [false, true] {
+                let mut inventory = Inventory::default();
+                inventory.apply(InventoryUpdate::Snapshot(vec![item(30, 37)]));
+                for (from, to) in [(30, 8), (8, 30), (30, 24)] {
+                    planned_move(&mut inventory, rules, from, to);
+                    assert_eq!(
+                        inventory.carried_weight_tenths(crate::GameDialect::EqMac, 0),
+                        Ok(37)
+                    );
+                }
+                let mut arrival = item(30, 50);
+                arrival.details.id = 2;
+                inventory.apply(if cursor {
+                    InventoryUpdate::Cursor(vec![arrival])
+                } else {
+                    InventoryUpdate::Set(vec![arrival])
+                });
+                let weight = inventory.carried_weight_tenths(crate::GameDialect::EqMac, 0);
+                eprintln!(
+                    "{rules:?} cursor={cursor}: weight={weight:?}, stale={}, origins={:?}",
+                    inventory.stale(),
+                    inventory.prediction_origins().collect::<Vec<_>>()
+                );
+                assert!(inventory.predicted());
+                outcomes.push((weight, inventory.stale()));
+            }
+        }
+        assert_eq!(outcomes, vec![(Ok(87), false); 4]);
+    }
+
+    fn after_arrival(rules: super::super::MoveRules, cursor: bool) -> Inventory {
+        let mut inventory = Inventory::default();
+        inventory.apply(InventoryUpdate::Snapshot(vec![item(30, 37)]));
+        for (from, to) in [(30, 8), (8, 30), (30, 24)] {
+            planned_move(&mut inventory, rules, from, to);
+        }
+        let mut arrival = item(30, 50);
+        arrival.details.id = 2;
+        inventory.apply(if cursor {
+            InventoryUpdate::Cursor(vec![arrival])
+        } else {
+            InventoryUpdate::Set(vec![arrival])
+        });
+        inventory
+    }
+
+    #[test]
+    fn arrival_after_a_carried_round_trip_retains_the_old_empty_cursor_origin() {
+        use super::super::MoveRules;
+        for rules in [MoveRules::Takp, MoveRules::Quarm] {
+            for cursor in [false, true] {
+                let mut inventory = Inventory::default();
+                inventory.apply(InventoryUpdate::Snapshot(vec![item(22, 37)]));
+                for (from, to) in [(22, 30), (30, 28), (28, 30), (30, 22)] {
+                    planned_move(&mut inventory, rules, from, to);
+                }
+                let mut arrival = item(30, 50);
+                arrival.details.id = 2;
+                inventory.apply(if cursor {
+                    InventoryUpdate::Cursor(vec![arrival])
+                } else {
+                    InventoryUpdate::Set(vec![arrival])
+                });
+                assert_eq!(
+                    inventory.carried_weight_tenths(crate::GameDialect::EqMac, 0),
+                    Ok(87)
+                );
+                assert!(!inventory.stale());
+                assert!(inventory.carried_weight_is_conservative());
+                assert_eq!(inventory.unresolved_predictions(), 4);
+                assert!(inventory
+                    .prediction_origins()
+                    .any(|(slot, origin)| { slot == InventorySlot(22) && origin.is_some() }));
+            }
+        }
+    }
+
+    #[test]
+    fn arrival_weight_bounds_every_recorded_prefix_without_confirming_placement() {
+        use super::super::MoveRules;
+        for rules in [MoveRules::Takp, MoveRules::Quarm] {
+            for cursor in [false, true] {
+                let inventory = after_arrival(rules, cursor);
+                let bound = inventory
+                    .carried_weight_tenths(crate::GameDialect::EqMac, 0)
+                    .unwrap();
+                assert!(inventory.carried_weight_is_conservative());
+                assert_eq!(inventory.unresolved_predictions(), 3);
+                assert!(inventory
+                    .prediction_origins()
+                    .any(|(slot, origin)| { slot == InventorySlot(24) && origin.is_none() }));
+                for prefix in 0..=3 {
+                    let mut actual = Inventory::default();
+                    actual.apply(InventoryUpdate::Snapshot(vec![item(30, 37)]));
+                    for &(from, to) in [(30, 8), (8, 30), (30, 24)].iter().take(prefix) {
+                        planned_move(&mut actual, rules, from, to);
+                    }
+                    actual.apply(InventoryUpdate::Snapshot(
+                        actual.items().values().cloned().collect(),
+                    ));
+                    let mut arrival = item(30, 50);
+                    arrival.details.id = 2;
+                    actual.apply(if cursor {
+                        InventoryUpdate::Cursor(vec![arrival])
+                    } else {
+                        InventoryUpdate::Set(vec![arrival])
+                    });
+                    assert!(
+                        bound
+                            >= actual
+                                .carried_weight_tenths(crate::GameDialect::EqMac, 0)
+                                .unwrap()
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn affecting_intermediate_bank_swap_cannot_be_certified_by_equal_endpoints_or_arrival() {
+        use super::super::MoveRules;
+        for rules in [MoveRules::Takp, MoveRules::Quarm] {
+            let mut inventory = Inventory::default();
+            let mut heavy = item(2000, 100);
+            heavy.details.id = 3;
+            inventory.apply(InventoryUpdate::Snapshot(vec![item(30, 37), heavy]));
+            planned_move_with_bank(&mut inventory, rules, 30, 2000, true);
+            planned_move_with_bank(&mut inventory, rules, 30, 2000, true);
+            planned_move(&mut inventory, rules, 30, 24);
+            assert_eq!(
+                inventory.carried_weight_tenths(crate::GameDialect::EqMac, 0),
+                Err(WeightUnavailable::Prediction)
+            );
+            let mut arrival = item(30, 50);
+            arrival.details.id = 2;
+            inventory.apply(InventoryUpdate::Cursor(vec![arrival]));
+            assert!(!inventory.carried_weight_is_conservative());
+            assert_eq!(
+                inventory.carried_weight_tenths(crate::GameDialect::EqMac, 0),
+                Err(WeightUnavailable::Prediction)
+            );
+            let snapshot = inventory.items().values().cloned().collect();
+            inventory.apply(InventoryUpdate::Snapshot(snapshot));
+            assert_eq!(
+                inventory.carried_weight_tenths(crate::GameDialect::EqMac, 0),
+                Ok(87)
+            );
+        }
+    }
+
+    #[test]
+    fn plain_moves_retain_the_arrival_bound_but_bank_and_swap_changes_do_not() {
+        use super::super::MoveRules;
+        for rules in [MoveRules::Takp, MoveRules::Quarm] {
+            let mut inventory = after_arrival(rules, true);
+            for (from, to) in [(30, 25), (24, 30), (30, 26)] {
+                planned_move(&mut inventory, rules, from, to);
+                assert_eq!(
+                    inventory.carried_weight_tenths(crate::GameDialect::EqMac, 0),
+                    Ok(87)
+                );
+                assert!(inventory.predicted());
+            }
+            let mut bank = inventory.clone();
+            planned_move_with_bank(&mut bank, rules, 25, 2000, true);
+            assert_eq!(
+                bank.carried_weight_tenths(crate::GameDialect::EqMac, 0),
+                Err(WeightUnavailable::Prediction)
+            );
+            let mut other = item(27, 6);
+            other.details.id = 3;
+            inventory.apply(InventoryUpdate::Set(vec![other]));
+            planned_move(&mut inventory, rules, 25, 30);
+            planned_move(&mut inventory, rules, 30, 27);
+            assert_eq!(
+                inventory.carried_weight_tenths(crate::GameDialect::EqMac, 0),
+                Err(WeightUnavailable::Prediction)
+            );
+            let snapshot = inventory.items().values().cloned().collect();
+            inventory.apply(InventoryUpdate::Snapshot(snapshot));
+            assert!(!inventory.carried_weight_is_conservative());
+            assert_eq!(
+                inventory.carried_weight_tenths(crate::GameDialect::EqMac, 0),
+                Ok(93)
+            );
+        }
+    }
+
+    #[test]
+    fn ambiguous_stack_or_repeated_item_arrivals_do_not_rebase_the_weight() {
+        use super::super::MoveRules;
+        for rules in [MoveRules::Takp, MoveRules::Quarm] {
+            for stack in [false, true] {
+                let mut original = item(30, 37);
+                if stack {
+                    original.stack_count = Some(2);
+                    original.rules.stack_size = 20;
+                }
+                let mut inventory = Inventory::default();
+                inventory.apply(InventoryUpdate::Snapshot(vec![original]));
+                planned_move(&mut inventory, rules, 30, 24);
+                let mut arrival = item(30, 50);
+                arrival.details.id = if stack { 2 } else { 1 };
+                inventory.apply(InventoryUpdate::Cursor(vec![arrival]));
+                assert!(!inventory.carried_weight_is_conservative());
+                assert_eq!(
+                    inventory.carried_weight_tenths(crate::GameDialect::EqMac, 0),
+                    Err(WeightUnavailable::Prediction)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn queued_arrival_promotion_rebases_mass_without_settling_prior_moves() {
+        use super::super::MoveRules;
+        for rules in [MoveRules::Takp, MoveRules::Quarm] {
+            let mut inventory = Inventory::default();
+            inventory.apply(InventoryUpdate::Snapshot(vec![item(30, 37)]));
+            let mut arrival = item(30, 50);
+            arrival.details.id = 2;
+            inventory.apply(InventoryUpdate::Cursor(vec![arrival]));
+            assert_eq!(inventory.queued().count(), 1);
+            assert_eq!(
+                inventory.carried_weight_tenths(crate::GameDialect::EqMac, 0),
+                Ok(37)
+            );
+            planned_move(&mut inventory, rules, 30, 24);
+            assert_eq!(inventory.queued().count(), 0);
+            assert_eq!(
+                inventory.carried_weight_tenths(crate::GameDialect::EqMac, 0),
+                Ok(87)
+            );
+            assert!(inventory.carried_weight_is_conservative());
+            assert_eq!(inventory.unresolved_predictions(), 1);
+        }
+    }
+
+    #[test]
+    fn arrival_mass_recovery_never_retires_affecting_or_unread_equipment_history() {
+        use super::super::MoveRules;
+        for rules in [MoveRules::Takp, MoveRules::Quarm] {
+            for kind in 0..3 {
+                let mut original = item(30, 37);
+                match kind {
+                    0 => original.details.bonuses.as_mut().unwrap().strength = 7,
+                    1 => original.details.bonuses.as_mut().unwrap().strength = -7,
+                    _ => original.details.bonuses = None,
+                }
+                let mut inventory = Inventory::default();
+                inventory.apply(InventoryUpdate::Snapshot(vec![original]));
+                for (from, to) in [(30, 8), (8, 30), (30, 24)] {
+                    planned_move(&mut inventory, rules, from, to);
+                }
+                let mut arrival = item(30, 50);
+                arrival.details.id = 2;
+                inventory.apply(InventoryUpdate::Cursor(vec![arrival]));
+                assert_eq!(
+                    inventory.carried_weight_tenths(crate::GameDialect::EqMac, 0),
+                    Ok(87)
+                );
+                assert!(inventory.equipment_stats_uncertain());
+                assert!(inventory.predicted());
+            }
+        }
     }
 
     #[test]

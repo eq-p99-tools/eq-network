@@ -1,5 +1,6 @@
 //! How spawns look: their worn gear in EQ's nine texture slots, tints and
-//! facial features, as Titanium spawn records and wear changes carry them;
+//! facial features, as both generations' spawn records and wear changes
+//! carry them;
 //! their light, fly mode and the like, as both generations' records carry
 //! some of them; and what changes how a spawn shows: appearance updates
 //! (`OP_SpawnAppearance`) on both generations, Titanium's player states, and
@@ -17,8 +18,10 @@ use crate::world::WorldEvent;
 use anyhow::{ensure, Context, Result};
 use serde::Serialize;
 
-/// `OP_WearChange`: one texture slot of a spawn changed.
+/// Titanium's `OP_WearChange`: one texture slot of a spawn changed.
 pub const WEAR_CHANGE_OPCODE: u16 = 0x7441;
+/// `OP_WearChange` on the `EQMac` wire.
+pub const EQMAC_WEAR_CHANGE_OPCODE: u16 = 0x9240;
 /// `OP_PlayerStateAdd`: a spawn took on states (Titanium).
 pub const STATES_ADDED_OPCODE: u16 = 0x63da;
 /// `OP_PlayerStateRemove`: a spawn left states (Titanium).
@@ -272,7 +275,7 @@ pub struct WearChange {
     pub tint: Option<[u8; 3]>,
 }
 
-/// Titanium's tint record: blue, green, red, and a flag set when the tint is used.
+/// Both generations' tint record: blue, green, red, and a flag set when used.
 fn tint(bytes: &[u8]) -> Option<[u8; 3]> {
     (bytes[3] != 0).then_some([bytes[2], bytes[1], bytes[0]])
 }
@@ -392,6 +395,27 @@ pub fn titanium_wear_change(body: &[u8]) -> Result<WearChange> {
         slot,
         material: u32::from(u16::from_le_bytes([body[2], body[3]])),
         tint: tint(&body[4..8]),
+    })
+}
+
+/// Decodes `EQMac`'s 12-byte `OP_WearChange` (TAKP's
+/// `common/eq_packet_structs.h`, `WearChange_Struct`): spawn at 0, slot at 2,
+/// material at 4 and tint at 8. Bytes 3 and 6..8 are alignment, not values.
+/// Held slots carry the item's model number, as in the spawn's appearance.
+///
+/// # Errors
+/// Rejects wrong lengths, a zero spawn ID and slots past the ninth.
+pub fn eqmac_wear_change(body: &[u8]) -> Result<WearChange> {
+    ensure!(body.len() == 12, "invalid EQMac wear change length");
+    let spawn_id = u16::from_le_bytes([body[0], body[1]]);
+    ensure!(spawn_id != 0, "wear change without a spawn");
+    let slot = TextureSlot::from_index(usize::from(body[2]))
+        .ok_or_else(|| anyhow::anyhow!("wear change for an unknown slot"))?;
+    Ok(WearChange {
+        spawn_id,
+        slot,
+        material: u32::from(u16::from_le_bytes([body[4], body[5]])),
+        tint: tint(&body[8..12]),
     })
 }
 
@@ -1016,6 +1040,89 @@ mod tests {
         assert!(titanium_wear_change(&body[..8]).is_err());
         assert!(titanium_wear_change(&[0, 0, 3, 0, 0, 0, 0, 0, 5]).is_err());
         assert!(titanium_wear_change(&[9, 0, 3, 0, 0, 0, 0, 0, 9]).is_err());
+    }
+
+    #[test]
+    fn eqmac_wear_changes_preserve_every_slot_material_and_tint_without_reading_padding() {
+        for (wire_slot, slot) in (0_u8..9).zip(TextureSlot::ALL) {
+            let body = [
+                9, 0, wire_slot, 0x91, 0x34, 0x12, 0xa2, 0xb3, 0x30, 0x20, 0x10, 0xff,
+            ];
+            let change = eqmac_wear_change(&body).unwrap();
+            assert_eq!(
+                change,
+                WearChange {
+                    spawn_id: 9,
+                    slot,
+                    material: 0x1234,
+                    tint: Some([0x10, 0x20, 0x30]),
+                }
+            );
+            let mut look = Appearance::default();
+            let mut expected = look;
+            expected.materials[slot.index()] = 0x1234;
+            expected.tints[slot.index()] = change.tint;
+            look.apply(&change);
+            assert_eq!(look, expected);
+            let mut cleared = body;
+            cleared[4..6].fill(0);
+            cleared[11] = 0;
+            look.apply(&eqmac_wear_change(&cleared).unwrap());
+            assert_eq!(look, Appearance::default());
+        }
+    }
+
+    #[test]
+    fn eqmac_wear_changes_validate_their_own_length_id_and_slot() {
+        let body = [0xff, 0xff, 7, 0, 0xff, 0xff, 0, 0, 1, 2, 3, 0];
+        let change = eqmac_wear_change(&body).unwrap();
+        assert_eq!(
+            (change.spawn_id, change.material, change.tint),
+            (u16::MAX, 65_535, None)
+        );
+        for length in [0, 8, 9, 11, 13, 24] {
+            assert!(eqmac_wear_change(&vec![0; length]).is_err());
+        }
+        for slot in [9, u8::MAX] {
+            let mut invalid = body;
+            invalid[2] = slot;
+            assert!(eqmac_wear_change(&invalid).is_err());
+        }
+        let mut invalid = body;
+        invalid[..2].fill(0);
+        assert!(eqmac_wear_change(&invalid).is_err());
+        assert!(titanium_wear_change(&body).is_err());
+        assert!(eqmac_wear_change(&[9, 0, 1, 0, 0, 0, 0, 0, 7]).is_err());
+    }
+
+    #[test]
+    fn both_eqmac_message_policies_deliver_wear_changes_and_diagnose_malformed_ones() {
+        use crate::message::{Message, Part};
+        let body = [9, 0, 8, 0x81, 0x34, 0x12, 0x72, 0x63, 3, 2, 1, 0xff];
+        let expected = eqmac_wear_change(&body).unwrap();
+        for decode in [crate::message::eqmac, crate::message::quarm] {
+            assert!(matches!(decode(EQMAC_WEAR_CHANGE_OPCODE, &body).as_slice(),
+                [Message::Event(WorldEvent::WearChange(change))] if *change == expected));
+            let mut invalid = body;
+            invalid[2] = u8::MAX;
+            assert!(matches!(
+                decode(EQMAC_WEAR_CHANGE_OPCODE, &invalid).as_slice(),
+                [Message::Unreadable {
+                    part: Part::World,
+                    ..
+                }]
+            ));
+            assert!(matches!(
+                decode(EQMAC_WEAR_CHANGE_OPCODE, &body[..9]).as_slice(),
+                [Message::Unreadable {
+                    part: Part::World,
+                    ..
+                }]
+            ));
+        }
+        assert!(!crate::message::titanium(EQMAC_WEAR_CHANGE_OPCODE, &body)
+            .iter()
+            .any(|message| matches!(message, Message::Event(WorldEvent::WearChange(_)))));
     }
 
     fn record(spawn_id: u16, kind: u16, value: u32) -> Vec<u8> {

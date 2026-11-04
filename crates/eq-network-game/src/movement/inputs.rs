@@ -8,8 +8,98 @@ pub struct SpeedInputs {
     /// Carried weight in whole units (including coins).
     pub weight: u16,
     /// Effective strength. Zero retains the formula's no-encumbrance meaning;
-    /// it must never stand for unavailable strength.
+    /// it must never stand for unavailable strength. On `EQMac` with a fatigue
+    /// component this is a stable conservative fallback, not a second authority.
     pub capacity: u32,
+    /// Proven `EQMac` prerequisites, used only by that generation to apply the
+    /// session's authoritative fatigue. None retains the legacy capacity and
+    /// host-report refresh path; it never supplies guessed strength/stamina.
+    pub eqmac_fatigue: Option<EqMacFatigueInputs>,
+}
+
+/// Host prerequisites for `EQMac`'s session-owned fatigue calculation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+pub struct EqMacFatigueInputs {
+    /// Effective signed strength before fatigue and the final stat cap.
+    pub strength: i64,
+    /// Effective stamina, capped to 1..=255. None or invalid zero keeps the
+    /// established conservative maximum fatigue penalty.
+    pub stamina: Option<u8>,
+}
+
+impl EqMacFatigueInputs {
+    /// Apply fatigue before the final stat cap. Unknown fatigue or stamina
+    /// retains the maximum ten-point penalty; negative strength never becomes
+    /// the movement formula's zero/no-encumbrance sentinel.
+    #[must_use]
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)] // Final 1..=255 bound.
+    pub fn capacity(self, fatigue: Option<u8>) -> u32 {
+        let penalty = fatigue
+            .zip(self.stamina.filter(|value| *value != 0))
+            .map_or(10, |(fatigue, stamina)| {
+                i64::from(fatigue.saturating_sub(stamina)).min(10)
+            });
+        self.strength.saturating_sub(penalty).clamp(1, 255) as u32
+    }
+}
+
+impl SpeedInputs {
+    /// Effective `EQMac` capacity, leaving legacy capacity (including its zero
+    /// sentinel) unchanged when no fatigue prerequisites were reported.
+    #[must_use]
+    pub fn eqmac_capacity(self, fatigue: Option<u8>) -> u32 {
+        self.eqmac_fatigue
+            .map_or(self.capacity, |inputs| inputs.capacity(fatigue))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn eqmac_fatigue_preserves_signed_bounds_unknowns_and_legacy_capacity() {
+        let base = EqMacFatigueInputs {
+            strength: 100,
+            stamina: Some(100),
+        };
+        for (strength, expected) in [
+            (i64::MIN, 1),
+            (-1, 1),
+            (0, 1),
+            (1, 1),
+            (255, 245),
+            (260, 250),
+            (265, 255),
+            (i64::MAX, 255),
+        ] {
+            assert_eq!(
+                EqMacFatigueInputs { strength, ..base }.capacity(Some(110)),
+                expected
+            );
+        }
+        assert_eq!(base.capacity(Some(100)), 100);
+        assert_eq!(base.capacity(Some(105)), 95);
+        assert_eq!(base.capacity(None), 90);
+        for stamina in [None, Some(0)] {
+            assert_eq!(EqMacFatigueInputs { stamina, ..base }.capacity(Some(1)), 90);
+        }
+        let legacy = SpeedInputs {
+            rate: 0,
+            weight: 100,
+            capacity: 0,
+            eqmac_fatigue: None,
+        };
+        assert_eq!(legacy.eqmac_capacity(Some(255)), 0);
+        assert_eq!(
+            SpeedInputs {
+                capacity: 99,
+                ..legacy
+            }
+            .eqmac_capacity(Some(255)),
+            99
+        );
+    }
 }
 
 /// The local session accepted one exact host report and evaluated its grant.

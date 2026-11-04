@@ -77,6 +77,77 @@ fn stack(slot: i32, count: u32) -> InventoryItem {
 }
 
 #[test]
+fn root_stack_splits_keep_worker_mass_bounded_without_acknowledging_moves() {
+    use eq_network_game::{
+        items::{EquipmentRules, ItemBonuses},
+        GameDialect,
+    };
+    for protocol in [
+        ServerProtocol::Takp,
+        ServerProtocol::Quarm,
+        ServerProtocol::EqEmu,
+    ] {
+        let mut milk = stack(22, 19);
+        milk.details.weight_tenths = 1;
+        milk.details.equipment = Some(EquipmentRules::default());
+        milk.details.bonuses = Some(ItemBonuses::default());
+        let mut other = milk.clone();
+        other.slot = InventorySlot(24);
+        other.stack_count = None;
+        other.details.id += 1;
+        other.details.weight_tenths = 43;
+        let (mut features, mut world) = setup(protocol, vec![milk, other]);
+        let count = MoveQuantity::Count(NonZeroU32::new(1).unwrap());
+        for cycle in 0..3 {
+            for (from, to, quantity) in [
+                (22, 30, count),
+                (30, 29, MoveQuantity::Whole),
+                (29, 30, MoveQuantity::Whole),
+                (30, 22, count),
+            ] {
+                let request = command(&world, from, to, quantity);
+                let output = submit(protocol, &mut features, &mut world, &request);
+                assert!(output.result.unwrap());
+                assert_eq!(output.sent.len(), 1);
+                assert!(output.events.iter().any(|event| matches!(
+                    event,
+                    ClientEvent::World(WorldEvent::InventoryAction {
+                        update: Some(InventoryUpdate::Prediction(_)),
+                        error: None,
+                        ..
+                    })
+                )));
+                let bound = if cycle == 0 && from == 22 { 45 } else { 46 };
+                assert_eq!(
+                    world.inventory.carried_weight_tenths(GameDialect::EqMac, 0),
+                    Ok(bound)
+                );
+                assert!(world.inventory.predicted());
+                assert!(!world.inventory.stale());
+                assert!(!world.inventory.equipment_stats_uncertain());
+            }
+        }
+        assert_eq!(
+            world.inventory.items()[&InventorySlot(22)].stack_count,
+            Some(19)
+        );
+        observe(
+            protocol,
+            &mut features,
+            &mut world,
+            InventoryUpdate::Consume {
+                slot: InventorySlot(22),
+                charge: false,
+            },
+        );
+        assert!(world
+            .inventory
+            .carried_weight_tenths(GameDialect::EqMac, 0)
+            .is_err());
+    }
+}
+
+#[test]
 fn rapid_moves_send_in_order_on_takp_quarm_and_titanium() {
     for (protocol, opcode, cursor) in [
         (ServerProtocol::Takp, 0x2c41, 0),
@@ -504,6 +575,72 @@ fn eqmac_partial_slot_observations_do_not_retire_affecting_equipment_history() {
             InventoryUpdate::Snapshot(vec![original]),
         );
         assert!(!world.inventory.equipment_stats_uncertain());
+    }
+}
+
+#[test]
+fn eqmac_cursor_arrivals_recover_a_mass_bound_without_settling_local_moves() {
+    use eq_network_game::items::{EquipmentRules, ItemBonuses};
+    for protocol in [ServerProtocol::Takp, ServerProtocol::Quarm] {
+        for cursor in [false, true] {
+            let mut original = testing::item(30);
+            original.details.weight_tenths = 37;
+            original.details.equipment = Some(EquipmentRules::default());
+            original.details.bonuses = Some(ItemBonuses::default());
+            original.details.slots = u32::MAX;
+            original.details.classes = u32::MAX;
+            original.details.races = u32::MAX;
+            let mut arrival = original.clone();
+            arrival.details.id += 1;
+            arrival.details.weight_tenths = 50;
+            let (mut features, mut world) = setup(protocol, vec![original]);
+            let mut player = testing::player(7);
+            player.class = Some(1);
+            player.race = 1;
+            player.level = 60;
+            world.player.admit(player);
+            for (from, to) in [(30, 8), (8, 30), (30, 24)] {
+                let request = command(&world, from, to, MoveQuantity::Whole);
+                let outcome = submit(protocol, &mut features, &mut world, &request);
+                assert!(outcome.result.unwrap());
+                assert_eq!(outcome.sent.len(), 1, "{protocol:?}: {:?}", outcome.events);
+                assert_eq!(outcome.sent[0].opcode, 0x2c41);
+                assert!(matches!(
+                    outcome.events.as_slice(),
+                    [ClientEvent::World(WorldEvent::InventoryAction {
+                        update: Some(InventoryUpdate::Prediction(_)),
+                        error: None,
+                        ..
+                    })]
+                ));
+            }
+            observe(
+                protocol,
+                &mut features,
+                &mut world,
+                if cursor {
+                    InventoryUpdate::Cursor(vec![arrival])
+                } else {
+                    InventoryUpdate::Set(vec![arrival])
+                },
+            );
+            assert_eq!(
+                world
+                    .inventory
+                    .carried_weight_tenths(eq_network_game::GameDialect::EqMac, 0),
+                Ok(87)
+            );
+            assert!(world.inventory.carried_weight_is_conservative());
+            assert!(!world.inventory.stale());
+            assert_eq!(world.inventory.unresolved_predictions(), 3);
+            testing::run_on(servers::server_type(protocol).wire(), |out| {
+                features.tick(Instant::now() + Duration::from_secs(60), &mut world, out)
+            })
+            .result
+            .unwrap();
+            assert_eq!(world.inventory.unresolved_predictions(), 3);
+            assert!(world.inventory.predicted());
+        }
     }
 }
 

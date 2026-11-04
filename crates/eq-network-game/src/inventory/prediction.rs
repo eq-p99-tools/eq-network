@@ -2,7 +2,7 @@
 use super::{Inventory, InventoryItem, InventorySlot, InventoryUpdate};
 use std::collections::{BTreeMap, BTreeSet};
 
-fn same_item(left: &InventoryItem, right: &InventoryItem) -> bool {
+pub(super) fn same_item(left: &InventoryItem, right: &InventoryItem) -> bool {
     let mut relocated = left.clone();
     relocated.slot = right.slot;
     relocated == *right
@@ -13,6 +13,10 @@ impl Inventory {
     /// into server authority or delaying the next move.
     pub(super) fn predict(&mut self, items: Vec<InventoryItem>) {
         let next: BTreeMap<_, _> = items.into_iter().map(|item| (item.slot, item)).collect();
+        // Equal endpoints cannot certify an affecting intermediate prefix.
+        let preserved = self.preserves_weight(&next);
+        let bounded = self.record_stack_weight(&next, preserved);
+        self.weight_history_uncertain |= !preserved && !bounded;
         self.trace_relocation(&next);
         let changed: BTreeSet<_> = self
             .items
@@ -105,6 +109,7 @@ impl Inventory {
         } else {
             None
         };
+        self.follow_rebased_weight(&changed, movement);
         self.relocations.retain(|slot, _| !changed.contains(slot));
         if let Some((to, origin)) = movement {
             self.relocations.insert(to, origin);

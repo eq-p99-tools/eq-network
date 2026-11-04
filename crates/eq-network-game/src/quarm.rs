@@ -488,11 +488,11 @@ pub fn profile(body: &[u8], character: &str) -> Result<PlayerState> {
 }
 
 /// The current zone named by the encrypted `EQMac` profile, not its bind point.
-/// Zero leaves the identity unknown. The layout has no instance field.
+/// Zero or an ID outside the transfer interface's `u16` range leaves the
+/// identity unknown, without truncation. The layout has no instance field.
 ///
 /// # Errors
-/// Rejects malformed compression, unexpected layouts and zone IDs that the
-/// supported transfer interface cannot represent; an ID is never truncated.
+/// Rejects malformed compression and unexpected layouts.
 /// The field is `zone_id` at 3444 of `PlayerProfile_Struct` (TAKP
 /// `common/patches/mac_structs.h`), 340 bytes before the bind zones at 3784.
 pub fn profile_zone(body: &[u8]) -> Result<Option<u16>> {
@@ -505,12 +505,9 @@ fn decoded_profile_zone(data: &[u8]) -> Result<Option<u16>> {
         data.len() == PROFILE_SIZE,
         "unexpected EQMac profile layout"
     );
-    match word(data, 3444) {
-        0 => Ok(None),
-        zone => u16::try_from(zone)
-            .map(Some)
-            .context("EQMac current zone out of range"),
-    }
+    Ok(u16::try_from(word(data, 3444))
+        .ok()
+        .filter(|zone| *zone != 0))
 }
 
 /// The player's group as the profile lists it each time a zone admits them
@@ -927,6 +924,11 @@ pub fn updates(opcode: u16, body: &[u8]) -> Result<Vec<WorldEvent>> {
             )?)]
         }
         0xf540 => crate::appearance::update(body)?.into_iter().collect(),
+        crate::appearance::EQMAC_WEAR_CHANGE_OPCODE => {
+            vec![WorldEvent::WearChange(
+                crate::appearance::eqmac_wear_change(body)?,
+            )]
+        }
         ZONE_TIME_OF_DAY => vec![WorldEvent::TimeOfDay(crate::clock::decode_eqmac(body)?)],
         crate::appearance::EQMAC_ILLUSION_OPCODE => vec![crate::appearance::eqmac_illusion(body)?],
         crate::appearance::EQMAC_FACE_CHANGE_OPCODE => {

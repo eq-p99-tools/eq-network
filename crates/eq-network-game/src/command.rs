@@ -57,6 +57,8 @@ pub enum GameCommand {
         /// Requested name, race, class, deity, start zone and stats.
         character: crate::creation::NewCharacter,
     },
+    /// Delete an explicitly named and confirmed identity from the current list.
+    DeleteCharacter(crate::deletion::Request),
     /// Ask the world for a character name suggestion (Titanium).
     GenerateName {
         /// Identity supplied with the character list.
@@ -390,13 +392,15 @@ pub enum GameCommand {
         /// What the session may eat and drink on its own.
         auto_eat: crate::food::AutoEat,
     },
-    /// Use an ability: a strike or taunt at the server-side target, or one
-    /// on the player.
+    /// Use an ability on the unchanged expected target, or on the player.
     UseAbility {
         /// Current zone admission.
         session_id: u64,
         /// The ability.
         ability: crate::abilities::Ability,
+        /// Target state displayed when requested. Targeted actions require
+        /// an available, unchanged session projection.
+        target: Option<crate::targets::TargetState>,
         /// Reject delayed actions instead of replaying them after a stall.
         created: std::time::Instant,
     },
@@ -453,8 +457,12 @@ pub enum GameCommand {
     ReadItem {
         /// Current zone admission.
         session_id: u64,
+        /// Worker inventory revision observed when selecting the readable item.
+        revision: u64,
         /// Where the item is carried.
         slot: crate::inventory::InventorySlot,
+        /// Reject delayed selections rather than reading a replacement item.
+        created: std::time::Instant,
     },
     /// Combine what a carried tradeskill container holds.
     Combine {
@@ -504,15 +512,23 @@ pub enum GameCommand {
         /// Who is invited.
         name: String,
     },
-    /// Join the group of whoever invited the player last: `/follow`.
+    /// Ask to join the displayed invitation's group: `/follow`.
     FollowGroup {
         /// Current zone admission.
         session_id: u64,
+        /// The inviter shown when the player chose to accept.
+        inviter: String,
+        /// Identity of that displayed invitation; None authorizes no answer.
+        invitation_id: Option<crate::group::InvitationId>,
     },
     /// Decline the invitation waiting for an answer.
     DeclineGroup {
         /// Current zone admission.
         session_id: u64,
+        /// The inviter shown when the player chose to decline.
+        inviter: String,
+        /// Identity of that displayed invitation; None authorizes no answer.
+        invitation_id: Option<crate::group::InvitationId>,
     },
     /// Leave the group, or, as its leader, remove the targeted member or
     /// disband it, as the server decides; with an invitation waiting,
@@ -642,6 +658,8 @@ pub enum GameCommand {
     SelectTarget {
         /// Connection identifier supplied by zone admission.
         session_id: u64,
+        /// Host selection sequence; correlates results with pending intent.
+        request_id: u64,
         /// None clears the target; zero is not a valid selected spawn.
         spawn_id: Option<u16>,
     },
@@ -690,6 +708,91 @@ pub enum GameCommand {
 }
 
 impl GameCommand {
+    /// The command variant's name, without any payload, for diagnostics.
+    /// Exhaustive so new commands cannot silently lose their diagnostic identity.
+    #[must_use]
+    pub const fn name(&self) -> &'static str {
+        match self {
+            Self::SelectServer { .. } => "SelectServer",
+            Self::SelectCharacter { .. } => "SelectCharacter",
+            Self::DeleteCharacter(_) => "DeleteCharacter",
+            Self::CreateCharacter { .. } => "CreateCharacter",
+            Self::GenerateName { .. } => "GenerateName",
+            Self::SwapSpell { .. } => "SwapSpell",
+            Self::UseItem(..) => "UseItem",
+            Self::ClickDoor { .. } => "ClickDoor",
+            Self::PickUp { .. } => "PickUp",
+            Self::OpenContainer { .. } => "OpenContainer",
+            Self::CloseContainer { .. } => "CloseContainer",
+            Self::CrossZoneLine { .. } => "CrossZoneLine",
+            Self::ScribeSpell { .. } => "ScribeSpell",
+            Self::DeleteSpell { .. } => "DeleteSpell",
+            Self::ForgetSpell { .. } => "ForgetSpell",
+            Self::MemorizeSpell { .. } => "MemorizeSpell",
+            Self::CastSpell { .. } => "CastSpell",
+            Self::SetPosture { .. } => "SetPosture",
+            Self::MoveInventory(..) => "MoveInventory",
+            Self::SendChat(..) => "SendChat",
+            Self::InspectItem { .. } => "InspectItem",
+            Self::Consider { .. } => "Consider",
+            Self::Camp { .. } => "Camp",
+            Self::BledOut { .. } => "BledOut",
+            Self::Loot { .. } => "Loot",
+            Self::LootItem { .. } => "LootItem",
+            Self::EndLoot { .. } => "EndLoot",
+            Self::Shop { .. } => "Shop",
+            Self::Buy { .. } => "Buy",
+            Self::Sell { .. } => "Sell",
+            Self::OfferTrade { .. } => "OfferTrade",
+            Self::AcceptTrade { .. } => "AcceptTrade",
+            Self::CancelTrade { .. } => "CancelTrade",
+            Self::MoveCoins { .. } => "MoveCoins",
+            Self::Jump { .. } => "Jump",
+            Self::EnvironmentalDamage { .. } => "EnvironmentalDamage",
+            Self::Consume { .. } => "Consume",
+            Self::AutoEat { .. } => "AutoEat",
+            Self::UseAbility { .. } => "UseAbility",
+            Self::Consent { .. } => "Consent",
+            Self::SummonCorpse { .. } => "SummonCorpse",
+            Self::DragCorpse { .. } => "DragCorpse",
+            Self::DropCorpse { .. } => "DropCorpse",
+            Self::Pet { .. } => "Pet",
+            Self::Training { .. } => "Training",
+            Self::ReadItem { .. } => "ReadItem",
+            Self::Combine { .. } => "Combine",
+            Self::AnswerResurrection { .. } => "AnswerResurrection",
+            Self::AnswerSacrifice { .. } => "AnswerSacrifice",
+            Self::AnswerTranslocate { .. } => "AnswerTranslocate",
+            Self::DropInvisibility { .. } => "DropInvisibility",
+            Self::InviteToGroup { .. } => "InviteToGroup",
+            Self::FollowGroup { .. } => "FollowGroup",
+            Self::DeclineGroup { .. } => "DeclineGroup",
+            Self::Disband { .. } => "Disband",
+            Self::ToggleAway { .. } => "ToggleAway",
+            Self::ToggleAnonymous { .. } => "ToggleAnonymous",
+            Self::ToggleRoleplay { .. } => "ToggleRoleplay",
+            Self::ShowHelm { .. } => "ShowHelm",
+            Self::Random { .. } => "Random",
+            Self::Emote { .. } => "Emote",
+            Self::Assist { .. } => "Assist",
+            Self::RaidInvite { .. } => "RaidInvite",
+            Self::RaidAccept { .. } => "RaidAccept",
+            Self::RaidDecline { .. } => "RaidDecline",
+            Self::RaidLeave { .. } => "RaidLeave",
+            Self::RaidLock { .. } => "RaidLock",
+            Self::RaidMove { .. } => "RaidMove",
+            Self::RaidMakeLeader { .. } => "RaidMakeLeader",
+            Self::RaidRemove { .. } => "RaidRemove",
+            Self::WhoAll { .. } => "WhoAll",
+            Self::AutoAttack { .. } => "AutoAttack",
+            Self::SelectTarget { .. } => "SelectTarget",
+            Self::ConfigureMotion { .. } => "ConfigureMotion",
+            Self::SpeedInputs { .. } => "SpeedInputs",
+            Self::ClimbReach { .. } => "ClimbReach",
+            Self::Move(..) => "Move",
+        }
+    }
+
     /// The zone admission the command was made for, if it names one.
     #[must_use]
     pub const fn session_id(&self) -> Option<u64> {
@@ -697,6 +800,7 @@ impl GameCommand {
             Self::SelectServer { .. }
             | Self::SelectCharacter { .. }
             | Self::GenerateName { .. }
+            | Self::DeleteCharacter(_)
             | Self::CreateCharacter { .. }
             | Self::SendChat(_) => None,
             Self::UseItem(request) => Some(request.session_id),
@@ -742,8 +846,8 @@ impl GameCommand {
             | Self::AnswerTranslocate { session_id, .. }
             | Self::DropInvisibility { session_id, .. }
             | Self::InviteToGroup { session_id, .. }
-            | Self::FollowGroup { session_id }
-            | Self::DeclineGroup { session_id }
+            | Self::FollowGroup { session_id, .. }
+            | Self::DeclineGroup { session_id, .. }
             | Self::Disband { session_id }
             | Self::ToggleAway { session_id }
             | Self::ToggleAnonymous { session_id }
@@ -783,6 +887,7 @@ impl GameCommand {
             Self::SelectServer { .. }
             | Self::SelectCharacter { .. }
             | Self::GenerateName { .. }
+            | Self::DeleteCharacter(_)
             | Self::CreateCharacter { .. } => return None,
             Self::ScribeSpell { .. } | Self::ForgetSpell { .. } | Self::MemorizeSpell { .. } => {
                 Capability::Spellbook
@@ -804,9 +909,8 @@ impl GameCommand {
             // Only a server that takes falls from the client lets the player jump.
             Self::Jump { .. } => Capability::Jumping,
             Self::EnvironmentalDamage { .. } => Capability::EnvironmentalDamage,
-            Self::MoveInventory(_) | Self::Consume { .. } | Self::AutoEat { .. } => {
-                Capability::Inventory
-            }
+            Self::MoveInventory(_) => Capability::Inventory,
+            Self::Consume { .. } | Self::AutoEat { .. } => Capability::Meals,
             Self::SendChat(_) | Self::InspectItem { .. } => Capability::Talking,
             Self::Consider { .. } | Self::AutoAttack { .. } => Capability::Combat,
             Self::Camp { .. } => Capability::Camping,
@@ -854,9 +958,8 @@ impl GameCommand {
             | Self::RaidMakeLeader { .. }
             | Self::RaidRemove { .. } => Capability::Raiding,
             Self::ReadItem { .. } => Capability::Reading,
-            Self::Combine { .. } | Self::OpenContainer { .. } | Self::CloseContainer { .. } => {
-                Capability::Tradeskills
-            }
+            Self::Combine { container, .. } => crate::tradeskills::combine_capability(*container),
+            Self::OpenContainer { .. } | Self::CloseContainer { .. } => Capability::WorldContainers,
             Self::Consent { .. }
             | Self::SummonCorpse { .. }
             | Self::DragCorpse { .. }
@@ -872,6 +975,7 @@ impl GameCommand {
             Self::SelectServer { .. }
             | Self::SelectCharacter { .. }
             | Self::GenerateName { .. }
+            | Self::DeleteCharacter(_)
             | Self::CreateCharacter { .. }
             | Self::SendChat(_)
             | Self::InspectItem { .. }
@@ -907,7 +1011,6 @@ impl GameCommand {
             | Self::RaidMove { .. }
             | Self::RaidMakeLeader { .. }
             | Self::RaidRemove { .. }
-            | Self::ReadItem { .. }
             | Self::CloseContainer { .. }
             | Self::Consent { .. }
             | Self::SummonCorpse { .. }
@@ -944,6 +1047,7 @@ impl GameCommand {
             | Self::Consume { created, .. }
             | Self::UseAbility { created, .. }
             | Self::Training { created, .. }
+            | Self::ReadItem { created, .. }
             | Self::Combine { created, .. }
             | Self::ConfigureMotion { created, .. } => Some(*created),
         }
@@ -1075,6 +1179,7 @@ pub fn encode(
             anyhow::bail!("choosing a world requires the login controller")
         }
         GameCommand::SelectCharacter { .. }
+        | GameCommand::DeleteCharacter(_)
         | GameCommand::CreateCharacter { .. }
         | GameCommand::GenerateName { .. } => {
             anyhow::bail!("character selection requires the world controller")
@@ -1412,6 +1517,7 @@ mod tests {
     #[test]
     fn targeting_uses_each_generations_mouse_target_and_id_width() {
         let command = GameCommand::SelectTarget {
+            request_id: 1,
             session_id: 9,
             spawn_id: Some(513),
         };
@@ -1421,6 +1527,7 @@ mod tests {
         let packet = encode(GameDialect::EqMac, &command, "Example").unwrap();
         assert_eq!((packet.opcode, packet.body), (0x6241, vec![1, 2]));
         let clear = GameCommand::SelectTarget {
+            request_id: 1,
             session_id: 9,
             spawn_id: None,
         };

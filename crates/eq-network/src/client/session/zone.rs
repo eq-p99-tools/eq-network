@@ -629,10 +629,10 @@ mod tests {
     };
 
     /// How many kinds of command there are.
-    const KINDS: usize = 75;
+    const KINDS: usize = 76;
 
     /// The kinds the login and world servers take, before any zone session.
-    const BEFORE_ZONES: [usize; 3] = [0, 1, 70];
+    const BEFORE_ZONES: [usize; 4] = [0, 1, 70, 75];
 
     /// Which kind of command this is. A new command is a compile error here
     /// until it has a number, and then a test failure until the list below
@@ -641,6 +641,7 @@ mod tests {
         match command {
             // The world server's, before any zone session.
             ClientCommand::SelectCharacter { .. } => 0,
+            ClientCommand::DeleteCharacter(_) => 75,
             ClientCommand::CreateCharacter { .. } | ClientCommand::GenerateName { .. } => 1,
             ClientCommand::SwapSpell { .. } => 2,
             ClientCommand::UseItem(_) => 3,
@@ -876,6 +877,7 @@ mod tests {
                 created,
             },
             ClientCommand::SelectTarget {
+                request_id: 1,
                 session_id,
                 spawn_id: None,
             },
@@ -897,6 +899,7 @@ mod tests {
                 report_id: 1,
                 state: eq_network_game::movement::SpeedInputState::Ready(
                     eq_network_game::movement::SpeedInputs {
+                        eqmac_fatigue: None,
                         rate: 0,
                         weight: 0,
                         capacity: 100,
@@ -931,6 +934,7 @@ mod tests {
                 created,
             },
             ClientCommand::UseAbility {
+                target: None,
                 session_id,
                 ability: eq_network_game::abilities::Ability::Kick,
                 created,
@@ -995,8 +999,16 @@ mod tests {
                 session_id,
                 name: "Friend".into(),
             },
-            ClientCommand::FollowGroup { session_id },
-            ClientCommand::DeclineGroup { session_id },
+            ClientCommand::FollowGroup {
+                session_id,
+                inviter: "Leader".into(),
+                invitation_id: eq_network_game::group::InvitationId::new(1),
+            },
+            ClientCommand::DeclineGroup {
+                session_id,
+                inviter: "Leader".into(),
+                invitation_id: eq_network_game::group::InvitationId::new(1),
+            },
             ClientCommand::Disband { session_id },
             ClientCommand::ToggleAway { session_id },
             ClientCommand::ToggleAnonymous { session_id },
@@ -1048,7 +1060,9 @@ mod tests {
             },
             ClientCommand::ReadItem {
                 session_id,
+                revision: 0,
                 slot: InventorySlot(23),
+                created,
             },
             ClientCommand::Combine {
                 session_id,
@@ -1125,6 +1139,18 @@ mod tests {
             );
         }
         for selection in [
+            ClientCommand::DeleteCharacter(
+                eq_network_game::deletion::Request::new(
+                    eq_network_game::deletion::Scope {
+                        connection_id: 1,
+                        selection_id: 1,
+                    },
+                    1,
+                    "Disposable",
+                    "Disposable",
+                )
+                .unwrap(),
+            ),
             ClientCommand::SelectServer {
                 selection_id: 1,
                 index: 0,
@@ -1407,14 +1433,152 @@ mod tests {
     }
 
     #[test]
+    fn meal_capability_matches_the_owner_that_accepts_configuration() {
+        use crate::client::{session::feature::testing, ServerProtocol};
+        use eq_network_game::{food::AutoEat, world::Capability};
+        for (protocol, meals) in [
+            (ServerProtocol::Quarm, true),
+            (ServerProtocol::Takp, true),
+            (ServerProtocol::EqEmu, true),
+            (ServerProtocol::Project1999, true),
+        ] {
+            let server = servers::server_type(protocol);
+            let mut features = Features::new(server, "Tester", AutoEat::default());
+            assert!(features.capabilities().contains(&Capability::Inventory));
+            assert_eq!(features.capabilities().contains(&Capability::Meals), meals);
+            let command = ClientCommand::AutoEat {
+                session_id: 5,
+                auto_eat: AutoEat::Anything,
+            };
+            let consume = ClientCommand::Consume {
+                session_id: 5,
+                slot: eq_network_game::inventory::InventorySlot(22),
+                created: Instant::now(),
+            };
+            assert_eq!(command.capability(), Some(Capability::Meals));
+            assert_eq!(consume.capability(), Some(Capability::Meals));
+            assert_eq!(
+                features
+                    .provided
+                    .iter()
+                    .any(|feature| feature.owns(&consume)),
+                meals
+            );
+            let mut world = World::new(5);
+            let outcome = testing::run_on(server.wire(), |out| {
+                let handled = features.handle(&command, &mut world, out)?;
+                assert_eq!(handled, meals);
+                if !handled {
+                    unoffered(&command, out.log)?;
+                }
+                Ok::<_, anyhow::Error>(())
+            });
+            outcome.result.unwrap();
+            assert!(
+                outcome.sent.is_empty(),
+                "changing the preference sends no packet"
+            );
+            if meals {
+                assert!(outcome.events.is_empty());
+            } else {
+                assert!(
+                    matches!(outcome.events.as_slice(), [ClientEvent::Diagnostic(message)]
+                    if message == "Rejected AutoEat command: Not available on this server")
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn combined_quarm_inventory_capabilities_keep_one_owner_and_exchanges_disabled() {
+        use crate::client::ServerProtocol;
+        use eq_network_game::{food::AutoEat, inventory::InventorySlot, world::Capability};
+        let server = servers::server_type(ServerProtocol::Quarm);
+        let features = Features::new(server, "Tester", AutoEat::default());
+        let capabilities = features.capabilities();
+        for capability in [
+            Capability::Inventory,
+            Capability::Meals,
+            Capability::Trading,
+            Capability::Reading,
+        ] {
+            assert!(capabilities.contains(&capability), "{capability:?}");
+        }
+        assert!(!capabilities.contains(&Capability::Giving));
+        for command in [
+            ClientCommand::AutoEat {
+                session_id: 5,
+                auto_eat: AutoEat::Anything,
+            },
+            ClientCommand::Consume {
+                session_id: 5,
+                slot: InventorySlot(22),
+                created: Instant::now(),
+            },
+            ClientCommand::Buy {
+                session_id: 5,
+                merchant_id: 9,
+                own_id: 7,
+                slot: 0,
+                quantity: 1,
+                created: Instant::now(),
+            },
+        ] {
+            assert_eq!(
+                features
+                    .provided
+                    .iter()
+                    .filter(|feature| feature.owns(&command))
+                    .count(),
+                1
+            );
+        }
+    }
+
+    #[test]
+    fn ordinary_eqmac_doors_compose_with_reading_and_inventory_features() {
+        use crate::client::ServerProtocol;
+        use eq_network_game::{food::AutoEat, world::Capability};
+        for protocol in [ServerProtocol::Quarm, ServerProtocol::Takp] {
+            let features =
+                Features::new(servers::server_type(protocol), "Tester", AutoEat::default());
+            for capability in [
+                Capability::Doors,
+                Capability::Reading,
+                Capability::Inventory,
+                Capability::Trading,
+                Capability::Meals,
+            ] {
+                assert!(
+                    features.capabilities().contains(&capability),
+                    "{protocol:?} {capability:?}"
+                );
+            }
+            let click = ClientCommand::ClickDoor {
+                session_id: 5,
+                door_id: 3,
+                created: Instant::now(),
+            };
+            assert_eq!(
+                features
+                    .provided
+                    .iter()
+                    .filter(|feature| feature.owns(&click))
+                    .count(),
+                1
+            );
+        }
+    }
+
+    #[test]
     fn a_command_no_feature_takes_is_refused_as_unavailable() {
         use crate::client::session::feature::testing;
-        // Quarm opens no doors yet.
-        let mut features = Features::new(
-            servers::server_type(crate::client::ServerProtocol::Quarm),
-            "Tester",
-            eq_network_game::food::AutoEat::default(),
-        );
+        // No owner is installed in this fixture, independently of server offers.
+        let mut features = Features {
+            provided: Vec::new(),
+            choices: Vec::new(),
+            spell_landing_flag: None,
+        };
         let click = ClientCommand::ClickDoor {
             session_id: 5,
             door_id: 3,
@@ -1483,6 +1647,7 @@ mod tests {
         }
         assert!(p99.contains(&Capability::Falling));
         assert!(p99.contains(&Capability::Jumping));
+        assert!(p99.contains(&Capability::Reading));
         assert!(!p99.contains(&Capability::Training));
         let eqemu = features(crate::client::ServerProtocol::EqEmu);
         assert!(eqemu.contains(&Capability::Falling));
@@ -1490,6 +1655,9 @@ mod tests {
         assert!(eqemu.contains(&Capability::Resurrection));
         assert!(eqemu.contains(&Capability::Reading));
         assert!(eqemu.contains(&Capability::Tradeskills));
+        assert!(p99.contains(&Capability::Tradeskills));
+        assert!(eqemu.contains(&Capability::WorldContainers));
+        assert!(!p99.contains(&Capability::WorldContainers));
         assert!(eqemu.contains(&Capability::Map));
         assert!(eqemu.contains(&Capability::DeletingSpells));
         assert!(eqemu.contains(&Capability::MovingSpells));
@@ -1498,7 +1666,7 @@ mod tests {
         assert!(eqemu.contains(&Capability::MerchantOffers));
         assert!(!p99.contains(&Capability::MerchantOffers));
         assert!(eqemu.contains(&Capability::Grouping));
-        assert!(!p99.contains(&Capability::Grouping));
+        assert!(p99.contains(&Capability::Grouping));
         assert!(eqemu.contains(&Capability::Listing));
         assert!(!p99.contains(&Capability::Listing));
         for capability in [
@@ -1515,7 +1683,7 @@ mod tests {
             assert!(!p99.contains(&capability));
         }
         assert!(p99.contains(&Capability::EnvironmentalDamage));
-        assert_eq!(eqemu.len(), p99.len() + 17);
+        assert_eq!(eqemu.len(), p99.len() + 15);
     }
 
     #[test]
@@ -1530,13 +1698,15 @@ mod tests {
             .capabilities()
         };
         // Both EQMac policies move, jump, fall, zone, camp, cast spells and
-        // move inventory. TAKP also offers the social actions checked there.
+        // move inventory, read, shop and eat. TAKP also offers the social
+        // actions checked there.
         assert_eq!(
             features(crate::client::ServerProtocol::Quarm),
             [
                 Capability::Casting,
                 Capability::Spellbook,
                 Capability::Inventory,
+                Capability::Trading,
                 Capability::Moving,
                 Capability::Falling,
                 Capability::Targeting,
@@ -1544,12 +1714,15 @@ mod tests {
                 Capability::Looting,
                 Capability::Talking,
                 Capability::Camping,
+                Capability::Doors,
                 Capability::GroundItems,
                 Capability::Zoning,
                 Capability::Abilities,
+                Capability::Reading,
                 Capability::EnvironmentalDamage,
                 Capability::Jumping,
-                Capability::Posture
+                Capability::Posture,
+                Capability::Meals
             ]
         );
         assert_eq!(
@@ -1566,16 +1739,19 @@ mod tests {
                 Capability::Combat,
                 Capability::Talking,
                 Capability::Camping,
+                Capability::Doors,
                 Capability::GroundItems,
                 Capability::Zoning,
                 Capability::Abilities,
+                Capability::Reading,
                 Capability::Grouping,
                 Capability::Listing,
                 Capability::EnvironmentalDamage,
                 Capability::BleedingOut,
                 Capability::Translocate,
                 Capability::Jumping,
-                Capability::Posture
+                Capability::Posture,
+                Capability::Meals
             ]
         );
     }
@@ -1686,6 +1862,150 @@ mod tests {
         )));
         assert!(world.exit().is_none());
     }
+    #[test]
+    #[allow(clippy::too_many_lines)] // One policy/decode/consent/admission regression flow.
+    fn p99_group_policy_dispatch_preserves_consent_admission_and_native_modes() {
+        use super::super::feature::testing;
+        use crate::client::ServerProtocol;
+        use eq_network_game::{
+            group::{self, GroupUpdate},
+            world::{Capability, WorldEvent},
+        };
+        let server = servers::server_type(ServerProtocol::Project1999);
+        let mut features =
+            Features::new(server, "Tester", eq_network_game::food::AutoEat::default());
+        assert!(features.capabilities().contains(&Capability::Grouping));
+        let mut world = World::new(5);
+        let mut player = testing::player(7);
+        player.name = "Tester".into();
+        world.player.admit(player);
+        world.admitted = Some(Instant::now());
+        let invite_packet = group::invite("Tester", "Leader").unwrap();
+        let offered = testing::run_on(server.wire(), |out| {
+            hear(
+                server
+                    .wire()
+                    .messages(0x12d6, &invite_packet.body, server.item_rules()),
+                &mut features,
+                &mut world,
+                out,
+                true,
+            )
+        });
+        offered.result.unwrap();
+        assert_eq!(offered.sent, []);
+        let invitation_id = offered.events.iter().find_map(|event| match event {
+            ClientEvent::World(WorldEvent::Group(GroupUpdate::Invited { id, .. })) => *id,
+            _ => None,
+        });
+        assert!(invitation_id.is_some());
+        let accept = ClientCommand::FollowGroup {
+            session_id: 5,
+            inviter: "Leader".into(),
+            invitation_id,
+        };
+        assert_eq!(
+            features
+                .provided
+                .iter()
+                .filter(|feature| feature.owns(&accept))
+                .count(),
+            1
+        );
+        let stale = ClientCommand::FollowGroup {
+            session_id: 4,
+            inviter: "Leader".into(),
+            invitation_id,
+        };
+        let stale_out = testing::run_on(server.wire(), |out| {
+            let reason = features
+                .refusal(&stale, &world, Instant::now())
+                .expect("old admission is refused");
+            actions::refuse(&stale, reason, out.log)
+        });
+        stale_out.result.unwrap();
+        assert_eq!(stale_out.sent, []);
+        assert_eq!(features.refusal(&accept, &world, Instant::now()), None);
+        let answered = testing::run_on(server.wire(), |out| {
+            features.handle(&accept, &mut world, out)
+        });
+        assert!(answered.result.unwrap());
+        assert_eq!(answered.sent.len(), 1);
+        assert_eq!(answered.sent[0].opcode, 0x42c9);
+        assert!(!answered.events.iter().any(|event| matches!(
+            event,
+            ClientEvent::World(WorldEvent::Group(
+                GroupUpdate::Members { .. } | GroupUpdate::Formed { .. }
+            ))
+        )));
+        let mut roster = vec![0; 452];
+        roster[..4].copy_from_slice(&7u32.to_le_bytes());
+        roster[4..10].copy_from_slice(b"Tester");
+        roster[68..74].copy_from_slice(b"Leader");
+        roster[388..394].copy_from_slice(b"Leader");
+        let members = testing::run_on(server.wire(), |out| {
+            hear(
+                server.wire().messages(0x2dd6, &roster, server.item_rules()),
+                &mut features,
+                &mut world,
+                out,
+                true,
+            )
+        });
+        members.result.unwrap();
+        assert_eq!(members.sent, []);
+        let invite = ClientCommand::InviteToGroup {
+            session_id: 5,
+            name: "Other".into(),
+        };
+        let nonleader = testing::run_on(server.wire(), |out| {
+            features.handle(&invite, &mut world, out)
+        });
+        assert!(nonleader.result.unwrap());
+        assert_eq!(nonleader.sent, []);
+        assert!(nonleader.events.iter().any(|event| matches!(
+            event,
+            ClientEvent::World(WorldEvent::GroupRefused {
+                string_id: Some(12267),
+                ..
+            })
+        )));
+        // A new admission builds a new owner; old consent cannot carry over.
+        let mut next = Features::new(server, "Tester", eq_network_game::food::AutoEat::default());
+        let mut next_world = World::new(6);
+        let mut player = testing::player(8);
+        player.name = "Tester".into();
+        next_world.player.admit(player);
+        next_world.admitted = Some(Instant::now());
+        assert!(next.refusal(&accept, &next_world, Instant::now()).is_some());
+        let unassigned = ClientCommand::FollowGroup {
+            session_id: 6,
+            inviter: "Leader".into(),
+            invitation_id: None,
+        };
+        let no_offer = testing::run_on(server.wire(), |out| {
+            next.handle(&unassigned, &mut next_world, out)
+        });
+        assert!(no_offer.result.unwrap());
+        assert_eq!(no_offer.sent, []);
+        assert!(no_offer
+            .events
+            .iter()
+            .any(|event| matches!(event, ClientEvent::World(WorldEvent::GroupRefused { .. }))));
+        let malformed = testing::run_on(server.wire(), |out| {
+            hear(
+                server
+                    .wire()
+                    .messages(0x1b48, &[0; 128], server.item_rules()),
+                &mut next,
+                &mut next_world,
+                out,
+                true,
+            )
+        });
+        malformed.result.unwrap();
+        assert_eq!(malformed.sent, []);
+    }
 }
 
 #[cfg(test)]
@@ -1707,6 +2027,9 @@ mod quarm_inventory_tests;
 mod item_move_tests;
 
 #[cfg(test)]
+mod reading_tests;
+
+#[cfg(test)]
 mod combat_tests;
 
 #[cfg(test)]
@@ -1714,3 +2037,9 @@ mod loot_tests;
 
 #[cfg(test)]
 mod diagnostic_tests;
+
+#[cfg(test)]
+mod target_tests;
+
+#[cfg(test)]
+mod manual_combine_tests;

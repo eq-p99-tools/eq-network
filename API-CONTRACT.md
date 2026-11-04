@@ -1,5 +1,138 @@
 # API and integration contracts
 
+## P99 readable items
+
+`GameCommand::ReadItem { session_id, revision, slot, created }` now binds the
+intent to the worker inventory revision and enqueue time. `Book::from_item`
+preserves numeric kind values rather than coercing nonzero flags into a book.
+Actual Titanium item decoding retains unsupported read metadata for refusal or
+rejects malformed numeric fields. Titanium text decoding requires a supported
+note/book kind and terminating NUL. Submission does not supply `BookText`;
+supported server text opens the result. See `docs/p99-reading.md`.
+
+## Modern session termination
+
+`eq_network_transport::modern::SessionTermination` is an additive typed error
+inside the existing `anyhow::Result` APIs. `PeerDisconnected` retains an opaque
+optional native reason; `OutOfSession` reports the established stateless control.
+Neither reports acceptance or failure of an application request.
+
+Once observed, the first termination clears queued transport work and prevents
+both reliable and unreliable application sends. Repeated receives retain the same
+terminal error. `Client::run` reports Disconnected once for that attempt. With
+reconnect disabled it returns the typed error; with reconnect enabled it retains
+the configured delay before starting a fresh login. Unknown terminal reasons do
+not establish permanent refusal. The existing permanent credential-refusal rule,
+other retry timings and legacy EQMac contracts are unchanged.
+Hosts can downcast the error or show its credential-free Display text. Existing
+status/event variants and `Transport` signatures are unchanged. See
+[evidence and packet limits](docs/session-termination.md).
+
+## Meal command availability
+
+`Capability::Meals` is separate from `Inventory`: it gates `Consume` and
+`AutoEat`. The inventory feature offers it exactly when its existing
+`Allowances::meals` is enabled. Hosts retain the local automatic-food preference
+but post it only for an admission offering meals. Protocol and server-specific
+allowance policies remain with the existing inventory owner.
+
+## Command diagnostic identity
+
+`GameCommand::name()` returns its exhaustive variant name as a static string,
+without command fields. Shared refusal diagnostics use that name; their
+structured result events retain the original reason and request identity.
+
+## EQMac wear updates
+
+`appearance::EQMAC_WEAR_CHANGE_OPCODE` and `eqmac_wear_change` decode the
+12-byte `EQMac` record into the existing `WearChange`/`WorldEvent::WearChange`.
+The shared EQMac message path delivers it for TAKP and Quarm. The player's
+record and named spawns apply the received slot's material/model and tint;
+zero selects bare armor or an empty held slot. Hosts consuming the typed event need
+no new event variant. A visible equipment update does not acknowledge an
+inventory move or create an inventory item.
+
+The slot is byte 2, the 16-bit material/model is at 4, and the tint is at 8;
+alignment bytes are ignored. Length must be exactly 12, the spawn ID nonzero,
+and the texture slot 0 through 8. Titanium retains its separate 9-byte codec
+and slot validation. See TAKP's
+[`WearChange_Struct`](https://github.com/EQMacEmu/Server/blob/e517d0bdbca302d94ff6979cd6c6028ddf2b9a4f/common/eq_packet_structs.h)
+and [`Mob::GetEquipmentMaterial`/`SendWearChange`](https://github.com/EQMacEmu/Server/blob/e517d0bdbca302d94ff6979cd6c6028ddf2b9a4f/zone/mob.cpp).
+
+## EQMac note and book reading
+
+TAKP and Quarm now offer `Capability::Reading`. Existing `ReadItem`,
+`ReadRefused` and `BookText` events are reused. New game codecs are
+`books::eqmac_request`, `books::eqmac_text` and `EQMAC_READ_OPCODE`.
+EQMac item decoding takes the raw kind byte from BookType at offset 228 rather
+than deriving it from Book at 230; unknown kind bytes remain numeric.
+Only received text populates reading state. Encoding refusal remains a
+local `ReadRefused`; transport errors remain errors, and submission does
+not produce a fabricated read-success event or change holdings.
+
+## Inventory planning policy and arrival weight bounds
+
+`Client::inventory_move_rules()` returns `Option<MoveRules>` before connecting.
+The selected `ServerType` supplies this same value to its worker inventory
+factory. Hosts must use it for queued placement projections, rather than
+assuming `EqEmu` rules from the installed generation. None means there is no
+inventory movement policy; it is not permission to choose a fallback.
+
+`Inventory::carried_weight_tenths` can retain a conservative upper bound after
+a distinct plain cursor arrival follows a recorded weight-neutral history. An
+originally occupied cursor additionally needs a plain whole-item relocation trace.
+`carried_weight_is_conservative()` identifies that property state and does not
+grant readiness. A server prefix where the arrival remains queued weighs less.
+`can_rebase_cursor_arrival(update)` exposes the same read-only classification
+to the session's resync check; callers still apply the actual update through
+Inventory and retain all other correction guards. It is not move permission.
+The old item's endpoint remains speculative: Cursor leaves its placement
+origins intact; Set covers only its observed slot. Neither resolves other
+prediction journals or equipment contribution history.
+
+Every recorded prediction must preserve item weight and the coin-purse
+coefficient in both dialects before this bound can be used. Affecting intermediate
+histories remain unavailable even after equal endpoints; a full Snapshot or an
+existing policy-driven Settled establishes a new baseline. Repeated IDs,
+non-plain arrivals and ambiguous occupied-cursor traces cannot start this rebase. Later
+unsupported changes to rebased slots invalidate the bound. No new silence
+timer, packet meaning or per-move acknowledgement is introduced.
+
+## Named character deletion at world selection
+
+`WorldEvent::CharacterSelection` now requires the actual `connection_id` and
+`deletion: Option<deletion::Rules>`. Each world connection has a checked,
+process-monotonic generation; each published list has a fresh monotonic identity.
+Hosts must preserve both in `deletion::Scope`, invalidate unanswered confirmations
+on any new list, and invalidate all prior intents on reconnect. Do not invent a
+default scope. `GameCommand::DeleteCharacter(Request)` requires a positive local
+request ID, an encodable name and an exact repeated confirmation. The world owner
+checks that scope, capability, exact unique listed identity and selection-stage
+ownership before sending. IDs and confirmation text are never wire fields.
+
+`WorldEvent::CharacterDeletion(Update)` carries the full original request and
+`Progress`: `NotSent(Refusal)`, `Pending(Option<Observation>)`,
+`Unconfirmed { reason, observation }`, or `ObservedAbsent { scope }`. An observation
+names the received list and connection. Still present is not a correlated refusal;
+absent is not a deletion ACK, causal success or database purge. No transport send,
+silence, timeout or disconnect establishes absence. Exact intent replays never
+resend. Ambiguous attempts hold creation/entry; the host must retain explicit
+Back/Disconnect recovery. Ending the connection reports unconfirmed. The frontend
+may report `NotSent(QueueUnavailable)` if it could not enqueue a request at all.
+Exhaustive command/event matches and complete selection literals must migrate.
+
+Pinned public source: [EQEmu world handler](https://github.com/EQEmu/EQEmu/blob/4aceae18b94ffaafc08e2b17bc41cd72c77f795d/world/client.cpp),
+[TAKP world handler](https://github.com/EQMacEmu/Server/blob/e517d0bdbca302d94ff6979cd6c6028ddf2b9a4f/world/client.cpp),
+and [Quarm world handler](https://github.com/SecretsOTheP/EQMacEmu/blob/c2cd2651045ab063b236b08f3a9e83cbf10289e9/world/client.cpp)
+refresh the character list after an ownership-checked operation, without a
+correlated deletion response. TAKP/Quarm may mark instead of purge characters.
+The native request is the selected ASCII name followed by NUL, not a padded
+64-byte record (Titanium sender address 0x4f0e94; EQMac sender 0x53b21b). Titanium
+uses application opcode 0x26c9. The library's big-endian legacy application writer
+uses 0x5a40, producing bytes 5a40; current TAKP spells the host opcode 0x405a and
+writes it little-endian. P99 server internals and live behavior are unverified;
+its policy uses the evidenced Titanium request with observation-only outcomes.
+
 ## Typed spell-provider policy and attempt identity
 
 `Client::spell_table_policy()` returns `ProviderPolicy` before connecting,
@@ -7,6 +140,12 @@ resolved through the same selected server policy that owns table emission.
 Hosts bind this value when creating their producer; no protocol-name branch
 or first-table ordering assumption is needed. Other policies retain installed
 definitions without inheriting a replay overlay.
+
+`ProviderPolicy::requires_server_tables()` is the network-owned semantic
+predicate for whether installed mechanics require registration/replay facts.
+Hosts use it for lifecycle routing and initial readiness instead of matching
+a provider variant. This additive const method preserves the enum variants,
+serialization and existing policy accessor.
 
 `SessionStatus::run_id: Option<u64>` carries the numeric attempt ID shared with
 `spell_tables::Context::run_id`. A real Connecting notification establishes
@@ -110,15 +249,48 @@ Installed data remains the source of text. Complete `WorldRules` literals
 must add the field or use its default for absence; this source API addition
 requires downstream consumer validation before publication.
 
+## Session-owned EQMac fatigue
+
+`SpeedInputs` adds optional `eqmac_fatigue: Option<EqMacFatigueInputs>` with
+signed unpenalized `strength: i64` and effective `stamina: Option<u8>`.
+Existing rate, weight and final capacity (including the explicit zero sentinel)
+retain their meaning. Only EQMac with this component derives capacity from
+current session fatigue; legacy absent components retain the existing host
+refresh/withdrawal path. Other generations use final capacity directly.
+
+Known stamina is capped to 1..=255; missing/zero stamina or missing fatigue
+retains the conservative maximum ten-point penalty. Subtract with saturation
+before the final 1..=255 cap. Known nonpositive strength never becomes the
+zero/no-encumbrance sentinel. The host supplies one proven prerequisite
+baseline and a stable conservative fallback capacity. Session-derived
+capacity does not rewrite the exact accepted host report or its receipt.
+Unchanged fatigue/derived speed stays quiet; true prerequisite invalidation,
+root, correction, death and transfers retain their guards.
+
 ## EQMac admission zone identity
 
 `quarm::profile_zone` reads the current zone from the supported encrypted
-profile. Zero returns `None`; malformed layouts and values outside the
-transfer interface's `u16` range are errors, never truncated aliases. The
+profile. Zero or a value outside the transfer interface's `u16` range returns
+`None`, never a truncated alias. Malformed compression/layouts remain errors. The
 bind point and zone-description name do not substitute for missing identity.
-EQMac admission commits the validated current zone with no instance field
+EQMac admission keeps an otherwise valid profile when its current zone is
+unknown, and commits representable current zones with no instance field
 before zone-line commands can run. Unknown identity retains the existing
 transfer refusal. No transfer packet layout or server policy changes.
+
+## Quarm death-bind handoff
+
+Quarm's source-defined death-only bind offer produces admission-scoped
+`WorldEvent::DeathBind` before the transfer. It carries lifecycle knowledge,
+not a death packet: no killer, corpse or kill credit is synthesized. Ordinary
+death packets retain their full details. Duplicate bind offers do not repeat
+death or departure; dead state survives an approved departure. This
+classification is enabled by the Quarm provider, not generic bind offers.
+
+For Quarm only, approval of a solicited pending bind transfer to the exact
+current zone accepts its documented reply stand-in 185. Character, instance
+and success checks remain; normal transfers and other profiles retain exact
+destination validation. The stand-in is not stored as the real destination.
 
 ## Camping and the movement owner's pending stop
 
@@ -138,6 +310,11 @@ do not infer success from the host's `MotionSent` notification.
 Camp retains its own waiting intent while the existing paced stop is pending,
 then starts its countdown only after camp submission succeeds. New movement,
 refusal, withdrawal or admission/lifecycle loss cancels that waiting intent.
+Cancellation reports `CampStatus::Abandoned { by: CampEnd::Other }` when its
+admission/movement context is lost or a transfer arrives. It clears the local
+intent before notification, so overlapping invalidation/transfer/death events
+report once and a failing callback leaves no intent to replay. Player actions
+retain their existing typed causes; no cancellation sends a camp packet.
 The established motion timer precedes the camp timer. Official stop/camp
 ordering remains unverified under recording checklist 6.380; no spacing,
 repeat, wire format or movement authority changes.
@@ -210,8 +387,17 @@ ambiguous removal packets cannot cancel it. Only a new admission restores unique
 result attribution.
 The result rule is selected through the generation interface; the established
 Titanium path is preserved. TAKP and Quarm offer `GroundItems` with this rule.
-Their door definitions/actions are replayed at admission, but no `Doors`
-capability, door-click command owner or unverified door sender is enabled.
+Their door definitions/actions are replayed at admission. Both offer `Doors`
+with a click owner restricted to ordinary EQMac types 0--8 and the documented
+definition, empty-cursor, freshness, motion and reach guards. Hidden server
+locks, movability and scripts retain authority; submission is not an opening.
+Additive APIs `doors::eqmac::click` and `request::eqmac(Request::ClickDoor)`
+encode the eight-byte ordinary no-held-item request with the player's ID.
+`doors::eqmac::ordinary` identifies supported definitions, and `Hinge` exposes
+their local motion/return clocks for the network guard and frontend pose.
+Only received definitions/actions set those targets; a click predicts no state.
+Specialized or unknown mechanisms remain visible without ordinary use. No
+event variants or definition fields change.
 
 One feature owns each command and its state. Wire generation determines layout;
 server policy determines availability. New features start absent, and a frontend
@@ -407,3 +593,23 @@ succeeds. A checked candidate is not yet an accepted move or a server receipt.
 Dropping it or failing the callback leaves motion state untouched; external
 callback effects cannot be rolled back. No public observer/transaction API is
 introduced, and the private plan certifies no external body or scene identity.
+
+## Carried combines and world containers
+
+**Breaking:** `Capability::WorldContainers` is a new variant and
+`Capability::ALL` grows from 43 to 44. `Tradeskills` offers carried manual
+combines; `OpenContainer`, `CloseContainer` and `Combine(WORLD_CONTAINER)`
+require `WorldContainers`. `tradeskills::combine_capability` supplies the
+same distinction to frontends. EQEmu offers both; P99 offers carried combines
+only, with no change to the current TAKP/Quarm offers. Exhaustive capability
+matches and station controls must handle the new variant.
+
+`titanium_combine` retains its signature but writes the native full 32-bit
+slot, replacing the old invented high-word sentinel, and rejects nonpack,
+nonworld slots. No EQMac combine encoding is introduced. Additive
+`tradeskills::{check_carried, CarriedRefusal}` exposes the source-backed local
+metadata/identity prerequisites without changing any inventory.
+`CombineUpdate::Answered` means a received local transaction reset, not a
+successful craft or item-move acknowledgment. Components, returned tools and
+products require separate authoritative inventory updates. See
+[the source contract and limits](docs/p99-manual-combines.md).

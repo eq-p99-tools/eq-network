@@ -6,7 +6,7 @@ use super::{
     feature::{Feature, Out, World},
     ClientCommand,
 };
-use anyhow::Result;
+use anyhow::{ensure, Context, Result};
 use eq_network_game::request::Request;
 
 /// Asks for the texts of the player's books and notes.
@@ -27,17 +27,47 @@ impl Feature for Reading {
         world: &mut World,
         out: &mut Out<'_, '_>,
     ) -> Result<()> {
-        let ClientCommand::ReadItem { slot, .. } = *command else {
+        let ClientCommand::ReadItem { slot, revision, .. } = *command else {
             return Ok(());
         };
-        let book = world
-            .inventory
-            .items()
-            .get(&slot)
-            .and_then(|item| item.book.clone());
-        match book {
-            Some(book) => out.request(&Request::ReadBook(book)),
-            None => actions::refuse(command, "That is not something you can read.", out.log),
+        let prepare = || -> Result<_> {
+            ensure!(
+                world.inventory.received() && !world.inventory.stale(),
+                "Wait for current inventory before reading"
+            );
+            ensure!(
+                revision == world.inventory.revision(),
+                "Inventory changed; select the readable item again"
+            );
+            ensure!(
+                out.wire.dialect() != eq_network_game::GameDialect::Titanium
+                    || slot.is_equipment()
+                    || slot.is_carried()
+                    || slot == eq_network_game::inventory::InventorySlot::CURSOR
+                    || slot.is_in_cursor_bag(),
+                "Place the readable item in carried inventory"
+            );
+            if let Some((parent, index)) = slot.parent() {
+                ensure!(
+                    world
+                        .inventory
+                        .items()
+                        .get(&parent)
+                        .is_some_and(|bag| index < bag.bag_slots),
+                    "The readable item's container is not known"
+                );
+            }
+            let book = world
+                .inventory
+                .items()
+                .get(&slot)
+                .and_then(|item| item.book.clone())
+                .context("That is not something you can read.")?;
+            out.encode(&Request::ReadBook(book))
+        };
+        match prepare() {
+            Ok(packet) => out.send(&packet),
+            Err(error) => actions::refuse(command, &error.to_string(), out.log),
         }
     }
 }
@@ -52,10 +82,12 @@ mod tests {
         world::WorldEvent,
     };
 
-    fn read(slot: i32) -> ClientCommand {
+    fn read(world: &World, slot: i32) -> ClientCommand {
         ClientCommand::ReadItem {
             session_id: 5,
+            revision: world.inventory.revision(),
             slot: InventorySlot(slot),
+            created: std::time::Instant::now(),
         }
     }
 
@@ -73,18 +105,89 @@ mod tests {
             testing::item(24),
         ]));
         world.inventory = inventory.into();
-        let outcome = testing::run(|out| Reading.handle(&read(23), &mut world, out));
+        let outcome = testing::run(|out| Reading.handle(&read(&world, 23), &mut world, out));
         assert_eq!(
             outcome.sent,
             [titanium_request(note.book.as_ref().unwrap()).unwrap()]
         );
         for slot in [24, 25] {
-            let outcome = testing::run(|out| Reading.handle(&read(slot), &mut world, out));
-            assert!(outcome.sent.is_empty(), "sent {:?}", outcome.sent);
+            let outcome = testing::run(|out| Reading.handle(&read(&world, slot), &mut world, out));
+            assert_eq!(outcome.sent, [], "unreadable item sent a request");
             assert!(outcome
                 .events
                 .iter()
                 .any(|event| matches!(event, ClientEvent::World(WorldEvent::ReadRefused { .. }))));
+        }
+    }
+
+    #[test]
+    fn eqmac_reading_uses_its_wire_and_refuses_invalid_names_without_losing_inventory() {
+        use crate::client::{session::servers, ServerProtocol};
+        use eq_network_game::{books::eqmac_request, message::Message};
+        for protocol in [ServerProtocol::Takp, ServerProtocol::Quarm] {
+            let server = servers::server_type(protocol);
+            for kind in [0, 1] {
+                let mut note = testing::item(23);
+                note.book = Some(Book {
+                    file: "SyntheticText".into(),
+                    kind,
+                });
+                let mut world = World::new(5);
+                let mut inventory = Inventory::default();
+                inventory.apply(InventoryUpdate::Snapshot(vec![
+                    note.clone(),
+                    testing::item(24),
+                ]));
+                world.inventory = inventory.clone().into();
+                let output = testing::run_on(server.wire(), |out| {
+                    Reading.handle(&read(&world, 23), &mut world, out)
+                });
+                output.result.unwrap();
+                assert_eq!(
+                    output.sent,
+                    [eqmac_request(note.book.as_ref().unwrap()).unwrap()]
+                );
+                assert!(
+                    matches!(output.events.as_slice(), []),
+                    "unexpected local read result: {:?}",
+                    output.events
+                );
+                assert_eq!(world.inventory.items(), inventory.items());
+                let text = [vec![kind], b"Synthetic server text\0".to_vec()].concat();
+                let replies = server.wire().messages(
+                    eq_network_game::books::EQMAC_READ_OPCODE,
+                    &text,
+                    server.item_rules(),
+                );
+                assert!(
+                    matches!(replies.as_slice(), [Message::Event(WorldEvent::BookText(text))] if text.kind == kind && text.text == "Synthetic server text")
+                );
+                for slot in [24, 25] {
+                    let output = testing::run_on(server.wire(), |out| {
+                        Reading.handle(&read(&world, slot), &mut world, out)
+                    });
+                    output.result.unwrap();
+                    assert_eq!(output.sent, []);
+                    assert!(matches!(
+                        output.events.as_slice(),
+                        [
+                            ClientEvent::World(WorldEvent::ReadRefused { session_id: 5, .. }),
+                            ClientEvent::Diagnostic(_)
+                        ]
+                    ));
+                }
+                note.book.as_mut().unwrap().file = "x".repeat(20);
+                inventory.apply(InventoryUpdate::Set(vec![note]));
+                world.inventory = inventory.into();
+                let output = testing::run_on(server.wire(), |out| {
+                    Reading.handle(&read(&world, 23), &mut world, out)
+                });
+                output.result.unwrap();
+                assert_eq!(output.sent, []);
+                assert!(
+                    matches!(output.events.as_slice(), [ClientEvent::World(WorldEvent::ReadRefused { session_id: 5, reason }), ClientEvent::Diagnostic(_)] if reason == "not a book a server can find")
+                );
+            }
         }
     }
 }

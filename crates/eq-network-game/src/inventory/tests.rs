@@ -379,6 +379,37 @@ fn admission_replays_the_cursor_queue_in_order() {
     assert_eq!(cursor_id(&replayed), None);
 }
 
+#[test]
+fn titanium_readable_fields_preserve_book_flag_separately_from_book_type() {
+    let encoded = wire(23, 123, 0, false, 0, &[]);
+    let parts: Vec<_> = encoded.splitn(3, '"').collect();
+    for (flag, book_type, file) in [
+        ("0", "-1", "SyntheticNote"),
+        ("1", "0", "SyntheticBook"),
+        ("2", "1", ""),
+        ("255", "-1", "0"),
+    ] {
+        let mut fields: Vec<_> = parts[1].split('|').collect();
+        fields[0] = "2";
+        fields[100] = flag;
+        fields[101] = book_type;
+        fields[102] = file;
+        let text = format!("{}\"{}\"{}", parts[0], fields.join("|"), parts[2]);
+        let InventoryUpdate::Snapshot(items) = decode(0x5394, text.as_bytes()).unwrap().unwrap()
+        else {
+            panic!("snapshot");
+        };
+        let book = items[0].book.as_ref().unwrap();
+        assert_eq!(book.kind.to_string(), flag);
+        assert_eq!(book.file, file);
+    }
+    let mut fields: Vec<_> = parts[1].split('|').collect();
+    fields[0] = "2";
+    fields[100] = "invalid";
+    let text = format!("{}\"{}\"{}", parts[0], fields.join("|"), parts[2]);
+    assert!(decode(0x5394, text.as_bytes()).is_err());
+}
+
 /// A serialized Titanium item in `slot`, with `children` in its bag.
 pub(crate) fn wire(
     slot: i32,

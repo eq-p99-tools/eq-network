@@ -102,6 +102,8 @@ pub(super) enum Choice {
     Create(eq_network_game::creation::NewCharacter),
     /// List-scoped name request, carrying frontend identity, race and gender.
     GenerateName(u64, u64, u32, u32),
+    /// An explicitly confirmed identity, validated by the deletion owner.
+    Delete(eq_network_game::deletion::Request),
 }
 
 #[cfg(test)]
@@ -110,13 +112,15 @@ impl Choice {
     fn entered(self) -> Option<String> {
         match self {
             Self::Enter(name) => Some(name),
-            Self::Create(_) | Self::GenerateName(..) => None,
+            Self::Create(_) | Self::GenerateName(..) | Self::Delete(_) => None,
         }
     }
 }
 
 pub(super) struct Selection {
     id: u64,
+    connection_id: u64,
+    deletion: Option<eq_network_game::deletion::Rules>,
     characters: Vec<CharacterChoice>,
 }
 
@@ -126,6 +130,8 @@ impl Selection {
         characters: Vec<CharacterChoice>,
         configured: &str,
         creation: Option<eq_network_game::creation::Rules>,
+        connection_id: u64,
+        deletion: Option<eq_network_game::deletion::Rules>,
         log: &mut Events<'_>,
     ) -> Result<(Self, Option<String>)> {
         let selected = if configured.is_empty() {
@@ -141,15 +147,38 @@ impl Selection {
             )
         };
         let selection = Self {
-            id: rand::random(),
+            id: next_identity()?,
+            connection_id,
+            deletion,
             characters,
         };
         log.send(ClientEvent::World(WorldEvent::CharacterSelection {
             selection_id: selection.id,
+            connection_id,
             characters: selection.characters.clone(),
             creation,
+            deletion,
         }))?;
         Ok((selection, selected))
+    }
+
+    pub fn scope(&self) -> eq_network_game::deletion::Scope {
+        eq_network_game::deletion::Scope {
+            connection_id: self.connection_id,
+            selection_id: self.id,
+        }
+    }
+
+    pub fn deletion(&self) -> Option<eq_network_game::deletion::Rules> {
+        self.deletion
+    }
+
+    pub fn contains(&self, name: &str) -> bool {
+        self.characters
+            .iter()
+            .filter(|entry| entry.name == name)
+            .count()
+            == 1
     }
 
     /// Ignores stale choices and all zone actions without emitting packets.
@@ -162,6 +191,8 @@ impl Selection {
 
     fn choose(&self, command: ClientCommand) -> Option<Choice> {
         match command {
+            // Even stale requests receive a typed local refusal from the owner.
+            ClientCommand::DeleteCharacter(request) => Some(Choice::Delete(request)),
             ClientCommand::SelectCharacter { selection_id, slot } if selection_id == self.id => {
                 self.characters
                     .iter()
@@ -183,6 +214,16 @@ impl Selection {
             _ => None,
         }
     }
+}
+
+/// Never reuse a list identity within this process, including on reconnect.
+fn next_identity() -> Result<u64> {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NEXT: AtomicU64 = AtomicU64::new(1);
+    NEXT.try_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
+        value.checked_add(1)
+    })
+    .map_err(|_| anyhow::anyhow!("character-list identity exhausted"))
 }
 
 #[cfg(test)]
@@ -252,6 +293,8 @@ mod tests {
     fn only_current_occupied_slots_can_enter_world() {
         let selection = Selection {
             id: 9,
+            connection_id: 1,
+            deletion: None,
             characters: vec![CharacterChoice {
                 slot: 3,
                 name: "Example".into(),

@@ -281,7 +281,7 @@ impl Feature for Looting {
         out: &mut Out<'_, '_>,
     ) -> Result<()> {
         let reset = match message {
-            Message::Event(WorldEvent::Death(death)) => world.is_player(death.spawn_id),
+            Message::Event(event) if world.owns_death(event) => true,
             Message::Event(WorldEvent::ZoneTransfer(_)) | Message::LoggedOut => true,
             Message::Event(WorldEvent::Despawn(id)) => {
                 self.corpse.as_ref().is_some_and(|corpse| corpse.id == *id)

@@ -125,6 +125,7 @@ pub(super) fn needs(command: &ClientCommand) -> &'static [Resource] {
         ClientCommand::SelectServer { .. }
         | ClientCommand::SelectCharacter { .. }
         | ClientCommand::GenerateName { .. }
+        | ClientCommand::DeleteCharacter(_)
         | ClientCommand::CreateCharacter { .. }
         | ClientCommand::ClickDoor { .. }
         | ClientCommand::CrossZoneLine { .. }
@@ -237,7 +238,7 @@ pub(super) fn refuse_naming(
         }
         log.send(ClientEvent::World(event))?;
     }
-    log.diagnostic(reason.into())
+    log.diagnostic(format!("Rejected {} command: {reason}", command.name()))
 }
 
 /// The result event that tells the host a command was refused; None for a
@@ -250,6 +251,10 @@ pub(super) fn refuse_naming(
 fn refusal(command: &ClientCommand, reason: &str) -> Option<WorldEvent> {
     let error = Some(reason.to_owned());
     Some(match command {
+        ClientCommand::DeleteCharacter(request) => WorldEvent::CharacterDeletion(eq_network_game::deletion::Update {
+            request: request.clone(),
+            progress: eq_network_game::deletion::Progress::NotSent(eq_network_game::deletion::Refusal::NotAtSelection),
+        }),
         ClientCommand::CastSpell { .. } => return casting::rejected(command, reason),
         ClientCommand::Consider { .. } | ClientCommand::AutoAttack { .. } => {
             return super::combat::rejected(command, reason);
@@ -282,8 +287,8 @@ fn refusal(command: &ClientCommand, reason: &str) -> Option<WorldEvent> {
         | ClientCommand::AnswerSacrifice { session_id, .. }
         | ClientCommand::AnswerTranslocate { session_id, .. }
         | ClientCommand::InviteToGroup { session_id, .. }
-        | ClientCommand::FollowGroup { session_id }
-        | ClientCommand::DeclineGroup { session_id }
+        | ClientCommand::FollowGroup { session_id, .. }
+        | ClientCommand::DeclineGroup { session_id, .. }
         | ClientCommand::Disband { session_id }
         | ClientCommand::ToggleAway { session_id }
         | ClientCommand::ToggleAnonymous { session_id }
@@ -336,10 +341,13 @@ fn refusal(command: &ClientCommand, reason: &str) -> Option<WorldEvent> {
         ClientCommand::Camp { .. } => WorldEvent::Camp(CampStatus::Rejected(reason.into())),
         ClientCommand::SelectTarget {
             session_id,
+            request_id,
             spawn_id,
         } => WorldEvent::TargetRejected {
             session_id: *session_id,
+            request_id: *request_id,
             spawn_id: *spawn_id,
+            state: None,
             reason: reason.into(),
         },
         ClientCommand::ScribeSpell { .. }
@@ -472,6 +480,57 @@ mod tests {
     use casting::CastGuard;
 
     #[test]
+    fn refusal_diagnostics_name_commands_without_their_payloads() {
+        use super::super::feature::testing;
+        use eq_network_game::chat::OutboundChat;
+        for (command, expected) in [
+            (
+                ClientCommand::SendChat(OutboundChat::Tell {
+                    recipient: "SyntheticRecipient".into(),
+                    message: "Synthetic message body".into(),
+                }),
+                "Rejected SendChat command: Not available on this server",
+            ),
+            (
+                ClientCommand::InspectItem {
+                    session_id: 123_456_789,
+                    link_body: "SyntheticLinkBody".into(),
+                },
+                "Rejected InspectItem command: Not available on this server",
+            ),
+        ] {
+            let outcome =
+                testing::run(|out| refuse(&command, "Not available on this server", out.log));
+            outcome.result.unwrap();
+            assert_eq!(outcome.sent, []);
+            let [ClientEvent::Diagnostic(message)] = outcome.events.as_slice() else {
+                panic!("a fire-and-forget refusal should emit one diagnostic");
+            };
+            assert_eq!(message, expected);
+            for payload in [
+                "SyntheticRecipient",
+                "Synthetic message body",
+                "SyntheticLinkBody",
+                "123456789",
+            ] {
+                assert!(!message.contains(payload));
+            }
+        }
+        let command = ClientCommand::ClickDoor {
+            session_id: 5,
+            door_id: 3,
+            created: Instant::now(),
+        };
+        let outcome = testing::run(|out| refuse(&command, "Not available on this server", out.log));
+        outcome.result.unwrap();
+        assert_eq!(outcome.sent, []);
+        assert!(matches!(outcome.events.as_slice(), [
+            ClientEvent::World(WorldEvent::DoorAction { session_id: 5, door_id: 3, error: Some(reason), .. }),
+            ClientEvent::Diagnostic(message),
+        ] if reason == "Not available on this server" && message == "Rejected ClickDoor command: Not available on this server"));
+    }
+
+    #[test]
     fn commands_for_an_earlier_admission_or_made_too_long_ago_are_stale() {
         let now = Instant::now();
         let ago = |millis| now.checked_sub(Duration::from_millis(millis)).unwrap();
@@ -565,6 +624,7 @@ mod tests {
         assert!(casting.conflict(&memorize()).is_some());
         assert_eq!(
             casting.conflict(&ClientCommand::SelectTarget {
+                request_id: 1,
                 session_id: 1,
                 spawn_id: Some(7)
             }),

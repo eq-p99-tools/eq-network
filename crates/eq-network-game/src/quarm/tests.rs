@@ -13,8 +13,10 @@ fn profile_zone_preserves_unknown_and_does_not_use_the_bind_point() {
         data[3444..3448].copy_from_slice(&u32::from(zone).to_le_bytes());
         assert_eq!(decoded_profile_zone(&data).unwrap(), Some(zone));
     }
-    data[3444..3448].copy_from_slice(&70_000u32.to_le_bytes());
-    assert!(decoded_profile_zone(&data).is_err());
+    for zone in [65_536u32, 70_000, u32::MAX] {
+        data[3444..3448].copy_from_slice(&zone.to_le_bytes());
+        assert_eq!(decoded_profile_zone(&data).unwrap(), None);
+    }
     assert!(decoded_profile_zone(&data[..3448]).is_err());
     assert!(profile_zone(&[0; 4]).is_err());
     assert_eq!(profile_zone(&hex::decode(PROFILE).unwrap()).unwrap(), None);

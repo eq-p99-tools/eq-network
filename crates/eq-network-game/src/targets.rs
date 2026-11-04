@@ -15,6 +15,28 @@
 //! (TAKP's).
 use anyhow::{Context, Result};
 
+/// Session-owned target identity. A new revision invalidates queued actions,
+/// even when the selected spawn ID has returned to the same value.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+pub struct TargetState {
+    /// Monotonic within one zone admission; not a wire acknowledgment.
+    pub revision: u64,
+    /// The raw selected ID, including an unresolved server selection.
+    pub spawn_id: Option<u16>,
+    /// Whether the selection names the current visible incarnation, or none.
+    pub available: bool,
+}
+
+impl Default for TargetState {
+    fn default() -> Self {
+        Self {
+            revision: 0,
+            spawn_id: None,
+            available: true,
+        }
+    }
+}
+
 /// `OP_TargetCommand`: the target the server sets, or 0 for none.
 pub const TARGET_COMMAND_OPCODE: u16 = 0x1477;
 /// `EQMac`'s `OP_TargetCommand`.

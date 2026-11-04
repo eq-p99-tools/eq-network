@@ -41,10 +41,72 @@ fn public_provider_accessor_uses_the_emitting_policy_before_receiving_anything()
         let emits = super::super::servers::server_type(protocol)
             .spell_tables()
             .is_some();
-        assert_eq!(
-            emits,
-            client.spell_table_policy() == ProviderPolicy::Project1999
+        assert_eq!(emits, client.spell_table_policy().requires_server_tables());
+    }
+}
+
+#[test]
+fn provider_requirement_agrees_with_valid_and_failed_table_delivery() {
+    for protocol in [
+        ServerProtocol::Project1999,
+        ServerProtocol::EqEmu,
+        ServerProtocol::Quarm,
+        ServerProtocol::Takp,
+    ] {
+        let server = super::super::servers::server_type(protocol);
+        let requires = provider_policy(protocol).requires_server_tables();
+        let config = ClientConfig::for_protocol(
+            protocol,
+            "EXAMPLE_ACCOUNT",
+            "EXAMPLE_PASSWORD",
+            "Test",
+            "Tester",
         );
+        let mut received = Vec::new();
+        let mut handler = |event| {
+            received.push(event);
+            Ok(())
+        };
+        let mut log = Events::new(&config, &mut handler);
+        for (stage, opcode, bytes) in [
+            (
+                Stage::World,
+                spell_tables::REGISTRATION_OPCODE,
+                registration(),
+            ),
+            (
+                Stage::Zone { session_id: 31 },
+                spell_tables::REPLAY_OPCODE,
+                replay(),
+            ),
+            (
+                Stage::Zone { session_id: 31 },
+                spell_tables::REPLAY_OPCODE,
+                vec![1],
+            ),
+        ] {
+            assert_eq!(
+                receive(server, stage, opcode, &bytes, &mut log).unwrap(),
+                requires,
+                "{protocol:?}"
+            );
+        }
+        drop(log);
+        if requires {
+            let [ClientEvent::World(WorldEvent::SpellTable(registration)), ClientEvent::World(WorldEvent::SpellTable(replay)), ClientEvent::World(WorldEvent::SpellTable(failure))] =
+                received.as_slice()
+            else {
+                panic!("{received:?}")
+            };
+            assert!(matches!(
+                registration.update,
+                Update::Table(Table::Registration(_))
+            ));
+            assert!(matches!(replay.update, Update::Table(Table::Replay(_))));
+            assert!(matches!(failure.update, Update::Unavailable { .. }));
+        } else {
+            assert!(received.is_empty(), "{protocol:?}");
+        }
     }
 }
 

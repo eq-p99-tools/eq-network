@@ -2,6 +2,7 @@
 use super::super::feature::testing;
 use super::*;
 use crate::client::ServerProtocol;
+use eq_network_game::GameDialect;
 use eq_network_game::{
     food::AutoEat,
     inventory::{InventoryItem, InventoryMove, InventorySlot, InventoryUpdate, MoveQuantity},
@@ -121,7 +122,6 @@ fn quarm_prediction_pacing_never_restores_a_withdrawn_weight_grant() {
     use eq_network_game::{
         inventory::WeightUnavailable,
         movement::{SpeedInputState, SpeedInputUnavailable, SpeedInputs},
-        GameDialect,
     };
     let mut plain = testing::item(22);
     plain.details.weight_tenths = 40;
@@ -143,6 +143,7 @@ fn quarm_prediction_pacing_never_restores_a_withdrawn_weight_grant() {
         revision,
         report_id: 1,
         state: SpeedInputState::Ready(SpeedInputs {
+            eqmac_fatigue: None,
             rate: 0,
             weight: 4,
             capacity: 100,
@@ -689,7 +690,7 @@ fn quarm_banking_requires_a_live_admitted_session_even_beside_a_banker() {
 }
 
 #[test]
-fn quarm_inventory_enablement_does_not_enable_unrelated_actions_or_meals() {
+fn quarm_inventory_composes_with_meals_and_keeps_exchanges_disabled() {
     use eq_network_game::food::Nourishment;
     let mut food = stack(22, 10);
     food.rules.item_type = 14;
@@ -699,46 +700,39 @@ fn quarm_inventory_enablement_does_not_enable_unrelated_actions_or_meals() {
         Capability::Spellbook,
         Capability::Abilities,
         Capability::Looting,
+        Capability::Trading,
+        Capability::Meals,
     ] {
         assert!(features.capabilities().contains(&capability));
     }
-    for capability in [Capability::Trading, Capability::Giving] {
-        assert!(!features.capabilities().contains(&capability));
-    }
-    let commands = [
-        ClientCommand::AutoEat {
+    assert!(!features.capabilities().contains(&Capability::Giving));
+    let output = submit(
+        &mut features,
+        &mut world,
+        &ClientCommand::AutoEat {
             session_id: 5,
             auto_eat: AutoEat::Anything,
         },
-        ClientCommand::Consume {
-            session_id: 5,
-            slot: InventorySlot(22),
-            created: Instant::now(),
-        },
-        ClientCommand::Shop {
-            session_id: 5,
-            merchant_id: 9,
-            own_id: 7,
-            open: true,
-            created: Instant::now(),
-        },
-        ClientCommand::OfferTrade {
+    );
+    assert!(output.result.unwrap());
+    assert_eq!(output.sent, []);
+    let output = submit(
+        &mut features,
+        &mut world,
+        &ClientCommand::OfferTrade {
             session_id: 5,
             with_id: 9,
             created: Instant::now(),
         },
-    ];
-    for command in commands {
-        let output = submit(&mut features, &mut world, &command);
-        assert!(!output.result.unwrap());
-        assert_eq!(output.sent.len(), 0);
-    }
+    );
+    assert!(!output.result.unwrap());
+    assert_eq!(output.sent, []);
     let output = testing::run_on(servers::server_type(ServerProtocol::Quarm).wire(), |out| {
         features.observe(
             &Message::Event(WorldEvent::Nourishment(Nourishment {
                 fatigue: Some(0),
-                food: 0,
-                water: 0,
+                food: 6000,
+                water: 6000,
             })),
             &mut world,
             out,

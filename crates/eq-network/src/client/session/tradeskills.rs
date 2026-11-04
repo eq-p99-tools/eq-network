@@ -3,12 +3,11 @@
 //! when the server puts what it still holds back in the inventory. The
 //! session sends a combine for a tradeskill container carried in a pack
 //! slot, or for the world container open for the player, and holds the
-//! inventory until the server answers: the components leave and what was
-//! made arrives only after that answer, so a move or a second combine in
-//! between would act on what the server is about to change. As the official
-//! client does, it refuses a combine while the cursor holds an item or
-//! coins, where what was made would land, and names the official client's
-//! own words for that.
+//! inventory until the server's reset. That reset releases only the local
+//! operation gate; independent inventory updates supply consumption and any
+//! product, with no result inferred from their order or absence. As the
+//! official client does, it refuses a combine while the cursor holds an item
+//! or coins, and names the official client's own words for that.
 use super::{
     actions::{self, Resource},
     feature::{Feature, Out, World},
@@ -68,11 +67,73 @@ pub(super) struct Tradeskills {
     combining: Option<InventorySlot>,
     /// When the open container's reach was last checked.
     reach_checked: Option<Instant>,
+    scope: Scope,
+    inventory_changed: Option<Instant>,
+}
+
+#[derive(Default, PartialEq, Eq)]
+enum Scope {
+    #[default]
+    All,
+    Carried,
+}
+
+impl Tradeskills {
+    /// Manual carried combines with the native predicates, without stations.
+    pub(super) fn carried() -> Self {
+        Self {
+            scope: Scope::Carried,
+            ..Self::default()
+        }
+    }
+
+    fn carried_refusal(
+        &self,
+        container: InventorySlot,
+        created: Instant,
+        world: &World,
+    ) -> Option<tradeskills::CarriedRefusal> {
+        let local = |reason| tradeskills::CarriedRefusal {
+            reason,
+            string_id: None,
+        };
+        if self.combining.is_some() {
+            return Some(local("Wait for the combine response"));
+        }
+        if self
+            .inventory_changed
+            .is_some_and(|changed| created < changed)
+        {
+            return Some(local(
+                "The inventory changed since that combine was requested",
+            ));
+        }
+        let Some(player) = world
+            .player
+            .as_ref()
+            .filter(|_| world.player_at().is_some())
+        else {
+            return Some(local("The player is unavailable"));
+        };
+        tradeskills::check_carried(
+            &world.inventory,
+            container,
+            player.race,
+            player.class,
+            !world.coins.cursor.is_empty(),
+        )
+        .err()
+    }
 }
 
 impl Feature for Tradeskills {
     fn capabilities(&self) -> Vec<crate::world::Capability> {
-        vec![crate::world::Capability::Tradeskills]
+        use crate::world::Capability;
+        if self.scope == Scope::Carried {
+            vec![Capability::Tradeskills]
+        } else {
+            vec![Capability::Tradeskills, Capability::WorldContainers]
+        }
     }
 
     fn holds(&self, _world: &World, _now: Instant) -> Vec<(Resource, &'static str)> {
@@ -83,6 +144,9 @@ impl Feature for Tradeskills {
     }
 
     fn owns(&self, command: &ClientCommand) -> bool {
+        if self.scope == Scope::Carried {
+            return matches!(command, ClientCommand::Combine { container, .. } if *container != WORLD_CONTAINER);
+        }
         matches!(
             command,
             ClientCommand::Combine { .. }
@@ -97,16 +161,28 @@ impl Feature for Tradeskills {
         world: &mut World,
         out: &mut Out<'_, '_>,
     ) -> Result<()> {
-        let (session_id, container) = match *command {
+        if self.scope == Scope::Carried && !self.owns(command) {
+            return actions::refuse(command, "World containers are not available.", out.log);
+        }
+        let (session_id, container, created) = match *command {
             ClientCommand::Combine {
                 session_id,
                 container,
-                ..
-            } => (session_id, container),
+                created,
+            } => (session_id, container, created),
             ClientCommand::OpenContainer { drop_id, .. } => return open(drop_id, world, out),
             ClientCommand::CloseContainer { .. } => return close(world, out),
             _ => return Ok(()),
         };
+        if self.scope == Scope::Carried {
+            if let Some(refusal) = self.carried_refusal(container, created, world) {
+                return out.log.send(ClientEvent::World(WorldEvent::CombineRefused {
+                    session_id,
+                    reason: refusal.reason.into(),
+                    string_id: refusal.string_id,
+                }));
+            }
+        }
         if container == WORLD_CONTAINER {
             if !world.container.is_open() {
                 return actions::refuse(command, "No world container is open.", out.log);
@@ -138,8 +214,7 @@ impl Feature for Tradeskills {
         )))
     }
 
-    /// Hears the server answer a combine, and open the container the player
-    /// asked for or say that someone else is using it.
+    /// Checks whether an open world container has moved out of reach.
     fn tick(&mut self, now: Instant, world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
         let reach = out.wire.reaches().containers;
         keep_in_reach((&mut self.reach_checked, reach), now, world, out)
@@ -151,6 +226,7 @@ impl Feature for Tradeskills {
         world: &mut World,
         _out: &mut Out<'_, '_>,
     ) -> Result<()> {
+        self.admit(message, world)?;
         match message {
             Message::Event(WorldEvent::Combine(CombineUpdate::Answered)) => self.combining = None,
             Message::Event(WorldEvent::Objects(ObjectUpdate::Container(view)))
@@ -159,6 +235,22 @@ impl Feature for Tradeskills {
                 world.container.0 = view.open.then(|| Container::Open(view.clone()));
             }
             _ => (),
+        }
+        Ok(())
+    }
+
+    fn admit(&mut self, message: &Message, _world: &mut World) -> Result<()> {
+        if self.scope == Scope::Carried
+            && matches!(
+                message,
+                Message::Event(
+                    WorldEvent::Inventory(_)
+                        | WorldEvent::Coins(_)
+                        | WorldEvent::CoinsElsewhere { .. }
+                )
+            )
+        {
+            self.inventory_changed = Some(Instant::now());
         }
         Ok(())
     }

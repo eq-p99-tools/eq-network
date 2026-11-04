@@ -17,6 +17,7 @@ enum Phase {
     /// this moment.
     Departing {
         since: Instant,
+        dead: bool,
     },
 }
 
@@ -30,7 +31,10 @@ impl ZoneLifecycle {
         !matches!(self.phase, Phase::Active)
     }
     pub(super) fn is_dead(&self) -> bool {
-        matches!(self.phase, Phase::Dead | Phase::Transfer { dead: true, .. })
+        matches!(
+            self.phase,
+            Phase::Dead | Phase::Transfer { dead: true, .. } | Phase::Departing { dead: true, .. }
+        )
     }
     pub(super) fn pending(&self) -> Option<&ZoneOffer> {
         if let Phase::Transfer { offer, .. } = &self.phase {
@@ -49,13 +53,12 @@ impl ZoneLifecycle {
     }
     /// Whether the player has been leaving for this long.
     pub(super) fn departed(&self, now: Instant, wait: Duration) -> bool {
-        matches!(self.phase, Phase::Departing { since }
+        matches!(self.phase, Phase::Departing { since, .. }
             if now.saturating_duration_since(since) >= wait)
     }
     pub(super) fn mark_dead(&mut self) {
         match &mut self.phase {
-            Phase::Transfer { dead, .. } => *dead = true,
-            Phase::Departing { .. } => (),
+            Phase::Transfer { dead, .. } | Phase::Departing { dead, .. } => *dead = true,
             _ => self.phase = Phase::Dead,
         }
     }
@@ -84,7 +87,10 @@ impl ZoneLifecycle {
             "zone approval without a pending request"
         );
         self.phase = if approved {
-            Phase::Departing { since: now }
+            Phase::Departing {
+                since: now,
+                dead: self.is_dead(),
+            }
         } else if self.is_dead() {
             Phase::Dead
         } else {

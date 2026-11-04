@@ -404,10 +404,13 @@ pub fn titanium_coins(profile: &[u8]) -> Result<Coins> {
 pub enum CampEnd {
     /// The player stood up.
     Standing,
+    /// The admitted player's stun interrupted preparation.
+    Stunned,
     /// The player moved, or crossed a zone line.
     Moving,
     /// Ducking, a door, a pick-up or death: the program's line for these
-    /// is unread (6.309).
+    /// is unread (6.309). Also local loss of a waiting request's admission
+    /// or movement context, with no verified client wording.
     Other,
 }
 
@@ -422,8 +425,8 @@ pub enum CampStatus {
         /// Seconds left: 25, 20, 15, 10 or 5.
         seconds_left: u8,
     },
-    /// Something the player did, or death, abandoned the attempt before
-    /// logout.
+    /// A player action, death or lost admission/movement context abandoned
+    /// the attempt before logout, possibly before `OP_Camp` was submitted.
     Abandoned {
         /// What ended it.
         by: CampEnd,
@@ -549,12 +552,17 @@ pub enum Capability {
     ShowingHelm,
     /// Sitting, standing and ducking, independently of locomotion.
     Posture,
+    /// Consuming food and drink, including the automatic meal preference.
+    Meals,
+    /// Opening, closing and combining in a world container, independently
+    /// of carried manual combines ([`Capability::Tradeskills`]).
+    WorldContainers,
 }
 
 impl Capability {
     /// Every capability, in order: what a session offers when its server and
     /// client generation support everything.
-    pub const ALL: [Self; 42] = [
+    pub const ALL: [Self; 44] = [
         Self::Casting,
         Self::Spellbook,
         Self::Inventory,
@@ -597,6 +605,8 @@ impl Capability {
         Self::Jumping,
         Self::ShowingHelm,
         Self::Posture,
+        Self::Meals,
+        Self::WorldContainers,
     ];
 }
 
@@ -695,14 +705,20 @@ pub enum WorldEvent {
         /// Why, in the login server's terms.
         refusal: crate::servers::ServerRefusal,
     },
+    /// Local character-deletion lifecycle and received-list observations, not an ACK.
+    CharacterDeletion(crate::deletion::Update),
     /// Available characters for this world connection; no zone has been entered.
     CharacterSelection {
+        /// Process-monotonic world connection generation, distinct from list identity.
+        connection_id: u64,
         /// Fresh identity invalidates choices queued for an older connection.
         selection_id: u64,
         /// Occupied server slots, possibly empty on a new account.
         characters: Vec<crate::characters::CharacterChoice>,
         /// Creation offered by this server policy, scoped to this list.
         creation: Option<crate::creation::Rules>,
+        /// Deletion offered by this server policy, scoped to this exact list.
+        deletion: Option<crate::deletion::Rules>,
     },
     /// Local item-use validation/submission result, not proof that its effect landed.
     ItemUseAction {
@@ -832,6 +848,13 @@ pub enum WorldEvent {
     ItemDetails(crate::items::ItemDetails),
     /// Server death notification; consumers compare its ID with their own spawn.
     Death(crate::zoning::Death),
+    /// The server's death-only bind path identifies the player's death,
+    /// without a death packet or any killer/corpse details. Never creates a
+    /// corpse or a kill record; only the named admission's lifecycle changes.
+    DeathBind {
+        /// Admission receiving the server's death-only bind offer.
+        session_id: u64,
+    },
     /// A corpse moved, on `EQMac`: summoned, returned, a game master's
     /// `#summon`, and on Quarm all the while it is dragged.
     CorpseMoved {
@@ -859,11 +882,30 @@ pub enum WorldEvent {
         reason: crate::zoning::ZoneRejection,
     },
     /// Selection request was handed to transport; this is not a server acknowledgment.
-    TargetSent(Option<u16>),
+    TargetSent {
+        /// Admission in which this choice was sent.
+        session_id: u64,
+        /// Host choice whose submission completed.
+        request_id: u64,
+        /// Session target after submission, not server acceptance.
+        state: crate::targets::TargetState,
+    },
+    /// Admission-scoped session projection of a server-directed target or
+    /// a change to the selected incarnation. Never echo this as a request.
+    TargetChanged {
+        /// Current admission.
+        session_id: u64,
+        /// Last local choice processed before this update.
+        request_id: u64,
+        /// Raw ID, availability and command-freshness revision.
+        state: crate::targets::TargetState,
+    },
     /// The player's target as the server set it, or none: `EQEmu` as a sense
     /// spell or a corpse locator picks a spawn, TAKP and Quarm as they refuse
     /// a mouse target, putting back the last one, and as they echo the
     /// player's clearing of it ([`crate::targets`]).
+    /// This raw decoder fact has no admission identity; hosts consume the
+    /// session's [`Self::TargetChanged`] projection instead.
     Target(Option<u16>),
     /// Whom the player's target targets, or no one (`EQEmu`).
     TargetOfTarget(Option<u16>),
@@ -871,8 +913,12 @@ pub enum WorldEvent {
     TargetRejected {
         /// Admission that originated the request.
         session_id: u64,
+        /// Host choice rejected locally.
+        request_id: u64,
         /// Requested selection, or clearing the current target.
         spawn_id: Option<u16>,
+        /// Still-current session target, when the target owner supplied it.
+        state: Option<crate::targets::TargetState>,
         /// Validation reason; this is not a server rejection packet.
         reason: String,
     },
@@ -1059,6 +1105,12 @@ pub enum WorldEvent {
     Camp(CampStatus),
     /// Carried coins, from admission or a server money update.
     Coins(Coins),
+    /// The current purse cannot be established; keep it unknown until an
+    /// authoritative purse update or a new admission supplies it.
+    PurseUncertain {
+        /// Admission whose purse projection became uncertain.
+        session_id: u64,
+    },
     /// The coins outside the purse: from the profile at admission, and after
     /// every change the session makes or hears of (the purse's own changes
     /// come as [`WorldEvent::Coins`]).
@@ -1104,11 +1156,19 @@ pub enum WorldEvent {
     Loot(crate::loot::LootUpdate),
     /// Merchant window changes.
     Merchant(crate::merchant::MerchantUpdate),
-    /// A purchase or sale that was not sent, or that the merchant never answered.
+    /// A purchase or sale that was not sent, or that the merchant explicitly refused.
     MerchantRefused {
         /// Admission from the request.
         session_id: u64,
         /// Why nothing was bought or sold.
+        reason: String,
+    },
+    /// A sent purchase or sale whose outcome is still unknown after waiting.
+    /// This does not establish an item or coin change, or authorize a retry.
+    MerchantUnanswered {
+        /// Admission from the request.
+        session_id: u64,
+        /// Why the outcome remains unknown.
         reason: String,
     },
     /// Give and trade window changes.
@@ -1398,9 +1458,20 @@ pub enum WorldEvent {
     /// A one-shot motion for a nearby spawn, the player's own included, such
     /// as a swing as an attack goes out.
     Animation(crate::combat::Animation),
-    /// A stun on the player begins, for this long, or ends (`None`). One
-    /// that runs out sends nothing; see [`crate::control::stun`].
+    /// A raw own-player stun duration, or received zero (`None`). Zero is
+    /// not a portable release rule; see [`crate::control::stun`].
     Stun(Option<std::time::Duration>),
+    /// The session's interpreted own-player stun state. Revisions increase
+    /// within this admission, including expiry, so a delayed projection
+    /// cannot restore an old hold or release.
+    OwnStun {
+        /// The admission that owns this state.
+        session_id: u64,
+        /// Monotonic state revision within this admission.
+        revision: u64,
+        /// A verified stun state, not generic control ownership.
+        state: crate::control::StunState,
+    },
     /// A player's charm takes hold or ends, or the server gives a player
     /// back the control it took for a charm or a fear.
     Charm(crate::control::Charm),
@@ -1992,6 +2063,8 @@ mod tests {
             Capability::Jumping => 39,
             Capability::ShowingHelm => 40,
             Capability::Posture => 41,
+            Capability::Meals => 42,
+            Capability::WorldContainers => 43,
         };
         for (index, capability) in Capability::ALL.into_iter().enumerate() {
             assert_eq!(place(capability), index, "{capability:?}");

@@ -334,3 +334,192 @@ fn camp_return_selection_can_dwell_create_and_enter_without_automatic_reentry() 
 fn takp_retains_syn_and_accepts_the_nonzero_origin_through_selection_and_creation() {
     selection_creation_and_handoff(ServerProtocol::Takp, false);
 }
+
+fn deletion_world(
+    protocol: ServerProtocol,
+    address: SocketAddr,
+    commands: mpsc::Receiver<ClientCommand>,
+    events: mpsc::Sender<ClientEvent>,
+    stop: CancellationToken,
+) -> thread::JoinHandle<Result<()>> {
+    thread::spawn(move || {
+        let config =
+            ClientConfig::for_protocol(protocol, "ACCOUNT", "PASSWORD", "Synthetic World", "");
+        let credentials = Credentials {
+            account: "LS#1".into(),
+            key: *b"0123456789",
+        };
+        let identity = ClientIdentity::new("example-device", "example-user");
+        let context = CharacterSession {
+            config: config.clone(),
+            identity: &identity,
+            credentials: &credentials,
+            stop: &stop,
+            duration: None,
+            commands: Some(&commands),
+            sysinfo_reported_at: std::cell::Cell::new(0),
+        };
+        let mut handler = |event| {
+            events.send(event).unwrap();
+            Ok(())
+        };
+        world_at(
+            &context,
+            address,
+            (false, false),
+            &mut Events::new(&config, &mut handler),
+        )
+        .map(|_| ())
+    })
+}
+
+fn deletion_scope(
+    heard: &mpsc::Receiver<ClientEvent>,
+    seen: &mut Vec<ClientEvent>,
+) -> eq_network_game::deletion::Scope {
+    loop {
+        let event = heard.recv_timeout(Duration::from_secs(3)).unwrap();
+        let scope = if let ClientEvent::World(WorldEvent::CharacterSelection {
+            connection_id,
+            selection_id,
+            ..
+        }) = &event
+        {
+            Some(eq_network_game::deletion::Scope {
+                connection_id: *connection_id,
+                selection_id: *selection_id,
+            })
+        } else {
+            None
+        };
+        seen.push(event);
+        if let Some(scope) = scope {
+            return scope;
+        }
+    }
+}
+
+fn deletion_update(
+    heard: &mpsc::Receiver<ClientEvent>,
+    seen: &mut Vec<ClientEvent>,
+) -> eq_network_game::deletion::Update {
+    loop {
+        let event = heard.recv_timeout(Duration::from_secs(3)).unwrap();
+        let update = if let ClientEvent::World(WorldEvent::CharacterDeletion(update)) = &event {
+            Some(update.clone())
+        } else {
+            None
+        };
+        seen.push(event);
+        if let Some(update) = update {
+            return update;
+        }
+    }
+}
+
+/// Real application writer and world loop, with an entirely synthetic peer.
+fn deletion_refresh(protocol: ServerProtocol) {
+    use eq_network_game::deletion::{Observation, Presence, Progress, Request};
+    let mut peer = WorldPeer::new(protocol);
+    let (commands, incoming) = mpsc::channel();
+    let (events, heard) = mpsc::channel();
+    let stop = CancellationToken::default();
+    let worker = deletion_world(
+        protocol,
+        peer.socket.local_addr().unwrap(),
+        incoming,
+        events,
+        stop.clone(),
+    );
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let mut seen = Vec::new();
+        peer.expect(WORLD_LOGIN, 200);
+        peer.send(true, Some(0xc341), &[0; 244], None);
+        peer.send(true, Some(0x0710), &[0; 65], None);
+        peer.character_list("Disposable");
+        let first = deletion_scope(&heard, &mut seen);
+        let request = Request::new(first, 1, "Disposable", "Disposable").unwrap();
+        commands
+            .send(ClientCommand::DeleteCharacter(request.clone()))
+            .unwrap();
+        peer.expect(0x5a40, "Disposable".len() + 1);
+        assert_eq!(
+            deletion_update(&heard, &mut seen).progress,
+            Progress::Pending(None)
+        );
+        commands
+            .send(ClientCommand::SelectCharacter {
+                selection_id: first.selection_id,
+                slot: 0,
+            })
+            .unwrap();
+        commands
+            .send(ClientCommand::DeleteCharacter(request.clone()))
+            .unwrap();
+        assert_eq!(
+            deletion_update(&heard, &mut seen).progress,
+            Progress::Pending(None)
+        );
+        peer.character_list("Disposable");
+        let present = deletion_scope(&heard, &mut seen);
+        assert_eq!(present.connection_id, first.connection_id);
+        assert_ne!(present.selection_id, first.selection_id);
+        assert_eq!(
+            deletion_update(&heard, &mut seen).progress,
+            Progress::Pending(Some(Observation {
+                scope: present,
+                presence: Presence::Present
+            }))
+        );
+        peer.character_list("");
+        let absent = deletion_scope(&heard, &mut seen);
+        assert_eq!(
+            deletion_update(&heard, &mut seen).progress,
+            Progress::ObservedAbsent { scope: absent }
+        );
+        commands
+            .send(ClientCommand::DeleteCharacter(request))
+            .unwrap();
+        assert_eq!(
+            deletion_update(&heard, &mut seen).progress,
+            Progress::ObservedAbsent { scope: absent }
+        );
+        let until = Instant::now() + Duration::from_millis(250);
+        while Instant::now() < until {
+            assert!(
+                peer.receive().is_none(),
+                "deletion replay or pending entry sent an application"
+            );
+        }
+        assert_eq!(
+            seen.iter()
+                .filter(|event| matches!(
+                    event,
+                    ClientEvent::Progress(ConnectionStage::SelectingCharacter)
+                ))
+                .count(),
+            1,
+            "ordinary refreshed lists must not restart the frontend connection lifecycle"
+        );
+    }));
+    stop.cancel();
+    let outcome = worker.join().unwrap();
+    if result.is_err() {
+        eprintln!("synthetic world lifecycle outcome: {outcome:?}");
+    }
+    result.unwrap();
+    assert!(outcome
+        .unwrap_err()
+        .to_string()
+        .contains("shutdown requested"));
+}
+
+#[test]
+fn quarm_deletion_refresh_stays_on_same_connection_without_reentering() {
+    deletion_refresh(ServerProtocol::Quarm);
+}
+
+#[test]
+fn takp_deletion_refresh_stays_on_same_connection_without_reentering() {
+    deletion_refresh(ServerProtocol::Takp);
+}

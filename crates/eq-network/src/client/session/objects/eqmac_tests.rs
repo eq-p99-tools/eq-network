@@ -58,6 +58,158 @@ fn receive(
     assert_eq!(outcome.sent, []);
 }
 
+fn admission(
+    protocol: ServerProtocol,
+    session_id: u64,
+    drop_ids: &[u32],
+) -> (GroundObjects, Belongings, World) {
+    let mut world = World::new(session_id);
+    world.player.admit(testing::player(7));
+    let mut objects = GroundObjects::for_generation(eq_network_game::GameDialect::EqMac);
+    let mut belongings = Belongings::new(eq_network_game::food::AutoEat::default());
+    receive(
+        protocol,
+        0xf641,
+        &[0, 0],
+        &mut objects,
+        &mut belongings,
+        &mut world,
+    );
+    for &drop_id in drop_ids {
+        receive(
+            protocol,
+            eqmac::SPAWN_OPCODE,
+            &placement(drop_id, b"IT63_ACTORDEF", 1.0),
+            &mut objects,
+            &mut belongings,
+            &mut world,
+        );
+    }
+    (objects, belongings, world)
+}
+
+#[test]
+fn the_submission_clock_bounds_expiry_without_retry_or_inventory_authority() {
+    for protocol in [ServerProtocol::Takp, ServerProtocol::Quarm] {
+        let (mut objects, _belongings, mut world) = admission(protocol, 5, &[71]);
+        let submitted = Instant::now() + Duration::from_secs(3600);
+        world.objects.pickup = objects.results.sent(71, 7, submitted);
+        assert_eq!(
+            world.objects.pickup.as_ref().unwrap().expires,
+            submitted + PICKUP_WINDOW
+        );
+        let inventory = world.inventory.clone();
+        let deadline = submitted + PICKUP_WINDOW;
+        let before = deadline.checked_sub(Duration::from_nanos(1)).unwrap();
+        let wire = servers::server_type(protocol).wire();
+        let outcome = testing::run_on(wire, |out| objects.tick(before, &mut world, out));
+        outcome.result.unwrap();
+        assert_eq!(objects.holds(&world, before).len(), 1);
+        assert_eq!(outcome.sent, []);
+        assert!(outcome.events.is_empty(), "{:?}", outcome.events);
+        let outcome = testing::run_on(wire, |out| objects.tick(deadline, &mut world, out));
+        outcome.result.unwrap();
+        assert_eq!(objects.holds(&world, deadline), []);
+        assert_eq!(outcome.sent, []);
+        assert!(matches!(
+            outcome.events.as_slice(),
+            [ClientEvent::Diagnostic(reason)]
+                if reason == "Ground pickup wait ended; its result is still unknown"
+        ));
+        assert!(world.objects.ambiguous_pickup_results);
+        assert_eq!(*world.inventory, inventory);
+        assert!(world.objects.entries().contains_key(&71));
+        let outcome = testing::run_on(wire, |out| {
+            objects.tick(deadline + PICKUP_WINDOW, &mut world, out)
+        });
+        outcome.result.unwrap();
+        assert_eq!(outcome.sent, []);
+        assert!(outcome.events.is_empty(), "{:?}", outcome.events);
+        assert!(PickupResults::Existing.sent(71, 7, submitted).is_none());
+    }
+}
+
+#[test]
+fn each_later_pickup_wait_is_bounded_without_restoring_lost_attribution() {
+    for protocol in [ServerProtocol::Takp, ServerProtocol::Quarm] {
+        let (mut objects, mut belongings, mut world) = admission(protocol, 5, &[71, 72]);
+        let wire = servers::server_type(protocol).wire();
+        for drop_id in [71, 72, 71] {
+            let outcome = testing::run_on(wire, |out| {
+                objects.handle(&command(drop_id), &mut world, out)
+            });
+            outcome.result.unwrap();
+            assert_eq!(outcome.sent, [eqmac::pickup(drop_id, 7)]);
+            let expires = world.objects.pickup.as_ref().unwrap().expires;
+            if world.objects.ambiguous_pickup_results {
+                // An old untagged refusal cannot identify this later pickup,
+                // including when a previously requested ID is used again.
+                receive(
+                    protocol,
+                    eqmac::CLICK_OPCODE,
+                    &[u32::MAX.to_le_bytes(), 7_u32.to_le_bytes()].concat(),
+                    &mut objects,
+                    &mut belongings,
+                    &mut world,
+                );
+                assert_eq!(objects.holds(&world, expires).len(), 1);
+            }
+            let before = expires.checked_sub(Duration::from_nanos(1)).unwrap();
+            let outcome = testing::run_on(wire, |out| objects.tick(before, &mut world, out));
+            outcome.result.unwrap();
+            assert_eq!(objects.holds(&world, before).len(), 1);
+            assert_eq!(outcome.sent, []);
+            let outcome = testing::run_on(wire, |out| objects.tick(expires, &mut world, out));
+            outcome.result.unwrap();
+            assert_eq!(objects.holds(&world, expires), []);
+            assert_eq!(outcome.sent, []);
+            assert!(world.objects.ambiguous_pickup_results);
+            assert!(world.inventory.items().is_empty());
+            assert!(world.objects.entries().contains_key(&drop_id));
+        }
+    }
+}
+
+#[test]
+fn a_refusal_keeps_the_object_until_a_new_admission_supplies_its_own_table() {
+    for protocol in [ServerProtocol::Takp, ServerProtocol::Quarm] {
+        for (session_id, drop_ids) in [(5, &[71][..]), (6, &[][..]), (7, &[71][..])] {
+            let (mut objects, mut belongings, mut world) =
+                admission(protocol, session_id, drop_ids);
+            let wire = servers::server_type(protocol).wire();
+            if session_id == 5 {
+                let outcome =
+                    testing::run_on(wire, |out| objects.handle(&command(71), &mut world, out));
+                outcome.result.unwrap();
+                assert_eq!(outcome.sent, [eqmac::pickup(71, 7)]);
+                receive(
+                    protocol,
+                    eqmac::CLICK_OPCODE,
+                    &[u32::MAX.to_le_bytes(), 7_u32.to_le_bytes()].concat(),
+                    &mut objects,
+                    &mut belongings,
+                    &mut world,
+                );
+                let later = Instant::now() + Duration::from_secs(60);
+                let outcome = testing::run_on(wire, |out| objects.tick(later, &mut world, out));
+                outcome.result.unwrap();
+                assert_eq!(outcome.sent, []);
+                assert!(outcome.events.is_empty(), "{:?}", outcome.events);
+                assert_eq!(objects.holds(&world, later), []);
+                assert!(world.inventory.items().is_empty());
+            }
+            let replay = testing::run_on(wire, |out| objects.admitted(&mut world, out));
+            replay.result.unwrap();
+            assert_eq!(replay.sent, []);
+            assert!(matches!(
+                replay.events.as_slice(),
+                [ClientEvent::World(WorldEvent::Objects(ObjectUpdate::Snapshot(objects)))]
+                    if objects.iter().map(|object| object.drop_id).eq(drop_ids.iter().copied())
+            ));
+        }
+    }
+}
+
 #[test]
 fn eqmac_pickups_need_current_objects_in_reach_and_authoritative_item_packets() {
     for protocol in [ServerProtocol::Takp, ServerProtocol::Quarm] {

@@ -73,6 +73,19 @@ enabling food-consumption actions.
 
 ## Public evidence and limits
 
+New plain cursor arrivals after whole-item carried moves can use a conservative
+weight bound while all placement predictions remain unresolved. For example,
+an item weighing 3.7 moved through carried slots plus a new 5.0 arrival yields
+an 8.7 bound; a server prefix that still has the arrival queued weighs less.
+The bound does not certify the old item's endpoint. Set covers only the
+reported root; Cursor does not acknowledge its earlier origin. Repeated IDs,
+non-plain arrivals and ambiguous occupied-cursor traces remain unavailable. Every local
+intermediate mass/purse change is recorded, so an affecting bank round trip
+cannot become known merely by returning to the same endpoints. A later
+unsupported change to rebased slots needs a full baseline; no EQMac timeout
+settles that history. `carried_weight_is_conservative()` reports this property
+separately from placement, equipment readiness and movement permission.
+
 - [Quarm weight, STR and fatigue rules](https://github.com/SecretsOTheP/EQMacEmu/blob/c2cd2651045ab063b236b08f3a9e83cbf10289e9/zone/client_mods.cpp):
   `CalcCurrentWeight`, `CalcSTR`, `CalculateFatiguePenalty`.
 - [Quarm equipment and spell bonuses](https://github.com/SecretsOTheP/EQMacEmu/blob/c2cd2651045ab063b236b08f3a9e83cbf10289e9/zone/bonuses.cpp)

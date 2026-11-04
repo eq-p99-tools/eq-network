@@ -111,6 +111,12 @@ pub fn titanium(opcode: u16, body: &[u8]) -> Vec<Message> {
             Message::ZoneOffer,
         ),
         PROFILE_OPCODE => {
+            match crate::group::titanium_profile(body) {
+                Ok(group) => {
+                    messages.extend(group.map(|update| Message::Event(WorldEvent::Group(update))));
+                }
+                Err(error) => messages.push(unreadable(Part::World, &error)),
+            }
             messages.push(crate::buffs::titanium_profile(body).map_or_else(
                 |error| unreadable(Part::World, &error),
                 |buffs| Message::Event(WorldEvent::BuffSnapshot(buffs)),
@@ -191,6 +197,10 @@ pub fn quarm(opcode: u16, body: &[u8]) -> Vec<Message> {
 #[must_use]
 pub fn eqmac_with(opcode: u16, body: &[u8], item_rules: inventory::ItemRules) -> Vec<Message> {
     match opcode {
+        crate::books::EQMAC_READ_OPCODE => vec![crate::books::eqmac_text(body).map_or_else(
+            |error| unreadable(Part::World, &error),
+            |text| Message::Event(WorldEvent::BookText(text)),
+        )],
         crate::quarm::ZONE_LOGOUT_REPLY => vec![Message::LoggedOut],
         crate::quarm::ZONE_CHANGE_REQUEST => vec![crate::quarm::zone_request(body).map_or_else(
             |error| unreadable(Part::ZoneOffer, &error),
@@ -236,10 +246,14 @@ pub fn eqmac_with(opcode: u16, body: &[u8], item_rules: inventory::ItemRules) ->
             |error| unreadable(Part::World, &error),
             |details| Message::Event(WorldEvent::ItemDetails(details)),
         )],
-        crate::merchant::EQMAC_STOCK_OPCODE => vec![crate::merchant::eqmac_list(body).map_or_else(
-            |error| unreadable(Part::World, &error),
-            Message::MerchantList,
-        )],
+        crate::merchant::EQMAC_STOCK_OPCODE => {
+            vec![
+                crate::merchant::eqmac_list_with(body, item_rules).map_or_else(
+                    |error| unreadable(Part::World, &error),
+                    Message::MerchantList,
+                ),
+            ]
+        }
         _ if let Some(message) = eqmac_loot(opcode, body, item_rules) => vec![message],
         _ if let Some(message) = eqmac_objects(opcode, body) => vec![message],
         _ if let Some(message) = eqmac_exchange(opcode, body) => vec![message],
@@ -414,10 +428,12 @@ mod tests {
     #[test]
     fn the_profile_says_what_is_in_the_spellbook() {
         let mut profile = vec![0; 19592];
+        profile[12940..12946].copy_from_slice(b"Tester");
         profile[2312..2316].copy_from_slice(&73u32.to_le_bytes());
         assert!(matches!(
             &titanium(PROFILE_OPCODE, &profile)[..],
             [
+                Message::Event(WorldEvent::Group(crate::group::GroupUpdate::Disbanded)),
                 Message::Event(WorldEvent::BuffSnapshot(_)),
                 Message::Event(WorldEvent::Coins(_)),
                 Message::Event(WorldEvent::Nourishment(_)),
@@ -428,6 +444,10 @@ mod tests {
         assert!(matches!(
             titanium(PROFILE_OPCODE, &[0; 8])[..],
             [
+                Message::Unreadable {
+                    part: Part::World,
+                    ..
+                },
                 Message::Unreadable {
                     part: Part::World,
                     ..

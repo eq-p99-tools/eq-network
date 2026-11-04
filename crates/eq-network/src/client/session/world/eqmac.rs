@@ -63,6 +63,20 @@ fn world_at(
     (world_only, zoning): (bool, bool),
     log: &mut Events<'_>,
 ) -> Result<Option<ZoneDestination>> {
+    let mut deletion = super::super::deletion::Owner::new()?;
+    let result = world_owned(context, address, (world_only, zoning), &mut deletion, log);
+    let ended = deletion.ended(log);
+    result.and_then(|value| ended.map(|()| value))
+}
+
+#[allow(clippy::too_many_lines)]
+fn world_owned(
+    context: &CharacterSession<'_>,
+    address: SocketAddr,
+    (world_only, zoning): (bool, bool),
+    deletion: &mut super::super::deletion::Owner,
+    log: &mut Events<'_>,
+) -> Result<Option<ZoneDestination>> {
     let config = &context.config;
     let stop = context.stop;
     let mut session = OldSession::connect_cancellable(address, stop.flag())?;
@@ -80,6 +94,7 @@ fn world_at(
             !creating.as_ref().is_some_and(Creating::expired),
             "Character creation timed out. Reconnect to check whether the character was created."
         );
+        deletion.tick(log)?;
         if !entered {
             match selection
                 .as_ref()
@@ -89,9 +104,22 @@ fn world_at(
                 Some(Choice::GenerateName(list, request, _, _)) => {
                     super::super::creation::names::answer(list, request, None, log)?;
                 }
-                Some(Choice::Enter(name)) if creating.is_none() => chosen = Some(name),
-                Some(Choice::Create(character)) if creating.is_none() => {
+                Some(Choice::Enter(name)) if creating.is_none() && !deletion.blocked() => {
+                    chosen = Some(name);
+                }
+                Some(Choice::Create(character)) if creating.is_none() && !deletion.blocked() => {
                     creating = Creating::start(server.creation(), character, &mut session, log)?;
+                }
+                Some(Choice::Delete(request)) => {
+                    if let Some(list) = selection.as_ref() {
+                        deletion.request(
+                            request,
+                            list,
+                            creating.is_some() || chosen.is_some(),
+                            &mut session,
+                            log,
+                        )?;
+                    }
                 }
                 _ => (),
             }
@@ -136,14 +164,14 @@ fn world_at(
             // The first list, or the one with a character just created.
             WORLD_CHARACTER_LIST
                 if !entered
-                    && (selection.is_none()
+                    && (creating.is_none()
                         || creating.as_ref().is_some_and(Creating::requested)) =>
             {
                 let entries = super::character_list(server, config.protocol.into(), &packet.body)?;
-                let after_creation = creating.is_some();
+                let initial = selection.is_none() && creating.is_none();
                 if let Some(attempt) = creating.take() {
                     attempt.created(&entries, log)?;
-                } else {
+                } else if initial {
                     log.send(ClientEvent::Progress(ConnectionStage::SelectingCharacter))?;
                     if world_only {
                         session.close()?;
@@ -152,16 +180,15 @@ fn world_at(
                 }
                 let (list, automatic) = Selection::new(
                     entries,
-                    if after_creation {
-                        ""
-                    } else {
-                        &config.character
-                    },
+                    if initial { &config.character } else { "" },
                     server
                         .creation()
                         .map(super::super::creation::Creation::rules),
+                    deletion.connection_id(),
+                    server.deletion(),
                     log,
                 )?;
+                deletion.observe(&list, log)?;
                 selection = Some(list);
                 chosen = automatic;
             }

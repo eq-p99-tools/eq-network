@@ -7,6 +7,94 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- Keep movement load conservatively bounded through known carried-stack splits
+  and merges, including independently refused or partial moves. Placement stays
+  unconfirmed; unknown, bag, bank, purse and correction history remains guarded.
+
+- **Breaking:** correlate target selections and their admission-scoped results.
+  `GameCommand::SelectTarget` gains `request_id`; `WorldEvent::TargetSent`,
+  `TargetRejected` and the new `TargetChanged` carry `request_id` and a
+  `targets::TargetState` (revision, spawn and availability).
+  Publish session target identity and availability without reflecting server
+  changes as outgoing requests. Targeted abilities must name the unchanged
+  target version they were requested for (`UseAbility.target:
+  Option<TargetState>`); stale or unresolved intent is refused.
+- **Breaking:** `WorldEvent::OwnStun { session_id, revision, state }` reports
+  the session's interpreted own-player stun as a `control::StunState`
+  (`Clear` or `Stunned`), with increasing revisions within an admission;
+  `CampEnd::Stunned` is a new variant. Movement submitted while stunned, or
+  predating the current stun state, is refused.
+- **Breaking:** group invitations carry consent identity.
+  `GroupUpdate::Invited` gains `kind: InvitationKind` and
+  `id: Option<group::InvitationId>`; `GameCommand::FollowGroup` and
+  `DeclineGroup` require the displayed `inviter` and `invitation_id`;
+  `GroupUpdate::Formed` names its `leader`. Titanium's acceptance of an
+  invitation to an existing group uses `group::FOLLOW2_OPCODE`.
+- **Breaking:** `WorldEvent::PurseUncertain { session_id }` and
+  `WorldEvent::MerchantUnanswered { session_id, reason }` are new variants: a
+  purse projection that cannot be established stays unknown until an
+  authoritative update, and a sent purchase or sale whose outcome stays
+  unknown after waiting is reported without an item or coin change, and
+  without authorizing a retry.
+
+- Offer source-checked P99 note/book reading through the ordinary inventory
+  action. Retain Titanium's Book flag separately from EQMac's BookType rule;
+  refuse invalid metadata, stale selections and unsupported text kinds instead
+  of opening a guessed note. Only received server text supplies a read result.
+- **Breaking:** `GameCommand::ReadItem` now requires `revision` and `created`.
+  Select from the submitted worker inventory and retain the enqueue time.
+  See `docs/p99-reading.md` for the wire contract and remaining live checks.
+
+- **Breaking:** separate carried combines from world-station actions with
+  `Capability::WorldContainers` (`ALL` grows to 44). P99 offers only carried
+  manual combines, with current container, component, identity and cursor
+  guards. EQEmu keeps both offers; TAKP/Quarm are unchanged. Titanium's
+  four-byte combine request writes the full native slot with a zero upper
+  word, replacing the invented tribute sentinel. A received reset clears
+  only the local gate; consumption/products remain authoritative inventory
+  news. Additive `tradeskills::{combine_capability, check_carried, CarriedRefusal}`.
+
+- Return a typed modern `SessionTermination` for a matching peer disconnect or
+  the established stateless out-of-session control. Discard queued work and
+  refuse application sends after termination. Caller-configured fresh-login
+  retries retain their existing delay; disabling reconnect returns the typed
+  terminal error. See [the contract](docs/session-termination.md).
+
+- **Breaking:** add `Capability::Meals` for consuming food/drink and choosing
+  automatic meals, separate from inventory moves. Inventory owners offer it
+  only when their existing meal policy handles those commands.
+
+- Name the rejected command variant in refusal diagnostics without logging its
+  payload; structured refusal events keep their existing reason and identity.
+- Offer note/book reading on TAKP and Quarm using EQMac's kind/name request
+  and kind/text reply, without Titanium's window byte. Read the item's
+  BookType byte separately from its Book flag. Invalid text names produce
+  a local read refusal; only a server text reply supplies readable content.
+- Expose `Client::inventory_move_rules()` from the same selected server policy
+  used by worker inventory validation so hosts can predict with matching rules.
+- Preserve a conservative carried-weight bound for a distinct plain cursor
+  arrival after whole-item carried moves, without confirming placement or
+  discarding unrelated predictions. `Inventory::carried_weight_is_conservative()`
+  distinguishes this bound. Affecting intermediate mass histories stay unknown
+  until a full inventory baseline or existing policy settlement.
+- Offer guarded ordinary EQMac door use on TAKP and Quarm. Encode the
+  source-backed eight-byte no-held-item request and player ID; retain server
+  authority for locks, scripts and movability. Shared ordinary hinge motion
+  guards clicks during movement and models native ten/twenty-second local
+  return timing without predicting acceptance or sending retries. Specialized
+  and unknown mechanisms remain visible without use. Additive APIs:
+  `doors::eqmac::{click, ordinary, Hinge}`.
+- **Breaking:** character-selection events require `connection_id` and
+  `deletion: Option<deletion::Rules>`. Consumers must preserve the actual
+  connection/list scope. New `GameCommand::DeleteCharacter(Request)` and
+  `WorldEvent::CharacterDeletion(Update)` variants use exact named confirmation
+  and one world-stage owner on all four checked server policies. The request
+  sends only the native NUL-terminated name. Results distinguish local refusal,
+  pending, unconfirmed, and absence observed in a specific refreshed list;
+  absence is not a correlated deletion acknowledgment or proof of database purge.
+  A pending/uncertain attempt blocks entry/creation until a fresh absence
+  observation or explicit disconnect; it never automatically retries.
+
 - **Breaking:** inventory move requests can carry ordered local projection
   identities: `InventoryMove` gains `sequence: Option<MoveSequence>`, and
   `WorldEvent::InventoryAction` gains `sequence` and
@@ -52,14 +140,30 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **Breaking:** re-evaluate EQMac fatigue from current host strength/stamina
+  prerequisites in the session, avoiding an unnecessary withdrawal and host
+  round trip on each stamina tick. `SpeedInputs` gains
+  `eqmac_fatigue: Option<EqMacFatigueInputs>`, which preserves legacy capacity
+  semantics and conservative unknowns; real readiness losses still withdraw.
+- **Breaking:** follow Quarm's same-zone death-bind approval without treating
+  its documented reply stand-in as an unsolicited destination change. The new
+  `WorldEvent::DeathBind` reports bind-only death knowledge before transfer
+  without inventing killer/corpse details; dead state is retained through
+  departure and duplicate departure offers are ignored.
+
 - EQMac admission records the profile's current zone identity before handling
-  zone-line requests. Unknown zero stays unavailable and oversized IDs are
-  rejected; bind points and zone names do not supply guessed identities.
+  zone-line requests. Zero and oversized IDs stay unknown without failing an
+  otherwise valid admission; bind points and zone names do not supply guessed
+  identities. Transfers still refuse unknown current-zone identity.
 
 - Defer a camp requested just after movement until the existing motion owner
   submits its real paced stop. A trailing stationary stop can finish the
   pending intent; new movement or a failed/refused stop cannot start camping.
   Official ordering remains unverified (recording checklist 6.380).
+
+- Report a typed abandoned outcome when a waiting camp loses its admission
+  or movement context, or a zone transfer arrives. Clear the intent before
+  notifying, so overlapping events cannot repeat it or start a countdown.
 
 - Keep contribution readiness through equipment predictions only when all
   affected definitions explicitly have zero direct bonuses and no worn effect.
@@ -121,6 +225,17 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Add `ProviderPolicy::requires_server_tables()` so hosts can follow the
+  network-owned registration/replay requirement without matching policy names.
+- Decode `EQMac` wear changes into the existing typed appearance updates,
+  including held item models, removal and tint changes. Validate its 12-byte
+  layout independently of Titanium's 9-byte layout; retain strict spawn and
+  texture-slot validation.
+
+- Offer Quarm food/drink through the existing EQMac inventory owner, withholding
+  consumption of stale or moved items and automatic meals during merchant holds.
+- Offer bounded Quarm merchant purchases/sales, preserving its stack rules,
+  known price/capacity guards and zero-quantity sale refusals without delivery claims.
 - Expose `Client::spell_table_policy()` and `ProviderPolicy` from the same
   network policy that emits spell tables, before the first event arrives.
 - Add optional numeric `SessionStatus::run_id`, matching spell-table context

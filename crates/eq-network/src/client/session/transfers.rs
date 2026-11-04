@@ -64,6 +64,9 @@ pub(super) struct Transfers {
     /// When a dead player who asks their way home asks for their bind
     /// point, from their death on.
     going_home: Option<Instant>,
+    /// A profile-specific stand-in used only in approval of a bind transfer
+    /// back to this exact current zone. Never applies to ordinary transfers.
+    same_zone_bind_reply: Option<u16>,
 }
 
 impl Transfers {
@@ -74,7 +77,14 @@ impl Transfers {
             home,
             bind: None,
             going_home: None,
+            same_zone_bind_reply: None,
         }
+    }
+
+    /// Quarm's worldserver.cpp answers a same-zone move with zone 185.
+    pub(super) fn with_same_zone_bind_reply(mut self, alias: u16) -> Self {
+        self.same_zone_bind_reply = Some(alias);
+        self
     }
 
     /// The transfer for crossing a zone line where the player stands.
@@ -162,7 +172,19 @@ impl Transfers {
             .body
             .position()
             .map_or(0.0, |position| position.heading);
-        let reply = zoning::reply(answer, &self.character, pending, world.zone, heading)?;
+        let mut answer = answer.clone();
+        if pending.to_bind
+            && pending.solicited
+            && answer.success == 1
+            && (pending.zone_id, pending.instance_id) == world.zone
+            && self.same_zone_bind_reply == Some(answer.zone_id)
+            && answer.instance_id == pending.instance_id
+        {
+            // Only normalize the documented profile's stand-in. reply still
+            // checks identity, success and instance against the real request.
+            answer.zone_id = pending.zone_id;
+        }
+        let reply = zoning::reply(&answer, &self.character, pending, world.zone, heading)?;
         if reply == zoning::ZoneReply::Approved {
             world.lifecycle.finish(true, Instant::now())?;
             noted(out, &Request::SaveOnZone, "the save before leaving")?;
@@ -284,6 +306,24 @@ impl Feature for Transfers {
             return Ok(());
         }
         match message {
+            Message::ZoneOffer(_) if world.lifecycle.departing() => out
+                .log
+                .diagnostic("Zoning: ignored another offer while the player departs".into()),
+            Message::ZoneOffer(offer)
+                if self.same_zone_bind_reply.is_some()
+                    && offer.to_bind
+                    && !world.lifecycle.is_dead() =>
+            {
+                // Quarm's only outgoing GMGoto is ZoneToBindPoint (Death
+                // Only); forced non-death binds use RequestClientZoneChange.
+                // Let every owner and the host hear this knowledge before the
+                // transfer, without manufacturing a Death/corpse packet.
+                world.happened(Message::Event(WorldEvent::DeathBind {
+                    session_id: world.session_id,
+                }));
+                world.happened(Message::ZoneOffer(offer.clone()));
+                Ok(())
+            }
             Message::ZoneOffer(offer) => Self::offered(offer, world, out),
             Message::Unreadable {
                 part: Part::ZoneOffer | Part::ZoneAnswer,
@@ -302,6 +342,15 @@ impl Feature for Transfers {
                 world.end(ZoneExit::World);
                 out.log
                     .diagnostic("Zoning: the zone answered the departure".into())
+            }
+            Message::Event(WorldEvent::DeathBind { session_id })
+                if *session_id == world.session_id =>
+            {
+                world.died();
+                // The queued bind offer owns the destination; do not also
+                // start a cached-profile bind request on the next tick.
+                self.going_home = None;
+                Ok(())
             }
             Message::Event(WorldEvent::Death(death)) if world.is_player(death.spawn_id) => {
                 let already = world.lifecycle.is_dead();
@@ -377,6 +426,79 @@ mod tests {
     use super::super::feature::testing;
     use super::*;
     use eq_network_game::movement::MotionSession;
+
+    #[test]
+    fn quarm_same_zone_bind_alias_is_narrow_and_duplicate_approval_is_quiet() {
+        use super::super::wire::EqMac;
+        for invalid in 0..10 {
+            let mut world = World::new(5);
+            world.zone = (2, 0);
+            world.player.admit(testing::player(7));
+            world.admitted = Some(Instant::now());
+            let mut transfers = Transfers::new("Tester", Home::Asked);
+            if invalid != 1 {
+                transfers = transfers.with_same_zone_bind_reply(185);
+            }
+            let mut offer = zoning::BindPoint {
+                zone_id: 2,
+                position: Position::default(),
+            }
+            .offer();
+            if invalid == 2 {
+                offer.to_bind = false;
+            }
+            if invalid == 3 {
+                offer.zone_id = 4;
+            }
+            if invalid == 6 {
+                offer.solicited = false;
+            }
+            world.died();
+            if invalid != 8 {
+                world.transfer_offered(offer, Instant::now()).unwrap();
+            }
+            let answer = zoning::ZoneAnswer {
+                character: if invalid == 4 {
+                    "SomeoneElse"
+                } else {
+                    "Tester"
+                }
+                .into(),
+                zone_id: if invalid == 7 { 186 } else { 185 },
+                instance_id: u16::from(invalid == 5),
+                position: None,
+                success: if invalid == 9 { -1 } else { 1 },
+            };
+            let output =
+                testing::run_on(&EqMac, |out| transfers.answered(&answer, &mut world, out));
+            if invalid == 9 {
+                output.result.unwrap();
+                assert_eq!(output.sent, Vec::new());
+                assert!(!world.lifecycle.departing());
+                assert!(world.lifecycle.is_dead());
+                continue;
+            }
+            if invalid != 0 {
+                assert!(output.result.is_err());
+                assert_eq!(output.sent, Vec::new());
+                assert!(!world.lifecycle.departing());
+                continue;
+            }
+            output.result.unwrap();
+            assert!(world.lifecycle.departing());
+            assert!(world.lifecycle.is_dead());
+            assert_eq!(
+                output.sent.len(),
+                2,
+                "save and departure follow validated approval"
+            );
+            let duplicate = testing::run_on(&EqMac, |out| {
+                transfers.observe(&Message::ZoneAnswer(answer), &mut world, out)
+            });
+            duplicate.result.unwrap();
+            assert_eq!(duplicate.sent, Vec::new());
+        }
+    }
 
     #[test]
     fn movement_resumes_before_a_refused_transfer_is_reported() {

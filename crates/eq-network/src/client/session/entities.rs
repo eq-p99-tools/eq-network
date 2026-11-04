@@ -320,6 +320,57 @@ mod tests {
     }
 
     #[test]
+    fn eqmac_wear_changes_update_only_the_named_existing_spawn() {
+        use eq_network_game::appearance::{Appearance, TextureSlot, EQMAC_WEAR_CHANGE_OPCODE};
+        let mut entities = Entities::new(GameDialect::EqMac);
+        let mut world = World::new(5);
+        entities
+            .admit(
+                &event(WorldEvent::Spawns(vec![
+                    spawn(7, SpawnKind::Player),
+                    spawn(8, SpawnKind::Npc),
+                ])),
+                &mut world,
+            )
+            .unwrap();
+        for (spawn_id, material) in [(8_u16, 205_u16), (99, 42), (8, 0)] {
+            let mut body = [0; 12];
+            body[..2].copy_from_slice(&spawn_id.to_le_bytes());
+            body[2] = 8;
+            body[4..6].copy_from_slice(&material.to_le_bytes());
+            for message in eq_network_game::message::eqmac(EQMAC_WEAR_CHANGE_OPCODE, &body) {
+                let outcome = testing::run_on(&super::super::wire::EqMac, |out| {
+                    entities.observe(&message, &mut world, out)
+                });
+                outcome.result.unwrap();
+                assert_eq!(
+                    outcome.sent,
+                    [] as [eq_network_game::command::EncodedCommand; 0]
+                );
+            }
+            let expected = if spawn_id == 8 {
+                u32::from(material)
+            } else {
+                205
+            };
+            assert_eq!(
+                world
+                    .spawns
+                    .visible(8)
+                    .unwrap()
+                    .appearance
+                    .material(TextureSlot::Secondary),
+                expected
+            );
+            assert_eq!(
+                world.spawns.visible(7).unwrap().appearance,
+                Appearance::default()
+            );
+            assert!(world.spawns.visible(99).is_none());
+        }
+    }
+
+    #[test]
     fn spawns_staged_before_admission_are_reported_with_their_postures() {
         let mut entities = Entities::default();
         let mut world = World::new(5);

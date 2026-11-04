@@ -428,9 +428,7 @@ impl Feature for Spellbook {
             Message::Event(WorldEvent::Position { spawn_id, .. }) if world.is_player(*spawn_id) => {
                 self.cancel("Server corrected character position", out)
             }
-            Message::Event(WorldEvent::Death(death)) if world.is_player(death.spawn_id) => {
-                self.cancel("Character died", out)
-            }
+            Message::Event(event) if world.owns_death(event) => self.cancel("Character died", out),
             Message::ZoneOffer(offer) if offer.local_position(world.zone).is_some() => {
                 self.cancel("Server relocated character", out)
             }
@@ -696,6 +694,7 @@ mod tests {
         // Commands that leave the player seated change nothing.
         let (mut spellbook, mut world) = memorizing();
         let target = ClientCommand::SelectTarget {
+            request_id: 1,
             session_id: 5,
             spawn_id: Some(9),
         };

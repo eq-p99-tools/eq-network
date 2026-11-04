@@ -53,7 +53,12 @@ fn refused(events: &[ClientEvent], original: &ClientCommand) {
             _ => None,
         })
         .collect();
-    assert_eq!(diagnostics, [reason], "retain the diagnostic exactly once");
+    let expected = format!("Rejected {} command: {reason}", original.name());
+    assert_eq!(
+        diagnostics,
+        [&expected],
+        "retain the command identity and original reason exactly once"
+    );
 }
 
 #[test]

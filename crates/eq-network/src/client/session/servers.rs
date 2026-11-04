@@ -26,6 +26,7 @@ use super::{
     clock::Clock,
     combat::Combat,
     confirmations::{Sacrifice, Translocate},
+    control::Stuns,
     corpses::Corpses,
     creation::{self, Creation},
     doors::Doors,
@@ -136,6 +137,12 @@ pub(super) trait ServerType: Sync {
     /// The client generation's packets the server speaks.
     fn wire(&self) -> &'static dyn Wire;
 
+    /// Placement rules shared by worker validation and host projections.
+    /// An unconfigured server type offers no inventory movement policy.
+    fn inventory_move_rules(&self) -> Option<MoveRules> {
+        None
+    }
+
     /// How the server interprets shared `EQMac` inventory records. This
     /// affects decoding only; offering inventory actions is independent.
     fn item_rules(&self) -> ItemRules {
@@ -180,6 +187,11 @@ pub(super) trait ServerType: Sync {
     /// How the world creates characters, if it creates them for this
     /// server type.
     fn creation(&self) -> Option<&'static dyn Creation> {
+        None
+    }
+
+    /// Native deletion request offered before zone admission; outcomes are list observations.
+    fn deletion(&self) -> Option<eq_network_game::deletion::Rules> {
         None
     }
 
@@ -244,6 +256,11 @@ pub(super) trait ServerType: Sync {
     /// How the player moves: walking, running, and on some
     /// servers jumps and falls.
     fn motion(&self, _setup: &Setup<'_>) -> Provided {
+        None
+    }
+
+    /// Own-player stun semantics, only where the native handler is verified.
+    fn control(&self, _setup: &Setup<'_>) -> Provided {
         None
     }
 
@@ -427,6 +444,7 @@ pub(super) trait ServerType: Sync {
     /// offers them each command, packet and timer.
     fn features(&self, setup: &Setup<'_>) -> Vec<Provision> {
         [
+            self.control(setup),
             self.casting(setup),
             self.spellbook(setup),
             self.inventory(setup),
@@ -576,8 +594,8 @@ mod shared {
         Box::new(Spellbook::new(edits))
     }
 
-    pub(super) fn inventory(setup: &Setup<'_>) -> Box<dyn Feature> {
-        Box::new(Belongings::new(setup.auto_eat))
+    pub(super) fn inventory(rules: MoveRules, setup: &Setup<'_>) -> Box<dyn Feature> {
+        inventory_under(rules, Quotes::WithRate, Allowances::ALL, setup)
     }
 
     /// The inventory, whose items the player moves under the server type's
@@ -652,7 +670,7 @@ mod shared {
     }
 
     pub(super) fn eqmac_doors() -> Box<dyn Feature> {
-        Box::new(Doors::definitions_only())
+        Box::new(Doors::eqmac())
     }
 
     pub(super) fn eqmac_ground_items() -> Box<dyn Feature> {
@@ -708,6 +726,10 @@ mod shared {
 
     pub(super) fn tradeskills() -> Box<dyn Feature> {
         Box::<Tradeskills>::default()
+    }
+
+    pub(super) fn carried_combines() -> Box<dyn Feature> {
+        Box::new(Tradeskills::carried())
     }
 
     pub(super) fn map() -> Box<dyn Feature> {
@@ -806,6 +828,27 @@ const P99_HAZARDS: [Hazard; 1] = [Hazard::Falling];
 struct Project1999;
 
 impl ServerType for Project1999 {
+    /// Ordinary Titanium group senders and explicit consent (native
+    /// 0x49d3cc/0x49d654/0x49d7b6/0x49d8bd), with roster state from
+    /// 0x458738. Public P99 partner compatibility remains a separate check.
+    fn groups(&self, _setup: &Setup<'_>) -> Provided {
+        offer(Box::new(Groups::titanium()))
+    }
+
+    /// Titanium's native inventory read path and a recorded P99 note exchange
+    /// agree on window 0xff, kind and NUL-terminated item-derived text name.
+    fn reading(&self, _setup: &Setup<'_>) -> Provided {
+        offer(shared::reading())
+    }
+
+    fn tradeskills(&self, _setup: &Setup<'_>) -> Provided {
+        offer(shared::carried_combines())
+    }
+
+    fn inventory_move_rules(&self) -> Option<MoveRules> {
+        Some(MoveRules::EqEmu)
+    }
+
     fn spell_tables(&self) -> Option<&'static dyn super::spell_tables::Policy> {
         Some(&super::spell_tables::P99)
     }
@@ -854,6 +897,10 @@ impl ServerType for Project1999 {
         Some(&creation::Classic)
     }
 
+    fn deletion(&self) -> Option<eq_network_game::deletion::Rules> {
+        Some(eq_network_game::deletion::Rules::Titanium)
+    }
+
     /// Recorded Titanium lists agree with the following profiles and own
     /// spawns, including worn materials and tints. See the parity evidence.
     fn character_preview(&self) -> bool {
@@ -875,7 +922,7 @@ impl ServerType for Project1999 {
     }
 
     fn inventory(&self, setup: &Setup<'_>) -> Provided {
-        offer(shared::inventory(setup))
+        offer(shared::inventory(self.inventory_move_rules()?, setup))
     }
 
     /// The Titanium program's floor is whatever surface lies under the
@@ -893,6 +940,10 @@ impl ServerType for Project1999 {
     /// Falls only (6.332).
     fn hazards(&self, _setup: &Setup<'_>) -> Provided {
         offer(shared::hazards(&P99_HAZARDS, false))
+    }
+
+    fn control(&self, _setup: &Setup<'_>) -> Provided {
+        offer(Box::new(Stuns))
     }
 
     fn character(&self, _setup: &Setup<'_>) -> Provided {
@@ -971,6 +1022,10 @@ impl ServerType for Project1999 {
 struct EqEmu;
 
 impl ServerType for EqEmu {
+    fn inventory_move_rules(&self) -> Option<MoveRules> {
+        Some(MoveRules::EqEmu)
+    }
+
     fn posture(&self, _setup: &Setup<'_>) -> Provided {
         offer(Box::new(Stances))
     }
@@ -1000,6 +1055,10 @@ impl ServerType for EqEmu {
         Some(&creation::Titanium)
     }
 
+    fn deletion(&self) -> Option<eq_network_game::deletion::Rules> {
+        Some(eq_network_game::deletion::Rules::Titanium)
+    }
+
     fn casting(&self, _setup: &Setup<'_>) -> Provided {
         offer(shared::casting())
     }
@@ -1012,7 +1071,7 @@ impl ServerType for EqEmu {
     }
 
     fn inventory(&self, setup: &Setup<'_>) -> Provided {
-        offer(shared::inventory(setup))
+        offer(shared::inventory(self.inventory_move_rules()?, setup))
     }
 
     fn motion(&self, _setup: &Setup<'_>) -> Provided {
@@ -1174,6 +1233,15 @@ impl ServerType for EqEmu {
 struct Quarm;
 
 impl ServerType for Quarm {
+    /// The native request and Quarm's `ReadBook` handler share `EQMac`'s layout.
+    fn reading(&self, _setup: &Setup<'_>) -> Provided {
+        offer(shared::reading())
+    }
+
+    fn inventory_move_rules(&self) -> Option<MoveRules> {
+        Some(MoveRules::Quarm)
+    }
+
     /// Quarm's own source establishes definitions/actions, separately from
     /// click support. No Doors capability or click sender is offered yet.
     fn doors(&self, _setup: &Setup<'_>) -> Provided {
@@ -1235,13 +1303,13 @@ impl ServerType for Quarm {
     /// banker checks, independent of merchants, meals and exchanges.
     fn inventory(&self, setup: &Setup<'_>) -> Provided {
         offer(shared::inventory_under(
-            MoveRules::Quarm,
+            self.inventory_move_rules()?,
             Quotes::of(GameDialect::EqMac),
             Allowances {
                 items: true,
                 coins: true,
-                merchants: false,
-                meals: false,
+                merchants: true,
+                meals: true,
             },
             setup,
         ))
@@ -1261,7 +1329,11 @@ impl ServerType for Quarm {
     /// Client-requested boundaries and bind entry use Quarm's `EQMac` world
     /// re-entry, with the same offer/refusal/correction lifecycle as TAKP.
     fn transfers(&self, setup: &Setup<'_>) -> Provided {
-        offer(shared::transfers(setup, Home::Asked))
+        // Quarm zone/worldserver.cpp substitutes 185 for a same-zone bind
+        // approval. TAKP and ordinary zone-line replies retain exact identity.
+        offer(Box::new(
+            Transfers::new(setup.character, Home::Asked).with_same_zone_bind_reply(185),
+        ))
     }
 
     /// Quarm handles camp and logout using the shared `EQMac` packets.
@@ -1278,6 +1350,10 @@ impl ServerType for Quarm {
     // the same EQMac bodies and replies as TAKP. Source-derived; not a live test.
     fn creation(&self) -> Option<&'static dyn Creation> {
         Some(&creation::EqMac)
+    }
+
+    fn deletion(&self) -> Option<eq_network_game::deletion::Rules> {
+        Some(eq_network_game::deletion::Rules::EqMac)
     }
 
     /// Quarm's `GetCharSelectInfo` fills the shared 1,620-byte character
@@ -1318,6 +1394,15 @@ const TAKP_DEATH_THRESHOLD: i32 = -11;
 struct Takp;
 
 impl ServerType for Takp {
+    /// TAKP answers a kind and server-owned text, without a window byte.
+    fn reading(&self, _setup: &Setup<'_>) -> Provided {
+        offer(shared::reading())
+    }
+
+    fn inventory_move_rules(&self) -> Option<MoveRules> {
+        Some(MoveRules::Takp)
+    }
+
     /// Definitions/actions from TAKP's door producer; unverified interaction
     /// remains unavailable while admission still replays the server state.
     fn doors(&self, _setup: &Setup<'_>) -> Provided {
@@ -1363,6 +1448,10 @@ impl ServerType for Takp {
         Some(&creation::EqMac)
     }
 
+    fn deletion(&self) -> Option<eq_network_game::deletion::Rules> {
+        Some(eq_network_game::deletion::Rules::EqMac)
+    }
+
     /// Its list fills each character's look, level and zone
     /// (world/worlddb.cpp `GetCharSelectInfo`).
     fn character_preview(&self) -> bool {
@@ -1399,7 +1488,7 @@ impl ServerType for Takp {
     /// TAKP's own client would.
     fn inventory(&self, setup: &Setup<'_>) -> Provided {
         offer(shared::inventory_under(
-            MoveRules::Takp,
+            self.inventory_move_rules()?,
             Quotes::of(GameDialect::EqMac),
             Allowances::ALL,
             setup,
@@ -1537,6 +1626,22 @@ mod tests {
         }
     }
 
+    #[test]
+    fn only_verified_p99_policy_enables_own_stun_interpretation() {
+        let setup = Setup::new("Tester", AutoEat::default());
+        assert!(server_type(ServerProtocol::Project1999)
+            .control(&setup)
+            .is_some());
+        for protocol in [
+            ServerProtocol::EqEmu,
+            ServerProtocol::Takp,
+            ServerProtocol::Quarm,
+        ] {
+            assert!(server_type(protocol).control(&setup).is_none());
+        }
+        assert!(Empty.control(&setup).is_none());
+    }
+
     /// What a server type's features let the player do, each once: what it
     /// offers, or else what it leaves to the player.
     fn listed(server: &dyn ServerType, choices: bool) -> Vec<Capability> {
@@ -1558,15 +1663,46 @@ mod tests {
     }
 
     #[test]
+    fn deletion_is_explicit_for_each_checked_native_generation() {
+        use crate::client::ServerProtocol;
+        use eq_network_game::deletion::Rules;
+        for (protocol, expected) in [
+            (ServerProtocol::Project1999, Rules::Titanium),
+            (ServerProtocol::EqEmu, Rules::Titanium),
+            (ServerProtocol::Takp, Rules::EqMac),
+            (ServerProtocol::Quarm, Rules::EqMac),
+        ] {
+            assert_eq!(server_type(protocol).deletion(), Some(expected));
+        }
+    }
+
+    #[test]
     fn a_new_server_type_starts_with_every_feature_off() {
         let empty: &dyn ServerType = &Empty;
         let setup = Setup::new("Tester", AutoEat::default());
         assert!(empty.features(&setup).is_empty());
+        assert_eq!(empty.inventory_move_rules(), None);
         assert!(empty.protect(&[0; 464]).unwrap().is_none());
         assert!((empty.profile_turn() - 512.0).abs() < f32::EPSILON);
         assert!(!empty.start_choice());
         assert!(empty.creation().is_none());
+        assert!(empty.deletion().is_none());
         assert_eq!(empty.spell_landing_flag(), None);
+    }
+
+    #[test]
+    fn host_inventory_rules_come_from_the_policy_that_constructs_the_worker() {
+        for (protocol, rules) in [
+            (ServerProtocol::Project1999, MoveRules::EqEmu),
+            (ServerProtocol::EqEmu, MoveRules::EqEmu),
+            (ServerProtocol::Takp, MoveRules::Takp),
+            (ServerProtocol::Quarm, MoveRules::Quarm),
+        ] {
+            assert_eq!(super::super::inventory_move_rules(protocol), Some(rules));
+            assert!(server_type(protocol)
+                .inventory(&Setup::new("Synthetic", AutoEat::default()))
+                .is_some());
+        }
     }
 
     #[test]
@@ -1653,13 +1789,14 @@ mod tests {
         // personal inventory actions. Other features await their own evidence.
         let setup = Setup::new("Tester", AutoEat::default());
         let quarm = server_type(ServerProtocol::Quarm);
-        assert_eq!(quarm.features(&setup).len(), 17);
+        assert_eq!(quarm.features(&setup).len(), 18);
         assert_eq!(
             offers(quarm),
             [
                 Capability::Casting,
                 Capability::Spellbook,
                 Capability::Inventory,
+                Capability::Trading,
                 Capability::Moving,
                 Capability::Falling,
                 Capability::Targeting,
@@ -1667,16 +1804,19 @@ mod tests {
                 Capability::Looting,
                 Capability::Talking,
                 Capability::Camping,
+                Capability::Doors,
                 Capability::GroundItems,
                 Capability::Zoning,
                 Capability::Abilities,
+                Capability::Reading,
                 Capability::EnvironmentalDamage,
                 Capability::Jumping,
-                Capability::Posture
+                Capability::Posture,
+                Capability::Meals,
             ]
         );
         let takp = server_type(ServerProtocol::Takp);
-        assert_eq!(takp.features(&setup).len(), 22);
+        assert_eq!(takp.features(&setup).len(), 23);
         assert_eq!(
             offers(takp),
             [
@@ -1691,16 +1831,19 @@ mod tests {
                 Capability::Combat,
                 Capability::Talking,
                 Capability::Camping,
+                Capability::Doors,
                 Capability::GroundItems,
                 Capability::Zoning,
                 Capability::Abilities,
+                Capability::Reading,
                 Capability::Grouping,
                 Capability::Listing,
                 Capability::EnvironmentalDamage,
                 Capability::BleedingOut,
                 Capability::Translocate,
                 Capability::Jumping,
-                Capability::Posture
+                Capability::Posture,
+                Capability::Meals
             ]
         );
         for server in [quarm, takp] {
@@ -1839,6 +1982,7 @@ mod tests {
             report_id: 1,
             state: eq_network_game::movement::SpeedInputState::Ready(
                 eq_network_game::movement::SpeedInputs {
+                    eqmac_fatigue: None,
                     rate: 0,
                     weight: 0,
                     capacity: 100,
@@ -1963,15 +2107,16 @@ mod tests {
 
     #[test]
     fn p99_and_eqemu_provide_every_feature_one_each() {
-        // Training, resurrection, reading, tradeskills, the map, deleting
-        // spells, merchants' offers, groups, the player's listing, dice,
+        // Training, resurrection, world containers, the map, deleting
+        // spells, merchants' offers, the player's listing, dice,
         // emotes, assisting, raids and the server's tick are checked on
         // EQEmu alone so far; P99 takes falls' damage by the Titanium
         // program (6.332); only EQEmu waits for the answer to the end of
         // hiding; only EQEmu answers sacrifices, read from its source and not
         // yet checked live; and only EQEmu takes the show-helm option.
+        // P99 also retains the verified own-player stun timer.
         for (protocol, count) in [
-            (ServerProtocol::Project1999, 23),
+            (ServerProtocol::Project1999, 27),
             (ServerProtocol::EqEmu, 37),
         ] {
             let server = server_type(protocol);
@@ -1983,12 +2128,10 @@ mod tests {
             Capability::Resurrection,
             Capability::Sacrifice,
             Capability::Translocate,
-            Capability::Reading,
-            Capability::Tradeskills,
+            Capability::WorldContainers,
             Capability::Map,
             Capability::DeletingSpells,
             Capability::MerchantOffers,
-            Capability::Grouping,
             Capability::Listing,
             Capability::Rolling,
             Capability::Emoting,
@@ -2000,9 +2143,12 @@ mod tests {
             assert!(!offers(server_type(ServerProtocol::Project1999)).contains(&capability));
             assert!(offers(server_type(ServerProtocol::EqEmu)).contains(&capability));
         }
-        // Moving the book's spells is checked on both.
+        assert!(offers(server_type(ServerProtocol::Project1999)).contains(&Capability::Grouping));
+        // Reading, moving book spells and carried combines are offered on both.
         for protocol in [ServerProtocol::Project1999, ServerProtocol::EqEmu] {
             assert!(offers(server_type(protocol)).contains(&Capability::MovingSpells));
+            assert!(offers(server_type(protocol)).contains(&Capability::Reading));
+            assert!(offers(server_type(protocol)).contains(&Capability::Tradeskills));
         }
     }
 

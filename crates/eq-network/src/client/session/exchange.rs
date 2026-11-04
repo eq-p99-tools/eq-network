@@ -364,7 +364,7 @@ impl Feature for Exchanges {
             WorldEvent::Exchange(ExchangeUpdate::Requested { from }) => {
                 Self::requested(*from, world, out)?;
             }
-            WorldEvent::Death(death) if world.is_player(death.spawn_id) => {
+            event if world.owns_death(event) => {
                 world.exchange.0 = None;
             }
             _ => (),
