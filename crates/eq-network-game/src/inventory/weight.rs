@@ -55,9 +55,12 @@ impl Inventory {
     /// uncertainty while using a conservative mass bound: an alternative where
     /// that arrival is still queued weighs less, never more. This does not
     /// establish the relocated item's endpoint or acknowledge a move.
+    /// Known root-stack splits/merges can instead bound all conserved units by
+    /// their finite touched-slot footprint, including independent refused or
+    /// partial moves. Repeating the same edges adds no weight penalty.
     ///
     /// # Errors
-    /// Rejects missing/stale state, malformed bags and weight-changing predictions.
+    /// Rejects missing/stale state, malformed bags and unbounded affecting history.
     pub fn carried_weight_tenths(
         &self,
         generation: crate::GameDialect,
@@ -70,6 +73,11 @@ impl Inventory {
         let weight = total(&current, generation, coins)?;
         if self.weight_history_uncertain {
             return Err(WeightUnavailable::Prediction);
+        }
+        if let Some(bound) = self.stack_weight.as_ref().filter(|bound| bound.active()) {
+            return bound
+                .weight(&self.items, weight)
+                .ok_or(WeightUnavailable::Prediction);
         }
         if self.predicted() {
             let mut before = current;

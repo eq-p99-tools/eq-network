@@ -14,7 +14,9 @@ impl Inventory {
     pub(super) fn predict(&mut self, items: Vec<InventoryItem>) {
         let next: BTreeMap<_, _> = items.into_iter().map(|item| (item.slot, item)).collect();
         // Equal endpoints cannot certify an affecting intermediate prefix.
-        self.weight_history_uncertain |= !self.preserves_weight(&next);
+        let preserved = self.preserves_weight(&next);
+        let bounded = self.record_stack_weight(&next, preserved);
+        self.weight_history_uncertain |= !preserved && !bounded;
         self.trace_relocation(&next);
         let changed: BTreeSet<_> = self
             .items

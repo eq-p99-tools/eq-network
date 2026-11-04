@@ -16,11 +16,15 @@ enum Arrival {
 }
 
 impl Inventory {
-    /// Whether a usable carried weight may conservatively include an arrival
-    /// that an unresolved server prefix still has queued. Not a readiness grant.
+    /// Whether a usable carried weight conservatively includes a queued arrival
+    /// or unresolved root-stack distribution. Not a readiness grant.
     #[must_use]
     pub fn carried_weight_is_conservative(&self) -> bool {
         !self.weight_rebased.is_empty()
+            || self
+                .stack_weight
+                .as_ref()
+                .is_some_and(|bound| bound.active())
     }
 
     /// Whether the reducer can include this normalized cursor arrival in a

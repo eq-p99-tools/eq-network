@@ -7,6 +7,10 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- Keep movement load conservatively bounded through known carried-stack splits
+  and merges, including independently refused or partial moves. Placement stays
+  unconfirmed; unknown, bag, bank, purse and correction history remains guarded.
+
 - **Breaking:** correlate target selections and their admission-scoped results.
   Publish session target identity and availability without reflecting server
   changes as outgoing requests. Targeted abilities must name the unchanged

@@ -346,6 +346,9 @@ pub struct Inventory {
     /// An affecting transition invalidated the narrow arrival weight proof.
     #[serde(skip)]
     weight_history_uncertain: bool,
+    /// Conserved units in a finite root-slot footprint, not confirmed placement.
+    #[serde(skip)]
+    stack_weight: Option<stack_weight::StackWeightBound>,
     correcting: bool,
 }
 
@@ -441,6 +444,7 @@ impl Inventory {
     }
 
     fn change(&mut self, update: InventoryUpdate) {
+        self.observe_stack_weight(&update);
         let arrival = self.rebase_cursor_arrival(&update);
         self.observe_rebased_weight(&update, arrival);
         self.retain_relocations(&update);
@@ -478,6 +482,7 @@ impl Inventory {
                 self.equipment_uncertainty.clear();
                 self.weight_rebased.clear();
                 self.weight_history_uncertain = false;
+                self.stack_weight = None;
                 self.correcting = false;
             }
             InventoryUpdate::Set(items) => {
@@ -537,6 +542,7 @@ impl Inventory {
                 self.equipment_uncertainty.clear();
                 self.weight_rebased.clear();
                 self.weight_history_uncertain = false;
+                self.stack_weight = None;
                 self.resolved();
             }
         }
@@ -641,12 +647,14 @@ impl Inventory {
         if !self.predicted {
             self.correcting = false;
             self.weight_rebased.clear();
+            self.stack_weight = None;
         }
     }
 }
 
 mod arrivals;
 mod prediction;
+mod stack_weight;
 
 #[cfg(test)]
 pub(crate) mod tests;

@@ -77,6 +77,77 @@ fn stack(slot: i32, count: u32) -> InventoryItem {
 }
 
 #[test]
+fn root_stack_splits_keep_worker_mass_bounded_without_acknowledging_moves() {
+    use eq_network_game::{
+        items::{EquipmentRules, ItemBonuses},
+        GameDialect,
+    };
+    for protocol in [
+        ServerProtocol::Takp,
+        ServerProtocol::Quarm,
+        ServerProtocol::EqEmu,
+    ] {
+        let mut milk = stack(22, 19);
+        milk.details.weight_tenths = 1;
+        milk.details.equipment = Some(EquipmentRules::default());
+        milk.details.bonuses = Some(ItemBonuses::default());
+        let mut other = milk.clone();
+        other.slot = InventorySlot(24);
+        other.stack_count = None;
+        other.details.id += 1;
+        other.details.weight_tenths = 43;
+        let (mut features, mut world) = setup(protocol, vec![milk, other]);
+        let count = MoveQuantity::Count(NonZeroU32::new(1).unwrap());
+        for cycle in 0..3 {
+            for (from, to, quantity) in [
+                (22, 30, count),
+                (30, 29, MoveQuantity::Whole),
+                (29, 30, MoveQuantity::Whole),
+                (30, 22, count),
+            ] {
+                let request = command(&world, from, to, quantity);
+                let output = submit(protocol, &mut features, &mut world, &request);
+                assert!(output.result.unwrap());
+                assert_eq!(output.sent.len(), 1);
+                assert!(output.events.iter().any(|event| matches!(
+                    event,
+                    ClientEvent::World(WorldEvent::InventoryAction {
+                        update: Some(InventoryUpdate::Prediction(_)),
+                        error: None,
+                        ..
+                    })
+                )));
+                let bound = if cycle == 0 && from == 22 { 45 } else { 46 };
+                assert_eq!(
+                    world.inventory.carried_weight_tenths(GameDialect::EqMac, 0),
+                    Ok(bound)
+                );
+                assert!(world.inventory.predicted());
+                assert!(!world.inventory.stale());
+                assert!(!world.inventory.equipment_stats_uncertain());
+            }
+        }
+        assert_eq!(
+            world.inventory.items()[&InventorySlot(22)].stack_count,
+            Some(19)
+        );
+        observe(
+            protocol,
+            &mut features,
+            &mut world,
+            InventoryUpdate::Consume {
+                slot: InventorySlot(22),
+                charge: false,
+            },
+        );
+        assert!(world
+            .inventory
+            .carried_weight_tenths(GameDialect::EqMac, 0)
+            .is_err());
+    }
+}
+
+#[test]
 fn rapid_moves_send_in_order_on_takp_quarm_and_titanium() {
     for (protocol, opcode, cursor) in [
         (ServerProtocol::Takp, 0x2c41, 0),
