@@ -1174,6 +1174,11 @@ impl ServerType for EqEmu {
 struct Quarm;
 
 impl ServerType for Quarm {
+    /// The native request and Quarm's `ReadBook` handler share `EQMac`'s layout.
+    fn reading(&self, _setup: &Setup<'_>) -> Provided {
+        offer(shared::reading())
+    }
+
     /// Quarm's own source establishes definitions/actions, separately from
     /// click support. No Doors capability or click sender is offered yet.
     fn doors(&self, _setup: &Setup<'_>) -> Provided {
@@ -1322,6 +1327,11 @@ const TAKP_DEATH_THRESHOLD: i32 = -11;
 struct Takp;
 
 impl ServerType for Takp {
+    /// TAKP answers a kind and server-owned text, without a window byte.
+    fn reading(&self, _setup: &Setup<'_>) -> Provided {
+        offer(shared::reading())
+    }
+
     /// Definitions/actions from TAKP's door producer; unverified interaction
     /// remains unavailable while admission still replays the server state.
     fn doors(&self, _setup: &Setup<'_>) -> Provided {
@@ -1657,7 +1667,7 @@ mod tests {
         // personal inventory actions. Other features await their own evidence.
         let setup = Setup::new("Tester", AutoEat::default());
         let quarm = server_type(ServerProtocol::Quarm);
-        assert_eq!(quarm.features(&setup).len(), 17);
+        assert_eq!(quarm.features(&setup).len(), 18);
         assert_eq!(
             offers(quarm),
             [
@@ -1674,13 +1684,14 @@ mod tests {
                 Capability::GroundItems,
                 Capability::Zoning,
                 Capability::Abilities,
+                Capability::Reading,
                 Capability::EnvironmentalDamage,
                 Capability::Jumping,
-                Capability::Posture
+                Capability::Posture,
             ]
         );
         let takp = server_type(ServerProtocol::Takp);
-        assert_eq!(takp.features(&setup).len(), 22);
+        assert_eq!(takp.features(&setup).len(), 23);
         assert_eq!(
             offers(takp),
             [
@@ -1698,6 +1709,7 @@ mod tests {
                 Capability::GroundItems,
                 Capability::Zoning,
                 Capability::Abilities,
+                Capability::Reading,
                 Capability::Grouping,
                 Capability::Listing,
                 Capability::EnvironmentalDamage,

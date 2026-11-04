@@ -13,6 +13,7 @@ changes any server allowance.
 `GameCommand::name()` returns its exhaustive variant name as a static string,
 without command fields. Shared refusal diagnostics use that name; their
 structured result events retain the original reason and request identity.
+
 ## EQMac wear updates
 
 `appearance::EQMAC_WEAR_CHANGE_OPCODE` and `eqmac_wear_change` decode the
@@ -29,6 +30,17 @@ and the texture slot 0 through 8. Titanium retains its separate 9-byte codec
 and slot validation. See TAKP's
 [`WearChange_Struct`](https://github.com/EQMacEmu/Server/blob/e517d0bdbca302d94ff6979cd6c6028ddf2b9a4f/common/eq_packet_structs.h)
 and [`Mob::GetEquipmentMaterial`/`SendWearChange`](https://github.com/EQMacEmu/Server/blob/e517d0bdbca302d94ff6979cd6c6028ddf2b9a4f/zone/mob.cpp).
+
+## EQMac note and book reading
+
+TAKP and Quarm now offer `Capability::Reading`. Existing `ReadItem`,
+`ReadRefused` and `BookText` events are reused. New game codecs are
+`books::eqmac_request`, `books::eqmac_text` and `EQMAC_READ_OPCODE`.
+EQMac item decoding takes the raw kind byte from BookType at offset 228 rather
+than deriving it from Book at 230; unknown kind bytes remain numeric.
+Only received text populates reading state. Encoding refusal remains a
+local `ReadRefused`; transport errors remain errors, and submission does
+not produce a fabricated read-success event or change holdings.
 
 ## Typed spell-provider policy and attempt identity
 

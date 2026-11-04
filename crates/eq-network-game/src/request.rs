@@ -470,6 +470,7 @@ pub fn titanium(request: &Request, sender: Sender<'_>) -> Result<EncodedCommand>
 /// Refuses every other request, and a command the generation cannot carry.
 pub fn eqmac(request: &Request, sender: Sender<'_>) -> Result<EncodedCommand> {
     match request {
+        Request::ReadBook(book) => books::eqmac_request(book),
         Request::Ability { ability, target } => {
             abilities::eqmac::encode(*ability, *target, sender.spawn())
         }

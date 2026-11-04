@@ -1605,6 +1605,7 @@ mod tests {
                 Capability::GroundItems,
                 Capability::Zoning,
                 Capability::Abilities,
+                Capability::Reading,
                 Capability::EnvironmentalDamage,
                 Capability::Jumping,
                 Capability::Posture
@@ -1627,6 +1628,7 @@ mod tests {
                 Capability::GroundItems,
                 Capability::Zoning,
                 Capability::Abilities,
+                Capability::Reading,
                 Capability::Grouping,
                 Capability::Listing,
                 Capability::EnvironmentalDamage,

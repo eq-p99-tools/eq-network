@@ -191,6 +191,10 @@ pub fn quarm(opcode: u16, body: &[u8]) -> Vec<Message> {
 #[must_use]
 pub fn eqmac_with(opcode: u16, body: &[u8], item_rules: inventory::ItemRules) -> Vec<Message> {
     match opcode {
+        crate::books::EQMAC_READ_OPCODE => vec![crate::books::eqmac_text(body).map_or_else(
+            |error| unreadable(Part::World, &error),
+            |text| Message::Event(WorldEvent::BookText(text)),
+        )],
         crate::quarm::ZONE_LOGOUT_REPLY => vec![Message::LoggedOut],
         crate::quarm::ZONE_CHANGE_REQUEST => vec![crate::quarm::zone_request(body).map_or_else(
             |error| unreadable(Part::ZoneOffer, &error),

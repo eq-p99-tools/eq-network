@@ -208,7 +208,7 @@ pub(in crate::client) fn eqmac(opcode: u16) -> Option<ServerMessage> {
         0xc341 => sent("OP_LogServer", EQMAC, Partly(&[World, Zone], LOG_SERVER)),
         0xc441 => sent("OP_Surname", EQMAC, unasked(Social)),
         0xcb40 => sent("OP_GMNameChange", EQMAC, Partly(&[Zone], GM_RENAME)),
-        0xce40 => sent("OP_ReadBook", EQMAC, planned(EqMacWorld)),
+        0xce40 => sent("OP_ReadBook", EQMAC, Read(&[Zone])),
         0xce41 => sent("OP_SwapSpell", EQMAC, Read(&[Zone])),
         0xcf40 => sent("OP_RequestDuel", EQMAC, Partly(&[Zone], DUEL_REQUEST)),
         0xd040 => sent("OP_DuelResponse", TAKP, Partly(&[Zone], DUEL_ANSWER)),

@@ -406,13 +406,9 @@ fn item_at_for(
             recast_timestamp: 0,
         },
         scroll_spell: effect.spell(&[7]).map(u32::from),
-        book: crate::books::Book::from_item(
-            &record.short(178).to_string(),
-            if record.signed_byte(230) == 0 {
-                "0"
-            } else {
-                "1"
-            },
+        book: crate::books::Book::from_eqmac_item(
+            record.short(178),
+            record.byte(228),
             &record.text(231, 30),
         ),
         rules: ItemPlacement {

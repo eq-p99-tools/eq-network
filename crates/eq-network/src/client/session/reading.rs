@@ -36,7 +36,10 @@ impl Feature for Reading {
             .get(&slot)
             .and_then(|item| item.book.clone());
         match book {
-            Some(book) => out.request(&Request::ReadBook(book)),
+            Some(book) => match out.encode(&Request::ReadBook(book)) {
+                Ok(packet) => out.send(&packet),
+                Err(error) => actions::refuse(command, &error.to_string(), out.log),
+            },
             None => actions::refuse(command, "That is not something you can read.", out.log),
         }
     }
@@ -80,11 +83,82 @@ mod tests {
         );
         for slot in [24, 25] {
             let outcome = testing::run(|out| Reading.handle(&read(slot), &mut world, out));
-            assert!(outcome.sent.is_empty(), "sent {:?}", outcome.sent);
+            assert_eq!(outcome.sent, [], "unreadable item sent a request");
             assert!(outcome
                 .events
                 .iter()
                 .any(|event| matches!(event, ClientEvent::World(WorldEvent::ReadRefused { .. }))));
+        }
+    }
+
+    #[test]
+    fn eqmac_reading_uses_its_wire_and_refuses_invalid_names_without_losing_inventory() {
+        use crate::client::{session::servers, ServerProtocol};
+        use eq_network_game::{books::eqmac_request, message::Message};
+        for protocol in [ServerProtocol::Takp, ServerProtocol::Quarm] {
+            let server = servers::server_type(protocol);
+            for kind in [0, 1] {
+                let mut note = testing::item(23);
+                note.book = Some(Book {
+                    file: "SyntheticText".into(),
+                    kind,
+                });
+                let mut world = World::new(5);
+                let mut inventory = Inventory::default();
+                inventory.apply(InventoryUpdate::Snapshot(vec![
+                    note.clone(),
+                    testing::item(24),
+                ]));
+                world.inventory = inventory.clone().into();
+                let output = testing::run_on(server.wire(), |out| {
+                    Reading.handle(&read(23), &mut world, out)
+                });
+                output.result.unwrap();
+                assert_eq!(
+                    output.sent,
+                    [eqmac_request(note.book.as_ref().unwrap()).unwrap()]
+                );
+                assert!(
+                    matches!(output.events.as_slice(), []),
+                    "unexpected local read result: {:?}",
+                    output.events
+                );
+                assert_eq!(world.inventory.items(), inventory.items());
+                let text = [vec![kind], b"Synthetic server text\0".to_vec()].concat();
+                let replies = server.wire().messages(
+                    eq_network_game::books::EQMAC_READ_OPCODE,
+                    &text,
+                    server.item_rules(),
+                );
+                assert!(
+                    matches!(replies.as_slice(), [Message::Event(WorldEvent::BookText(text))] if text.kind == kind && text.text == "Synthetic server text")
+                );
+                for slot in [24, 25] {
+                    let output = testing::run_on(server.wire(), |out| {
+                        Reading.handle(&read(slot), &mut world, out)
+                    });
+                    output.result.unwrap();
+                    assert_eq!(output.sent, []);
+                    assert!(matches!(
+                        output.events.as_slice(),
+                        [
+                            ClientEvent::World(WorldEvent::ReadRefused { session_id: 5, .. }),
+                            ClientEvent::Diagnostic(_)
+                        ]
+                    ));
+                }
+                note.book.as_mut().unwrap().file = "x".repeat(20);
+                inventory.apply(InventoryUpdate::Set(vec![note]));
+                world.inventory = inventory.into();
+                let output = testing::run_on(server.wire(), |out| {
+                    Reading.handle(&read(23), &mut world, out)
+                });
+                output.result.unwrap();
+                assert_eq!(output.sent, []);
+                assert!(
+                    matches!(output.events.as_slice(), [ClientEvent::World(WorldEvent::ReadRefused { session_id: 5, reason }), ClientEvent::Diagnostic(_)] if reason == "not a book a server can find")
+                );
+            }
         }
     }
 }

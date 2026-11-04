@@ -13,6 +13,10 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Name the rejected command variant in refusal diagnostics without logging its
   payload; structured refusal events keep their existing reason and identity.
+- Offer note/book reading on TAKP and Quarm using EQMac's kind/name request
+  and kind/text reply, without Titanium's window byte. Read the item's
+  BookType byte separately from its Book flag. Invalid text names produce
+  a local read refusal; only a server text reply supplies readable content.
 
 - **Breaking:** inventory move requests can carry ordered local projection
   identities: `InventoryMove` gains `sequence: Option<MoveSequence>`, and

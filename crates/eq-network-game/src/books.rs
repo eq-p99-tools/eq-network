@@ -7,12 +7,17 @@
 //! `BookText_Struct` (`common/patches/titanium_structs.h`, translated in
 //! `titanium.cpp`) and the Titanium opcode (`utils/patches/patch_Titanium.conf`);
 //! `Client::ReadBook` (`zone/client.cpp`) for the rules.
+//! `EQMac` uses `BookRequest_Struct` and `BookText_Struct` from TAKP/Quarm
+//! `common/eq_packet_structs.h`: a kind byte without Titanium's window byte.
 use crate::command::EncodedCommand;
 use anyhow::{ensure, Result};
 use serde::Serialize;
 
 /// `OP_ReadBook`: the request for a text, and the text that answers it.
 pub const READ_OPCODE: u16 = 0x1496;
+
+/// `OP_ReadBook` on `EQMac`: a kind and text name, or a kind and returned text.
+pub const EQMAC_READ_OPCODE: u16 = 0xce40;
 
 /// The window byte that asks for a window of its own.
 const NEW_WINDOW: u8 = 0xff;
@@ -29,7 +34,8 @@ const READABLE_CLASS: &str = "2";
 pub struct Book {
     /// Its text's name on the server.
     pub file: String,
-    /// The kind of window it opens: 0 a note or scroll, 1 a book.
+    /// The received kind: 0 a note or scroll, 1 a book. Other `EQMac` kind
+    /// bytes are preserved rather than replaced by the item's Book flag.
     pub kind: u8,
 }
 
@@ -41,10 +47,26 @@ impl Book {
     /// None for anything else.
     #[must_use]
     pub fn from_item(class: &str, flag: &str, file: &str) -> Option<Self> {
+        if class.trim() != READABLE_CLASS {
+            return None;
+        }
+        Self::with_file(u8::from(flag.trim() != "0"), file)
+    }
+
+    /// `EQMac`'s native text request uses the `BookType` byte at item offset 228,
+    /// not the independent `Book` flag at 230. Preserve the received kind.
+    pub(crate) fn from_eqmac_item(class: i16, kind: u8, file: &str) -> Option<Self> {
+        if class != 2 {
+            return None;
+        }
+        Self::with_file(kind, file)
+    }
+
+    fn with_file(kind: u8, file: &str) -> Option<Self> {
         let file = file.trim();
-        (class.trim() == READABLE_CLASS && !file.is_empty() && file != "0").then(|| Self {
+        (!file.is_empty() && file != "0").then(|| Self {
             file: file.to_owned(),
-            kind: u8::from(flag.trim() != "0"),
+            kind,
         })
     }
 
@@ -100,6 +122,45 @@ pub fn titanium_text(body: &[u8]) -> Result<BookText> {
     })
 }
 
+/// Encodes `EQMac`'s kind, text name and NUL. The native `SendTextRequestMsg`
+/// sends the name's length plus two; the server's name array holds 20 bytes.
+///
+/// # Errors
+/// Rejects an empty, non-ASCII, NUL-containing or overlong text name.
+pub fn eqmac_request(book: &Book) -> Result<EncodedCommand> {
+    ensure!(
+        !book.file.is_empty()
+            && book.file.len() <= MAX_FILE
+            && book.file.is_ascii()
+            && !book.file.contains('\0'),
+        "not a book a server can find"
+    );
+    let mut body = vec![book.kind];
+    body.extend_from_slice(book.file.as_bytes());
+    body.push(0);
+    Ok(EncodedCommand {
+        opcode: EQMAC_READ_OPCODE,
+        body,
+    })
+}
+
+/// Decodes `EQMac`'s kind byte and server text, without a window byte.
+///
+/// # Errors
+/// Rejects a body too short to contain a kind and text.
+pub fn eqmac_text(body: &[u8]) -> Result<BookText> {
+    ensure!(body.len() >= 2, "invalid EQMac book text length");
+    let text = &body[1..];
+    let end = text
+        .iter()
+        .position(|byte| *byte == 0)
+        .unwrap_or(text.len());
+    Ok(BookText {
+        kind: body[0],
+        text: String::from_utf8_lossy(&text[..end]).into_owned(),
+    })
+}
+
 /// Decodes a Titanium book packet from the server: a text to read; None for
 /// any other opcode.
 ///
@@ -115,6 +176,68 @@ pub fn decode(opcode: u16, body: &[u8]) -> Result<Option<BookText>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn eqmac_requests_and_replies_have_no_titanium_window_byte() {
+        for kind in [0, 1, 2] {
+            let book = Book {
+                file: "SyntheticText".into(),
+                kind,
+            };
+            assert_eq!(
+                eqmac_request(&book).unwrap(),
+                EncodedCommand {
+                    opcode: EQMAC_READ_OPCODE,
+                    body: [vec![kind], b"SyntheticText\0".to_vec()].concat(),
+                }
+            );
+            let body = [vec![kind], b"Page one^Page two\0ignored".to_vec()].concat();
+            assert_eq!(
+                eqmac_text(&body).unwrap(),
+                BookText {
+                    kind,
+                    text: "Page one^Page two".into()
+                }
+            );
+            for messages in [
+                crate::message::eqmac(EQMAC_READ_OPCODE, &body),
+                crate::message::quarm(EQMAC_READ_OPCODE, &body),
+            ] {
+                assert!(
+                    matches!(messages.as_slice(), [crate::message::Message::Event(crate::world::WorldEvent::BookText(text))] if text.kind == kind && text.text == "Page one^Page two")
+                );
+            }
+        }
+        for body in [&[][..], &[0][..]] {
+            assert!(eqmac_text(body).is_err());
+            assert!(matches!(
+                crate::message::eqmac(EQMAC_READ_OPCODE, body).as_slice(),
+                [crate::message::Message::Unreadable {
+                    part: crate::message::Part::World,
+                    ..
+                }]
+            ));
+        }
+        assert_eq!(eqmac_text(&[0, 0]).unwrap().text, "");
+    }
+
+    #[test]
+    fn eqmac_text_names_fit_the_server_array_without_truncation_or_embedded_nul() {
+        let mut book = Book {
+            file: "x".repeat(MAX_FILE),
+            kind: 0,
+        };
+        assert_eq!(eqmac_request(&book).unwrap().body.len(), 21);
+        for file in [
+            String::new(),
+            "x".repeat(20),
+            "a\0b".into(),
+            "\u{e9}".into(),
+        ] {
+            book.file = file;
+            assert!(eqmac_request(&book).is_err());
+        }
+    }
 
     #[test]
     fn a_readable_item_asks_for_its_text_by_name() {
