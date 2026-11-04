@@ -153,6 +153,10 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   layout independently of Titanium's 9-byte layout; retain strict spawn and
   texture-slot validation.
 
+- Offer Quarm food/drink through the existing EQMac inventory owner, withholding
+  consumption of stale or moved items and automatic meals during merchant holds.
+- Offer bounded Quarm merchant purchases/sales, preserving its stack rules,
+  known price/capacity guards and zero-quantity sale refusals without delivery claims.
 - Expose `Client::spell_table_policy()` and `ProviderPolicy` from the same
   network policy that emits spell tables, before the first event arrives.
 - Add optional numeric `SessionStatus::run_id`, matching spell-table context

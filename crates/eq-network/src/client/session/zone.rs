@@ -1412,7 +1412,7 @@ mod tests {
         use crate::client::{session::feature::testing, ServerProtocol};
         use eq_network_game::{food::AutoEat, world::Capability};
         for (protocol, meals) in [
-            (ServerProtocol::Quarm, false),
+            (ServerProtocol::Quarm, true),
             (ServerProtocol::Takp, true),
             (ServerProtocol::EqEmu, true),
             (ServerProtocol::Project1999, true),
@@ -1461,6 +1461,52 @@ mod tests {
                     if message == "Rejected AutoEat command: Not available on this server")
                 );
             }
+        }
+    }
+
+    #[test]
+    fn combined_quarm_inventory_capabilities_keep_one_owner_and_exchanges_disabled() {
+        use crate::client::ServerProtocol;
+        use eq_network_game::{food::AutoEat, inventory::InventorySlot, world::Capability};
+        let server = servers::server_type(ServerProtocol::Quarm);
+        let features = Features::new(server, "Tester", AutoEat::default());
+        let capabilities = features.capabilities();
+        for capability in [
+            Capability::Inventory,
+            Capability::Meals,
+            Capability::Trading,
+            Capability::Reading,
+        ] {
+            assert!(capabilities.contains(&capability), "{capability:?}");
+        }
+        assert!(!capabilities.contains(&Capability::Giving));
+        for command in [
+            ClientCommand::AutoEat {
+                session_id: 5,
+                auto_eat: AutoEat::Anything,
+            },
+            ClientCommand::Consume {
+                session_id: 5,
+                slot: InventorySlot(22),
+                created: Instant::now(),
+            },
+            ClientCommand::Buy {
+                session_id: 5,
+                merchant_id: 9,
+                own_id: 7,
+                slot: 0,
+                quantity: 1,
+                created: Instant::now(),
+            },
+        ] {
+            assert_eq!(
+                features
+                    .provided
+                    .iter()
+                    .filter(|feature| feature.owns(&command))
+                    .count(),
+                1
+            );
         }
     }
 
@@ -1588,13 +1634,15 @@ mod tests {
             .capabilities()
         };
         // Both EQMac policies move, jump, fall, zone, camp, cast spells and
-        // move inventory. TAKP also offers the social actions checked there.
+        // move inventory, read, shop and eat. TAKP also offers the social
+        // actions checked there.
         assert_eq!(
             features(crate::client::ServerProtocol::Quarm),
             [
                 Capability::Casting,
                 Capability::Spellbook,
                 Capability::Inventory,
+                Capability::Trading,
                 Capability::Moving,
                 Capability::Falling,
                 Capability::Targeting,

@@ -127,6 +127,7 @@ impl MerchantTrades {
         inventory: &Inventory,
     ) -> Option<InventoryUpdate> {
         match update {
+            MerchantUpdate::Sold { quantity: 0, .. } => None,
             MerchantUpdate::Sold { slot, quantity, .. } => {
                 // A script veto echoes slot -1 so that nothing is removed.
                 if *slot < 0 {
@@ -165,16 +166,23 @@ impl MerchantTrades {
         }
     }
 
-    /// Ends a pending purchase that an echo answers with nothing bought,
-    /// which can only mean the merchant refused it: TAKP echoes a refused
-    /// purchase with no place, count or price
-    /// (`Client::Handle_OP_ShopPlayerBuy`), where `EQEmu` says nothing.
+    /// Ends a pending trade of the kind a zero-quantity refusal names.
+    /// `EQMac` echoes a refused purchase, and Quarm also rejects special sales
+    /// this way. Neither response establishes an item or coin change.
     /// True when one ended.
     pub(super) fn refused(&mut self, update: &MerchantUpdate) -> bool {
-        let refused = matches!(update, MerchantUpdate::Bought { quantity: 0, .. })
-            && matches!(self.pending, Some((Trade::Purchase { .. }, _)));
+        let refused = matches!(
+            (update, &self.pending),
+            (
+                MerchantUpdate::Bought { quantity: 0, .. },
+                Some((Trade::Purchase { .. }, _))
+            ) | (
+                MerchantUpdate::Sold { quantity: 0, .. },
+                Some((Trade::Sale(_), _))
+            )
+        );
         if refused {
-            self.pending = None;
+            self.release();
         }
         refused
     }
@@ -261,8 +269,9 @@ struct Window {
     /// The rate the window opened with.
     rate: f32,
     /// By place on the list: the most a unit costs, and whether the item is
-    /// priced once whatever the count, as a charged item is.
-    places: BTreeMap<u32, (u64, bool)>,
+    /// priced once whatever the count, as a charged item is, and the bounded
+    /// quantity supported by its decoded stack rules.
+    places: BTreeMap<u32, (u64, bool, u32)>,
 }
 
 impl Window {
@@ -276,6 +285,11 @@ impl Window {
             (
                 quotes.most_per_unit(quote, self.rate),
                 listed.item.activation.maximum_charges > 1,
+                if listed.item.stack_count.is_some() {
+                    listed.item.rules.stack_size.min(20)
+                } else {
+                    1
+                },
             ),
         );
     }
@@ -351,7 +365,7 @@ impl OpenMerchant {
         quantity: u32,
         purse: Option<Coins>,
     ) -> Result<(), &'static str> {
-        let (most, once) = self
+        let (most, once, _) = self
             .0
             .as_ref()
             .and_then(|window| window.places.get(&slot))
@@ -367,6 +381,15 @@ impl OpenMerchant {
             return Err("You may not have enough coins for that");
         }
         Ok(())
+    }
+
+    /// Bound ordinary Quarm purchases by decoded stock rather than guessing
+    /// quantities for charged, non-stackable or unknown items.
+    pub(super) fn quarm_quantity_known(&self, slot: u32, quantity: u32) -> bool {
+        self.0
+            .as_ref()
+            .and_then(|window| window.places.get(&slot))
+            .is_some_and(|(_, _, limit)| quantity > 0 && quantity <= *limit)
     }
 
     /// Forgets the window, as after death.
@@ -422,6 +445,21 @@ mod tests {
             slot: InventorySlot(slot),
             quantity: 2,
         }
+    }
+
+    #[test]
+    fn a_zero_sale_does_not_answer_a_purchase_or_invalidate_its_items() {
+        let mut trades = MerchantTrades::default();
+        let inventory = inventory();
+        trades.sent(&buy(3), &inventory, Instant::now());
+        let zero = MerchantUpdate::Sold {
+            slot: 30,
+            quantity: 0,
+            price: 0,
+        };
+        assert!(!trades.refused(&zero));
+        assert_eq!(trades.observe(&zero, &inventory), None);
+        assert!(trades.active());
     }
 
     #[test]

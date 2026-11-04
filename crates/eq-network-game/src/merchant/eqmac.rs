@@ -131,7 +131,18 @@ fn count(quantity: u32, verb: &str) -> Result<u8> {
 /// # Errors
 /// Rejects malformed records and compression.
 pub fn eqmac_list(body: &[u8]) -> Result<Vec<MerchantItem>> {
-    Ok(crate::inventory::eqmac_merchant_stock(body)?
+    eqmac_list_with(body, crate::inventory::ItemRules::Takp)
+}
+
+/// Reads stock under the selected server's stack/charge rules.
+///
+/// # Errors
+/// Rejects the same malformed records and compression as [`eqmac_list`].
+pub fn eqmac_list_with(
+    body: &[u8],
+    rules: crate::inventory::ItemRules,
+) -> Result<Vec<MerchantItem>> {
+    Ok(crate::inventory::eqmac_merchant_stock(body, rules)?
         .into_iter()
         .map(|(item, slot, price)| MerchantItem {
             slot,
@@ -234,6 +245,34 @@ mod tests {
             4,
         ));
         body
+    }
+
+    #[test]
+    fn merchant_stock_and_dispatch_preserve_quarm_stack_rules() {
+        use crate::{
+            inventory::ItemRules,
+            message::{self, Message},
+        };
+        let mut record = listed(13005, 3, 25);
+        let item = &mut record[2..];
+        item[246] = 20;
+        item[253] = 14;
+        item[276] = 0;
+        item[278] = 4;
+        let bytes = stock(&[record]);
+        assert_eq!(eqmac_list(&bytes).unwrap()[0].item.stack_count, Some(4));
+        assert_eq!(
+            eqmac_list_with(&bytes, ItemRules::Quarm).unwrap()[0]
+                .item
+                .stack_count,
+            None
+        );
+        let messages = message::eqmac_with(EQMAC_STOCK_OPCODE, &bytes, ItemRules::Quarm);
+        let [Message::MerchantList(items)] = messages.as_slice() else {
+            panic!()
+        };
+        assert_eq!(items[0].item.stack_count, None);
+        assert_eq!(items[0].item.charges, 4);
     }
 
     #[test]

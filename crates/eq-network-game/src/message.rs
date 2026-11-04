@@ -240,10 +240,14 @@ pub fn eqmac_with(opcode: u16, body: &[u8], item_rules: inventory::ItemRules) ->
             |error| unreadable(Part::World, &error),
             |details| Message::Event(WorldEvent::ItemDetails(details)),
         )],
-        crate::merchant::EQMAC_STOCK_OPCODE => vec![crate::merchant::eqmac_list(body).map_or_else(
-            |error| unreadable(Part::World, &error),
-            Message::MerchantList,
-        )],
+        crate::merchant::EQMAC_STOCK_OPCODE => {
+            vec![
+                crate::merchant::eqmac_list_with(body, item_rules).map_or_else(
+                    |error| unreadable(Part::World, &error),
+                    Message::MerchantList,
+                ),
+            ]
+        }
         _ if let Some(message) = eqmac_loot(opcode, body, item_rules) => vec![message],
         _ if let Some(message) = eqmac_objects(opcode, body) => vec![message],
         _ if let Some(message) = eqmac_exchange(opcode, body) => vec![message],

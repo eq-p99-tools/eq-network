@@ -1245,8 +1245,8 @@ impl ServerType for Quarm {
             Allowances {
                 items: true,
                 coins: true,
-                merchants: false,
-                meals: false,
+                merchants: true,
+                meals: true,
             },
             setup,
         ))
@@ -1674,6 +1674,7 @@ mod tests {
                 Capability::Casting,
                 Capability::Spellbook,
                 Capability::Inventory,
+                Capability::Trading,
                 Capability::Moving,
                 Capability::Falling,
                 Capability::Targeting,
@@ -1688,6 +1689,7 @@ mod tests {
                 Capability::EnvironmentalDamage,
                 Capability::Jumping,
                 Capability::Posture,
+                Capability::Meals,
             ]
         );
         let takp = server_type(ServerProtocol::Takp);

@@ -274,7 +274,10 @@ pub(crate) fn details(body: &[u8]) -> Result<ItemDetails> {
 /// # Errors
 /// Rejects malformed records and compression, more than 80 items, records
 /// tagged for another class, and negative places or prices.
-pub(crate) fn merchant_stock(body: &[u8]) -> Result<Vec<(InventoryItem, u32, u32)>> {
+pub(crate) fn merchant_stock(
+    body: &[u8],
+    rules: ItemRules,
+) -> Result<Vec<(InventoryItem, u32, u32)>> {
     ensure!(body.len() > 2, "truncated EQMac merchant list");
     let data = miniz_oxide::inflate::decompress_to_vec_zlib_with_limit(
         &body[2..],
@@ -295,7 +298,7 @@ pub(crate) fn merchant_stock(body: &[u8]) -> Result<Vec<(InventoryItem, u32, u32
                 u32::try_from(record.short(184)).context("negative EQMac merchant place")?;
             let price =
                 u32::try_from(record.signed_word(192)).context("negative EQMac merchant price")?;
-            let item = item_at(&record, InventorySlot(i32::try_from(place)?))?;
+            let item = item_at_for(&record, InventorySlot(i32::try_from(place)?), rules)?;
             Ok((item, place, price))
         })
         .collect()

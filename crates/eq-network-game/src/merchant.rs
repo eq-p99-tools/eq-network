@@ -11,9 +11,9 @@ use serde::Serialize;
 mod eqmac;
 
 pub use eqmac::{
-    decode_eqmac, eqmac_buy, eqmac_end, eqmac_list, eqmac_request, eqmac_sell, EQMAC_BUY_OPCODE,
-    EQMAC_DELETE_OPCODE, EQMAC_END_CONFIRM_OPCODE, EQMAC_END_OPCODE, EQMAC_REQUEST_OPCODE,
-    EQMAC_SELL_OPCODE, EQMAC_STOCK_OPCODE,
+    decode_eqmac, eqmac_buy, eqmac_end, eqmac_list, eqmac_list_with, eqmac_request, eqmac_sell,
+    EQMAC_BUY_OPCODE, EQMAC_DELETE_OPCODE, EQMAC_END_CONFIRM_OPCODE, EQMAC_END_OPCODE,
+    EQMAC_REQUEST_OPCODE, EQMAC_SELL_OPCODE, EQMAC_STOCK_OPCODE,
 };
 
 /// `OP_ShopRequest`: open (1) or close (0) in both directions.

@@ -5,8 +5,8 @@
 `Capability::Meals` is separate from `Inventory`: it gates `Consume` and
 `AutoEat`. The inventory feature offers it exactly when its existing
 `Allowances::meals` is enabled. Hosts retain the local automatic-food preference
-but post it only for an admission offering meals. This adds no meal protocol or
-changes any server allowance.
+but post it only for an admission offering meals. Protocol and server-specific
+allowance policies remain with the existing inventory owner.
 
 ## Command diagnostic identity
 
