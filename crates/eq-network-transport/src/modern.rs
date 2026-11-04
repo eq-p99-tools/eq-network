@@ -9,6 +9,9 @@ use std::{
     time::{Duration, Instant},
 };
 
+mod termination;
+pub use termination::SessionTermination;
+
 const MAX_APPLICATION: usize = 16 * 1024 * 1024;
 const WINDOW: u16 = 2048;
 
@@ -57,6 +60,7 @@ pub struct Session {
     sent_count: Cell<u64>,
     received_count: u64,
     closed: bool,
+    termination: Option<SessionTermination>,
 }
 
 impl Session {
@@ -167,6 +171,7 @@ impl Session {
                 sent_count: Cell::new(1 + u64::from(echo_response)),
                 received_count: 1,
                 closed: false,
+                termination: None,
             });
         }
     }
@@ -203,7 +208,7 @@ impl Session {
     /// Returns an error when the session is closed, a size limit is exceeded,
     /// or the UDP socket cannot send a packet.
     pub fn send(&mut self, opcode: u16, body: &[u8]) -> Result<()> {
-        ensure!(!self.closed, "session is closed");
+        self.open()?;
         ensure!(body.len() <= MAX_APPLICATION - 3, "application too large");
         let mut application = Vec::with_capacity(body.len() + 3);
         if opcode.to_le_bytes()[0] == 0 {
@@ -232,6 +237,7 @@ impl Session {
     /// Returns an error for an unsupported opcode, an oversized datagram, or a
     /// UDP socket failure.
     pub fn send_unreliable(&self, opcode: u16, body: &[u8]) -> Result<()> {
+        self.open()?;
         ensure!(
             opcode & 0xff != 0,
             "unreliable opcode requires nonzero low byte"
@@ -285,6 +291,7 @@ impl Session {
     /// Returns an error for malformed packets, protocol-limit violations,
     /// timeouts, or UDP socket failures.
     pub fn receive(&mut self) -> Result<Option<Application>> {
+        self.open()?;
         if self.ack_pending && self.last_ack.elapsed() >= Duration::from_millis(100) {
             self.control(0x15, &self.next_receive.wrapping_sub(1).to_be_bytes())?;
             self.ack_pending = false;
@@ -293,7 +300,6 @@ impl Session {
         if let Some(application) = self.applications.pop_front() {
             return Ok(Some(application));
         }
-        ensure!(!self.closed, "server closed session");
         for pending in &mut self.pending {
             if pending.sent.elapsed() >= Duration::from_secs(1) {
                 ensure!(
@@ -329,6 +335,13 @@ impl Session {
         match self.socket.recv(&mut packet) {
             Ok(n) => {
                 self.received_count += 1;
+                if packet[..n].starts_with(&[0, 0x1d]) {
+                    if SessionTermination::out_of_session(&packet[..n]) {
+                        self.terminate(SessionTermination::OutOfSession);
+                        self.open()?;
+                    }
+                    return Ok(None);
+                }
                 if n < 2 + self.crc_bytes {
                     return Ok(None);
                 }
@@ -340,8 +353,10 @@ impl Session {
                 if packet[end..n] != expected[4 - self.crc_bytes..] {
                     return Ok(None);
                 }
-                self.last_receive = Instant::now();
-                self.process(&packet[..end], false, 0)?;
+                if self.process(&packet[..end], false, 0)? && !self.closed {
+                    self.last_receive = Instant::now();
+                }
+                self.open()?;
             }
             Err(e) if timed_out(&e) => (),
             Err(e) => return Err(e.into()),
@@ -349,9 +364,14 @@ impl Session {
         Ok(self.applications.pop_front())
     }
 
+    // The result says whether the frame counts as session activity. Malformed or
+    // wrong-session terminal controls must not postpone the silence deadline.
     // Keeping the opcode dispatch linear makes the session state transitions auditable.
     #[allow(clippy::too_many_lines)]
-    fn process(&mut self, packet: &[u8], nested: bool, depth: usize) -> Result<()> {
+    fn process(&mut self, packet: &[u8], nested: bool, depth: usize) -> Result<bool> {
+        if self.closed {
+            return Ok(false);
+        }
         ensure!(
             depth < 8 && packet.len() >= 2,
             "invalid nested transport packet"
@@ -373,7 +393,8 @@ impl Session {
             } else {
                 application.extend_from_slice(&packet[1..]);
             }
-            return self.application(&application, depth + 1);
+            self.application(&application, depth + 1)?;
+            return Ok(true);
         }
         let opcode = u16::from_be_bytes(packet[..2].try_into().unwrap());
         let decompressed;
@@ -395,9 +416,14 @@ impl Session {
         }
         match opcode {
             3 => {
+                let mut received = false;
                 for part in combined::parts(body)? {
-                    self.process(part, true, depth + 1)?;
+                    received |= self.process(part, true, depth + 1)?;
+                    if self.closed {
+                        break;
+                    }
                 }
+                return Ok(received);
             }
             0x19 => {
                 for part in combined::app_parts(body)? {
@@ -410,7 +436,7 @@ impl Session {
                 let distance = sequence.wrapping_sub(self.next_receive);
                 if distance >= 32768 {
                     self.ack_pending = true;
-                    return Ok(());
+                    return Ok(true);
                 }
                 ensure!(distance < WINDOW, "incoming reliable window exceeded");
                 self.reorder
@@ -449,7 +475,15 @@ impl Session {
                     }
                 }
             }
-            5 => self.closed = true,
+            5 => {
+                let Some(reason) = SessionTermination::disconnect(body, self.id) else {
+                    return Ok(false);
+                };
+                self.terminate(reason);
+            }
+            // Stateless controls are accepted only as the established standalone
+            // datagram, before negotiated framing in receive().
+            0x1d => return Ok(false),
             8 => {
                 ensure!(body.len() == 38, "invalid session statistics response");
                 if let Some((token, sent)) = self.stats_request {
@@ -479,7 +513,29 @@ impl Session {
             }
             _ => (),
         }
+        Ok(true)
+    }
+
+    fn open(&self) -> Result<()> {
+        if let Some(reason) = self.termination {
+            return Err(reason.into());
+        }
+        ensure!(!self.closed, "session is closed");
         Ok(())
+    }
+
+    fn terminate(&mut self, reason: SessionTermination) {
+        if self.closed {
+            return;
+        }
+        self.termination = Some(reason);
+        self.closed = true;
+        self.pending.clear();
+        self.reorder.clear();
+        self.fragment = None;
+        self.applications.clear();
+        self.ack_pending = false;
+        self.stats_request = None;
     }
 
     fn ordered(&mut self, opcode: u16, body: &[u8]) -> Result<()> {
@@ -593,7 +649,7 @@ mod tests {
         assert!(!timed_out(&io::Error::from_raw_os_error(10054)));
     }
 
-    fn session() -> (Session, UdpSocket) {
+    pub(super) fn session() -> (Session, UdpSocket) {
         let peer = UdpSocket::bind("127.0.0.1:0").unwrap();
         let socket = UdpSocket::bind("127.0.0.1:0").unwrap();
         socket.connect(peer.local_addr().unwrap()).unwrap();
@@ -628,12 +684,13 @@ mod tests {
                 sent_count: Cell::new(0),
                 received_count: 0,
                 closed: false,
+                termination: None,
             },
             peer,
         )
     }
 
-    fn packet(session: &Session, op: u16, seq: u16, body: &[u8]) -> Vec<u8> {
+    pub(super) fn packet(session: &Session, op: u16, seq: u16, body: &[u8]) -> Vec<u8> {
         let mut data = seq.to_be_bytes().to_vec();
         data.extend_from_slice(body);
         session.datagram(op, &data)
@@ -753,3 +810,6 @@ mod tests {
         assert_eq!((chat.opcode, chat.body.len()), (0x1004, 249));
     }
 }
+
+#[cfg(test)]
+mod termination_tests;

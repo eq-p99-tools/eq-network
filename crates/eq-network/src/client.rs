@@ -362,7 +362,8 @@ impl std::error::Error for LoginError {}
 #[derive(Clone, Copy, Debug)]
 #[non_exhaustive]
 pub struct RunOptions {
-    /// Reconnect after transient session failures.
+    /// Reconnect after transient session failures, including modern peer
+    /// termination. Each retry is a fresh login after the configured delay.
     pub reconnect: bool,
     /// Stop after character selection without opening the zone connection.
     pub world_only: bool,

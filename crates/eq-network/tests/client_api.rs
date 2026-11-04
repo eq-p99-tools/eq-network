@@ -36,6 +36,14 @@ fn peer() -> UdpSocket {
     socket
 }
 
+struct CancelOnDrop(CancellationToken);
+
+impl Drop for CancelOnDrop {
+    fn drop(&mut self) {
+        self.0.cancel();
+    }
+}
+
 fn receive(socket: &UdpSocket) -> (Vec<u8>, SocketAddr) {
     let mut buffer = [0; 2048];
     let (length, address) = socket.recv_from(&mut buffer).unwrap();
@@ -176,13 +184,17 @@ fn cancellation_during_login_closes_the_session_and_stops_without_retry() {
 }
 
 #[test]
-fn server_disconnect_retries_only_when_requested_and_retry_wait_is_cancellable() {
+fn a_transient_login_error_retries_only_when_requested_and_retry_wait_is_cancellable() {
     for reconnect in [false, true] {
         let socket = peer();
         let engine = client(config(socket.local_addr().unwrap().port()));
         let server = thread::spawn(move || {
-            let (address, id) = negotiate(&socket);
-            socket.send_to(&closed_packet(&id), address).unwrap();
+            let (address, _id) = negotiate(&socket);
+            // A malformed application reply is still a retryable protocol error,
+            // unlike an explicit transport termination from the peer.
+            socket
+                .send_to(&application_packet(0, 0x17, &[]), address)
+                .unwrap();
         });
         let cancel = CancellationToken::default();
         let mut states = Vec::new();
@@ -222,6 +234,206 @@ fn server_disconnect_retries_only_when_requested_and_retry_wait_is_cancellable()
         }
         assert!(start.elapsed() < Duration::from_secs(3));
     }
+}
+
+#[test]
+fn explicit_peer_termination_obeys_the_configured_fresh_login_policy() {
+    use eq_network::transport::SessionTermination;
+
+    for out_of_session in [false, true] {
+        for reconnect in [false, true] {
+            let socket = peer();
+            let mut settings = config(socket.local_addr().unwrap().port());
+            settings.local_only = true;
+            let engine = client(settings);
+            let cancel = CancellationToken::default();
+            let _stop = CancelOnDrop(cancel.clone());
+            let worker_cancel = cancel.clone();
+            let (done, result) = mpsc::channel();
+            let worker = thread::spawn(move || {
+                let mut states = Vec::new();
+                let mut retries = 0;
+                let outcome = engine.run(
+                    &worker_cancel,
+                    {
+                        let mut options = RunOptions::default();
+                        options.reconnect = reconnect;
+                        options
+                    },
+                    |event| {
+                        match event {
+                            ClientEvent::Status(session_status) => {
+                                states.push(session_status.state);
+                            }
+                            ClientEvent::Reconnecting { delay_seconds, .. } => {
+                                retries += 1;
+                                assert_eq!(delay_seconds, 30);
+                                worker_cancel.cancel();
+                            }
+                            _ => (),
+                        }
+                        Ok(())
+                    },
+                );
+                done.send((outcome, states, retries)).unwrap();
+            });
+            let (address, id) = negotiate(&socket);
+            let terminal = if out_of_session {
+                vec![0, 0x1d, 0, 0, 0, 0]
+            } else {
+                closed_packet(&id)
+            };
+            socket.send_to(&terminal, address).unwrap();
+            socket.send_to(&terminal, address).unwrap();
+            let completed = result.recv_timeout(Duration::from_secs(2));
+            if completed.is_err() {
+                cancel.cancel();
+            }
+            worker.join().unwrap();
+            let (outcome, states, retries) = completed.unwrap();
+            let expected = if out_of_session {
+                SessionTermination::OutOfSession
+            } else {
+                SessionTermination::PeerDisconnected { reason: None }
+            };
+            if reconnect {
+                outcome.unwrap();
+                assert_eq!(
+                    states,
+                    [
+                        ConnectionState::Connecting,
+                        ConnectionState::Disconnected,
+                        ConnectionState::Stopped
+                    ]
+                );
+            } else {
+                assert_eq!(
+                    outcome.unwrap_err().downcast_ref::<SessionTermination>(),
+                    Some(&expected)
+                );
+                assert_eq!(
+                    states,
+                    [ConnectionState::Connecting, ConnectionState::Disconnected]
+                );
+            }
+            assert_eq!(retries, usize::from(reconnect));
+            socket
+                .set_read_timeout(Some(Duration::from_millis(50)))
+                .unwrap();
+            let mut bytes = [0; 512];
+            assert!(
+                socket.recv_from(&mut bytes).is_err(),
+                "no echo or fresh login follows"
+            );
+        }
+    }
+}
+
+#[test]
+fn explicit_termination_waits_for_the_configured_delay_before_a_fresh_attempt() {
+    for out_of_session in [false, true] {
+        let socket = peer();
+        // The existing minimum delay is ten seconds; do not shorten production
+        // timing or inject a public endpoint to make this regression faster.
+        socket
+            .set_read_timeout(Some(Duration::from_secs(13)))
+            .unwrap();
+        let mut settings = config(socket.local_addr().unwrap().port());
+        settings.local_only = true;
+        settings.reconnect_delay = Duration::from_secs(10);
+        let engine = client(settings);
+        let cancel = CancellationToken::default();
+        let _stop = CancelOnDrop(cancel.clone());
+        let worker_cancel = cancel.clone();
+        let (done, result) = mpsc::channel();
+        let worker = thread::spawn(move || {
+            let mut retries = 0;
+            let mut runs = Vec::new();
+            let outcome = engine.run(&worker_cancel, RunOptions::default(), |event| {
+                match event {
+                    ClientEvent::Status(status) if status.state == ConnectionState::Connecting => {
+                        runs.push(status.run_id.unwrap());
+                    }
+                    ClientEvent::Reconnecting { delay_seconds, .. } => {
+                        retries += 1;
+                        assert_eq!(delay_seconds, 10);
+                    }
+                    _ => (),
+                }
+                Ok(())
+            });
+            done.send((outcome, retries, runs)).unwrap();
+        });
+        let (address, first_id) = negotiate(&socket);
+        let terminal = if out_of_session {
+            vec![0, 0x1d, 0, 0, 0, 0]
+        } else {
+            closed_packet(&first_id)
+        };
+        let ended = Instant::now();
+        socket.send_to(&terminal, address).unwrap();
+        let (_fresh_address, _fresh_id) = negotiate(&socket);
+        assert!(
+            ended.elapsed() >= Duration::from_secs(10),
+            "fresh login must observe the existing pacing"
+        );
+        cancel.cancel();
+        let completed = result.recv_timeout(Duration::from_secs(2));
+        worker.join().unwrap();
+        let (outcome, retries, runs) = completed.unwrap();
+        outcome.unwrap();
+        assert_eq!(retries, 1);
+        assert_eq!(runs.len(), 2);
+        assert_ne!(runs[0], runs[1]);
+    }
+}
+
+#[test]
+fn a_user_can_start_a_fresh_attempt_after_explicit_termination() {
+    use eq_network::transport::SessionTermination;
+
+    let socket = peer();
+    let mut settings = config(socket.local_addr().unwrap().port());
+    settings.local_only = true;
+    let mut engine = client(settings);
+    let mut runs = Vec::new();
+    for _ in 0..2 {
+        let cancel = CancellationToken::default();
+        let _stop = CancelOnDrop(cancel.clone());
+        let worker_cancel = cancel.clone();
+        let (done, result) = mpsc::channel();
+        let worker = thread::spawn(move || {
+            let mut run = None;
+            let mut options = RunOptions::default();
+            options.reconnect = false;
+            let outcome = engine.run(&worker_cancel, options, |event| {
+                match event {
+                    ClientEvent::Status(status) if status.state == ConnectionState::Connecting => {
+                        run = status.run_id;
+                    }
+                    ClientEvent::Reconnecting { .. } => worker_cancel.cancel(),
+                    _ => (),
+                }
+                Ok(())
+            });
+            done.send((engine, outcome, run)).unwrap();
+        });
+        let (address, id) = negotiate(&socket);
+        socket.send_to(&closed_packet(&id), address).unwrap();
+        let completed = result.recv_timeout(Duration::from_secs(2));
+        if completed.is_err() {
+            cancel.cancel();
+        }
+        worker.join().unwrap();
+        let (returned, outcome, run) = completed.unwrap();
+        engine = returned;
+        assert_eq!(
+            outcome.unwrap_err().downcast_ref::<SessionTermination>(),
+            Some(&SessionTermination::PeerDisconnected { reason: None })
+        );
+        runs.push(run.unwrap());
+    }
+    assert_ne!(runs[0], runs[1]);
 }
 
 #[test]

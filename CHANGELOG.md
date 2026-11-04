@@ -29,6 +29,12 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   only the local gate; consumption/products remain authoritative inventory
   news. Additive `tradeskills::{combine_capability, check_carried, CarriedRefusal}`.
 
+- Return a typed modern `SessionTermination` for a matching peer disconnect or
+  the established stateless out-of-session control. Discard queued work and
+  refuse application sends after termination. Caller-configured fresh-login
+  retries retain their existing delay; disabling reconnect returns the typed
+  terminal error. See [the contract](docs/session-termination.md).
+
 - **Breaking:** add `Capability::Meals` for consuming food/drink and choosing
   automatic meals, separate from inventory moves. Inventory owners offer it
   only when their existing meal policy handles those commands.

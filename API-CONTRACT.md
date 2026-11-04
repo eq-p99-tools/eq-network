@@ -10,6 +10,24 @@ rejects malformed numeric fields. Titanium text decoding requires a supported
 note/book kind and terminating NUL. Submission does not supply `BookText`;
 supported server text opens the result. See `docs/p99-reading.md`.
 
+## Modern session termination
+
+`eq_network_transport::modern::SessionTermination` is an additive typed error
+inside the existing `anyhow::Result` APIs. `PeerDisconnected` retains an opaque
+optional native reason; `OutOfSession` reports the established stateless control.
+Neither reports acceptance or failure of an application request.
+
+Once observed, the first termination clears queued transport work and prevents
+both reliable and unreliable application sends. Repeated receives retain the same
+terminal error. `Client::run` reports Disconnected once for that attempt. With
+reconnect disabled it returns the typed error; with reconnect enabled it retains
+the configured delay before starting a fresh login. Unknown terminal reasons do
+not establish permanent refusal. The existing permanent credential-refusal rule,
+other retry timings and legacy EQMac contracts are unchanged.
+Hosts can downcast the error or show its credential-free Display text. Existing
+status/event variants and `Transport` signatures are unchanged. See
+[evidence and packet limits](docs/session-termination.md).
+
 ## Meal command availability
 
 `Capability::Meals` is separate from `Inventory`: it gates `Consume` and
