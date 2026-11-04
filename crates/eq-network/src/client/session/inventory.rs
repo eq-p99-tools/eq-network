@@ -592,6 +592,9 @@ impl Feature for Belongings {
         if self.allows.merchants {
             offered.push(Capability::Trading);
         }
+        if self.allows.meals {
+            offered.push(Capability::Meals);
+        }
         offered
     }
 
@@ -1551,7 +1554,8 @@ mod tests {
             belongings.capabilities(),
             [
                 crate::world::Capability::Inventory,
-                crate::world::Capability::Trading
+                crate::world::Capability::Trading,
+                crate::world::Capability::Meals
             ]
         );
         for command in [

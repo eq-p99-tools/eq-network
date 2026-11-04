@@ -1407,6 +1407,63 @@ mod tests {
     }
 
     #[test]
+    fn meal_capability_matches_the_owner_that_accepts_configuration() {
+        use crate::client::{session::feature::testing, ServerProtocol};
+        use eq_network_game::{food::AutoEat, world::Capability};
+        for (protocol, meals) in [
+            (ServerProtocol::Quarm, false),
+            (ServerProtocol::Takp, true),
+            (ServerProtocol::EqEmu, true),
+            (ServerProtocol::Project1999, true),
+        ] {
+            let server = servers::server_type(protocol);
+            let mut features = Features::new(server, "Tester", AutoEat::default());
+            assert!(features.capabilities().contains(&Capability::Inventory));
+            assert_eq!(features.capabilities().contains(&Capability::Meals), meals);
+            let command = ClientCommand::AutoEat {
+                session_id: 5,
+                auto_eat: AutoEat::Anything,
+            };
+            let consume = ClientCommand::Consume {
+                session_id: 5,
+                slot: eq_network_game::inventory::InventorySlot(22),
+                created: Instant::now(),
+            };
+            assert_eq!(command.capability(), Some(Capability::Meals));
+            assert_eq!(consume.capability(), Some(Capability::Meals));
+            assert_eq!(
+                features
+                    .provided
+                    .iter()
+                    .any(|feature| feature.owns(&consume)),
+                meals
+            );
+            let mut world = World::new(5);
+            let outcome = testing::run_on(server.wire(), |out| {
+                let handled = features.handle(&command, &mut world, out)?;
+                assert_eq!(handled, meals);
+                if !handled {
+                    unoffered(&command, out.log)?;
+                }
+                Ok::<_, anyhow::Error>(())
+            });
+            outcome.result.unwrap();
+            assert!(
+                outcome.sent.is_empty(),
+                "changing the preference sends no packet"
+            );
+            if meals {
+                assert!(outcome.events.is_empty());
+            } else {
+                assert!(
+                    matches!(outcome.events.as_slice(), [ClientEvent::Diagnostic(message)]
+                    if message == "Rejected AutoEat command: Not available on this server")
+                );
+            }
+        }
+    }
+
+    #[test]
     fn a_command_no_feature_takes_is_refused_as_unavailable() {
         use crate::client::session::feature::testing;
         // Quarm opens no doors yet.
@@ -1575,7 +1632,8 @@ mod tests {
                 Capability::BleedingOut,
                 Capability::Translocate,
                 Capability::Jumping,
-                Capability::Posture
+                Capability::Posture,
+                Capability::Meals
             ]
         );
     }

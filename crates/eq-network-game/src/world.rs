@@ -550,12 +550,14 @@ pub enum Capability {
     ShowingHelm,
     /// Sitting, standing and ducking, independently of locomotion.
     Posture,
+    /// Consuming food and drink, including the automatic meal preference.
+    Meals,
 }
 
 impl Capability {
     /// Every capability, in order: what a session offers when its server and
     /// client generation support everything.
-    pub const ALL: [Self; 42] = [
+    pub const ALL: [Self; 43] = [
         Self::Casting,
         Self::Spellbook,
         Self::Inventory,
@@ -598,6 +600,7 @@ impl Capability {
         Self::Jumping,
         Self::ShowingHelm,
         Self::Posture,
+        Self::Meals,
     ];
 }
 
@@ -1993,6 +1996,7 @@ mod tests {
             Capability::Jumping => 39,
             Capability::ShowingHelm => 40,
             Capability::Posture => 41,
+            Capability::Meals => 42,
         };
         for (index, capability) in Capability::ALL.into_iter().enumerate() {
             assert_eq!(place(capability), index, "{capability:?}");

@@ -690,6 +690,90 @@ pub enum GameCommand {
 }
 
 impl GameCommand {
+    /// The command variant's name, without any payload, for diagnostics.
+    /// Exhaustive so new commands cannot silently lose their diagnostic identity.
+    #[must_use]
+    pub const fn name(&self) -> &'static str {
+        match self {
+            Self::SelectServer { .. } => "SelectServer",
+            Self::SelectCharacter { .. } => "SelectCharacter",
+            Self::CreateCharacter { .. } => "CreateCharacter",
+            Self::GenerateName { .. } => "GenerateName",
+            Self::SwapSpell { .. } => "SwapSpell",
+            Self::UseItem(..) => "UseItem",
+            Self::ClickDoor { .. } => "ClickDoor",
+            Self::PickUp { .. } => "PickUp",
+            Self::OpenContainer { .. } => "OpenContainer",
+            Self::CloseContainer { .. } => "CloseContainer",
+            Self::CrossZoneLine { .. } => "CrossZoneLine",
+            Self::ScribeSpell { .. } => "ScribeSpell",
+            Self::DeleteSpell { .. } => "DeleteSpell",
+            Self::ForgetSpell { .. } => "ForgetSpell",
+            Self::MemorizeSpell { .. } => "MemorizeSpell",
+            Self::CastSpell { .. } => "CastSpell",
+            Self::SetPosture { .. } => "SetPosture",
+            Self::MoveInventory(..) => "MoveInventory",
+            Self::SendChat(..) => "SendChat",
+            Self::InspectItem { .. } => "InspectItem",
+            Self::Consider { .. } => "Consider",
+            Self::Camp { .. } => "Camp",
+            Self::BledOut { .. } => "BledOut",
+            Self::Loot { .. } => "Loot",
+            Self::LootItem { .. } => "LootItem",
+            Self::EndLoot { .. } => "EndLoot",
+            Self::Shop { .. } => "Shop",
+            Self::Buy { .. } => "Buy",
+            Self::Sell { .. } => "Sell",
+            Self::OfferTrade { .. } => "OfferTrade",
+            Self::AcceptTrade { .. } => "AcceptTrade",
+            Self::CancelTrade { .. } => "CancelTrade",
+            Self::MoveCoins { .. } => "MoveCoins",
+            Self::Jump { .. } => "Jump",
+            Self::EnvironmentalDamage { .. } => "EnvironmentalDamage",
+            Self::Consume { .. } => "Consume",
+            Self::AutoEat { .. } => "AutoEat",
+            Self::UseAbility { .. } => "UseAbility",
+            Self::Consent { .. } => "Consent",
+            Self::SummonCorpse { .. } => "SummonCorpse",
+            Self::DragCorpse { .. } => "DragCorpse",
+            Self::DropCorpse { .. } => "DropCorpse",
+            Self::Pet { .. } => "Pet",
+            Self::Training { .. } => "Training",
+            Self::ReadItem { .. } => "ReadItem",
+            Self::Combine { .. } => "Combine",
+            Self::AnswerResurrection { .. } => "AnswerResurrection",
+            Self::AnswerSacrifice { .. } => "AnswerSacrifice",
+            Self::AnswerTranslocate { .. } => "AnswerTranslocate",
+            Self::DropInvisibility { .. } => "DropInvisibility",
+            Self::InviteToGroup { .. } => "InviteToGroup",
+            Self::FollowGroup { .. } => "FollowGroup",
+            Self::DeclineGroup { .. } => "DeclineGroup",
+            Self::Disband { .. } => "Disband",
+            Self::ToggleAway { .. } => "ToggleAway",
+            Self::ToggleAnonymous { .. } => "ToggleAnonymous",
+            Self::ToggleRoleplay { .. } => "ToggleRoleplay",
+            Self::ShowHelm { .. } => "ShowHelm",
+            Self::Random { .. } => "Random",
+            Self::Emote { .. } => "Emote",
+            Self::Assist { .. } => "Assist",
+            Self::RaidInvite { .. } => "RaidInvite",
+            Self::RaidAccept { .. } => "RaidAccept",
+            Self::RaidDecline { .. } => "RaidDecline",
+            Self::RaidLeave { .. } => "RaidLeave",
+            Self::RaidLock { .. } => "RaidLock",
+            Self::RaidMove { .. } => "RaidMove",
+            Self::RaidMakeLeader { .. } => "RaidMakeLeader",
+            Self::RaidRemove { .. } => "RaidRemove",
+            Self::WhoAll { .. } => "WhoAll",
+            Self::AutoAttack { .. } => "AutoAttack",
+            Self::SelectTarget { .. } => "SelectTarget",
+            Self::ConfigureMotion { .. } => "ConfigureMotion",
+            Self::SpeedInputs { .. } => "SpeedInputs",
+            Self::ClimbReach { .. } => "ClimbReach",
+            Self::Move(..) => "Move",
+        }
+    }
+
     /// The zone admission the command was made for, if it names one.
     #[must_use]
     pub const fn session_id(&self) -> Option<u64> {
@@ -804,9 +888,8 @@ impl GameCommand {
             // Only a server that takes falls from the client lets the player jump.
             Self::Jump { .. } => Capability::Jumping,
             Self::EnvironmentalDamage { .. } => Capability::EnvironmentalDamage,
-            Self::MoveInventory(_) | Self::Consume { .. } | Self::AutoEat { .. } => {
-                Capability::Inventory
-            }
+            Self::MoveInventory(_) => Capability::Inventory,
+            Self::Consume { .. } | Self::AutoEat { .. } => Capability::Meals,
             Self::SendChat(_) | Self::InspectItem { .. } => Capability::Talking,
             Self::Consider { .. } | Self::AutoAttack { .. } => Capability::Combat,
             Self::Camp { .. } => Capability::Camping,

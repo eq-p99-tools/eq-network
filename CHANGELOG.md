@@ -7,6 +7,13 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Breaking:** add `Capability::Meals` for consuming food/drink and choosing
+  automatic meals, separate from inventory moves. Inventory owners offer it
+  only when their existing meal policy handles those commands.
+
+- Name the rejected command variant in refusal diagnostics without logging its
+  payload; structured refusal events keep their existing reason and identity.
+
 - **Breaking:** inventory move requests can carry ordered local projection
   identities: `InventoryMove` gains `sequence: Option<MoveSequence>`, and
   `WorldEvent::InventoryAction` gains `sequence` and
@@ -126,6 +133,8 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Add `ProviderPolicy::requires_server_tables()` so hosts can follow the
+  network-owned registration/replay requirement without matching policy names.
 - Expose `Client::spell_table_policy()` and `ProviderPolicy` from the same
   network policy that emits spell tables, before the first event arrives.
 - Add optional numeric `SessionStatus::run_id`, matching spell-table context

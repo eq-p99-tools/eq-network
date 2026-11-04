@@ -23,6 +23,18 @@ pub enum ProviderPolicy {
     Project1999,
 }
 
+impl ProviderPolicy {
+    /// Whether installed spell mechanics require server registration and replay.
+    /// Hosts use this contract to gate table lifecycle handling and readiness.
+    #[must_use]
+    pub const fn requires_server_tables(self) -> bool {
+        match self {
+            Self::Installed => false,
+            Self::Project1999 => true,
+        }
+    }
+}
+
 /// World registration of source spell IDs.
 pub const REGISTRATION_OPCODE: u16 = 0x1235;
 /// Zone replay of cached sources into destination spell IDs.

@@ -1700,7 +1700,8 @@ mod tests {
                 Capability::BleedingOut,
                 Capability::Translocate,
                 Capability::Jumping,
-                Capability::Posture
+                Capability::Posture,
+                Capability::Meals
             ]
         );
         for server in [quarm, takp] {

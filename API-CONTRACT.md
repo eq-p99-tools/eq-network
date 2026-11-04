@@ -1,5 +1,19 @@
 # API and integration contracts
 
+## Meal command availability
+
+`Capability::Meals` is separate from `Inventory`: it gates `Consume` and
+`AutoEat`. The inventory feature offers it exactly when its existing
+`Allowances::meals` is enabled. Hosts retain the local automatic-food preference
+but post it only for an admission offering meals. This adds no meal protocol or
+changes any server allowance.
+
+## Command diagnostic identity
+
+`GameCommand::name()` returns its exhaustive variant name as a static string,
+without command fields. Shared refusal diagnostics use that name; their
+structured result events retain the original reason and request identity.
+
 ## Typed spell-provider policy and attempt identity
 
 `Client::spell_table_policy()` returns `ProviderPolicy` before connecting,
@@ -7,6 +21,12 @@ resolved through the same selected server policy that owns table emission.
 Hosts bind this value when creating their producer; no protocol-name branch
 or first-table ordering assumption is needed. Other policies retain installed
 definitions without inheriting a replay overlay.
+
+`ProviderPolicy::requires_server_tables()` is the network-owned semantic
+predicate for whether installed mechanics require registration/replay facts.
+Hosts use it for lifecycle routing and initial readiness instead of matching
+a provider variant. This additive const method preserves the enum variants,
+serialization and existing policy accessor.
 
 `SessionStatus::run_id: Option<u64>` carries the numeric attempt ID shared with
 `spell_tables::Context::run_id`. A real Connecting notification establishes
