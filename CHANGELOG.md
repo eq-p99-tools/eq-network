@@ -17,6 +17,13 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   and kind/text reply, without Titanium's window byte. Read the item's
   BookType byte separately from its Book flag. Invalid text names produce
   a local read refusal; only a server text reply supplies readable content.
+- Expose `Client::inventory_move_rules()` from the same selected server policy
+  used by worker inventory validation so hosts can predict with matching rules.
+- Preserve a conservative carried-weight bound for a distinct plain cursor
+  arrival after whole-item carried moves, without confirming placement or
+  discarding unrelated predictions. `Inventory::carried_weight_is_conservative()`
+  distinguishes this bound. Affecting intermediate mass histories stay unknown
+  until a full inventory baseline or existing policy settlement.
 
 - **Breaking:** inventory move requests can carry ordered local projection
   identities: `InventoryMove` gains `sequence: Option<MoveSequence>`, and

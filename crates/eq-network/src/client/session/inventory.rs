@@ -374,6 +374,7 @@ pub(super) struct Belongings {
 impl Belongings {
     /// Belongings under `EQEmu`'s rules on Titanium's wire, with coins,
     /// merchants and meals.
+    #[cfg(test)]
     pub(super) fn new(auto_eat: eq_network_game::food::AutoEat) -> Self {
         Self::under(
             MoveRules::EqEmu,

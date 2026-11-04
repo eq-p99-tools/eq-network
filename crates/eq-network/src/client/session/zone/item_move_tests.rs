@@ -507,6 +507,72 @@ fn eqmac_partial_slot_observations_do_not_retire_affecting_equipment_history() {
     }
 }
 
+#[test]
+fn eqmac_cursor_arrivals_recover_a_mass_bound_without_settling_local_moves() {
+    use eq_network_game::items::{EquipmentRules, ItemBonuses};
+    for protocol in [ServerProtocol::Takp, ServerProtocol::Quarm] {
+        for cursor in [false, true] {
+            let mut original = testing::item(30);
+            original.details.weight_tenths = 37;
+            original.details.equipment = Some(EquipmentRules::default());
+            original.details.bonuses = Some(ItemBonuses::default());
+            original.details.slots = u32::MAX;
+            original.details.classes = u32::MAX;
+            original.details.races = u32::MAX;
+            let mut arrival = original.clone();
+            arrival.details.id += 1;
+            arrival.details.weight_tenths = 50;
+            let (mut features, mut world) = setup(protocol, vec![original]);
+            let mut player = testing::player(7);
+            player.class = Some(1);
+            player.race = 1;
+            player.level = 60;
+            world.player.admit(player);
+            for (from, to) in [(30, 8), (8, 30), (30, 24)] {
+                let request = command(&world, from, to, MoveQuantity::Whole);
+                let outcome = submit(protocol, &mut features, &mut world, &request);
+                assert!(outcome.result.unwrap());
+                assert_eq!(outcome.sent.len(), 1, "{protocol:?}: {:?}", outcome.events);
+                assert_eq!(outcome.sent[0].opcode, 0x2c41);
+                assert!(matches!(
+                    outcome.events.as_slice(),
+                    [ClientEvent::World(WorldEvent::InventoryAction {
+                        update: Some(InventoryUpdate::Prediction(_)),
+                        error: None,
+                        ..
+                    })]
+                ));
+            }
+            observe(
+                protocol,
+                &mut features,
+                &mut world,
+                if cursor {
+                    InventoryUpdate::Cursor(vec![arrival])
+                } else {
+                    InventoryUpdate::Set(vec![arrival])
+                },
+            );
+            assert_eq!(
+                world
+                    .inventory
+                    .carried_weight_tenths(eq_network_game::GameDialect::EqMac, 0),
+                Ok(87)
+            );
+            assert!(world.inventory.carried_weight_is_conservative());
+            assert!(!world.inventory.stale());
+            assert_eq!(world.inventory.unresolved_predictions(), 3);
+            testing::run_on(servers::server_type(protocol).wire(), |out| {
+                features.tick(Instant::now() + Duration::from_secs(60), &mut world, out)
+            })
+            .result
+            .unwrap();
+            assert_eq!(world.inventory.unresolved_predictions(), 3);
+            assert!(world.inventory.predicted());
+        }
+    }
+}
+
 /// The original fixture must report its eligibility refusal, without a packet
 /// or a prediction for the failed cursor-to-primary move.
 fn assert_unknown_equipment_actor_refused(protocol: ServerProtocol, original: &InventoryItem) {

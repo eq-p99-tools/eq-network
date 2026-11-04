@@ -42,6 +42,34 @@ Only received text populates reading state. Encoding refusal remains a
 local `ReadRefused`; transport errors remain errors, and submission does
 not produce a fabricated read-success event or change holdings.
 
+## Inventory planning policy and arrival weight bounds
+
+`Client::inventory_move_rules()` returns `Option<MoveRules>` before connecting.
+The selected `ServerType` supplies this same value to its worker inventory
+factory. Hosts must use it for queued placement projections, rather than
+assuming `EqEmu` rules from the installed generation. None means there is no
+inventory movement policy; it is not permission to choose a fallback.
+
+`Inventory::carried_weight_tenths` can retain a conservative upper bound after
+a distinct plain cursor arrival follows a recorded weight-neutral history. An
+originally occupied cursor additionally needs a plain whole-item relocation trace.
+`carried_weight_is_conservative()` identifies that property state and does not
+grant readiness. A server prefix where the arrival remains queued weighs less.
+`can_rebase_cursor_arrival(update)` exposes the same read-only classification
+to the session's resync check; callers still apply the actual update through
+Inventory and retain all other correction guards. It is not move permission.
+The old item's endpoint remains speculative: Cursor leaves its placement
+origins intact; Set covers only its observed slot. Neither resolves other
+prediction journals or equipment contribution history.
+
+Every recorded prediction must preserve item weight and the coin-purse
+coefficient in both dialects before this bound can be used. Affecting intermediate
+histories remain unavailable even after equal endpoints; a full Snapshot or an
+existing policy-driven Settled establishes a new baseline. Repeated IDs,
+non-plain arrivals and ambiguous occupied-cursor traces cannot start this rebase. Later
+unsupported changes to rebased slots invalidate the bound. No new silence
+timer, packet meaning or per-move acknowledgement is introduced.
+
 ## Typed spell-provider policy and attempt identity
 
 `Client::spell_table_policy()` returns `ProviderPolicy` before connecting,

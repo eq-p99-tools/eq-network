@@ -62,6 +62,13 @@ use std::{
 
 use login::Credentials;
 
+/// The selected server type owns the host and worker's placement policy.
+pub(super) fn inventory_move_rules(
+    protocol: ServerProtocol,
+) -> Option<eq_network_game::inventory::MoveRules> {
+    servers::server_type(protocol).inventory_move_rules()
+}
+
 /// Run one complete login/world/zone attempt with fresh session credentials,
 /// each stage the way the configured server's type runs it.
 pub(super) fn run(

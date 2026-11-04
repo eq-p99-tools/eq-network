@@ -136,6 +136,12 @@ pub(super) trait ServerType: Sync {
     /// The client generation's packets the server speaks.
     fn wire(&self) -> &'static dyn Wire;
 
+    /// Placement rules shared by worker validation and host projections.
+    /// An unconfigured server type offers no inventory movement policy.
+    fn inventory_move_rules(&self) -> Option<MoveRules> {
+        None
+    }
+
     /// How the server interprets shared `EQMac` inventory records. This
     /// affects decoding only; offering inventory actions is independent.
     fn item_rules(&self) -> ItemRules {
@@ -576,8 +582,8 @@ mod shared {
         Box::new(Spellbook::new(edits))
     }
 
-    pub(super) fn inventory(setup: &Setup<'_>) -> Box<dyn Feature> {
-        Box::new(Belongings::new(setup.auto_eat))
+    pub(super) fn inventory(rules: MoveRules, setup: &Setup<'_>) -> Box<dyn Feature> {
+        inventory_under(rules, Quotes::WithRate, Allowances::ALL, setup)
     }
 
     /// The inventory, whose items the player moves under the server type's
@@ -806,6 +812,10 @@ const P99_HAZARDS: [Hazard; 1] = [Hazard::Falling];
 struct Project1999;
 
 impl ServerType for Project1999 {
+    fn inventory_move_rules(&self) -> Option<MoveRules> {
+        Some(MoveRules::EqEmu)
+    }
+
     fn spell_tables(&self) -> Option<&'static dyn super::spell_tables::Policy> {
         Some(&super::spell_tables::P99)
     }
@@ -875,7 +885,7 @@ impl ServerType for Project1999 {
     }
 
     fn inventory(&self, setup: &Setup<'_>) -> Provided {
-        offer(shared::inventory(setup))
+        offer(shared::inventory(self.inventory_move_rules()?, setup))
     }
 
     /// The Titanium program's floor is whatever surface lies under the
@@ -971,6 +981,10 @@ impl ServerType for Project1999 {
 struct EqEmu;
 
 impl ServerType for EqEmu {
+    fn inventory_move_rules(&self) -> Option<MoveRules> {
+        Some(MoveRules::EqEmu)
+    }
+
     fn posture(&self, _setup: &Setup<'_>) -> Provided {
         offer(Box::new(Stances))
     }
@@ -1012,7 +1026,7 @@ impl ServerType for EqEmu {
     }
 
     fn inventory(&self, setup: &Setup<'_>) -> Provided {
-        offer(shared::inventory(setup))
+        offer(shared::inventory(self.inventory_move_rules()?, setup))
     }
 
     fn motion(&self, _setup: &Setup<'_>) -> Provided {
@@ -1179,6 +1193,10 @@ impl ServerType for Quarm {
         offer(shared::reading())
     }
 
+    fn inventory_move_rules(&self) -> Option<MoveRules> {
+        Some(MoveRules::Quarm)
+    }
+
     /// Quarm's own source establishes definitions/actions, separately from
     /// click support. No Doors capability or click sender is offered yet.
     fn doors(&self, _setup: &Setup<'_>) -> Provided {
@@ -1240,7 +1258,7 @@ impl ServerType for Quarm {
     /// banker checks, independent of merchants, meals and exchanges.
     fn inventory(&self, setup: &Setup<'_>) -> Provided {
         offer(shared::inventory_under(
-            MoveRules::Quarm,
+            self.inventory_move_rules()?,
             Quotes::of(GameDialect::EqMac),
             Allowances {
                 items: true,
@@ -1332,6 +1350,10 @@ impl ServerType for Takp {
         offer(shared::reading())
     }
 
+    fn inventory_move_rules(&self) -> Option<MoveRules> {
+        Some(MoveRules::Takp)
+    }
+
     /// Definitions/actions from TAKP's door producer; unverified interaction
     /// remains unavailable while admission still replays the server state.
     fn doors(&self, _setup: &Setup<'_>) -> Provided {
@@ -1413,7 +1435,7 @@ impl ServerType for Takp {
     /// TAKP's own client would.
     fn inventory(&self, setup: &Setup<'_>) -> Provided {
         offer(shared::inventory_under(
-            MoveRules::Takp,
+            self.inventory_move_rules()?,
             Quotes::of(GameDialect::EqMac),
             Allowances::ALL,
             setup,
@@ -1576,11 +1598,27 @@ mod tests {
         let empty: &dyn ServerType = &Empty;
         let setup = Setup::new("Tester", AutoEat::default());
         assert!(empty.features(&setup).is_empty());
+        assert_eq!(empty.inventory_move_rules(), None);
         assert!(empty.protect(&[0; 464]).unwrap().is_none());
         assert!((empty.profile_turn() - 512.0).abs() < f32::EPSILON);
         assert!(!empty.start_choice());
         assert!(empty.creation().is_none());
         assert_eq!(empty.spell_landing_flag(), None);
+    }
+
+    #[test]
+    fn host_inventory_rules_come_from_the_policy_that_constructs_the_worker() {
+        for (protocol, rules) in [
+            (ServerProtocol::Project1999, MoveRules::EqEmu),
+            (ServerProtocol::EqEmu, MoveRules::EqEmu),
+            (ServerProtocol::Takp, MoveRules::Takp),
+            (ServerProtocol::Quarm, MoveRules::Quarm),
+        ] {
+            assert_eq!(super::super::inventory_move_rules(protocol), Some(rules));
+            assert!(server_type(protocol)
+                .inventory(&Setup::new("Synthetic", AutoEat::default()))
+                .is_some());
+        }
     }
 
     #[test]

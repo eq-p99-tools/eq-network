@@ -627,6 +627,14 @@ pub struct Client {
 }
 
 impl Client {
+    /// Item placement rules used by the selected server's inventory owner.
+    /// Available before connection so host projections use the same policy.
+    /// None means the server type does not provide inventory movement.
+    #[must_use]
+    pub fn inventory_move_rules(&self) -> Option<eq_network_game::inventory::MoveRules> {
+        session::inventory_move_rules(self.config.protocol)
+    }
+
     /// The installed-spell provider required by the same selected server
     /// policy that emits spell-table facts. Available before connection so
     /// hosts need no protocol-name branch or first-packet latch.
