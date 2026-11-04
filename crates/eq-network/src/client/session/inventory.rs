@@ -14,6 +14,8 @@
 //! servers do, and takes each money update as the truth about the purse.
 mod meals;
 mod merchant;
+#[cfg(test)]
+mod merchant_outcomes;
 mod resync;
 
 use super::{
@@ -114,6 +116,18 @@ fn merchant_refused(world: &World, reason: &str, out: &mut Out<'_, '_>) -> Resul
         }))?;
     out.log
         .diagnostic(format!("Merchant trade refused: {reason}"))
+}
+
+/// Drops a stale purse projection without inventing a new balance. Cursor
+/// and bank money retain their separate authority.
+fn purse_uncertain(world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
+    if world.coins.0.purse.take().is_some() {
+        out.log
+            .send(ClientEvent::World(WorldEvent::PurseUncertain {
+                session_id: world.session_id,
+            }))?;
+    }
+    Ok(())
 }
 
 /// Follows what a message says about the coins; true when the purse changed
@@ -472,6 +486,9 @@ impl Belongings {
         world: &World,
         out: &mut Out<'_, '_>,
     ) -> Result<()> {
+        if let Err(reason) = self.trades.check(command) {
+            return merchant_refused(world, reason, out);
+        }
         if self.rules == MoveRules::Quarm {
             let inventory = &world.inventory;
             if !inventory.received() || inventory.stale() {
@@ -675,6 +692,8 @@ impl Feature for Belongings {
     /// this one count the same revisions.
     fn admitted(&mut self, world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
         self.moves = MoveOrder::default();
+        self.trades.clear();
+        self.merchant.clear();
         let admission = world.inventory.admission_updates();
         world.inventory = Carried::default();
         for update in admission {
@@ -766,7 +785,15 @@ impl Feature for Belongings {
             }
         }
         if self.trades.expire(now) {
-            merchant_refused(world, "The merchant did not accept that offer.", out)?;
+            purse_uncertain(world, out)?;
+            let reason = "The merchant has not answered. The outcome is unknown; wait for the result before trying again.";
+            out.log
+                .send(ClientEvent::World(WorldEvent::MerchantUnanswered {
+                    session_id: world.session_id,
+                    reason: reason.into(),
+                }))?;
+            out.log
+                .diagnostic(format!("Merchant trade unanswered: {reason}"))?;
         }
         Ok(())
     }
@@ -811,8 +838,30 @@ impl Feature for Belongings {
         world: &mut World,
         out: &mut Out<'_, '_>,
     ) -> Result<()> {
-        if let Some(purse) = coins_news(message, &mut world.coins.0) {
-            tell_coins(world, purse, out)?;
+        if matches!(message, Message::Event(WorldEvent::Coins(_))) {
+            self.trades.coins_replaced();
+        }
+        let known_coins = match message {
+            Message::Event(WorldEvent::Merchant(update)) => {
+                let known = self.trades.coins_current(update);
+                let coin_bearing = matches!(
+                    update,
+                    MerchantUpdate::Bought { quantity, price, .. } if *quantity > 0 && *price > 0
+                ) || matches!(
+                    update,
+                    MerchantUpdate::Sold { slot, quantity, price } if *slot >= 0 && *quantity > 0 && *price > 0
+                );
+                if coin_bearing && !known {
+                    purse_uncertain(world, out)?;
+                }
+                known
+            }
+            _ => true,
+        };
+        if known_coins {
+            if let Some(purse) = coins_news(message, &mut world.coins.0) {
+                tell_coins(world, purse, out)?;
+            }
         }
         match message {
             Message::Event(WorldEvent::Inventory(update)) => {
@@ -855,6 +904,9 @@ impl Feature for Belongings {
             // A sale's echo is the only notice that the item left, and an echo
             // of nothing bought the only one that a purchase was refused.
             Message::Event(WorldEvent::Merchant(update)) => {
+                if matches!(update, MerchantUpdate::Closed) && self.trades.active() {
+                    purse_uncertain(world, out)?;
+                }
                 if self.trades.refused(update) {
                     merchant_refused(world, "The merchant did not accept that offer.", out)?;
                 } else if let Some(update) = self.trades.observe(update, &world.inventory) {
@@ -1058,7 +1110,7 @@ mod tests {
     /// Admitted player 7, carrying one item in slot 22.
     /// Merchant 9 open at a rate of 1, listing place 3 for 25 copper, with
     /// a platinum in the purse.
-    fn shopping_at(belongings: &mut Belongings, world: &mut World) {
+    pub(super) fn shopping_at(belongings: &mut Belongings, world: &mut World) {
         let purse = Message::Event(WorldEvent::Coins(Coins {
             platinum: 1,
             ..Coins::default()
@@ -1085,7 +1137,7 @@ mod tests {
         }
     }
 
-    fn admitted() -> (Belongings, World) {
+    pub(super) fn admitted() -> (Belongings, World) {
         let mut belongings = Belongings::new(eq_network_game::food::AutoEat::default());
         let mut world = World::new(5);
         let snapshot = Message::Event(WorldEvent::Inventory(InventoryUpdate::Snapshot(vec![
@@ -1270,7 +1322,7 @@ mod tests {
         assert!(!world.inventory.items().contains_key(&drink));
     }
 
-    fn inventory_events(events: &[ClientEvent]) -> Vec<&InventoryUpdate> {
+    pub(super) fn inventory_events(events: &[ClientEvent]) -> Vec<&InventoryUpdate> {
         events
             .iter()
             .filter_map(|event| match event {
@@ -1765,6 +1817,13 @@ mod tests {
         testing::run(|out| belongings.observe(&sold, &mut world, out))
             .result
             .unwrap();
+        assert_eq!(world.coins.purse, None);
+        // The old coin basis expired with the unanswered operation. Only
+        // authoritative money news restores a known purse.
+        let coins = Message::Event(WorldEvent::Coins(Coins::from_copper(80)));
+        testing::run(|out| belongings.observe(&coins, &mut world, out))
+            .result
+            .unwrap();
         assert_eq!(world.coins.purse, Some(Coins::from_copper(80)));
     }
 
@@ -1786,6 +1845,17 @@ mod tests {
     fn a_sale_adds_its_price_to_the_purse_and_no_drop_is_never_offered() {
         let (mut belongings, mut world) = admitted();
         shopping_at(&mut belongings, &mut world);
+        let sale = ClientCommand::Sell {
+            session_id: 5,
+            merchant_id: 9,
+            own_id: 7,
+            slot: 22,
+            quantity: 1,
+            created: Instant::now(),
+        };
+        testing::run(|out| belongings.handle(&sale, &mut world, out))
+            .result
+            .unwrap();
         let sold = Message::Event(WorldEvent::Merchant(MerchantUpdate::Sold {
             slot: 22,
             quantity: 1,
@@ -2110,7 +2180,7 @@ mod tests {
     }
 
     #[test]
-    fn an_unanswered_trade_is_refused_and_releases_the_inventory() {
+    fn an_unanswered_trade_reports_unknown_and_releases_the_inventory() {
         let (mut belongings, mut world) = admitted();
         shopping_at(&mut belongings, &mut world);
         let buy = ClientCommand::Buy {
@@ -2130,7 +2200,8 @@ mod tests {
         assert!(matches!(
             outcome.events[..],
             [
-                ClientEvent::World(WorldEvent::MerchantRefused { session_id: 5, .. }),
+                ClientEvent::World(WorldEvent::PurseUncertain { session_id: 5 }),
+                ClientEvent::World(WorldEvent::MerchantUnanswered { session_id: 5, .. }),
                 ClientEvent::Diagnostic(_)
             ]
         ));
@@ -2521,6 +2592,7 @@ mod tests {
     fn loot_coins_and_purchases_move_the_purse_until_a_money_update_says_otherwise() {
         use eq_network_game::{loot::LootResponse, merchant::MerchantUpdate};
         let (mut belongings, mut world) = admitted();
+        shopping_at(&mut belongings, &mut world);
         let news = |event| Message::Event(event);
         testing::run(|out| {
             belongings.observe(
@@ -2555,10 +2627,21 @@ mod tests {
                 ..
             }))]
         ));
+        let purchase = ClientCommand::Buy {
+            session_id: 5,
+            merchant_id: 9,
+            own_id: 7,
+            slot: 3,
+            quantity: 1,
+            created: Instant::now(),
+        };
+        let sent = testing::run(|out| belongings.handle(&purchase, &mut world, out));
+        sent.result.unwrap();
+        assert_eq!(sent.sent.len(), 1);
         testing::run(|out| {
             belongings.observe(
                 &news(WorldEvent::Merchant(MerchantUpdate::Bought {
-                    slot: 1,
+                    slot: 3,
                     quantity: 1,
                     price: 25,
                 })),

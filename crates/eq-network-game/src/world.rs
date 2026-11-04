@@ -1105,6 +1105,12 @@ pub enum WorldEvent {
     Camp(CampStatus),
     /// Carried coins, from admission or a server money update.
     Coins(Coins),
+    /// The current purse cannot be established; keep it unknown until an
+    /// authoritative purse update or a new admission supplies it.
+    PurseUncertain {
+        /// Admission whose purse projection became uncertain.
+        session_id: u64,
+    },
     /// The coins outside the purse: from the profile at admission, and after
     /// every change the session makes or hears of (the purse's own changes
     /// come as [`WorldEvent::Coins`]).
@@ -1150,11 +1156,19 @@ pub enum WorldEvent {
     Loot(crate::loot::LootUpdate),
     /// Merchant window changes.
     Merchant(crate::merchant::MerchantUpdate),
-    /// A purchase or sale that was not sent, or that the merchant never answered.
+    /// A purchase or sale that was not sent, or that the merchant explicitly refused.
     MerchantRefused {
         /// Admission from the request.
         session_id: u64,
         /// Why nothing was bought or sold.
+        reason: String,
+    },
+    /// A sent purchase or sale whose outcome is still unknown after waiting.
+    /// This does not establish an item or coin change, or authorize a retry.
+    MerchantUnanswered {
+        /// Admission from the request.
+        session_id: u64,
+        /// Why the outcome remains unknown.
         reason: String,
     },
     /// Give and trade window changes.
