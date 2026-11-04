@@ -17,16 +17,35 @@ inside the existing `anyhow::Result` APIs. `PeerDisconnected` retains an opaque
 optional native reason; `OutOfSession` reports the established stateless control.
 Neither reports acceptance or failure of an application request.
 
-Once observed, the first termination clears queued transport work and prevents
-both reliable and unreliable application sends. Repeated receives retain the same
-terminal error. `Client::run` reports Disconnected once for that attempt. With
+Once observed, the first termination immediately prevents all sends and network
+I/O, and discards incomplete fragment/reorder and outbound work. Fully completed,
+ordered applications before the terminal control drain exactly once in order;
+later combined suffixes are ignored. After that prefix, repeated receives retain
+the same terminal error. Explicit local close still refuses staged applications.
+`Client::run` reports Disconnected once for an attempt ending in that error. With
 reconnect disabled it returns the typed error; with reconnect enabled it retains
 the configured delay before starting a fresh login. Unknown terminal reasons do
 not establish permanent refusal. The existing permanent credential-refusal rule,
 other retry timings and legacy EQMac contracts are unchanged.
-Hosts can downcast the error or show its credential-free Display text. Existing
-status/event variants and `Transport` signatures are unchanged. See
+Hosts can downcast the error or show its credential-free Display text.
+`Transport::termination()` is an additive read-only accessor, defaulting to None
+for other transports and forwarded by boxed transports. The zone stops timers,
+queued actions and automatic replies while draining. A matching latched typed
+send refusal from an observer is noted as not submitted and deferred until the
+prefix drains; unrelated failures still propagate. Existing receive signatures
+are unchanged. See
 [evidence and packet limits](docs/session-termination.md).
+
+## Camp completion evidence
+
+`CampStatus::Camped` now means an actual `Message::LoggedOut` was received.
+The additive `CampStatus::ClosedWithoutReply` instead names the documented local
+logout-close deadline, with unchanged timing and local selection/desktop routing.
+It does not confirm server logout, cleanup or a reconnect cooldown waiver.
+Consumers must handle both local completion destinations and keep their evidence
+distinct. Ordinary camp preparation and the explicit ExitAtOnce opt-in still
+share the same logout/reply owner. A terminal error without a logout reply is
+still an error, not either completion event.
 
 ## Meal command availability
 

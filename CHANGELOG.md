@@ -80,10 +80,16 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   news. Additive `tradeskills::{combine_capability, check_carried, CarriedRefusal}`.
 
 - Return a typed modern `SessionTermination` for a matching peer disconnect or
-  the established stateless out-of-session control. Discard queued work and
-  refuse application sends after termination. Caller-configured fresh-login
+  the established stateless out-of-session control. Deliver complete, ordered
+  applications preceding termination exactly once before its error; discard
+  unfinished work and later combined suffixes, and stop all network I/O.
+  Refuse application sends immediately. Caller-configured fresh-login
   retries retain their existing delay; disabling reconnect returns the typed
   terminal error. See [the contract](docs/session-termination.md).
+- Add read-only `Transport::termination()` and stop zone outbound work while
+  its completed application prefix drains. Distinguish a received camp logout
+  reply (`CampStatus::Camped`) from the unchanged local close deadline
+  (`CampStatus::ClosedWithoutReply`); the deadline does not confirm server cleanup.
 
 - **Breaking:** add `Capability::Meals` for consuming food/drink and choosing
   automatic meals, separate from inventory moves. Inventory owners offer it

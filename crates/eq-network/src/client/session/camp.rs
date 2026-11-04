@@ -192,6 +192,10 @@ mod stop_tests;
 #[path = "camp_stun_tests.rs"]
 mod stun_tests;
 
+#[cfg(test)]
+#[path = "camp_transport_tests.rs"]
+mod transport_tests;
+
 impl Feature for Camp {
     fn capabilities(&self) -> Vec<crate::world::Capability> {
         use crate::world::Capability;
@@ -334,8 +338,9 @@ impl Feature for Camp {
                 .send(ClientEvent::World(WorldEvent::Camp(CampStatus::LoggingOut)))?;
         }
         if self.reply_overdue(now, out.wire.logout_close().unwrap_or(REPLY_TIMEOUT)) {
-            out.log
-                .send(ClientEvent::World(WorldEvent::Camp(CampStatus::Camped)))?;
+            out.log.send(ClientEvent::World(WorldEvent::Camp(
+                CampStatus::ClosedWithoutReply,
+            )))?;
             world.end(ZoneExit::CharacterSelect);
         }
         Ok(())

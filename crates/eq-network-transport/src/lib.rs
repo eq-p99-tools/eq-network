@@ -51,9 +51,19 @@ pub trait Transport {
 
     /// Whole seconds since the server last sent anything.
     fn last_received_seconds(&self) -> u64;
+
+    /// A latched modern peer termination, before its completed application
+    /// prefix has necessarily drained. Owners must stop outbound work and keep
+    /// receiving that prefix; termination is not an application acknowledgement.
+    fn termination(&self) -> Option<modern::SessionTermination> {
+        None
+    }
 }
 
 impl Transport for modern::Session {
+    fn termination(&self) -> Option<modern::SessionTermination> {
+        Self::termination(self)
+    }
     fn send(&mut self, opcode: u16, body: &[u8]) -> anyhow::Result<()> {
         Self::send(self, opcode, body)
     }
@@ -76,6 +86,9 @@ impl Transport for modern::Session {
 }
 
 impl<T: Transport + ?Sized> Transport for Box<T> {
+    fn termination(&self) -> Option<modern::SessionTermination> {
+        (**self).termination()
+    }
     fn send(&mut self, opcode: u16, body: &[u8]) -> anyhow::Result<()> {
         (**self).send(opcode, body)
     }

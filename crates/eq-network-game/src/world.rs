@@ -414,7 +414,7 @@ pub enum CampEnd {
     Other,
 }
 
-/// Progress of a camp request; the server confirms only the final logout.
+/// Camp progress, distinguishing a received logout reply from local closing.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub enum CampStatus {
     /// `OP_Camp` was sent; logout follows after the preparation time.
@@ -433,8 +433,11 @@ pub enum CampStatus {
     },
     /// Preparation finished and `OP_Logout` was sent.
     LoggingOut,
-    /// The zone connection ended; character selection follows.
+    /// The server's logout reply was received; character selection follows.
     Camped,
+    /// The documented local logout-close deadline elapsed without a reply.
+    /// Selection follows locally; server logout/cleanup is unconfirmed.
+    ClosedWithoutReply,
     /// Local validation rejected the request before transmission.
     Rejected(String),
 }

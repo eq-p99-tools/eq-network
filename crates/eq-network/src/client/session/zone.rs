@@ -141,6 +141,10 @@ impl Features {
         world: &mut World,
         out: &mut Out<'_, '_>,
     ) -> Result<bool> {
+        if out.sink.termination().is_some() {
+            actions::refuse(command, "The zone connection ended", out.log)?;
+            return Ok(true);
+        }
         for feature in &mut self.provided {
             feature.notice(command, world, out)?;
         }
@@ -157,6 +161,9 @@ impl Features {
 
     /// Runs the features' timers until one ends the session.
     fn tick(&mut self, now: Instant, world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
+        if out.sink.termination().is_some() {
+            return Ok(());
+        }
         for feature in &mut self.provided {
             feature.tick(now, world, out)?;
             if world.ending() {
@@ -186,7 +193,20 @@ impl Features {
         out: &mut Out<'_, '_>,
     ) -> Result<()> {
         for feature in &mut self.provided {
-            feature.observe(message, world, out)?;
+            if let Err(error) = feature.observe(message, world, out) {
+                // A response to completed incoming news may be refused by the
+                // already ended transport. It was not submitted. Keep the
+                // remaining observers/prefix readable, then receive reports
+                // that same latched failure. Other errors still fail here.
+                let refused = error
+                    .downcast_ref::<eq_network_transport::modern::SessionTermination>()
+                    .copied();
+                if refused.is_none() || refused != out.sink.termination() {
+                    return Err(error);
+                }
+                out.log
+                    .diagnostic(format!("Response not submitted: {error}"))?;
+            }
             if world.ending() {
                 break;
             }
@@ -301,8 +321,10 @@ pub(super) fn run(
         }
         // Apply opt-outs before any due send. Death and transfers invalidate
         // a queued reply; a fresh admission never inherits one.
-        let may_reply =
-            context.answer_list_polls.get() && world.ready() && !world.lifecycle.blocks_motion();
+        let may_reply = context.answer_list_polls.get()
+            && world.ready()
+            && !world.lifecycle.blocks_motion()
+            && session.termination().is_none();
         list_replies.tick(Instant::now(), may_reply, &mut session, log)?;
         if world.lifecycle.blocks_motion() {
             // Death and zone transfers hold every command; each is refused,
@@ -392,7 +414,11 @@ pub(super) fn run(
             continue;
         }
         // What the generation's client answers by itself, at any time.
-        if let Some(reply) = server.wire().answer(packet.opcode, &packet.body) {
+        if let Some(reply) = server
+            .wire()
+            .answer(packet.opcode, &packet.body)
+            .filter(|_| session.termination().is_none())
+        {
             session.send(reply.opcode, &reply.body)?;
         }
         if !world.ready() {
@@ -2158,3 +2184,6 @@ mod target_tests;
 
 #[cfg(test)]
 mod manual_combine_tests;
+
+#[cfg(test)]
+mod terminal_tests;
