@@ -10,8 +10,8 @@ This bound tracks a finite union of ordinary unreduced root slots touched by
 validated projections, and the complete item definitions and quantities originally
 inside that union. A later edge grows the union by including its original occupants.
 Known whole non-stack relocations may precede a stack split, including neutral
-equipment moves. Stack redistribution itself is limited to general slots22-29
-and cursor30. Bags, purses, mixed definitions for one ID, unknown definitions,
+equipment moves. Stack redistribution itself is limited to general slots 22-29
+and cursor 30. Bags, purses, mixed definitions for one ID, unknown definitions,
 inter-family projected swaps and external inventory changes invalidate the proof.
 An existing unknown/affecting history cannot start it.
 

@@ -12,9 +12,30 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   unconfirmed; unknown, bag, bank, purse and correction history remains guarded.
 
 - **Breaking:** correlate target selections and their admission-scoped results.
+  `GameCommand::SelectTarget` gains `request_id`; `WorldEvent::TargetSent`,
+  `TargetRejected` and the new `TargetChanged` carry `request_id` and a
+  `targets::TargetState` (revision, spawn and availability).
   Publish session target identity and availability without reflecting server
   changes as outgoing requests. Targeted abilities must name the unchanged
-  target version they were requested for; stale or unresolved intent is refused.
+  target version they were requested for (`UseAbility.target:
+  Option<TargetState>`); stale or unresolved intent is refused.
+- **Breaking:** `WorldEvent::OwnStun { session_id, revision, state }` reports
+  the session's interpreted own-player stun as a `control::StunState`
+  (`Clear` or `Stunned`), with increasing revisions within an admission;
+  `CampEnd::Stunned` is a new variant. Movement submitted while stunned, or
+  predating the current stun state, is refused.
+- **Breaking:** group invitations carry consent identity.
+  `GroupUpdate::Invited` gains `kind: InvitationKind` and
+  `id: Option<group::InvitationId>`; `GameCommand::FollowGroup` and
+  `DeclineGroup` require the displayed `inviter` and `invitation_id`;
+  `GroupUpdate::Formed` names its `leader`. Titanium's acceptance of an
+  invitation to an existing group uses `group::FOLLOW2_OPCODE`.
+- **Breaking:** `WorldEvent::PurseUncertain { session_id }` and
+  `WorldEvent::MerchantUnanswered { session_id, reason }` are new variants: a
+  purse projection that cannot be established stays unknown until an
+  authoritative update, and a sent purchase or sale whose outcome stays
+  unknown after waiting is reported without an item or coin change, and
+  without authorizing a retry.
 
 - Offer source-checked P99 note/book reading through the ordinary inventory
   action. Retain Titanium's Book flag separately from EQMac's BookType rule;
@@ -25,7 +46,7 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   See `docs/p99-reading.md` for the wire contract and remaining live checks.
 
 - **Breaking:** separate carried combines from world-station actions with
-  `Capability::WorldContainers` (`ALL` grows to44). P99 offers only carried
+  `Capability::WorldContainers` (`ALL` grows to 44). P99 offers only carried
   manual combines, with current container, component, identity and cursor
   guards. EQEmu keeps both offers; TAKP/Quarm are unchanged. Titanium's
   four-byte combine request writes the full native slot with a zero upper
@@ -119,14 +140,16 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
-- Re-evaluate EQMac fatigue from current host strength/stamina prerequisites
-  in the session, avoiding an unnecessary withdrawal and host round trip on
-  each stamina tick. Optional `EqMacFatigueInputs` preserves legacy capacity
+- **Breaking:** re-evaluate EQMac fatigue from current host strength/stamina
+  prerequisites in the session, avoiding an unnecessary withdrawal and host
+  round trip on each stamina tick. `SpeedInputs` gains
+  `eqmac_fatigue: Option<EqMacFatigueInputs>`, which preserves legacy capacity
   semantics and conservative unknowns; real readiness losses still withdraw.
-- Follow Quarm's same-zone death-bind approval without treating its documented
-  reply stand-in as an unsolicited destination change. Report bind-only death
-  knowledge before transfer without inventing killer/corpse details, retain
-  dead state through departure and ignore duplicate departure offers.
+- **Breaking:** follow Quarm's same-zone death-bind approval without treating
+  its documented reply stand-in as an unsolicited destination change. The new
+  `WorldEvent::DeathBind` reports bind-only death knowledge before transfer
+  without inventing killer/corpse details; dead state is retained through
+  departure and duplicate departure offers are ignored.
 
 - EQMac admission records the profile's current zone identity before handling
   zone-line requests. Zero and oversized IDs stay unknown without failing an

@@ -597,14 +597,14 @@ introduced, and the private plan certifies no external body or scene identity.
 ## Carried combines and world containers
 
 **Breaking:** `Capability::WorldContainers` is a new variant and
-`Capability::ALL` grows from43 to44. `Tradeskills` offers carried manual
+`Capability::ALL` grows from 43 to 44. `Tradeskills` offers carried manual
 combines; `OpenContainer`, `CloseContainer` and `Combine(WORLD_CONTAINER)`
 require `WorldContainers`. `tradeskills::combine_capability` supplies the
 same distinction to frontends. EQEmu offers both; P99 offers carried combines
 only, with no change to the current TAKP/Quarm offers. Exhaustive capability
 matches and station controls must handle the new variant.
 
-`titanium_combine` retains its signature but writes the native full32-bit
+`titanium_combine` retains its signature but writes the native full 32-bit
 slot, replacing the old invented high-word sentinel, and rejects nonpack,
 nonworld slots. No EQMac combine encoding is introduced. Additive
 `tradeskills::{check_carried, CarriedRefusal}` exposes the source-backed local
