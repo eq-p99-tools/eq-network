@@ -204,6 +204,11 @@ fn outcomes(
         MoveQuantity::Count(count) => (1..=count.get()).map(quantity).collect(),
     };
     for inventory in states {
+        for extra in endpoint_outcomes(inventory, from, to, amount) {
+            if !result.iter().any(|old| old.items() == extra.items()) {
+                result.push(extra);
+            }
+        }
         for &amount in &quantities {
             if let Ok(update) = plan(inventory, rules, from, to, amount) {
                 let mut next = inventory.clone();
@@ -214,6 +219,62 @@ fn outcomes(
                 }
             }
         }
+    }
+    result
+}
+
+/// Also overapproximate wire outcomes the host would not prepare on that actual
+/// branch: either-direction swaps (including an unexpectedly occupied cursor),
+/// missing-source reversal and counted transfers into an occupied cursor. All
+/// preserve endpoint quantities; extra hypothetical outcomes make the test harder.
+fn endpoint_outcomes(
+    inventory: &Inventory,
+    from: i32,
+    to: i32,
+    amount: MoveQuantity,
+) -> Vec<Inventory> {
+    let from = InventorySlot(from);
+    let to = InventorySlot(to);
+    let source = inventory.items().get(&from);
+    let destination = inventory.items().get(&to);
+    let mut swapped = inventory.items().clone();
+    swapped.remove(&from);
+    swapped.remove(&to);
+    for (item, slot) in [(source, to), (destination, from)] {
+        if let Some(item) = item {
+            let mut moved = item.clone();
+            moved.slot = slot;
+            swapped.insert(slot, moved);
+        }
+    }
+    let mut result = vec![state(swapped.into_values().collect())];
+    let (Some(source), MoveQuantity::Count(requested)) = (source, amount) else {
+        return result;
+    };
+    let Some(available) = source.stack_count else {
+        return result;
+    };
+    let existing = match destination {
+        Some(item) if same_definition(source, item) => item.stack_count.unwrap(),
+        Some(_) => return result,
+        None => 0,
+    };
+    for transferred in 1..=requested
+        .get()
+        .min(available)
+        .min(source.rules.stack_size - existing)
+    {
+        let mut items = inventory.items().clone();
+        if transferred == available {
+            items.remove(&from);
+        } else {
+            items.get_mut(&from).unwrap().stack_count = Some(available - transferred);
+        }
+        let mut placed = destination.unwrap_or(source).clone();
+        placed.slot = to;
+        placed.stack_count = Some(existing + transferred);
+        items.insert(to, placed);
+        result.push(state(items.into_values().collect()));
     }
     result
 }
@@ -256,6 +317,12 @@ fn independent_refusals_partial_transfers_and_initial_occupants_fit_the_bound() 
                 most_states > 10,
                 "did not exercise independent branches: {most_states}"
             );
+            assert!(actual.iter().any(|branch| branch
+                .items()
+                .values()
+                .filter(|item| item.stack_count.is_some())
+                .count()
+                > 2));
             assert!(projected.predicted());
             assert_eq!(
                 weight(&projected, GameDialect::EqMac),

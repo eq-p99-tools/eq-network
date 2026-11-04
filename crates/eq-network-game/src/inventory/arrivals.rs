@@ -24,7 +24,7 @@ impl Inventory {
             || self
                 .stack_weight
                 .as_ref()
-                .is_some_and(|bound| bound.active())
+                .is_some_and(super::stack_weight::StackWeightBound::active)
     }
 
     /// Whether the reducer can include this normalized cursor arrival in a
