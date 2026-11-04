@@ -824,6 +824,13 @@ const P99_HAZARDS: [Hazard; 1] = [Hazard::Falling];
 struct Project1999;
 
 impl ServerType for Project1999 {
+    /// Ordinary Titanium group senders and explicit consent (native
+    /// 0x49d3cc/0x49d654/0x49d7b6/0x49d8bd), with roster state from
+    /// 0x458738. Public P99 partner compatibility remains a separate check.
+    fn groups(&self, _setup: &Setup<'_>) -> Provided {
+        offer(Box::new(Groups::titanium()))
+    }
+
     fn inventory_move_rules(&self) -> Option<MoveRules> {
         Some(MoveRules::EqEmu)
     }
@@ -2087,7 +2094,7 @@ mod tests {
     #[test]
     fn p99_and_eqemu_provide_every_feature_one_each() {
         // Training, resurrection, reading, tradeskills, the map, deleting
-        // spells, merchants' offers, groups, the player's listing, dice,
+        // spells, merchants' offers, the player's listing, dice,
         // emotes, assisting, raids and the server's tick are checked on
         // EQEmu alone so far; P99 takes falls' damage by the Titanium
         // program (6.332); only EQEmu waits for the answer to the end of
@@ -2095,7 +2102,7 @@ mod tests {
         // yet checked live; and only EQEmu takes the show-helm option.
         // P99 also retains the verified own-player stun timer.
         for (protocol, count) in [
-            (ServerProtocol::Project1999, 24),
+            (ServerProtocol::Project1999, 25),
             (ServerProtocol::EqEmu, 37),
         ] {
             let server = server_type(protocol);
@@ -2112,7 +2119,6 @@ mod tests {
             Capability::Map,
             Capability::DeletingSpells,
             Capability::MerchantOffers,
-            Capability::Grouping,
             Capability::Listing,
             Capability::Rolling,
             Capability::Emoting,
@@ -2124,6 +2130,7 @@ mod tests {
             assert!(!offers(server_type(ServerProtocol::Project1999)).contains(&capability));
             assert!(offers(server_type(ServerProtocol::EqEmu)).contains(&capability));
         }
+        assert!(offers(server_type(ServerProtocol::Project1999)).contains(&Capability::Grouping));
         // Moving the book's spells is checked on both.
         for protocol in [ServerProtocol::Project1999, ServerProtocol::EqEmu] {
             assert!(offers(server_type(protocol)).contains(&Capability::MovingSpells));

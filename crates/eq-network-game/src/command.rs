@@ -508,15 +508,23 @@ pub enum GameCommand {
         /// Who is invited.
         name: String,
     },
-    /// Join the group of whoever invited the player last: `/follow`.
+    /// Ask to join the displayed invitation's group: `/follow`.
     FollowGroup {
         /// Current zone admission.
         session_id: u64,
+        /// The inviter shown when the player chose to accept.
+        inviter: String,
+        /// Identity of that displayed invitation; None authorizes no answer.
+        invitation_id: Option<crate::group::InvitationId>,
     },
     /// Decline the invitation waiting for an answer.
     DeclineGroup {
         /// Current zone admission.
         session_id: u64,
+        /// The inviter shown when the player chose to decline.
+        inviter: String,
+        /// Identity of that displayed invitation; None authorizes no answer.
+        invitation_id: Option<crate::group::InvitationId>,
     },
     /// Leave the group, or, as its leader, remove the targeted member or
     /// disband it, as the server decides; with an invitation waiting,
@@ -834,8 +842,8 @@ impl GameCommand {
             | Self::AnswerTranslocate { session_id, .. }
             | Self::DropInvisibility { session_id, .. }
             | Self::InviteToGroup { session_id, .. }
-            | Self::FollowGroup { session_id }
-            | Self::DeclineGroup { session_id }
+            | Self::FollowGroup { session_id, .. }
+            | Self::DeclineGroup { session_id, .. }
             | Self::Disband { session_id }
             | Self::ToggleAway { session_id }
             | Self::ToggleAnonymous { session_id }

@@ -133,6 +133,9 @@ pub enum Request {
     /// Leave or disband the group, as the server decides by its idea of the
     /// player's target.
     Disband,
+    /// P99's source-backed ordinary Titanium group path, separate from the
+    /// emulator compatibility senders above.
+    TitaniumGroup(group::TitaniumRequest),
     /// Say the player is away from the keyboard (true), or back.
     SetAway(bool),
     /// Say how the player hides from `/who`.
@@ -377,6 +380,7 @@ pub fn titanium(request: &Request, sender: Sender<'_>) -> Result<EncodedCommand>
         Request::FollowGroup(inviter) => group::follow(inviter, sender.name)?,
         Request::DeclineGroup(inviter) => group::decline(inviter, sender.name)?,
         Request::Disband => group::disband(sender.name)?,
+        Request::TitaniumGroup(request) => group::titanium(request, sender.name)?,
         Request::SetAway(away) => listing::titanium_away(sender.spawn(), *away)?,
         Request::SetAnonymity(anonymity) => {
             listing::titanium_anonymity(sender.spawn(), *anonymity)?

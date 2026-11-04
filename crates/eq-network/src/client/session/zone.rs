@@ -999,8 +999,16 @@ mod tests {
                 session_id,
                 name: "Friend".into(),
             },
-            ClientCommand::FollowGroup { session_id },
-            ClientCommand::DeclineGroup { session_id },
+            ClientCommand::FollowGroup {
+                session_id,
+                inviter: "Leader".into(),
+                invitation_id: eq_network_game::group::InvitationId::new(1),
+            },
+            ClientCommand::DeclineGroup {
+                session_id,
+                inviter: "Leader".into(),
+                invitation_id: eq_network_game::group::InvitationId::new(1),
+            },
             ClientCommand::Disband { session_id },
             ClientCommand::ToggleAway { session_id },
             ClientCommand::ToggleAnonymous { session_id },
@@ -1652,7 +1660,7 @@ mod tests {
         assert!(eqemu.contains(&Capability::MerchantOffers));
         assert!(!p99.contains(&Capability::MerchantOffers));
         assert!(eqemu.contains(&Capability::Grouping));
-        assert!(!p99.contains(&Capability::Grouping));
+        assert!(p99.contains(&Capability::Grouping));
         assert!(eqemu.contains(&Capability::Listing));
         assert!(!p99.contains(&Capability::Listing));
         for capability in [
@@ -1669,7 +1677,7 @@ mod tests {
             assert!(!p99.contains(&capability));
         }
         assert!(p99.contains(&Capability::EnvironmentalDamage));
-        assert_eq!(eqemu.len(), p99.len() + 17);
+        assert_eq!(eqemu.len(), p99.len() + 16);
     }
 
     #[test]
@@ -1847,6 +1855,150 @@ mod tests {
             ClientEvent::World(WorldEvent::Camp(CampStatus::Abandoned { .. }))
         )));
         assert!(world.exit().is_none());
+    }
+    #[test]
+    #[allow(clippy::too_many_lines)] // One policy/decode/consent/admission regression flow.
+    fn p99_group_policy_dispatch_preserves_consent_admission_and_native_modes() {
+        use super::super::feature::testing;
+        use crate::client::ServerProtocol;
+        use eq_network_game::{
+            group::{self, GroupUpdate},
+            world::{Capability, WorldEvent},
+        };
+        let server = servers::server_type(ServerProtocol::Project1999);
+        let mut features =
+            Features::new(server, "Tester", eq_network_game::food::AutoEat::default());
+        assert!(features.capabilities().contains(&Capability::Grouping));
+        let mut world = World::new(5);
+        let mut player = testing::player(7);
+        player.name = "Tester".into();
+        world.player.admit(player);
+        world.admitted = Some(Instant::now());
+        let invite_packet = group::invite("Tester", "Leader").unwrap();
+        let offered = testing::run_on(server.wire(), |out| {
+            hear(
+                server
+                    .wire()
+                    .messages(0x12d6, &invite_packet.body, server.item_rules()),
+                &mut features,
+                &mut world,
+                out,
+                true,
+            )
+        });
+        offered.result.unwrap();
+        assert_eq!(offered.sent, []);
+        let invitation_id = offered.events.iter().find_map(|event| match event {
+            ClientEvent::World(WorldEvent::Group(GroupUpdate::Invited { id, .. })) => *id,
+            _ => None,
+        });
+        assert!(invitation_id.is_some());
+        let accept = ClientCommand::FollowGroup {
+            session_id: 5,
+            inviter: "Leader".into(),
+            invitation_id,
+        };
+        assert_eq!(
+            features
+                .provided
+                .iter()
+                .filter(|feature| feature.owns(&accept))
+                .count(),
+            1
+        );
+        let stale = ClientCommand::FollowGroup {
+            session_id: 4,
+            inviter: "Leader".into(),
+            invitation_id,
+        };
+        let stale_out = testing::run_on(server.wire(), |out| {
+            let reason = features
+                .refusal(&stale, &world, Instant::now())
+                .expect("old admission is refused");
+            actions::refuse(&stale, reason, out.log)
+        });
+        stale_out.result.unwrap();
+        assert_eq!(stale_out.sent, []);
+        assert_eq!(features.refusal(&accept, &world, Instant::now()), None);
+        let answered = testing::run_on(server.wire(), |out| {
+            features.handle(&accept, &mut world, out)
+        });
+        assert!(answered.result.unwrap());
+        assert_eq!(answered.sent.len(), 1);
+        assert_eq!(answered.sent[0].opcode, 0x42c9);
+        assert!(!answered.events.iter().any(|event| matches!(
+            event,
+            ClientEvent::World(WorldEvent::Group(
+                GroupUpdate::Members { .. } | GroupUpdate::Formed { .. }
+            ))
+        )));
+        let mut roster = vec![0; 452];
+        roster[..4].copy_from_slice(&7u32.to_le_bytes());
+        roster[4..10].copy_from_slice(b"Tester");
+        roster[68..74].copy_from_slice(b"Leader");
+        roster[388..394].copy_from_slice(b"Leader");
+        let members = testing::run_on(server.wire(), |out| {
+            hear(
+                server.wire().messages(0x2dd6, &roster, server.item_rules()),
+                &mut features,
+                &mut world,
+                out,
+                true,
+            )
+        });
+        members.result.unwrap();
+        assert_eq!(members.sent, []);
+        let invite = ClientCommand::InviteToGroup {
+            session_id: 5,
+            name: "Other".into(),
+        };
+        let nonleader = testing::run_on(server.wire(), |out| {
+            features.handle(&invite, &mut world, out)
+        });
+        assert!(nonleader.result.unwrap());
+        assert_eq!(nonleader.sent, []);
+        assert!(nonleader.events.iter().any(|event| matches!(
+            event,
+            ClientEvent::World(WorldEvent::GroupRefused {
+                string_id: Some(12267),
+                ..
+            })
+        )));
+        // A new admission builds a new owner; old consent cannot carry over.
+        let mut next = Features::new(server, "Tester", eq_network_game::food::AutoEat::default());
+        let mut next_world = World::new(6);
+        let mut player = testing::player(8);
+        player.name = "Tester".into();
+        next_world.player.admit(player);
+        next_world.admitted = Some(Instant::now());
+        assert!(next.refusal(&accept, &next_world, Instant::now()).is_some());
+        let unassigned = ClientCommand::FollowGroup {
+            session_id: 6,
+            inviter: "Leader".into(),
+            invitation_id: None,
+        };
+        let no_offer = testing::run_on(server.wire(), |out| {
+            next.handle(&unassigned, &mut next_world, out)
+        });
+        assert!(no_offer.result.unwrap());
+        assert_eq!(no_offer.sent, []);
+        assert!(no_offer
+            .events
+            .iter()
+            .any(|event| matches!(event, ClientEvent::World(WorldEvent::GroupRefused { .. }))));
+        let malformed = testing::run_on(server.wire(), |out| {
+            hear(
+                server
+                    .wire()
+                    .messages(0x1b48, &[0; 128], server.item_rules()),
+                &mut next,
+                &mut next_world,
+                out,
+                true,
+            )
+        });
+        malformed.result.unwrap();
+        assert_eq!(malformed.sent, []);
     }
 }
 

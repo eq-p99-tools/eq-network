@@ -25,6 +25,7 @@
 use crate::command::EncodedCommand;
 use anyhow::{ensure, Result};
 use serde::Serialize;
+use std::num::NonZeroU64;
 
 /// `OP_GroupInvite`: an invitation, either way.
 pub const INVITE_OPCODE: u16 = 0x1b48;
@@ -33,6 +34,8 @@ pub const INVITE2_OPCODE: u16 = 0x12d6;
 /// `OP_GroupFollow`: joining the inviter's group; the server repeats it to
 /// the inviter.
 pub const FOLLOW_OPCODE: u16 = 0x7bc7;
+/// Titanium's acceptance of an invitation to an existing group.
+pub const FOLLOW2_OPCODE: u16 = 0x42c9;
 /// `OP_GroupCancelInvite`: declining an invitation; the server passes it on
 /// to the inviter.
 pub const CANCEL_OPCODE: u16 = 0x1f27;
@@ -75,9 +78,134 @@ const DISBANDED: u32 = 6;
 const UPDATED: u32 = 7;
 const NEW_LEADER: u32 = 8;
 const FIRST_INVITE: u32 = 9;
-/// `EQMac`'s quiet way out of a group (TAKP's `groupActDisband2`), which no
-/// `EQEmu` source sends.
+/// Disband with a message (native Titanium action 5). `EQMac` also uses a
+/// distinct short form, interpreted separately below.
 const OUT_QUIETLY: u32 = 5;
+
+/// Session-local consent identity, scoped by the command's admission.
+/// It is never transmitted to or assigned by the game server.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+pub struct InvitationId(NonZeroU64);
+
+impl InvitationId {
+    /// A nonzero local generation; raw codec offers have no identity.
+    #[must_use]
+    pub const fn new(generation: u64) -> Option<Self> {
+        match NonZeroU64::new(generation) {
+            Some(value) => Some(Self(value)),
+            None => None,
+        }
+    }
+
+    /// The monotonically assigned local generation.
+    #[must_use]
+    pub const fn get(self) -> u64 {
+        self.0.get()
+    }
+}
+
+/// Which invitation the server sent. Titanium answers the two differently.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+pub enum InvitationKind {
+    /// The inviter is forming a group.
+    Initial,
+    /// The inviter already leads a group.
+    Existing,
+}
+
+/// A native refusal of an additional incoming invitation (0x49d654).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+pub enum InvitationRefusal {
+    /// An invitation is already awaiting an answer.
+    Waiting,
+    /// Grouped, or an accepted invitation is still awaiting group news.
+    Unavailable,
+}
+
+impl InvitationRefusal {
+    /// Native reason byte, not a membership assertion.
+    #[must_use]
+    pub const fn code(self) -> u8 {
+        match self {
+            Self::Waiting => 1,
+            Self::Unavailable => 2,
+        }
+    }
+}
+
+/// The ordinary Titanium client's group requests, used by P99 independently
+/// of `EQEmu`'s compatibility path. Native senders: 0x49d3cc, 0x49d7b6 and
+/// 0x49d8bd. Submission never establishes membership.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum TitaniumRequest {
+    /// Invite by name; a known leader uses the existing-group opcode.
+    Invite {
+        /// The invited player.
+        player: String,
+        /// Whether authoritative state names the sender as leader.
+        leading: bool,
+    },
+    /// Answer the retained invitation, without changing its kind.
+    Follow {
+        /// Who sent the retained invitation.
+        inviter: String,
+        /// Which native acceptance the invitation requires.
+        kind: InvitationKind,
+    },
+    /// Explicitly decline, with native reason 3.
+    Decline {
+        /// Who sent the retained invitation.
+        inviter: String,
+    },
+    /// Refuse an additional incoming invitation without replacing consent.
+    Refuse {
+        /// Who sent the additional invitation.
+        inviter: String,
+        /// Established ordinary native refusal only.
+        reason: InvitationRefusal,
+    },
+    /// Leave; both name fields name the player.
+    Leave,
+}
+
+/// Encode only established ordinary Titanium group actions.
+///
+/// # Errors
+/// Rejects names their fields cannot hold.
+pub fn titanium(request: &TitaniumRequest, player: &str) -> Result<EncodedCommand> {
+    match request {
+        TitaniumRequest::Invite {
+            player: invitee,
+            leading,
+        } => Ok(EncodedCommand {
+            opcode: if *leading {
+                INVITE2_OPCODE
+            } else {
+                INVITE_OPCODE
+            },
+            body: names(invitee, player)?,
+        }),
+        TitaniumRequest::Follow { inviter, kind } => Ok(EncodedCommand {
+            opcode: match kind {
+                InvitationKind::Initial => FOLLOW_OPCODE,
+                InvitationKind::Existing => FOLLOW2_OPCODE,
+            },
+            body: names(inviter, player)?,
+        }),
+        TitaniumRequest::Decline { inviter } | TitaniumRequest::Refuse { inviter, .. } => {
+            let mut body = names(inviter, player)?;
+            body.push(match request {
+                TitaniumRequest::Refuse { reason, .. } => reason.code(),
+                _ => 3,
+            });
+            Ok(EncodedCommand {
+                opcode: CANCEL_OPCODE,
+                body,
+            })
+        }
+        TitaniumRequest::Leave => disband(player),
+    }
+}
 
 /// News of groups: the server's word, and what the session sent for the
 /// player, which the server does not answer.
@@ -88,7 +216,8 @@ pub enum GroupUpdate {
         /// Who was invited.
         player: String,
     },
-    /// The session joined the inviter's group for the player.
+    /// The session submitted the player's acceptance. Membership is still
+    /// unknown until the server reports it.
     Following {
         /// Who invited the player.
         inviter: String,
@@ -102,10 +231,19 @@ pub enum GroupUpdate {
     Invited {
         /// Who invited them.
         inviter: String,
+        /// Who the packet invites.
+        player: String,
+        /// The invitation's native acceptance form.
+        kind: InvitationKind,
+        /// Assigned by the admission's group owner; None at the raw codec
+        /// boundary. This local consent identity never enters a game packet.
+        id: Option<InvitationId>,
     },
-    /// The one the player invited joined, and with them the player formed a
-    /// group, which the player leads.
-    Formed,
+    /// The server reported initial group formation, naming its leader.
+    Formed {
+        /// Explicit leader name; never inferred from a local submission.
+        leader: String,
+    },
     /// The one the player invited joined.
     Accepted {
         /// Who joined.
@@ -115,6 +253,8 @@ pub enum GroupUpdate {
     Declined {
         /// Who declined.
         member: String,
+        /// The server's reason byte, including values not interpreted here.
+        reason: u8,
     },
     /// Someone joined the player's group.
     Joined {
@@ -149,17 +289,52 @@ fn name(body: &[u8], at: usize) -> String {
     String::from_utf8_lossy(&field[..end]).into_owned()
 }
 
+fn invitation_name(body: &[u8], at: usize) -> Result<String> {
+    let field = &body[at..at + NAME];
+    let Some(end) = field.iter().position(|byte| *byte == 0) else {
+        anyhow::bail!("unterminated group invitation name");
+    };
+    ensure!(end > 0, "empty group invitation name");
+    let text = &field[..end];
+    ensure!(text.is_ascii(), "non-ASCII group invitation name");
+    ensure!(
+        !text.iter().any(u8::is_ascii_control),
+        "control character in group invitation name"
+    );
+    Ok(String::from_utf8_lossy(text).into_owned())
+}
+
 /// Two names, each in its own 64-byte field.
 fn names(first: &str, second: &str) -> Result<Vec<u8>> {
     let mut body = vec![0; NAME * 2];
     for (at, text) in [(0, first), (NAME, second)] {
         ensure!(
-            !text.is_empty() && text.len() < NAME,
+            !text.is_empty() && text.len() < NAME && !text.as_bytes().contains(&0),
             "a group packet's name must be 1 to 63 bytes"
         );
         body[at..at + text.len()].copy_from_slice(text.as_bytes());
     }
     Ok(body)
+}
+
+/// Titanium's admission profile lists six names including the player, then
+/// the leader. `EQEmu`'s Titanium `PlayerProfile_Struct` gives offsets 13280 and
+/// 13664; native 0x4b925c/0x458738 consume saved members and explicit leaders
+/// separately. An absent leader remains unknown, never inferred from order.
+///
+/// # Errors
+/// Rejects profiles too short for those fields.
+pub fn titanium_profile(body: &[u8]) -> Result<Option<GroupUpdate>> {
+    ensure!(body.len() >= 19592, "truncated Titanium profile group");
+    let player = invitation_name(body, 12940)?;
+    let Some(GroupUpdate::Members { members, .. }) = profile_members(&body[13280..13664], &player)
+    else {
+        return Ok(Some(GroupUpdate::Disbanded));
+    };
+    Ok(Some(GroupUpdate::Members {
+        leader: name(body, 13664),
+        members,
+    }))
 }
 
 /// Invites a player, by name, to the inviter's group.
@@ -184,9 +359,8 @@ pub fn follow(inviter: &str, player: &str) -> Result<EncodedCommand> {
     })
 }
 
-/// Declines the inviter's invitation. The struct's last byte, which the
-/// server passes on unread, is sent as 0; what the official client sends
-/// there is not checked.
+/// Emulator-compatible decline. Its uninterpreted last byte stays zero;
+/// the native explicit reason is encoded by [`titanium`] separately.
 ///
 /// # Errors
 /// Rejects a name its field cannot hold.
@@ -352,7 +526,14 @@ pub fn decode(opcode: u16, body: &[u8]) -> Result<Option<GroupUpdate>> {
         INVITE_OPCODE | INVITE2_OPCODE => {
             ensure!(body.len() >= NAME * 2, "truncated group invitation");
             Some(GroupUpdate::Invited {
-                inviter: name(body, NAME),
+                inviter: invitation_name(body, NAME)?,
+                player: invitation_name(body, 0)?,
+                kind: if opcode == INVITE_OPCODE {
+                    InvitationKind::Initial
+                } else {
+                    InvitationKind::Existing
+                },
+                id: None,
             })
         }
         FOLLOW_OPCODE => {
@@ -362,9 +543,10 @@ pub fn decode(opcode: u16, body: &[u8]) -> Result<Option<GroupUpdate>> {
             })
         }
         CANCEL_OPCODE => {
-            ensure!(body.len() >= NAME * 2, "truncated group decline");
+            ensure!(body.len() > NAME * 2, "truncated group decline");
             Some(GroupUpdate::Declined {
                 member: name(body, NAME),
+                reason: body[NAME * 2],
             })
         }
         UPDATE_OPCODE => update(body)?,
@@ -386,9 +568,17 @@ fn update(body: &[u8]) -> Result<Option<GroupUpdate>> {
             name: name(body, MEMBER),
         }),
         DISBANDED => Some(GroupUpdate::Disbanded),
+        OUT_QUIETLY => {
+            // Native 0x458738 also reads the message word at 448. EQMac's
+            // different 136-byte form must not enter this Titanium path.
+            ensure!(body.len() >= 452, "truncated Titanium group disband");
+            Some(GroupUpdate::Disbanded)
+        }
         // Sent to the inviter alone, naming them as the member: the first
         // to join formed the group with them.
-        FIRST_INVITE => Some(GroupUpdate::Formed),
+        FIRST_INVITE => Some(GroupUpdate::Formed {
+            leader: name(body, MEMBER),
+        }),
         UPDATED => {
             ensure!(body.len() >= LEADER + NAME, "truncated group list");
             Some(GroupUpdate::Members {
@@ -460,6 +650,9 @@ mod tests {
         put(&mut invitation, 64, "Leader");
         let invited = Some(GroupUpdate::Invited {
             inviter: "Leader".into(),
+            player: "Tester".into(),
+            kind: InvitationKind::Initial,
+            id: None,
         });
         assert_eq!(
             decode_eqmac(EQMAC_INVITE_OPCODE, &invitation).unwrap(),
@@ -477,7 +670,9 @@ mod tests {
         put(&mut formed, 68, "Leader");
         assert_eq!(
             decode_eqmac(EQMAC_UPDATE_OPCODE, &formed).unwrap(),
-            Some(GroupUpdate::Formed)
+            Some(GroupUpdate::Formed {
+                leader: "Leader".into()
+            })
         );
         // The full list: GroupUpdate_Struct, the leader at 388.
         let mut list = vec![0; 708];
@@ -517,8 +712,8 @@ mod tests {
         cleared[..4].copy_from_slice(&5u32.to_le_bytes());
         assert_eq!(decode_eqmac(EQMAC_UPDATE_OPCODE, &cleared).unwrap(), None);
         assert!(decode_eqmac(EQMAC_UPDATE_OPCODE, &cleared[..100]).is_err());
-        // Titanium's servers send no such action.
-        assert_eq!(decode(UPDATE_OPCODE, &removed).unwrap(), None);
+        // EQMac's short action-5 record is not native Titanium's full form.
+        assert!(decode(UPDATE_OPCODE, &removed).is_err());
         // The empty acceptance as a zone admits a player in no group.
         assert_eq!(decode_eqmac(EQMAC_FOLLOW_OPCODE, &[]).unwrap(), None);
         assert!(decode_eqmac(EQMAC_FOLLOW_OPCODE, &[0; 64]).is_err());
@@ -571,7 +766,10 @@ mod tests {
         assert_eq!(
             decode(INVITE_OPCODE, &invitation).unwrap(),
             Some(GroupUpdate::Invited {
-                inviter: "Leader".into()
+                inviter: "Leader".into(),
+                player: "Tester".into(),
+                kind: InvitationKind::Initial,
+                id: None,
             })
         );
         let mut accepted = vec![0; 128];
@@ -587,7 +785,8 @@ mod tests {
         assert_eq!(
             decode(CANCEL_OPCODE, &accepted).unwrap(),
             Some(GroupUpdate::Declined {
-                member: "Friend".into()
+                member: "Friend".into(),
+                reason: 0,
             })
         );
         // A join or a leave, as long as the server's own struct.
@@ -617,6 +816,7 @@ mod tests {
             })
         );
         assert_eq!(change(DISBANDED), Some(GroupUpdate::Disbanded));
+        assert_eq!(change(OUT_QUIETLY), Some(GroupUpdate::Disbanded));
         // The first to join forms the group with the inviter: a join naming
         // the inviter twice, with their leadership ranks after the names.
         let mut formed = vec![0; 452];
@@ -626,7 +826,9 @@ mod tests {
         formed[132] = 1;
         assert_eq!(
             decode(UPDATE_OPCODE, &formed).unwrap(),
-            Some(GroupUpdate::Formed)
+            Some(GroupUpdate::Formed {
+                leader: "Tester".into()
+            })
         );
         // The leader's leadership abilities are not read.
         assert_eq!(change(10), None);
@@ -647,5 +849,141 @@ mod tests {
         assert!(decode(UPDATE_OPCODE, &list[..300]).is_err());
         assert!(decode(INVITE_OPCODE, &invitation[..100]).is_err());
         assert_eq!(decode(0x1234, &invitation).unwrap(), None);
+    }
+    #[test]
+    fn native_titanium_preserves_invite_kind_and_explicit_refusal() {
+        for (leading, opcode, kind, follow_opcode) in [
+            (false, 0x1b48, InvitationKind::Initial, 0x7bc7),
+            (true, 0x12d6, InvitationKind::Existing, 0x42c9),
+        ] {
+            let invite = titanium(
+                &TitaniumRequest::Invite {
+                    player: "Invitee".into(),
+                    leading,
+                },
+                "Leader",
+            )
+            .unwrap();
+            assert_eq!((invite.opcode, invite.body.len()), (opcode, 128));
+            assert_eq!(
+                decode(opcode, &invite.body).unwrap(),
+                Some(GroupUpdate::Invited {
+                    inviter: "Leader".into(),
+                    player: "Invitee".into(),
+                    kind,
+                    id: None,
+                })
+            );
+            let answer = titanium(
+                &TitaniumRequest::Follow {
+                    inviter: "Leader".into(),
+                    kind,
+                },
+                "Invitee",
+            )
+            .unwrap();
+            assert_eq!((answer.opcode, answer.body.len()), (follow_opcode, 128));
+            assert_eq!(name(&answer.body, 0), "Leader");
+            assert_eq!(name(&answer.body, 64), "Invitee");
+        }
+        for (request, reason) in [
+            (
+                TitaniumRequest::Decline {
+                    inviter: "Leader".into(),
+                },
+                3,
+            ),
+            (
+                TitaniumRequest::Refuse {
+                    inviter: "Leader".into(),
+                    reason: InvitationRefusal::Waiting,
+                },
+                1,
+            ),
+            (
+                TitaniumRequest::Refuse {
+                    inviter: "Leader".into(),
+                    reason: InvitationRefusal::Unavailable,
+                },
+                2,
+            ),
+        ] {
+            let declined = titanium(&request, "Invitee").unwrap();
+            assert_eq!(
+                (declined.opcode, declined.body.len(), declined.body[128]),
+                (0x1f27, 129, reason)
+            );
+            assert_eq!(name(&declined.body, 0), "Leader");
+            assert_eq!(name(&declined.body, 64), "Invitee");
+        }
+        let left = titanium(&TitaniumRequest::Leave, "Invitee").unwrap();
+        assert_eq!(left.opcode, 0x0e76);
+        assert_eq!(name(&left.body, 0), "Invitee");
+        assert_eq!(name(&left.body, 64), "Invitee");
+        // The emulator compatibility path is deliberately unchanged.
+        assert_eq!(follow("Leader", "Invitee").unwrap().opcode, 0x7bc7);
+        assert_eq!(decline("Leader", "Invitee").unwrap().body[128], 0);
+        assert_eq!(eqmac_follow("Leader", "Invitee").unwrap().opcode, 0x3d20);
+    }
+
+    #[test]
+    fn malformed_or_unknown_offers_cannot_acquire_consent() {
+        assert_eq!(InvitationId::new(0), None);
+        assert!(decode(0x1b48, &[0; 128]).is_err());
+        let mut body = vec![b'x'; 128];
+        assert!(decode(0x12d6, &body).is_err());
+        body.fill(0);
+        put(&mut body, 0, "Invitee");
+        body[64] = 0xff;
+        assert!(decode(0x12d6, &body).is_err());
+        body[64] = b'\n';
+        assert!(decode(0x12d6, &body).is_err());
+        assert_eq!(decode(0xffff, &body).unwrap(), None);
+        assert!(titanium(
+            &TitaniumRequest::Decline {
+                inviter: "bad\0name".into()
+            },
+            "Invitee"
+        )
+        .is_err());
+        assert!(decode(0x1f27, &[0; 128]).is_err());
+        let mut decline = vec![0; 129];
+        put(&mut decline, 64, "Invitee");
+        decline[128] = 251;
+        assert_eq!(
+            decode(0x1f27, &decline).unwrap(),
+            Some(GroupUpdate::Declined {
+                member: "Invitee".into(),
+                reason: 251
+            })
+        );
+    }
+
+    #[test]
+    fn titanium_profile_restores_members_and_explicit_leader_independently() {
+        let mut body = vec![0; 19592];
+        put(&mut body, 12940, "Invitee");
+        put(&mut body, 13280, "Invitee");
+        assert_eq!(
+            titanium_profile(&body).unwrap(),
+            Some(GroupUpdate::Disbanded)
+        );
+        put(&mut body, 13344, "Leader");
+        assert_eq!(
+            titanium_profile(&body).unwrap(),
+            Some(GroupUpdate::Members {
+                leader: String::new(),
+                members: vec!["Leader".into()],
+            })
+        );
+        put(&mut body, 13664, "Leader");
+        assert_eq!(
+            titanium_profile(&body).unwrap(),
+            Some(GroupUpdate::Members {
+                leader: "Leader".into(),
+                members: vec!["Leader".into()],
+            })
+        );
+        assert!(titanium_profile(&body[..13727]).is_err());
     }
 }

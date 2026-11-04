@@ -287,8 +287,8 @@ fn refusal(command: &ClientCommand, reason: &str) -> Option<WorldEvent> {
         | ClientCommand::AnswerSacrifice { session_id, .. }
         | ClientCommand::AnswerTranslocate { session_id, .. }
         | ClientCommand::InviteToGroup { session_id, .. }
-        | ClientCommand::FollowGroup { session_id }
-        | ClientCommand::DeclineGroup { session_id }
+        | ClientCommand::FollowGroup { session_id, .. }
+        | ClientCommand::DeclineGroup { session_id, .. }
         | ClientCommand::Disband { session_id }
         | ClientCommand::ToggleAway { session_id }
         | ClientCommand::ToggleAnonymous { session_id }
