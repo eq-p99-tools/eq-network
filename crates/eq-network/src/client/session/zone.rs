@@ -964,6 +964,7 @@ mod tests {
             ClientCommand::ConfigureMotion {
                 session_id,
                 calibration: MotionCalibration {
+                    diagonal: Default::default(),
                     units_per_second: 6.0,
                     velocity_scale: 0.05,
                     animation: 12,

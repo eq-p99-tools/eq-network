@@ -1,6 +1,7 @@
 //! How fast each client generation lets the player move, from what the
 //! session knows of them.
 use super::session::{BackwardCalibration, MotionCalibration, StrafeCalibration, WalkCalibration};
+use super::DiagonalRates;
 
 /// What the official client's speeds depend on, as far as the session knows
 /// it.
@@ -83,6 +84,8 @@ struct Generation {
     /// Titanium's two tests that hold the multiplier at 1 are unread, so it
     /// slows the player everywhere, the slower side.
     unslowed_zone: Option<u16>,
+    /// Grounded combined longitudinal and lateral input is calibrated.
+    grounded_diagonal: bool,
 }
 
 /// `EQMac`'s side of the table.
@@ -90,6 +93,7 @@ const EQMAC: Generation = Generation {
     rate_floor: None,
     animation_per_input: 10.0,
     unslowed_zone: Some(EQMAC_UNSLOWED_ZONE),
+    grounded_diagonal: false,
 };
 
 /// Titanium's side of the table, from the Titanium speeds read and the
@@ -98,6 +102,7 @@ const TITANIUM: Generation = Generation {
     rate_floor: Some(-65),
     animation_per_input: 40.0,
     unslowed_zone: None,
+    grounded_diagonal: true,
 };
 
 /// `EQMac`'s speeds, from the program (TAKP sitting 2 M1, "Speeds", and the
@@ -221,6 +226,18 @@ fn motion(generation: Generation, state: &SpeedState) -> Option<MotionCalibratio
     let strafing =
         state.walk * 0.5 * 2.0 * multiplier * if state.sneaking || slowed { 0.5 } else { 1.0 };
     let speed = |input: f32| input.abs() * EQMAC_UNITS_PER_INPUT;
+    let diagonal = if generation.grounded_diagonal && !state.sneaking {
+        // While longitudinal input is nonzero, Titanium takes half the
+        // active run/walk base for the lateral input. The standalone strafe
+        // multiplier and additive spell modifier do not enter this branch.
+        let lateral = |base| (base > 0.0).then_some(speed(base * 0.5));
+        DiagonalRates {
+            run: lateral(state.run),
+            walk: lateral(state.walk),
+        }
+    } else {
+        DiagonalRates::default()
+    };
     // The programs cut the field toward zero. Whether Titanium's conversion
     // truncates is read from its routine's shape only (0x60e98c), and the
     // product is taken in single precision.
@@ -229,6 +246,7 @@ fn motion(generation: Generation, state: &SpeedState) -> Option<MotionCalibratio
         (input.clamp(WIRE_INPUTS.0, WIRE_INPUTS.1) * generation.animation_per_input) as i16
     };
     let calibration = MotionCalibration {
+        diagonal,
         units_per_second: speed(running),
         velocity_scale: VELOCITY_SCALE,
         animation: byte(running),
@@ -313,6 +331,7 @@ mod tests {
         let speeds = eqmac(&player());
         assert_eq!(speeds.encumbrance, Some((false, 0x3067)));
         let speeds = speeds.motion.unwrap();
+        assert_eq!(speeds.diagonal, DiagonalRates::default());
         assert!(close(speeds.units_per_second, 29.9), "{speeds:?}");
         assert_eq!(speeds.animation, 7);
         assert!((speeds.velocity_scale - 0.05).abs() < f32::EPSILON);
@@ -323,6 +342,50 @@ mod tests {
         // Strafing takes the walk speed, the slower of the two.
         let strafe = speeds.strafe.unwrap();
         assert!(close(strafe.units_per_second, 19.6) && strafe.animation == 0);
+    }
+
+    #[test]
+    fn titanium_diagonal_uses_half_the_selected_base_and_preserves_backward_calibration() {
+        let state = player();
+        let straight = titanium(&state).motion.unwrap();
+        let slowed = titanium(&SpeedState { rate: -40, ..state }).motion.unwrap();
+        let encumbered = titanium(&SpeedState {
+            weight: 150,
+            ..state
+        })
+        .motion
+        .unwrap();
+        for calibration in [straight, slowed, encumbered] {
+            assert!(close(
+                calibration.diagonal.run.unwrap(),
+                0.35 * EQMAC_UNITS_PER_INPUT
+            ));
+            assert!(close(
+                calibration.diagonal.walk.unwrap(),
+                0.23 * EQMAC_UNITS_PER_INPUT
+            ));
+        }
+        assert!(close(
+            straight.backward.unwrap().units_per_second,
+            0.46 * EQMAC_UNITS_PER_INPUT
+        ));
+        assert!(slowed.units_per_second < straight.units_per_second);
+        assert!(
+            slowed.strafe.unwrap().units_per_second < straight.strafe.unwrap().units_per_second
+        );
+        assert!(titanium(&SpeedState {
+            rate: -1000,
+            ..state
+        })
+        .motion
+        .is_none());
+        let sneaking = titanium(&SpeedState {
+            sneaking: true,
+            ..state
+        })
+        .motion
+        .unwrap();
+        assert_eq!(sneaking.diagonal, DiagonalRates::default());
     }
 
     #[test]

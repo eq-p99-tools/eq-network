@@ -1,6 +1,7 @@
 //! Titanium movement encoding and session-scoped displacement validation.
 
 mod carry;
+mod diagonal;
 mod gate;
 pub mod history;
 mod inputs;
@@ -10,6 +11,7 @@ pub use inputs::{
 mod session;
 mod speeds;
 pub use carry::{between_reports, carry, Carried, ZBetween};
+pub use diagonal::{DiagonalAlong, DiagonalRates, GroundedDiagonal, StrafeSide};
 pub use gate::{
     UpdateGate, EQMAC_HEADING_STEP, EQMAC_REPEATS, EQMAC_SPEED_STEP, EQMAC_UPDATE_SPACING,
     EQMAC_UPDATE_TICK,
@@ -148,6 +150,8 @@ pub enum MovementMode {
     Walk,
     /// Sideways movement preserving character facing.
     Strafe,
+    /// Concurrent longitudinal and lateral movement with a fixed ground heading.
+    GroundedDiagonal(GroundedDiagonal),
     /// Airborne descent after leaving a ledge: forward speed and animation, while
     /// height falls under gravity instead of following the ground.
     Fall,
@@ -156,7 +160,7 @@ pub enum MovementMode {
 /// A graphical client's proposed position, tied to its current zone admission.
 #[derive(Clone, Debug, PartialEq)]
 pub struct MovementRequest {
-    /// Selects an independently calibrated speed and animation.
+    /// Selects the calibrated movement limits and animation.
     pub mode: MovementMode,
     /// Connection identifier from `WorldEvent::Entered`.
     pub session_id: u64,
@@ -454,6 +458,15 @@ impl MovementGuard {
     /// # Errors
     /// Rejects disabled, stale, foreign-session, non-finite, or excessive motion.
     pub fn accept(&mut self, request: &MovementRequest, now: Instant) -> Result<[f32; 3]> {
+        self.accept_with_diagonal(request, now, None)
+    }
+
+    fn accept_with_diagonal(
+        &mut self,
+        request: &MovementRequest,
+        now: Instant,
+        lateral_rate: Option<f32>,
+    ) -> Result<[f32; 3]> {
         ensure!(
             request.session_id == self.session_id,
             "movement belongs to an old zone session"
@@ -484,12 +497,22 @@ impl MovementGuard {
             request.position.y - self.position.y,
             request.position.z - self.position.z,
         ];
-        // The tolerance covers f32 rounding in the distance and the stamps'
-        // conversion to seconds; it grants no extra time.
-        ensure!(
-            delta[0].hypot(delta[1]) <= speed * elapsed + 0.01,
-            "movement exceeds elapsed-time budget"
-        );
+        if let MovementMode::GroundedDiagonal(diagonal) = request.mode {
+            ensure!(
+                !self.flying
+                    && lateral_rate.is_some_and(|lateral| {
+                        diagonal.admits(self.position, request.position, speed, lateral, elapsed)
+                    }),
+                "diagonal movement exceeds its grounded component budgets"
+            );
+        } else {
+            // The tolerance covers f32 rounding in the distance and the
+            // stamps' conversion to seconds; it grants no extra time.
+            ensure!(
+                delta[0].hypot(delta[1]) <= speed * elapsed + 0.01,
+                "movement exceeds elapsed-time budget"
+            );
+        }
         // A fall may only descend, at most at terminal speed; grounded modes climb
         // the player's own reach a program step ([`Self::set_climb`]) and come
         // down at most a riser, past which the client's walk falls. After a

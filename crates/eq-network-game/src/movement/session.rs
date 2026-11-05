@@ -1,7 +1,7 @@
 //! Zone-scoped movement submission with caller-supplied calibration.
 use super::{
     gate::{Flags, UpdateGate},
-    MovementGuard, MovementMode, MovementRequest, PositionPacket, JUMP_OPCODE,
+    DiagonalRates, MovementGuard, MovementMode, MovementRequest, PositionPacket, JUMP_OPCODE,
 };
 use crate::{command::EncodedCommand, world::Position};
 use anyhow::{ensure, Result};
@@ -29,7 +29,10 @@ pub struct MotionCalibration {
     /// Optional independently measured backward mode; omission disables backing up.
     #[serde(default)]
     pub backward: Option<BackwardCalibration>,
-    /// Maximum horizontal world units per second.
+    /// Lateral calibration while also holding a longitudinal input.
+    #[serde(default, skip_serializing_if = "DiagonalRates::is_unavailable")]
+    pub diagonal: DiagonalRates,
+    /// Forward world units per second before movement options apply.
     pub units_per_second: f32,
     /// Converts world velocity per second to wire velocity.
     pub velocity_scale: f32,
@@ -121,6 +124,13 @@ impl MotionCalibration {
                 "invalid strafing calibration"
             );
         }
+        ensure!(
+            [self.diagonal.run, self.diagonal.walk]
+                .into_iter()
+                .flatten()
+                .all(|rate| rate.is_finite() && rate > 0.0),
+            "invalid diagonal movement calibration"
+        );
         Ok(())
     }
 }
@@ -572,7 +582,8 @@ impl MotionSession {
     /// Body/scene authority is not owned or certified by this local plan.
     #[allow(
         clippy::float_cmp,
-        reason = "Withdrawn input must preserve coordinates exactly, without drift credit"
+        clippy::too_many_lines,
+        reason = "One prepare/validate/encode transaction, with exact withdrawn coordinates"
     )]
     fn prepare_move_sample(
         &mut self,
@@ -597,8 +608,26 @@ impl MotionSession {
             );
         }
         let mut guard = self.guard.clone();
+        let diagonal = match request.mode {
+            MovementMode::GroundedDiagonal(value) => Some(value),
+            _ => None,
+        };
+        let along = diagonal.map_or(request.mode, |diagonal| diagonal.along.mode());
+        let lateral_rate = if let Some(diagonal) = diagonal {
+            ensure!(
+                !self.options.fly,
+                "diagonal movement requires a grounded mode"
+            );
+            Some(
+                self.calibration
+                    .and_then(|value| value.diagonal.for_mode(diagonal))
+                    .ok_or_else(|| anyhow::anyhow!("diagonal movement is not calibrated"))?,
+            )
+        } else {
+            None
+        };
         let (speed, velocity_scale, animation) = if let Some(calibration) = self.calibration {
-            match request.mode {
+            match along {
                 MovementMode::Strafe => {
                     let strafe = calibration
                         .strafe
@@ -630,6 +659,7 @@ impl MotionSession {
                         backward.animation,
                     )
                 }
+                MovementMode::GroundedDiagonal(_) => unreachable!("longitudinal mode is cardinal"),
             }
         } else {
             (0.0, 0.0, 0)
@@ -637,7 +667,7 @@ impl MotionSession {
         // Switching mode changes the per-sample limit without resetting input expiry
         // or granting a new time budget. The clone is committed only after send succeeds.
         let speed = if self.options.run_boost
-            && matches!(request.mode, MovementMode::Forward | MovementMode::Fall)
+            && matches!(along, MovementMode::Forward | MovementMode::Fall)
         {
             speed * super::MovementOptions::RUN_BOOST
         } else {
@@ -647,7 +677,7 @@ impl MotionSession {
         // The wire's velocity and turn rate cover the same interval the guard
         // budgets: from the last accepted request's stamp to this one's.
         let elapsed = guard.interval(request.created);
-        let displacement = guard.accept(request, now)?;
+        let displacement = guard.accept_with_diagonal(request, now, lateral_rate)?;
         // Following a slope changes position Z without creating the airborne
         // velocity seen during a fall. Falls also leave that field zero: its wire
         // scale is unmeasured, so position Z alone carries the descent.

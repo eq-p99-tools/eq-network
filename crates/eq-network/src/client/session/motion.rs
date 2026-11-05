@@ -10,8 +10,8 @@ use eq_network_game::{
     appearance::AppearanceChange,
     message::Message,
     movement::{
-        MotionCalibration, MotionSession, MovementRequest, PositionPacket, SpeedInputAcceptance,
-        SpeedInputState, SpeedInputs, SpeedState, STATIONARY_HEARTBEAT,
+        DiagonalRates, MotionCalibration, MotionSession, MovementRequest, PositionPacket,
+        SpeedInputAcceptance, SpeedInputState, SpeedInputs, SpeedState, STATIONARY_HEARTBEAT,
     },
     request::Request,
     world::{PlayerState, Position, WorldEvent},
@@ -175,6 +175,7 @@ fn granted(session_id: u64, speeds: &MotionCalibration, falls: bool) -> WorldEve
         walk_units_per_second: speeds.walk.map(|value| value.units_per_second),
         strafe_units_per_second: speeds.strafe.map(|value| value.units_per_second),
         backward_units_per_second: speeds.backward.map(|value| value.units_per_second),
+        diagonal: speeds.diagonal,
         falls,
     }
 }
@@ -188,6 +189,7 @@ pub(super) fn withdrawn(session_id: u64) -> WorldEvent {
         strafe_units_per_second: None,
         walk_units_per_second: None,
         backward_units_per_second: None,
+        diagonal: DiagonalRates::default(),
         falls: false,
     }
 }
@@ -869,6 +871,7 @@ mod tests {
         let configure = ClientCommand::ConfigureMotion {
             session_id: 5,
             calibration: eq_network_game::movement::MotionCalibration {
+                diagonal: Default::default(),
                 units_per_second: 6.0,
                 velocity_scale: 0.05,
                 animation: 12,

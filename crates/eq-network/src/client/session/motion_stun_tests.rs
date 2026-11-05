@@ -16,6 +16,7 @@ fn setup(start: Instant) -> World {
     motion
         .calibrate(
             MotionCalibration {
+                diagonal: Default::default(),
                 units_per_second: 6.0,
                 velocity_scale: 0.05,
                 animation: 12,

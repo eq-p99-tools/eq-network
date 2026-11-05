@@ -833,7 +833,7 @@ pub enum WorldEvent {
     MotionState {
         /// Current zone admission.
         session_id: u64,
-        /// Calibrated world units per second, if movement is enabled.
+        /// Calibrated forward world units per second, if movement is enabled.
         units_per_second: Option<f32>,
         /// Independently calibrated backward speed; None disables backing up.
         backward_units_per_second: Option<f32>,
@@ -841,6 +841,9 @@ pub enum WorldEvent {
         walk_units_per_second: Option<f32>,
         /// Optional separately calibrated sideways speed.
         strafe_units_per_second: Option<f32>,
+        /// Lateral rates while longitudinal input is active.
+        #[serde(skip_serializing_if = "crate::movement::DiagonalRates::is_unavailable")]
+        diagonal: crate::movement::DiagonalRates,
         /// Whether this server's session accepts `MovementMode::Fall` samples.
         falls: bool,
     },
