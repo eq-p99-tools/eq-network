@@ -82,7 +82,9 @@ impl Inventory {
         if self.predicted() {
             let mut before = current;
             for (slot, origin) in self.prediction_origins() {
-                if self.weight_rebased.contains(&slot) {
+                if (slot == InventorySlot::CURSOR && self.destroyed.is_some())
+                    || self.weight_rebased.contains(&slot)
+                {
                     continue;
                 }
                 if let Some(item) = origin {
@@ -95,7 +97,13 @@ impl Inventory {
                 return Err(WeightUnavailable::Prediction);
             }
         }
-        Ok(weight)
+        // Keep the destroyed instance's whole mass as an upper bound until
+        // received cursor/snapshot evidence arrives. No lighter load is inferred.
+        Ok(weight
+            + self
+                .destroyed
+                .as_ref()
+                .map_or(0, |item| u64::from(item.details.weight_tenths)))
     }
 }
 

@@ -115,6 +115,7 @@ pub(super) fn needs(command: &ClientCommand) -> &'static [Resource] {
         ClientCommand::PickUp { .. } => &[Inventory, GroundPickup],
         // Give hands the trade slots over.
         ClientCommand::MoveInventory(_)
+        | ClientCommand::DestroyItem(_)
         | ClientCommand::Buy { .. }
         | ClientCommand::Sell { .. }
         | ClientCommand::Consume { .. }
@@ -269,6 +270,13 @@ fn refusal(command: &ClientCommand, reason: &str) -> Option<WorldEvent> {
         ClientCommand::UseItem(request) => WorldEvent::ItemUseAction {
             session_id: request.session_id,
             request_id: request.request_id,
+            error,
+        },
+        ClientCommand::DestroyItem(request) => WorldEvent::InventoryAction {
+            session_id: request.session_id,
+            revision: request.revision,
+            sequence: None,
+            update: None,
             error,
         },
         ClientCommand::MoveInventory(request) => WorldEvent::InventoryAction {

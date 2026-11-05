@@ -303,6 +303,8 @@ pub enum Request {
         /// The whole item, or part of a stack.
         quantity: MoveQuantity,
     },
+    /// Explicit whole-cursor destruction; no caller-supplied sentinel.
+    DestroyCursor,
     /// Move coins between places, or change them into another coin.
     MoveCoins(CoinTransfer),
     /// Eat or drink.
@@ -449,6 +451,7 @@ pub fn titanium(request: &Request, sender: Sender<'_>) -> Result<EncodedCommand>
         Request::MoveItem { from, to, quantity } => {
             inventory::titanium_move(*from, *to, *quantity)?
         }
+        Request::DestroyCursor => inventory::titanium_destroy(),
         Request::MoveCoins(transfer) => transfer.encode()?,
         Request::Consume {
             slot,
@@ -521,6 +524,7 @@ pub fn eqmac(request: &Request, sender: Sender<'_>) -> Result<EncodedCommand> {
             ..
         } => crate::quarm::zone_change(sender.name, *zone_id, *reason),
         Request::SaveOnZone => Ok(crate::quarm::save_on_zone()),
+        Request::DestroyCursor => anyhow::bail!("Cursor destruction is unavailable for EQMac"),
         Request::MoveItem { from, to, quantity } => {
             crate::inventory::eqmac_move(*from, *to, *quantity)
         }

@@ -286,6 +286,9 @@ fn told(update: &InventoryUpdate) -> String {
             .join(", ")
     };
     let what = match update {
+        InventoryUpdate::DestroyCursor => {
+            "a submitted cursor destruction (local prediction)".into()
+        }
         InventoryUpdate::Prediction(items) => format!("a prediction for slots {}", slots(items)),
         InventoryUpdate::Consume { slot, charge } => format!(
             "a {} used from slot {}",
@@ -472,6 +475,36 @@ impl Belongings {
                 session_id: request.session_id,
                 revision: request.revision,
                 sequence: request.sequence,
+                update,
+                error,
+            }))
+    }
+
+    /// Destruction is owned here, once. Transport failure ends admission and
+    /// does not commit or retry the prediction. Silence never settles it.
+    fn destroy_item(
+        &mut self,
+        request: &eq_network_game::inventory::InventoryDestroy,
+        world: &mut World,
+        out: &mut Out<'_, '_>,
+    ) -> Result<()> {
+        let planned = world
+            .inventory
+            .plan_destroy(self.rules, request)
+            .and_then(|update| Ok((update, out.encode(&Request::DestroyCursor)?)));
+        let (update, error) = match planned {
+            Ok((update, packet)) => {
+                out.send(&packet)?;
+                world.inventory.0.apply(update.clone());
+                (Some(update), None)
+            }
+            Err(error) => (None, Some(error.to_string())),
+        };
+        out.log
+            .send(ClientEvent::World(WorldEvent::InventoryAction {
+                session_id: request.session_id,
+                revision: request.revision,
+                sequence: None,
                 update,
                 error,
             }))
@@ -734,6 +767,7 @@ impl Feature for Belongings {
     fn owns(&self, command: &ClientCommand) -> bool {
         match command {
             ClientCommand::MoveInventory(_) => self.allows.items,
+            ClientCommand::DestroyItem(_) => self.allows.items && self.rules == MoveRules::EqEmu,
             ClientCommand::MoveCoins { .. } => self.allows.coins,
             ClientCommand::Shop { .. } | ClientCommand::Buy { .. } | ClientCommand::Sell { .. } => {
                 self.allows.merchants
@@ -754,6 +788,7 @@ impl Feature for Belongings {
         }
         match command {
             ClientCommand::MoveInventory(request) => self.move_item(request, world, out),
+            ClientCommand::DestroyItem(request) => self.destroy_item(request, world, out),
             ClientCommand::MoveCoins { .. } => Self::move_coins(command, world, out),
             ClientCommand::Shop { .. } => Self::shop(command, world, out),
             ClientCommand::AutoEat { auto_eat, .. } => {

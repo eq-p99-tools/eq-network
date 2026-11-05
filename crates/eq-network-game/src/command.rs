@@ -204,6 +204,8 @@ pub enum GameCommand {
     },
     /// Move an inventory item using the admitted session state.
     MoveInventory(crate::inventory::InventoryMove),
+    /// Explicitly destroy the confirmed whole cursor item or stack.
+    DestroyItem(Box<crate::inventory::InventoryDestroy>),
     /// Send one chat message.
     SendChat(OutboundChat),
     /// Inspect a preserved item link in the active zone session.
@@ -766,6 +768,7 @@ impl GameCommand {
             Self::CastSpell { .. } => "CastSpell",
             Self::SetPosture { .. } => "SetPosture",
             Self::MoveInventory(..) => "MoveInventory",
+            Self::DestroyItem(..) => "DestroyItem",
             Self::SendChat(..) => "SendChat",
             Self::InspectItem { .. } => "InspectItem",
             Self::Consider { .. } => "Consider",
@@ -843,6 +846,7 @@ impl GameCommand {
             | Self::SendChat(_) => None,
             Self::UseItem(request) => Some(request.session_id),
             Self::MoveInventory(request) => Some(request.session_id),
+            Self::DestroyItem(request) => Some(request.session_id),
             Self::Move(request) => Some(request.session_id),
             Self::SwapSpell { session_id, .. }
             | Self::ClickDoor { session_id, .. }
@@ -953,7 +957,7 @@ impl GameCommand {
             // Only a server that takes falls from the client lets the player jump.
             Self::Jump { .. } => Capability::Jumping,
             Self::EnvironmentalDamage { .. } => Capability::EnvironmentalDamage,
-            Self::MoveInventory(_) => Capability::Inventory,
+            Self::MoveInventory(_) | Self::DestroyItem(_) => Capability::Inventory,
             Self::Consume { .. } | Self::AutoEat { .. } => Capability::Meals,
             Self::AnswerListPolls { .. } => Capability::AnsweringListPolls,
             Self::SendChat(_) | Self::InspectItem { .. } => Capability::Talking,
@@ -1066,6 +1070,7 @@ impl GameCommand {
             | Self::SelectTarget { .. } => None,
             Self::UseItem(request) => Some(request.created),
             Self::MoveInventory(request) => Some(request.created),
+            Self::DestroyItem(request) => Some(request.created),
             Self::Move(request) => Some(request.created),
             Self::SwapSpell { created, .. }
             | Self::ClickDoor { created, .. }
@@ -1264,6 +1269,7 @@ pub fn encode(
         | GameCommand::Sell { .. } => encode_trade(dialect, command),
         // What these send depends on the admitted session's state.
         GameCommand::MoveInventory(_)
+        | GameCommand::DestroyItem(_)
         | GameCommand::ClickDoor { .. }
         | GameCommand::PickUp { .. }
         | GameCommand::OpenContainer { .. }

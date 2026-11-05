@@ -688,7 +688,7 @@ mod tests {
     };
 
     /// How many kinds of command there are.
-    const KINDS: usize = 80;
+    const KINDS: usize = 81;
 
     /// The kinds the login and world servers take, before any zone session.
     const BEFORE_ZONES: [usize; 4] = [0, 1, 70, 75];
@@ -714,6 +714,7 @@ mod tests {
             ClientCommand::CastSpell { .. } => 11,
             ClientCommand::SetPosture { .. } => 12,
             ClientCommand::MoveInventory(_) => 13,
+            ClientCommand::DestroyItem(_) => 80,
             ClientCommand::SendChat(_) => 14,
             ClientCommand::InspectItem { .. } => 15,
             ClientCommand::Consider { .. } => 16,
@@ -871,6 +872,12 @@ mod tests {
                 quantity: MoveQuantity::Whole,
                 created,
             }),
+            ClientCommand::DestroyItem(Box::new(eq_network_game::inventory::InventoryDestroy {
+                session_id,
+                revision: 1,
+                created,
+                item: super::super::feature::testing::item(30),
+            })),
             ClientCommand::SendChat(OutboundChat::Say("Hail".into())),
             ClientCommand::InspectItem {
                 session_id,
