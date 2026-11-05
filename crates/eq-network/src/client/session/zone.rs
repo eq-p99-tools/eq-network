@@ -684,7 +684,7 @@ mod tests {
     use eq_network_game::{
         chat::OutboundChat,
         inventory::{InventoryMove, InventorySlot, ItemUse, MoveQuantity},
-        movement::{MotionCalibration, MovementMode, MovementRequest},
+        movement::{DiagonalRates, MotionCalibration, MovementMode, MovementRequest},
     };
 
     /// How many kinds of command there are.
@@ -964,7 +964,7 @@ mod tests {
             ClientCommand::ConfigureMotion {
                 session_id,
                 calibration: MotionCalibration {
-                    diagonal: Default::default(),
+                    diagonal: DiagonalRates::default(),
                     units_per_second: 6.0,
                     velocity_scale: 0.05,
                     animation: 12,

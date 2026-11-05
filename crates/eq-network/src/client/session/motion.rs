@@ -871,7 +871,7 @@ mod tests {
         let configure = ClientCommand::ConfigureMotion {
             session_id: 5,
             calibration: eq_network_game::movement::MotionCalibration {
-                diagonal: Default::default(),
+                diagonal: DiagonalRates::default(),
                 units_per_second: 6.0,
                 velocity_scale: 0.05,
                 animation: 12,

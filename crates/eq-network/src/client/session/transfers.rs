@@ -425,7 +425,7 @@ impl Feature for Transfers {
 mod tests {
     use super::super::feature::testing;
     use super::*;
-    use eq_network_game::movement::MotionSession;
+    use eq_network_game::movement::{DiagonalRates, MotionSession};
 
     #[test]
     fn quarm_same_zone_bind_alias_is_narrow_and_duplicate_approval_is_quiet() {
@@ -554,7 +554,7 @@ mod tests {
             .map(|(_, at)| *at)
             .unwrap();
         let calibration = eq_network_game::movement::MotionCalibration {
-            diagonal: Default::default(),
+            diagonal: DiagonalRates::default(),
             units_per_second: 6.0,
             velocity_scale: 0.05,
             animation: 12,

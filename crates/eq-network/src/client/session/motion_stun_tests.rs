@@ -1,7 +1,7 @@
 //! Clock-driven session enforcement with fabricated values, no live traffic.
 use super::*;
 use crate::client::session::{control::Stuns, feature::testing};
-use eq_network_game::movement::MovementMode;
+use eq_network_game::movement::{DiagonalRates, MovementMode};
 use std::time::Duration;
 
 fn setup(start: Instant) -> World {
@@ -16,7 +16,7 @@ fn setup(start: Instant) -> World {
     motion
         .calibrate(
             MotionCalibration {
-                diagonal: Default::default(),
+                diagonal: DiagonalRates::default(),
                 units_per_second: 6.0,
                 velocity_scale: 0.05,
                 animation: 12,

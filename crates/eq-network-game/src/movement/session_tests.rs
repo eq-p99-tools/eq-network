@@ -139,7 +139,7 @@ fn strafing_requires_its_own_calibration_and_preserves_heading() {
             .send_move(&motion, now, |_| panic!("uncalibrated strafe"))
             .is_err());
         let calibration = MotionCalibration {
-            diagonal: Default::default(),
+            diagonal: DiagonalRates::default(),
             units_per_second: 6.0,
             velocity_scale: 0.05,
             animation: 12,
@@ -187,7 +187,7 @@ fn walking_uses_its_own_budget_and_commits_only_after_transport() {
         .send_move(&motion, now, |_| panic!("missing walk calibration"))
         .is_err());
     let calibration = MotionCalibration {
-        diagonal: Default::default(),
+        diagonal: DiagonalRates::default(),
         units_per_second: 6.0,
         velocity_scale: 0.05,
         animation: 12,
@@ -251,7 +251,7 @@ fn backward_motion_has_its_own_budget_animation_and_transport_commit() {
         .send_move(&motion, now, |_| panic!("uncalibrated send"))
         .is_err());
     let calibration = MotionCalibration {
-        diagonal: Default::default(),
+        diagonal: DiagonalRates::default(),
         units_per_second: 6.0,
         velocity_scale: 0.05,
         animation: 12,
@@ -304,7 +304,7 @@ fn setup(now: Instant) -> MotionSession {
     session
         .calibrate(
             MotionCalibration {
-                diagonal: Default::default(),
+                diagonal: DiagonalRates::default(),
                 walk: None,
                 strafe: None,
                 backward: None,
@@ -343,35 +343,13 @@ fn grounded_diagonals_budget_each_axis_and_keep_the_longitudinal_wire_value() {
         ),
     ] {
         let mut session = setup(start);
-        let original = session.calibration().unwrap();
         let mut motion = request(now, x);
         motion.mode = MovementMode::GroundedDiagonal(GroundedDiagonal { along, side });
         motion.position.y = y;
         assert!(session
             .send_move_sample(&motion, now, |_| panic!("ungranted diagonal"))
             .is_err());
-        session
-            .calibrate(
-                MotionCalibration {
-                    diagonal: DiagonalRates {
-                        run: Some(3.0),
-                        walk: Some(1.0),
-                    },
-                    walk: Some(WalkCalibration {
-                        units_per_second: 2.0,
-                        velocity_scale: original.velocity_scale,
-                        animation: 7,
-                    }),
-                    backward: Some(BackwardCalibration {
-                        units_per_second: 2.0,
-                        velocity_scale: original.velocity_scale,
-                        animation: -7,
-                    }),
-                    ..original
-                },
-                start,
-            )
-            .unwrap();
+        grant_grounded_diagonal(&mut session, start);
         for position in [
             Position {
                 x: 0.0,
@@ -431,6 +409,32 @@ fn grounded_diagonals_budget_each_axis_and_keep_the_longitudinal_wire_value() {
             .unwrap();
     }
 }
+fn grant_grounded_diagonal(session: &mut MotionSession, start: Instant) {
+    let original = session.calibration().unwrap();
+    session
+        .calibrate(
+            MotionCalibration {
+                diagonal: DiagonalRates {
+                    run: Some(3.0),
+                    walk: Some(1.0),
+                },
+                walk: Some(WalkCalibration {
+                    units_per_second: 2.0,
+                    velocity_scale: original.velocity_scale,
+                    animation: 7,
+                }),
+                backward: Some(BackwardCalibration {
+                    units_per_second: 2.0,
+                    velocity_scale: original.velocity_scale,
+                    animation: -7,
+                }),
+                ..original
+            },
+            start,
+        )
+        .unwrap();
+}
+
 fn request(created: Instant, x: f32) -> MovementRequest {
     MovementRequest {
         mode: MovementMode::Forward,
@@ -617,7 +621,7 @@ fn correction_revokes_motion_and_old_input_cannot_replay_after_recalibration() {
     session
         .calibrate(
             MotionCalibration {
-                diagonal: Default::default(),
+                diagonal: DiagonalRates::default(),
                 walk: None,
                 strafe: None,
                 backward: None,
@@ -648,7 +652,7 @@ fn death_or_transfer_suppresses_heartbeats_and_cannot_resume_old_admission() {
     assert!(session
         .calibrate(
             MotionCalibration {
-                diagonal: Default::default(),
+                diagonal: DiagonalRates::default(),
                 walk: None,
                 strafe: None,
                 backward: None,
@@ -663,7 +667,7 @@ fn death_or_transfer_suppresses_heartbeats_and_cannot_resume_old_admission() {
     new_zone
         .calibrate(
             MotionCalibration {
-                diagonal: Default::default(),
+                diagonal: DiagonalRates::default(),
                 walk: None,
                 strafe: None,
                 backward: None,
@@ -742,7 +746,7 @@ fn queued_calibration_requires_valid_data_from_after_the_last_reset() {
         .is_err());
     for invalid in [
         MotionCalibration {
-            diagonal: Default::default(),
+            diagonal: DiagonalRates::default(),
             walk: None,
             strafe: None,
             backward: None,
