@@ -562,12 +562,14 @@ pub enum Capability {
     WorldContainers,
     /// Opt-in automatic P99 list presence replies, independently of joining.
     AnsweringListPolls,
+    /// Explicit cancellation of an ordinary beneficial buff.
+    CancellingBuffs,
 }
 
 impl Capability {
     /// Every capability, in order: what a session offers when its server and
     /// client generation support everything.
-    pub const ALL: [Self; 45] = [
+    pub const ALL: [Self; 46] = [
         Self::Casting,
         Self::Spellbook,
         Self::Inventory,
@@ -613,6 +615,7 @@ impl Capability {
         Self::Meals,
         Self::WorldContainers,
         Self::AnsweringListPolls,
+        Self::CancellingBuffs,
     ];
 }
 
@@ -647,6 +650,8 @@ pub enum WorldEvent {
     BuffSnapshot(Vec<Option<crate::buffs::Buff>>),
     /// A server-owned slot replacement or fade for an entity.
     Buff(crate::buffs::BuffUpdate),
+    /// Progress of an exact, admission-scoped buff cancellation selection.
+    BuffCancellation(crate::buffs::cancel::Update),
     /// A name suggestion, or no suggestion when refused, malformed or timed out.
     NameSuggestion {
         /// Character list the request belongs to.
@@ -2091,6 +2096,7 @@ mod tests {
             Capability::Meals => 42,
             Capability::WorldContainers => 43,
             Capability::AnsweringListPolls => 44,
+            Capability::CancellingBuffs => 45,
         };
         for (index, capability) in Capability::ALL.into_iter().enumerate() {
             assert_eq!(place(capability), index, "{capability:?}");

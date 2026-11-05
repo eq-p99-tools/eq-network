@@ -178,6 +178,8 @@ pub enum GameCommand {
         /// Request creation time; queued actions expire.
         created: std::time::Instant,
     },
+    /// Cancel an explicit beneficial buff, with current provider classification.
+    CancelBuff(crate::buffs::cancel::Request),
     /// Cast a memorized spell; the server decides completion and resource use.
     CastSpell {
         /// Current zone admission.
@@ -765,6 +767,7 @@ impl GameCommand {
             Self::DeleteSpell { .. } => "DeleteSpell",
             Self::ForgetSpell { .. } => "ForgetSpell",
             Self::MemorizeSpell { .. } => "MemorizeSpell",
+            Self::CancelBuff(_) => "CancelBuff",
             Self::CastSpell { .. } => "CastSpell",
             Self::SetPosture { .. } => "SetPosture",
             Self::MoveInventory(..) => "MoveInventory",
@@ -844,6 +847,7 @@ impl GameCommand {
             | Self::DeleteCharacter(_)
             | Self::CreateCharacter { .. }
             | Self::SendChat(_) => None,
+            Self::CancelBuff(request) => Some(request.session_id),
             Self::UseItem(request) => Some(request.session_id),
             Self::MoveInventory(request) => Some(request.session_id),
             Self::DestroyItem(request) => Some(request.session_id),
@@ -939,6 +943,7 @@ impl GameCommand {
                 Capability::Spellbook
             }
             Self::SetBookOptions { .. } => Capability::Spellbook,
+            Self::CancelBuff(_) => Capability::CancellingBuffs,
             Self::DeleteSpell { .. } => Capability::DeletingSpells,
             Self::SwapSpell { .. } => Capability::MovingSpells,
             // An item's click effect is a cast.
@@ -1068,6 +1073,7 @@ impl GameCommand {
             | Self::DragCorpse { .. }
             | Self::DropCorpse { .. }
             | Self::SelectTarget { .. } => None,
+            Self::CancelBuff(request) => Some(request.created),
             Self::UseItem(request) => Some(request.created),
             Self::MoveInventory(request) => Some(request.created),
             Self::DestroyItem(request) => Some(request.created),
@@ -1237,6 +1243,9 @@ pub fn encode(
         | GameCommand::CreateCharacter { .. }
         | GameCommand::GenerateName { .. } => {
             anyhow::bail!("character selection requires the world controller")
+        }
+        GameCommand::CancelBuff(_) => {
+            anyhow::bail!("buff cancellation requires the admitted buff-slot owner")
         }
         GameCommand::CastSpell {
             gem,

@@ -688,7 +688,7 @@ mod tests {
     };
 
     /// How many kinds of command there are.
-    const KINDS: usize = 81;
+    const KINDS: usize = 82;
 
     /// The kinds the login and world servers take, before any zone session.
     const BEFORE_ZONES: [usize; 4] = [0, 1, 70, 75];
@@ -712,6 +712,7 @@ mod tests {
             ClientCommand::ForgetSpell { .. } => 9,
             ClientCommand::MemorizeSpell { .. } => 10,
             ClientCommand::CastSpell { .. } => 11,
+            ClientCommand::CancelBuff(_) => 81,
             ClientCommand::SetPosture { .. } => 12,
             ClientCommand::MoveInventory(_) => 13,
             ClientCommand::DestroyItem(_) => 80,
@@ -793,6 +794,15 @@ mod tests {
         let (session_id, created) = (1, Instant::now());
         let position = crate::world::Position::default();
         vec![
+            ClientCommand::CancelBuff(eq_network_game::buffs::cancel::Request {
+                session_id,
+                revision: 1,
+                slot: 3,
+                spell_id: 42,
+                beneficial: Some(true),
+                cancellable: Some(true),
+                created,
+            }),
             ClientCommand::SwapSpell {
                 session_id,
                 from: 0,
@@ -1824,6 +1834,7 @@ mod tests {
             Capability::Translocate,
             Capability::ServerTicks,
             Capability::ShowingHelm,
+            Capability::CancellingBuffs,
         ] {
             assert!(eqemu.contains(&capability));
             assert!(!p99.contains(&capability));
@@ -1831,7 +1842,7 @@ mod tests {
         assert!(p99.contains(&Capability::EnvironmentalDamage));
         assert!(p99.contains(&Capability::AnsweringListPolls));
         assert!(!eqemu.contains(&Capability::AnsweringListPolls));
-        assert_eq!(eqemu.len(), p99.len() + 14);
+        assert_eq!(eqemu.len(), p99.len() + 15);
     }
 
     #[test]
@@ -2197,3 +2208,6 @@ mod terminal_tests;
 
 #[cfg(test)]
 mod stun_tests;
+
+#[cfg(test)]
+mod buff_tests;

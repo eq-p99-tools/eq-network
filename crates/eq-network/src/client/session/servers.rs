@@ -20,6 +20,7 @@ use anyhow::Result;
 use super::{
     abilities::Abilities,
     bleeding::{BleedingOut, ItemCount},
+    buffs::Buffs,
     camp::Camp,
     casting::Casting,
     character::Character,
@@ -250,6 +251,11 @@ pub(super) trait ServerType: Sync {
         None
     }
 
+    /// Explicit cancellation, separate from casting and disabled by default.
+    fn buff_cancellation(&self, _setup: &Setup<'_>) -> Provided {
+        None
+    }
+
     /// Memorizing, scribing and forgetting spells.
     fn spellbook(&self, _setup: &Setup<'_>) -> Provided {
         None
@@ -453,6 +459,7 @@ pub(super) trait ServerType: Sync {
         [
             self.control(setup),
             self.casting(setup),
+            self.buff_cancellation(setup),
             self.spellbook(setup),
             self.inventory(setup),
             self.motion(setup),
@@ -835,6 +842,10 @@ const P99_HAZARDS: [Hazard; 1] = [Hazard::Falling];
 struct Project1999;
 
 impl ServerType for Project1999 {
+    // Ordinary buff cancellation remains a P99 evidence gap. The initialized
+    // EQEmu request differs from Titanium's optimistic two-send UI path; do
+    // not offer it here until the deployed P99 contract is established.
+
     /// Ordinary Titanium group senders and explicit consent (native
     /// 0x49d3cc/0x49d654/0x49d7b6/0x49d8bd), with roster state from
     /// 0x458738. Public P99 partner compatibility remains a separate check.
@@ -1033,6 +1044,10 @@ impl ServerType for Project1999 {
 struct EqEmu;
 
 impl ServerType for EqEmu {
+    fn buff_cancellation(&self, _setup: &Setup<'_>) -> Provided {
+        offer(Box::<Buffs>::default())
+    }
+
     fn inventory_move_rules(&self) -> Option<MoveRules> {
         Some(MoveRules::EqEmu)
     }
@@ -2130,7 +2145,7 @@ mod tests {
         // Both Titanium policies retain the verified own-player stun timer.
         for (protocol, count) in [
             (ServerProtocol::Project1999, 27),
-            (ServerProtocol::EqEmu, 38),
+            (ServerProtocol::EqEmu, 39),
         ] {
             let server = server_type(protocol);
             let setup = Setup::new("Tester", AutoEat::default());

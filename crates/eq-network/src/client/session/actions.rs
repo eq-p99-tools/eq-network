@@ -123,7 +123,8 @@ pub(super) fn needs(command: &ClientCommand) -> &'static [Resource] {
         // A combine takes the container's contents and puts what was made
         // on the cursor.
         | ClientCommand::Combine { .. } => &[Inventory],
-        ClientCommand::SelectServer { .. }
+        ClientCommand::CancelBuff(_)
+        | ClientCommand::SelectServer { .. }
         | ClientCommand::SelectCharacter { .. }
         | ClientCommand::GenerateName { .. }
         | ClientCommand::DeleteCharacter(_)
@@ -260,6 +261,7 @@ fn refusal(command: &ClientCommand, reason: &str) -> Option<WorldEvent> {
             request: request.clone(),
             progress: eq_network_game::deletion::Progress::NotSent(eq_network_game::deletion::Refusal::NotAtSelection),
         }),
+        ClientCommand::CancelBuff(request) => WorldEvent::BuffCancellation(request.update(eq_network_game::buffs::cancel::Progress::Refused(reason.into()))),
         ClientCommand::CastSpell { .. } => return casting::rejected(command, reason),
         ClientCommand::Consider { .. } | ClientCommand::AutoAttack { .. } => {
             return super::combat::rejected(command, reason);
