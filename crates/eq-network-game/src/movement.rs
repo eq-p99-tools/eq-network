@@ -498,6 +498,12 @@ impl MovementGuard {
             request.position.z - self.position.z,
         ];
         if let MovementMode::GroundedDiagonal(diagonal) = request.mode {
+            // A known jump excludes fresh grounded diagonal input. The
+            // ascent tracker does not establish where the player lands.
+            ensure!(
+                self.jumped_at.is_none(),
+                "grounded diagonal movement is unavailable during a tracked jump"
+            );
             ensure!(
                 !self.flying
                     && lateral_rate.is_some_and(|lateral| {

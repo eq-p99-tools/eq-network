@@ -887,6 +887,99 @@ fn a_jump_rises_past_a_step_once_the_session_announces_it() {
         .send_move(&rise, now, |_| panic!("the jump is unread"))
         .is_err());
 }
+
+#[test]
+fn an_announced_jump_refuses_diagonal_credit_without_consuming_the_sample() {
+    use crate::movement::{DiagonalAlong, GroundedDiagonal, StrafeSide};
+
+    let start = Instant::now();
+    let at = |ms| start + Duration::from_millis(ms);
+    let mut session = setup(start).with_falls(true).with_jump(Some((
+        super::super::JUMP_SPEED,
+        super::super::gravity_per_second(None),
+    )));
+    let base = session.calibration().unwrap();
+    session
+        .calibrate(
+            MotionCalibration {
+                diagonal: DiagonalRates {
+                    run: Some(3.0),
+                    walk: None,
+                },
+                ..base
+            },
+            start,
+        )
+        .unwrap();
+    let mode = MovementMode::GroundedDiagonal(GroundedDiagonal {
+        along: DiagonalAlong::Run,
+        side: StrafeSide::Right,
+    });
+    let mut step = request(at(100), -0.3);
+    step.mode = mode;
+    step.position.y = 0.6;
+    step.position.z = 0.5;
+    session
+        .send_move_sample(&step, at(100), |_| Ok(()))
+        .unwrap();
+    assert_eq!(session.position(), step.position);
+
+    // The host marks the jump only after its notice was submitted.
+    assert_eq!(session.jump().unwrap().opcode, JUMP_OPCODE);
+    session.jumped();
+    let reject = |session: &mut MotionSession, now| {
+        let accepted = session.position();
+        let sampled = session.guard.sampled;
+        let jump = session.guard.jumped_at;
+        let sequence = session.sequence;
+        let combined = MovementRequest {
+            mode,
+            position: Position {
+                x: accepted.x - 0.15,
+                y: accepted.y + 0.3,
+                ..accepted
+            },
+            ..request(now, accepted.x)
+        };
+        let refusal = session.send_move_sample(&combined, now, |_| panic!("diagonal during jump"));
+        assert_eq!(
+            refusal.unwrap_err().to_string(),
+            "grounded diagonal movement is unavailable during a tracked jump"
+        );
+        assert_eq!(session.position(), accepted);
+        assert_eq!(session.guard.sampled, sampled);
+        assert_eq!(session.guard.jumped_at, jump);
+        assert_eq!(session.sequence, sequence);
+    };
+
+    // Both the pending first sample and an ascent in progress disallow
+    // diagonal credit, even when the proposed Z would stay unchanged.
+    reject(&mut session, at(150));
+    let ascent = MovementRequest {
+        mode: MovementMode::Fall,
+        position: Position {
+            z: step.position.z + 2.03,
+            ..step.position
+        },
+        ..request(at(150), step.position.x)
+    };
+    session
+        .send_move_sample(&ascent, at(150), |_| Ok(()))
+        .unwrap();
+    reject(&mut session, at(200));
+    let cardinal = MovementRequest {
+        position: Position {
+            y: ascent.position.y + 0.2,
+            ..ascent.position
+        },
+        ..request(at(200), ascent.position.x)
+    };
+    session
+        .send_move_sample(&cardinal, at(200), |_| Ok(()))
+        .unwrap();
+    assert_eq!(session.position(), cardinal.position);
+}
+
 #[test]
 fn the_wire_velocity_covers_the_stamp_interval_not_the_processing_one() {
     let start = Instant::now();
