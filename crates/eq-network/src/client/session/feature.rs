@@ -174,7 +174,7 @@ impl Out<'_, '_> {
 pub(in crate::client) struct World {
     /// This admission's session, which host commands must name.
     pub(super) session_id: u64,
-    /// Whether this admission is on a network-constrained local EQEmu connection.
+    /// Whether this admission is on a network-constrained local `EQEmu` connection.
     local_eqemu: bool,
     /// The admitted player, once the zone is ready; see [`PlayerRecord`] for
     /// who writes it.
@@ -258,7 +258,7 @@ impl World {
         }
     }
 
-    /// Whether the zone connection permits scoped local EQEmu fixture commands.
+    /// Whether the zone connection permits scoped local `EQEmu` fixture commands.
     pub(super) const fn local_eqemu(&self) -> bool {
         self.local_eqemu
     }

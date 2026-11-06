@@ -96,8 +96,7 @@ pub(super) fn needs(command: &ClientCommand) -> &'static [Resource] {
         // `EQEmu` ignores a strike during a cast; bards may strike while they
         // sing, but the session cannot tell songs apart, so they wait too.
         ClientCommand::UseAbility { ability, .. } if ability.strikes() => &[Casting],
-        ClientCommand::UseItem(_) => &[Casting, Inventory],
-        ClientCommand::RangedAttack(_) => &[Casting, Inventory],
+        ClientCommand::UseItem(_) | ClientCommand::RangedAttack(_) => &[Casting, Inventory],
         ClientCommand::ScribeSpell { .. } => &[Casting, Spellbook, Inventory],
         ClientCommand::MemorizeSpell { .. }
         | ClientCommand::ForgetSpell { .. }

@@ -82,7 +82,10 @@ fn eqemu_rank_zero_first_shots_leave_skill_eligibility_to_the_server() {
             command(&mut features, &mut world, &request, out)
         });
         output.result.unwrap();
-        assert!(output.sent.is_empty());
+        assert_eq!(
+            output.sent,
+            [] as [eq_network_game::command::EncodedCommand; 0]
+        );
         assert!(
             matches!(status(&output.events).1, CombatRequestStatus::Refused(reason)
             if reason.contains("recovering"))
@@ -109,7 +112,10 @@ fn p99_zero_rank_and_unknown_rank_are_distinct_local_refusals() {
             command(&mut features, &mut world, &request, out)
         });
         output.result.unwrap();
-        assert!(output.sent.is_empty());
+        assert_eq!(
+            output.sent,
+            [] as [eq_network_game::command::EncodedCommand; 0]
+        );
         assert!(
             matches!(status(&output.events).1, CombatRequestStatus::Refused(reason)
             if reason.contains(expected))
@@ -147,7 +153,10 @@ fn titanium_ranged_sends_one_request_and_only_received_inventory_changes_ammo() 
             command(&mut features, &mut world, &request, out)
         });
         output.result.unwrap();
-        assert!(output.sent.is_empty());
+        assert_eq!(
+            output.sent,
+            [] as [eq_network_game::command::EncodedCommand; 0]
+        );
         assert!(
             matches!(status(&output.events).1, CombatRequestStatus::Refused(reason)
             if reason.contains("recovering"))
@@ -170,7 +179,10 @@ fn titanium_ranged_sends_one_request_and_only_received_inventory_changes_ammo() 
                 )
             });
             output.result.unwrap();
-            assert!(output.sent.is_empty());
+            assert_eq!(
+                output.sent,
+                [] as [eq_network_game::command::EncodedCommand; 0]
+            );
             assert_eq!(
                 world
                     .inventory
@@ -268,7 +280,10 @@ fn ranged_refuses_stale_target_loadout_and_admission_and_unavailable_actions() {
             command(&mut features, &mut world, &request, out)
         });
         output.result.unwrap();
-        assert!(output.sent.is_empty());
+        assert_eq!(
+            output.sent,
+            [] as [eq_network_game::command::EncodedCommand; 0]
+        );
         assert!(matches!(
             status(&output.events).1,
             CombatRequestStatus::Refused(_)

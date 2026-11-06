@@ -1064,7 +1064,10 @@ mod tests {
         let late = Instant::now() + Duration::from_secs(31);
         let output = testing::run(|out| spellbook.tick(late, &mut world, out));
         output.result.unwrap();
-        assert!(output.sent.is_empty());
+        assert_eq!(
+            output.sent,
+            [] as [eq_network_game::command::EncodedCommand; 0]
+        );
         assert_eq!(statuses(&output.events), [&BookActionStatus::Unconfirmed]);
         assert_eq!(spellbook.holds(&world, late).len(), 1);
 

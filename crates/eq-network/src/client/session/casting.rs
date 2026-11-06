@@ -187,10 +187,10 @@ impl Casting {
     /// item use. The server owns song pulses and the resulting interruption.
     fn stop_song(&self, world: &World, out: &mut Out<'_, '_>) -> Result<()> {
         if !self.song_stop
-            || !world
+            || world
                 .player
                 .as_ref()
-                .is_some_and(|p| p.class == Some(BARD_CLASS))
+                .is_none_or(|p| p.class != Some(BARD_CLASS))
         {
             return out
                 .log
@@ -436,7 +436,7 @@ mod tests {
         output.result.unwrap();
         assert_eq!(output.sent.len(), 1);
         assert_eq!(output.sent[0].opcode, 0x4839);
-        assert!(output.sent[0].body.is_empty());
+        assert_eq!(output.sent[0].body, [] as [u8; 0]);
         assert!(output.events.is_empty());
         assert_eq!(casting.guard.pending(), Some(202));
 
@@ -470,7 +470,10 @@ mod tests {
         world.player.admit(testing::player(7));
         let output = testing::run(|out| casting.handle(&stop, &mut world, out));
         output.result.unwrap();
-        assert!(output.sent.is_empty());
+        assert_eq!(
+            output.sent,
+            [] as [eq_network_game::command::EncodedCommand; 0]
+        );
 
         // The requested gem's refresh still completes the normal cast path.
         casting.guard.submitted(202, Some(Source::Gem(2)), now);
@@ -540,7 +543,10 @@ mod tests {
             .unwrap();
         let output = testing::run(|out| casting.handle(&stop, &mut world, out));
         output.result.unwrap();
-        assert!(output.sent.is_empty());
+        assert_eq!(
+            output.sent,
+            [] as [eq_network_game::command::EncodedCommand; 0]
+        );
         assert!(casting.guard.active());
 
         testing::run(|out| casting.observe(&refresh(10), &mut world, out))
@@ -551,7 +557,7 @@ mod tests {
         output.result.unwrap();
         assert_eq!(output.sent.len(), 1);
         assert_eq!(output.sent[0].opcode, 0x4839);
-        assert!(output.sent[0].body.is_empty());
+        assert_eq!(output.sent[0].body, [] as [u8; 0]);
     }
 
     #[test]

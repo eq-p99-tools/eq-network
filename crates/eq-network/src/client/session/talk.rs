@@ -26,7 +26,7 @@ impl Feature for Talk {
     }
 
     /// Chat and inspections are encoded directly. Fixture cleanup rechecks
-    /// the admission and target before sending EQEmu's bare depop command.
+    /// the admission and target before sending `EQEmu`'s bare depop command.
     fn handle(
         &mut self,
         command: &ClientCommand,
