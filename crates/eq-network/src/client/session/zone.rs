@@ -2045,6 +2045,7 @@ mod tests {
             Capability::ServerTicks,
             Capability::ShowingHelm,
             Capability::CancellingBuffs,
+            Capability::StoppingSongs,
         ] {
             assert!(eqemu.contains(&capability));
             assert!(!p99.contains(&capability));
@@ -2054,7 +2055,7 @@ mod tests {
         assert!(!eqemu.contains(&Capability::AnsweringListPolls));
         assert!(eqemu.contains(&Capability::GameplayDepartures));
         assert!(p99.contains(&Capability::GameplayDepartures));
-        assert_eq!(eqemu.len(), p99.len() + 15);
+        assert_eq!(eqemu.len(), p99.len() + 16);
     }
 
     #[test]
