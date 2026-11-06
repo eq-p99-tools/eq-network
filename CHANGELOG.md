@@ -26,11 +26,12 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   remain unverified on deployed public servers.
 - `Capability::GameplayDepartures` and `ServerType::offers_gameplay_departures`:
   the explicit movement and memorization departures are offered only where the
-  server type permits them (stock `EQEmu`). `SetMovementOptions` and
-  `SetBookOptions` need that capability; P99, Quarm and TAKP zone sessions
-  refuse them ("Gameplay departures are not offered on this server"), so a
-  public server never sees movement or memorization faster or more permissive
-  than the official client's.
+  server type permits them. `SetMovementOptions` and `SetBookOptions` need that
+  capability; a zone session that does not offer it refuses them ("Gameplay
+  departures are not offered on this server"). Every checked server type
+  offers them while the owner tests them (2026-11-06); narrowing that to the
+  player's own servers is one override per server type. A departure on a
+  public server is faster or more permissive than the official client.
 - Explicit cursor-item destruction (`ClientCommand::DestroyItem`,
   `Request::DestroyCursor`, `InventoryUpdate::DestroyCursor`) on the Titanium
   inventory policy, and gated ordinary beneficial-buff cancellation
