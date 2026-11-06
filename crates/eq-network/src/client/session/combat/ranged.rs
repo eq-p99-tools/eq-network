@@ -3,20 +3,37 @@ use crate::client::session::feature::Out;
 use anyhow::Result;
 use eq_network_game::{
     abilities::player_size,
-    combat::ranged::{RangedAttack, RangedKind, RangedLoadout},
+    combat::ranged::{RangedAttack, RangedLoadout},
     request::Request,
     world::{Position, PostureState, SpawnKind},
 };
 use std::time::Instant;
 
+/// How the server profile admits a skill to the ranged action.
+pub(super) enum SkillAdmission {
+    /// Stock `EQEmu` checks the class and level cap, which the profile does
+    /// not carry. Its raw rank can be zero for an eligible first use.
+    ServerCap,
+    /// P99's deployed first-use behavior is unverified. Keep the local
+    /// positive-rank prerequisite for ordinary P99 skill values.
+    ReportedRank,
+}
+
 /// The local unmodified wait between manually submitted ranged attacks.
 /// The server's attack and ranged timers remain independent.
-#[derive(Default)]
 pub(super) struct Shots {
     ready_at: Option<Instant>,
+    skill_admission: SkillAdmission,
 }
 
 impl Shots {
+    pub(super) const fn new(skill_admission: SkillAdmission) -> Self {
+        Self {
+            ready_at: None,
+            skill_admission,
+        }
+    }
+
     pub(super) fn reset(&mut self) {
         self.ready_at = None;
     }
@@ -79,8 +96,19 @@ impl Shots {
             .player
             .as_ref()
             .ok_or("Enter the zone before attacking")?;
-        if !knows_skill(loadout.kind(), player.skills.as_deref()) {
-            return Err("You do not have that ranged skill");
+        if matches!(self.skill_admission, SkillAdmission::ReportedRank) {
+            let rank = player
+                .skills
+                .as_deref()
+                .and_then(|skills| skills.get(usize::from(loadout.kind().skill())))
+                .copied();
+            match rank {
+                Some(1..=252) => (),
+                Some(0) => return Err("A positive ranged skill rank is required on this profile"),
+                // A missing or outlying value is not evidence of a learned
+                // skill. Do not assign `EQMac` sentinel meanings to P99.
+                _ => return Err("The ranged skill rank is unavailable"),
+            }
         }
         let size = world
             .spawns
@@ -93,12 +121,6 @@ impl Shots {
         }
         Ok(target_id)
     }
-}
-
-fn knows_skill(kind: RangedKind, skills: Option<&[u32]>) -> bool {
-    skills
-        .and_then(|skills| skills.get(usize::from(kind.skill())))
-        .is_some_and(|skill| *skill > 0)
 }
 
 /// Titanium's native minimum is horizontal. The maximum is checked against

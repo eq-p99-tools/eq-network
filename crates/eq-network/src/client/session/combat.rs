@@ -3,7 +3,7 @@ mod ranged;
 
 use super::{
     feature::{Feature, Out, World},
-    ClientCommand, ClientEvent,
+    ClientCommand, ClientEvent, ServerProtocol,
 };
 use anyhow::Result;
 use eq_network_game::{
@@ -11,7 +11,6 @@ use eq_network_game::{
     message::Message,
     request::Request,
     world::WorldEvent,
-    GameDialect,
 };
 use std::time::Instant;
 
@@ -59,10 +58,17 @@ pub(super) struct Combat {
 }
 
 impl Combat {
-    pub(super) fn new(dialect: GameDialect) -> Self {
+    pub(super) fn new(protocol: ServerProtocol) -> Self {
+        use ranged::SkillAdmission;
         Self {
-            attack_notice: dialect == GameDialect::EqMac,
-            shots: (dialect == GameDialect::Titanium).then(ranged::Shots::default),
+            attack_notice: !protocol.is_titanium(),
+            shots: match protocol {
+                ServerProtocol::EqEmu => Some(ranged::Shots::new(SkillAdmission::ServerCap)),
+                ServerProtocol::Project1999 => {
+                    Some(ranged::Shots::new(SkillAdmission::ReportedRank))
+                }
+                ServerProtocol::Quarm | ServerProtocol::Takp => None,
+            },
         }
     }
 }
@@ -211,7 +217,7 @@ mod tests {
     fn a_local_death_clears_the_ranged_wait() {
         use eq_network_game::combat::ranged::{RangedAttack, RangedKind, RangedLoadout};
 
-        let mut combat = Combat::new(GameDialect::Titanium);
+        let mut combat = Combat::new(ServerProtocol::EqEmu);
         let mut world = World::new(5);
         world.own_spawn = Some(7);
         let mut player = testing::player(7);
@@ -249,7 +255,7 @@ mod tests {
 
     #[test]
     fn the_eqmac_program_sends_its_notice_before_the_toggle() {
-        let mut combat = Combat::new(GameDialect::EqMac);
+        let mut combat = Combat::new(ServerProtocol::Takp);
         let mut world = World::new(5);
         world.own_spawn = Some(7);
         world.player.admit(testing::player(7));
@@ -280,7 +286,7 @@ mod tests {
 
     #[test]
     fn the_player_considers_only_a_spawn_they_can_see() {
-        let mut combat = Combat::new(GameDialect::Titanium);
+        let mut combat = Combat::new(ServerProtocol::Project1999);
         let mut world = World::new(5);
         world.own_spawn = Some(7);
         world.player.admit(testing::player(7));

@@ -37,6 +37,86 @@ fn ranged_attack(world: &World) -> RangedAttack {
     }
 }
 
+fn set_ranged_rank(world: &mut World, kind: RangedKind, rank: Option<u32>) {
+    let player = world.player.corrected().unwrap();
+    player.class = Some(4); // Ranger
+    player.level = 10;
+    player.skills = rank.map(|rank| {
+        let mut skills = vec![0; 100];
+        skills[usize::from(kind.skill())] = rank;
+        skills
+    });
+}
+
+#[test]
+fn eqemu_rank_zero_first_shots_leave_skill_eligibility_to_the_server() {
+    let protocol = ServerProtocol::EqEmu;
+    let wire = servers::server_type(protocol).wire();
+    for (kind, rank) in [
+        (RangedKind::Archery, Some(0)),
+        (RangedKind::Throwing, Some(0)),
+        // Neither missing data nor a marker-like value supplies a class/level cap.
+        (RangedKind::Archery, None),
+        (RangedKind::Throwing, Some(u32::MAX)),
+    ] {
+        let (mut features, mut world) = ranged_setup(protocol, kind);
+        set_ranged_rank(&mut world, kind, rank);
+        let request = ClientCommand::RangedAttack(ranged_attack(&world));
+        let output = testing::run_on(wire, |out| {
+            command(&mut features, &mut world, &request, out)
+        });
+        output.result.unwrap();
+        assert_eq!(output.sent.len(), 1, "{kind:?} {rank:?}");
+        assert_eq!(output.sent[0].body[8], kind.skill());
+        assert_eq!(output.events.len(), 1);
+        assert_eq!(status(&output.events).1, &CombatRequestStatus::Sent);
+        let skills = &world.player.as_ref().unwrap().skills;
+        assert_eq!(
+            skills
+                .as_ref()
+                .map(|skills| skills[usize::from(kind.skill())]),
+            rank
+        );
+
+        let output = testing::run_on(wire, |out| {
+            command(&mut features, &mut world, &request, out)
+        });
+        output.result.unwrap();
+        assert!(output.sent.is_empty());
+        assert!(
+            matches!(status(&output.events).1, CombatRequestStatus::Refused(reason)
+            if reason.contains("recovering"))
+        );
+    }
+}
+
+#[test]
+fn p99_zero_rank_and_unknown_rank_are_distinct_local_refusals() {
+    let protocol = ServerProtocol::Project1999;
+    let wire = servers::server_type(protocol).wire();
+    let kind = RangedKind::Archery;
+    for (rank, expected) in [
+        (Some(0), "positive ranged skill rank"),
+        (None, "rank is unavailable"),
+        (Some(254), "rank is unavailable"),
+        (Some(255), "rank is unavailable"),
+        (Some(u32::MAX), "rank is unavailable"),
+    ] {
+        let (mut features, mut world) = ranged_setup(protocol, kind);
+        set_ranged_rank(&mut world, kind, rank);
+        let request = ClientCommand::RangedAttack(ranged_attack(&world));
+        let output = testing::run_on(wire, |out| {
+            command(&mut features, &mut world, &request, out)
+        });
+        output.result.unwrap();
+        assert!(output.sent.is_empty());
+        assert!(
+            matches!(status(&output.events).1, CombatRequestStatus::Refused(reason)
+            if reason.contains(expected))
+        );
+    }
+}
+
 #[test]
 fn titanium_ranged_sends_one_request_and_only_received_inventory_changes_ammo() {
     for (kind, slot, wire_skill) in [(RangedKind::Archery, 21, 7), (RangedKind::Throwing, 11, 51)] {
@@ -117,7 +197,6 @@ fn ranged_refuses_stale_target_loadout_and_admission_and_unavailable_actions() {
         "sitting",
         "near",
         "far",
-        "untrained",
     ] {
         let (mut features, mut world) = ranged_setup(protocol, RangedKind::Archery);
         let mut attack = ranged_attack(&world);
@@ -158,7 +237,6 @@ fn ranged_refuses_stale_target_loadout_and_admission_and_unavailable_actions() {
                 target.position.x = if case == "near" { 20.0 } else { 300.0 };
                 world.spawns.insert(target);
             }
-            "untrained" => world.player.admit(testing::player(7)),
             _ => unreachable!(),
         }
         let output = testing::run_on(wire, |out| {

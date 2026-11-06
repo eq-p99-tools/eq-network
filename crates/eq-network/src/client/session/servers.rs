@@ -608,8 +608,8 @@ mod shared {
         Combat, Corpses, Doors, Edits, Entities, Exchanges, Feature, GameDialect, GroundObjects,
         Groups, Hazard, Hazards, Helm, HideAnswer, Home, ItemCount, Listing, Looting, Map, Marks,
         MerchantOffers, Motion, MoveRules, Pets, Quotes, Raids, Reading, Resurrection, Sacrifice,
-        Setup, Socials, Spellbook, Talk, Targeting, Ticks, Tradeskills, Training, Transfers,
-        Translocate, Who,
+        ServerProtocol, Setup, Socials, Spellbook, Talk, Targeting, Ticks, Tradeskills, Training,
+        Transfers, Translocate, Who,
     };
 
     pub(super) fn casting() -> Box<dyn Feature> {
@@ -659,8 +659,8 @@ mod shared {
 
     /// Considering and attacking, with a notice before each change of the
     /// attack toggle where the client generation sends one.
-    pub(super) fn combat(dialect: GameDialect) -> Box<dyn Feature> {
-        Box::new(Combat::new(dialect))
+    pub(super) fn combat(protocol: ServerProtocol) -> Box<dyn Feature> {
+        Box::new(Combat::new(protocol))
     }
 
     pub(super) fn looting() -> Box<dyn Feature> {
@@ -995,7 +995,7 @@ impl ServerType for Project1999 {
     }
 
     fn combat(&self, _setup: &Setup<'_>) -> Provided {
-        offer(shared::combat(GameDialect::Titanium))
+        offer(shared::combat(ServerProtocol::Project1999))
     }
 
     fn looting(&self, _setup: &Setup<'_>) -> Provided {
@@ -1137,7 +1137,7 @@ impl ServerType for EqEmu {
     }
 
     fn combat(&self, _setup: &Setup<'_>) -> Provided {
-        offer(shared::combat(GameDialect::Titanium))
+        offer(shared::combat(ServerProtocol::EqEmu))
     }
 
     fn looting(&self, _setup: &Setup<'_>) -> Provided {
@@ -1304,7 +1304,7 @@ impl ServerType for Quarm {
     /// Quarm handles normal attack toggles and consideration with the shared
     /// `EQMac` layouts; only server records report combat outcomes.
     fn combat(&self, _setup: &Setup<'_>) -> Provided {
-        offer(shared::combat(GameDialect::EqMac))
+        offer(shared::combat(ServerProtocol::Quarm))
     }
 
     /// Quarm's source-derived corpse flow uses the existing inventory owner
@@ -1633,7 +1633,7 @@ impl ServerType for Takp {
     }
 
     fn combat(&self, _setup: &Setup<'_>) -> Provided {
-        offer(shared::combat(GameDialect::EqMac))
+        offer(shared::combat(ServerProtocol::Takp))
     }
 }
 
