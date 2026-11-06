@@ -244,6 +244,15 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- Keep merchant commands and Titanium receipts scoped to the relevant shop.
+  Check stock, quantity, and sale custody before sending. Preserve an
+  unanswered transaction across a shop close and await server evidence.
+- Retire item and coin escrow when a trade cancel is sent. Returned holdings
+  come from server inventory and money updates. Withhold exchange replies
+  that cannot apply to the current stage or partner.
+- Check that a bank conversion's source holds the whole offered amount,
+  including the amount the conversion leaves behind.
+
 - Keep tracking jump ascent across flight toggles so toggling flight off
   cannot open grounded diagonal movement during a tracked jump. The jump's
   own rise allowance also survives the toggle; it expires at the apex as

@@ -100,6 +100,7 @@ impl TradeKey {
 
 /// A submitted operation and whether the purse it was sent against is current.
 struct Outstanding {
+    merchant_id: u16,
     trade: Trade,
     coin_basis: bool,
 }
@@ -175,6 +176,25 @@ impl MerchantTrades {
             .chain(self.unanswered.values())
     }
 
+    /// A different merchant's reply cannot settle a transaction even when
+    /// the echoed slot and count match. A refusal with multiple candidates
+    /// remains ambiguous in the shared settlement path.
+    pub(super) fn receipt_is_current(
+        &self,
+        merchant_id: u16,
+        update: &MerchantUpdate,
+        open: bool,
+    ) -> bool {
+        let mut candidates = self
+            .records()
+            .filter(|record| record.trade.answers(update) || record.trade.refused_by(update))
+            .peekable();
+        if candidates.peek().is_none() {
+            return open;
+        }
+        candidates.all(|record| record.merchant_id == merchant_id)
+    }
+
     /// A coin delta needs a matching trade and its original known purse basis.
     /// A newer snapshot may already include that effect; do not count it twice.
     pub(super) fn coins_current(&self, update: &MerchantUpdate) -> bool {
@@ -198,23 +218,40 @@ impl MerchantTrades {
     /// Records a purchase or sale that was handed to transport, and for a sale
     /// what its slot holds.
     pub(super) fn sent(&mut self, command: &ClientCommand, inventory: &Inventory, now: Instant) {
-        let trade = match command {
-            ClientCommand::Buy { slot, quantity, .. } => Trade::Purchase {
-                slot: *slot,
-                quantity: *quantity,
-            },
-            ClientCommand::Sell { slot, quantity, .. } => {
-                let slot = InventorySlot(*slot);
-                Trade::Sale(Sale {
-                    slot,
+        let (merchant_id, trade) = match command {
+            ClientCommand::Buy {
+                merchant_id,
+                slot,
+                quantity,
+                ..
+            } => (
+                *merchant_id,
+                Trade::Purchase {
+                    slot: *slot,
                     quantity: *quantity,
-                    item: inventory.items().get(&slot).cloned().map(Box::new),
-                })
+                },
+            ),
+            ClientCommand::Sell {
+                merchant_id,
+                slot,
+                quantity,
+                ..
+            } => {
+                let slot = InventorySlot(*slot);
+                (
+                    *merchant_id,
+                    Trade::Sale(Sale {
+                        slot,
+                        quantity: *quantity,
+                        item: inventory.items().get(&slot).cloned().map(Box::new),
+                    }),
+                )
             }
             _ => return,
         };
         self.pending = Some((
             Outstanding {
+                merchant_id,
                 trade,
                 coin_basis: true,
             },
@@ -378,12 +415,17 @@ pub(super) struct OpenMerchant(Option<Window>);
 
 /// An open merchant window.
 struct Window {
+    merchant_id: u16,
     /// The rate the window opened with.
     rate: f32,
-    /// By place on the list: the most a unit costs, and whether the item is
-    /// priced once whatever the count, as a charged item is, and the bounded
-    /// quantity supported by its decoded stack rules.
-    places: BTreeMap<u32, (u64, bool, u32)>,
+    places: BTreeMap<u32, Listed>,
+}
+
+struct Listed {
+    most_per_unit: u64,
+    charged: bool,
+    stack_limit: u32,
+    stock: u32,
 }
 
 impl Window {
@@ -394,15 +436,16 @@ impl Window {
         listed.price = quotes.unit_price(quote, self.rate);
         self.places.insert(
             listed.slot,
-            (
-                quotes.most_per_unit(quote, self.rate),
-                listed.item.activation.maximum_charges > 1,
-                if listed.item.stack_count.is_some() {
-                    listed.item.rules.stack_size.min(20)
+            Listed {
+                most_per_unit: quotes.most_per_unit(quote, self.rate),
+                charged: listed.item.activation.maximum_charges > 1,
+                stack_limit: if listed.item.stack_count.is_some() {
+                    listed.item.rules.stack_size
                 } else {
                     1
                 },
-            ),
+                stock: listed.quantity,
+            },
         );
     }
 }
@@ -414,8 +457,13 @@ impl OpenMerchant {
     /// charges it.
     pub(super) fn explain(&mut self, update: &mut MerchantUpdate, quotes: Quotes) {
         match update {
-            MerchantUpdate::Opened { accepted, rate, .. } => {
+            MerchantUpdate::Opened {
+                merchant_id,
+                accepted,
+                rate,
+            } => {
                 self.0 = accepted.then(|| Window {
+                    merchant_id: *merchant_id,
                     rate: *rate,
                     places: BTreeMap::new(),
                 });
@@ -477,17 +525,14 @@ impl OpenMerchant {
         quantity: u32,
         purse: Option<Coins>,
     ) -> Result<(), &'static str> {
-        let (most, once, _) = self
-            .0
-            .as_ref()
-            .and_then(|window| window.places.get(&slot))
-            .copied()
+        let listed = self
+            .listed(slot)
             .ok_or("That item is not on the merchant's list")?;
         let purse = purse.ok_or("Your coins are not known yet")?;
-        let cost = if once {
-            most
+        let cost = if listed.charged {
+            listed.most_per_unit
         } else {
-            most.saturating_mul(u64::from(quantity))
+            listed.most_per_unit.saturating_mul(u64::from(quantity))
         };
         if purse.total_copper() < cost {
             return Err("You may not have enough coins for that");
@@ -495,13 +540,30 @@ impl OpenMerchant {
         Ok(())
     }
 
+    /// Whether the command names the shop whose stock is in use.
+    pub(super) fn is_open(&self, merchant_id: u16) -> bool {
+        self.0
+            .as_ref()
+            .is_some_and(|window| window.merchant_id == merchant_id)
+    }
+
+    fn listed(&self, slot: u32) -> Option<&Listed> {
+        self.0.as_ref()?.places.get(&slot)
+    }
+
+    /// Bounds ordinary Titanium purchases by the decoded item and any finite stock.
+    pub(super) fn titanium_quantity_known(&self, slot: u32, quantity: u32) -> bool {
+        self.listed(slot).is_some_and(|listed| {
+            (1..=listed.stack_limit.max(1)).contains(&quantity)
+                && (listed.stock == 0 || quantity <= listed.stock)
+        })
+    }
+
     /// Bound ordinary Quarm purchases by decoded stock rather than guessing
     /// quantities for charged, non-stackable or unknown items.
     pub(super) fn quarm_quantity_known(&self, slot: u32, quantity: u32) -> bool {
-        self.0
-            .as_ref()
-            .and_then(|window| window.places.get(&slot))
-            .is_some_and(|(_, _, limit)| quantity > 0 && quantity <= *limit)
+        self.listed(slot)
+            .is_some_and(|listed| (1..=listed.stack_limit.min(20)).contains(&quantity))
     }
 
     /// Forgets the window, as after death.

@@ -23,6 +23,14 @@ pub enum Message {
     /// feature keeping the merchant window tells the host the places that
     /// left and each item listed.
     MerchantList(Vec<crate::merchant::MerchantItem>),
+    /// Titanium merchant update whose wire entity must be checked against
+    /// the open catalog or an outstanding transaction before publication.
+    MerchantScoped {
+        /// Merchant entity from the packet.
+        merchant_id: u32,
+        /// The stock removal or transaction result.
+        update: crate::merchant::MerchantUpdate,
+    },
     /// Coins the server added to the player's purse without saying what the
     /// purse holds, as `EQMac`'s money notices do one kind at a time; the
     /// feature keeping the purse adds them, and the host hears the purse.
@@ -151,6 +159,15 @@ pub fn titanium(opcode: u16, body: &[u8]) -> Vec<Message> {
         ),
         zoning::HANDOFF_OPCODE => Message::Handoff(body.to_vec()),
         LOGOUT_REPLY_OPCODE => Message::LoggedOut,
+        crate::merchant::BUY_OPCODE
+        | crate::merchant::SELL_OPCODE
+        | crate::merchant::DELETE_OPCODE => match crate::merchant::decode_scoped(opcode, body) {
+            Ok((merchant_id, update)) => Message::MerchantScoped {
+                merchant_id,
+                update,
+            },
+            Err(error) => unreadable(Part::World, &error),
+        },
         crate::buffs::TITANIUM_ACTION_OPCODE => action(crate::buffs::titanium_action(body)),
         crate::zones::TITANIUM_HEADER_OPCODE => {
             messages.extend(crate::clock::titanium_zone_sky(body).map(sky));

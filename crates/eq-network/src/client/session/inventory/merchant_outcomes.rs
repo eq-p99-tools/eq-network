@@ -545,3 +545,101 @@ fn an_absolute_snapshot_before_a_result_cannot_be_charged_again() {
         assert_eq!(world.coins.purse, Some(coins));
     }
 }
+
+#[test]
+fn titanium_results_and_removals_keep_their_wire_merchant_identity() {
+    use eq_network_game::{merchant, message};
+    let (mut belongings, mut world) = admitted();
+    shopping_at(&mut belongings, &mut world);
+
+    let mut removal = [0; 12];
+    removal[..4].copy_from_slice(&8_u32.to_le_bytes());
+    removal[8..].copy_from_slice(&3_u32.to_le_bytes());
+    let mut news = message::titanium(merchant::DELETE_OPCODE, &removal).remove(0);
+    belongings.explain(&mut news, &world);
+    assert!(matches!(news, Message::Withheld));
+
+    sent(&mut belongings, &mut world, &buy(3));
+    let accepted = |merchant_id| {
+        let mut body = merchant::buy(merchant_id, 7, 3, 1).unwrap();
+        body[20..].copy_from_slice(&25_u32.to_le_bytes());
+        message::titanium(merchant::BUY_OPCODE, &body).remove(0)
+    };
+    let mut stale = accepted(8);
+    belongings.explain(&mut stale, &world);
+    assert!(matches!(stale, Message::Withheld));
+    assert!(belongings.trades.active());
+    assert_eq!(world.coins.purse, Some(Coins::from_copper(1000)));
+
+    let mut matching = accepted(9);
+    belongings.explain(&mut matching, &world);
+    assert!(matches!(
+        matching,
+        Message::Event(WorldEvent::Merchant(MerchantUpdate::Bought { .. }))
+    ));
+    testing::run(|out| belongings.observe(&matching, &mut world, out))
+        .result
+        .unwrap();
+    assert!(!belongings.trades.active());
+    assert_eq!(
+        world.coins.purse.map(|coins| coins.total_copper()),
+        Some(975)
+    );
+}
+
+#[test]
+fn merchant_commands_require_the_current_shop_and_available_quantity() {
+    let (mut belongings, mut world) = admitted();
+    shopping_at(&mut belongings, &mut world);
+    let mut wrong_shop = buy(3);
+    if let ClientCommand::Buy { merchant_id, .. } = &mut wrong_shop {
+        *merchant_id = 8;
+    }
+    let mut overbuy = buy(3);
+    if let ClientCommand::Buy { quantity, .. } = &mut overbuy {
+        *quantity = 2;
+    }
+    let mut oversell = sell(22);
+    if let ClientCommand::Sell { quantity, .. } = &mut oversell {
+        *quantity = 2;
+    }
+    for command in [wrong_shop, overbuy, oversell, sell(24)] {
+        let result = testing::run(|out| belongings.handle(&command, &mut world, out));
+        result.result.unwrap();
+        assert!(result.sent.is_empty());
+        assert!(matches!(
+            result.events.first(),
+            Some(ClientEvent::World(WorldEvent::MerchantRefused { .. }))
+        ));
+        assert!(!belongings.trades.active());
+    }
+    sent(&mut belongings, &mut world, &sell(22));
+}
+
+#[test]
+fn closing_a_shop_reports_unknown_and_preserves_the_late_sale() {
+    let (mut belongings, mut world) = admitted();
+    shopping_at(&mut belongings, &mut world);
+    sent(&mut belongings, &mut world, &sell(22));
+    let close = hear(&mut belongings, &mut world, MerchantUpdate::Closed);
+    close.result.unwrap();
+    assert!(close.sent.is_empty());
+    assert!(close.events.iter().any(|event| matches!(
+        event,
+        ClientEvent::World(WorldEvent::MerchantUnanswered { .. })
+    )));
+    assert!(world.inventory.items().contains_key(&InventorySlot(22)));
+    assert_eq!(world.coins.purse, None);
+    assert!(!belongings.trades.active());
+
+    let mut body = eq_network_game::merchant::sell(9, 22, 1).unwrap();
+    body[12..].copy_from_slice(&40_u32.to_le_bytes());
+    let mut reply =
+        eq_network_game::message::titanium(eq_network_game::merchant::SELL_OPCODE, &body).remove(0);
+    belongings.explain(&mut reply, &world);
+    testing::run(|out| belongings.observe(&reply, &mut world, out))
+        .result
+        .unwrap();
+    assert!(!world.inventory.items().contains_key(&InventorySlot(22)));
+    assert_eq!(world.coins.purse, None);
+}

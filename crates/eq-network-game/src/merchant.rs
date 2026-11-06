@@ -5,7 +5,7 @@
 //! Prices and stock come from the server; a purchase or sale is only settled by the
 //! server's echo, its money update and the resulting inventory packets.
 use crate::inventory::InventoryItem;
-use anyhow::{ensure, Result};
+use anyhow::{ensure, Context, Result};
 use serde::Serialize;
 
 mod eqmac;
@@ -163,6 +163,12 @@ pub enum MerchantUpdate {
     },
     /// The merchant window closed.
     Closed,
+}
+
+/// Decodes a result or removal while keeping its merchant identity for the session.
+pub(crate) fn decode_scoped(opcode: u16, body: &[u8]) -> Result<(u32, MerchantUpdate)> {
+    let update = decode(opcode, body)?.context("missing merchant update")?;
+    Ok((word(body, 0)?, update))
 }
 
 fn word(body: &[u8], offset: usize) -> Result<u32> {
