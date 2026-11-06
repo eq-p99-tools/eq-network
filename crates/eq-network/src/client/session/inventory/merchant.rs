@@ -151,6 +151,13 @@ pub(super) const fn is_refusal(update: &MerchantUpdate) -> bool {
     }
 }
 
+/// Which wait a uniquely matched refusal ended.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum Refusal {
+    Pending(u16),
+    Unanswered,
+}
+
 /// The trade waiting for the merchant's echo, if any, and trades released
 /// unanswered, whose echoes may still come.
 #[derive(Default)]
@@ -303,13 +310,13 @@ impl MerchantTrades {
         }
     }
 
-    /// Retires a uniquely identified refusal and returns its merchant. With
-    /// no wire merchant ID, all transactions of that kind are candidates.
+    /// Retires a uniquely identified refusal and records which wait ended.
+    /// With no wire merchant ID, all transactions of that kind are candidates.
     pub(super) fn refused(
         &mut self,
         update: &MerchantUpdate,
         merchant_id: Option<u16>,
-    ) -> Option<u16> {
+    ) -> Option<Refusal> {
         let (key, merchant_id) = {
             let mut candidates = self.records().filter(|record| {
                 merchant_id.is_none_or(|id| record.merchant_id == id)
@@ -324,11 +331,12 @@ impl MerchantTrades {
         if self
             .pending
             .take_if(|(record, _)| record.trade.key() == key)
-            .is_none()
+            .is_some()
         {
-            self.unanswered.remove(&key);
+            Some(Refusal::Pending(merchant_id))
+        } else {
+            self.unanswered.remove(&key).map(|_| Refusal::Unanswered)
         }
-        Some(merchant_id)
     }
 
     /// The item a remembered sale offered, which an echo of `sold` units
@@ -674,7 +682,7 @@ mod tests {
         let inventory = inventory();
         let mut trades = MerchantTrades::default();
         trades.sent(&sell(25), &inventory, start);
-        assert_eq!(trades.refused(&echo(-1), None), Some(7));
+        assert_eq!(trades.refused(&echo(-1), None), Some(Refusal::Pending(7)));
         assert_eq!(trades.observe(&echo(-1), &inventory), None);
         assert!(!trades.active());
         trades.sent(&buy(3), &inventory, start);
@@ -854,7 +862,7 @@ mod tests {
         assert!(trades.active());
         trades.clear();
         trades.sent(&buy(4), &inventory(), start);
-        assert_eq!(trades.refused(&nothing, None), Some(7));
+        assert_eq!(trades.refused(&nothing, None), Some(Refusal::Pending(7)));
         assert!(!trades.active());
         // A purchase echoed with units bought is not a refusal.
         trades.sent(&buy(4), &inventory(), start);

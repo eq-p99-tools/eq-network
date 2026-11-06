@@ -255,7 +255,8 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   unanswered transaction across a shop close and await server evidence.
   A Titanium refusal with a merchant ID can resolve that shop's sole matching
   action. Despawn or replacement retires the catalog and releases the pending
-  trade as unknown while retaining any late result.
+  trade as unknown while retaining any late result. A late refusal of an
+  already released trade leaves the host's other unanswered action alone.
 - Retire item and coin escrow when a trade cancel is sent. Returned holdings
   come from server inventory and money updates. Withhold exchange replies
   that cannot apply to the current stage or partner.

@@ -39,7 +39,7 @@ use eq_network_game::{
     world::Coins,
     world::{SpawnKind, WorldEvent},
 };
-use merchant::{MerchantTrades, OpenMerchant};
+use merchant::{MerchantTrades, OpenMerchant, Refusal};
 use std::time::{Duration, Instant};
 
 /// The player's inventory as the session knows it. Every feature reads it;
@@ -695,8 +695,8 @@ impl Belongings {
         }
     }
 
-    /// Keep the refusal's wire identity through settlement. A refusal for
-    /// an older shop must not dismiss a current action in the host.
+    /// Preserve the wire identity through settlement. Only the refusal of
+    /// an active wait at this shop can dismiss a host action.
     fn scoped_merchant_refusal(
         &mut self,
         merchant_id: u32,
@@ -708,16 +708,42 @@ impl Belongings {
             return Ok(());
         };
         let scope = (merchant_id != 0).then_some(merchant_id);
-        let Some(refused_at) = self.trades.refused(update, scope) else {
-            return Ok(());
-        };
-        if self.merchant.is_open(refused_at) && !self.trades.active() {
-            merchant_refused(world, "The merchant did not accept that offer.", out)?;
-            out.log
-                .send(ClientEvent::World(WorldEvent::Merchant(update.clone())))
-        } else {
-            out.log
-                .diagnostic("A previous merchant trade was refused".into())
+        match self.trades.refused(update, scope) {
+            Some(Refusal::Pending(id)) if self.merchant.is_open(id) => {
+                merchant_refused(world, "The merchant did not accept that offer.", out)?;
+                out.log
+                    .send(ClientEvent::World(WorldEvent::Merchant(update.clone())))
+            }
+            Some(_) => out
+                .log
+                .diagnostic("A previous merchant trade was refused".into()),
+            None => Ok(()),
+        }
+    }
+
+    /// Applies merchant news that reached the ordinary event path.
+    fn merchant_news(
+        &mut self,
+        update: &MerchantUpdate,
+        world: &mut World,
+        out: &mut Out<'_, '_>,
+    ) -> Result<()> {
+        if matches!(update, MerchantUpdate::Closed) && self.trades.active() {
+            merchant_unanswered(world, out)?;
+        }
+        match self.trades.refused(update, None) {
+            Some(Refusal::Pending(id)) if self.merchant.is_open(id) => {
+                merchant_refused(world, "The merchant did not accept that offer.", out)
+            }
+            Some(_) => out
+                .log
+                .diagnostic("A previous merchant trade was refused".into()),
+            None => {
+                if let Some(update) = self.trades.observe(update, &world.inventory) {
+                    change(update, world, out)?;
+                }
+                Ok(())
+            }
         }
     }
 
@@ -1105,17 +1131,8 @@ impl Feature for Belongings {
                 part: Part::Inventory,
                 ..
             } => change(InventoryUpdate::Invalidated, world, out)?,
-            // A sale's echo is the only notice that the item left, and an echo
-            // of nothing bought the only one that a purchase was refused.
             Message::Event(WorldEvent::Merchant(update)) => {
-                if matches!(update, MerchantUpdate::Closed) && self.trades.active() {
-                    merchant_unanswered(world, out)?;
-                }
-                if self.trades.refused(update, None).is_some() {
-                    merchant_refused(world, "The merchant did not accept that offer.", out)?;
-                } else if let Some(update) = self.trades.observe(update, &world.inventory) {
-                    change(update, world, out)?;
-                }
+                self.merchant_news(update, world, out)?;
             }
             Message::Event(event) if world.owns_death(event) => {
                 self.trades.clear();

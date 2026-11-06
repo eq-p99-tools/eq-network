@@ -236,10 +236,7 @@ fn distinct_unanswered_sales_survive_out_of_order_results_and_an_uncorrelated_re
     // Only sale 24 remains, so a later refusal now has a unique owner.
     let last = hear(&mut belongings, &mut world, sold(30, 0, 999));
     last.result.unwrap();
-    assert!(last.events.iter().any(|event| matches!(
-        event,
-        ClientEvent::World(WorldEvent::MerchantRefused { .. })
-    )));
+    assert!(matches!(&last.events[..], [ClientEvent::Diagnostic(_)]));
     assert_eq!(world.coins.purse, None);
     assert!(belongings.trades.check(&sell(24)).is_ok());
 }
@@ -895,5 +892,44 @@ fn a_merchant_spawn_replacement_requires_a_fresh_window_and_stock() {
         assert!(belongings.trades.active());
         assert_eq!(world.coins.purse, None);
         assert_eq!(world.inventory.items(), &items);
+    }
+}
+
+#[test]
+fn a_late_buy_refusal_does_not_resolve_an_unanswered_sale_at_the_reopened_shop() {
+    for close in [
+        WorldEvent::Merchant(MerchantUpdate::Closed),
+        WorldEvent::Despawn(9),
+    ] {
+        let (mut belongings, mut world) = admitted();
+        shopping_at(&mut belongings, &mut world);
+        sent(&mut belongings, &mut world, &buy(3));
+        hear_message(&mut belongings, &mut world, Message::Event(close))
+            .result
+            .unwrap();
+        shopping_at(&mut belongings, &mut world);
+        sent(&mut belongings, &mut world, &sell(22));
+        let timeout = expire(&mut belongings, &mut world);
+        timeout.result.unwrap();
+        assert!(timeout.events.iter().any(|event| matches!(
+            event,
+            ClientEvent::World(WorldEvent::MerchantUnanswered { .. })
+        )));
+        assert!(!belongings.trades.active());
+        assert!(belongings.trades.check(&buy(3)).is_err());
+        assert!(belongings.trades.check(&sell(22)).is_err());
+
+        let items = world.inventory.items().clone();
+        let late = hear_message(&mut belongings, &mut world, wire_refusal(9));
+        late.result.unwrap();
+        assert!(late.sent.is_empty());
+        assert!(
+            matches!(&late.events[..], [ClientEvent::Diagnostic(_)]),
+            "a generic refusal or terminal merchant event can dismiss the unknown sale"
+        );
+        assert!(belongings.trades.check(&buy(3)).is_ok());
+        assert!(belongings.trades.check(&sell(22)).is_err());
+        assert_eq!(world.inventory.items(), &items);
+        assert_eq!(world.coins.purse, None);
     }
 }
