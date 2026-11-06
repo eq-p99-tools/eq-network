@@ -228,6 +228,8 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   runs retain active connection health. Interactive runs instead close the zone
   and return `PlayerAdmissionError` without reconnecting. `Ready` now requires
   an admitted player. Serialized progress consumers may see `recording`.
+  The record-only heartbeat stops using the entry position when an own update
+  or transfer supersedes it, including during the handshake.
 
 - Keep tracking jump ascent when run boost or stunned-movement options
   change. Boosted forward movement that becomes a fall keeps its horizontal

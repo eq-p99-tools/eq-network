@@ -61,11 +61,6 @@ impl Body {
         self.stationary_known = true;
     }
 
-    /// A recording-only connection has no movement owner to update its position.
-    pub(super) const fn forget_stationary_position(&mut self) {
-        self.stationary_known = false;
-    }
-
     /// Notes the player's spawn ID.
     pub(super) fn own(&mut self, spawn_id: u16) {
         self.stationary.spawn_id = spawn_id;
@@ -882,11 +877,6 @@ mod tests {
         );
         let outcome = testing::run(|out| motion.tick(now + STATIONARY_HEARTBEAT, &mut world, out));
         assert_eq!(&outcome.unreliable[0].body[2..4], &[1, 0]);
-        world.body.forget_stationary_position();
-        let outcome =
-            testing::run(|out| motion.tick(now + 2 * STATIONARY_HEARTBEAT, &mut world, out));
-        outcome.result.unwrap();
-        assert!(outcome.unreliable.is_empty());
     }
 
     #[test]

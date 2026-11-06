@@ -283,6 +283,7 @@ fn run_connected(
     let session_id = rand::random();
     let mut world = World::new(session_id);
     let mut recording_only = false;
+    let mut entry_position_superseded = false;
     let mut unheard = Unheard::new(Stage::Zone);
     let mut list_replies = super::list_poll::Replies::default();
     let mut features = Features::new(server, &config.character, config.auto_eat);
@@ -329,7 +330,10 @@ fn run_connected(
             };
             if recording_only {
                 // Preserve the listener's stationary heartbeat from wire facts.
-                if repeats_position && out.sink.termination().is_none() {
+                if repeats_position
+                    && !entry_position_superseded
+                    && out.sink.termination().is_none()
+                {
                     world.body.heartbeat(Instant::now(), &mut out)?;
                 }
             } else {
@@ -495,6 +499,12 @@ fn run_connected(
             ),
             log,
         )?;
+        if context.commands.is_none() && !world.ready() && !entry_position_superseded {
+            // A later handshake packet cannot restore a superseded fallback.
+            entry_position_superseded = messages
+                .iter()
+                .any(|message| supersedes_entry_position(message, &world));
+        }
         let speaker = sender(&config.character, &world);
         if recording_only {
             // Keep the communication stream without giving the player
@@ -505,22 +515,6 @@ fn run_connected(
                     .any(|message| matches!(message, Message::LoggedOut)),
                 "server logged the character out"
             );
-            if messages.iter().any(|message| match message {
-                Message::ZoneOffer(_)
-                | Message::ZoneAnswer(_)
-                | Message::Handoff(_)
-                | Message::Unreadable {
-                    part: Part::ZoneOffer | Part::ZoneAnswer,
-                    ..
-                } => true,
-                Message::Event(
-                    WorldEvent::Position { spawn_id, .. } | WorldEvent::Despawn(spawn_id),
-                ) => world.is_player(*spawn_id),
-                Message::Event(event) => world.owns_death(event),
-                _ => false,
-            }) {
-                world.body.forget_stationary_position();
-            }
         } else if let Some(exit) = hear(
             messages,
             &mut features,
@@ -553,6 +547,28 @@ fn run_connected(
                 }),
             )?,
         }
+    }
+}
+
+/// A listener can repeat the entry position only until the zone supersedes it.
+fn supersedes_entry_position(message: &Message, world: &World) -> bool {
+    let own_spawn = world.own_spawn.filter(|&id| id != 0);
+    match message {
+        Message::ZoneOffer(_)
+        | Message::ZoneAnswer(_)
+        | Message::Handoff(_)
+        | Message::Unreadable {
+            part: Part::ZoneOffer | Part::ZoneAnswer,
+            ..
+        } => true,
+        Message::Event(WorldEvent::Position { spawn_id, .. } | WorldEvent::Despawn(spawn_id)) => {
+            own_spawn == Some(*spawn_id)
+        }
+        Message::Event(WorldEvent::Death(death)) => {
+            own_spawn.map(u32::from) == Some(death.spawn_id)
+        }
+        Message::Event(event) => world.owns_death(event),
+        _ => false,
     }
 }
 

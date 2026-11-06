@@ -25,10 +25,11 @@ health. This outcome has no `Entered`, `Ready`, or live gameplay feature
 processing. Servers offering movement retain the stationary heartbeat only
 with the nonzero own-spawn ID and position read during the handshake (Titanium's
 validated own spawn and saved profile position, or EQMac's assigned ID and own
-spawn position). Own death, despawn, a position correction, or transfer traffic
-withdraws the position repeat. The progress enum is non-exhaustive, and its
-new serialized value is `recording`. Errors in the handshake itself continue to
-follow the existing session error policy.
+spawn position). Transfer traffic or a death, despawn, or position update for
+an already known own spawn withdraws the position repeat for that zone, even
+if it arrived before handshake completion. The progress enum is non-exhaustive,
+and its new serialized value is `recording`. Errors in the handshake itself
+continue to follow the existing session error policy.
 
 ## Modern session termination
 

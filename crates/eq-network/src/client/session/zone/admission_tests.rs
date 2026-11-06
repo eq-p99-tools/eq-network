@@ -7,7 +7,7 @@ use eq_network_game::{
     chat::OutboundChat,
     movement::POSITION_OPCODE,
     world::WorldEvent,
-    zoning::{HANDOFF_OPCODE, MOVE_OPCODE},
+    zoning::{DEPART_OPCODE, HANDOFF_OPCODE, MOVE_OPCODE},
 };
 use eq_network_transport::Application;
 use std::{
@@ -242,8 +242,7 @@ fn a_transfer_destination_requires_its_own_usable_player() {
     assert_failed_admission(result, &destination, &events[transfer + 1..], &commands);
 }
 
-#[test]
-fn the_same_incomplete_admission_keeps_record_only_chat_running() {
+fn record_chat_through(script: &mut Script) {
     let config = config();
     let identity = ClientIdentity::new("example-host", "example-user");
     let credentials = credentials();
@@ -257,25 +256,16 @@ fn the_same_incomplete_admission_keeps_record_only_chat_running() {
         events.push(event);
         Ok(())
     };
-    let mut script = Script::titanium(-1.0);
     let mut body = vec![0; 148];
     body[64..70].copy_from_slice(b"Trader");
     body[132..136].copy_from_slice(&5u32.to_le_bytes());
     body.extend_from_slice(b"Hello from the zone\0");
     script.packet(0x1004, body);
     assert!(matches!(
-        run_script(
-            &context,
-            &mut script,
-            &mut Events::new(&config, &mut handler)
-        )
-        .unwrap(),
+        run_script(&context, script, &mut Events::new(&config, &mut handler)).unwrap(),
         ZoneExit::Stopped
     ));
     assert!(script.closed);
-    assert!(script
-        .sent
-        .ends_with(&[0x6563, 0x5e20, 0x0c11, POSITION_OPCODE]));
     assert!(!events.iter().any(|event| matches!(
         event,
         ClientEvent::Progress(ConnectionStage::Ready) | ClientEvent::World(_)
@@ -300,4 +290,77 @@ fn the_same_incomplete_admission_keeps_record_only_chat_running() {
         ] if matches!(&record.event, RecordEvent::Chat(chat)
             if chat.message.as_ref().is_some_and(|line| line.text == "Hello from the zone"))
     ));
+}
+
+#[test]
+fn the_same_incomplete_admission_keeps_record_only_chat_running() {
+    let mut script = Script::titanium(-1.0);
+    record_chat_through(&mut script);
+    assert!(script
+        .sent
+        .ends_with(&[0x6563, 0x5e20, 0x0c11, POSITION_OPCODE]));
+}
+
+/// A valid Titanium server update away from the saved position.
+fn position_update(spawn_id: u16) -> Vec<u8> {
+    let mut body = vec![0; 22];
+    body[..2].copy_from_slice(&spawn_id.to_le_bytes());
+    body[6..10].copy_from_slice(&8u32.to_le_bytes());
+    body
+}
+
+#[test]
+fn own_updates_during_the_handshake_withdraw_the_recording_heartbeat() {
+    let mut death = vec![0; 32];
+    death[..4].copy_from_slice(&7u32.to_le_bytes());
+    for (opcode, body) in [
+        (POSITION_OPCODE, position_update(7)),
+        (0x6160, death),
+        (DEPART_OPCODE, 7u32.to_le_bytes().to_vec()),
+    ] {
+        let mut script = Script::titanium(-1.0);
+        script
+            .incoming
+            .insert(script.incoming.len() - 1, Application { opcode, body });
+        record_chat_through(&mut script);
+        assert!(
+            !script.sent.contains(&POSITION_OPCODE),
+            "opcode {opcode:#06x}"
+        );
+    }
+}
+
+#[test]
+fn recording_uses_only_own_identity_known_when_the_update_arrives() {
+    // Profile, then own spawn. The same numeric ID is unresolved before the
+    // spawn and identifies the player afterwards. A different ID remains remote.
+    for (index, spawn_id) in [(1, 7), (2, 8)] {
+        let mut script = Script::titanium(-1.0);
+        script.incoming.insert(
+            index,
+            Application {
+                opcode: POSITION_OPCODE,
+                body: position_update(spawn_id),
+            },
+        );
+        record_chat_through(&mut script);
+        assert!(script.sent.contains(&POSITION_OPCODE));
+    }
+}
+
+#[test]
+fn a_later_profile_cannot_restore_a_superseded_recording_heartbeat() {
+    let mut script = Script::titanium(-1.0);
+    let profile = script.incoming.pop_front().unwrap();
+    // The own spawn is already known when the server reports a correction.
+    script.incoming.insert(
+        1,
+        Application {
+            opcode: POSITION_OPCODE,
+            body: position_update(7),
+        },
+    );
+    script.incoming.insert(2, profile);
+    record_chat_through(&mut script);
+    assert!(!script.sent.contains(&POSITION_OPCODE));
 }
