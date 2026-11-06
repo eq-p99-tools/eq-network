@@ -9,7 +9,7 @@
 //! `Client::ReadBook` (`zone/client.cpp`) for the rules.
 //! `EQMac` uses `BookRequest_Struct` and `BookText_Struct` from TAKP/Quarm
 //! `common/eq_packet_structs.h`: a kind byte without Titanium's window byte.
-use crate::command::EncodedCommand;
+use crate::{command::EncodedCommand, GameDialect};
 use anyhow::{ensure, Context, Result};
 use serde::Serialize;
 
@@ -92,10 +92,33 @@ impl Book {
 /// A text the server sent to read.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct BookText {
-    /// The kind of window it is for: 0 a note or scroll, 1 a book.
+    /// Raw window kind. Interpret it with [`Self::window`].
     pub kind: u8,
     /// The text, with the server's markup as it came.
     pub text: String,
+}
+
+/// Window in which to present received reading text.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum ReadingWindow {
+    /// A note or scroll.
+    Note,
+    /// A book.
+    Book,
+}
+
+impl BookText {
+    /// Projects the wire kind into a reading window. Titanium's other kinds
+    /// are not reading windows; `EQMac` uses nonzero kinds for books.
+    #[must_use]
+    pub const fn window(&self, dialect: GameDialect) -> Option<ReadingWindow> {
+        match (dialect, self.kind) {
+            (_, 0) => Some(ReadingWindow::Note),
+            (GameDialect::EqMac, _) | (_, 1) => Some(ReadingWindow::Book),
+            _ => None,
+        }
+    }
 }
 
 /// Encodes asking for a readable item's text, in a window of its own.

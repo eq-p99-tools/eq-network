@@ -227,9 +227,11 @@ fn motion(generation: Generation, state: &SpeedState) -> Option<MotionCalibratio
         state.walk * 0.5 * 2.0 * multiplier * if state.sneaking || slowed { 0.5 } else { 1.0 };
     let speed = |input: f32| input.abs() * EQMAC_UNITS_PER_INPUT;
     let diagonal = if generation.grounded_diagonal && !state.sneaking {
-        // While longitudinal input is nonzero, Titanium takes half the
-        // active run/walk base for the lateral input. The standalone strafe
-        // multiplier and additive spell modifier do not enter this branch.
+        // Titanium eqgame.exe (0x4bfe0f, 0x4c00d7–0x4c01c2) takes half
+        // the active raw run/walk base for this lateral input (0x6410bc =
+        // 0.5; base fields loaded at 0x48170c–0x48171f). With longitudinal
+        // input, the standalone strafe factor and additive spell modifier
+        // do not enter this branch. We apply the steady-state scale.
         let lateral = |base| (base > 0.0).then_some(speed(base * 0.5));
         DiagonalRates {
             run: lateral(state.run),

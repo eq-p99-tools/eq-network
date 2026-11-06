@@ -1156,6 +1156,18 @@ fn an_announced_jump_refuses_diagonal_credit_without_consuming_the_sample() {
     session
         .send_move_sample(&ascent, at(150), |_| Ok(()))
         .unwrap();
+    session
+        .set_options(
+            super::super::MovementOptions {
+                run_boost: true,
+                walk_while_stunned: true,
+                ..Default::default()
+            },
+            at(155),
+        )
+        .unwrap();
+    // An unrelated option change may retire voluntary input, but it
+    // cannot make a known airborne step eligible for a ground chord.
     reject(&mut session, at(200));
     let cardinal = MovementRequest {
         position: Position {
@@ -1597,4 +1609,35 @@ fn caller_stamped_options_preserve_same_frame_motion_without_idle_credit() {
         )
         .is_err());
     assert_eq!(session.position().x, 0.65);
+}
+
+#[test]
+fn a_boosted_forward_step_can_finish_as_a_fall_within_the_same_budget() {
+    let start = Instant::now();
+    let now = start + Duration::from_millis(100);
+    let mut fall = request(now, 0.65);
+    fall.mode = MovementMode::Fall;
+    fall.position.z = -0.5;
+    let mut session = setup(start).with_falls(true);
+    assert!(session
+        .send_move(&fall, now, |_| panic!("unboosted fall exceeded its budget"))
+        .is_err());
+    session
+        .set_options(
+            super::super::MovementOptions {
+                run_boost: true,
+                ..Default::default()
+            },
+            start,
+        )
+        .unwrap();
+    let mut too_far = fall.clone();
+    too_far.position.x = 0.7;
+    assert!(session
+        .send_move(&too_far, now, |_| panic!(
+            "boosted fall exceeded its budget"
+        ))
+        .is_err());
+    session.send_move(&fall, now, |_| Ok(())).unwrap();
+    assert_eq!(session.position(), fall.position);
 }

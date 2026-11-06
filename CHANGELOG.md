@@ -41,9 +41,13 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Grounded Titanium diagonal movement (`MovementMode::GroundedDiagonal`,
   `movement::{GroundedDiagonal, DiagonalRates, DiagonalAlong, StrafeSide}`)
   with its own settled heading budget, refused during jumps, and absolute
-  mouse heading snapshots (`movement::HeadingUpdate`). The lateral half-rate
-  and the snapshot path are inferred from recordings, not read from the
-  program.
+  mouse heading snapshots (`movement::HeadingUpdate`). Titanium's
+  `eqgame.exe` establishes the raw lateral half-rate and the independent
+  heading and current yaw fields. The sampled diagonal endpoint and
+  completed-facing snapshot with zero continuing yaw are local policies.
+  Live P99 acceptance of this pair remains unverified.
+- Network-owned dialect accessors for heading snapshots, fatigue-based
+  carrying capacity, ordinary door cursor checks, and reading window kinds.
 
 ### Changed
 
@@ -216,6 +220,9 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- Keep tracking jump ascent when run boost or stunned-movement options
+  change. Boosted forward movement that becomes a fall keeps its horizontal
+  budget across the transition.
 - A local modern transport close discards staged applications and ignores later
   peer controls. If peer termination was observed first, its ordered,
   completed application prefix still drains once before the terminal error.

@@ -611,9 +611,7 @@ impl Feature for Motion {
             world.body.motion = Some(
                 MotionSession::new(world.session_id, player.spawn_id, player.position, admitted)?
                     .with_falls(self.falls)
-                    .with_heading_snapshots(
-                        out.wire.dialect() == eq_network_game::GameDialect::Titanium,
-                    )
+                    .with_heading_snapshots(out.wire.dialect().supports_heading_snapshots())
                     .with_gate(out.wire.update_gate())
                     .with_fall_speed(out.wire.fall_speed(world.gravity))
                     .with_jump(out.wire.jump_speed().map(|speed| {

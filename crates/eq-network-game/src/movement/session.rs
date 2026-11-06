@@ -445,10 +445,14 @@ impl MotionSession {
             return Ok(());
         }
         self.stop_voluntary();
+        // Only changing flight replaces the vertical controller. Running
+        // and stun choices invalidate old input without ending an ascent.
+        if self.options.fly != options.fly {
+            self.guard.jumped_at = None;
+        }
         self.options = options;
         self.guard.flying = options.fly;
         self.guard.input_epoch = created;
-        self.guard.jumped_at = None;
         Ok(())
     }
 
@@ -686,6 +690,9 @@ impl MotionSession {
         };
         // Switching mode changes the per-sample limit without resetting input expiry
         // or granting a new time budget. The clone is committed only after send succeeds.
+        // The host can integrate a boosted forward step before collision
+        // reclassifies it as Fall. Keep the same horizontal budget for the
+        // transition and its bounded drift.
         let speed = if self.options.run_boost
             && matches!(along, MovementMode::Forward | MovementMode::Fall)
         {
@@ -931,11 +938,10 @@ impl MotionSession {
 mod tests;
 
 /// The shortest-arc turn rate in heading units a second, cut toward zero.
-/// Titanium's program sends its turn rate per 50 ms tick times 20, cut to
-/// a whole number whatever the mode, so a full keyboard turn of 12 a tick
-/// sends 240 (the Titanium client update read of 10-31, and sitting 7).
-/// This conversion applies to paced turns. A heading snapshot has no
-/// continuing yaw to reconstruct from elapsed packet time.
+/// Titanium `eqgame.exe` sends current turn rate per 50 ms tick times 20,
+/// cut to a whole number (0x4652e0–0x4652fe); a full keyboard turn of 12
+/// a tick sends 240. The paced-turn path derives its own rate from the
+/// samples. A completed snapshot supplies zero continuing yaw.
 #[allow(clippy::cast_possible_truncation)] // Cut and checked against the signed wire range.
 fn heading_velocity(from: f32, to: f32, elapsed: f32) -> Result<i16> {
     let difference = (to - from + 256.0).rem_euclid(512.0) - 256.0;
