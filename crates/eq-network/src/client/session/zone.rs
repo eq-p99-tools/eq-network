@@ -285,6 +285,7 @@ fn run_connected(
     let session_id = rand::random();
     let mut world = World::new(session_id);
     let mut recording_only = false;
+    let mut reported_recording_offer = false;
     let mut entry_position_superseded = false;
     let mut unheard = Unheard::new(Stage::Zone);
     let mut list_replies = super::list_poll::Replies::default();
@@ -511,6 +512,14 @@ fn run_connected(
         if recording_only {
             // Keep the communication stream without giving the player
             // features a live world or ignoring an explicit logout.
+            if !reported_recording_offer
+                && messages
+                    .iter()
+                    .any(|message| matches!(message, Message::ZoneOffer(_)))
+            {
+                log.diagnostic("Zone offer received; record-only mode cannot follow it".into())?;
+                reported_recording_offer = true;
+            }
             ensure!(
                 !messages
                     .iter()
