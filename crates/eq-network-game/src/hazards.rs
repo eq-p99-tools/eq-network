@@ -76,7 +76,9 @@ pub(crate) fn titanium_environment(profile: &[u8]) -> TitaniumEnvironment {
         zone_id: u16::from_le_bytes([profile[13276], profile[13277]]),
         base_fire_resistance: i32::from_le_bytes(profile[12876..12880].try_into().unwrap()),
         has_alternate_advancement: profile[304..2224]
-            .chunks_exact(8)
+            .as_chunks::<8>()
+            .0
+            .iter()
             .any(|ability| ability[4..].iter().any(|&byte| byte != 0)),
     }
 }
