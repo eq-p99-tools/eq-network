@@ -345,7 +345,11 @@ mod tests {
             assert!(outcome.sent.is_empty());
             assert!(matches!(
                 outcome.events.as_slice(),
-                [ClientEvent::World(WorldEvent::TranslocateRefused { offer_id, .. })] if *offer_id == stale
+                [
+                    ClientEvent::World(WorldEvent::TranslocateRefused { session_id: 5, offer_id, .. }),
+                    ClientEvent::Diagnostic(message),
+                ] if *offer_id == stale
+                    && message == "Rejected AnswerTranslocate command: That translocate offer is no longer current."
             ));
         }
         let result = testing::run_on(&super::super::wire::EqMac, |out| {
