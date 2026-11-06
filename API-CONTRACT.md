@@ -78,12 +78,15 @@ admission. The worker refuses a wire-identical retry until a new admission.
 That includes a forget of the same gem even when the spell changed, because
 an empty sentinel identifies only the gem. An in-zone slot update or book
 snapshot changes the current state without retiring that reply ambiguity.
-Late updates still apply to their book or gem slots and produce no result for
-the timed-out edit. A mode-2 update clears its valid gem slot independently
-of spell identity. Only the matching gem and spell or an empty sentinel can
-confirm an active forget. An unconfirmed scribe retains its inventory hold
-until a received cursor update accounts for the scroll or the admission
-ends. A late book update alone does not establish consumption.
+Late updates still go through the ordinary state appliers and produce no
+result for the timed-out edit. A mode-2 update clears its valid gem slot
+independently of spell identity, and repeating it against an empty gem keeps
+that gem empty. Only the matching gem and spell or an empty sentinel can
+confirm an active forget. A repeated application-level book swap can apply
+the same delta again because its wire record carries only the two slots.
+An unconfirmed scribe retains its inventory hold until a received whole-slot
+removal or replacement accounts for the cursor scroll, or the admission
+ends. A unit decrement or late book insertion alone cannot release custody.
 
 Titanium EQEmu offers `Capability::StoppingSongs` and handles an explicit
 `ClientCommand::StopSong { session_id, created }` for the current Bard.

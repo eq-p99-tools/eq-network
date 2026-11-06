@@ -21,7 +21,7 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `BookActionStatus::Unconfirmed` releases the spellbook after 30 seconds
   without a matching result. Distinguishable edits can proceed. A retry with
   the same possible reply requires a fresh admission. A timed-out scribe
-  still guards cursor custody until received inventory evidence.
+  still guards cursor custody until received whole-slot evidence.
 - Apply authoritative gem clears by slot. Match the old spell or an empty
   sentinel separately when deciding whether a pending forget was answered.
 - `WorldEvent::OwnPet` reports the current pet's identity and revision for the

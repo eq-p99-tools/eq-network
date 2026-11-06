@@ -76,17 +76,13 @@ impl ScribeConsumption {
         };
         let cursor = InventorySlot(30);
         if receipt.confirmed.is_none() {
-            // A snapshot or slot change can account for the old scroll.
-            // A queued addition can still leave that scroll on top.
+            // Whole-slot evidence can account for the old scroll. A consume
+            // can decrement its stack, and a cursor addition can queue behind it.
             let replaces_scroll = |item: &eq_network_game::inventory::InventoryItem| {
                 item.scroll_spell != Some(receipt.spell_id)
             };
             let cursor_changed = match &update {
-                InventoryUpdate::Remove(slot)
-                | InventoryUpdate::Consume {
-                    slot,
-                    charge: false,
-                } if *slot == cursor => true,
+                InventoryUpdate::Remove(slot) if *slot == cursor => true,
                 InventoryUpdate::Snapshot(items) => items
                     .iter()
                     .find(|item| item.slot == cursor)
@@ -268,6 +264,32 @@ pub(super) mod tests {
                 "case {case}"
             );
         }
+    }
+
+    #[test]
+    fn a_cursor_stack_decrement_does_not_resolve_unconfirmed_scribe_custody() {
+        let cursor = InventorySlot(30);
+        let mut inventory = scroll_on_cursor();
+        let mut stack = inventory.items()[&cursor].clone();
+        stack.stack_count = Some(2);
+        inventory.apply(InventoryUpdate::Snapshot(vec![stack]));
+        let mut tracker = tracker(&inventory);
+        let decrement = InventoryUpdate::Consume {
+            slot: cursor,
+            charge: false,
+        };
+        let received = tracker.reconcile(&inventory, decrement.clone());
+        assert_eq!(received, decrement);
+        inventory.apply(received);
+        assert_eq!(inventory.items()[&cursor].stack_count, Some(1));
+        assert!(tracker.unconfirmed());
+
+        let removal = InventoryUpdate::Remove(cursor);
+        let received = tracker.reconcile(&inventory, removal.clone());
+        assert_eq!(received, removal);
+        inventory.apply(received);
+        assert!(!inventory.items().contains_key(&cursor));
+        assert!(!tracker.unconfirmed());
     }
 
     #[test]
