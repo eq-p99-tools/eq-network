@@ -226,6 +226,11 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- Keep tracking jump ascent across flight toggles so toggling flight off
+  cannot open grounded diagonal movement during a tracked jump.
+- Report the first decoded zone offer in a record-only zone session. The
+  listener stays on the current connection without processing the offer.
+
 - Report `ConnectionStage::Recording` when a completed zone handshake permits
   communication records but the player snapshot cannot be decoded. Record-only
   runs retain active connection health. Interactive runs instead close the zone

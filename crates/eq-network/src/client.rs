@@ -730,7 +730,10 @@ impl Client {
     /// session sends: the login server's worlds, when no world is
     /// configured, and the world's characters, when no character is. Other
     /// commands are consumed only after zone admission and may remain queued
-    /// while a reconnect is in progress. Dropping every sender disables input.
+    /// while a reconnect is in progress. A failed player admission leaves
+    /// pending commands in this host-owned receiver. Start a fresh queue for
+    /// a separate run so unscoped commands such as `SendChat` cannot carry
+    /// over. Dropping every sender disables input.
     ///
     /// # Errors
     ///
