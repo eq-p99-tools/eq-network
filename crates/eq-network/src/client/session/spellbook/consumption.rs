@@ -22,19 +22,19 @@ const REMOVAL_WINDOW: std::time::Duration = std::time::Duration::from_secs(5);
 impl ScribeConsumption {
     /// Records only a validated request that transport has accepted.
     pub fn sent(&mut self, intent: &BookIntent) {
-        self.0 = match *intent {
-            BookIntent::Scribe {
-                revision,
-                slot,
-                spell_id,
-            } => Some(Receipt {
+        if let BookIntent::Scribe {
+            revision,
+            slot,
+            spell_id,
+        } = *intent
+        {
+            self.0 = Some(Receipt {
                 revision,
                 book_slot: u32::from(slot),
                 spell_id,
                 confirmed: None,
-            }),
-            BookIntent::Memorize { .. } => None,
-        };
+            });
+        }
     }
 
     /// Requires both the exact book update and the outstanding edit's confirmation.
@@ -60,16 +60,48 @@ impl ScribeConsumption {
         })
     }
 
-    /// A queued cursor refill may precede removal (`SaveCursor` runs before the
-    /// deletion packet). Preserve the receipt across that addition only; all
-    /// other intervening inventory changes discard it, never authorize a retry.
+    /// An unconfirmed scribe can still affect the cursor after the book is free.
+    pub fn unconfirmed(&self) -> bool {
+        self.0
+            .as_ref()
+            .is_some_and(|receipt| receipt.confirmed.is_none())
+    }
+
+    /// An uncertain scribe keeps its custody hold until received cursor evidence
+    /// accounts for the scroll. An attributed removal needs an exact book
+    /// confirmation and inventory revision. A queued refill may precede it.
     pub fn reconcile(&mut self, inventory: &Inventory, update: InventoryUpdate) -> InventoryUpdate {
         let Some(mut receipt) = self.0.take() else {
             return update;
         };
         let cursor = InventorySlot(30);
-        if receipt.confirmed.is_some()
-            && inventory.revision() == receipt.revision
+        if receipt.confirmed.is_none() {
+            // A snapshot or slot change can account for the old scroll.
+            // A queued addition can still leave that scroll on top.
+            let replaces_scroll = |item: &eq_network_game::inventory::InventoryItem| {
+                item.scroll_spell != Some(receipt.spell_id)
+            };
+            let cursor_changed = match &update {
+                InventoryUpdate::Remove(slot)
+                | InventoryUpdate::Consume {
+                    slot,
+                    charge: false,
+                } if *slot == cursor => true,
+                InventoryUpdate::Snapshot(items) => items
+                    .iter()
+                    .find(|item| item.slot == cursor)
+                    .is_none_or(replaces_scroll),
+                InventoryUpdate::Set(items) => items
+                    .iter()
+                    .any(|item| item.slot == cursor && replaces_scroll(item)),
+                _ => false,
+            };
+            if !cursor_changed {
+                self.0 = Some(receipt);
+            }
+            return update;
+        }
+        if inventory.revision() == receipt.revision
             && !inventory.stale()
             && inventory.items().get(&cursor).is_some_and(|item| {
                 item.scroll_spell == Some(receipt.spell_id)

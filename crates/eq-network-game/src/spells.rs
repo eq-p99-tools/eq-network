@@ -41,7 +41,7 @@ pub enum BookActionStatus {
     Submitted,
     /// A tracked edit is awaiting its matching server reply.
     AwaitingReply,
-    /// The matching reply did not arrive in time; the edit remains outstanding.
+    /// The reply wait ended without a matching result. No outcome is inferred.
     Unconfirmed,
     /// The server confirmed the outstanding tracked edit.
     Confirmed,
@@ -397,8 +397,8 @@ pub enum SpellUpdate {
 }
 
 impl SpellUpdate {
-    /// A mode-2 clear names either the old spell or an empty-slot sentinel.
-    /// A named clear for a different spell cannot clear its replacement.
+    /// Whether a mode-2 clear can answer a forget of this gem and spell.
+    /// An empty-slot sentinel can match any spell on the named gem.
     #[must_use]
     pub fn clears_gem(&self, gem: u32, expected_spell: u32) -> bool {
         matches!(*self, Self::Slot { slot, spell_id, mode: 2 }
@@ -420,7 +420,7 @@ impl SpellUpdate {
                         1 => {
                             *gem = (!matches!(spell_id, 0 | 0xffff | u32::MAX)).then_some(spell_id);
                         }
-                        2 if gem.is_some_and(|old| self.clears_gem(slot, old)) => *gem = None,
+                        2 => *gem = None,
                         _ => (),
                     }
                 }
@@ -726,12 +726,13 @@ mod tests {
         }
         .apply_gems(&mut gems);
         assert_eq!(gems[0], Some(71));
-        SpellUpdate::Slot {
+        let clear = SpellUpdate::Slot {
             slot: 0,
-            spell_id: 71,
+            spell_id: 42,
             mode: 2,
-        }
-        .apply_gems(&mut gems);
+        };
+        assert!(!clear.clears_gem(0, 71));
+        clear.apply_gems(&mut gems);
         assert_eq!(gems[0], None);
     }
     #[test]

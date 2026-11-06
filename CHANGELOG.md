@@ -18,9 +18,12 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   admission. A silent stop of a tracked gem cast releases the local hold
   after one second and emits `WorldEvent::SongStopUnconfirmed`. Received
   cast results continue through the ordinary spell updates.
-- `BookActionStatus::Unconfirmed` reports an unanswered book edit once.
-  Forgetting also holds the book until its matching gem clear arrives.
-  Track the old spell in named clears to protect replacement gems.
+- `BookActionStatus::Unconfirmed` releases the spellbook after 30 seconds
+  without a matching result. Distinguishable edits can proceed. A retry with
+  the same possible reply requires a fresh admission. A timed-out scribe
+  still guards cursor custody until received inventory evidence.
+- Apply authoritative gem clears by slot. Match the old spell or an empty
+  sentinel separately when deciding whether a pending forget was answered.
 - `WorldEvent::OwnPet` reports the current pet's identity and revision for the
   admission. `ClientCommand::Pet` now takes that identity, a target revision
   for targeted orders, and a creation time. `SelectTarget::expected_pet`

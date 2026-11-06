@@ -4,7 +4,8 @@
 //! Scribing and memorizing sit the player and wait first, as the game
 //! requires, and anything that disturbs the player meanwhile cancels them. A
 //! waiting request is checked again against the book and cursor when it goes
-//! out, and every change is then held until the server answers it.
+//! out, and each submitted change holds the book until it is answered or
+//! retired unconfirmed.
 mod consumption;
 mod edits;
 
@@ -335,8 +336,10 @@ impl Feature for Spellbook {
     /// from the cursor when it answers; any change in flight holds the book.
     fn holds(&self, _world: &World, now: Instant) -> Vec<(Resource, &'static str)> {
         let mut held = Vec::new();
+        let awaiting_cursor = self.consumption.awaiting_cursor(now);
         let scribing = self.answers.scribing()
-            || self.consumption.awaiting_cursor(now)
+            || awaiting_cursor
+            || self.consumption.unconfirmed()
             || self
                 .pending
                 .as_ref()
@@ -346,7 +349,7 @@ impl Feature for Spellbook {
             // logged the character out.
             held.push((Resource::Inventory, "Wait for scribing to finish"));
         }
-        if scribing || self.pending.is_some() || self.answers.outstanding() {
+        if awaiting_cursor || self.pending.is_some() || self.answers.outstanding() {
             held.push((Resource::Spellbook, "Wait for the current spellbook change"));
         }
         held
@@ -392,6 +395,15 @@ impl Feature for Spellbook {
         world: &mut World,
         out: &mut Out<'_, '_>,
     ) -> Result<()> {
+        if self.answers.ambiguous(command) {
+            return report(
+                BookActionStatus::Rejected(
+                    "An earlier edit could have the same reply. Re-enter the zone to retry this edit."
+                        .into(),
+                ),
+                out,
+            );
+        }
         if let ClientCommand::MemorizeSpell { created, .. }
         | ClientCommand::ScribeSpell { created, .. } = command
         {
@@ -437,8 +449,8 @@ impl Feature for Spellbook {
     /// Reports an unanswered edit, cancels unsent work on death or zoning,
     /// and submits an eligible prepared request.
     fn tick(&mut self, now: Instant, world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
-        // A server can report a refusal only in chat. Silence gives us
-        // neither a matched refusal nor permission to replace the edit.
+        // Silence ends this local wait. Only distinguishable requests can
+        // take a new reply, and cursor custody has its own hold.
         if let Some(status) = self.answers.timeout(now) {
             report(status, out)?;
         }
@@ -934,6 +946,76 @@ mod tests {
     }
 
     #[test]
+    fn an_unconfirmed_scribe_releases_the_book_but_preserves_cursor_custody() {
+        let (mut spellbook, mut world) = admitted(Some(42));
+        world.inventory = consumption::tests::scroll_on_cursor().into();
+        let scribe = ClientCommand::ScribeSpell {
+            session_id: 5,
+            revision: world.inventory.revision(),
+            slot: 2,
+            spell_id: 73,
+            created: Instant::now(),
+        };
+        testing::run(|out| spellbook.handle(&scribe, &mut world, out))
+            .result
+            .unwrap();
+        let submitted = Instant::now() + SITTING;
+        let output = testing::run(|out| spellbook.tick(submitted, &mut world, out));
+        output.result.unwrap();
+        assert_eq!(output.sent.len(), 1);
+        let timed_out = submitted + Duration::from_secs(31);
+        let output = testing::run(|out| spellbook.tick(timed_out, &mut world, out));
+        output.result.unwrap();
+        assert!(output.sent.is_empty());
+        assert_eq!(statuses(&output.events), [&BookActionStatus::Unconfirmed]);
+        assert_eq!(
+            spellbook.holds(&world, timed_out),
+            [(Resource::Inventory, "Wait for scribing to finish")]
+        );
+
+        spellbook.memorize_without_sitting = true;
+        let memorize = ClientCommand::MemorizeSpell {
+            session_id: 5,
+            gem: 0,
+            spell_id: 42,
+            created: Instant::now(),
+        };
+        let output = testing::run(|out| spellbook.handle(&memorize, &mut world, out));
+        output.result.unwrap();
+        assert_eq!(output.sent.len(), 1);
+        let scribed = Message::Event(WorldEvent::Spell(SpellUpdate::Slot {
+            slot: 2,
+            spell_id: 73,
+            mode: 0,
+        }));
+        let output = testing::run(|out| spellbook.observe(&scribed, &mut world, out));
+        output.result.unwrap();
+        assert!(output.events.is_empty());
+        assert!(spellbook.answers.outstanding());
+        assert_eq!(spellbook.book.as_ref().unwrap().slots()[2], Some(73));
+
+        let mut unrelated = Message::Event(WorldEvent::Inventory(InventoryUpdate::Remove(
+            InventorySlot(29),
+        )));
+        spellbook.explain(&mut unrelated, &world);
+        assert!(spellbook.consumption.unconfirmed());
+        let mut removal = Message::Event(WorldEvent::Inventory(InventoryUpdate::Remove(
+            InventorySlot(30),
+        )));
+        spellbook.explain(&mut removal, &world);
+        assert!(matches!(
+            removal,
+            Message::Event(WorldEvent::Inventory(InventoryUpdate::Remove(
+                InventorySlot(30)
+            )))
+        ));
+        assert_eq!(
+            spellbook.holds(&world, timed_out),
+            [(Resource::Spellbook, "Wait for the current spellbook change")]
+        );
+    }
+
+    #[test]
     fn book_edits_need_an_idle_admitted_book() {
         let now = Instant::now();
         let book = book(Some(42));
@@ -1046,18 +1128,20 @@ mod tests {
     }
 
     #[test]
-    fn forgetting_holds_the_book_past_silence_until_the_exact_gem_clear() {
+    fn a_timed_out_forget_does_not_own_the_next_edit_on_the_same_gem() {
+        let mut character = super::super::character::Character::default();
         let (mut spellbook, mut world) = admitted(Some(73));
+        spellbook.memorize_without_sitting = true;
         let mut player = world.player.as_ref().unwrap().clone();
         player.memorized_spells[2] = Some(73);
         world.player.admit(player);
-        let command = ClientCommand::ForgetSpell {
-            session_id: world.session_id,
+        let forget = |spell_id| ClientCommand::ForgetSpell {
+            session_id: 5,
             gem: 2,
-            spell_id: 73,
+            spell_id,
             created: Instant::now(),
         };
-        let output = testing::run(|out| spellbook.handle(&command, &mut world, out));
+        let output = testing::run(|out| spellbook.handle(&forget(73), &mut world, out));
         output.result.unwrap();
         assert_eq!(output.sent.len(), 1);
         assert_eq!(statuses(&output.events), [&BookActionStatus::Submitted]);
@@ -1065,26 +1149,91 @@ mod tests {
         let late = Instant::now() + Duration::from_secs(31);
         let output = testing::run(|out| spellbook.tick(late, &mut world, out));
         output.result.unwrap();
-        assert_eq!(
-            output.sent,
-            [] as [eq_network_game::command::EncodedCommand; 0]
-        );
+        assert!(output.sent.is_empty());
         assert_eq!(statuses(&output.events), [&BookActionStatus::Unconfirmed]);
-        assert_eq!(spellbook.holds(&world, late).len(), 1);
+        assert!(spellbook.holds(&world, late).is_empty());
 
-        for (slot, spell_id, expected) in [(3, 73, false), (2, 74, false), (2, 73, true)] {
+        let refresh = |spellbook: &mut Spellbook,
+                       character: &mut super::super::character::Character,
+                       world: &mut World,
+                       spell_id,
+                       mode| {
             let update = Message::Event(WorldEvent::Spell(SpellUpdate::Slot {
-                slot,
+                slot: 2,
                 spell_id,
+                mode,
+            }));
+            let output = testing::run(|out| {
+                character.observe(&update, world, out)?;
+                spellbook.observe(&update, world, out)
+            });
+            output.result.unwrap();
+            output.events
+        };
+        let _ = refresh(&mut spellbook, &mut character, &mut world, 74, 1);
+        assert_eq!(world.player.as_ref().unwrap().memorized_spells[2], Some(74));
+        let refused = testing::run(|out| spellbook.handle(&forget(74), &mut world, out));
+        refused.result.unwrap();
+        assert!(refused.sent.is_empty());
+        assert!(matches!(
+            statuses(&refused.events)[..],
+            [BookActionStatus::Rejected(_)]
+        ));
+
+        assert!(refresh(&mut spellbook, &mut character, &mut world, 73, 2).is_empty());
+        assert_eq!(world.player.as_ref().unwrap().memorized_spells[2], None);
+        let output = testing::run(|out| spellbook.handle(&memorize(2), &mut world, out));
+        output.result.unwrap();
+        assert_eq!(output.sent.len(), 1);
+        assert_eq!(
+            statuses(&output.events),
+            [
+                &BookActionStatus::Preparing,
+                &BookActionStatus::AwaitingReply
+            ]
+        );
+        for spell_id in [73, 73, 0xffff] {
+            assert!(refresh(&mut spellbook, &mut character, &mut world, spell_id, 2).is_empty());
+            assert_eq!(world.player.as_ref().unwrap().memorized_spells[2], None);
+            assert!(spellbook.answers.outstanding());
+        }
+        let settled = refresh(&mut spellbook, &mut character, &mut world, 73, 1);
+        assert_eq!(statuses(&settled), [&BookActionStatus::Confirmed]);
+        assert!(spellbook.holds(&world, late).is_empty());
+        assert_eq!(world.player.as_ref().unwrap().memorized_spells[2], Some(73));
+    }
+
+    #[test]
+    fn a_live_forget_matches_the_requested_spell_or_an_empty_sentinel() {
+        for confirmation in [73, 0xffff] {
+            let (mut spellbook, mut world) = admitted(Some(73));
+            world.player.corrected().unwrap().memorized_spells[2] = Some(73);
+            let command = ClientCommand::ForgetSpell {
+                session_id: 5,
+                gem: 2,
+                spell_id: 73,
+                created: Instant::now(),
+            };
+            testing::run(|out| spellbook.handle(&command, &mut world, out))
+                .result
+                .unwrap();
+            let update = Message::Event(WorldEvent::Spell(SpellUpdate::Slot {
+                slot: 2,
+                spell_id: 74,
                 mode: 2,
             }));
             let output = testing::run(|out| spellbook.observe(&update, &mut world, out));
             output.result.unwrap();
-            assert_eq!(
-                statuses(&output.events).first().copied(),
-                expected.then_some(&BookActionStatus::Confirmed)
-            );
-            assert_eq!(spellbook.holds(&world, late).is_empty(), expected);
+            assert!(output.events.is_empty());
+            assert!(spellbook.answers.outstanding());
+            let update = Message::Event(WorldEvent::Spell(SpellUpdate::Slot {
+                slot: 2,
+                spell_id: confirmation,
+                mode: 2,
+            }));
+            let output = testing::run(|out| spellbook.observe(&update, &mut world, out));
+            output.result.unwrap();
+            assert_eq!(statuses(&output.events), [&BookActionStatus::Confirmed]);
         }
     }
 

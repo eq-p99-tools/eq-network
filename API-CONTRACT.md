@@ -71,12 +71,19 @@ separate and takes precedence in hosts.
 
 ## Spellbook edits and Bard song stop
 
-An unanswered book edit emits `BookActionStatus::Unconfirmed` once after
-30 seconds. Match this variant separately from `Rejected` and `Cancelled`.
-The worker keeps the edit's ownership and exact reply match until it receives
-settlement or the admission is replaced. An unanswered scribe retains the
-inventory hold. A mode-2 clear with a valid spell ID must name the old gem
-spell. A mode-2 empty sentinel reports a slot clear.
+An unanswered book edit emits terminal `BookActionStatus::Unconfirmed` once
+after 30 seconds and releases the spellbook hold. A fresh edit can proceed
+if its expected reply is distinguishable from every timed-out edit in the
+admission. The worker refuses a wire-identical retry until a new admission.
+That includes a forget of the same gem even when the spell changed, because
+an empty sentinel identifies only the gem. An in-zone slot update or book
+snapshot changes the current state without retiring that reply ambiguity.
+Late updates still apply to their book or gem slots and produce no result for
+the timed-out edit. A mode-2 update clears its valid gem slot independently
+of spell identity. Only the matching gem and spell or an empty sentinel can
+confirm an active forget. An unconfirmed scribe retains its inventory hold
+until a received cursor update accounts for the scroll or the admission
+ends. A late book update alone does not establish consumption.
 
 Titanium EQEmu offers `Capability::StoppingSongs` and handles an explicit
 `ClientCommand::StopSong { session_id, created }` for the current Bard.
@@ -91,12 +98,15 @@ the admission and released spell. When no cast is held, submission emits
 the same event without a spell. This event reports local state only. It
 leaves buffs and cooldowns to the existing server updates, and a retry
 requires a fresh user command. An active item cast or a cast of unknown
-source blocks song stop. The P99 policy keeps song stop gated.
+source blocks song stop. A duplicate while the worker awaits the cast update
+produces a diagnostic without another send. The P99 policy keeps song stop
+gated.
 
 An own start for a different spell during the stop wait supersedes the
 stopped hold. The worker emits `WorldEvent::CastSuperseded` with the
 old spell before forwarding the new start. Consumers should discard the
-identified hold and its request alias. A late start for an abandoned
+identified hold and its request alias while preserving a different pending
+spell. A late start for an abandoned
 pending spell is withheld during a retry of a different spell.
 Titanium has no cast request ID for distinguishing same-spell starts
 after a same-spell retry.
