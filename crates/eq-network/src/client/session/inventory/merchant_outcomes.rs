@@ -643,3 +643,60 @@ fn closing_a_shop_reports_unknown_and_preserves_the_late_sale() {
     assert!(!world.inventory.items().contains_key(&InventorySlot(22)));
     assert_eq!(world.coins.purse, None);
 }
+
+#[test]
+fn a_bounded_stack_purchase_and_partial_sale_settle_independently() {
+    let (mut belongings, mut world) = admitted();
+    shopping_at(&mut belongings, &mut world);
+    let mut stack = item(3);
+    stack.stack_count = Some(4);
+    stack.rules.stack_size = 20;
+    let mut stock = Message::Event(WorldEvent::Merchant(MerchantUpdate::Item(Box::new(
+        eq_network_game::merchant::MerchantItem {
+            slot: 3,
+            price: 25,
+            quantity: 4,
+            item: stack.clone(),
+        },
+    ))));
+    belongings.explain(&mut stock, &world);
+    let mut purchase = buy(3);
+    if let ClientCommand::Buy { quantity, .. } = &mut purchase {
+        *quantity = 2;
+    }
+    sent(&mut belongings, &mut world, &purchase);
+    hear(
+        &mut belongings,
+        &mut world,
+        MerchantUpdate::Bought {
+            slot: 3,
+            quantity: 2,
+            price: 50,
+        },
+    )
+    .result
+    .unwrap();
+    assert!(!world.inventory.items().contains_key(&InventorySlot(3)));
+    assert_eq!(
+        world.coins.purse.map(|coins| coins.total_copper()),
+        Some(950)
+    );
+
+    stack.slot = InventorySlot(22);
+    let arrival = Message::Event(WorldEvent::Inventory(InventoryUpdate::Set(vec![stack])));
+    testing::run(|out| belongings.observe(&arrival, &mut world, out))
+        .result
+        .unwrap();
+    sent(&mut belongings, &mut world, &sell(22));
+    hear(&mut belongings, &mut world, sold(22, 1, 18))
+        .result
+        .unwrap();
+    assert_eq!(
+        world.inventory.items()[&InventorySlot(22)].stack_count,
+        Some(3)
+    );
+    assert_eq!(
+        world.coins.purse.map(|coins| coins.total_copper()),
+        Some(968)
+    );
+}
