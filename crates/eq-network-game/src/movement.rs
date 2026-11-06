@@ -166,7 +166,11 @@ pub enum HeadingUpdate {
     #[default]
     Rate,
     /// The heading is the endpoint of locally applied mouse input.
-    /// Titanium can send this absolute heading with no continuing turn hint.
+    /// Titanium `eqgame.exe` packs absolute heading independently of the
+    /// current yaw rate (0x46529f–0x4652c4 and 0x4652e0–0x4652fe).
+    /// A snapshot uses that heading field and supplies zero continuing yaw;
+    /// that a mouse-completed facing goes out with zero yaw is inferred
+    /// (recording checklist 6.388).
     Snapshot,
 }
 
@@ -326,7 +330,8 @@ impl MovementBounds {
 pub struct MovementOptions {
     /// Permit fresh voluntary motion while stunned. Other stun gates remain.
     pub walk_while_stunned: bool,
-    /// Increase forward running speed by [`Self::RUN_BOOST`].
+    /// Increase forward running speed by [`Self::RUN_BOOST`]. A forward
+    /// step that leaves ground keeps this horizontal budget as a fall sample.
     pub run_boost: bool,
     /// Permit vertical travel within the current mode's elapsed speed budget.
     pub fly: bool,

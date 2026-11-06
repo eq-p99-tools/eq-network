@@ -41,11 +41,29 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Grounded Titanium diagonal movement (`MovementMode::GroundedDiagonal`,
   `movement::{GroundedDiagonal, DiagonalRates, DiagonalAlong, StrafeSide}`)
   with its own settled heading budget, refused during jumps, and absolute
-  mouse heading snapshots (`movement::HeadingUpdate`). The lateral half-rate
-  and the snapshot path are inferred from recordings, not read from the
-  program.
+  mouse heading snapshots (`movement::HeadingUpdate`). Titanium's
+  `eqgame.exe` establishes the raw lateral half-rate and the independent
+  heading and current yaw fields. The sampled diagonal endpoint and
+  completed-facing snapshot with zero continuing yaw are inferred (recording
+  checklist 6.388). Live P99 acceptance of this pair remains unverified.
+- Network-owned dialect accessors for heading snapshots, fatigue-based
+  carrying capacity, ordinary door cursor checks, and reading window kinds.
 
 ### Changed
+
+- Restore the configured P99 list reply preference on return to character
+  selection. A runtime choice follows the same character across zones.
+
+- **Breaking:** rename `buffs::cancel::Progress::ObservedRemoval` to
+  `FadeObserved`. The event observes a matching received fade during the
+  local wait; natural expiry can produce it too. No cancellation ACK or
+  slot-only sentinel fallback is inferred.
+- Expose the inventory policy's cursor destruction support via
+  `MoveRules::supports_cursor_destruction`. Document its Titanium bag slot
+  bound and the explicit P99 buff cancellation policy.
+- `PlayerAdmissionError` and the additive `ConnectionStage::Recording`
+  milestone (serialized `recording`); `ConnectionStage` is non-exhaustive, so
+  no match breaks.
 
 - Interpret received own-player stuns on stock Titanium `EQEmu` using the
   existing Titanium timer, including zero, overlap and admission boundaries.
@@ -65,6 +83,8 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Commands queued behind one that kills or transfers the player in the same
   batch are refused ("The player is dead" / "The player is between zones")
   instead of being dropped, as they were before the batch was drained eagerly.
+  The old zone continues refusing gameplay commands after approving departure.
+  Commands already drained when a command ends the session get a refusal too.
 
 - Keep movement load conservatively bounded through known carried-stack splits
   and merges, including independently refused or partial moves. Placement stays
@@ -206,6 +226,20 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- Report `ConnectionStage::Recording` when a completed zone handshake permits
+  communication records but the player snapshot cannot be decoded. Record-only
+  runs retain active connection health. Interactive runs instead close the zone
+  and return `PlayerAdmissionError` without reconnecting. `Ready` now requires
+  an admitted player. Serialized progress consumers may see `recording`.
+  The record-only heartbeat stops using the entry position when an own update
+  or transfer supersedes it, including during the handshake.
+
+- Keep tracking jump ascent when run boost or stunned-movement options
+  change. Boosted forward movement that becomes a fall keeps its horizontal
+  budget across the transition.
+- A local modern transport close discards staged applications and ignores later
+  peer controls. If peer termination was observed first, its ordered,
+  completed application prefix still drains once before the terminal error.
 - **Breaking:** re-evaluate EQMac fatigue from current host strength/stamina
   prerequisites in the session, avoiding an unnecessary withdrawal and host
   round trip on each stamina tick. `SpeedInputs` gains

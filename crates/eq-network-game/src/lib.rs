@@ -152,6 +152,28 @@ pub enum GameDialect {
     EqMac,
 }
 
+impl GameDialect {
+    /// Whether the session accepts a completed absolute facing with no
+    /// continuing turn hint in its movement requests.
+    #[must_use]
+    pub const fn supports_heading_snapshots(self) -> bool {
+        matches!(self, Self::Titanium)
+    }
+
+    /// Whether carrying capacity depends on the current fatigue and stamina.
+    #[must_use]
+    pub const fn uses_fatigue_for_carry_capacity(self) -> bool {
+        matches!(self, Self::EqMac)
+    }
+
+    /// Whether an ordinary door click requires a current inventory and an
+    /// empty cursor.
+    #[must_use]
+    pub const fn requires_clear_cursor_for_doors(self) -> bool {
+        matches!(self, Self::EqMac)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::GameDialect;

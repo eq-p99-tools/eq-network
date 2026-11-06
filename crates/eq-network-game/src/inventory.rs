@@ -35,6 +35,10 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 /// The cursor; items pushed onto it queue behind the one shown there.
 const CURSOR: InventorySlot = InventorySlot::CURSOR;
 
+/// Titanium inventory bags have ten addressable child slots
+/// (`EQEmu` `common/patches/titanium_limits.h`, `invbag::SLOT_COUNT`).
+const BAG_SLOT_COUNT: u8 = 10;
+
 /// A Titanium inventory address; unknown slots retain their original number.
 /// The named slots and ranges below are the one vocabulary for them.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
@@ -150,7 +154,11 @@ impl InventorySlot {
         ] {
             if (start..=end).contains(&self.0) {
                 let offset = self.0 - start;
-                return Some((Self(parent + offset / 10), u8::try_from(offset % 10).ok()?));
+                let count = i32::from(BAG_SLOT_COUNT);
+                return Some((
+                    Self(parent + offset / count),
+                    u8::try_from(offset % count).ok()?,
+                ));
             }
         }
         None
@@ -159,15 +167,16 @@ impl InventorySlot {
     /// Resolves a bag index without using the child's serialized placeholder slot.
     #[must_use]
     pub fn child(self, index: u8) -> Option<Self> {
-        if index >= 10 {
+        if index >= BAG_SLOT_COUNT {
             return None;
         }
+        let count = i32::from(BAG_SLOT_COUNT);
         let base = match self.0 {
-            22..=29 => 251 + (self.0 - 22) * 10,
+            22..=29 => 251 + (self.0 - 22) * count,
             30 => 331,
-            2000..=2015 => 2031 + (self.0 - 2000) * 10,
-            2500..=2501 => 2531 + (self.0 - 2500) * 10,
-            3000..=3007 => 3031 + (self.0 - 3000) * 10,
+            2000..=2015 => 2031 + (self.0 - 2000) * count,
+            2500..=2501 => 2531 + (self.0 - 2500) * count,
+            3000..=3007 => 3031 + (self.0 - 3000) * count,
             _ => return None,
         };
         Some(Self(base + i32::from(index)))

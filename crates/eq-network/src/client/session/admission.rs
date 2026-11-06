@@ -5,7 +5,7 @@
 //! features, which stage it for the admission.
 use super::{
     bail, chat, cstr, ensure, feature::World, le32, put_string, servers::Shield, ClientEvent,
-    ConnectionStage, ConnectionState, Context, Events, Instant, Result,
+    ConnectionStage, ConnectionState, Context, Events, Result,
 };
 use crate::world::{PlayerState, Position};
 use eq_network_game::zones::{self, ZoneDescription};
@@ -49,7 +49,8 @@ pub(in crate::client) trait Admission {
     fn stage(&self) -> &'static str;
 
     /// Takes one packet of the handshake, answering it as the client must.
-    /// When it admits the player, returns them and their zone.
+    /// When the handshake finishes, returns the zone and the separate
+    /// outcome of decoding the player snapshot.
     ///
     /// # Errors
     /// Returns an error when the zone refuses the character or sends a
@@ -59,7 +60,14 @@ pub(in crate::client) trait Admission {
         packet: &mut Application,
         world: &mut World,
         handshake: &mut Handshake<'_, '_>,
-    ) -> Result<Option<(Result<PlayerState>, Zone)>>;
+    ) -> Result<Option<HandshakeComplete>>;
+}
+
+/// A completed handshake with the zone. The snapshot can fail independently
+/// of the wire exchange.
+pub(in crate::client) struct HandshakeComplete {
+    pub(super) player: Result<PlayerState>,
+    pub(super) zone: Zone,
 }
 
 /// How far Titanium's handshake has come.
@@ -72,14 +80,14 @@ pub(super) enum Stage {
     Requested,
     /// The zone described itself; it reports experience next.
     Described,
-    /// The client answered the first experience report; the second admits
-    /// the player.
+    /// The client answered the first experience report; the second finishes
+    /// the handshake.
     Answered,
-    /// The player is admitted.
-    Admitted,
+    /// The handshake is complete.
+    Complete,
 }
 
-/// The zone the player was admitted to.
+/// The zone described during the handshake.
 pub(in crate::client) struct Zone {
     /// Its short name.
     pub(in crate::client) name: String,
@@ -107,12 +115,12 @@ pub(super) struct TitaniumAdmission {
 }
 
 /// The zone's two experience reports after its description: the client
-/// answers the first, and the second admits the player.
+/// answers the first, and the second finishes the handshake.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Reports {
     Awaited,
     Answered,
-    Admitted,
+    Complete,
 }
 
 impl TitaniumAdmission {
@@ -151,7 +159,7 @@ impl TitaniumAdmission {
     /// How far the handshake has come.
     pub(super) const fn progress(&self) -> Stage {
         match self.reports {
-            Reports::Admitted => Stage::Admitted,
+            Reports::Complete => Stage::Complete,
             Reports::Answered => Stage::Answered,
             Reports::Awaited if self.zone.is_some() => Stage::Described,
             Reports::Awaited if self.requested => Stage::Requested,
@@ -197,23 +205,23 @@ impl Admission for TitaniumAdmission {
             Stage::Requested => "Requested",
             Stage::Described => "Described",
             Stage::Answered => "Answered",
-            Stage::Admitted => "Admitted",
+            Stage::Complete => "Complete",
         }
     }
 
     /// Takes one packet of the handshake, answering it as the client must.
-    /// When it admits the player, returns them, built from their profile and
-    /// spawn, and their zone.
+    /// Builds the snapshot from the profile and own spawn once the exchange
+    /// has finished.
     fn read(
         &mut self,
         packet: &mut Application,
         world: &mut World,
         handshake: &mut Handshake<'_, '_>,
-    ) -> Result<Option<(Result<PlayerState>, Zone)>> {
-        if self.reports == Reports::Admitted {
+    ) -> Result<Option<HandshakeComplete>> {
+        if self.reports == Reports::Complete {
             return Ok(None);
         }
-        let mut admitted = None;
+        let mut completed = None;
         match packet.opcode {
             PROFILE_OPCODE => self.profile(&packet.body, world)?,
             WEATHER_OPCODE => self.weather = true,
@@ -261,14 +269,16 @@ impl Admission for TitaniumAdmission {
                 handshake.session.send(0x6563, &chat::server_filters())?;
                 handshake.session.send(0x5e20, &[])?;
                 handshake.session.send(0x0c11, &1u32.to_le_bytes())?;
-                world.admitted = Some(Instant::now());
-                self.reports = Reports::Admitted;
+                self.reports = Reports::Complete;
                 let player = crate::world::titanium_player(
                     self.profile.as_deref().unwrap_or_default(),
                     self.spawn.as_deref().unwrap_or_default(),
                     self.revolution,
                 );
-                admitted = self.zone.take().map(|zone| (player, zone));
+                completed = self
+                    .zone
+                    .take()
+                    .map(|zone| HandshakeComplete { player, zone });
             }
             REJECTED_OPCODE => bail!("server rejected zone validation"),
             _ => (),
@@ -286,7 +296,7 @@ impl Admission for TitaniumAdmission {
                 .log
                 .send(ClientEvent::Progress(ConnectionStage::EnteringWorld))?;
         }
-        Ok(admitted)
+        Ok(completed)
     }
 }
 
@@ -349,7 +359,6 @@ mod tests {
             admission
                 .read(&mut packet(opcode, body), world, &mut handshake)
                 .unwrap()
-                .map(|(_, zone)| zone)
         };
         // The profile, spawn and weather come in any order.
         assert!(read(&mut admission, &mut world, WEATHER_OPCODE, Vec::new()).is_none());
@@ -371,12 +380,14 @@ mod tests {
         read(&mut admission, &mut world, EXPERIENCE_OPCODE, Vec::new());
         assert_eq!(admission.progress(), Stage::Answered);
         assert!(world.admitted.is_none());
-        let zone = read(&mut admission, &mut world, EXPERIENCE_OPCODE, Vec::new()).unwrap();
+        let HandshakeComplete { player, zone } =
+            read(&mut admission, &mut world, EXPERIENCE_OPCODE, Vec::new()).unwrap();
+        assert_eq!(player.unwrap().spawn_id, 9);
         assert_eq!(zone.name, "qeytoqrg");
         assert_eq!(zone.description.unwrap().long_name, "Test Hills");
-        assert_eq!(admission.progress(), Stage::Admitted);
-        assert!(world.admitted.is_some());
-        // Once admitted, the handshake takes nothing more.
+        assert_eq!(admission.progress(), Stage::Complete);
+        assert!(!world.ready());
+        // Once complete, the handshake takes nothing more.
         assert!(read(&mut admission, &mut world, EXPERIENCE_OPCODE, Vec::new()).is_none());
         drop(read);
         // Titanium's answers, in the order the client sends them.

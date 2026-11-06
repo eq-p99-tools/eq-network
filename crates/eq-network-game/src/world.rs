@@ -566,7 +566,7 @@ pub enum Capability {
     CancellingBuffs,
     /// Opt-in gameplay departures from the official client (movement and
     /// memorization options), offered only where the server type permits
-    /// them; public servers never list it.
+    /// them; a public server lists it only while the owner tests them.
     GameplayDepartures,
 }
 

@@ -200,11 +200,13 @@ pub struct ClientConfig {
     /// What the session eats and drinks on its own for a hungry or thirsty
     /// player; by default nothing with modifiers.
     pub auto_eat: eq_network_game::food::AutoEat,
-    /// Automatically answer server-driven P99 list presence polls. Disabled
-    /// by default. Replies wait 3..=60 seconds as application policy; that
+    /// Startup preference for automatic replies to server-driven P99 list
+    /// presence polls. Disabled by default. Returning to character selection
+    /// restores this preference. [`ClientCommand::AnswerListPolls`] changes
+    /// it for the current character across zones and cancels an owed reply
+    /// on disable. Replies wait 3..=60 seconds as application policy; that
     /// delay is not native timing or evidence of server acceptance. Joining
-    /// a list remains a separate player action. Runtime changes use
-    /// [`ClientCommand::AnswerListPolls`] and cancel an owed reply on disable.
+    /// a list remains a separate player action.
     pub answer_list_polls: bool,
     /// The host's machine, for the weekly report the official client
     /// makes to the world (see [`eq_network_game::sysinfo`]): the saved
@@ -365,6 +367,19 @@ impl fmt::Display for LoginError {
 
 impl std::error::Error for LoginError {}
 
+/// The zone handshake completed, but the player snapshot could not be decoded.
+/// Returned by [`Client::run_with_commands`] before gameplay can begin.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PlayerAdmissionError;
+
+impl fmt::Display for PlayerAdmissionError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("The zone connected, but your character data could not be read")
+    }
+}
+
+impl std::error::Error for PlayerAdmissionError {}
+
 /// Limits for one run; transient failures reconnect until cancellation by default.
 #[derive(Clone, Copy, Debug)]
 #[non_exhaustive]
@@ -395,7 +410,8 @@ impl Default for RunOptions {
 pub enum ConnectionState {
     /// A fresh login attempt is in progress.
     Connecting,
-    /// The character is active in a zone.
+    /// An active zone connection. A record-only run can reach this state
+    /// without a usable player snapshot.
     Connected,
     /// A zone handoff is in progress.
     Zoning,
@@ -597,8 +613,11 @@ pub enum ConnectionStage {
     LoadingCharacter,
     /// Completing final zone admission acknowledgements.
     EnteringWorld,
-    /// Character is active and chat commands can be sent.
+    /// The player snapshot and staged world events have been delivered.
     Ready,
+    /// The zone handshake completed without a usable player snapshot. A
+    /// record-only run continues to receive communications from this zone.
+    Recording,
 }
 
 /// Owned output produced by the native session engine.
@@ -688,6 +707,8 @@ impl Client {
     /// Run on a worker thread and keep the handler fast (typically enqueue events).
     /// A confirmed credential rejection returns `LoginError` without reconnecting.
     /// A handler error terminates the run, without reconnecting or invoking it again.
+    /// If a zone handshake completes without a usable player snapshot, the
+    /// run can continue receiving records with [`ConnectionStage::Recording`].
     /// Network waits and retry delays observe cancellation; system DNS resolution
     /// remains a blocking platform call. Sessions close when the run unwinds.
     ///
@@ -713,8 +734,10 @@ impl Client {
     ///
     /// # Errors
     ///
-    /// Returns a [`LoginError`] for rejected credentials and otherwise returns
-    /// transport, protocol, cancellation, command, or event-handler errors.
+    /// Returns a [`LoginError`] for rejected credentials or a
+    /// [`PlayerAdmissionError`] if the zone handshake completed without a usable
+    /// player snapshot. Neither is retried. Also returns transport, protocol,
+    /// cancellation, command, or event-handler errors.
     pub fn run_with_commands(
         &self,
         cancel: &CancellationToken,
@@ -767,7 +790,11 @@ impl Client {
                 return events.status(ConnectionState::Stopped, 0, None);
             }
             events.status(ConnectionState::Disconnected, 0, None)?;
-            if !options.reconnect || result.as_ref().is_err_and(anyhow::Error::is::<LoginError>) {
+            if !options.reconnect
+                || result.as_ref().is_err_and(|error| {
+                    error.is::<LoginError>() || error.is::<PlayerAdmissionError>()
+                })
+            {
                 return result;
             }
             events.send(ClientEvent::Reconnecting {

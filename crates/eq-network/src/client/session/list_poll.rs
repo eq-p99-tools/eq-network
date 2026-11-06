@@ -113,8 +113,11 @@ impl Replies {
 
 #[cfg(test)]
 mod tests {
+    use super::super::{login::Credentials, CharacterSession, ZoneExit};
     use super::*;
-    use crate::client::{ClientConfig, ClientEvent, ServerProtocol};
+    use crate::client::{
+        CancellationToken, ClientConfig, ClientEvent, ClientIdentity, ServerProtocol,
+    };
     use eq_network_transport::{Application, Transport};
 
     #[derive(Default)]
@@ -133,6 +136,184 @@ mod tests {
         fn last_received_seconds(&self) -> u64 {
             0
         }
+    }
+
+    fn p99() -> &'static dyn ServerType {
+        super::super::servers::server_type(ServerProtocol::Project1999)
+    }
+
+    fn with_character_session(config: &ClientConfig, test: impl FnOnce(CharacterSession<'_>)) {
+        let identity = ClientIdentity::new("testhost", "testuser");
+        let credentials = Credentials {
+            account: "0".into(),
+            key: [0; 10],
+        };
+        let stop = CancellationToken::default();
+        test(CharacterSession::new(
+            config,
+            &identity,
+            &credentials,
+            &stop,
+            None,
+            None,
+        ));
+    }
+
+    fn set_choice(
+        context: &CharacterSession<'_>,
+        replies: &mut Replies,
+        requested: u64,
+        current: u64,
+        enabled: bool,
+        log: &mut Events<'_>,
+    ) {
+        assert!(replies
+            .configure(
+                p99(),
+                &ClientCommand::AnswerListPolls {
+                    session_id: requested,
+                    enabled,
+                },
+                current,
+                &context.answer_list_polls,
+                log,
+            )
+            .unwrap());
+    }
+
+    fn presence_poll(
+        context: &CharacterSession<'_>,
+        replies: &mut Replies,
+        now: Instant,
+        log: &mut Events<'_>,
+    ) {
+        assert!(replies
+            .observe(
+                p99(),
+                context.answer_list_polls.get(),
+                0x1253,
+                &[2],
+                now,
+                log
+            )
+            .unwrap());
+    }
+
+    fn send_due(
+        context: &CharacterSession<'_>,
+        replies: &mut Replies,
+        now: Instant,
+        sent: &mut Sent,
+        log: &mut Events<'_>,
+    ) {
+        replies
+            .tick(now, context.answer_list_polls.get(), sent, log)
+            .unwrap();
+    }
+
+    #[test]
+    fn camped_character_does_not_enable_replies_for_the_next_character() {
+        let config = ClientConfig::new("ACCOUNT", "PASSWORD", "Test", "First");
+        let start = Instant::now();
+        let wait = Duration::from_secs(61);
+        for host_sent_off in [true, false] {
+            with_character_session(&config, |mut context| {
+                let mut handler = |_| Ok(());
+                let mut log = Events::new(&config, &mut handler);
+                {
+                    let mut replies = Replies::default();
+                    set_choice(&context, &mut replies, 1, 1, true, &mut log);
+                    presence_poll(&context, &mut replies, start, &mut log);
+                    assert!(replies.due.is_some());
+                }
+                context.on_zone_exit(&ZoneExit::CharacterSelect);
+                assert_eq!(context.config.character, "");
+                "Second".clone_into(&mut context.config.character);
+                let mut replies = Replies::default();
+                let mut sent = Sent::default();
+                if host_sent_off {
+                    set_choice(&context, &mut replies, 2, 2, false, &mut log);
+                }
+                let early = start + wait;
+                presence_poll(&context, &mut replies, early, &mut log);
+                send_due(&context, &mut replies, early + wait, &mut sent, &mut log);
+                assert!(
+                    sent.0.is_empty(),
+                    "the first character's choice cannot answer for the second"
+                );
+
+                let stale = early + wait;
+                set_choice(&context, &mut replies, 1, 2, true, &mut log);
+                presence_poll(&context, &mut replies, stale, &mut log);
+                send_due(&context, &mut replies, stale + wait, &mut sent, &mut log);
+                assert!(sent.0.is_empty(), "the old admission cannot enable replies");
+
+                let fresh = stale + wait;
+                set_choice(&context, &mut replies, 2, 2, true, &mut log);
+                send_due(&context, &mut replies, fresh, &mut sent, &mut log);
+                assert!(sent.0.is_empty(), "enabling cannot answer a prior poll");
+                presence_poll(&context, &mut replies, fresh, &mut log);
+                send_due(&context, &mut replies, fresh + wait, &mut sent, &mut log);
+                assert_eq!(sent.0, [(0x1253, vec![3, 0, 0, 0, 0])]);
+            });
+        }
+    }
+
+    #[test]
+    fn same_character_transfers_keep_choice_without_the_old_zone_timer() {
+        let config = ClientConfig::new("ACCOUNT", "PASSWORD", "Test", "Tester");
+        let now = Instant::now();
+        let wait = Duration::from_secs(61);
+        for exit in [ZoneExit::World, ZoneExit::Direct(Vec::new())] {
+            with_character_session(&config, |mut context| {
+                let mut handler = |_| Ok(());
+                let mut log = Events::new(&config, &mut handler);
+                {
+                    let mut replies = Replies::default();
+                    set_choice(&context, &mut replies, 1, 1, true, &mut log);
+                    presence_poll(&context, &mut replies, now, &mut log);
+                    assert!(replies.due.is_some());
+                }
+                context.on_zone_exit(&exit);
+                assert_eq!(context.config.character, "Tester");
+                let mut replies = Replies::default();
+                let mut sent = Sent::default();
+                send_due(&context, &mut replies, now + wait, &mut sent, &mut log);
+                assert_eq!(sent.0, Vec::<(u16, Vec<u8>)>::new());
+                presence_poll(&context, &mut replies, now + wait, &mut log);
+                send_due(&context, &mut replies, now + wait * 2, &mut sent, &mut log);
+                assert_eq!(sent.0, [(0x1253, vec![3, 0, 0, 0, 0])]);
+            });
+        }
+    }
+
+    #[test]
+    fn new_characters_start_with_the_explicit_library_opt_in() {
+        let mut config = ClientConfig::new("ACCOUNT", "PASSWORD", "Test", "First");
+        config.answer_list_polls = true;
+        with_character_session(&config, |mut context| {
+            let mut handler = |_| Ok(());
+            let mut log = Events::new(&config, &mut handler);
+            let now = Instant::now();
+            let wait = Duration::from_secs(61);
+            let mut sent = Sent::default();
+            let mut first = Replies::default();
+            presence_poll(&context, &mut first, now, &mut log);
+            send_due(&context, &mut first, now + wait, &mut sent, &mut log);
+            assert_eq!(sent.0, [(0x1253, vec![3, 0, 0, 0, 0])]);
+            set_choice(&context, &mut first, 1, 1, false, &mut log);
+            assert!(!context.answer_list_polls.get());
+
+            context.on_zone_exit(&ZoneExit::CharacterSelect);
+            "Second".clone_into(&mut context.config.character);
+            let mut second = Replies::default();
+            presence_poll(&context, &mut second, now + wait, &mut log);
+            send_due(&context, &mut second, now + wait * 2, &mut sent, &mut log);
+            assert_eq!(
+                sent.0,
+                [(0x1253, vec![3, 0, 0, 0, 0]), (0x1253, vec![3, 0, 0, 0, 0])]
+            );
+        });
     }
 
     #[test]

@@ -422,8 +422,9 @@ pub enum GameCommand {
         /// Reject expired requests rather than replaying an immediate logout.
         created: std::time::Instant,
     },
-    /// Enable or disable automatic P99 list presence replies. Disabling
-    /// cancels an owed reply, including while dead or transferring zones.
+    /// Enable or disable automatic P99 list presence replies for this
+    /// character until returning to character selection. Disabling cancels
+    /// an owed reply, including while dead or transferring zones.
     AnswerListPolls {
         /// Current zone admission.
         session_id: u64,

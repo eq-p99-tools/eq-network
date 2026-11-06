@@ -29,7 +29,9 @@ for their check on P99:
 | `Quarm` | Windows TAKP/`EQMac` | Character creation and previews, admission, chat, targeting, normal attack and consider, posture, camping, ground movement, jumping, falling, zoning, casting, basic spellbook actions, the supported EQMac abilities, and guarded item/coin moves including personal banking; source-backed ground pickups and guarded ordinary door requests ([validation limits](docs/eqmac-world-objects.md)), and source-backed looting of NPC and own corpses ([evidence and limits](docs/eqmac-looting.md), live unverified). Meals use the guarded EQMac path ([limits](docs/quarm-meals.md)). Guarded ordinary merchant purchases/sales are offered ([limits](docs/quarm-merchants.md)); exchanges remain disabled. Movement requires current load/STR/buff inputs; uncertain state withdraws player input. Source evidence, confirmation limits and deferred live checks are in the [gap report](docs/public-server-gaps.md) and [combat notes](docs/quarm-combat.md). |
 
 P99 list presence replies are an explicit, default-off option
-(`ClientConfig::answer_list_polls`). The session observes population notices
+(`ClientConfig::answer_list_polls`). A runtime choice follows the character
+across zones; returning to character selection restores the startup option.
+Pending replies belong to their zone. The session observes population notices
 without joining a list. Presence replies use a 3..=60 second application
 policy delay; deployed server acceptance remains unverified.
 

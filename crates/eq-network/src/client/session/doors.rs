@@ -12,6 +12,7 @@ use eq_network_game::{
     message::Message,
     request::Request,
     world::{WorldEvent, WorldEvent::DoorAction},
+    GameDialect,
 };
 use std::{collections::BTreeMap, time::Instant};
 
@@ -20,15 +21,9 @@ pub(super) struct Doors {
     table: eq_network_game::doors::Doors,
     /// When the table last gained or lost doors; older clicks are stale.
     changed_at: Instant,
-    interaction: Interaction,
+    dialect: GameDialect,
     /// Local ordinary-hinge motion; sending a request never changes it.
     hinges: BTreeMap<u8, eqmac::Hinge>,
-}
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Interaction {
-    Titanium,
-    EqMacOrdinary,
 }
 
 impl Default for Doors {
@@ -36,7 +31,7 @@ impl Default for Doors {
         Self {
             table: eq_network_game::doors::Doors::default(),
             changed_at: Instant::now(),
-            interaction: Interaction::Titanium,
+            dialect: GameDialect::Titanium,
             hinges: BTreeMap::new(),
         }
     }
@@ -47,14 +42,14 @@ impl Doors {
     /// Specialized or unknown mechanisms remain definitions without use.
     pub(super) fn eqmac() -> Self {
         Self {
-            interaction: Interaction::EqMacOrdinary,
+            dialect: GameDialect::EqMac,
             ..Self::default()
         }
     }
 
     fn apply(&mut self, update: &DoorUpdate, now: Instant) {
         self.table.apply(update);
-        if self.interaction != Interaction::EqMacOrdinary {
+        if self.dialect != GameDialect::EqMac {
             return;
         }
         match update {
@@ -103,7 +98,7 @@ impl Doors {
             .ok_or_else(|| anyhow!("player is unavailable"))?;
         self.table
             .check_click(*door_id, spawn_id, position, reach)?;
-        if self.interaction == Interaction::EqMacOrdinary {
+        if self.dialect == GameDialect::EqMac {
             let door = self
                 .table
                 .entries()
@@ -113,6 +108,8 @@ impl Doors {
                 eqmac::ordinary(door),
                 "this door mechanism is not supported"
             );
+        }
+        if self.dialect.requires_clear_cursor_for_doors() {
             ensure!(
                 world.inventory.received() && !world.inventory.stale(),
                 "the inventory is not loaded"
@@ -121,6 +118,8 @@ impl Doors {
                 !world.inventory.items().contains_key(&InventorySlot::CURSOR),
                 "put down the item on your cursor first"
             );
+        }
+        if self.dialect == GameDialect::EqMac {
             let mut hinge = self
                 .hinges
                 .get(door_id)

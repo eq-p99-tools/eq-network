@@ -38,7 +38,7 @@ fn setup(protocol: ServerProtocol, class: u32) -> (Features, World) {
         .unwrap();
     let output = testing::run_on(server.wire(), |out| {
         admit(
-            Ok(player),
+            player,
             &Zone {
                 name: "SyntheticZone".into(),
                 far_clip: None,
@@ -51,7 +51,6 @@ fn setup(protocol: ServerProtocol, class: u32) -> (Features, World) {
         )
     });
     output.result.unwrap();
-    world.admitted = Some(Instant::now());
     assert!(output.events.iter().any(|event| matches!(event,
         ClientEvent::World(WorldEvent::Entered { capabilities, .. }) if capabilities.contains(&Capability::Abilities))));
     assert!(output.events.iter().any(|event| matches!(event,

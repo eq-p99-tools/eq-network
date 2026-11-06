@@ -1,6 +1,6 @@
 # Ordinary beneficial-buff cancellation
 
-`GameCommand::CancelBuff` carries the current admission, received buff-slot
+`ClientCommand::CancelBuff` carries the current admission, received buff-slot
 revision, exact slot and spell, creation time, and the host spell provider's
 explicit beneficial and cancellable classifications. Unknown classification is
 not permission. The host must preserve the ordinary spell-effect 101 exclusion.
@@ -26,11 +26,17 @@ selects by spell ID, echoes sentinel/detrimental requests, and otherwise calls
 same spell instead of promising that the server cancels only one slot.
 
 Submission does not remove received membership or constitute an acknowledgement.
-A matching received slot removal is reported as `ObservedRemoval`, without claiming
-that this request caused it. Replacement is `Changed`; silence after the local
-five-second observation interval is `Unresolved`. Neither path retries. A
-rejected echoed current record remains present. Death, transfer and disconnect
-discard the worker's selection; reports retain their admission for host filtering.
+A received fade matching the slot and spell during the five-second local wait
+is reported as `FadeObserved`. It can be natural expiry. Replacement is
+`Changed`; no matching change before the wait ends is `Unresolved`. None of
+these results retries the request. A rejected echoed current record remains
+present. Death, transfer and disconnect discard the worker's selection;
+reports retain their admission for host filtering.
+
+The open EQEmu fade sender names the spell and slot. P99's use of sentinel
+spell IDs for slot clears is unverified. The worker keeps the received spell
+field and requires an exact match before removing a slotted buff; a sentinel
+alone cannot identify the buff or remove a replacement.
 
 This implementation sends one initialized current-record request, which the
 EQEmu handler supports, and awaits received membership. It does not claim native

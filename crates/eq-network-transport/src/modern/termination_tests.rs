@@ -223,6 +223,7 @@ fn a_terminal_control_in_a_combined_packet_preserves_only_its_complete_prefix() 
         .unwrap());
     let late = packet(&connection, 9, 2, b"\x04\x10late");
     send(&peer, &connection, &late);
+    connection.close().unwrap(); // Peer termination owns the staged prefix.
     let received = connection.received_count;
     assert_eq!(connection.receive().unwrap().unwrap().body, b"b");
     assert_eq!(reason(&connection.receive().unwrap_err()), expected);
@@ -278,19 +279,24 @@ fn a_complete_fragment_before_termination_is_delivered() {
 }
 
 #[test]
-fn local_close_still_refuses_a_staged_application() {
-    let (mut connection, _peer) = session();
+fn local_close_discards_staged_data_and_ignores_later_peer_termination() {
+    let (mut connection, peer) = session();
     connection.applications.push_back(Application {
         opcode: 0x1004,
         body: b"staged".to_vec(),
     });
     connection.close().unwrap();
+    assert!(connection.applications.is_empty());
+    let terminal = connection.datagram(5, &7u32.to_be_bytes());
+    send(&peer, &connection, &terminal);
+    let received = connection.received_count;
     let sent = connection.sent_count.get();
     assert_eq!(
         connection.receive().unwrap_err().to_string(),
         "session is closed"
     );
     assert!(connection.termination.is_none());
+    assert_eq!(connection.received_count, received);
     connection.close().unwrap();
     assert_eq!(connection.sent_count.get(), sent);
 }

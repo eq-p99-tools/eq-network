@@ -10,6 +10,27 @@ rejects malformed numeric fields. Titanium text decoding requires a supported
 note/book kind and terminating NUL. Submission does not supply `BookText`;
 supported server text opens the result. See `docs/p99-reading.md`.
 
+## Zone handshake and player admission
+
+`Client::run_with_commands` requires a usable player snapshot after each zone
+handshake, including transfers. The worker delivers `WorldEvent::Entered` and
+staged world updates before `ConnectionStage::Ready`. If the wire handshake
+completes but the player snapshot cannot be decoded, the worker closes the zone
+without taking player commands, reports `ConnectionState::Disconnected`, and
+returns `PlayerAdmissionError` without an automatic retry.
+
+`Client::run` can still deliver communications from that zone. It sends the
+additive `ConnectionStage::Recording` milestone with `Connected` transport
+health. This outcome has no `Entered`, `Ready`, or live gameplay feature
+processing. Servers offering movement retain the stationary heartbeat only
+with the nonzero own-spawn ID and position read during the handshake (Titanium's
+validated own spawn and saved profile position, or EQMac's assigned ID and own
+spawn position). Transfer traffic or a death, despawn, or position update for
+an already known own spawn withdraws the position repeat for that zone, even
+if it arrived before handshake completion. The progress enum is non-exhaustive,
+and its new serialized value is `recording`. Errors in the handshake itself
+continue to follow the existing session error policy.
+
 ## Modern session termination
 
 `eq_network_transport::modern::SessionTermination` is an additive typed error
@@ -650,11 +671,12 @@ products require separate authoritative inventory updates. See
 `ClientConfig::answer_list_polls` starts false. P99 offers
 `Capability::AnsweringListPolls`; the choice does not enable itself from that
 capability. `ClientCommand::AnswerListPolls { session_id, enabled }` changes
-future reply policy for the current connection, retaining it across zone
-crossings. A new connection starts from its config. A stale admission cannot
-change the choice. Disabling cancels an owed reply before its send, including
-while dead or zoning. Death, transfer, disconnect and a fresh zone owner drop
-any owed answer; re-enabling never answers an earlier poll.
+future reply policy for the current character, retaining it across zone
+crossings. Returning to character selection or reconnecting restores the
+configured startup value. A stale admission cannot change the choice.
+Disabling cancels an owed reply before its send, including while dead or
+zoning. Death, transfer, disconnect and a fresh zone owner drop any owed
+answer; re-enabling never answers an earlier poll.
 
 Mode 1 reports population and never joins a list automatically. Mode 2 alone
 schedules one presence reply when enabled and admitted. A newer list message

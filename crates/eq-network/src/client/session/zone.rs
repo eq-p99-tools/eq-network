@@ -7,9 +7,13 @@ use super::{
     DecodeError, Duration, Events, Instant, RecordEvent, Result, Shield, ZoneExit,
 };
 
-use super::admission::{Handshake, Zone};
+use super::admission::{Handshake, HandshakeComplete, Zone};
 use super::coverage::{Stage, Unheard};
-use eq_network_game::message::Message;
+use crate::client::PlayerAdmissionError;
+use eq_network_game::{
+    message::{Message, Part},
+    world::{Capability, WorldEvent},
+};
 use eq_network_transport::Transport;
 
 /// The zone's features, each offered every command, packet, timer and
@@ -23,7 +27,9 @@ struct Features {
     spell_landing_flag: Option<u8>,
     answers_list_polls: bool,
     /// Whether the server type offers the explicit gameplay departures
-    /// (movement and memorization options); public servers never do.
+    /// (movement and memorization options). Every server type offers them
+    /// while the owner tests them; public parity needs them withheld on
+    /// P99, Quarm and TAKP again before a release.
     gameplay_departures: bool,
 }
 
@@ -130,11 +136,8 @@ impl Features {
         world: &World,
         now: Instant,
     ) -> Option<&'static str> {
-        if world.lifecycle.is_dead() {
-            return Some("The player is dead");
-        }
         if !world.ready() || world.lifecycle.blocks_motion() {
-            return Some("The player is between zones");
+            return Some(hold_reason(world));
         }
         if !self.gameplay_departures && Self::is_departure(command) {
             return Some("Gameplay departures are not offered on this server");
@@ -235,13 +238,30 @@ impl Features {
 }
 
 /// Enter the zone, keep the character stationary, and collect communications.
-// The linear handshake keeps packet ordering and state transitions together.
-#[allow(clippy::too_many_lines)]
 pub(super) fn run(
     context: &CharacterSession<'_>,
     shield: &mut Option<Box<dyn Shield>>,
     host: &str,
     port: u16,
+    checksums: Vec<u8>,
+    log: &mut Events<'_>,
+) -> Result<ZoneExit> {
+    let config = &context.config;
+    let server = servers::server_type(config.protocol);
+    let mut session = server.wire().connect_zone(
+        crate::client::endpoint(host, port, config.local_only)?,
+        context.stop.flag(),
+    )?;
+    run_connected(context, server, &mut session, shield, checksums, log)
+}
+
+// The linear handshake keeps packet ordering and state transitions together.
+#[allow(clippy::too_many_lines)]
+fn run_connected(
+    context: &CharacterSession<'_>,
+    server: &dyn servers::ServerType,
+    session: &mut impl Transport,
+    shield: &mut Option<Box<dyn Shield>>,
     mut checksums: Vec<u8>,
     log: &mut Events<'_>,
 ) -> Result<ZoneExit> {
@@ -249,18 +269,11 @@ pub(super) fn run(
     let credentials = context.credentials;
     let stop = context.stop;
     let duration = context.duration;
-    // Each generation connects to its zones its own way; the loop needs only
-    // the interface every generation's transport offers.
-    let server = servers::server_type(config.protocol);
-    let mut session = server.wire().connect_zone(
-        crate::client::endpoint(host, port, config.local_only)?,
-        stop.flag(),
-    )?;
     let mut admission = server.wire().admit(
         &config.character,
         server.profile_turn(),
         &mut Handshake {
-            session: &mut *session,
+            session,
             shield,
             key: &credentials.key,
             checksums: &mut checksums,
@@ -271,12 +284,14 @@ pub(super) fn run(
     let mut progress = Instant::now();
     let session_id = rand::random();
     let mut world = World::new(session_id);
+    let mut recording_only = false;
+    let mut entry_position_superseded = false;
     let mut unheard = Unheard::new(Stage::Zone);
     let mut list_replies = super::list_poll::Replies::default();
     let mut features = Features::new(server, &config.character, config.auto_eat);
-    let follows_zones = features
-        .capabilities()
-        .contains(&crate::world::Capability::Zoning);
+    let offered = features.capabilities();
+    let follows_zones = offered.contains(&Capability::Zoning);
+    let repeats_position = offered.contains(&Capability::Moving);
     loop {
         if stop.is_cancelled() || duration.is_some_and(|limit| connected.elapsed() >= limit) {
             session.close()?;
@@ -285,7 +300,7 @@ pub(super) fn run(
         }
         if progress.elapsed() >= Duration::from_secs(30) {
             log.status(
-                if world.ready()
+                if (world.ready() || recording_only)
                     && world.lifecycle.pending().is_none()
                     && session.last_received_seconds() < 60
                 {
@@ -303,24 +318,33 @@ pub(super) fn run(
             progress = Instant::now();
         }
         ensure!(
-            world.ready() || connected.elapsed() < Duration::from_secs(60),
+            world.ready() || recording_only || connected.elapsed() < Duration::from_secs(60),
             "zone admission timed out while {}",
             admission.stage()
         );
         let speaker = sender(&config.character, &world);
-        let exit = {
+        {
             let mut out = Out {
-                sink: &mut session,
+                sink: session,
                 log: &mut *log,
                 wire: server.wire(),
                 sender: speaker,
             };
-            features.tick(Instant::now(), &mut world, &mut out)?;
-            settle(&mut features, &mut world, &mut out, follows_zones)?
-        };
-        if let Some(exit) = exit {
-            session.close()?;
-            return Ok(exit);
+            if recording_only {
+                // Preserve the listener's stationary heartbeat from wire facts.
+                if repeats_position
+                    && !entry_position_superseded
+                    && out.sink.termination().is_none()
+                {
+                    world.body.heartbeat(Instant::now(), &mut out)?;
+                }
+            } else {
+                features.tick(Instant::now(), &mut world, &mut out)?;
+                if let Some(exit) = settle(&mut features, &mut world, &mut out, follows_zones)? {
+                    session.close()?;
+                    return Ok(exit);
+                }
+            }
         }
         let mut commands = Vec::new();
         if world.ready() || world.lifecycle.blocks_motion() {
@@ -344,65 +368,30 @@ pub(super) fn run(
             && world.ready()
             && !world.lifecycle.blocks_motion()
             && session.termination().is_none();
-        list_replies.tick(Instant::now(), may_reply, &mut session, log)?;
-        if world.lifecycle.blocks_motion() {
-            // Death and zone transfers hold every command; each is refused,
-            // so that whoever waits on one hears why.
-            let reason = hold_reason(&world);
-            for command in &commands {
-                actions::refuse(command, reason, log)?;
-            }
-        }
-        if world.ready() && !world.lifecycle.blocks_motion() {
-            // The command batch is bounded above to preserve receive/ACK work.
-            let mut pending = commands.iter();
-            while let Some(command) = pending.next() {
-                // Stale commands, and commands that need what an action in
-                // flight holds, are refused here and nowhere else.
-                let now = Instant::now();
-                let refusal = features.refusal(command, &world, now);
-                if let Some(reason) = refusal {
-                    actions::refuse(command, reason, log)?;
-                    continue;
-                }
-                let speaker = sender(&config.character, &world);
-                let (handled, exit) = {
-                    let mut out = Out {
-                        sink: &mut session,
-                        log: &mut *log,
-                        wire: server.wire(),
-                        sender: speaker,
-                    };
-                    let handled = features.handle(command, &mut world, &mut out)?;
-                    (
-                        handled,
-                        settle(&mut features, &mut world, &mut out, follows_zones)?,
-                    )
-                };
-                if let Some(exit) = exit {
-                    session.close()?;
-                    return Ok(exit);
-                }
-                if !handled {
-                    unoffered(command, log)?;
-                }
-                // Death and zone transfers hold the rest of the batch; it was
-                // already taken from the queue, so each is refused here, so
-                // that whoever waits on one hears why.
-                if world.lifecycle.blocks_motion() {
-                    let reason = hold_reason(&world);
-                    for command in pending {
-                        actions::refuse(command, reason, log)?;
-                    }
-                    break;
-                }
-            }
+        list_replies.tick(Instant::now(), may_reply, session, log)?;
+        let exit = apply_commands(
+            &commands,
+            &mut features,
+            &mut world,
+            &mut Out {
+                sink: session,
+                log: &mut *log,
+                wire: server.wire(),
+                sender: speaker,
+            },
+            follows_zones,
+        )?;
+        if let Some(exit) = exit {
+            session.close()?;
+            return Ok(exit);
         }
         let received = match session.receive() {
             Ok(received) => received,
             Err(error) => {
                 // A feature may expect the zone to close the connection.
-                features.connection_ended(&mut world);
+                if !recording_only {
+                    features.connection_ended(&mut world);
+                }
                 return match world.take_exit() {
                     Some(exit) => Ok(exit),
                     None => Err(error),
@@ -443,7 +432,7 @@ pub(super) fn run(
         {
             session.send(reply.opcode, &reply.body)?;
         }
-        if !world.ready() {
+        if !world.ready() && !recording_only {
             log.diagnostic(format!(
                 "Zone received 0x{:04x} ({} bytes)",
                 packet.opcode,
@@ -452,21 +441,40 @@ pub(super) fn run(
         }
         // What the zone leaves unread still leaves a trace, once a session.
         unheard.tell(server.wire(), packet.opcode, packet.body.len(), log)?;
-        if let Some((player, zone)) = admission.read(
+        if let Some(HandshakeComplete { player, zone }) = admission.read(
             &mut packet,
             &mut world,
             &mut Handshake {
-                session: &mut *session,
+                session,
                 shield,
                 key: &credentials.key,
                 checksums: &mut checksums,
                 log: &mut *log,
             },
         )? {
+            let player = match player {
+                Ok(player) => player,
+                Err(error) => {
+                    log.diagnostic(format!("Player presentation unavailable: {error}"))?;
+                    if context.commands.is_some() {
+                        // Keep the admission error even if closing the wire fails.
+                        let _ = session.close();
+                        return Err(PlayerAdmissionError.into());
+                    }
+                    recording_only = true;
+                    log.send(ClientEvent::Progress(ConnectionStage::Recording))?;
+                    log.status(
+                        ConnectionState::Connected,
+                        world.packets,
+                        Some(session.last_received_seconds()),
+                    )?;
+                    continue;
+                }
+            };
             let speaker = sender(&config.character, &world);
             let exit = {
                 let mut out = Out {
-                    sink: &mut session,
+                    sink: session,
                     log: &mut *log,
                     wire: server.wire(),
                     sender: speaker,
@@ -493,20 +501,34 @@ pub(super) fn run(
             ),
             log,
         )?;
+        if context.commands.is_none() && !world.ready() && !entry_position_superseded {
+            // A later handshake packet cannot restore a superseded fallback.
+            entry_position_superseded = messages
+                .iter()
+                .any(|message| supersedes_entry_position(message, &world));
+        }
         let speaker = sender(&config.character, &world);
-        let exit = hear(
+        if recording_only {
+            // Keep the communication stream without giving the player
+            // features a live world or ignoring an explicit logout.
+            ensure!(
+                !messages
+                    .iter()
+                    .any(|message| matches!(message, Message::LoggedOut)),
+                "server logged the character out"
+            );
+        } else if let Some(exit) = hear(
             messages,
             &mut features,
             &mut world,
             &mut Out {
-                sink: &mut session,
+                sink: session,
                 log: &mut *log,
                 wire: server.wire(),
                 sender: speaker,
             },
             follows_zones,
-        )?;
-        if let Some(exit) = exit {
+        )? {
             session.close()?;
             return Ok(exit);
         }
@@ -527,6 +549,28 @@ pub(super) fn run(
                 }),
             )?,
         }
+    }
+}
+
+/// A listener can repeat the entry position only until the zone supersedes it.
+fn supersedes_entry_position(message: &Message, world: &World) -> bool {
+    let own_spawn = world.own_spawn.filter(|&id| id != 0);
+    match message {
+        Message::ZoneOffer(_)
+        | Message::ZoneAnswer(_)
+        | Message::Handoff(_)
+        | Message::Unreadable {
+            part: Part::ZoneOffer | Part::ZoneAnswer,
+            ..
+        } => true,
+        Message::Event(WorldEvent::Position { spawn_id, .. } | WorldEvent::Despawn(spawn_id)) => {
+            own_spawn == Some(*spawn_id)
+        }
+        Message::Event(WorldEvent::Death(death)) => {
+            own_spawn.map(u32::from) == Some(death.spawn_id)
+        }
+        Message::Event(event) => world.owns_death(event),
+        _ => false,
     }
 }
 
@@ -660,46 +704,75 @@ fn hold_reason(world: &World) -> &'static str {
     }
 }
 
+/// Recheck the lifecycle for each command in the already drained batch.
+/// A prior command can change it directly or through the news it settles.
+fn apply_commands(
+    commands: &[ClientCommand],
+    features: &mut Features,
+    world: &mut World,
+    out: &mut Out<'_, '_>,
+    follows_zones: bool,
+) -> Result<Option<ZoneExit>> {
+    let mut pending = commands.iter();
+    while let Some(command) = pending.next() {
+        if let Some(reason) = features.refusal(command, world, Instant::now()) {
+            actions::refuse(command, reason, out.log)?;
+            continue;
+        }
+        out.sender = sender(out.sender.name, world);
+        let handled = features.handle(command, world, out)?;
+        if let Some(exit) = settle(features, world, out, follows_zones)? {
+            let reason = if world.lifecycle.blocks_motion() {
+                hold_reason(world)
+            } else {
+                "The zone connection ended"
+            };
+            for command in pending {
+                actions::refuse(command, reason, out.log)?;
+            }
+            return Ok(Some(exit));
+        }
+        if !handled {
+            unoffered(command, out.log)?;
+        }
+    }
+    Ok(None)
+}
+
 /// Tells the host the zone admitted the player, as the features shape them,
 /// and lets every feature tell what it staged.
 fn admit(
-    player: Result<crate::world::PlayerState>,
+    mut player: crate::world::PlayerState,
     zone: &Zone,
     features: &mut Features,
     world: &mut World,
     out: &mut Out<'_, '_>,
 ) -> Result<()> {
-    match player {
-        Ok(mut player) => {
-            features.shape(&mut player);
-            out.sender.spawn_id = Some(player.spawn_id);
-            world.player.admit(player.clone());
-            out.log
-                .send(ClientEvent::World(crate::world::WorldEvent::Entered {
-                    capabilities: features.capabilities(),
-                    choices: features.choices(),
-                    session_id: world.session_id,
-                    zone: zone.name.clone(),
-                    player: Box::new(player),
-                    far_clip: zone.far_clip,
-                    spell_landing_flag: features.spell_landing_flag,
-                }))?;
-            if let Some(sky) = zone.sky {
-                out.log
-                    .send(ClientEvent::World(crate::world::WorldEvent::Sky(sky)))?;
-            }
-            if let Some(description) = &zone.description {
-                out.log.send(ClientEvent::World(
-                    crate::world::WorldEvent::ZoneDescription(description.clone()),
-                ))?;
-            }
-            world.gravity = zone.description.as_ref().map(|zone| zone.gravity);
-            features.admitted(world, out)?;
-        }
-        Err(error) => out
-            .log
-            .diagnostic(format!("Player presentation unavailable: {error}"))?,
+    features.shape(&mut player);
+    out.sender.spawn_id = Some(player.spawn_id);
+    world.player.admit(player.clone());
+    world.admitted = Some(Instant::now());
+    out.log
+        .send(ClientEvent::World(crate::world::WorldEvent::Entered {
+            capabilities: features.capabilities(),
+            choices: features.choices(),
+            session_id: world.session_id,
+            zone: zone.name.clone(),
+            player: Box::new(player),
+            far_clip: zone.far_clip,
+            spell_landing_flag: features.spell_landing_flag,
+        }))?;
+    if let Some(sky) = zone.sky {
+        out.log
+            .send(ClientEvent::World(crate::world::WorldEvent::Sky(sky)))?;
     }
+    if let Some(description) = &zone.description {
+        out.log.send(ClientEvent::World(
+            crate::world::WorldEvent::ZoneDescription(description.clone()),
+        ))?;
+    }
+    world.gravity = zone.description.as_ref().map(|zone| zone.gravity);
+    features.admitted(world, out)?;
     out.log
         .send(ClientEvent::Progress(ConnectionStage::Ready))?;
     out.status(ConnectionState::Connected, world)?;
@@ -1456,7 +1529,7 @@ mod tests {
                 out.sender = sender("Tester", &world);
                 assert_eq!(out.sender.spawn_id, None);
                 admit(
-                    Ok(testing::player(spawn_id)),
+                    testing::player(spawn_id),
                     &zone,
                     &mut features,
                     &mut world,
@@ -1494,15 +1567,8 @@ mod tests {
             "Tester",
             eq_network_game::food::AutoEat::default(),
         );
-        let outcome = testing::run(|out| {
-            admit(
-                Ok(testing::player(7)),
-                &zone,
-                &mut features,
-                &mut world,
-                out,
-            )
-        });
+        let outcome =
+            testing::run(|out| admit(testing::player(7), &zone, &mut features, &mut world, out));
         outcome.result.unwrap();
         let told: Vec<String> = outcome
             .events
@@ -1558,14 +1624,7 @@ mod tests {
                 true
             )?
             .is_none());
-            admit(
-                Ok(testing::player(7)),
-                &zone,
-                &mut features,
-                &mut world,
-                out,
-            )?;
-            world.admitted = Some(Instant::now());
+            admit(testing::player(7), &zone, &mut features, &mut world, out)?;
             let mut inventory = Inventory::default();
             inventory.apply(InventoryUpdate::Snapshot(Vec::new()));
             world.inventory = inventory.into();
@@ -2320,6 +2379,12 @@ mod manual_combine_tests;
 
 #[cfg(test)]
 mod terminal_tests;
+
+#[cfg(test)]
+mod admission_tests;
+
+#[cfg(test)]
+mod command_batch_tests;
 
 #[cfg(test)]
 mod stun_tests;
