@@ -44,8 +44,10 @@ duplicate spawn report of the same ID. Pass the latest identity in
 name the target; the session refuses an order whose identity or target no
 longer matches ("Your pet has changed") before anything is sent, and
 `SelectTarget::expected_pet` pins a pet-specific selection the same way.
-`PetCommand::GuardMe` is Titanium command 6. The Project 1999 policy refuses
-Hold, Feign, NoCast and Focus.
+`PetCommand::GuardMe` is Titanium command 6. The Project 1999 provider
+selects the classic order set, which excludes Hold, Feign, NoCast and Focus.
+The EQEmu provider selects the expanded set. Local submission leaves
+execution and any further restrictions to the server.
 
 ## Titanium EQEmu swimming bound
 

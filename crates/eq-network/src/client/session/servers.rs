@@ -44,7 +44,7 @@ use super::{
     motion::Motion,
     objects::GroundObjects,
     offers::MerchantOffers,
-    pets::Pets,
+    pets::{PetOrderSet, Pets},
     posture::Stances,
     raids::Raids,
     reading::Reading,
@@ -607,9 +607,9 @@ mod shared {
         Abilities, Ability, Allowances, Belongings, BleedingOut, Camp, Casting, Character, Clock,
         Combat, Corpses, Doors, Edits, Entities, Exchanges, Feature, GameDialect, GroundObjects,
         Groups, Hazard, Hazards, Helm, HideAnswer, Home, ItemCount, Listing, Looting, Map, Marks,
-        MerchantOffers, Motion, MoveRules, Pets, Quotes, Raids, Reading, Resurrection, Sacrifice,
-        ServerProtocol, Setup, Socials, Spellbook, Talk, Targeting, Ticks, Tradeskills, Training,
-        Transfers, Translocate, Who,
+        MerchantOffers, Motion, MoveRules, PetOrderSet, Pets, Quotes, Raids, Reading, Resurrection,
+        Sacrifice, ServerProtocol, Setup, Socials, Spellbook, Talk, Targeting, Ticks, Tradeskills,
+        Training, Transfers, Translocate, Who,
     };
 
     pub(super) fn casting() -> Box<dyn Feature> {
@@ -726,8 +726,8 @@ mod shared {
         Box::new(Corpses)
     }
 
-    pub(super) fn pets(project1999: bool) -> Box<dyn Feature> {
-        Box::new(Pets::new(project1999))
+    pub(super) fn pets(orders: PetOrderSet) -> Box<dyn Feature> {
+        Box::new(Pets::new(orders))
     }
 
     pub(super) fn training() -> Box<dyn Feature> {
@@ -1043,7 +1043,7 @@ impl ServerType for Project1999 {
     }
 
     fn pets(&self, _setup: &Setup<'_>) -> Provided {
-        offer(shared::pets(true))
+        offer(shared::pets(PetOrderSet::Classic))
     }
 
     /// P99's own client keeps the in-game map off, which is right for P99;
@@ -1193,7 +1193,7 @@ impl ServerType for EqEmu {
     }
 
     fn pets(&self, _setup: &Setup<'_>) -> Provided {
-        offer(shared::pets(false))
+        offer(shared::pets(PetOrderSet::Expanded))
     }
 
     fn training(&self, _setup: &Setup<'_>) -> Provided {

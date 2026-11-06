@@ -133,10 +133,16 @@ impl PetCommand {
         }
     }
 
+    /// Whether this command belongs to the classic pet order set.
+    #[must_use]
+    pub const fn in_classic_order_set(self) -> bool {
+        !matches!(self, Self::Hold | Self::Feign | Self::NoCast | Self::Focus)
+    }
+
     /// Whether the Project 1999 policy offers this ordinary command.
     #[must_use]
     pub const fn project1999_available(self) -> bool {
-        !matches!(self, Self::Hold | Self::Feign | Self::NoCast | Self::Focus)
+        self.in_classic_order_set()
     }
 
     /// Whether the command names the player's target: an attack aims at it,
