@@ -1209,8 +1209,8 @@ impl ServerType for EqEmu {
         offer(shared::sacrifice())
     }
 
-    /// Answered only on the player's word; on a yes `EQEmu` moves the player
-    /// itself (`Client::Handle_OP_Translocate`).
+    /// A player answer or the Titanium timeout closes the question. On a yes
+    /// `EQEmu` moves the player itself (`Client::Handle_OP_Translocate`).
     fn translocate(&self, _setup: &Setup<'_>) -> Provided {
         offer(shared::translocate(super::confirmations::TITANIUM_TIMEOUT))
     }

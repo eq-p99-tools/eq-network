@@ -54,12 +54,13 @@ execution and any further restrictions to the server.
 Only the Titanium `EQEmu` policy offers `Capability::Swimming`; P99, Quarm
 and TAKP reject `MovementMode::Swim` samples. A swim sample is bounded by one
 three-dimensional budget of `movement::swim_speed` of the unboosted grant,
-with no run boost, and is refused while flying or stunned. The two native
-branch constants in `swim_speed` are read from the Titanium program; the
-shared three-axis budget, the vertical stroke sharing the wet horizontal
-rate, and the absence of skill, race and buff scaling are inferred
-(recording checklist 6.390). A submitted sample establishes neither server
-acceptance nor water state; the host asserts water from the installed zone.
+with no run boost, and is refused while flying or stunned. The native wet
+pair is read at Titanium `eqgame.exe` 0x4c052d and 0x4c0534, and the land
+pair at 0x4c04c1 and 0x4c04cd. The shared three-axis budget, the vertical
+stroke sharing the wet horizontal rate, and the absence of skill, race and
+buff scaling are inferred (recording checklist 6.390). A submitted sample
+establishes neither server acceptance nor water state. The host asserts water
+from the installed zone.
 
 ## Retained base held models
 
@@ -887,9 +888,11 @@ refusal naming the attempted token and leaves a replacement untouched.
 Death, an outstanding zone transfer and logout invalidate old consent.
 The in-process `expires_at` is a monotonic local deadline omitted from
 serialization. The Titanium `EQEmu` policy uses a five-minute local answer
-window and submits a decline when it elapses during the same live admission;
-that the native client answers No on its own, and the five minutes, are
-inferred (recording checklist 6.391). TAKP translocate retains its one-hour
+window and submits a decline when it elapses during the same live admission.
+Titanium `eqgame.exe` sets the timer at 0x4561bd (translocate) and 0x459b61
+(resurrection). Expiry at 0x547f0a passes dismissal result 2 at 0x547eff.
+The translocate and resurrection callbacks send a decline at 0x499ef3
+and 0x499f3a, respectively. TAKP translocate retains its one-hour
 window (6.253). A server may apply its own timing rule.
 
 `ConsentClosed` distinguishes a submitted answer, a local expiry with a

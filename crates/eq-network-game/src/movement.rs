@@ -162,7 +162,8 @@ pub enum MovementMode {
 /// Conservative three-dimensional swim budget for a Titanium session.
 ///
 /// The slower native wet horizontal branch settles at `0.02 / (1 - 0.94)`
-/// input units per tick, versus `0.8 / (1 - 0.625)` on land. Use this
+/// input units per tick (`eqgame.exe` 0x4c052d and 0x4c0534), versus
+/// `0.8 / (1 - 0.625)` on land (0x4c04c1 and 0x4c04cd). Use this
 /// fraction of the current unboosted grant on every axis. This is a bound
 /// for this client, not a claim about the native skill, race or buff formula;
 /// the shared three-axis budget is inferred (recording checklist 6.390).

@@ -257,8 +257,9 @@ pub fn eqmac_sacrifice_answer(offer: &SacrificeOffer, accept: bool) -> EncodedCo
     )
 }
 
-/// Encodes Titanium's answer to a translocate: the offer, with 1 for yes
-/// and 0 for no.
+/// Encodes the Titanium translocate answer for `EQEmu`. The session sends 1
+/// for yes and 0 for no. `Client::Handle_OP_Translocate` treats only 1 as
+/// acceptance. Titanium `eqgame.exe` uses -1 for no (0x499f08).
 #[must_use]
 pub fn titanium_translocate_answer(offer: &TranslocateOffer, accept: bool) -> EncodedCommand {
     answer(TRANSLOCATE_OPCODE, &offer.body, COMPLETE, u32::from(accept))

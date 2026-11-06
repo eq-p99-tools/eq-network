@@ -165,7 +165,12 @@ mod tests {
             panic!("expected the new question");
         };
         assert_ne!(question.id, new_question.id);
-        let now = Instant::now() + TITANIUM_TIMEOUT;
+        let now = new_question.expires_at;
+        let early = testing::run(|out| {
+            resurrection.tick(now - std::time::Duration::from_nanos(1), &mut world, out)
+        });
+        early.result.unwrap();
+        assert!(early.sent.is_empty() && early.events.is_empty());
         let expired = testing::run(|out| resurrection.tick(now, &mut world, out));
         expired.result.unwrap();
         assert_eq!(expired.sent, [titanium_answer(&new_question.offer, false)]);
@@ -173,8 +178,10 @@ mod tests {
             expired.events.as_slice(),
             [ClientEvent::World(WorldEvent::ConsentClosed { id, closure: ConsentClosure::Expired })] if *id == new_question.id
         ));
+        let repeated = testing::run(|out| resurrection.tick(now, &mut world, out));
+        repeated.result.unwrap();
+        assert!(repeated.sent.is_empty() && repeated.events.is_empty());
         let late = testing::run(|out| {
-            resurrection.tick(now, &mut world, out)?;
             resurrection.handle(&answer(new_question.id, true), &mut world, out)
         });
         late.result.unwrap();

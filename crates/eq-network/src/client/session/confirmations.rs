@@ -19,9 +19,10 @@ use eq_network_game::{
 
 use std::time::{Duration, Instant};
 
-/// The Titanium confirmation prompt's five-minute answer window; that the
-/// native client declines by itself, and the length, are inferred
-/// (recording checklist 6.391).
+/// Titanium's five-minute consent window. `eqgame.exe` opens translocate at
+/// 0x4561bd and resurrection at 0x459b61. The timer at 0x547f0a dismisses
+/// with result 2 (0x547eff). Both callback branches send a decline
+/// (translocate at 0x499ef3 and resurrection at 0x499f3a).
 pub(super) const TITANIUM_TIMEOUT: Duration = Duration::from_secs(300);
 
 /// The latest live question of one kind in a zone feature.
@@ -258,6 +259,7 @@ mod tests {
     use super::*;
     use eq_network_game::confirmations::{
         eqmac_translocate_answer, sacrifice, titanium_sacrifice_answer, titanium_translocate,
+        titanium_translocate_answer,
     };
 
     #[test]
@@ -375,6 +377,51 @@ mod tests {
             repeated.sent,
             [] as [eq_network_game::command::EncodedCommand; 0]
         );
+    }
+
+    #[test]
+    fn an_unanswered_titanium_translocate_declines_once_at_its_deadline() {
+        let mut feature = Translocate::new(TITANIUM_TIMEOUT);
+        let mut world = World::new(5);
+        world.admitted = Some(Instant::now());
+        let offer = titanium_translocate(&translocate_record(4)).unwrap();
+        let opened =
+            testing::run(|out| feature.observe(&Message::TranslocateOffer(offer), &mut world, out));
+        opened.result.unwrap();
+        assert!(opened.sent.is_empty());
+        let [ClientEvent::World(WorldEvent::TranslocateOffer(question))] = opened.events.as_slice()
+        else {
+            panic!("expected the question");
+        };
+        let deadline = question.expires_at;
+        let before = deadline - Duration::from_nanos(1);
+        let early = testing::run(|out| feature.tick(before, &mut world, out));
+        early.result.unwrap();
+        assert!(early.sent.is_empty() && early.events.is_empty());
+
+        let expired = testing::run(|out| feature.tick(deadline, &mut world, out));
+        expired.result.unwrap();
+        assert_eq!(
+            expired.sent,
+            [titanium_translocate_answer(&question.offer, false)]
+        );
+        assert!(matches!(
+            expired.events.as_slice(),
+            [ClientEvent::World(WorldEvent::ConsentClosed { id, closure: ConsentClosure::Expired })]
+                if *id == question.id
+        ));
+        let repeated = testing::run(|out| feature.tick(deadline, &mut world, out));
+        repeated.result.unwrap();
+        assert!(repeated.sent.is_empty() && repeated.events.is_empty());
+
+        let late = testing::run(|out| feature.handle(&answer(question.id, true), &mut world, out));
+        late.result.unwrap();
+        assert!(late.sent.is_empty());
+        assert!(matches!(
+            late.events.first(),
+            Some(ClientEvent::World(WorldEvent::TranslocateRefused { offer_id, .. }))
+                if *offer_id == question.id
+        ));
     }
 
     #[test]
