@@ -509,6 +509,7 @@ mod tests {
         };
         let step = ClientCommand::Move(eq_network_game::movement::MovementRequest {
             mode: eq_network_game::movement::MovementMode::Forward,
+            heading: eq_network_game::movement::HeadingUpdate::Rate,
             session_id: 5,
             position: eq_network_game::world::Position::default(),
             created: Instant::now(),

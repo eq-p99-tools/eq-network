@@ -157,6 +157,19 @@ pub enum MovementMode {
     Fall,
 }
 
+/// How the heading in a movement request was produced.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum HeadingUpdate {
+    /// The heading follows a paced turn. The session derives a checked
+    /// velocity from the heading change and elapsed sample time.
+    #[default]
+    Rate,
+    /// The heading is the endpoint of locally applied mouse input.
+    /// Titanium can send this absolute heading with no continuing turn hint.
+    Snapshot,
+}
+
 /// A graphical client's proposed position, tied to its current zone admission.
 #[derive(Clone, Debug, PartialEq)]
 pub struct MovementRequest {
@@ -166,8 +179,29 @@ pub struct MovementRequest {
     pub session_id: u64,
     /// Position after local collision resolution.
     pub position: Position,
+    /// Whether the proposed heading includes a paced turn or a completed mouse turn.
+    pub heading: HeadingUpdate,
     /// Local creation time; queued input expires instead of replaying after a stall.
     pub created: Instant,
+}
+
+impl MovementRequest {
+    /// Proposes a position with the ordinary checked turn-rate intent.
+    #[must_use]
+    pub const fn new(
+        mode: MovementMode,
+        session_id: u64,
+        position: Position,
+        created: Instant,
+    ) -> Self {
+        Self {
+            mode,
+            session_id,
+            position,
+            heading: HeadingUpdate::Rate,
+            created,
+        }
+    }
 }
 
 /// One client-to-server motion sample, independent of transport sequencing.
@@ -600,6 +634,7 @@ mod tests {
         guard.set_speed(Some(30.0), start);
         let mut request = MovementRequest {
             mode: MovementMode::Forward,
+            heading: HeadingUpdate::Rate,
             session_id: 7,
             position: Position {
                 x: 1.0,
@@ -621,6 +656,7 @@ mod tests {
         guard.set_speed(Some(30.0), start);
         let mut request = MovementRequest {
             mode: MovementMode::Forward,
+            heading: HeadingUpdate::Rate,
             session_id: 7,
             position: Position {
                 x: 1.0,
@@ -672,6 +708,7 @@ mod tests {
         let now = start + Duration::from_millis(100);
         let mut request = MovementRequest {
             mode: MovementMode::Forward,
+            heading: HeadingUpdate::Rate,
             session_id: 7,
             position: Position {
                 x: 1.0,
@@ -696,6 +733,7 @@ mod tests {
     fn rising(z: f32, created: Instant) -> MovementRequest {
         MovementRequest {
             mode: MovementMode::Fall,
+            heading: HeadingUpdate::Rate,
             session_id: 7,
             position: Position {
                 z,
@@ -763,6 +801,7 @@ mod tests {
     fn forward(x: f32, created: Instant) -> MovementRequest {
         MovementRequest {
             mode: MovementMode::Forward,
+            heading: HeadingUpdate::Rate,
             session_id: 7,
             position: Position {
                 x,
@@ -849,6 +888,7 @@ mod tests {
         let now = start + Duration::from_millis(100);
         let mut request = MovementRequest {
             mode: MovementMode::Forward,
+            heading: HeadingUpdate::Rate,
             session_id: 3,
             position: Position {
                 x: 1.0,
@@ -867,6 +907,7 @@ mod tests {
         let mut guard = MovementGuard::new(3, Position::default(), start);
         let mut request = MovementRequest {
             mode: MovementMode::Forward,
+            heading: HeadingUpdate::Rate,
             session_id: 3,
             position: Position {
                 x: 1.0,
@@ -905,6 +946,7 @@ mod tests {
         let now = start + Duration::from_millis(200);
         let mut request = MovementRequest {
             mode: MovementMode::Forward,
+            heading: HeadingUpdate::Rate,
             session_id: 1,
             position: Position {
                 x: 0.51,
@@ -943,6 +985,7 @@ mod tests {
             .accept(
                 &MovementRequest {
                     mode: MovementMode::Forward,
+                    heading: HeadingUpdate::Rate,
                     session_id: 1,
                     position: Position {
                         x: 10.0,

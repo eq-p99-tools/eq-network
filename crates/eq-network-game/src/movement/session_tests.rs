@@ -436,15 +436,115 @@ fn grant_grounded_diagonal(session: &mut MotionSession, start: Instant) {
 }
 
 fn request(created: Instant, x: f32) -> MovementRequest {
-    MovementRequest {
-        mode: MovementMode::Forward,
-        session_id: 11,
-        position: Position {
+    MovementRequest::new(
+        MovementMode::Forward,
+        11,
+        Position {
             x,
             ..Position::default()
         },
         created,
+    )
+}
+
+#[test]
+fn titanium_heading_snapshots_keep_absolute_heading_and_ordinary_cadence() {
+    let start = Instant::now();
+    let at = |ms| start + Duration::from_millis(ms);
+    let mut session =
+        setup(start)
+            .with_heading_snapshots(true)
+            .with_gate(Some(UpdateGate::Changed {
+                spacing: Duration::from_millis(280),
+            }));
+    let mut half_turn = request(at(300), 0.0);
+    half_turn.position.heading = 256.0;
+    assert!(session
+        .send_move(&half_turn, at(300), |_| panic!(
+            "unrepresentable paced turn"
+        ))
+        .is_err());
+    half_turn.heading = HeadingUpdate::Snapshot;
+    session
+        .send_move(&half_turn, at(300), |packet| {
+            assert_eq!(word(&packet.body, 20) & 0x000f_ffff, 0);
+            assert_eq!(word(&packet.body, 32) & 0xfff, 1024);
+            assert_eq!(word(&packet.body, 12), 0);
+            assert_eq!(word(&packet.body, 16), 0);
+            Ok(())
+        })
+        .unwrap();
+    assert!(!session.stop_pending());
+
+    for (ms, x, heading) in [(400, 0.5, 0.0), (500, 0.75, 384.0)] {
+        let now = at(ms);
+        let mut step = request(now, x);
+        step.heading = HeadingUpdate::Snapshot;
+        step.position.heading = heading;
+        session
+            .send_move(&step, now, |_| panic!("heading bypassed position cadence"))
+            .unwrap();
     }
+    assert!(!session
+        .tick(at(579), |_| panic!("early position update"))
+        .unwrap());
+    assert!(session
+        .tick(at(580), |packet| {
+            assert_eq!(word(&packet.body, 32) & 0xfff, 1536);
+            assert_eq!(word(&packet.body, 20) >> 10 & 0x3ff, 0);
+            assert_ne!(word(&packet.body, 20) & 0x3ff, 0);
+            assert_eq!(word(&packet.body, 24), 0.75_f32.to_bits());
+            Ok(())
+        })
+        .unwrap());
+}
+
+#[test]
+fn heading_snapshot_requires_titanium_and_preserves_movement_guards() {
+    let start = Instant::now();
+    let at = |ms| start + Duration::from_millis(ms);
+    let mut snapshot = request(at(100), 0.0);
+    snapshot.position.heading = 256.0;
+    snapshot.heading = HeadingUpdate::Snapshot;
+    let mut session = setup(start);
+    assert!(session
+        .send_move(&snapshot, at(100), |_| panic!("snapshot not enabled"))
+        .is_err());
+    let mut session = session.with_heading_snapshots(true);
+    assert!(!session.is_passive(&snapshot));
+    for invalid in [
+        MovementRequest {
+            created: at(40),
+            ..snapshot.clone()
+        },
+        MovementRequest {
+            session_id: 12,
+            ..snapshot.clone()
+        },
+        MovementRequest {
+            position: Position {
+                x: 2.0,
+                ..snapshot.position
+            },
+            ..snapshot.clone()
+        },
+        MovementRequest {
+            mode: MovementMode::GroundedDiagonal(super::super::GroundedDiagonal {
+                along: super::super::DiagonalAlong::Run,
+                side: super::super::StrafeSide::Right,
+            }),
+            ..snapshot.clone()
+        },
+    ] {
+        assert!(session
+            .send_move(&invalid, at(100), |_| panic!("invalid snapshot"))
+            .is_err());
+        assert_eq!(session.position(), Position::default());
+    }
+    session.withdraw();
+    assert!(session
+        .send_move(&snapshot, at(100), |_| panic!("withdrawn heading input"))
+        .is_err());
 }
 fn word(body: &[u8], offset: usize) -> u32 {
     u32::from_le_bytes(body[offset..offset + 4].try_into().unwrap())

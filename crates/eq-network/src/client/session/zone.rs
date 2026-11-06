@@ -989,6 +989,7 @@ mod tests {
             },
             ClientCommand::Move(MovementRequest {
                 mode: MovementMode::Forward,
+                heading: eq_network_game::movement::HeadingUpdate::Rate,
                 session_id,
                 position,
                 created,

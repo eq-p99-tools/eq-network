@@ -1,7 +1,8 @@
 //! Zone-scoped movement submission with caller-supplied calibration.
 use super::{
     gate::{Flags, UpdateGate},
-    DiagonalRates, MovementGuard, MovementMode, MovementRequest, PositionPacket, JUMP_OPCODE,
+    DiagonalRates, HeadingUpdate, MovementGuard, MovementMode, MovementRequest, PositionPacket,
+    JUMP_OPCODE,
 };
 use crate::{command::EncodedCommand, world::Position};
 use anyhow::{ensure, Result};
@@ -137,6 +138,7 @@ impl MotionCalibration {
 
 /// Position, packet counter, and input expiry for one zone admission.
 #[derive(Debug)]
+#[allow(clippy::struct_excessive_bools)] // Independent session permissions and motion state.
 pub struct MotionSession {
     guard: MovementGuard,
     spawn_id: u16,
@@ -148,6 +150,7 @@ pub struct MotionSession {
     moving: bool,
     suspended: bool,
     falls: bool,
+    heading_snapshots: bool,
     /// How the client generation gates its own update, where it is read;
     /// see [`Self::with_gate`].
     gate: Option<UpdateGate>,
@@ -221,6 +224,13 @@ impl PreparedMove<'_> {
 }
 
 impl MotionSession {
+    /// Allows absolute mouse heading snapshots for a Titanium position stream.
+    #[must_use]
+    pub const fn with_heading_snapshots(mut self, enabled: bool) -> Self {
+        self.heading_snapshots = enabled;
+        self
+    }
+
     /// Whether movement or its real stop still awaits local submission.
     /// Stationary heartbeat repeats do not hold an action behind a stop.
     /// This only observes this movement owner; it never forces an update or
@@ -405,6 +415,7 @@ impl MotionSession {
             moving: false,
             suspended: false,
             falls: false,
+            heading_snapshots: false,
             gate: None,
             held: None,
             last_update: None,
@@ -612,6 +623,15 @@ impl MotionSession {
             MovementMode::GroundedDiagonal(value) => Some(value),
             _ => None,
         };
+        let snapshot = request.heading == HeadingUpdate::Snapshot;
+        ensure!(
+            !snapshot || self.heading_snapshots && diagonal.is_none(),
+            "absolute heading snapshots require Titanium cardinal movement"
+        );
+        ensure!(
+            !snapshot || (0.0..512.0).contains(&request.position.heading),
+            "heading snapshot is outside the canonical turn"
+        );
         let along = diagonal.map_or(request.mode, |diagonal| diagonal.along.mode());
         let lateral_rate = if let Some(diagonal) = diagonal {
             ensure!(
@@ -687,7 +707,12 @@ impl MotionSession {
             0.0,
         ];
         let moving = displacement[..2].iter().any(|d| d.abs() > f32::EPSILON);
-        let turn = heading_velocity(self.position.heading, request.position.heading, elapsed)?;
+        // Absolute heading and continuing yaw are independent fields.
+        let turn = if snapshot {
+            0
+        } else {
+            heading_velocity(self.position.heading, request.position.heading, elapsed)?
+        };
         let sample = PositionPacket {
             spawn_id: self.spawn_id,
             sequence: self.sequence,
@@ -908,10 +933,9 @@ mod tests;
 /// The shortest-arc turn rate in heading units a second, cut toward zero.
 /// Titanium's program sends its turn rate per 50 ms tick times 20, cut to
 /// a whole number whatever the mode, so a full keyboard turn of 12 a tick
-/// sends 240 (the Titanium client update read of 10-31, and sitting 7); the
-/// cut is read from its conversion routine's shape only. Its mouse-turn path
-/// is unread, so a turn faster than the 10-bit field holds is refused, as
-/// before.
+/// sends 240 (the Titanium client update read of 10-31, and sitting 7).
+/// This conversion applies to paced turns. A heading snapshot has no
+/// continuing yaw to reconstruct from elapsed packet time.
 #[allow(clippy::cast_possible_truncation)] // Cut and checked against the signed wire range.
 fn heading_velocity(from: f32, to: f32, elapsed: f32) -> Result<i16> {
     let difference = (to - from + 256.0).rem_euclid(512.0) - 256.0;

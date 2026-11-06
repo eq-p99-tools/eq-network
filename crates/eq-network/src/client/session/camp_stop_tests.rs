@@ -94,6 +94,7 @@ fn request(created: Instant, position: Position) -> ClientCommand {
     ClientCommand::Move(MovementRequest {
         session_id: 5,
         mode: MovementMode::Forward,
+        heading: eq_network_game::movement::HeadingUpdate::Rate,
         position,
         created,
     })

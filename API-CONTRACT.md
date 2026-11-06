@@ -613,6 +613,15 @@ Dropping it or failing the callback leaves motion state untouched; external
 callback effects cannot be rolled back. No public observer/transaction API is
 introduced, and the private plan certifies no external body or scene identity.
 
+### Absolute Titanium heading samples
+
+`MovementRequest` has a typed `heading` field. Existing callers using struct
+literals can set `HeadingUpdate::Rate` or use `MovementRequest::new` to keep the
+existing elapsed-time turn check. `HeadingUpdate::Snapshot` carries a completed
+mouse turn as an absolute heading with a zero continuing-turn hint. The zone
+owner enables it for Titanium. It shares the existing packet cadence, admission,
+position and calibration checks and cannot use the grounded diagonal budget.
+
 ## Carried combines and world containers
 
 **Breaking:** `Capability::WorldContainers` is a new variant and

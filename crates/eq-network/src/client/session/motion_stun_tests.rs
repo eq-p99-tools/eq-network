@@ -48,6 +48,7 @@ fn request(created: Instant, position: Position) -> MovementRequest {
     MovementRequest {
         session_id: 12,
         mode: MovementMode::Fall,
+        heading: eq_network_game::movement::HeadingUpdate::Rate,
         created,
         position,
     }
