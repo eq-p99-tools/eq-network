@@ -17,6 +17,23 @@ submission or refusal. Existing received damage, inventory and chat events
 carry the outcomes. The server chooses whether and from which stack to consume
 a projectile. Hosts should issue a fresh intent for each explicit input.
 
+## Spellbook edits and Bard song stop
+
+An unanswered book edit emits `BookActionStatus::Unconfirmed` once after
+30 seconds. Match this variant separately from `Rejected` and `Cancelled`.
+The worker keeps the edit's ownership and exact reply match until it receives
+settlement or the admission is replaced. An unanswered scribe retains the
+inventory hold. A mode-2 clear with a valid spell ID must name the old gem
+spell. A mode-2 empty sentinel reports a slot clear.
+
+Titanium EQEmu offers `Capability::StoppingSongs` and handles an explicit
+`ClientCommand::StopSong { session_id, created }` for the current Bard.
+The wire request is empty `OP_ManaChange` (`0x4839`), as implemented by the
+[server handler](https://github.com/EQEmu/EQEmu/blob/master/zone/client_packet.cpp)
+and [Titanium opcode table](https://github.com/EQEmu/EQEmu/blob/master/utils/patches/patch_Titanium.conf).
+The request does not settle a cast or remove buffs. The session leaves a
+tracked item cast alone. The P99 policy keeps song stop gated.
+
 ## P99 readable items
 
 `GameCommand::ReadItem { session_id, revision, slot, created }` now binds the

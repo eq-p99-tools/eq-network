@@ -45,9 +45,16 @@ enum Phase {
     },
 }
 
+#[derive(Clone, Copy)]
+pub(super) enum Source {
+    Gem(u8),
+    Item,
+}
+
 #[derive(Default)]
 pub(super) struct CastGuard {
     phase: Option<Phase>,
+    source: Option<Source>,
 }
 
 impl CastGuard {
@@ -72,7 +79,8 @@ impl CastGuard {
     }
 
     /// Records a request only after successful transport submission.
-    pub fn submitted(&mut self, spell: u32, now: Instant) {
+    pub fn submitted(&mut self, spell: u32, source: Option<Source>, now: Instant) {
+        self.source = source;
         self.phase = Some(Phase::Awaiting {
             spell,
             submitted: now,
@@ -113,7 +121,7 @@ impl CastGuard {
 
     /// Clears state when this character dies or the owning zone session ends.
     pub fn clear(&mut self) {
-        self.phase = None;
+        *self = Self::default();
     }
 
     /// Only own-caster starts/interruptions and matching result notifications affect us.
@@ -135,9 +143,12 @@ impl CastGuard {
             SpellUpdate::Mana {
                 spell_id,
                 keep_casting: false,
+            } if self.answers(spell_id) => {
+                self.clear();
             }
-            | SpellUpdate::BarRefresh { spell_id, .. }
-                if self.answers(spell_id) =>
+            SpellUpdate::BarRefresh { slot, spell_id, .. }
+                if self.answers(spell_id)
+                    && !matches!(self.source, Some(Source::Gem(gem)) if slot != u32::from(gem)) =>
             {
                 self.clear();
             }
@@ -150,9 +161,40 @@ impl CastGuard {
 #[derive(Default)]
 pub(super) struct Casting {
     guard: CastGuard,
+    song_stop: bool,
 }
 
+const BARD_CLASS: u32 = 8;
+
 impl Casting {
+    pub(super) fn with_song_stop() -> Self {
+        Self {
+            song_stop: true,
+            ..Self::default()
+        }
+    }
+
+    /// The empty request can interrupt an item too, so protect a tracked
+    /// item use. The server owns song pulses and the resulting interruption.
+    fn stop_song(&self, world: &World, out: &mut Out<'_, '_>) -> Result<()> {
+        if !self.song_stop
+            || !world
+                .player
+                .as_ref()
+                .is_some_and(|p| p.class == Some(BARD_CLASS))
+        {
+            return out
+                .log
+                .diagnostic("Stopping songs is unavailable for this character".into());
+        }
+        if matches!(self.guard.source, Some(Source::Item)) {
+            return out
+                .log
+                .diagnostic("Wait for the item cast to finish before stopping a song".into());
+        }
+        out.request(&Request::StopSong)
+    }
+
     /// Casts a memorized spell at a target the player can see.
     fn cast(
         &mut self,
@@ -177,7 +219,7 @@ impl Casting {
             match out.encode_command(command) {
                 Ok(packet) => {
                     out.send(&packet)?;
-                    return self.submitted(*spell_id, world, out);
+                    return self.submitted(*spell_id, Source::Gem(*gem), world, out);
                 }
                 Err(error) => (
                     error.to_string(),
@@ -219,7 +261,7 @@ impl Casting {
         let error = match prepared {
             Ok((spell_id, packet)) => {
                 out.send(&packet)?;
-                self.submitted(spell_id, world, out)?;
+                self.submitted(spell_id, Source::Item, world, out)?;
                 None
             }
             Err(error) => Some(error.to_string()),
@@ -232,8 +274,14 @@ impl Casting {
     }
 
     /// Holds casting until the server answers the request.
-    fn submitted(&mut self, spell_id: u32, world: &World, out: &mut Out<'_, '_>) -> Result<()> {
-        self.guard.submitted(spell_id, Instant::now());
+    fn submitted(
+        &mut self,
+        spell_id: u32,
+        source: Source,
+        world: &World,
+        out: &mut Out<'_, '_>,
+    ) -> Result<()> {
+        self.guard.submitted(spell_id, Some(source), Instant::now());
         out.log.send(ClientEvent::World(WorldEvent::CastPending {
             session_id: world.session_id,
             spell_id: Some(spell_id),
@@ -244,7 +292,11 @@ impl Casting {
 impl Feature for Casting {
     fn capabilities(&self) -> Vec<crate::world::Capability> {
         use crate::world::Capability;
-        vec![Capability::Casting]
+        if self.song_stop {
+            vec![Capability::Casting, Capability::StoppingSongs]
+        } else {
+            vec![Capability::Casting]
+        }
     }
 
     fn holds(&self, _world: &World, _now: Instant) -> Vec<(Resource, &'static str)> {
@@ -257,6 +309,7 @@ impl Feature for Casting {
             ClientCommand::CastSpell { .. }
                 | ClientCommand::UseItem(_)
                 | ClientCommand::DropInvisibility { .. }
+                | ClientCommand::StopSong { .. }
         )
     }
 
@@ -267,6 +320,7 @@ impl Feature for Casting {
         out: &mut Out<'_, '_>,
     ) -> Result<()> {
         match command {
+            ClientCommand::StopSong { .. } => self.stop_song(world, out),
             ClientCommand::UseItem(request) => self.use_item(request, world, out),
             ClientCommand::DropInvisibility { steps, .. } => drop_invisibility(steps, out),
             _ => self.cast(command, world, out),
@@ -341,6 +395,92 @@ fn drop_invisibility(
 mod tests {
     use super::super::feature::testing;
     use super::*;
+
+    #[test]
+    fn stopping_a_song_leaves_casting_held_until_server_evidence() {
+        let mut casting = Casting::with_song_stop();
+        let mut world = World::new(5);
+        world.own_spawn = Some(7);
+        let mut player = testing::player(7);
+        player.class = Some(BARD_CLASS);
+        player.memorized_spells[2] = Some(202);
+        world.player.admit(player);
+        let now = Instant::now();
+        let cast = ClientCommand::CastSpell {
+            session_id: 5,
+            gem: 2,
+            spell_id: 202,
+            target_id: 7,
+            created: now,
+        };
+        let stop = ClientCommand::StopSong {
+            session_id: 5,
+            created: now,
+        };
+        assert!(casting.owns(&stop));
+        assert!(!casting.guard.blocks(&stop));
+
+        testing::run(|out| casting.handle(&cast, &mut world, out))
+            .result
+            .unwrap();
+        let output = testing::run(|out| casting.handle(&stop, &mut world, out));
+        output.result.unwrap();
+        assert_eq!(
+            output.sent,
+            [eq_network_game::command::EncodedCommand {
+                opcode: 0x4839,
+                body: Vec::new(),
+            }]
+        );
+        assert!(output.events.is_empty());
+        assert_eq!(casting.guard.pending(), Some(202));
+
+        let refresh = |slot| {
+            Message::Event(WorldEvent::Spell(SpellUpdate::BarRefresh {
+                slot,
+                spell_id: 202,
+                reduction_ms: 0,
+            }))
+        };
+        testing::run(|out| casting.observe(&refresh(1), &mut world, out))
+            .result
+            .unwrap();
+        assert_eq!(casting.guard.pending(), Some(202));
+
+        let interrupted = Message::Event(WorldEvent::Spell(SpellUpdate::Interrupted {
+            caster_id: 7,
+            message_id: 1,
+            caster_name: None,
+        }));
+        testing::run(|out| casting.observe(&interrupted, &mut world, out))
+            .result
+            .unwrap();
+        assert!(!casting.guard.active());
+
+        // An already pulsing song need not be an active cast.
+        let output = testing::run(|out| casting.handle(&stop, &mut world, out));
+        output.result.unwrap();
+        assert_eq!(output.sent.len(), 1);
+
+        // A manual stop cannot interrupt a tracked item use.
+        casting.guard.submitted(202, Some(Source::Item), now);
+        let output = testing::run(|out| casting.handle(&stop, &mut world, out));
+        output.result.unwrap();
+        assert!(output.sent.is_empty());
+        assert!(casting.guard.active());
+
+        world.player.admit(testing::player(7));
+        let output = testing::run(|out| casting.handle(&stop, &mut world, out));
+        output.result.unwrap();
+        assert!(output.sent.is_empty());
+
+        // The requested gem's refresh still completes the normal cast path.
+        casting.guard.submitted(202, Some(Source::Gem(2)), now);
+        testing::run(|out| casting.observe(&refresh(2), &mut world, out))
+            .result
+            .unwrap();
+        assert!(!casting.guard.active());
+    }
 
     #[test]
     fn a_memorized_spell_goes_out_and_holds_casting_until_answered() {
@@ -429,7 +569,7 @@ mod tests {
             created: Instant::now(),
         };
         let mut guard = CastGuard::default();
-        guard.submitted(42, Instant::now());
+        guard.submitted(42, None, Instant::now());
         assert!(matches!(rejected(&request, "Target unavailable"),
             Some(crate::world::WorldEvent::CastRejected { session_id: 12, spell_id: 73, reason })
             if reason == "Target unavailable"));
@@ -458,7 +598,7 @@ mod tests {
         });
         let mut guard = CastGuard::default();
         assert!(!guard.blocks(&request));
-        guard.submitted(73, now);
+        guard.submitted(73, None, now);
         assert!(guard.blocks(&request));
         assert!(!guard.blocks(&ClientCommand::SetPosture {
             session_id: 12,
@@ -489,14 +629,14 @@ mod tests {
     fn submission_blocks_until_acknowledged_and_only_silent_requests_expire() {
         let now = Instant::now();
         let mut guard = CastGuard::default();
-        guard.submitted(73, now);
+        guard.submitted(73, None, now);
         assert!(guard.active());
         assert_eq!(guard.pending(), Some(73));
         assert!(!guard.expire(now + Duration::from_millis(4999)));
         assert!(guard.expire(now + ACK_TIMEOUT));
         assert!(!guard.active());
         assert!(!guard.expire(now + ACK_TIMEOUT));
-        guard.submitted(73, now);
+        guard.submitted(73, None, now);
         guard.observe(12, &begin(13));
         assert_eq!(guard.pending(), Some(73));
         guard.observe(12, &begin(12));
@@ -528,7 +668,7 @@ mod tests {
                 reduction_ms: 0,
             },
         ] {
-            guard.submitted(73, Instant::now());
+            guard.submitted(73, None, Instant::now());
             guard.observe(12, &update);
             assert!(!guard.active());
             assert_eq!(guard.pending(), None);
@@ -594,7 +734,7 @@ mod tests {
         };
         for end in [73, 2935] {
             let mut guard = CastGuard::default();
-            guard.submitted(73, Instant::now());
+            guard.submitted(73, None, Instant::now());
             guard.observe(12, &begun_as(2935));
             guard.observe(12, &ended(74));
             assert!(guard.active());

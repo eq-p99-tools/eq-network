@@ -11,6 +11,12 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   and `Capability::RangedCombat`. The session checks the target revision,
   loadout, reach and unmodified weapon delay. Damage and ammunition changes
   come through the existing server events.
+- `ClientCommand::StopSong` is offered by Titanium EQEmu through
+  `Capability::StoppingSongs`. The worker checks Bard class and current
+  admission, and receives cast results through the ordinary spell updates.
+- `BookActionStatus::Unconfirmed` reports an unanswered book edit once.
+  Forgetting also holds the book until its matching gem clear arrives.
+  Track the old spell in named clears to protect replacement gems.
 
 - Default-off P99 list presence replies (`ClientConfig::answer_list_polls`,
   `ClientCommand::AnswerListPolls`, `Capability::AnsweringListPolls`). Runtime

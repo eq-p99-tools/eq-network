@@ -6,6 +6,7 @@ use std::time::{Duration, Instant};
 
 #[derive(Clone, Copy)]
 enum Edit {
+    Forget(u8, u32),
     Delete(u16),
     Swap(u16, u16),
     Slot { slot: u32, spell_id: u32, mode: u32 },
@@ -13,7 +14,22 @@ enum Edit {
 
 /// A submitted edit is never retried or released by an unrelated spell notification.
 #[derive(Default)]
-pub(super) struct BookEdits(Option<(Edit, Instant)>);
+pub(super) struct BookEdits(Option<Outstanding>);
+
+#[derive(Clone, Copy)]
+struct Outstanding {
+    edit: Edit,
+    notify_at: Option<Instant>,
+}
+
+impl Outstanding {
+    fn new(edit: Edit, now: Instant) -> Self {
+        Self {
+            edit,
+            notify_at: Some(now + Duration::from_secs(30)),
+        }
+    }
+}
 
 impl BookEdits {
     /// Whether an edit awaits its result; the shared action table then holds the book.
@@ -32,18 +48,20 @@ impl BookEdits {
     /// Whether a submitted scribe still awaits its result; the server consumes the
     /// cursor scroll when it answers.
     pub fn scribing(&self) -> bool {
-        matches!(self.0, Some((Edit::Slot { mode: 0, .. }, _)))
+        self.0
+            .is_some_and(|pending| matches!(pending.edit, Edit::Slot { mode: 0, .. }))
     }
 
     /// Called only after an edit has been validated and handed to transport.
     pub fn sent(&mut self, command: &ClientCommand, now: Instant) {
         let edit = match command {
+            ClientCommand::ForgetSpell { gem, spell_id, .. } => Edit::Forget(*gem, *spell_id),
             ClientCommand::DeleteSpell { slot, .. } => Edit::Delete(*slot),
             ClientCommand::SwapSpell { from, to, .. } => Edit::Swap(*from, *to),
             _ => return,
         };
         // Keep the first request and its deadline even if a caller reports it twice.
-        self.0.get_or_insert((edit, now));
+        self.0.get_or_insert(Outstanding::new(edit, now));
     }
 
     /// Tracks a prepared scribe/memorize request only after successful submission.
@@ -52,7 +70,7 @@ impl BookEdits {
             BookIntent::Memorize { gem, spell_id } => (u32::from(gem), spell_id, 1),
             BookIntent::Scribe { slot, spell_id, .. } => (u32::from(slot), spell_id, 0),
         };
-        self.0.get_or_insert((
+        self.0.get_or_insert(Outstanding::new(
             Edit::Slot {
                 slot,
                 spell_id,
@@ -64,22 +82,18 @@ impl BookEdits {
 
     /// Successful and failed deletion replies both resolve their exact outstanding slot.
     pub fn observe(&mut self, update: &SpellUpdate) -> Option<BookActionStatus> {
-        let matched = match (self.0, update) {
-            (Some((Edit::Delete(expected), _)), SpellUpdate::BookDeletion { slot, .. }) => {
+        let matched = match (self.0.map(|pending| pending.edit), update) {
+            (Some(Edit::Forget(gem, spell)), update) => update.clears_gem(u32::from(gem), spell),
+            (Some(Edit::Delete(expected)), SpellUpdate::BookDeletion { slot, .. }) => {
                 expected == *slot
             }
-            (Some((Edit::Swap(a, b), _)), SpellUpdate::BookSwap { from, to }) => {
-                a == *from && b == *to
-            }
+            (Some(Edit::Swap(a, b)), SpellUpdate::BookSwap { from, to }) => a == *from && b == *to,
             (
-                Some((
-                    Edit::Slot {
-                        slot,
-                        spell_id,
-                        mode,
-                    },
-                    _,
-                )),
+                Some(Edit::Slot {
+                    slot,
+                    spell_id,
+                    mode,
+                }),
                 SpellUpdate::Slot {
                     slot: received_slot,
                     spell_id: received_spell,
@@ -102,22 +116,13 @@ impl BookEdits {
         }
     }
 
-    /// Ends an edit the server never answered, reporting it refused; it is never
-    /// retried.
-    pub fn expire(&mut self, now: Instant) -> Option<BookActionStatus> {
-        if !self.expired(now) {
-            return None;
-        }
-        self.0 = None;
-        Some(BookActionStatus::Rejected(
-            "The server did not accept the spellbook change".into(),
-        ))
-    }
-
-    /// Whether an edit has waited too long for its answer.
-    pub fn expired(&self, now: Instant) -> bool {
+    /// Reports silence once while keeping ownership and the exact late-reply match.
+    pub fn timeout(&mut self, now: Instant) -> Option<BookActionStatus> {
         self.0
-            .is_some_and(|(_, sent)| now.saturating_duration_since(sent) >= Duration::from_secs(30))
+            .as_mut()?
+            .notify_at
+            .take_if(|deadline| now >= *deadline)?;
+        Some(BookActionStatus::Unconfirmed)
     }
 }
 
@@ -170,8 +175,11 @@ mod tests {
             });
             guard.prepared_sent(&intent, now + Duration::from_secs(20));
             assert!(guard.blocks(&next));
-            assert!(!guard.expired(now + Duration::from_secs(29)));
-            assert!(guard.expired(now + Duration::from_secs(30)));
+            assert_eq!(guard.timeout(now + Duration::from_secs(29)), None);
+            assert_eq!(
+                guard.timeout(now + Duration::from_secs(30)),
+                Some(BookActionStatus::Unconfirmed)
+            );
             let result = guard.observe(&SpellUpdate::Slot {
                 slot: 2,
                 spell_id: 73,
@@ -187,7 +195,7 @@ mod tests {
                 None
             );
             assert!(!guard.blocks(&next));
-            assert!(!guard.expired(now + Duration::from_secs(31)));
+            assert_eq!(guard.timeout(now + Duration::from_secs(31)), None);
         }
     }
 
@@ -229,10 +237,13 @@ mod tests {
             mode: 1,
         });
         assert!(guard.blocks(&swap));
-        assert!(!guard.expired(now + Duration::from_secs(29)));
-        assert!(guard.expired(now + Duration::from_secs(30)));
+        assert_eq!(guard.timeout(now + Duration::from_secs(29)), None);
+        assert_eq!(
+            guard.timeout(now + Duration::from_secs(30)),
+            Some(BookActionStatus::Unconfirmed)
+        );
         let _ = guard.observe(&SpellUpdate::BookSwap { from: 3, to: 4 });
-        assert!(!guard.blocks(&swap) && !guard.expired(now + Duration::from_secs(31)));
+        assert!(!guard.blocks(&swap) && guard.timeout(now + Duration::from_secs(31)).is_none());
         for success in [false, true] {
             guard.sent(&delete, now);
             assert_eq!(
@@ -276,7 +287,7 @@ mod tests {
     }
 
     #[test]
-    fn an_unanswered_edit_ends_as_refused_without_retry() {
+    fn an_unanswered_edit_retains_ownership_until_its_late_reply() {
         let now = Instant::now();
         let mut edits = BookEdits::default();
         edits.sent(
@@ -288,12 +299,20 @@ mod tests {
             },
             now,
         );
-        assert_eq!(edits.expire(now + Duration::from_secs(29)), None);
-        assert!(matches!(
-            edits.expire(now + Duration::from_secs(30)),
-            Some(BookActionStatus::Rejected(_))
-        ));
+        assert_eq!(edits.timeout(now + Duration::from_secs(29)), None);
+        assert_eq!(
+            edits.timeout(now + Duration::from_secs(30)),
+            Some(BookActionStatus::Unconfirmed)
+        );
+        assert!(edits.outstanding());
+        assert_eq!(edits.timeout(now + Duration::from_secs(60)), None);
+        assert_eq!(
+            edits.observe(&SpellUpdate::BookDeletion {
+                slot: 3,
+                success: true
+            }),
+            Some(BookActionStatus::Confirmed)
+        );
         assert!(!edits.outstanding());
-        assert_eq!(edits.expire(now + Duration::from_secs(60)), None);
     }
 }

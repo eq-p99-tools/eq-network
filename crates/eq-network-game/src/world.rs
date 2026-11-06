@@ -570,12 +570,14 @@ pub enum Capability {
     GameplayDepartures,
     /// Firing a bow or throwing a weapon once at the current target.
     RangedCombat,
+    /// Explicitly stop a Bard song on this server.
+    StoppingSongs,
 }
 
 impl Capability {
     /// Every capability, in order: what a session offers when its server and
     /// client generation support everything.
-    pub const ALL: [Self; 48] = [
+    pub const ALL: [Self; 49] = [
         Self::Casting,
         Self::Spellbook,
         Self::Inventory,
@@ -624,6 +626,7 @@ impl Capability {
         Self::CancellingBuffs,
         Self::GameplayDepartures,
         Self::RangedCombat,
+        Self::StoppingSongs,
     ];
 }
 
@@ -2110,6 +2113,7 @@ mod tests {
             Capability::CancellingBuffs => 45,
             Capability::GameplayDepartures => 46,
             Capability::RangedCombat => 47,
+            Capability::StoppingSongs => 48,
         };
         for (index, capability) in Capability::ALL.into_iter().enumerate() {
             assert_eq!(place(capability), index, "{capability:?}");

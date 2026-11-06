@@ -1100,7 +1100,7 @@ impl ServerType for EqEmu {
     }
 
     fn casting(&self, _setup: &Setup<'_>) -> Provided {
-        offer(shared::casting())
+        offer(Box::new(Casting::with_song_stop()))
     }
 
     fn spellbook(&self, _setup: &Setup<'_>) -> Provided {
@@ -1803,6 +1803,21 @@ mod tests {
                     ));
                 }
             }
+        }
+    }
+
+    #[test]
+    fn only_eqemu_offers_the_bard_stop_request() {
+        for protocol in [
+            ServerProtocol::Project1999,
+            ServerProtocol::EqEmu,
+            ServerProtocol::Quarm,
+            ServerProtocol::Takp,
+        ] {
+            assert_eq!(
+                offers(server_type(protocol)).contains(&Capability::StoppingSongs),
+                protocol == ServerProtocol::EqEmu
+            );
         }
     }
 

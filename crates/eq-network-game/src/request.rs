@@ -339,6 +339,8 @@ pub enum Request {
         /// The skill selected by the loadout.
         kind: crate::combat::ranged::RangedKind,
     },
+    /// Ask the server to stop the current Bard song.
+    StopSong,
     /// The notice that goes before the auto-attack toggle, where the client
     /// generation sends one.
     AttackNotice {
@@ -447,6 +449,7 @@ pub fn titanium(request: &Request, sender: Sender<'_>) -> Result<EncodedCommand>
         | Request::DropInvisibility(_)
         | Request::FeignDeathPosture
         | Request::BledOut { .. } => anyhow::bail!("the Titanium client cannot send {request:?}"),
+        Request::StopSong => spells::titanium_stop_song(),
         Request::Memorize { gem, spell_id } => spells::titanium_memorize(*gem, *spell_id),
         Request::Forget { gem, spell_id } => spells::titanium_forget(*gem, *spell_id),
         Request::Scribe { slot, spell_id } => spells::titanium_scribe(*slot, *spell_id),

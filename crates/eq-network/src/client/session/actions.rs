@@ -154,6 +154,7 @@ pub(super) fn needs(command: &ClientCommand) -> &'static [Resource] {
         | ClientCommand::EnvironmentalDamage { .. }
         // Nor does dropping invisibility, which goes before the cast.
         | ClientCommand::DropInvisibility { .. }
+        | ClientCommand::StopSong { .. }
         | ClientCommand::AutoAttack { .. }
         | ClientCommand::UseAbility { .. }
         | ClientCommand::SelectTarget { .. }
@@ -391,6 +392,7 @@ fn refusal(command: &ClientCommand, reason: &str) -> Option<WorldEvent> {
         | ClientCommand::Jump { .. }
         | ClientCommand::EnvironmentalDamage { .. }
         | ClientCommand::DropInvisibility { .. }
+        | ClientCommand::StopSong { .. }
         | ClientCommand::WhoAll { .. }
         | ClientCommand::ConfigureMotion { .. }
         | ClientCommand::SpeedInputs { .. }
@@ -642,7 +644,7 @@ mod tests {
         assert_eq!(idle.conflict(&memorize()), None);
 
         let mut guard = CastGuard::default();
-        guard.submitted(42, Instant::now());
+        guard.submitted(42, None, Instant::now());
         let casting = Held::casting(&guard);
         assert!(casting.conflict(&cast()).is_some());
         assert!(casting.conflict(&memorize()).is_some());
@@ -682,7 +684,7 @@ mod tests {
     #[test]
     fn items_move_during_a_cast_only_from_the_cursor() {
         let mut guard = CastGuard::default();
-        guard.submitted(42, Instant::now());
+        guard.submitted(42, None, Instant::now());
         let casting = Held::casting(&guard);
         // Worn, carried, in a bag, in a bag on the cursor, banked, and in a
         // world container.

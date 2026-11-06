@@ -180,6 +180,13 @@ pub enum GameCommand {
     },
     /// Cancel an explicit beneficial buff, with current provider classification.
     CancelBuff(crate::buffs::cancel::Request),
+    /// Request a manual stop of the current Bard song.
+    StopSong {
+        /// Current zone admission.
+        session_id: u64,
+        /// When the player requested the stop.
+        created: std::time::Instant,
+    },
     /// Cast a memorized spell; the server decides completion and resource use.
     CastSpell {
         /// Current zone admission.
@@ -772,6 +779,7 @@ impl GameCommand {
             Self::MemorizeSpell { .. } => "MemorizeSpell",
             Self::CancelBuff(_) => "CancelBuff",
             Self::CastSpell { .. } => "CastSpell",
+            Self::StopSong { .. } => "StopSong",
             Self::SetPosture { .. } => "SetPosture",
             Self::MoveInventory(..) => "MoveInventory",
             Self::DestroyItem(..) => "DestroyItem",
@@ -900,6 +908,7 @@ impl GameCommand {
             | Self::AnswerSacrifice { session_id, .. }
             | Self::AnswerTranslocate { session_id, .. }
             | Self::DropInvisibility { session_id, .. }
+            | Self::StopSong { session_id, .. }
             | Self::InviteToGroup { session_id, .. }
             | Self::FollowGroup { session_id, .. }
             | Self::DeclineGroup { session_id, .. }
@@ -954,6 +963,7 @@ impl GameCommand {
             }
             Self::CancelBuff(_) => Capability::CancellingBuffs,
             Self::RangedAttack(_) => Capability::RangedCombat,
+            Self::StopSong { .. } => Capability::StoppingSongs,
             Self::DeleteSpell { .. } => Capability::DeletingSpells,
             Self::SwapSpell { .. } => Capability::MovingSpells,
             // An item's click effect is a cast.
@@ -1098,6 +1108,7 @@ impl GameCommand {
             | Self::ForgetSpell { created, .. }
             | Self::MemorizeSpell { created, .. }
             | Self::CastSpell { created, .. }
+            | Self::StopSong { created, .. }
             | Self::SetPosture { created, .. }
             | Self::Consider { created, .. }
             | Self::Camp { created, .. }
@@ -1321,6 +1332,7 @@ pub fn encode(
         | GameCommand::AnswerSacrifice { .. }
         | GameCommand::AnswerTranslocate { .. }
         | GameCommand::DropInvisibility { .. }
+        | GameCommand::StopSong { .. }
         | GameCommand::InviteToGroup { .. }
         | GameCommand::FollowGroup { .. }
         | GameCommand::DeclineGroup { .. }
