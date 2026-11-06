@@ -650,11 +650,12 @@ products require separate authoritative inventory updates. See
 `ClientConfig::answer_list_polls` starts false. P99 offers
 `Capability::AnsweringListPolls`; the choice does not enable itself from that
 capability. `ClientCommand::AnswerListPolls { session_id, enabled }` changes
-future reply policy for the current connection, retaining it across zone
-crossings. A new connection starts from its config. A stale admission cannot
-change the choice. Disabling cancels an owed reply before its send, including
-while dead or zoning. Death, transfer, disconnect and a fresh zone owner drop
-any owed answer; re-enabling never answers an earlier poll.
+future reply policy for the current character, retaining it across zone
+crossings. Returning to character selection or reconnecting restores the
+configured startup value. A stale admission cannot change the choice.
+Disabling cancels an owed reply before its send, including while dead or
+zoning. Death, transfer, disconnect and a fresh zone owner drop any owed
+answer; re-enabling never answers an earlier poll.
 
 Mode 1 reports population and never joins a list automatically. Mode 2 alone
 schedules one presence reply when enabled and admitted. A newer list message

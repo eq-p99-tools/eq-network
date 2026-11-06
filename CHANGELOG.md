@@ -51,6 +51,9 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- Restore the configured P99 list reply preference on return to character
+  selection. A runtime choice follows the same character across zones.
+
 - **Breaking:** rename `buffs::cancel::Progress::ObservedRemoval` to
   `FadeObserved`. The event observes a matching received fade during the
   local wait; natural expiry can produce it too. No cancellation ACK or

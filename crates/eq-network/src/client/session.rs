@@ -87,29 +87,29 @@ pub(super) fn run(
     ensure!(!stop.is_cancelled(), "shutdown requested");
     let server = servers::server_type(config.protocol);
     let (credentials, ip) = server.wire().login(config, stop, commands, log)?;
-    let mut context = CharacterSession {
-        config: config.clone(),
+    let mut context = CharacterSession::new(
+        config,
         identity,
-        credentials: &credentials,
+        &credentials,
         stop,
-        duration: options.zone_duration,
+        options.zone_duration,
         commands,
-        sysinfo_reported_at: std::cell::Cell::new(0),
-        answer_list_polls: std::cell::Cell::new(config.answer_list_polls),
-    };
+    );
     let mut destination =
         server
             .wire()
             .world(&context, assets, &ip, (options.world_only, false), log)?;
     while let Some(mut next_zone) = destination {
         context.config.character.clone_from(&next_zone.character);
-        match server.zone(
+        let exit = server.zone(
             &context,
             &mut next_zone.shield,
             (&next_zone.host, next_zone.port),
             next_zone.checksums,
             log,
-        )? {
+        )?;
+        context.on_zone_exit(&exit);
+        match exit {
             ZoneExit::Stopped => return Ok(()),
             ZoneExit::World => {
                 destination = server
@@ -117,8 +117,6 @@ pub(super) fn run(
                     .world(&context, assets, &ip, (false, true), log)?;
             }
             ZoneExit::CharacterSelect => {
-                // Show the list again rather than re-entering the camped character.
-                context.config.character.clear();
                 destination = server
                     .wire()
                     .world(&context, assets, &ip, (false, false), log)?;
@@ -155,8 +153,38 @@ pub(in crate::client) struct CharacterSession<'a> {
     /// not report twice inside the week while the host is still saving the
     /// first report's time.
     pub(in crate::client) sysinfo_reported_at: std::cell::Cell<u64>,
-    /// Current opt-in, retained across zone crossings but not reconnections.
+    /// Current character's opt-in; zone crossings retain it.
     pub(in crate::client) answer_list_polls: std::cell::Cell<bool>,
+}
+
+impl<'a> CharacterSession<'a> {
+    fn new(
+        config: &ClientConfig,
+        identity: &'a ClientIdentity,
+        credentials: &'a Credentials,
+        stop: &'a CancellationToken,
+        duration: Option<Duration>,
+        commands: Option<&'a Receiver<ClientCommand>>,
+    ) -> Self {
+        Self {
+            config: config.clone(),
+            identity,
+            credentials,
+            stop,
+            duration,
+            commands,
+            sysinfo_reported_at: std::cell::Cell::new(0),
+            answer_list_polls: std::cell::Cell::new(config.answer_list_polls),
+        }
+    }
+
+    fn on_zone_exit(&mut self, exit: &ZoneExit) {
+        if matches!(exit, ZoneExit::CharacterSelect) {
+            // Show the list and forget the departing character's runtime choice.
+            self.config.character.clear();
+            self.answer_list_polls.set(self.config.answer_list_polls);
+        }
+    }
 }
 
 /// Where the world sends the character next.

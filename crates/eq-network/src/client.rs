@@ -200,11 +200,13 @@ pub struct ClientConfig {
     /// What the session eats and drinks on its own for a hungry or thirsty
     /// player; by default nothing with modifiers.
     pub auto_eat: eq_network_game::food::AutoEat,
-    /// Automatically answer server-driven P99 list presence polls. Disabled
-    /// by default. Replies wait 3..=60 seconds as application policy; that
+    /// Startup preference for automatic replies to server-driven P99 list
+    /// presence polls. Disabled by default. Returning to character selection
+    /// restores this preference. [`ClientCommand::AnswerListPolls`] changes
+    /// it for the current character across zones and cancels an owed reply
+    /// on disable. Replies wait 3..=60 seconds as application policy; that
     /// delay is not native timing or evidence of server acceptance. Joining
-    /// a list remains a separate player action. Runtime changes use
-    /// [`ClientCommand::AnswerListPolls`] and cancel an owed reply on disable.
+    /// a list remains a separate player action.
     pub answer_list_polls: bool,
     /// The host's machine, for the weekly report the official client
     /// makes to the world (see [`eq_network_game::sysinfo`]): the saved
