@@ -564,12 +564,16 @@ pub enum Capability {
     AnsweringListPolls,
     /// Explicit cancellation of an ordinary beneficial buff.
     CancellingBuffs,
+    /// Opt-in gameplay departures from the official client (movement and
+    /// memorization options), offered only where the server type permits
+    /// them; public servers never list it.
+    GameplayDepartures,
 }
 
 impl Capability {
     /// Every capability, in order: what a session offers when its server and
     /// client generation support everything.
-    pub const ALL: [Self; 46] = [
+    pub const ALL: [Self; 47] = [
         Self::Casting,
         Self::Spellbook,
         Self::Inventory,
@@ -616,6 +620,7 @@ impl Capability {
         Self::WorldContainers,
         Self::AnsweringListPolls,
         Self::CancellingBuffs,
+        Self::GameplayDepartures,
     ];
 }
 
@@ -2100,6 +2105,7 @@ mod tests {
             Capability::WorldContainers => 43,
             Capability::AnsweringListPolls => 44,
             Capability::CancellingBuffs => 45,
+            Capability::GameplayDepartures => 46,
         };
         for (index, capability) in Capability::ALL.into_iter().enumerate() {
             assert_eq!(place(capability), index, "{capability:?}");

@@ -24,6 +24,25 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `ClientCommand::ExitAtOnce` submits ordinary Logout without camp preparation
   and uses the existing reply/close lifecycle. Server acceptance and cleanup
   remain unverified on deployed public servers.
+- `Capability::GameplayDepartures` and `ServerType::offers_gameplay_departures`:
+  the explicit movement and memorization departures are offered only where the
+  server type permits them (stock `EQEmu`). `SetMovementOptions` and
+  `SetBookOptions` need that capability; P99, Quarm and TAKP zone sessions
+  refuse them ("Gameplay departures are not offered on this server"), so a
+  public server never sees movement or memorization faster or more permissive
+  than the official client's.
+- Explicit cursor-item destruction (`ClientCommand::DestroyItem`,
+  `Request::DestroyCursor`, `InventoryUpdate::DestroyCursor`) on the Titanium
+  inventory policy, and gated ordinary beneficial-buff cancellation
+  (`ClientCommand::CancelBuff`, `WorldEvent::BuffCancellation`,
+  `Capability::CancellingBuffs`, `EQEmu` only). See
+  `docs/cursor-destruction.md` and `docs/buff-cancellation.md`.
+- Grounded Titanium diagonal movement (`MovementMode::GroundedDiagonal`,
+  `movement::{GroundedDiagonal, DiagonalRates, DiagonalAlong, StrafeSide}`)
+  with its own settled heading budget, refused during jumps, and absolute
+  mouse heading snapshots (`movement::HeadingUpdate`). The lateral half-rate
+  and the snapshot path are inferred from recordings, not read from the
+  program.
 
 ### Changed
 
@@ -33,9 +52,18 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   establish live server receipt or movement acceptance.
 
 - **Breaking:** the exhaustive `ClientCommand` enum gains `AnswerListPolls`,
-  `SetMovementOptions`, `SetBookOptions` and `ExitAtOnce`. New local worker
+  `SetMovementOptions`, `SetBookOptions`, `ExitAtOnce`, `CancelBuff` and
+  `DestroyItem`; `WorldEvent` gains `BuffCancellation`; `Capability` gains
+  `AnsweringListPolls`, `CancellingBuffs` and `GameplayDepartures`
+  (`Capability::ALL` grows from 44 to 47); `MovementMode` gains
+  `GroundedDiagonal`; `MovementRequest` gains `heading: HeadingUpdate`, and
+  `MotionCalibration` and `WorldEvent::MotionState` gain `diagonal:
+  DiagonalRates`, so struct literals must supply them. New local worker
   feedback is `WorldEvent::MovementOptionsApplied` / `MovementOptionsRefused`;
   these are separate from server replies and speed-input grants.
+- Commands queued behind one that kills or transfers the player in the same
+  batch are refused ("The player is dead" / "The player is between zones")
+  instead of being dropped, as they were before the batch was drained eagerly.
 
 - Keep movement load conservatively bounded through known carried-stack splits
   and merges, including independently refused or partial moves. Placement stays
@@ -92,9 +120,10 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   retries retain their existing delay; disabling reconnect returns the typed
   terminal error. See [the contract](docs/session-termination.md).
 - Add read-only `Transport::termination()` and stop zone outbound work while
-  its completed application prefix drains. Distinguish a received camp logout
-  reply (`CampStatus::Camped`) from the unchanged local close deadline
-  (`CampStatus::ClosedWithoutReply`); the deadline does not confirm server cleanup.
+  its completed application prefix drains. **Breaking:** distinguish a received
+  camp logout reply (`CampStatus::Camped`) from the unchanged local close
+  deadline (the new `CampStatus::ClosedWithoutReply` variant); the deadline
+  does not confirm server cleanup.
 
 - **Breaking:** add `Capability::Meals` for consuming food/drink and choosing
   automatic meals, separate from inventory moves. Inventory owners offer it

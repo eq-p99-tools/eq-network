@@ -27,7 +27,7 @@ pub enum Poll {
     Presence,
 }
 
-/// Reads the fields consumed by the native receiver (`0x1000f100`).
+/// Reads the fields the native receiver consumes.
 ///
 /// Mode 1 needs a four-byte little-endian population after its mode byte;
 /// mode 2 consumes only its mode byte. Trailing bytes are ignored, matching
@@ -44,7 +44,7 @@ pub fn decode(body: &[u8]) -> Option<Poll> {
     }
 }
 
-/// The five-byte presence reply emitted by the native sender (`0x1000f620`).
+/// The five-byte presence reply the native sender emits.
 /// Sending it neither joins a list nor establishes server acceptance.
 #[must_use]
 pub fn present() -> EncodedCommand {

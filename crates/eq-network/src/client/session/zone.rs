@@ -22,6 +22,9 @@ struct Features {
     /// says.
     spell_landing_flag: Option<u8>,
     answers_list_polls: bool,
+    /// Whether the server type offers the explicit gameplay departures
+    /// (movement and memorization options); public servers never do.
+    gameplay_departures: bool,
 }
 
 impl Features {
@@ -52,6 +55,7 @@ impl Features {
             choices,
             spell_landing_flag: server.spell_landing_flag(),
             answers_list_polls: server.answers_list_polls(),
+            gameplay_departures: server.offers_gameplay_departures(),
         }
     }
 
@@ -66,6 +70,9 @@ impl Features {
             .collect();
         if self.answers_list_polls {
             capabilities.push(crate::world::Capability::AnsweringListPolls);
+        }
+        if self.gameplay_departures {
+            capabilities.push(crate::world::Capability::GameplayDepartures);
         }
         capabilities.sort_unstable();
         capabilities.dedup();
@@ -129,8 +136,20 @@ impl Features {
         if !world.ready() || world.lifecycle.blocks_motion() {
             return Some("The player is between zones");
         }
+        if !self.gameplay_departures && Self::is_departure(command) {
+            return Some("Gameplay departures are not offered on this server");
+        }
         actions::stale(command, world.session_id, now)
             .or_else(|| actions::Held::new(self.holds(world, now)).conflict(command))
+    }
+
+    /// Whether a command chooses an explicit departure from the official
+    /// client, which only a server type that offers them takes.
+    const fn is_departure(command: &ClientCommand) -> bool {
+        matches!(
+            command,
+            ClientCommand::SetMovementOptions { .. } | ClientCommand::SetBookOptions { .. }
+        )
     }
 
     /// Lets every feature hear a command, then has its owner carry it out;
@@ -329,18 +348,15 @@ pub(super) fn run(
         if world.lifecycle.blocks_motion() {
             // Death and zone transfers hold every command; each is refused,
             // so that whoever waits on one hears why.
-            let reason = if world.lifecycle.is_dead() {
-                "The player is dead"
-            } else {
-                "The player is between zones"
-            };
+            let reason = hold_reason(&world);
             for command in &commands {
                 actions::refuse(command, reason, log)?;
             }
         }
         if world.ready() && !world.lifecycle.blocks_motion() {
             // The command batch is bounded above to preserve receive/ACK work.
-            for command in &commands {
+            let mut pending = commands.iter();
+            while let Some(command) = pending.next() {
                 // Stale commands, and commands that need what an action in
                 // flight holds, are refused here and nowhere else.
                 let now = Instant::now();
@@ -370,8 +386,14 @@ pub(super) fn run(
                 if !handled {
                     unoffered(command, log)?;
                 }
-                // Commands wait while the player is dead or zoning.
+                // Death and zone transfers hold the rest of the batch; it was
+                // already taken from the queue, so each is refused here, so
+                // that whoever waits on one hears why.
                 if world.lifecycle.blocks_motion() {
+                    let reason = hold_reason(&world);
+                    for command in pending {
+                        actions::refuse(command, reason, log)?;
+                    }
                     break;
                 }
             }
@@ -627,6 +649,15 @@ const UNOFFERED: &str = "Not available on this server";
 /// its caller waits for, so the player hears why instead of nothing.
 fn unoffered(command: &ClientCommand, log: &mut Events<'_>) -> Result<()> {
     actions::refuse(command, UNOFFERED, log)
+}
+
+/// Why death or a zone transfer holds every command.
+fn hold_reason(world: &World) -> &'static str {
+    if world.lifecycle.is_dead() {
+        "The player is dead"
+    } else {
+        "The player is between zones"
+    }
 }
 
 /// Tells the host the zone admitted the player, as the features shape them,
@@ -1222,6 +1253,11 @@ mod tests {
                 assert!(servers.iter().any(|features| features.answers_list_polls));
                 continue;
             }
+            if Features::is_departure(&command) {
+                // Departures are gated by the server type before their owner.
+                assert!(servers.iter().any(|features| features.gameplay_departures));
+                continue;
+            }
             let needed = command
                 .capability()
                 .expect("a zone command needs a capability");
@@ -1322,6 +1358,64 @@ mod tests {
                 }
             ))
         ));
+    }
+
+    #[test]
+    fn public_servers_refuse_the_explicit_gameplay_departures() {
+        use super::super::feature::testing;
+        use crate::world::Capability;
+        let now = Instant::now();
+        let mut world = World::new(5);
+        world.player.admit(testing::player(7));
+        world.own_spawn = Some(7);
+        world.admitted = Some(now);
+        let options = ClientCommand::SetMovementOptions {
+            session_id: 5,
+            request_id: 7,
+            options: eq_network_game::movement::MovementOptions::default(),
+            created: now,
+        };
+        let book = ClientCommand::SetBookOptions {
+            session_id: 5,
+            memorize_without_sitting: true,
+        };
+        assert_eq!(options.capability(), Some(Capability::GameplayDepartures));
+        assert_eq!(book.capability(), Some(Capability::GameplayDepartures));
+        let features = |protocol| {
+            Features::new(
+                servers::server_type(protocol),
+                "Tester",
+                eq_network_game::food::AutoEat::default(),
+            )
+        };
+        let eqemu = features(crate::client::ServerProtocol::EqEmu);
+        assert_eq!(eqemu.refusal(&options, &world, now), None);
+        assert_eq!(eqemu.refusal(&book, &world, now), None);
+        for protocol in [
+            crate::client::ServerProtocol::Project1999,
+            crate::client::ServerProtocol::Quarm,
+            crate::client::ServerProtocol::Takp,
+        ] {
+            let public = features(protocol);
+            assert!(
+                !public
+                    .capabilities()
+                    .contains(&Capability::GameplayDepartures),
+                "{protocol:?}"
+            );
+            for command in [&options, &book] {
+                let reason = public
+                    .refusal(command, &world, now)
+                    .unwrap_or_else(|| panic!("{protocol:?} takes {command:?}"));
+                assert!(reason.contains("not offered"), "{protocol:?}: {reason}");
+            }
+            // Ordinary movement itself stays ungated there.
+            let jump = ClientCommand::Jump {
+                session_id: 5,
+                created: now,
+            };
+            assert_eq!(public.refusal(&jump, &world, now), None, "{protocol:?}");
+        }
     }
 
     #[test]
@@ -1505,6 +1599,7 @@ mod tests {
             choices: Vec::new(),
             spell_landing_flag: None,
             answers_list_polls: false,
+            gameplay_departures: false,
         };
         let (world, outcome) = bleed_out(features);
         outcome.result.unwrap();
@@ -1571,6 +1666,7 @@ mod tests {
             choices: Vec::new(),
             spell_landing_flag: None,
             answers_list_polls: false,
+            gameplay_departures: false,
         };
         let mut world = World::new(5);
         world.admitted = Some(Instant::now());
@@ -1736,6 +1832,7 @@ mod tests {
             choices: Vec::new(),
             spell_landing_flag: None,
             answers_list_polls: false,
+            gameplay_departures: false,
         };
         let click = ClientCommand::ClickDoor {
             session_id: 5,
@@ -1844,7 +1941,9 @@ mod tests {
         assert!(p99.contains(&Capability::EnvironmentalDamage));
         assert!(p99.contains(&Capability::AnsweringListPolls));
         assert!(!eqemu.contains(&Capability::AnsweringListPolls));
-        assert_eq!(eqemu.len(), p99.len() + 15);
+        assert!(eqemu.contains(&Capability::GameplayDepartures));
+        assert!(!p99.contains(&Capability::GameplayDepartures));
+        assert_eq!(eqemu.len(), p99.len() + 16);
     }
 
     #[test]

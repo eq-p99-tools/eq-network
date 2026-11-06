@@ -667,6 +667,17 @@ Only diagnostic events are produced by this handler.
 
 ## Explicit session control options
 
+`Capability::GameplayDepartures` gates every explicit departure from the
+official client's behaviour. Only a server type whose
+`ServerType::offers_gameplay_departures` is true (stock `EQEmu`) offers it;
+`Capability::ALL` grows from 46 to 47. `SetMovementOptions` and
+`SetBookOptions` carry that capability, and a zone session that does not offer
+it refuses them with "Gameplay departures are not offered on this server"
+through the command's ordinary refusal event, before any owner sees them. A
+host greys the controls out there like any other unoffered command. Public
+servers (P99, Quarm, TAKP) therefore keep the official client's movement and
+memorization behaviour whatever the player chooses.
+
 `movement::MovementOptions` starts with all fields false. The admission-scoped
 `SetMovementOptions { session_id, request_id, options, created }` command keeps ordinary movement
 unchanged when off. `walk_while_stunned` permits fresh movement input during a

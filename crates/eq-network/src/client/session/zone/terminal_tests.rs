@@ -267,6 +267,7 @@ fn only_the_matching_latched_send_refusal_is_deferred() {
             choices: Vec::new(),
             spell_landing_flag: None,
             answers_list_polls: false,
+            gameplay_departures: false,
         };
         let result = features.observe(
             &Message::LoggedOut,

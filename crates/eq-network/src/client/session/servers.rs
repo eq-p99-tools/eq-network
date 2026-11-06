@@ -230,6 +230,15 @@ pub(super) trait ServerType: Sync {
         false
     }
 
+    /// Whether this server policy offers the explicit gameplay departures
+    /// ([`crate::world::Capability::GameplayDepartures`]: movement and memorization
+    /// options the official client never takes). Public servers never do;
+    /// a departure there would be faster or more permissive than the
+    /// official client, so their zone session refuses the option commands.
+    fn offers_gameplay_departures(&self) -> bool {
+        false
+    }
+
     /// Runs the character's stay in a zone: the shared zone session, with
     /// the features this server type provides.
     ///
@@ -1046,6 +1055,12 @@ struct EqEmu;
 impl ServerType for EqEmu {
     fn buff_cancellation(&self, _setup: &Setup<'_>) -> Provided {
         offer(Box::<Buffs>::default())
+    }
+
+    /// Stock local servers are the player's own; the departures stay off
+    /// until chosen there too.
+    fn offers_gameplay_departures(&self) -> bool {
+        true
     }
 
     fn inventory_move_rules(&self) -> Option<MoveRules> {
@@ -2232,6 +2247,21 @@ mod tests {
             assert!(
                 !server_type(protocol).answers_list_polls(),
                 "{protocol:?} offers a P99-only list reply"
+            );
+        }
+    }
+
+    #[test]
+    fn only_eqemu_offers_the_explicit_gameplay_departures() {
+        assert!(server_type(ServerProtocol::EqEmu).offers_gameplay_departures());
+        for protocol in [
+            ServerProtocol::Project1999,
+            ServerProtocol::Quarm,
+            ServerProtocol::Takp,
+        ] {
+            assert!(
+                !server_type(protocol).offers_gameplay_departures(),
+                "{protocol:?} offers gameplay departures on a public server"
             );
         }
     }

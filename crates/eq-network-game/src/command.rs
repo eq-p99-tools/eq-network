@@ -942,7 +942,11 @@ impl GameCommand {
             Self::ScribeSpell { .. } | Self::ForgetSpell { .. } | Self::MemorizeSpell { .. } => {
                 Capability::Spellbook
             }
-            Self::SetBookOptions { .. } => Capability::Spellbook,
+            // Explicit departures from the official client's behaviour are
+            // offered only where the server type permits them.
+            Self::SetMovementOptions { .. } | Self::SetBookOptions { .. } => {
+                Capability::GameplayDepartures
+            }
             Self::CancelBuff(_) => Capability::CancellingBuffs,
             Self::DeleteSpell { .. } => Capability::DeletingSpells,
             Self::SwapSpell { .. } => Capability::MovingSpells,
@@ -955,7 +959,6 @@ impl GameCommand {
             Self::CrossZoneLine { .. } => Capability::Zoning,
             Self::SetPosture { .. } => Capability::Posture,
             Self::Move(_)
-            | Self::SetMovementOptions { .. }
             | Self::ConfigureMotion { .. }
             | Self::SpeedInputs { .. }
             | Self::ClimbReach { .. } => Capability::Moving,
