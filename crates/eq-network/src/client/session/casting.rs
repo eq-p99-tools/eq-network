@@ -18,7 +18,7 @@ use std::time::{Duration, Instant};
 /// Local retry policy, not a protocol timeout. Never resends a request automatically.
 const ACK_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// Allow ordered cast results already in flight to arrive. EQEmu can stop a
+/// Allow ordered cast results already in flight to arrive. `EQEmu` can stop a
 /// song without sending the Bard an interrupt or spell-bar refresh.
 const SONG_STOP_WAIT: Duration = Duration::from_secs(1);
 

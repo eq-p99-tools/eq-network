@@ -814,7 +814,7 @@ pub enum WorldEvent {
         /// Spell that was held before the new start.
         spell_id: u32,
     },
-    /// The local EQEmu song stop has no matching server confirmation.
+    /// The local `EQEmu` song stop has no matching server confirmation.
     SongStopUnconfirmed {
         /// Zone admission that owns the request.
         session_id: u64,
