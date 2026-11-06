@@ -18,6 +18,7 @@ use std::{
 
 struct Script {
     incoming: VecDeque<Application>,
+    stop_when_drained: Option<CancellationToken>,
     sent: Vec<u16>,
     closed: bool,
 }
@@ -35,6 +36,7 @@ impl Script {
         header[64..71].copy_from_slice(b"example");
         let mut script = Self {
             incoming: VecDeque::new(),
+            stop_when_drained: None,
             sent: Vec::new(),
             closed: false,
         };
@@ -65,8 +67,16 @@ impl Transport for Script {
     }
 
     fn receive(&mut self) -> Result<Option<Application>> {
-        let packet = self.incoming.pop_front().expect("unexpected receive");
-        Ok(Some(packet))
+        if let Some(packet) = self.incoming.pop_front() {
+            return Ok(Some(packet));
+        }
+        // An explicitly scripted idle poll requests cancellation so a test
+        // cannot keep polling an empty transport.
+        self.stop_when_drained
+            .take()
+            .expect("unexpected receive")
+            .cancel();
+        Ok(None)
     }
 
     fn close(&mut self) -> Result<()> {
@@ -299,6 +309,57 @@ fn the_same_incomplete_admission_keeps_record_only_chat_running() {
     assert!(script
         .sent
         .ends_with(&[0x6563, 0x5e20, 0x0c11, POSITION_OPCODE]));
+}
+
+#[test]
+fn recording_reports_repeated_zone_offers_once_without_following_them() {
+    let config = config();
+    let identity = ClientIdentity::new("example-host", "example-user");
+    let credentials = credentials();
+    let stop = CancellationToken::default();
+    let context = context(&config, &identity, &credentials, &stop, None);
+    let mut script = Script::titanium(-1.0);
+    script.stop_when_drained = Some(stop.clone());
+    let mut offer = vec![0; 24];
+    offer[..2].copy_from_slice(&2u16.to_le_bytes());
+    script.packet(MOVE_OPCODE, offer.clone());
+    script.packet(MOVE_OPCODE, offer);
+    let mut events = Vec::new();
+    let mut handler = |event| {
+        events.push(event);
+        Ok(())
+    };
+
+    assert!(matches!(
+        run_script(
+            &context,
+            &mut script,
+            &mut Events::new(&config, &mut handler)
+        )
+        .unwrap(),
+        ZoneExit::Stopped
+    ));
+    assert!(stop.is_cancelled());
+    assert!(script.incoming.is_empty());
+    assert!(script.closed);
+    assert!(script
+        .sent
+        .ends_with(&[0x6563, 0x5e20, 0x0c11, POSITION_OPCODE]));
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| matches!(
+                event,
+                ClientEvent::Diagnostic(message)
+                    if message == "Zone offer received; record-only mode cannot follow it"
+            ))
+            .count(),
+        1
+    );
+    assert!(!events.iter().any(|event| matches!(
+        event,
+        ClientEvent::Progress(ConnectionStage::Ready) | ClientEvent::World(_)
+    )));
 }
 
 /// A valid Titanium server update away from the saved position.

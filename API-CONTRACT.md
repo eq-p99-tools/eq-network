@@ -19,6 +19,15 @@ completes but the player snapshot cannot be decoded, the worker closes the zone
 without taking player commands, reports `ConnectionState::Disconnected`, and
 returns `PlayerAdmissionError` without an automatic retry.
 
+The receiver belongs to the host. Pending commands stay queued at the failed
+admission and get no per-command refusal from that attempt. Use a fresh command
+queue for a separate run. Interactive world or character selection polls may
+discard leftover gameplay commands before another admission. If a pending
+gameplay command reaches a ready zone, the worker rejects old admission IDs
+where the command carries one. Legacy `SendChat` carries neither an admission
+ID nor a creation time and can be sent from the later zone if it reaches that
+zone's queue drain.
+
 `Client::run` can still deliver communications from that zone. It sends the
 additive `ConnectionStage::Recording` milestone with `Connected` transport
 health. This outcome has no `Entered`, `Ready`, or live gameplay feature
@@ -27,9 +36,11 @@ with the nonzero own-spawn ID and position read during the handshake (Titanium's
 validated own spawn and saved profile position, or EQMac's assigned ID and own
 spawn position). Transfer traffic or a death, despawn, or position update for
 an already known own spawn withdraws the position repeat for that zone, even
-if it arrived before handshake completion. The progress enum is non-exhaustive,
-and its new serialized value is `recording`. Errors in the handshake itself
-continue to follow the existing session error policy.
+if it arrived before handshake completion. A decoded zone offer in recording
+mode yields one diagnostic per zone session. The listener continues on its
+current connection while the transport remains active. The progress enum is
+non-exhaustive, and its new serialized value is `recording`. Errors in the
+handshake itself continue to follow the existing session error policy.
 
 ## Modern session termination
 
@@ -714,7 +725,10 @@ within the current mode's elapsed speed budget. These options never bypass
 session identity, input freshness, finite coordinates, fixed bounds, current
 known speed, corrections, death or transfer gates. Changes invalidate pre-toggle queued input using the caller stamp, preserve
 the accepted sample time for same-frame FIFO movement, and keep the ordinary
-paced stop. None represents a native movement
+paced stop. Flight toggles preserve a tracked jump, so switching back to
+grounded movement cannot qualify a sample for diagonal credit during that
+ascent. The tracker expires as accepted samples pass the jump apex. It does
+not establish a landing. None represents a native movement
 rule, safe server threshold or detection guarantee.
 
 `SetBookOptions { session_id, memorize_without_sitting }` is an explicit
