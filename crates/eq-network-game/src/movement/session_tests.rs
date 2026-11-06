@@ -1080,7 +1080,7 @@ fn a_jump_rises_past_a_step_once_the_session_announces_it() {
 
 #[test]
 fn an_announced_jump_refuses_diagonal_credit_without_consuming_the_sample() {
-    use crate::movement::{DiagonalAlong, GroundedDiagonal, StrafeSide};
+    use crate::movement::{DiagonalAlong, GroundedDiagonal, MovementOptions, StrafeSide};
 
     let start = Instant::now();
     let at = |ms| start + Duration::from_millis(ms);
@@ -1097,9 +1097,12 @@ fn an_announced_jump_refuses_diagonal_credit_without_consuming_the_sample() {
     step.mode = mode;
     step.position.y = 0.6;
     step.position.z = 0.5;
-    session
-        .send_move_sample(&step, at(100), |_| Ok(()))
-        .unwrap();
+    let submit = |session: &mut MotionSession, sample: &MovementRequest| {
+        session
+            .send_move_sample(sample, sample.created, |_| Ok(()))
+            .unwrap();
+    };
+    submit(&mut session, &step);
     assert_eq!(session.position(), step.position);
 
     // The host marks the jump only after its notice was submitted.
@@ -1131,14 +1134,15 @@ fn an_announced_jump_refuses_diagonal_credit_without_consuming_the_sample() {
         assert_eq!(session.sequence, sequence);
     };
 
-    let flight = super::super::MovementOptions {
+    let ordinary = MovementOptions::default();
+    let flight = MovementOptions {
         fly: true,
-        ..Default::default()
+        ..ordinary
     };
     // Toggling flight twice before the first jump sample cannot make the
     // pending jump eligible for ground credit, even with unchanged Z.
     session.set_options(flight, at(105)).unwrap();
-    session.set_options(Default::default(), at(110)).unwrap();
+    session.set_options(ordinary, at(110)).unwrap();
     reject(&mut session, at(150));
     let ascent = MovementRequest {
         mode: MovementMode::Fall,
@@ -1148,15 +1152,13 @@ fn an_announced_jump_refuses_diagonal_credit_without_consuming_the_sample() {
         },
         ..request(at(150), step.position.x)
     };
-    session
-        .send_move_sample(&ascent, at(150), |_| Ok(()))
-        .unwrap();
+    submit(&mut session, &ascent);
     session
         .set_options(
-            super::super::MovementOptions {
+            MovementOptions {
                 run_boost: true,
                 walk_while_stunned: true,
-                ..Default::default()
+                ..ordinary
             },
             at(155),
         )
@@ -1172,12 +1174,10 @@ fn an_announced_jump_refuses_diagonal_credit_without_consuming_the_sample() {
         },
         ..request(at(250), ascent.position.x)
     };
-    session
-        .send_move_sample(&cardinal, at(250), |_| Ok(()))
-        .unwrap();
+    submit(&mut session, &cardinal);
     assert_eq!(session.position(), cardinal.position);
     // A sample accepted under the flight budget does not establish landing.
-    session.set_options(Default::default(), at(255)).unwrap();
+    session.set_options(ordinary, at(255)).unwrap();
     reject(&mut session, at(300));
 
     // Ordinary sample progression still retires the ascent tracker at its
@@ -1186,14 +1186,10 @@ fn an_announced_jump_refuses_diagonal_credit_without_consuming_the_sample() {
         created: at(400),
         ..cardinal
     };
-    session
-        .send_move_sample(&past_apex, at(400), |_| Ok(()))
-        .unwrap();
+    submit(&mut session, &past_apex);
     assert!(session.guard.jumped_at.is_none());
     let grounded = diagonal(past_apex.position, at(450));
-    session
-        .send_move_sample(&grounded, at(450), |_| Ok(()))
-        .unwrap();
+    submit(&mut session, &grounded);
     assert_eq!(session.position(), grounded.position);
 }
 
