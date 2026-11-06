@@ -806,6 +806,13 @@ pub enum WorldEvent {
         /// Pending spell, or None when acknowledged, interrupted, or timed out.
         spell_id: Option<u32>,
     },
+    /// The local EQEmu song stop has no matching server confirmation.
+    SongStopUnconfirmed {
+        /// Zone admission that owns the request.
+        session_id: u64,
+        /// The cast released locally, or None if there was no cast to release.
+        spell_id: Option<u32>,
+    },
     /// A cast request failed local validation; existing cast state is unchanged.
     CastRejected {
         /// Admission identifier from the rejected request.

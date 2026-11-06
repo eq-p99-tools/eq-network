@@ -18,6 +18,10 @@ use std::time::{Duration, Instant};
 /// Local retry policy, not a protocol timeout. Never resends a request automatically.
 const ACK_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// Allow ordered cast results already in flight to arrive. EQEmu can stop a
+/// song without sending the Bard an interrupt or spell-bar refresh.
+const SONG_STOP_WAIT: Duration = Duration::from_secs(1);
+
 /// Reports only cast rejections, preserving the caller's admission for host filtering.
 pub(super) fn rejected(command: &ClientCommand, reason: &str) -> Option<crate::world::WorldEvent> {
     let ClientCommand::CastSpell {
@@ -59,6 +63,8 @@ pub(super) enum Source {
 pub(super) struct CastGuard {
     phase: Option<Phase>,
     source: Option<Source>,
+    stop_deadline: Option<Instant>,
+    late_begin: Option<u32>,
 }
 
 impl CastGuard {
@@ -84,11 +90,14 @@ impl CastGuard {
 
     /// Records a request only after successful transport submission.
     pub fn submitted(&mut self, spell: u32, source: Option<Source>, now: Instant) {
-        self.source = source;
-        self.phase = Some(Phase::Awaiting {
-            spell,
-            submitted: now,
-        });
+        *self = Self {
+            phase: Some(Phase::Awaiting {
+                spell,
+                submitted: now,
+            }),
+            source,
+            ..Self::default()
+        };
     }
 
     /// The unacknowledged request, distinct from a server-confirmed cast.
@@ -99,9 +108,24 @@ impl CastGuard {
         }
     }
 
-    /// Allows a fresh user attempt after silence; confirmed casts never expire by time.
+    /// Ends the local hold after a submitted stop received no matching result.
+    fn expire_song_stop(&mut self, now: Instant) -> Option<u32> {
+        if now < self.stop_deadline? {
+            return None;
+        }
+        let spell = match self.phase.as_ref()? {
+            Phase::Awaiting { spell, .. } | Phase::Casting { spell, .. } => *spell,
+        };
+        let late_begin = self.pending();
+        self.clear();
+        self.late_begin = late_begin;
+        Some(spell)
+    }
+
+    /// Allows a fresh user attempt after silence; ordinary begun casts stay held.
     pub fn expire(&mut self, now: Instant) -> bool {
-        if matches!(self.phase, Some(Phase::Awaiting { submitted, .. })
+        if self.stop_deadline.is_none()
+            && matches!(self.phase, Some(Phase::Awaiting { submitted, .. })
             if now.checked_duration_since(submitted).is_some_and(|age| age >= ACK_TIMEOUT))
         {
             self.clear();
@@ -136,10 +160,14 @@ impl CastGuard {
                 spell_id,
                 ..
             } if caster_id == own_id => {
-                self.phase = Some(Phase::Casting {
-                    spell: u32::from(spell_id),
-                    requested: self.pending(),
-                });
+                let spell = u32::from(spell_id);
+                let mut requested = self.pending();
+                if self.stop_deadline.is_some() && !self.answers(spell) {
+                    self.stop_deadline = None;
+                    self.source = None;
+                    requested = None;
+                }
+                self.phase = Some(Phase::Casting { spell, requested });
             }
             SpellUpdate::Interrupted { caster_id, .. } if caster_id == u32::from(own_id) => {
                 self.clear();
@@ -183,9 +211,9 @@ impl Casting {
         }
     }
 
-    /// The empty request can interrupt an item too, so protect a tracked
-    /// item use. The server owns song pulses and the resulting interruption.
-    fn stop_song(&self, world: &World, out: &mut Out<'_, '_>) -> Result<()> {
+    /// The empty request can interrupt an item too. Only a known gem cast
+    /// can use the fallback that releases a cast without a server answer.
+    fn stop_song(&mut self, world: &World, out: &mut Out<'_, '_>) -> Result<()> {
         if !self.song_stop
             || world
                 .player
@@ -196,12 +224,21 @@ impl Casting {
                 .log
                 .diagnostic("Stopping songs is unavailable for this character".into());
         }
-        if matches!(self.guard.source, Some(Source::Item)) {
+        if self.guard.active() && !matches!(self.guard.source, Some(Source::Gem(_))) {
             return out
                 .log
-                .diagnostic("Wait for the item cast to finish before stopping a song".into());
+                .diagnostic("Wait for the current cast to finish before stopping a song".into());
         }
-        out.request(&Request::StopSong)
+        if self.guard.stop_deadline.is_some() {
+            return Ok(());
+        }
+        out.request(&Request::StopSong)?;
+        if self.guard.active() {
+            self.guard.stop_deadline = Some(Instant::now() + SONG_STOP_WAIT);
+            Ok(())
+        } else {
+            report_unconfirmed_stop(world.session_id, None, out)
+        }
     }
 
     /// Casts a memorized spell at a target the player can see.
@@ -336,9 +373,11 @@ impl Feature for Casting {
         }
     }
 
-    /// Releases a request the server never acknowledged, so the player may
-    /// try again.
+    /// Releases a local hold when the server sends no matching reply.
     fn tick(&mut self, now: Instant, world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
+        if let Some(spell) = self.guard.expire_song_stop(now) {
+            return report_unconfirmed_stop(world.session_id, Some(spell), out);
+        }
         if !self.guard.expire(now) {
             return Ok(());
         }
@@ -348,6 +387,23 @@ impl Feature for Casting {
         }))?;
         out.log
             .diagnostic("Cast acknowledgement timed out; a manual retry is available".into())
+    }
+
+    /// An own start received after releasing its pending cast must not
+    /// reopen that hold. The next submitted cast owns subsequent starts.
+    fn explain(&mut self, message: &mut Message, world: &World) {
+        let Message::Event(WorldEvent::Spell(SpellUpdate::Began {
+            caster_id,
+            spell_id,
+            ..
+        })) = message
+        else {
+            return;
+        };
+        if world.is_player(*caster_id) && self.guard.late_begin.take() == Some(u32::from(*spell_id))
+        {
+            *message = Message::Withheld;
+        }
     }
 
     /// Follows the player's own casts; dying ends any cast.
@@ -380,6 +436,18 @@ impl Feature for Casting {
     }
 }
 
+fn report_unconfirmed_stop(
+    session_id: u64,
+    spell_id: Option<u32>,
+    out: &mut Out<'_, '_>,
+) -> Result<()> {
+    out.log
+        .send(ClientEvent::World(WorldEvent::SongStopUnconfirmed {
+            session_id,
+            spell_id,
+        }))
+}
+
 /// Sends the steps of an invisibility drop in the host's order, where the
 /// client generation sends them. Every step is encoded before any is sent,
 /// so a generation that sends none, or a step it cannot carry, sends
@@ -401,12 +469,15 @@ fn drop_invisibility(
 }
 
 #[cfg(test)]
+mod song_stop_tests;
+
+#[cfg(test)]
 mod tests {
     use super::super::feature::testing;
     use super::*;
 
     #[test]
-    fn stopping_a_song_leaves_casting_held_until_server_evidence() {
+    fn a_received_interrupt_resolves_a_requested_song_stop() {
         let mut casting = Casting::with_song_stop();
         let mut world = World::new(5);
         world.own_spawn = Some(7);
@@ -466,6 +537,17 @@ mod tests {
         let output = testing::run(|out| casting.handle(&stop, &mut world, out));
         output.result.unwrap();
         assert_eq!(output.sent.len(), 1);
+        assert!(matches!(
+            output.events.as_slice(),
+            [ClientEvent::World(WorldEvent::SongStopUnconfirmed {
+                session_id: 5,
+                spell_id: None
+            })]
+        ));
+        let output =
+            testing::run(|out| casting.tick(Instant::now() + SONG_STOP_WAIT, &mut world, out));
+        output.result.unwrap();
+        assert!(output.events.is_empty());
 
         world.player.admit(testing::player(7));
         let output = testing::run(|out| casting.handle(&stop, &mut world, out));

@@ -16,7 +16,9 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   come through the existing server events.
 - `ClientCommand::StopSong` is offered by Titanium EQEmu through
   `Capability::StoppingSongs`. The worker checks Bard class and current
-  admission, and receives cast results through the ordinary spell updates.
+  admission. A silent stop of a tracked gem cast releases the local hold
+  after one second and emits `WorldEvent::SongStopUnconfirmed`. Received
+  cast results continue through the ordinary spell updates.
 - `BookActionStatus::Unconfirmed` reports an unanswered book edit once.
   Forgetting also holds the book until its matching gem clear arrives.
   Track the old spell in named clears to protect replacement gems.

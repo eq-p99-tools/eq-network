@@ -47,8 +47,15 @@ Titanium EQEmu offers `Capability::StoppingSongs` and handles an explicit
 The wire request is empty `OP_ManaChange` (`0x4839`), as implemented by the
 [server handler](https://github.com/EQEmu/EQEmu/blob/master/zone/client_packet.cpp)
 and [Titanium opcode table](https://github.com/EQEmu/EQEmu/blob/master/utils/patches/patch_Titanium.conf).
-The request does not settle a cast or remove buffs. The session leaves a
-tracked item cast alone. The P99 policy keeps song stop gated.
+After submitting a stop for a tracked gem cast, the worker allows one
+second for matching cast news. An own interrupt or matching mana or gem
+refresh follows the ordinary cast path. With no such update, the worker
+releases its local hold and emits `WorldEvent::SongStopUnconfirmed` with
+the admission and released spell. When no cast is held, submission emits
+the same event without a spell. This event reports local state only. It
+leaves buffs and cooldowns to the existing server updates, and a retry
+requires a fresh user command. An active item cast or a cast of unknown
+source blocks song stop. The P99 policy keeps song stop gated.
 
 ## P99 readable items
 
