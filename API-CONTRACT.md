@@ -620,7 +620,10 @@ literals can set `HeadingUpdate::Rate` or use `MovementRequest::new` to keep the
 existing elapsed-time turn check. `HeadingUpdate::Snapshot` carries a completed
 mouse turn as an absolute heading with a zero continuing-turn hint. The zone
 owner enables it for Titanium. It shares the existing packet cadence, admission,
-position and calibration checks and cannot use the grounded diagonal budget.
+position and calibration checks. If both ground axes are active after the turn
+has completed, the snapshot may carry a grounded diagonal step. The same signed
+longitudinal and lateral limits apply in the snapshot heading. A rate sample
+keeps the prior accepted heading when it uses those limits.
 
 ## Carried combines and world containers
 

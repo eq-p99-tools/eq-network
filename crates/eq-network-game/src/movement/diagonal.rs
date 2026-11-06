@@ -1,5 +1,5 @@
 //! Independent ground movement components and their collision endpoint budget.
-use super::MovementMode;
+use super::{HeadingUpdate, MovementMode};
 use crate::world::Position;
 
 /// The requested longitudinal mode while taking a sidestep.
@@ -45,7 +45,7 @@ pub enum StrafeSide {
     Right,
 }
 
-/// A combined ground input, tied to the previously accepted body heading.
+/// A combined ground input along two axes of a single body heading.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct GroundedDiagonal {
     /// The longitudinal input that supplies the speed and animation.
@@ -59,7 +59,6 @@ impl GroundedDiagonal {
     /// A slide can shorten either component. It cannot use one axis's budget
     /// to move faster on the other, reverse an axis, or change the heading.
     #[must_use]
-    #[allow(clippy::float_cmp)] // This mode keeps the previously accepted heading exactly.
     pub fn admits(
         self,
         from: Position,
@@ -68,11 +67,31 @@ impl GroundedDiagonal {
         lateral: f32,
         seconds: f32,
     ) -> bool {
+        self.admits_with_heading(from, to, HeadingUpdate::Rate, along, lateral, seconds)
+    }
+
+    /// Checks both signed components in the body heading used for this step.
+    /// A completed snapshot uses the new heading. A rate sample requires
+    /// the previously accepted heading. The session validates snapshot
+    /// availability and the other movement restrictions separately.
+    #[must_use]
+    #[allow(clippy::float_cmp)] // A rate sample keeps the heading exactly.
+    pub fn admits_with_heading(
+        self,
+        from: Position,
+        to: Position,
+        heading: HeadingUpdate,
+        along: f32,
+        lateral: f32,
+        seconds: f32,
+    ) -> bool {
         const ROUNDING: f32 = 0.01;
-        if to.heading != from.heading {
-            return false;
-        }
-        let (sin, cos) = (from.heading / 512.0 * std::f32::consts::TAU).sin_cos();
+        let basis = match heading {
+            HeadingUpdate::Snapshot if (0.0..512.0).contains(&to.heading) => to.heading,
+            HeadingUpdate::Rate if to.heading == from.heading => from.heading,
+            _ => return false,
+        };
+        let (sin, cos) = (basis / 512.0 * std::f32::consts::TAU).sin_cos();
         let dx = to.x - from.x;
         let dy = to.y - from.y;
         let forward = dx * sin + dy * cos;

@@ -150,7 +150,7 @@ pub enum MovementMode {
     Walk,
     /// Sideways movement preserving character facing.
     Strafe,
-    /// Concurrent longitudinal and lateral movement with a fixed ground heading.
+    /// Concurrent longitudinal and lateral movement along one ground heading.
     GroundedDiagonal(GroundedDiagonal),
     /// Airborne descent after leaving a ledge: forward speed and animation, while
     /// height falls under gravity instead of following the ground.
@@ -541,7 +541,14 @@ impl MovementGuard {
             ensure!(
                 !self.flying
                     && lateral_rate.is_some_and(|lateral| {
-                        diagonal.admits(self.position, request.position, speed, lateral, elapsed)
+                        diagonal.admits_with_heading(
+                            self.position,
+                            request.position,
+                            request.heading,
+                            speed,
+                            lateral,
+                            elapsed,
+                        )
                     }),
                 "diagonal movement exceeds its grounded component budgets"
             );

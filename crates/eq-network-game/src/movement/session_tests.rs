@@ -546,6 +546,92 @@ fn heading_snapshot_requires_titanium_and_preserves_movement_guards() {
         .send_move(&snapshot, at(100), |_| panic!("withdrawn heading input"))
         .is_err());
 }
+
+#[test]
+fn completed_heading_snapshot_budgets_and_paces_a_chord_in_its_new_heading() {
+    use crate::movement::{DiagonalAlong, GroundedDiagonal, StrafeSide};
+    let start = Instant::now();
+    let at = |ms| start + Duration::from_millis(ms);
+    for (side, sign) in [(StrafeSide::Left, -1.0), (StrafeSide::Right, 1.0)] {
+        let mut session =
+            setup(start)
+                .with_heading_snapshots(true)
+                .with_gate(Some(UpdateGate::Changed {
+                    spacing: Duration::from_millis(280),
+                }));
+        grant_grounded_diagonal(&mut session, start);
+        let initial = request(at(300), 0.0);
+        session
+            .send_move_sample(&initial, at(300), |_| Ok(()))
+            .unwrap();
+        let chord = MovementRequest {
+            mode: MovementMode::GroundedDiagonal(GroundedDiagonal {
+                along: DiagonalAlong::Run,
+                side,
+            }),
+            position: Position {
+                x: 0.6,
+                y: sign * 0.3,
+                heading: 128.0,
+                ..initial.position
+            },
+            heading: HeadingUpdate::Snapshot,
+            ..request(at(400), 0.0)
+        };
+        // At heading 128, +X is forward and signed Y is lateral. The
+        // previous heading's basis and a changed Rate heading both fail.
+        for (x, y, heading) in [
+            (0.6, sign * 0.3, HeadingUpdate::Rate),
+            (-sign * 0.3, 0.6, HeadingUpdate::Snapshot),
+            (-0.2, sign * 0.3, HeadingUpdate::Snapshot),
+            (0.6, -sign * 0.3, HeadingUpdate::Snapshot),
+            (0.65, sign * 0.2, HeadingUpdate::Snapshot),
+            (0.4, sign * 0.4, HeadingUpdate::Snapshot),
+        ] {
+            let invalid = MovementRequest {
+                position: Position {
+                    x,
+                    y,
+                    ..chord.position
+                },
+                heading,
+                ..chord.clone()
+            };
+            assert!(session
+                .send_move_sample(&invalid, at(400), |_| panic!("invalid chord"))
+                .is_err());
+            assert_eq!(session.position(), initial.position);
+        }
+        session
+            .send_move_sample(&chord, at(400), |_| panic!("chord bypassed cadence"))
+            .unwrap();
+        let later = MovementRequest {
+            position: Position {
+                x: 1.2,
+                y: sign * 0.6,
+                ..chord.position
+            },
+            heading: HeadingUpdate::Rate,
+            created: at(500),
+            ..chord
+        };
+        session
+            .send_move_sample(&later, at(500), |_| panic!("chord bypassed cadence"))
+            .unwrap();
+        assert!(!session
+            .tick_sample(at(579), |_| panic!("early chord"))
+            .unwrap());
+        assert!(session
+            .tick_sample(at(580), |sample| {
+                assert_eq!(sample.position, later.position);
+                assert_eq!((sample.animation, sample.delta_heading), (12, 0));
+                assert!((sample.delta[0] - 0.3).abs() < 0.001);
+                assert!((sample.delta[1] - sign * 0.15).abs() < 0.001);
+                Ok(())
+            })
+            .unwrap());
+    }
+}
 fn word(body: &[u8], offset: usize) -> u32 {
     u32::from_le_bytes(body[offset..offset + 4].try_into().unwrap())
 }

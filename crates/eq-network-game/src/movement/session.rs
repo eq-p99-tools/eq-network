@@ -625,8 +625,8 @@ impl MotionSession {
         };
         let snapshot = request.heading == HeadingUpdate::Snapshot;
         ensure!(
-            !snapshot || self.heading_snapshots && diagonal.is_none(),
-            "absolute heading snapshots require Titanium cardinal movement"
+            !snapshot || self.heading_snapshots,
+            "absolute heading snapshots require Titanium movement"
         );
         ensure!(
             !snapshot || (0.0..512.0).contains(&request.position.heading),
