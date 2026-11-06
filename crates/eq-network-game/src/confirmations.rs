@@ -27,6 +27,52 @@ use serde::Serialize;
 
 /// `OP_Sacrifice`: the offer, and the player's answer.
 pub const SACRIFICE_OPCODE: u16 = 0x727a;
+/// The kind of consent question a zone admission can issue.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+pub enum ConsentKind {
+    /// Return to the player's corpse.
+    Resurrection,
+    /// Move the player with a translocate spell.
+    Translocate,
+}
+
+/// Local identity of one question, independent of the packet's wire fields.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+pub struct ConsentId {
+    /// The zone admission that received the offer.
+    pub session_id: u64,
+    /// The feature that owns this offer.
+    pub kind: ConsentKind,
+    /// A sequence within this admission and kind.
+    pub sequence: u64,
+}
+
+/// The session's invitation to answer one particular server offer.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct ConsentOffer<T> {
+    /// Identity to return with the answer.
+    pub id: ConsentId,
+    /// Decoded offer.
+    pub offer: T,
+    /// Local monotonic deadline. The server can impose its own deadline.
+    #[serde(skip)]
+    pub expires_at: std::time::Instant,
+}
+
+/// The session disposition of an offer, independent of any server result.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+pub enum ConsentClosure {
+    /// An answer was submitted to the transport.
+    AnswerSent {
+        /// Whether the answer accepted the offer.
+        accept: bool,
+    },
+    /// The local deadline elapsed and a decline was submitted.
+    Expired,
+    /// Death, zoning or logout took the offer out of scope.
+    Interrupted,
+}
+
 /// `OP_Translocate`: the offer, and the player's answer.
 pub const TRANSLOCATE_OPCODE: u16 = 0x8258;
 /// `EQMac`'s `OP_Sacrifice`.

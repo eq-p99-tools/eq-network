@@ -438,15 +438,19 @@ fn reasoned(command: &ClientCommand, session_id: u64, reason: String) -> Option<
             string_id: None,
         },
         ClientCommand::Training { .. } => WorldEvent::TrainingRefused { session_id, reason },
-        ClientCommand::AnswerResurrection { .. } => {
-            WorldEvent::ResurrectionRefused { session_id, reason }
-        }
+        ClientCommand::AnswerResurrection { offer_id, .. } => WorldEvent::ResurrectionRefused {
+            offer_id: *offer_id,
+            session_id,
+            reason,
+        },
         ClientCommand::AnswerSacrifice { .. } => {
             WorldEvent::SacrificeRefused { session_id, reason }
         }
-        ClientCommand::AnswerTranslocate { .. } => {
-            WorldEvent::TranslocateRefused { session_id, reason }
-        }
+        ClientCommand::AnswerTranslocate { offer_id, .. } => WorldEvent::TranslocateRefused {
+            offer_id: *offer_id,
+            session_id,
+            reason,
+        },
         ClientCommand::InviteToGroup { .. }
         | ClientCommand::FollowGroup { .. }
         | ClientCommand::DeclineGroup { .. }

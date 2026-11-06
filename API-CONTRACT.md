@@ -819,3 +819,40 @@ never reset input epochs. These events are not server acknowledgments and
 never imply a movement speed grant. Expired changes can be retried with a new
 identity and caller stamp without accepting old motion or reasserting policy
 on every render frame.
+
+
+## Resurrection and translocate consent
+
+A live session exposes `WorldEvent::Resurrection` and
+`WorldEvent::TranslocateOffer` with `confirmations::ConsentOffer<T>` where
+its server policy supports the operation. Read the decoded fields from
+`offer`. Copy `id` into `AnswerResurrection::offer_id` or
+`AnswerTranslocate::offer_id` and use the admission from the same token as
+`session_id`. A fresh admission can reuse a sequence. The ID combines its
+admission, question kind and sequence and has no wire representation.
+
+An identical pending offer keeps its original token and deadline. A distinct
+offer of the same kind replaces it. A stale or repeated answer produces a
+refusal naming the attempted token and leaves a replacement untouched.
+Death, an outstanding zone transfer and logout invalidate old consent.
+The in-process `expires_at` is a monotonic local deadline omitted from
+serialization. EQEmu uses a five-minute local answer window. TAKP
+translocate retains its one-hour window. When the deadline elapses during
+the same live admission the session submits a decline. A server may
+apply its own timing rule.
+
+`ConsentClosed` distinguishes a submitted answer, a local expiry with a
+submitted decline, and a lifecycle interruption. Movement and recovery follow the ordinary server messages and admission. EQEmu translocate uses the
+server's pending destination and resurrection echoes the offered packet with
+the answer selected. P99's resurrection and translocate answer policies
+remain gated.
+
+Raw wire readers should use `message::titanium` or `message::eqmac`
+for consent records. The corresponding `Message::Resurrection` or
+`Message::TranslocateOffer` carries decoded facts without a session
+token. `world::titanium_update` no longer treats these as world events.
+TAKP's distinct server move still enters the existing zone-transfer path.
+
+See EQEmu's [resurrection offer routing](https://github.com/EQEmu/EQEmu/blob/master/zone/worldserver.cpp#L865-L893),
+[resurrection processing](https://github.com/EQEmu/EQEmu/blob/master/zone/client_process.cpp#L971-L1055)
+and [translocate processing](https://github.com/EQEmu/EQEmu/blob/master/zone/client_packet.cpp#L14888-L14952).

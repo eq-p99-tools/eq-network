@@ -742,8 +742,8 @@ mod shared {
         Box::<Sacrifice>::default()
     }
 
-    pub(super) fn translocate() -> Box<dyn Feature> {
-        Box::<Translocate>::default()
+    pub(super) fn translocate(timeout: std::time::Duration) -> Box<dyn Feature> {
+        Box::new(Translocate::new(timeout))
     }
 
     pub(super) fn reading() -> Box<dyn Feature> {
@@ -1210,7 +1210,7 @@ impl ServerType for EqEmu {
     /// Answered only on the player's word; on a yes `EQEmu` moves the player
     /// itself (`Client::Handle_OP_Translocate`).
     fn translocate(&self, _setup: &Setup<'_>) -> Provided {
-        offer(shared::translocate())
+        offer(shared::translocate(super::confirmations::TITANIUM_TIMEOUT))
     }
 
     fn reading(&self, _setup: &Setup<'_>) -> Provided {
@@ -1586,7 +1586,7 @@ impl ServerType for Takp {
     /// ([`eq_network_game::confirmations`]); the client asks as the `EQMac`
     /// program does (TAKP Batch 1 R8). Not yet checked live.
     fn translocate(&self, _setup: &Setup<'_>) -> Provided {
-        offer(shared::translocate())
+        offer(shared::translocate(std::time::Duration::from_secs(3600)))
     }
 
     /// Giving items to NPCs and trading with players, in the `EQMac`

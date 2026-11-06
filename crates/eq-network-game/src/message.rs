@@ -18,6 +18,10 @@ const PROFILE_OPCODE: u16 = 0x75df;
 pub enum Message {
     /// News the host hears about too.
     Event(WorldEvent),
+    /// A decoded resurrection that still needs admission and consent checks.
+    Resurrection(crate::resurrection::ResurrectionOffer),
+    /// A decoded translocate that still needs admission and consent checks.
+    TranslocateOffer(crate::confirmations::TranslocateOffer),
     /// A merchant's whole list, which replaces what it listed before, as
     /// `EQMac`'s comes on every change, its places numbered afresh. The
     /// feature keeping the merchant window tells the host the places that
@@ -168,6 +172,16 @@ pub fn titanium(opcode: u16, body: &[u8]) -> Vec<Message> {
             },
             Err(error) => unreadable(Part::World, &error),
         },
+        crate::resurrection::OFFER_OPCODE => crate::resurrection::titanium_offer(body).map_or_else(
+            |error| unreadable(Part::World, &error),
+            Message::Resurrection,
+        ),
+        crate::confirmations::TRANSLOCATE_OPCODE => {
+            crate::confirmations::titanium_translocate(body).map_or_else(
+                |error| unreadable(Part::World, &error),
+                Message::TranslocateOffer,
+            )
+        }
         crate::buffs::TITANIUM_ACTION_OPCODE => action(crate::buffs::titanium_action(body)),
         crate::zones::TITANIUM_HEADER_OPCODE => {
             messages.extend(crate::clock::titanium_zone_sky(body).map(sky));
@@ -230,7 +244,7 @@ pub fn eqmac_with(opcode: u16, body: &[u8], item_rules: inventory::ItemRules) ->
         crate::confirmations::EQMAC_TRANSLOCATE_OPCODE => {
             vec![match crate::confirmations::eqmac_translocate(body) {
                 Ok(crate::confirmations::Translocate::Offer(offer)) => {
-                    Message::Event(WorldEvent::TranslocateOffer(offer))
+                    Message::TranslocateOffer(offer)
                 }
                 Ok(crate::confirmations::Translocate::Go(offer)) => Message::ZoneOffer(offer),
                 Err(error) => unreadable(Part::World, &error),
@@ -733,7 +747,7 @@ mod tests {
         let opcode = crate::confirmations::EQMAC_TRANSLOCATE_OPCODE;
         assert!(matches!(
             &eqmac(opcode, &body)[..],
-            [Message::Event(WorldEvent::TranslocateOffer(offer))] if offer.zone_id == 4
+            [Message::TranslocateOffer(offer)] if offer.zone_id == 4
         ));
         body[88..].copy_from_slice(&1u32.to_le_bytes());
         assert!(matches!(

@@ -69,6 +69,12 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- Scope resurrection and translocate consent to an admission and a specific
+  offer. The offer events carry `ConsentOffer`, and the answer commands and
+  refusal events carry its `offer_id`. Hosts can observe the worker's
+  `ConsentClosed` disposition independently of server results. The raw offers
+  decode through `message` before session policy and recipient checks.
+
 - Restore the configured P99 list reply preference on return to character
   selection. A runtime choice follows the same character across zones.
 

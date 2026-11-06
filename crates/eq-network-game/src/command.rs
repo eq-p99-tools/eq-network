@@ -533,8 +533,10 @@ pub enum GameCommand {
         /// Reject delayed actions instead of replaying them after a stall.
         created: std::time::Instant,
     },
-    /// Accept or decline the resurrection offered last.
+    /// Accept or decline the identified resurrection offer.
     AnswerResurrection {
+        /// Identity from the offer event.
+        offer_id: crate::confirmations::ConsentId,
         /// Current zone admission.
         session_id: u64,
         /// True accepts.
@@ -548,9 +550,11 @@ pub enum GameCommand {
         /// True accepts.
         accept: bool,
     },
-    /// Accept or decline the translocate offered last, which moves the
-    /// player: only ever on the player's own choice.
+    /// Accept or decline the identified translocate offer. A Yes requires
+    /// the player's own choice.
     AnswerTranslocate {
+        /// Identity from the offer event.
+        offer_id: crate::confirmations::ConsentId,
         /// Current zone admission.
         session_id: u64,
         /// True accepts.

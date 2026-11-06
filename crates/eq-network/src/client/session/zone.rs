@@ -1227,6 +1227,11 @@ mod tests {
             },
             ClientCommand::AnswerResurrection {
                 session_id,
+                offer_id: eq_network_game::confirmations::ConsentId {
+                    session_id,
+                    kind: eq_network_game::confirmations::ConsentKind::Resurrection,
+                    sequence: 1,
+                },
                 accept: true,
             },
             ClientCommand::AnswerSacrifice {
@@ -1235,6 +1240,11 @@ mod tests {
             },
             ClientCommand::AnswerTranslocate {
                 session_id,
+                offer_id: eq_network_game::confirmations::ConsentId {
+                    session_id,
+                    kind: eq_network_game::confirmations::ConsentKind::Translocate,
+                    sequence: 1,
+                },
                 accept: true,
             },
             ClientCommand::DropInvisibility {
@@ -1968,6 +1978,69 @@ mod tests {
                 ..
             }), ..] if reason == UNOFFERED
         ));
+    }
+
+    #[test]
+    fn only_the_offering_server_turns_a_wire_record_into_answerable_consent() {
+        use crate::client::{session::feature::testing, ServerProtocol};
+        use eq_network_game::confirmations::{ConsentClosure, TRANSLOCATE_OPCODE};
+
+        let mut body = vec![0; 92];
+        body[..4].copy_from_slice(&4u32.to_le_bytes());
+        body[12..18].copy_from_slice(b"Helper");
+        let offer = eq_network_game::confirmations::titanium_translocate(&body).unwrap();
+        for protocol in [ServerProtocol::EqEmu, ServerProtocol::Project1999] {
+            let server = servers::server_type(protocol);
+            let mut features =
+                Features::new(server, "Tester", eq_network_game::food::AutoEat::default());
+            let mut world = World::new(5);
+            world.admitted = Some(Instant::now());
+            let result = testing::run(|out| {
+                hear(
+                    read_messages(
+                        server.wire(),
+                        TRANSLOCATE_OPCODE,
+                        &body,
+                        eq_network_game::inventory::ItemRules::Takp,
+                    ),
+                    &mut features,
+                    &mut world,
+                    out,
+                    true,
+                )
+            });
+            assert!(result.result.unwrap().is_none());
+            assert!(result.sent.is_empty());
+            if protocol == ServerProtocol::Project1999 {
+                assert!(result.events.is_empty());
+                continue;
+            }
+            let [ClientEvent::World(WorldEvent::TranslocateOffer(question))] =
+                result.events.as_slice()
+            else {
+                panic!("expected a scoped consent offer");
+            };
+            let commands = [ClientCommand::AnswerTranslocate {
+                session_id: 5,
+                offer_id: question.id,
+                accept: true,
+            }];
+            let answered =
+                testing::run(|out| apply_commands(&commands, &mut features, &mut world, out, true));
+            assert!(answered.result.unwrap().is_none());
+            assert_eq!(
+                answered.sent,
+                [eq_network_game::confirmations::titanium_translocate_answer(
+                    &offer, true
+                )]
+            );
+            assert!(matches!(
+                answered.events.as_slice(),
+                [ClientEvent::World(WorldEvent::ConsentClosed { id, closure: ConsentClosure::AnswerSent { accept: true } })]
+                    if *id == question.id
+            ));
+            assert!(!world.lifecycle.blocks_motion());
+        }
     }
 
     #[test]

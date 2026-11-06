@@ -1359,9 +1359,11 @@ pub enum WorldEvent {
     PracticePoints(u32),
     /// A resurrection was cast on the player's corpse; the player may accept
     /// or decline it.
-    Resurrection(crate::resurrection::ResurrectionOffer),
+    Resurrection(crate::confirmations::ConsentOffer<crate::resurrection::ResurrectionOffer>),
     /// An answer to a resurrection was not sent, and why.
     ResurrectionRefused {
+        /// The offer the command named.
+        offer_id: crate::confirmations::ConsentId,
         /// Admission from the request.
         session_id: u64,
         /// Why not.
@@ -1379,9 +1381,18 @@ pub enum WorldEvent {
     },
     /// A translocate was cast on the player; the player may accept, going
     /// where it takes them, or decline it.
-    TranslocateOffer(crate::confirmations::TranslocateOffer),
+    TranslocateOffer(crate::confirmations::ConsentOffer<crate::confirmations::TranslocateOffer>),
+    /// This offer is no longer answerable in the session.
+    ConsentClosed {
+        /// The exact offer that closed.
+        id: crate::confirmations::ConsentId,
+        /// Why the session closed it.
+        closure: crate::confirmations::ConsentClosure,
+    },
     /// An answer to a translocate was not sent, and why.
     TranslocateRefused {
+        /// The offer the command named.
+        offer_id: crate::confirmations::ConsentId,
         /// Admission from the request.
         session_id: u64,
         /// Why not.
@@ -1866,11 +1877,6 @@ fn titanium_views(opcode: u16, body: &[u8]) -> Result<Option<WorldEvent>> {
                 crate::confirmations::sacrifice(body)?,
             )));
         }
-        crate::confirmations::TRANSLOCATE_OPCODE => {
-            return Ok(Some(WorldEvent::TranslocateOffer(
-                crate::confirmations::titanium_translocate(body)?,
-            )));
-        }
         _ => (),
     }
     Ok(
@@ -1896,8 +1902,6 @@ fn titanium_views(opcode: u16, body: &[u8]) -> Result<Option<WorldEvent>> {
             Some(WorldEvent::Exchange(update))
         } else if let Some(update) = crate::training::decode(opcode, body)? {
             Some(WorldEvent::Training(update))
-        } else if let Some(offer) = crate::resurrection::decode(opcode, body)? {
-            Some(WorldEvent::Resurrection(offer))
         } else if let Some(update) = crate::group::decode(opcode, body)? {
             Some(WorldEvent::Group(update))
         } else if let Some(roll) = crate::socials::decode_roll(opcode, body)? {
@@ -2705,7 +2709,7 @@ mod tests {
     }
 
     #[test]
-    fn sacrifice_and_translocate_offers_are_read() {
+    fn a_sacrifice_offer_is_read() {
         let sacrifice: Vec<u8> = [581u32, 7, 0]
             .iter()
             .flat_map(|value| value.to_le_bytes())
@@ -2714,16 +2718,7 @@ mod tests {
             titanium_update(0x727a, &sacrifice).unwrap(),
             Some(WorldEvent::SacrificeOffer(offer)) if offer.caster_id == 581
         ));
-        let mut translocate = vec![0; 92];
-        translocate[..4].copy_from_slice(&4u32.to_le_bytes());
-        translocate[12..18].copy_from_slice(b"Tester");
-        assert!(matches!(
-            titanium_update(0x8258, &translocate).unwrap(),
-            Some(WorldEvent::TranslocateOffer(offer))
-                if offer.zone_id == 4 && offer.caster == "Tester"
-        ));
         assert!(titanium_update(0x727a, &sacrifice[..8]).is_err());
-        assert!(titanium_update(0x8258, &translocate[..91]).is_err());
     }
 
     #[test]
