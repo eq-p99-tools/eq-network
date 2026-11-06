@@ -823,7 +823,7 @@ const P99_ABILITIES: [Ability; 16] = [
     Ability::SenseHeading,
 ];
 
-/// Liquid reporting is enabled for local EQEmu validation. The server
+/// Liquid reporting is enabled for local `EQEmu` validation. The server
 /// applies its modifiers in `Client::Handle_OP_EnvDamage`.
 const LOCAL_EQEMU_HAZARDS: [Hazard; 3] = [Hazard::Falling, Hazard::Drowning, Hazard::Lava];
 const TITANIUM_FALLS: [Hazard; 1] = [Hazard::Falling];

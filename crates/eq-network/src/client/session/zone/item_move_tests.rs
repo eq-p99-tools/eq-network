@@ -155,7 +155,7 @@ fn an_equip_invalidates_a_liquid_sample_at_the_same_position() {
         output.sent,
         [titanium_move(cursor, worn, MoveQuantity::Whole).unwrap()]
     );
-    assert!(output.unreliable.is_empty());
+    assert_eq!(output.unreliable, []);
     assert!(world.inventory.items().contains_key(&worn));
     assert!(world.inventory.equipment_stats_uncertain());
     assert_eq!(world.player_at(), Some((7, position)));

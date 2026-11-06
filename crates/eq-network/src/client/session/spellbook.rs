@@ -966,7 +966,7 @@ mod tests {
         let timed_out = submitted + Duration::from_secs(31);
         let output = testing::run(|out| spellbook.tick(timed_out, &mut world, out));
         output.result.unwrap();
-        assert!(output.sent.is_empty());
+        assert_eq!(output.sent, []);
         assert_eq!(statuses(&output.events), [&BookActionStatus::Unconfirmed]);
         assert_eq!(
             spellbook.holds(&world, timed_out),
@@ -1149,9 +1149,9 @@ mod tests {
         let late = Instant::now() + Duration::from_secs(31);
         let output = testing::run(|out| spellbook.tick(late, &mut world, out));
         output.result.unwrap();
-        assert!(output.sent.is_empty());
+        assert_eq!(output.sent, []);
         assert_eq!(statuses(&output.events), [&BookActionStatus::Unconfirmed]);
-        assert!(spellbook.holds(&world, late).is_empty());
+        assert_eq!(spellbook.holds(&world, late), []);
 
         let refresh = |spellbook: &mut Spellbook,
                        character: &mut super::super::character::Character,
@@ -1174,7 +1174,7 @@ mod tests {
         assert_eq!(world.player.as_ref().unwrap().memorized_spells[2], Some(74));
         let refused = testing::run(|out| spellbook.handle(&forget(74), &mut world, out));
         refused.result.unwrap();
-        assert!(refused.sent.is_empty());
+        assert_eq!(refused.sent, []);
         assert!(matches!(
             statuses(&refused.events)[..],
             [BookActionStatus::Rejected(_)]
@@ -1199,7 +1199,7 @@ mod tests {
         }
         let settled = refresh(&mut spellbook, &mut character, &mut world, 73, 1);
         assert_eq!(statuses(&settled), [&BookActionStatus::Confirmed]);
-        assert!(spellbook.holds(&world, late).is_empty());
+        assert_eq!(spellbook.holds(&world, late), []);
         assert_eq!(world.player.as_ref().unwrap().memorized_spells[2], Some(73));
     }
 

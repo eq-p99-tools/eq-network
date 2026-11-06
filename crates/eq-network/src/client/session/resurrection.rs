@@ -166,9 +166,10 @@ mod tests {
         };
         assert_ne!(question.id, new_question.id);
         let now = new_question.expires_at;
-        let early = testing::run(|out| {
-            resurrection.tick(now - std::time::Duration::from_nanos(1), &mut world, out)
-        });
+        let before = now
+            .checked_sub(std::time::Duration::from_nanos(1))
+            .expect("the fixture deadline has a preceding nanosecond");
+        let early = testing::run(|out| resurrection.tick(before, &mut world, out));
         early.result.unwrap();
         assert!(early.sent.is_empty() && early.events.is_empty());
         let expired = testing::run(|out| resurrection.tick(now, &mut world, out));

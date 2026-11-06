@@ -388,13 +388,15 @@ mod tests {
         let opened =
             testing::run(|out| feature.observe(&Message::TranslocateOffer(offer), &mut world, out));
         opened.result.unwrap();
-        assert!(opened.sent.is_empty());
+        assert_eq!(opened.sent, []);
         let [ClientEvent::World(WorldEvent::TranslocateOffer(question))] = opened.events.as_slice()
         else {
             panic!("expected the question");
         };
         let deadline = question.expires_at;
-        let before = deadline - Duration::from_nanos(1);
+        let before = deadline
+            .checked_sub(Duration::from_nanos(1))
+            .expect("the fixture deadline has a preceding nanosecond");
         let early = testing::run(|out| feature.tick(before, &mut world, out));
         early.result.unwrap();
         assert!(early.sent.is_empty() && early.events.is_empty());
@@ -416,7 +418,7 @@ mod tests {
 
         let late = testing::run(|out| feature.handle(&answer(question.id, true), &mut world, out));
         late.result.unwrap();
-        assert!(late.sent.is_empty());
+        assert_eq!(late.sent, []);
         assert!(matches!(
             late.events.first(),
             Some(ClientEvent::World(WorldEvent::TranslocateRefused { offer_id, .. }))

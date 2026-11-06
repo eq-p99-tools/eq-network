@@ -1352,7 +1352,7 @@ mod tests {
                 amount: 13,
                 observation: eq_network_game::hazards::LiquidObservation {
                     revision: 0,
-                    position: Default::default(),
+                    position: eq_network_game::world::Position::default(),
                     sampled_at: created,
                 },
             },
@@ -1376,7 +1376,7 @@ mod tests {
     fn liquid_ticks_follow_current_worker_inputs_and_completed_falls_survive_corrections() {
         use super::super::feature::testing;
         use crate::client::{ClientConfig, ServerProtocol};
-        use eq_network_game::hazards::{self, Hazard, LiquidHazard, LiquidObservation};
+        use eq_network_game::hazards::{Hazard, LiquidHazard, LiquidObservation};
 
         let mut config = ClientConfig::new("Example", "Fixture", "Local", "Tester");
         config.local_only = true;
@@ -1474,6 +1474,12 @@ mod tests {
             assert!(apply_commands(&commands, &mut features, &mut world, out, true)?.is_none());
             Ok(expired.is_some())
         });
+        assert_liquid_tick_outcome(outcome);
+    }
+
+    fn assert_liquid_tick_outcome(outcome: super::super::feature::testing::Outcome<Result<bool>>) {
+        use eq_network_game::hazards::{self, Hazard};
+
         let expiry_covered = outcome.result.unwrap();
         assert_eq!(
             outcome.sent,
@@ -1483,7 +1489,7 @@ mod tests {
                 hazards::titanium_damage(7, Hazard::Falling, 160).unwrap(),
             ]
         );
-        assert!(outcome.unreliable.is_empty());
+        assert_eq!(outcome.unreliable, []);
         let rejected = outcome.events.iter().filter(|event| {
             matches!(event, ClientEvent::Diagnostic(line) if line.contains("Rejected LiquidDamage"))
         }).count();

@@ -535,7 +535,7 @@ mod tests {
 
         let duplicate = testing::run(|out| casting.handle(&stop, &mut world, out));
         duplicate.result.unwrap();
-        assert!(duplicate.sent.is_empty());
+        assert_eq!(duplicate.sent, []);
         assert!(matches!(
             duplicate.events.as_slice(),
             [ClientEvent::Diagnostic(reason)]
@@ -582,7 +582,7 @@ mod tests {
 
         let unavailable = testing::run(|out| Casting::default().handle(&stop, &mut world, out));
         unavailable.result.unwrap();
-        assert!(unavailable.sent.is_empty());
+        assert_eq!(unavailable.sent, []);
         assert!(matches!(
             unavailable.events.as_slice(),
             [ClientEvent::Diagnostic(reason)] if reason == "Stopping songs is unavailable on this server"

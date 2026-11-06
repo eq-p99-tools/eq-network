@@ -16,7 +16,7 @@ use anyhow::Result;
 use eq_network_game::{
     hazards::{Hazard, LiquidHazard},
     request::Request,
-    world::{Capability, WorldEvent},
+    world::{Capability, Position, WorldEvent},
 };
 use std::time::{Duration, Instant};
 
@@ -61,8 +61,8 @@ impl Observations {
             WorldEvent::Buff(buff) => u32::from(*own) == buff.entity_id,
             WorldEvent::SpellEffect(effect) => *own == effect.target_id,
             WorldEvent::Death(death) => death.spawn_id == u32::from(*own),
-            WorldEvent::DeathBind { session_id: visit } => *visit == *session_id,
-            WorldEvent::InventoryAction {
+            WorldEvent::DeathBind { session_id: visit }
+            | WorldEvent::InventoryAction {
                 session_id: visit,
                 update: Some(_),
                 error: None,
@@ -90,6 +90,11 @@ impl Observations {
     fn matches(&self, session_id: u64, spawn_id: u16, revision: u64) -> bool {
         self.current == Some((session_id, spawn_id, revision))
     }
+}
+
+fn same_finite_xyz(current: [f32; 3], observed: Position) -> bool {
+    current.into_iter().all(f32::is_finite)
+        && current.map(f32::to_bits) == [observed.x, observed.y, observed.z].map(f32::to_bits)
 }
 
 /// Reports the world's damage to the server.
@@ -178,14 +183,7 @@ impl Feature for Hazards {
                     out.log
                         .liquid_inputs
                         .matches(session_id, spawn_id, observation.revision)
-                        && current.into_iter().all(f32::is_finite)
-                        && current.map(f32::to_bits)
-                            == [
-                                observation.position.x,
-                                observation.position.y,
-                                observation.position.z,
-                            ]
-                            .map(f32::to_bits)
+                        && same_finite_xyz(current, observation.position)
                 });
                 if !world.ready() || world.lifecycle.blocks_motion() || !current {
                     return actions::refuse(
@@ -289,8 +287,8 @@ mod tests {
         for hazard in [Hazard::Drowning, Hazard::Lava] {
             let outcome = testing::run(|out| feature.handle(&report(hazard, 13), &mut world, out));
             outcome.result.unwrap();
-            assert!(outcome.sent.is_empty());
-            assert!(outcome.unreliable.is_empty());
+            assert_eq!(outcome.sent, []);
+            assert_eq!(outcome.unreliable, []);
         }
     }
 
