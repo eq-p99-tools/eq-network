@@ -1,7 +1,7 @@
-//! Target packets, production feature ordering and exact ability recipients.
+//! Target packets, production feature ordering and target-bound requests.
 use super::super::feature::testing;
 use super::*;
-use crate::client::ServerProtocol;
+use crate::client::{ClientConfig, ServerProtocol};
 use eq_network_game::{
     abilities::Ability,
     food::AutoEat,
@@ -18,9 +18,12 @@ const SERVERS: [ServerProtocol; 4] = [
 ];
 
 fn setup(protocol: ServerProtocol) -> (Features, World) {
+    setup_world(protocol, World::new(5))
+}
+
+fn setup_world(protocol: ServerProtocol, mut world: World) -> (Features, World) {
     let server = servers::server_type(protocol);
     let mut features = Features::new(server, "Tester", AutoEat::default());
-    let mut world = World::new(5);
     world.own_spawn = Some(7);
     let mut player = testing::player(7);
     player.class = Some(1);
@@ -44,6 +47,125 @@ fn setup(protocol: ServerProtocol) -> (Features, World) {
     .result
     .unwrap();
     (features, world)
+}
+
+fn fixture_world(protocol: ServerProtocol, local_only: bool) -> World {
+    let mut config = ClientConfig::for_protocol(protocol, "Example", "Example", "Test", "Tester");
+    config.local_only = local_only;
+    World::for_zone(5, &config)
+}
+
+fn drain_depop(
+    protocol: ServerProtocol,
+    features: &mut Features,
+    world: &mut World,
+    command: ClientCommand,
+) -> testing::Outcome<Result<Option<ZoneExit>>> {
+    testing::run_on(servers::server_type(protocol).wire(), |out| {
+        apply_commands(&[command], features, world, out, true)
+    })
+}
+
+#[test]
+fn queued_local_depop_refuses_target_changes_and_reused_spawn_ids_at_drain() {
+    use eq_network_game::chat::OutboundChat;
+
+    let protocol = ServerProtocol::EqEmu;
+    let server = servers::server_type(protocol);
+    let (mut features, mut world) = setup_world(protocol, fixture_world(protocol, true));
+    receive_target(protocol, &mut features, &mut world, Some(42))
+        .result
+        .unwrap();
+    let original = world.target.state();
+    let queued = ClientCommand::DepopLocalNpc {
+        session_id: world.session_id,
+        target: original,
+        created: Instant::now(),
+    };
+
+    receive_target(protocol, &mut features, &mut world, Some(43))
+        .result
+        .unwrap();
+    let refused = |output: testing::Outcome<Result<Option<ZoneExit>>>| {
+        assert!(output.result.unwrap().is_none());
+        assert!(output.sent.is_empty() && output.unreliable.is_empty());
+        assert!(output.events.iter().any(|event| matches!(event,
+            ClientEvent::Diagnostic(reason) if reason.contains("fixture NPC target has changed"))));
+    };
+    refused(drain_depop(
+        protocol,
+        &mut features,
+        &mut world,
+        queued.clone(),
+    ));
+
+    hear_events(
+        protocol,
+        &mut features,
+        &mut world,
+        vec![
+            Message::Event(WorldEvent::Despawn(42)),
+            Message::Event(WorldEvent::Spawns(vec![testing::spawn(42, SpawnKind::Npc)])),
+        ],
+    )
+    .result
+    .unwrap();
+    receive_target(protocol, &mut features, &mut world, Some(42))
+        .result
+        .unwrap();
+    let replacement = world.target.state();
+    assert_eq!(replacement.spawn_id, original.spawn_id);
+    assert!(replacement.available && replacement.revision > original.revision);
+    refused(drain_depop(protocol, &mut features, &mut world, queued));
+
+    let current = ClientCommand::DepopLocalNpc {
+        session_id: world.session_id,
+        target: replacement,
+        created: Instant::now(),
+    };
+    let output = drain_depop(protocol, &mut features, &mut world, current);
+    assert!(output.result.unwrap().is_none());
+    let expected = server
+        .wire()
+        .encode(
+            &Request::Command(ClientCommand::SendChat(OutboundChat::Say("#depop".into()))),
+            Sender {
+                name: "Tester",
+                spawn_id: Some(7),
+            },
+        )
+        .unwrap();
+    assert_eq!(output.sent, [expected]);
+    assert!(output.events.is_empty());
+    assert!(
+        world.spawns.visible(42).is_some(),
+        "submission cannot remove the NPC"
+    );
+}
+
+#[test]
+fn depop_requires_a_local_eqemu_connection_and_the_current_admission() {
+    for (protocol, local_only, session_id, expected) in [
+        (ServerProtocol::EqEmu, false, 5, "requires local EQEmu"),
+        (ServerProtocol::Project1999, true, 5, "requires local EQEmu"),
+        (ServerProtocol::Takp, true, 5, "requires local EQEmu"),
+        (ServerProtocol::EqEmu, true, 4, "earlier zone visit"),
+    ] {
+        let (mut features, mut world) = setup_world(protocol, fixture_world(protocol, local_only));
+        receive_target(protocol, &mut features, &mut world, Some(42))
+            .result
+            .unwrap();
+        let queued = ClientCommand::DepopLocalNpc {
+            session_id,
+            target: world.target.state(),
+            created: Instant::now(),
+        };
+        let output = drain_depop(protocol, &mut features, &mut world, queued);
+        assert!(output.result.unwrap().is_none());
+        assert!(output.sent.is_empty() && output.unreliable.is_empty());
+        assert!(output.events.iter().any(|event| matches!(event,
+            ClientEvent::Diagnostic(reason) if reason.contains(expected))));
+    }
 }
 
 fn hear_events(

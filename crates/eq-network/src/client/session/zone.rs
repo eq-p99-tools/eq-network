@@ -283,7 +283,7 @@ fn run_connected(
     let connected = Instant::now();
     let mut progress = Instant::now();
     let session_id = rand::random();
-    let mut world = World::new(session_id);
+    let mut world = World::for_zone(session_id, config);
     let mut recording_only = false;
     let mut reported_recording_offer = false;
     let mut entry_position_superseded = false;
@@ -809,7 +809,7 @@ mod tests {
     };
 
     /// How many kinds of command there are.
-    const KINDS: usize = 84;
+    const KINDS: usize = 85;
 
     /// The kinds the login and world servers take, before any zone session.
     const BEFORE_ZONES: [usize; 4] = [0, 1, 70, 75];
@@ -836,6 +836,7 @@ mod tests {
             ClientCommand::CancelBuff(_) => 81,
             ClientCommand::RangedAttack(_) => 82,
             ClientCommand::StopSong { .. } => 83,
+            ClientCommand::DepopLocalNpc { .. } => 84,
             ClientCommand::SetPosture { .. } => 12,
             ClientCommand::MoveInventory(_) => 13,
             ClientCommand::DestroyItem(_) => 80,
@@ -1026,6 +1027,11 @@ mod tests {
                 item: super::super::feature::testing::item(30),
             })),
             ClientCommand::SendChat(OutboundChat::Say("Hail".into())),
+            ClientCommand::DepopLocalNpc {
+                session_id,
+                target: eq_network_game::targets::TargetState::default(),
+                created,
+            },
             ClientCommand::InspectItem {
                 session_id,
                 link_body: String::new(),

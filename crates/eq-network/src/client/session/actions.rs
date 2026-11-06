@@ -134,6 +134,7 @@ pub(super) fn needs(command: &ClientCommand) -> &'static [Resource] {
         | ClientCommand::CrossZoneLine { .. }
         | ClientCommand::SetPosture { .. }
         | ClientCommand::SendChat(_)
+        | ClientCommand::DepopLocalNpc { .. }
         | ClientCommand::InspectItem { .. }
         | ClientCommand::Consider { .. }
         | ClientCommand::Camp { .. }
@@ -386,6 +387,7 @@ fn refusal(command: &ClientCommand, reason: &str) -> Option<WorldEvent> {
         | ClientCommand::CreateCharacter { .. }
         | ClientCommand::SetPosture { .. }
         | ClientCommand::SendChat(_)
+        | ClientCommand::DepopLocalNpc { .. }
         | ClientCommand::InspectItem { .. }
         | ClientCommand::Shop { .. }
         | ClientCommand::CancelTrade { .. }

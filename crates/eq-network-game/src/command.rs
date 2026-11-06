@@ -217,6 +217,15 @@ pub enum GameCommand {
     DestroyItem(Box<crate::inventory::InventoryDestroy>),
     /// Send one chat message.
     SendChat(OutboundChat),
+    /// Remove the selected NPC in a network-constrained local EQEmu fixture.
+    DepopLocalNpc {
+        /// Current zone admission.
+        session_id: u64,
+        /// The available target and its reconciled selection revision.
+        target: crate::targets::TargetState,
+        /// When the host made the request.
+        created: std::time::Instant,
+    },
     /// Inspect a preserved item link in the active zone session.
     InspectItem {
         /// Connection identifier from zone admission.
@@ -784,6 +793,7 @@ impl GameCommand {
             Self::MoveInventory(..) => "MoveInventory",
             Self::DestroyItem(..) => "DestroyItem",
             Self::SendChat(..) => "SendChat",
+            Self::DepopLocalNpc { .. } => "DepopLocalNpc",
             Self::InspectItem { .. } => "InspectItem",
             Self::Consider { .. } => "Consider",
             Self::Camp { .. } => "Camp",
@@ -935,6 +945,7 @@ impl GameCommand {
             | Self::DragCorpse { session_id, .. }
             | Self::DropCorpse { session_id, .. }
             | Self::SelectTarget { session_id, .. }
+            | Self::DepopLocalNpc { session_id, .. }
             | Self::ConfigureMotion { session_id, .. }
             | Self::SpeedInputs { session_id, .. }
             | Self::ClimbReach { session_id, .. } => Some(*session_id),
@@ -984,7 +995,9 @@ impl GameCommand {
             Self::MoveInventory(_) | Self::DestroyItem(_) => Capability::Inventory,
             Self::Consume { .. } | Self::AutoEat { .. } => Capability::Meals,
             Self::AnswerListPolls { .. } => Capability::AnsweringListPolls,
-            Self::SendChat(_) | Self::InspectItem { .. } => Capability::Talking,
+            Self::SendChat(_) | Self::InspectItem { .. } | Self::DepopLocalNpc { .. } => {
+                Capability::Talking
+            }
             Self::Consider { .. } | Self::AutoAttack { .. } => Capability::Combat,
             Self::Camp { .. } | Self::ExitAtOnce { .. } => Capability::Camping,
             Self::BledOut { .. } => Capability::BleedingOut,
@@ -1111,6 +1124,7 @@ impl GameCommand {
             | Self::StopSong { created, .. }
             | Self::SetPosture { created, .. }
             | Self::Consider { created, .. }
+            | Self::DepopLocalNpc { created, .. }
             | Self::Camp { created, .. }
             | Self::ExitAtOnce { created, .. }
             | Self::BledOut { created, .. }
@@ -1270,6 +1284,9 @@ pub fn encode(
         }
         GameCommand::RangedAttack(_) => {
             anyhow::bail!("a ranged attack requires the admitted target and loadout")
+        }
+        GameCommand::DepopLocalNpc { .. } => {
+            anyhow::bail!("local fixture cleanup requires the admitted target")
         }
         GameCommand::CastSpell {
             gem,

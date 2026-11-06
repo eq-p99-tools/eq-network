@@ -1,5 +1,18 @@
 # API and integration contracts
 
+## Local EQEmu fixture cleanup
+
+`GameCommand::DepopLocalNpc` carries the current admission, creation time
+and reconciled `TargetState`. The chat owner accepts it only when the session
+uses `ServerProtocol::EqEmu` with `ClientConfig::local_only`. At the send it
+requires the same available target revision and a visible NPC. The normal
+admission and freshness guards also apply. A local refusal is diagnostic.
+
+The wire command is the fixed `#depop` chat line. The server acts on its
+current target and sends any resulting world changes independently. The
+target guard covers state the session has observed at the send. A caller
+must verify ownership and observe the exact fixture's removal.
+
 ## Manual Titanium ranged attacks
 
 An admission offering `Capability::RangedCombat` can take
