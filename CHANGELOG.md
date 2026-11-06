@@ -44,8 +44,8 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   mouse heading snapshots (`movement::HeadingUpdate`). Titanium's
   `eqgame.exe` establishes the raw lateral half-rate and the independent
   heading and current yaw fields. The sampled diagonal endpoint and
-  completed-facing snapshot with zero continuing yaw are local policies.
-  Live P99 acceptance of this pair remains unverified.
+  completed-facing snapshot with zero continuing yaw are inferred (recording
+  checklist 6.388). Live P99 acceptance of this pair remains unverified.
 - Network-owned dialect accessors for heading snapshots, fatigue-based
   carrying capacity, ordinary door cursor checks, and reading window kinds.
 
@@ -61,6 +61,9 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Expose the inventory policy's cursor destruction support via
   `MoveRules::supports_cursor_destruction`. Document its Titanium bag slot
   bound and the explicit P99 buff cancellation policy.
+- `PlayerAdmissionError` and the additive `ConnectionStage::Recording`
+  milestone (serialized `recording`); `ConnectionStage` is non-exhaustive, so
+  no match breaks.
 
 - Interpret received own-player stuns on stock Titanium `EQEmu` using the
   existing Titanium timer, including zero, overlap and admission boundaries.

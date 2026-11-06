@@ -168,7 +168,9 @@ pub enum HeadingUpdate {
     /// The heading is the endpoint of locally applied mouse input.
     /// Titanium `eqgame.exe` packs absolute heading independently of the
     /// current yaw rate (0x46529f–0x4652c4 and 0x4652e0–0x4652fe).
-    /// A snapshot uses that heading field and supplies zero continuing yaw.
+    /// A snapshot uses that heading field and supplies zero continuing yaw;
+    /// that a mouse-completed facing goes out with zero yaw is inferred
+    /// (recording checklist 6.388).
     Snapshot,
 }
 

@@ -27,7 +27,9 @@ struct Features {
     spell_landing_flag: Option<u8>,
     answers_list_polls: bool,
     /// Whether the server type offers the explicit gameplay departures
-    /// (movement and memorization options).
+    /// (movement and memorization options). Every server type offers them
+    /// while the owner tests them; public parity needs them withheld on
+    /// P99, Quarm and TAKP again before a release.
     gameplay_departures: bool,
 }
 
