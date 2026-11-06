@@ -217,7 +217,7 @@ pub enum GameCommand {
     DestroyItem(Box<crate::inventory::InventoryDestroy>),
     /// Send one chat message.
     SendChat(OutboundChat),
-    /// Remove the selected NPC in a network-constrained local EQEmu fixture.
+    /// Remove the selected NPC in a network-constrained local `EQEmu` fixture.
     DepopLocalNpc {
         /// Current zone admission.
         session_id: u64,
