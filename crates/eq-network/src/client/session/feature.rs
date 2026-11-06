@@ -212,6 +212,8 @@ pub(in crate::client) struct World {
     /// The server's idea of the player's target, which only the targeting
     /// feature changes.
     pub(super) target: super::targeting::Target,
+    /// Current own-pet identity, derived from the spawn table by Pets.
+    pub(super) own_pet: Option<eq_network_game::pets::PetIdentity>,
     /// The zone's objects, which only the ground objects feature changes.
     pub(super) objects: ZoneObjects,
     /// The world container asked for or open, which only the tradeskills
@@ -244,6 +246,7 @@ impl World {
             spawns: Spawns::default(),
             exchange: Exchanging::default(),
             target: super::targeting::Target::default(),
+            own_pet: None,
             objects: ZoneObjects::default(),
             container: OpenContainer::default(),
             news: Vec::new(),

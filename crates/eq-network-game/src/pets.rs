@@ -9,7 +9,10 @@
 //! `common/patches/titanium.cpp`), and `Client::Handle_OP_PetCommands`
 //! (`zone/client_packet.cpp`), which aims an attack at the target the
 //! command names.
-use crate::command::EncodedCommand;
+use crate::{
+    command::EncodedCommand,
+    world::{SpawnKind, SpawnState},
+};
 use anyhow::{ensure, Result};
 use serde::Serialize;
 
@@ -19,6 +22,31 @@ pub const COMMAND_OPCODE: u16 = 0x10a1;
 pub const BUFFS_OPCODE: u16 = 0x4e31;
 /// Buff slots a pet has.
 pub const BUFF_SLOTS: usize = 30;
+
+/// The session's identity for the player's current pet. Ownership loss or a
+/// new incarnation invalidates queued orders even if the spawn ID is reused.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+pub struct PetIdentity {
+    /// Pet's spawn ID in the current admission.
+    pub spawn_id: u16,
+    /// Monotonic within this admission.
+    pub revision: u64,
+}
+
+/// Finds the sole living pet the spawn table assigns to this owner. If
+/// multiple spawns claim the same owner, the commandable pet is unresolved.
+#[must_use]
+pub fn owned_pet<'a>(owner: u16, spawns: impl Iterator<Item = &'a SpawnState>) -> Option<u16> {
+    let mut pets = spawns.filter(|spawn| {
+        owner != 0
+            && spawn.spawn_id != 0
+            && spawn.spawn_id != owner
+            && spawn.pet_owner == Some(owner)
+            && matches!(spawn.kind, SpawnKind::Npc | SpawnKind::Player)
+    });
+    let pet = pets.next()?.spawn_id;
+    pets.next().is_none().then_some(pet)
+}
 
 /// A command to a pet, numbered as the Titanium client sends it.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
@@ -31,6 +59,8 @@ pub enum PetCommand {
     Health,
     /// Guard where it stands.
     GuardHere,
+    /// Guard the player.
+    GuardMe,
     /// Attack the target the command names.
     Attack,
     /// Follow the player.
@@ -59,11 +89,12 @@ pub enum PetCommand {
 
 impl PetCommand {
     /// Every command, in the Titanium client's order.
-    pub const ALL: [Self; 16] = [
+    pub const ALL: [Self; 17] = [
         Self::BackOff,
         Self::GetLost,
         Self::Health,
         Self::GuardHere,
+        Self::GuardMe,
         Self::Attack,
         Self::Follow,
         Self::Sit,
@@ -86,6 +117,7 @@ impl PetCommand {
             Self::GetLost => 2,
             Self::Health => 4,
             Self::GuardHere => 5,
+            Self::GuardMe => 6,
             Self::Attack => 7,
             Self::Follow => 8,
             Self::Sit => 9,
@@ -99,6 +131,12 @@ impl PetCommand {
             Self::NoCast => 18,
             Self::Focus => 19,
         }
+    }
+
+    /// Whether the Project 1999 policy offers this ordinary command.
+    #[must_use]
+    pub const fn project1999_available(self) -> bool {
+        !matches!(self, Self::Hold | Self::Feign | Self::NoCast | Self::Focus)
     }
 
     /// Whether the command names the player's target: an attack aims at it,
@@ -202,7 +240,7 @@ mod tests {
         let numbers: Vec<u32> = PetCommand::ALL.map(PetCommand::wire).into();
         assert_eq!(
             numbers,
-            [1, 2, 4, 5, 7, 8, 9, 10, 11, 12, 13, 14, 16, 17, 18, 19]
+            [1, 2, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 16, 17, 18, 19]
         );
         assert!(PetCommand::Attack.names_target() && !PetCommand::Follow.names_target());
     }

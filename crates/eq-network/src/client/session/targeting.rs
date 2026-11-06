@@ -130,6 +130,7 @@ impl Feature for Targeting {
             session_id,
             request_id,
             spawn_id,
+            expected_pet,
         } = *command
         else {
             return Ok(());
@@ -139,17 +140,21 @@ impl Feature for Targeting {
             world.target.request_id = request_id;
         }
         let available = spawn_id.is_none_or(|id| world.visible(id));
-        if !available || !fresh {
+        let pet_changed = expected_pet
+            .is_some_and(|pet| Some(pet) != world.own_pet || Some(pet.spawn_id) != spawn_id);
+        if !available || !fresh || pet_changed {
             out.log
                 .send(ClientEvent::World(WorldEvent::TargetRejected {
                     session_id,
                     request_id,
                     spawn_id,
                     state: Some(world.target.state()),
-                    reason: if fresh {
-                        "Target is invisible or unavailable"
-                    } else {
+                    reason: if !fresh {
                         "Target choice is stale"
+                    } else if pet_changed {
+                        "Your pet has changed"
+                    } else {
+                        "Target is invisible or unavailable"
                     }
                     .into(),
                 }))?;
@@ -221,6 +226,7 @@ mod tests {
             request_id,
             session_id: 5,
             spawn_id,
+            expected_pet: None,
         }
     }
 

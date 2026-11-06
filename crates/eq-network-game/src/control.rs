@@ -76,6 +76,23 @@ pub struct Charm {
     pub charmed: bool,
 }
 
+impl Charm {
+    /// The owner's ID after applying this message to the named existing
+    /// spawn. An ownerless control return does not name a pet relationship.
+    /// Release from an old owner cannot remove a newer owner's charm.
+    #[must_use]
+    pub fn pet_owner(self, current: Option<u16>) -> Option<u16> {
+        match self
+            .owner_id
+            .filter(|owner| *owner != 0 && *owner != self.pet_id)
+        {
+            Some(owner) if self.charmed => Some(owner),
+            Some(owner) if current == Some(owner) => None,
+            _ => current,
+        }
+    }
+}
+
 /// Decodes a stun on either generation: its length, or None for received zero.
 /// This raw value does not itself establish the client's release behavior.
 ///

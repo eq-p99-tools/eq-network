@@ -386,6 +386,7 @@ fn local_refusal_keeps_authority_and_old_selection_sequences_cannot_replay() {
         session_id: 5,
         request_id,
         spawn_id,
+        expected_pet: None,
     };
     let sent = testing::run(|out| features.handle(&select(1, Some(42)), &mut world, out));
     assert!(sent.result.unwrap());

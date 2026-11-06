@@ -1326,6 +1326,13 @@ pub enum WorldEvent {
         /// Its new owner's spawn, if any.
         owner: Option<u16>,
     },
+    /// The session's current commandable pet, derived from zone ownership.
+    OwnPet {
+        /// The admission that owns this observation.
+        session_id: u64,
+        /// The sole known living pet, if resolved.
+        pet: Option<crate::pets::PetIdentity>,
+    },
     /// The player's pet's buffs.
     PetBuffs(crate::pets::PetBuffs),
     /// A command to the pet was not sent, and why.

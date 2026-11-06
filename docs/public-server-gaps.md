@@ -210,7 +210,7 @@ it adds no live combat/death evidence to this report.
 | Groups | Disabled | Disabled; TAKP implementation exists | Invitation, refusal, roster changes, leader changes, zoning and disband checks on each. |
 | Raid group-leader removal | No policy offers it; generic EQEmu lacks the handler | No verified implementation | Remains a gap unless the specific public server proves it inapplicable. |
 | Raids | Disabled; native raid-window restriction reported below | Disabled | Quarm has raid handlers and opcodes: this is a gap, not an established Quarm restriction. |
-| Pets | Offered | Disabled | Public verification of supported commands; EQMac wire/action integration. |
+| Pets | Ordinary orders offered | Disabled | Public verification of orders and charm ownership. Hold, feign, spellhold and focus are withheld on Project 1999. EQMac orders still need wire/action integration. |
 | Training / reading / tradeskills | Disabled | Disabled | Generic client paths exist; verify/implement each dialect's packets and eligibility. |
 | Resurrection / sacrifice / translocate | Disabled | Disabled (TAKP translocate exists) | Source-backed offers, explicit consent, rejection and transfer/death lifecycles. |
 | Who / time of day | Offered | Disabled | Quarm handlers/policy; do not confuse received entity state with a complete `/who` answer. |

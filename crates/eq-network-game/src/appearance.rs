@@ -649,10 +649,13 @@ pub(crate) fn update(body: &[u8]) -> Result<Option<WorldEvent>> {
             spawn_id,
             posture: value.into(),
         },
-        (crate::pets::PET_APPEARANCE, None) => WorldEvent::PetOwner {
-            spawn_id,
-            owner: u16::try_from(value).ok().filter(|owner| *owner != 0),
-        },
+        (crate::pets::PET_APPEARANCE, None) => {
+            let owner = u16::try_from(value).context("pet owner beyond any spawn")?;
+            WorldEvent::PetOwner {
+                spawn_id,
+                owner: (owner != 0).then_some(owner),
+            }
+        }
         (kind, None) => WorldEvent::Appearance {
             spawn_id,
             change: AppearanceChange::read(kind, value)?,

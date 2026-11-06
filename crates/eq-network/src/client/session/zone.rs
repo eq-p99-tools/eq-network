@@ -1103,6 +1103,7 @@ mod tests {
                 request_id: 1,
                 session_id,
                 spawn_id: None,
+                expected_pet: None,
             },
             ClientCommand::ConfigureMotion {
                 session_id,
@@ -1215,7 +1216,9 @@ mod tests {
             ClientCommand::Pet {
                 session_id,
                 command: eq_network_game::pets::PetCommand::Follow,
+                pet: None,
                 target: None,
+                created,
             },
             ClientCommand::Training {
                 session_id,
@@ -2414,6 +2417,9 @@ mod diagnostic_tests;
 
 #[cfg(test)]
 mod target_tests;
+
+#[cfg(test)]
+mod pet_tests;
 
 #[cfg(test)]
 mod manual_combine_tests;

@@ -9,6 +9,7 @@ use anyhow::{ensure, Result};
 use eq_network_game::{
     message::Message,
     names::TitleChange,
+    pets,
     spells::SpellUpdate,
     world::{PostureState, SpawnKind, SpawnState, WorldEvent},
     GameDialect,
@@ -34,6 +35,11 @@ impl Spawns {
         self.0.values()
     }
 
+    /// The commandable pet, if the spawn records resolve it uniquely.
+    pub(super) fn pet(&self, owner: u16) -> Option<u16> {
+        pets::owned_pet(owner, self.all())
+    }
+
     /// Puts a spawn in the zone for a test.
     #[cfg(test)]
     pub(super) fn insert(&mut self, spawn: SpawnState) {
@@ -41,7 +47,7 @@ impl Spawns {
     }
 
     /// Records what an event says about the zone's spawns.
-    fn apply(&mut self, event: &WorldEvent) {
+    fn apply(&mut self, event: &WorldEvent, own_spawn: Option<u16>) {
         match event {
             WorldEvent::Spawns(spawns) => {
                 for spawn in spawns {
@@ -50,6 +56,16 @@ impl Spawns {
             }
             WorldEvent::Despawn(id) => {
                 self.0.remove(id);
+            }
+            WorldEvent::Death(death) => {
+                if let Some(spawn) = u16::try_from(death.spawn_id)
+                    .ok()
+                    .filter(|id| Some(*id) != own_spawn)
+                    .and_then(|id| self.0.get_mut(&id))
+                {
+                    spawn.kind = spawn.kind.corpse();
+                    spawn.pet_owner = None;
+                }
             }
             WorldEvent::Visibility {
                 spawn_id,
@@ -97,6 +113,11 @@ impl Spawns {
             WorldEvent::PetOwner { spawn_id, owner } => {
                 if let Some(spawn) = self.0.get_mut(spawn_id) {
                     spawn.pet_owner = *owner;
+                }
+            }
+            WorldEvent::Charm(charm) => {
+                if let Some(spawn) = self.0.get_mut(&charm.pet_id) {
+                    spawn.pet_owner = charm.pet_owner(spawn.pet_owner);
                 }
             }
             WorldEvent::Renamed {
@@ -234,7 +255,7 @@ impl Feature for Entities {
         let Message::Event(event) = message else {
             return Ok(());
         };
-        world.spawns.apply(event);
+        world.spawns.apply(event, world.own_spawn);
         match event {
             WorldEvent::Spawns(_) => {
                 ensure!(
@@ -282,27 +303,18 @@ impl Feature for Entities {
         let Message::Event(event) = message else {
             return Ok(());
         };
-        world.spawns.apply(event);
+        world.spawns.apply(event, world.own_spawn);
         if self.dialect == GameDialect::EqMac && matches!(event, WorldEvent::HideAndSneakEnded) {
             if let Some(spawn_id) = world.own_spawn {
                 let ended = WorldEvent::Appearance {
                     spawn_id,
                     change: eq_network_game::appearance::AppearanceChange::Sneaking(false),
                 };
-                world.spawns.apply(&ended);
+                world.spawns.apply(&ended, world.own_spawn);
                 out.log.send(ClientEvent::World(ended))?;
             }
             // Visibility has its own authoritative appearance update. A
             // sneak-only cancellation need not break spell invisibility.
-        }
-        if let WorldEvent::Death(death) = event {
-            if let Some(spawn) = u16::try_from(death.spawn_id)
-                .ok()
-                .filter(|id| !world.is_player(*id))
-                .and_then(|id| world.spawns.0.get_mut(&id))
-            {
-                spawn.kind = spawn.kind.corpse();
-            }
         }
         Ok(())
     }

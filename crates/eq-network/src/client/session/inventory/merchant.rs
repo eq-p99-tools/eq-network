@@ -584,6 +584,7 @@ mod tests {
                 request_id: 1,
                 session_id: 1,
                 spawn_id: None,
+                expected_pet: None,
             },
             &inventory,
             start,

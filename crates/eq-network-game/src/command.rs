@@ -496,8 +496,13 @@ pub enum GameCommand {
         session_id: u64,
         /// The command.
         command: crate::pets::PetCommand,
-        /// The player's target, which an attack aims at.
-        target: Option<u16>,
+        /// Current owned pet when the order is made. A targeted Leader
+        /// query can address another pet and does not require this.
+        pet: Option<crate::pets::PetIdentity>,
+        /// The authoritative target selection when the order is made.
+        target: Option<crate::targets::TargetState>,
+        /// When the host made the request.
+        created: std::time::Instant,
     },
     /// Open training with a guildmaster, practice a skill there, or leave.
     Training {
@@ -719,6 +724,9 @@ pub enum GameCommand {
         request_id: u64,
         /// None clears the target; zero is not a valid selected spawn.
         spawn_id: Option<u16>,
+        /// For `/pet target`, the owned pet this choice was made for.
+        /// Ordinary target choices leave this unset.
+        expected_pet: Option<crate::pets::PetIdentity>,
     },
     /// Install independently measured motion values for this admission.
     /// Generations with a known speed rule reject this override and require
@@ -1075,7 +1083,6 @@ impl GameCommand {
             | Self::SpeedInputs { .. }
             | Self::ClimbReach { .. }
             | Self::WhoAll { .. }
-            | Self::Pet { .. }
             | Self::AnswerResurrection { .. }
             | Self::AnswerSacrifice { .. }
             | Self::AnswerTranslocate { .. }
@@ -1140,6 +1147,7 @@ impl GameCommand {
             | Self::AutoAttack { created, .. }
             | Self::Consume { created, .. }
             | Self::UseAbility { created, .. }
+            | Self::Pet { created, .. }
             | Self::Training { created, .. }
             | Self::ReadItem { created, .. }
             | Self::Combine { created, .. }
@@ -1630,6 +1638,7 @@ mod tests {
             request_id: 1,
             session_id: 9,
             spawn_id: Some(513),
+            expected_pet: None,
         };
         let packet = encode(GameDialect::Titanium, &command, "Example").unwrap();
         assert_eq!(packet.opcode, 0x6c47);
@@ -1640,6 +1649,7 @@ mod tests {
             request_id: 1,
             session_id: 9,
             spawn_id: None,
+            expected_pet: None,
         };
         assert_eq!(
             encode(GameDialect::Titanium, &clear, "Example")

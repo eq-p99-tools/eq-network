@@ -366,6 +366,7 @@ fn refusal(command: &ClientCommand, reason: &str) -> Option<WorldEvent> {
             session_id,
             request_id,
             spawn_id,
+            ..
         } => WorldEvent::TargetRejected {
             session_id: *session_id,
             request_id: *request_id,
@@ -653,7 +654,8 @@ mod tests {
             casting.conflict(&ClientCommand::SelectTarget {
                 request_id: 1,
                 session_id: 1,
-                spawn_id: Some(7)
+                spawn_id: Some(7),
+                expected_pet: None,
             }),
             None
         );

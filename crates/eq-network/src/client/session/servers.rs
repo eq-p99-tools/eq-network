@@ -726,8 +726,8 @@ mod shared {
         Box::new(Corpses)
     }
 
-    pub(super) fn pets() -> Box<dyn Feature> {
-        Box::new(Pets)
+    pub(super) fn pets(project1999: bool) -> Box<dyn Feature> {
+        Box::new(Pets::new(project1999))
     }
 
     pub(super) fn training() -> Box<dyn Feature> {
@@ -1043,7 +1043,7 @@ impl ServerType for Project1999 {
     }
 
     fn pets(&self, _setup: &Setup<'_>) -> Provided {
-        offer(shared::pets())
+        offer(shared::pets(true))
     }
 
     /// P99's own client keeps the in-game map off, which is right for P99;
@@ -1191,7 +1191,7 @@ impl ServerType for EqEmu {
     }
 
     fn pets(&self, _setup: &Setup<'_>) -> Provided {
-        offer(shared::pets())
+        offer(shared::pets(false))
     }
 
     fn training(&self, _setup: &Setup<'_>) -> Provided {

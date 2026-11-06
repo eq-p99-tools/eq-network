@@ -18,6 +18,13 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Forgetting also holds the book until its matching gem clear arrives.
   Track the old spell in named clears to protect replacement gems.
 
+- `WorldEvent::OwnPet` reports the current pet's identity and revision for the
+  admission. `ClientCommand::Pet` now takes that identity, a target revision
+  for targeted orders, and a creation time. `SelectTarget::expected_pet`
+  pins a pet-specific selection to the same identity. Charm, ownership changes and
+  death update the existing spawn table. Stale pet and target orders are
+  refused before sending. Guard Me uses Titanium command 6, and the
+  Project 1999 policy refuses hold, feign, spellhold and focus.
 - Default-off P99 list presence replies (`ClientConfig::answer_list_polls`,
   `ClientCommand::AnswerListPolls`, `Capability::AnsweringListPolls`). Runtime
   disable cancels an owed reply. Only server-driven presence polls schedule

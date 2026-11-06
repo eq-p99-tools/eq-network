@@ -656,7 +656,8 @@ mod tests {
             &ClientCommand::SelectTarget {
                 request_id: 1,
                 session_id: 12,
-                spawn_id: Some(7)
+                spawn_id: Some(7),
+                expected_pet: None,
             },
             "Unavailable"
         )
@@ -896,7 +897,8 @@ mod tests {
         assert!(!guard.blocks(&ClientCommand::SelectTarget {
             request_id: 1,
             session_id: 1,
-            spawn_id: Some(13)
+            spawn_id: Some(13),
+            expected_pet: None,
         }));
         guard.observe(
             12,

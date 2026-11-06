@@ -747,6 +747,7 @@ mod tests {
             request_id: 1,
             session_id: 5,
             spawn_id: Some(9),
+            expected_pet: None,
         };
         let outcome = testing::run(|out| spellbook.notice(&target, &mut world, out));
         assert!(
