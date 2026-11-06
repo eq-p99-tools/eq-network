@@ -1115,7 +1115,9 @@ impl ServerType for EqEmu {
     }
 
     fn motion(&self, _setup: &Setup<'_>) -> Provided {
-        offer(shared::motion(true, true, self.spell_landing_flag()))
+        offer(Box::new(
+            Motion::new(true, true, self.spell_landing_flag()).with_swimming(),
+        ))
     }
 
     /// `Client::Stun` sends Titanium's four-byte duration to the same native

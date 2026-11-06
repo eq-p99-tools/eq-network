@@ -1652,3 +1652,92 @@ fn a_boosted_forward_step_can_finish_as_a_fall_within_the_same_budget() {
     session.send_move(&fall, now, |_| Ok(())).unwrap();
     assert_eq!(session.position(), fall.position);
 }
+
+#[test]
+fn swim_budget_is_three_dimensional_and_vertical_strokes_are_voluntary() {
+    let start = Instant::now();
+    let now = start + Duration::from_millis(100);
+    let mut proposal = request(now, 0.0);
+    proposal.mode = MovementMode::Swim;
+    proposal.position.z = -0.08;
+
+    let mut session = setup(start);
+    assert!(session
+        .send_move_sample(&proposal, now, |_| panic!("ungranted stroke"))
+        .is_err());
+    let mut session = session.with_swimming(true);
+    assert!(!session.is_passive(&proposal), "a dive is not gravity");
+    proposal.position.x = 0.08;
+    assert!(session
+        .send_move_sample(&proposal, now, |_| panic!("axes exceed the shared budget"))
+        .is_err());
+    assert_eq!(session.position(), Position::default());
+
+    proposal.position.x = 0.0;
+    assert!(session
+        .send_move_sample(&proposal, now, |_| anyhow::bail!("failed transport"))
+        .is_err());
+    assert_eq!(session.position(), Position::default());
+    session
+        .send_move_sample(&proposal, now, |sample| {
+            assert_eq!(sample.position, proposal.position);
+            assert!((sample.delta[2] + 0.04).abs() < 1e-6);
+            assert_eq!(sample.animation, 0);
+            assert_eq!(sample.packet()?.body.len(), 36);
+            Ok(())
+        })
+        .unwrap();
+    assert!(session.stop_pending(), "vertical motion requires a stop");
+}
+
+#[test]
+fn correction_drops_held_swim_and_requires_a_new_grant_and_input() {
+    let start = Instant::now();
+    let stroke = start + Duration::from_millis(100);
+    let correction = start + Duration::from_millis(200);
+    let stop = start + Duration::from_millis(300);
+    let later = start + Duration::from_millis(600);
+    let mut session = setup(start)
+        .with_swimming(true)
+        .with_gate(Some(UpdateGate::Changed {
+            spacing: Duration::from_millis(280),
+        }));
+    let calibration = session.calibration().unwrap();
+    let mut old = request(stroke, 0.0);
+    old.mode = MovementMode::Swim;
+    old.position.z = 0.08;
+    session
+        .send_move_sample(&old, stroke, |_| panic!("stroke bypassed pacing"))
+        .unwrap();
+    let placed = Position {
+        x: 25.0,
+        z: -12.0,
+        ..Position::default()
+    };
+    session.correct(placed, correction).unwrap();
+    assert!(session
+        .tick_sample(stop, |sample| {
+            assert_eq!(sample.position, placed);
+            assert_eq!(sample.delta, [0.0; 3]);
+            Ok(())
+        })
+        .unwrap());
+    let mut fresh = MovementRequest::new(MovementMode::Swim, 11, placed, later);
+    fresh.position.z += 0.08;
+    assert!(session
+        .send_move_sample(&fresh, later, |_| panic!("correction did not revoke input"))
+        .is_err());
+    session.calibrate(calibration, correction).unwrap();
+    assert!(session
+        .send_move_sample(&old, correction, |_| panic!(
+            "replayed a pre-correction stroke"
+        ))
+        .is_err());
+    assert!(session
+        .send_move_sample(&fresh, later, |sample| {
+            assert_eq!(sample.position, fresh.position);
+            assert!(sample.delta[2] > 0.0);
+            Ok(())
+        })
+        .is_ok());
+}

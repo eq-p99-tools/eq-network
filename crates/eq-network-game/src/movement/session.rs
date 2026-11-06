@@ -151,6 +151,7 @@ pub struct MotionSession {
     suspended: bool,
     falls: bool,
     heading_snapshots: bool,
+    swimming: bool,
     /// How the client generation gates its own update, where it is read;
     /// see [`Self::with_gate`].
     gate: Option<UpdateGate>,
@@ -224,6 +225,13 @@ impl PreparedMove<'_> {
 }
 
 impl MotionSession {
+    /// Allows bounded swimming on a supported Titanium position stream.
+    #[must_use]
+    pub const fn with_swimming(mut self, enabled: bool) -> Self {
+        self.swimming = enabled;
+        self
+    }
+
     /// Allows absolute mouse heading snapshots for a Titanium position stream.
     #[must_use]
     pub const fn with_heading_snapshots(mut self, enabled: bool) -> Self {
@@ -416,6 +424,7 @@ impl MotionSession {
             suspended: false,
             falls: false,
             heading_snapshots: false,
+            swimming: false,
             gate: None,
             held: None,
             last_update: None,
@@ -534,6 +543,9 @@ impl MotionSession {
             || request.position.heading != self.position.heading
         {
             return false;
+        }
+        if request.mode == MovementMode::Swim {
+            return request.position.z == self.position.z;
         }
         let elapsed = self.guard.interval(request.created);
         let rise = self.guard.jumped_at.map_or(0.0, |start| {
@@ -679,6 +691,11 @@ impl MotionSession {
                         backward.animation,
                     )
                 }
+                MovementMode::Swim => (
+                    super::swim_speed(calibration.units_per_second),
+                    calibration.velocity_scale,
+                    0, // Swim animation/skill calibration is unverified.
+                ),
                 MovementMode::GroundedDiagonal(_) => unreachable!("longitudinal mode is cardinal"),
             }
         } else {
@@ -700,16 +717,23 @@ impl MotionSession {
         // The wire's velocity and turn rate cover the same interval the guard
         // budgets: from the last accepted request's stamp to this one's.
         let elapsed = guard.interval(request.created);
-        let displacement = guard.accept_with_diagonal(request, now, lateral_rate)?;
-        // Following a slope changes position Z without creating the airborne
-        // velocity seen during a fall. Falls also leave that field zero: its wire
-        // scale is unmeasured, so position Z alone carries the descent.
+        let swimming = request.mode == MovementMode::Swim;
+        let displacement = guard.accept_with_modes(request, now, lateral_rate, self.swimming)?;
+        // Following a slope has no vertical stroke. Ordinary falls still
+        // carry their descent in absolute Z. For a swim stroke Titanium
+        // copies all three tick velocities into its existing update fields.
         let delta = [
             displacement[0] / elapsed * velocity_scale,
             displacement[1] / elapsed * velocity_scale,
-            0.0,
+            if swimming {
+                displacement[2] / elapsed * velocity_scale
+            } else {
+                0.0
+            },
         ];
-        let moving = displacement[..2].iter().any(|d| d.abs() > f32::EPSILON);
+        let moving = displacement[..if swimming { 3 } else { 2 }]
+            .iter()
+            .any(|d| d.abs() > f32::EPSILON);
         // Absolute heading and continuing yaw are independent fields.
         let turn = if snapshot {
             0

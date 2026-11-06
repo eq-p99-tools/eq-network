@@ -572,12 +572,14 @@ pub enum Capability {
     RangedCombat,
     /// Explicitly stop a Bard song on this server.
     StoppingSongs,
+    /// Bounded swimming with local water collision on a supported admission.
+    Swimming,
 }
 
 impl Capability {
     /// Every capability, in order: what a session offers when its server and
     /// client generation support everything.
-    pub const ALL: [Self; 49] = [
+    pub const ALL: [Self; 50] = [
         Self::Casting,
         Self::Spellbook,
         Self::Inventory,
@@ -627,6 +629,7 @@ impl Capability {
         Self::GameplayDepartures,
         Self::RangedCombat,
         Self::StoppingSongs,
+        Self::Swimming,
     ];
 }
 
@@ -2125,6 +2128,7 @@ mod tests {
             Capability::GameplayDepartures => 46,
             Capability::RangedCombat => 47,
             Capability::StoppingSongs => 48,
+            Capability::Swimming => 49,
         };
         for (index, capability) in Capability::ALL.into_iter().enumerate() {
             assert_eq!(place(capability), index, "{capability:?}");

@@ -2134,7 +2134,9 @@ mod tests {
         assert!(!eqemu.contains(&Capability::AnsweringListPolls));
         assert!(eqemu.contains(&Capability::GameplayDepartures));
         assert!(p99.contains(&Capability::GameplayDepartures));
-        assert_eq!(eqemu.len(), p99.len() + 16);
+        assert!(eqemu.contains(&Capability::Swimming));
+        assert!(!p99.contains(&Capability::Swimming));
+        assert_eq!(eqemu.len(), p99.len() + 17);
     }
 
     #[test]

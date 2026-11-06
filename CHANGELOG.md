@@ -25,6 +25,10 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   death update the existing spawn table. Stale pet and target orders are
   refused before sending. Guard Me uses Titanium command 6, and the
   Project 1999 policy refuses hold, feign, spellhold and focus.
+- Grant bounded swimming for Titanium EQEmu sessions. Swim proposals use the
+  existing position update and share one speed budget across all three axes.
+  A motion submission does not establish server acceptance or water state.
+
 - Default-off P99 list presence replies (`ClientConfig::answer_list_polls`,
   `ClientCommand::AnswerListPolls`, `Capability::AnsweringListPolls`). Runtime
   disable cancels an owed reply. Only server-driven presence polls schedule

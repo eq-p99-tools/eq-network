@@ -146,18 +146,17 @@ const TITANIUM: Generation = Generation {
 /// then. Its two tests that hold the multiplier at 1 are unread, so zone
 /// 151's exception is `EQMac`'s only. The hit-point pair is read as a current and maximum that fits hit
 /// points, as TAKP names it. Not taken from Titanium's read: ducking, the
-/// flag at +0x1b1 and its value at +0xec4, mounts, water (the session
-/// doesn't swim), the halved decay and model 141. Sneaking, which the
-/// Titanium read doesn't reach, takes `EQMac`'s rule, the slower side. Its
-/// values on the wire are [`titanium`]'s.
+/// flag at +0x1b1 and its value at +0xec4, mounts, the native swim rate,
+/// the halved decay and model 141. Sneaking takes `EQMac`'s rule, the slower
+/// side. Its values on the wire are [`titanium`]'s.
 ///
 /// What the session doesn't know, it takes the slower side of: the
 /// modifier's cap is the base one, as the run-speed ability's ranks aren't
 /// tracked (nor the small modifier the ability gives with no buffs), and
 /// strafing takes the walk speed, where the program takes the run speed
 /// while running, since a strafe doesn't say which it is. Crouching,
-/// swimming and riding are left out: the session stands the player up to
-/// move, and doesn't take swimming or mounts.
+/// riding and native swim skill tuning are left out. An `EQEmu` session may
+/// instead apply the conservative bound in [`super::swim_speed`].
 #[must_use]
 pub fn eqmac(state: &SpeedState) -> Speeds {
     speeds(EQMAC, state)
