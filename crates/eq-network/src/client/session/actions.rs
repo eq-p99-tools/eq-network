@@ -97,6 +97,7 @@ pub(super) fn needs(command: &ClientCommand) -> &'static [Resource] {
         // sing, but the session cannot tell songs apart, so they wait too.
         ClientCommand::UseAbility { ability, .. } if ability.strikes() => &[Casting],
         ClientCommand::UseItem(_) => &[Casting, Inventory],
+        ClientCommand::RangedAttack(_) => &[Casting, Inventory],
         ClientCommand::ScribeSpell { .. } => &[Casting, Spellbook, Inventory],
         ClientCommand::MemorizeSpell { .. }
         | ClientCommand::ForgetSpell { .. }
@@ -263,7 +264,9 @@ fn refusal(command: &ClientCommand, reason: &str) -> Option<WorldEvent> {
         }),
         ClientCommand::CancelBuff(request) => WorldEvent::BuffCancellation(request.update(eq_network_game::buffs::cancel::Progress::Refused(reason.into()))),
         ClientCommand::CastSpell { .. } => return casting::rejected(command, reason),
-        ClientCommand::Consider { .. } | ClientCommand::AutoAttack { .. } => {
+        ClientCommand::Consider { .. }
+        | ClientCommand::AutoAttack { .. }
+        | ClientCommand::RangedAttack(_) => {
             return super::combat::rejected(command, reason);
         }
         ClientCommand::Loot { .. }

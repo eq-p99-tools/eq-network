@@ -693,6 +693,8 @@ pub enum GameCommand {
         /// Reject delayed actions instead of replaying them after a stall.
         created: std::time::Instant,
     },
+    /// Fire or throw once with the current ranged loadout.
+    RangedAttack(crate::combat::ranged::RangedAttack),
     /// Select or clear a target in the current zone session, without attacking.
     SelectTarget {
         /// Connection identifier supplied by zone admission.
@@ -830,6 +832,7 @@ impl GameCommand {
             Self::RaidRemove { .. } => "RaidRemove",
             Self::WhoAll { .. } => "WhoAll",
             Self::AutoAttack { .. } => "AutoAttack",
+            Self::RangedAttack(_) => "RangedAttack",
             Self::SelectTarget { .. } => "SelectTarget",
             Self::ConfigureMotion { .. } => "ConfigureMotion",
             Self::SpeedInputs { .. } => "SpeedInputs",
@@ -849,6 +852,7 @@ impl GameCommand {
             | Self::CreateCharacter { .. }
             | Self::SendChat(_) => None,
             Self::CancelBuff(request) => Some(request.session_id),
+            Self::RangedAttack(request) => Some(request.session_id),
             Self::UseItem(request) => Some(request.session_id),
             Self::MoveInventory(request) => Some(request.session_id),
             Self::DestroyItem(request) => Some(request.session_id),
@@ -949,6 +953,7 @@ impl GameCommand {
                 Capability::GameplayDepartures
             }
             Self::CancelBuff(_) => Capability::CancellingBuffs,
+            Self::RangedAttack(_) => Capability::RangedCombat,
             Self::DeleteSpell { .. } => Capability::DeletingSpells,
             Self::SwapSpell { .. } => Capability::MovingSpells,
             // An item's click effect is a cast.
@@ -1078,6 +1083,7 @@ impl GameCommand {
             | Self::DropCorpse { .. }
             | Self::SelectTarget { .. } => None,
             Self::CancelBuff(request) => Some(request.created),
+            Self::RangedAttack(request) => Some(request.created),
             Self::UseItem(request) => Some(request.created),
             Self::MoveInventory(request) => Some(request.created),
             Self::DestroyItem(request) => Some(request.created),
@@ -1250,6 +1256,9 @@ pub fn encode(
         }
         GameCommand::CancelBuff(_) => {
             anyhow::bail!("buff cancellation requires the admitted buff-slot owner")
+        }
+        GameCommand::RangedAttack(_) => {
+            anyhow::bail!("a ranged attack requires the admitted target and loadout")
         }
         GameCommand::CastSpell {
             gem,

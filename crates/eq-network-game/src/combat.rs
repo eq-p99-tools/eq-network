@@ -10,6 +10,8 @@
 use anyhow::{ensure, Context, Result};
 use serde::Serialize;
 
+pub mod ranged;
+
 /// A normal combat request made by the host, separate from its server result.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[non_exhaustive]
@@ -23,6 +25,13 @@ pub enum CombatRequest {
     AutoAttack {
         /// Whether normal melee attacks are requested.
         enabled: bool,
+    },
+    /// Fire or throw once at the current selection.
+    RangedAttack {
+        /// The selected spawn, if the intent names one.
+        target_id: Option<u16>,
+        /// The skill selected by the loadout.
+        kind: ranged::RangedKind,
     },
 }
 

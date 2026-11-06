@@ -7,6 +7,11 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- One explicit Titanium bow shot or throw through `GameCommand::RangedAttack`
+  and `Capability::RangedCombat`. The session checks the target revision,
+  loadout, reach and unmodified weapon delay. Damage and ammunition changes
+  come through the existing server events.
+
 - Default-off P99 list presence replies (`ClientConfig::answer_list_polls`,
   `ClientCommand::AnswerListPolls`, `Capability::AnsweringListPolls`). Runtime
   disable cancels an owed reply. Only server-driven presence polls schedule

@@ -568,12 +568,14 @@ pub enum Capability {
     /// memorization options), offered only where the server type permits
     /// them; a public server lists it only while the owner tests them.
     GameplayDepartures,
+    /// Firing a bow or throwing a weapon once at the current target.
+    RangedCombat,
 }
 
 impl Capability {
     /// Every capability, in order: what a session offers when its server and
     /// client generation support everything.
-    pub const ALL: [Self; 47] = [
+    pub const ALL: [Self; 48] = [
         Self::Casting,
         Self::Spellbook,
         Self::Inventory,
@@ -621,6 +623,7 @@ impl Capability {
         Self::AnsweringListPolls,
         Self::CancellingBuffs,
         Self::GameplayDepartures,
+        Self::RangedCombat,
     ];
 }
 
@@ -2106,6 +2109,7 @@ mod tests {
             Capability::AnsweringListPolls => 44,
             Capability::CancellingBuffs => 45,
             Capability::GameplayDepartures => 46,
+            Capability::RangedCombat => 47,
         };
         for (index, capability) in Capability::ALL.into_iter().enumerate() {
             assert_eq!(place(capability), index, "{capability:?}");

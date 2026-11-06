@@ -809,7 +809,7 @@ mod tests {
     };
 
     /// How many kinds of command there are.
-    const KINDS: usize = 82;
+    const KINDS: usize = 83;
 
     /// The kinds the login and world servers take, before any zone session.
     const BEFORE_ZONES: [usize; 4] = [0, 1, 70, 75];
@@ -834,6 +834,7 @@ mod tests {
             ClientCommand::MemorizeSpell { .. } => 10,
             ClientCommand::CastSpell { .. } => 11,
             ClientCommand::CancelBuff(_) => 81,
+            ClientCommand::RangedAttack(_) => 82,
             ClientCommand::SetPosture { .. } => 12,
             ClientCommand::MoveInventory(_) => 13,
             ClientCommand::DestroyItem(_) => 80,
@@ -914,7 +915,17 @@ mod tests {
     fn zone_commands() -> Vec<ClientCommand> {
         let (session_id, created) = (1, Instant::now());
         let position = crate::world::Position::default();
+        let inventory = super::super::combat::test_ranged_inventory(
+            eq_network_game::combat::ranged::RangedKind::Archery,
+        );
         vec![
+            ClientCommand::RangedAttack(eq_network_game::combat::ranged::RangedAttack {
+                session_id,
+                target: eq_network_game::targets::TargetState::default(),
+                loadout: eq_network_game::combat::ranged::RangedLoadout::current(&inventory)
+                    .unwrap(),
+                created,
+            }),
             ClientCommand::CancelBuff(eq_network_game::buffs::cancel::Request {
                 session_id,
                 revision: 1,
@@ -1975,6 +1986,7 @@ mod tests {
             Capability::Moving,
             Capability::Targeting,
             Capability::Combat,
+            Capability::RangedCombat,
             Capability::Looting,
             Capability::Talking,
             Capability::Camping,

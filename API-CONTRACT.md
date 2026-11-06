@@ -1,5 +1,22 @@
 # API and integration contracts
 
+## Manual Titanium ranged attacks
+
+An admission offering `Capability::RangedCombat` can take
+`GameCommand::RangedAttack`. Pass the current available `TargetState` from
+`TargetChanged`, a `RangedLoadout::current` snapshot from the same admission's
+inventory, and the admission ID and input time. Reconciled target identity
+includes its revision. Any intervening inventory revision invalidates the
+queued loadout, including a same-ID replacement or ammo update.
+
+The zone checks readiness, posture, casting/inventory holds, equipped items,
+skill and range before it sends. A successful send starts a local wait based on
+unmodified item delay. The server applies its own timers, targeting rules and
+combat resolution. The `CombatRequest` disposition reports only local
+submission or refusal. Existing received damage, inventory and chat events
+carry the outcomes. The server chooses whether and from which stack to consume
+a projectile. Hosts should issue a fresh intent for each explicit input.
+
 ## P99 readable items
 
 `GameCommand::ReadItem { session_id, revision, slot, created }` now binds the
