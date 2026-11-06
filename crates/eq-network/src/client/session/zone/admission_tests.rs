@@ -70,8 +70,8 @@ impl Transport for Script {
         if let Some(packet) = self.incoming.pop_front() {
             return Ok(Some(packet));
         }
-        // An explicitly scripted idle poll requests cancellation so a test
-        // cannot keep polling an empty transport.
+        // The scripted idle poll cancels once. The loop checks cancellation
+        // before calling receive again, so another poll is unexpected.
         self.stop_when_drained
             .take()
             .expect("unexpected receive")
@@ -313,6 +313,23 @@ fn the_same_incomplete_admission_keeps_record_only_chat_running() {
 
 #[test]
 fn recording_reports_repeated_zone_offers_once_without_following_them() {
+    let mut offer = vec![0; 24];
+    offer[..2].copy_from_slice(&2u16.to_le_bytes());
+    assert_recording_offer_diagnostic(
+        &offer,
+        "Zone offer received; record-only mode cannot follow it",
+    );
+}
+
+#[test]
+fn recording_reports_unreadable_zone_offers_once_without_following_them() {
+    assert_recording_offer_diagnostic(
+        &[],
+        "Unreadable zone offer received; record-only mode cannot follow it",
+    );
+}
+
+fn assert_recording_offer_diagnostic(offer: &[u8], expected: &str) {
     let config = config();
     let identity = ClientIdentity::new("example-host", "example-user");
     let credentials = credentials();
@@ -320,10 +337,8 @@ fn recording_reports_repeated_zone_offers_once_without_following_them() {
     let context = context(&config, &identity, &credentials, &stop, None);
     let mut script = Script::titanium(-1.0);
     script.stop_when_drained = Some(stop.clone());
-    let mut offer = vec![0; 24];
-    offer[..2].copy_from_slice(&2u16.to_le_bytes());
-    script.packet(MOVE_OPCODE, offer.clone());
-    script.packet(MOVE_OPCODE, offer);
+    script.packet(MOVE_OPCODE, offer.to_vec());
+    script.packet(MOVE_OPCODE, offer.to_vec());
     let mut events = Vec::new();
     let mut handler = |event| {
         events.push(event);
@@ -350,8 +365,7 @@ fn recording_reports_repeated_zone_offers_once_without_following_them() {
             .iter()
             .filter(|event| matches!(
                 event,
-                ClientEvent::Diagnostic(message)
-                    if message == "Zone offer received; record-only mode cannot follow it"
+                ClientEvent::Diagnostic(message) if message == expected
             ))
             .count(),
         1

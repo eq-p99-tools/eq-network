@@ -14,6 +14,9 @@ pub use eqmac::{
     EQMAC_INTERRUPT_OPCODE, EQMAC_MEMORIZE_OPCODE, EQMAC_SWAP_OPCODE,
 };
 
+/// The Titanium and `EQMac` casting slot for an ordinary item click.
+pub const ITEM_CAST_SLOT: u16 = 10;
+
 /// `OP_MemorizeSpell`: scribing, memorizing and forgetting, by mode.
 pub const MEMORIZE_OPCODE: u16 = 0x308e;
 /// `OP_DeleteSpell`: a book entry removed.
@@ -38,12 +41,20 @@ pub enum BookActionStatus {
     Submitted,
     /// A tracked edit is awaiting its matching server reply.
     AwaitingReply,
+    /// The matching reply did not arrive in time; the edit remains outstanding.
+    Unconfirmed,
     /// The server confirmed the outstanding tracked edit.
     Confirmed,
     /// A pending action was cancelled before submission.
     Cancelled(String),
     /// Validation rejected a requested action.
     Rejected(String),
+}
+
+/// Titanium's empty `OP_ManaChange` request to stop singing.
+#[must_use]
+pub fn titanium_stop_song() -> EncodedCommand {
+    packet(0x4839, &[])
 }
 
 /// Encodes removal of the spell currently occupying a gem, without deleting its book entry.
@@ -386,6 +397,15 @@ pub enum SpellUpdate {
 }
 
 impl SpellUpdate {
+    /// A mode-2 clear names either the old spell or an empty-slot sentinel.
+    /// A named clear for a different spell cannot clear its replacement.
+    #[must_use]
+    pub fn clears_gem(&self, gem: u32, expected_spell: u32) -> bool {
+        matches!(*self, Self::Slot { slot, spell_id, mode: 2 }
+            if slot == gem
+                && (spell_id == expected_spell || matches!(spell_id, 0 | 0xffff | u32::MAX)))
+    }
+
     /// Applies valid gem updates; book and unknown modes leave gems unchanged.
     pub fn apply_gems(&self, gems: &mut [Option<u32>; 8]) {
         if let Self::Slot {
@@ -400,7 +420,7 @@ impl SpellUpdate {
                         1 => {
                             *gem = (!matches!(spell_id, 0 | 0xffff | u32::MAX)).then_some(spell_id);
                         }
-                        2 => *gem = None,
+                        2 if gem.is_some_and(|old| self.clears_gem(slot, old)) => *gem = None,
                         _ => (),
                     }
                 }

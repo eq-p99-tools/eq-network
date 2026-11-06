@@ -273,6 +273,24 @@ pub struct InventoryItem {
     pub bag_slots: u8,
 }
 
+impl InventoryItem {
+    /// Compare slot contents for inventory decisions. A model ID is display
+    /// metadata and can be omitted or changed without changing the item here.
+    #[must_use]
+    pub fn same_slot_contents(left: Option<&Self>, right: Option<&Self>) -> bool {
+        match (left, right) {
+            (Some(left), Some(right))
+                if left.details.base_held_model != right.details.base_held_model =>
+            {
+                let mut comparable = left.clone();
+                comparable.details.base_held_model = right.details.base_held_model;
+                &comparable == right
+            }
+            _ => left == right,
+        }
+    }
+}
+
 /// Authoritative updates and explicitly identified local predictions.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub enum InventoryUpdate {
@@ -652,7 +670,7 @@ impl Inventory {
     fn reconcile(&mut self, root: InventorySlot, authoritative: &[InventoryItem]) {
         for slot in self.covered(root) {
             let actual = authoritative.iter().find(|item| item.slot == slot);
-            if self.items.get(&slot) != actual {
+            if !InventoryItem::same_slot_contents(self.items.get(&slot), actual) {
                 self.correcting = true;
             }
             self.unconfirmed.remove(&slot);

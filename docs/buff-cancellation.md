@@ -39,9 +39,9 @@ field and requires an exact match before removing a slotted buff; a sentinel
 alone cannot identify the buff or remove a replacement.
 
 This implementation sends one initialized current-record request, which the
-EQEmu handler supports, and awaits received membership. It does not claim native
-presentation or packet-sequence equivalence. P99 compatibility remains pending
-an attended check; the policy does not offer this encoding there.
+EQEmu handler supports, and awaits received membership. A client-side sender
+layout alone leaves both request sequencing and the server's fade contract
+unresolved. P99 remains gated pending that evidence and an attended check.
 
 Regression fixtures are constructed. Domain checks, worker submission/fade/echo/
 replacement/timeout/reset/send-failure cases and selected-policy lifecycle gates

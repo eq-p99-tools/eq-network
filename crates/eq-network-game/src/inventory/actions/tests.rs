@@ -68,6 +68,7 @@ fn item(slot: i32, count: Option<u32>, bag: u8) -> InventoryItem {
             ..Default::default()
         },
         details: ItemDetails {
+            base_held_model: None,
             equipment: None,
             bonuses: None,
             id: 42,

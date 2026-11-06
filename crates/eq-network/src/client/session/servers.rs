@@ -608,8 +608,8 @@ mod shared {
         Combat, Corpses, Doors, Edits, Entities, Exchanges, Feature, GameDialect, GroundObjects,
         Groups, Hazard, Hazards, Helm, HideAnswer, Home, ItemCount, Listing, Looting, Map, Marks,
         MerchantOffers, Motion, MoveRules, Pets, Quotes, Raids, Reading, Resurrection, Sacrifice,
-        Setup, Socials, Spellbook, Talk, Targeting, Ticks, Tradeskills, Training, Transfers,
-        Translocate, Who,
+        ServerProtocol, Setup, Socials, Spellbook, Talk, Targeting, Ticks, Tradeskills, Training,
+        Transfers, Translocate, Who,
     };
 
     pub(super) fn casting() -> Box<dyn Feature> {
@@ -659,8 +659,8 @@ mod shared {
 
     /// Considering and attacking, with a notice before each change of the
     /// attack toggle where the client generation sends one.
-    pub(super) fn combat(attack_notice: bool) -> Box<dyn Feature> {
-        Box::new(Combat { attack_notice })
+    pub(super) fn combat(protocol: ServerProtocol) -> Box<dyn Feature> {
+        Box::new(Combat::new(protocol))
     }
 
     pub(super) fn looting() -> Box<dyn Feature> {
@@ -726,8 +726,8 @@ mod shared {
         Box::new(Corpses)
     }
 
-    pub(super) fn pets() -> Box<dyn Feature> {
-        Box::new(Pets)
+    pub(super) fn pets(project1999: bool) -> Box<dyn Feature> {
+        Box::new(Pets::new(project1999))
     }
 
     pub(super) fn training() -> Box<dyn Feature> {
@@ -742,8 +742,8 @@ mod shared {
         Box::<Sacrifice>::default()
     }
 
-    pub(super) fn translocate() -> Box<dyn Feature> {
-        Box::<Translocate>::default()
+    pub(super) fn translocate(timeout: std::time::Duration) -> Box<dyn Feature> {
+        Box::new(Translocate::new(timeout))
     }
 
     pub(super) fn reading() -> Box<dyn Feature> {
@@ -995,7 +995,7 @@ impl ServerType for Project1999 {
     }
 
     fn combat(&self, _setup: &Setup<'_>) -> Provided {
-        offer(shared::combat(false))
+        offer(shared::combat(ServerProtocol::Project1999))
     }
 
     fn looting(&self, _setup: &Setup<'_>) -> Provided {
@@ -1043,7 +1043,7 @@ impl ServerType for Project1999 {
     }
 
     fn pets(&self, _setup: &Setup<'_>) -> Provided {
-        offer(shared::pets())
+        offer(shared::pets(true))
     }
 
     /// P99's own client keeps the in-game map off, which is right for P99;
@@ -1100,7 +1100,7 @@ impl ServerType for EqEmu {
     }
 
     fn casting(&self, _setup: &Setup<'_>) -> Provided {
-        offer(shared::casting())
+        offer(Box::new(Casting::with_song_stop()))
     }
 
     fn spellbook(&self, _setup: &Setup<'_>) -> Provided {
@@ -1115,7 +1115,9 @@ impl ServerType for EqEmu {
     }
 
     fn motion(&self, _setup: &Setup<'_>) -> Provided {
-        offer(shared::motion(true, true, self.spell_landing_flag()))
+        offer(Box::new(
+            Motion::new(true, true, self.spell_landing_flag()).with_swimming(),
+        ))
     }
 
     /// `Client::Stun` sends Titanium's four-byte duration to the same native
@@ -1137,7 +1139,7 @@ impl ServerType for EqEmu {
     }
 
     fn combat(&self, _setup: &Setup<'_>) -> Provided {
-        offer(shared::combat(false))
+        offer(shared::combat(ServerProtocol::EqEmu))
     }
 
     fn looting(&self, _setup: &Setup<'_>) -> Provided {
@@ -1191,7 +1193,7 @@ impl ServerType for EqEmu {
     }
 
     fn pets(&self, _setup: &Setup<'_>) -> Provided {
-        offer(shared::pets())
+        offer(shared::pets(false))
     }
 
     fn training(&self, _setup: &Setup<'_>) -> Provided {
@@ -1210,7 +1212,7 @@ impl ServerType for EqEmu {
     /// Answered only on the player's word; on a yes `EQEmu` moves the player
     /// itself (`Client::Handle_OP_Translocate`).
     fn translocate(&self, _setup: &Setup<'_>) -> Provided {
-        offer(shared::translocate())
+        offer(shared::translocate(super::confirmations::TITANIUM_TIMEOUT))
     }
 
     fn reading(&self, _setup: &Setup<'_>) -> Provided {
@@ -1304,7 +1306,7 @@ impl ServerType for Quarm {
     /// Quarm handles normal attack toggles and consideration with the shared
     /// `EQMac` layouts; only server records report combat outcomes.
     fn combat(&self, _setup: &Setup<'_>) -> Provided {
-        offer(shared::combat(true))
+        offer(shared::combat(ServerProtocol::Quarm))
     }
 
     /// Quarm's source-derived corpse flow uses the existing inventory owner
@@ -1586,7 +1588,7 @@ impl ServerType for Takp {
     /// ([`eq_network_game::confirmations`]); the client asks as the `EQMac`
     /// program does (TAKP Batch 1 R8). Not yet checked live.
     fn translocate(&self, _setup: &Setup<'_>) -> Provided {
-        offer(shared::translocate())
+        offer(shared::translocate(std::time::Duration::from_secs(3600)))
     }
 
     /// Giving items to NPCs and trading with players, in the `EQMac`
@@ -1633,7 +1635,7 @@ impl ServerType for Takp {
     }
 
     fn combat(&self, _setup: &Setup<'_>) -> Provided {
-        offer(shared::combat(true))
+        offer(shared::combat(ServerProtocol::Takp))
     }
 }
 
@@ -1803,6 +1805,21 @@ mod tests {
                     ));
                 }
             }
+        }
+    }
+
+    #[test]
+    fn only_eqemu_offers_the_bard_stop_request() {
+        for protocol in [
+            ServerProtocol::Project1999,
+            ServerProtocol::EqEmu,
+            ServerProtocol::Quarm,
+            ServerProtocol::Takp,
+        ] {
+            assert_eq!(
+                offers(server_type(protocol)).contains(&Capability::StoppingSongs),
+                protocol == ServerProtocol::EqEmu
+            );
         }
     }
 

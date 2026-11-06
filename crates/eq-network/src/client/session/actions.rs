@@ -96,7 +96,7 @@ pub(super) fn needs(command: &ClientCommand) -> &'static [Resource] {
         // `EQEmu` ignores a strike during a cast; bards may strike while they
         // sing, but the session cannot tell songs apart, so they wait too.
         ClientCommand::UseAbility { ability, .. } if ability.strikes() => &[Casting],
-        ClientCommand::UseItem(_) => &[Casting, Inventory],
+        ClientCommand::UseItem(_) | ClientCommand::RangedAttack(_) => &[Casting, Inventory],
         ClientCommand::ScribeSpell { .. } => &[Casting, Spellbook, Inventory],
         ClientCommand::MemorizeSpell { .. }
         | ClientCommand::ForgetSpell { .. }
@@ -133,6 +133,7 @@ pub(super) fn needs(command: &ClientCommand) -> &'static [Resource] {
         | ClientCommand::CrossZoneLine { .. }
         | ClientCommand::SetPosture { .. }
         | ClientCommand::SendChat(_)
+        | ClientCommand::DepopLocalNpc { .. }
         | ClientCommand::InspectItem { .. }
         | ClientCommand::Consider { .. }
         | ClientCommand::Camp { .. }
@@ -153,6 +154,7 @@ pub(super) fn needs(command: &ClientCommand) -> &'static [Resource] {
         | ClientCommand::EnvironmentalDamage { .. }
         // Nor does dropping invisibility, which goes before the cast.
         | ClientCommand::DropInvisibility { .. }
+        | ClientCommand::StopSong { .. }
         | ClientCommand::AutoAttack { .. }
         | ClientCommand::UseAbility { .. }
         | ClientCommand::SelectTarget { .. }
@@ -263,7 +265,9 @@ fn refusal(command: &ClientCommand, reason: &str) -> Option<WorldEvent> {
         }),
         ClientCommand::CancelBuff(request) => WorldEvent::BuffCancellation(request.update(eq_network_game::buffs::cancel::Progress::Refused(reason.into()))),
         ClientCommand::CastSpell { .. } => return casting::rejected(command, reason),
-        ClientCommand::Consider { .. } | ClientCommand::AutoAttack { .. } => {
+        ClientCommand::Consider { .. }
+        | ClientCommand::AutoAttack { .. }
+        | ClientCommand::RangedAttack(_) => {
             return super::combat::rejected(command, reason);
         }
         ClientCommand::Loot { .. }
@@ -362,6 +366,7 @@ fn refusal(command: &ClientCommand, reason: &str) -> Option<WorldEvent> {
             session_id,
             request_id,
             spawn_id,
+            ..
         } => WorldEvent::TargetRejected {
             session_id: *session_id,
             request_id: *request_id,
@@ -382,12 +387,14 @@ fn refusal(command: &ClientCommand, reason: &str) -> Option<WorldEvent> {
         | ClientCommand::CreateCharacter { .. }
         | ClientCommand::SetPosture { .. }
         | ClientCommand::SendChat(_)
+        | ClientCommand::DepopLocalNpc { .. }
         | ClientCommand::InspectItem { .. }
         | ClientCommand::Shop { .. }
         | ClientCommand::CancelTrade { .. }
         | ClientCommand::Jump { .. }
         | ClientCommand::EnvironmentalDamage { .. }
         | ClientCommand::DropInvisibility { .. }
+        | ClientCommand::StopSong { .. }
         | ClientCommand::WhoAll { .. }
         | ClientCommand::ConfigureMotion { .. }
         | ClientCommand::SpeedInputs { .. }
@@ -431,15 +438,19 @@ fn reasoned(command: &ClientCommand, session_id: u64, reason: String) -> Option<
             string_id: None,
         },
         ClientCommand::Training { .. } => WorldEvent::TrainingRefused { session_id, reason },
-        ClientCommand::AnswerResurrection { .. } => {
-            WorldEvent::ResurrectionRefused { session_id, reason }
-        }
+        ClientCommand::AnswerResurrection { offer_id, .. } => WorldEvent::ResurrectionRefused {
+            offer_id: *offer_id,
+            session_id,
+            reason,
+        },
         ClientCommand::AnswerSacrifice { .. } => {
             WorldEvent::SacrificeRefused { session_id, reason }
         }
-        ClientCommand::AnswerTranslocate { .. } => {
-            WorldEvent::TranslocateRefused { session_id, reason }
-        }
+        ClientCommand::AnswerTranslocate { offer_id, .. } => WorldEvent::TranslocateRefused {
+            offer_id: *offer_id,
+            session_id,
+            reason,
+        },
         ClientCommand::InviteToGroup { .. }
         | ClientCommand::FollowGroup { .. }
         | ClientCommand::DeclineGroup { .. }
@@ -639,7 +650,7 @@ mod tests {
         assert_eq!(idle.conflict(&memorize()), None);
 
         let mut guard = CastGuard::default();
-        guard.submitted(42, Instant::now());
+        guard.submitted(42, None, Instant::now());
         let casting = Held::casting(&guard);
         assert!(casting.conflict(&cast()).is_some());
         assert!(casting.conflict(&memorize()).is_some());
@@ -647,7 +658,8 @@ mod tests {
             casting.conflict(&ClientCommand::SelectTarget {
                 request_id: 1,
                 session_id: 1,
-                spawn_id: Some(7)
+                spawn_id: Some(7),
+                expected_pet: None,
             }),
             None
         );
@@ -679,7 +691,7 @@ mod tests {
     #[test]
     fn items_move_during_a_cast_only_from_the_cursor() {
         let mut guard = CastGuard::default();
-        guard.submitted(42, Instant::now());
+        guard.submitted(42, None, Instant::now());
         let casting = Held::casting(&guard);
         // Worn, carried, in a bag, in a bag on the cursor, banked, and in a
         // world container.

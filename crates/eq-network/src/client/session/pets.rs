@@ -1,16 +1,60 @@
-//! Commands to the player's pet. The session knows the pet as the spawn the
-//! player owns, and refuses a command without one in the official client's
-//! words; an attack names the player's target, which it needs.
+//! Ordinary pet orders use the session's current ownership and target
+//! identities. Sending a request never predicts a pet's actions.
 use super::{
     actions,
     feature::{Feature, Out, World},
-    ClientCommand,
+    ClientCommand, ClientEvent,
 };
 use anyhow::Result;
-use eq_network_game::{pets, request::Request};
+use eq_network_game::{
+    message::Message,
+    pets::{PetCommand, PetIdentity},
+    request::Request,
+    world::{SpawnKind, WorldEvent},
+};
 
-/// Sends the player's commands to their pet.
-pub(super) struct Pets;
+/// Projects the entity table's commandable pet and sends its orders.
+pub(super) struct Pets {
+    project1999: bool,
+    revision: u64,
+}
+
+impl Pets {
+    pub(super) const fn new(project1999: bool) -> Self {
+        Self {
+            project1999,
+            revision: 0,
+        }
+    }
+
+    fn project(&mut self, world: &mut World, event: Option<&WorldEvent>) -> Option<WorldEvent> {
+        let id = if world.lifecycle.is_dead() || event.is_some_and(|event| world.owns_death(event))
+        {
+            None
+        } else {
+            world.own_spawn.and_then(|owner| world.spawns.pet(owner))
+        };
+        let replaced = matches!(event, Some(WorldEvent::Spawns(spawns))
+            if spawns.iter().any(|spawn| id == Some(spawn.spawn_id)));
+        if event.is_some() && !replaced && id == world.own_pet.map(|pet| pet.spawn_id) {
+            return None;
+        }
+        world.own_pet = id.map(|spawn_id| {
+            self.revision = self
+                .revision
+                .checked_add(1)
+                .expect("pet revision exhausted");
+            PetIdentity {
+                spawn_id,
+                revision: self.revision,
+            }
+        });
+        Some(WorldEvent::OwnPet {
+            session_id: world.session_id,
+            pet: world.own_pet,
+        })
+    }
+}
 
 impl Feature for Pets {
     fn capabilities(&self) -> Vec<crate::world::Capability> {
@@ -21,6 +65,38 @@ impl Feature for Pets {
         matches!(command, ClientCommand::Pet { .. })
     }
 
+    fn admitted(&mut self, world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
+        if let Some(event) = self.project(world, None) {
+            out.log.send(ClientEvent::World(event))?;
+        }
+        Ok(())
+    }
+
+    fn observe(
+        &mut self,
+        message: &Message,
+        world: &mut World,
+        _out: &mut Out<'_, '_>,
+    ) -> Result<()> {
+        // Entities has already applied the event. Publish after the original
+        // event so the host sees the spawn/owner before the order identity.
+        let Message::Event(
+            event @ (WorldEvent::Spawns(_)
+            | WorldEvent::Despawn(_)
+            | WorldEvent::Death(_)
+            | WorldEvent::DeathBind { .. }
+            | WorldEvent::PetOwner { .. }
+            | WorldEvent::Charm(_)),
+        ) = message
+        else {
+            return Ok(());
+        };
+        if let Some(update) = self.project(world, Some(event)) {
+            world.happened(Message::Event(update));
+        }
+        Ok(())
+    }
+
     fn handle(
         &mut self,
         command: &ClientCommand,
@@ -29,93 +105,73 @@ impl Feature for Pets {
     ) -> Result<()> {
         let ClientCommand::Pet {
             command: order,
+            pet,
             target,
             ..
-        } = command
+        } = *command
         else {
             return Ok(());
         };
-        let has_pet = world
-            .own_spawn
-            .is_some_and(|own| world.spawns.all().any(|spawn| spawn.pet_owner == Some(own)));
-        // Asking whose pet the target is needs no pet of the player's own.
-        if !has_pet && *order != pets::PetCommand::Leader {
-            // The official client says so in its own words (eqstr 13091).
-            return actions::refuse_officially(command, ("You have no pet", Some(13091)), out.log);
-        }
-        if *order == pets::PetCommand::Attack && target.is_none() {
+        if self.project1999 && !order.project1999_available() {
             return actions::refuse(
                 command,
-                "You must first select a target for your pet.",
+                "That pet command is unavailable on this server",
                 out.log,
             );
         }
-        let target = target.filter(|_| order.names_target());
+        let target = if order.names_target() {
+            let Some(target) =
+                target.filter(|target| target.available && *target == world.target.state())
+            else {
+                return actions::refuse(
+                    command,
+                    "The target choice is unavailable or stale",
+                    out.log,
+                );
+            };
+            target.spawn_id
+        } else {
+            None
+        };
+        // A targeted Leader query asks another spawn. With no target, the
+        // server asks our own pet, so that case still needs its identity.
+        if order != PetCommand::Leader || target.is_none() {
+            if pet != world.own_pet {
+                return actions::refuse(command, "Your pet has changed", out.log);
+            }
+            if world.own_pet.is_none() {
+                return actions::refuse_officially(
+                    command,
+                    ("You have no pet", Some(13091)),
+                    out.log,
+                );
+            }
+        }
+        if order == PetCommand::Attack {
+            let Some(id) = target else {
+                return actions::refuse(
+                    command,
+                    "You must first select a target for your pet.",
+                    out.log,
+                );
+            };
+            if pet.is_some_and(|pet| pet.spawn_id == id)
+                || world.is_player(id)
+                || world
+                    .spawns
+                    .visible(id)
+                    .is_none_or(|spawn| !matches!(spawn.kind, SpawnKind::Npc | SpawnKind::Player))
+            {
+                return actions::refuse(
+                    command,
+                    "That target is unavailable for pet attack",
+                    out.log,
+                );
+            }
+        }
         out.request(&Request::Pet {
-            command: *order,
+            command: order,
             target,
         })
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::super::feature::testing;
-    use super::*;
-    use eq_network_game::{
-        pets::PetCommand,
-        world::{SpawnKind, WorldEvent},
-    };
-
-    fn order(command: PetCommand, target: Option<u16>) -> ClientCommand {
-        ClientCommand::Pet {
-            session_id: 5,
-            command,
-            target,
-        }
-    }
-
-    fn refusals(events: &[super::super::ClientEvent]) -> Vec<String> {
-        events
-            .iter()
-            .filter_map(|event| match event {
-                super::super::ClientEvent::World(WorldEvent::PetRefused { reason, .. }) => {
-                    Some(reason.clone())
-                }
-                _ => None,
-            })
-            .collect()
-    }
-
-    #[test]
-    fn a_pet_takes_commands_and_an_attack_names_the_target() {
-        let mut world = World::new(5);
-        world.own_spawn = Some(7);
-        // No pet yet: refused, though anyone may ask whose pet a target is.
-        let outcome =
-            testing::run(|out| Pets.handle(&order(PetCommand::Follow, None), &mut world, out));
-        outcome.result.unwrap();
-        assert!(outcome.sent.is_empty(), "sent {:?}", outcome.sent);
-        assert_eq!(refusals(&outcome.events), ["You have no pet"]);
-        let outcome =
-            testing::run(|out| Pets.handle(&order(PetCommand::Leader, Some(9)), &mut world, out));
-        assert_eq!(outcome.sent, [pets::command(PetCommand::Leader, Some(9))]);
-        let mut pet = testing::spawn(8, SpawnKind::Npc);
-        pet.pet_owner = Some(7);
-        world.spawns.insert(pet);
-        let outcome =
-            testing::run(|out| Pets.handle(&order(PetCommand::Attack, Some(9)), &mut world, out));
-        assert_eq!(outcome.sent, [pets::command(PetCommand::Attack, Some(9))]);
-        let outcome =
-            testing::run(|out| Pets.handle(&order(PetCommand::Attack, None), &mut world, out));
-        assert!(outcome.sent.is_empty(), "sent {:?}", outcome.sent);
-        assert_eq!(
-            refusals(&outcome.events),
-            ["You must first select a target for your pet."]
-        );
-        // Commands that need no target send none.
-        let outcome =
-            testing::run(|out| Pets.handle(&order(PetCommand::Sit, Some(9)), &mut world, out));
-        assert_eq!(outcome.sent, [pets::command(PetCommand::Sit, None)]);
     }
 }

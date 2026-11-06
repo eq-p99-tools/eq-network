@@ -229,6 +229,7 @@ mod tests {
             },
             slot: InventorySlot(slot),
             details: ItemDetails {
+                base_held_model: None,
                 equipment: Some(EquipmentRules::default()),
                 bonuses: Some(ItemBonuses {
                     hit_points,

@@ -1,23 +1,25 @@
-//! Being resurrected. The session keeps the latest offer, since the answer
-//! repeats it, and sends the player's answer to it once; an answer with no
-//! offer waiting is refused, as the server would only say the player was
-//! resurrected already. On acceptance the server moves the player to the
-//! corpse as it moves them anywhere, which the transfers feature follows.
+//! Being resurrected. The session offers one answer to the admitted player
+//! for the server's exact packet. Movement and recovery come from the server.
 use super::{
     actions,
+    confirmations::{closed, Pending, TITANIUM_TIMEOUT},
     feature::{Feature, Out, World},
-    ClientCommand,
+    ClientCommand, ClientEvent,
 };
 use anyhow::Result;
 use eq_network_game::{
-    message::Message, request::Request, resurrection::ResurrectionOffer, world::WorldEvent,
+    confirmations::{ConsentClosure, ConsentKind, ConsentOffer},
+    message::Message,
+    request::Request,
+    resurrection::ResurrectionOffer,
+    world::WorldEvent,
 };
+use std::time::Instant;
 
 /// Answers offers to resurrect the player.
 #[derive(Default)]
 pub(super) struct Resurrection {
-    /// The offer waiting for an answer, if any.
-    offer: Option<ResurrectionOffer>,
+    pending: Pending<ResurrectionOffer>,
 }
 
 impl Feature for Resurrection {
@@ -32,30 +34,63 @@ impl Feature for Resurrection {
     fn handle(
         &mut self,
         command: &ClientCommand,
-        _world: &mut World,
+        world: &mut World,
         out: &mut Out<'_, '_>,
     ) -> Result<()> {
-        let ClientCommand::AnswerResurrection { accept, .. } = *command else {
+        let ClientCommand::AnswerResurrection {
+            offer_id, accept, ..
+        } = *command
+        else {
             return Ok(());
         };
-        let Some(offer) = self.offer.take() else {
+        self.tick(Instant::now(), world, out)?;
+        let Some(offer) = self.pending.take(offer_id, world) else {
             return actions::refuse(
                 command,
-                "No resurrection is waiting for an answer.",
+                "That resurrection offer is no longer current.",
                 out.log,
             );
         };
-        out.request(&Request::AnswerResurrection { offer, accept })
+        out.request(&Request::AnswerResurrection { offer, accept })?;
+        closed(out, offer_id, ConsentClosure::AnswerSent { accept })
     }
 
     fn observe(
         &mut self,
         message: &Message,
-        _world: &mut World,
-        _out: &mut Out<'_, '_>,
+        world: &mut World,
+        out: &mut Out<'_, '_>,
     ) -> Result<()> {
-        if let Message::Event(WorldEvent::Resurrection(offer)) = message {
-            self.offer = Some(offer.clone());
+        self.pending.invalidate(message, world, out)?;
+        let Message::Resurrection(offer) = message else {
+            return Ok(());
+        };
+        if world
+            .player
+            .as_ref()
+            .is_none_or(|player| !player.name.eq_ignore_ascii_case(&offer.recipient))
+        {
+            return Ok(());
+        }
+        if let Some(question) = self.pending.open(
+            offer,
+            world,
+            ConsentKind::Resurrection,
+            Instant::now() + TITANIUM_TIMEOUT,
+        ) {
+            out.log
+                .send(ClientEvent::World(WorldEvent::Resurrection(question)))?;
+        }
+        Ok(())
+    }
+
+    fn tick(&mut self, now: Instant, world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
+        if let Some(ConsentOffer { id, offer, .. }) = self.pending.elapsed(now, world, out)? {
+            out.request(&Request::AnswerResurrection {
+                offer,
+                accept: false,
+            })?;
+            closed(out, id, ConsentClosure::Expired)?;
         }
         Ok(())
     }
@@ -63,46 +98,89 @@ impl Feature for Resurrection {
 
 #[cfg(test)]
 mod tests {
-    use super::super::{feature::testing, ClientEvent};
+    use super::super::feature::testing;
     use super::*;
-    use eq_network_game::resurrection::{titanium_answer, titanium_offer};
+    use eq_network_game::{
+        confirmations::ConsentId,
+        resurrection::{titanium_answer, OFFER_OPCODE},
+    };
 
-    fn answer(accept: bool) -> ClientCommand {
+    fn answer(offer_id: ConsentId, accept: bool) -> ClientCommand {
         ClientCommand::AnswerResurrection {
             session_id: 5,
+            offer_id,
             accept,
         }
     }
 
+    fn offer(name: &[u8]) -> Message {
+        let mut body = vec![0; 228];
+        body[24..24 + name.len()].copy_from_slice(name);
+        body[92..98].copy_from_slice(b"Helper");
+        body[160..173].copy_from_slice(b"Tester's body");
+        eq_network_game::message::titanium(OFFER_OPCODE, &body)
+            .pop()
+            .unwrap()
+    }
+
     #[test]
-    fn an_offer_is_answered_once() {
+    fn only_the_admitted_recipient_can_answer_and_expiry_only_declines_once() {
         let mut resurrection = Resurrection::default();
         let mut world = World::new(5);
-        let outcome = testing::run(|out| resurrection.handle(&answer(true), &mut world, out));
-        assert!(outcome.sent.is_empty(), "sent {:?}", outcome.sent);
-        assert!(outcome.events.iter().any(|event| matches!(
-            event,
-            ClientEvent::World(WorldEvent::ResurrectionRefused { .. })
-        )));
-        // An offer from Tester to Example's corpse: the caster's name at 92
-        // and the corpse's at 160 of the 228 bytes.
-        let mut body = vec![0; 228];
-        body[92..98].copy_from_slice(b"Tester");
-        body[160..177].copy_from_slice(b"Example's corpse0");
-        let offer = titanium_offer(&body).unwrap();
-        testing::run(|out| {
-            resurrection.observe(
-                &Message::Event(WorldEvent::Resurrection(offer.clone())),
-                &mut world,
-                out,
-            )
-        })
-        .result
-        .unwrap();
-        let outcome = testing::run(|out| resurrection.handle(&answer(true), &mut world, out));
-        assert_eq!(outcome.sent, [titanium_answer(&offer, true)]);
-        // The offer is spent.
-        let outcome = testing::run(|out| resurrection.handle(&answer(false), &mut world, out));
-        assert!(outcome.sent.is_empty(), "sent {:?}", outcome.sent);
+        let mut player = testing::player(7);
+        player.name = "Tester".into();
+        world.player.admit(player);
+        let valid = offer(b"tester");
+        let foreign = offer(b"Another");
+        let too_early = testing::run(|out| resurrection.observe(&valid, &mut world, out));
+        assert!(too_early.events.is_empty());
+        world.admitted = Some(Instant::now());
+        let foreign = testing::run(|out| resurrection.observe(&foreign, &mut world, out));
+        assert!(foreign.events.is_empty());
+        assert_eq!(
+            foreign.sent,
+            [] as [eq_network_game::command::EncodedCommand; 0]
+        );
+
+        let opened = testing::run(|out| resurrection.observe(&valid, &mut world, out));
+        opened.result.unwrap();
+        assert_eq!(
+            opened.sent,
+            [] as [eq_network_game::command::EncodedCommand; 0]
+        );
+        let [ClientEvent::World(WorldEvent::Resurrection(question))] = opened.events.as_slice()
+        else {
+            panic!("expected the question");
+        };
+        let outcome =
+            testing::run(|out| resurrection.handle(&answer(question.id, true), &mut world, out));
+        outcome.result.unwrap();
+        assert_eq!(outcome.sent, [titanium_answer(&question.offer, true)]);
+        assert!(!world.lifecycle.blocks_motion());
+
+        // An identical offer after answering can be a fresh cast.
+        let opened = testing::run(|out| resurrection.observe(&valid, &mut world, out));
+        let [ClientEvent::World(WorldEvent::Resurrection(new_question))] = opened.events.as_slice()
+        else {
+            panic!("expected the new question");
+        };
+        assert_ne!(question.id, new_question.id);
+        let now = Instant::now() + TITANIUM_TIMEOUT;
+        let expired = testing::run(|out| resurrection.tick(now, &mut world, out));
+        expired.result.unwrap();
+        assert_eq!(expired.sent, [titanium_answer(&new_question.offer, false)]);
+        assert!(matches!(
+            expired.events.as_slice(),
+            [ClientEvent::World(WorldEvent::ConsentClosed { id, closure: ConsentClosure::Expired })] if *id == new_question.id
+        ));
+        let late = testing::run(|out| {
+            resurrection.tick(now, &mut world, out)?;
+            resurrection.handle(&answer(new_question.id, true), &mut world, out)
+        });
+        late.result.unwrap();
+        assert_eq!(
+            late.sent,
+            [] as [eq_network_game::command::EncodedCommand; 0]
+        );
     }
 }

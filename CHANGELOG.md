@@ -7,6 +7,31 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Retain a checked optional base held model from Titanium item definitions.
+  The item model and received wear appearance remain separate.
+- One explicit Titanium bow shot or throw through `GameCommand::RangedAttack`
+  and `Capability::RangedCombat`. The session checks the target revision,
+  loadout, reach and unmodified weapon delay. Damage and ammunition changes
+  come through the existing server events.
+- `ClientCommand::StopSong` is offered by Titanium EQEmu through
+  `Capability::StoppingSongs`. The worker checks Bard class and current
+  admission. A silent stop of a tracked gem cast releases the local hold
+  after one second and emits `WorldEvent::SongStopUnconfirmed`. Received
+  cast results continue through the ordinary spell updates.
+- `BookActionStatus::Unconfirmed` reports an unanswered book edit once.
+  Forgetting also holds the book until its matching gem clear arrives.
+  Track the old spell in named clears to protect replacement gems.
+- `WorldEvent::OwnPet` reports the current pet's identity and revision for the
+  admission. `ClientCommand::Pet` now takes that identity, a target revision
+  for targeted orders, and a creation time. `SelectTarget::expected_pet`
+  pins a pet-specific selection to the same identity. Charm, ownership changes and
+  death update the existing spawn table. Stale pet and target orders are
+  refused before sending. Guard Me uses Titanium command 6, and the
+  Project 1999 policy refuses hold, feign, spellhold and focus.
+- Grant bounded swimming for Titanium EQEmu sessions. Swim proposals use the
+  existing position update and share one speed budget across all three axes.
+  A motion submission does not establish server acceptance or water state.
+
 - Default-off P99 list presence replies (`ClientConfig::answer_list_polls`,
   `ClientCommand::AnswerListPolls`, `Capability::AnsweringListPolls`). Runtime
   disable cancels an owed reply. Only server-driven presence polls schedule
@@ -50,6 +75,32 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   carrying capacity, ordinary door cursor checks, and reading window kinds.
 
 ### Changed
+
+- **Breaking:** scope resurrection and translocate consent to an admission
+  and a specific offer. `WorldEvent::Resurrection` and
+  `WorldEvent::TranslocateOffer` carried the bare offer and now carry
+  `confirmations::ConsentOffer<T>`; `AnswerResurrection`, `AnswerTranslocate`
+  and the two `*Refused` events gain `offer_id`; `WorldEvent` gains
+  `ConsentClosed`; `Message` gains `Resurrection`, `TranslocateOffer` and
+  `MerchantScoped`, and `world::titanium_update` no longer emits consent as
+  world events. Hosts can observe the worker's `ConsentClosed` disposition
+  independently of server results. The raw offers decode through `message`
+  before session policy and recipient checks.
+- **Breaking:** pet orders carry the pet's identity. `ClientCommand::Pet`
+  was `{ session_id, command, target: Option<u16> }` and any spawn owned by
+  the player sufficed; it is now `{ session_id, command, pet:
+  Option<PetIdentity>, target: Option<TargetState>, created }`, refused with
+  "Your pet has changed" when the identity no longer matches the current pet,
+  and subject to the ordinary input expiry. `SelectTarget` gains
+  `expected_pet`; `PetCommand` gains `GuardMe` (`ALL` grows from 16 to 17).
+- **Breaking:** exhaustive public enums grow. `GameCommand` gains `StopSong`,
+  `RangedAttack` and `DepopLocalNpc`; `WorldEvent` gains `OwnPet`,
+  `CastSuperseded` and `SongStopUnconfirmed`; `Capability` gains
+  `RangedCombat`, `StoppingSongs` and `Swimming` (`Capability::ALL` grows
+  from 47 to 50); `MovementMode` gains `Swim`; `BookActionStatus` gains
+  `Unconfirmed`; `Request` gains `RangedAttack` and `StopSong`; and
+  `ItemDetails` gains the public field `base_held_model: Option<NonZeroU16>`,
+  which breaks struct literals.
 
 - Restore the configured P99 list reply preference on return to character
   selection. A runtime choice follows the same character across zones.
@@ -226,12 +277,25 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- Keep merchant commands and Titanium receipts scoped to the relevant shop.
+  Check stock, quantity, and sale custody before sending. Preserve an
+  unanswered transaction across a shop close and await server evidence.
+  A Titanium refusal with a merchant ID can resolve that shop's sole matching
+  action. Despawn or replacement retires the catalog and releases the pending
+  trade as unknown while retaining any late result. A late refusal of an
+  already released trade leaves the host's other unanswered action alone.
+- Retire item and coin escrow when a trade cancel is sent. Returned holdings
+  come from server inventory and money updates. Withhold exchange replies
+  that cannot apply to the current stage or partner.
+- Check that a bank conversion's source holds the whole offered amount,
+  including the amount the conversion leaves behind.
+
 - Keep tracking jump ascent across flight toggles so toggling flight off
   cannot open grounded diagonal movement during a tracked jump. The jump's
   own rise allowance also survives the toggle; it expires at the apex as
   before.
-- Report the first decoded zone offer in a record-only zone session. The
-  listener stays on the current connection without following the offer.
+- Report the first zone offer in a record-only zone session, even if the offer
+  is unreadable. The listener stays on the current connection.
 
 - Report `ConnectionStage::Recording` when a completed zone handshake permits
   communication records but the player snapshot cannot be decoded. Record-only

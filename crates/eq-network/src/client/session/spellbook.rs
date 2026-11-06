@@ -205,8 +205,16 @@ impl Spellbook {
         report(status, out)
     }
 
-    /// Forgets a memorized spell; nothing waits for the server's answer.
-    fn forget(gem: u8, spell_id: u32, world: &World, out: &mut Out<'_, '_>) -> Result<()> {
+    /// Requests a gem clear and holds the book until the matching update.
+    fn forget(
+        &mut self,
+        command: &ClientCommand,
+        world: &World,
+        out: &mut Out<'_, '_>,
+    ) -> Result<()> {
+        let ClientCommand::ForgetSpell { gem, spell_id, .. } = *command else {
+            return Ok(());
+        };
         let checked = world
             .player
             .as_ref()
@@ -215,6 +223,7 @@ impl Spellbook {
         match checked {
             Ok(()) => {
                 out.request(&Request::Forget { gem, spell_id })?;
+                self.answers.sent(command, Instant::now());
                 report(BookActionStatus::Submitted, out)
             }
             Err(error) => {
@@ -420,20 +429,17 @@ impl Feature for Spellbook {
             ClientCommand::MemorizeSpell { gem, spell_id, .. } => {
                 self.prepare(BookIntent::Memorize { gem, spell_id }, world, out)
             }
-            ClientCommand::ForgetSpell { gem, spell_id, .. } => {
-                Self::forget(gem, spell_id, world, out)
-            }
+            ClientCommand::ForgetSpell { .. } => self.forget(command, world, out),
             _ => self.edit(command, out),
         }
     }
 
-    /// Ends a change the server never answered, cancels a waiting scribe or
-    /// memorization once the player dies or starts to zone, and sends one
-    /// the player has sat long enough for.
+    /// Reports an unanswered edit, cancels unsent work on death or zoning,
+    /// and submits an eligible prepared request.
     fn tick(&mut self, now: Instant, world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
-        // Servers refuse an edit (a spell above the character's level, another
-        // class's scroll) with only a chat message, so silence means refusal.
-        if let Some(status) = self.answers.expire(now) {
+        // A server can report a refusal only in chat. Silence gives us
+        // neither a matched refusal nor permission to replace the edit.
+        if let Some(status) = self.answers.timeout(now) {
             report(status, out)?;
         }
         if world.lifecycle.is_dead() {
@@ -741,6 +747,7 @@ mod tests {
             request_id: 1,
             session_id: 5,
             spawn_id: Some(9),
+            expected_pet: None,
         };
         let outcome = testing::run(|out| spellbook.notice(&target, &mut world, out));
         assert!(
@@ -1036,6 +1043,49 @@ mod tests {
             [eq_network_game::command::titanium_posture(7, Posture::Sitting).unwrap()]
         );
         assert_eq!(spellbook.pending.as_ref().unwrap().delay, SITTING);
+    }
+
+    #[test]
+    fn forgetting_holds_the_book_past_silence_until_the_exact_gem_clear() {
+        let (mut spellbook, mut world) = admitted(Some(73));
+        let mut player = world.player.as_ref().unwrap().clone();
+        player.memorized_spells[2] = Some(73);
+        world.player.admit(player);
+        let command = ClientCommand::ForgetSpell {
+            session_id: world.session_id,
+            gem: 2,
+            spell_id: 73,
+            created: Instant::now(),
+        };
+        let output = testing::run(|out| spellbook.handle(&command, &mut world, out));
+        output.result.unwrap();
+        assert_eq!(output.sent.len(), 1);
+        assert_eq!(statuses(&output.events), [&BookActionStatus::Submitted]);
+
+        let late = Instant::now() + Duration::from_secs(31);
+        let output = testing::run(|out| spellbook.tick(late, &mut world, out));
+        output.result.unwrap();
+        assert_eq!(
+            output.sent,
+            [] as [eq_network_game::command::EncodedCommand; 0]
+        );
+        assert_eq!(statuses(&output.events), [&BookActionStatus::Unconfirmed]);
+        assert_eq!(spellbook.holds(&world, late).len(), 1);
+
+        for (slot, spell_id, expected) in [(3, 73, false), (2, 74, false), (2, 73, true)] {
+            let update = Message::Event(WorldEvent::Spell(SpellUpdate::Slot {
+                slot,
+                spell_id,
+                mode: 2,
+            }));
+            let output = testing::run(|out| spellbook.observe(&update, &mut world, out));
+            output.result.unwrap();
+            assert_eq!(
+                statuses(&output.events).first().copied(),
+                expected.then_some(&BookActionStatus::Confirmed)
+            );
+            assert_eq!(spellbook.holds(&world, late).is_empty(), expected);
+        }
     }
 
     #[test]

@@ -4,7 +4,7 @@
 //! 32, a book of 256 slots, no reuse adjustment on a gem's refresh, and
 //! interruptions that name no caster. The opcodes are TAKP
 //! `utils/patches/patch_Mac.conf`'s, their bytes swapped.
-use super::{SpellBook, SpellUpdate};
+use super::{SpellBook, SpellUpdate, ITEM_CAST_SLOT};
 use crate::{command::EncodedCommand, inventory::InventorySlot};
 use anyhow::{ensure, Context, Result};
 
@@ -29,8 +29,6 @@ pub const EQMAC_BOOK_SLOTS: usize = 256;
 /// `spell_book`).
 const PROFILE_BOOK: std::ops::Range<usize> = 1846..1846 + EQMAC_BOOK_SLOTS * 2;
 
-/// The casting slot of an item's click effect (TAKP `CastingSlot::Item`).
-const ITEM_CAST: u16 = 10;
 /// The item slot of a cast from a gem: none.
 const NO_ITEM: u16 = u16::MAX;
 /// The item slots TAKP casts click effects from: the worn ones, which on the
@@ -95,7 +93,7 @@ pub fn eqmac_item_cast(
         .ok()
         .filter(|slot| CLICKABLE.contains(slot))
         .context("TAKP casts items only from worn and general slots")?;
-    cast(ITEM_CAST, spell_id, item, target_id)
+    cast(ITEM_CAST_SLOT, spell_id, item, target_id)
 }
 
 /// TAKP's `CastSpell_Struct` (12 bytes, packed): the casting slot, the

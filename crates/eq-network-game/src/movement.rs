@@ -155,6 +155,20 @@ pub enum MovementMode {
     /// Airborne descent after leaving a ledge: forward speed and animation, while
     /// height falls under gravity instead of following the ground.
     Fall,
+    /// Locally collision-checked water motion. Never serialized as a mode.
+    Swim,
+}
+
+/// Conservative three-dimensional swim budget for a Titanium session.
+///
+/// The slower native wet horizontal branch settles at `0.02 / (1 - 0.94)`
+/// input units per tick, versus `0.8 / (1 - 0.625)` on land. Use this
+/// fraction of the current unboosted grant on every axis. This is a bound
+/// for this client, not a claim about the native skill, race or buff formula;
+/// the shared three-axis budget is inferred (recording checklist 6.390).
+#[must_use]
+pub fn swim_speed(granted_units_per_second: f32) -> f32 {
+    granted_units_per_second * 0.156_25
 }
 
 /// How the heading in a movement request was produced.
@@ -497,14 +511,15 @@ impl MovementGuard {
     /// # Errors
     /// Rejects disabled, stale, foreign-session, non-finite, or excessive motion.
     pub fn accept(&mut self, request: &MovementRequest, now: Instant) -> Result<[f32; 3]> {
-        self.accept_with_diagonal(request, now, None)
+        self.accept_with_modes(request, now, None, false)
     }
 
-    fn accept_with_diagonal(
+    fn accept_with_modes(
         &mut self,
         request: &MovementRequest,
         now: Instant,
         lateral_rate: Option<f32>,
+        swimming: bool,
     ) -> Result<[f32; 3]> {
         ensure!(
             request.session_id == self.session_id,
@@ -536,7 +551,13 @@ impl MovementGuard {
             request.position.y - self.position.y,
             request.position.z - self.position.z,
         ];
-        if let MovementMode::GroundedDiagonal(diagonal) = request.mode {
+        if request.mode == MovementMode::Swim {
+            ensure!(swimming && !self.flying, "swimming is not available");
+            ensure!(
+                delta[0].hypot(delta[1]).hypot(delta[2]) <= speed * elapsed + 0.01,
+                "swimming exceeds its three-dimensional time budget"
+            );
+        } else if let MovementMode::GroundedDiagonal(diagonal) = request.mode {
             // A known jump excludes fresh grounded diagonal input. The
             // ascent tracker does not establish where the player lands.
             ensure!(
@@ -578,7 +599,9 @@ impl MovementGuard {
             }
         });
         let rise = since_jump.map_or(0.0, |(from, to)| self.jump_rise(from, to));
-        let vertical = if self.flying {
+        let vertical = if request.mode == MovementMode::Swim {
+            true // The single 3D budget already checks vertical movement.
+        } else if self.flying {
             delta[2].abs() <= speed * elapsed + 0.01
         } else if request.mode == MovementMode::Fall {
             delta[2] <= MAX_GROUNDED_STEP + rise
@@ -595,19 +618,28 @@ impl MovementGuard {
         );
         self.position = request.position;
         self.sampled = request.created;
-        // The jump started with this sample's interval; past the top it
-        // rises no more.
-        if let (Some((speed, gravity)), Some((_, to))) = (self.jump, since_jump) {
+        self.update_jump_after_move(request.mode, request.created, since_jump.map(|(_, to)| to));
+        Ok(delta)
+    }
+
+    /// Ends jump tracking on water entry or once its upward allowance is spent.
+    fn update_jump_after_move(
+        &mut self,
+        mode: MovementMode,
+        created: Instant,
+        since_jump: Option<f32>,
+    ) {
+        if mode == MovementMode::Swim {
+            self.jumped_at = None;
+        } else if let (Some((speed, gravity)), Some(to)) = (self.jump, since_jump) {
             self.jumped_at = if gravity > 0.0 && to >= speed / gravity {
                 None
             } else {
-                request
-                    .created
+                created
                     .checked_sub(Duration::from_secs_f32(to))
                     .map(JumpStart::At)
             };
         }
-        Ok(delta)
     }
 
     /// The seconds a request stamped `created` covers since the last

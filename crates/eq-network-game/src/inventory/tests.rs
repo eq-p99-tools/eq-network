@@ -1,5 +1,106 @@
 use super::*;
 
+fn held_wire(slot: i32, id: u32, id_file: &str, charges: &str) -> String {
+    let fixture = wire(slot, id, 0, false, 0, &[]);
+    let (header, rest) = fixture.split_once('"').unwrap();
+    let (definition, tail) = rest.split_once('"').unwrap();
+    let mut header: Vec<_> = header.split('|').collect();
+    header[8] = charges;
+    let mut fields: Vec<_> = definition.split('|').collect();
+    fields[3] = id_file;
+    fields[9] = "8192"; // Primary slot mask.
+    fields[52] = "1"; // Warrior.
+    fields[53] = "1"; // Human.
+    format!("{}\"{}\"{tail}", header.join("|"), fields.join("|"))
+}
+
+#[test]
+fn titanium_inventory_keeps_only_checked_base_held_models() {
+    for (id_file, expected) in [
+        ("IT0037", Some(37)),
+        ("it205", Some(205)),
+        ("", None),
+        ("0", None),
+        ("IT0", None),
+        ("IT", None),
+        ("IT+5", None),
+        ("IT65536", None),
+        ("OBJ7", None),
+        ("İT7", None),
+    ] {
+        let packet = held_wire(13, 42, id_file, "-1");
+        let Some(InventoryUpdate::Snapshot(items)) = decode(0x5394, packet.as_bytes()).unwrap()
+        else {
+            panic!("expected an inventory snapshot");
+        };
+        assert_eq!(items[0].slot, InventorySlot(13));
+        assert_eq!(items[0].details.id, 42);
+        assert_eq!(
+            items[0]
+                .details
+                .base_held_model
+                .map(std::num::NonZeroU16::get),
+            expected,
+            "{id_file}"
+        );
+    }
+}
+
+#[test]
+fn titanium_held_model_omission_confirms_only_its_slot_without_a_correction() {
+    let primary = InventorySlot(13);
+    let cursor = InventorySlot::CURSOR;
+    let snapshot = [
+        held_wire(primary.0, 41, "IT0007", "-1"),
+        held_wire(cursor.0, 42, "IT0014", "-1"),
+    ]
+    .concat();
+    let mut state = Inventory::default();
+    state.apply(decode(0x5394, snapshot.as_bytes()).unwrap().unwrap());
+    let request = InventoryMove {
+        session_id: 1,
+        revision: state.revision(),
+        sequence: None,
+        from: cursor,
+        to: primary,
+        quantity: MoveQuantity::Whole,
+        created: std::time::Instant::now(),
+    };
+    let actor = InventoryActor {
+        bank_access: false,
+        class: Some(1),
+        deity: None,
+        dual_wield: None,
+        race: 1,
+        level: 1,
+        trade_slots: 0,
+        trade_no_drop: false,
+        world_container: false,
+    };
+    state.submit_move(&request, actor, |_| Ok(())).unwrap();
+    let origins = |state: &Inventory| {
+        state
+            .prediction_origins()
+            .map(|(slot, _)| slot)
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(origins(&state), [primary, cursor]);
+    assert!(state.items()[&primary].details.base_held_model.is_some());
+
+    for (id, charges, correcting) in [(42, "-1", false), (41, "-1", true), (42, "2", true)] {
+        let mut packet = 0x69_u32.to_le_bytes().to_vec();
+        packet.extend(held_wire(primary.0, id, "", charges).bytes());
+        let mut received = state.clone();
+        received.apply(decode(0x3397, &packet).unwrap().unwrap());
+        let hand = &received.items()[&primary];
+        assert!(hand.details.base_held_model.is_none());
+        assert_ne!(hand, &state.items()[&primary]);
+        assert_eq!(origins(&received), [cursor]);
+        assert_eq!(received.awaiting_correction(), correcting);
+        assert_eq!(received.stale(), correcting);
+    }
+}
+
 #[test]
 fn zero_quantity_removal_clears_cursor_but_does_not_confirm_other_predictions() {
     let mut state = Inventory::default();

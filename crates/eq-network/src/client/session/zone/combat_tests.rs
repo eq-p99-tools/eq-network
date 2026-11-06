@@ -1,12 +1,295 @@
-//! Normal combat through the actual server feature assembly and `EQMac` wire.
+//! Normal combat through the actual server feature assembly and wire codecs.
 use super::*;
 use crate::client::{session::feature::testing, ServerProtocol};
 use eq_network_game::{
-    combat::{self, CombatRequest, CombatRequestStatus, DamageOutcome},
+    combat::{
+        self,
+        ranged::{RangedAttack, RangedKind, RangedLoadout},
+        CombatRequest, CombatRequestStatus, DamageOutcome,
+    },
+    inventory::InventorySlot,
     world::{SpawnKind, WorldEvent},
 };
 
 const SERVERS: &[ServerProtocol] = &[ServerProtocol::Takp, ServerProtocol::Quarm];
+
+fn ranged_setup(protocol: ServerProtocol, kind: RangedKind) -> (Features, World) {
+    let (features, mut world) = setup(protocol);
+    let mut player = testing::player(7);
+    let mut skills = vec![0; 100];
+    skills[usize::from(kind.skill())] = 20;
+    player.skills = Some(skills);
+    world.player.admit(player);
+    let mut target = testing::spawn(8, SpawnKind::Npc);
+    target.position.x = 50.0;
+    world.spawns.insert(target);
+    world.target = 8.into();
+    world.inventory = super::super::combat::test_ranged_inventory(kind).into();
+    (features, world)
+}
+
+fn ranged_attack(world: &World) -> RangedAttack {
+    RangedAttack {
+        session_id: world.session_id,
+        target: world.target.state(),
+        loadout: RangedLoadout::current(&world.inventory).unwrap(),
+        created: Instant::now(),
+    }
+}
+
+fn set_ranged_rank(world: &mut World, kind: RangedKind, rank: Option<u32>) {
+    let player = world.player.corrected().unwrap();
+    player.class = Some(4); // Ranger
+    player.level = 10;
+    player.skills = rank.map(|rank| {
+        let mut skills = vec![0; 100];
+        skills[usize::from(kind.skill())] = rank;
+        skills
+    });
+}
+
+#[test]
+fn eqemu_rank_zero_first_shots_leave_skill_eligibility_to_the_server() {
+    let protocol = ServerProtocol::EqEmu;
+    let wire = servers::server_type(protocol).wire();
+    for (kind, rank) in [
+        (RangedKind::Archery, Some(0)),
+        (RangedKind::Throwing, Some(0)),
+        // Neither missing data nor a marker-like value supplies a class/level cap.
+        (RangedKind::Archery, None),
+        (RangedKind::Throwing, Some(u32::MAX)),
+    ] {
+        let (mut features, mut world) = ranged_setup(protocol, kind);
+        set_ranged_rank(&mut world, kind, rank);
+        let request = ClientCommand::RangedAttack(ranged_attack(&world));
+        let output = testing::run_on(wire, |out| {
+            command(&mut features, &mut world, &request, out)
+        });
+        output.result.unwrap();
+        assert_eq!(output.sent.len(), 1, "{kind:?} {rank:?}");
+        assert_eq!(output.sent[0].body[8], kind.skill());
+        assert_eq!(output.events.len(), 1);
+        assert_eq!(status(&output.events).1, &CombatRequestStatus::Sent);
+        let skills = &world.player.as_ref().unwrap().skills;
+        assert_eq!(
+            skills
+                .as_ref()
+                .map(|skills| skills[usize::from(kind.skill())]),
+            rank
+        );
+
+        let output = testing::run_on(wire, |out| {
+            command(&mut features, &mut world, &request, out)
+        });
+        output.result.unwrap();
+        assert_eq!(
+            output.sent,
+            [] as [eq_network_game::command::EncodedCommand; 0]
+        );
+        assert!(
+            matches!(status(&output.events).1, CombatRequestStatus::Refused(reason)
+            if reason.contains("recovering"))
+        );
+    }
+}
+
+#[test]
+fn p99_zero_rank_and_unknown_rank_are_distinct_local_refusals() {
+    let protocol = ServerProtocol::Project1999;
+    let wire = servers::server_type(protocol).wire();
+    let kind = RangedKind::Archery;
+    for (rank, expected) in [
+        (Some(0), "positive ranged skill rank"),
+        (None, "rank is unavailable"),
+        (Some(254), "rank is unavailable"),
+        (Some(255), "rank is unavailable"),
+        (Some(u32::MAX), "rank is unavailable"),
+    ] {
+        let (mut features, mut world) = ranged_setup(protocol, kind);
+        set_ranged_rank(&mut world, kind, rank);
+        let request = ClientCommand::RangedAttack(ranged_attack(&world));
+        let output = testing::run_on(wire, |out| {
+            command(&mut features, &mut world, &request, out)
+        });
+        output.result.unwrap();
+        assert_eq!(
+            output.sent,
+            [] as [eq_network_game::command::EncodedCommand; 0]
+        );
+        assert!(
+            matches!(status(&output.events).1, CombatRequestStatus::Refused(reason)
+            if reason.contains(expected))
+        );
+    }
+}
+
+#[test]
+fn titanium_ranged_sends_one_request_and_only_received_inventory_changes_ammo() {
+    for (kind, slot, wire_skill) in [(RangedKind::Archery, 21, 7), (RangedKind::Throwing, 11, 51)] {
+        let protocol = ServerProtocol::EqEmu;
+        let server = servers::server_type(protocol);
+        let wire = server.wire();
+        let (mut features, mut world) = ranged_setup(protocol, kind);
+        let request = ClientCommand::RangedAttack(ranged_attack(&world));
+        let output = testing::run_on(wire, |out| {
+            command(&mut features, &mut world, &request, out)
+        });
+        output.result.unwrap();
+        assert_eq!(output.sent.len(), 1);
+        assert_eq!(output.sent[0].opcode, 0x5ee8);
+        assert_eq!(
+            output.sent[0].body,
+            [8, 0, 0, 0, 11, 0, 0, 0, wire_skill, 0, 0, 0]
+        );
+        assert_eq!(output.events.len(), 1);
+        assert_eq!(status(&output.events).1, &CombatRequestStatus::Sent);
+        assert_eq!(
+            world.inventory.items()[&InventorySlot(slot)].stack_count,
+            Some(2)
+        );
+
+        // A second input inside the local wait sends nothing and leaves ammo alone.
+        let output = testing::run_on(wire, |out| {
+            command(&mut features, &mut world, &request, out)
+        });
+        output.result.unwrap();
+        assert_eq!(
+            output.sent,
+            [] as [eq_network_game::command::EncodedCommand; 0]
+        );
+        assert!(
+            matches!(status(&output.events).1, CombatRequestStatus::Refused(reason)
+            if reason.contains("recovering"))
+        );
+        assert_eq!(
+            world.inventory.items()[&InventorySlot(slot)].stack_count,
+            Some(2)
+        );
+
+        let mut delete = [255; 12];
+        delete[..4].copy_from_slice(&slot.to_le_bytes());
+        for (opcode, remaining) in [(0x4d81, Some(1)), (0x420f, None)] {
+            let output = testing::run_on(wire, |out| {
+                hear(
+                    wire.messages(opcode, &delete, server.item_rules()),
+                    &mut features,
+                    &mut world,
+                    out,
+                    true,
+                )
+            });
+            output.result.unwrap();
+            assert_eq!(
+                output.sent,
+                [] as [eq_network_game::command::EncodedCommand; 0]
+            );
+            assert_eq!(
+                world
+                    .inventory
+                    .items()
+                    .get(&InventorySlot(slot))
+                    .and_then(|item| item.stack_count),
+                remaining
+            );
+        }
+        assert!(RangedLoadout::current(&world.inventory).is_err());
+    }
+}
+
+#[test]
+fn ranged_refuses_stale_target_loadout_and_admission_and_unavailable_actions() {
+    let protocol = ServerProtocol::Project1999;
+    let server = servers::server_type(protocol);
+    let wire = server.wire();
+    for case in [
+        "new target revision",
+        "new item revision",
+        "old admission",
+        "dead",
+        "sitting",
+        "near",
+        "far",
+    ] {
+        let (mut features, mut world) = ranged_setup(protocol, RangedKind::Archery);
+        let mut attack = ranged_attack(&world);
+        match case {
+            "new target revision" => {
+                let output = testing::run_on(wire, |out| {
+                    hear(
+                        wire.messages(
+                            eq_network_game::targets::TARGET_COMMAND_OPCODE,
+                            &8u32.to_le_bytes(),
+                            server.item_rules(),
+                        ),
+                        &mut features,
+                        &mut world,
+                        out,
+                        true,
+                    )
+                });
+                output.result.unwrap();
+                assert_eq!(*world.target, attack.target.spawn_id);
+                assert_ne!(world.target.state().revision, attack.target.revision);
+            }
+            "new item revision" => {
+                let mut refreshed = (*world.inventory).clone();
+                let identical = refreshed.items().values().cloned().collect();
+                refreshed.apply(eq_network_game::inventory::InventoryUpdate::Snapshot(
+                    identical,
+                ));
+                world.inventory = refreshed.into();
+            }
+            "old admission" => attack.session_id -= 1,
+            "dead" => world.lifecycle.mark_dead(),
+            "sitting" => world
+                .posture
+                .observed(eq_network_game::world::PostureState::Sitting),
+            "near" | "far" => {
+                let mut target = testing::spawn(8, SpawnKind::Npc);
+                target.position.x = if case == "near" { 20.0 } else { 300.0 };
+                world.spawns.insert(target);
+            }
+            _ => unreachable!(),
+        }
+        let output = testing::run_on(wire, |out| {
+            command(
+                &mut features,
+                &mut world,
+                &ClientCommand::RangedAttack(attack),
+                out,
+            )
+        });
+        output.result.unwrap();
+        assert!(output.sent.is_empty(), "{case}");
+        assert!(
+            output.events.iter().any(|event| matches!(
+                event,
+                ClientEvent::World(WorldEvent::CombatRequest {
+                    status: CombatRequestStatus::Refused(_),
+                    ..
+                })
+            )),
+            "{case}"
+        );
+    }
+
+    for &protocol in SERVERS {
+        let (mut features, mut world) = ranged_setup(protocol, RangedKind::Throwing);
+        let request = ClientCommand::RangedAttack(ranged_attack(&world));
+        let output = testing::run_on(servers::server_type(protocol).wire(), |out| {
+            command(&mut features, &mut world, &request, out)
+        });
+        output.result.unwrap();
+        assert_eq!(
+            output.sent,
+            [] as [eq_network_game::command::EncodedCommand; 0]
+        );
+        assert!(matches!(
+            status(&output.events).1,
+            CombatRequestStatus::Refused(_)
+        ));
+    }
+}
 
 fn setup(protocol: ServerProtocol) -> (Features, World) {
     let features = Features::new(

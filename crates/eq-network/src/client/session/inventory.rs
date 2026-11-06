@@ -39,7 +39,7 @@ use eq_network_game::{
     world::Coins,
     world::{SpawnKind, WorldEvent},
 };
-use merchant::{MerchantTrades, OpenMerchant};
+use merchant::{MerchantTrades, OpenMerchant, Refusal};
 use std::time::{Duration, Instant};
 
 /// The player's inventory as the session knows it. Every feature reads it;
@@ -130,6 +130,19 @@ fn purse_uncertain(world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
     Ok(())
 }
 
+/// A closed or silent merchant window does not establish a transaction result.
+fn merchant_unanswered(world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
+    purse_uncertain(world, out)?;
+    let reason = "The merchant has not answered. The outcome is unknown; wait for the result before trying again.";
+    out.log
+        .send(ClientEvent::World(WorldEvent::MerchantUnanswered {
+            session_id: world.session_id,
+            reason: reason.into(),
+        }))?;
+    out.log
+        .diagnostic(format!("Merchant trade unanswered: {reason}"))
+}
+
 /// Follows what a message says about the coins; true when the purse changed
 /// without the host hearing it (loot coins, a purchase, a reward's coins,
 /// coins TAKP added), false when only coins elsewhere changed, None when
@@ -192,13 +205,6 @@ fn coins_news(message: &Message, wallet: &mut Wallet) -> Option<bool> {
         WorldEvent::Training(TrainingUpdate::Trained { cost, .. }) if *cost > 0 => {
             wallet.pay(*cost);
             Some(true)
-        }
-        // What the window held was handed over, or comes back with the
-        // server's money update.
-        WorldEvent::Exchange(ExchangeUpdate::Finished | ExchangeUpdate::Cancelled { .. }) => {
-            wallet.given = Coins::default();
-            wallet.offered = Coins::default();
-            Some(false)
         }
         _ => None,
     }
@@ -316,6 +322,27 @@ fn change(update: InventoryUpdate, world: &mut World, out: &mut Out<'_, '_>) -> 
     world.inventory.0.apply(update.clone());
     out.log
         .send(ClientEvent::World(WorldEvent::Inventory(update)))
+}
+
+/// Retires the closed exchange's escrow. The server supplies any returned
+/// items and the new purse through ordinary inventory and coin updates.
+pub(super) fn close_exchange(
+    world: &mut World,
+    returning: bool,
+    out: &mut Out<'_, '_>,
+) -> Result<()> {
+    let given = std::mem::take(&mut world.coins.0.given);
+    let offered = std::mem::take(&mut world.coins.0.offered);
+    if returning
+        && !given.is_empty()
+        && out.wire.dialect() == eq_network_game::GameDialect::Titanium
+    {
+        purse_uncertain(world, out)?;
+    }
+    if !given.is_empty() || !offered.is_empty() {
+        tell_coins(world, false, out)?;
+    }
+    change(InventoryUpdate::TradeEmptied, world, out)
 }
 
 /// What a server type lets the player do with their belongings. With no
@@ -519,79 +546,73 @@ impl Belongings {
         world: &World,
         out: &mut Out<'_, '_>,
     ) -> Result<()> {
+        let (ClientCommand::Buy {
+            merchant_id,
+            own_id,
+            ..
+        }
+        | ClientCommand::Sell {
+            merchant_id,
+            own_id,
+            ..
+        }) = *command
+        else {
+            return Ok(());
+        };
+        if world.own_spawn != Some(own_id) {
+            return merchant_refused(
+                world,
+                "That merchant action belongs to another admission",
+                out,
+            );
+        }
+        if !self.merchant.is_open(merchant_id) {
+            return merchant_refused(world, "That merchant's window is no longer open", out);
+        }
+        if !world.spawns.visible(merchant_id).is_some_and(|spawn| {
+            spawn.kind == SpawnKind::Npc
+                && out.wire.reaches().merchants.is_none_or(|reach| {
+                    world
+                        .player_at()
+                        .is_some_and(|(_, position)| reach.admits(position, spawn.position))
+                })
+        }) {
+            return merchant_refused(world, "That merchant is unavailable or out of reach", out);
+        }
         if let Err(reason) = self.trades.check(command) {
             return merchant_refused(world, reason, out);
         }
         if self.rules == MoveRules::Quarm {
-            let inventory = &world.inventory;
-            if !inventory.received() || inventory.stale() {
-                return merchant_refused(world, "Wait for a current inventory snapshot", out);
-            }
-            let known = |slot: InventorySlot| {
-                !inventory.prediction_origins().any(|(changed, _)| {
-                    changed == slot || slot.parent().is_some_and(|(parent, _)| parent == changed)
-                })
-            };
-            match command {
-                ClientCommand::Buy { slot, quantity, .. } => {
-                    if !self.merchant.quarm_quantity_known(*slot, *quantity) {
-                        return merchant_refused(
-                            world,
-                            "That purchase quantity is not established by the stock",
-                            out,
-                        );
-                    }
-                    if inventory.items().contains_key(&InventorySlot::CURSOR)
-                        || !known(InventorySlot::CURSOR)
-                        || !(22..=29)
-                            .map(InventorySlot)
-                            .any(|slot| !inventory.items().contains_key(&slot) && known(slot))
-                    {
-                        return merchant_refused(
-                            world,
-                            "Keep a known empty cursor and general slot for the purchase",
-                            out,
-                        );
-                    }
-                }
-                ClientCommand::Sell { slot, quantity, .. } => {
-                    let slot = InventorySlot(*slot);
-                    let item = inventory.items().get(&slot);
-                    let quantity_known = item.is_some_and(|item| {
-                        *quantity > 0 && *quantity <= item.stack_count.unwrap_or(1).min(20)
-                    });
-                    let priced = item
-                        .and_then(|item| item.details.price)
-                        .and_then(|price| self.merchant.sale_price(self.quotes, price, *quantity))
-                        .is_some();
-                    if !known(slot)
-                        || !(slot.is_carried()
-                            || slot.is_equipment()
-                            || slot == InventorySlot::CURSOR)
-                        || !priced
-                        || !quantity_known
-                    {
-                        return merchant_refused(
-                            world,
-                            "The sale needs an established carried item and merchant price",
-                            out,
-                        );
-                    }
-                }
-                _ => (),
+            if let Some(reason) = self.quarm_trade_refusal(command, world) {
+                return merchant_refused(world, reason, out);
             }
         }
         let refusal = match command {
+            ClientCommand::Buy { .. }
+                if self.rules == MoveRules::EqEmu
+                    && (!world.inventory.received()
+                        || world.inventory.stale()
+                        || world.inventory.items().contains_key(&InventorySlot::CURSOR)
+                        || world
+                            .inventory
+                            .prediction_origins()
+                            .any(|(slot, _)| slot == InventorySlot::CURSOR)) =>
+            {
+                Some("Keep a current inventory and an empty cursor for the purchase")
+            }
+            ClientCommand::Buy { slot, quantity, .. }
+                if self.rules == MoveRules::EqEmu
+                    && !self.merchant.titanium_quantity_known(*slot, *quantity) =>
+            {
+                Some("That purchase quantity is not available")
+            }
             ClientCommand::Buy { slot, quantity, .. } => self
                 .merchant
                 .check_purchase(*slot, *quantity, world.coins.purse)
                 .err(),
-            ClientCommand::Sell { slot, .. } => world
-                .inventory
-                .items()
-                .get(&InventorySlot(*slot))
-                .is_some_and(|item| item.details.flags.iter().any(|flag| flag == "NO DROP"))
-                .then_some("NO DROP items cannot be sold"),
+            ClientCommand::Sell { slot, quantity, .. } => {
+                Self::sale_refusal(world, InventorySlot(*slot), *quantity)
+            }
             _ => None,
         };
         if let Some(reason) = refusal {
@@ -599,6 +620,149 @@ impl Belongings {
         }
         if out.command(command)? {
             self.trades.sent(command, &world.inventory, Instant::now());
+        }
+        Ok(())
+    }
+
+    /// Quarm requires a known cursor, a free general slot for a purchase,
+    /// and an established item, quantity and price for a sale.
+    fn quarm_trade_refusal(&self, command: &ClientCommand, world: &World) -> Option<&'static str> {
+        let inventory = &world.inventory;
+        if !inventory.received() || inventory.stale() {
+            return Some("Wait for a current inventory snapshot");
+        }
+        let known = |slot: InventorySlot| {
+            !inventory.prediction_origins().any(|(changed, _)| {
+                changed == slot || slot.parent().is_some_and(|(parent, _)| parent == changed)
+            })
+        };
+        match command {
+            ClientCommand::Buy { slot, quantity, .. } => {
+                if !self.merchant.quarm_quantity_known(*slot, *quantity) {
+                    Some("That purchase quantity is not established by the stock")
+                } else if inventory.items().contains_key(&InventorySlot::CURSOR)
+                    || !known(InventorySlot::CURSOR)
+                    || !(22..=29)
+                        .map(InventorySlot)
+                        .any(|slot| !inventory.items().contains_key(&slot) && known(slot))
+                {
+                    Some("Keep a known empty cursor and general slot for the purchase")
+                } else {
+                    None
+                }
+            }
+            ClientCommand::Sell { slot, quantity, .. } => {
+                let slot = InventorySlot(*slot);
+                let valid = known(slot)
+                    && inventory.items().get(&slot).is_some_and(|item| {
+                        (1..=item.stack_count.unwrap_or(1).min(20)).contains(quantity)
+                            && item
+                                .details
+                                .price
+                                .and_then(|price| {
+                                    self.merchant.sale_price(self.quotes, price, *quantity)
+                                })
+                                .is_some()
+                    });
+                (!valid).then_some("The sale needs an established carried item and merchant price")
+            }
+            _ => None,
+        }
+    }
+
+    /// A sale may only offer the current item and a known available quantity.
+    fn sale_refusal(world: &World, slot: InventorySlot, quantity: u32) -> Option<&'static str> {
+        let inventory = world.inventory.items();
+        let Some(item) = inventory.get(&slot).filter(|_| {
+            world.inventory.received()
+                && !world.inventory.stale()
+                && (slot.is_carried() || slot.is_equipment() || slot == InventorySlot::CURSOR)
+        }) else {
+            return Some("Choose a current carried item to sell");
+        };
+        if item.details.flags.iter().any(|flag| flag == "NO DROP") {
+            Some("NO DROP items cannot be sold")
+        } else if !(1..=item.stack_count.unwrap_or(1)).contains(&quantity) {
+            Some("That sale quantity is not available")
+        } else if item.bag_slots > 0
+            && (0..10)
+                .filter_map(|index| slot.child(index))
+                .any(|child| inventory.contains_key(&child))
+        {
+            Some("Empty the bag before selling it")
+        } else {
+            None
+        }
+    }
+
+    /// Preserve the wire identity through settlement. Only the refusal of
+    /// an active wait at this shop can dismiss a host action.
+    fn scoped_merchant_refusal(
+        &mut self,
+        merchant_id: u32,
+        update: &MerchantUpdate,
+        world: &World,
+        out: &mut Out<'_, '_>,
+    ) -> Result<()> {
+        let Ok(merchant_id) = u16::try_from(merchant_id) else {
+            return Ok(());
+        };
+        let scope = (merchant_id != 0).then_some(merchant_id);
+        match self.trades.refused(update, scope) {
+            Some(Refusal::Pending(id)) if self.merchant.is_open(id) => {
+                merchant_refused(world, "The merchant did not accept that offer.", out)?;
+                out.log
+                    .send(ClientEvent::World(WorldEvent::Merchant(update.clone())))
+            }
+            Some(_) => out
+                .log
+                .diagnostic("A previous merchant trade was refused".into()),
+            None => Ok(()),
+        }
+    }
+
+    /// Applies merchant news that reached the ordinary event path.
+    fn merchant_news(
+        &mut self,
+        update: &MerchantUpdate,
+        world: &mut World,
+        out: &mut Out<'_, '_>,
+    ) -> Result<()> {
+        if matches!(update, MerchantUpdate::Closed) && self.trades.active() {
+            merchant_unanswered(world, out)?;
+        }
+        match self.trades.refused(update, None) {
+            Some(Refusal::Pending(id)) if self.merchant.is_open(id) => {
+                merchant_refused(world, "The merchant did not accept that offer.", out)
+            }
+            Some(_) => out
+                .log
+                .diagnostic("A previous merchant trade was refused".into()),
+            None => {
+                if let Some(update) = self.trades.observe(update, &world.inventory) {
+                    change(update, world, out)?;
+                }
+                Ok(())
+            }
+        }
+    }
+
+    /// Drops the catalog for the old spawn and releases its pending trade
+    /// as unknown. A subsequent stock packet alone cannot reopen the shop.
+    fn merchant_departed(
+        &mut self,
+        merchant_id: u16,
+        world: &mut World,
+        out: &mut Out<'_, '_>,
+    ) -> Result<()> {
+        if self.trades.merchant_departed(merchant_id) {
+            merchant_unanswered(world, out)?;
+        }
+        if self.merchant.is_open(merchant_id) {
+            self.merchant.clear();
+            out.log.send(ClientEvent::World(WorldEvent::Merchant(
+                MerchantUpdate::Closed,
+            )))?;
         }
         Ok(())
     }
@@ -661,23 +825,38 @@ impl Belongings {
     /// it is read (TAKP: 3-D, at most 20). Out of reach the program says
     /// nothing of its own and considers the merchant instead; this session
     /// only refuses.
-    fn shop(command: &ClientCommand, world: &World, out: &mut Out<'_, '_>) -> Result<()> {
+    fn shop(
+        &mut self,
+        command: &ClientCommand,
+        world: &World,
+        out: &mut Out<'_, '_>,
+    ) -> Result<()> {
         let ClientCommand::Shop {
-            merchant_id, open, ..
-        } = command
+            merchant_id,
+            own_id,
+            open,
+            ..
+        } = *command
         else {
             return Ok(());
         };
-        let Some(merchant) = world
-            .spawns
-            .visible(*merchant_id)
-            .filter(|spawn| spawn.kind == SpawnKind::Npc)
-        else {
+        if world.own_spawn != Some(own_id) {
+            return merchant_refused(world, "That shop action belongs to another admission", out);
+        }
+        if !open {
+            if self.merchant.is_open(merchant_id) && out.command(command)? {
+                self.merchant.clear();
+            }
+            return Ok(());
+        }
+        let Some(merchant) = world.spawns.visible(merchant_id).filter(|spawn| {
+            spawn.kind == SpawnKind::Npc && spawn.class.is_none_or(|class| class == 41)
+        }) else {
             return out
                 .log
                 .diagnostic("Rejected an unavailable merchant".into());
         };
-        let reach = out.wire.reaches().merchants.filter(|_| *open);
+        let reach = out.wire.reaches().merchants;
         let within = reach.is_none_or(|reach| {
             world
                 .player_at()
@@ -750,20 +929,6 @@ impl Feature for Belongings {
         }
     }
 
-    /// Closing a give or trade window empties the trade slots: the server
-    /// sends their items back without emptying them itself.
-    fn notice(
-        &mut self,
-        command: &ClientCommand,
-        world: &mut World,
-        out: &mut Out<'_, '_>,
-    ) -> Result<()> {
-        if matches!(command, ClientCommand::CancelTrade { .. }) && world.exchange.is_some() {
-            change(InventoryUpdate::TradeEmptied, world, out)?;
-        }
-        Ok(())
-    }
-
     fn owns(&self, command: &ClientCommand) -> bool {
         match command {
             ClientCommand::MoveInventory(_) => self.allows.items,
@@ -790,7 +955,7 @@ impl Feature for Belongings {
             ClientCommand::MoveInventory(request) => self.move_item(request, world, out),
             ClientCommand::DestroyItem(request) => self.destroy_item(request, world, out),
             ClientCommand::MoveCoins { .. } => Self::move_coins(command, world, out),
-            ClientCommand::Shop { .. } => Self::shop(command, world, out),
+            ClientCommand::Shop { .. } => self.shop(command, world, out),
             ClientCommand::AutoEat { auto_eat, .. } => {
                 self.meals.choose(*auto_eat);
                 Ok(())
@@ -820,15 +985,7 @@ impl Feature for Belongings {
             }
         }
         if self.trades.expire(now) {
-            purse_uncertain(world, out)?;
-            let reason = "The merchant has not answered. The outcome is unknown; wait for the result before trying again.";
-            out.log
-                .send(ClientEvent::World(WorldEvent::MerchantUnanswered {
-                    session_id: world.session_id,
-                    reason: reason.into(),
-                }))?;
-            out.log
-                .diagnostic(format!("Merchant trade unanswered: {reason}"))?;
+            merchant_unanswered(world, out)?;
         }
         Ok(())
     }
@@ -842,6 +999,30 @@ impl Feature for Belongings {
     /// session remembers adds nothing, so the purse never rises past what
     /// the server added.
     fn explain(&mut self, message: &mut Message, _world: &World) {
+        if let Message::MerchantScoped {
+            merchant_id,
+            update,
+        } = message
+        {
+            if merchant::is_refusal(update) {
+                return;
+            }
+            let current = if *merchant_id == 0 {
+                // Some packets may leave the field empty. Apply the existing
+                // slot correlation for results, but require identity to remove stock.
+                !matches!(update, MerchantUpdate::Removed { .. })
+            } else {
+                u16::try_from(*merchant_id).is_ok_and(|id| {
+                    self.trades
+                        .receipt_is_current(id, update, self.merchant.is_open(id))
+                })
+            };
+            *message = if current {
+                Message::Event(WorldEvent::Merchant(update.clone()))
+            } else {
+                Message::Withheld
+            };
+        }
         let Message::Event(WorldEvent::Merchant(update)) = message else {
             return;
         };
@@ -899,6 +1080,20 @@ impl Feature for Belongings {
             }
         }
         match message {
+            Message::MerchantScoped {
+                merchant_id,
+                update,
+            } if merchant::is_refusal(update) => {
+                self.scoped_merchant_refusal(*merchant_id, update, world, out)?;
+            }
+            Message::Event(WorldEvent::Despawn(id)) => {
+                self.merchant_departed(*id, world, out)?;
+            }
+            Message::Event(WorldEvent::Spawns(spawns)) => {
+                for spawn in spawns {
+                    self.merchant_departed(spawn.spawn_id, world, out)?;
+                }
+            }
             Message::Event(WorldEvent::Inventory(update)) => {
                 let resync = !self.rules.settles_by_silence()
                     && resync::contradicts(&world.inventory, update);
@@ -936,17 +1131,8 @@ impl Feature for Belongings {
                 part: Part::Inventory,
                 ..
             } => change(InventoryUpdate::Invalidated, world, out)?,
-            // A sale's echo is the only notice that the item left, and an echo
-            // of nothing bought the only one that a purchase was refused.
             Message::Event(WorldEvent::Merchant(update)) => {
-                if matches!(update, MerchantUpdate::Closed) && self.trades.active() {
-                    purse_uncertain(world, out)?;
-                }
-                if self.trades.refused(update) {
-                    merchant_refused(world, "The merchant did not accept that offer.", out)?;
-                } else if let Some(update) = self.trades.observe(update, &world.inventory) {
-                    change(update, world, out)?;
-                }
+                self.merchant_news(update, world, out)?;
             }
             Message::Event(event) if world.owns_death(event) => {
                 self.trades.clear();
@@ -956,11 +1142,9 @@ impl Feature for Belongings {
                 self.meals
                     .nourished(*nourishment, !self.trades.active(), world, out)?;
             }
-            // The window closed: what the trade slots held was handed over, or
-            // comes back as item updates.
-            Message::Event(WorldEvent::Exchange(
-                ExchangeUpdate::Finished | ExchangeUpdate::Cancelled { .. },
-            )) => change(InventoryUpdate::TradeEmptied, world, out)?,
+            Message::Event(WorldEvent::Exchange(ExchangeUpdate::Finished)) => {
+                close_exchange(world, false, out)?;
+            }
             _ => (),
         }
         Ok(())
@@ -1106,8 +1290,8 @@ mod tests {
 
     #[test]
     fn a_mac_era_merchant_opens_only_within_reach() {
-        let mut world = World::new(5);
-        world.player.admit(testing::player(7));
+        let (mut belongings, mut world) = admitted();
+        shopping_at(&mut belongings, &mut world);
         let mut merchant = testing::spawn(9, SpawnKind::Npc);
         merchant.position.x = 20.5;
         world.spawns.insert(merchant);
@@ -1118,16 +1302,17 @@ mod tests {
             open,
             created: Instant::now(),
         };
-        let run = |wire, command: &ClientCommand, world: &World| {
-            let outcome = testing::run_on(wire, |out| Belongings::shop(command, world, out));
+        let mut run = |wire, command: &ClientCommand, world: &World| {
+            let outcome = testing::run_on(wire, |out| belongings.shop(command, world, out));
             outcome.result.unwrap();
             outcome.sent.len()
         };
         // TAKP reaches a merchant 20 away in 3-D; Titanium's reach is unread.
         assert_eq!(run(&super::super::wire::EqMac, &shop(true), &world), 0);
         assert_eq!(run(&super::super::wire::Titanium, &shop(true), &world), 1);
-        // Closing is never refused.
+        // A matching close still goes out after the merchant has walked away.
         assert_eq!(run(&super::super::wire::EqMac, &shop(false), &world), 1);
+        assert_eq!(run(&super::super::wire::EqMac, &shop(false), &world), 0);
         let mut merchant = testing::spawn(9, SpawnKind::Npc);
         merchant.position.x = 20.0;
         world.spawns.insert(merchant);
@@ -1146,6 +1331,7 @@ mod tests {
     /// Merchant 9 open at a rate of 1, listing place 3 for 25 copper, with
     /// a platinum in the purse.
     pub(super) fn shopping_at(belongings: &mut Belongings, world: &mut World) {
+        world.spawns.insert(testing::spawn(9, SpawnKind::Npc));
         let purse = Message::Event(WorldEvent::Coins(Coins {
             platinum: 1,
             ..Coins::default()
@@ -1457,6 +1643,7 @@ mod tests {
         belongings.admit(&snapshot, &mut world).unwrap();
         world.own_spawn = Some(7);
         world.player.admit(testing::player(7));
+        world.spawns.insert(testing::spawn(9, SpawnKind::Npc));
         testing::run_on(&super::super::wire::EqMac, |out| {
             belongings.admitted(&mut world, out)
         })
@@ -2173,6 +2360,7 @@ mod tests {
     #[test]
     fn a_sale_holds_the_inventory_until_the_merchant_echoes_it() {
         let (mut belongings, mut world) = admitted();
+        shopping_at(&mut belongings, &mut world);
         let sell = ClientCommand::Sell {
             session_id: 5,
             merchant_id: 9,
@@ -2250,6 +2438,7 @@ mod tests {
     #[test]
     fn a_late_sale_echo_never_removes_what_took_the_items_place() {
         let (mut belongings, mut world) = admitted();
+        shopping_at(&mut belongings, &mut world);
         let sell = ClientCommand::Sell {
             session_id: 5,
             merchant_id: 9,
@@ -2328,7 +2517,10 @@ mod tests {
         assert!(world.inventory.items().contains_key(&InventorySlot(3000)));
         // Closing the window empties the slots; the server sends the item back.
         let close = ClientCommand::CancelTrade { session_id: 5 };
-        let outcome = testing::run(|out| belongings.notice(&close, &mut world, out));
+        let outcome =
+            testing::run(|out| super::super::exchange::Exchanges.handle(&close, &mut world, out));
+        outcome.result.unwrap();
+        assert_eq!(outcome.sent.len(), 1);
         assert_eq!(
             inventory_events(&outcome.events),
             [&InventoryUpdate::TradeEmptied]
@@ -2562,6 +2754,60 @@ mod tests {
             .result
             .unwrap();
         assert_eq!(world.coins.given, Coins::default());
+    }
+
+    #[test]
+    fn cancellation_retires_escrow_and_only_late_server_news_returns_it() {
+        use super::super::exchange::{Exchange, Exchanges, Exchanging, Stage};
+        use eq_network_game::{exchange::Partner, money::CoinPlace};
+        let (mut belongings, mut world, move_coins) = with_gold();
+        world.exchange = Exchanging::from(Exchange {
+            with: 50,
+            partner: Partner::Player,
+            stage: Stage::Open,
+        });
+        for (from, to) in [
+            (CoinPlace::Purse, CoinPlace::Cursor),
+            (CoinPlace::Cursor, CoinPlace::Trade),
+        ] {
+            let result =
+                testing::run(|out| belongings.handle(&move_coins(from, to), &mut world, out));
+            result.result.unwrap();
+            assert_eq!(result.sent.len(), 1);
+        }
+        world
+            .inventory
+            .0
+            .apply(InventoryUpdate::Set(vec![item(3000)]));
+        let cancel = ClientCommand::CancelTrade { session_id: 5 };
+        let result = testing::run(|out| Exchanges.handle(&cancel, &mut world, out));
+        result.result.unwrap();
+        assert_eq!(result.sent.len(), 1);
+        assert!(world.exchange.is_none());
+        assert_eq!(world.coins.given, Coins::default());
+        assert_eq!(world.coins.purse, None);
+        assert!(!world.inventory.items().contains_key(&InventorySlot(3000)));
+        assert!(!world.inventory.items().contains_key(&InventorySlot::CURSOR));
+        assert!(matches!(
+            result.events.first(),
+            Some(ClientEvent::World(WorldEvent::PurseUncertain { .. }))
+        ));
+
+        let returned = Coins {
+            gold: 5,
+            ..Coins::default()
+        };
+        for event in [
+            WorldEvent::Inventory(InventoryUpdate::Set(vec![item(30)])),
+            WorldEvent::Coins(returned),
+        ] {
+            testing::run(|out| belongings.observe(&Message::Event(event), &mut world, out))
+                .result
+                .unwrap();
+        }
+        assert_eq!(world.coins.purse, Some(returned));
+        assert!(world.inventory.items().contains_key(&InventorySlot::CURSOR));
+        assert!(!world.inventory.items().contains_key(&InventorySlot(3000)));
     }
 
     #[test]

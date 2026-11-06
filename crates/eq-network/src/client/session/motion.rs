@@ -10,8 +10,9 @@ use eq_network_game::{
     appearance::AppearanceChange,
     message::Message,
     movement::{
-        DiagonalRates, MotionCalibration, MotionSession, MovementRequest, PositionPacket,
-        SpeedInputAcceptance, SpeedInputState, SpeedInputs, SpeedState, STATIONARY_HEARTBEAT,
+        DiagonalRates, MotionCalibration, MotionSession, MovementMode, MovementRequest,
+        PositionPacket, SpeedInputAcceptance, SpeedInputState, SpeedInputs, SpeedState,
+        STATIONARY_HEARTBEAT,
     },
     request::Request,
     world::{PlayerState, Position, WorldEvent},
@@ -203,12 +204,17 @@ pub(super) fn withdrawn(session_id: u64) -> WorldEvent {
 }
 
 /// The player's movement and stance.
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "Independent server permissions and observed sneak state"
+)]
 pub(super) struct Motion {
     /// Whether the server lets the player fall.
     falls: bool,
     /// Whether the player may also jump: the generation's notice of a jump
     /// is known, and the server takes falls.
     jumps: bool,
+    swimming: bool,
     /// The host's report of what the player's speeds depend on (the buffs'
     /// movement rate, the weight carried and the capacity), once it has
     /// sent one; until then the session grants no movement itself.
@@ -245,6 +251,7 @@ impl Motion {
         Self {
             falls,
             jumps: falls && jumps,
+            swimming: false,
             spell_landing,
             inputs: None,
             input_report_id: None,
@@ -256,6 +263,11 @@ impl Motion {
             sneaking: false,
             hit_points: None,
         }
+    }
+
+    pub(super) const fn with_swimming(mut self) -> Self {
+        self.swimming = true;
+        self
     }
 
     /// Takes the host's word on how far the player's body climbs a step in
@@ -486,10 +498,12 @@ impl Motion {
                 .diagnostic("Rejected movement: the player cannot move yet".into());
         };
         let (to, from) = (request.position, motion.position());
+        let may_walk_while_stunned =
+            request.mode != MovementMode::Swim && motion.options().walk_while_stunned;
         if let Some(reason) = world.control.motion_refusal(
             request,
             motion.is_passive(request),
-            motion.options().walk_while_stunned,
+            may_walk_while_stunned,
         ) {
             return out.log.send(ClientEvent::World(WorldEvent::MotionSent {
                 session_id: world.session_id,
@@ -596,11 +610,17 @@ impl Motion {
 impl Feature for Motion {
     fn capabilities(&self) -> Vec<crate::world::Capability> {
         use crate::world::Capability;
-        match (self.falls, self.jumps) {
-            (true, true) => vec![Capability::Moving, Capability::Falling, Capability::Jumping],
-            (true, false) => vec![Capability::Moving, Capability::Falling],
-            _ => vec![Capability::Moving],
+        let mut caps = vec![Capability::Moving];
+        if self.falls {
+            caps.push(Capability::Falling);
         }
+        if self.jumps {
+            caps.push(Capability::Jumping);
+        }
+        if self.swimming {
+            caps.push(Capability::Swimming);
+        }
+        caps
     }
 
     fn admit(&mut self, message: &Message, _world: &mut World) -> Result<()> {
@@ -620,6 +640,10 @@ impl Feature for Motion {
                 MotionSession::new(world.session_id, player.spawn_id, player.position, admitted)?
                     .with_falls(self.falls)
                     .with_heading_snapshots(out.wire.dialect().supports_heading_snapshots())
+                    .with_swimming(
+                        self.swimming
+                            && out.wire.dialect() == eq_network_game::GameDialect::Titanium,
+                    )
                     .with_gate(out.wire.update_gate())
                     .with_fall_speed(out.wire.fall_speed(world.gravity))
                     .with_jump(out.wire.jump_speed().map(|speed| {

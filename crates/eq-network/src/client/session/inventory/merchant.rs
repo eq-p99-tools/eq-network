@@ -43,10 +43,9 @@ impl Sale {
     /// longer be trusted.
     fn settle(&self, sold: u32, inventory: &Inventory) -> InventoryUpdate {
         let unchanged = !inventory.stale()
-            && self
-                .item
-                .as_deref()
-                .is_some_and(|item| inventory.items().get(&self.slot) == Some(item));
+            && self.item.as_deref().is_some_and(|item| {
+                InventoryItem::same_slot_contents(inventory.items().get(&self.slot), Some(item))
+            });
         if unchanged {
             InventoryUpdate::Deduct {
                 slot: self.slot,
@@ -100,6 +99,7 @@ impl TradeKey {
 
 /// A submitted operation and whether the purse it was sent against is current.
 struct Outstanding {
+    merchant_id: u16,
     trade: Trade,
     coin_basis: bool,
 }
@@ -123,15 +123,14 @@ impl Trade {
         }
     }
 
-    /// An explicit refusal identifies a kind, but not a reliable request slot.
+    /// An explicit refusal identifies a kind but leaves the request slot ambiguous.
     fn refused_by(&self, update: &MerchantUpdate) -> bool {
-        match (self, update) {
-            (Self::Purchase { .. }, MerchantUpdate::Bought { quantity: 0, .. }) => true,
-            (Self::Sale(_), MerchantUpdate::Sold { slot, quantity, .. }) => {
-                *quantity == 0 || *slot < 0
-            }
-            _ => false,
-        }
+        is_refusal(update)
+            && matches!(
+                (self, update),
+                (Self::Purchase { .. }, MerchantUpdate::Bought { .. })
+                    | (Self::Sale(_), MerchantUpdate::Sold { .. })
+            )
     }
 
     fn key(&self) -> TradeKey {
@@ -140,6 +139,22 @@ impl Trade {
             Self::Sale(sale) => TradeKey::Sale(sale.slot),
         }
     }
+}
+
+/// The reply explicitly refuses a purchase or sale.
+pub(super) const fn is_refusal(update: &MerchantUpdate) -> bool {
+    match update {
+        MerchantUpdate::Bought { quantity, .. } => *quantity == 0,
+        MerchantUpdate::Sold { slot, quantity, .. } => *quantity == 0 || *slot < 0,
+        _ => false,
+    }
+}
+
+/// Which wait a uniquely matched refusal ended.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum Refusal {
+    Pending(u16),
+    Unanswered,
 }
 
 /// The trade waiting for the merchant's echo, if any, and trades released
@@ -175,6 +190,19 @@ impl MerchantTrades {
             .chain(self.unanswered.values())
     }
 
+    /// Checks a positive receipt against its transaction's merchant, or an
+    /// unmatched receipt or stock removal against the open catalog.
+    pub(super) fn receipt_is_current(
+        &self,
+        merchant_id: u16,
+        update: &MerchantUpdate,
+        open: bool,
+    ) -> bool {
+        self.records()
+            .find(|record| record.trade.answers(update))
+            .map_or(open, |record| record.merchant_id == merchant_id)
+    }
+
     /// A coin delta needs a matching trade and its original known purse basis.
     /// A newer snapshot may already include that effect; do not count it twice.
     pub(super) fn coins_current(&self, update: &MerchantUpdate) -> bool {
@@ -198,23 +226,40 @@ impl MerchantTrades {
     /// Records a purchase or sale that was handed to transport, and for a sale
     /// what its slot holds.
     pub(super) fn sent(&mut self, command: &ClientCommand, inventory: &Inventory, now: Instant) {
-        let trade = match command {
-            ClientCommand::Buy { slot, quantity, .. } => Trade::Purchase {
-                slot: *slot,
-                quantity: *quantity,
-            },
-            ClientCommand::Sell { slot, quantity, .. } => {
-                let slot = InventorySlot(*slot);
-                Trade::Sale(Sale {
-                    slot,
+        let (merchant_id, trade) = match command {
+            ClientCommand::Buy {
+                merchant_id,
+                slot,
+                quantity,
+                ..
+            } => (
+                *merchant_id,
+                Trade::Purchase {
+                    slot: *slot,
                     quantity: *quantity,
-                    item: inventory.items().get(&slot).cloned().map(Box::new),
-                })
+                },
+            ),
+            ClientCommand::Sell {
+                merchant_id,
+                slot,
+                quantity,
+                ..
+            } => {
+                let slot = InventorySlot(*slot);
+                (
+                    *merchant_id,
+                    Trade::Sale(Sale {
+                        slot,
+                        quantity: *quantity,
+                        item: inventory.items().get(&slot).cloned().map(Box::new),
+                    }),
+                )
             }
             _ => return,
         };
         self.pending = Some((
             Outstanding {
+                merchant_id,
                 trade,
                 coin_basis: true,
             },
@@ -264,38 +309,33 @@ impl MerchantTrades {
         }
     }
 
-    /// Ends the sole outstanding trade of the kind an explicit refusal names.
-    /// `EQMac` echoes a refused purchase, and Quarm also rejects special sales
-    /// this way. Neither response establishes an item or coin change.
-    /// With several candidates the reply cannot identify which was refused;
-    /// none is discarded or reported as definitively refused. True when one ended.
-    pub(super) fn refused(&mut self, update: &MerchantUpdate) -> bool {
-        let candidates = self
-            .records()
-            .filter(|record| record.trade.refused_by(update))
-            .count();
-        if candidates != 1 {
-            return false;
-        }
+    /// Retires a uniquely identified refusal and records which wait ended.
+    /// With no wire merchant ID, all transactions of that kind are candidates.
+    pub(super) fn refused(
+        &mut self,
+        update: &MerchantUpdate,
+        merchant_id: Option<u16>,
+    ) -> Option<Refusal> {
+        let (key, merchant_id) = {
+            let mut candidates = self.records().filter(|record| {
+                merchant_id.is_none_or(|id| record.merchant_id == id)
+                    && record.trade.refused_by(update)
+            });
+            let record = candidates.next()?;
+            if candidates.next().is_some() {
+                return None;
+            }
+            (record.trade.key(), record.merchant_id)
+        };
         if self
             .pending
-            .as_ref()
-            .is_some_and(|(record, _)| record.trade.refused_by(update))
+            .take_if(|(record, _)| record.trade.key() == key)
+            .is_some()
         {
-            // This trade has an outcome. Do not retain it as unanswered or
-            // discard an older trade whose late result can still arrive.
-            self.pending = None;
-            return true;
+            Some(Refusal::Pending(merchant_id))
+        } else {
+            self.unanswered.remove(&key).map(|_| Refusal::Unanswered)
         }
-        let key = self
-            .unanswered
-            .iter()
-            .find_map(|(key, record)| record.trade.refused_by(update).then_some(*key));
-        if let Some(key) = key {
-            self.unanswered.remove(&key);
-            return true;
-        }
-        false
     }
 
     /// The item a remembered sale offered, which an echo of `sold` units
@@ -321,6 +361,19 @@ impl MerchantTrades {
             self.release();
         }
         expired
+    }
+
+    /// Releases the active hold when its merchant disappears, retaining late
+    /// settlement authority independently of the catalog.
+    pub(super) fn merchant_departed(&mut self, merchant_id: u16) -> bool {
+        let pending_here = self
+            .pending
+            .as_ref()
+            .is_some_and(|(record, _)| record.merchant_id == merchant_id);
+        if pending_here {
+            self.release();
+        }
+        pending_here
     }
 
     /// Forgets the trades that can no longer be answered, such as after death.
@@ -378,12 +431,17 @@ pub(super) struct OpenMerchant(Option<Window>);
 
 /// An open merchant window.
 struct Window {
+    merchant_id: u16,
     /// The rate the window opened with.
     rate: f32,
-    /// By place on the list: the most a unit costs, and whether the item is
-    /// priced once whatever the count, as a charged item is, and the bounded
-    /// quantity supported by its decoded stack rules.
-    places: BTreeMap<u32, (u64, bool, u32)>,
+    places: BTreeMap<u32, Listed>,
+}
+
+struct Listed {
+    most_per_unit: u64,
+    charged: bool,
+    stack_limit: u32,
+    stock: u32,
 }
 
 impl Window {
@@ -394,15 +452,16 @@ impl Window {
         listed.price = quotes.unit_price(quote, self.rate);
         self.places.insert(
             listed.slot,
-            (
-                quotes.most_per_unit(quote, self.rate),
-                listed.item.activation.maximum_charges > 1,
-                if listed.item.stack_count.is_some() {
-                    listed.item.rules.stack_size.min(20)
+            Listed {
+                most_per_unit: quotes.most_per_unit(quote, self.rate),
+                charged: listed.item.activation.maximum_charges > 1,
+                stack_limit: if listed.item.stack_count.is_some() {
+                    listed.item.rules.stack_size
                 } else {
                     1
                 },
-            ),
+                stock: listed.quantity,
+            },
         );
     }
 }
@@ -414,8 +473,13 @@ impl OpenMerchant {
     /// charges it.
     pub(super) fn explain(&mut self, update: &mut MerchantUpdate, quotes: Quotes) {
         match update {
-            MerchantUpdate::Opened { accepted, rate, .. } => {
+            MerchantUpdate::Opened {
+                merchant_id,
+                accepted,
+                rate,
+            } => {
                 self.0 = accepted.then(|| Window {
+                    merchant_id: *merchant_id,
                     rate: *rate,
                     places: BTreeMap::new(),
                 });
@@ -477,17 +541,14 @@ impl OpenMerchant {
         quantity: u32,
         purse: Option<Coins>,
     ) -> Result<(), &'static str> {
-        let (most, once, _) = self
-            .0
-            .as_ref()
-            .and_then(|window| window.places.get(&slot))
-            .copied()
+        let listed = self
+            .listed(slot)
             .ok_or("That item is not on the merchant's list")?;
         let purse = purse.ok_or("Your coins are not known yet")?;
-        let cost = if once {
-            most
+        let cost = if listed.charged {
+            listed.most_per_unit
         } else {
-            most.saturating_mul(u64::from(quantity))
+            listed.most_per_unit.saturating_mul(u64::from(quantity))
         };
         if purse.total_copper() < cost {
             return Err("You may not have enough coins for that");
@@ -495,13 +556,30 @@ impl OpenMerchant {
         Ok(())
     }
 
+    /// Whether the command names the shop whose stock is in use.
+    pub(super) fn is_open(&self, merchant_id: u16) -> bool {
+        self.0
+            .as_ref()
+            .is_some_and(|window| window.merchant_id == merchant_id)
+    }
+
+    fn listed(&self, slot: u32) -> Option<&Listed> {
+        self.0.as_ref()?.places.get(&slot)
+    }
+
+    /// Bounds ordinary Titanium purchases by the decoded item and any finite stock.
+    pub(super) fn titanium_quantity_known(&self, slot: u32, quantity: u32) -> bool {
+        self.listed(slot).is_some_and(|listed| {
+            (1..=listed.stack_limit.max(1)).contains(&quantity)
+                && (listed.stock == 0 || quantity <= listed.stock)
+        })
+    }
+
     /// Bound ordinary Quarm purchases by decoded stock rather than guessing
     /// quantities for charged, non-stackable or unknown items.
     pub(super) fn quarm_quantity_known(&self, slot: u32, quantity: u32) -> bool {
-        self.0
-            .as_ref()
-            .and_then(|window| window.places.get(&slot))
-            .is_some_and(|(_, _, limit)| quantity > 0 && quantity <= *limit)
+        self.listed(slot)
+            .is_some_and(|listed| (1..=listed.stack_limit.min(20)).contains(&quantity))
     }
 
     /// Forgets the window, as after death.
@@ -569,7 +647,7 @@ mod tests {
             quantity: 0,
             price: 0,
         };
-        assert!(!trades.refused(&zero));
+        assert_eq!(trades.refused(&zero, None), None);
         assert_eq!(trades.observe(&zero, &inventory), None);
         assert!(trades.active());
     }
@@ -584,6 +662,7 @@ mod tests {
                 request_id: 1,
                 session_id: 1,
                 spawn_id: None,
+                expected_pet: None,
             },
             &inventory,
             start,
@@ -602,7 +681,7 @@ mod tests {
         let inventory = inventory();
         let mut trades = MerchantTrades::default();
         trades.sent(&sell(25), &inventory, start);
-        assert!(trades.refused(&echo(-1)));
+        assert_eq!(trades.refused(&echo(-1), None), Some(Refusal::Pending(7)));
         assert_eq!(trades.observe(&echo(-1), &inventory), None);
         assert!(!trades.active());
         trades.sent(&buy(3), &inventory, start);
@@ -776,21 +855,27 @@ mod tests {
             price: 0,
         };
         // Answering no purchase, it ends nothing.
-        assert!(!trades.refused(&nothing));
+        assert_eq!(trades.refused(&nothing, None), None);
         trades.sent(&sell(25), &inventory(), start);
-        assert!(!trades.refused(&nothing));
+        assert_eq!(trades.refused(&nothing, None), None);
         assert!(trades.active());
         trades.clear();
         trades.sent(&buy(4), &inventory(), start);
-        assert!(trades.refused(&nothing));
+        assert_eq!(trades.refused(&nothing, None), Some(Refusal::Pending(7)));
         assert!(!trades.active());
         // A purchase echoed with units bought is not a refusal.
         trades.sent(&buy(4), &inventory(), start);
-        assert!(!trades.refused(&MerchantUpdate::Bought {
-            slot: 4,
-            quantity: 1,
-            price: 25
-        }));
+        assert_eq!(
+            trades.refused(
+                &MerchantUpdate::Bought {
+                    slot: 4,
+                    quantity: 1,
+                    price: 25
+                },
+                None
+            ),
+            None
+        );
     }
 
     /// A merchant opened at `rate`, listing an item at place 3 for `quote`,

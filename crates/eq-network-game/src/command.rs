@@ -180,6 +180,13 @@ pub enum GameCommand {
     },
     /// Cancel an explicit beneficial buff, with current provider classification.
     CancelBuff(crate::buffs::cancel::Request),
+    /// Request a manual stop of the current Bard song.
+    StopSong {
+        /// Current zone admission.
+        session_id: u64,
+        /// When the player requested the stop.
+        created: std::time::Instant,
+    },
     /// Cast a memorized spell; the server decides completion and resource use.
     CastSpell {
         /// Current zone admission.
@@ -210,6 +217,15 @@ pub enum GameCommand {
     DestroyItem(Box<crate::inventory::InventoryDestroy>),
     /// Send one chat message.
     SendChat(OutboundChat),
+    /// Remove the selected NPC in a network-constrained local `EQEmu` fixture.
+    DepopLocalNpc {
+        /// Current zone admission.
+        session_id: u64,
+        /// The available target and its reconciled selection revision.
+        target: crate::targets::TargetState,
+        /// When the host made the request.
+        created: std::time::Instant,
+    },
     /// Inspect a preserved item link in the active zone session.
     InspectItem {
         /// Connection identifier from zone admission.
@@ -480,8 +496,13 @@ pub enum GameCommand {
         session_id: u64,
         /// The command.
         command: crate::pets::PetCommand,
-        /// The player's target, which an attack aims at.
-        target: Option<u16>,
+        /// Current owned pet when the order is made. A targeted Leader
+        /// query can address another pet and does not require this.
+        pet: Option<crate::pets::PetIdentity>,
+        /// The authoritative target selection when the order is made.
+        target: Option<crate::targets::TargetState>,
+        /// When the host made the request.
+        created: std::time::Instant,
     },
     /// Open training with a guildmaster, practice a skill there, or leave.
     Training {
@@ -512,8 +533,10 @@ pub enum GameCommand {
         /// Reject delayed actions instead of replaying them after a stall.
         created: std::time::Instant,
     },
-    /// Accept or decline the resurrection offered last.
+    /// Accept or decline the identified resurrection offer.
     AnswerResurrection {
+        /// Identity from the offer event.
+        offer_id: crate::confirmations::ConsentId,
         /// Current zone admission.
         session_id: u64,
         /// True accepts.
@@ -527,9 +550,11 @@ pub enum GameCommand {
         /// True accepts.
         accept: bool,
     },
-    /// Accept or decline the translocate offered last, which moves the
-    /// player: only ever on the player's own choice.
+    /// Accept or decline the identified translocate offer. A Yes requires
+    /// the player's own choice.
     AnswerTranslocate {
+        /// Identity from the offer event.
+        offer_id: crate::confirmations::ConsentId,
         /// Current zone admission.
         session_id: u64,
         /// True accepts.
@@ -693,6 +718,8 @@ pub enum GameCommand {
         /// Reject delayed actions instead of replaying them after a stall.
         created: std::time::Instant,
     },
+    /// Fire or throw once with the current ranged loadout.
+    RangedAttack(crate::combat::ranged::RangedAttack),
     /// Select or clear a target in the current zone session, without attacking.
     SelectTarget {
         /// Connection identifier supplied by zone admission.
@@ -701,6 +728,9 @@ pub enum GameCommand {
         request_id: u64,
         /// None clears the target; zero is not a valid selected spawn.
         spawn_id: Option<u16>,
+        /// For `/pet target`, the owned pet this choice was made for.
+        /// Ordinary target choices leave this unset.
+        expected_pet: Option<crate::pets::PetIdentity>,
     },
     /// Install independently measured motion values for this admission.
     /// Generations with a known speed rule reject this override and require
@@ -770,10 +800,12 @@ impl GameCommand {
             Self::MemorizeSpell { .. } => "MemorizeSpell",
             Self::CancelBuff(_) => "CancelBuff",
             Self::CastSpell { .. } => "CastSpell",
+            Self::StopSong { .. } => "StopSong",
             Self::SetPosture { .. } => "SetPosture",
             Self::MoveInventory(..) => "MoveInventory",
             Self::DestroyItem(..) => "DestroyItem",
             Self::SendChat(..) => "SendChat",
+            Self::DepopLocalNpc { .. } => "DepopLocalNpc",
             Self::InspectItem { .. } => "InspectItem",
             Self::Consider { .. } => "Consider",
             Self::Camp { .. } => "Camp",
@@ -830,6 +862,7 @@ impl GameCommand {
             Self::RaidRemove { .. } => "RaidRemove",
             Self::WhoAll { .. } => "WhoAll",
             Self::AutoAttack { .. } => "AutoAttack",
+            Self::RangedAttack(_) => "RangedAttack",
             Self::SelectTarget { .. } => "SelectTarget",
             Self::ConfigureMotion { .. } => "ConfigureMotion",
             Self::SpeedInputs { .. } => "SpeedInputs",
@@ -849,6 +882,7 @@ impl GameCommand {
             | Self::CreateCharacter { .. }
             | Self::SendChat(_) => None,
             Self::CancelBuff(request) => Some(request.session_id),
+            Self::RangedAttack(request) => Some(request.session_id),
             Self::UseItem(request) => Some(request.session_id),
             Self::MoveInventory(request) => Some(request.session_id),
             Self::DestroyItem(request) => Some(request.session_id),
@@ -896,6 +930,7 @@ impl GameCommand {
             | Self::AnswerSacrifice { session_id, .. }
             | Self::AnswerTranslocate { session_id, .. }
             | Self::DropInvisibility { session_id, .. }
+            | Self::StopSong { session_id, .. }
             | Self::InviteToGroup { session_id, .. }
             | Self::FollowGroup { session_id, .. }
             | Self::DeclineGroup { session_id, .. }
@@ -922,6 +957,7 @@ impl GameCommand {
             | Self::DragCorpse { session_id, .. }
             | Self::DropCorpse { session_id, .. }
             | Self::SelectTarget { session_id, .. }
+            | Self::DepopLocalNpc { session_id, .. }
             | Self::ConfigureMotion { session_id, .. }
             | Self::SpeedInputs { session_id, .. }
             | Self::ClimbReach { session_id, .. } => Some(*session_id),
@@ -949,6 +985,8 @@ impl GameCommand {
                 Capability::GameplayDepartures
             }
             Self::CancelBuff(_) => Capability::CancellingBuffs,
+            Self::RangedAttack(_) => Capability::RangedCombat,
+            Self::StopSong { .. } => Capability::StoppingSongs,
             Self::DeleteSpell { .. } => Capability::DeletingSpells,
             Self::SwapSpell { .. } => Capability::MovingSpells,
             // An item's click effect is a cast.
@@ -969,7 +1007,9 @@ impl GameCommand {
             Self::MoveInventory(_) | Self::DestroyItem(_) => Capability::Inventory,
             Self::Consume { .. } | Self::AutoEat { .. } => Capability::Meals,
             Self::AnswerListPolls { .. } => Capability::AnsweringListPolls,
-            Self::SendChat(_) | Self::InspectItem { .. } => Capability::Talking,
+            Self::SendChat(_) | Self::InspectItem { .. } | Self::DepopLocalNpc { .. } => {
+                Capability::Talking
+            }
             Self::Consider { .. } | Self::AutoAttack { .. } => Capability::Combat,
             Self::Camp { .. } | Self::ExitAtOnce { .. } => Capability::Camping,
             Self::BledOut { .. } => Capability::BleedingOut,
@@ -1047,7 +1087,6 @@ impl GameCommand {
             | Self::SpeedInputs { .. }
             | Self::ClimbReach { .. }
             | Self::WhoAll { .. }
-            | Self::Pet { .. }
             | Self::AnswerResurrection { .. }
             | Self::AnswerSacrifice { .. }
             | Self::AnswerTranslocate { .. }
@@ -1078,6 +1117,7 @@ impl GameCommand {
             | Self::DropCorpse { .. }
             | Self::SelectTarget { .. } => None,
             Self::CancelBuff(request) => Some(request.created),
+            Self::RangedAttack(request) => Some(request.created),
             Self::UseItem(request) => Some(request.created),
             Self::MoveInventory(request) => Some(request.created),
             Self::DestroyItem(request) => Some(request.created),
@@ -1092,8 +1132,10 @@ impl GameCommand {
             | Self::ForgetSpell { created, .. }
             | Self::MemorizeSpell { created, .. }
             | Self::CastSpell { created, .. }
+            | Self::StopSong { created, .. }
             | Self::SetPosture { created, .. }
             | Self::Consider { created, .. }
+            | Self::DepopLocalNpc { created, .. }
             | Self::Camp { created, .. }
             | Self::ExitAtOnce { created, .. }
             | Self::BledOut { created, .. }
@@ -1109,6 +1151,7 @@ impl GameCommand {
             | Self::AutoAttack { created, .. }
             | Self::Consume { created, .. }
             | Self::UseAbility { created, .. }
+            | Self::Pet { created, .. }
             | Self::Training { created, .. }
             | Self::ReadItem { created, .. }
             | Self::Combine { created, .. }
@@ -1251,6 +1294,12 @@ pub fn encode(
         GameCommand::CancelBuff(_) => {
             anyhow::bail!("buff cancellation requires the admitted buff-slot owner")
         }
+        GameCommand::RangedAttack(_) => {
+            anyhow::bail!("a ranged attack requires the admitted target and loadout")
+        }
+        GameCommand::DepopLocalNpc { .. } => {
+            anyhow::bail!("local fixture cleanup requires the admitted target")
+        }
         GameCommand::CastSpell {
             gem,
             spell_id,
@@ -1312,6 +1361,7 @@ pub fn encode(
         | GameCommand::AnswerSacrifice { .. }
         | GameCommand::AnswerTranslocate { .. }
         | GameCommand::DropInvisibility { .. }
+        | GameCommand::StopSong { .. }
         | GameCommand::InviteToGroup { .. }
         | GameCommand::FollowGroup { .. }
         | GameCommand::DeclineGroup { .. }
@@ -1592,6 +1642,7 @@ mod tests {
             request_id: 1,
             session_id: 9,
             spawn_id: Some(513),
+            expected_pet: None,
         };
         let packet = encode(GameDialect::Titanium, &command, "Example").unwrap();
         assert_eq!(packet.opcode, 0x6c47);
@@ -1602,6 +1653,7 @@ mod tests {
             request_id: 1,
             session_id: 9,
             spawn_id: None,
+            expected_pet: None,
         };
         assert_eq!(
             encode(GameDialect::Titanium, &clear, "Example")

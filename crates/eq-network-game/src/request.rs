@@ -332,6 +332,15 @@ pub enum Request {
     /// One step of dropping the player's invisibility, where the client
     /// generation sends its steps.
     DropInvisibility(crate::buffs::InvisibilityStep),
+    /// One ranged attack already checked against the admitted target and loadout.
+    RangedAttack {
+        /// The target's zone spawn ID.
+        target_id: u16,
+        /// The skill selected by the loadout.
+        kind: crate::combat::ranged::RangedKind,
+    },
+    /// Ask the server to stop the current Bard song.
+    StopSong,
     /// The notice that goes before the auto-attack toggle, where the client
     /// generation sends one.
     AttackNotice {
@@ -431,12 +440,16 @@ pub fn titanium(request: &Request, sender: Sender<'_>) -> Result<EncodedCommand>
             reason,
         } => zoning::titanium_answer(sender.name, (*zone_id, *instance_id), *position, *reason)?,
         Request::SaveOnZone => zoning::titanium_save_on_zone(),
+        Request::RangedAttack { target_id, kind } => {
+            crate::combat::ranged::titanium(*target_id, *kind)?
+        }
         Request::Depart => zoning::titanium_depart(sender.spawn()),
         Request::EnvironmentalNotice { .. }
         | Request::AttackNotice { .. }
         | Request::DropInvisibility(_)
         | Request::FeignDeathPosture
         | Request::BledOut { .. } => anyhow::bail!("the Titanium client cannot send {request:?}"),
+        Request::StopSong => spells::titanium_stop_song(),
         Request::Memorize { gem, spell_id } => spells::titanium_memorize(*gem, *spell_id),
         Request::Forget { gem, spell_id } => spells::titanium_forget(*gem, *spell_id),
         Request::Scribe { slot, spell_id } => spells::titanium_scribe(*slot, *spell_id),

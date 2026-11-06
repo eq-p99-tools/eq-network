@@ -23,6 +23,7 @@ const LENGTH: usize = 228;
 const ZONE: usize = 4;
 const INSTANCE: usize = 6;
 const POSITION: usize = 8;
+const RECIPIENT: usize = 24;
 const CASTER_NAME: usize = 92;
 const SPELL: usize = 156;
 const CORPSE_NAME: usize = 160;
@@ -33,6 +34,8 @@ const NAME: usize = 64;
 /// An offer to resurrect the player.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct ResurrectionOffer {
+    /// Who the offer names as its recipient.
+    pub recipient: String,
     /// Who cast the resurrection.
     pub caster: String,
     /// The corpse it was cast on, as the server names it.
@@ -60,17 +63,17 @@ fn name(body: &[u8], at: usize) -> String {
 /// Decodes an offer to resurrect the player.
 ///
 /// # Errors
-/// Rejects an offer of the wrong length, and one without a caster or a
-/// corpse.
+/// Rejects a malformed offer or one missing its recipient, caster or corpse.
 pub fn titanium_offer(body: &[u8]) -> Result<ResurrectionOffer> {
     ensure!(body.len() == LENGTH, "invalid resurrection offer length");
     let float =
         |at: usize| f32::from_le_bytes([body[at], body[at + 1], body[at + 2], body[at + 3]]);
+    let recipient = name(body, RECIPIENT);
     let caster = name(body, CASTER_NAME);
     let corpse = name(body, CORPSE_NAME);
     ensure!(
-        !caster.is_empty() && !corpse.is_empty(),
-        "resurrection offer without a caster or a corpse"
+        !recipient.is_empty() && !caster.is_empty() && !corpse.is_empty(),
+        "resurrection offer without a recipient, caster or corpse"
     );
     // The offer carries y before x.
     let (y, x, z) = (float(POSITION), float(POSITION + 4), float(POSITION + 8));
@@ -79,6 +82,7 @@ pub fn titanium_offer(body: &[u8]) -> Result<ResurrectionOffer> {
         "resurrection offer at no place"
     );
     Ok(ResurrectionOffer {
+        recipient,
         caster,
         corpse,
         spell_id: u32::from_le_bytes([
@@ -126,9 +130,6 @@ pub fn decode(opcode: u16, body: &[u8]) -> Result<Option<ResurrectionOffer>> {
 mod tests {
     use super::*;
 
-    /// Where the offer names the player.
-    const PLAYER_NAME: usize = 24;
-
     /// An offer from Tester, with Resurrection (392), to the corpse of
     /// Example in zone 4.
     fn offer() -> Vec<u8> {
@@ -137,7 +138,7 @@ mod tests {
         body[POSITION..POSITION + 4].copy_from_slice(&1748.0f32.to_le_bytes());
         body[POSITION + 4..POSITION + 8].copy_from_slice(&263.0f32.to_le_bytes());
         body[POSITION + 8..POSITION + 12].copy_from_slice(&27.0f32.to_le_bytes());
-        body[PLAYER_NAME..PLAYER_NAME + 7].copy_from_slice(b"Example");
+        body[RECIPIENT..RECIPIENT + 7].copy_from_slice(b"Example");
         body[CASTER_NAME..CASTER_NAME + 6].copy_from_slice(b"Tester");
         body[SPELL..SPELL + 4].copy_from_slice(&392u32.to_le_bytes());
         body[CORPSE_NAME..CORPSE_NAME + 17].copy_from_slice(b"Example's corpse0");

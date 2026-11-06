@@ -25,6 +25,7 @@ fn item(slot: i32, id: u32, count: Option<u32>, weight: u32) -> InventoryItem {
             ..ItemPlacement::default()
         },
         details: ItemDetails {
+            base_held_model: None,
             equipment: Some(EquipmentRules::default()),
             bonuses: Some(ItemBonuses::default()),
             id,
@@ -101,6 +102,20 @@ fn move_item(
 
 fn weight(inventory: &Inventory, dialect: GameDialect) -> u64 {
     inventory.carried_weight_tenths(dialect, 0).unwrap()
+}
+
+#[test]
+fn display_model_differences_do_not_split_a_stack_weight_family() {
+    let mut source = item(30, 1, Some(3), 7);
+    source.details.base_held_model = std::num::NonZeroU16::new(14);
+    let destination = item(23, 1, Some(5), 7);
+    let mut inventory = state(vec![source, destination]);
+    move_item(&mut inventory, MoveRules::EqEmu, 30, 23, quantity(3));
+
+    // The merge leaves one projected stack. Two stacks still bound the
+    // carried weight while the server's placement remains unknown.
+    assert_eq!(weight(&inventory, GameDialect::Titanium), 14);
+    assert!(inventory.predicted());
 }
 
 #[test]

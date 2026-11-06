@@ -7,12 +7,20 @@ use super::{
 };
 use anyhow::{Context, Result};
 use eq_network_game::{
-    inventory::ItemUse, message::Message, request::Request, spells::SpellUpdate, world::WorldEvent,
+    inventory::ItemUse,
+    message::Message,
+    request::Request,
+    spells::{SpellUpdate, ITEM_CAST_SLOT},
+    world::WorldEvent,
 };
 use std::time::{Duration, Instant};
 
 /// Local retry policy, not a protocol timeout. Never resends a request automatically.
 const ACK_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Allow ordered cast results already in flight to arrive. `EQEmu` can stop a
+/// song without sending the Bard an interrupt or spell-bar refresh.
+const SONG_STOP_WAIT: Duration = Duration::from_secs(1);
 
 /// Reports only cast rejections, preserving the caller's admission for host filtering.
 pub(super) fn rejected(command: &ClientCommand, reason: &str) -> Option<crate::world::WorldEvent> {
@@ -45,9 +53,18 @@ enum Phase {
     },
 }
 
+#[derive(Clone, Copy)]
+pub(super) enum Source {
+    Gem(u8),
+    Item,
+}
+
 #[derive(Default)]
 pub(super) struct CastGuard {
     phase: Option<Phase>,
+    source: Option<Source>,
+    stop_deadline: Option<Instant>,
+    late_begin: Option<u32>,
 }
 
 impl CastGuard {
@@ -72,11 +89,24 @@ impl CastGuard {
     }
 
     /// Records a request only after successful transport submission.
-    pub fn submitted(&mut self, spell: u32, now: Instant) {
-        self.phase = Some(Phase::Awaiting {
-            spell,
-            submitted: now,
-        });
+    pub fn submitted(&mut self, spell: u32, source: Option<Source>, now: Instant) {
+        *self = Self {
+            phase: Some(Phase::Awaiting {
+                spell,
+                submitted: now,
+            }),
+            source,
+            late_begin: self.late_begin.filter(|&abandoned| abandoned != spell),
+            ..Self::default()
+        };
+    }
+
+    /// The spell named by the current hold.
+    fn held_spell(&self) -> Option<u32> {
+        match self.phase {
+            Some(Phase::Awaiting { spell, .. } | Phase::Casting { spell, .. }) => Some(spell),
+            None => None,
+        }
     }
 
     /// The unacknowledged request, distinct from a server-confirmed cast.
@@ -87,9 +117,22 @@ impl CastGuard {
         }
     }
 
-    /// Allows a fresh user attempt after silence; confirmed casts never expire by time.
+    /// Ends the local hold after a submitted stop received no matching result.
+    fn expire_song_stop(&mut self, now: Instant) -> Option<u32> {
+        if now < self.stop_deadline? {
+            return None;
+        }
+        let spell = self.held_spell()?;
+        let late_begin = self.pending();
+        self.clear();
+        self.late_begin = late_begin;
+        Some(spell)
+    }
+
+    /// Allows a fresh user attempt after silence; ordinary begun casts stay held.
     pub fn expire(&mut self, now: Instant) -> bool {
-        if matches!(self.phase, Some(Phase::Awaiting { submitted, .. })
+        if self.stop_deadline.is_none()
+            && matches!(self.phase, Some(Phase::Awaiting { submitted, .. })
             if now.checked_duration_since(submitted).is_some_and(|age| age >= ACK_TIMEOUT))
         {
             self.clear();
@@ -113,21 +156,30 @@ impl CastGuard {
 
     /// Clears state when this character dies or the owning zone session ends.
     pub fn clear(&mut self) {
-        self.phase = None;
+        *self = Self::default();
     }
 
-    /// Only own-caster starts/interruptions and matching result notifications affect us.
-    pub fn observe(&mut self, own_id: u16, update: &SpellUpdate) {
+    /// Follows own starts and interruptions and matching spell results.
+    /// Returns the stopped hold if a different own spell begins.
+    fn observe(&mut self, own_id: u16, update: &SpellUpdate) -> Option<u32> {
         match *update {
             SpellUpdate::Began {
                 caster_id,
                 spell_id,
                 ..
             } if caster_id == own_id => {
-                self.phase = Some(Phase::Casting {
-                    spell: u32::from(spell_id),
-                    requested: self.pending(),
-                });
+                let spell = u32::from(spell_id);
+                let mut requested = self.pending();
+                let superseded = if self.stop_deadline.is_some() && !self.answers(spell) {
+                    self.stop_deadline = None;
+                    self.source = None;
+                    self.late_begin = requested.take().or(self.late_begin);
+                    self.held_spell()
+                } else {
+                    None
+                };
+                self.phase = Some(Phase::Casting { spell, requested });
+                return superseded;
             }
             SpellUpdate::Interrupted { caster_id, .. } if caster_id == u32::from(own_id) => {
                 self.clear();
@@ -135,14 +187,23 @@ impl CastGuard {
             SpellUpdate::Mana {
                 spell_id,
                 keep_casting: false,
+            } if self.answers(spell_id) => {
+                self.clear();
             }
-            | SpellUpdate::BarRefresh { spell_id, .. }
-                if self.answers(spell_id) =>
+            SpellUpdate::BarRefresh { slot, spell_id, .. }
+                if self.answers(spell_id)
+                    && self.source.is_none_or(|source| {
+                        slot == match source {
+                            Source::Gem(gem) => u32::from(gem),
+                            Source::Item => u32::from(ITEM_CAST_SLOT),
+                        }
+                    }) =>
             {
                 self.clear();
             }
             _ => (),
         }
+        None
     }
 }
 
@@ -150,9 +211,49 @@ impl CastGuard {
 #[derive(Default)]
 pub(super) struct Casting {
     guard: CastGuard,
+    song_stop: bool,
 }
 
+const BARD_CLASS: u32 = 8;
+
 impl Casting {
+    pub(super) fn with_song_stop() -> Self {
+        Self {
+            song_stop: true,
+            ..Self::default()
+        }
+    }
+
+    /// The empty request can interrupt an item too. Only a known gem cast
+    /// can use the fallback that releases a cast without a server answer.
+    fn stop_song(&mut self, world: &World, out: &mut Out<'_, '_>) -> Result<()> {
+        if !self.song_stop
+            || world
+                .player
+                .as_ref()
+                .is_none_or(|p| p.class != Some(BARD_CLASS))
+        {
+            return out
+                .log
+                .diagnostic("Stopping songs is unavailable for this character".into());
+        }
+        if self.guard.active() && !matches!(self.guard.source, Some(Source::Gem(_))) {
+            return out
+                .log
+                .diagnostic("Wait for the current cast to finish before stopping a song".into());
+        }
+        if self.guard.stop_deadline.is_some() {
+            return Ok(());
+        }
+        out.request(&Request::StopSong)?;
+        if self.guard.active() {
+            self.guard.stop_deadline = Some(Instant::now() + SONG_STOP_WAIT);
+            Ok(())
+        } else {
+            report_unconfirmed_stop(world.session_id, None, out)
+        }
+    }
+
     /// Casts a memorized spell at a target the player can see.
     fn cast(
         &mut self,
@@ -177,7 +278,7 @@ impl Casting {
             match out.encode_command(command) {
                 Ok(packet) => {
                     out.send(&packet)?;
-                    return self.submitted(*spell_id, world, out);
+                    return self.submitted(*spell_id, Source::Gem(*gem), world, out);
                 }
                 Err(error) => (
                     error.to_string(),
@@ -219,7 +320,7 @@ impl Casting {
         let error = match prepared {
             Ok((spell_id, packet)) => {
                 out.send(&packet)?;
-                self.submitted(spell_id, world, out)?;
+                self.submitted(spell_id, Source::Item, world, out)?;
                 None
             }
             Err(error) => Some(error.to_string()),
@@ -232,8 +333,14 @@ impl Casting {
     }
 
     /// Holds casting until the server answers the request.
-    fn submitted(&mut self, spell_id: u32, world: &World, out: &mut Out<'_, '_>) -> Result<()> {
-        self.guard.submitted(spell_id, Instant::now());
+    fn submitted(
+        &mut self,
+        spell_id: u32,
+        source: Source,
+        world: &World,
+        out: &mut Out<'_, '_>,
+    ) -> Result<()> {
+        self.guard.submitted(spell_id, Some(source), Instant::now());
         out.log.send(ClientEvent::World(WorldEvent::CastPending {
             session_id: world.session_id,
             spell_id: Some(spell_id),
@@ -244,7 +351,11 @@ impl Casting {
 impl Feature for Casting {
     fn capabilities(&self) -> Vec<crate::world::Capability> {
         use crate::world::Capability;
-        vec![Capability::Casting]
+        if self.song_stop {
+            vec![Capability::Casting, Capability::StoppingSongs]
+        } else {
+            vec![Capability::Casting]
+        }
     }
 
     fn holds(&self, _world: &World, _now: Instant) -> Vec<(Resource, &'static str)> {
@@ -257,6 +368,7 @@ impl Feature for Casting {
             ClientCommand::CastSpell { .. }
                 | ClientCommand::UseItem(_)
                 | ClientCommand::DropInvisibility { .. }
+                | ClientCommand::StopSong { .. }
         )
     }
 
@@ -267,15 +379,18 @@ impl Feature for Casting {
         out: &mut Out<'_, '_>,
     ) -> Result<()> {
         match command {
+            ClientCommand::StopSong { .. } => self.stop_song(world, out),
             ClientCommand::UseItem(request) => self.use_item(request, world, out),
             ClientCommand::DropInvisibility { steps, .. } => drop_invisibility(steps, out),
             _ => self.cast(command, world, out),
         }
     }
 
-    /// Releases a request the server never acknowledged, so the player may
-    /// try again.
+    /// Releases a local hold when the server sends no matching reply.
     fn tick(&mut self, now: Instant, world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
+        if let Some(spell) = self.guard.expire_song_stop(now) {
+            return report_unconfirmed_stop(world.session_id, Some(spell), out);
+        }
         if !self.guard.expire(now) {
             return Ok(());
         }
@@ -285,6 +400,23 @@ impl Feature for Casting {
         }))?;
         out.log
             .diagnostic("Cast acknowledgement timed out; a manual retry is available".into())
+    }
+
+    /// Withholds a start for an abandoned request even while a different
+    /// spell is pending or casting.
+    fn explain(&mut self, message: &mut Message, world: &World) {
+        let Message::Event(WorldEvent::Spell(SpellUpdate::Began {
+            caster_id,
+            spell_id,
+            ..
+        })) = message
+        else {
+            return;
+        };
+        if world.is_player(*caster_id) && self.guard.late_begin == Some(u32::from(*spell_id)) {
+            self.guard.late_begin = None;
+            *message = Message::Withheld;
+        }
     }
 
     /// Follows the player's own casts; dying ends any cast.
@@ -300,8 +432,13 @@ impl Feature for Casting {
                     return Ok(());
                 };
                 let pending = self.guard.pending();
-                self.guard.observe(own, update);
-                if pending.is_some() && self.guard.pending().is_none() {
+                if let Some(spell_id) = self.guard.observe(own, update) {
+                    out.log
+                        .send(ClientEvent::World(WorldEvent::CastSuperseded {
+                            session_id: world.session_id,
+                            spell_id,
+                        }))?;
+                } else if pending.is_some() && self.guard.pending().is_none() {
                     out.log.send(ClientEvent::World(WorldEvent::CastPending {
                         session_id: world.session_id,
                         spell_id: None,
@@ -315,6 +452,18 @@ impl Feature for Casting {
         }
         Ok(())
     }
+}
+
+fn report_unconfirmed_stop(
+    session_id: u64,
+    spell_id: Option<u32>,
+    out: &mut Out<'_, '_>,
+) -> Result<()> {
+    out.log
+        .send(ClientEvent::World(WorldEvent::SongStopUnconfirmed {
+            session_id,
+            spell_id,
+        }))
 }
 
 /// Sends the steps of an invisibility drop in the host's order, where the
@@ -338,9 +487,178 @@ fn drop_invisibility(
 }
 
 #[cfg(test)]
+mod song_stop_tests;
+
+#[cfg(test)]
 mod tests {
     use super::super::feature::testing;
     use super::*;
+
+    #[test]
+    fn a_received_interrupt_resolves_a_requested_song_stop() {
+        let mut casting = Casting::with_song_stop();
+        let mut world = World::new(5);
+        world.own_spawn = Some(7);
+        let mut player = testing::player(7);
+        player.class = Some(BARD_CLASS);
+        player.memorized_spells[2] = Some(202);
+        world.player.admit(player);
+        let now = Instant::now();
+        let cast = ClientCommand::CastSpell {
+            session_id: 5,
+            gem: 2,
+            spell_id: 202,
+            target_id: 7,
+            created: now,
+        };
+        let stop = ClientCommand::StopSong {
+            session_id: 5,
+            created: now,
+        };
+        assert!(casting.owns(&stop));
+        assert!(!casting.guard.blocks(&stop));
+
+        testing::run(|out| casting.handle(&cast, &mut world, out))
+            .result
+            .unwrap();
+        let output = testing::run(|out| casting.handle(&stop, &mut world, out));
+        output.result.unwrap();
+        assert_eq!(output.sent.len(), 1);
+        assert_eq!(output.sent[0].opcode, 0x4839);
+        assert_eq!(output.sent[0].body, [] as [u8; 0]);
+        assert!(output.events.is_empty());
+        assert_eq!(casting.guard.pending(), Some(202));
+
+        let refresh = |slot| {
+            Message::Event(WorldEvent::Spell(SpellUpdate::BarRefresh {
+                slot,
+                spell_id: 202,
+                reduction_ms: 0,
+            }))
+        };
+        testing::run(|out| casting.observe(&refresh(1), &mut world, out))
+            .result
+            .unwrap();
+        assert_eq!(casting.guard.pending(), Some(202));
+
+        let interrupted = Message::Event(WorldEvent::Spell(SpellUpdate::Interrupted {
+            caster_id: 7,
+            message_id: 1,
+            caster_name: None,
+        }));
+        testing::run(|out| casting.observe(&interrupted, &mut world, out))
+            .result
+            .unwrap();
+        assert!(!casting.guard.active());
+
+        // An already pulsing song need not be an active cast.
+        let output = testing::run(|out| casting.handle(&stop, &mut world, out));
+        output.result.unwrap();
+        assert_eq!(output.sent.len(), 1);
+        assert!(matches!(
+            output.events.as_slice(),
+            [ClientEvent::World(WorldEvent::SongStopUnconfirmed {
+                session_id: 5,
+                spell_id: None
+            })]
+        ));
+        let output =
+            testing::run(|out| casting.tick(Instant::now() + SONG_STOP_WAIT, &mut world, out));
+        output.result.unwrap();
+        assert!(output.events.is_empty());
+
+        world.player.admit(testing::player(7));
+        let output = testing::run(|out| casting.handle(&stop, &mut world, out));
+        output.result.unwrap();
+        assert_eq!(
+            output.sent,
+            [] as [eq_network_game::command::EncodedCommand; 0]
+        );
+
+        // The requested gem's refresh still completes the normal cast path.
+        casting.guard.submitted(202, Some(Source::Gem(2)), now);
+        testing::run(|out| casting.observe(&refresh(2), &mut world, out))
+            .result
+            .unwrap();
+        assert!(!casting.guard.active());
+    }
+
+    #[test]
+    fn a_same_spell_gem_refresh_cannot_expose_an_item_cast_to_stop_song() {
+        use eq_network_game::inventory::{
+            ClickEffect, ClickKind, Inventory, InventorySlot, InventoryUpdate,
+        };
+
+        let mut casting = Casting::with_song_stop();
+        let mut world = World::new(5);
+        world.own_spawn = Some(7);
+        let mut player = testing::player(7);
+        player.class = Some(BARD_CLASS);
+        player.memorized_spells[2] = Some(202);
+        world.player.admit(player);
+
+        let slot = InventorySlot(22);
+        let mut item = testing::item(slot.0);
+        item.activation.effect = Some(ClickEffect {
+            spell_id: 202,
+            kind: ClickKind::Expendable,
+            required_level: 0,
+            effect_level: 1,
+            cast_time_ms: 1000,
+            recast_delay_seconds: 0,
+            recast_type: 0,
+        });
+        item.charges = 1;
+        let mut inventory = Inventory::default();
+        inventory.apply(InventoryUpdate::Snapshot(vec![item]));
+        world.inventory = inventory.into();
+        let now = Instant::now();
+        let item = ClientCommand::UseItem(ItemUse {
+            request_id: 1,
+            session_id: 5,
+            revision: world.inventory.revision(),
+            slot,
+            target_id: 7,
+            created: now,
+        });
+        let stop = ClientCommand::StopSong {
+            session_id: 5,
+            created: now,
+        };
+
+        let output = testing::run(|out| casting.handle(&item, &mut world, out));
+        output.result.unwrap();
+        assert_eq!(output.sent.len(), 1);
+        assert_eq!(casting.guard.pending(), Some(202));
+
+        let refresh = |slot| {
+            Message::Event(WorldEvent::Spell(SpellUpdate::BarRefresh {
+                slot,
+                spell_id: 202,
+                reduction_ms: 0,
+            }))
+        };
+        testing::run(|out| casting.observe(&refresh(2), &mut world, out))
+            .result
+            .unwrap();
+        let output = testing::run(|out| casting.handle(&stop, &mut world, out));
+        output.result.unwrap();
+        assert_eq!(
+            output.sent,
+            [] as [eq_network_game::command::EncodedCommand; 0]
+        );
+        assert!(casting.guard.active());
+
+        testing::run(|out| casting.observe(&refresh(10), &mut world, out))
+            .result
+            .unwrap();
+        assert!(!casting.guard.active());
+        let output = testing::run(|out| casting.handle(&stop, &mut world, out));
+        output.result.unwrap();
+        assert_eq!(output.sent.len(), 1);
+        assert_eq!(output.sent[0].opcode, 0x4839);
+        assert_eq!(output.sent[0].body, [] as [u8; 0]);
+    }
 
     #[test]
     fn a_memorized_spell_goes_out_and_holds_casting_until_answered() {
@@ -429,7 +747,7 @@ mod tests {
             created: Instant::now(),
         };
         let mut guard = CastGuard::default();
-        guard.submitted(42, Instant::now());
+        guard.submitted(42, None, Instant::now());
         assert!(matches!(rejected(&request, "Target unavailable"),
             Some(crate::world::WorldEvent::CastRejected { session_id: 12, spell_id: 73, reason })
             if reason == "Target unavailable"));
@@ -438,7 +756,8 @@ mod tests {
             &ClientCommand::SelectTarget {
                 request_id: 1,
                 session_id: 12,
-                spawn_id: Some(7)
+                spawn_id: Some(7),
+                expected_pet: None,
             },
             "Unavailable"
         )
@@ -458,7 +777,7 @@ mod tests {
         });
         let mut guard = CastGuard::default();
         assert!(!guard.blocks(&request));
-        guard.submitted(73, now);
+        guard.submitted(73, None, now);
         assert!(guard.blocks(&request));
         assert!(!guard.blocks(&ClientCommand::SetPosture {
             session_id: 12,
@@ -489,14 +808,14 @@ mod tests {
     fn submission_blocks_until_acknowledged_and_only_silent_requests_expire() {
         let now = Instant::now();
         let mut guard = CastGuard::default();
-        guard.submitted(73, now);
+        guard.submitted(73, None, now);
         assert!(guard.active());
         assert_eq!(guard.pending(), Some(73));
         assert!(!guard.expire(now + Duration::from_millis(4999)));
         assert!(guard.expire(now + ACK_TIMEOUT));
         assert!(!guard.active());
         assert!(!guard.expire(now + ACK_TIMEOUT));
-        guard.submitted(73, now);
+        guard.submitted(73, None, now);
         guard.observe(12, &begin(13));
         assert_eq!(guard.pending(), Some(73));
         guard.observe(12, &begin(12));
@@ -528,7 +847,7 @@ mod tests {
                 reduction_ms: 0,
             },
         ] {
-            guard.submitted(73, Instant::now());
+            guard.submitted(73, None, Instant::now());
             guard.observe(12, &update);
             assert!(!guard.active());
             assert_eq!(guard.pending(), None);
@@ -594,7 +913,7 @@ mod tests {
         };
         for end in [73, 2935] {
             let mut guard = CastGuard::default();
-            guard.submitted(73, Instant::now());
+            guard.submitted(73, None, Instant::now());
             guard.observe(12, &begun_as(2935));
             guard.observe(12, &ended(74));
             assert!(guard.active());
@@ -678,7 +997,8 @@ mod tests {
         assert!(!guard.blocks(&ClientCommand::SelectTarget {
             request_id: 1,
             session_id: 1,
-            spawn_id: Some(13)
+            spawn_id: Some(13),
+            expected_pet: None,
         }));
         guard.observe(
             12,

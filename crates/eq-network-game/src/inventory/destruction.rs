@@ -83,7 +83,8 @@ impl Inventory {
             .get(&InventorySlot::CURSOR)
             .context("The cursor is empty")?;
         ensure!(
-            request.item.slot == InventorySlot::CURSOR && item == &request.item,
+            request.item.slot == InventorySlot::CURSOR
+                && InventoryItem::same_slot_contents(Some(item), Some(&request.item)),
             "The cursor item changed; select Destroy again"
         );
         ensure!(
@@ -127,6 +128,7 @@ mod tests {
                 ..Default::default()
             },
             details: ItemDetails {
+                base_held_model: None,
                 equipment: None,
                 bonuses: None,
                 id: 42,

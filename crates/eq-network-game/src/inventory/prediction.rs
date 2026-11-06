@@ -5,7 +5,7 @@ use std::collections::{BTreeMap, BTreeSet};
 pub(super) fn same_item(left: &InventoryItem, right: &InventoryItem) -> bool {
     let mut relocated = left.clone();
     relocated.slot = right.slot;
-    relocated == *right
+    InventoryItem::same_slot_contents(Some(&relocated), Some(right))
 }
 
 impl Inventory {
@@ -23,7 +23,7 @@ impl Inventory {
             .keys()
             .chain(next.keys())
             .copied()
-            .filter(|slot| self.items.get(slot) != next.get(slot))
+            .filter(|slot| !InventoryItem::same_slot_contents(self.items.get(slot), next.get(slot)))
             .collect();
         for slot in &changed {
             // Charm through waist: the slots whose items' statistics and worn
@@ -70,7 +70,10 @@ impl Inventory {
             InventoryUpdate::Set(items) => items.first().is_none_or(|root| {
                 !covers(root.slot, *origin)
                     && (!covers(root.slot, *slot)
-                        || self.items.get(slot) == items.iter().find(|item| item.slot == *slot))
+                        || InventoryItem::same_slot_contents(
+                            self.items.get(slot),
+                            items.iter().find(|item| item.slot == *slot),
+                        ))
             }),
             InventoryUpdate::Remove(root)
             | InventoryUpdate::Used(root)
@@ -93,7 +96,7 @@ impl Inventory {
             .keys()
             .chain(next.keys())
             .copied()
-            .filter(|slot| self.items.get(slot) != next.get(slot))
+            .filter(|slot| !InventoryItem::same_slot_contents(self.items.get(slot), next.get(slot)))
             .collect();
         let movement = if changed.len() == 2 {
             let from = changed

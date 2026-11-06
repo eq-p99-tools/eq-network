@@ -224,13 +224,19 @@ impl Wallet {
     /// TAKP kicks for it (`Client::OPMoveCoin`), and `EQEmu`'s count would
     /// wrap, since its overflow check compares in 64 bits.
     pub fn apply(&mut self, transfer: CoinTransfer) -> Result<(), &'static str> {
+        if transfer.from == transfer.to && transfer.coin == transfer.into {
+            return Err("Coins must go somewhere");
+        }
+        if i32::try_from(transfer.amount).is_err() {
+            return Err("Too many coins for one move");
+        }
         let (taken, added) = transfer.amounts();
         if taken == 0 {
             return Err("Too few coins to change into that kind");
         }
         if self
             .get(transfer.from)
-            .is_none_or(|coins| coins.of(transfer.coin) < taken)
+            .is_none_or(|coins| coins.of(transfer.coin) < transfer.amount)
         {
             return Err("You do not have that many coins there");
         }
@@ -623,15 +629,24 @@ mod tests {
         assert_eq!(wallet.cursor.of(Coin::Gold), 11);
         assert_eq!(wallet.purse.unwrap().of(Coin::Gold), 1);
         assert!(wallet.apply(pick_up).is_err(), "only one gold is left");
+        // The wire names the offered count, even when conversion leaves a remainder.
+        let conversion = CoinTransfer {
+            from: CoinPlace::Cursor,
+            to: CoinPlace::Bank,
+            into: Coin::Platinum,
+            ..pick_up
+        };
+        let before = wallet;
+        assert_eq!(
+            wallet.apply(CoinTransfer {
+                amount: 19,
+                ..conversion
+            }),
+            Err("You do not have that many coins there")
+        );
+        assert_eq!(wallet, before);
         // Into the bank's platinum: one platinum arrives, one gold stays.
-        wallet
-            .apply(CoinTransfer {
-                from: CoinPlace::Cursor,
-                to: CoinPlace::Bank,
-                into: Coin::Platinum,
-                ..pick_up
-            })
-            .unwrap();
+        wallet.apply(conversion).unwrap();
         assert_eq!(wallet.bank.unwrap().of(Coin::Platinum), 1);
         assert_eq!(wallet.cursor.of(Coin::Gold), 1);
         // Never more of a kind than the servers' signed count holds.

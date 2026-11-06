@@ -1,5 +1,103 @@
 # API and integration contracts
 
+## Local EQEmu fixture cleanup
+
+`GameCommand::DepopLocalNpc` carries the current admission, creation time
+and reconciled `TargetState`. The chat owner accepts it only when the session
+uses `ServerProtocol::EqEmu` with `ClientConfig::local_only`. At the send it
+requires the same available target revision and a visible NPC. The normal
+admission and freshness guards also apply. A local refusal is diagnostic.
+
+The wire command is the fixed `#depop` chat line. The server acts on its
+current target and sends any resulting world changes independently. The
+target guard covers state the session has observed at the send. A caller
+must verify ownership and observe the exact fixture's removal.
+
+## Manual Titanium ranged attacks
+
+An admission offering `Capability::RangedCombat` can take
+`GameCommand::RangedAttack`. Pass the current available `TargetState` from
+`TargetChanged`, a `RangedLoadout::current` snapshot from the same admission's
+inventory, and the admission ID and input time. Reconciled target identity
+includes its revision. Any intervening inventory revision invalidates the
+queued loadout, including a same-ID replacement or ammo update.
+
+The zone checks readiness, posture, casting/inventory holds, equipped items and
+range before it sends. Stock EQEmu applies its class/level skill cap, so a raw
+rank of zero or an unavailable rank does not settle eligibility locally. P99
+retains a conservative positive-rank prerequisite in the recognized 1–252
+range while its first-use behavior is unverified. A successful send starts a
+local wait based on unmodified item delay. The server applies its own timers,
+targeting rules and combat resolution. The `CombatRequest` disposition reports
+only local submission or refusal. Existing received damage, inventory and chat events
+carry the outcomes. The server chooses whether and from which stack to consume
+a projectile. Hosts should issue a fresh intent for each explicit input.
+
+## Pet orders
+
+`WorldEvent::OwnPet` reports the current pet's `PetIdentity` (spawn ID and
+an admission-scoped revision) whenever the session resolves exactly one
+living spawn the server marks as owned by the player. The revision changes
+on every owned re-spawn, death, charm or ownership change, including a
+duplicate spawn report of the same ID. Pass the latest identity in
+`ClientCommand::Pet { pet }` and the current `TargetState` for orders that
+name the target; the session refuses an order whose identity or target no
+longer matches ("Your pet has changed") before anything is sent, and
+`SelectTarget::expected_pet` pins a pet-specific selection the same way.
+`PetCommand::GuardMe` is Titanium command 6. The Project 1999 policy refuses
+Hold, Feign, NoCast and Focus.
+
+## Titanium EQEmu swimming bound
+
+Only the Titanium `EQEmu` policy offers `Capability::Swimming`; P99, Quarm
+and TAKP reject `MovementMode::Swim` samples. A swim sample is bounded by one
+three-dimensional budget of `movement::swim_speed` of the unboosted grant,
+with no run boost, and is refused while flying or stunned. The two native
+branch constants in `swim_speed` are read from the Titanium program; the
+shared three-axis budget, the vertical stroke sharing the wet horizontal
+rate, and the absence of skill, race and buff scaling are inferred
+(recording checklist 6.390). A submitted sample establishes neither server
+acceptance nor water state; the host asserts water from the installed zone.
+
+## Retained base held models
+
+`ItemDetails.base_held_model` keeps the checked optional base held model from
+a Titanium item definition. A later item packet for the same slot with an
+empty model field replaces it with `None`; the received wear appearance stays
+separate and takes precedence in hosts.
+
+## Spellbook edits and Bard song stop
+
+An unanswered book edit emits `BookActionStatus::Unconfirmed` once after
+30 seconds. Match this variant separately from `Rejected` and `Cancelled`.
+The worker keeps the edit's ownership and exact reply match until it receives
+settlement or the admission is replaced. An unanswered scribe retains the
+inventory hold. A mode-2 clear with a valid spell ID must name the old gem
+spell. A mode-2 empty sentinel reports a slot clear.
+
+Titanium EQEmu offers `Capability::StoppingSongs` and handles an explicit
+`ClientCommand::StopSong { session_id, created }` for the current Bard.
+The wire request is empty `OP_ManaChange` (`0x4839`), as implemented by the
+[server handler](https://github.com/EQEmu/EQEmu/blob/master/zone/client_packet.cpp)
+and [Titanium opcode table](https://github.com/EQEmu/EQEmu/blob/master/utils/patches/patch_Titanium.conf).
+After submitting a stop for a tracked gem cast, the worker allows one
+second for matching cast news. An own interrupt or matching mana or gem
+refresh follows the ordinary cast path. With no such update, the worker
+releases its local hold and emits `WorldEvent::SongStopUnconfirmed` with
+the admission and released spell. When no cast is held, submission emits
+the same event without a spell. This event reports local state only. It
+leaves buffs and cooldowns to the existing server updates, and a retry
+requires a fresh user command. An active item cast or a cast of unknown
+source blocks song stop. The P99 policy keeps song stop gated.
+
+An own start for a different spell during the stop wait supersedes the
+stopped hold. The worker emits `WorldEvent::CastSuperseded` with the
+old spell before forwarding the new start. Consumers should discard the
+identified hold and its request alias. A late start for an abandoned
+pending spell is withheld during a retry of a different spell.
+Titanium has no cast request ID for distinguishing same-spell starts
+after a same-spell retry.
+
 ## P99 readable items
 
 `GameCommand::ReadItem { session_id, revision, slot, created }` now binds the
@@ -36,11 +134,12 @@ with the nonzero own-spawn ID and position read during the handshake (Titanium's
 validated own spawn and saved profile position, or EQMac's assigned ID and own
 spawn position). Transfer traffic or a death, despawn, or position update for
 an already known own spawn withdraws the position repeat for that zone, even
-if it arrived before handshake completion. A decoded zone offer in recording
-mode yields one diagnostic per zone session. The listener continues on its
-current connection while the transport remains active. The progress enum is
-non-exhaustive, and its new serialized value is `recording`. Errors in the
-handshake itself continue to follow the existing session error policy.
+if it arrived before handshake completion. The first zone offer in recording
+mode yields a diagnostic, including when the offer cannot be decoded. The
+listener continues on its current connection while the transport remains
+active. The progress enum is non-exhaustive, and its new serialized value is
+`recording`. Errors in the handshake itself continue to follow the existing
+session error policy.
 
 ## Modern session termination
 
@@ -768,3 +867,42 @@ never reset input epochs. These events are not server acknowledgments and
 never imply a movement speed grant. Expired changes can be retried with a new
 identity and caller stamp without accepting old motion or reasserting policy
 on every render frame.
+
+
+## Resurrection and translocate consent
+
+A live session exposes `WorldEvent::Resurrection` and
+`WorldEvent::TranslocateOffer` with `confirmations::ConsentOffer<T>` where
+its server policy supports the operation. Read the decoded fields from
+`offer`. Copy `id` into `AnswerResurrection::offer_id` or
+`AnswerTranslocate::offer_id` and use the admission from the same token as
+`session_id`. A fresh admission can reuse a sequence. The ID combines its
+admission, question kind and sequence and has no wire representation.
+
+An identical pending offer keeps its original token and deadline. A distinct
+offer of the same kind replaces it. A stale or repeated answer produces a
+refusal naming the attempted token and leaves a replacement untouched.
+Death, an outstanding zone transfer and logout invalidate old consent.
+The in-process `expires_at` is a monotonic local deadline omitted from
+serialization. The Titanium `EQEmu` policy uses a five-minute local answer
+window and submits a decline when it elapses during the same live admission;
+that the native client answers No on its own, and the five minutes, are
+inferred (recording checklist 6.391). TAKP translocate retains its one-hour
+window (6.253). A server may apply its own timing rule.
+
+`ConsentClosed` distinguishes a submitted answer, a local expiry with a
+submitted decline, and a lifecycle interruption. Movement and recovery
+follow the ordinary server messages and admission. EQEmu translocate uses
+the server's pending destination and resurrection echoes the offered packet with
+the answer selected. P99's resurrection and translocate answer policies
+remain gated.
+
+Raw wire readers should use `message::titanium` or `message::eqmac`
+for consent records. The corresponding `Message::Resurrection` or
+`Message::TranslocateOffer` carries decoded facts without a session
+token. `world::titanium_update` no longer treats these as world events.
+TAKP's distinct server move still enters the existing zone-transfer path.
+
+See EQEmu's [resurrection offer routing](https://github.com/EQEmu/EQEmu/blob/master/zone/worldserver.cpp#L865-L893),
+[resurrection processing](https://github.com/EQEmu/EQEmu/blob/master/zone/client_process.cpp#L971-L1055)
+and [translocate processing](https://github.com/EQEmu/EQEmu/blob/master/zone/client_packet.cpp#L14888-L14952).

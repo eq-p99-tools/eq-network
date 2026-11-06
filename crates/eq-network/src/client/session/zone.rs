@@ -283,7 +283,7 @@ fn run_connected(
     let connected = Instant::now();
     let mut progress = Instant::now();
     let session_id = rand::random();
-    let mut world = World::new(session_id);
+    let mut world = World::for_zone(session_id, config);
     let mut recording_only = false;
     let mut reported_recording_offer = false;
     let mut entry_position_superseded = false;
@@ -512,13 +512,21 @@ fn run_connected(
         if recording_only {
             // Keep the communication stream without giving the player
             // features a live world or ignoring an explicit logout.
-            if !reported_recording_offer
-                && messages
-                    .iter()
-                    .any(|message| matches!(message, Message::ZoneOffer(_)))
-            {
-                log.diagnostic("Zone offer received; record-only mode cannot follow it".into())?;
-                reported_recording_offer = true;
+            if !reported_recording_offer {
+                let offer = messages.iter().find_map(|message| match message {
+                    Message::ZoneOffer(_) => {
+                        Some("Zone offer received; record-only mode cannot follow it")
+                    }
+                    Message::Unreadable {
+                        part: Part::ZoneOffer,
+                        ..
+                    } => Some("Unreadable zone offer received; record-only mode cannot follow it"),
+                    _ => None,
+                });
+                if let Some(offer) = offer {
+                    log.diagnostic(offer.into())?;
+                    reported_recording_offer = true;
+                }
             }
             ensure!(
                 !messages
@@ -801,7 +809,7 @@ mod tests {
     };
 
     /// How many kinds of command there are.
-    const KINDS: usize = 82;
+    const KINDS: usize = 85;
 
     /// The kinds the login and world servers take, before any zone session.
     const BEFORE_ZONES: [usize; 4] = [0, 1, 70, 75];
@@ -826,6 +834,9 @@ mod tests {
             ClientCommand::MemorizeSpell { .. } => 10,
             ClientCommand::CastSpell { .. } => 11,
             ClientCommand::CancelBuff(_) => 81,
+            ClientCommand::RangedAttack(_) => 82,
+            ClientCommand::StopSong { .. } => 83,
+            ClientCommand::DepopLocalNpc { .. } => 84,
             ClientCommand::SetPosture { .. } => 12,
             ClientCommand::MoveInventory(_) => 13,
             ClientCommand::DestroyItem(_) => 80,
@@ -906,7 +917,21 @@ mod tests {
     fn zone_commands() -> Vec<ClientCommand> {
         let (session_id, created) = (1, Instant::now());
         let position = crate::world::Position::default();
+        let inventory = super::super::combat::test_ranged_inventory(
+            eq_network_game::combat::ranged::RangedKind::Archery,
+        );
         vec![
+            ClientCommand::StopSong {
+                session_id,
+                created,
+            },
+            ClientCommand::RangedAttack(eq_network_game::combat::ranged::RangedAttack {
+                session_id,
+                target: eq_network_game::targets::TargetState::default(),
+                loadout: eq_network_game::combat::ranged::RangedLoadout::current(&inventory)
+                    .unwrap(),
+                created,
+            }),
             ClientCommand::CancelBuff(eq_network_game::buffs::cancel::Request {
                 session_id,
                 revision: 1,
@@ -1002,6 +1027,11 @@ mod tests {
                 item: super::super::feature::testing::item(30),
             })),
             ClientCommand::SendChat(OutboundChat::Say("Hail".into())),
+            ClientCommand::DepopLocalNpc {
+                session_id,
+                target: eq_network_game::targets::TargetState::default(),
+                created,
+            },
             ClientCommand::InspectItem {
                 session_id,
                 link_body: String::new(),
@@ -1073,6 +1103,7 @@ mod tests {
                 request_id: 1,
                 session_id,
                 spawn_id: None,
+                expected_pet: None,
             },
             ClientCommand::ConfigureMotion {
                 session_id,
@@ -1185,7 +1216,9 @@ mod tests {
             ClientCommand::Pet {
                 session_id,
                 command: eq_network_game::pets::PetCommand::Follow,
+                pet: None,
                 target: None,
+                created,
             },
             ClientCommand::Training {
                 session_id,
@@ -1194,6 +1227,11 @@ mod tests {
             },
             ClientCommand::AnswerResurrection {
                 session_id,
+                offer_id: eq_network_game::confirmations::ConsentId {
+                    session_id,
+                    kind: eq_network_game::confirmations::ConsentKind::Resurrection,
+                    sequence: 1,
+                },
                 accept: true,
             },
             ClientCommand::AnswerSacrifice {
@@ -1202,6 +1240,11 @@ mod tests {
             },
             ClientCommand::AnswerTranslocate {
                 session_id,
+                offer_id: eq_network_game::confirmations::ConsentId {
+                    session_id,
+                    kind: eq_network_game::confirmations::ConsentKind::Translocate,
+                    sequence: 1,
+                },
                 accept: true,
             },
             ClientCommand::DropInvisibility {
@@ -1938,6 +1981,72 @@ mod tests {
     }
 
     #[test]
+    fn only_the_offering_server_turns_a_wire_record_into_answerable_consent() {
+        use crate::client::{session::feature::testing, ServerProtocol};
+        use eq_network_game::confirmations::{ConsentClosure, TRANSLOCATE_OPCODE};
+
+        let mut body = vec![0; 92];
+        body[..4].copy_from_slice(&4u32.to_le_bytes());
+        body[12..18].copy_from_slice(b"Helper");
+        let offer = eq_network_game::confirmations::titanium_translocate(&body).unwrap();
+        for protocol in [ServerProtocol::EqEmu, ServerProtocol::Project1999] {
+            let server = servers::server_type(protocol);
+            let mut features =
+                Features::new(server, "Tester", eq_network_game::food::AutoEat::default());
+            let mut world = World::new(5);
+            world.admitted = Some(Instant::now());
+            let result = testing::run(|out| {
+                hear(
+                    read_messages(
+                        server.wire(),
+                        TRANSLOCATE_OPCODE,
+                        &body,
+                        eq_network_game::inventory::ItemRules::Takp,
+                    ),
+                    &mut features,
+                    &mut world,
+                    out,
+                    true,
+                )
+            });
+            assert!(result.result.unwrap().is_none());
+            assert_eq!(
+                result.sent,
+                [] as [eq_network_game::command::EncodedCommand; 0]
+            );
+            if protocol == ServerProtocol::Project1999 {
+                assert!(result.events.is_empty());
+                continue;
+            }
+            let [ClientEvent::World(WorldEvent::TranslocateOffer(question))] =
+                result.events.as_slice()
+            else {
+                panic!("expected a scoped consent offer");
+            };
+            let commands = [ClientCommand::AnswerTranslocate {
+                session_id: 5,
+                offer_id: question.id,
+                accept: true,
+            }];
+            let answered =
+                testing::run(|out| apply_commands(&commands, &mut features, &mut world, out, true));
+            assert!(answered.result.unwrap().is_none());
+            assert_eq!(
+                answered.sent,
+                [eq_network_game::confirmations::titanium_translocate_answer(
+                    &offer, true
+                )]
+            );
+            assert!(matches!(
+                answered.events.as_slice(),
+                [ClientEvent::World(WorldEvent::ConsentClosed { id, closure: ConsentClosure::AnswerSent { accept: true } })]
+                    if *id == question.id
+            ));
+            assert!(!world.lifecycle.blocks_motion());
+        }
+    }
+
+    #[test]
     fn a_titanium_zone_reports_everything_its_features_offer() {
         use crate::world::Capability;
         let features = |protocol| {
@@ -1967,6 +2076,7 @@ mod tests {
             Capability::Moving,
             Capability::Targeting,
             Capability::Combat,
+            Capability::RangedCombat,
             Capability::Looting,
             Capability::Talking,
             Capability::Camping,
@@ -2014,6 +2124,7 @@ mod tests {
             Capability::ServerTicks,
             Capability::ShowingHelm,
             Capability::CancellingBuffs,
+            Capability::StoppingSongs,
         ] {
             assert!(eqemu.contains(&capability));
             assert!(!p99.contains(&capability));
@@ -2023,7 +2134,9 @@ mod tests {
         assert!(!eqemu.contains(&Capability::AnsweringListPolls));
         assert!(eqemu.contains(&Capability::GameplayDepartures));
         assert!(p99.contains(&Capability::GameplayDepartures));
-        assert_eq!(eqemu.len(), p99.len() + 15);
+        assert!(eqemu.contains(&Capability::Swimming));
+        assert!(!p99.contains(&Capability::Swimming));
+        assert_eq!(eqemu.len(), p99.len() + 17);
     }
 
     #[test]
@@ -2382,6 +2495,9 @@ mod diagnostic_tests;
 
 #[cfg(test)]
 mod target_tests;
+
+#[cfg(test)]
+mod pet_tests;
 
 #[cfg(test)]
 mod manual_combine_tests;

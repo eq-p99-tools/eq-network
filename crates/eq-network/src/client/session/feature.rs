@@ -17,7 +17,7 @@ use super::{
     objects::ZoneObjects,
     posture::OwnPosture,
     tradeskills::OpenContainer,
-    ClientCommand, ConnectionState, Events, ZoneExit,
+    ClientCommand, ClientConfig, ConnectionState, Events, ServerProtocol, ZoneExit,
 };
 use anyhow::{Context, Result};
 use eq_network_game::{
@@ -174,6 +174,8 @@ impl Out<'_, '_> {
 pub(in crate::client) struct World {
     /// This admission's session, which host commands must name.
     pub(super) session_id: u64,
+    /// Whether this admission is on a network-constrained local `EQEmu` connection.
+    local_eqemu: bool,
     /// The admitted player, once the zone is ready; see [`PlayerRecord`] for
     /// who writes it.
     pub(super) player: PlayerRecord,
@@ -210,6 +212,8 @@ pub(in crate::client) struct World {
     /// The server's idea of the player's target, which only the targeting
     /// feature changes.
     pub(super) target: super::targeting::Target,
+    /// Current own-pet identity, derived from the spawn table by Pets.
+    pub(super) own_pet: Option<eq_network_game::pets::PetIdentity>,
     /// The zone's objects, which only the ground objects feature changes.
     pub(super) objects: ZoneObjects,
     /// The world container asked for or open, which only the tradeskills
@@ -225,6 +229,7 @@ impl World {
     pub(in crate::client) fn new(session_id: u64) -> Self {
         Self {
             session_id,
+            local_eqemu: false,
             player: PlayerRecord::default(),
             body: Body::default(),
             control: OwnControl::default(),
@@ -241,10 +246,24 @@ impl World {
             spawns: Spawns::default(),
             exchange: Exchanging::default(),
             target: super::targeting::Target::default(),
+            own_pet: None,
             objects: ZoneObjects::default(),
             container: OpenContainer::default(),
             news: Vec::new(),
         }
+    }
+
+    /// The shared state of a production zone and its connection policy.
+    pub(super) fn for_zone(session_id: u64, config: &ClientConfig) -> Self {
+        Self {
+            local_eqemu: config.local_only && config.protocol == ServerProtocol::EqEmu,
+            ..Self::new(session_id)
+        }
+    }
+
+    /// Whether the zone connection permits scoped local `EQEmu` fixture commands.
+    pub(super) const fn local_eqemu(&self) -> bool {
+        self.local_eqemu
     }
 
     /// Whether the zone yielded an admitted player.
@@ -536,6 +555,7 @@ pub(super) mod testing {
             charges: 0,
             bag_slots: 0,
             details: eq_network_game::items::ItemDetails {
+                base_held_model: None,
                 equipment: None,
                 bonuses: None,
                 id: 42,
