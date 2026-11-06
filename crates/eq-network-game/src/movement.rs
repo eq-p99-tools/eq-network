@@ -617,21 +617,28 @@ impl MovementGuard {
         );
         self.position = request.position;
         self.sampled = request.created;
-        // The jump started with this sample's interval; past the top it
-        // rises no more.
-        if request.mode == MovementMode::Swim {
+        self.update_jump_after_move(request.mode, request.created, since_jump.map(|(_, to)| to));
+        Ok(delta)
+    }
+
+    /// Ends jump tracking on water entry or once its upward allowance is spent.
+    fn update_jump_after_move(
+        &mut self,
+        mode: MovementMode,
+        created: Instant,
+        since_jump: Option<f32>,
+    ) {
+        if mode == MovementMode::Swim {
             self.jumped_at = None;
-        } else if let (Some((speed, gravity)), Some((_, to))) = (self.jump, since_jump) {
+        } else if let (Some((speed, gravity)), Some(to)) = (self.jump, since_jump) {
             self.jumped_at = if gravity > 0.0 && to >= speed / gravity {
                 None
             } else {
-                request
-                    .created
+                created
                     .checked_sub(Duration::from_secs_f32(to))
                     .map(JumpStart::At)
             };
         }
-        Ok(delta)
     }
 
     /// The seconds a request stamped `created` covers since the last
