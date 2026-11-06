@@ -809,7 +809,7 @@ mod tests {
     };
 
     /// How many kinds of command there are.
-    const KINDS: usize = 83;
+    const KINDS: usize = 84;
 
     /// The kinds the login and world servers take, before any zone session.
     const BEFORE_ZONES: [usize; 4] = [0, 1, 70, 75];
@@ -835,6 +835,7 @@ mod tests {
             ClientCommand::CastSpell { .. } => 11,
             ClientCommand::CancelBuff(_) => 81,
             ClientCommand::RangedAttack(_) => 82,
+            ClientCommand::StopSong { .. } => 83,
             ClientCommand::SetPosture { .. } => 12,
             ClientCommand::MoveInventory(_) => 13,
             ClientCommand::DestroyItem(_) => 80,
@@ -919,6 +920,10 @@ mod tests {
             eq_network_game::combat::ranged::RangedKind::Archery,
         );
         vec![
+            ClientCommand::StopSong {
+                session_id,
+                created,
+            },
             ClientCommand::RangedAttack(eq_network_game::combat::ranged::RangedAttack {
                 session_id,
                 target: eq_network_game::targets::TargetState::default(),
