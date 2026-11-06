@@ -431,7 +431,8 @@ impl MotionSession {
     }
 
     /// Applies caller-stamped choices without granting speed or reusing queued
-    /// input. The accepted position, sample time and fixed bounds remain.
+    /// input. The accepted position, sample time, tracked jump and fixed
+    /// bounds remain.
     ///
     /// # Errors
     /// Refuses choices made before the latest reset or accepted sample. The
@@ -445,11 +446,6 @@ impl MotionSession {
             return Ok(());
         }
         self.stop_voluntary();
-        // Only changing flight replaces the vertical controller. Running
-        // and stun choices invalidate old input without ending an ascent.
-        if self.options.fly != options.fly {
-            self.guard.jumped_at = None;
-        }
         self.options = options;
         self.guard.flying = options.fly;
         self.guard.input_epoch = created;
