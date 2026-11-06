@@ -695,6 +695,52 @@ impl Belongings {
         }
     }
 
+    /// Keep the refusal's wire identity through settlement. A refusal for
+    /// an older shop must not dismiss a current action in the host.
+    fn scoped_merchant_refusal(
+        &mut self,
+        merchant_id: u32,
+        update: &MerchantUpdate,
+        world: &World,
+        out: &mut Out<'_, '_>,
+    ) -> Result<()> {
+        let Ok(merchant_id) = u16::try_from(merchant_id) else {
+            return Ok(());
+        };
+        let scope = (merchant_id != 0).then_some(merchant_id);
+        let Some(refused_at) = self.trades.refused(update, scope) else {
+            return Ok(());
+        };
+        if self.merchant.is_open(refused_at) && !self.trades.active() {
+            merchant_refused(world, "The merchant did not accept that offer.", out)?;
+            out.log
+                .send(ClientEvent::World(WorldEvent::Merchant(update.clone())))
+        } else {
+            out.log
+                .diagnostic("A previous merchant trade was refused".into())
+        }
+    }
+
+    /// Drops the catalog for the old spawn and releases its pending trade
+    /// as unknown. A subsequent stock packet alone cannot reopen the shop.
+    fn merchant_departed(
+        &mut self,
+        merchant_id: u16,
+        world: &mut World,
+        out: &mut Out<'_, '_>,
+    ) -> Result<()> {
+        if self.trades.merchant_departed(merchant_id) {
+            merchant_unanswered(world, out)?;
+        }
+        if self.merchant.is_open(merchant_id) {
+            self.merchant.clear();
+            out.log.send(ClientEvent::World(WorldEvent::Merchant(
+                MerchantUpdate::Closed,
+            )))?;
+        }
+        Ok(())
+    }
+
     /// Moves coins and keeps them where they went. Servers answer no coin
     /// move, and log one that takes more than a place holds, so the ledger
     /// refuses that before anything is sent; a trade window must be open for
@@ -932,6 +978,9 @@ impl Feature for Belongings {
             update,
         } = message
         {
+            if merchant::is_refusal(update) {
+                return;
+            }
             let current = if *merchant_id == 0 {
                 // Some packets may leave the field empty. Apply the existing
                 // slot correlation for results, but require identity to remove stock.
@@ -1005,6 +1054,20 @@ impl Feature for Belongings {
             }
         }
         match message {
+            Message::MerchantScoped {
+                merchant_id,
+                update,
+            } if merchant::is_refusal(update) => {
+                self.scoped_merchant_refusal(*merchant_id, update, world, out)?;
+            }
+            Message::Event(WorldEvent::Despawn(id)) => {
+                self.merchant_departed(*id, world, out)?;
+            }
+            Message::Event(WorldEvent::Spawns(spawns)) => {
+                for spawn in spawns {
+                    self.merchant_departed(spawn.spawn_id, world, out)?;
+                }
+            }
             Message::Event(WorldEvent::Inventory(update)) => {
                 let resync = !self.rules.settles_by_silence()
                     && resync::contradicts(&world.inventory, update);
@@ -1048,7 +1111,7 @@ impl Feature for Belongings {
                 if matches!(update, MerchantUpdate::Closed) && self.trades.active() {
                     merchant_unanswered(world, out)?;
                 }
-                if self.trades.refused(update) {
+                if self.trades.refused(update, None).is_some() {
                     merchant_refused(world, "The merchant did not accept that offer.", out)?;
                 } else if let Some(update) = self.trades.observe(update, &world.inventory) {
                     change(update, world, out)?;

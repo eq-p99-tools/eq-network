@@ -124,15 +124,14 @@ impl Trade {
         }
     }
 
-    /// An explicit refusal identifies a kind, but not a reliable request slot.
+    /// An explicit refusal identifies a kind but leaves the request slot ambiguous.
     fn refused_by(&self, update: &MerchantUpdate) -> bool {
-        match (self, update) {
-            (Self::Purchase { .. }, MerchantUpdate::Bought { quantity: 0, .. }) => true,
-            (Self::Sale(_), MerchantUpdate::Sold { slot, quantity, .. }) => {
-                *quantity == 0 || *slot < 0
-            }
-            _ => false,
-        }
+        is_refusal(update)
+            && matches!(
+                (self, update),
+                (Self::Purchase { .. }, MerchantUpdate::Bought { .. })
+                    | (Self::Sale(_), MerchantUpdate::Sold { .. })
+            )
     }
 
     fn key(&self) -> TradeKey {
@@ -140,6 +139,15 @@ impl Trade {
             Self::Purchase { slot, .. } => TradeKey::Purchase(*slot),
             Self::Sale(sale) => TradeKey::Sale(sale.slot),
         }
+    }
+}
+
+/// The reply explicitly refuses a purchase or sale.
+pub(super) const fn is_refusal(update: &MerchantUpdate) -> bool {
+    match update {
+        MerchantUpdate::Bought { quantity, .. } => *quantity == 0,
+        MerchantUpdate::Sold { slot, quantity, .. } => *quantity == 0 || *slot < 0,
+        _ => false,
     }
 }
 
@@ -176,23 +184,17 @@ impl MerchantTrades {
             .chain(self.unanswered.values())
     }
 
-    /// A different merchant's reply cannot settle a transaction even when
-    /// the echoed slot and count match. A refusal with multiple candidates
-    /// remains ambiguous in the shared settlement path.
+    /// Checks a positive receipt against its transaction's merchant, or an
+    /// unmatched receipt or stock removal against the open catalog.
     pub(super) fn receipt_is_current(
         &self,
         merchant_id: u16,
         update: &MerchantUpdate,
         open: bool,
     ) -> bool {
-        let mut candidates = self
-            .records()
-            .filter(|record| record.trade.answers(update) || record.trade.refused_by(update))
-            .peekable();
-        if candidates.peek().is_none() {
-            return open;
-        }
-        candidates.all(|record| record.merchant_id == merchant_id)
+        self.records()
+            .find(|record| record.trade.answers(update))
+            .map_or(open, |record| record.merchant_id == merchant_id)
     }
 
     /// A coin delta needs a matching trade and its original known purse basis.
@@ -301,38 +303,32 @@ impl MerchantTrades {
         }
     }
 
-    /// Ends the sole outstanding trade of the kind an explicit refusal names.
-    /// `EQMac` echoes a refused purchase, and Quarm also rejects special sales
-    /// this way. Neither response establishes an item or coin change.
-    /// With several candidates the reply cannot identify which was refused;
-    /// none is discarded or reported as definitively refused. True when one ended.
-    pub(super) fn refused(&mut self, update: &MerchantUpdate) -> bool {
-        let candidates = self
-            .records()
-            .filter(|record| record.trade.refused_by(update))
-            .count();
-        if candidates != 1 {
-            return false;
-        }
+    /// Retires a uniquely identified refusal and returns its merchant. With
+    /// no wire merchant ID, all transactions of that kind are candidates.
+    pub(super) fn refused(
+        &mut self,
+        update: &MerchantUpdate,
+        merchant_id: Option<u16>,
+    ) -> Option<u16> {
+        let (key, merchant_id) = {
+            let mut candidates = self.records().filter(|record| {
+                merchant_id.is_none_or(|id| record.merchant_id == id)
+                    && record.trade.refused_by(update)
+            });
+            let record = candidates.next()?;
+            if candidates.next().is_some() {
+                return None;
+            }
+            (record.trade.key(), record.merchant_id)
+        };
         if self
             .pending
-            .as_ref()
-            .is_some_and(|(record, _)| record.trade.refused_by(update))
+            .take_if(|(record, _)| record.trade.key() == key)
+            .is_none()
         {
-            // This trade has an outcome. Do not retain it as unanswered or
-            // discard an older trade whose late result can still arrive.
-            self.pending = None;
-            return true;
-        }
-        let key = self
-            .unanswered
-            .iter()
-            .find_map(|(key, record)| record.trade.refused_by(update).then_some(*key));
-        if let Some(key) = key {
             self.unanswered.remove(&key);
-            return true;
         }
-        false
+        Some(merchant_id)
     }
 
     /// The item a remembered sale offered, which an echo of `sold` units
@@ -358,6 +354,19 @@ impl MerchantTrades {
             self.release();
         }
         expired
+    }
+
+    /// Releases the active hold when its merchant disappears, retaining late
+    /// settlement authority independently of the catalog.
+    pub(super) fn merchant_departed(&mut self, merchant_id: u16) -> bool {
+        let pending_here = self
+            .pending
+            .as_ref()
+            .is_some_and(|(record, _)| record.merchant_id == merchant_id);
+        if pending_here {
+            self.release();
+        }
+        pending_here
     }
 
     /// Forgets the trades that can no longer be answered, such as after death.
@@ -631,7 +640,7 @@ mod tests {
             quantity: 0,
             price: 0,
         };
-        assert!(!trades.refused(&zero));
+        assert_eq!(trades.refused(&zero, None), None);
         assert_eq!(trades.observe(&zero, &inventory), None);
         assert!(trades.active());
     }
@@ -665,7 +674,7 @@ mod tests {
         let inventory = inventory();
         let mut trades = MerchantTrades::default();
         trades.sent(&sell(25), &inventory, start);
-        assert!(trades.refused(&echo(-1)));
+        assert_eq!(trades.refused(&echo(-1), None), Some(7));
         assert_eq!(trades.observe(&echo(-1), &inventory), None);
         assert!(!trades.active());
         trades.sent(&buy(3), &inventory, start);
@@ -839,21 +848,27 @@ mod tests {
             price: 0,
         };
         // Answering no purchase, it ends nothing.
-        assert!(!trades.refused(&nothing));
+        assert_eq!(trades.refused(&nothing, None), None);
         trades.sent(&sell(25), &inventory(), start);
-        assert!(!trades.refused(&nothing));
+        assert_eq!(trades.refused(&nothing, None), None);
         assert!(trades.active());
         trades.clear();
         trades.sent(&buy(4), &inventory(), start);
-        assert!(trades.refused(&nothing));
+        assert_eq!(trades.refused(&nothing, None), Some(7));
         assert!(!trades.active());
         // A purchase echoed with units bought is not a refusal.
         trades.sent(&buy(4), &inventory(), start);
-        assert!(!trades.refused(&MerchantUpdate::Bought {
-            slot: 4,
-            quantity: 1,
-            price: 25
-        }));
+        assert_eq!(
+            trades.refused(
+                &MerchantUpdate::Bought {
+                    slot: 4,
+                    quantity: 1,
+                    price: 25
+                },
+                None
+            ),
+            None
+        );
     }
 
     /// A merchant opened at `rate`, listing an item at place 3 for `quote`,

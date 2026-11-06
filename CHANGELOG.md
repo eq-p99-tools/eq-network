@@ -253,6 +253,9 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Keep merchant commands and Titanium receipts scoped to the relevant shop.
   Check stock, quantity, and sale custody before sending. Preserve an
   unanswered transaction across a shop close and await server evidence.
+  A Titanium refusal with a merchant ID can resolve that shop's sole matching
+  action. Despawn or replacement retires the catalog and releases the pending
+  trade as unknown while retaining any late result.
 - Retire item and coin escrow when a trade cancel is sent. Returned holdings
   come from server inventory and money updates. Withhold exchange replies
   that cannot apply to the current stage or partner.
