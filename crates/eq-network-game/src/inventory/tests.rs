@@ -1,6 +1,43 @@
 use super::*;
 
 #[test]
+fn titanium_inventory_keeps_only_checked_base_held_models() {
+    let fixture = wire(13, 42, 0, false, 0, &[]);
+    for (id_file, expected) in [
+        ("IT0037", Some(37)),
+        ("it205", Some(205)),
+        ("", None),
+        ("0", None),
+        ("IT0", None),
+        ("IT", None),
+        ("IT+5", None),
+        ("IT65536", None),
+        ("OBJ7", None),
+        ("İT7", None),
+    ] {
+        let packet = fixture.replacen(
+            "|Test item 42|0|0|42|",
+            &format!("|Test item 42|0|{id_file}|42|"),
+            1,
+        );
+        let Some(InventoryUpdate::Snapshot(items)) = decode(0x5394, packet.as_bytes()).unwrap()
+        else {
+            panic!("expected an inventory snapshot");
+        };
+        assert_eq!(items[0].slot, InventorySlot(13));
+        assert_eq!(items[0].details.id, 42);
+        assert_eq!(
+            items[0]
+                .details
+                .base_held_model
+                .map(std::num::NonZeroU16::get),
+            expected,
+            "{id_file}"
+        );
+    }
+}
+
+#[test]
 fn zero_quantity_removal_clears_cursor_but_does_not_confirm_other_predictions() {
     let mut state = Inventory::default();
     state.apply(

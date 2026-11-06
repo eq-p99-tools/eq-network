@@ -112,6 +112,7 @@ pub(super) mod tests {
             charges: 0,
             bag_slots: 0,
             details: ItemDetails {
+                base_held_model: None,
                 equipment: None,
                 bonuses: None,
                 id: 42,

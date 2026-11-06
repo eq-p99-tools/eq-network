@@ -25,6 +25,7 @@ fn item(slot: i32, id: u32, count: Option<u32>, weight: u32) -> InventoryItem {
             ..ItemPlacement::default()
         },
         details: ItemDetails {
+            base_held_model: None,
             equipment: Some(EquipmentRules::default()),
             bonuses: Some(ItemBonuses::default()),
             id,

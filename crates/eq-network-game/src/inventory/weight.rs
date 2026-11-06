@@ -174,6 +174,7 @@ mod tests {
             charges: 0,
             bag_slots: 0,
             details: ItemDetails {
+                base_held_model: None,
                 equipment: Some(EquipmentRules::default()),
                 bonuses: Some(ItemBonuses::default()),
                 id: 1,

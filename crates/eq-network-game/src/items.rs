@@ -2,6 +2,7 @@
 //! equips, trades, or activates items.
 use anyhow::{ensure, Context, Result};
 use serde::Serialize;
+use std::num::NonZeroU16;
 
 /// Displayable numeric property from the server's item definition.
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -63,6 +64,10 @@ pub struct WornEffect {
 /// An inspected item; augment/evolution fields are deliberately not surfaced.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct ItemDetails {
+    /// Base held model from a checked Titanium item `IDFile`. Received wear
+    /// appearance can override this model.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub base_held_model: Option<NonZeroU16>,
     /// None means equipment restrictions/passive effects were not decoded.
     pub equipment: Option<EquipmentRules>,
     /// Raw numeric modifiers; None means the definition has not supplied them.
@@ -259,6 +264,7 @@ pub(crate) fn definition(fields: &[&str]) -> Result<ItemDetails> {
     let id = uint(4)?;
     ensure!(id != 0 && !fields[1].is_empty(), "missing item identity");
     Ok(ItemDetails {
+        base_held_model: base_held_model(fields[3]),
         equipment: Some(equipment_rules(fields)?),
         bonuses: Some(bonuses(fields)?),
         id,
@@ -273,6 +279,15 @@ pub(crate) fn definition(fields: &[&str]) -> Result<ItemDetails> {
         price: Some(uint(10)?),
         icon: Some(uint(11)?),
     })
+}
+
+/// Reads a positive classic IT model number without making it an item requirement.
+fn base_held_model(value: &str) -> Option<NonZeroU16> {
+    let (prefix, number) = value.split_at_checked(2)?;
+    if !prefix.eq_ignore_ascii_case("IT") || !number.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    number.parse().ok()
 }
 
 /// Reads passive-effect metadata without interpreting its server-specific activation rules.

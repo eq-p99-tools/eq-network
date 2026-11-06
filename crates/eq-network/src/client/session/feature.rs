@@ -555,6 +555,7 @@ pub(super) mod testing {
             charges: 0,
             bag_slots: 0,
             details: eq_network_game::items::ItemDetails {
+                base_held_model: None,
                 equipment: None,
                 bonuses: None,
                 id: 42,

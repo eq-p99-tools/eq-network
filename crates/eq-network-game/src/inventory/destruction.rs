@@ -127,6 +127,7 @@ mod tests {
                 ..Default::default()
             },
             details: ItemDetails {
+                base_held_model: None,
                 equipment: None,
                 bonuses: None,
                 id: 42,

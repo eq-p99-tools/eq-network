@@ -456,6 +456,7 @@ fn definition(record: &Record<'_>) -> Result<ItemDetails> {
     let lore = record.text(64, 80);
     let effect = Effect::of(record);
     Ok(ItemDetails {
+        base_held_model: None,
         equipment: Some(EquipmentRules {
             required_level: u32::try_from(record.short(352))
                 .context("invalid EQMac required level")?,

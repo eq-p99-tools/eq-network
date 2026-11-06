@@ -7,6 +7,9 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Retain a checked optional base held model from Titanium item definitions.
+  The item model and received wear appearance remain separate.
+
 - One explicit Titanium bow shot or throw through `GameCommand::RangedAttack`
   and `Capability::RangedCombat`. The session checks the target revision,
   loadout, reach and unmodified weapon delay. Damage and ammunition changes
