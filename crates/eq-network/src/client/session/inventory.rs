@@ -546,18 +546,18 @@ impl Belongings {
         world: &World,
         out: &mut Out<'_, '_>,
     ) -> Result<()> {
-        let (merchant_id, own_id) = match *command {
-            ClientCommand::Buy {
-                merchant_id,
-                own_id,
-                ..
-            }
-            | ClientCommand::Sell {
-                merchant_id,
-                own_id,
-                ..
-            } => (merchant_id, own_id),
-            _ => return Ok(()),
+        let (ClientCommand::Buy {
+            merchant_id,
+            own_id,
+            ..
+        }
+        | ClientCommand::Sell {
+            merchant_id,
+            own_id,
+            ..
+        }) = *command
+        else {
+            return Ok(());
         };
         if world.own_spawn != Some(own_id) {
             return merchant_refused(
@@ -1012,7 +1012,7 @@ impl Feature for Belongings {
                 // slot correlation for results, but require identity to remove stock.
                 !matches!(update, MerchantUpdate::Removed { .. })
             } else {
-                u16::try_from(*merchant_id).ok().is_some_and(|id| {
+                u16::try_from(*merchant_id).is_ok_and(|id| {
                     self.trades
                         .receipt_is_current(id, update, self.merchant.is_open(id))
                 })

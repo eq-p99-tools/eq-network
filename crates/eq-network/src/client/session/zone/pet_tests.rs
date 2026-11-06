@@ -15,6 +15,22 @@ struct Session {
     world: World,
 }
 
+#[derive(Debug, PartialEq, Eq)]
+enum PetObservation {
+    Unreported,
+    Cleared,
+    Owned(PetIdentity),
+}
+
+impl PetObservation {
+    fn identity(self) -> Option<PetIdentity> {
+        match self {
+            Self::Owned(pet) => Some(pet),
+            Self::Cleared | Self::Unreported => None,
+        }
+    }
+}
+
 impl Session {
     fn new(protocol: ServerProtocol, session_id: u64) -> Self {
         let mut features =
@@ -40,7 +56,7 @@ impl Session {
         Self { features, world }
     }
 
-    fn hear(&mut self, event: WorldEvent) -> Option<Option<PetIdentity>> {
+    fn hear(&mut self, event: WorldEvent) -> PetObservation {
         let outcome = testing::run(|out| {
             hear(
                 vec![Message::Event(event)],
@@ -51,14 +67,18 @@ impl Session {
             )
         });
         assert!(outcome.result.unwrap().is_none());
-        outcome.events.iter().find_map(|event| match event {
-            ClientEvent::World(WorldEvent::OwnPet { session_id, pet })
-                if *session_id == self.world.session_id =>
-            {
-                Some(*pet)
-            }
-            _ => None,
-        })
+        outcome
+            .events
+            .iter()
+            .find_map(|event| match event {
+                ClientEvent::World(WorldEvent::OwnPet { session_id, pet })
+                    if *session_id == self.world.session_id =>
+                {
+                    Some(pet.map_or(PetObservation::Cleared, PetObservation::Owned))
+                }
+                _ => None,
+            })
+            .unwrap_or(PetObservation::Unreported)
     }
 
     fn order(&self, command: PetCommand, pet: Option<PetIdentity>) -> ClientCommand {
@@ -104,7 +124,10 @@ fn death(id: u16) -> WorldEvent {
 
 fn refused(outcome: testing::Outcome<Result<Option<ZoneExit>>>, expected: &str) {
     assert!(outcome.result.unwrap().is_none());
-    assert!(outcome.sent.is_empty());
+    assert_eq!(
+        outcome.sent,
+        [] as [eq_network_game::command::EncodedCommand; 0]
+    );
     assert!(outcome.events.iter().any(|event| {
         matches!(event, ClientEvent::World(WorldEvent::PetRefused { reason, .. }) if reason == expected)
     }));
@@ -129,21 +152,33 @@ fn pet_ownership_changes_invalidate_orders_even_when_the_id_returns() {
     );
 
     // A charm of an unseen ID does not attach itself to a later spawn.
-    assert_eq!(zone.hear(charm(Some(7), 8, true)), None);
-    assert_eq!(zone.hear(WorldEvent::Spawns(vec![npc(8, None)])), None);
-    let pet = zone.hear(charm(Some(7), 8, true)).flatten().unwrap();
+    assert_eq!(
+        zone.hear(charm(Some(7), 8, true)),
+        PetObservation::Unreported
+    );
+    assert_eq!(
+        zone.hear(WorldEvent::Spawns(vec![npc(8, None)])),
+        PetObservation::Unreported
+    );
+    let pet = zone.hear(charm(Some(7), 8, true)).identity().unwrap();
     assert_eq!(pet.spawn_id, 8);
     let follow = zone.order(PetCommand::Follow, Some(pet));
-    assert_eq!(zone.hear(charm(None, 8, false)), None);
-    assert_eq!(zone.hear(charm(Some(9), 8, false)), None);
+    assert_eq!(zone.hear(charm(None, 8, false)), PetObservation::Unreported);
+    assert_eq!(
+        zone.hear(charm(Some(9), 8, false)),
+        PetObservation::Unreported
+    );
     sent(zone.send(follow.clone()), PetCommand::Follow, None);
 
     // Another player becomes the owner. Our late release cannot remove it.
-    assert_eq!(zone.hear(charm(Some(9), 8, true)), Some(None));
-    assert_eq!(zone.hear(charm(Some(7), 8, false)), None);
+    assert_eq!(zone.hear(charm(Some(9), 8, true)), PetObservation::Cleared);
+    assert_eq!(
+        zone.hear(charm(Some(7), 8, false)),
+        PetObservation::Unreported
+    );
     assert_eq!(zone.world.spawns.pet(9), Some(8));
     refused(zone.send(follow.clone()), "Your pet has changed");
-    let pet = zone.hear(charm(Some(7), 8, true)).flatten().unwrap();
+    let pet = zone.hear(charm(Some(7), 8, true)).identity().unwrap();
     assert_eq!(pet.spawn_id, 8);
     refused(zone.send(follow), "Your pet has changed");
 
@@ -154,11 +189,11 @@ fn pet_ownership_changes_invalidate_orders_even_when_the_id_returns() {
             spawn_id: 8,
             owner: Some(7)
         }),
-        None
+        PetObservation::Unreported
     );
     let back = zone.order(PetCommand::BackOff, Some(pet));
     sent(zone.send(back.clone()), PetCommand::BackOff, None);
-    assert_eq!(zone.hear(death(8)), Some(None));
+    assert_eq!(zone.hear(death(8)), PetObservation::Cleared);
     assert_eq!(
         zone.world.spawns.visible(8).unwrap().kind,
         SpawnKind::NpcCorpse
@@ -166,7 +201,7 @@ fn pet_ownership_changes_invalidate_orders_even_when_the_id_returns() {
     refused(zone.send(back.clone()), "Your pet has changed");
     let pet = zone
         .hear(WorldEvent::Spawns(vec![npc(8, Some(7))]))
-        .flatten()
+        .identity()
         .unwrap();
     assert_eq!(pet.spawn_id, 8);
     refused(zone.send(back), "Your pet has changed");
@@ -174,7 +209,7 @@ fn pet_ownership_changes_invalidate_orders_even_when_the_id_returns() {
     // An owned replacement can arrive without a preceding Despawn.
     let replaced = zone
         .hear(WorldEvent::Spawns(vec![npc(8, Some(7))]))
-        .flatten()
+        .identity()
         .unwrap();
     assert_ne!(pet, replaced);
     let previous_admission = zone.order(PetCommand::Follow, Some(replaced));
@@ -193,7 +228,7 @@ fn pet_attack_uses_the_current_living_target_and_never_predicts_an_outcome() {
     distant.position.x = 2_000.0;
     let pet = zone
         .hear(WorldEvent::Spawns(vec![npc(8, Some(7)), distant]))
-        .flatten();
+        .identity();
     refused(
         zone.send(zone.order(PetCommand::Attack, pet)),
         "You must first select a target for your pet.",
@@ -237,10 +272,10 @@ fn pet_target_selection_refuses_an_owned_replacement_with_the_same_id() {
     let mut zone = Session::new(ServerProtocol::EqEmu, 5);
     let old_pet = zone
         .hear(WorldEvent::Spawns(vec![npc(8, Some(7))]))
-        .flatten();
+        .identity();
     let replacement = zone
         .hear(WorldEvent::Spawns(vec![npc(8, Some(7))]))
-        .flatten();
+        .identity();
     let select = |request_id, expected_pet| ClientCommand::SelectTarget {
         session_id: 5,
         request_id,
@@ -249,7 +284,10 @@ fn pet_target_selection_refuses_an_owned_replacement_with_the_same_id() {
     };
     let stale = zone.send(select(1, old_pet));
     stale.result.unwrap();
-    assert!(stale.sent.is_empty());
+    assert_eq!(
+        stale.sent,
+        [] as [eq_network_game::command::EncodedCommand; 0]
+    );
     assert!(stale.events.iter().any(|event| matches!(
         event,
         ClientEvent::World(WorldEvent::TargetRejected { reason, .. }) if reason == "Your pet has changed"
@@ -283,7 +321,7 @@ fn p99_refuses_later_commands_and_leader_can_ask_a_visible_pet_without_owning_on
 
     let pet = zone
         .hear(WorldEvent::Spawns(vec![npc(8, Some(7))]))
-        .flatten();
+        .identity();
     for order in [
         PetCommand::Hold,
         PetCommand::Feign,

@@ -322,7 +322,10 @@ mod tests {
                 feature.observe(&Message::TranslocateOffer(offer.clone()), &mut world, out)
             });
             result.result.unwrap();
-            assert!(result.sent.is_empty());
+            assert_eq!(
+                result.sent,
+                [] as [eq_network_game::command::EncodedCommand; 0]
+            );
             result.events
         };
         let first = offer(4);
@@ -342,7 +345,10 @@ mod tests {
         for stale in [older, other_admission] {
             let outcome = testing::run(|out| feature.handle(&answer(stale, true), &mut world, out));
             outcome.result.unwrap();
-            assert!(outcome.sent.is_empty());
+            assert_eq!(
+                outcome.sent,
+                [] as [eq_network_game::command::EncodedCommand; 0]
+            );
             assert!(matches!(
                 outcome.events.as_slice(),
                 [
@@ -363,7 +369,10 @@ mod tests {
         ));
         let repeated = testing::run(|out| feature.handle(&answer(current, true), &mut world, out));
         repeated.result.unwrap();
-        assert!(repeated.sent.is_empty());
+        assert_eq!(
+            repeated.sent,
+            [] as [eq_network_game::command::EncodedCommand; 0]
+        );
     }
 
     #[test]
@@ -373,7 +382,7 @@ mod tests {
         let transfer = eq_network_game::zoning::ZoneOffer {
             zone_id: 8,
             instance_id: 0,
-            position: Default::default(),
+            position: eq_network_game::world::Position::default(),
             reason: 0,
             to_bind: false,
             solicited: false,
@@ -398,7 +407,10 @@ mod tests {
             }
             let reset = testing::run(|out| feature.observe(&interrupt, &mut world, out));
             reset.result.unwrap();
-            assert!(reset.sent.is_empty());
+            assert_eq!(
+                reset.sent,
+                [] as [eq_network_game::command::EncodedCommand; 0]
+            );
             assert!(matches!(
                 reset.events.as_slice(),
                 [ClientEvent::World(WorldEvent::ConsentClosed { id, closure: ConsentClosure::Interrupted })]
@@ -410,7 +422,10 @@ mod tests {
             let result =
                 testing::run(|out| feature.handle(&answer(question.id, true), &mut world, out));
             result.result.unwrap();
-            assert!(result.sent.is_empty());
+            assert_eq!(
+                result.sent,
+                [] as [eq_network_game::command::EncodedCommand; 0]
+            );
         }
     }
 }

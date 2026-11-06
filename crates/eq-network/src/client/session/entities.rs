@@ -46,6 +46,18 @@ impl Spawns {
         self.0.insert(spawn.spawn_id, spawn);
     }
 
+    /// Converts a seen spawn other than our own to a corpse and clears its pet owner.
+    fn mark_corpse(&mut self, spawn_id: u32, own_spawn: Option<u16>) {
+        if let Some(spawn) = u16::try_from(spawn_id)
+            .ok()
+            .filter(|id| Some(*id) != own_spawn)
+            .and_then(|id| self.0.get_mut(&id))
+        {
+            spawn.kind = spawn.kind.corpse();
+            spawn.pet_owner = None;
+        }
+    }
+
     /// Records what an event says about the zone's spawns.
     fn apply(&mut self, event: &WorldEvent, own_spawn: Option<u16>) {
         match event {
@@ -57,16 +69,7 @@ impl Spawns {
             WorldEvent::Despawn(id) => {
                 self.0.remove(id);
             }
-            WorldEvent::Death(death) => {
-                if let Some(spawn) = u16::try_from(death.spawn_id)
-                    .ok()
-                    .filter(|id| Some(*id) != own_spawn)
-                    .and_then(|id| self.0.get_mut(&id))
-                {
-                    spawn.kind = spawn.kind.corpse();
-                    spawn.pet_owner = None;
-                }
-            }
+            WorldEvent::Death(death) => self.mark_corpse(death.spawn_id, own_spawn),
             WorldEvent::Visibility {
                 spawn_id,
                 invisible,

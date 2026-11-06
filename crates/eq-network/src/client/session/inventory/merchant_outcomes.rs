@@ -618,7 +618,10 @@ fn merchant_commands_require_the_current_shop_and_available_quantity() {
     for command in [wrong_shop, overbuy, oversell, sell(24)] {
         let result = testing::run(|out| belongings.handle(&command, &mut world, out));
         result.result.unwrap();
-        assert!(result.sent.is_empty());
+        assert_eq!(
+            result.sent,
+            [] as [eq_network_game::command::EncodedCommand; 0]
+        );
         assert!(matches!(
             result.events.first(),
             Some(ClientEvent::World(WorldEvent::MerchantRefused { .. }))
@@ -635,7 +638,10 @@ fn closing_a_shop_reports_unknown_and_preserves_the_late_sale() {
     sent(&mut belongings, &mut world, &sell(22));
     let close = hear(&mut belongings, &mut world, MerchantUpdate::Closed);
     close.result.unwrap();
-    assert!(close.sent.is_empty());
+    assert_eq!(
+        close.sent,
+        [] as [eq_network_game::command::EncodedCommand; 0]
+    );
     assert!(close.events.iter().any(|event| matches!(
         event,
         ClientEvent::World(WorldEvent::MerchantUnanswered { .. })
@@ -663,7 +669,7 @@ fn a_bounded_stack_purchase_and_partial_sale_settle_independently() {
     let mut stack = item(3);
     stack.stack_count = Some(4);
     stack.rules.stack_size = 20;
-    let mut stock = Message::Event(WorldEvent::Merchant(MerchantUpdate::Item(Box::new(
+    let mut catalog_row = Message::Event(WorldEvent::Merchant(MerchantUpdate::Item(Box::new(
         eq_network_game::merchant::MerchantItem {
             slot: 3,
             price: 25,
@@ -671,7 +677,7 @@ fn a_bounded_stack_purchase_and_partial_sale_settle_independently() {
             item: stack.clone(),
         },
     ))));
-    belongings.explain(&mut stock, &world);
+    belongings.explain(&mut catalog_row, &world);
     let mut purchase = buy(3);
     if let ClientCommand::Buy { quantity, .. } = &mut purchase {
         *quantity = 2;
@@ -797,7 +803,10 @@ fn a_titanium_refusal_uses_the_wire_merchant_to_select_one_purchase() {
             )),
             current_refused
         );
-        assert!(reply.sent.is_empty());
+        assert_eq!(
+            reply.sent,
+            [] as [eq_network_game::command::EncodedCommand; 0]
+        );
         assert_eq!(world.inventory.items(), &items);
         assert_eq!(world.coins.purse, Some(Coins::from_copper(1000)));
     }
@@ -834,7 +843,10 @@ fn a_merchant_spawn_replacement_requires_a_fresh_window_and_stock() {
             Ok(())
         });
         retired.result.unwrap();
-        assert!(retired.sent.is_empty());
+        assert_eq!(
+            retired.sent,
+            [] as [eq_network_game::command::EncodedCommand; 0]
+        );
         assert!(matches!(
             &retired.events[..],
             [
@@ -856,7 +868,10 @@ fn a_merchant_spawn_replacement_requires_a_fresh_window_and_stock() {
         for command in [buy(4), sell(22)] {
             let stale = testing::run(|out| belongings.handle(&command, &mut world, out));
             stale.result.unwrap();
-            assert!(stale.sent.is_empty());
+            assert_eq!(
+                stale.sent,
+                [] as [eq_network_game::command::EncodedCommand; 0]
+            );
             assert!(matches!(
                 stale.events.first(),
                 Some(ClientEvent::World(WorldEvent::MerchantRefused { reason, .. }))
@@ -877,7 +892,10 @@ fn a_merchant_spawn_replacement_requires_a_fresh_window_and_stock() {
             .unwrap();
         let unlisted = testing::run(|out| belongings.handle(&buy(4), &mut world, out));
         unlisted.result.unwrap();
-        assert!(unlisted.sent.is_empty());
+        assert_eq!(
+            unlisted.sent,
+            [] as [eq_network_game::command::EncodedCommand; 0]
+        );
         hear(&mut belongings, &mut world, stock(4)).result.unwrap();
         sent(&mut belongings, &mut world, &buy(4));
 
@@ -922,7 +940,10 @@ fn a_late_buy_refusal_does_not_resolve_an_unanswered_sale_at_the_reopened_shop()
         let items = world.inventory.items().clone();
         let late = hear_message(&mut belongings, &mut world, wire_refusal(9));
         late.result.unwrap();
-        assert!(late.sent.is_empty());
+        assert_eq!(
+            late.sent,
+            [] as [eq_network_game::command::EncodedCommand; 0]
+        );
         assert!(
             matches!(&late.events[..], [ClientEvent::Diagnostic(_)]),
             "a generic refusal or terminal merchant event can dismiss the unknown sale"

@@ -432,15 +432,15 @@ impl Feature for Exchanges {
             WorldEvent::Exchange(ExchangeUpdate::Requested { from }) => {
                 Self::requested(*from, world, out)?;
             }
-            event if world.owns_death(event) => {
-                if world
-                    .exchange
-                    .0
-                    .take()
-                    .is_some_and(|exchange| !matches!(exchange.stage, Stage::Asked(_)))
-                {
-                    close_exchange(world, true, out)?;
-                }
+            event
+                if world.owns_death(event)
+                    && world
+                        .exchange
+                        .0
+                        .take()
+                        .is_some_and(|exchange| !matches!(exchange.stage, Stage::Asked(_))) =>
+            {
+                close_exchange(world, true, out)?;
             }
             _ => (),
         }
@@ -868,7 +868,10 @@ mod tests {
         assert_eq!(world.exchange.unwrap().trade_slots(), 0);
         let repeat = testing::run(|out| Exchanges.handle(&give, &mut world, out));
         repeat.result.unwrap();
-        assert!(repeat.sent.is_empty());
+        assert_eq!(
+            repeat.sent,
+            [] as [eq_network_game::command::EncodedCommand; 0]
+        );
     }
 
     #[test]

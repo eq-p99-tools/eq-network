@@ -2010,7 +2010,10 @@ mod tests {
                 )
             });
             assert!(result.result.unwrap().is_none());
-            assert!(result.sent.is_empty());
+            assert_eq!(
+                result.sent,
+                [] as [eq_network_game::command::EncodedCommand; 0]
+            );
             if protocol == ServerProtocol::Project1999 {
                 assert!(result.events.is_empty());
                 continue;

@@ -137,11 +137,17 @@ mod tests {
         world.admitted = Some(Instant::now());
         let foreign = testing::run(|out| resurrection.observe(&foreign, &mut world, out));
         assert!(foreign.events.is_empty());
-        assert!(foreign.sent.is_empty());
+        assert_eq!(
+            foreign.sent,
+            [] as [eq_network_game::command::EncodedCommand; 0]
+        );
 
         let opened = testing::run(|out| resurrection.observe(&valid, &mut world, out));
         opened.result.unwrap();
-        assert!(opened.sent.is_empty());
+        assert_eq!(
+            opened.sent,
+            [] as [eq_network_game::command::EncodedCommand; 0]
+        );
         let [ClientEvent::World(WorldEvent::Resurrection(question))] = opened.events.as_slice()
         else {
             panic!("expected the question");
@@ -172,6 +178,9 @@ mod tests {
             resurrection.handle(&answer(new_question.id, true), &mut world, out)
         });
         late.result.unwrap();
-        assert!(late.sent.is_empty());
+        assert_eq!(
+            late.sent,
+            [] as [eq_network_game::command::EncodedCommand; 0]
+        );
     }
 }
