@@ -53,7 +53,7 @@ impl Bard {
         output.result.unwrap();
         assert_eq!(output.sent.len(), 1);
         assert_eq!(output.sent[0].opcode, 0x4839);
-        assert!(output.sent[0].body.is_empty());
+        assert_eq!(output.sent[0].body, [] as [u8; 0]);
         assert!(output.events.is_empty());
         self.casting.guard.stop_deadline.unwrap()
     }
@@ -61,7 +61,7 @@ impl Bard {
     fn tick(&mut self, now: Instant) -> Vec<ClientEvent> {
         let output = testing::run(|out| self.casting.tick(now, &mut self.world, out));
         output.result.unwrap();
-        assert!(output.sent.is_empty());
+        assert_eq!(output.sent, []);
         output.events
     }
 
@@ -97,7 +97,7 @@ fn a_silent_stop_of_a_begun_song_releases_casting_once_for_a_manual_recast() {
     let stop = bard.stop_command();
     let duplicate = bard.command(&stop);
     duplicate.result.unwrap();
-    assert!(duplicate.sent.is_empty());
+    assert_eq!(duplicate.sent, []);
     assert_eq!(bard.casting.guard.stop_deadline, Some(deadline));
 
     let before_deadline = deadline.checked_sub(Duration::from_millis(1)).unwrap();
@@ -237,7 +237,7 @@ fn a_different_own_start_or_death_invalidates_the_old_stop() {
     let stop = bard.stop_command();
     let refused = bard.command(&stop);
     refused.result.unwrap();
-    assert!(refused.sent.is_empty());
+    assert_eq!(refused.sent, []);
     assert!(bard.casting.guard.active());
 
     let mut bard = Bard::new();
@@ -280,7 +280,7 @@ fn a_refused_or_failed_song_stop_leaves_the_existing_hold() {
     bard.casting.song_stop = false;
     let refused = bard.command(&stop);
     refused.result.unwrap();
-    assert!(refused.sent.is_empty());
+    assert_eq!(refused.sent, []);
     assert!(matches!(
         refused.events.as_slice(),
         [ClientEvent::Diagnostic(_)]
