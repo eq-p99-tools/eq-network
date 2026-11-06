@@ -7,7 +7,11 @@ use super::{
 };
 use anyhow::{Context, Result};
 use eq_network_game::{
-    inventory::ItemUse, message::Message, request::Request, spells::SpellUpdate, world::WorldEvent,
+    inventory::ItemUse,
+    message::Message,
+    request::Request,
+    spells::{SpellUpdate, ITEM_CAST_SLOT},
+    world::WorldEvent,
 };
 use std::time::{Duration, Instant};
 
@@ -148,7 +152,12 @@ impl CastGuard {
             }
             SpellUpdate::BarRefresh { slot, spell_id, .. }
                 if self.answers(spell_id)
-                    && !matches!(self.source, Some(Source::Gem(gem)) if slot != u32::from(gem)) =>
+                    && self.source.is_none_or(|source| {
+                        slot == match source {
+                            Source::Gem(gem) => u32::from(gem),
+                            Source::Item => u32::from(ITEM_CAST_SLOT),
+                        }
+                    }) =>
             {
                 self.clear();
             }
@@ -425,13 +434,9 @@ mod tests {
             .unwrap();
         let output = testing::run(|out| casting.handle(&stop, &mut world, out));
         output.result.unwrap();
-        assert_eq!(
-            output.sent,
-            [eq_network_game::command::EncodedCommand {
-                opcode: 0x4839,
-                body: Vec::new(),
-            }]
-        );
+        assert_eq!(output.sent.len(), 1);
+        assert_eq!(output.sent[0].opcode, 0x4839);
+        assert!(output.sent[0].body.is_empty());
         assert!(output.events.is_empty());
         assert_eq!(casting.guard.pending(), Some(202));
 
@@ -462,13 +467,6 @@ mod tests {
         output.result.unwrap();
         assert_eq!(output.sent.len(), 1);
 
-        // A manual stop cannot interrupt a tracked item use.
-        casting.guard.submitted(202, Some(Source::Item), now);
-        let output = testing::run(|out| casting.handle(&stop, &mut world, out));
-        output.result.unwrap();
-        assert!(output.sent.is_empty());
-        assert!(casting.guard.active());
-
         world.player.admit(testing::player(7));
         let output = testing::run(|out| casting.handle(&stop, &mut world, out));
         output.result.unwrap();
@@ -480,6 +478,80 @@ mod tests {
             .result
             .unwrap();
         assert!(!casting.guard.active());
+    }
+
+    #[test]
+    fn a_same_spell_gem_refresh_cannot_expose_an_item_cast_to_stop_song() {
+        use eq_network_game::inventory::{
+            ClickEffect, ClickKind, Inventory, InventorySlot, InventoryUpdate,
+        };
+
+        let mut casting = Casting::with_song_stop();
+        let mut world = World::new(5);
+        world.own_spawn = Some(7);
+        let mut player = testing::player(7);
+        player.class = Some(BARD_CLASS);
+        player.memorized_spells[2] = Some(202);
+        world.player.admit(player);
+
+        let slot = InventorySlot(22);
+        let mut item = testing::item(slot.0);
+        item.activation.effect = Some(ClickEffect {
+            spell_id: 202,
+            kind: ClickKind::Expendable,
+            required_level: 0,
+            effect_level: 1,
+            cast_time_ms: 1000,
+            recast_delay_seconds: 0,
+            recast_type: 0,
+        });
+        item.charges = 1;
+        let mut inventory = Inventory::default();
+        inventory.apply(InventoryUpdate::Snapshot(vec![item]));
+        world.inventory = inventory.into();
+        let now = Instant::now();
+        let item = ClientCommand::UseItem(ItemUse {
+            request_id: 1,
+            session_id: 5,
+            revision: world.inventory.revision(),
+            slot,
+            target_id: 7,
+            created: now,
+        });
+        let stop = ClientCommand::StopSong {
+            session_id: 5,
+            created: now,
+        };
+
+        let output = testing::run(|out| casting.handle(&item, &mut world, out));
+        output.result.unwrap();
+        assert_eq!(output.sent.len(), 1);
+        assert_eq!(casting.guard.pending(), Some(202));
+
+        let refresh = |slot| {
+            Message::Event(WorldEvent::Spell(SpellUpdate::BarRefresh {
+                slot,
+                spell_id: 202,
+                reduction_ms: 0,
+            }))
+        };
+        testing::run(|out| casting.observe(&refresh(2), &mut world, out))
+            .result
+            .unwrap();
+        let output = testing::run(|out| casting.handle(&stop, &mut world, out));
+        output.result.unwrap();
+        assert!(output.sent.is_empty());
+        assert!(casting.guard.active());
+
+        testing::run(|out| casting.observe(&refresh(10), &mut world, out))
+            .result
+            .unwrap();
+        assert!(!casting.guard.active());
+        let output = testing::run(|out| casting.handle(&stop, &mut world, out));
+        output.result.unwrap();
+        assert_eq!(output.sent.len(), 1);
+        assert_eq!(output.sent[0].opcode, 0x4839);
+        assert!(output.sent[0].body.is_empty());
     }
 
     #[test]

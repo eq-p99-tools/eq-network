@@ -14,6 +14,9 @@ pub use eqmac::{
     EQMAC_INTERRUPT_OPCODE, EQMAC_MEMORIZE_OPCODE, EQMAC_SWAP_OPCODE,
 };
 
+/// The Titanium and `EQMac` casting slot for an ordinary item click.
+pub const ITEM_CAST_SLOT: u16 = 10;
+
 /// `OP_MemorizeSpell`: scribing, memorizing and forgetting, by mode.
 pub const MEMORIZE_OPCODE: u16 = 0x308e;
 /// `OP_DeleteSpell`: a book entry removed.

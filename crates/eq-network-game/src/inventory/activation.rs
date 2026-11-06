@@ -1,5 +1,5 @@
 //! Click-cast metadata from Titanium's serialized item definition.
-use crate::command::EncodedCommand;
+use crate::{command::EncodedCommand, spells::ITEM_CAST_SLOT};
 use anyhow::{ensure, Context, Result};
 use serde::Serialize;
 use std::time::Instant;
@@ -247,7 +247,7 @@ fn titanium_item_cast_body(
 ) -> Result<[u8; 20]> {
     let mut body = [0; 20];
     for (bytes, value) in body.as_chunks_mut::<4>().0.iter_mut().zip([
-        10,
+        u32::from(ITEM_CAST_SLOT),
         spell_id,
         u32::try_from(slot.0)?,
         u32::from(target_id),

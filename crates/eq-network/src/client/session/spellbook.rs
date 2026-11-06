@@ -1047,7 +1047,9 @@ mod tests {
     #[test]
     fn forgetting_holds_the_book_past_silence_until_the_exact_gem_clear() {
         let (mut spellbook, mut world) = admitted(Some(73));
-        world.player.as_mut().unwrap().memorized_spells[2] = Some(73);
+        let mut player = world.player.as_ref().unwrap().clone();
+        player.memorized_spells[2] = Some(73);
+        world.player.admit(player);
         let command = ClientCommand::ForgetSpell {
             session_id: world.session_id,
             gem: 2,
