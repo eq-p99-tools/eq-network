@@ -39,8 +39,8 @@ an already known own spawn withdraws the position repeat for that zone, even
 if it arrived before handshake completion. A decoded zone offer in recording
 mode yields one diagnostic per zone session. The listener continues on its
 current connection while the transport remains active. The progress enum is
-non-exhaustive, and its new serialized value is `recording`. Errors in the handshake itself
-continue to follow the existing session error policy.
+non-exhaustive, and its new serialized value is `recording`. Errors in the
+handshake itself continue to follow the existing session error policy.
 
 ## Modern session termination
 
