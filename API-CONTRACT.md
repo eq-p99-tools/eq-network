@@ -33,6 +33,39 @@ only local submission or refusal. Existing received damage, inventory and chat e
 carry the outcomes. The server chooses whether and from which stack to consume
 a projectile. Hosts should issue a fresh intent for each explicit input.
 
+## Pet orders
+
+`WorldEvent::OwnPet` reports the current pet's `PetIdentity` (spawn ID and
+an admission-scoped revision) whenever the session resolves exactly one
+living spawn the server marks as owned by the player. The revision changes
+on every owned re-spawn, death, charm or ownership change, including a
+duplicate spawn report of the same ID. Pass the latest identity in
+`ClientCommand::Pet { pet }` and the current `TargetState` for orders that
+name the target; the session refuses an order whose identity or target no
+longer matches ("Your pet has changed") before anything is sent, and
+`SelectTarget::expected_pet` pins a pet-specific selection the same way.
+`PetCommand::GuardMe` is Titanium command 6. The Project 1999 policy refuses
+Hold, Feign, NoCast and Focus.
+
+## Titanium EQEmu swimming bound
+
+Only the Titanium `EQEmu` policy offers `Capability::Swimming`; P99, Quarm
+and TAKP reject `MovementMode::Swim` samples. A swim sample is bounded by one
+three-dimensional budget of `movement::swim_speed` of the unboosted grant,
+with no run boost, and is refused while flying or stunned. The two native
+branch constants in `swim_speed` are read from the Titanium program; the
+shared three-axis budget, the vertical stroke sharing the wet horizontal
+rate, and the absence of skill, race and buff scaling are inferred
+(recording checklist 6.390). A submitted sample establishes neither server
+acceptance nor water state; the host asserts water from the installed zone.
+
+## Retained base held models
+
+`ItemDetails.base_held_model` keeps the checked optional base held model from
+a Titanium item definition. A later item packet for the same slot with an
+empty model field replaces it with `None`; the received wear appearance stays
+separate and takes precedence in hosts.
+
 ## Spellbook edits and Bard song stop
 
 An unanswered book edit emits `BookActionStatus::Unconfirmed` once after
@@ -851,14 +884,16 @@ offer of the same kind replaces it. A stale or repeated answer produces a
 refusal naming the attempted token and leaves a replacement untouched.
 Death, an outstanding zone transfer and logout invalidate old consent.
 The in-process `expires_at` is a monotonic local deadline omitted from
-serialization. EQEmu uses a five-minute local answer window. TAKP
-translocate retains its one-hour window. When the deadline elapses during
-the same live admission the session submits a decline. A server may
-apply its own timing rule.
+serialization. The Titanium `EQEmu` policy uses a five-minute local answer
+window and submits a decline when it elapses during the same live admission;
+that the native client answers No on its own, and the five minutes, are
+inferred (recording checklist 6.391). TAKP translocate retains its one-hour
+window (6.253). A server may apply its own timing rule.
 
 `ConsentClosed` distinguishes a submitted answer, a local expiry with a
-submitted decline, and a lifecycle interruption. Movement and recovery follow the ordinary server messages and admission. EQEmu translocate uses the
-server's pending destination and resurrection echoes the offered packet with
+submitted decline, and a lifecycle interruption. Movement and recovery
+follow the ordinary server messages and admission. EQEmu translocate uses
+the server's pending destination and resurrection echoes the offered packet with
 the answer selected. P99's resurrection and translocate answer policies
 remain gated.
 

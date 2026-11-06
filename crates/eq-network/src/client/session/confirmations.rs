@@ -19,7 +19,9 @@ use eq_network_game::{
 
 use std::time::{Duration, Instant};
 
-/// The Titanium confirmation prompt's five-minute answer window.
+/// The Titanium confirmation prompt's five-minute answer window; that the
+/// native client declines by itself, and the length, are inferred
+/// (recording checklist 6.391).
 pub(super) const TITANIUM_TIMEOUT: Duration = Duration::from_secs(300);
 
 /// The latest live question of one kind in a zone feature.

@@ -9,7 +9,6 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Retain a checked optional base held model from Titanium item definitions.
   The item model and received wear appearance remain separate.
-
 - One explicit Titanium bow shot or throw through `GameCommand::RangedAttack`
   and `Capability::RangedCombat`. The session checks the target revision,
   loadout, reach and unmodified weapon delay. Damage and ammunition changes
@@ -22,7 +21,6 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `BookActionStatus::Unconfirmed` reports an unanswered book edit once.
   Forgetting also holds the book until its matching gem clear arrives.
   Track the old spell in named clears to protect replacement gems.
-
 - `WorldEvent::OwnPet` reports the current pet's identity and revision for the
   admission. `ClientCommand::Pet` now takes that identity, a target revision
   for targeted orders, and a creation time. `SelectTarget::expected_pet`
@@ -78,11 +76,31 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
-- Scope resurrection and translocate consent to an admission and a specific
-  offer. The offer events carry `ConsentOffer`, and the answer commands and
-  refusal events carry its `offer_id`. Hosts can observe the worker's
-  `ConsentClosed` disposition independently of server results. The raw offers
-  decode through `message` before session policy and recipient checks.
+- **Breaking:** scope resurrection and translocate consent to an admission
+  and a specific offer. `WorldEvent::Resurrection` and
+  `WorldEvent::TranslocateOffer` carried the bare offer and now carry
+  `confirmations::ConsentOffer<T>`; `AnswerResurrection`, `AnswerTranslocate`
+  and the two `*Refused` events gain `offer_id`; `WorldEvent` gains
+  `ConsentClosed`; `Message` gains `Resurrection`, `TranslocateOffer` and
+  `MerchantScoped`, and `world::titanium_update` no longer emits consent as
+  world events. Hosts can observe the worker's `ConsentClosed` disposition
+  independently of server results. The raw offers decode through `message`
+  before session policy and recipient checks.
+- **Breaking:** pet orders carry the pet's identity. `ClientCommand::Pet`
+  was `{ session_id, command, target: Option<u16> }` and any spawn owned by
+  the player sufficed; it is now `{ session_id, command, pet:
+  Option<PetIdentity>, target: Option<TargetState>, created }`, refused with
+  "Your pet has changed" when the identity no longer matches the current pet,
+  and subject to the ordinary input expiry. `SelectTarget` gains
+  `expected_pet`; `PetCommand` gains `GuardMe` (`ALL` grows from 16 to 17).
+- **Breaking:** exhaustive public enums grow. `GameCommand` gains `StopSong`,
+  `RangedAttack` and `DepopLocalNpc`; `WorldEvent` gains `OwnPet`,
+  `CastSuperseded` and `SongStopUnconfirmed`; `Capability` gains
+  `RangedCombat`, `StoppingSongs` and `Swimming` (`Capability::ALL` grows
+  from 47 to 50); `MovementMode` gains `Swim`; `BookActionStatus` gains
+  `Unconfirmed`; `Request` gains `RangedAttack` and `StopSong`; and
+  `ItemDetails` gains the public field `base_held_model: Option<NonZeroU16>`,
+  which breaks struct literals.
 
 - Restore the configured P99 list reply preference on return to character
   selection. A runtime choice follows the same character across zones.

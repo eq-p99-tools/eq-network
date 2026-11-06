@@ -164,7 +164,8 @@ pub enum MovementMode {
 /// The slower native wet horizontal branch settles at `0.02 / (1 - 0.94)`
 /// input units per tick, versus `0.8 / (1 - 0.625)` on land. Use this
 /// fraction of the current unboosted grant on every axis. This is a bound
-/// for this client, not a claim about the native skill, race or buff formula.
+/// for this client, not a claim about the native skill, race or buff formula;
+/// the shared three-axis budget is inferred (recording checklist 6.390).
 #[must_use]
 pub fn swim_speed(granted_units_per_second: f32) -> f32 {
     granted_units_per_second * 0.156_25
