@@ -232,11 +232,14 @@ pub(super) trait ServerType: Sync {
 
     /// Whether this server policy offers the explicit gameplay departures
     /// ([`crate::world::Capability::GameplayDepartures`]: movement and memorization
-    /// options the official client never takes). Public servers never do;
-    /// a departure there would be faster or more permissive than the
-    /// official client, so their zone session refuses the option commands.
+    /// options the official client never takes). Every checked server type
+    /// offers them while the owner tests them (2026-11-06); a departure on a
+    /// public server is faster or more permissive than the official client,
+    /// so narrowing this to the player's own servers is one override here,
+    /// and a server type that does not offer them refuses the option
+    /// commands.
     fn offers_gameplay_departures(&self) -> bool {
-        false
+        true
     }
 
     /// Runs the character's stay in a zone: the shared zone session, with
@@ -1055,12 +1058,6 @@ struct EqEmu;
 impl ServerType for EqEmu {
     fn buff_cancellation(&self, _setup: &Setup<'_>) -> Provided {
         offer(Box::<Buffs>::default())
-    }
-
-    /// Stock local servers are the player's own; the departures stay off
-    /// until chosen there too.
-    fn offers_gameplay_departures(&self) -> bool {
-        true
     }
 
     fn inventory_move_rules(&self) -> Option<MoveRules> {
@@ -2252,16 +2249,16 @@ mod tests {
     }
 
     #[test]
-    fn only_eqemu_offers_the_explicit_gameplay_departures() {
-        assert!(server_type(ServerProtocol::EqEmu).offers_gameplay_departures());
+    fn every_checked_server_type_offers_the_explicit_gameplay_departures_for_testing() {
         for protocol in [
+            ServerProtocol::EqEmu,
             ServerProtocol::Project1999,
             ServerProtocol::Quarm,
             ServerProtocol::Takp,
         ] {
             assert!(
-                !server_type(protocol).offers_gameplay_departures(),
-                "{protocol:?} offers gameplay departures on a public server"
+                server_type(protocol).offers_gameplay_departures(),
+                "{protocol:?} withholds the gameplay departures the owner is testing"
             );
         }
     }

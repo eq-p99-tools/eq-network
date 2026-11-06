@@ -1361,7 +1361,7 @@ mod tests {
     }
 
     #[test]
-    fn public_servers_refuse_the_explicit_gameplay_departures() {
+    fn the_explicit_gameplay_departures_are_gated_by_the_server_type() {
         use super::super::feature::testing;
         use crate::world::Capability;
         let now = Instant::now();
@@ -1381,41 +1381,53 @@ mod tests {
         };
         assert_eq!(options.capability(), Some(Capability::GameplayDepartures));
         assert_eq!(book.capability(), Some(Capability::GameplayDepartures));
-        let features = |protocol| {
-            Features::new(
-                servers::server_type(protocol),
-                "Tester",
-                eq_network_game::food::AutoEat::default(),
-            )
-        };
-        let eqemu = features(crate::client::ServerProtocol::EqEmu);
-        assert_eq!(eqemu.refusal(&options, &world, now), None);
-        assert_eq!(eqemu.refusal(&book, &world, now), None);
+        // Every checked server type offers them while the owner tests them.
         for protocol in [
+            crate::client::ServerProtocol::EqEmu,
             crate::client::ServerProtocol::Project1999,
             crate::client::ServerProtocol::Quarm,
             crate::client::ServerProtocol::Takp,
         ] {
-            let public = features(protocol);
+            let features = Features::new(
+                servers::server_type(protocol),
+                "Tester",
+                eq_network_game::food::AutoEat::default(),
+            );
             assert!(
-                !public
+                features
                     .capabilities()
                     .contains(&Capability::GameplayDepartures),
                 "{protocol:?}"
             );
-            for command in [&options, &book] {
-                let reason = public
-                    .refusal(command, &world, now)
-                    .unwrap_or_else(|| panic!("{protocol:?} takes {command:?}"));
-                assert!(reason.contains("not offered"), "{protocol:?}: {reason}");
-            }
-            // Ordinary movement itself stays ungated there.
-            let jump = ClientCommand::Jump {
-                session_id: 5,
-                created: now,
-            };
-            assert_eq!(public.refusal(&jump, &world, now), None, "{protocol:?}");
+            assert_eq!(
+                features.refusal(&options, &world, now),
+                None,
+                "{protocol:?}"
+            );
+            assert_eq!(features.refusal(&book, &world, now), None, "{protocol:?}");
         }
+        // A server type that withholds them refuses the option commands
+        // before any owner sees them, and ordinary movement stays ungated.
+        let mut withheld = Features::new(
+            servers::server_type(crate::client::ServerProtocol::Project1999),
+            "Tester",
+            eq_network_game::food::AutoEat::default(),
+        );
+        withheld.gameplay_departures = false;
+        assert!(!withheld
+            .capabilities()
+            .contains(&Capability::GameplayDepartures));
+        for command in [&options, &book] {
+            let reason = withheld
+                .refusal(command, &world, now)
+                .unwrap_or_else(|| panic!("takes {command:?}"));
+            assert!(reason.contains("not offered"), "{reason}");
+        }
+        let jump = ClientCommand::Jump {
+            session_id: 5,
+            created: now,
+        };
+        assert_eq!(withheld.refusal(&jump, &world, now), None);
     }
 
     #[test]
@@ -1942,8 +1954,8 @@ mod tests {
         assert!(p99.contains(&Capability::AnsweringListPolls));
         assert!(!eqemu.contains(&Capability::AnsweringListPolls));
         assert!(eqemu.contains(&Capability::GameplayDepartures));
-        assert!(!p99.contains(&Capability::GameplayDepartures));
-        assert_eq!(eqemu.len(), p99.len() + 16);
+        assert!(p99.contains(&Capability::GameplayDepartures));
+        assert_eq!(eqemu.len(), p99.len() + 15);
     }
 
     #[test]
@@ -1982,7 +1994,8 @@ mod tests {
                 Capability::EnvironmentalDamage,
                 Capability::Jumping,
                 Capability::Posture,
-                Capability::Meals
+                Capability::Meals,
+                Capability::GameplayDepartures
             ]
         );
         assert_eq!(
@@ -2011,7 +2024,8 @@ mod tests {
                 Capability::Translocate,
                 Capability::Jumping,
                 Capability::Posture,
-                Capability::Meals
+                Capability::Meals,
+                Capability::GameplayDepartures
             ]
         );
     }
