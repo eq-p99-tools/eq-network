@@ -36,11 +36,12 @@ with the nonzero own-spawn ID and position read during the handshake (Titanium's
 validated own spawn and saved profile position, or EQMac's assigned ID and own
 spawn position). Transfer traffic or a death, despawn, or position update for
 an already known own spawn withdraws the position repeat for that zone, even
-if it arrived before handshake completion. A decoded zone offer in recording
-mode yields one diagnostic per zone session. The listener continues on its
-current connection while the transport remains active. The progress enum is
-non-exhaustive, and its new serialized value is `recording`. Errors in the
-handshake itself continue to follow the existing session error policy.
+if it arrived before handshake completion. The first zone offer in recording
+mode yields a diagnostic, including when the offer cannot be decoded. The
+listener continues on its current connection while the transport remains
+active. The progress enum is non-exhaustive, and its new serialized value is
+`recording`. Errors in the handshake itself continue to follow the existing
+session error policy.
 
 ## Modern session termination
 

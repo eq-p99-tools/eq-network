@@ -512,13 +512,21 @@ fn run_connected(
         if recording_only {
             // Keep the communication stream without giving the player
             // features a live world or ignoring an explicit logout.
-            if !reported_recording_offer
-                && messages
-                    .iter()
-                    .any(|message| matches!(message, Message::ZoneOffer(_)))
-            {
-                log.diagnostic("Zone offer received; record-only mode cannot follow it".into())?;
-                reported_recording_offer = true;
+            if !reported_recording_offer {
+                let offer = messages.iter().find_map(|message| match message {
+                    Message::ZoneOffer(_) => {
+                        Some("Zone offer received; record-only mode cannot follow it")
+                    }
+                    Message::Unreadable {
+                        part: Part::ZoneOffer,
+                        ..
+                    } => Some("Unreadable zone offer received; record-only mode cannot follow it"),
+                    _ => None,
+                });
+                if let Some(offer) = offer {
+                    log.diagnostic(offer.into())?;
+                    reported_recording_offer = true;
+                }
             }
             ensure!(
                 !messages
