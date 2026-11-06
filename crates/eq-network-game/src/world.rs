@@ -806,6 +806,14 @@ pub enum WorldEvent {
         /// Pending spell, or None when acknowledged, interrupted, or timed out.
         spell_id: Option<u32>,
     },
+    /// A different own cast began while a song stop was pending.
+    /// Discard this hold before applying the new start.
+    CastSuperseded {
+        /// Zone admission that owns the hold.
+        session_id: u64,
+        /// Spell that was held before the new start.
+        spell_id: u32,
+    },
     /// The local EQEmu song stop has no matching server confirmation.
     SongStopUnconfirmed {
         /// Zone admission that owns the request.

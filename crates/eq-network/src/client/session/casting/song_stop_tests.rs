@@ -65,11 +65,11 @@ impl Bard {
         output.events
     }
 
-    fn hear(&mut self, mut message: Message) -> Message {
+    fn hear(&mut self, mut message: Message) -> (Message, Vec<ClientEvent>) {
         self.casting.explain(&mut message, &self.world);
         let output = testing::run(|out| self.casting.observe(&message, &mut self.world, out));
         output.result.unwrap();
-        message
+        (message, output.events)
     }
 }
 
@@ -78,6 +78,13 @@ fn began(caster_id: u16, spell_id: u16) -> Message {
         caster_id,
         spell_id,
         duration_ms: 3000,
+    }))
+}
+
+fn mana_ended(spell_id: u32) -> Message {
+    Message::Event(WorldEvent::Spell(SpellUpdate::Mana {
+        spell_id,
+        keep_casting: false,
     }))
 }
 
@@ -93,7 +100,8 @@ fn a_silent_stop_of_a_begun_song_releases_casting_once_for_a_manual_recast() {
     assert!(duplicate.sent.is_empty());
     assert_eq!(bard.casting.guard.stop_deadline, Some(deadline));
 
-    assert!(bard.tick(deadline - Duration::from_millis(1)).is_empty());
+    let before_deadline = deadline.checked_sub(Duration::from_millis(1)).unwrap();
+    assert!(bard.tick(before_deadline).is_empty());
     assert!(bard.casting.guard.active());
     assert!(matches!(
         bard.tick(deadline).as_slice(),
@@ -120,10 +128,7 @@ fn stop_before_begin_preserves_order_and_withholds_an_abandoned_late_start() {
     let deadline = bard.stop();
     bard.hear(began(7, 202));
     assert_eq!(bard.casting.guard.stop_deadline, Some(deadline));
-    bard.hear(Message::Event(WorldEvent::Spell(SpellUpdate::Mana {
-        spell_id: 202,
-        keep_casting: false,
-    })));
+    bard.hear(mana_ended(202));
     assert!(!bard.casting.guard.active());
     assert!(bard.tick(deadline).is_empty());
 
@@ -136,12 +141,89 @@ fn stop_before_begin_preserves_order_and_withholds_an_abandoned_late_start() {
             ..
         })]
     ));
-    assert!(matches!(bard.hear(began(8, 202)), Message::Event(_)));
-    assert!(matches!(bard.hear(began(7, 202)), Message::Withheld));
+    assert!(matches!(bard.hear(began(8, 202)).0, Message::Event(_)));
+    assert!(matches!(bard.hear(began(7, 202)).0, Message::Withheld));
     assert!(!bard.casting.guard.active());
     bard.cast(0, 202);
-    assert!(matches!(bard.hear(began(7, 202)), Message::Event(_)));
+    assert!(matches!(bard.hear(began(7, 202)).0, Message::Event(_)));
     assert!(bard.casting.guard.active());
+}
+
+#[test]
+fn a_late_stopped_start_cannot_take_over_a_different_spell_retry() {
+    for new_start_first in [false, true] {
+        let mut bard = Bard::new();
+        bard.cast(0, 202);
+        let deadline = bard.stop();
+        assert_eq!(bard.tick(deadline).len(), 1);
+        bard.cast(1, 203);
+
+        if new_start_first {
+            assert!(matches!(bard.hear(began(7, 203)).0, Message::Event(_)));
+        }
+        let (old_start, events) = bard.hear(began(7, 202));
+        assert!(matches!(old_start, Message::Withheld));
+        assert!(events.is_empty());
+        assert_eq!(
+            bard.casting.guard.pending(),
+            if new_start_first { None } else { Some(203) },
+        );
+        bard.hear(mana_ended(202));
+        assert!(bard.casting.guard.answers(203));
+        assert!(!bard.casting.guard.answers(202));
+
+        if !new_start_first {
+            assert!(matches!(bard.hear(began(7, 203)).0, Message::Event(_)));
+        }
+        bard.hear(mana_ended(203));
+        assert!(!bard.casting.guard.active());
+    }
+}
+
+#[test]
+fn a_same_spell_retry_accepts_the_next_matching_start() {
+    let mut bard = Bard::new();
+    bard.cast(0, 202);
+    let deadline = bard.stop();
+    assert_eq!(bard.tick(deadline).len(), 1);
+
+    bard.cast(0, 202);
+    assert!(matches!(bard.hear(began(7, 202)).0, Message::Event(_)));
+    assert!(bard.casting.guard.active());
+    assert_eq!(bard.casting.guard.pending(), None);
+}
+
+#[test]
+fn a_different_start_discards_the_stopped_hold_before_forwarding_the_start() {
+    for old_began in [false, true] {
+        let mut bard = Bard::new();
+        bard.cast(0, 202);
+        if old_began {
+            bard.hear(began(7, 202));
+        }
+        let deadline = bard.stop();
+
+        let (new_start, events) = bard.hear(began(7, 203));
+        assert!(matches!(new_start, Message::Event(_)));
+        assert!(matches!(
+            events.as_slice(),
+            [ClientEvent::World(WorldEvent::CastSuperseded {
+                session_id: 5,
+                spell_id: 202,
+            })]
+        ));
+        assert_eq!(bard.casting.guard.pending(), None);
+        assert!(bard.tick(deadline).is_empty());
+        if !old_began {
+            assert!(matches!(bard.hear(began(7, 202)).0, Message::Withheld));
+        }
+
+        bard.hear(mana_ended(202));
+        assert!(bard.casting.guard.answers(203));
+        assert!(!bard.casting.guard.answers(202));
+        bard.hear(mana_ended(203));
+        assert!(!bard.casting.guard.active());
+    }
 }
 
 #[test]

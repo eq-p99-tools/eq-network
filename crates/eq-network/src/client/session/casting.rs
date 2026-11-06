@@ -96,8 +96,17 @@ impl CastGuard {
                 submitted: now,
             }),
             source,
+            late_begin: self.late_begin.filter(|&abandoned| abandoned != spell),
             ..Self::default()
         };
+    }
+
+    /// The spell named by the current hold.
+    fn held_spell(&self) -> Option<u32> {
+        match self.phase {
+            Some(Phase::Awaiting { spell, .. } | Phase::Casting { spell, .. }) => Some(spell),
+            None => None,
+        }
     }
 
     /// The unacknowledged request, distinct from a server-confirmed cast.
@@ -113,9 +122,7 @@ impl CastGuard {
         if now < self.stop_deadline? {
             return None;
         }
-        let spell = match self.phase.as_ref()? {
-            Phase::Awaiting { spell, .. } | Phase::Casting { spell, .. } => *spell,
-        };
+        let spell = self.held_spell()?;
         let late_begin = self.pending();
         self.clear();
         self.late_begin = late_begin;
@@ -152,8 +159,9 @@ impl CastGuard {
         *self = Self::default();
     }
 
-    /// Only own-caster starts/interruptions and matching result notifications affect us.
-    pub fn observe(&mut self, own_id: u16, update: &SpellUpdate) {
+    /// Follows own starts and interruptions and matching spell results.
+    /// Returns the stopped hold if a different own spell begins.
+    fn observe(&mut self, own_id: u16, update: &SpellUpdate) -> Option<u32> {
         match *update {
             SpellUpdate::Began {
                 caster_id,
@@ -162,12 +170,16 @@ impl CastGuard {
             } if caster_id == own_id => {
                 let spell = u32::from(spell_id);
                 let mut requested = self.pending();
-                if self.stop_deadline.is_some() && !self.answers(spell) {
+                let superseded = if self.stop_deadline.is_some() && !self.answers(spell) {
                     self.stop_deadline = None;
                     self.source = None;
-                    requested = None;
-                }
+                    self.late_begin = requested.take().or(self.late_begin);
+                    self.held_spell()
+                } else {
+                    None
+                };
                 self.phase = Some(Phase::Casting { spell, requested });
+                return superseded;
             }
             SpellUpdate::Interrupted { caster_id, .. } if caster_id == u32::from(own_id) => {
                 self.clear();
@@ -191,6 +203,7 @@ impl CastGuard {
             }
             _ => (),
         }
+        None
     }
 }
 
@@ -389,8 +402,8 @@ impl Feature for Casting {
             .diagnostic("Cast acknowledgement timed out; a manual retry is available".into())
     }
 
-    /// An own start received after releasing its pending cast must not
-    /// reopen that hold. The next submitted cast owns subsequent starts.
+    /// Withholds a start for an abandoned request even while a different
+    /// spell is pending or casting.
     fn explain(&mut self, message: &mut Message, world: &World) {
         let Message::Event(WorldEvent::Spell(SpellUpdate::Began {
             caster_id,
@@ -400,8 +413,8 @@ impl Feature for Casting {
         else {
             return;
         };
-        if world.is_player(*caster_id) && self.guard.late_begin.take() == Some(u32::from(*spell_id))
-        {
+        if world.is_player(*caster_id) && self.guard.late_begin == Some(u32::from(*spell_id)) {
+            self.guard.late_begin = None;
             *message = Message::Withheld;
         }
     }
@@ -419,8 +432,13 @@ impl Feature for Casting {
                     return Ok(());
                 };
                 let pending = self.guard.pending();
-                self.guard.observe(own, update);
-                if pending.is_some() && self.guard.pending().is_none() {
+                if let Some(spell_id) = self.guard.observe(own, update) {
+                    out.log
+                        .send(ClientEvent::World(WorldEvent::CastSuperseded {
+                            session_id: world.session_id,
+                            spell_id,
+                        }))?;
+                } else if pending.is_some() && self.guard.pending().is_none() {
                     out.log.send(ClientEvent::World(WorldEvent::CastPending {
                         session_id: world.session_id,
                         spell_id: None,

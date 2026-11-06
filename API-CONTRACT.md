@@ -57,6 +57,14 @@ leaves buffs and cooldowns to the existing server updates, and a retry
 requires a fresh user command. An active item cast or a cast of unknown
 source blocks song stop. The P99 policy keeps song stop gated.
 
+An own start for a different spell during the stop wait supersedes the
+stopped hold. The worker emits `WorldEvent::CastSuperseded` with the
+old spell before forwarding the new start. Consumers should discard the
+identified hold and its request alias. A late start for an abandoned
+pending spell is withheld during a retry of a different spell.
+Titanium has no cast request ID for distinguishing same-spell starts
+after a same-spell retry.
+
 ## P99 readable items
 
 `GameCommand::ReadItem { session_id, revision, slot, created }` now binds the
