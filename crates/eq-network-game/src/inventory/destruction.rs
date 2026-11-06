@@ -1,5 +1,5 @@
 //! Explicit whole-cursor destruction; never a negative ordinary move slot.
-use super::{Inventory, InventoryItem, InventorySlot, InventoryUpdate, MoveRules};
+use super::{Inventory, InventoryItem, InventorySlot, InventoryUpdate, MoveRules, BAG_SLOT_COUNT};
 use crate::command::EncodedCommand;
 use anyhow::{ensure, Context, Result};
 use std::time::Instant;
@@ -63,7 +63,7 @@ impl Inventory {
         request: &InventoryDestroy,
     ) -> Result<InventoryUpdate> {
         ensure!(
-            rules == MoveRules::EqEmu,
+            rules.supports_cursor_destruction(),
             "Item destruction is unavailable for this server"
         );
         ensure!(
@@ -96,7 +96,8 @@ impl Inventory {
             "The cursor stack quantity is unavailable"
         );
         ensure!(
-            item.bag_slots <= 10 && !self.items().keys().any(|slot| slot.is_in_cursor_bag()),
+            item.bag_slots <= BAG_SLOT_COUNT
+                && !self.items().keys().any(|slot| slot.is_in_cursor_bag()),
             "Empty the cursor container before destroying it"
         );
         Ok(InventoryUpdate::DestroyCursor)

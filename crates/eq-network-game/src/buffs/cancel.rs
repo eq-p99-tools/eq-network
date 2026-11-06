@@ -32,8 +32,9 @@ pub struct Request {
 pub enum Progress {
     /// Transport submission only; received membership is unchanged.
     Submitted,
-    /// A matching received slot removal removed the selected spell.
-    ObservedRemoval,
+    /// A received fade matched the selected slot and spell during the local
+    /// wait. It may be natural expiry; it does not acknowledge cancellation.
+    FadeObserved,
     /// The received slot changed; the request never follows its replacement.
     Changed,
     /// No matching change arrived within the local waiting interval.

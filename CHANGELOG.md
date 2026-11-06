@@ -47,6 +47,14 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Breaking:** rename `buffs::cancel::Progress::ObservedRemoval` to
+  `FadeObserved`. The event observes a matching received fade during the
+  local wait; natural expiry can produce it too. No cancellation ACK or
+  slot-only sentinel fallback is inferred.
+- Expose the inventory policy's cursor destruction support via
+  `MoveRules::supports_cursor_destruction`. Document its Titanium bag slot
+  bound and the explicit P99 buff cancellation policy.
+
 - Interpret received own-player stuns on stock Titanium `EQEmu` using the
   existing Titanium timer, including zero, overlap and admission boundaries.
   Malformed packets remain rejected. Synthetic receive-path tests do not

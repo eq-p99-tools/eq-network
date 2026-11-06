@@ -854,9 +854,11 @@ const P99_HAZARDS: [Hazard; 1] = [Hazard::Falling];
 struct Project1999;
 
 impl ServerType for Project1999 {
-    // Ordinary buff cancellation remains a P99 evidence gap. The initialized
-    // EQEmu request differs from Titanium's optimistic two-send UI path; do
-    // not offer it here until the deployed P99 contract is established.
+    /// The initialized `EQEmu` request differs from Titanium's two-send
+    /// cancellation path. The deployed P99 contract remains unverified.
+    fn buff_cancellation(&self, _setup: &Setup<'_>) -> Provided {
+        None
+    }
 
     /// Ordinary Titanium group senders and explicit consent (native
     /// 0x49d3cc/0x49d654/0x49d7b6/0x49d8bd), with roster state from

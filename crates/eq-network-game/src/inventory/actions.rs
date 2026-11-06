@@ -116,6 +116,12 @@ pub enum MoveRules {
 }
 
 impl MoveRules {
+    /// Whether this policy offers explicit destruction of a cursor item.
+    #[must_use]
+    pub const fn supports_cursor_destruction(self) -> bool {
+        matches!(self, Self::EqEmu)
+    }
+
     /// Legacy Titanium refusal window. `EQMac` has no generic positive move
     /// acknowledgment: elapsed time never confirms its inventory predictions.
     #[must_use]

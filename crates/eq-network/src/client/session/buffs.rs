@@ -148,15 +148,16 @@ impl Feature for Buffs {
                     if let Some(buff) = &update.buff {
                         slots.insert(update.slot, buff.clone());
                     } else {
-                        // An explicit fade names its spell as well as its slot.
-                        // Never let a late old-spell fade remove a replacement.
+                        // Require both the slot and spell. A late old-spell
+                        // fade or a sentinel without established slot-clear
+                        // semantics cannot remove the current buff.
                         if slots
                             .get(&update.slot)
                             .is_some_and(|buff| buff.spell_id == update.spell_id)
                         {
                             slots.remove(&update.slot);
+                            faded = Some((update.slot, update.spell_id));
                         }
-                        faded = Some((update.slot, update.spell_id));
                     }
                 }
             }
@@ -173,7 +174,7 @@ impl Feature for Buffs {
         }
         if let Some((request, _)) = &self.pending {
             let progress = if faded == Some((request.slot, request.spell_id)) {
-                Some(Progress::ObservedRemoval)
+                Some(Progress::FadeObserved)
             } else if self
                 .slots
                 .as_ref()
@@ -310,7 +311,7 @@ mod tests {
         assert_eq!(outcome.sent.len(), 1);
         assert_eq!(
             progress(&outcome.events),
-            [Progress::Submitted, Progress::ObservedRemoval]
+            [Progress::Submitted, Progress::FadeObserved]
         );
         assert!(!buffs.slots.as_ref().unwrap().contains_key(&3));
         assert!(buffs.pending.is_none());
@@ -334,12 +335,15 @@ mod tests {
     }
 
     #[test]
-    fn silence_and_echo_are_unresolved_with_no_retry_or_predicted_fade() {
+    fn echoes_and_unidentified_fades_leave_cancellation_unresolved() {
         let (mut buffs, mut world, command) = fixture();
         let outcome = testing::run(|out| {
             buffs.handle(&command, &mut world, out)?;
             buffs.handle(&command, &mut world, out)?;
             buffs.observe(&update(7, 42, Some(buff(42))), &mut world, out)?;
+            for spell in [0, 0xffff, u32::MAX] {
+                buffs.observe(&update(7, spell, None), &mut world, out)?;
+            }
             let since = buffs.pending.as_ref().unwrap().1;
             buffs.tick(
                 (since + WAIT)
