@@ -27,6 +27,8 @@ pub(super) struct Body {
     /// What the stationary heartbeat repeats: the player's spawn ID, its next
     /// sequence number and position.
     stationary: PositionPacket,
+    /// Whether the server supplied a position that can still be repeated.
+    stationary_known: bool,
     /// When the stationary heartbeat last went out.
     last_sent: Instant,
 }
@@ -43,6 +45,7 @@ impl Default for Body {
                 animation: 0,
                 delta_heading: 0,
             },
+            stationary_known: false,
             // In the past, so the first stationary heartbeat goes out at once.
             last_sent: Instant::now()
                 .checked_sub(STATIONARY_HEARTBEAT)
@@ -55,6 +58,12 @@ impl Body {
     /// Notes where the profile left the player.
     pub(super) fn place(&mut self, position: Position) {
         self.stationary.position = position;
+        self.stationary_known = true;
+    }
+
+    /// A recording-only connection has no movement owner to update its position.
+    pub(super) const fn forget_stationary_position(&mut self) {
+        self.stationary_known = false;
     }
 
     /// Notes the player's spawn ID.
@@ -145,6 +154,7 @@ impl Body {
         }
         player.position = position;
         self.stationary = stationary;
+        self.stationary_known = true;
         Ok(())
     }
 
@@ -157,7 +167,10 @@ impl Body {
             })?;
             return Ok(());
         }
-        if now.saturating_duration_since(self.last_sent) < STATIONARY_HEARTBEAT {
+        if !self.stationary_known
+            || self.stationary.spawn_id == 0
+            || now.saturating_duration_since(self.last_sent) < STATIONARY_HEARTBEAT
+        {
             return Ok(());
         }
         out.request_unreliable(&Request::Position(self.stationary))?;
@@ -831,10 +844,20 @@ mod tests {
     fn without_movement_the_profile_position_repeats_each_second() {
         let mut world = World::new(5);
         world.admitted = Some(Instant::now());
-        world.body.own(7);
-        world.body.place(at(1.0));
         let mut motion = Motion::new(false, false, None);
         let now = Instant::now();
+        for supply_position in [false, true] {
+            if supply_position {
+                world.body.place(at(1.0));
+            }
+            let outcome = testing::run(|out| motion.tick(now, &mut world, out));
+            outcome.result.unwrap();
+            assert_eq!(
+                outcome.unreliable,
+                Vec::<eq_network_game::command::EncodedCommand>::new()
+            );
+        }
+        world.body.own(7);
         let outcome = testing::run(|out| motion.tick(now, &mut world, out));
         outcome.result.unwrap();
         assert_eq!(outcome.unreliable.len(), 1);
@@ -859,6 +882,11 @@ mod tests {
         );
         let outcome = testing::run(|out| motion.tick(now + STATIONARY_HEARTBEAT, &mut world, out));
         assert_eq!(&outcome.unreliable[0].body[2..4], &[1, 0]);
+        world.body.forget_stationary_position();
+        let outcome =
+            testing::run(|out| motion.tick(now + 2 * STATIONARY_HEARTBEAT, &mut world, out));
+        outcome.result.unwrap();
+        assert!(outcome.unreliable.is_empty());
     }
 
     #[test]

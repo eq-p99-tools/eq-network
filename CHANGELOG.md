@@ -223,6 +223,12 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- Report `ConnectionStage::Recording` when a completed zone handshake permits
+  communication records but the player snapshot cannot be decoded. Record-only
+  runs retain active connection health. Interactive runs instead close the zone
+  and return `PlayerAdmissionError` without reconnecting. `Ready` now requires
+  an admitted player. Serialized progress consumers may see `recording`.
+
 - Keep tracking jump ascent when run boost or stunned-movement options
   change. Boosted forward movement that becomes a fall keeps its horizontal
   budget across the transition.

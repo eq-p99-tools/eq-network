@@ -10,6 +10,26 @@ rejects malformed numeric fields. Titanium text decoding requires a supported
 note/book kind and terminating NUL. Submission does not supply `BookText`;
 supported server text opens the result. See `docs/p99-reading.md`.
 
+## Zone handshake and player admission
+
+`Client::run_with_commands` requires a usable player snapshot after each zone
+handshake, including transfers. The worker delivers `WorldEvent::Entered` and
+staged world updates before `ConnectionStage::Ready`. If the wire handshake
+completes but the player snapshot cannot be decoded, the worker closes the zone
+without taking player commands, reports `ConnectionState::Disconnected`, and
+returns `PlayerAdmissionError` without an automatic retry.
+
+`Client::run` can still deliver communications from that zone. It sends the
+additive `ConnectionStage::Recording` milestone with `Connected` transport
+health. This outcome has no `Entered`, `Ready`, or live gameplay feature
+processing. Servers offering movement retain the stationary heartbeat only
+with the nonzero own-spawn ID and position read during the handshake (Titanium's
+validated own spawn and saved profile position, or EQMac's assigned ID and own
+spawn position). Own death, despawn, a position correction, or transfer traffic
+withdraws the position repeat. The progress enum is non-exhaustive, and its
+new serialized value is `recording`. Errors in the handshake itself continue to
+follow the existing session error policy.
+
 ## Modern session termination
 
 `eq_network_transport::modern::SessionTermination` is an additive typed error

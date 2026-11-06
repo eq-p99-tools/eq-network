@@ -27,10 +27,9 @@ fn setup(protocol: ServerProtocol) -> (Features, World) {
     player.skills = Some(vec![100; 100]);
     world.spawns.insert(testing::spawn(42, SpawnKind::Npc));
     world.spawns.insert(testing::spawn(43, SpawnKind::Npc));
-    world.admitted = Some(Instant::now());
     testing::run_on(server.wire(), |out| {
         admit(
-            Ok(player),
+            player,
             &Zone {
                 name: "SyntheticZone".into(),
                 far_clip: None,
@@ -321,7 +320,6 @@ fn target_before_admission_is_staged_and_an_old_admission_cannot_send_an_ability
     assert!(announced.events.iter().any(|event| matches!(event,
         ClientEvent::World(WorldEvent::TargetChanged { session_id: 5, state, .. })
         if state.spawn_id == Some(42))));
-    world.admitted = Some(Instant::now());
     let old = world.target.state();
     world.session_id = 6;
     refused(ability(protocol, &mut features, &mut world, 5, Some(old)));

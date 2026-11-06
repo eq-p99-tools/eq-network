@@ -196,7 +196,7 @@ pub(in crate::client) struct World {
     pub(super) lifecycle: ZoneLifecycle,
     /// The zone's ID and instance, from the player's profile.
     pub(super) zone: (u16, u16),
-    /// When the zone admitted the player, once it has.
+    /// When the completed handshake yielded a usable player snapshot.
     pub(super) admitted: Option<Instant>,
     /// The zone's gravity from its header (`OP_NewZone` +420), once it came.
     pub(super) gravity: Option<f32>,
@@ -247,7 +247,7 @@ impl World {
         }
     }
 
-    /// Whether the zone has admitted the player.
+    /// Whether the zone yielded an admitted player.
     pub(super) const fn ready(&self) -> bool {
         self.admitted.is_some()
     }

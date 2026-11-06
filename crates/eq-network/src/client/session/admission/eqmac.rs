@@ -7,7 +7,7 @@
 //! spawn in an appearance of its own, and the player is admitted once that,
 //! the own spawn and the ready avatar are all in. Quarm's version checks, at
 //! any time, are the wire's to answer.
-use super::{Admission, Handshake, Zone};
+use super::{Admission, Handshake, HandshakeComplete, Zone};
 use crate::client::session::{feature::World, put_string, ClientEvent, ConnectionStage};
 use crate::world::PlayerState;
 use anyhow::{bail, ensure, Result};
@@ -21,7 +21,6 @@ use eq_network_game::{
     zones,
 };
 use eq_network_transport::Application;
-use std::time::Instant;
 
 /// How far the `EQMac` handshake has come; it only moves forward.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, PartialOrd, Ord)]
@@ -36,8 +35,8 @@ enum Step {
     Answered,
     /// The avatar is ready and the client sent its first position.
     Ready,
-    /// The player is admitted.
-    Admitted,
+    /// The handshake is complete and the zone named the own-spawn ID.
+    Complete,
 }
 
 /// The `EQMac` handshake in progress.
@@ -103,7 +102,7 @@ impl Admission for EqMacAdmission {
             Step::Described => "Described",
             Step::Answered => "Answered",
             Step::Ready => "Ready",
-            Step::Admitted => "Admitted",
+            Step::Complete => "Complete",
         }
     }
 
@@ -112,8 +111,8 @@ impl Admission for EqMacAdmission {
         packet: &mut Application,
         world: &mut World,
         handshake: &mut Handshake<'_, '_>,
-    ) -> Result<Option<(Result<PlayerState>, Zone)>> {
-        if self.step == Step::Admitted {
+    ) -> Result<Option<HandshakeComplete>> {
+        if self.step == Step::Complete {
             return Ok(None);
         }
         match packet.opcode {
@@ -196,9 +195,11 @@ impl Admission for EqMacAdmission {
             world.zone = (zone_id.unwrap_or(0), 0);
             player
         });
-        world.admitted = Some(Instant::now());
-        self.step = Step::Admitted;
-        Ok(self.zone.take().map(|zone| (player, zone)))
+        self.step = Step::Complete;
+        Ok(self
+            .zone
+            .take()
+            .map(|zone| HandshakeComplete { player, zone }))
     }
 }
 
@@ -207,6 +208,7 @@ mod tests {
     use super::*;
     use crate::client::{session::Events, ClientConfig};
     use eq_network_transport::Transport;
+    use std::time::Instant;
 
     /// The codec crate's synthetic, encrypted profile for "Example".
     const PROFILE: &str = "ae05f5a6083907c71a8fa0b9df18601d2fadb4d6b80a3099d83162b5c95015d3bd8bd662ad969f16538260e8249c5a9d1c78803e51a3f8d3d48f5ca3fb28b2bff7a48403366d5c880b3422059ae86574971744def74907496b270882";
@@ -240,7 +242,7 @@ mod tests {
         }
     }
 
-    /// Run the production handshake with synthetic wire packets, not world edits.
+    /// Decode a synthetic profile through the handshake for feature tests.
     fn admitted_profile(profile: &str) -> World {
         let config = ClientConfig::new("ACCOUNT", "PASSWORD", "Test Server", "Example");
         let mut handler = |_| Ok(());
@@ -271,7 +273,7 @@ mod tests {
             (ZONE_EXPERIENCE_READY, Vec::new()),
             (ZONE_AVATAR_READY, Vec::new()),
         ] {
-            if let Some((player, _)) = admission
+            if let Some(HandshakeComplete { player, .. }) = admission
                 .read(
                     &mut Application { opcode, body },
                     &mut world,
@@ -280,6 +282,7 @@ mod tests {
                 .unwrap()
             {
                 world.player.admit(player.unwrap());
+                world.admitted = Some(Instant::now());
             }
         }
         assert!(world.ready());
@@ -394,7 +397,7 @@ mod tests {
         // Ready, but the zone has not named the player's spawn yet.
         assert_eq!(admission.stage(), "Ready");
         assert!(world.admitted.is_none());
-        let (player, zone) = read(
+        let HandshakeComplete { player, zone } = read(
             &mut admission,
             &mut world,
             ZONE_SPAWN_APPEARANCE,
@@ -412,8 +415,8 @@ mod tests {
             Some("Example".to_owned())
         );
         assert_eq!(world.own_spawn, Some(7));
-        assert!(world.admitted.is_some());
-        // Once admitted, the handshake takes nothing more.
+        assert!(!world.ready());
+        // Once complete, the handshake takes nothing more.
         assert!(read(&mut admission, &mut world, ZONE_AVATAR_READY, &[]).is_none());
         drop(read);
         let sent: Vec<u16> = wire.0.iter().map(|(opcode, _)| *opcode).collect();
