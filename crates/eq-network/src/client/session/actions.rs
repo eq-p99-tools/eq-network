@@ -115,6 +115,7 @@ pub(super) fn needs(command: &ClientCommand) -> &'static [Resource] {
         ClientCommand::PickUp { .. } => &[Inventory, GroundPickup],
         // Give hands the trade slots over.
         ClientCommand::MoveInventory(_)
+        | ClientCommand::DestroyItem(_)
         | ClientCommand::Buy { .. }
         | ClientCommand::Sell { .. }
         | ClientCommand::Consume { .. }
@@ -122,7 +123,8 @@ pub(super) fn needs(command: &ClientCommand) -> &'static [Resource] {
         // A combine takes the container's contents and puts what was made
         // on the cursor.
         | ClientCommand::Combine { .. } => &[Inventory],
-        ClientCommand::SelectServer { .. }
+        ClientCommand::CancelBuff(_)
+        | ClientCommand::SelectServer { .. }
         | ClientCommand::SelectCharacter { .. }
         | ClientCommand::GenerateName { .. }
         | ClientCommand::DeleteCharacter(_)
@@ -134,6 +136,7 @@ pub(super) fn needs(command: &ClientCommand) -> &'static [Resource] {
         | ClientCommand::InspectItem { .. }
         | ClientCommand::Consider { .. }
         | ClientCommand::Camp { .. }
+        | ClientCommand::ExitAtOnce { .. }
         // A death holds nothing: whatever was under way ends with it.
         | ClientCommand::BledOut { .. }
         | ClientCommand::Loot { .. }
@@ -191,6 +194,9 @@ pub(super) fn needs(command: &ClientCommand) -> &'static [Resource] {
         | ClientCommand::SpeedInputs { .. }
         | ClientCommand::ClimbReach { .. }
         | ClientCommand::AutoEat { .. }
+        | ClientCommand::AnswerListPolls { .. }
+        | ClientCommand::SetMovementOptions { .. }
+        | ClientCommand::SetBookOptions { .. }
         | ClientCommand::Move(_) => &[],
     }
 }
@@ -255,6 +261,7 @@ fn refusal(command: &ClientCommand, reason: &str) -> Option<WorldEvent> {
             request: request.clone(),
             progress: eq_network_game::deletion::Progress::NotSent(eq_network_game::deletion::Refusal::NotAtSelection),
         }),
+        ClientCommand::CancelBuff(request) => WorldEvent::BuffCancellation(request.update(eq_network_game::buffs::cancel::Progress::Refused(reason.into()))),
         ClientCommand::CastSpell { .. } => return casting::rejected(command, reason),
         ClientCommand::Consider { .. } | ClientCommand::AutoAttack { .. } => {
             return super::combat::rejected(command, reason);
@@ -265,6 +272,13 @@ fn refusal(command: &ClientCommand, reason: &str) -> Option<WorldEvent> {
         ClientCommand::UseItem(request) => WorldEvent::ItemUseAction {
             session_id: request.session_id,
             request_id: request.request_id,
+            error,
+        },
+        ClientCommand::DestroyItem(request) => WorldEvent::InventoryAction {
+            session_id: request.session_id,
+            revision: request.revision,
+            sequence: None,
+            update: None,
             error,
         },
         ClientCommand::MoveInventory(request) => WorldEvent::InventoryAction {
@@ -338,7 +352,12 @@ fn refusal(command: &ClientCommand, reason: &str) -> Option<WorldEvent> {
             error,
             string_id: None,
         },
-        ClientCommand::Camp { .. } => WorldEvent::Camp(CampStatus::Rejected(reason.into())),
+        ClientCommand::SetMovementOptions { session_id, request_id, .. } => WorldEvent::MovementOptionsRefused {
+            session_id: *session_id,
+            request_id: *request_id,
+            reason: reason.into(),
+        },
+        ClientCommand::Camp { .. } | ClientCommand::ExitAtOnce { .. } => WorldEvent::Camp(CampStatus::Rejected(reason.into())),
         ClientCommand::SelectTarget {
             session_id,
             request_id,
@@ -374,6 +393,8 @@ fn refusal(command: &ClientCommand, reason: &str) -> Option<WorldEvent> {
         | ClientCommand::SpeedInputs { .. }
         | ClientCommand::ClimbReach { .. }
         | ClientCommand::AutoEat { .. }
+        | ClientCommand::AnswerListPolls { .. }
+        | ClientCommand::SetBookOptions { .. }
         | ClientCommand::CloseContainer { .. }
         // The host sends a death report on its own; nobody waits on it.
         | ClientCommand::BledOut { .. }

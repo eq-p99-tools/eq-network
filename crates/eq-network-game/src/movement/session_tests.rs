@@ -139,6 +139,7 @@ fn strafing_requires_its_own_calibration_and_preserves_heading() {
             .send_move(&motion, now, |_| panic!("uncalibrated strafe"))
             .is_err());
         let calibration = MotionCalibration {
+            diagonal: DiagonalRates::default(),
             units_per_second: 6.0,
             velocity_scale: 0.05,
             animation: 12,
@@ -186,6 +187,7 @@ fn walking_uses_its_own_budget_and_commits_only_after_transport() {
         .send_move(&motion, now, |_| panic!("missing walk calibration"))
         .is_err());
     let calibration = MotionCalibration {
+        diagonal: DiagonalRates::default(),
         units_per_second: 6.0,
         velocity_scale: 0.05,
         animation: 12,
@@ -249,6 +251,7 @@ fn backward_motion_has_its_own_budget_animation_and_transport_commit() {
         .send_move(&motion, now, |_| panic!("uncalibrated send"))
         .is_err());
     let calibration = MotionCalibration {
+        diagonal: DiagonalRates::default(),
         units_per_second: 6.0,
         velocity_scale: 0.05,
         animation: 12,
@@ -301,6 +304,7 @@ fn setup(now: Instant) -> MotionSession {
     session
         .calibrate(
             MotionCalibration {
+                diagonal: DiagonalRates::default(),
                 walk: None,
                 strafe: None,
                 backward: None,
@@ -313,15 +317,319 @@ fn setup(now: Instant) -> MotionSession {
         .unwrap();
     session
 }
+
+#[test]
+fn grounded_diagonals_budget_each_axis_and_keep_the_longitudinal_wire_value() {
+    use crate::movement::{DiagonalAlong, GroundedDiagonal, StrafeSide};
+    let start = Instant::now();
+    let now = start + Duration::from_millis(100);
+    for (along, side, x, y, animation) in [
+        (DiagonalAlong::Run, StrafeSide::Right, -0.3, 0.6, 12),
+        (DiagonalAlong::Run, StrafeSide::Left, 0.3, 0.6, 12),
+        (DiagonalAlong::Walk, StrafeSide::Right, -0.1, 0.2, 7),
+        (
+            DiagonalAlong::Backward { walking: false },
+            StrafeSide::Left,
+            0.3,
+            -0.2,
+            -7,
+        ),
+        (
+            DiagonalAlong::Backward { walking: true },
+            StrafeSide::Right,
+            -0.1,
+            -0.2,
+            -7,
+        ),
+    ] {
+        let mut session = setup(start);
+        let mut motion = request(now, x);
+        motion.mode = MovementMode::GroundedDiagonal(GroundedDiagonal { along, side });
+        motion.position.y = y;
+        assert!(session
+            .send_move_sample(&motion, now, |_| panic!("ungranted diagonal"))
+            .is_err());
+        grant_grounded_diagonal(&mut session, start);
+        for position in [
+            Position {
+                x: 0.0,
+                y: y * 1.10,
+                ..motion.position
+            },
+            Position {
+                x: x * 1.25,
+                y: 0.0,
+                ..motion.position
+            },
+            Position {
+                x: -x,
+                ..motion.position
+            },
+            Position {
+                heading: 1.0,
+                ..motion.position
+            },
+        ] {
+            let refused = MovementRequest {
+                position,
+                ..motion.clone()
+            };
+            assert!(session
+                .send_move_sample(&refused, now, |_| panic!("invalid diagonal"))
+                .is_err());
+            assert_eq!(session.position(), Position::default());
+        }
+        session
+            .send_move_sample(&motion, now, |sample| {
+                assert_eq!(sample.animation, animation);
+                assert_eq!(sample.delta_heading, 0);
+                assert!((sample.delta[0] - x * 0.5).abs() < 0.0001);
+                assert!((sample.delta[1] - y * 0.5).abs() < 0.0001);
+                let encoded = sample.encode()?;
+                assert_eq!(word(&encoded, 12), sample.delta[0].to_bits());
+                assert_eq!(word(&encoded, 16), sample.delta[1].to_bits());
+                Ok(())
+            })
+            .unwrap();
+        let later = now + Duration::from_millis(100);
+        let stop = MovementRequest {
+            mode: MovementMode::Forward,
+            created: later,
+            ..motion
+        };
+        session
+            .send_move_sample(&stop, later, |sample| {
+                assert_eq!(sample.animation, 0);
+                assert!(sample
+                    .delta
+                    .into_iter()
+                    .all(|axis| axis.abs() < f32::EPSILON));
+                Ok(())
+            })
+            .unwrap();
+    }
+}
+fn grant_grounded_diagonal(session: &mut MotionSession, start: Instant) {
+    let original = session.calibration().unwrap();
+    session
+        .calibrate(
+            MotionCalibration {
+                diagonal: DiagonalRates {
+                    run: Some(3.0),
+                    walk: Some(1.0),
+                },
+                walk: Some(WalkCalibration {
+                    units_per_second: 2.0,
+                    velocity_scale: original.velocity_scale,
+                    animation: 7,
+                }),
+                backward: Some(BackwardCalibration {
+                    units_per_second: 2.0,
+                    velocity_scale: original.velocity_scale,
+                    animation: -7,
+                }),
+                ..original
+            },
+            start,
+        )
+        .unwrap();
+}
+
 fn request(created: Instant, x: f32) -> MovementRequest {
-    MovementRequest {
-        mode: MovementMode::Forward,
-        session_id: 11,
-        position: Position {
+    MovementRequest::new(
+        MovementMode::Forward,
+        11,
+        Position {
             x,
             ..Position::default()
         },
         created,
+    )
+}
+
+#[test]
+fn titanium_heading_snapshots_keep_absolute_heading_and_ordinary_cadence() {
+    let start = Instant::now();
+    let at = |ms| start + Duration::from_millis(ms);
+    let mut session =
+        setup(start)
+            .with_heading_snapshots(true)
+            .with_gate(Some(UpdateGate::Changed {
+                spacing: Duration::from_millis(280),
+            }));
+    let mut half_turn = request(at(300), 0.0);
+    half_turn.position.heading = 256.0;
+    assert!(session
+        .send_move(&half_turn, at(300), |_| panic!(
+            "unrepresentable paced turn"
+        ))
+        .is_err());
+    half_turn.heading = HeadingUpdate::Snapshot;
+    session
+        .send_move(&half_turn, at(300), |packet| {
+            assert_eq!(word(&packet.body, 20) & 0x000f_ffff, 0);
+            assert_eq!(word(&packet.body, 32) & 0xfff, 1024);
+            assert_eq!(word(&packet.body, 12), 0);
+            assert_eq!(word(&packet.body, 16), 0);
+            Ok(())
+        })
+        .unwrap();
+    assert!(!session.stop_pending());
+
+    for (ms, x, heading) in [(400, 0.5, 0.0), (500, 0.75, 384.0)] {
+        let now = at(ms);
+        let mut step = request(now, x);
+        step.heading = HeadingUpdate::Snapshot;
+        step.position.heading = heading;
+        session
+            .send_move(&step, now, |_| panic!("heading bypassed position cadence"))
+            .unwrap();
+    }
+    assert!(!session
+        .tick(at(579), |_| panic!("early position update"))
+        .unwrap());
+    assert!(session
+        .tick(at(580), |packet| {
+            assert_eq!(word(&packet.body, 32) & 0xfff, 1536);
+            assert_eq!(word(&packet.body, 20) >> 10 & 0x3ff, 0);
+            assert_ne!(word(&packet.body, 20) & 0x3ff, 0);
+            assert_eq!(word(&packet.body, 24), 0.75_f32.to_bits());
+            Ok(())
+        })
+        .unwrap());
+}
+
+#[test]
+fn heading_snapshot_requires_titanium_and_preserves_movement_guards() {
+    let start = Instant::now();
+    let at = |ms| start + Duration::from_millis(ms);
+    let mut snapshot = request(at(100), 0.0);
+    snapshot.position.heading = 256.0;
+    snapshot.heading = HeadingUpdate::Snapshot;
+    let mut session = setup(start);
+    assert!(session
+        .send_move(&snapshot, at(100), |_| panic!("snapshot not enabled"))
+        .is_err());
+    let mut session = session.with_heading_snapshots(true);
+    assert!(!session.is_passive(&snapshot));
+    for invalid in [
+        MovementRequest {
+            created: at(40),
+            ..snapshot.clone()
+        },
+        MovementRequest {
+            session_id: 12,
+            ..snapshot.clone()
+        },
+        MovementRequest {
+            position: Position {
+                x: 2.0,
+                ..snapshot.position
+            },
+            ..snapshot.clone()
+        },
+        MovementRequest {
+            mode: MovementMode::GroundedDiagonal(super::super::GroundedDiagonal {
+                along: super::super::DiagonalAlong::Run,
+                side: super::super::StrafeSide::Right,
+            }),
+            ..snapshot.clone()
+        },
+    ] {
+        assert!(session
+            .send_move(&invalid, at(100), |_| panic!("invalid snapshot"))
+            .is_err());
+        assert_eq!(session.position(), Position::default());
+    }
+    session.withdraw();
+    assert!(session
+        .send_move(&snapshot, at(100), |_| panic!("withdrawn heading input"))
+        .is_err());
+}
+
+#[test]
+fn completed_heading_snapshot_budgets_and_paces_a_chord_in_its_new_heading() {
+    use crate::movement::{DiagonalAlong, GroundedDiagonal, StrafeSide};
+    let start = Instant::now();
+    let at = |ms| start + Duration::from_millis(ms);
+    for (side, sign) in [(StrafeSide::Left, -1.0), (StrafeSide::Right, 1.0)] {
+        let mut session =
+            setup(start)
+                .with_heading_snapshots(true)
+                .with_gate(Some(UpdateGate::Changed {
+                    spacing: Duration::from_millis(280),
+                }));
+        grant_grounded_diagonal(&mut session, start);
+        let initial = request(at(300), 0.0);
+        session
+            .send_move_sample(&initial, at(300), |_| Ok(()))
+            .unwrap();
+        let chord = MovementRequest {
+            mode: MovementMode::GroundedDiagonal(GroundedDiagonal {
+                along: DiagonalAlong::Run,
+                side,
+            }),
+            position: Position {
+                x: 0.6,
+                y: sign * 0.3,
+                heading: 128.0,
+                ..initial.position
+            },
+            heading: HeadingUpdate::Snapshot,
+            ..request(at(400), 0.0)
+        };
+        // At heading 128, +X is forward and signed Y is lateral. The
+        // previous heading's basis and a changed Rate heading both fail.
+        for (x, y, heading) in [
+            (0.6, sign * 0.3, HeadingUpdate::Rate),
+            (-sign * 0.3, 0.6, HeadingUpdate::Snapshot),
+            (-0.2, sign * 0.3, HeadingUpdate::Snapshot),
+            (0.6, -sign * 0.3, HeadingUpdate::Snapshot),
+            (0.65, sign * 0.2, HeadingUpdate::Snapshot),
+            (0.4, sign * 0.4, HeadingUpdate::Snapshot),
+        ] {
+            let invalid = MovementRequest {
+                position: Position {
+                    x,
+                    y,
+                    ..chord.position
+                },
+                heading,
+                ..chord.clone()
+            };
+            assert!(session
+                .send_move_sample(&invalid, at(400), |_| panic!("invalid chord"))
+                .is_err());
+            assert_eq!(session.position(), initial.position);
+        }
+        session
+            .send_move_sample(&chord, at(400), |_| panic!("chord bypassed cadence"))
+            .unwrap();
+        let later = MovementRequest {
+            position: Position {
+                x: 1.2,
+                y: sign * 0.6,
+                ..chord.position
+            },
+            heading: HeadingUpdate::Rate,
+            created: at(500),
+            ..chord
+        };
+        session
+            .send_move_sample(&later, at(500), |_| panic!("chord bypassed cadence"))
+            .unwrap();
+        assert!(!session
+            .tick_sample(at(579), |_| panic!("early chord"))
+            .unwrap());
+        assert!(session
+            .tick_sample(at(580), |sample| {
+                assert_eq!(sample.position, later.position);
+                assert_eq!((sample.animation, sample.delta_heading), (12, 0));
+                assert!((sample.delta[0] - 0.3).abs() < 0.001);
+                assert!((sample.delta[1] - sign * 0.15).abs() < 0.001);
+                Ok(())
+            })
+            .unwrap());
     }
 }
 fn word(body: &[u8], offset: usize) -> u32 {
@@ -499,6 +807,7 @@ fn correction_revokes_motion_and_old_input_cannot_replay_after_recalibration() {
     session
         .calibrate(
             MotionCalibration {
+                diagonal: DiagonalRates::default(),
                 walk: None,
                 strafe: None,
                 backward: None,
@@ -529,6 +838,7 @@ fn death_or_transfer_suppresses_heartbeats_and_cannot_resume_old_admission() {
     assert!(session
         .calibrate(
             MotionCalibration {
+                diagonal: DiagonalRates::default(),
                 walk: None,
                 strafe: None,
                 backward: None,
@@ -543,6 +853,7 @@ fn death_or_transfer_suppresses_heartbeats_and_cannot_resume_old_admission() {
     new_zone
         .calibrate(
             MotionCalibration {
+                diagonal: DiagonalRates::default(),
                 walk: None,
                 strafe: None,
                 backward: None,
@@ -621,6 +932,7 @@ fn queued_calibration_requires_valid_data_from_after_the_last_reset() {
         .is_err());
     for invalid in [
         MotionCalibration {
+            diagonal: DiagonalRates::default(),
             walk: None,
             strafe: None,
             backward: None,
@@ -765,6 +1077,99 @@ fn a_jump_rises_past_a_step_once_the_session_announces_it() {
         .send_move(&rise, now, |_| panic!("the jump is unread"))
         .is_err());
 }
+
+#[test]
+fn an_announced_jump_refuses_diagonal_credit_without_consuming_the_sample() {
+    use crate::movement::{DiagonalAlong, GroundedDiagonal, StrafeSide};
+
+    let start = Instant::now();
+    let at = |ms| start + Duration::from_millis(ms);
+    let mut session = setup(start).with_falls(true).with_jump(Some((
+        super::super::JUMP_SPEED,
+        super::super::gravity_per_second(None),
+    )));
+    let base = session.calibration().unwrap();
+    session
+        .calibrate(
+            MotionCalibration {
+                diagonal: DiagonalRates {
+                    run: Some(3.0),
+                    walk: None,
+                },
+                ..base
+            },
+            start,
+        )
+        .unwrap();
+    let mode = MovementMode::GroundedDiagonal(GroundedDiagonal {
+        along: DiagonalAlong::Run,
+        side: StrafeSide::Right,
+    });
+    let mut step = request(at(100), -0.3);
+    step.mode = mode;
+    step.position.y = 0.6;
+    step.position.z = 0.5;
+    session
+        .send_move_sample(&step, at(100), |_| Ok(()))
+        .unwrap();
+    assert_eq!(session.position(), step.position);
+
+    // The host marks the jump only after its notice was submitted.
+    assert_eq!(session.jump().unwrap().opcode, JUMP_OPCODE);
+    session.jumped();
+    let reject = |session: &mut MotionSession, now| {
+        let accepted = session.position();
+        let sampled = session.guard.sampled;
+        let jump = session.guard.jumped_at;
+        let sequence = session.sequence;
+        let combined = MovementRequest {
+            mode,
+            position: Position {
+                x: accepted.x - 0.15,
+                y: accepted.y + 0.3,
+                ..accepted
+            },
+            ..request(now, accepted.x)
+        };
+        let refusal = session.send_move_sample(&combined, now, |_| panic!("diagonal during jump"));
+        assert_eq!(
+            refusal.unwrap_err().to_string(),
+            "grounded diagonal movement is unavailable during a tracked jump"
+        );
+        assert_eq!(session.position(), accepted);
+        assert_eq!(session.guard.sampled, sampled);
+        assert_eq!(session.guard.jumped_at, jump);
+        assert_eq!(session.sequence, sequence);
+    };
+
+    // Both the pending first sample and an ascent in progress disallow
+    // diagonal credit, even when the proposed Z would stay unchanged.
+    reject(&mut session, at(150));
+    let ascent = MovementRequest {
+        mode: MovementMode::Fall,
+        position: Position {
+            z: step.position.z + 2.03,
+            ..step.position
+        },
+        ..request(at(150), step.position.x)
+    };
+    session
+        .send_move_sample(&ascent, at(150), |_| Ok(()))
+        .unwrap();
+    reject(&mut session, at(200));
+    let cardinal = MovementRequest {
+        position: Position {
+            y: ascent.position.y + 0.2,
+            ..ascent.position
+        },
+        ..request(at(200), ascent.position.x)
+    };
+    session
+        .send_move_sample(&cardinal, at(200), |_| Ok(()))
+        .unwrap();
+    assert_eq!(session.position(), cardinal.position);
+}
+
 #[test]
 fn the_wire_velocity_covers_the_stamp_interval_not_the_processing_one() {
     let start = Instant::now();
@@ -1086,4 +1491,110 @@ fn failed_prepared_send_preserves_motion_without_undoing_external_effects() {
             Ok(())
         })
         .unwrap();
+}
+
+#[test]
+fn run_boost_is_explicit_and_disabling_restores_the_original_budget() {
+    let start = Instant::now();
+    let now = start + Duration::from_millis(100);
+    let proposal = request(now, 0.65);
+    let mut normal = setup(start);
+    assert!(normal.send_move(&proposal, now, |_| Ok(())).is_err());
+    let mut boosted = setup(start);
+    boosted
+        .set_options(
+            super::super::MovementOptions {
+                run_boost: true,
+                ..Default::default()
+            },
+            start,
+        )
+        .unwrap();
+    boosted.send_move(&proposal, now, |_| Ok(())).unwrap();
+    boosted
+        .set_options(super::super::MovementOptions::default(), now)
+        .unwrap();
+    let later = now + Duration::from_millis(100);
+    assert!(boosted
+        .send_move(&request(later, 1.30), later, |_| Ok(()))
+        .is_err());
+    assert_eq!(boosted.position().x, 0.65);
+}
+
+#[test]
+fn flying_changes_only_the_vertical_gate_and_still_needs_current_valid_motion() {
+    let start = Instant::now();
+    let now = start + Duration::from_millis(100);
+    let mut proposal = request(now, 0.0);
+    proposal.position.z = 2.5;
+    let mut session = setup(start);
+    let mut calibration = session.calibration().unwrap();
+    calibration.units_per_second = 30.0;
+    session.calibrate(calibration, start).unwrap();
+    assert!(session.send_move(&proposal, now, |_| Ok(())).is_err());
+    session
+        .set_options(
+            super::super::MovementOptions {
+                fly: true,
+                ..Default::default()
+            },
+            start,
+        )
+        .unwrap();
+    let mut foreign = proposal.clone();
+    foreign.session_id = 99;
+    assert!(session.send_move(&foreign, now, |_| Ok(())).is_err());
+    let mut excessive = proposal.clone();
+    excessive.position.z = 3.1;
+    assert!(session.send_move(&excessive, now, |_| Ok(())).is_err());
+    let mut invalid = proposal.clone();
+    invalid.position.z = f32::NAN;
+    assert!(session.send_move(&invalid, now, |_| Ok(())).is_err());
+    session.guard.bounds = Some(super::super::MovementBounds::new([-1.0; 3], [1.0; 3]).unwrap());
+    assert!(session.send_move(&proposal, now, |_| Ok(())).is_err());
+    session.guard.bounds = None;
+    session.send_move(&proposal, now, |_| Ok(())).unwrap();
+    let later = now + Duration::from_millis(100);
+    let mut descent = request(later, 0.0);
+    descent.position.z = 0.0;
+    session.send_move(&descent, later, |_| Ok(())).unwrap();
+    session.withdraw();
+    let mut no_speed = request(later + Duration::from_millis(100), 0.0);
+    no_speed.position.z = 1.0;
+    assert!(session
+        .send_move(&no_speed, no_speed.created, |_| Ok(()))
+        .is_err());
+}
+
+#[test]
+fn caller_stamped_options_preserve_same_frame_motion_without_idle_credit() {
+    let start = Instant::now();
+    let caller = start + Duration::from_millis(100);
+    let processing = caller + Duration::from_millis(25);
+    let mut session = setup(start);
+    let options = super::super::MovementOptions {
+        run_boost: true,
+        ..Default::default()
+    };
+    session.set_options(options, caller).unwrap();
+    let stale = request(caller.checked_sub(Duration::from_millis(1)).unwrap(), 0.2);
+    assert!(session.send_move(&stale, processing, |_| Ok(())).is_err());
+    session
+        .send_move(&request(caller, 0.65), processing, |_| Ok(()))
+        .unwrap();
+    assert!(session
+        .set_options(
+            super::super::MovementOptions::default(),
+            caller.checked_sub(Duration::from_millis(1)).unwrap()
+        )
+        .is_err());
+    let later = caller + Duration::from_millis(100);
+    assert!(session
+        .send_move(
+            &request(later, 1.4),
+            processing + Duration::from_millis(100),
+            |_| Ok(())
+        )
+        .is_err());
+    assert_eq!(session.position().x, 0.65);
 }

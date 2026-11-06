@@ -64,6 +64,7 @@ impl Inventory {
         };
         self.relocations.retain(|slot, origin| match update {
             InventoryUpdate::Prediction(_)
+            | InventoryUpdate::DestroyCursor
             | InventoryUpdate::Cursor(_)
             | InventoryUpdate::Consume { .. } => true,
             InventoryUpdate::Set(items) => items.first().is_none_or(|root| {

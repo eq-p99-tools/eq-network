@@ -414,7 +414,7 @@ pub enum CampEnd {
     Other,
 }
 
-/// Progress of a camp request; the server confirms only the final logout.
+/// Camp progress, distinguishing a received logout reply from local closing.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub enum CampStatus {
     /// `OP_Camp` was sent; logout follows after the preparation time.
@@ -433,8 +433,11 @@ pub enum CampStatus {
     },
     /// Preparation finished and `OP_Logout` was sent.
     LoggingOut,
-    /// The zone connection ended; character selection follows.
+    /// The server's logout reply was received; character selection follows.
     Camped,
+    /// The documented local logout-close deadline elapsed without a reply.
+    /// Selection follows locally; server logout/cleanup is unconfirmed.
+    ClosedWithoutReply,
     /// Local validation rejected the request before transmission.
     Rejected(String),
 }
@@ -557,12 +560,20 @@ pub enum Capability {
     /// Opening, closing and combining in a world container, independently
     /// of carried manual combines ([`Capability::Tradeskills`]).
     WorldContainers,
+    /// Opt-in automatic P99 list presence replies, independently of joining.
+    AnsweringListPolls,
+    /// Explicit cancellation of an ordinary beneficial buff.
+    CancellingBuffs,
+    /// Opt-in gameplay departures from the official client (movement and
+    /// memorization options), offered only where the server type permits
+    /// them; public servers never list it.
+    GameplayDepartures,
 }
 
 impl Capability {
     /// Every capability, in order: what a session offers when its server and
     /// client generation support everything.
-    pub const ALL: [Self; 44] = [
+    pub const ALL: [Self; 47] = [
         Self::Casting,
         Self::Spellbook,
         Self::Inventory,
@@ -607,6 +618,9 @@ impl Capability {
         Self::Posture,
         Self::Meals,
         Self::WorldContainers,
+        Self::AnsweringListPolls,
+        Self::CancellingBuffs,
+        Self::GameplayDepartures,
     ];
 }
 
@@ -641,6 +655,8 @@ pub enum WorldEvent {
     BuffSnapshot(Vec<Option<crate::buffs::Buff>>),
     /// A server-owned slot replacement or fade for an entity.
     Buff(crate::buffs::BuffUpdate),
+    /// Progress of an exact, admission-scoped buff cancellation selection.
+    BuffCancellation(crate::buffs::cancel::Update),
     /// A name suggestion, or no suggestion when refused, malformed or timed out.
     NameSuggestion {
         /// Character list the request belongs to.
@@ -822,7 +838,7 @@ pub enum WorldEvent {
     MotionState {
         /// Current zone admission.
         session_id: u64,
-        /// Calibrated world units per second, if movement is enabled.
+        /// Calibrated forward world units per second, if movement is enabled.
         units_per_second: Option<f32>,
         /// Independently calibrated backward speed; None disables backing up.
         backward_units_per_second: Option<f32>,
@@ -830,6 +846,9 @@ pub enum WorldEvent {
         walk_units_per_second: Option<f32>,
         /// Optional separately calibrated sideways speed.
         strafe_units_per_second: Option<f32>,
+        /// Lateral rates while longitudinal input is active.
+        #[serde(skip_serializing_if = "crate::movement::DiagonalRates::is_unavailable")]
+        diagonal: crate::movement::DiagonalRates,
         /// Whether this server's session accepts `MovementMode::Fall` samples.
         falls: bool,
     },
@@ -1100,6 +1119,25 @@ pub enum WorldEvent {
         request: crate::combat::CombatRequest,
         /// Whether it was submitted or refused locally.
         status: crate::combat::CombatRequestStatus,
+    },
+    /// The local session installed explicit movement policy. This is not a
+    /// server acknowledgment or a new speed grant.
+    MovementOptionsApplied {
+        /// Current zone admission.
+        session_id: u64,
+        /// Identity of the caller's option request.
+        request_id: u64,
+        /// Policy now installed in the movement owner.
+        options: crate::movement::MovementOptions,
+    },
+    /// The local session refused an option request; prior policy remains.
+    MovementOptionsRefused {
+        /// Admission from the request.
+        session_id: u64,
+        /// Identity of the caller's option request.
+        request_id: u64,
+        /// Why it was not installed.
+        reason: String,
     },
     /// Camp progress for the current admission.
     Camp(CampStatus),
@@ -2065,6 +2103,9 @@ mod tests {
             Capability::Posture => 41,
             Capability::Meals => 42,
             Capability::WorldContainers => 43,
+            Capability::AnsweringListPolls => 44,
+            Capability::CancellingBuffs => 45,
+            Capability::GameplayDepartures => 46,
         };
         for (index, capability) in Capability::ALL.into_iter().enumerate() {
             assert_eq!(place(capability), index, "{capability:?}");

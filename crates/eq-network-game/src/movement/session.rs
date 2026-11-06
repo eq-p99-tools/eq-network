@@ -1,7 +1,8 @@
 //! Zone-scoped movement submission with caller-supplied calibration.
 use super::{
     gate::{Flags, UpdateGate},
-    MovementGuard, MovementMode, MovementRequest, PositionPacket, JUMP_OPCODE,
+    DiagonalRates, HeadingUpdate, MovementGuard, MovementMode, MovementRequest, PositionPacket,
+    JUMP_OPCODE,
 };
 use crate::{command::EncodedCommand, world::Position};
 use anyhow::{ensure, Result};
@@ -29,7 +30,10 @@ pub struct MotionCalibration {
     /// Optional independently measured backward mode; omission disables backing up.
     #[serde(default)]
     pub backward: Option<BackwardCalibration>,
-    /// Maximum horizontal world units per second.
+    /// Lateral calibration while also holding a longitudinal input.
+    #[serde(default, skip_serializing_if = "DiagonalRates::is_unavailable")]
+    pub diagonal: DiagonalRates,
+    /// Forward world units per second before movement options apply.
     pub units_per_second: f32,
     /// Converts world velocity per second to wire velocity.
     pub velocity_scale: f32,
@@ -121,22 +125,32 @@ impl MotionCalibration {
                 "invalid strafing calibration"
             );
         }
+        ensure!(
+            [self.diagonal.run, self.diagonal.walk]
+                .into_iter()
+                .flatten()
+                .all(|rate| rate.is_finite() && rate > 0.0),
+            "invalid diagonal movement calibration"
+        );
         Ok(())
     }
 }
 
 /// Position, packet counter, and input expiry for one zone admission.
 #[derive(Debug)]
+#[allow(clippy::struct_excessive_bools)] // Independent session permissions and motion state.
 pub struct MotionSession {
     guard: MovementGuard,
     spawn_id: u16,
     sequence: u16,
     position: Position,
     calibration: Option<MotionCalibration>,
+    options: super::MovementOptions,
     last_sent: Instant,
     moving: bool,
     suspended: bool,
     falls: bool,
+    heading_snapshots: bool,
     /// How the client generation gates its own update, where it is read;
     /// see [`Self::with_gate`].
     gate: Option<UpdateGate>,
@@ -210,6 +224,13 @@ impl PreparedMove<'_> {
 }
 
 impl MotionSession {
+    /// Allows absolute mouse heading snapshots for a Titanium position stream.
+    #[must_use]
+    pub const fn with_heading_snapshots(mut self, enabled: bool) -> Self {
+        self.heading_snapshots = enabled;
+        self
+    }
+
     /// Whether movement or its real stop still awaits local submission.
     /// Stationary heartbeat repeats do not hold an action behind a stop.
     /// This only observes this movement owner; it never forces an update or
@@ -389,16 +410,46 @@ impl MotionSession {
             sequence: 0,
             position,
             calibration: None,
+            options: super::MovementOptions::default(),
             last_sent: now,
             moving: false,
             suspended: false,
             falls: false,
+            heading_snapshots: false,
             gate: None,
             held: None,
             last_update: None,
             flags: Flags::default(),
             last_input: now,
         })
+    }
+
+    /// Current explicit movement choices for this admission.
+    #[must_use]
+    pub const fn options(&self) -> super::MovementOptions {
+        self.options
+    }
+
+    /// Applies caller-stamped choices without granting speed or reusing queued
+    /// input. The accepted position, sample time and fixed bounds remain.
+    ///
+    /// # Errors
+    /// Refuses choices made before the latest reset or accepted sample. The
+    /// caller also checks the command's future/expiry and session identity.
+    pub fn set_options(&mut self, options: super::MovementOptions, created: Instant) -> Result<()> {
+        ensure!(
+            created >= self.guard.input_epoch && created >= self.guard.sampled,
+            "movement options predate the current motion state"
+        );
+        if self.options == options {
+            return Ok(());
+        }
+        self.stop_voluntary();
+        self.options = options;
+        self.guard.flying = options.fly;
+        self.guard.input_epoch = created;
+        self.guard.jumped_at = None;
+        Ok(())
     }
 
     /// Enables an independently measured movement mode for this admission.
@@ -542,7 +593,8 @@ impl MotionSession {
     /// Body/scene authority is not owned or certified by this local plan.
     #[allow(
         clippy::float_cmp,
-        reason = "Withdrawn input must preserve coordinates exactly, without drift credit"
+        clippy::too_many_lines,
+        reason = "One prepare/validate/encode transaction, with exact withdrawn coordinates"
     )]
     fn prepare_move_sample(
         &mut self,
@@ -567,8 +619,35 @@ impl MotionSession {
             );
         }
         let mut guard = self.guard.clone();
+        let diagonal = match request.mode {
+            MovementMode::GroundedDiagonal(value) => Some(value),
+            _ => None,
+        };
+        let snapshot = request.heading == HeadingUpdate::Snapshot;
+        ensure!(
+            !snapshot || self.heading_snapshots,
+            "absolute heading snapshots require Titanium movement"
+        );
+        ensure!(
+            !snapshot || (0.0..512.0).contains(&request.position.heading),
+            "heading snapshot is outside the canonical turn"
+        );
+        let along = diagonal.map_or(request.mode, |diagonal| diagonal.along.mode());
+        let lateral_rate = if let Some(diagonal) = diagonal {
+            ensure!(
+                !self.options.fly,
+                "diagonal movement requires a grounded mode"
+            );
+            Some(
+                self.calibration
+                    .and_then(|value| value.diagonal.for_mode(diagonal))
+                    .ok_or_else(|| anyhow::anyhow!("diagonal movement is not calibrated"))?,
+            )
+        } else {
+            None
+        };
         let (speed, velocity_scale, animation) = if let Some(calibration) = self.calibration {
-            match request.mode {
+            match along {
                 MovementMode::Strafe => {
                     let strafe = calibration
                         .strafe
@@ -600,17 +679,25 @@ impl MotionSession {
                         backward.animation,
                     )
                 }
+                MovementMode::GroundedDiagonal(_) => unreachable!("longitudinal mode is cardinal"),
             }
         } else {
             (0.0, 0.0, 0)
         };
         // Switching mode changes the per-sample limit without resetting input expiry
         // or granting a new time budget. The clone is committed only after send succeeds.
+        let speed = if self.options.run_boost
+            && matches!(along, MovementMode::Forward | MovementMode::Fall)
+        {
+            speed * super::MovementOptions::RUN_BOOST
+        } else {
+            speed
+        };
         guard.speed = Some(speed);
         // The wire's velocity and turn rate cover the same interval the guard
         // budgets: from the last accepted request's stamp to this one's.
         let elapsed = guard.interval(request.created);
-        let displacement = guard.accept(request, now)?;
+        let displacement = guard.accept_with_diagonal(request, now, lateral_rate)?;
         // Following a slope changes position Z without creating the airborne
         // velocity seen during a fall. Falls also leave that field zero: its wire
         // scale is unmeasured, so position Z alone carries the descent.
@@ -620,7 +707,12 @@ impl MotionSession {
             0.0,
         ];
         let moving = displacement[..2].iter().any(|d| d.abs() > f32::EPSILON);
-        let turn = heading_velocity(self.position.heading, request.position.heading, elapsed)?;
+        // Absolute heading and continuing yaw are independent fields.
+        let turn = if snapshot {
+            0
+        } else {
+            heading_velocity(self.position.heading, request.position.heading, elapsed)?
+        };
         let sample = PositionPacket {
             spawn_id: self.spawn_id,
             sequence: self.sequence,
@@ -841,10 +933,9 @@ mod tests;
 /// The shortest-arc turn rate in heading units a second, cut toward zero.
 /// Titanium's program sends its turn rate per 50 ms tick times 20, cut to
 /// a whole number whatever the mode, so a full keyboard turn of 12 a tick
-/// sends 240 (the Titanium client update read of 10-31, and sitting 7); the
-/// cut is read from its conversion routine's shape only. Its mouse-turn path
-/// is unread, so a turn faster than the 10-bit field holds is refused, as
-/// before.
+/// sends 240 (the Titanium client update read of 10-31, and sitting 7).
+/// This conversion applies to paced turns. A heading snapshot has no
+/// continuing yaw to reconstruct from elapsed packet time.
 #[allow(clippy::cast_possible_truncation)] // Cut and checked against the signed wire range.
 fn heading_velocity(from: f32, to: f32, elapsed: f32) -> Result<i16> {
     let difference = (to - from + 256.0).rem_euclid(512.0) - 256.0;

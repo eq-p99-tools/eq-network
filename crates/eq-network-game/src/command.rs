@@ -178,6 +178,8 @@ pub enum GameCommand {
         /// Request creation time; queued actions expire.
         created: std::time::Instant,
     },
+    /// Cancel an explicit beneficial buff, with current provider classification.
+    CancelBuff(crate::buffs::cancel::Request),
     /// Cast a memorized spell; the server decides completion and resource use.
     CastSpell {
         /// Current zone admission.
@@ -204,6 +206,8 @@ pub enum GameCommand {
     },
     /// Move an inventory item using the admitted session state.
     MoveInventory(crate::inventory::InventoryMove),
+    /// Explicitly destroy the confirmed whole cursor item or stack.
+    DestroyItem(Box<crate::inventory::InventoryDestroy>),
     /// Send one chat message.
     SendChat(OutboundChat),
     /// Inspect a preserved item link in the active zone session.
@@ -391,6 +395,40 @@ pub enum GameCommand {
         session_id: u64,
         /// What the session may eat and drink on its own.
         auto_eat: crate::food::AutoEat,
+    },
+    /// Explicit movement departures. Defaults preserve ordinary movement.
+    SetMovementOptions {
+        /// Current zone admission.
+        session_id: u64,
+        /// Caller identity returned in local application/refusal feedback.
+        request_id: u64,
+        /// Choices applied only after the movement prerequisites are known.
+        options: crate::movement::MovementOptions,
+        /// Caller stamp: subsequent same-frame movement keeps its elapsed budget.
+        created: std::time::Instant,
+    },
+    /// Change the automatic sitting and local preparation delay for memorization.
+    SetBookOptions {
+        /// Current zone admission.
+        session_id: u64,
+        /// Memorize without automatic sitting or local delay; scribing is unchanged.
+        memorize_without_sitting: bool,
+    },
+    /// Send the ordinary logout without the camp preparation/countdown.
+    /// Server acceptance is not implied; the ordinary reply lifecycle applies.
+    ExitAtOnce {
+        /// Current zone admission.
+        session_id: u64,
+        /// Reject expired requests rather than replaying an immediate logout.
+        created: std::time::Instant,
+    },
+    /// Enable or disable automatic P99 list presence replies. Disabling
+    /// cancels an owed reply, including while dead or transferring zones.
+    AnswerListPolls {
+        /// Current zone admission.
+        session_id: u64,
+        /// Whether future presence polls may be answered automatically.
+        enabled: bool,
     },
     /// Use an ability on the unchanged expected target, or on the player.
     UseAbility {
@@ -729,9 +767,11 @@ impl GameCommand {
             Self::DeleteSpell { .. } => "DeleteSpell",
             Self::ForgetSpell { .. } => "ForgetSpell",
             Self::MemorizeSpell { .. } => "MemorizeSpell",
+            Self::CancelBuff(_) => "CancelBuff",
             Self::CastSpell { .. } => "CastSpell",
             Self::SetPosture { .. } => "SetPosture",
             Self::MoveInventory(..) => "MoveInventory",
+            Self::DestroyItem(..) => "DestroyItem",
             Self::SendChat(..) => "SendChat",
             Self::InspectItem { .. } => "InspectItem",
             Self::Consider { .. } => "Consider",
@@ -751,6 +791,10 @@ impl GameCommand {
             Self::EnvironmentalDamage { .. } => "EnvironmentalDamage",
             Self::Consume { .. } => "Consume",
             Self::AutoEat { .. } => "AutoEat",
+            Self::AnswerListPolls { .. } => "AnswerListPolls",
+            Self::SetMovementOptions { .. } => "SetMovementOptions",
+            Self::SetBookOptions { .. } => "SetBookOptions",
+            Self::ExitAtOnce { .. } => "ExitAtOnce",
             Self::UseAbility { .. } => "UseAbility",
             Self::Consent { .. } => "Consent",
             Self::SummonCorpse { .. } => "SummonCorpse",
@@ -803,8 +847,10 @@ impl GameCommand {
             | Self::DeleteCharacter(_)
             | Self::CreateCharacter { .. }
             | Self::SendChat(_) => None,
+            Self::CancelBuff(request) => Some(request.session_id),
             Self::UseItem(request) => Some(request.session_id),
             Self::MoveInventory(request) => Some(request.session_id),
+            Self::DestroyItem(request) => Some(request.session_id),
             Self::Move(request) => Some(request.session_id),
             Self::SwapSpell { session_id, .. }
             | Self::ClickDoor { session_id, .. }
@@ -837,6 +883,10 @@ impl GameCommand {
             | Self::AutoAttack { session_id, .. }
             | Self::Consume { session_id, .. }
             | Self::AutoEat { session_id, .. }
+            | Self::AnswerListPolls { session_id, .. }
+            | Self::SetMovementOptions { session_id, .. }
+            | Self::SetBookOptions { session_id, .. }
+            | Self::ExitAtOnce { session_id, .. }
             | Self::UseAbility { session_id, .. }
             | Self::WhoAll { session_id, .. }
             | Self::Pet { session_id, .. }
@@ -892,6 +942,12 @@ impl GameCommand {
             Self::ScribeSpell { .. } | Self::ForgetSpell { .. } | Self::MemorizeSpell { .. } => {
                 Capability::Spellbook
             }
+            // Explicit departures from the official client's behaviour are
+            // offered only where the server type permits them.
+            Self::SetMovementOptions { .. } | Self::SetBookOptions { .. } => {
+                Capability::GameplayDepartures
+            }
+            Self::CancelBuff(_) => Capability::CancellingBuffs,
             Self::DeleteSpell { .. } => Capability::DeletingSpells,
             Self::SwapSpell { .. } => Capability::MovingSpells,
             // An item's click effect is a cast.
@@ -909,11 +965,12 @@ impl GameCommand {
             // Only a server that takes falls from the client lets the player jump.
             Self::Jump { .. } => Capability::Jumping,
             Self::EnvironmentalDamage { .. } => Capability::EnvironmentalDamage,
-            Self::MoveInventory(_) => Capability::Inventory,
+            Self::MoveInventory(_) | Self::DestroyItem(_) => Capability::Inventory,
             Self::Consume { .. } | Self::AutoEat { .. } => Capability::Meals,
+            Self::AnswerListPolls { .. } => Capability::AnsweringListPolls,
             Self::SendChat(_) | Self::InspectItem { .. } => Capability::Talking,
             Self::Consider { .. } | Self::AutoAttack { .. } => Capability::Combat,
-            Self::Camp { .. } => Capability::Camping,
+            Self::Camp { .. } | Self::ExitAtOnce { .. } => Capability::Camping,
             Self::BledOut { .. } => Capability::BleedingOut,
             Self::Loot { .. } | Self::LootItem { .. } | Self::EndLoot { .. } => Capability::Looting,
             Self::Shop { .. } | Self::Buy { .. } | Self::Sell { .. } => Capability::Trading,
@@ -982,6 +1039,8 @@ impl GameCommand {
             | Self::EndLoot { .. }
             | Self::CancelTrade { .. }
             | Self::AutoEat { .. }
+            | Self::AnswerListPolls { .. }
+            | Self::SetBookOptions { .. }
             | Self::EnvironmentalDamage { .. }
             // The latest report stands however long it waited.
             | Self::SpeedInputs { .. }
@@ -1017,8 +1076,10 @@ impl GameCommand {
             | Self::DragCorpse { .. }
             | Self::DropCorpse { .. }
             | Self::SelectTarget { .. } => None,
+            Self::CancelBuff(request) => Some(request.created),
             Self::UseItem(request) => Some(request.created),
             Self::MoveInventory(request) => Some(request.created),
+            Self::DestroyItem(request) => Some(request.created),
             Self::Move(request) => Some(request.created),
             Self::SwapSpell { created, .. }
             | Self::ClickDoor { created, .. }
@@ -1033,6 +1094,7 @@ impl GameCommand {
             | Self::SetPosture { created, .. }
             | Self::Consider { created, .. }
             | Self::Camp { created, .. }
+            | Self::ExitAtOnce { created, .. }
             | Self::BledOut { created, .. }
             | Self::Loot { created, .. }
             | Self::LootItem { created, .. }
@@ -1049,7 +1111,8 @@ impl GameCommand {
             | Self::Training { created, .. }
             | Self::ReadItem { created, .. }
             | Self::Combine { created, .. }
-            | Self::ConfigureMotion { created, .. } => Some(*created),
+            | Self::ConfigureMotion { created, .. }
+            | Self::SetMovementOptions { created, .. } => Some(*created),
         }
     }
 }
@@ -1184,6 +1247,9 @@ pub fn encode(
         | GameCommand::GenerateName { .. } => {
             anyhow::bail!("character selection requires the world controller")
         }
+        GameCommand::CancelBuff(_) => {
+            anyhow::bail!("buff cancellation requires the admitted buff-slot owner")
+        }
         GameCommand::CastSpell {
             gem,
             spell_id,
@@ -1215,6 +1281,7 @@ pub fn encode(
         | GameCommand::Sell { .. } => encode_trade(dialect, command),
         // What these send depends on the admitted session's state.
         GameCommand::MoveInventory(_)
+        | GameCommand::DestroyItem(_)
         | GameCommand::ClickDoor { .. }
         | GameCommand::PickUp { .. }
         | GameCommand::OpenContainer { .. }
@@ -1232,6 +1299,10 @@ pub fn encode(
         | GameCommand::CrossZoneLine { .. }
         | GameCommand::Consume { .. }
         | GameCommand::AutoEat { .. }
+        | GameCommand::AnswerListPolls { .. }
+        | GameCommand::SetMovementOptions { .. }
+        | GameCommand::SetBookOptions { .. }
+        | GameCommand::ExitAtOnce { .. }
         | GameCommand::UseAbility { .. }
         | GameCommand::WhoAll { .. }
         | GameCommand::Pet { .. }

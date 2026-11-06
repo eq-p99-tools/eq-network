@@ -244,6 +244,7 @@ fn selection_creation_and_handoff(protocol: ServerProtocol, camp_return: bool) {
             duration: None,
             commands: Some(&incoming),
             sysinfo_reported_at: std::cell::Cell::new(0),
+            answer_list_polls: std::cell::Cell::new(false),
         };
         let mut handler = |event| {
             events.send(event).unwrap();
@@ -358,6 +359,7 @@ fn deletion_world(
             duration: None,
             commands: Some(&commands),
             sysinfo_reported_at: std::cell::Cell::new(0),
+            answer_list_polls: std::cell::Cell::new(false),
         };
         let mut handler = |event| {
             events.send(event).unwrap();

@@ -2,6 +2,7 @@
 mod actions;
 mod activation;
 mod banking;
+mod destruction;
 mod eqmac;
 mod titanium;
 mod weight;
@@ -13,6 +14,7 @@ pub use activation::{
     titanium_item_cast, ClickEffect, ClickKind, ItemActivation, ItemUse, CAST_OPCODE,
 };
 pub use banking::banker_in_range;
+pub use destruction::{titanium_destroy, InventoryDestroy};
 pub(crate) use eqmac::details as eqmac_details;
 pub(crate) use eqmac::merchant_stock as eqmac_merchant_stock;
 pub(crate) use eqmac::record_at as eqmac_record_at;
@@ -267,6 +269,9 @@ pub struct InventoryItem {
 pub enum InventoryUpdate {
     /// Local post-send projection, not a server acknowledgment.
     Prediction(Vec<InventoryItem>),
+    /// Local whole-cursor removal after a successful destroy submission. It
+    /// remains uncertain across silence settlement; only received state settles it.
+    DestroyCursor,
     /// One server-reported stack unit or charge consumed.
     Consume {
         /// Slot affected by the server.
@@ -350,6 +355,9 @@ pub struct Inventory {
     #[serde(skip)]
     stack_weight: Option<stack_weight::StackWeightBound>,
     correcting: bool,
+    /// Original cursor mass retained after explicit destructive submission.
+    /// Never retired by the ordinary movement silence heuristic.
+    destroyed: Option<InventoryItem>,
 }
 
 impl Inventory {
@@ -361,7 +369,7 @@ impl Inventory {
     /// Whether any contents include post-send predictions.
     #[must_use]
     pub const fn predicted(&self) -> bool {
-        self.predicted
+        self.predicted || self.destroyed.is_some()
     }
 
     /// Number of local predictions with slots still awaiting server evidence.
@@ -450,6 +458,7 @@ impl Inventory {
         self.retain_relocations(&update);
         match update {
             InventoryUpdate::Prediction(items) => self.predict(items),
+            InventoryUpdate::DestroyCursor => self.predict_destruction(),
             InventoryUpdate::Consume { slot, charge } => {
                 let consumed = self
                     .items
@@ -471,20 +480,7 @@ impl Inventory {
                 }
                 self.reconcile_consumed(slot, consumed.as_ref());
             }
-            InventoryUpdate::Snapshot(items) => {
-                self.items = items.into_iter().map(|item| (item.slot, item)).collect();
-                self.queued.clear();
-                self.received = true;
-                self.predicted = false;
-                self.stale = false;
-                self.unconfirmed.clear();
-                self.predictions.clear();
-                self.equipment_uncertainty.clear();
-                self.weight_rebased.clear();
-                self.weight_history_uncertain = false;
-                self.stack_weight = None;
-                self.correcting = false;
-            }
+            InventoryUpdate::Snapshot(items) => self.replace_snapshot(items),
             InventoryUpdate::Set(items) => {
                 let additional = items
                     .iter()
@@ -495,6 +491,9 @@ impl Inventory {
                     return;
                 }
                 if let Some(root) = items.first() {
+                    if root.slot == CURSOR {
+                        self.destroyed = None;
+                    }
                     if arrival {
                         self.cover_arrival(root.slot);
                     } else {
@@ -520,6 +519,15 @@ impl Inventory {
                 }
             }
             InventoryUpdate::Remove(slot) => {
+                if slot == CURSOR && self.destroyed.is_some() {
+                    // A new cursor arrival/replacement cannot be identified as
+                    // the item an unversioned late removal names.
+                    if self.items.contains_key(&CURSOR) {
+                        self.stale = true;
+                        return;
+                    }
+                    self.destroyed = None;
+                }
                 self.reconcile(slot, &[]);
                 self.remove(slot);
             }
@@ -538,7 +546,8 @@ impl Inventory {
                 self.resolved();
             }
             InventoryUpdate::Settled => {
-                self.unconfirmed.clear();
+                self.unconfirmed
+                    .retain(|slot, _| self.destroyed.is_some() && *slot == CURSOR);
                 self.equipment_uncertainty.clear();
                 self.weight_rebased.clear();
                 self.weight_history_uncertain = false;
@@ -546,6 +555,23 @@ impl Inventory {
                 self.resolved();
             }
         }
+    }
+
+    /// Replaces every inventory baseline with a complete received snapshot.
+    fn replace_snapshot(&mut self, items: Vec<InventoryItem>) {
+        self.destroyed = None;
+        self.items = items.into_iter().map(|item| (item.slot, item)).collect();
+        self.queued.clear();
+        self.received = true;
+        self.predicted = false;
+        self.stale = false;
+        self.unconfirmed.clear();
+        self.predictions.clear();
+        self.equipment_uncertainty.clear();
+        self.weight_rebased.clear();
+        self.weight_history_uncertain = false;
+        self.stack_weight = None;
+        self.correcting = false;
     }
 
     /// Units the server took from `slot` without an item update.
@@ -643,7 +669,7 @@ impl Inventory {
             prediction.retain(|slot| self.unconfirmed.contains_key(slot));
         }
         self.predictions.retain(|prediction| !prediction.is_empty());
-        self.predicted = !self.unconfirmed.is_empty();
+        self.predicted = !self.unconfirmed.is_empty() || self.destroyed.is_some();
         if !self.predicted {
             self.correcting = false;
             self.weight_rebased.clear();

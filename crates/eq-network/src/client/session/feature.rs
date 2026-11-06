@@ -46,10 +46,18 @@ pub(super) trait Sink {
 
     /// Seconds since the server last sent anything.
     fn last_received_seconds(&self) -> u64;
+
+    /// A peer termination whose completed application prefix may remain.
+    fn termination(&self) -> Option<eq_network_transport::modern::SessionTermination> {
+        None
+    }
 }
 
 /// Any transport carries a feature's packets.
 impl<T: Transport + ?Sized> Sink for T {
+    fn termination(&self) -> Option<eq_network_transport::modern::SessionTermination> {
+        Transport::termination(self)
+    }
     fn send(&mut self, packet: &EncodedCommand) -> Result<()> {
         Transport::send(self, packet.opcode, &packet.body)
     }

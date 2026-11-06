@@ -20,7 +20,8 @@ impl Inventory {
     /// or unresolved root-stack distribution. Not a readiness grant.
     #[must_use]
     pub fn carried_weight_is_conservative(&self) -> bool {
-        !self.weight_rebased.is_empty()
+        self.destroyed.is_some()
+            || !self.weight_rebased.is_empty()
             || self
                 .stack_weight
                 .as_ref()

@@ -21,6 +21,10 @@ struct Features {
     /// The spell action flag that says a spell landed, as the server type
     /// says.
     spell_landing_flag: Option<u8>,
+    answers_list_polls: bool,
+    /// Whether the server type offers the explicit gameplay departures
+    /// (movement and memorization options); public servers never do.
+    gameplay_departures: bool,
 }
 
 impl Features {
@@ -50,6 +54,8 @@ impl Features {
             provided: features,
             choices,
             spell_landing_flag: server.spell_landing_flag(),
+            answers_list_polls: server.answers_list_polls(),
+            gameplay_departures: server.offers_gameplay_departures(),
         }
     }
 
@@ -62,6 +68,12 @@ impl Features {
             .flat_map(|feature| feature.capabilities())
             .filter(|capability| !self.choices.contains(capability))
             .collect();
+        if self.answers_list_polls {
+            capabilities.push(crate::world::Capability::AnsweringListPolls);
+        }
+        if self.gameplay_departures {
+            capabilities.push(crate::world::Capability::GameplayDepartures);
+        }
         capabilities.sort_unstable();
         capabilities.dedup();
         capabilities
@@ -121,11 +133,23 @@ impl Features {
         if world.lifecycle.is_dead() {
             return Some("The player is dead");
         }
-        if !world.ready() || world.lifecycle.pending().is_some() {
+        if !world.ready() || world.lifecycle.blocks_motion() {
             return Some("The player is between zones");
+        }
+        if !self.gameplay_departures && Self::is_departure(command) {
+            return Some("Gameplay departures are not offered on this server");
         }
         actions::stale(command, world.session_id, now)
             .or_else(|| actions::Held::new(self.holds(world, now)).conflict(command))
+    }
+
+    /// Whether a command chooses an explicit departure from the official
+    /// client, which only a server type that offers them takes.
+    const fn is_departure(command: &ClientCommand) -> bool {
+        matches!(
+            command,
+            ClientCommand::SetMovementOptions { .. } | ClientCommand::SetBookOptions { .. }
+        )
     }
 
     /// Lets every feature hear a command, then has its owner carry it out;
@@ -136,6 +160,10 @@ impl Features {
         world: &mut World,
         out: &mut Out<'_, '_>,
     ) -> Result<bool> {
+        if out.sink.termination().is_some() {
+            actions::refuse(command, "The zone connection ended", out.log)?;
+            return Ok(true);
+        }
         for feature in &mut self.provided {
             feature.notice(command, world, out)?;
         }
@@ -152,6 +180,9 @@ impl Features {
 
     /// Runs the features' timers until one ends the session.
     fn tick(&mut self, now: Instant, world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
+        if out.sink.termination().is_some() {
+            return Ok(());
+        }
         for feature in &mut self.provided {
             feature.tick(now, world, out)?;
             if world.ending() {
@@ -181,7 +212,20 @@ impl Features {
         out: &mut Out<'_, '_>,
     ) -> Result<()> {
         for feature in &mut self.provided {
-            feature.observe(message, world, out)?;
+            if let Err(error) = feature.observe(message, world, out) {
+                // A response to completed incoming news may be refused by the
+                // already ended transport. It was not submitted. Keep the
+                // remaining observers/prefix readable, then receive reports
+                // that same latched failure. Other errors still fail here.
+                let refused = error
+                    .downcast_ref::<eq_network_transport::modern::SessionTermination>()
+                    .copied();
+                if refused.is_none() || refused != out.sink.termination() {
+                    return Err(error);
+                }
+                out.log
+                    .diagnostic(format!("Response not submitted: {error}"))?;
+            }
             if world.ending() {
                 break;
             }
@@ -228,6 +272,7 @@ pub(super) fn run(
     let session_id = rand::random();
     let mut world = World::new(session_id);
     let mut unheard = Unheard::new(Stage::Zone);
+    let mut list_replies = super::list_poll::Replies::default();
     let mut features = Features::new(server, &config.character, config.auto_eat);
     let follows_zones = features
         .capabilities()
@@ -277,57 +322,79 @@ pub(super) fn run(
             session.close()?;
             return Ok(exit);
         }
-        if world.lifecycle.blocks_motion() {
-            if let Some(commands) = context.commands {
-                // Death and zone transfers hold every command; each is refused,
-                // so that whoever waits on one hears why.
-                let reason = if world.lifecycle.is_dead() {
-                    "The player is dead"
-                } else {
-                    "The player is between zones"
-                };
-                for command in commands.try_iter().take(64) {
-                    actions::refuse(&command, reason, log)?;
+        let mut commands = Vec::new();
+        if world.ready() || world.lifecycle.blocks_motion() {
+            if let Some(queue) = context.commands {
+                for command in queue.try_iter().take(64) {
+                    if !list_replies.configure(
+                        server,
+                        &command,
+                        session_id,
+                        &context.answer_list_polls,
+                        log,
+                    )? {
+                        commands.push(command);
+                    }
                 }
             }
         }
-        if world.ready() && !world.lifecycle.is_dead() && world.lifecycle.pending().is_none() {
-            if let Some(commands) = context.commands {
-                // Bound each pass so continuous producers cannot starve receive/ACK work.
-                for command in commands.try_iter().take(64) {
-                    // Stale commands, and commands that need what an action in
-                    // flight holds, are refused here and nowhere else.
-                    let now = Instant::now();
-                    let refusal = features.refusal(&command, &world, now);
-                    if let Some(reason) = refusal {
-                        actions::refuse(&command, reason, log)?;
-                        continue;
-                    }
-                    let speaker = sender(&config.character, &world);
-                    let (handled, exit) = {
-                        let mut out = Out {
-                            sink: &mut session,
-                            log: &mut *log,
-                            wire: server.wire(),
-                            sender: speaker,
-                        };
-                        let handled = features.handle(&command, &mut world, &mut out)?;
-                        (
-                            handled,
-                            settle(&mut features, &mut world, &mut out, follows_zones)?,
-                        )
+        // Apply opt-outs before any due send. Death and transfers invalidate
+        // a queued reply; a fresh admission never inherits one.
+        let may_reply = context.answer_list_polls.get()
+            && world.ready()
+            && !world.lifecycle.blocks_motion()
+            && session.termination().is_none();
+        list_replies.tick(Instant::now(), may_reply, &mut session, log)?;
+        if world.lifecycle.blocks_motion() {
+            // Death and zone transfers hold every command; each is refused,
+            // so that whoever waits on one hears why.
+            let reason = hold_reason(&world);
+            for command in &commands {
+                actions::refuse(command, reason, log)?;
+            }
+        }
+        if world.ready() && !world.lifecycle.blocks_motion() {
+            // The command batch is bounded above to preserve receive/ACK work.
+            let mut pending = commands.iter();
+            while let Some(command) = pending.next() {
+                // Stale commands, and commands that need what an action in
+                // flight holds, are refused here and nowhere else.
+                let now = Instant::now();
+                let refusal = features.refusal(command, &world, now);
+                if let Some(reason) = refusal {
+                    actions::refuse(command, reason, log)?;
+                    continue;
+                }
+                let speaker = sender(&config.character, &world);
+                let (handled, exit) = {
+                    let mut out = Out {
+                        sink: &mut session,
+                        log: &mut *log,
+                        wire: server.wire(),
+                        sender: speaker,
                     };
-                    if let Some(exit) = exit {
-                        session.close()?;
-                        return Ok(exit);
+                    let handled = features.handle(command, &mut world, &mut out)?;
+                    (
+                        handled,
+                        settle(&mut features, &mut world, &mut out, follows_zones)?,
+                    )
+                };
+                if let Some(exit) = exit {
+                    session.close()?;
+                    return Ok(exit);
+                }
+                if !handled {
+                    unoffered(command, log)?;
+                }
+                // Death and zone transfers hold the rest of the batch; it was
+                // already taken from the queue, so each is refused here, so
+                // that whoever waits on one hears why.
+                if world.lifecycle.blocks_motion() {
+                    let reason = hold_reason(&world);
+                    for command in pending {
+                        actions::refuse(command, reason, log)?;
                     }
-                    if !handled {
-                        unoffered(&command, log)?;
-                    }
-                    // Commands wait while the player is dead or zoning.
-                    if world.lifecycle.is_dead() || world.lifecycle.pending().is_some() {
-                        break;
-                    }
+                    break;
                 }
             }
         }
@@ -358,8 +425,22 @@ pub(super) fn run(
         )? {
             continue;
         }
+        if list_replies.observe(
+            server,
+            may_reply,
+            packet.opcode,
+            &packet.body,
+            Instant::now(),
+            log,
+        )? {
+            continue;
+        }
         // What the generation's client answers by itself, at any time.
-        if let Some(reply) = server.wire().answer(packet.opcode, &packet.body) {
+        if let Some(reply) = server
+            .wire()
+            .answer(packet.opcode, &packet.body)
+            .filter(|_| session.termination().is_none())
+        {
             session.send(reply.opcode, &reply.body)?;
         }
         if !world.ready() {
@@ -570,6 +651,15 @@ fn unoffered(command: &ClientCommand, log: &mut Events<'_>) -> Result<()> {
     actions::refuse(command, UNOFFERED, log)
 }
 
+/// Why death or a zone transfer holds every command.
+fn hold_reason(world: &World) -> &'static str {
+    if world.lifecycle.is_dead() {
+        "The player is dead"
+    } else {
+        "The player is between zones"
+    }
+}
+
 /// Tells the host the zone admitted the player, as the features shape them,
 /// and lets every feature tell what it staged.
 fn admit(
@@ -625,11 +715,11 @@ mod tests {
     use eq_network_game::{
         chat::OutboundChat,
         inventory::{InventoryMove, InventorySlot, ItemUse, MoveQuantity},
-        movement::{MotionCalibration, MovementMode, MovementRequest},
+        movement::{DiagonalRates, MotionCalibration, MovementMode, MovementRequest},
     };
 
     /// How many kinds of command there are.
-    const KINDS: usize = 76;
+    const KINDS: usize = 82;
 
     /// The kinds the login and world servers take, before any zone session.
     const BEFORE_ZONES: [usize; 4] = [0, 1, 70, 75];
@@ -653,8 +743,10 @@ mod tests {
             ClientCommand::ForgetSpell { .. } => 9,
             ClientCommand::MemorizeSpell { .. } => 10,
             ClientCommand::CastSpell { .. } => 11,
+            ClientCommand::CancelBuff(_) => 81,
             ClientCommand::SetPosture { .. } => 12,
             ClientCommand::MoveInventory(_) => 13,
+            ClientCommand::DestroyItem(_) => 80,
             ClientCommand::SendChat(_) => 14,
             ClientCommand::InspectItem { .. } => 15,
             ClientCommand::Consider { .. } => 16,
@@ -683,6 +775,10 @@ mod tests {
             ClientCommand::DropCorpse { .. } => 39,
             ClientCommand::Pet { .. } => 40,
             ClientCommand::AutoEat { .. } => 41,
+            ClientCommand::AnswerListPolls { .. } => 76,
+            ClientCommand::SetMovementOptions { .. } => 77,
+            ClientCommand::SetBookOptions { .. } => 78,
+            ClientCommand::ExitAtOnce { .. } => 79,
             ClientCommand::Training { .. } => 42,
             ClientCommand::AnswerResurrection { .. } => 43,
             ClientCommand::ReadItem { .. } => 44,
@@ -729,6 +825,15 @@ mod tests {
         let (session_id, created) = (1, Instant::now());
         let position = crate::world::Position::default();
         vec![
+            ClientCommand::CancelBuff(eq_network_game::buffs::cancel::Request {
+                session_id,
+                revision: 1,
+                slot: 3,
+                spell_id: 42,
+                beneficial: Some(true),
+                cancellable: Some(true),
+                created,
+            }),
             ClientCommand::SwapSpell {
                 session_id,
                 from: 0,
@@ -808,6 +913,12 @@ mod tests {
                 quantity: MoveQuantity::Whole,
                 created,
             }),
+            ClientCommand::DestroyItem(Box::new(eq_network_game::inventory::InventoryDestroy {
+                session_id,
+                revision: 1,
+                created,
+                item: super::super::feature::testing::item(30),
+            })),
             ClientCommand::SendChat(OutboundChat::Say("Hail".into())),
             ClientCommand::InspectItem {
                 session_id,
@@ -884,6 +995,7 @@ mod tests {
             ClientCommand::ConfigureMotion {
                 session_id,
                 calibration: MotionCalibration {
+                    diagonal: DiagonalRates::default(),
                     units_per_second: 6.0,
                     velocity_scale: 0.05,
                     animation: 12,
@@ -908,6 +1020,7 @@ mod tests {
             },
             ClientCommand::Move(MovementRequest {
                 mode: MovementMode::Forward,
+                heading: eq_network_game::movement::HeadingUpdate::Rate,
                 session_id,
                 position,
                 created,
@@ -942,6 +1055,24 @@ mod tests {
             ClientCommand::Consume {
                 session_id,
                 slot: InventorySlot(22),
+                created,
+            },
+            ClientCommand::AnswerListPolls {
+                session_id,
+                enabled: false,
+            },
+            ClientCommand::SetMovementOptions {
+                session_id,
+                request_id: 1,
+                options: eq_network_game::movement::MovementOptions::default(),
+                created,
+            },
+            ClientCommand::SetBookOptions {
+                session_id,
+                memorize_without_sitting: false,
+            },
+            ClientCommand::ExitAtOnce {
+                session_id,
                 created,
             },
             ClientCommand::AutoEat {
@@ -1117,6 +1248,16 @@ mod tests {
         })
         .collect();
         for command in zone_commands() {
+            if matches!(command, ClientCommand::AnswerListPolls { .. }) {
+                // Session control is owned before the gameplay feature gates.
+                assert!(servers.iter().any(|features| features.answers_list_polls));
+                continue;
+            }
+            if Features::is_departure(&command) {
+                // Departures are gated by the server type before their owner.
+                assert!(servers.iter().any(|features| features.gameplay_departures));
+                continue;
+            }
             let needed = command
                 .capability()
                 .expect("a zone command needs a capability");
@@ -1166,6 +1307,114 @@ mod tests {
                     .iter()
                     .any(|feature| feature.owns(&selection)));
             }
+        }
+    }
+
+    #[test]
+    fn immediate_exit_and_option_requests_keep_life_session_and_freshness_gates() {
+        use super::super::feature::testing;
+        let features = Features::new(
+            servers::server_type(crate::client::ServerProtocol::EqEmu),
+            "Tester",
+            eq_network_game::food::AutoEat::default(),
+        );
+        let now = Instant::now();
+        let mut world = World::new(5);
+        world.player.admit(testing::player(7));
+        world.own_spawn = Some(7);
+        world.admitted = Some(now);
+        let exit = ClientCommand::ExitAtOnce {
+            session_id: 5,
+            created: now,
+        };
+        assert_eq!(features.refusal(&exit, &world, now), None);
+        assert!(features
+            .refusal(&exit, &world, now + Duration::from_secs(1))
+            .is_some());
+        let foreign = ClientCommand::ExitAtOnce {
+            session_id: 6,
+            created: now,
+        };
+        assert!(features.refusal(&foreign, &world, now).is_some());
+        world.lifecycle.mark_dead();
+        assert!(features.refusal(&exit, &world, now).is_some());
+        let options = ClientCommand::SetMovementOptions {
+            session_id: 5,
+            request_id: 7,
+            options: eq_network_game::movement::MovementOptions::default(),
+            created: now,
+        };
+        let reason = features.refusal(&options, &world, now).unwrap();
+        let output = testing::run(|out| actions::refuse(&options, reason, out.log));
+        output.result.unwrap();
+        assert_eq!(output.sent, []);
+        assert!(matches!(
+            output.events.first(),
+            Some(ClientEvent::World(
+                crate::world::WorldEvent::MovementOptionsRefused {
+                    session_id: 5,
+                    request_id: 7,
+                    ..
+                }
+            ))
+        ));
+    }
+
+    #[test]
+    fn public_servers_refuse_the_explicit_gameplay_departures() {
+        use super::super::feature::testing;
+        use crate::world::Capability;
+        let now = Instant::now();
+        let mut world = World::new(5);
+        world.player.admit(testing::player(7));
+        world.own_spawn = Some(7);
+        world.admitted = Some(now);
+        let options = ClientCommand::SetMovementOptions {
+            session_id: 5,
+            request_id: 7,
+            options: eq_network_game::movement::MovementOptions::default(),
+            created: now,
+        };
+        let book = ClientCommand::SetBookOptions {
+            session_id: 5,
+            memorize_without_sitting: true,
+        };
+        assert_eq!(options.capability(), Some(Capability::GameplayDepartures));
+        assert_eq!(book.capability(), Some(Capability::GameplayDepartures));
+        let features = |protocol| {
+            Features::new(
+                servers::server_type(protocol),
+                "Tester",
+                eq_network_game::food::AutoEat::default(),
+            )
+        };
+        let eqemu = features(crate::client::ServerProtocol::EqEmu);
+        assert_eq!(eqemu.refusal(&options, &world, now), None);
+        assert_eq!(eqemu.refusal(&book, &world, now), None);
+        for protocol in [
+            crate::client::ServerProtocol::Project1999,
+            crate::client::ServerProtocol::Quarm,
+            crate::client::ServerProtocol::Takp,
+        ] {
+            let public = features(protocol);
+            assert!(
+                !public
+                    .capabilities()
+                    .contains(&Capability::GameplayDepartures),
+                "{protocol:?}"
+            );
+            for command in [&options, &book] {
+                let reason = public
+                    .refusal(command, &world, now)
+                    .unwrap_or_else(|| panic!("{protocol:?} takes {command:?}"));
+                assert!(reason.contains("not offered"), "{protocol:?}: {reason}");
+            }
+            // Ordinary movement itself stays ungated there.
+            let jump = ClientCommand::Jump {
+                session_id: 5,
+                created: now,
+            };
+            assert_eq!(public.refusal(&jump, &world, now), None, "{protocol:?}");
         }
     }
 
@@ -1349,6 +1598,8 @@ mod tests {
             ],
             choices: Vec::new(),
             spell_landing_flag: None,
+            answers_list_polls: false,
+            gameplay_departures: false,
         };
         let (world, outcome) = bleed_out(features);
         outcome.result.unwrap();
@@ -1414,6 +1665,8 @@ mod tests {
             provided: vec![Box::new(Echo)],
             choices: Vec::new(),
             spell_landing_flag: None,
+            answers_list_polls: false,
+            gameplay_departures: false,
         };
         let mut world = World::new(5);
         world.admitted = Some(Instant::now());
@@ -1578,6 +1831,8 @@ mod tests {
             provided: Vec::new(),
             choices: Vec::new(),
             spell_landing_flag: None,
+            answers_list_polls: false,
+            gameplay_departures: false,
         };
         let click = ClientCommand::ClickDoor {
             session_id: 5,
@@ -1678,12 +1933,17 @@ mod tests {
             Capability::Translocate,
             Capability::ServerTicks,
             Capability::ShowingHelm,
+            Capability::CancellingBuffs,
         ] {
             assert!(eqemu.contains(&capability));
             assert!(!p99.contains(&capability));
         }
         assert!(p99.contains(&Capability::EnvironmentalDamage));
-        assert_eq!(eqemu.len(), p99.len() + 15);
+        assert!(p99.contains(&Capability::AnsweringListPolls));
+        assert!(!eqemu.contains(&Capability::AnsweringListPolls));
+        assert!(eqemu.contains(&Capability::GameplayDepartures));
+        assert!(!p99.contains(&Capability::GameplayDepartures));
+        assert_eq!(eqemu.len(), p99.len() + 16);
     }
 
     #[test]
@@ -2043,3 +2303,12 @@ mod target_tests;
 
 #[cfg(test)]
 mod manual_combine_tests;
+
+#[cfg(test)]
+mod terminal_tests;
+
+#[cfg(test)]
+mod stun_tests;
+
+#[cfg(test)]
+mod buff_tests;

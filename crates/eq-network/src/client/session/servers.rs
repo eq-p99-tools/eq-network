@@ -20,6 +20,7 @@ use anyhow::Result;
 use super::{
     abilities::Abilities,
     bleeding::{BleedingOut, ItemCount},
+    buffs::Buffs,
     camp::Camp,
     casting::Casting,
     character::Character,
@@ -222,6 +223,22 @@ pub(super) trait ServerType: Sync {
         false
     }
 
+    /// Whether this server policy recognizes P99 list notices and supports
+    /// the separately opted-in presence reply. Recognition is source-backed;
+    /// deployed server acceptance remains unverified.
+    fn answers_list_polls(&self) -> bool {
+        false
+    }
+
+    /// Whether this server policy offers the explicit gameplay departures
+    /// ([`crate::world::Capability::GameplayDepartures`]: movement and memorization
+    /// options the official client never takes). Public servers never do;
+    /// a departure there would be faster or more permissive than the
+    /// official client, so their zone session refuses the option commands.
+    fn offers_gameplay_departures(&self) -> bool {
+        false
+    }
+
     /// Runs the character's stay in a zone: the shared zone session, with
     /// the features this server type provides.
     ///
@@ -240,6 +257,11 @@ pub(super) trait ServerType: Sync {
 
     /// Casting memorized spells and using items' effects.
     fn casting(&self, _setup: &Setup<'_>) -> Provided {
+        None
+    }
+
+    /// Explicit cancellation, separate from casting and disabled by default.
+    fn buff_cancellation(&self, _setup: &Setup<'_>) -> Provided {
         None
     }
 
@@ -446,6 +468,7 @@ pub(super) trait ServerType: Sync {
         [
             self.control(setup),
             self.casting(setup),
+            self.buff_cancellation(setup),
             self.spellbook(setup),
             self.inventory(setup),
             self.motion(setup),
@@ -828,6 +851,10 @@ const P99_HAZARDS: [Hazard; 1] = [Hazard::Falling];
 struct Project1999;
 
 impl ServerType for Project1999 {
+    // Ordinary buff cancellation remains a P99 evidence gap. The initialized
+    // EQEmu request differs from Titanium's optimistic two-send UI path; do
+    // not offer it here until the deployed P99 contract is established.
+
     /// Ordinary Titanium group senders and explicit consent (native
     /// 0x49d3cc/0x49d654/0x49d7b6/0x49d8bd), with roster state from
     /// 0x458738. Public P99 partner compatibility remains a separate check.
@@ -890,6 +917,10 @@ impl ServerType for Project1999 {
     /// watched leaving for them yet, so `EQEmu` keeps the default until
     /// one is; the `EQMac` types never showed it under wine.
     fn sends_system_info(&self) -> bool {
+        true
+    }
+
+    fn answers_list_polls(&self) -> bool {
         true
     }
 
@@ -1022,6 +1053,16 @@ impl ServerType for Project1999 {
 struct EqEmu;
 
 impl ServerType for EqEmu {
+    fn buff_cancellation(&self, _setup: &Setup<'_>) -> Provided {
+        offer(Box::<Buffs>::default())
+    }
+
+    /// Stock local servers are the player's own; the departures stay off
+    /// until chosen there too.
+    fn offers_gameplay_departures(&self) -> bool {
+        true
+    }
+
     fn inventory_move_rules(&self) -> Option<MoveRules> {
         Some(MoveRules::EqEmu)
     }
@@ -1076,6 +1117,12 @@ impl ServerType for EqEmu {
 
     fn motion(&self, _setup: &Setup<'_>) -> Provided {
         offer(shared::motion(true, true, self.spell_landing_flag()))
+    }
+
+    /// `Client::Stun` sends Titanium's four-byte duration to the same native
+    /// handler used on P99; zero retains that handler's minimum/overlap rules.
+    fn control(&self, _setup: &Setup<'_>) -> Provided {
+        offer(Box::new(Stuns))
     }
 
     fn character(&self, _setup: &Setup<'_>) -> Provided {
@@ -1627,16 +1674,12 @@ mod tests {
     }
 
     #[test]
-    fn only_verified_p99_policy_enables_own_stun_interpretation() {
+    fn only_verified_titanium_policies_enable_own_stun_interpretation() {
         let setup = Setup::new("Tester", AutoEat::default());
-        assert!(server_type(ServerProtocol::Project1999)
-            .control(&setup)
-            .is_some());
-        for protocol in [
-            ServerProtocol::EqEmu,
-            ServerProtocol::Takp,
-            ServerProtocol::Quarm,
-        ] {
+        for protocol in [ServerProtocol::Project1999, ServerProtocol::EqEmu] {
+            assert!(server_type(protocol).control(&setup).is_some());
+        }
+        for protocol in [ServerProtocol::Takp, ServerProtocol::Quarm] {
             assert!(server_type(protocol).control(&setup).is_none());
         }
         assert!(Empty.control(&setup).is_none());
@@ -2114,10 +2157,10 @@ mod tests {
         // program (6.332); only EQEmu waits for the answer to the end of
         // hiding; only EQEmu answers sacrifices, read from its source and not
         // yet checked live; and only EQEmu takes the show-helm option.
-        // P99 also retains the verified own-player stun timer.
+        // Both Titanium policies retain the verified own-player stun timer.
         for (protocol, count) in [
             (ServerProtocol::Project1999, 27),
-            (ServerProtocol::EqEmu, 37),
+            (ServerProtocol::EqEmu, 39),
         ] {
             let server = server_type(protocol);
             let setup = Setup::new("Tester", AutoEat::default());
@@ -2189,6 +2232,36 @@ mod tests {
             assert!(
                 !server_type(protocol).sends_system_info(),
                 "{protocol:?} lists a send nobody has watched"
+            );
+        }
+    }
+
+    #[test]
+    fn only_p99_offers_the_opt_in_list_presence_reply() {
+        assert!(server_type(ServerProtocol::Project1999).answers_list_polls());
+        for protocol in [
+            ServerProtocol::EqEmu,
+            ServerProtocol::Quarm,
+            ServerProtocol::Takp,
+        ] {
+            assert!(
+                !server_type(protocol).answers_list_polls(),
+                "{protocol:?} offers a P99-only list reply"
+            );
+        }
+    }
+
+    #[test]
+    fn only_eqemu_offers_the_explicit_gameplay_departures() {
+        assert!(server_type(ServerProtocol::EqEmu).offers_gameplay_departures());
+        for protocol in [
+            ServerProtocol::Project1999,
+            ServerProtocol::Quarm,
+            ServerProtocol::Takp,
+        ] {
+            assert!(
+                !server_type(protocol).offers_gameplay_departures(),
+                "{protocol:?} offers gameplay departures on a public server"
             );
         }
     }

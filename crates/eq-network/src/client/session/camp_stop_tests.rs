@@ -7,7 +7,10 @@ use crate::client::session::{
 use crate::client::{ClientConfig, Events};
 use eq_network_game::{
     command::EncodedCommand,
-    movement::{MotionCalibration, MotionSession, MovementMode, MovementRequest, PositionPacket},
+    movement::{
+        DiagonalRates, MotionCalibration, MotionSession, MovementMode, MovementRequest,
+        PositionPacket,
+    },
     quarm,
     request::Sender,
     world::Position,
@@ -91,6 +94,7 @@ fn request(created: Instant, position: Position) -> ClientCommand {
     ClientCommand::Move(MovementRequest {
         session_id: 5,
         mode: MovementMode::Forward,
+        heading: eq_network_game::movement::HeadingUpdate::Rate,
         position,
         created,
     })
@@ -126,6 +130,7 @@ fn walking_on(start: Instant, wire: &'static dyn Wire, first_ms: u64) -> World {
     motion
         .calibrate(
             MotionCalibration {
+                diagonal: DiagonalRates::default(),
                 units_per_second: 6.0,
                 velocity_scale: 0.05,
                 animation: 12,

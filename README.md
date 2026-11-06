@@ -28,6 +28,11 @@ for their check on P99:
 | `Takp` | Windows TAKP/`EQMac`, for a stock TAKP server | Character creation, entering the world, chat, moving, targeting, considering and attacking, casting and the spellbook (not yet deleting or moving its spells), zoning and camping, groups, moving items and coins (the bank's beside a banker), buying and selling at merchants (not yet what a merchant pays), and eating and drinking; source-backed ground pickups and guarded ordinary door requests ([validation limits](docs/eqmac-world-objects.md)) |
 | `Quarm` | Windows TAKP/`EQMac` | Character creation and previews, admission, chat, targeting, normal attack and consider, posture, camping, ground movement, jumping, falling, zoning, casting, basic spellbook actions, the supported EQMac abilities, and guarded item/coin moves including personal banking; source-backed ground pickups and guarded ordinary door requests ([validation limits](docs/eqmac-world-objects.md)), and source-backed looting of NPC and own corpses ([evidence and limits](docs/eqmac-looting.md), live unverified). Meals use the guarded EQMac path ([limits](docs/quarm-meals.md)). Guarded ordinary merchant purchases/sales are offered ([limits](docs/quarm-merchants.md)); exchanges remain disabled. Movement requires current load/STR/buff inputs; uncertain state withdraws player input. Source evidence, confirmation limits and deferred live checks are in the [gap report](docs/public-server-gaps.md) and [combat notes](docs/quarm-combat.md). |
 
+P99 list presence replies are an explicit, default-off option
+(`ClientConfig::answer_list_polls`). The session observes population notices
+without joining a list. Presence replies use a 3..=60 second application
+policy delay; deployed server acceptance remains unverified.
+
 The table follows [`servers.rs`](crates/eq-network/src/client/session/servers.rs),
 which decides. A front end goes by the capabilities its own session reports, from
 the revision of this library its lockfile resolves. [API and integration

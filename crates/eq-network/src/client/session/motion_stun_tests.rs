@@ -1,7 +1,7 @@
 //! Clock-driven session enforcement with fabricated values, no live traffic.
 use super::*;
 use crate::client::session::{control::Stuns, feature::testing};
-use eq_network_game::movement::MovementMode;
+use eq_network_game::movement::{DiagonalRates, MovementMode};
 use std::time::Duration;
 
 fn setup(start: Instant) -> World {
@@ -16,6 +16,7 @@ fn setup(start: Instant) -> World {
     motion
         .calibrate(
             MotionCalibration {
+                diagonal: DiagonalRates::default(),
                 units_per_second: 6.0,
                 velocity_scale: 0.05,
                 animation: 12,
@@ -47,6 +48,7 @@ fn request(created: Instant, position: Position) -> MovementRequest {
     MovementRequest {
         session_id: 12,
         mode: MovementMode::Fall,
+        heading: eq_network_game::movement::HeadingUpdate::Rate,
         created,
         position,
     }
@@ -216,4 +218,119 @@ fn expiry_does_not_replay_queued_move_or_jump_and_fresh_motion_uses_existing_cal
     output.result.unwrap();
     assert_eq!(output.unreliable.len(), 1);
     assert_eq!(world.body.position(), Some(fresh.position));
+}
+
+#[test]
+fn opted_in_stun_movement_keeps_transition_freshness_and_jump_restriction() {
+    let start = Instant::now();
+    let mut world = setup(start);
+    stun(&mut world, start + Duration::from_millis(100));
+    world
+        .body
+        .motion
+        .as_mut()
+        .unwrap()
+        .set_options(
+            eq_network_game::movement::MovementOptions {
+                walk_while_stunned: true,
+                ..Default::default()
+            },
+            start + Duration::from_millis(110),
+        )
+        .unwrap();
+    let now = start + Duration::from_millis(210);
+    let output = testing::run(|out| {
+        Motion::step_at(
+            &request(
+                now,
+                Position {
+                    x: 0.2,
+                    ..Position::default()
+                },
+            ),
+            now,
+            &mut world,
+            out,
+        )
+    });
+    output.result.unwrap();
+    assert_eq!(world.body.position().unwrap().x, 0.2);
+    let output = testing::run(|out| {
+        Motion::step_at(
+            &request(
+                start + Duration::from_millis(90),
+                Position {
+                    x: 0.3,
+                    ..Position::default()
+                },
+            ),
+            now,
+            &mut world,
+            out,
+        )
+    });
+    output.result.unwrap();
+    assert_eq!(world.body.position().unwrap().x, 0.2);
+    assert_eq!(output.unreliable, []);
+    let motion = Motion::new(true, true, None);
+    let output = testing::run(|out| motion.jump(now, &mut world, out));
+    output.result.unwrap();
+    assert_eq!(output.sent, []);
+    assert!(
+        world.control.stunned(),
+        "the option never clears control authority"
+    );
+}
+
+#[test]
+fn movement_policy_feedback_is_local_and_refusals_keep_prior_policy() {
+    let start = Instant::now();
+    let mut world = setup(start);
+    let mut owner = Motion::new(true, true, None);
+    owner.belongings = Some((
+        world.inventory.revision(),
+        world.coins.purse,
+        world.coins.cursor,
+    ));
+    let options = eq_network_game::movement::MovementOptions {
+        fly: true,
+        ..Default::default()
+    };
+    let command = ClientCommand::SetMovementOptions {
+        session_id: 12,
+        request_id: 42,
+        options,
+        created: Instant::now(),
+    };
+    let output = testing::run(|out| owner.handle(&command, &mut world, out));
+    output.result.unwrap();
+    assert_eq!(output.sent, []);
+    assert!(
+        matches!(output.events[..], [ClientEvent::World(WorldEvent::MovementOptionsApplied {
+        session_id: 12, request_id: 42, options: applied,
+    })] if applied == options)
+    );
+    assert_eq!(world.body.motion.as_ref().unwrap().options(), options);
+    // A stale local option result is a refusal, not a reset or server packet.
+    let old = ClientCommand::SetMovementOptions {
+        session_id: 12,
+        request_id: 43,
+        options: eq_network_game::movement::MovementOptions::default(),
+        created: start.checked_sub(Duration::from_millis(1)).unwrap(),
+    };
+    let output = testing::run(|out| owner.handle(&old, &mut world, out));
+    output.result.unwrap();
+    assert_eq!(output.sent, []);
+    assert!(matches!(
+        output.events[..],
+        [
+            ClientEvent::World(WorldEvent::MovementOptionsRefused {
+                session_id: 12,
+                request_id: 43,
+                ..
+            }),
+            ClientEvent::Diagnostic(_)
+        ]
+    ));
+    assert_eq!(world.body.motion.as_ref().unwrap().options(), options);
 }

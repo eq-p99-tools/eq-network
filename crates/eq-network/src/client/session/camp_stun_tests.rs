@@ -64,7 +64,9 @@ fn a_stun_never_rewinds_an_already_submitted_logout() {
     assert!(matches!(world.exit(), Some(ZoneExit::CharacterSelect)));
     assert!(matches!(
         output.events[..],
-        [ClientEvent::World(WorldEvent::Camp(CampStatus::Camped))]
+        [ClientEvent::World(WorldEvent::Camp(
+            CampStatus::ClosedWithoutReply
+        ))]
     ));
     assert_eq!(
         output.sent,

@@ -2,8 +2,11 @@
 
 The modern SOE transport reports explicit peer termination as
 `modern::SessionTermination` through its existing `anyhow::Result` return type.
-It ends the transport attempt, discards queued incoming applications, fragments,
-reorder data and retransmissions, and prevents further application sends. A
+It ends the transport attempt, discards incomplete fragments, reorder data and
+retransmissions, and immediately prevents further application sends and network
+I/O. Complete applications already ordered before the terminal control drain
+exactly once before its error. A combined suffix after termination is ignored.
+An explicit local close still refuses staged applications. A
 duplicate cannot replace the first reason. Closing an already terminated session
 sends no reply. This is transport evidence, not an acknowledgement or outcome of
 a gameplay, creation or deletion request.
@@ -15,8 +18,16 @@ packet shortens it. An opaque disconnect reason or out-of-session reply does not
 prove permanent refusal. The existing InvalidCredentials rule still prevents
 automatic retries. Cancellation, normal local closing, retry timings and the
 legacy EQMac transport retain their existing contracts. The desktop already
-disables automatic reconnect and can display the ordinary error text without a
-new event or consumer interface.
+disables automatic reconnect. The read-only `Transport::termination()` accessor
+lets the zone stop timers, queued commands and automatic replies while draining
+the completed prefix. Observer sends still fail; only a failure matching that
+latched terminal reason is deferred so remaining observers and applications can
+be read. It is recorded as not submitted. Other errors continue to propagate.
+
+The camp feature emits `CampStatus::Camped` only for a received logout reply.
+Its existing local close deadline instead emits `ClosedWithoutReply`, keeping
+the normal timing and local destination without asserting server cleanup or a
+reconnect cooldown waiver. A peer termination before a reply remains an error.
 
 ## Accepted inbound controls
 
@@ -47,9 +58,17 @@ connection-code comparison and optional disconnect reason. Its optional session
 resume branch requires another sender; this remains an open parity requirement.
 Recognizing termination and starting a fresh login do not implement native resume.
 
+The public connection implementation dispatches complete reliable applications
+through its [application callback](https://github.com/EQEmu/EQEmu/blob/4aceae18b94ffaafc08e2b17bc41cd72c77f795d/common/net/reliable_stream_connection.cpp#L814)
+while processing combined parts in order. A later disconnect changes connection
+status without withdrawing an already dispatched application. Retaining that
+completed prefix lets an actual logout reply reach the camp consumer; a terminal
+control without that reply remains transport evidence only.
+
 Synthetic regressions cover framing variants, malformed/current/wrong codes,
-peer filtering, duplicates, combined-packet ordering, queued-work withdrawal,
-application send guards, retry policy and fresh-attempt reset. Test preparation
+peer filtering, duplicates, complete-prefix delivery, incomplete-work removal,
+combined suffix rejection, local close, application send guards, a loopback camp
+consumer, retry policy and fresh-attempt reset. Test preparation
 does not establish execution or live P99 compatibility. Public P99 loss/refusal
 scenarios and additional control layouts remain unverified. No further world
 refusal opcode, session-resume sender, private movement/history/system packet or

@@ -10,8 +10,8 @@ use eq_network_game::{
     appearance::AppearanceChange,
     message::Message,
     movement::{
-        MotionCalibration, MotionSession, MovementRequest, PositionPacket, SpeedInputAcceptance,
-        SpeedInputState, SpeedInputs, SpeedState, STATIONARY_HEARTBEAT,
+        DiagonalRates, MotionCalibration, MotionSession, MovementRequest, PositionPacket,
+        SpeedInputAcceptance, SpeedInputState, SpeedInputs, SpeedState, STATIONARY_HEARTBEAT,
     },
     request::Request,
     world::{PlayerState, Position, WorldEvent},
@@ -175,6 +175,7 @@ fn granted(session_id: u64, speeds: &MotionCalibration, falls: bool) -> WorldEve
         walk_units_per_second: speeds.walk.map(|value| value.units_per_second),
         strafe_units_per_second: speeds.strafe.map(|value| value.units_per_second),
         backward_units_per_second: speeds.backward.map(|value| value.units_per_second),
+        diagonal: speeds.diagonal,
         falls,
     }
 }
@@ -188,6 +189,7 @@ pub(super) fn withdrawn(session_id: u64) -> WorldEvent {
         strafe_units_per_second: None,
         walk_units_per_second: None,
         backward_units_per_second: None,
+        diagonal: DiagonalRates::default(),
         falls: false,
     }
 }
@@ -476,10 +478,11 @@ impl Motion {
                 .diagnostic("Rejected movement: the player cannot move yet".into());
         };
         let (to, from) = (request.position, motion.position());
-        if let Some(reason) = world
-            .control
-            .motion_refusal(request, motion.is_passive(request))
-        {
+        if let Some(reason) = world.control.motion_refusal(
+            request,
+            motion.is_passive(request),
+            motion.options().walk_while_stunned,
+        ) {
             return out.log.send(ClientEvent::World(WorldEvent::MotionSent {
                 session_id: world.session_id,
                 position: from,
@@ -487,7 +490,8 @@ impl Motion {
             }));
         }
         if let (true, Some(player)) = (
-            !world.control.stunned() && (to.x, to.y, to.z) != (from.x, from.y, from.z),
+            (!world.control.stunned() || motion.options().walk_while_stunned)
+                && (to.x, to.y, to.z) != (from.x, from.y, from.z),
             world.player.as_ref(),
         ) {
             world.posture.stand_to_move(player.spawn_id, out)?;
@@ -607,6 +611,9 @@ impl Feature for Motion {
             world.body.motion = Some(
                 MotionSession::new(world.session_id, player.spawn_id, player.position, admitted)?
                     .with_falls(self.falls)
+                    .with_heading_snapshots(
+                        out.wire.dialect() == eq_network_game::GameDialect::Titanium,
+                    )
                     .with_gate(out.wire.update_gate())
                     .with_fall_speed(out.wire.fall_speed(world.gravity))
                     .with_jump(out.wire.jump_speed().map(|speed| {
@@ -633,6 +640,7 @@ impl Feature for Motion {
                 | ClientCommand::ConfigureMotion { .. }
                 | ClientCommand::SpeedInputs { .. }
                 | ClientCommand::ClimbReach { .. }
+                | ClientCommand::SetMovementOptions { .. }
         )
     }
 
@@ -649,6 +657,30 @@ impl Feature for Motion {
             ClientCommand::ConfigureMotion { .. } => Self::calibrate(command, world, out),
             ClientCommand::SpeedInputs { .. } => self.inputs(command, world, out),
             ClientCommand::ClimbReach { .. } => Self::climb(command, world, out),
+            ClientCommand::SetMovementOptions {
+                session_id,
+                request_id,
+                options,
+                created,
+            } if *session_id == world.session_id => {
+                let result = world
+                    .body
+                    .motion
+                    .as_mut()
+                    .ok_or_else(|| anyhow::anyhow!("The player cannot move yet"))
+                    .and_then(|motion| motion.set_options(*options, *created));
+                match result {
+                    Ok(()) => {
+                        out.log
+                            .send(ClientEvent::World(WorldEvent::MovementOptionsApplied {
+                                session_id: world.session_id,
+                                request_id: *request_id,
+                                options: *options,
+                            }))
+                    }
+                    Err(error) => super::actions::refuse(command, &error.to_string(), out.log),
+                }
+            }
             _ => Ok(()),
         }
     }
@@ -842,6 +874,7 @@ mod tests {
         let configure = ClientCommand::ConfigureMotion {
             session_id: 5,
             calibration: eq_network_game::movement::MotionCalibration {
+                diagonal: DiagonalRates::default(),
                 units_per_second: 6.0,
                 velocity_scale: 0.05,
                 animation: 12,

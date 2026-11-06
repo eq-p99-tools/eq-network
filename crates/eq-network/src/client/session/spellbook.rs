@@ -47,13 +47,15 @@ enum BookIntent {
 struct PendingBookAction {
     started: Instant,
     intent: BookIntent,
+    requires_sitting: bool,
+    delay: Duration,
 }
 
 impl PendingBookAction {
     /// Whether the player has sat long enough.
     fn ready(&self, now: Instant) -> bool {
         now.checked_duration_since(self.started)
-            .is_some_and(|elapsed| elapsed >= SITTING)
+            .is_some_and(|elapsed| elapsed >= self.delay)
     }
 
     /// The request, checked against the book and cursor as they are now
@@ -111,6 +113,7 @@ pub(super) struct Spellbook {
     /// What the server type lets the player do to the book's entries, as
     /// checked on that kind of server.
     edits: Edits,
+    memorize_without_sitting: bool,
     /// The book as the server last described it.
     book: Option<SpellBook>,
     /// A scribe or memorization waiting for the player to sit.
@@ -156,8 +159,11 @@ impl Spellbook {
             ),
             BookIntent::Scribe { .. } => ("scribing is unavailable", "Scribing scroll", "scribing"),
         };
+        let fast = self.memorize_without_sitting && matches!(intent, BookIntent::Memorize { .. });
         let pending = PendingBookAction {
             started: Instant::now(),
+            requires_sitting: !fast,
+            delay: if fast { Duration::ZERO } else { SITTING },
             intent,
         };
         let checked = self
@@ -173,11 +179,17 @@ impl Spellbook {
         let Some(spawn_id) = world.player.as_ref().map(|player| player.spawn_id) else {
             return Ok(());
         };
-        world.posture.set(spawn_id, Posture::Sitting, out)?;
+        if pending.requires_sitting {
+            world.posture.set(spawn_id, Posture::Sitting, out)?;
+        }
         self.pending = Some(pending);
         report(BookActionStatus::Preparing, out)?;
-        out.log
-            .diagnostic(format!("{starting}; movement or posture changes cancel it"))
+        if fast {
+            self.submit(Instant::now(), world, out)
+        } else {
+            out.log
+                .diagnostic(format!("{starting}; movement or posture changes cancel it"))
+        }
     }
 
     /// Deletes or swaps book entries at once.
@@ -215,6 +227,13 @@ impl Spellbook {
 
     /// Sends the scribe or memorization the player has sat long enough for.
     fn submit(&mut self, now: Instant, world: &World, out: &mut Out<'_, '_>) -> Result<()> {
+        if self
+            .pending
+            .as_ref()
+            .is_some_and(|pending| world.control.input_refusal(pending.started).is_some())
+        {
+            return self.cancel("Stun state changed during preparation", out);
+        }
         let Some(pending) = self.pending.take_if(|pending| pending.ready(now)) else {
             return Ok(());
         };
@@ -350,7 +369,8 @@ impl Feature for Spellbook {
         match command {
             ClientCommand::ScribeSpell { .. }
             | ClientCommand::MemorizeSpell { .. }
-            | ClientCommand::ForgetSpell { .. } => true,
+            | ClientCommand::ForgetSpell { .. }
+            | ClientCommand::SetBookOptions { .. } => true,
             ClientCommand::DeleteSpell { .. } => self.edits.deleting,
             ClientCommand::SwapSpell { .. } => self.edits.moving,
             _ => false,
@@ -363,7 +383,26 @@ impl Feature for Spellbook {
         world: &mut World,
         out: &mut Out<'_, '_>,
     ) -> Result<()> {
+        if let ClientCommand::MemorizeSpell { created, .. }
+        | ClientCommand::ScribeSpell { created, .. } = command
+        {
+            if let Some(reason) = world.control.input_refusal(*created) {
+                return report(BookActionStatus::Rejected(reason.into()), out);
+            }
+        }
         match *command {
+            ClientCommand::SetBookOptions {
+                session_id,
+                memorize_without_sitting,
+            } => {
+                if session_id == world.session_id
+                    && self.memorize_without_sitting != memorize_without_sitting
+                {
+                    self.cancel("Spellbook preparation option changed", out)?;
+                    self.memorize_without_sitting = memorize_without_sitting;
+                }
+                Ok(())
+            }
             ClientCommand::ScribeSpell {
                 revision,
                 slot,
@@ -421,7 +460,12 @@ impl Feature for Spellbook {
             }
             Message::Event(WorldEvent::Spell(update)) => self.spell(update, world, out),
             Message::Event(WorldEvent::Posture { spawn_id, posture })
-                if world.is_player(*spawn_id) && *posture != PostureState::Sitting =>
+                if world.is_player(*spawn_id)
+                    && *posture != PostureState::Sitting
+                    && self
+                        .pending
+                        .as_ref()
+                        .is_some_and(|pending| pending.requires_sitting) =>
             {
                 self.cancel("Server changed character posture", out)
             }
@@ -909,10 +953,123 @@ mod tests {
     }
 
     #[test]
+    fn fast_memorization_skips_local_delay_but_keeps_book_and_reply_authority() {
+        let (mut spellbook, mut world) = admitted(Some(73));
+        let option = ClientCommand::SetBookOptions {
+            session_id: 5,
+            memorize_without_sitting: true,
+        };
+        let output = testing::run(|out| {
+            spellbook.handle(&option, &mut world, out)?;
+            spellbook.handle(&memorize(2), &mut world, out)
+        });
+        output.result.unwrap();
+        assert_eq!(output.sent, [spells::titanium_memorize(2, 73)]);
+        assert!(spellbook.pending.is_none());
+        assert!(
+            spellbook.answers.outstanding(),
+            "submission is not a confirmed gem change"
+        );
+        assert_eq!(
+            statuses(&output.events),
+            [
+                &BookActionStatus::Preparing,
+                &BookActionStatus::AwaitingReply
+            ]
+        );
+        let (mut spellbook, mut world) = admitted(None);
+        spellbook.memorize_without_sitting = true;
+        let output = testing::run(|out| spellbook.handle(&memorize(2), &mut world, out));
+        output.result.unwrap();
+        assert_eq!(output.sent, []);
+        assert!(!spellbook.answers.outstanding());
+    }
+
+    #[test]
+    fn disabling_fast_memorization_restores_preparation_and_scribing_is_unchanged() {
+        let (mut spellbook, mut world) = admitted(Some(73));
+        spellbook.memorize_without_sitting = true;
+        let output = testing::run(|out| {
+            spellbook.handle(
+                &ClientCommand::SetBookOptions {
+                    session_id: 5,
+                    memorize_without_sitting: false,
+                },
+                &mut world,
+                out,
+            )?;
+            spellbook.handle(&memorize(2), &mut world, out)
+        });
+        output.result.unwrap();
+        assert_eq!(
+            output.sent,
+            [eq_network_game::command::titanium_posture(7, Posture::Sitting).unwrap()]
+        );
+        assert_eq!(spellbook.pending.as_ref().unwrap().delay, SITTING);
+        let output = testing::run(|out| {
+            spellbook.handle(
+                &ClientCommand::SetBookOptions {
+                    session_id: 5,
+                    memorize_without_sitting: true,
+                },
+                &mut world,
+                out,
+            )
+        });
+        output.result.unwrap();
+        assert!(spellbook.pending.is_none());
+        assert_eq!(output.sent, []);
+        let (mut spellbook, mut world) = admitted(None);
+        spellbook.memorize_without_sitting = true;
+        world.inventory = consumption::tests::scroll_on_cursor().into();
+        let scribe = ClientCommand::ScribeSpell {
+            session_id: 5,
+            revision: world.inventory.revision(),
+            slot: 0,
+            spell_id: 73,
+            created: Instant::now(),
+        };
+        let output = testing::run(|out| spellbook.handle(&scribe, &mut world, out));
+        output.result.unwrap();
+        assert_eq!(
+            output.sent,
+            [eq_network_game::command::titanium_posture(7, Posture::Sitting).unwrap()]
+        );
+        assert_eq!(spellbook.pending.as_ref().unwrap().delay, SITTING);
+    }
+
+    #[test]
+    fn both_prepared_and_fast_memorization_retain_stun_gates() {
+        for fast in [false, true] {
+            let (mut spellbook, mut world) = admitted(Some(73));
+            spellbook.memorize_without_sitting = fast;
+            testing::run(|out| {
+                super::super::control::Stuns::observe_at(
+                    &Message::Event(WorldEvent::Stun(None)),
+                    Instant::now(),
+                    &mut world,
+                    out,
+                )
+            })
+            .result
+            .unwrap();
+            let output = testing::run(|out| spellbook.handle(&memorize(2), &mut world, out));
+            output.result.unwrap();
+            assert_eq!(output.sent, []);
+            assert!(matches!(
+                statuses(&output.events)[..],
+                [BookActionStatus::Rejected(_)]
+            ));
+        }
+    }
+
+    #[test]
     fn a_waiting_request_is_checked_against_the_book_when_it_goes_out() {
         let now = Instant::now();
         let pending = PendingBookAction {
             started: now,
+            requires_sitting: true,
+            delay: SITTING,
             intent: BookIntent::Memorize {
                 gem: 2,
                 spell_id: 73,

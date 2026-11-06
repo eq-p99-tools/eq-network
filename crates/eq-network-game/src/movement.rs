@@ -1,6 +1,7 @@
 //! Titanium movement encoding and session-scoped displacement validation.
 
 mod carry;
+mod diagonal;
 mod gate;
 pub mod history;
 mod inputs;
@@ -10,6 +11,7 @@ pub use inputs::{
 mod session;
 mod speeds;
 pub use carry::{between_reports, carry, Carried, ZBetween};
+pub use diagonal::{DiagonalAlong, DiagonalRates, GroundedDiagonal, StrafeSide};
 pub use gate::{
     UpdateGate, EQMAC_HEADING_STEP, EQMAC_REPEATS, EQMAC_SPEED_STEP, EQMAC_UPDATE_SPACING,
     EQMAC_UPDATE_TICK,
@@ -148,22 +150,58 @@ pub enum MovementMode {
     Walk,
     /// Sideways movement preserving character facing.
     Strafe,
+    /// Concurrent longitudinal and lateral movement along one ground heading.
+    GroundedDiagonal(GroundedDiagonal),
     /// Airborne descent after leaving a ledge: forward speed and animation, while
     /// height falls under gravity instead of following the ground.
     Fall,
 }
 
+/// How the heading in a movement request was produced.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum HeadingUpdate {
+    /// The heading follows a paced turn. The session derives a checked
+    /// velocity from the heading change and elapsed sample time.
+    #[default]
+    Rate,
+    /// The heading is the endpoint of locally applied mouse input.
+    /// Titanium can send this absolute heading with no continuing turn hint.
+    Snapshot,
+}
+
 /// A graphical client's proposed position, tied to its current zone admission.
 #[derive(Clone, Debug, PartialEq)]
 pub struct MovementRequest {
-    /// Selects an independently calibrated speed and animation.
+    /// Selects the calibrated movement limits and animation.
     pub mode: MovementMode,
     /// Connection identifier from `WorldEvent::Entered`.
     pub session_id: u64,
     /// Position after local collision resolution.
     pub position: Position,
+    /// Whether the proposed heading includes a paced turn or a completed mouse turn.
+    pub heading: HeadingUpdate,
     /// Local creation time; queued input expires instead of replaying after a stall.
     pub created: Instant,
+}
+
+impl MovementRequest {
+    /// Proposes a position with the ordinary checked turn-rate intent.
+    #[must_use]
+    pub const fn new(
+        mode: MovementMode,
+        session_id: u64,
+        position: Position,
+        created: Instant,
+    ) -> Self {
+        Self {
+            mode,
+            session_id,
+            position,
+            heading: HeadingUpdate::Rate,
+            created,
+        }
+    }
 }
 
 /// One client-to-server motion sample, independent of transport sequencing.
@@ -282,6 +320,24 @@ impl MovementBounds {
     }
 }
 
+/// Explicit movement departures, all disabled by default. These are local
+/// policy choices, not native movement rules or detection guarantees.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize)]
+pub struct MovementOptions {
+    /// Permit fresh voluntary motion while stunned. Other stun gates remain.
+    pub walk_while_stunned: bool,
+    /// Increase forward running speed by [`Self::RUN_BOOST`].
+    pub run_boost: bool,
+    /// Permit vertical travel within the current mode's elapsed speed budget.
+    pub fly: bool,
+}
+
+impl MovementOptions {
+    /// The explicit 10% run increase. This is application policy, with no
+    /// assertion about server acceptance or movement detection thresholds.
+    pub const RUN_BOOST: f32 = 1.1;
+}
+
 /// Validates proposed motion without trusting render-frame timing or accumulating idle credit.
 #[derive(Clone, Debug)]
 pub struct MovementGuard {
@@ -294,6 +350,7 @@ pub struct MovementGuard {
     sampled: Instant,
     input_epoch: Instant,
     speed: Option<f32>,
+    flying: bool,
     bounds: Option<MovementBounds>,
     /// The fastest descent a fall sample may claim, in world units per second.
     fall_speed: f32,
@@ -330,6 +387,7 @@ impl MovementGuard {
             sampled: now,
             input_epoch: now,
             speed: None,
+            flying: false,
             bounds: None,
             fall_speed: MAX_FALL_SPEED,
             climb: None,
@@ -434,6 +492,15 @@ impl MovementGuard {
     /// # Errors
     /// Rejects disabled, stale, foreign-session, non-finite, or excessive motion.
     pub fn accept(&mut self, request: &MovementRequest, now: Instant) -> Result<[f32; 3]> {
+        self.accept_with_diagonal(request, now, None)
+    }
+
+    fn accept_with_diagonal(
+        &mut self,
+        request: &MovementRequest,
+        now: Instant,
+        lateral_rate: Option<f32>,
+    ) -> Result<[f32; 3]> {
         ensure!(
             request.session_id == self.session_id,
             "movement belongs to an old zone session"
@@ -464,12 +531,35 @@ impl MovementGuard {
             request.position.y - self.position.y,
             request.position.z - self.position.z,
         ];
-        // The tolerance covers f32 rounding in the distance and the stamps'
-        // conversion to seconds; it grants no extra time.
-        ensure!(
-            delta[0].hypot(delta[1]) <= speed * elapsed + 0.01,
-            "movement exceeds elapsed-time budget"
-        );
+        if let MovementMode::GroundedDiagonal(diagonal) = request.mode {
+            // A known jump excludes fresh grounded diagonal input. The
+            // ascent tracker does not establish where the player lands.
+            ensure!(
+                self.jumped_at.is_none(),
+                "grounded diagonal movement is unavailable during a tracked jump"
+            );
+            ensure!(
+                !self.flying
+                    && lateral_rate.is_some_and(|lateral| {
+                        diagonal.admits_with_heading(
+                            self.position,
+                            request.position,
+                            request.heading,
+                            speed,
+                            lateral,
+                            elapsed,
+                        )
+                    }),
+                "diagonal movement exceeds its grounded component budgets"
+            );
+        } else {
+            // The tolerance covers f32 rounding in the distance and the
+            // stamps' conversion to seconds; it grants no extra time.
+            ensure!(
+                delta[0].hypot(delta[1]) <= speed * elapsed + 0.01,
+                "movement exceeds elapsed-time budget"
+            );
+        }
         // A fall may only descend, at most at terminal speed; grounded modes climb
         // the player's own reach a program step ([`Self::set_climb`]) and come
         // down at most a riser, past which the client's walk falls. After a
@@ -483,7 +573,9 @@ impl MovementGuard {
             }
         });
         let rise = since_jump.map_or(0.0, |(from, to)| self.jump_rise(from, to));
-        let vertical = if request.mode == MovementMode::Fall {
+        let vertical = if self.flying {
+            delta[2].abs() <= speed * elapsed + 0.01
+        } else if request.mode == MovementMode::Fall {
             delta[2] <= MAX_GROUNDED_STEP + rise
                 && -delta[2] <= self.fall_speed * elapsed + MAX_GROUNDED_STEP
         } else {
@@ -549,6 +641,7 @@ mod tests {
         guard.set_speed(Some(30.0), start);
         let mut request = MovementRequest {
             mode: MovementMode::Forward,
+            heading: HeadingUpdate::Rate,
             session_id: 7,
             position: Position {
                 x: 1.0,
@@ -570,6 +663,7 @@ mod tests {
         guard.set_speed(Some(30.0), start);
         let mut request = MovementRequest {
             mode: MovementMode::Forward,
+            heading: HeadingUpdate::Rate,
             session_id: 7,
             position: Position {
                 x: 1.0,
@@ -621,6 +715,7 @@ mod tests {
         let now = start + Duration::from_millis(100);
         let mut request = MovementRequest {
             mode: MovementMode::Forward,
+            heading: HeadingUpdate::Rate,
             session_id: 7,
             position: Position {
                 x: 1.0,
@@ -645,6 +740,7 @@ mod tests {
     fn rising(z: f32, created: Instant) -> MovementRequest {
         MovementRequest {
             mode: MovementMode::Fall,
+            heading: HeadingUpdate::Rate,
             session_id: 7,
             position: Position {
                 z,
@@ -712,6 +808,7 @@ mod tests {
     fn forward(x: f32, created: Instant) -> MovementRequest {
         MovementRequest {
             mode: MovementMode::Forward,
+            heading: HeadingUpdate::Rate,
             session_id: 7,
             position: Position {
                 x,
@@ -798,6 +895,7 @@ mod tests {
         let now = start + Duration::from_millis(100);
         let mut request = MovementRequest {
             mode: MovementMode::Forward,
+            heading: HeadingUpdate::Rate,
             session_id: 3,
             position: Position {
                 x: 1.0,
@@ -816,6 +914,7 @@ mod tests {
         let mut guard = MovementGuard::new(3, Position::default(), start);
         let mut request = MovementRequest {
             mode: MovementMode::Forward,
+            heading: HeadingUpdate::Rate,
             session_id: 3,
             position: Position {
                 x: 1.0,
@@ -854,6 +953,7 @@ mod tests {
         let now = start + Duration::from_millis(200);
         let mut request = MovementRequest {
             mode: MovementMode::Forward,
+            heading: HeadingUpdate::Rate,
             session_id: 1,
             position: Position {
                 x: 0.51,
@@ -892,6 +992,7 @@ mod tests {
             .accept(
                 &MovementRequest {
                     mode: MovementMode::Forward,
+                    heading: HeadingUpdate::Rate,
                     session_id: 1,
                     position: Position {
                         x: 10.0,

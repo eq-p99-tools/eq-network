@@ -2,6 +2,8 @@
 use anyhow::{ensure, Result};
 use serde::Serialize;
 
+pub mod cancel;
+
 /// Titanium's `OP_Action`, which carries spell landings and one other
 /// record ([`Action`]).
 pub const TITANIUM_ACTION_OPCODE: u16 = 0x497c;

@@ -151,7 +151,7 @@ fn another_udp_endpoint_cannot_end_the_connected_session() {
 }
 
 #[test]
-fn termination_discards_queued_work_and_prevents_every_application_sender() {
+fn termination_keeps_completed_delivery_but_discards_unfinished_work_and_sends() {
     let (mut connection, _peer) = session();
     connection.send(0x1004, b"queued").unwrap();
     connection.reorder.insert(1, (9, vec![4, 16]));
@@ -167,6 +167,8 @@ fn termination_discards_queued_work_and_prevents_every_application_sender() {
     connection.terminate(SessionTermination::PeerDisconnected { reason: None });
     connection.next_stats = Instant::now();
     connection.last_ack = Instant::now().checked_sub(Duration::from_secs(1)).unwrap();
+    let received = connection.received_count;
+    assert_eq!(connection.receive().unwrap().unwrap().body, b"old");
     for error in [
         connection.send(0x1004, b"late").unwrap_err(),
         connection.send_unreliable(0x14cb, &[0; 36]).unwrap_err(),
@@ -176,11 +178,15 @@ fn termination_discards_queued_work_and_prevents_every_application_sender() {
     }
     connection.close().unwrap();
     assert_eq!(connection.sent_count.get(), sent);
+    assert_eq!(
+        connection.received_count, received,
+        "no post-terminal receive"
+    );
     assert!(connection.pending.is_empty(), "no retransmission remains");
     assert!(connection.reorder.is_empty(), "no successor remains");
     assert!(
         connection.applications.is_empty(),
-        "no staged application remains"
+        "the completed application drained exactly once"
     );
     assert!(connection.fragment.is_none());
     assert!(!connection.ack_pending);
@@ -188,13 +194,14 @@ fn termination_discards_queued_work_and_prevents_every_application_sender() {
 }
 
 #[test]
-fn a_terminal_control_in_a_combined_packet_discards_both_sides_of_it() {
+fn a_terminal_control_in_a_combined_packet_preserves_only_its_complete_prefix() {
     let (mut connection, peer) = session();
-    let parts: [&[u8]; 3] = [
+    let parts: [&[u8]; 4] = [
         &[0, 9, 0, 0, 4, 16, b'a'],
+        &[0, 9, 0, 1, 4, 16, b'b'],
         &[0, 5, 0, 0, 0, 7],
         // Structurally valid combined part; parsing it as an application would fail.
-        &[0, 9, 0, 1, 4],
+        &[0, 9, 0, 2, 4],
     ];
     let mut body = Vec::new();
     for part in parts {
@@ -203,16 +210,89 @@ fn a_terminal_control_in_a_combined_packet_discards_both_sides_of_it() {
     }
     let frame = connection.datagram(3, &body);
     send(&peer, &connection, &frame);
+    assert_eq!(connection.receive().unwrap().unwrap().body, b"a");
+    let expected = SessionTermination::PeerDisconnected { reason: None };
+    assert_eq!(
+        reason(&connection.send(0x1004, b"late").unwrap_err()),
+        expected
+    );
+    // Even a different later terminal or application cannot replace the latch
+    // or append to its completed prefix.
+    assert!(!connection
+        .process(&[0, 5, 0, 0, 0, 7, 0x12, 0x34], true, 0)
+        .unwrap());
+    let late = packet(&connection, 9, 2, b"\x04\x10late");
+    send(&peer, &connection, &late);
+    let received = connection.received_count;
+    assert_eq!(connection.receive().unwrap().unwrap().body, b"b");
+    assert_eq!(reason(&connection.receive().unwrap_err()), expected);
+    assert_eq!(reason(&connection.receive().unwrap_err()), expected);
+    assert_eq!(connection.next_receive, 2);
+    assert!(connection.applications.is_empty());
+    assert_eq!(connection.received_count, received);
+    assert_eq!(connection.sent_count.get(), 0);
+}
+
+#[test]
+fn termination_never_completes_a_fragment_or_a_gap() {
+    let (mut connection, peer) = session();
+    let mut first = 10u32.to_be_bytes().to_vec();
+    first.extend_from_slice(b"\x04\x10pre");
+    let mut reliable = vec![0, 13, 0, 0];
+    reliable.extend(first);
+    let mut body = Vec::new();
+    for part in [&[0, 13, 0, 2, b'x'][..], &reliable, &[0, 5, 0, 0, 0, 7]] {
+        body.push(u8::try_from(part.len()).unwrap());
+        body.extend_from_slice(part);
+    }
+    send(&peer, &connection, &connection.datagram(3, &body));
     assert_eq!(
         reason(&connection.receive().unwrap_err()),
         SessionTermination::PeerDisconnected { reason: None }
     );
+    assert!(connection.applications.is_empty());
+    assert!(connection.reorder.is_empty());
+    assert!(connection.fragment.is_none());
     assert_eq!(connection.next_receive, 1);
-    assert!(
-        connection.applications.is_empty(),
-        "the earlier queued message is withdrawn"
+}
+
+#[test]
+fn a_complete_fragment_before_termination_is_delivered() {
+    let (mut connection, peer) = session();
+    let parts: [&[u8]; 3] = [
+        &[0, 13, 0, 0, 0, 0, 0, 5, 4, 16, b'a'],
+        &[0, 13, 0, 1, b'b', b'c'],
+        &[0, 5, 0, 0, 0, 7],
+    ];
+    let mut body = Vec::new();
+    for part in parts {
+        body.push(u8::try_from(part.len()).unwrap());
+        body.extend_from_slice(part);
+    }
+    send(&peer, &connection, &connection.datagram(3, &body));
+    assert_eq!(connection.receive().unwrap().unwrap().body, b"abc");
+    assert_eq!(
+        reason(&connection.receive().unwrap_err()),
+        SessionTermination::PeerDisconnected { reason: None }
     );
-    assert_eq!(connection.sent_count.get(), 0);
+}
+
+#[test]
+fn local_close_still_refuses_a_staged_application() {
+    let (mut connection, _peer) = session();
+    connection.applications.push_back(Application {
+        opcode: 0x1004,
+        body: b"staged".to_vec(),
+    });
+    connection.close().unwrap();
+    let sent = connection.sent_count.get();
+    assert_eq!(
+        connection.receive().unwrap_err().to_string(),
+        "session is closed"
+    );
+    assert!(connection.termination.is_none());
+    connection.close().unwrap();
+    assert_eq!(connection.sent_count.get(), sent);
 }
 
 #[test]

@@ -76,6 +76,12 @@ impl Session {
     pub fn last_received_seconds(&self) -> u64 {
         self.last_receive.elapsed().as_secs()
     }
+    /// The first peer termination observed, including while its completed
+    /// application prefix is still available from [`Self::receive`].
+    #[must_use]
+    pub fn termination(&self) -> Option<SessionTermination> {
+        self.termination
+    }
     /// Negotiate a new reliable EQ UDP session with the remote endpoint.
     ///
     /// # Errors
@@ -285,12 +291,17 @@ impl Session {
     }
 
     /// Drive retransmits and acknowledgements, returning the next full packet.
+    /// Complete applications ordered before peer termination drain once before
+    /// its error. No network I/O occurs after termination is observed.
     ///
     /// # Errors
     ///
     /// Returns an error for malformed packets, protocol-limit violations,
     /// timeouts, or UDP socket failures.
     pub fn receive(&mut self) -> Result<Option<Application>> {
+        if self.termination.is_some() {
+            return self.received();
+        }
         self.open()?;
         if self.ack_pending && self.last_ack.elapsed() >= Duration::from_millis(100) {
             self.control(0x15, &self.next_receive.wrapping_sub(1).to_be_bytes())?;
@@ -356,12 +367,21 @@ impl Session {
                 if self.process(&packet[..end], false, 0)? && !self.closed {
                     self.last_receive = Instant::now();
                 }
-                self.open()?;
             }
             Err(e) if timed_out(&e) => (),
             Err(e) => return Err(e.into()),
         }
-        Ok(self.applications.pop_front())
+        self.received()
+    }
+
+    /// Deliver the already completed prefix before reporting peer termination.
+    /// The ordinary local-close guard runs before this helper is reached.
+    fn received(&mut self) -> Result<Option<Application>> {
+        let application = self.applications.pop_front();
+        if application.is_none() {
+            self.open()?;
+        }
+        Ok(application)
     }
 
     // The result says whether the frame counts as session activity. Malformed or
@@ -533,7 +553,9 @@ impl Session {
         self.pending.clear();
         self.reorder.clear();
         self.fragment = None;
-        self.applications.clear();
+        // These applications were fully reassembled and ordered before the
+        // terminal control. Keep their delivery order; incomplete work above
+        // and any later combined suffix cannot become application evidence.
         self.ack_pending = false;
         self.stats_request = None;
     }

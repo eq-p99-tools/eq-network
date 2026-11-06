@@ -124,6 +124,8 @@ pub(super) enum Reader {
     World,
     /// Server-policy spell tables delivered outside profile admission gates.
     SpellTables,
+    /// P99 list population notices and presence polls.
+    ListPolls,
     /// The zone's admission of the player.
     Admission,
     /// The generation's decoders, whose messages every zone feature hears
