@@ -20,9 +20,9 @@ fn freshness(command: &ClientCommand) -> Duration {
     match command {
         // A zone line is crossed where the player stands now, and a movement
         // calibration belongs to the movement that follows it.
-        ClientCommand::CrossZoneLine { .. } | ClientCommand::ConfigureMotion { .. } => {
-            Duration::from_millis(250)
-        }
+        ClientCommand::CrossZoneLine { .. }
+        | ClientCommand::ConfigureMotion { .. }
+        | ClientCommand::LiquidDamage { .. } => Duration::from_millis(250),
         _ => Duration::from_secs(1),
     }
 }
@@ -152,6 +152,7 @@ pub(super) fn needs(command: &ClientCommand) -> &'static [Resource] {
         | ClientCommand::Jump { .. }
         // Damage done holds nothing back.
         | ClientCommand::EnvironmentalDamage { .. }
+        | ClientCommand::LiquidDamage { .. }
         // Nor does dropping invisibility, which goes before the cast.
         | ClientCommand::DropInvisibility { .. }
         | ClientCommand::StopSong { .. }
@@ -393,6 +394,7 @@ fn refusal(command: &ClientCommand, reason: &str) -> Option<WorldEvent> {
         | ClientCommand::CancelTrade { .. }
         | ClientCommand::Jump { .. }
         | ClientCommand::EnvironmentalDamage { .. }
+        | ClientCommand::LiquidDamage { .. }
         | ClientCommand::DropInvisibility { .. }
         | ClientCommand::StopSong { .. }
         | ClientCommand::WhoAll { .. }

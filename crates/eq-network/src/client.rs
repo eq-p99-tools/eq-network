@@ -844,6 +844,8 @@ struct Events<'a> {
     character: String,
     /// Typed spell-table ordering across this attempt's world/zone connections.
     spell_tables: session::spell_tables::Sequence,
+    /// Tracks the delivered view used by local liquid damage proposals.
+    liquid_inputs: session::hazards::Observations,
 }
 
 impl<'a> Events<'a> {
@@ -860,6 +862,7 @@ impl<'a> Events<'a> {
             server: config.server.clone(),
             character: config.character.clone(),
             spell_tables: session::spell_tables::Sequence::new(rand::random()),
+            liquid_inputs: session::hazards::Observations::default(),
         }
     }
 
@@ -867,6 +870,7 @@ impl<'a> Events<'a> {
         let run_id = rand::random::<u64>();
         self.session_id = format!("{run_id:016x}");
         self.spell_tables = session::spell_tables::Sequence::new(run_id);
+        self.liquid_inputs = session::hazards::Observations::default();
         self.zone.clear();
         self.messages = 0;
         self.server.clone_from(&self.config.server);
@@ -874,7 +878,12 @@ impl<'a> Events<'a> {
     }
 
     fn send(&mut self, event: ClientEvent) -> Result<()> {
-        (self.handler)(event).map_err(|error| EventDeliveryError(error).into())
+        let revision = self.liquid_inputs.observe(&event);
+        (self.handler)(event).map_err(EventDeliveryError)?;
+        if let Some(revision) = revision {
+            (self.handler)(ClientEvent::World(revision)).map_err(EventDeliveryError)?;
+        }
+        Ok(())
     }
 
     fn diagnostic(&mut self, message: String) -> Result<()> {

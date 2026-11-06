@@ -39,6 +39,48 @@ const TITANIUM_SIZE: usize = 31;
 /// `EQMac`'s `Damage_Struct`.
 const EQMAC_SIZE: usize = 24;
 
+/// Titanium profile inputs for client-computed environmental hazards.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize)]
+pub struct TitaniumEnvironment {
+    /// Zone ID from this admission's profile.
+    pub zone_id: u16,
+    /// Profile fire resistance before racial, class and active modifiers.
+    pub base_fire_resistance: i32,
+    /// A rank is present in the profile's alternate advancement array.
+    pub has_alternate_advancement: bool,
+}
+
+/// A periodic report from a sampled region.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum LiquidHazard {
+    /// The head was submerged and the local air reserve was empty.
+    Drowning,
+    /// The body origin was in mapped lava.
+    Lava,
+}
+
+/// The session view used when the host sampled a liquid hazard.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct LiquidObservation {
+    /// Latest worker revision for the admission's hazard inputs.
+    pub revision: u64,
+    /// Session position at which the host sampled the region.
+    pub position: crate::world::Position,
+    /// Time of the local sample, on the worker's monotonic clock.
+    pub sampled_at: std::time::Instant,
+}
+
+/// Reads environment inputs from an already length-checked Titanium profile.
+pub(crate) fn titanium_environment(profile: &[u8]) -> TitaniumEnvironment {
+    TitaniumEnvironment {
+        zone_id: u16::from_le_bytes([profile[13276], profile[13277]]),
+        base_fire_resistance: i32::from_le_bytes(profile[12876..12880].try_into().unwrap()),
+        has_alternate_advancement: profile[304..2224]
+            .chunks_exact(8)
+            .any(|ability| ability[4..].iter().any(|&byte| byte != 0)),
+    }
+}
+
 /// What in the world did the damage.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Hazard {
@@ -199,6 +241,37 @@ mod tests {
         );
         // No Titanium type is known for freezing.
         assert!(titanium_damage(7, Hazard::Freezing, 10).is_err());
+    }
+
+    #[test]
+    fn titanium_drowning_uses_the_existing_environmental_record() {
+        let report = titanium_damage(0x0342, Hazard::Drowning, 13).unwrap();
+        let mut body = [0; TITANIUM_SIZE];
+        body[..2].copy_from_slice(&0x0342u16.to_le_bytes());
+        body[6..10].copy_from_slice(&13u32.to_le_bytes());
+        body[22] = 251;
+        body[27..29].fill(0xff);
+        assert_eq!(report.opcode, ENV_DAMAGE_OPCODE);
+        assert_eq!(report.body, body);
+    }
+
+    #[test]
+    fn titanium_environment_retains_base_resist_and_rank_presence() {
+        let mut profile = vec![0; 19592];
+        profile[12876..12880].copy_from_slice(&25i32.to_le_bytes());
+        profile[13276..13278].copy_from_slice(&27u16.to_le_bytes());
+        assert_eq!(
+            titanium_environment(&profile),
+            TitaniumEnvironment {
+                zone_id: 27,
+                base_fire_resistance: 25,
+                has_alternate_advancement: false,
+            }
+        );
+        profile[304] = 1;
+        assert!(!titanium_environment(&profile).has_alternate_advancement);
+        profile[308] = 1;
+        assert!(titanium_environment(&profile).has_alternate_advancement);
     }
 
     #[test]

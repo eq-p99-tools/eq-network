@@ -7,6 +7,13 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Offer Titanium drowning and lava heat reports on local-only EQEmu sessions
+  through `Capability::Drowning` and `Capability::LavaHeat`. Retain the
+  profile's zone, base fire resistance and AA presence and the Titanium
+  item's signed fire resistance. Require a fresh host sample of the current
+  worker inputs and position before sending the existing environmental record.
+  The server owns health and death. Deployed Project 1999 liquid reporting
+  awaits validation.
 - Retain a checked optional base held model from Titanium item definitions.
   The item model and received wear appearance remain separate.
 - One explicit Titanium bow shot or throw through `GameCommand::RangedAttack`
@@ -79,6 +86,12 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Breaking:** `GameCommand` gains `LiquidDamage` for periodic reports and
+  `WorldEvent` gains `LiquidHazardRevision`. `EnvironmentalDamage` retains
+  the completed-fall path. `Capability::ALL` grows from 50 to 52 with
+  `Drowning` and `LavaHeat`. Struct literals for `PlayerState` and
+  `ItemBonuses` gain the optional `titanium_environment` and
+  `fire_resistance` fields, respectively.
 - **Breaking:** scope resurrection and translocate consent to an admission
   and a specific offer. `WorldEvent::Resurrection` and
   `WorldEvent::TranslocateOffer` carried the bare offer and now carry

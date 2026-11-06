@@ -556,6 +556,7 @@ fn decoded_profile(data: &[u8], character: &str) -> Result<PlayerState> {
     );
     Ok(PlayerState {
         name: String::from_utf8_lossy(cstr(&data[6..70])).into_owned(),
+        titanium_environment: None,
         base_attributes: Some(BaseAttributes {
             strength: signed_attribute(data, 164),
             stamina: signed_attribute(data, 166),

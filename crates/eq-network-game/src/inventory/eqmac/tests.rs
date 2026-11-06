@@ -225,6 +225,7 @@ fn a_worn_item_reads_its_restrictions_bonuses_and_effect() {
         Some(ItemBonuses {
             strength: -3,
             stamina: 4,
+            fire_resistance: None,
             agility: 8,
             dexterity: 6,
             charisma: 5,

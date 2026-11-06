@@ -77,6 +77,8 @@ pub(super) struct Setup<'a> {
     pub(super) character: &'a str,
     /// What the session may eat and drink on its own.
     pub(super) auto_eat: eq_network_game::food::AutoEat,
+    /// The connection is constrained to local endpoints.
+    pub(super) local_only: bool,
 }
 
 impl<'a> Setup<'a> {
@@ -85,6 +87,7 @@ impl<'a> Setup<'a> {
         Self {
             character,
             auto_eat,
+            local_only: false,
         }
     }
 }
@@ -820,12 +823,10 @@ const P99_ABILITIES: [Ability; 16] = [
     Ability::SenseHeading,
 ];
 
-/// The hazards `EQEmu` takes from the client so far: falls, whose damage it
-/// takes as the client reports it and lowers by the player's fall damage
-/// reductions from spells, items and AAs (`Client::Handle_OP_EnvDamage`).
-/// Drowning, lava and freezing wait until the official client's reports of
-/// them are recorded.
-const EQEMU_HAZARDS: [Hazard; 1] = [Hazard::Falling];
+/// Liquid reporting is enabled for local EQEmu validation. The server
+/// applies its modifiers in `Client::Handle_OP_EnvDamage`.
+const LOCAL_EQEMU_HAZARDS: [Hazard; 3] = [Hazard::Falling, Hazard::Drowning, Hazard::Lava];
+const TITANIUM_FALLS: [Hazard; 1] = [Hazard::Falling];
 
 /// The hazards TAKP takes from the client so far: falls. The `EQMac`
 /// program reports one as `OP_EnvDamage` and then `OP_Damage` (from the
@@ -839,14 +840,6 @@ const TAKP_HAZARDS: [Hazard; 1] = [Hazard::Falling];
 /// The starts of the lowercased names of the worlds P99 plays on, as Adam's
 /// SSO login proxy keeps them.
 const P99_WORLD_PREFIXES: [&str; 2] = ["project 1999", "an interesting"];
-
-/// The hazards P99 takes from the client so far: falls. The Titanium
-/// program works a fall's damage out itself (0x420dec) and reports it as
-/// `OP_EnvDamage` type 252 from the player's own spawn (sitting 6, T2;
-/// R-s). P99's own module hooks that routine and is not read, so that
-/// P99's server takes our report as it takes the official client's is
-/// inferred (recording checklist item 6.332).
-const P99_HAZARDS: [Hazard; 1] = [Hazard::Falling];
 
 /// Project 1999: Titanium with V62 protection and 256-unit saved headings.
 /// Falls and jumps follow the Titanium program; recorded P99 jump notices
@@ -975,7 +968,8 @@ impl ServerType for Project1999 {
 
     /// Falls only (6.332).
     fn hazards(&self, _setup: &Setup<'_>) -> Provided {
-        offer(shared::hazards(&P99_HAZARDS, false))
+        // Deployed P99 liquid report handling awaits validation.
+        offer(shared::hazards(&TITANIUM_FALLS, false))
     }
 
     fn control(&self, _setup: &Setup<'_>) -> Provided {
@@ -1264,8 +1258,13 @@ impl ServerType for EqEmu {
         offer(shared::raids())
     }
 
-    fn hazards(&self, _setup: &Setup<'_>) -> Provided {
-        offer(shared::hazards(&EQEMU_HAZARDS, false))
+    fn hazards(&self, setup: &Setup<'_>) -> Provided {
+        let hazards: &[Hazard] = if setup.local_only {
+            &LOCAL_EQEMU_HAZARDS
+        } else {
+            &TITANIUM_FALLS
+        };
+        offer(shared::hazards(hazards, false))
     }
 
     /// `EQEmu` regenerates the player's HP, mana and endurance on the tick
