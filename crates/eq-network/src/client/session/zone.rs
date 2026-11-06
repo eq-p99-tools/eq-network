@@ -23,7 +23,7 @@ struct Features {
     spell_landing_flag: Option<u8>,
     answers_list_polls: bool,
     /// Whether the server type offers the explicit gameplay departures
-    /// (movement and memorization options); public servers never do.
+    /// (movement and memorization options).
     gameplay_departures: bool,
 }
 
@@ -130,11 +130,8 @@ impl Features {
         world: &World,
         now: Instant,
     ) -> Option<&'static str> {
-        if world.lifecycle.is_dead() {
-            return Some("The player is dead");
-        }
         if !world.ready() || world.lifecycle.blocks_motion() {
-            return Some("The player is between zones");
+            return Some(hold_reason(world));
         }
         if !self.gameplay_departures && Self::is_departure(command) {
             return Some("Gameplay departures are not offered on this server");
@@ -345,58 +342,21 @@ pub(super) fn run(
             && !world.lifecycle.blocks_motion()
             && session.termination().is_none();
         list_replies.tick(Instant::now(), may_reply, &mut session, log)?;
-        if world.lifecycle.blocks_motion() {
-            // Death and zone transfers hold every command; each is refused,
-            // so that whoever waits on one hears why.
-            let reason = hold_reason(&world);
-            for command in &commands {
-                actions::refuse(command, reason, log)?;
-            }
-        }
-        if world.ready() && !world.lifecycle.blocks_motion() {
-            // The command batch is bounded above to preserve receive/ACK work.
-            let mut pending = commands.iter();
-            while let Some(command) = pending.next() {
-                // Stale commands, and commands that need what an action in
-                // flight holds, are refused here and nowhere else.
-                let now = Instant::now();
-                let refusal = features.refusal(command, &world, now);
-                if let Some(reason) = refusal {
-                    actions::refuse(command, reason, log)?;
-                    continue;
-                }
-                let speaker = sender(&config.character, &world);
-                let (handled, exit) = {
-                    let mut out = Out {
-                        sink: &mut session,
-                        log: &mut *log,
-                        wire: server.wire(),
-                        sender: speaker,
-                    };
-                    let handled = features.handle(command, &mut world, &mut out)?;
-                    (
-                        handled,
-                        settle(&mut features, &mut world, &mut out, follows_zones)?,
-                    )
-                };
-                if let Some(exit) = exit {
-                    session.close()?;
-                    return Ok(exit);
-                }
-                if !handled {
-                    unoffered(command, log)?;
-                }
-                // Death and zone transfers hold the rest of the batch; it was
-                // already taken from the queue, so each is refused here, so
-                // that whoever waits on one hears why.
-                if world.lifecycle.blocks_motion() {
-                    let reason = hold_reason(&world);
-                    for command in pending {
-                        actions::refuse(command, reason, log)?;
-                    }
-                    break;
-                }
-            }
+        let exit = apply_commands(
+            &commands,
+            &mut features,
+            &mut world,
+            &mut Out {
+                sink: &mut session,
+                log: &mut *log,
+                wire: server.wire(),
+                sender: speaker,
+            },
+            follows_zones,
+        )?;
+        if let Some(exit) = exit {
+            session.close()?;
+            return Ok(exit);
         }
         let received = match session.receive() {
             Ok(received) => received,
@@ -658,6 +618,41 @@ fn hold_reason(world: &World) -> &'static str {
     } else {
         "The player is between zones"
     }
+}
+
+/// Recheck the lifecycle for each command in the already drained batch.
+/// A prior command can change it directly or through the news it settles.
+fn apply_commands(
+    commands: &[ClientCommand],
+    features: &mut Features,
+    world: &mut World,
+    out: &mut Out<'_, '_>,
+    follows_zones: bool,
+) -> Result<Option<ZoneExit>> {
+    let mut pending = commands.iter();
+    while let Some(command) = pending.next() {
+        if let Some(reason) = features.refusal(command, world, Instant::now()) {
+            actions::refuse(command, reason, out.log)?;
+            continue;
+        }
+        out.sender = sender(out.sender.name, world);
+        let handled = features.handle(command, world, out)?;
+        if let Some(exit) = settle(features, world, out, follows_zones)? {
+            let reason = if world.lifecycle.blocks_motion() {
+                hold_reason(world)
+            } else {
+                "The zone connection ended"
+            };
+            for command in pending {
+                actions::refuse(command, reason, out.log)?;
+            }
+            return Ok(Some(exit));
+        }
+        if !handled {
+            unoffered(command, out.log)?;
+        }
+    }
+    Ok(None)
 }
 
 /// Tells the host the zone admitted the player, as the features shape them,
@@ -2320,6 +2315,9 @@ mod manual_combine_tests;
 
 #[cfg(test)]
 mod terminal_tests;
+
+#[cfg(test)]
+mod command_batch_tests;
 
 #[cfg(test)]
 mod stun_tests;

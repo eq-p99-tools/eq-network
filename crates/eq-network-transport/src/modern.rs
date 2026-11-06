@@ -616,7 +616,9 @@ impl Session {
         Ok(())
     }
 
-    /// Send the session disconnect control packet once.
+    /// Send the session disconnect control packet once. A local close
+    /// discards staged applications; if the peer already terminated the
+    /// session, its completed prefix remains readable.
     ///
     /// # Errors
     ///
@@ -625,6 +627,7 @@ impl Session {
         if !self.closed {
             self.control(5, &self.id.to_be_bytes())?;
             self.closed = true;
+            self.applications.clear();
         }
         Ok(())
     }

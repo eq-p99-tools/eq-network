@@ -65,6 +65,8 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Commands queued behind one that kills or transfers the player in the same
   batch are refused ("The player is dead" / "The player is between zones")
   instead of being dropped, as they were before the batch was drained eagerly.
+  The old zone continues refusing gameplay commands after approving departure.
+  Commands already drained when a command ends the session get a refusal too.
 
 - Keep movement load conservatively bounded through known carried-stack splits
   and merges, including independently refused or partial moves. Placement stays
@@ -206,6 +208,9 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- A local modern transport close discards staged applications and ignores later
+  peer controls. If peer termination was observed first, its ordered,
+  completed application prefix still drains once before the terminal error.
 - **Breaking:** re-evaluate EQMac fatigue from current host strength/stamina
   prerequisites in the session, avoiding an unnecessary withdrawal and host
   round trip on each stamina tick. `SpeedInputs` gains
