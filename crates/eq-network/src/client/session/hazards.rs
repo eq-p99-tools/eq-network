@@ -60,7 +60,7 @@ impl Observations {
             WorldEvent::Spawns(spawns) => spawns.iter().any(|spawn| spawn.spawn_id == *own),
             WorldEvent::Buff(buff) => u32::from(*own) == buff.entity_id,
             WorldEvent::SpellEffect(effect) => *own == effect.target_id,
-            WorldEvent::Death(death) => death.spawn_id == *own,
+            WorldEvent::Death(death) => death.spawn_id == u32::from(*own),
             WorldEvent::DeathBind { session_id: visit } => *visit == *session_id,
             WorldEvent::InventoryAction {
                 session_id: visit,
