@@ -3,7 +3,7 @@
 //! `docs/quarm-inventory-parity.md`) and TAKP (`EQMacEmu/Server` e517d0b,
 //! `zone/inventory.cpp` `Client::SwapItemResync`, line 1561), so
 //! `MoveRules::Takp` and `MoveRules::Quarm` share this module.
-use eq_network_game::inventory::{Inventory, InventoryUpdate};
+use eq_network_game::inventory::{Inventory, InventoryItem, InventoryUpdate};
 
 /// Whether a server replacement contradicts any locally predicted slot it
 /// covers. A resync's root-only bag packet cannot certify its contents.
@@ -25,7 +25,10 @@ pub(super) fn contradicts(inventory: &Inventory, update: &InventoryUpdate) -> bo
     };
     inventory.prediction_origins().any(|(slot, _)| {
         (slot == root || slot.parent().is_some_and(|(parent, _)| parent == root))
-            && inventory.items().get(&slot) != items.iter().find(|item| item.slot == slot)
+            && !InventoryItem::same_slot_contents(
+                inventory.items().get(&slot),
+                items.iter().find(|item| item.slot == slot),
+            )
     })
 }
 

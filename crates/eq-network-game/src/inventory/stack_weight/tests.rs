@@ -105,6 +105,20 @@ fn weight(inventory: &Inventory, dialect: GameDialect) -> u64 {
 }
 
 #[test]
+fn display_model_differences_do_not_split_a_stack_weight_family() {
+    let mut source = item(30, 1, Some(3), 7);
+    source.details.base_held_model = std::num::NonZeroU16::new(14);
+    let destination = item(23, 1, Some(5), 7);
+    let mut inventory = state(vec![source, destination]);
+    move_item(&mut inventory, MoveRules::EqEmu, 30, 23, quantity(3));
+
+    // The merge leaves one projected stack. Two stacks still bound the
+    // carried weight while the server's placement remains unknown.
+    assert_eq!(weight(&inventory, GameDialect::Titanium), 14);
+    assert!(inventory.predicted());
+}
+
+#[test]
 fn one_unit_full_stacks_and_zero_or_heavy_weights_keep_their_safe_bounds() {
     for count in [1, 20] {
         for mass in [0, 7, 2000] {

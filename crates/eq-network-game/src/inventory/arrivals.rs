@@ -158,9 +158,10 @@ impl Inventory {
 
     pub(super) fn observe_rebased_weight(&mut self, update: &InventoryUpdate, arrival: bool) {
         let root = match update {
-            InventoryUpdate::Set(items) if !arrival => items
-                .first()
-                .and_then(|item| (self.items.get(&item.slot) != Some(item)).then_some(item.slot)),
+            InventoryUpdate::Set(items) if !arrival => items.first().and_then(|item| {
+                (!InventoryItem::same_slot_contents(self.items.get(&item.slot), Some(item)))
+                    .then_some(item.slot)
+            }),
             InventoryUpdate::Remove(slot) if self.items.contains_key(slot) => Some(*slot),
             InventoryUpdate::Consume { slot, .. }
             | InventoryUpdate::Used(slot)

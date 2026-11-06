@@ -43,7 +43,7 @@ fn same_definition(left: &InventoryItem, right: &InventoryItem) -> bool {
     normalized.stack_count = normalized.stack_count.map(|_| 1);
     let mut right = right.clone();
     right.stack_count = right.stack_count.map(|_| 1);
-    normalized == right
+    InventoryItem::same_slot_contents(Some(&normalized), Some(&right))
 }
 
 fn families<'a>(
@@ -78,7 +78,7 @@ impl StackWeightBound {
             .keys()
             .chain(after.keys())
             .copied()
-            .filter(|slot| before.get(slot) != after.get(slot))
+            .filter(|slot| !InventoryItem::same_slot_contents(before.get(slot), after.get(slot)))
             .collect();
         if changed.len() != 2 || changed.iter().any(|slot| !root(*slot)) {
             return None;

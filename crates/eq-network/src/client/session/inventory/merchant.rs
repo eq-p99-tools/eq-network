@@ -43,10 +43,9 @@ impl Sale {
     /// longer be trusted.
     fn settle(&self, sold: u32, inventory: &Inventory) -> InventoryUpdate {
         let unchanged = !inventory.stale()
-            && self
-                .item
-                .as_deref()
-                .is_some_and(|item| inventory.items().get(&self.slot) == Some(item));
+            && self.item.as_deref().is_some_and(|item| {
+                InventoryItem::same_slot_contents(inventory.items().get(&self.slot), Some(item))
+            });
         if unchanged {
             InventoryUpdate::Deduct {
                 slot: self.slot,
