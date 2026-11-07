@@ -1573,6 +1573,72 @@ fn run_speed_multiplier_changes_the_worker_budget_until_reset() {
 }
 
 #[test]
+fn changing_run_speed_keeps_the_moving_sample_and_its_send_deadline() {
+    use crate::movement::MovementOptions;
+
+    let start = Instant::now();
+    let at = |ms| start + Duration::from_millis(ms);
+    let mut session = setup(start).with_gate(Some(UpdateGate::Changed {
+        spacing: Duration::from_millis(280),
+    }));
+    session
+        .set_options(
+            MovementOptions {
+                run_speed_multiplier: RunSpeedMultiplier::MAX,
+                ..Default::default()
+            },
+            start,
+        )
+        .unwrap();
+    session
+        .send_move_sample(&request(at(300), 0.5), at(300), |_| Ok(()))
+        .unwrap();
+    session
+        .send_move_sample(&request(at(400), 1.3), at(400), |_| {
+            panic!("moving sample bypassed pacing")
+        })
+        .unwrap();
+    let held = session.held.unwrap();
+    assert!(MotionSession::moving_update(&held));
+    session
+        .set_options(MovementOptions::default(), at(450))
+        .unwrap();
+    assert!(session.moving);
+    assert_eq!(session.held, Some(held));
+    assert!(!session
+        .tick_sample(at(579), |_| panic!("speed change bypassed pacing"))
+        .unwrap());
+    assert!(session
+        .tick_sample(at(580), |sample| {
+            assert_eq!(*sample, held);
+            Ok(())
+        })
+        .unwrap());
+
+    let now = at(600);
+    assert!(session
+        .send_move_sample(&request(now, 2.6), now, |_| panic!("old speed budget"))
+        .is_err());
+    session
+        .send_move_sample(&request(now, 2.5), now, |_| {
+            panic!("next moving sample bypassed pacing")
+        })
+        .unwrap();
+    assert!(MotionSession::moving_update(&session.held.unwrap()));
+    session
+        .set_options(
+            MovementOptions {
+                fly: true,
+                ..Default::default()
+            },
+            at(610),
+        )
+        .unwrap();
+    assert!(!session.moving);
+    assert!(!MotionSession::moving_update(&session.held.unwrap()));
+}
+
+#[test]
 fn the_run_speed_multiplier_scales_flight_travel_only_horizontally() {
     use crate::movement::MovementOptions;
 

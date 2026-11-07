@@ -439,9 +439,9 @@ impl MotionSession {
         self.options
     }
 
-    /// Applies caller-stamped choices without granting speed or reusing queued
-    /// input. The accepted position, sample time, tracked jump and fixed
-    /// bounds remain.
+    /// Applies caller-stamped choices without granting calibration. Changing
+    /// motion permissions stops voluntary motion. A speed-only change leaves
+    /// already accepted samples on their usual send schedule.
     ///
     /// # Errors
     /// Refuses choices made before the latest reset or accepted sample. The
@@ -454,7 +454,9 @@ impl MotionSession {
         if self.options == options {
             return Ok(());
         }
-        self.stop_voluntary();
+        if !self.options.same_permissions(options) {
+            self.stop_voluntary();
+        }
         self.options = options;
         self.guard.flying = options.fly;
         self.guard.input_epoch = created;

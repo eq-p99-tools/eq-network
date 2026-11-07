@@ -340,7 +340,7 @@ impl MovementBounds {
 }
 
 /// A selected forward running speed in hundredths of the calibrated speed.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, serde::Serialize)]
 #[serde(transparent)]
 pub struct RunSpeedMultiplier(u16);
 
@@ -390,6 +390,14 @@ pub struct MovementOptions {
     pub run_speed_multiplier: RunSpeedMultiplier,
     /// Permit vertical travel within the current mode's elapsed speed budget.
     pub fly: bool,
+}
+
+impl MovementOptions {
+    /// Whether two choices allow the same motion modes, regardless of run speed.
+    #[must_use]
+    pub const fn same_permissions(self, other: Self) -> bool {
+        self.walk_while_stunned == other.walk_while_stunned && self.fly == other.fly
+    }
 }
 
 /// Validates proposed motion without trusting render-frame timing or accumulating idle credit.
