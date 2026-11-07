@@ -7,7 +7,7 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
-- Submit an ordinary Titanium cursor drop on EQEmu through
+- **Breaking:** Submit an ordinary Titanium cursor drop on EQEmu through
   `Capability::GroundDropping` and `GameCommand::DropItem`. Check the
   received droppable instance, actor and inventory revision before sending.
   `InventoryUpdate::GroundDropPending` holds custody until a received
