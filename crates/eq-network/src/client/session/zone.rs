@@ -1596,10 +1596,11 @@ mod tests {
     fn discarded_moves_reply_to_the_original_request_without_publishing_a_position() {
         use super::super::feature::testing;
         use crate::client::ServerProtocol;
+        use eq_network_game::{food::AutoEat, world::Position};
 
         let server = servers::server_type(ServerProtocol::EqEmu);
         let mut features =
-            Features::from_setup(server, &servers::Setup::new("Tester", Default::default()));
+            Features::from_setup(server, &servers::Setup::new("Tester", AutoEat::default()));
         let mut world = World::new(5);
         let created = Instant::now();
         for (ready, session_id, reason) in [
@@ -1611,15 +1612,15 @@ mod tests {
             let command = ClientCommand::Move(MovementRequest::new(
                 MovementMode::Forward,
                 session_id,
-                Default::default(),
+                Position::default(),
                 created,
             ));
             let outcome = testing::run_on(server.wire(), |out| {
                 apply_commands(&[command], &mut features, &mut world, out, true)
             });
             assert!(outcome.result.unwrap().is_none());
-            assert!(outcome.sent.is_empty());
-            assert!(outcome.unreliable.is_empty());
+            assert_eq!(outcome.sent, []);
+            assert_eq!(outcome.unreliable, []);
             assert!(matches!(
                 &outcome.events[..],
                 [
