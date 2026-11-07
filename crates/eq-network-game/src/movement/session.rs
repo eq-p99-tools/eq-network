@@ -706,17 +706,23 @@ impl MotionSession {
         // The host can integrate a boosted forward step before collision
         // reclassifies it as Fall. Keep the same horizontal budget for the
         // transition and its bounded drift.
-        let speed = if matches!(along, MovementMode::Forward | MovementMode::Fall) {
-            speed * self.options.run_speed_multiplier.factor()
+        let run_speed_multiplier = if matches!(along, MovementMode::Forward | MovementMode::Fall) {
+            self.options.run_speed_multiplier
         } else {
-            speed
+            super::RunSpeedMultiplier::NORMAL
         };
         guard.speed = Some(speed);
         // The wire's velocity and turn rate cover the same interval the guard
         // budgets: from the last accepted request's stamp to this one's.
         let elapsed = guard.interval(request.created);
         let swimming = request.mode == MovementMode::Swim;
-        let displacement = guard.accept_with_modes(request, now, lateral_rate, self.swimming)?;
+        let displacement = guard.accept_with_modes(
+            request,
+            now,
+            run_speed_multiplier,
+            lateral_rate,
+            self.swimming,
+        )?;
         // Following a slope has no vertical stroke. Ordinary falls still
         // carry their descent in absolute Z. For a swim stroke Titanium
         // copies all three tick velocities into its existing update fields.

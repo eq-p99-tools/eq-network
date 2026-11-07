@@ -366,7 +366,7 @@ impl RunSpeedMultiplier {
         self.0
     }
 
-    /// The factor for scaling calibrated forward and fall speeds.
+    /// The factor for scaling horizontal forward and fall speeds.
     #[must_use]
     pub fn factor(self) -> f32 {
         f32::from(self.0) / 100.0
@@ -546,13 +546,14 @@ impl MovementGuard {
     /// # Errors
     /// Rejects disabled, stale, foreign-session, non-finite, or excessive motion.
     pub fn accept(&mut self, request: &MovementRequest, now: Instant) -> Result<[f32; 3]> {
-        self.accept_with_modes(request, now, None, false)
+        self.accept_with_modes(request, now, RunSpeedMultiplier::NORMAL, None, false)
     }
 
     fn accept_with_modes(
         &mut self,
         request: &MovementRequest,
         now: Instant,
+        run_speed_multiplier: RunSpeedMultiplier,
         lateral_rate: Option<f32>,
         swimming: bool,
     ) -> Result<[f32; 3]> {
@@ -579,6 +580,7 @@ impl MovementGuard {
         let speed = self
             .speed
             .ok_or_else(|| anyhow::anyhow!("effective movement speed is not established"))?;
+        let horizontal_speed = speed * run_speed_multiplier.factor();
         let elapsed = self.interval(request.created);
         ensure!(elapsed >= 0.05, "movement samples arrive too frequently");
         let delta = [
@@ -606,7 +608,7 @@ impl MovementGuard {
                             self.position,
                             request.position,
                             request.heading,
-                            speed,
+                            horizontal_speed,
                             lateral,
                             elapsed,
                         )
@@ -617,7 +619,7 @@ impl MovementGuard {
             // The tolerance covers f32 rounding in the distance and the
             // stamps' conversion to seconds; it grants no extra time.
             ensure!(
-                delta[0].hypot(delta[1]) <= speed * elapsed + 0.01,
+                delta[0].hypot(delta[1]) <= horizontal_speed * elapsed + 0.01,
                 "movement exceeds elapsed-time budget"
             );
         }
@@ -637,6 +639,7 @@ impl MovementGuard {
         let vertical = if request.mode == MovementMode::Swim {
             true // The single 3D budget already checks vertical movement.
         } else if self.flying {
+            // Flight uses the unscaled mode rate for ascent and descent.
             delta[2].abs() <= speed * elapsed + 0.01
         } else if request.mode == MovementMode::Fall {
             delta[2] <= MAX_GROUNDED_STEP + rise

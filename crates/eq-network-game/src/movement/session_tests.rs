@@ -1573,6 +1573,46 @@ fn run_speed_multiplier_changes_the_worker_budget_until_reset() {
 }
 
 #[test]
+fn the_run_speed_multiplier_scales_flight_travel_only_horizontally() {
+    use crate::movement::MovementOptions;
+
+    let start = Instant::now();
+    let now = start + Duration::from_millis(100);
+    let mut session = setup(start);
+    session
+        .set_options(
+            MovementOptions {
+                run_speed_multiplier: RunSpeedMultiplier::MAX,
+                fly: true,
+                ..Default::default()
+            },
+            start,
+        )
+        .unwrap();
+    // At 6 units/s the horizontal limit is 0.84 and the vertical limit is 0.60.
+    let mut flight = request(now, 0.8);
+    flight.position.z = 0.8;
+    let refused = session
+        .send_move_sample(&flight, now, |_| {
+            panic!("boosted ascent escaped the vertical gate")
+        })
+        .unwrap_err();
+    assert_eq!(
+        refused.to_string(),
+        "vertical motion requires a supported movement mode"
+    );
+    assert_eq!(session.position(), Position::default());
+    flight.position.z = 0.6;
+    session
+        .send_move_sample(&flight, now, |sample| {
+            assert_eq!(sample.position, flight.position);
+            Ok(())
+        })
+        .unwrap();
+    assert_eq!(session.position(), flight.position);
+}
+
+#[test]
 fn flying_changes_only_the_vertical_gate_and_still_needs_current_valid_motion() {
     let start = Instant::now();
     let now = start + Duration::from_millis(100);
