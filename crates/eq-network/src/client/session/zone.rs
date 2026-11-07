@@ -905,7 +905,6 @@ mod tests {
             ClientCommand::RaidMakeLeader { .. } => 64,
             ClientCommand::RaidRemove { .. } => 65,
             ClientCommand::EnvironmentalDamage { .. } => 66,
-            ClientCommand::LiquidDamage { .. } => 85,
             ClientCommand::BledOut { .. } => 67,
             ClientCommand::AnswerSacrifice { .. } => 68,
             ClientCommand::AnswerTranslocate { .. } => 69,
@@ -915,6 +914,7 @@ mod tests {
             ClientCommand::SpeedInputs { .. } => 72,
             ClientCommand::ShowHelm { .. } => 73,
             ClientCommand::ClimbReach { .. } => 74,
+            ClientCommand::LiquidDamage { .. } => 85,
         }
     }
 
@@ -1370,6 +1370,70 @@ mod tests {
                 .filter(|kind| !BEFORE_ZONES.contains(kind))
                 .collect()
         );
+    }
+
+    #[test]
+    fn public_and_remote_providers_cannot_send_liquid_damage() {
+        use super::super::feature::testing;
+        use crate::client::{ClientConfig, ServerProtocol};
+        use eq_network_game::hazards::{LiquidHazard, LiquidObservation};
+        use eq_network_game::world::Capability;
+
+        for (protocol, local_only) in [
+            (ServerProtocol::Project1999, false),
+            (ServerProtocol::EqEmu, false),
+            (ServerProtocol::Quarm, false),
+            (ServerProtocol::Takp, false),
+            (ServerProtocol::Quarm, true),
+            (ServerProtocol::Takp, true),
+        ] {
+            let mut config = ClientConfig::new("Example", "Fixture", "Server", "Tester");
+            config.protocol = protocol;
+            config.local_only = local_only;
+            let mut world = World::for_zone(5, &config);
+            let player = testing::player(7);
+            let position = player.position;
+            world.own_spawn = Some(7);
+            world.body.own(7);
+            world.body.place(position);
+            world.player.admit(player.clone());
+            world.admitted = Some(Instant::now());
+            let mut setup = servers::Setup::new("Tester", config.auto_eat);
+            setup.local_only = local_only;
+            let server = servers::server_type(protocol);
+            let mut features = Features::from_setup(server, &setup);
+            let capabilities = features.capabilities();
+            assert!(!capabilities.contains(&Capability::Drowning));
+            assert!(!capabilities.contains(&Capability::LavaHeat));
+            let outcome = testing::run_on(server.wire(), |out| -> Result<()> {
+                out.log.send(ClientEvent::World(WorldEvent::Entered {
+                    capabilities,
+                    choices: Vec::new(),
+                    session_id: 5,
+                    zone: "example".to_owned(),
+                    player: Box::new(player),
+                    far_clip: None,
+                    spell_landing_flag: None,
+                }))?;
+                let commands = [LiquidHazard::Drowning, LiquidHazard::Lava].map(|hazard| {
+                    ClientCommand::LiquidDamage {
+                        session_id: 5,
+                        hazard,
+                        amount: 13,
+                        observation: LiquidObservation {
+                            revision: 0,
+                            position,
+                            sampled_at: Instant::now(),
+                        },
+                    }
+                });
+                assert!(apply_commands(&commands, &mut features, &mut world, out, true)?.is_none());
+                Ok(())
+            });
+            outcome.result.unwrap();
+            assert!(outcome.sent.is_empty(), "{protocol:?}");
+            assert!(outcome.unreliable.is_empty(), "{protocol:?}");
+        }
     }
 
     #[test]

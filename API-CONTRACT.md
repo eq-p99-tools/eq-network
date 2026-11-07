@@ -92,9 +92,10 @@ sample again. An accepted report is sent as the Titanium environmental
 record with damage type 251 (drowning) or 250 (lava); the Titanium program's
 own liquid reports are unrecorded, so that layout is inferred (recording
 checklist 6.392). `PlayerState.titanium_environment` carries the profile's
-zone, base fire resistance (offset 12876, inside the block EQEmu leaves
-unknown and sends as zero; inferred, 6.392) and whether any alternate
-advancement rank is present. The server owns health and death.
+zone, base fire resistance and whether any alternate advancement rank is
+present. Titanium `eqgame.exe` copies the profile dword at byte 12876 at
+0x4b9f3c and uses it at 0x418756. Stock EQEmu zero-fills that field. The
+server's effective resistance, health and death remain its own state.
 
 ## Retained base held models
 

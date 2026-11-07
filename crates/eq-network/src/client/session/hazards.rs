@@ -175,9 +175,6 @@ impl Feature for Hazards {
                         out.log,
                     );
                 }
-                if let Some(reason) = actions::stale(command, world.session_id, Instant::now()) {
-                    return actions::refuse(command, reason, out.log);
-                }
                 let current = world.player_at().is_some_and(|(spawn_id, position)| {
                     let current = [position.x, position.y, position.z];
                     out.log

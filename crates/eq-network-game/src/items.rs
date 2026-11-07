@@ -19,7 +19,7 @@ pub struct ItemBonuses {
     pub strength: i32,
     /// Raw stamina attribute modifier, not endurance.
     pub stamina: i32,
-    /// Fire resistance where the item decoder establishes it.
+    /// Fire resistance from field 20 of the Titanium item string record.
     pub fire_resistance: Option<i32>,
     /// Raw agility modifier.
     pub agility: i32,
