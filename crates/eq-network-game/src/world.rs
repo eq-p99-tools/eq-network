@@ -901,15 +901,15 @@ pub enum WorldEvent {
         /// Whether this server's session accepts `MovementMode::Fall` samples.
         falls: bool,
     },
-    /// Motion submitted to transport (not an acknowledgment by the server), or a
-    /// sample the local movement guard refused.
+    /// The worker's local result for a movement sample. Accepted samples may
+    /// be held for pacing or left unchanged by the update gate.
     MotionSent {
         /// Current zone admission.
         session_id: u64,
         /// Position accepted by local motion validation; after a refusal, the last
         /// accepted one.
         position: Position,
-        /// Why the guard refused the sample; None when it was sent.
+        /// Why the worker refused the sample. None means locally accepted.
         refused: Option<String>,
     },
     /// The worker discarded a movement request before the motion guard could

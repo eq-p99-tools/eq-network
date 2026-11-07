@@ -120,7 +120,8 @@ instead emits `WorldEvent::CastRequestUnconfirmed` for the unanswered
 request and allows a fresh manual attempt. That event reports only the end
 of the local wait. It precedes any later submission in that admission,
 including a manual retry of the same spell. An already begun cast still
-awaits a matching update.
+awaits a matching update. Downstream exhaustive `WorldEvent` matches must
+handle the new timeout variant.
 
 An unanswered book edit emits terminal `BookActionStatus::Unconfirmed` once
 after 30 seconds and releases the spellbook hold. A fresh edit can proceed
@@ -540,6 +541,17 @@ For Quarm only, approval of a solicited pending bind transfer to the exact
 current zone accepts its documented reply stand-in 185. Character, instance
 and success checks remain; normal transfers and other profiles retain exact
 destination validation. The stand-in is not stored as the real destination.
+
+## Movement proposal results
+
+`WorldEvent::MotionSent` reports the worker's current accepted position and
+the local outcome of the proposal. A locally accepted sample can be submitted
+immediately, held for pacing, or left unchanged by the update gate. The event
+describes worker state only. `WorldEvent::MotionRefused` reports an early
+discard before the worker can return a movement position. It carries the
+original admission and process-local request stamp, with the stamp omitted
+from serialized logs. The new variant requires downstream exhaustive
+`WorldEvent` matches to be updated.
 
 ## Camping and the movement owner's pending stop
 

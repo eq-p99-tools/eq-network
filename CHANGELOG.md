@@ -40,6 +40,9 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **Breaking:** `WorldEvent::CastRequestUnconfirmed` reports the existing
   cast acknowledgement timeout with its admission and spell. A
   `CastPending` clear precedes a received update that answers the request.
+- **Breaking:** `WorldEvent::MotionRefused` identifies an early movement
+  discard by admission and request stamp. `MotionSent` describes local
+  worker acceptance or refusal, including accepted samples held for pacing.
 - `BookActionStatus::Unconfirmed` releases the spellbook after 30 seconds
   without a matching result. Distinguishable edits can proceed. A retry with
   the same possible reply requires a fresh admission. A timed-out scribe
