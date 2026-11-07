@@ -154,7 +154,7 @@ impl Feature for Hazards {
             ClientCommand::EnvironmentalDamage { .. } => {
                 return actions::refuse(
                     command,
-                    "A liquid report requires a current observation",
+                    "Only a completed fall is reported here; drowning and lava go through LiquidDamage, and freezing is not reported",
                     out.log,
                 );
             }

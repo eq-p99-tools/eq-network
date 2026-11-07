@@ -396,13 +396,17 @@ impl Feature for Spellbook {
         out: &mut Out<'_, '_>,
     ) -> Result<()> {
         if self.answers.ambiguous(command) {
-            return report(
+            report(
                 BookActionStatus::Rejected(
                     "An earlier edit could have the same reply. Re-enter the zone to retry this edit."
                         .into(),
                 ),
                 out,
-            );
+            )?;
+            return out.log.diagnostic(format!(
+                "Rejected {}: an earlier unanswered edit could have the same reply",
+                command.name()
+            ));
         }
         if let ClientCommand::MemorizeSpell { created, .. }
         | ClientCommand::ScribeSpell { created, .. } = command

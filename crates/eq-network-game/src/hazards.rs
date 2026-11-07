@@ -44,7 +44,12 @@ const EQMAC_SIZE: usize = 24;
 pub struct TitaniumEnvironment {
     /// Zone ID from this admission's profile.
     pub zone_id: u16,
-    /// Profile fire resistance before racial, class and active modifiers.
+    /// Profile fire resistance before racial, class and active modifiers,
+    /// read at offset 12876. That word lies in the block `EQEmu`'s Titanium
+    /// `PlayerProfile_Struct` leaves unknown (`unknown12864`) and sends as
+    /// zero, so an `EQEmu` profile yields 0 here. Which profile field, if
+    /// any, the Titanium program reads as a base resistance is unread; the
+    /// offset is inferred (recording checklist 6.392).
     pub base_fire_resistance: i32,
     /// A rank is present in the profile's alternate advancement array.
     pub has_alternate_advancement: bool,

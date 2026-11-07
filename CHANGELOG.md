@@ -13,7 +13,9 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   item's signed fire resistance. Require a fresh host sample of the current
   worker inputs and position before sending the existing environmental record.
   The server owns health and death. Deployed Project 1999 liquid reporting
-  awaits validation.
+  awaits validation. The liquid record layout and the base fire resistance
+  offset (inside the profile block EQEmu sends as zero) are inferred
+  (recording checklist 6.392).
 - Retain a checked optional base held model from Titanium item definitions.
   The item model and received wear appearance remain separate.
 - One explicit Titanium bow shot or throw through `GameCommand::RangedAttack`
@@ -86,6 +88,9 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- The Titanium translocate decline carries -1, as the Titanium program sends
+  it (`eqgame.exe` 0x499f08), instead of 0. `EQEmu` accepts only 1 as a yes,
+  so the outcome is unchanged.
 - **Breaking:** `GameCommand` gains `LiquidDamage` for periodic reports and
   `WorldEvent` gains `LiquidHazardRevision`. `EnvironmentalDamage` retains
   the completed-fall path. `Capability::ALL` grows from 50 to 52 with

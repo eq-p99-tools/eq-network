@@ -823,9 +823,22 @@ const P99_ABILITIES: [Ability; 16] = [
     Ability::SenseHeading,
 ];
 
-/// Liquid reporting is enabled for local `EQEmu` validation. The server
-/// applies its modifiers in `Client::Handle_OP_EnvDamage`.
+/// The hazards a local `EQEmu` takes from the client: falls, whose damage it
+/// lowers by the player's fall damage reductions from spells, items and AAs,
+/// and drowning and lava, whose amounts it takes as sent
+/// (`Client::Handle_OP_EnvDamage`). The Titanium program's own drowning and
+/// lava reports are unrecorded; the liquid reports reuse the fall record
+/// with the server reader's damage types 251 and 250, inferred (recording
+/// checklist 6.392), and stay local until recorded.
 const LOCAL_EQEMU_HAZARDS: [Hazard; 3] = [Hazard::Falling, Hazard::Drowning, Hazard::Lava];
+
+/// The hazard every Titanium server takes from the client so far: falls. The
+/// Titanium program works a fall's damage out itself (0x420dec) and reports
+/// it as `OP_EnvDamage` type 252 from the player's own spawn (sitting 6, T2;
+/// R-s). P99's own module hooks that routine and is not read, so that P99's
+/// server takes our report as it takes the official client's is inferred
+/// (recording checklist item 6.332). Remote `EQEmu` takes falls only until
+/// the liquid reports are recorded.
 const TITANIUM_FALLS: [Hazard; 1] = [Hazard::Falling];
 
 /// The hazards TAKP takes from the client so far: falls. The `EQMac`

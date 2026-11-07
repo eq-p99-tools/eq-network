@@ -62,6 +62,36 @@ buff scaling are inferred (recording checklist 6.390). A submitted sample
 establishes neither server acceptance nor water state. The host asserts water
 from the installed zone.
 
+## Local Titanium liquid reports
+
+`Capability::ALL` grows from 50 to 52 with `Drowning` and `LavaHeat`;
+`GameCommand` gains `LiquidDamage { session_id, hazard, amount, observation }`
+and `WorldEvent` gains `LiquidHazardRevision { session_id, revision }`.
+Only the Titanium `EQEmu` policy offers the two capabilities, and only on a
+session whose connection is constrained to local endpoints; P99, Quarm, TAKP
+and a remote `EQEmu` keep falls only and refuse `LiquidDamage` before
+anything is sent. `EnvironmentalDamage` keeps the completed-fall path and
+refuses every other hazard.
+
+The session raises `LiquidHazardRevision` at admission and whenever an input
+of the air or heat calculation changes: the player's own position, hit
+points, appearance, posture, buffs and spell effects, death, inventory and
+level updates, and zone transfer state. A `LiquidDamage` report is accepted
+only when its `session_id` is the current admission, its `revision` is the
+latest one raised, its `observation.position` equals the session body's
+current X, Y and Z bit for bit, its `observation.sampled_at` is within 250
+milliseconds, the player is admitted and not dead or transferring, its
+`amount` is positive, and at least one second has passed since the last
+accepted report of the same hazard. Anything else is refused with a
+diagnostic and no wire change; the next revision is the host's signal to
+sample again. An accepted report is sent as the Titanium environmental
+record with damage type 251 (drowning) or 250 (lava); the Titanium program's
+own liquid reports are unrecorded, so that layout is inferred (recording
+checklist 6.392). `PlayerState.titanium_environment` carries the profile's
+zone, base fire resistance (offset 12876, inside the block EQEmu leaves
+unknown and sends as zero; inferred, 6.392) and whether any alternate
+advancement rank is present. The server owns health and death.
+
 ## Retained base held models
 
 `ItemDetails.base_held_model` keeps the checked optional base held model from
