@@ -7,6 +7,14 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `Client::consider_npcs_by_level` exposes the selected server's NPC
+  consider presentation policy. All current policies use the received
+  color. The consider reply documents the faction code swaps in EQEmu
+  and EQMacEmu.
+- `buffs::scale_instrument_effect` provides the host's bounded Titanium
+  instrument scaling for movement-related buff magnitudes. The existing
+  neutral values and unavailable modifiers keep their meaning.
+
 - **Breaking:** Submit an ordinary Titanium cursor drop on local-only EQEmu through
   `Capability::GroundDropping` and `GameCommand::DropItem`. Check the
   received droppable instance, actor and inventory revision before sending.

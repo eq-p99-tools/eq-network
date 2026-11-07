@@ -740,6 +740,12 @@ has since selected. Unknown con/damage values remain observable. Neither target
 range nor weapon eligibility is recalculated by the normal toggle owner.
 See [combat evidence and limits](docs/quarm-combat.md).
 
+Hosts can read `Client::consider_npcs_by_level` before connecting. Every
+current server policy prefers the reply's color. The policy affects display
+only and leaves the received color and faction available separately. The
+`combat::Consideration::faction` docs give the wire order and cite the pinned
+server swaps.
+
 This library workspace intentionally does not commit `Cargo.lock`. CI resolves
 dependencies for each toolchain: stable format, Clippy, tests and docs on Linux;
 native tests on Windows. These checks
@@ -864,6 +870,10 @@ fallback or partial application. Hosts must route these facts before their
 own player/profile gates. This networking API applies no installed definitions.
 
 ## Checked local movement preparation
+
+`eq_network_game::buffs::scale_instrument_effect` takes an already evaluated
+signed magnitude and a received modifier. The result is a host projection
+for movement-related effects. An unresolved modifier returns `None`.
 
 `MotionSession::send_move_sample` keeps its existing signature and result
 semantics. Internally it prepares one checked candidate while exclusively

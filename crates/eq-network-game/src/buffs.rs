@@ -1,8 +1,41 @@
 //! Server-owned buff state. Durations are wire ticks, not client countdowns.
+//!
+//! Titanium's action handler (`eqgame.exe` 0x414913) copies the landing
+//! modifier into the buff at 0x416213–0x416219 and 0x416289–0x41628f.
+//! The effect cache evaluates the signed level/cap magnitude at 0x410200.
+//! At 0x4102a6 it reads the modifier, bypasses scaling for 10 or values above
+//! 45, and otherwise multiplies the magnitude by the modifier in tenths
+//! (0.1 at 0x640e38, integer conversion at 0x60e98c). Movement effect 3
+//! reaches the comparison at 0x410619 with the scaled value, including
+//! negative snares.
+//!
+//! [`scale_instrument_effect`] exposes the bounded host projection. It
+//! preserves the host's neutral encodings and leaves unresolved modifiers
+//! unavailable. Use the modifier from a received action or buff slot.
 use anyhow::{ensure, Result};
 use serde::Serialize;
 
 pub mod cancel;
+
+/// Scales an evaluated movement-related buff magnitude using its received
+/// instrument modifier. Both dialects accept 0 and 10 as neutral for this
+/// projection. Boosts of 11 through 45 are supported on Titanium, and
+/// signed division truncates toward zero. Returns `None` for an unresolved
+/// modifier or a result outside `i64`.
+#[must_use]
+pub fn scale_instrument_effect(
+    dialect: crate::GameDialect,
+    magnitude: i64,
+    modifier: u32,
+) -> Option<i64> {
+    match (dialect, modifier) {
+        (_, 0 | 10) => Some(magnitude),
+        (crate::GameDialect::Titanium, 11..=45) => {
+            i64::try_from(i128::from(magnitude) * i128::from(modifier) / 10).ok()
+        }
+        _ => None,
+    }
+}
 
 /// Titanium's `OP_Action`, which carries spell landings and one other
 /// record ([`Action`]).
@@ -362,6 +395,25 @@ fn word(bytes: &[u8], offset: usize) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn instrument_projection_preserves_sign_and_dialect_bounds() {
+        use crate::GameDialect::{EqMac, Titanium};
+
+        for dialect in [Titanium, EqMac] {
+            for modifier in [0, 10] {
+                assert_eq!(scale_instrument_effect(dialect, -13, modifier), Some(-13));
+            }
+        }
+        assert_eq!(scale_instrument_effect(Titanium, 13, 11), Some(14));
+        assert_eq!(scale_instrument_effect(Titanium, -13, 11), Some(-14));
+        assert_eq!(scale_instrument_effect(Titanium, -13, 45), Some(-58));
+        assert_eq!(scale_instrument_effect(Titanium, i64::MAX, 45), None);
+        for modifier in [1, 9, 46, u32::MAX] {
+            assert_eq!(scale_instrument_effect(Titanium, -13, modifier), None);
+        }
+        assert_eq!(scale_instrument_effect(EqMac, -13, 11), None);
+    }
 
     #[test]
     fn an_invisibility_drop_fades_or_clears_as_the_program_lays_it_out() {

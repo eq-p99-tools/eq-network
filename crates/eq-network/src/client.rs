@@ -654,6 +654,14 @@ pub struct Client {
 }
 
 impl Client {
+    /// Whether the selected server policy asks the host to estimate NPC
+    /// consider difficulty from the classic level scale. All current policies
+    /// display the received color. This setting does not change the reply.
+    #[must_use]
+    pub fn consider_npcs_by_level(&self) -> bool {
+        session::consider_npcs_by_level(self.config.protocol)
+    }
+
     /// Item placement rules used by the selected server's inventory owner.
     /// Available before connection so host projections use the same policy.
     /// None means the server type does not provide inventory movement.

@@ -141,6 +141,12 @@ pub(super) trait ServerType: Sync {
     /// The client generation's packets the server speaks.
     fn wire(&self) -> &'static dyn Wire;
 
+    /// Enable a classic level estimate in place of the received NPC color.
+    /// Each server needs its own evidence for selecting this estimate.
+    fn consider_npcs_by_level(&self) -> bool {
+        false
+    }
+
     /// Placement rules shared by worker validation and host projections.
     /// An unconfigured server type offers no inventory movement policy.
     fn inventory_move_rules(&self) -> Option<MoveRules> {
@@ -1747,12 +1753,25 @@ mod tests {
         let setup = Setup::new("Tester", AutoEat::default());
         assert!(empty.features(&setup).is_empty());
         assert_eq!(empty.inventory_move_rules(), None);
+        assert!(!empty.consider_npcs_by_level());
         assert!(empty.protect(&[0; 464]).unwrap().is_none());
         assert!((empty.profile_turn() - 512.0).abs() < f32::EPSILON);
         assert!(!empty.start_choice());
         assert!(empty.creation().is_none());
         assert!(empty.deletion().is_none());
         assert_eq!(empty.spell_landing_flag(), None);
+    }
+
+    #[test]
+    fn every_current_consider_policy_uses_the_received_color() {
+        for protocol in [
+            ServerProtocol::Project1999,
+            ServerProtocol::EqEmu,
+            ServerProtocol::Quarm,
+            ServerProtocol::Takp,
+        ] {
+            assert!(!super::super::consider_npcs_by_level(protocol));
+        }
     }
 
     #[test]
