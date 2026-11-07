@@ -9,9 +9,10 @@
 //! reaches the comparison at 0x410619 with the scaled value, including
 //! negative snares.
 //!
-//! [`scale_instrument_effect`] exposes the bounded host projection. It
-//! preserves the host's neutral encodings and leaves unresolved modifiers
-//! unavailable. Use the modifier from a received action or buff slot.
+//! [`scale_instrument_effect`](crate::buffs::scale_instrument_effect) exposes
+//! the bounded host projection. It preserves the host's neutral encodings and
+//! leaves unresolved modifiers unavailable. Use the modifier from a received
+//! action or buff slot.
 use anyhow::{ensure, Result};
 use serde::Serialize;
 
