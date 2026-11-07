@@ -2191,7 +2191,7 @@ mod tests {
         let began = |caster_id| {
             WorldEvent::Spell(SpellUpdate::Began {
                 caster_id,
-                spell_id: 2935,
+                spell_id: 202,
                 duration_ms: 3000,
             })
         };
@@ -3029,6 +3029,9 @@ mod admission_tests;
 
 #[cfg(test)]
 mod command_batch_tests;
+
+#[cfg(test)]
+mod cast_result_tests;
 
 #[cfg(test)]
 mod stun_tests;

@@ -80,6 +80,7 @@ pub(super) struct CastGuard {
     phase: Option<Phase>,
     source: Option<Source>,
     stop_deadline: Option<Instant>,
+    luclin_port_begins: bool,
     /// Request provenance survives the acknowledgement wait without holding casting.
     unconfirmed: Option<(u32, Option<Source>)>,
     late_begin: Option<u32>,
@@ -114,6 +115,7 @@ impl CastGuard {
                 submitted: now,
             }),
             source,
+            luclin_port_begins: self.luclin_port_begins,
             late_begin: self.late_begin.filter(|&abandoned| abandoned != spell),
             ..Self::default()
         };
@@ -175,7 +177,23 @@ impl CastGuard {
 
     /// Clears state when this character dies or the owning zone session ends.
     pub fn clear(&mut self) {
-        *self = Self::default();
+        self.release();
+        self.unconfirmed = None;
+    }
+
+    /// Settles the observed hold independently of any timed-out request.
+    fn release(&mut self) {
+        self.phase = None;
+        self.source = None;
+        self.stop_deadline = None;
+        self.late_begin = None;
+    }
+
+    fn matches_late_begin(&self, requested: u32, received: u32) -> bool {
+        requested == received
+            // EQMacEmu Mob::DoCastSpell reports IsLuclinPortSpell as 2935.
+            // An exact 2935 request is handled by the first comparison.
+            || (self.luclin_port_begins && received == 2935 && matches!(requested, 2062 | 2706..=2709))
     }
 
     /// Follows own starts and interruptions and matching spell results.
@@ -199,7 +217,18 @@ impl CastGuard {
                     });
                     return stopped.map(Followup::Superseded);
                 }
-                let late = self.unconfirmed.take();
+                if let Some((requested, source)) = self
+                    .unconfirmed
+                    .filter(|&(requested, _)| self.matches_late_begin(requested, spell))
+                {
+                    self.unconfirmed = None;
+                    self.source = source;
+                    self.phase = Some(Phase::Casting {
+                        spell,
+                        requested: Some(requested),
+                    });
+                    return Some(Followup::LateBegin(requested));
+                }
                 let requested = match self.phase {
                     Some(Phase::Awaiting { spell, .. }) => Some(spell),
                     Some(Phase::Casting {
@@ -207,30 +236,32 @@ impl CastGuard {
                         requested,
                     }) if active == spell => requested,
                     _ => {
-                        self.source = late.and_then(|(_, source)| source);
-                        late.map(|(requested, _)| requested)
+                        self.source = None;
+                        None
                     }
                 };
                 self.phase = Some(Phase::Casting { spell, requested });
-                return late.map(|(requested, _)| Followup::LateBegin(requested));
             }
             SpellUpdate::Interrupted { caster_id, .. } if caster_id == u32::from(own_id) => {
-                self.clear();
+                // This message has no spell ID to settle a timed-out request.
+                self.release();
             }
             SpellUpdate::Mana {
                 spell_id,
                 keep_casting: false,
             } => {
                 if self.answers(spell_id) {
-                    self.clear();
-                } else if self.unconfirmed.is_some_and(|(spell, _)| spell == spell_id) {
+                    self.release();
+                }
+                if self.unconfirmed.is_some_and(|(spell, _)| spell == spell_id) {
                     self.unconfirmed = None;
                 }
             }
             SpellUpdate::BarRefresh { slot, spell_id, .. } => {
                 if self.answers(spell_id) && Source::accepts_refresh(self.source, slot) {
-                    self.clear();
-                } else if self.unconfirmed.is_some_and(|(spell, source)| {
+                    self.release();
+                }
+                if self.unconfirmed.is_some_and(|(spell, source)| {
                     spell == spell_id && Source::accepts_refresh(source, slot)
                 }) {
                     self.unconfirmed = None;
@@ -255,6 +286,17 @@ impl Casting {
     pub(super) fn with_song_stop() -> Self {
         Self {
             song_stop: true,
+            ..Self::default()
+        }
+    }
+
+    /// Stock EQMacEmu rewrites the received start of selected Luclin ports.
+    pub(super) fn with_luclin_port_begins() -> Self {
+        Self {
+            guard: CastGuard {
+                luclin_port_begins: true,
+                ..CastGuard::default()
+            },
             ..Self::default()
         }
     }
@@ -871,40 +913,6 @@ mod tests {
             spell_id: 73,
             duration_ms: 0,
         }
-    }
-
-    #[test]
-    fn a_timed_out_item_remembers_its_refresh_slot_until_the_result_arrives() {
-        let now = Instant::now();
-        let refresh = |slot| SpellUpdate::BarRefresh {
-            slot,
-            spell_id: 73,
-            reduction_ms: 0,
-        };
-        let began = SpellUpdate::Began {
-            caster_id: 12,
-            spell_id: 2935,
-            duration_ms: 3000,
-        };
-        let item_slot = u32::from(ITEM_CAST_SLOT);
-        let mut guard = CastGuard::default();
-        guard.submitted(73, Some(Source::Item), now);
-        assert_eq!(guard.expire(now + ACK_TIMEOUT), Some(73));
-        assert!(guard.observe(12, &refresh(0)).is_none());
-        assert!(matches!(
-            guard.observe(12, &began),
-            Some(Followup::LateBegin(73))
-        ));
-        assert!(guard.observe(12, &refresh(0)).is_none());
-        assert!(guard.active());
-        assert!(guard.observe(12, &refresh(item_slot)).is_none());
-        assert!(!guard.active());
-
-        guard.submitted(73, Some(Source::Item), now);
-        assert_eq!(guard.expire(now + ACK_TIMEOUT), Some(73));
-        assert!(guard.observe(12, &refresh(item_slot)).is_none());
-        assert!(guard.observe(12, &began).is_none());
-        assert!(!guard.answers(73));
     }
 
     #[test]

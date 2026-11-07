@@ -1537,7 +1537,7 @@ impl ServerType for Takp {
     /// request; the cast is held until TAKP brings the spell bar back or
     /// interrupts it.
     fn casting(&self, _setup: &Setup<'_>) -> Provided {
-        offer(shared::casting())
+        offer(Box::new(Casting::with_luclin_port_begins()))
     }
 
     /// Memorizing, forgetting and scribing spells in TAKP's 256-slot book.

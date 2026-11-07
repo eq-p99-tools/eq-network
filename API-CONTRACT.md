@@ -120,15 +120,30 @@ instead emits `WorldEvent::CastRequestUnconfirmed` for the unanswered
 request and allows a fresh manual attempt. That event reports only the end
 of the local wait. It precedes any later submission in that admission,
 including a manual retry of the same spell. The worker retains the last
-timed-out spell and gem/item source until a fresh submission, an answering
-result, or admission reset. If an own start arrives in that interval, the
+timed-out spell and gem/item source until a compatible own start, an
+answering result naming the spell, a fresh submission, death, or the end of
+the admission. An unrelated own start can hold casting independently.
+An interruption carries no spell ID and releases the active hold.
+
+A late start matches the request by spell ID. Stock TAKP also accepts
+the documented Luclin port rewrite from 2062 or 2706–2709 to 2935. The
 worker emits `WorldEvent::CastLateBegin` with the request spell before
-forwarding the received `SpellUpdate::Began`. This supplies the same local alias
-used for ordinary starts and preserves gem/item result matching. The wire
-start has no request ID, so receipt order does not disambiguate starts across
-retries. An already begun cast still awaits a matching result. Own death clears
-cast state through the death event. Exhaustive `WorldEvent` matches must
-handle `CastLateBegin` and `CastRequestUnconfirmed`.
+forwarding the compatible own `SpellUpdate::Began`. Starts carry no
+request ID, so overlapping retries with the same spell or alias remain
+ambiguous. An already begun cast still awaits a matching result. Own
+death clears cast state through the death event. Exhaustive `WorldEvent`
+matches must handle `CastLateBegin` and `CastRequestUnconfirmed`.
+[EQMacEmu start](https://github.com/EQMacEmu/Server/blob/d8d589a0ce486ee47ec990d3c3bbbf604b2572a1/zone/spells.cpp#L501-L511),
+[EQMacEmu port spell IDs](https://github.com/EQMacEmu/Server/blob/d8d589a0ce486ee47ec990d3c3bbbf604b2572a1/common/spdat.cpp#L1305-L1311)
+
+Stock EQEmu and EQMacEmu use spell-bearing `SpellUpdate::Mana` to
+re-enable ordinary casts, including item clicks. That update settles a
+matching cast when `keep_casting` is false. Standalone item-slot
+`BarRefresh` remains a worker compatibility path. The paired host's
+refresh handling covers memorized gems, so standalone item refresh is
+outside the delayed-item completion contract.
+[EQEmu spell bar](https://github.com/EQEmu/EQEmu/blob/4aceae18b94ffaafc08e2b17bc41cd72c77f795d/zone/spells.cpp#L5377-L5390),
+[EQMacEmu spell bar](https://github.com/EQMacEmu/Server/blob/d8d589a0ce486ee47ec990d3c3bbbf604b2572a1/zone/spells.cpp#L3945-L3957)
 
 An unanswered book edit emits terminal `BookActionStatus::Unconfirmed` once
 after 30 seconds and releases the spellbook hold. A fresh edit can proceed

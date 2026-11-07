@@ -832,8 +832,8 @@ pub enum WorldEvent {
         /// Spell named by the unanswered request.
         spell_id: u32,
     },
-    /// Local request context for the following own `SpellUpdate::Began`.
-    /// The received start can name a different spell from the request.
+    /// Local request context for the following compatible own `SpellUpdate::Began`.
+    /// The received start may use the provider's known spell alias.
     CastLateBegin {
         /// Zone admission that owns the cast.
         session_id: u64,

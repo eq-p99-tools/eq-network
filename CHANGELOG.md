@@ -343,9 +343,11 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   cursor-only resync while the worker withdraws movement until recovery.
   Clean state accepts fresh movement inputs that meet the bound.
   Ground drops are restricted to local-only EQEmu pending live validation.
-- **Breaking:** Preserve the unanswered spell and cast source for an own
-  start that arrives after the local cast wait and before another submission.
-  Handle `WorldEvent::CastLateBegin` before the received spell update.
+- **Breaking:** Preserve the unanswered spell and cast source for a
+  compatible own start after the local cast wait. Match the spell ID or
+  stock TAKP's documented Luclin port rewrite. Unrelated own starts keep
+  separate cast state. Handle `WorldEvent::CastLateBegin` before the
+  received spell update.
 - **Breaking:** Both movement results now carry the original local request
   stamp. A Move discarded at selection or abandoned in a failed zone batch
   receives a typed refusal while the event stream can still deliver it.
