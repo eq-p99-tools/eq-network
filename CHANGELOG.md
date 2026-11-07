@@ -5,10 +5,6 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-- Accept a bounded 1.00 to 1.40 forward run speed multiplier in local
-  movement options. The worker budgets the same forward component and fall
-  drift as the host, with ordinary speed as the default.
-
 ### Added
 
 - Submit an ordinary Titanium cursor drop on EQEmu through
@@ -114,6 +110,12 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Breaking:** `MovementOptions::run_boost` and `MovementOptions::RUN_BOOST`
+  are replaced by `run_speed_multiplier: RunSpeedMultiplier`, a bounded 100
+  through 140 percent forward run speed multiplier with 100 as the default.
+  The worker budgets the same forward component and fall drift as the host;
+  flight keeps its unscaled vertical budget. The option remains a gameplay
+  departure, offered only where `SetMovementOptions` is.
 - The Titanium translocate decline carries -1, as the Titanium program sends
   it (`eqgame.exe` 0x499f08), instead of 0. `EQEmu` accepts only 1 as a yes,
   so the outcome is unchanged.
