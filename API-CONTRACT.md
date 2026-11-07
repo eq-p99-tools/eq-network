@@ -431,6 +431,12 @@ cursor removal or quantity update identifies the slot only, and may refer to
 another item after a silent drop. Preserve the last view and mark inventory
 stale on such an update. Re-enter the world for a fresh inventory baseline.
 
+During that hold `Inventory::carried_weight_tenths` returns
+`WeightUnavailable::Inventory`. The queued item may already be the server's
+current cursor, so the displayed load can be too low. The worker withdraws
+active movement input, refuses ready speed reports and withholds fall-damage
+and Safe Fall reports. Supported passive descent remains available.
+
 Process received ground spawns and removals through the existing object
 owner. The spawn carries no cursor instance correlation, and pickup delivery
 still comes from received inventory. Downstream exhaustive command, capability

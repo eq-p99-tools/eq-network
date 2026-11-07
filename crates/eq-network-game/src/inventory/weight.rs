@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 /// A weight that cannot be established from this inventory.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum WeightUnavailable {
-    /// No complete snapshot, or a stale/correcting one.
+    /// No complete snapshot, a stale/correcting one, or unresolved drop custody.
     Inventory,
     /// Pending moves change the carried weight.
     Prediction,
@@ -58,15 +58,18 @@ impl Inventory {
     /// Known root-stack splits/merges can instead bound all conserved units by
     /// their finite touched-slot footprint, including independent refused or
     /// partial moves. Repeating the same edges adds no weight penalty.
+    /// A submitted ground drop requires a fresh snapshot. An arrival shown
+    /// in the queue can already be the server's current cursor item.
     ///
     /// # Errors
-    /// Rejects missing/stale state, malformed bags and unbounded affecting history.
+    /// Rejects missing/stale state, unresolved drops, malformed bags and
+    /// unbounded affecting history.
     pub fn carried_weight_tenths(
         &self,
         generation: crate::GameDialect,
         coins: u64,
     ) -> Result<u64, WeightUnavailable> {
-        if !self.received() || self.stale() {
+        if !self.received() || self.stale() || self.ground_drop_pending() {
             return Err(WeightUnavailable::Inventory);
         }
         let current: BTreeMap<_, _> = self.items().iter().map(|(&s, i)| (s, i)).collect();

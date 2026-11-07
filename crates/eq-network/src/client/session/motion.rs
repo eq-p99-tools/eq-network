@@ -422,6 +422,11 @@ impl Motion {
                 .log
                 .diagnostic("Rejected obsolete movement inputs".into());
         }
+        if matches!(state, SpeedInputState::Ready(_)) && world.inventory.ground_drop_pending() {
+            return out
+                .log
+                .diagnostic("Movement needs a fresh inventory snapshot after the drop".into());
+        }
         self.input_report_id = match state {
             SpeedInputState::Ready(_) => Some(report_id),
             SpeedInputState::Unavailable(_) => None,
@@ -1636,6 +1641,106 @@ mod tests {
             .unwrap();
         assert!(world.body.motion.as_ref().unwrap().calibration().is_none());
         assert_eq!(motion.revision, 3);
+    }
+
+    #[test]
+    fn pending_drop_with_heavier_cursor_arrival_blocks_current_worker_grant() {
+        use eq_network_game::{
+            inventory::{Inventory, InventorySlot, InventoryUpdate, WeightUnavailable},
+            GameDialect,
+        };
+        use std::num::NonZeroU32;
+
+        let mut original = testing::item(InventorySlot::CURSOR.0);
+        original.details.weight_tenths = 50;
+        original.rules.ground_drop_serial = NonZeroU32::new(17);
+        let mut heavier = original.clone();
+        heavier.details.weight_tenths = 1_500;
+        heavier.rules.ground_drop_serial = NonZeroU32::new(18);
+        let mut inventory = Inventory::default();
+        inventory.apply(InventoryUpdate::Snapshot(vec![original.clone()]));
+
+        let mut world = World::new(5);
+        world.own_spawn = Some(7);
+        let mut player = testing::player(7);
+        (player.run_speed, player.walk_speed, player.level) = (0.7, 0.46, 50);
+        world.player.admit(player);
+        world.admitted = Some(Instant::now());
+        world.inventory = inventory.clone().into();
+        let mut motion = Motion::new(true, true, None);
+        testing::run(|out| motion.admitted(&mut world, out))
+            .result
+            .unwrap();
+        let report_at = |revision, weight| ClientCommand::SpeedInputs {
+            session_id: 5,
+            revision,
+            report_id: revision,
+            state: SpeedInputState::Ready(SpeedInputs {
+                eqmac_fatigue: None,
+                rate: 0,
+                weight,
+                capacity: 200,
+            }),
+        };
+        let weight =
+            |inventory: &Inventory| inventory.carried_weight_tenths(GameDialect::Titanium, 0);
+        assert_eq!(weight(&inventory), Ok(50));
+        let ready = report_at(motion.revision, 5);
+        let outcome = testing::run(|out| motion.handle(&ready, &mut world, out));
+        outcome.result.unwrap();
+        assert!(matches!(
+            acceptances(&outcome.events)[..],
+            [SpeedInputAcceptance { granted: true, .. }]
+        ));
+
+        inventory.apply(InventoryUpdate::GroundDropPending(
+            original.rules.ground_drop_serial.unwrap(),
+        ));
+        assert_eq!(weight(&inventory), Err(WeightUnavailable::Inventory));
+        inventory.apply(InventoryUpdate::Cursor(vec![heavier.clone()]));
+        assert!(!inventory.stale());
+        assert_eq!(
+            inventory.items().get(&InventorySlot::CURSOR),
+            Some(&original)
+        );
+        assert_eq!(inventory.queued().count(), 1);
+        assert_eq!(weight(&inventory), Err(WeightUnavailable::Inventory));
+        world.inventory = inventory.clone().into();
+        let outcome = testing::run(|out| motion.tick(Instant::now(), &mut world, out));
+        outcome.result.unwrap();
+        assert!(outcome.events.iter().any(|event| matches!(
+            event,
+            ClientEvent::World(WorldEvent::MotionState {
+                units_per_second: None,
+                falls: true,
+                ..
+            })
+        )));
+        let underweight = report_at(motion.revision, 5);
+        let outcome = testing::run(|out| motion.handle(&underweight, &mut world, out));
+        outcome.result.unwrap();
+        assert!(acceptances(&outcome.events).is_empty());
+        assert!(world.body.motion.as_ref().unwrap().calibration().is_none());
+        assert!(world.inventory.ground_drop_pending());
+
+        inventory.apply(InventoryUpdate::Snapshot(vec![heavier]));
+        assert_eq!(weight(&inventory), Ok(1_500));
+        world.inventory = inventory.into();
+        let outcome = testing::run(|out| motion.handle(&underweight, &mut world, out));
+        outcome.result.unwrap();
+        assert!(acceptances(&outcome.events).is_empty());
+        let recovered = report_at(motion.revision, 150);
+        let outcome = testing::run(|out| motion.handle(&recovered, &mut world, out));
+        outcome.result.unwrap();
+        assert!(matches!(
+            acceptances(&outcome.events)[..],
+            [SpeedInputAcceptance {
+                granted: true,
+                inputs: SpeedInputs { weight: 150, .. },
+                ..
+            }]
+        ));
+        assert!(!world.inventory.ground_drop_pending());
     }
 
     /// A same-zone relocation or a refused transfer's rewind corrects the

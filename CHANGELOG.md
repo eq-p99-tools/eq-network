@@ -11,9 +11,11 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `Capability::GroundDropping` and `GameCommand::DropItem`. Check the
   received droppable instance, actor and inventory revision before sending.
   `InventoryUpdate::GroundDropPending` holds custody until a received
-  inventory snapshot. Ground objects use their existing independent update
-  and pickup paths. Downstream exhaustive matches and `ItemPlacement` literals
-  need migration. P99 drop support awaits validation.
+  inventory snapshot. The hold makes carried weight unavailable, pauses
+  movement input and withholds fall reports. Ground objects use their
+  existing independent update and pickup paths. Downstream exhaustive
+  matches and `ItemPlacement` literals need migration. P99 drop support
+  awaits validation.
 - Offer Titanium drowning and lava heat reports on local-only EQEmu sessions
   through `Capability::Drowning` and `Capability::LavaHeat`. Retain the
   profile's zone, base fire resistance and AA presence and the Titanium

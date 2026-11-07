@@ -150,7 +150,16 @@ impl Feature for Hazards {
                 amount,
                 safe_fall,
                 ..
-            } => (Hazard::Falling, amount, safe_fall),
+            } => {
+                if world.inventory.ground_drop_pending() {
+                    return actions::refuse(
+                        command,
+                        "Fall damage needs a fresh inventory snapshot after the drop",
+                        out.log,
+                    );
+                }
+                (Hazard::Falling, amount, safe_fall)
+            }
             ClientCommand::EnvironmentalDamage { .. } => {
                 return actions::refuse(
                     command,
@@ -257,6 +266,43 @@ mod tests {
             amount,
             safe_fall: false,
         }
+    }
+
+    #[test]
+    fn pending_ground_drop_withholds_fall_and_safe_fall_reports() {
+        use eq_network_game::inventory::{Inventory, InventorySlot, InventoryUpdate};
+        use std::num::NonZeroU32;
+
+        let mut inventory = Inventory::default();
+        let serial = NonZeroU32::new(17).unwrap();
+        let mut item = testing::item(InventorySlot::CURSOR.0);
+        item.rules.ground_drop_serial = Some(serial);
+        inventory.apply(InventoryUpdate::Snapshot(vec![item]));
+        inventory.apply(InventoryUpdate::GroundDropPending(serial));
+        let mut world = World::new(5);
+        world.inventory = inventory.clone().into();
+        let mut feature = Hazards::new(&[Hazard::Falling], false);
+        let command = ClientCommand::EnvironmentalDamage {
+            session_id: 5,
+            hazard: Hazard::Falling,
+            amount: 160,
+            safe_fall: true,
+        };
+        let held = testing::run(|out| feature.handle(&command, &mut world, out));
+        held.result.unwrap();
+        assert!(held.sent.is_empty());
+
+        inventory.apply(InventoryUpdate::Snapshot(Vec::new()));
+        world.inventory = inventory.into();
+        let recovered = testing::run(|out| feature.handle(&command, &mut world, out));
+        recovered.result.unwrap();
+        assert_eq!(
+            recovered.sent,
+            [
+                hazards::safe_fall(true),
+                hazards::titanium_damage(7, Hazard::Falling, 160).unwrap(),
+            ]
+        );
     }
 
     #[test]
