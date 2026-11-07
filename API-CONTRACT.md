@@ -435,7 +435,8 @@ events, with existing uncertainty, correction and snapshot rules unchanged.
 Titanium EQEmu. Public servers await separate validation of item serialization,
 eligibility and cursor updates. Pass the current admission,
 own spawn, inventory revision and exact received cursor item in
-`InventoryDrop` after explicit user consent.
+`InventoryDrop` after explicit user consent. Submission requires current
+carried item and coin evidence sufficient to bound the load.
 `Inventory::plan_ground_drop` requires a positively identified ordinary
 droppable instance and an unqueued cursor. A predicted move settled by silence
 leaves the drop unavailable until the server identifies the new cursor.
@@ -461,6 +462,12 @@ possible cursor group. The worker validates fresh speed inputs against that
 bound before granting active movement. A conflicting cursor update or
 invalidation withdraws active movement until received recovery. Supported
 passive descent and ordinary completed-fall reporting continue during the hold.
+For a landing, `Inventory::ground_drop_weight_tenths` also preserves the
+bound through slot-only reductions and complete cursor-only replacements,
+including a temporary resync token. It retains the heaviest candidate seen.
+An unreadable inventory update or a carried-slot change that can increase
+weight invalidates this proof. A host with unknown load can report only a
+landing cost established independently of load.
 [EQEmu cursor buffer](https://github.com/EQEmu/EQEmu/blob/4aceae18b94ffaafc08e2b17bc41cd72c77f795d/zone/inventory.cpp#L851-L862)
 [EQEmu weight calculation](https://github.com/EQEmu/EQEmu/blob/4aceae18b94ffaafc08e2b17bc41cd72c77f795d/zone/client_mods.cpp#L686-L749)
 

@@ -1,5 +1,6 @@
 //! Carried item weight from complete authoritative inventory definitions.
-use super::{Inventory, InventoryItem, InventorySlot};
+use super::{Inventory, InventoryItem, InventorySlot, InventoryUpdate};
+use crate::GameDialect;
 use std::collections::BTreeMap;
 
 /// Maximum whole weight used by the native movement calculation.
@@ -16,7 +17,116 @@ pub enum WeightUnavailable {
     Container,
 }
 
+/// Carried weight evidence retained independently of cursor placement.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct DropWeight {
+    non_cursor: u64,
+    heaviest_cursor: u64,
+}
+
+impl DropWeight {
+    pub(super) fn start(inventory: &Inventory) -> Option<Self> {
+        if !inventory.received()
+            || inventory.stale()
+            || inventory.predicted()
+            || inventory.ground_drop_pending()
+            || inventory.weight_history_uncertain
+            || inventory
+                .stack_weight
+                .as_ref()
+                .is_some_and(|bound| bound.active())
+            || inventory.queued().next().is_some()
+            || inventory.items().keys().any(|slot| slot.is_in_cursor_bag())
+        {
+            return None;
+        }
+        let items: BTreeMap<_, _> = inventory.items().iter().map(|(&s, i)| (s, i)).collect();
+        let shown = items
+            .get(&InventorySlot::CURSOR)
+            .filter(|item| item.bag_slots == 0)?;
+        let heaviest_cursor = u64::from(shown.details.weight_tenths);
+        let non_cursor = total(&items, GameDialect::Titanium, 0).ok()? - heaviest_cursor;
+        Some(Self {
+            non_cursor,
+            heaviest_cursor,
+        })
+    }
+
+    pub(super) fn observe(mut self, update: &InventoryUpdate) -> Option<Self> {
+        match update {
+            InventoryUpdate::Cursor(items) | InventoryUpdate::Set(items)
+                if items
+                    .first()
+                    .is_some_and(|item| item.slot == InventorySlot::CURSOR) =>
+            {
+                self.include_cursor(items)?;
+            }
+            // A lone child can belong to an unidentified cursor bag. A
+            // carried-slot replacement can be a resync token or a genuine
+            // increase. Neither certifies the old non-cursor load.
+            InventoryUpdate::Set(items)
+                if items.iter().any(|item| {
+                    let slot = item.slot;
+                    slot == InventorySlot::CURSOR
+                        || slot.is_in_cursor_bag()
+                        || slot.is_equipment()
+                        || slot.is_carried()
+                }) =>
+            {
+                return None
+            }
+            InventoryUpdate::Snapshot(_)
+            | InventoryUpdate::Cursor(_)
+            | InventoryUpdate::Invalidated
+            | InventoryUpdate::Prediction(_)
+            | InventoryUpdate::DestroyCursor
+            | InventoryUpdate::GroundDropPending(_)
+            | InventoryUpdate::TradeEmptied
+            | InventoryUpdate::WorldEmptied => return None,
+            // Slot-only reductions cannot increase the old group's mass.
+            // Even when one promotes a new cursor item, every received
+            // candidate remains in the bound.
+            InventoryUpdate::Remove(_)
+            | InventoryUpdate::Consume { .. }
+            | InventoryUpdate::Deduct { .. }
+            | InventoryUpdate::Used(_)
+            | InventoryUpdate::Set(_)
+            | InventoryUpdate::Settled => (),
+        }
+        Some(self)
+    }
+
+    fn include_cursor(&mut self, group: &[InventoryItem]) -> Option<()> {
+        let items: BTreeMap<_, _> = group.iter().map(|item| (item.slot, item)).collect();
+        if items.len() != group.len()
+            || group
+                .first()
+                .is_none_or(|item| item.slot != InventorySlot::CURSOR)
+            || group
+                .iter()
+                .skip(1)
+                .any(|item| !item.slot.is_in_cursor_bag())
+        {
+            return None;
+        }
+        self.heaviest_cursor = self
+            .heaviest_cursor
+            .max(total(&items, GameDialect::Titanium, 0).ok()?);
+        Some(())
+    }
+}
+
 impl Inventory {
+    /// Upper bound in tenths for a pending Titanium cursor drop. Includes
+    /// carried coins once and the heaviest one of the observed cursor
+    /// groups. Cursor-only corrections can invalidate placement and leave
+    /// this mass bound intact. Use [`Self::carried_weight_tenths`] for movement.
+    #[must_use]
+    pub fn ground_drop_weight_tenths(&self, coins: u64) -> Option<u64> {
+        let basis = self.drop_weight?;
+        Some(basis.non_cursor + basis.heaviest_cursor + coins / 4)
+    }
+
     /// Coin-free weight establishes the item contribution; exactly one hundred
     /// coin-weight units distinguishes every decoded purse reduction percent.
     /// Together these prove equality for every coin count, in both dialects.
@@ -77,44 +187,18 @@ impl Inventory {
         if !self.received() || self.stale() {
             return Err(WeightUnavailable::Inventory);
         }
+        if self.ground_drop_pending() {
+            return self
+                .ground_drop_weight_tenths(coins)
+                .filter(|_| generation == GameDialect::Titanium)
+                .ok_or(WeightUnavailable::Inventory);
+        }
         let current: BTreeMap<_, _> = self.items().iter().map(|(&s, i)| (s, i)).collect();
         let weight = total(&current, generation, coins)?;
         if self.weight_history_uncertain {
             return Err(WeightUnavailable::Prediction);
         }
         let stack_bound = self.stack_weight.as_ref().filter(|bound| bound.active());
-        if self.ground_drop_pending() {
-            if generation != crate::GameDialect::Titanium
-                || self.predicted()
-                || stack_bound.is_some()
-            {
-                return Err(WeightUnavailable::Inventory);
-            }
-            let cursor: BTreeMap<_, _> = current
-                .iter()
-                .filter(|(slot, _)| **slot == InventorySlot::CURSOR || slot.is_in_cursor_bag())
-                .map(|(&slot, &item)| (slot, item))
-                .collect();
-            let shown = total(&cursor, generation, 0)?;
-            let mut heaviest = shown;
-            for group in self.queued() {
-                let candidate: BTreeMap<_, _> =
-                    group.iter().map(|item| (item.slot, item)).collect();
-                if candidate.len() != group.len()
-                    || group
-                        .first()
-                        .is_none_or(|item| item.slot != InventorySlot::CURSOR)
-                    || group
-                        .iter()
-                        .skip(1)
-                        .any(|item| !item.slot.is_in_cursor_bag())
-                {
-                    return Err(WeightUnavailable::Inventory);
-                }
-                heaviest = heaviest.max(total(&candidate, generation, 0)?);
-            }
-            return Ok(weight - shown + heaviest);
-        }
         if let Some(bound) = stack_bound {
             return bound
                 .weight(&self.items, weight)
@@ -266,10 +350,18 @@ mod tests {
 
         // A cursor resync can send a temporary item before the real replacement.
         inventory.apply(InventoryUpdate::Set(vec![item(30, 1)]));
+        inventory.apply(InventoryUpdate::Remove(InventorySlot::CURSOR));
         assert_eq!(
             inventory.carried_weight_tenths(Titanium, 40),
             Err(WeightUnavailable::Inventory)
         );
+        assert_eq!(inventory.ground_drop_weight_tenths(40), Some(1_730));
+        inventory.apply(InventoryUpdate::Set(vec![item(30, 2_000)]));
+        assert_eq!(inventory.ground_drop_weight_tenths(40), Some(2_110));
+        inventory.apply(InventoryUpdate::Set(vec![item(24, 50)]));
+        assert_eq!(inventory.ground_drop_weight_tenths(40), None);
+        inventory.apply(InventoryUpdate::Cursor(vec![item(30, 2_500)]));
+        assert_eq!(inventory.ground_drop_weight_tenths(40), None);
         assert!(inventory.ground_drop_pending());
     }
 

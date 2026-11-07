@@ -338,9 +338,10 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Fixed
 
 - Keep reporting completed falls while a cursor drop awaits inventory evidence.
-  The carried-weight calculation bounds clean drop state by the heaviest
-  possible current cursor group. The worker accepts fresh movement inputs
-  that meet the bound and withdraws input after an inventory invalidation.
+  A drop requires enough item and coin evidence to establish carried weight.
+  Its landing bound retains the heaviest received cursor group through
+  cursor-only resync while the worker withdraws movement until recovery.
+  Clean state accepts fresh movement inputs that meet the bound.
   Ground drops are restricted to local-only EQEmu pending live validation.
 - **Breaking:** Preserve the unanswered spell and cast source for an own
   start that arrives after the local cast wait and before another submission.

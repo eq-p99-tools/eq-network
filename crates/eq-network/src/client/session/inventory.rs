@@ -559,6 +559,10 @@ impl Belongings {
                         .is_some_and(|(actor, _)| actor == request.own_id),
                 "That cursor drop needs a current local EQEmu admission and actor"
             );
+            anyhow::ensure!(
+                world.coins.purse.is_some() && world.coins.bank.is_some(),
+                "A cursor drop needs current carried coin information"
+            );
             let serial = world.inventory.plan_ground_drop(request)?;
             Ok((
                 InventoryUpdate::GroundDropPending(serial),

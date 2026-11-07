@@ -399,6 +399,8 @@ pub struct Inventory {
     destroyed: Option<InventoryItem>,
     ground_drop: Option<NonZeroU32>,
     #[serde(skip)]
+    drop_weight: Option<weight::DropWeight>,
+    #[serde(skip)]
     drop_cursor: ground_drop::CursorBasis,
 }
 
@@ -486,6 +488,7 @@ impl Inventory {
     /// Applies a fully decoded update; a new snapshot replaces previous admission data.
     pub fn apply(&mut self, update: InventoryUpdate) {
         self.revision = self.revision.wrapping_add(1);
+        self.drop_weight = self.drop_weight.and_then(|basis| basis.observe(&update));
         if self.ground_drop_pending() && ground_drop::unidentified_cursor_mutation(&update) {
             // A slot-only update can refer to an item that followed the
             // submitted one. Keep the last view and require a fresh snapshot.
@@ -627,6 +630,7 @@ impl Inventory {
     fn replace_snapshot(&mut self, items: Vec<InventoryItem>) {
         self.destroyed = None;
         self.ground_drop = None;
+        self.drop_weight = None;
         self.items = items.into_iter().map(|item| (item.slot, item)).collect();
         self.queued.clear();
         self.received = true;

@@ -5,7 +5,7 @@ use crate::client::ServerProtocol;
 use eq_network_game::{
     food::AutoEat,
     inventory::{InventoryItem, InventoryMove, InventorySlot, InventoryUpdate, MoveQuantity},
-    world::WorldEvent,
+    world::{Coins, WorldEvent},
 };
 use std::num::NonZeroU32;
 
@@ -26,6 +26,15 @@ fn setup_on(
     setup.local_only = local_only;
     let mut features = Features::from_setup(server, &setup);
     let mut world = World::for_zone(5, &config);
+    if local_only {
+        use eq_network_game::money::Wallet;
+        world.coins = Wallet {
+            purse: Some(Coins::default()),
+            bank: Some(Coins::default()),
+            ..Wallet::default()
+        }
+        .into();
+    }
     world.player.admit(testing::player(7));
     world.own_spawn = Some(7);
     world.admitted = Some(Instant::now());
@@ -268,6 +277,12 @@ fn ordinary_drop_holds_after_object_and_cursor_updates_until_snapshot() {
     assert!(!world.inventory.ground_drop_pending());
 
     let drop = request(&world, 7);
+    let known = std::mem::take(&mut world.coins);
+    let unweighed = submit(protocol, &mut features, &mut world, &drop);
+    assert!(unweighed.result.unwrap() && unweighed.sent.is_empty());
+    assert!(!world.inventory.ground_drop_pending());
+    world.coins = known;
+
     let output = submit(protocol, &mut features, &mut world, &drop);
     assert!(output.result.unwrap());
     assert_eq!(output.sent, [titanium_ground_drop()]);
