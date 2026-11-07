@@ -261,11 +261,7 @@ pub(super) fn refuse_naming(
 fn refusal(command: &ClientCommand, reason: &str) -> Option<WorldEvent> {
     let error = Some(reason.to_owned());
     Some(match command {
-        ClientCommand::Move(request) => WorldEvent::MotionRefused {
-            session_id: request.session_id,
-            created: request.created,
-            reason: reason.to_owned(),
-        },
+        ClientCommand::Move(request) => crate::client::motion_refused(request, reason),
         ClientCommand::DeleteCharacter(request) => WorldEvent::CharacterDeletion(eq_network_game::deletion::Update {
             request: request.clone(),
             progress: eq_network_game::deletion::Progress::NotSent(eq_network_game::deletion::Refusal::NotAtSelection),

@@ -66,6 +66,11 @@ use std::{
 
 use login::Credentials;
 
+/// The selected server type owns the host's consider presentation policy.
+pub(super) fn consider_npcs_by_level(protocol: ServerProtocol) -> bool {
+    servers::server_type(protocol).consider_npcs_by_level()
+}
+
 /// The selected server type owns the host and worker's placement policy.
 pub(super) fn inventory_move_rules(
     protocol: ServerProtocol,

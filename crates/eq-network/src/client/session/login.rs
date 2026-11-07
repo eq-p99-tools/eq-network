@@ -90,7 +90,7 @@ pub(super) fn titanium(
     let mut sent_credentials = false;
     let mut unheard = Unheard::new(Stage::Login);
     loop {
-        let packet = match choice.next(&mut session, &mut deadline, stop, commands)? {
+        let packet = match choice.next(&mut session, &mut deadline, stop, commands, log)? {
             Next::Chosen(world) => {
                 play(&mut session, world)?;
                 continue;
@@ -286,12 +286,13 @@ impl<T> WorldChoice<T> {
         deadline: &mut Instant,
         stop: &CancellationToken,
         commands: Option<&Receiver<ClientCommand>>,
+        log: &mut Events<'_>,
     ) -> Result<Next<'_, T>> {
         loop {
             ensure!(!stop.is_cancelled(), "shutdown requested");
             match self.worlds.as_ref().filter(|_| self.asked.is_none()) {
                 Some(worlds) => {
-                    if let Some(index) = worlds.poll(commands) {
+                    if let Some(index) = worlds.poll(commands, log)? {
                         self.asked = Some(index);
                         *deadline = Instant::now() + ANSWER_LIMIT;
                         let listed = self
@@ -456,8 +457,15 @@ mod tests {
                 index: 1,
             })
             .unwrap();
+        let mut handler = |_| Ok(());
+        let mut log = Events::new(&config, &mut handler);
         assert_eq!(
-            choice.worlds.as_ref().unwrap().poll(Some(&commands)),
+            choice
+                .worlds
+                .as_ref()
+                .unwrap()
+                .poll(Some(&commands), &mut log)
+                .unwrap(),
             Some(1)
         );
         assert_eq!(choice.listed.as_ref().unwrap()[1], 3);

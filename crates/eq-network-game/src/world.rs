@@ -821,7 +821,8 @@ pub enum WorldEvent {
     CastPending {
         /// Zone admission that owns this request.
         session_id: u64,
-        /// Pending spell, or None before forwarding the update that answered it.
+        /// Pending spell, or None before the answering spell update.
+        /// Own death clears the hold as part of the death event.
         spell_id: Option<u32>,
     },
     /// A submitted cast received no matching update during the local acknowledgement wait.
@@ -830,6 +831,14 @@ pub enum WorldEvent {
         session_id: u64,
         /// Spell named by the unanswered request.
         spell_id: u32,
+    },
+    /// Local request context for the following compatible own `SpellUpdate::Began`.
+    /// The received start may use the provider's known spell alias.
+    CastLateBegin {
+        /// Zone admission that owns the cast.
+        session_id: u64,
+        /// Spell of the latest unanswered submission, before any retry.
+        requested_spell: u32,
     },
     /// A different own cast began while a song stop was pending.
     /// Discard this hold before applying the new start.
@@ -906,14 +915,16 @@ pub enum WorldEvent {
     MotionSent {
         /// Current zone admission.
         session_id: u64,
+        /// Original process-local request stamp, omitted from serialized logs.
+        #[serde(skip)]
+        created: std::time::Instant,
         /// Position accepted by local motion validation; after a refusal, the last
         /// accepted one.
         position: Position,
         /// Why the worker refused the sample. None means locally accepted.
         refused: Option<String>,
     },
-    /// The worker discarded a movement request before the motion guard could
-    /// return its position.
+    /// The worker discarded a movement request without publishing a position.
     MotionRefused {
         /// Admission named by the original request.
         session_id: u64,

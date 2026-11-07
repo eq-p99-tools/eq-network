@@ -88,8 +88,16 @@ pub struct Consideration {
     /// Considered spawn.
     pub target_id: u16,
     /// Raw consider faction code. Values 1 through 5 are ally through
-    /// indifferent, and 6 through 9 are scowling through apprehensive.
-    /// Other codes are preserved.
+    /// indifferent. Wire codes 6, 7, 8 and 9 are scowling, threatening,
+    /// dubious and apprehensive respectively. Other codes are preserved.
+    ///
+    /// [`EQEmu`] and [`EQMacEmu`] swap their internal codes 6 and 9, and
+    /// 7 and 8, in `Handle_OP_Consider` before queuing the reply. Titanium's
+    /// NPC handler (`eqgame.exe` 0x49ba39–0x49baa7) maps wire codes 1–9
+    /// to string IDs 12212–12220 in order.
+    ///
+    /// [`EQEmu`]: https://github.com/EQEmu/EQEmu/blob/4aceae18b94ffaafc08e2b17bc41cd72c77f795d/zone/client_packet.cpp
+    /// [`EQMacEmu`]: https://github.com/EQMacEmu/Server/blob/d8d589a0ce486ee47ec990d3c3bbbf604b2572a1/zone/client_packet.cpp
     pub faction: u32,
     /// The server's level-difference color code. A client may display a
     /// separate assessment based on the player and target levels.

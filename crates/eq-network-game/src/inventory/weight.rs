@@ -1,11 +1,17 @@
 //! Carried item weight from complete authoritative inventory definitions.
-use super::{Inventory, InventoryItem, InventorySlot};
+use super::{
+    stack_weight::StackWeightBound, Inventory, InventoryItem, InventorySlot, InventoryUpdate,
+};
+use crate::GameDialect;
 use std::collections::BTreeMap;
+
+/// Maximum whole weight used by the native movement calculation.
+pub const MAX_CARRIED_WEIGHT: u16 = 32_766;
 
 /// A weight that cannot be established from this inventory.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum WeightUnavailable {
-    /// No complete snapshot, a stale/correcting one, or unresolved drop custody.
+    /// No complete snapshot, a stale/correcting one, or an unbounded drop state.
     Inventory,
     /// Pending moves change the carried weight.
     Prediction,
@@ -13,7 +19,116 @@ pub enum WeightUnavailable {
     Container,
 }
 
+/// Carried weight evidence retained independently of cursor placement.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct DropWeight {
+    non_cursor: u64,
+    heaviest_cursor: u64,
+}
+
+impl DropWeight {
+    pub(super) fn start(inventory: &Inventory) -> Option<Self> {
+        if !inventory.received()
+            || inventory.stale()
+            || inventory.predicted()
+            || inventory.ground_drop_pending()
+            || inventory.weight_history_uncertain
+            || inventory
+                .stack_weight
+                .as_ref()
+                .is_some_and(StackWeightBound::active)
+            || inventory.queued().next().is_some()
+            || inventory.items().keys().any(|slot| slot.is_in_cursor_bag())
+        {
+            return None;
+        }
+        let items: BTreeMap<_, _> = inventory.items().iter().map(|(&s, i)| (s, i)).collect();
+        let shown = items
+            .get(&InventorySlot::CURSOR)
+            .filter(|item| item.bag_slots == 0)?;
+        let heaviest_cursor = u64::from(shown.details.weight_tenths);
+        let non_cursor = total(&items, GameDialect::Titanium, 0).ok()? - heaviest_cursor;
+        Some(Self {
+            non_cursor,
+            heaviest_cursor,
+        })
+    }
+
+    pub(super) fn observe(mut self, update: &InventoryUpdate) -> Option<Self> {
+        match update {
+            InventoryUpdate::Cursor(items) | InventoryUpdate::Set(items)
+                if items
+                    .first()
+                    .is_some_and(|item| item.slot == InventorySlot::CURSOR) =>
+            {
+                self.include_cursor(items)?;
+            }
+            // A lone child can belong to an unidentified cursor bag. A
+            // carried-slot replacement can be a resync token or a genuine
+            // increase. Neither certifies the old non-cursor load.
+            InventoryUpdate::Set(items)
+                if items.iter().any(|item| {
+                    let slot = item.slot;
+                    slot == InventorySlot::CURSOR
+                        || slot.is_in_cursor_bag()
+                        || slot.is_equipment()
+                        || slot.is_carried()
+                }) =>
+            {
+                return None
+            }
+            InventoryUpdate::Snapshot(_)
+            | InventoryUpdate::Cursor(_)
+            | InventoryUpdate::Invalidated
+            | InventoryUpdate::Prediction(_)
+            | InventoryUpdate::DestroyCursor
+            | InventoryUpdate::GroundDropPending(_)
+            | InventoryUpdate::TradeEmptied
+            | InventoryUpdate::WorldEmptied => return None,
+            // Slot-only reductions cannot increase the old group's mass.
+            // Even when one promotes a new cursor item, every received
+            // candidate remains in the bound.
+            InventoryUpdate::Remove(_)
+            | InventoryUpdate::Consume { .. }
+            | InventoryUpdate::Deduct { .. }
+            | InventoryUpdate::Used(_)
+            | InventoryUpdate::Set(_)
+            | InventoryUpdate::Settled => (),
+        }
+        Some(self)
+    }
+
+    fn include_cursor(&mut self, group: &[InventoryItem]) -> Option<()> {
+        let items: BTreeMap<_, _> = group.iter().map(|item| (item.slot, item)).collect();
+        if items.len() != group.len()
+            || group
+                .first()
+                .is_none_or(|item| item.slot != InventorySlot::CURSOR)
+            || group
+                .iter()
+                .skip(1)
+                .any(|item| !item.slot.is_in_cursor_bag())
+        {
+            return None;
+        }
+        self.heaviest_cursor = self
+            .heaviest_cursor
+            .max(total(&items, GameDialect::Titanium, 0).ok()?);
+        Some(())
+    }
+}
+
 impl Inventory {
+    /// Upper bound in tenths for a pending Titanium cursor drop. Includes
+    /// carried coins once and the heaviest one of the observed cursor
+    /// groups. Cursor-only corrections can invalidate placement and leave
+    /// this mass bound intact. Use [`Self::carried_weight_tenths`] for movement.
+    #[must_use]
+    pub fn ground_drop_weight_tenths(&self, coins: u64) -> Option<u64> {
+        let basis = self.drop_weight?;
+        Some(basis.non_cursor + basis.heaviest_cursor + coins / 4)
+    }
+
     /// Coin-free weight establishes the item contribution; exactly one hundred
     /// coin-weight units distinguishes every decoded purse reduction percent.
     /// Together these prove equality for every coin count, in both dialects.
@@ -58,26 +173,35 @@ impl Inventory {
     /// Known root-stack splits/merges can instead bound all conserved units by
     /// their finite touched-slot footprint, including independent refused or
     /// partial moves. Repeating the same edges adds no weight penalty.
-    /// A submitted ground drop requires a fresh snapshot. An arrival shown
-    /// in the queue can already be the server's current cursor item.
+    /// During a Titanium drop hold a limbo arrival can already be the server's
+    /// current cursor item. Take the heaviest of the displayed and queued
+    /// cursor groups. Only one group can be current at a time. This bounds the
+    /// load without establishing which item the server holds.
     ///
     /// # Errors
-    /// Rejects missing/stale state, unresolved drops, malformed bags and
+    /// Rejects missing/stale state, malformed cursor groups or bags, and
     /// unbounded affecting history.
     pub fn carried_weight_tenths(
         &self,
         generation: crate::GameDialect,
         coins: u64,
     ) -> Result<u64, WeightUnavailable> {
-        if !self.received() || self.stale() || self.ground_drop_pending() {
+        if !self.received() || self.stale() {
             return Err(WeightUnavailable::Inventory);
+        }
+        if self.ground_drop_pending() {
+            return self
+                .ground_drop_weight_tenths(coins)
+                .filter(|_| generation == GameDialect::Titanium)
+                .ok_or(WeightUnavailable::Inventory);
         }
         let current: BTreeMap<_, _> = self.items().iter().map(|(&s, i)| (s, i)).collect();
         let weight = total(&current, generation, coins)?;
         if self.weight_history_uncertain {
             return Err(WeightUnavailable::Prediction);
         }
-        if let Some(bound) = self.stack_weight.as_ref().filter(|bound| bound.active()) {
+        let stack_bound = self.stack_weight.as_ref().filter(|bound| bound.active());
+        if let Some(bound) = stack_bound {
             return bound
                 .weight(&self.items, weight)
                 .ok_or(WeightUnavailable::Prediction);
@@ -193,6 +317,54 @@ mod tests {
                 icon: None,
             },
         }
+    }
+
+    #[test]
+    fn pending_drop_bounds_the_heaviest_cursor_group_without_counting_it_twice() {
+        use crate::GameDialect::Titanium;
+        use std::num::NonZeroU32;
+
+        let serial = NonZeroU32::new(17).unwrap();
+        let mut original = item(30, 50);
+        original.rules.ground_drop_serial = Some(serial);
+        let mut inventory = Inventory::default();
+        inventory.apply(InventoryUpdate::Snapshot(vec![item(24, 100), original]));
+        inventory.apply(InventoryUpdate::GroundDropPending(serial));
+        assert_eq!(inventory.carried_weight_tenths(Titanium, 40), Ok(160));
+
+        let mut stack = item(30, 1_500);
+        stack.stack_count = Some(5);
+        inventory.apply(InventoryUpdate::Cursor(vec![stack]));
+        let mut bag = item(30, 20);
+        bag.bag_slots = 1;
+        bag.rules.bag_weight_reduction = 50;
+        let inside = InventorySlot::CURSOR.child(0).unwrap().0;
+        inventory.apply(InventoryUpdate::Cursor(vec![bag, item(inside, 3_200)]));
+        assert_eq!(inventory.carried_weight_tenths(Titanium, 40), Ok(1_730));
+        assert_eq!(
+            inventory.items()[&InventorySlot::CURSOR]
+                .details
+                .weight_tenths,
+            50
+        );
+        assert_eq!(inventory.queued().count(), 2);
+        assert!(inventory.ground_drop_pending());
+
+        // A cursor resync can send a temporary item before the real replacement.
+        inventory.apply(InventoryUpdate::Set(vec![item(30, 1)]));
+        inventory.apply(InventoryUpdate::Remove(InventorySlot::CURSOR));
+        assert_eq!(
+            inventory.carried_weight_tenths(Titanium, 40),
+            Err(WeightUnavailable::Inventory)
+        );
+        assert_eq!(inventory.ground_drop_weight_tenths(40), Some(1_730));
+        inventory.apply(InventoryUpdate::Set(vec![item(30, 2_000)]));
+        assert_eq!(inventory.ground_drop_weight_tenths(40), Some(2_110));
+        inventory.apply(InventoryUpdate::Set(vec![item(24, 50)]));
+        assert_eq!(inventory.ground_drop_weight_tenths(40), None);
+        inventory.apply(InventoryUpdate::Cursor(vec![item(30, 2_500)]));
+        assert_eq!(inventory.ground_drop_weight_tenths(40), None);
+        assert!(inventory.ground_drop_pending());
     }
 
     fn planned_move(inventory: &mut Inventory, rules: super::super::MoveRules, from: i32, to: i32) {

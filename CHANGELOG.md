@@ -7,12 +7,19 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
-- **Breaking:** Submit an ordinary Titanium cursor drop on EQEmu through
+- `Client::consider_npcs_by_level` exposes the selected server's NPC
+  consider presentation policy. All current policies use the received
+  color. The consider reply documents the faction code swaps in EQEmu
+  and EQMacEmu.
+- `buffs::scale_instrument_effect` provides the host's bounded Titanium
+  instrument scaling for movement-related buff magnitudes. The existing
+  neutral values and unavailable modifiers keep their meaning.
+
+- **Breaking:** Submit an ordinary Titanium cursor drop on local-only EQEmu through
   `Capability::GroundDropping` and `GameCommand::DropItem`. Check the
   received droppable instance, actor and inventory revision before sending.
   `InventoryUpdate::GroundDropPending` holds custody until a received
-  inventory snapshot. The hold makes carried weight unavailable, pauses
-  movement input and withholds fall reports. Ground objects use their
+  inventory snapshot. Ground objects use their
   existing independent update and pickup paths. Downstream exhaustive
   matches and `ItemPlacement` literals need migration. P99 drop support
   awaits validation.
@@ -329,6 +336,22 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   silence (60 s) timers are unchanged.
 
 ### Fixed
+
+- Keep reporting completed falls while a cursor drop awaits inventory evidence.
+  A drop requires enough item and coin evidence to establish carried weight.
+  Its landing bound retains the heaviest received cursor group through
+  cursor-only resync while the worker withdraws movement until recovery.
+  Clean state accepts fresh movement inputs that meet the bound.
+  Ground drops are restricted to local-only EQEmu pending live validation.
+- **Breaking:** Preserve the unanswered spell and cast source for a
+  compatible own start after the local cast wait. Match the spell ID or
+  stock TAKP's documented Luclin port rewrite. Unrelated own starts keep
+  separate cast state. Handle `WorldEvent::CastLateBegin` before the
+  received spell update.
+- **Breaking:** Both movement results now carry the original local request
+  stamp. A Move discarded at selection or abandoned in a failed zone batch
+  receives a typed refusal while the event stream can still deliver it.
+  Supply or match `WorldEvent::MotionSent.created`.
 
 - Keep merchant commands and Titanium receipts scoped to the relevant shop.
   Check stock, quantity, and sale custody before sending. Preserve an

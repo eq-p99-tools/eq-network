@@ -28,7 +28,7 @@ pub use eqmac::{
 pub use ground_drop::{titanium_ground_drop, InventoryDrop};
 pub use titanium::decode;
 pub(crate) use titanium::{parse as parse_items, parse_at};
-pub use weight::WeightUnavailable;
+pub use weight::{WeightUnavailable, MAX_CARRIED_WEIGHT};
 
 use crate::items::ItemDetails;
 use serde::Serialize;
@@ -399,6 +399,8 @@ pub struct Inventory {
     destroyed: Option<InventoryItem>,
     ground_drop: Option<NonZeroU32>,
     #[serde(skip)]
+    drop_weight: Option<weight::DropWeight>,
+    #[serde(skip)]
     drop_cursor: ground_drop::CursorBasis,
 }
 
@@ -486,6 +488,7 @@ impl Inventory {
     /// Applies a fully decoded update; a new snapshot replaces previous admission data.
     pub fn apply(&mut self, update: InventoryUpdate) {
         self.revision = self.revision.wrapping_add(1);
+        self.drop_weight = self.drop_weight.and_then(|basis| basis.observe(&update));
         if self.ground_drop_pending() && ground_drop::unidentified_cursor_mutation(&update) {
             // A slot-only update can refer to an item that followed the
             // submitted one. Keep the last view and require a fresh snapshot.
@@ -540,30 +543,7 @@ impl Inventory {
                 self.reconcile_consumed(slot, consumed.as_ref());
             }
             InventoryUpdate::Snapshot(items) => self.replace_snapshot(items),
-            InventoryUpdate::Set(items) => {
-                let additional = items
-                    .iter()
-                    .filter(|item| !self.items.contains_key(&item.slot))
-                    .count();
-                if self.items.len() + additional > 1024 {
-                    self.stale = true;
-                    return;
-                }
-                if let Some(root) = items.first() {
-                    if root.slot == CURSOR {
-                        self.destroyed = None;
-                    }
-                    if arrival {
-                        self.cover_arrival(root.slot);
-                    } else {
-                        self.reconcile(root.slot, &items);
-                    }
-                    self.remove(root.slot);
-                }
-                for item in items {
-                    self.items.insert(item.slot, item);
-                }
-            }
+            InventoryUpdate::Set(items) => self.replace_items(items, arrival),
             InventoryUpdate::Cursor(items) => {
                 let queued: usize = self.queued.iter().map(Vec::len).sum();
                 if self.items.len() + queued + items.len() > 1024 {
@@ -616,10 +596,41 @@ impl Inventory {
         }
     }
 
+    fn replace_items(&mut self, items: Vec<InventoryItem>, arrival: bool) {
+        let additional = items
+            .iter()
+            .filter(|item| !self.items.contains_key(&item.slot))
+            .count();
+        if self.items.len() + additional > 1024 {
+            self.stale = true;
+            return;
+        }
+        if let Some(root) = items.first() {
+            if root.slot == CURSOR {
+                self.destroyed = None;
+            }
+            if self.ground_drop_pending() && (root.slot == CURSOR || root.slot.is_in_cursor_bag()) {
+                // A cursor correction can be a temporary resync token.
+                // The replacement may hide a heavier candidate.
+                self.stale = true;
+            }
+            if arrival {
+                self.cover_arrival(root.slot);
+            } else {
+                self.reconcile(root.slot, &items);
+            }
+            self.remove(root.slot);
+        }
+        for item in items {
+            self.items.insert(item.slot, item);
+        }
+    }
+
     /// Replaces every inventory baseline with a complete received snapshot.
     fn replace_snapshot(&mut self, items: Vec<InventoryItem>) {
         self.destroyed = None;
         self.ground_drop = None;
+        self.drop_weight = None;
         self.items = items.into_iter().map(|item| (item.slot, item)).collect();
         self.queued.clear();
         self.received = true;
