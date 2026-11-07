@@ -2281,17 +2281,11 @@ mod tests {
                 "Tester",
                 eq_network_game::food::AutoEat::default(),
             )
-            .capabilities()
         };
         let p99 = features(crate::client::ServerProtocol::Project1999);
         // P99 leaves the map to the player, which is not offered until then.
-        let p99_choices = Features::new(
-            servers::server_type(crate::client::ServerProtocol::Project1999),
-            "Tester",
-            eq_network_game::food::AutoEat::default(),
-        )
-        .choices();
-        assert_eq!(p99_choices, [Capability::Map]);
+        assert_eq!(p99.choices(), [Capability::Map]);
+        let p99 = p99.capabilities();
         assert!(!p99.contains(&Capability::Map));
         for capability in [
             Capability::Casting,
@@ -2321,7 +2315,7 @@ mod tests {
         assert!(p99.contains(&Capability::Reading));
         assert!(!p99.contains(&Capability::GroundDropping));
         assert!(!p99.contains(&Capability::Training));
-        let eqemu = features(crate::client::ServerProtocol::EqEmu);
+        let eqemu = features(crate::client::ServerProtocol::EqEmu).capabilities();
         assert!(eqemu.contains(&Capability::GroundDropping));
         assert!(eqemu.contains(&Capability::Falling));
         assert!(eqemu.contains(&Capability::Training));

@@ -230,8 +230,10 @@ fn explicit_destroy_is_single_submission_through_p99_and_eqemu_inventory_owner()
 #[test]
 fn ordinary_drop_holds_after_object_and_cursor_updates_until_snapshot() {
     use eq_network_game::{
+        command::EncodedCommand,
         inventory::{titanium_ground_drop, InventoryDrop},
         objects::{GroundObject, ObjectUpdate},
+        world::Position,
     };
 
     let protocol = ServerProtocol::EqEmu;
@@ -256,7 +258,7 @@ fn ordinary_drop_holds_after_object_and_cursor_updates_until_snapshot() {
     let output = submit(protocol, &mut features, &mut world, &drop);
     assert!(output.result.unwrap());
     assert_eq!(output.sent, [titanium_ground_drop()]);
-    assert!(output.unreliable.is_empty());
+    assert_eq!(output.unreliable, Vec::<EncodedCommand>::new());
     assert!(world.inventory.ground_drop_pending());
     assert_eq!(
         world.inventory.items().get(&InventorySlot::CURSOR),
@@ -266,7 +268,7 @@ fn ordinary_drop_holds_after_object_and_cursor_updates_until_snapshot() {
     let object = Message::Event(WorldEvent::Objects(ObjectUpdate::Spawn(GroundObject {
         drop_id: 41,
         model: "IT63_ACTORDEF".into(),
-        position: Default::default(),
+        position: Position::default(),
         object_type: 0,
     })));
     testing::run_on(servers::server_type(protocol).wire(), |out| {

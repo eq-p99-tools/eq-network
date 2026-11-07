@@ -1717,9 +1717,10 @@ mod tests {
             })
         )));
         let underweight = report_at(motion.revision, 5);
+        let none: [SpeedInputAcceptance; 0] = [];
         let outcome = testing::run(|out| motion.handle(&underweight, &mut world, out));
         outcome.result.unwrap();
-        assert!(acceptances(&outcome.events).is_empty());
+        assert_eq!(acceptances(&outcome.events), none);
         assert!(world.body.motion.as_ref().unwrap().calibration().is_none());
         assert!(world.inventory.ground_drop_pending());
 
@@ -1728,7 +1729,7 @@ mod tests {
         world.inventory = inventory.into();
         let outcome = testing::run(|out| motion.handle(&underweight, &mut world, out));
         outcome.result.unwrap();
-        assert!(acceptances(&outcome.events).is_empty());
+        assert_eq!(acceptances(&outcome.events), none);
         let recovered = report_at(motion.revision, 150);
         let outcome = testing::run(|out| motion.handle(&recovered, &mut world, out));
         outcome.result.unwrap();
