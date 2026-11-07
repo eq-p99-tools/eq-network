@@ -1672,12 +1672,34 @@ mod tests {
         assert_eq!(motion.revision, 3);
     }
 
+    fn motion_with_known_inventory(
+        inventory: eq_network_game::inventory::Inventory,
+    ) -> (World, Motion) {
+        use eq_network_game::{money::Wallet, world::Coins};
+        let mut world = World::new(5);
+        world.own_spawn = Some(7);
+        let mut player = testing::player(7);
+        (player.run_speed, player.walk_speed, player.level) = (0.7, 0.46, 50);
+        world.player.admit(player);
+        world.admitted = Some(Instant::now());
+        world.inventory = inventory.into();
+        world.coins = Wallet {
+            purse: Some(Coins::default()),
+            bank: Some(Coins::default()),
+            ..Wallet::default()
+        }
+        .into();
+        let mut motion = Motion::new(true, true, None);
+        testing::run(|out| motion.admitted(&mut world, out))
+            .result
+            .unwrap();
+        (world, motion)
+    }
+
     #[test]
     fn pending_drop_grants_only_with_a_current_carried_weight_bound() {
         use eq_network_game::{
             inventory::{Inventory, InventorySlot, InventoryUpdate, WeightUnavailable},
-            money::Wallet,
-            world::Coins,
             GameDialect,
         };
         use std::num::NonZeroU32;
@@ -1691,23 +1713,7 @@ mod tests {
         let mut inventory = Inventory::default();
         inventory.apply(InventoryUpdate::Snapshot(vec![original.clone()]));
 
-        let mut world = World::new(5);
-        world.own_spawn = Some(7);
-        let mut player = testing::player(7);
-        (player.run_speed, player.walk_speed, player.level) = (0.7, 0.46, 50);
-        world.player.admit(player);
-        world.admitted = Some(Instant::now());
-        world.inventory = inventory.clone().into();
-        world.coins = Wallet {
-            purse: Some(Coins::default()),
-            bank: Some(Coins::default()),
-            ..Wallet::default()
-        }
-        .into();
-        let mut motion = Motion::new(true, true, None);
-        testing::run(|out| motion.admitted(&mut world, out))
-            .result
-            .unwrap();
+        let (mut world, mut motion) = motion_with_known_inventory(inventory.clone());
         let report_at = |revision, weight| ClientCommand::SpeedInputs {
             session_id: 5,
             revision,

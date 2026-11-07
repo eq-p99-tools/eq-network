@@ -169,17 +169,19 @@ fn the_connected_zone_delivers_one_result_for_each_queued_move() {
                     )))?;
                 }
             }
-            ClientEvent::World(WorldEvent::MotionRefused {
-                session_id,
-                created,
-                ..
-            })
-            | ClientEvent::World(WorldEvent::MotionSent {
-                session_id,
-                created,
-                refused: Some(_),
-                ..
-            }) => {
+            ClientEvent::World(
+                WorldEvent::MotionRefused {
+                    session_id,
+                    created,
+                    ..
+                }
+                | WorldEvent::MotionSent {
+                    session_id,
+                    created,
+                    refused: Some(_),
+                    ..
+                },
+            ) => {
                 results.push((session_id, created));
             }
             ClientEvent::World(WorldEvent::MotionSent { refused: None, .. }) => {

@@ -290,7 +290,7 @@ impl Casting {
         }
     }
 
-    /// Stock EQMacEmu rewrites the received start of selected Luclin ports.
+    /// Stock `EQMacEmu` rewrites the received start of selected Luclin ports.
     pub(super) fn with_luclin_port_begins() -> Self {
         Self {
             guard: CastGuard {
