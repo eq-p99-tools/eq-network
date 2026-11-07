@@ -9,7 +9,9 @@ use super::{
 use anyhow::Result;
 use eq_network_game::{
     appearance::AppearanceChange,
+    inventory::MAX_CARRIED_WEIGHT,
     message::Message,
+    money::Coin,
     movement::{
         DiagonalRates, MotionCalibration, MotionSession, MovementMode, MovementRequest,
         PositionPacket, SpeedInputAcceptance, SpeedInputState, SpeedInputs, SpeedState,
@@ -423,10 +425,32 @@ impl Motion {
                 .log
                 .diagnostic("Rejected obsolete movement inputs".into());
         }
-        if matches!(state, SpeedInputState::Ready(_)) && world.inventory.ground_drop_pending() {
-            return out
-                .log
-                .diagnostic("Movement needs a fresh inventory snapshot after the drop".into());
+        if let (SpeedInputState::Ready(inputs), true) =
+            (state, world.inventory.ground_drop_pending())
+        {
+            let bound = world
+                .coins
+                .purse
+                .zip(world.coins.bank)
+                .and_then(|(purse, _)| {
+                    let coins = Coin::ALL
+                        .iter()
+                        .map(|&coin| {
+                            u64::from(purse.of(coin)) + u64::from(world.coins.cursor.of(coin))
+                        })
+                        .sum();
+                    world
+                        .inventory
+                        .carried_weight_tenths(eq_network_game::GameDialect::Titanium, coins)
+                        .ok()
+                });
+            if bound.is_none_or(|tenths| {
+                u64::from(inputs.weight) < (tenths / 10).min(u64::from(MAX_CARRIED_WEIGHT))
+            }) {
+                return out.log.diagnostic(
+                    "Movement needs a current carried-weight bound after the drop".into(),
+                );
+            }
         }
         self.input_report_id = match state {
             SpeedInputState::Ready(_) => Some(report_id),
@@ -1647,9 +1671,11 @@ mod tests {
     }
 
     #[test]
-    fn pending_drop_with_heavier_cursor_arrival_blocks_current_worker_grant() {
+    fn pending_drop_grants_only_with_a_current_carried_weight_bound() {
         use eq_network_game::{
             inventory::{Inventory, InventorySlot, InventoryUpdate, WeightUnavailable},
+            money::Wallet,
+            world::Coins,
             GameDialect,
         };
         use std::num::NonZeroU32;
@@ -1670,6 +1696,12 @@ mod tests {
         world.player.admit(player);
         world.admitted = Some(Instant::now());
         world.inventory = inventory.clone().into();
+        world.coins = Wallet {
+            purse: Some(Coins::default()),
+            bank: Some(Coins::default()),
+            ..Wallet::default()
+        }
+        .into();
         let mut motion = Motion::new(true, true, None);
         testing::run(|out| motion.admitted(&mut world, out))
             .result
@@ -1699,7 +1731,7 @@ mod tests {
         inventory.apply(InventoryUpdate::GroundDropPending(
             original.rules.ground_drop_serial.unwrap(),
         ));
-        assert_eq!(weight(&inventory), Err(WeightUnavailable::Inventory));
+        assert_eq!(weight(&inventory), Ok(50));
         inventory.apply(InventoryUpdate::Cursor(vec![heavier.clone()]));
         assert!(!inventory.stale());
         assert_eq!(
@@ -1707,7 +1739,7 @@ mod tests {
             Some(&original)
         );
         assert_eq!(inventory.queued().count(), 1);
-        assert_eq!(weight(&inventory), Err(WeightUnavailable::Inventory));
+        assert_eq!(weight(&inventory), Ok(1_500));
         world.inventory = inventory.clone().into();
         let outcome = testing::run(|out| motion.tick(Instant::now(), &mut world, out));
         outcome.result.unwrap();
@@ -1726,6 +1758,25 @@ mod tests {
         assert_eq!(acceptances(&outcome.events), none);
         assert!(world.body.motion.as_ref().unwrap().calibration().is_none());
         assert!(world.inventory.ground_drop_pending());
+
+        let bounded = report_at(motion.revision, 150);
+        let outcome = testing::run(|out| motion.handle(&bounded, &mut world, out));
+        outcome.result.unwrap();
+        assert!(matches!(
+            acceptances(&outcome.events)[..],
+            [SpeedInputAcceptance { granted: true, .. }]
+        ));
+        assert!(world.inventory.ground_drop_pending());
+
+        inventory.apply(InventoryUpdate::Remove(InventorySlot::CURSOR));
+        assert_eq!(weight(&inventory), Err(WeightUnavailable::Inventory));
+        world.inventory = inventory.clone().into();
+        let outcome = testing::run(|out| motion.tick(Instant::now(), &mut world, out));
+        outcome.result.unwrap();
+        let stale = report_at(motion.revision, 150);
+        let outcome = testing::run(|out| motion.handle(&stale, &mut world, out));
+        outcome.result.unwrap();
+        assert_eq!(acceptances(&outcome.events), none);
 
         inventory.apply(InventoryUpdate::Snapshot(vec![heavier]));
         assert_eq!(weight(&inventory), Ok(1_500));

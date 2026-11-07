@@ -16,11 +16,12 @@ enum Arrival {
 }
 
 impl Inventory {
-    /// Whether a usable carried weight conservatively includes a queued arrival
-    /// or unresolved root-stack distribution. Not a readiness grant.
+    /// Whether a usable carried weight conservatively includes uncertain cursor
+    /// custody or unresolved root-stack distribution. Not a readiness grant.
     #[must_use]
     pub fn carried_weight_is_conservative(&self) -> bool {
         self.destroyed.is_some()
+            || self.ground_drop_pending()
             || !self.weight_rebased.is_empty()
             || self
                 .stack_weight

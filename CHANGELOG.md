@@ -7,12 +7,11 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
-- **Breaking:** Submit an ordinary Titanium cursor drop on EQEmu through
+- **Breaking:** Submit an ordinary Titanium cursor drop on local-only EQEmu through
   `Capability::GroundDropping` and `GameCommand::DropItem`. Check the
   received droppable instance, actor and inventory revision before sending.
   `InventoryUpdate::GroundDropPending` holds custody until a received
-  inventory snapshot. The hold makes carried weight unavailable, pauses
-  movement input and withholds fall reports. Ground objects use their
+  inventory snapshot. Ground objects use their
   existing independent update and pickup paths. Downstream exhaustive
   matches and `ItemPlacement` literals need migration. P99 drop support
   awaits validation.
@@ -329,6 +328,12 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   silence (60 s) timers are unchanged.
 
 ### Fixed
+
+- Keep reporting completed falls while a cursor drop awaits inventory evidence.
+  The carried-weight calculation bounds clean drop state by the heaviest
+  possible current cursor group. The worker accepts fresh movement inputs
+  that meet the bound and withdraws input after an inventory invalidation.
+  Ground drops are restricted to local-only EQEmu pending live validation.
 
 - Keep merchant commands and Titanium receipts scoped to the relevant shop.
   Check stock, quantity, and sale custody before sending. Preserve an

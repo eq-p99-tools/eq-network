@@ -424,14 +424,17 @@ events, with existing uncertainty, correction and snapshot rules unchanged.
 
 ## Ordinary cursor drops
 
-`Capability::GroundDropping` offers `GameCommand::DropItem` on Titanium
-EQEmu. P99 drop support awaits attended validation of the server's item
-serialization, eligibility and cursor updates. Pass the current admission,
+`Capability::GroundDropping` offers `GameCommand::DropItem` on local-only
+Titanium EQEmu. Public servers await separate validation of item serialization,
+eligibility and cursor updates. Pass the current admission,
 own spawn, inventory revision and exact received cursor item in
 `InventoryDrop` after explicit user consent.
 `Inventory::plan_ground_drop` requires a positively identified ordinary
 droppable instance and an unqueued cursor. A predicted move settled by silence
 leaves the drop unavailable until the server identifies the new cursor.
+Stock EQEmu's ordinary move to cursor saves the slot without a matching item
+packet, so a later received update or snapshot is needed.
+[EQEmu move and persistence](https://github.com/EQEmu/EQEmu/blob/4aceae18b94ffaafc08e2b17bc41cd72c77f795d/zone/inventory.cpp#L2049-L2077)
 
 Titanium sends an empty `OP_GroundSpawn`. The server chooses the cursor item
 and position. A successful `InventoryAction` with
@@ -443,11 +446,16 @@ cursor removal or quantity update identifies the slot only, and may refer to
 another item after a silent drop. Preserve the last view and mark inventory
 stale on such an update. Re-enter the world for a fresh inventory baseline.
 
-During that hold `Inventory::carried_weight_tenths` returns
-`WeightUnavailable::Inventory`. The queued item may already be the server's
-current cursor, so the displayed load can be too low. The worker withdraws
-active movement input, refuses ready speed reports and withholds fall-damage
-and Safe Fall reports. Supported passive descent remains available.
+During the hold, a received limbo item may already be the server's current
+cursor. On a complete, otherwise unambiguous inventory,
+`Inventory::carried_weight_tenths` takes the heaviest of the displayed and
+queued cursor groups, plus the ordinary non-cursor load. It counts one
+possible cursor group. The worker validates fresh speed inputs against that
+bound before granting active movement. A conflicting cursor update or
+invalidation withdraws active movement until received recovery. Supported
+passive descent and ordinary completed-fall reporting continue during the hold.
+[EQEmu cursor buffer](https://github.com/EQEmu/EQEmu/blob/4aceae18b94ffaafc08e2b17bc41cd72c77f795d/zone/inventory.cpp#L851-L862)
+[EQEmu weight calculation](https://github.com/EQEmu/EQEmu/blob/4aceae18b94ffaafc08e2b17bc41cd72c77f795d/zone/client_mods.cpp#L686-L749)
 
 Process received ground spawns and removals through the existing object
 owner. The spawn carries no cursor instance correlation, and pickup delivery

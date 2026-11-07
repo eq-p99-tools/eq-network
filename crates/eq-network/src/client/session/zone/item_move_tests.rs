@@ -10,9 +10,22 @@ use eq_network_game::{
 use std::num::NonZeroU32;
 
 fn setup(protocol: ServerProtocol, items: Vec<InventoryItem>) -> (Features, World) {
+    setup_on(protocol, items, false)
+}
+
+fn setup_on(
+    protocol: ServerProtocol,
+    items: Vec<InventoryItem>,
+    local_only: bool,
+) -> (Features, World) {
     let server = servers::server_type(protocol);
-    let mut features = Features::new(server, "Synthetic", AutoEat::Anything);
-    let mut world = World::new(5);
+    let mut config = crate::client::ClientConfig::new("Example", "Fixture", "Local", "Synthetic");
+    config.local_only = local_only;
+    config.protocol = protocol;
+    let mut setup = servers::Setup::new("Synthetic", AutoEat::Anything);
+    setup.local_only = local_only;
+    let mut features = Features::from_setup(server, &setup);
+    let mut world = World::for_zone(5, &config);
     world.player.admit(testing::player(7));
     world.own_spawn = Some(7);
     world.admitted = Some(Instant::now());
@@ -239,7 +252,7 @@ fn ordinary_drop_holds_after_object_and_cursor_updates_until_snapshot() {
     let protocol = ServerProtocol::EqEmu;
     let mut cursor = stack(30, 7);
     cursor.rules.ground_drop_serial = NonZeroU32::new(17);
-    let (mut features, mut world) = setup(protocol, vec![cursor.clone()]);
+    let (mut features, mut world) = setup_on(protocol, vec![cursor.clone()], true);
     let request = |world: &World, own_id| {
         ClientCommand::DropItem(Box::new(InventoryDrop {
             session_id: world.session_id,
@@ -334,6 +347,7 @@ fn direct_drop_command_is_refused_on_unoffered_providers() {
     use eq_network_game::inventory::InventoryDrop;
 
     for protocol in [
+        ServerProtocol::EqEmu,
         ServerProtocol::Project1999,
         ServerProtocol::Quarm,
         ServerProtocol::Takp,
@@ -438,7 +452,7 @@ fn cursor_actions_attempt_transport_once_and_leave_inventory_unchanged_on_failur
         let protocol = ServerProtocol::EqEmu;
         let mut cursor = stack(30, 7);
         cursor.rules.ground_drop_serial = NonZeroU32::new(17);
-        let (mut features, mut world) = setup(protocol, vec![cursor.clone()]);
+        let (mut features, mut world) = setup_on(protocol, vec![cursor.clone()], drop);
         let session_id = world.session_id;
         let revision = world.inventory.revision();
         let created = Instant::now();

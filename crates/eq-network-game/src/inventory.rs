@@ -28,7 +28,7 @@ pub use eqmac::{
 pub use ground_drop::{titanium_ground_drop, InventoryDrop};
 pub use titanium::decode;
 pub(crate) use titanium::{parse as parse_items, parse_at};
-pub use weight::WeightUnavailable;
+pub use weight::{WeightUnavailable, MAX_CARRIED_WEIGHT};
 
 use crate::items::ItemDetails;
 use serde::Serialize;
@@ -552,6 +552,13 @@ impl Inventory {
                 if let Some(root) = items.first() {
                     if root.slot == CURSOR {
                         self.destroyed = None;
+                    }
+                    if self.ground_drop_pending()
+                        && (root.slot == CURSOR || root.slot.is_in_cursor_bag())
+                    {
+                        // A cursor correction can be a temporary resync token.
+                        // The replacement may hide a heavier candidate.
+                        self.stale = true;
                     }
                     if arrival {
                         self.cover_arrival(root.slot);

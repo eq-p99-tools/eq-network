@@ -2451,7 +2451,7 @@ mod tests {
         assert!(!p99.contains(&Capability::GroundDropping));
         assert!(!p99.contains(&Capability::Training));
         let eqemu = features(crate::client::ServerProtocol::EqEmu).capabilities();
-        assert!(eqemu.contains(&Capability::GroundDropping));
+        assert!(!eqemu.contains(&Capability::GroundDropping));
         assert!(eqemu.contains(&Capability::Falling));
         assert!(eqemu.contains(&Capability::Training));
         assert!(eqemu.contains(&Capability::Resurrection));
@@ -2494,6 +2494,7 @@ mod tests {
             &setup,
         )
         .capabilities();
+        assert!(local.contains(&Capability::GroundDropping));
         for liquid in [Capability::Drowning, Capability::LavaHeat] {
             assert!(!p99.contains(&liquid));
             assert!(!eqemu.contains(&liquid));
@@ -2505,8 +2506,7 @@ mod tests {
         assert!(p99.contains(&Capability::GameplayDepartures));
         assert!(eqemu.contains(&Capability::Swimming));
         assert!(!p99.contains(&Capability::Swimming));
-        // EQEmu also offers GroundDropping.
-        assert_eq!(eqemu.len(), p99.len() + 18);
+        assert_eq!(eqemu.len(), p99.len() + 17);
     }
 
     #[test]

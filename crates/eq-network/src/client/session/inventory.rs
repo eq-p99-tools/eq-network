@@ -549,14 +549,15 @@ impl Belongings {
     ) -> Result<()> {
         let planned: Result<_> = (|| {
             anyhow::ensure!(
-                world.ready()
+                world.local_eqemu()
+                    && world.ready()
                     && !world.lifecycle.blocks_motion()
                     && request.session_id == world.session_id
                     && world.own_spawn == Some(request.own_id)
                     && world
                         .player_at()
                         .is_some_and(|(actor, _)| actor == request.own_id),
-                "That cursor drop belongs to another admission or actor"
+                "That cursor drop needs a current local EQEmu admission and actor"
             );
             let serial = world.inventory.plan_ground_drop(request)?;
             Ok((

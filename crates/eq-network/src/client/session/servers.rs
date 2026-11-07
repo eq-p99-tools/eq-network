@@ -1122,7 +1122,7 @@ impl ServerType for EqEmu {
             self.inventory_move_rules()?,
             Quotes::WithRate,
             Allowances {
-                ground_drop: true,
+                ground_drop: setup.local_only,
                 ..Allowances::STANDARD
             },
             setup,
