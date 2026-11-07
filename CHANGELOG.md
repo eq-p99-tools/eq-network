@@ -116,6 +116,10 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   The worker budgets the same forward component and fall drift as the host;
   flight keeps its unscaled vertical budget. The option remains a gameplay
   departure, offered only where `SetMovementOptions` is.
+- A speed-only change of the run speed multiplier no longer stops voluntary
+  motion: the held paced sample keeps its send deadline and the moving state,
+  and the new budget applies to later samples. Changing flight or stun
+  permissions still stops motion first.
 - The Titanium translocate decline carries -1, as the Titanium program sends
   it (`eqgame.exe` 0x499f08), instead of 0. `EQEmu` accepts only 1 as a yes,
   so the outcome is unchanged.
