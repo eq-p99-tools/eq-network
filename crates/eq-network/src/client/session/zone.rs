@@ -1562,10 +1562,22 @@ mod tests {
             ]
         );
         assert_eq!(outcome.unreliable, []);
-        let rejected = outcome.events.iter().filter(|event| {
-            matches!(event, ClientEvent::Diagnostic(line) if line.contains("Rejected LiquidDamage"))
-        }).count();
-        assert_eq!(rejected, 4 + usize::from(expiry_covered));
+        let rejected: Vec<_> = outcome
+            .events
+            .iter()
+            .filter_map(|event| match event {
+                ClientEvent::Diagnostic(line) => {
+                    line.strip_prefix("Rejected LiquidDamage command: ")
+                }
+                _ => None,
+            })
+            .collect();
+        let mut expected = vec!["The liquid observation is no longer current"; 3];
+        expected.push("The liquid tick has no new damage");
+        if expiry_covered {
+            expected.insert(0, "The request expired");
+        }
+        assert_eq!(rejected, expected);
         let buffs = outcome
             .events
             .iter()
@@ -1578,6 +1590,47 @@ mod tests {
                 revision: 2
             }))
         ));
+    }
+
+    #[test]
+    fn discarded_moves_reply_to_the_original_request_without_publishing_a_position() {
+        use super::super::feature::testing;
+        use crate::client::ServerProtocol;
+
+        let server = servers::server_type(ServerProtocol::EqEmu);
+        let mut features =
+            Features::from_setup(server, &servers::Setup::new("Tester", Default::default()));
+        let mut world = World::new(5);
+        let created = Instant::now();
+        for (ready, session_id, reason) in [
+            (false, 5, "The player is between zones"),
+            (true, 4, "That was meant for an earlier zone visit"),
+            (true, 5, "The player cannot move yet"),
+        ] {
+            world.admitted = ready.then_some(created);
+            let command = ClientCommand::Move(MovementRequest::new(
+                MovementMode::Forward,
+                session_id,
+                Default::default(),
+                created,
+            ));
+            let outcome = testing::run_on(server.wire(), |out| {
+                apply_commands(&[command], &mut features, &mut world, out, true)
+            });
+            assert!(outcome.result.unwrap().is_none());
+            assert!(outcome.sent.is_empty());
+            assert!(outcome.unreliable.is_empty());
+            assert!(matches!(
+                &outcome.events[..],
+                [
+                    ClientEvent::World(WorldEvent::MotionRefused {
+                        session_id: requested, created: stamp, reason: refusal,
+                    }),
+                    ClientEvent::Diagnostic(diagnostic),
+                ] if *requested == session_id && *stamp == created
+                    && refusal == reason && diagnostic.contains(reason)
+            ));
+        }
     }
 
     #[test]

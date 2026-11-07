@@ -912,6 +912,17 @@ pub enum WorldEvent {
         /// Why the guard refused the sample; None when it was sent.
         refused: Option<String>,
     },
+    /// The worker discarded a movement request before the motion guard could
+    /// return its position.
+    MotionRefused {
+        /// Admission named by the original request.
+        session_id: u64,
+        /// Process-local request stamp, omitted from serialized logs.
+        #[serde(skip)]
+        created: std::time::Instant,
+        /// Why the request was refused.
+        reason: String,
+    },
     /// Server-provided item definition for a clicked chat link.
     ItemDetails(crate::items::ItemDetails),
     /// Server death notification; consumers compare its ID with their own spawn.

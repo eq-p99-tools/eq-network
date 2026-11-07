@@ -2,6 +2,7 @@
 //! the host's moves, jumps, calibrations and changes of stance, and the
 //! server's corrections.
 use super::{
+    actions,
     feature::{Feature, Out, World},
     ClientCommand, ClientEvent,
 };
@@ -498,9 +499,11 @@ impl Motion {
         out: &mut Out<'_, '_>,
     ) -> Result<()> {
         let Some(motion) = world.body.motion.as_mut() else {
-            return out
-                .log
-                .diagnostic("Rejected movement: the player cannot move yet".into());
+            return actions::refuse(
+                &ClientCommand::Move(request.clone()),
+                "The player cannot move yet",
+                out.log,
+            );
         };
         let (to, from) = (request.position, motion.position());
         let may_walk_while_stunned =
