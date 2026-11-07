@@ -46,8 +46,11 @@ pub struct TitaniumEnvironment {
     pub zone_id: u16,
     /// Profile fire resistance before racial, class and active modifiers.
     /// Titanium `eqgame.exe` copies the dword at byte 12876 at 0x4b9f3c
-    /// and uses it in the base calculation at 0x418756. Stock `EQEmu`
-    /// zero-fills this profile field. Its server-side resist is separate.
+    /// and uses it in the base calculation at 0x418756. The cited
+    /// [`EQEmu` encoder][encoder] writes 25 in its constant block copy.
+    /// This field retains the received value. Server-side resist is separate.
+    ///
+    /// [encoder]: https://github.com/EQEmu/EQEmu/blob/4aceae18b94ffaafc08e2b17bc41cd72c77f795d/common/patches/titanium.cpp#L1600-L1606
     pub base_fire_resistance: i32,
     /// A rank is present in the profile's alternate advancement array.
     pub has_alternate_advancement: bool,
@@ -262,6 +265,7 @@ mod tests {
 
     #[test]
     fn titanium_environment_retains_base_resist_and_rank_presence() {
+        // A synthetic zero-filled profile, then the cited encoder's value.
         let mut profile = vec![0; 19592];
         assert_eq!(titanium_environment(&profile).base_fire_resistance, 0);
         profile[12876..12880].copy_from_slice(&25i32.to_le_bytes());

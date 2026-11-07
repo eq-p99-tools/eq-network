@@ -94,8 +94,13 @@ own liquid reports are unrecorded, so that layout is inferred (recording
 checklist 6.392). `PlayerState.titanium_environment` carries the profile's
 zone, base fire resistance and whether any alternate advancement rank is
 present. Titanium `eqgame.exe` copies the profile dword at byte 12876 at
-0x4b9f3c and uses it at 0x418756. Stock EQEmu zero-fills that field. The
-server's effective resistance, health and death remain its own state.
+0x4b9f3c and uses it at 0x418756. The cited EQEmu Titanium encoder writes
+a constant 25 there through its `unknown12864` block copy. The decoder
+retains the received dword. The server owns effective resistance, health
+and death. [Profile layout][titanium-profile] [EQEmu encoder][titanium-encoder]
+
+[titanium-profile]: https://github.com/EQEmu/EQEmu/blob/4aceae18b94ffaafc08e2b17bc41cd72c77f795d/common/patches/titanium_structs.h#L883
+[titanium-encoder]: https://github.com/EQEmu/EQEmu/blob/4aceae18b94ffaafc08e2b17bc41cd72c77f795d/common/patches/titanium.cpp#L1600-L1606
 
 ## Retained base held models
 
