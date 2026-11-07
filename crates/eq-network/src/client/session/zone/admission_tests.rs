@@ -5,7 +5,7 @@ use crate::client::{
 };
 use eq_network_game::{
     chat::OutboundChat,
-    movement::POSITION_OPCODE,
+    movement::{MovementMode, MovementRequest, POSITION_OPCODE},
     world::WorldEvent,
     zoning::{DEPART_OPCODE, HANDOFF_OPCODE, MOVE_OPCODE},
 };
@@ -138,6 +138,68 @@ fn run_script(
         Vec::new(),
         log,
     )
+}
+
+#[test]
+fn the_connected_zone_delivers_one_result_for_each_queued_move() {
+    let config = config();
+    let identity = ClientIdentity::new("example-host", "example-user");
+    let credentials = credentials();
+    let stop = CancellationToken::default();
+    let (sender, commands) = mpsc::channel();
+    let context = context(&config, &identity, &credentials, &stop, Some(&commands));
+    let mut script = Script::titanium(1.0);
+    script.stop_when_drained = Some(stop.clone());
+    let mut expected = None;
+    let mut results = Vec::new();
+    let mut handler = |event| {
+        match event {
+            ClientEvent::World(WorldEvent::Entered {
+                session_id, player, ..
+            }) => {
+                let other = session_id.wrapping_add(1);
+                let created = Instant::now();
+                expected = Some([(other, created), (session_id, created)]);
+                for visit in [other, session_id] {
+                    sender.send(ClientCommand::Move(MovementRequest::new(
+                        MovementMode::Forward,
+                        visit,
+                        player.position,
+                        created,
+                    )))?;
+                }
+            }
+            ClientEvent::World(WorldEvent::MotionRefused {
+                session_id,
+                created,
+                ..
+            })
+            | ClientEvent::World(WorldEvent::MotionSent {
+                session_id,
+                created,
+                refused: Some(_),
+                ..
+            }) => {
+                results.push((session_id, created));
+            }
+            ClientEvent::World(WorldEvent::MotionSent { refused: None, .. }) => {
+                panic!("the synthetic host provided no speed inputs");
+            }
+            _ => (),
+        }
+        Ok(())
+    };
+    assert!(matches!(
+        run_script(
+            &context,
+            &mut script,
+            &mut Events::new(&config, &mut handler)
+        )
+        .unwrap(),
+        ZoneExit::Stopped
+    ));
+    assert_eq!(results, expected.unwrap());
+    assert!(commands.try_recv().is_err());
 }
 
 fn assert_failed_admission(

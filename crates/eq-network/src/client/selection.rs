@@ -52,13 +52,19 @@ impl Worlds {
     }
 
     /// The player's choice, from the host's queue: a world of this list
-    /// that takes players. Stale choices and every other command are
-    /// dropped without a packet, as the character list drops them.
-    pub fn poll(&self, commands: Option<&Receiver<ClientCommand>>) -> Option<usize> {
-        commands?
-            .try_iter()
-            .take(64)
-            .find_map(|command| self.choose(&command))
+    /// that takes players. A discarded Move still receives a local result.
+    pub fn poll(
+        &self,
+        commands: Option<&Receiver<ClientCommand>>,
+        log: &mut Events<'_>,
+    ) -> Result<Option<usize>> {
+        for command in commands.into_iter().flat_map(Receiver::try_iter).take(64) {
+            log.refuse_move(&command, "The player is at server selection")?;
+            if let Some(choice) = self.choose(&command) {
+                return Ok(Some(choice));
+            }
+        }
+        Ok(None)
     }
 
     fn choose(&self, command: &ClientCommand) -> Option<usize> {
@@ -181,12 +187,20 @@ impl Selection {
             == 1
     }
 
-    /// Ignores stale choices and all zone actions without emitting packets.
-    pub fn poll(&self, commands: Option<&Receiver<ClientCommand>>) -> Option<Choice> {
-        commands?
-            .try_iter()
-            .take(64)
-            .find_map(|command| self.choose(command))
+    /// Ignores stale choices and discards zone actions without sending packets.
+    /// A discarded Move still receives a local result.
+    pub fn poll(
+        &self,
+        commands: Option<&Receiver<ClientCommand>>,
+        log: &mut Events<'_>,
+    ) -> Result<Option<Choice>> {
+        for command in commands.into_iter().flat_map(Receiver::try_iter).take(64) {
+            log.refuse_move(&command, "The player is at character selection")?;
+            if let Some(choice) = self.choose(command) {
+                return Ok(Some(choice));
+            }
+        }
+        Ok(None)
     }
 
     fn choose(&self, command: ClientCommand) -> Option<Choice> {
@@ -229,7 +243,22 @@ fn next_identity() -> Result<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use eq_network_game::servers::ServerStatus;
+    use crate::client::ClientConfig;
+    use eq_network_game::{
+        movement::{MovementMode, MovementRequest},
+        servers::ServerStatus,
+        world::Position,
+    };
+    use std::time::Instant;
+
+    fn move_at(created: Instant) -> ClientCommand {
+        ClientCommand::Move(MovementRequest::new(
+            MovementMode::Forward,
+            3,
+            Position::default(),
+            created,
+        ))
+    }
 
     fn world(name: &str, status: ServerStatus) -> ServerChoice {
         ServerChoice {
@@ -276,6 +305,8 @@ mod tests {
         assert_eq!(worlds.choose(&choice(9, 2)), None);
         let (sender, receiver) = std::sync::mpsc::channel();
         sender.send(choice(8, 0)).unwrap();
+        let created = Instant::now();
+        sender.send(move_at(created)).unwrap();
         sender
             .send(ClientCommand::SelectCharacter {
                 selection_id: 9,
@@ -283,9 +314,22 @@ mod tests {
             })
             .unwrap();
         sender.send(choice(9, 0)).unwrap();
-        assert_eq!(worlds.poll(Some(&receiver)), Some(0));
-        assert_eq!(worlds.poll(Some(&receiver)), None);
-        assert_eq!(worlds.poll(None), None);
+        let config = ClientConfig::new("ACCOUNT", "PASSWORD", "Example Up", "");
+        let mut events = Vec::new();
+        let mut handler = |event| {
+            events.push(event);
+            Ok(())
+        };
+        let mut log = Events::new(&config, &mut handler);
+        assert_eq!(worlds.poll(Some(&receiver), &mut log).unwrap(), Some(0));
+        assert_eq!(worlds.poll(Some(&receiver), &mut log).unwrap(), None);
+        assert_eq!(worlds.poll(None, &mut log).unwrap(), None);
+        drop(log);
+        assert!(matches!(
+            events.as_slice(),
+            [ClientEvent::World(WorldEvent::MotionRefused { session_id: 3, created: stamp, .. })]
+                if *stamp == created
+        ));
         assert_eq!(worlds.name(0), "Example Up");
     }
 
@@ -316,6 +360,8 @@ mod tests {
             );
         }
         let (sender, receiver) = std::sync::mpsc::channel();
+        let created = Instant::now();
+        sender.send(move_at(created)).unwrap();
         sender
             .send(ClientCommand::SelectCharacter {
                 selection_id: 8,
@@ -328,13 +374,27 @@ mod tests {
                 slot: 3,
             })
             .unwrap();
+        let config = ClientConfig::new("ACCOUNT", "PASSWORD", "Example Up", "");
+        let mut events = Vec::new();
+        let mut handler = |event| {
+            events.push(event);
+            Ok(())
+        };
+        let mut log = Events::new(&config, &mut handler);
         assert_eq!(
             selection
-                .poll(Some(&receiver))
+                .poll(Some(&receiver), &mut log)
+                .unwrap()
                 .and_then(Choice::entered)
                 .as_deref(),
             Some("Example")
         );
-        assert!(selection.poll(Some(&receiver)).is_none());
+        assert!(selection.poll(Some(&receiver), &mut log).unwrap().is_none());
+        drop(log);
+        assert!(matches!(
+            events.as_slice(),
+            [ClientEvent::World(WorldEvent::MotionRefused { session_id: 3, created: stamp, .. })]
+                if *stamp == created
+        ));
     }
 }

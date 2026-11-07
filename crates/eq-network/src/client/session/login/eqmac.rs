@@ -61,7 +61,7 @@ pub(in crate::client::session) fn login(
     let mut requested_list = false;
     let mut unheard = Unheard::new(Stage::Login);
     loop {
-        let packet = match choice.next(&mut session, &mut deadline, stop, commands)? {
+        let packet = match choice.next(&mut session, &mut deadline, stop, commands, log)? {
             Next::Chosen(world) => {
                 play(&mut session, world)?;
                 continue;

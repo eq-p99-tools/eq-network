@@ -59,11 +59,29 @@ pub(super) enum Source {
     Item,
 }
 
+impl Source {
+    fn accepts_refresh(source: Option<Self>, slot: u32) -> bool {
+        source.is_none_or(|source| {
+            slot == match source {
+                Self::Gem(gem) => u32::from(gem),
+                Self::Item => u32::from(ITEM_CAST_SLOT),
+            }
+        })
+    }
+}
+
+enum Followup {
+    LateBegin(u32),
+    Superseded(u32),
+}
+
 #[derive(Default)]
 pub(super) struct CastGuard {
     phase: Option<Phase>,
     source: Option<Source>,
     stop_deadline: Option<Instant>,
+    /// Request provenance survives the acknowledgement wait without holding casting.
+    unconfirmed: Option<(u32, Option<Source>)>,
     late_begin: Option<u32>,
 }
 
@@ -137,7 +155,9 @@ impl CastGuard {
         if self.stop_deadline.is_some() || now.saturating_duration_since(submitted) < ACK_TIMEOUT {
             return None;
         }
+        let source = self.source;
         self.clear();
+        self.unconfirmed = Some((spell, source));
         Some(spell)
     }
 
@@ -159,8 +179,8 @@ impl CastGuard {
     }
 
     /// Follows own starts and interruptions and matching spell results.
-    /// Returns the stopped hold if a different own spell begins.
-    fn observe(&mut self, own_id: u16, update: &SpellUpdate) -> Option<u32> {
+    /// Reports local provenance to the host before forwarding the received update.
+    fn observe(&mut self, own_id: u16, update: &SpellUpdate) -> Option<Followup> {
         match *update {
             SpellUpdate::Began {
                 caster_id,
@@ -168,17 +188,31 @@ impl CastGuard {
                 ..
             } if caster_id == own_id => {
                 let spell = u32::from(spell_id);
-                let mut requested = self.pending();
-                let superseded = if self.stop_deadline.is_some() && !self.answers(spell) {
+                if self.stop_deadline.is_some() && !self.answers(spell) {
+                    let stopped = self.held_spell();
                     self.stop_deadline = None;
                     self.source = None;
-                    self.late_begin = requested.take().or(self.late_begin);
-                    self.held_spell()
-                } else {
-                    None
+                    self.late_begin = self.pending().or(self.late_begin);
+                    self.phase = Some(Phase::Casting {
+                        spell,
+                        requested: None,
+                    });
+                    return stopped.map(Followup::Superseded);
+                }
+                let late = self.unconfirmed.take();
+                let requested = match self.phase {
+                    Some(Phase::Awaiting { spell, .. }) => Some(spell),
+                    Some(Phase::Casting {
+                        spell: active,
+                        requested,
+                    }) if active == spell => requested,
+                    _ => {
+                        self.source = late.and_then(|(_, source)| source);
+                        late.map(|(requested, _)| requested)
+                    }
                 };
                 self.phase = Some(Phase::Casting { spell, requested });
-                return superseded;
+                return late.map(|(requested, _)| Followup::LateBegin(requested));
             }
             SpellUpdate::Interrupted { caster_id, .. } if caster_id == u32::from(own_id) => {
                 self.clear();
@@ -186,19 +220,21 @@ impl CastGuard {
             SpellUpdate::Mana {
                 spell_id,
                 keep_casting: false,
-            } if self.answers(spell_id) => {
-                self.clear();
+            } => {
+                if self.answers(spell_id) {
+                    self.clear();
+                } else if self.unconfirmed.is_some_and(|(spell, _)| spell == spell_id) {
+                    self.unconfirmed = None;
+                }
             }
-            SpellUpdate::BarRefresh { slot, spell_id, .. }
-                if self.answers(spell_id)
-                    && self.source.is_none_or(|source| {
-                        slot == match source {
-                            Source::Gem(gem) => u32::from(gem),
-                            Source::Item => u32::from(ITEM_CAST_SLOT),
-                        }
-                    }) =>
-            {
-                self.clear();
+            SpellUpdate::BarRefresh { slot, spell_id, .. } => {
+                if self.answers(spell_id) && Source::accepts_refresh(self.source, slot) {
+                    self.clear();
+                } else if self.unconfirmed.is_some_and(|(spell, source)| {
+                    spell == spell_id && Source::accepts_refresh(source, slot)
+                }) {
+                    self.unconfirmed = None;
+                }
             }
             _ => (),
         }
@@ -436,17 +472,25 @@ impl Feature for Casting {
                     return Ok(());
                 };
                 let pending = self.guard.pending();
-                if let Some(spell_id) = self.guard.observe(own, update) {
-                    out.log
-                        .send(ClientEvent::World(WorldEvent::CastSuperseded {
-                            session_id: world.session_id,
-                            spell_id,
-                        }))?;
-                } else if pending.is_some() && self.guard.pending().is_none() {
-                    out.log.send(ClientEvent::World(WorldEvent::CastPending {
+                let event = match self.guard.observe(own, update) {
+                    Some(Followup::LateBegin(requested_spell)) => Some(WorldEvent::CastLateBegin {
                         session_id: world.session_id,
-                        spell_id: None,
-                    }))?;
+                        requested_spell,
+                    }),
+                    Some(Followup::Superseded(spell_id)) => Some(WorldEvent::CastSuperseded {
+                        session_id: world.session_id,
+                        spell_id,
+                    }),
+                    None if pending.is_some() && self.guard.pending().is_none() => {
+                        Some(WorldEvent::CastPending {
+                            session_id: world.session_id,
+                            spell_id: None,
+                        })
+                    }
+                    None => None,
+                };
+                if let Some(event) = event {
+                    out.log.send(ClientEvent::World(event))?;
                 }
             }
             Message::Event(event) if world.owns_death(event) => {
@@ -827,6 +871,40 @@ mod tests {
             spell_id: 73,
             duration_ms: 0,
         }
+    }
+
+    #[test]
+    fn a_timed_out_item_remembers_its_refresh_slot_until_the_result_arrives() {
+        let now = Instant::now();
+        let refresh = |slot| SpellUpdate::BarRefresh {
+            slot,
+            spell_id: 73,
+            reduction_ms: 0,
+        };
+        let began = SpellUpdate::Began {
+            caster_id: 12,
+            spell_id: 2935,
+            duration_ms: 3000,
+        };
+        let item_slot = u32::from(ITEM_CAST_SLOT);
+        let mut guard = CastGuard::default();
+        guard.submitted(73, Some(Source::Item), now);
+        assert_eq!(guard.expire(now + ACK_TIMEOUT), Some(73));
+        assert!(guard.observe(12, &refresh(0)).is_none());
+        assert!(matches!(
+            guard.observe(12, &began),
+            Some(Followup::LateBegin(73))
+        ));
+        assert!(guard.observe(12, &refresh(0)).is_none());
+        assert!(guard.active());
+        assert!(guard.observe(12, &refresh(item_slot)).is_none());
+        assert!(!guard.active());
+
+        guard.submitted(73, Some(Source::Item), now);
+        assert_eq!(guard.expire(now + ACK_TIMEOUT), Some(73));
+        assert!(guard.observe(12, &refresh(item_slot)).is_none());
+        assert!(guard.observe(12, &began).is_none());
+        assert!(!guard.answers(73));
     }
 
     #[test]

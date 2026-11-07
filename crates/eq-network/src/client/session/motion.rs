@@ -539,6 +539,7 @@ impl Motion {
         ) {
             return out.log.send(ClientEvent::World(WorldEvent::MotionSent {
                 session_id: world.session_id,
+                created: request.created,
                 position: from,
                 refused: Some(reason.into()),
             }));
@@ -572,6 +573,7 @@ impl Motion {
         // Refused coordinates are never published.
         out.log.send(ClientEvent::World(WorldEvent::MotionSent {
             session_id: world.session_id,
+            created: request.created,
             position: motion.position(),
             refused,
         }))

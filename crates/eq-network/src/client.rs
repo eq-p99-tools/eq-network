@@ -890,6 +890,14 @@ impl<'a> Events<'a> {
         self.send(ClientEvent::Diagnostic(message))
     }
 
+    /// Completes a move discarded outside normal zone action routing.
+    fn refuse_move(&mut self, command: &ClientCommand, reason: &str) -> Result<()> {
+        if let ClientCommand::Move(request) = command {
+            self.send(ClientEvent::World(motion_refused(request, reason)))?;
+        }
+        Ok(())
+    }
+
     fn status(
         &mut self,
         state: ConnectionState,
@@ -924,6 +932,17 @@ impl<'a> Events<'a> {
             message_id: self.messages,
             event,
         })))
+    }
+}
+
+fn motion_refused(
+    request: &eq_network_game::movement::MovementRequest,
+    reason: &str,
+) -> eq_network_game::world::WorldEvent {
+    eq_network_game::world::WorldEvent::MotionRefused {
+        session_id: request.session_id,
+        created: request.created,
+        reason: reason.into(),
     }
 }
 
