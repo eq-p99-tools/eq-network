@@ -49,6 +49,10 @@ selects the classic order set, which excludes Hold, Feign, NoCast and Focus.
 The EQEmu provider selects the expanded set. Local submission leaves
 execution and any further restrictions to the server.
 
+`PetCommand::project1999_available` is deprecated in favor of
+`PetCommand::in_classic_order_set`. The compatibility alias returns the
+same classification. The provider chooses the order set for each admission.
+
 ## Titanium EQEmu swimming bound
 
 Only the Titanium `EQEmu` policy offers `Capability::Swimming`; P99, Quarm
@@ -88,9 +92,15 @@ sample again. An accepted report is sent as the Titanium environmental
 record with damage type 251 (drowning) or 250 (lava); the Titanium program's
 own liquid reports are unrecorded, so that layout is inferred (recording
 checklist 6.392). `PlayerState.titanium_environment` carries the profile's
-zone, base fire resistance (offset 12876, inside the block EQEmu leaves
-unknown and sends as zero; inferred, 6.392) and whether any alternate
-advancement rank is present. The server owns health and death.
+zone, base fire resistance and whether any alternate advancement rank is
+present. Titanium `eqgame.exe` copies the profile dword at byte 12876 at
+0x4b9f3c and uses it at 0x418756. The cited EQEmu Titanium encoder writes
+a constant 25 there through its `unknown12864` block copy. The decoder
+retains the received dword. The server owns effective resistance, health
+and death. [Profile layout][titanium-profile] [EQEmu encoder][titanium-encoder]
+
+[titanium-profile]: https://github.com/EQEmu/EQEmu/blob/4aceae18b94ffaafc08e2b17bc41cd72c77f795d/common/patches/titanium_structs.h#L883
+[titanium-encoder]: https://github.com/EQEmu/EQEmu/blob/4aceae18b94ffaafc08e2b17bc41cd72c77f795d/common/patches/titanium.cpp#L1600-L1606
 
 ## Retained base held models
 

@@ -44,12 +44,13 @@ const EQMAC_SIZE: usize = 24;
 pub struct TitaniumEnvironment {
     /// Zone ID from this admission's profile.
     pub zone_id: u16,
-    /// Profile fire resistance before racial, class and active modifiers,
-    /// read at offset 12876. That word lies in the block `EQEmu`'s Titanium
-    /// `PlayerProfile_Struct` leaves unknown (`unknown12864`) and sends as
-    /// zero, so an `EQEmu` profile yields 0 here. Which profile field, if
-    /// any, the Titanium program reads as a base resistance is unread; the
-    /// offset is inferred (recording checklist 6.392).
+    /// Profile fire resistance before racial, class and active modifiers.
+    /// Titanium `eqgame.exe` copies the dword at byte 12876 at 0x4b9f3c
+    /// and uses it in the base calculation at 0x418756. The cited
+    /// [`EQEmu` encoder][encoder] writes 25 in its constant block copy.
+    /// This field retains the received value. Server-side resist is separate.
+    ///
+    /// [encoder]: https://github.com/EQEmu/EQEmu/blob/4aceae18b94ffaafc08e2b17bc41cd72c77f795d/common/patches/titanium.cpp#L1600-L1606
     pub base_fire_resistance: i32,
     /// A rank is present in the profile's alternate advancement array.
     pub has_alternate_advancement: bool,
@@ -264,7 +265,9 @@ mod tests {
 
     #[test]
     fn titanium_environment_retains_base_resist_and_rank_presence() {
+        // A synthetic zero-filled profile, then the cited encoder's value.
         let mut profile = vec![0; 19592];
+        assert_eq!(titanium_environment(&profile).base_fire_resistance, 0);
         profile[12876..12880].copy_from_slice(&25i32.to_le_bytes());
         profile[13276..13278].copy_from_slice(&27u16.to_le_bytes());
         assert_eq!(

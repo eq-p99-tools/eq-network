@@ -13,9 +13,10 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   item's signed fire resistance. Require a fresh host sample of the current
   worker inputs and position before sending the existing environmental record.
   The server owns health and death. Deployed Project 1999 liquid reporting
-  awaits validation. The liquid record layout and the base fire resistance
-  offset (inside the profile block EQEmu sends as zero) are inferred
-  (recording checklist 6.392).
+  awaits validation. The liquid record layout is inferred (recording
+  checklist 6.392). The base fire resistance is the profile dword at byte
+  12876, which the Titanium program copies at `eqgame.exe` 0x4b9f3c and uses
+  at 0x418756; the cited EQEmu Titanium encoder writes a constant 25 there.
 - Retain a checked optional base held model from Titanium item definitions.
   The item model and received wear appearance remain separate.
 - One explicit Titanium bow shot or throw through `GameCommand::RangedAttack`
@@ -85,6 +86,12 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   checklist 6.388). Live P99 acceptance of this pair remains unverified.
 - Network-owned dialect accessors for heading snapshots, fatigue-based
   carrying capacity, ordinary door cursor checks, and reading window kinds.
+
+### Deprecated
+
+- `PetCommand::project1999_available`, in favour of
+  `PetCommand::in_classic_order_set`. The alias returns the same
+  classification; the provider chooses the order set for each admission.
 
 ### Changed
 

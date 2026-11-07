@@ -139,8 +139,9 @@ impl PetCommand {
         !matches!(self, Self::Hold | Self::Feign | Self::NoCast | Self::Focus)
     }
 
-    /// Whether the Project 1999 policy offers this ordinary command.
+    /// Compatibility alias for [`Self::in_classic_order_set`].
     #[must_use]
+    #[deprecated(note = "use PetCommand::in_classic_order_set")]
     pub const fn project1999_available(self) -> bool {
         self.in_classic_order_set()
     }
