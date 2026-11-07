@@ -130,16 +130,15 @@ impl CastGuard {
     }
 
     /// Allows a fresh user attempt after silence; ordinary begun casts stay held.
-    pub fn expire(&mut self, now: Instant) -> bool {
-        if self.stop_deadline.is_none()
-            && matches!(self.phase, Some(Phase::Awaiting { submitted, .. })
-            if now.checked_duration_since(submitted).is_some_and(|age| age >= ACK_TIMEOUT))
-        {
-            self.clear();
-            true
-        } else {
-            false
+    pub fn expire(&mut self, now: Instant) -> Option<u32> {
+        let Some(Phase::Awaiting { spell, submitted }) = self.phase else {
+            return None;
+        };
+        if self.stop_deadline.is_some() || now.saturating_duration_since(submitted) < ACK_TIMEOUT {
+            return None;
         }
+        self.clear();
+        Some(spell)
     }
 
     /// Whether a result for this spell answers the cast held: the spell
@@ -395,13 +394,14 @@ impl Feature for Casting {
         if let Some(spell) = self.guard.expire_song_stop(now) {
             return report_unconfirmed_stop(world.session_id, Some(spell), out);
         }
-        if !self.guard.expire(now) {
+        let Some(spell_id) = self.guard.expire(now) else {
             return Ok(());
-        }
-        out.log.send(ClientEvent::World(WorldEvent::CastPending {
-            session_id: world.session_id,
-            spell_id: None,
-        }))?;
+        };
+        out.log
+            .send(ClientEvent::World(WorldEvent::CastRequestUnconfirmed {
+                session_id: world.session_id,
+                spell_id,
+            }))?;
         out.log
             .diagnostic("Cast acknowledgement timed out; a manual retry is available".into())
     }
@@ -836,17 +836,17 @@ mod tests {
         guard.submitted(73, None, now);
         assert!(guard.active());
         assert_eq!(guard.pending(), Some(73));
-        assert!(!guard.expire(now + Duration::from_millis(4999)));
-        assert!(guard.expire(now + ACK_TIMEOUT));
+        assert_eq!(guard.expire(now + Duration::from_millis(4999)), None);
+        assert_eq!(guard.expire(now + ACK_TIMEOUT), Some(73));
         assert!(!guard.active());
-        assert!(!guard.expire(now + ACK_TIMEOUT));
+        assert_eq!(guard.expire(now + ACK_TIMEOUT), None);
         guard.submitted(73, None, now);
         guard.observe(12, &begin(13));
         assert_eq!(guard.pending(), Some(73));
         guard.observe(12, &begin(12));
         assert_eq!(guard.pending(), None);
         assert!(guard.active());
-        assert!(!guard.expire(now + Duration::from_secs(60)));
+        assert_eq!(guard.expire(now + Duration::from_secs(60)), None);
         guard.observe(
             12,
             &SpellUpdate::Interrupted {

@@ -109,7 +109,18 @@ a Titanium item definition. A later item packet for the same slot with an
 empty model field replaces it with `None`; the received wear appearance stays
 separate and takes precedence in hosts.
 
-## Spellbook edits and Bard song stop
+## Casting, spellbook edits and Bard song stop
+
+The worker emits `WorldEvent::CastPending` with the submitted spell and
+admission. When a received spell update answers that request, the worker
+clears the pending notice before forwarding the update on the same ordered
+event stream. A cast may begin under a different spell ID and end under the
+requested ID. After five seconds without a matching update, the worker
+instead emits `WorldEvent::CastRequestUnconfirmed` for the unanswered
+request and allows a fresh manual attempt. That event reports only the end
+of the local wait. It precedes any later submission in that admission,
+including a manual retry of the same spell. An already begun cast still
+awaits a matching update.
 
 An unanswered book edit emits terminal `BookActionStatus::Unconfirmed` once
 after 30 seconds and releases the spellbook hold. A fresh edit can proceed

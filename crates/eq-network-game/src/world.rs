@@ -821,8 +821,15 @@ pub enum WorldEvent {
     CastPending {
         /// Zone admission that owns this request.
         session_id: u64,
-        /// Pending spell, or None when acknowledged, interrupted, or timed out.
+        /// Pending spell, or None before forwarding the update that answered it.
         spell_id: Option<u32>,
+    },
+    /// A submitted cast received no matching update during the local acknowledgement wait.
+    CastRequestUnconfirmed {
+        /// Zone admission that owns the request.
+        session_id: u64,
+        /// Spell named by the unanswered request.
+        spell_id: u32,
     },
     /// A different own cast began while a song stop was pending.
     /// Discard this hold before applying the new start.

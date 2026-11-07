@@ -37,6 +37,9 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   admission. A silent stop of a tracked gem cast releases the local hold
   after one second and emits `WorldEvent::SongStopUnconfirmed`. Received
   cast results continue through the ordinary spell updates.
+- **Breaking:** `WorldEvent::CastRequestUnconfirmed` reports the existing
+  cast acknowledgement timeout with its admission and spell. A
+  `CastPending` clear precedes a received update that answers the request.
 - `BookActionStatus::Unconfirmed` releases the spellbook after 30 seconds
   without a matching result. Distinguishable edits can proceed. A retry with
   the same possible reply requires a fresh admission. A timed-out scribe

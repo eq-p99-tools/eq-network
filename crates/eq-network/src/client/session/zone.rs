@@ -1995,6 +1995,87 @@ mod tests {
     }
 
     #[test]
+    fn an_unconfirmed_cast_precedes_the_same_spell_retry_and_its_begin() {
+        use super::super::{casting::Casting, feature::testing};
+        use eq_network_game::spells::SpellUpdate;
+
+        let mut features = Features {
+            provided: vec![Box::new(Casting::default())],
+            choices: Vec::new(),
+            spell_landing_flag: None,
+            answers_list_polls: false,
+            gameplay_departures: false,
+        };
+        let mut world = World::new(5);
+        world.admitted = Some(Instant::now());
+        world.own_spawn = Some(7);
+        let mut player = testing::player(7);
+        player.memorized_spells[0] = Some(202);
+        world.player.admit(player);
+        let cast = || ClientCommand::CastSpell {
+            session_id: 5,
+            gem: 0,
+            spell_id: 202,
+            target_id: 7,
+            created: Instant::now(),
+        };
+        let began = WorldEvent::Spell(SpellUpdate::Began {
+            caster_id: 7,
+            spell_id: 2935,
+            duration_ms: 3000,
+        });
+        let outcome = testing::run(|out| -> Result<()> {
+            apply_commands(&[cast()], &mut features, &mut world, out, true)?;
+            assert_eq!(
+                features.refusal(&cast(), &world, Instant::now()),
+                Some("Wait for the current cast to finish or interrupt it")
+            );
+            let timeout = Instant::now() + Duration::from_secs(5);
+            features.tick(timeout, &mut world, out)?;
+            features.tick(timeout, &mut world, out)?;
+            apply_commands(&[cast()], &mut features, &mut world, out, true)?;
+            hear(
+                vec![Message::Event(began.clone())],
+                &mut features,
+                &mut world,
+                out,
+                true,
+            )?;
+            assert_eq!(
+                features.refusal(&cast(), &world, Instant::now()),
+                Some("Wait for the current cast to finish or interrupt it")
+            );
+            Ok(())
+        });
+        outcome.result.unwrap();
+        assert_eq!(outcome.sent.len(), 2);
+        assert!(matches!(
+            outcome.events.as_slice(),
+            [
+                ClientEvent::World(WorldEvent::CastPending {
+                    session_id: 5,
+                    spell_id: Some(202)
+                }),
+                ClientEvent::World(WorldEvent::CastRequestUnconfirmed {
+                    session_id: 5,
+                    spell_id: 202
+                }),
+                ClientEvent::Diagnostic(reason),
+                ClientEvent::World(WorldEvent::CastPending {
+                    session_id: 5,
+                    spell_id: Some(202)
+                }),
+                ClientEvent::World(WorldEvent::CastPending {
+                    session_id: 5,
+                    spell_id: None
+                }),
+                ClientEvent::World(update)
+            ] if reason == "Cast acknowledgement timed out; a manual retry is available"
+                && update == &began
+        ));
+    }
+
+    #[test]
     fn news_that_never_settles_ends_the_session() {
         use crate::client::session::feature::{testing, Feature};
         /// A feature that answers every message with another.
