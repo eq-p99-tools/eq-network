@@ -51,6 +51,12 @@ pub(super) fn unidentified_cursor_mutation(update: &InventoryUpdate) -> bool {
 }
 
 impl Inventory {
+    /// Records submission and withdraws the basis for another cursor action.
+    pub(super) fn hold_ground_drop(&mut self, serial: NonZeroU32) {
+        self.ground_drop = Some(serial);
+        self.drop_cursor = CursorBasis::Unknown;
+    }
+
     /// Whether this update directly identifies the cursor. A local move can
     /// invalidate the basis, and settling ordinary moves by silence cannot
     /// recover it for a subsequent drop.
@@ -194,7 +200,7 @@ mod tests {
     fn drop_has_an_empty_body_and_requires_known_eligible_cursor_custody() {
         let packet = titanium_ground_drop();
         assert_eq!(packet.opcode, 0x0f47);
-        assert!(packet.body.is_empty());
+        assert_eq!(packet.body.as_slice(), b"");
         let mut inventory = Inventory::default();
         for item in [
             decoded("0", "255", "0"),

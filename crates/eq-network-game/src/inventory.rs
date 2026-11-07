@@ -517,10 +517,7 @@ impl Inventory {
         match update {
             InventoryUpdate::Prediction(items) => self.predict(items),
             InventoryUpdate::DestroyCursor => self.predict_destruction(),
-            InventoryUpdate::GroundDropPending(serial) => {
-                self.ground_drop = Some(serial);
-                self.drop_cursor = ground_drop::CursorBasis::Unknown;
-            }
+            InventoryUpdate::GroundDropPending(serial) => self.hold_ground_drop(serial),
             InventoryUpdate::Consume { slot, charge } => {
                 let consumed = self
                     .items
