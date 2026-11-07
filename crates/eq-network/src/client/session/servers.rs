@@ -624,7 +624,7 @@ mod shared {
     }
 
     pub(super) fn inventory(rules: MoveRules, setup: &Setup<'_>) -> Box<dyn Feature> {
-        inventory_under(rules, Quotes::WithRate, Allowances::ALL, setup)
+        inventory_under(rules, Quotes::WithRate, Allowances::STANDARD, setup)
     }
 
     /// The inventory, whose items the player moves under the server type's
@@ -1118,7 +1118,15 @@ impl ServerType for EqEmu {
     }
 
     fn inventory(&self, setup: &Setup<'_>) -> Provided {
-        offer(shared::inventory(self.inventory_move_rules()?, setup))
+        offer(shared::inventory_under(
+            self.inventory_move_rules()?,
+            Quotes::WithRate,
+            Allowances {
+                ground_drop: true,
+                ..Allowances::STANDARD
+            },
+            setup,
+        ))
     }
 
     fn motion(&self, _setup: &Setup<'_>) -> Provided {
@@ -1367,6 +1375,7 @@ impl ServerType for Quarm {
             Quotes::of(GameDialect::EqMac),
             Allowances {
                 items: true,
+                ground_drop: false,
                 coins: true,
                 merchants: true,
                 meals: true,
@@ -1550,7 +1559,7 @@ impl ServerType for Takp {
         offer(shared::inventory_under(
             self.inventory_move_rules()?,
             Quotes::of(GameDialect::EqMac),
-            Allowances::ALL,
+            Allowances::STANDARD,
             setup,
         ))
     }

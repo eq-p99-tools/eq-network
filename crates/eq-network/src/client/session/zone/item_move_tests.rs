@@ -228,81 +228,142 @@ fn explicit_destroy_is_single_submission_through_p99_and_eqemu_inventory_owner()
 }
 
 #[test]
-fn ordinary_drop_submits_once_and_nearby_objects_cannot_settle_custody() {
+fn ordinary_drop_holds_after_object_and_cursor_updates_until_snapshot() {
     use eq_network_game::{
         inventory::{titanium_ground_drop, InventoryDrop},
         objects::{GroundObject, ObjectUpdate},
     };
 
-    for protocol in [ServerProtocol::Project1999, ServerProtocol::EqEmu] {
+    let protocol = ServerProtocol::EqEmu;
+    let mut cursor = stack(30, 7);
+    cursor.rules.ground_drop_serial = NonZeroU32::new(17);
+    let (mut features, mut world) = setup(protocol, vec![cursor.clone()]);
+    let request = |world: &World, own_id| {
+        ClientCommand::DropItem(Box::new(InventoryDrop {
+            session_id: world.session_id,
+            own_id,
+            revision: world.inventory.revision(),
+            item: cursor.clone(),
+            created: Instant::now(),
+        }))
+    };
+    let wrong_actor = request(&world, 8);
+    let refused = submit(protocol, &mut features, &mut world, &wrong_actor);
+    assert!(refused.result.unwrap() && refused.sent.is_empty());
+    assert!(!world.inventory.ground_drop_pending());
+
+    let drop = request(&world, 7);
+    let output = submit(protocol, &mut features, &mut world, &drop);
+    assert!(output.result.unwrap());
+    assert_eq!(output.sent, [titanium_ground_drop()]);
+    assert!(output.unreliable.is_empty());
+    assert!(world.inventory.ground_drop_pending());
+    assert_eq!(
+        world.inventory.items().get(&InventorySlot::CURSOR),
+        Some(&cursor)
+    );
+
+    let object = Message::Event(WorldEvent::Objects(ObjectUpdate::Spawn(GroundObject {
+        drop_id: 41,
+        model: "IT63_ACTORDEF".into(),
+        position: Default::default(),
+        object_type: 0,
+    })));
+    testing::run_on(servers::server_type(protocol).wire(), |out| {
+        features.observe(&object, &mut world, out)
+    })
+    .result
+    .unwrap();
+    let mut arrival = cursor.clone();
+    arrival.rules.ground_drop_serial = NonZeroU32::new(18);
+    observe(
+        protocol,
+        &mut features,
+        &mut world,
+        InventoryUpdate::Cursor(vec![arrival]),
+    );
+    observe(
+        protocol,
+        &mut features,
+        &mut world,
+        InventoryUpdate::Remove(InventorySlot::CURSOR),
+    );
+    assert!(world.inventory.stale());
+    assert_eq!(world.inventory.queued().count(), 1);
+    assert_eq!(
+        world.inventory.items().get(&InventorySlot::CURSOR),
+        Some(&cursor)
+    );
+    let repeat = request(&world, 7);
+    let rejected = submit(protocol, &mut features, &mut world, &repeat);
+    assert!(rejected.result.unwrap() && rejected.sent.is_empty());
+    assert!(world.inventory.ground_drop_pending());
+    let pickup = ClientCommand::PickUp {
+        session_id: world.session_id,
+        drop_id: 41,
+        created: Instant::now(),
+    };
+    let held = submit(protocol, &mut features, &mut world, &pickup);
+    assert!(held.result.unwrap() && held.sent.is_empty());
+
+    observe(
+        protocol,
+        &mut features,
+        &mut world,
+        InventoryUpdate::Snapshot(Vec::new()),
+    );
+    assert!(!world.inventory.ground_drop_pending());
+    assert!(!world.inventory.stale());
+    assert_eq!(world.inventory.queued().count(), 0);
+    let pickup = ClientCommand::PickUp {
+        session_id: world.session_id,
+        drop_id: 41,
+        created: Instant::now(),
+    };
+    let normal = submit(protocol, &mut features, &mut world, &pickup);
+    assert!(normal.result.unwrap());
+    assert_eq!(normal.sent.len(), 1);
+    assert_eq!(normal.sent[0].opcode, 0x3bc2);
+    assert!(!world.inventory.items().contains_key(&InventorySlot::CURSOR));
+}
+
+#[test]
+fn direct_drop_command_is_refused_on_unoffered_providers() {
+    use eq_network_game::inventory::InventoryDrop;
+
+    for protocol in [
+        ServerProtocol::Project1999,
+        ServerProtocol::Quarm,
+        ServerProtocol::Takp,
+    ] {
         let mut cursor = stack(30, 7);
         cursor.rules.ground_drop_serial = NonZeroU32::new(17);
         let (mut features, mut world) = setup(protocol, vec![cursor.clone()]);
-        let request = |world: &World, own_id| {
-            ClientCommand::DropItem(Box::new(InventoryDrop {
-                session_id: world.session_id,
-                own_id,
-                revision: world.inventory.revision(),
-                item: cursor.clone(),
-                created: Instant::now(),
-            }))
-        };
-        let wrong_actor = request(&world, 8);
-        let refused = submit(protocol, &mut features, &mut world, &wrong_actor);
-        assert!(refused.result.unwrap() && refused.sent.is_empty());
-        assert!(!world.inventory.ground_drop_pending());
-
-        let drop = request(&world, 7);
-        let output = submit(protocol, &mut features, &mut world, &drop);
-        assert!(output.result.unwrap());
-        assert_eq!(output.sent, [titanium_ground_drop()]);
-        assert!(output.unreliable.is_empty());
-        assert!(world.inventory.ground_drop_pending());
-        assert_eq!(
-            world.inventory.items().get(&InventorySlot::CURSOR),
-            Some(&cursor)
-        );
-
-        let object = Message::Event(WorldEvent::Objects(ObjectUpdate::Spawn(GroundObject {
-            drop_id: 41,
-            model: "IT63_ACTORDEF".into(),
-            position: Default::default(),
-            object_type: 0,
-        })));
-        testing::run_on(servers::server_type(protocol).wire(), |out| {
-            features.observe(&object, &mut world, out)
-        })
-        .result
-        .unwrap();
-        let repeat = request(&world, 7);
-        let rejected = submit(protocol, &mut features, &mut world, &repeat);
-        assert!(rejected.result.unwrap() && rejected.sent.is_empty());
-        assert!(world.inventory.ground_drop_pending());
-        let pickup = ClientCommand::PickUp {
+        assert!(!features
+            .capabilities()
+            .contains(&Capability::GroundDropping));
+        let command = ClientCommand::DropItem(Box::new(InventoryDrop {
             session_id: world.session_id,
-            drop_id: 41,
+            own_id: 7,
+            revision: world.inventory.revision(),
+            item: cursor,
             created: Instant::now(),
-        };
-        let held = submit(protocol, &mut features, &mut world, &pickup);
-        assert!(held.result.unwrap() && held.sent.is_empty());
-
-        observe(
-            protocol,
-            &mut features,
-            &mut world,
-            InventoryUpdate::Remove(InventorySlot::CURSOR),
-        );
-        assert!(!world.inventory.ground_drop_pending());
-        let pickup = ClientCommand::PickUp {
-            session_id: world.session_id,
-            drop_id: 41,
-            created: Instant::now(),
-        };
-        let normal = submit(protocol, &mut features, &mut world, &pickup);
-        assert!(normal.result.unwrap());
-        assert_eq!(normal.sent.len(), 1);
-        assert_eq!(normal.sent[0].opcode, 0x3bc2);
-        assert!(!world.inventory.items().contains_key(&InventorySlot::CURSOR));
+        }));
+        let before = world.inventory.clone();
+        let output = testing::run_on(servers::server_type(protocol).wire(), |out| {
+            apply_commands(&[command], &mut features, &mut world, out, false)
+        });
+        assert!(output.result.unwrap().is_none());
+        assert!(output.sent.is_empty() && output.unreliable.is_empty());
+        assert_eq!(&*world.inventory, &before);
+        assert!(output.events.iter().any(|event| matches!(
+            event,
+            ClientEvent::World(WorldEvent::InventoryAction {
+                update: None,
+                error: Some(reason),
+                ..
+            }) if reason == UNOFFERED
+        )));
     }
 }
 

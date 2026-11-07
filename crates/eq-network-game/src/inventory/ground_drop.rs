@@ -37,6 +37,19 @@ pub(super) enum CursorBasis {
     Item(NonZeroU32),
 }
 
+/// Slot-only mutations cannot identify a cursor instance during a drop hold.
+pub(super) fn unidentified_cursor_mutation(update: &InventoryUpdate) -> bool {
+    match update {
+        InventoryUpdate::Remove(slot)
+        | InventoryUpdate::Used(slot)
+        | InventoryUpdate::Consume { slot, .. }
+        | InventoryUpdate::Deduct { slot, .. } => {
+            *slot == InventorySlot::CURSOR || slot.is_in_cursor_bag()
+        }
+        _ => false,
+    }
+}
+
 impl Inventory {
     /// Whether this update directly identifies the cursor. A local move can
     /// invalidate the basis, and settling ordinary moves by silence cannot
@@ -102,7 +115,7 @@ impl Inventory {
         );
         ensure!(
             !self.ground_drop_pending(),
-            "Wait for received cursor state after the drop"
+            "Wait for a fresh inventory snapshot after the drop"
         );
         ensure!(
             self.revision() == request.revision,
@@ -146,7 +159,7 @@ mod tests {
     use super::*;
     use crate::inventory::parse_items;
 
-    fn decoded(serial: &str, no_drop: &str, attuned: &str) -> InventoryItem {
+    fn serialized(serial: &str, no_drop: &str, attuned: &str) -> String {
         let mut definition = vec!["0"; 159];
         definition[1] = "Synthetic drop fixture";
         definition[4] = "42";
@@ -154,12 +167,17 @@ mod tests {
         let header = [
             "0", "0", "30", "0", "1", "0", serial, "0", "0", attuned, "0",
         ];
-        let packet = format!(
+        format!(
             "{}|\"{}\"||||||||||\0",
             header.join("|"),
             definition.join("|")
-        );
-        parse_items(packet.as_bytes()).unwrap().remove(0)
+        )
+    }
+
+    fn decoded(serial: &str, no_drop: &str, attuned: &str) -> InventoryItem {
+        parse_items(serialized(serial, no_drop, attuned).as_bytes())
+            .unwrap()
+            .remove(0)
     }
 
     fn request(inventory: &Inventory, item: InventoryItem) -> InventoryDrop {
@@ -206,35 +224,80 @@ mod tests {
     }
 
     #[test]
-    fn cursor_drop_waits_for_received_custody_and_protects_a_replacement() {
+    fn cursor_drop_requires_a_snapshot_after_unidentified_cursor_changes() {
         let item = decoded("17", "255", "0");
         let replacement = decoded("18", "255", "0");
         let cursor = InventorySlot::CURSOR;
-        let mut inventory = Inventory::default();
-        inventory.apply(InventoryUpdate::Snapshot(vec![item.clone()]));
-        let serial = inventory
-            .plan_ground_drop(&request(&inventory, item.clone()))
+        let mut pending = Inventory::default();
+        pending.apply(InventoryUpdate::Snapshot(vec![item.clone()]));
+        let serial = pending
+            .plan_ground_drop(&request(&pending, item.clone()))
             .unwrap();
-        inventory.apply(InventoryUpdate::GroundDropPending(serial));
-        inventory.apply(InventoryUpdate::Settled);
-        assert!(inventory.ground_drop_pending());
-        assert_eq!(inventory.items().get(&cursor), Some(&item));
-        assert!(inventory
-            .plan_ground_drop(&request(&inventory, item))
-            .is_err());
+        pending.apply(InventoryUpdate::GroundDropPending(serial));
+        for (updates, displayed, queued) in [
+            (vec![InventoryUpdate::Settled], &item, 0),
+            (
+                vec![InventoryUpdate::Cursor(vec![replacement.clone()])],
+                &item,
+                1,
+            ),
+            (
+                vec![InventoryUpdate::Set(vec![replacement.clone()])],
+                &replacement,
+                0,
+            ),
+            (
+                vec![
+                    InventoryUpdate::Set(vec![replacement.clone()]),
+                    InventoryUpdate::Set(vec![item.clone()]),
+                ],
+                &item,
+                0,
+            ),
+            (
+                vec![InventoryUpdate::Deduct {
+                    slot: cursor,
+                    quantity: 1,
+                }],
+                &item,
+                0,
+            ),
+            (vec![InventoryUpdate::Invalidated], &item, 0),
+        ] {
+            let mut inventory = pending.clone();
+            for update in updates {
+                inventory.apply(update);
+            }
+            assert!(inventory.ground_drop_pending());
+            assert!(inventory
+                .plan_ground_drop(&request(&inventory, displayed.clone()))
+                .is_err());
+            inventory.apply(InventoryUpdate::Remove(cursor));
+            assert!(inventory.stale() && inventory.ground_drop_pending());
+            assert_eq!(inventory.items().get(&cursor), Some(displayed));
+            assert_eq!(inventory.queued().count(), queued);
+            inventory.apply(InventoryUpdate::Snapshot(vec![replacement.clone()]));
+            assert!(!inventory.stale() && !inventory.ground_drop_pending());
+            assert_eq!(inventory.queued().count(), 0);
+            assert_eq!(
+                inventory
+                    .plan_ground_drop(&request(&inventory, replacement.clone()))
+                    .unwrap()
+                    .get(),
+                18
+            );
+        }
+    }
 
-        let mut removed = inventory.clone();
-        removed.apply(InventoryUpdate::Remove(cursor));
-        assert!(!removed.ground_drop_pending());
-        assert!(!removed.items().contains_key(&cursor));
-
-        inventory.apply(InventoryUpdate::Set(vec![replacement.clone()]));
-        inventory.apply(InventoryUpdate::Remove(cursor));
-        assert!(inventory.stale() && inventory.ground_drop_pending());
-        assert_eq!(inventory.items().get(&cursor), Some(&replacement));
-        inventory.apply(InventoryUpdate::Snapshot(vec![replacement.clone()]));
-        assert!(!inventory.stale() && !inventory.ground_drop_pending());
-        assert_eq!(inventory.items().get(&cursor), Some(&replacement));
+    #[test]
+    fn titanium_inventory_rejects_a_serialized_child_on_an_ordinary_item() {
+        let parent = serialized("17", "255", "0");
+        let root = parent.strip_suffix("||||||||||\0").unwrap();
+        let child = serialized("18", "0", "0");
+        let child = child.trim_end_matches('\0').replace('"', "\\\"");
+        let snapshot = format!("{root}|\"{child}\"|||||||||\0");
+        let error = crate::inventory::decode(0x5394, snapshot.as_bytes()).unwrap_err();
+        assert_eq!(error.to_string(), "item outside container capacity");
     }
 
     #[test]

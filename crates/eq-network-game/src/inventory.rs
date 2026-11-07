@@ -308,7 +308,8 @@ pub enum InventoryUpdate {
     /// Local whole-cursor removal after a successful destroy submission. It
     /// remains uncertain across silence settlement; only received state settles it.
     DestroyCursor,
-    /// A drop was submitted for this cursor instance. Its custody is unresolved.
+    /// A drop was submitted for this cursor instance. A fresh inventory
+    /// snapshot is required to resolve its custody.
     GroundDropPending(NonZeroU32),
     /// One server-reported stack unit or charge consumed.
     Consume {
@@ -402,7 +403,7 @@ pub struct Inventory {
 }
 
 impl Inventory {
-    /// Whether a submitted drop still awaits authoritative cursor state.
+    /// Whether a submitted drop still awaits a fresh inventory snapshot.
     #[must_use]
     pub const fn ground_drop_pending(&self) -> bool {
         self.ground_drop.is_some()
@@ -485,11 +486,17 @@ impl Inventory {
     /// Applies a fully decoded update; a new snapshot replaces previous admission data.
     pub fn apply(&mut self, update: InventoryUpdate) {
         self.revision = self.revision.wrapping_add(1);
+        if self.ground_drop_pending() && ground_drop::unidentified_cursor_mutation(&update) {
+            // A slot-only update can refer to an item that followed the
+            // submitted one. Keep the last view and require a fresh snapshot.
+            self.stale = true;
+            return;
+        }
         let received_cursor = self.observe_drop_cursor(&update);
         self.change(update);
-        // As the Titanium client does, the next queued item moves up as soon
-        // as the cursor empties.
-        while !self.items.contains_key(&CURSOR) {
+        // Ordinarily the next queued item moves up as soon as the view empties.
+        // An unresolved drop leaves the queue's position uncertain.
+        while !self.ground_drop_pending() && !self.items.contains_key(&CURSOR) {
             let Some(next) = self.queued.pop_front() else {
                 break;
             };
@@ -497,7 +504,7 @@ impl Inventory {
             self.items
                 .extend(next.into_iter().map(|item| (item.slot, item)));
         }
-        if received_cursor && !self.stale() {
+        if received_cursor && !self.stale() && !self.ground_drop_pending() {
             self.record_drop_cursor();
         }
     }
@@ -510,7 +517,10 @@ impl Inventory {
         match update {
             InventoryUpdate::Prediction(items) => self.predict(items),
             InventoryUpdate::DestroyCursor => self.predict_destruction(),
-            InventoryUpdate::GroundDropPending(serial) => self.ground_drop = Some(serial),
+            InventoryUpdate::GroundDropPending(serial) => {
+                self.ground_drop = Some(serial);
+                self.drop_cursor = ground_drop::CursorBasis::Unknown;
+            }
             InventoryUpdate::Consume { slot, charge } => {
                 let consumed = self
                     .items
@@ -571,20 +581,6 @@ impl Inventory {
                 }
             }
             InventoryUpdate::Remove(slot) => {
-                if let Some(serial) = self.ground_drop.filter(|_| slot == CURSOR) {
-                    if self
-                        .items
-                        .get(&slot)
-                        .and_then(|item| item.rules.ground_drop_serial)
-                        != Some(serial)
-                    {
-                        // An unversioned removal might refer to the dropped
-                        // item, not the newer item now occupying the cursor.
-                        self.stale = true;
-                        return;
-                    }
-                    self.ground_drop = None;
-                }
                 if slot == CURSOR && self.destroyed.is_some() {
                     // A new cursor arrival/replacement cannot be identified as
                     // the item an unversioned late removal names.

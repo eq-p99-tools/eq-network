@@ -64,7 +64,7 @@ impl Inventory {
     ) -> Result<InventoryUpdate> {
         ensure!(
             !self.ground_drop_pending(),
-            "Wait for received cursor state after the drop"
+            "Wait for a fresh inventory snapshot after the drop"
         );
         ensure!(
             rules.supports_cursor_destruction(),

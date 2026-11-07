@@ -356,6 +356,8 @@ pub(super) fn close_exchange(
 pub(super) struct Allowances {
     /// Moving items. An observer still keeps authoritative inventory state.
     pub(super) items: bool,
+    /// The provider supports the ordinary Titanium cursor drop.
+    pub(super) ground_drop: bool,
     /// Moving coins between the purse, the cursor, the bank and a trade.
     pub(super) coins: bool,
     /// Buying and selling at merchants.
@@ -365,9 +367,10 @@ pub(super) struct Allowances {
 }
 
 impl Allowances {
-    /// Items, coins, merchants and meals.
-    pub(super) const ALL: Self = Self {
+    /// Common item moves, coin moves, merchants and meals.
+    pub(super) const STANDARD: Self = Self {
         items: true,
+        ground_drop: false,
         coins: true,
         merchants: true,
         meals: true,
@@ -424,7 +427,7 @@ impl Belongings {
         Self::under(
             MoveRules::EqEmu,
             Quotes::WithRate,
-            Allowances::ALL,
+            Allowances::STANDARD,
             auto_eat,
         )
     }
@@ -919,9 +922,9 @@ impl Feature for Belongings {
         let mut offered = Vec::new();
         if self.allows.items {
             offered.push(Capability::Inventory);
-            if self.rules == MoveRules::EqEmu {
-                offered.push(Capability::GroundDropping);
-            }
+        }
+        if self.allows.ground_drop {
+            offered.push(Capability::GroundDropping);
         }
         if self.allows.merchants {
             offered.push(Capability::Trading);
@@ -972,7 +975,7 @@ impl Feature for Belongings {
         } else if world.inventory.ground_drop_pending() {
             vec![(
                 Resource::Inventory,
-                "Wait for received cursor state after the drop",
+                "Wait for a fresh inventory snapshot after the drop",
             )]
         } else {
             Vec::new()
@@ -983,7 +986,7 @@ impl Feature for Belongings {
         match command {
             ClientCommand::MoveInventory(_) => self.allows.items,
             ClientCommand::DestroyItem(_) => self.allows.items && self.rules == MoveRules::EqEmu,
-            ClientCommand::DropItem(_) => self.allows.items && self.rules == MoveRules::EqEmu,
+            ClientCommand::DropItem(_) => self.allows.ground_drop,
             ClientCommand::MoveCoins { .. } => self.allows.coins,
             ClientCommand::Shop { .. } | ClientCommand::Buy { .. } | ClientCommand::Sell { .. } => {
                 self.allows.merchants
@@ -1682,7 +1685,7 @@ mod tests {
         let mut belongings = Belongings::under(
             MoveRules::Takp,
             Quotes::BeforeRate,
-            Allowances::ALL,
+            Allowances::STANDARD,
             eq_network_game::food::AutoEat::default(),
         );
         let mut world = World::new(5);

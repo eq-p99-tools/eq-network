@@ -2308,7 +2308,6 @@ mod tests {
             Capability::Camping,
             Capability::Doors,
             Capability::GroundItems,
-            Capability::GroundDropping,
             Capability::Zoning,
             Capability::Abilities,
             Capability::Who,
@@ -2320,6 +2319,7 @@ mod tests {
         assert!(p99.contains(&Capability::Falling));
         assert!(p99.contains(&Capability::Jumping));
         assert!(p99.contains(&Capability::Reading));
+        assert!(!p99.contains(&Capability::GroundDropping));
         assert!(!p99.contains(&Capability::Training));
         let eqemu = features(crate::client::ServerProtocol::EqEmu);
         assert!(eqemu.contains(&Capability::GroundDropping));
