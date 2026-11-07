@@ -817,7 +817,7 @@ mod tests {
     };
 
     /// How many kinds of command there are.
-    const KINDS: usize = 86;
+    const KINDS: usize = 87;
 
     /// The kinds the login and world servers take, before any zone session.
     const BEFORE_ZONES: [usize; 4] = [0, 1, 70, 75];
@@ -848,6 +848,7 @@ mod tests {
             ClientCommand::SetPosture { .. } => 12,
             ClientCommand::MoveInventory(_) => 13,
             ClientCommand::DestroyItem(_) => 80,
+            ClientCommand::DropItem(_) => 86,
             ClientCommand::SendChat(_) => 14,
             ClientCommand::InspectItem { .. } => 15,
             ClientCommand::Consider { .. } => 16,
@@ -1031,6 +1032,13 @@ mod tests {
             }),
             ClientCommand::DestroyItem(Box::new(eq_network_game::inventory::InventoryDestroy {
                 session_id,
+                revision: 1,
+                created,
+                item: super::super::feature::testing::item(30),
+            })),
+            ClientCommand::DropItem(Box::new(eq_network_game::inventory::InventoryDrop {
+                session_id,
+                own_id: 7,
                 revision: 1,
                 created,
                 item: super::super::feature::testing::item(30),
@@ -1554,10 +1562,22 @@ mod tests {
             ]
         );
         assert_eq!(outcome.unreliable, []);
-        let rejected = outcome.events.iter().filter(|event| {
-            matches!(event, ClientEvent::Diagnostic(line) if line.contains("Rejected LiquidDamage"))
-        }).count();
-        assert_eq!(rejected, 4 + usize::from(expiry_covered));
+        let rejected: Vec<_> = outcome
+            .events
+            .iter()
+            .filter_map(|event| match event {
+                ClientEvent::Diagnostic(line) => {
+                    line.strip_prefix("Rejected LiquidDamage command: ")
+                }
+                _ => None,
+            })
+            .collect();
+        let mut expected = vec!["The liquid observation is no longer current"; 3];
+        expected.push("The liquid tick has no new damage");
+        if expiry_covered {
+            expected.insert(0, "The request expired");
+        }
+        assert_eq!(rejected, expected);
         let buffs = outcome
             .events
             .iter()
@@ -1570,6 +1590,48 @@ mod tests {
                 revision: 2
             }))
         ));
+    }
+
+    #[test]
+    fn discarded_moves_reply_to_the_original_request_without_publishing_a_position() {
+        use super::super::feature::testing;
+        use crate::client::ServerProtocol;
+        use eq_network_game::{food::AutoEat, world::Position};
+
+        let server = servers::server_type(ServerProtocol::EqEmu);
+        let mut features =
+            Features::from_setup(server, &servers::Setup::new("Tester", AutoEat::default()));
+        let mut world = World::new(5);
+        let created = Instant::now();
+        for (ready, session_id, reason) in [
+            (false, 5, "The player is between zones"),
+            (true, 4, "That was meant for an earlier zone visit"),
+            (true, 5, "The player cannot move yet"),
+        ] {
+            world.admitted = ready.then_some(created);
+            let command = ClientCommand::Move(MovementRequest::new(
+                MovementMode::Forward,
+                session_id,
+                Position::default(),
+                created,
+            ));
+            let outcome = testing::run_on(server.wire(), |out| {
+                apply_commands(&[command], &mut features, &mut world, out, true)
+            });
+            assert!(outcome.result.unwrap().is_none());
+            assert_eq!(outcome.sent, []);
+            assert_eq!(outcome.unreliable, []);
+            assert!(matches!(
+                &outcome.events[..],
+                [
+                    ClientEvent::World(WorldEvent::MotionRefused {
+                        session_id: requested, created: stamp, reason: refusal,
+                    }),
+                    ClientEvent::Diagnostic(diagnostic),
+                ] if *requested == session_id && *stamp == created
+                    && refusal == reason && diagnostic.contains(reason)
+            ));
+        }
     }
 
     #[test]
@@ -1987,6 +2049,87 @@ mod tests {
     }
 
     #[test]
+    fn an_unconfirmed_cast_precedes_the_same_spell_retry_and_its_begin() {
+        use super::super::{casting::Casting, feature::testing};
+        use eq_network_game::spells::SpellUpdate;
+
+        let mut features = Features {
+            provided: vec![Box::new(Casting::default())],
+            choices: Vec::new(),
+            spell_landing_flag: None,
+            answers_list_polls: false,
+            gameplay_departures: false,
+        };
+        let mut world = World::new(5);
+        world.admitted = Some(Instant::now());
+        world.own_spawn = Some(7);
+        let mut player = testing::player(7);
+        player.memorized_spells[0] = Some(202);
+        world.player.admit(player);
+        let cast = || ClientCommand::CastSpell {
+            session_id: 5,
+            gem: 0,
+            spell_id: 202,
+            target_id: 7,
+            created: Instant::now(),
+        };
+        let began = WorldEvent::Spell(SpellUpdate::Began {
+            caster_id: 7,
+            spell_id: 2935,
+            duration_ms: 3000,
+        });
+        let outcome = testing::run(|out| -> Result<()> {
+            apply_commands(&[cast()], &mut features, &mut world, out, true)?;
+            assert_eq!(
+                features.refusal(&cast(), &world, Instant::now()),
+                Some("Wait for the current cast to finish or interrupt it")
+            );
+            let timeout = Instant::now() + Duration::from_secs(5);
+            features.tick(timeout, &mut world, out)?;
+            features.tick(timeout, &mut world, out)?;
+            apply_commands(&[cast()], &mut features, &mut world, out, true)?;
+            hear(
+                vec![Message::Event(began.clone())],
+                &mut features,
+                &mut world,
+                out,
+                true,
+            )?;
+            assert_eq!(
+                features.refusal(&cast(), &world, Instant::now()),
+                Some("Wait for the current cast to finish or interrupt it")
+            );
+            Ok(())
+        });
+        outcome.result.unwrap();
+        assert_eq!(outcome.sent.len(), 2);
+        assert!(matches!(
+            outcome.events.as_slice(),
+            [
+                ClientEvent::World(WorldEvent::CastPending {
+                    session_id: 5,
+                    spell_id: Some(202)
+                }),
+                ClientEvent::World(WorldEvent::CastRequestUnconfirmed {
+                    session_id: 5,
+                    spell_id: 202
+                }),
+                ClientEvent::Diagnostic(reason),
+                ClientEvent::World(WorldEvent::CastPending {
+                    session_id: 5,
+                    spell_id: Some(202)
+                }),
+                ClientEvent::World(WorldEvent::CastPending {
+                    session_id: 5,
+                    spell_id: None
+                }),
+                ClientEvent::World(update)
+            ] if reason == "Cast acknowledgement timed out; a manual retry is available"
+                && update == &began
+        ));
+    }
+
+    #[test]
     fn news_that_never_settles_ends_the_session() {
         use crate::client::session::feature::{testing, Feature};
         /// A feature that answers every message with another.
@@ -2273,17 +2416,11 @@ mod tests {
                 "Tester",
                 eq_network_game::food::AutoEat::default(),
             )
-            .capabilities()
         };
         let p99 = features(crate::client::ServerProtocol::Project1999);
         // P99 leaves the map to the player, which is not offered until then.
-        let p99_choices = Features::new(
-            servers::server_type(crate::client::ServerProtocol::Project1999),
-            "Tester",
-            eq_network_game::food::AutoEat::default(),
-        )
-        .choices();
-        assert_eq!(p99_choices, [Capability::Map]);
+        assert_eq!(p99.choices(), [Capability::Map]);
+        let p99 = p99.capabilities();
         assert!(!p99.contains(&Capability::Map));
         for capability in [
             Capability::Casting,
@@ -2311,8 +2448,10 @@ mod tests {
         assert!(p99.contains(&Capability::Falling));
         assert!(p99.contains(&Capability::Jumping));
         assert!(p99.contains(&Capability::Reading));
+        assert!(!p99.contains(&Capability::GroundDropping));
         assert!(!p99.contains(&Capability::Training));
-        let eqemu = features(crate::client::ServerProtocol::EqEmu);
+        let eqemu = features(crate::client::ServerProtocol::EqEmu).capabilities();
+        assert!(eqemu.contains(&Capability::GroundDropping));
         assert!(eqemu.contains(&Capability::Falling));
         assert!(eqemu.contains(&Capability::Training));
         assert!(eqemu.contains(&Capability::Resurrection));
@@ -2366,7 +2505,8 @@ mod tests {
         assert!(p99.contains(&Capability::GameplayDepartures));
         assert!(eqemu.contains(&Capability::Swimming));
         assert!(!p99.contains(&Capability::Swimming));
-        assert_eq!(eqemu.len(), p99.len() + 17);
+        // EQEmu also offers GroundDropping.
+        assert_eq!(eqemu.len(), p99.len() + 18);
     }
 
     #[test]

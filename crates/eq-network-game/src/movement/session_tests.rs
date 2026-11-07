@@ -1,4 +1,5 @@
 use super::*;
+use crate::movement::RunSpeedMultiplier;
 
 #[test]
 fn stopping_voluntary_motion_replaces_a_paced_update_and_keeps_calibration_and_jump() {
@@ -320,12 +321,12 @@ fn setup(now: Instant) -> MotionSession {
 
 #[test]
 fn grounded_diagonals_budget_each_axis_and_keep_the_longitudinal_wire_value() {
-    use crate::movement::{DiagonalAlong, GroundedDiagonal, StrafeSide};
+    use crate::movement::{DiagonalAlong, GroundedDiagonal, MovementOptions, StrafeSide};
     let start = Instant::now();
     let now = start + Duration::from_millis(100);
     for (along, side, x, y, animation) in [
-        (DiagonalAlong::Run, StrafeSide::Right, -0.3, 0.6, 12),
-        (DiagonalAlong::Run, StrafeSide::Left, 0.3, 0.6, 12),
+        (DiagonalAlong::Run, StrafeSide::Right, -0.3, 0.72, 12),
+        (DiagonalAlong::Run, StrafeSide::Left, 0.3, 0.72, 12),
         (DiagonalAlong::Walk, StrafeSide::Right, -0.1, 0.2, 7),
         (
             DiagonalAlong::Backward { walking: false },
@@ -350,6 +351,15 @@ fn grounded_diagonals_budget_each_axis_and_keep_the_longitudinal_wire_value() {
             .send_move_sample(&motion, now, |_| panic!("ungranted diagonal"))
             .is_err());
         grant_grounded_diagonal(&mut session, start);
+        session
+            .set_options(
+                MovementOptions {
+                    run_speed_multiplier: RunSpeedMultiplier::from_percent(120).unwrap(),
+                    ..Default::default()
+                },
+                start,
+            )
+            .unwrap();
         for position in [
             Position {
                 x: 0.0,
@@ -1156,7 +1166,7 @@ fn an_announced_jump_refuses_diagonal_credit_without_consuming_the_sample() {
     session
         .set_options(
             MovementOptions {
-                run_boost: true,
+                run_speed_multiplier: RunSpeedMultiplier::from_percent(110).unwrap(),
                 walk_while_stunned: true,
                 ..ordinary
             },
@@ -1517,31 +1527,155 @@ fn failed_prepared_send_preserves_motion_without_undoing_external_effects() {
 }
 
 #[test]
-fn run_boost_is_explicit_and_disabling_restores_the_original_budget() {
+fn run_speed_multiplier_changes_the_worker_budget_until_reset() {
+    use crate::movement::MovementOptions;
+
     let start = Instant::now();
     let now = start + Duration::from_millis(100);
-    let proposal = request(now, 0.65);
-    let mut normal = setup(start);
-    assert!(normal.send_move(&proposal, now, |_| Ok(())).is_err());
-    let mut boosted = setup(start);
-    boosted
+    assert_eq!(RunSpeedMultiplier::default().percent(), 100);
+    assert!(RunSpeedMultiplier::from_percent(99).is_none());
+    assert!(RunSpeedMultiplier::from_percent(141).is_none());
+    assert!(RunSpeedMultiplier::from_percent(u16::MAX).is_none());
+
+    // The host's 6 units/second forward grant covers these distances in 100 ms.
+    for (percent, distance) in [(100, 0.60), (110, 0.66), (120, 0.72), (140, 0.84)] {
+        let mut session = setup(start);
+        session
+            .set_options(
+                MovementOptions {
+                    run_speed_multiplier: RunSpeedMultiplier::from_percent(percent).unwrap(),
+                    ..Default::default()
+                },
+                start,
+            )
+            .unwrap();
+        assert!(session
+            .send_move(&request(now, distance + 0.02), now, |_| panic!(
+                "over budget"
+            ))
+            .is_err());
+        session
+            .send_move(&request(now, distance), now, |_| Ok(()))
+            .unwrap();
+        session
+            .set_options(MovementOptions::default(), now)
+            .unwrap();
+        let later = now + Duration::from_millis(100);
+        assert!(session
+            .send_move(&request(later, distance + 0.65), later, |_| panic!(
+                "over reset budget"
+            ))
+            .is_err());
+        session
+            .send_move(&request(later, distance + 0.60), later, |_| Ok(()))
+            .unwrap();
+    }
+}
+
+#[test]
+fn changing_run_speed_keeps_the_moving_sample_and_its_send_deadline() {
+    use crate::movement::MovementOptions;
+
+    let start = Instant::now();
+    let at = |ms| start + Duration::from_millis(ms);
+    let mut session = setup(start).with_gate(Some(UpdateGate::Changed {
+        spacing: Duration::from_millis(280),
+    }));
+    session
         .set_options(
-            super::super::MovementOptions {
-                run_boost: true,
+            MovementOptions {
+                run_speed_multiplier: RunSpeedMultiplier::MAX,
                 ..Default::default()
             },
             start,
         )
         .unwrap();
-    boosted.send_move(&proposal, now, |_| Ok(())).unwrap();
-    boosted
-        .set_options(super::super::MovementOptions::default(), now)
+    session
+        .send_move_sample(&request(at(300), 0.5), at(300), |_| Ok(()))
         .unwrap();
-    let later = now + Duration::from_millis(100);
-    assert!(boosted
-        .send_move(&request(later, 1.30), later, |_| Ok(()))
+    session
+        .send_move_sample(&request(at(400), 1.3), at(400), |_| {
+            panic!("moving sample bypassed pacing")
+        })
+        .unwrap();
+    let held = session.held.unwrap();
+    assert!(MotionSession::moving_update(&held));
+    session
+        .set_options(MovementOptions::default(), at(450))
+        .unwrap();
+    assert!(session.moving);
+    assert_eq!(session.held, Some(held));
+    assert!(!session
+        .tick_sample(at(579), |_| panic!("speed change bypassed pacing"))
+        .unwrap());
+    assert!(session
+        .tick_sample(at(580), |sample| {
+            assert_eq!(*sample, held);
+            Ok(())
+        })
+        .unwrap());
+
+    let now = at(600);
+    assert!(session
+        .send_move_sample(&request(now, 2.6), now, |_| panic!("old speed budget"))
         .is_err());
-    assert_eq!(boosted.position().x, 0.65);
+    session
+        .send_move_sample(&request(now, 2.5), now, |_| {
+            panic!("next moving sample bypassed pacing")
+        })
+        .unwrap();
+    assert!(MotionSession::moving_update(&session.held.unwrap()));
+    session
+        .set_options(
+            MovementOptions {
+                fly: true,
+                ..Default::default()
+            },
+            at(610),
+        )
+        .unwrap();
+    assert!(!session.moving);
+    assert!(!MotionSession::moving_update(&session.held.unwrap()));
+}
+
+#[test]
+fn the_run_speed_multiplier_scales_flight_travel_only_horizontally() {
+    use crate::movement::MovementOptions;
+
+    let start = Instant::now();
+    let now = start + Duration::from_millis(100);
+    let mut session = setup(start);
+    session
+        .set_options(
+            MovementOptions {
+                run_speed_multiplier: RunSpeedMultiplier::MAX,
+                fly: true,
+                ..Default::default()
+            },
+            start,
+        )
+        .unwrap();
+    // At 6 units/s the horizontal limit is 0.84 and the vertical limit is 0.60.
+    let mut flight = request(now, 0.8);
+    flight.position.z = 0.8;
+    let refused = session
+        .send_move_sample(&flight, now, |_| {
+            panic!("boosted ascent escaped the vertical gate")
+        })
+        .unwrap_err();
+    assert_eq!(
+        refused.to_string(),
+        "vertical motion requires a supported movement mode"
+    );
+    assert_eq!(session.position(), Position::default());
+    flight.position.z = 0.6;
+    session
+        .send_move_sample(&flight, now, |sample| {
+            assert_eq!(sample.position, flight.position);
+            Ok(())
+        })
+        .unwrap();
+    assert_eq!(session.position(), flight.position);
 }
 
 #[test]
@@ -1596,7 +1730,7 @@ fn caller_stamped_options_preserve_same_frame_motion_without_idle_credit() {
     let processing = caller + Duration::from_millis(25);
     let mut session = setup(start);
     let options = super::super::MovementOptions {
-        run_boost: true,
+        run_speed_multiplier: RunSpeedMultiplier::from_percent(110).unwrap(),
         ..Default::default()
     };
     session.set_options(options, caller).unwrap();
@@ -1626,7 +1760,7 @@ fn caller_stamped_options_preserve_same_frame_motion_without_idle_credit() {
 fn a_boosted_forward_step_can_finish_as_a_fall_within_the_same_budget() {
     let start = Instant::now();
     let now = start + Duration::from_millis(100);
-    let mut fall = request(now, 0.65);
+    let mut fall = request(now, 0.84);
     fall.mode = MovementMode::Fall;
     fall.position.z = -0.5;
     let mut session = setup(start).with_falls(true);
@@ -1636,14 +1770,14 @@ fn a_boosted_forward_step_can_finish_as_a_fall_within_the_same_budget() {
     session
         .set_options(
             super::super::MovementOptions {
-                run_boost: true,
+                run_speed_multiplier: RunSpeedMultiplier::MAX,
                 ..Default::default()
             },
             start,
         )
         .unwrap();
     let mut too_far = fall.clone();
-    too_far.position.x = 0.7;
+    too_far.position.x = 0.87;
     assert!(session
         .send_move(&too_far, now, |_| panic!(
             "boosted fall exceeded its budget"

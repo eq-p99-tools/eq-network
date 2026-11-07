@@ -305,6 +305,8 @@ pub enum Request {
     },
     /// Explicit whole-cursor destruction; no caller-supplied sentinel.
     DestroyCursor,
+    /// Drop the entire cursor item at the server's current player position.
+    DropCursor,
     /// Move coins between places, or change them into another coin.
     MoveCoins(CoinTransfer),
     /// Eat or drink.
@@ -465,6 +467,7 @@ pub fn titanium(request: &Request, sender: Sender<'_>) -> Result<EncodedCommand>
             inventory::titanium_move(*from, *to, *quantity)?
         }
         Request::DestroyCursor => inventory::titanium_destroy(),
+        Request::DropCursor => inventory::titanium_ground_drop(),
         Request::MoveCoins(transfer) => transfer.encode()?,
         Request::Consume {
             slot,
@@ -538,6 +541,7 @@ pub fn eqmac(request: &Request, sender: Sender<'_>) -> Result<EncodedCommand> {
         } => crate::quarm::zone_change(sender.name, *zone_id, *reason),
         Request::SaveOnZone => Ok(crate::quarm::save_on_zone()),
         Request::DestroyCursor => anyhow::bail!("Cursor destruction is unavailable for EQMac"),
+        Request::DropCursor => anyhow::bail!("Cursor dropping is unavailable for EQMac"),
         Request::MoveItem { from, to, quantity } => {
             crate::inventory::eqmac_move(*from, *to, *quantity)
         }

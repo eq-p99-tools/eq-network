@@ -109,7 +109,19 @@ a Titanium item definition. A later item packet for the same slot with an
 empty model field replaces it with `None`; the received wear appearance stays
 separate and takes precedence in hosts.
 
-## Spellbook edits and Bard song stop
+## Casting, spellbook edits and Bard song stop
+
+The worker emits `WorldEvent::CastPending` with the submitted spell and
+admission. When a received spell update answers that request, the worker
+clears the pending notice before forwarding the update on the same ordered
+event stream. A cast may begin under a different spell ID and end under the
+requested ID. After five seconds without a matching update, the worker
+instead emits `WorldEvent::CastRequestUnconfirmed` for the unanswered
+request and allows a fresh manual attempt. That event reports only the end
+of the local wait. It precedes any later submission in that admission,
+including a manual retry of the same spell. An already begun cast still
+awaits a matching update. Downstream exhaustive `WorldEvent` matches must
+handle the new timeout variant.
 
 An unanswered book edit emits terminal `BookActionStatus::Unconfirmed` once
 after 30 seconds and releases the spellbook hold. A fresh edit can proceed
@@ -410,6 +422,38 @@ be migrated; this is a breaking development API change for the next minor
 pre-1.0 release. Authoritative inventory updates remain ordinary inventory
 events, with existing uncertainty, correction and snapshot rules unchanged.
 
+## Ordinary cursor drops
+
+`Capability::GroundDropping` offers `GameCommand::DropItem` on Titanium
+EQEmu. P99 drop support awaits attended validation of the server's item
+serialization, eligibility and cursor updates. Pass the current admission,
+own spawn, inventory revision and exact received cursor item in
+`InventoryDrop` after explicit user consent.
+`Inventory::plan_ground_drop` requires a positively identified ordinary
+droppable instance and an unqueued cursor. A predicted move settled by silence
+leaves the drop unavailable until the server identifies the new cursor.
+
+Titanium sends an empty `OP_GroundSpawn`. The server chooses the cursor item
+and position. A successful `InventoryAction` with
+`InventoryUpdate::GroundDropPending` reports local submission and fences
+cursor custody. Apply it once at the matching admission and inventory
+revision. A fresh received inventory snapshot releases the fence. Stock
+Titanium EQEmu can send the object without sending cursor removal. A bare
+cursor removal or quantity update identifies the slot only, and may refer to
+another item after a silent drop. Preserve the last view and mark inventory
+stale on such an update. Re-enter the world for a fresh inventory baseline.
+
+During that hold `Inventory::carried_weight_tenths` returns
+`WeightUnavailable::Inventory`. The queued item may already be the server's
+current cursor, so the displayed load can be too low. The worker withdraws
+active movement input, refuses ready speed reports and withholds fall-damage
+and Safe Fall reports. Supported passive descent remains available.
+
+Process received ground spawns and removals through the existing object
+owner. The spawn carries no cursor instance correlation, and pickup delivery
+still comes from received inventory. Downstream exhaustive command, capability
+and inventory-update matches and `ItemPlacement` literals need migration.
+
 ## Local loot request disposition
 
 `WorldEvent::LootRequest` adds an exhaustive event variant. Its `LootRequest`
@@ -497,6 +541,17 @@ For Quarm only, approval of a solicited pending bind transfer to the exact
 current zone accepts its documented reply stand-in 185. Character, instance
 and success checks remain; normal transfers and other profiles retain exact
 destination validation. The stand-in is not stored as the real destination.
+
+## Movement proposal results
+
+`WorldEvent::MotionSent` reports the worker's current accepted position and
+the local outcome of the proposal. A locally accepted sample can be submitted
+immediately, held for pacing, or left unchanged by the update gate. The event
+describes worker state only. `WorldEvent::MotionRefused` reports an early
+discard before the worker can return a movement position. It carries the
+original admission and process-local request stamp, with the stamp omitted
+from serialized logs. The new variant requires downstream exhaustive
+`WorldEvent` matches to be updated.
 
 ## Camping and the movement owner's pending stop
 
@@ -867,20 +922,24 @@ the departures while the owner tests them (2026-11-06); a departure on a
 public server is faster or more permissive than the official client, and the
 accessor is the one place to withhold it per server type.
 
-`movement::MovementOptions` starts with all fields false. The admission-scoped
+`movement::MovementOptions` starts with both toggles off and ordinary running
+speed. The admission-scoped
 `SetMovementOptions { session_id, request_id, options, created }` command keeps ordinary movement
 unchanged when off. `walk_while_stunned` permits fresh movement input during a
 current stun without clearing it or admitting pre-transition input; casting,
-items and jumping retain their independent stun gates. `run_boost` raises
-only forward-running/Fall horizontal speed by `MovementOptions::RUN_BOOST`
-(1.1); other calibrated modes keep their speeds. Calibration events retain
-the unmodified source-derived speeds. The host applies the same explicit
-multiplier when proposing running movement. `fly` permits ascent/descent
-within the current mode's elapsed speed budget. These options never bypass
-session identity, input freshness, finite coordinates, fixed bounds, current
-known speed, corrections, death or transfer gates. Changes invalidate pre-toggle queued input using the caller stamp, preserve
-the accepted sample time for same-frame FIFO movement, and keep the ordinary
-paced stop. Flight toggles preserve a tracked jump, so switching back to
+items and jumping retain their independent stun gates. `run_speed_multiplier`
+scales forward running, including the forward component of grounded diagonals,
+and the horizontal budget for a Fall sample. `RunSpeedMultiplier` holds 100
+through 140 percent in one-percentage-point steps, with 100 as the default.
+Calibration events retain the source-derived speeds. The host applies the
+same multiplier when proposing running movement. `fly` permits ascent/descent
+within the current mode's unscaled elapsed speed budget. These options never
+bypass session identity, input freshness, finite coordinates, fixed bounds, current
+known speed, corrections, death or transfer gates. Changes invalidate pre-toggle queued input using the caller stamp and preserve
+the accepted sample time for same-frame FIFO movement. A change of flight or
+stun permissions keeps the ordinary paced stop; a speed-only change leaves a
+held moving sample on its send schedule and applies the new budget to later
+samples. Flight toggles preserve a tracked jump, so switching back to
 grounded movement cannot qualify a sample for diagonal credit during that
 ascent. The tracker expires as accepted samples pass the jump apex. It does
 not establish a landing. None represents a native movement

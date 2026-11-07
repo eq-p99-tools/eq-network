@@ -28,21 +28,21 @@ fn freshness(command: &ClientCommand) -> Duration {
 }
 
 /// Why a command can no longer be carried out: it names an earlier admission
-/// or is no longer fresh. Movement is the movement guard's to judge, since a
-/// refused move must also undo the host's prediction.
+/// or is no longer fresh. A current-admission move's freshness is the
+/// movement guard's to judge.
 pub(super) fn stale(
     command: &ClientCommand,
     session_id: u64,
     now: Instant,
 ) -> Option<&'static str> {
-    if matches!(command, ClientCommand::Move(_)) {
-        return None;
-    }
     if command
         .session_id()
         .is_some_and(|requested| requested != session_id)
     {
         return Some("That was meant for an earlier zone visit");
+    }
+    if matches!(command, ClientCommand::Move(_)) {
+        return None;
     }
     let created = command.created()?;
     (created > now || now.duration_since(created) >= freshness(command))
@@ -113,6 +113,7 @@ pub(super) fn needs(command: &ClientCommand) -> &'static [Resource] {
         }
         // A pickup needs the cursor and its own duplicate-request gate.
         ClientCommand::PickUp { .. } => &[Inventory, GroundPickup],
+        ClientCommand::DropItem(_) => &[Casting, Inventory, GroundPickup],
         // Give hands the trade slots over.
         ClientCommand::MoveInventory(_)
         | ClientCommand::DestroyItem(_)
@@ -260,6 +261,11 @@ pub(super) fn refuse_naming(
 fn refusal(command: &ClientCommand, reason: &str) -> Option<WorldEvent> {
     let error = Some(reason.to_owned());
     Some(match command {
+        ClientCommand::Move(request) => WorldEvent::MotionRefused {
+            session_id: request.session_id,
+            created: request.created,
+            reason: reason.to_owned(),
+        },
         ClientCommand::DeleteCharacter(request) => WorldEvent::CharacterDeletion(eq_network_game::deletion::Update {
             request: request.clone(),
             progress: eq_network_game::deletion::Progress::NotSent(eq_network_game::deletion::Refusal::NotAtSelection),
@@ -280,6 +286,13 @@ fn refusal(command: &ClientCommand, reason: &str) -> Option<WorldEvent> {
             error,
         },
         ClientCommand::DestroyItem(request) => WorldEvent::InventoryAction {
+            session_id: request.session_id,
+            revision: request.revision,
+            sequence: None,
+            update: None,
+            error,
+        },
+        ClientCommand::DropItem(request) => WorldEvent::InventoryAction {
             session_id: request.session_id,
             revision: request.revision,
             sequence: None,
@@ -406,8 +419,7 @@ fn refusal(command: &ClientCommand, reason: &str) -> Option<WorldEvent> {
         | ClientCommand::SetBookOptions { .. }
         | ClientCommand::CloseContainer { .. }
         // The host sends a death report on its own; nobody waits on it.
-        | ClientCommand::BledOut { .. }
-        | ClientCommand::Move(_) => return None,
+        | ClientCommand::BledOut { .. } => return None,
     })
 }
 

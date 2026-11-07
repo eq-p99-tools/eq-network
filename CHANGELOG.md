@@ -7,6 +7,15 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Breaking:** Submit an ordinary Titanium cursor drop on EQEmu through
+  `Capability::GroundDropping` and `GameCommand::DropItem`. Check the
+  received droppable instance, actor and inventory revision before sending.
+  `InventoryUpdate::GroundDropPending` holds custody until a received
+  inventory snapshot. The hold makes carried weight unavailable, pauses
+  movement input and withholds fall reports. Ground objects use their
+  existing independent update and pickup paths. Downstream exhaustive
+  matches and `ItemPlacement` literals need migration. P99 drop support
+  awaits validation.
 - Offer Titanium drowning and lava heat reports on local-only EQEmu sessions
   through `Capability::Drowning` and `Capability::LavaHeat`. Retain the
   profile's zone, base fire resistance and AA presence and the Titanium
@@ -28,6 +37,12 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   admission. A silent stop of a tracked gem cast releases the local hold
   after one second and emits `WorldEvent::SongStopUnconfirmed`. Received
   cast results continue through the ordinary spell updates.
+- **Breaking:** `WorldEvent::CastRequestUnconfirmed` reports the existing
+  cast acknowledgement timeout with its admission and spell. A
+  `CastPending` clear precedes a received update that answers the request.
+- **Breaking:** `WorldEvent::MotionRefused` identifies an early movement
+  discard by admission and request stamp. `MotionSent` describes local
+  worker acceptance or refusal, including accepted samples held for pacing.
 - `BookActionStatus::Unconfirmed` releases the spellbook after 30 seconds
   without a matching result. Distinguishable edits can proceed. A retry with
   the same possible reply requires a fresh admission. A timed-out scribe
@@ -95,6 +110,16 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Breaking:** `MovementOptions::run_boost` and `MovementOptions::RUN_BOOST`
+  are replaced by `run_speed_multiplier: RunSpeedMultiplier`, a bounded 100
+  through 140 percent forward run speed multiplier with 100 as the default.
+  The worker budgets the same forward component and fall drift as the host;
+  flight keeps its unscaled vertical budget. The option remains a gameplay
+  departure, offered only where `SetMovementOptions` is.
+- A speed-only change of the run speed multiplier no longer stops voluntary
+  motion: the held paced sample keeps its send deadline and the moving state,
+  and the new budget applies to later samples. Changing flight or stun
+  permissions still stops motion first.
 - The Titanium translocate decline carries -1, as the Titanium program sends
   it (`eqgame.exe` 0x499f08), instead of 0. `EQEmu` accepts only 1 as a yes,
   so the outcome is unchanged.

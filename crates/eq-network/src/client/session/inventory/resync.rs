@@ -80,6 +80,7 @@ mod tests {
         for bits in 0..16 {
             let allows = Allowances {
                 items: bits & 1 != 0,
+                ground_drop: false,
                 coins: bits & 2 != 0,
                 merchants: bits & 4 != 0,
                 meals: bits & 8 != 0,

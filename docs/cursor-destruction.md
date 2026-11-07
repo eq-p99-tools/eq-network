@@ -31,7 +31,7 @@ cursor arrival marks inventory stale and preserves the new item for recovery.
 There is no automatic retry, and a second destruction requires received state.
 
 Currency destruction needs its own native wire, denomination/amount, purse and
-cursor custody, confirmation, and refusal/recovery contract. Ground dropping
-needs the world-object owner, exact item/contents/position intent, server object
-identity and resulting inventory/object reconciliation. Neither is implemented
-by this action. EQMac destruction is unavailable.
+cursor custody, confirmation, and refusal/recovery contract. The separate
+[ordinary ground drop](../API-CONTRACT.md#ordinary-cursor-drops) uses the
+received cursor and the existing world-object owner. EQMac destruction is
+unavailable.

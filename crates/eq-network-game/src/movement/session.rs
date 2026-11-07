@@ -439,9 +439,9 @@ impl MotionSession {
         self.options
     }
 
-    /// Applies caller-stamped choices without granting speed or reusing queued
-    /// input. The accepted position, sample time, tracked jump and fixed
-    /// bounds remain.
+    /// Applies caller-stamped choices without granting calibration. Changing
+    /// motion permissions stops voluntary motion. A speed-only change leaves
+    /// already accepted samples on their usual send schedule.
     ///
     /// # Errors
     /// Refuses choices made before the latest reset or accepted sample. The
@@ -454,7 +454,9 @@ impl MotionSession {
         if self.options == options {
             return Ok(());
         }
-        self.stop_voluntary();
+        if !self.options.same_permissions(options) {
+            self.stop_voluntary();
+        }
         self.options = options;
         self.guard.flying = options.fly;
         self.guard.input_epoch = created;
@@ -706,19 +708,23 @@ impl MotionSession {
         // The host can integrate a boosted forward step before collision
         // reclassifies it as Fall. Keep the same horizontal budget for the
         // transition and its bounded drift.
-        let speed = if self.options.run_boost
-            && matches!(along, MovementMode::Forward | MovementMode::Fall)
-        {
-            speed * super::MovementOptions::RUN_BOOST
+        let run_speed_multiplier = if matches!(along, MovementMode::Forward | MovementMode::Fall) {
+            self.options.run_speed_multiplier
         } else {
-            speed
+            super::RunSpeedMultiplier::NORMAL
         };
         guard.speed = Some(speed);
         // The wire's velocity and turn rate cover the same interval the guard
         // budgets: from the last accepted request's stamp to this one's.
         let elapsed = guard.interval(request.created);
         let swimming = request.mode == MovementMode::Swim;
-        let displacement = guard.accept_with_modes(request, now, lateral_rate, self.swimming)?;
+        let displacement = guard.accept_with_modes(
+            request,
+            now,
+            run_speed_multiplier,
+            lateral_rate,
+            self.swimming,
+        )?;
         // Following a slope has no vertical stroke. Ordinary falls still
         // carry their descent in absolute Z. For a swim stroke Titanium
         // copies all three tick velocities into its existing update fields.

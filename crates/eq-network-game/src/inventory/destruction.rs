@@ -63,6 +63,10 @@ impl Inventory {
         request: &InventoryDestroy,
     ) -> Result<InventoryUpdate> {
         ensure!(
+            !self.ground_drop_pending(),
+            "Wait for a fresh inventory snapshot after the drop"
+        );
+        ensure!(
             rules.supports_cursor_destruction(),
             "Item destruction is unavailable for this server"
         );

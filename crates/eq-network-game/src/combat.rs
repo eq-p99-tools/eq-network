@@ -87,9 +87,12 @@ pub const DAMAGE_SHIELD_KINDS: std::ops::RangeInclusive<u8> = 244..=249;
 pub struct Consideration {
     /// Considered spawn.
     pub target_id: u16,
-    /// Faction standing, 1 (ally) through 9 (scowls); other values are preserved.
+    /// Raw consider faction code. Values 1 through 5 are ally through
+    /// indifferent, and 6 through 9 are scowling through apprehensive.
+    /// Other codes are preserved.
     pub faction: u32,
-    /// Level-difference color code chosen by the server.
+    /// The server's level-difference color code. A client may display a
+    /// separate assessment based on the player and target levels.
     pub color: ConColor,
     /// Current and maximum hit points when the server supplies them.
     pub hit_points: Option<(i32, i32)>,

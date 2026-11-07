@@ -580,12 +580,14 @@ pub enum Capability {
     Drowning,
     /// The Titanium client can report lava heat through environmental damage.
     LavaHeat,
+    /// Put one verified ordinary Titanium cursor item on the ground.
+    GroundDropping,
 }
 
 impl Capability {
     /// Every capability, in order: what a session offers when its server and
     /// client generation support everything.
-    pub const ALL: [Self; 52] = [
+    pub const ALL: [Self; 53] = [
         Self::Casting,
         Self::Spellbook,
         Self::Inventory,
@@ -638,6 +640,7 @@ impl Capability {
         Self::Swimming,
         Self::Drowning,
         Self::LavaHeat,
+        Self::GroundDropping,
     ];
 }
 
@@ -818,8 +821,15 @@ pub enum WorldEvent {
     CastPending {
         /// Zone admission that owns this request.
         session_id: u64,
-        /// Pending spell, or None when acknowledged, interrupted, or timed out.
+        /// Pending spell, or None before forwarding the update that answered it.
         spell_id: Option<u32>,
+    },
+    /// A submitted cast received no matching update during the local acknowledgement wait.
+    CastRequestUnconfirmed {
+        /// Zone admission that owns the request.
+        session_id: u64,
+        /// Spell named by the unanswered request.
+        spell_id: u32,
     },
     /// A different own cast began while a song stop was pending.
     /// Discard this hold before applying the new start.
@@ -891,16 +901,27 @@ pub enum WorldEvent {
         /// Whether this server's session accepts `MovementMode::Fall` samples.
         falls: bool,
     },
-    /// Motion submitted to transport (not an acknowledgment by the server), or a
-    /// sample the local movement guard refused.
+    /// The worker's local result for a movement sample. Accepted samples may
+    /// be held for pacing or left unchanged by the update gate.
     MotionSent {
         /// Current zone admission.
         session_id: u64,
         /// Position accepted by local motion validation; after a refusal, the last
         /// accepted one.
         position: Position,
-        /// Why the guard refused the sample; None when it was sent.
+        /// Why the worker refused the sample. None means locally accepted.
         refused: Option<String>,
+    },
+    /// The worker discarded a movement request before the motion guard could
+    /// return its position.
+    MotionRefused {
+        /// Admission named by the original request.
+        session_id: u64,
+        /// Process-local request stamp, omitted from serialized logs.
+        #[serde(skip)]
+        created: std::time::Instant,
+        /// Why the request was refused.
+        reason: String,
     },
     /// Server-provided item definition for a clicked chat link.
     ItemDetails(crate::items::ItemDetails),
@@ -2162,6 +2183,7 @@ mod tests {
             Capability::Swimming => 49,
             Capability::Drowning => 50,
             Capability::LavaHeat => 51,
+            Capability::GroundDropping => 52,
         };
         for (index, capability) in Capability::ALL.into_iter().enumerate() {
             assert_eq!(place(capability), index, "{capability:?}");

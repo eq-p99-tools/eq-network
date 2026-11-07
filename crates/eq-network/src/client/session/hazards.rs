@@ -117,6 +117,47 @@ impl Hazards {
             last_liquid_sample: [None; 2],
         }
     }
+
+    fn send_report(
+        &self,
+        hazard: Hazard,
+        amount: u32,
+        safe_fall: bool,
+        out: &mut Out<'_, '_>,
+    ) -> Result<()> {
+        // Both programs announce Safe Fall first, even when it left nothing.
+        if safe_fall && hazard == Hazard::Falling {
+            out.request(&Request::SafeFall)?;
+            if amount == 0 {
+                return out
+                    .log
+                    .diagnostic("Safe Fall took all of a fall's damage".into());
+            }
+        }
+        let notice = if self.notice {
+            Some(out.encode(&Request::EnvironmentalNotice { hazard, amount }))
+        } else {
+            None
+        };
+        match (
+            notice.transpose(),
+            out.encode(&Request::EnvironmentalDamage { hazard, amount }),
+        ) {
+            (Ok(notice), Ok(packet)) => {
+                if let Some(notice) = notice {
+                    out.send(&notice)?;
+                }
+                out.send(&packet)?;
+                out.log
+                    .diagnostic(format!("Reported {amount} points of {hazard:?} damage"))
+            }
+            // The host works the amount out; one the packet cannot carry is
+            // not worth the session.
+            (Err(error), _) | (_, Err(error)) => {
+                out.log.diagnostic(format!("Damage not reported: {error}"))
+            }
+        }
+    }
 }
 
 impl Feature for Hazards {
@@ -150,7 +191,16 @@ impl Feature for Hazards {
                 amount,
                 safe_fall,
                 ..
-            } => (Hazard::Falling, amount, safe_fall),
+            } => {
+                if world.inventory.ground_drop_pending() {
+                    return actions::refuse(
+                        command,
+                        "Fall damage needs a fresh inventory snapshot after the drop",
+                        out.log,
+                    );
+                }
+                (Hazard::Falling, amount, safe_fall)
+            }
             ClientCommand::EnvironmentalDamage { .. } => {
                 return actions::refuse(
                     command,
@@ -209,38 +259,7 @@ impl Feature for Hazards {
                 out.log,
             );
         }
-        // Both programs announce Safe Fall first, even when it left nothing.
-        if safe_fall && hazard == Hazard::Falling {
-            out.request(&Request::SafeFall)?;
-            if amount == 0 {
-                return out
-                    .log
-                    .diagnostic("Safe Fall took all of a fall's damage".into());
-            }
-        }
-        let notice = if self.notice {
-            Some(out.encode(&Request::EnvironmentalNotice { hazard, amount }))
-        } else {
-            None
-        };
-        match (
-            notice.transpose(),
-            out.encode(&Request::EnvironmentalDamage { hazard, amount }),
-        ) {
-            (Ok(notice), Ok(packet)) => {
-                if let Some(notice) = notice {
-                    out.send(&notice)?;
-                }
-                out.send(&packet)?;
-                out.log
-                    .diagnostic(format!("Reported {amount} points of {hazard:?} damage"))
-            }
-            // The host works the amount out; one the packet cannot carry is
-            // not worth the session.
-            (Err(error), _) | (_, Err(error)) => {
-                out.log.diagnostic(format!("Damage not reported: {error}"))
-            }
-        }
+        self.send_report(hazard, amount, safe_fall, out)
     }
 }
 
@@ -257,6 +276,46 @@ mod tests {
             amount,
             safe_fall: false,
         }
+    }
+
+    #[test]
+    fn pending_ground_drop_withholds_fall_and_safe_fall_reports() {
+        use eq_network_game::{
+            command::EncodedCommand,
+            inventory::{Inventory, InventorySlot, InventoryUpdate},
+        };
+        use std::num::NonZeroU32;
+
+        let mut inventory = Inventory::default();
+        let serial = NonZeroU32::new(17).unwrap();
+        let mut item = testing::item(InventorySlot::CURSOR.0);
+        item.rules.ground_drop_serial = Some(serial);
+        inventory.apply(InventoryUpdate::Snapshot(vec![item]));
+        inventory.apply(InventoryUpdate::GroundDropPending(serial));
+        let mut world = World::new(5);
+        world.inventory = inventory.clone().into();
+        let mut feature = Hazards::new(&[Hazard::Falling], false);
+        let command = ClientCommand::EnvironmentalDamage {
+            session_id: 5,
+            hazard: Hazard::Falling,
+            amount: 160,
+            safe_fall: true,
+        };
+        let held = testing::run(|out| feature.handle(&command, &mut world, out));
+        held.result.unwrap();
+        assert_eq!(held.sent, Vec::<EncodedCommand>::new());
+
+        inventory.apply(InventoryUpdate::Snapshot(Vec::new()));
+        world.inventory = inventory.into();
+        let recovered = testing::run(|out| feature.handle(&command, &mut world, out));
+        recovered.result.unwrap();
+        assert_eq!(
+            recovered.sent,
+            [
+                hazards::safe_fall(true),
+                hazards::titanium_damage(7, Hazard::Falling, 160).unwrap(),
+            ]
+        );
     }
 
     #[test]
