@@ -75,6 +75,8 @@ pub struct PlayerState {
     pub name: String,
     /// Base profile attributes, not effective stats or resource capacities.
     pub base_attributes: Option<BaseAttributes>,
+    /// The admission's Titanium environmental profile fields, when decoded.
+    pub titanium_environment: Option<crate::hazards::TitaniumEnvironment>,
     /// The active spawn, scoped to this zone connection.
     pub spawn_id: u16,
     /// Numeric race identifier.
@@ -574,12 +576,16 @@ pub enum Capability {
     StoppingSongs,
     /// Bounded swimming with local water collision on a supported admission.
     Swimming,
+    /// The Titanium client can report drowning through environmental damage.
+    Drowning,
+    /// The Titanium client can report lava heat through environmental damage.
+    LavaHeat,
 }
 
 impl Capability {
     /// Every capability, in order: what a session offers when its server and
     /// client generation support everything.
-    pub const ALL: [Self; 50] = [
+    pub const ALL: [Self; 52] = [
         Self::Casting,
         Self::Spellbook,
         Self::Inventory,
@@ -630,6 +636,8 @@ impl Capability {
         Self::RangedCombat,
         Self::StoppingSongs,
         Self::Swimming,
+        Self::Drowning,
+        Self::LavaHeat,
     ];
 }
 
@@ -654,6 +662,13 @@ pub enum ItemHitPoints {
 /// wildcard arm.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub enum WorldEvent {
+    /// The worker has delivered its changed inputs for a liquid sample.
+    LiquidHazardRevision {
+        /// The admission whose inputs changed.
+        session_id: u64,
+        /// Opaque revision to echo when reporting the sample.
+        revision: u64,
+    },
     /// P99 spell-table facts, delivered in world/zone receive order even
     /// before profile admission. Installed definitions and provider epochs
     /// remain host-owned; unavailable updates must not fall back silently.
@@ -1659,6 +1674,7 @@ pub fn titanium_player(profile: &[u8], spawn: &[u8], revolution: f32) -> Result<
     );
     Ok(PlayerState {
         name: String::from_utf8_lossy(until_nul(&profile[12940..13004])).into_owned(),
+        titanium_environment: Some(crate::hazards::titanium_environment(profile)),
         base_attributes: Some(BaseAttributes {
             strength: i32::try_from(word(profile, 2236))?,
             stamina: i32::try_from(word(profile, 2240))?,
@@ -2144,6 +2160,8 @@ mod tests {
             Capability::RangedCombat => 47,
             Capability::StoppingSongs => 48,
             Capability::Swimming => 49,
+            Capability::Drowning => 50,
+            Capability::LavaHeat => 51,
         };
         for (index, capability) in Capability::ALL.into_iter().enumerate() {
             assert_eq!(place(capability), index, "{capability:?}");

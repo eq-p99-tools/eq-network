@@ -19,7 +19,7 @@ mod entities;
 mod exchange;
 pub(super) mod feature;
 mod groups;
-mod hazards;
+pub(super) mod hazards;
 mod hiding;
 mod inventory;
 mod lifecycle;

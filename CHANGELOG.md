@@ -7,6 +7,15 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Offer Titanium drowning and lava heat reports on local-only EQEmu sessions
+  through `Capability::Drowning` and `Capability::LavaHeat`. Retain the
+  profile's zone, base fire resistance and AA presence and the Titanium
+  item's signed fire resistance. Require a fresh host sample of the current
+  worker inputs and position before sending the existing environmental record.
+  The server owns health and death. Deployed Project 1999 liquid reporting
+  awaits validation. The liquid record layout and the base fire resistance
+  offset (inside the profile block EQEmu sends as zero) are inferred
+  (recording checklist 6.392).
 - Retain a checked optional base held model from Titanium item definitions.
   The item model and received wear appearance remain separate.
 - One explicit Titanium bow shot or throw through `GameCommand::RangedAttack`
@@ -18,9 +27,12 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   admission. A silent stop of a tracked gem cast releases the local hold
   after one second and emits `WorldEvent::SongStopUnconfirmed`. Received
   cast results continue through the ordinary spell updates.
-- `BookActionStatus::Unconfirmed` reports an unanswered book edit once.
-  Forgetting also holds the book until its matching gem clear arrives.
-  Track the old spell in named clears to protect replacement gems.
+- `BookActionStatus::Unconfirmed` releases the spellbook after 30 seconds
+  without a matching result. Distinguishable edits can proceed. A retry with
+  the same possible reply requires a fresh admission. A timed-out scribe
+  still guards cursor custody until received whole-slot evidence.
+- Apply authoritative gem clears by slot. Match the old spell or an empty
+  sentinel separately when deciding whether a pending forget was answered.
 - `WorldEvent::OwnPet` reports the current pet's identity and revision for the
   admission. `ClientCommand::Pet` now takes that identity, a target revision
   for targeted orders, and a creation time. `SelectTarget::expected_pet`
@@ -76,6 +88,15 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- The Titanium translocate decline carries -1, as the Titanium program sends
+  it (`eqgame.exe` 0x499f08), instead of 0. `EQEmu` accepts only 1 as a yes,
+  so the outcome is unchanged.
+- **Breaking:** `GameCommand` gains `LiquidDamage` for periodic reports and
+  `WorldEvent` gains `LiquidHazardRevision`. `EnvironmentalDamage` retains
+  the completed-fall path. `Capability::ALL` grows from 50 to 52 with
+  `Drowning` and `LavaHeat`. Struct literals for `PlayerState` and
+  `ItemBonuses` gain the optional `titanium_environment` and
+  `fire_resistance` fields, respectively.
 - **Breaking:** scope resurrection and translocate consent to an admission
   and a specific offer. `WorldEvent::Resurrection` and
   `WorldEvent::TranslocateOffer` carried the bare offer and now carry

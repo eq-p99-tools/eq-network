@@ -376,7 +376,7 @@ pub enum GameCommand {
         /// Reject delayed actions instead of replaying them after a stall.
         created: std::time::Instant,
     },
-    /// Report damage the world did to the player, as the host worked it
+    /// Report damage from a completed fall, as the host worked it
     /// out. The server lowers the amount by its own reductions, such as the
     /// fall damage reductions of spells, items and AAs, so the host leaves
     /// those out. It never expires, since the damage was done.
@@ -392,6 +392,17 @@ pub enum GameCommand {
         /// programs announce before the damage, even when nothing is left of
         /// it ([`crate::hazards::safe_fall`]).
         safe_fall: bool,
+    },
+    /// Report a fresh liquid tick from the current worker observation.
+    LiquidDamage {
+        /// Current zone admission.
+        session_id: u64,
+        /// Which local liquid calculation produced the amount.
+        hazard: crate::hazards::LiquidHazard,
+        /// Positive damage before server reductions.
+        amount: u32,
+        /// Session view used to calculate this tick.
+        observation: crate::hazards::LiquidObservation,
     },
     /// Eat or drink the item in a slot by hand. The session eats and drinks
     /// on its own when the player turns hungry or thirsty.
@@ -822,6 +833,7 @@ impl GameCommand {
             Self::MoveCoins { .. } => "MoveCoins",
             Self::Jump { .. } => "Jump",
             Self::EnvironmentalDamage { .. } => "EnvironmentalDamage",
+            Self::LiquidDamage { .. } => "LiquidDamage",
             Self::Consume { .. } => "Consume",
             Self::AutoEat { .. } => "AutoEat",
             Self::AnswerListPolls { .. } => "AnswerListPolls",
@@ -915,6 +927,7 @@ impl GameCommand {
             | Self::MoveCoins { session_id, .. }
             | Self::Jump { session_id, .. }
             | Self::EnvironmentalDamage { session_id, .. }
+            | Self::LiquidDamage { session_id, .. }
             | Self::AutoAttack { session_id, .. }
             | Self::Consume { session_id, .. }
             | Self::AutoEat { session_id, .. }
@@ -1004,6 +1017,10 @@ impl GameCommand {
             // Only a server that takes falls from the client lets the player jump.
             Self::Jump { .. } => Capability::Jumping,
             Self::EnvironmentalDamage { .. } => Capability::EnvironmentalDamage,
+            Self::LiquidDamage { hazard, .. } => match hazard {
+                crate::hazards::LiquidHazard::Drowning => Capability::Drowning,
+                crate::hazards::LiquidHazard::Lava => Capability::LavaHeat,
+            },
             Self::MoveInventory(_) | Self::DestroyItem(_) => Capability::Inventory,
             Self::Consume { .. } | Self::AutoEat { .. } => Capability::Meals,
             Self::AnswerListPolls { .. } => Capability::AnsweringListPolls,
@@ -1070,6 +1087,7 @@ impl GameCommand {
     #[must_use]
     pub const fn created(&self) -> Option<std::time::Instant> {
         match self {
+            Self::LiquidDamage { observation, .. } => Some(observation.sampled_at),
             Self::SelectServer { .. }
             | Self::SelectCharacter { .. }
             | Self::GenerateName { .. }
@@ -1343,6 +1361,7 @@ pub fn encode(
         | GameCommand::Move(_)
         | GameCommand::Jump { .. }
         | GameCommand::EnvironmentalDamage { .. }
+        | GameCommand::LiquidDamage { .. }
         | GameCommand::ConfigureMotion { .. }
         | GameCommand::SpeedInputs { .. }
         | GameCommand::ClimbReach { .. }

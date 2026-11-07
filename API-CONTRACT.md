@@ -44,20 +44,53 @@ duplicate spawn report of the same ID. Pass the latest identity in
 name the target; the session refuses an order whose identity or target no
 longer matches ("Your pet has changed") before anything is sent, and
 `SelectTarget::expected_pet` pins a pet-specific selection the same way.
-`PetCommand::GuardMe` is Titanium command 6. The Project 1999 policy refuses
-Hold, Feign, NoCast and Focus.
+`PetCommand::GuardMe` is Titanium command 6. The Project 1999 provider
+selects the classic order set, which excludes Hold, Feign, NoCast and Focus.
+The EQEmu provider selects the expanded set. Local submission leaves
+execution and any further restrictions to the server.
 
 ## Titanium EQEmu swimming bound
 
 Only the Titanium `EQEmu` policy offers `Capability::Swimming`; P99, Quarm
 and TAKP reject `MovementMode::Swim` samples. A swim sample is bounded by one
 three-dimensional budget of `movement::swim_speed` of the unboosted grant,
-with no run boost, and is refused while flying or stunned. The two native
-branch constants in `swim_speed` are read from the Titanium program; the
-shared three-axis budget, the vertical stroke sharing the wet horizontal
-rate, and the absence of skill, race and buff scaling are inferred
-(recording checklist 6.390). A submitted sample establishes neither server
-acceptance nor water state; the host asserts water from the installed zone.
+with no run boost, and is refused while flying or stunned. The native wet
+pair is read at Titanium `eqgame.exe` 0x4c052d and 0x4c0534, and the land
+pair at 0x4c04c1 and 0x4c04cd. The shared three-axis budget, the vertical
+stroke sharing the wet horizontal rate, and the absence of skill, race and
+buff scaling are inferred (recording checklist 6.390). A submitted sample
+establishes neither server acceptance nor water state. The host asserts water
+from the installed zone.
+
+## Local Titanium liquid reports
+
+`Capability::ALL` grows from 50 to 52 with `Drowning` and `LavaHeat`;
+`GameCommand` gains `LiquidDamage { session_id, hazard, amount, observation }`
+and `WorldEvent` gains `LiquidHazardRevision { session_id, revision }`.
+Only the Titanium `EQEmu` policy offers the two capabilities, and only on a
+session whose connection is constrained to local endpoints; P99, Quarm, TAKP
+and a remote `EQEmu` keep falls only and refuse `LiquidDamage` before
+anything is sent. `EnvironmentalDamage` keeps the completed-fall path and
+refuses every other hazard.
+
+The session raises `LiquidHazardRevision` at admission and whenever an input
+of the air or heat calculation changes: the player's own position, hit
+points, appearance, posture, buffs and spell effects, death, inventory and
+level updates, and zone transfer state. A `LiquidDamage` report is accepted
+only when its `session_id` is the current admission, its `revision` is the
+latest one raised, its `observation.position` equals the session body's
+current X, Y and Z bit for bit, its `observation.sampled_at` is within 250
+milliseconds, the player is admitted and not dead or transferring, its
+`amount` is positive, and at least one second has passed since the last
+accepted report of the same hazard. Anything else is refused with a
+diagnostic and no wire change; the next revision is the host's signal to
+sample again. An accepted report is sent as the Titanium environmental
+record with damage type 251 (drowning) or 250 (lava); the Titanium program's
+own liquid reports are unrecorded, so that layout is inferred (recording
+checklist 6.392). `PlayerState.titanium_environment` carries the profile's
+zone, base fire resistance (offset 12876, inside the block EQEmu leaves
+unknown and sends as zero; inferred, 6.392) and whether any alternate
+advancement rank is present. The server owns health and death.
 
 ## Retained base held models
 
@@ -68,12 +101,22 @@ separate and takes precedence in hosts.
 
 ## Spellbook edits and Bard song stop
 
-An unanswered book edit emits `BookActionStatus::Unconfirmed` once after
-30 seconds. Match this variant separately from `Rejected` and `Cancelled`.
-The worker keeps the edit's ownership and exact reply match until it receives
-settlement or the admission is replaced. An unanswered scribe retains the
-inventory hold. A mode-2 clear with a valid spell ID must name the old gem
-spell. A mode-2 empty sentinel reports a slot clear.
+An unanswered book edit emits terminal `BookActionStatus::Unconfirmed` once
+after 30 seconds and releases the spellbook hold. A fresh edit can proceed
+if its expected reply is distinguishable from every timed-out edit in the
+admission. The worker refuses a wire-identical retry until a new admission.
+That includes a forget of the same gem even when the spell changed, because
+an empty sentinel identifies only the gem. An in-zone slot update or book
+snapshot changes the current state without retiring that reply ambiguity.
+Late updates still go through the ordinary state appliers and produce no
+result for the timed-out edit. A mode-2 update clears its valid gem slot
+independently of spell identity, and repeating it against an empty gem keeps
+that gem empty. Only the matching gem and spell or an empty sentinel can
+confirm an active forget. A repeated application-level book swap can apply
+the same delta again because its wire record carries only the two slots.
+An unconfirmed scribe retains its inventory hold until a received whole-slot
+removal or replacement accounts for the cursor scroll, or the admission
+ends. A unit decrement or late book insertion alone cannot release custody.
 
 Titanium EQEmu offers `Capability::StoppingSongs` and handles an explicit
 `ClientCommand::StopSong { session_id, created }` for the current Bard.
@@ -88,12 +131,15 @@ the admission and released spell. When no cast is held, submission emits
 the same event without a spell. This event reports local state only. It
 leaves buffs and cooldowns to the existing server updates, and a retry
 requires a fresh user command. An active item cast or a cast of unknown
-source blocks song stop. The P99 policy keeps song stop gated.
+source blocks song stop. A duplicate while the worker awaits the cast update
+produces a diagnostic without another send. The P99 policy keeps song stop
+gated.
 
 An own start for a different spell during the stop wait supersedes the
 stopped hold. The worker emits `WorldEvent::CastSuperseded` with the
 old spell before forwarding the new start. Consumers should discard the
-identified hold and its request alias. A late start for an abandoned
+identified hold and its request alias while preserving a different pending
+spell. A late start for an abandoned
 pending spell is withheld during a retry of a different spell.
 Titanium has no cast request ID for distinguishing same-spell starts
 after a same-spell retry.
@@ -885,9 +931,11 @@ refusal naming the attempted token and leaves a replacement untouched.
 Death, an outstanding zone transfer and logout invalidate old consent.
 The in-process `expires_at` is a monotonic local deadline omitted from
 serialization. The Titanium `EQEmu` policy uses a five-minute local answer
-window and submits a decline when it elapses during the same live admission;
-that the native client answers No on its own, and the five minutes, are
-inferred (recording checklist 6.391). TAKP translocate retains its one-hour
+window and submits a decline when it elapses during the same live admission.
+Titanium `eqgame.exe` sets the timer at 0x4561bd (translocate) and 0x459b61
+(resurrection). Expiry at 0x547f0a passes dismissal result 2 at 0x547eff.
+The translocate and resurrection callbacks send a decline at 0x499ef3
+and 0x499f3a, respectively. TAKP translocate retains its one-hour
 window (6.253). A server may apply its own timing rule.
 
 `ConsentClosed` distinguishes a submitted answer, a local expiry with a

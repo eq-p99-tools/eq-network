@@ -10,10 +10,92 @@
 use super::{
     actions,
     feature::{Feature, Out, World},
-    ClientCommand,
+    ClientCommand, ClientEvent,
 };
 use anyhow::Result;
-use eq_network_game::{hazards::Hazard, request::Request};
+use eq_network_game::{
+    hazards::{Hazard, LiquidHazard},
+    request::Request,
+    world::{Capability, Position, WorldEvent},
+};
+use std::time::{Duration, Instant};
+
+/// Worker revision for the ordered stream of liquid calculation inputs.
+#[derive(Default)]
+pub(in crate::client) struct Observations {
+    current: Option<(u64, u16, u64)>,
+}
+
+impl Observations {
+    /// Advances before delivery, returning a stamp to deliver after the input.
+    /// This covers both decoded packets and feature-produced inventory news.
+    pub(in crate::client) fn observe(&mut self, event: &ClientEvent) -> Option<WorldEvent> {
+        let ClientEvent::World(event) = event else {
+            return None;
+        };
+        if let WorldEvent::Entered {
+            capabilities,
+            session_id,
+            player,
+            ..
+        } = event
+        {
+            self.current = capabilities
+                .iter()
+                .any(|capability| matches!(capability, Capability::Drowning | Capability::LavaHeat))
+                .then_some((*session_id, player.spawn_id, 0));
+            return self.current.map(|(session_id, _, revision)| {
+                WorldEvent::LiquidHazardRevision {
+                    session_id,
+                    revision,
+                }
+            });
+        }
+        let (session_id, own, revision) = self.current.as_mut()?;
+        let changes_inputs = match event {
+            WorldEvent::Position { spawn_id, .. }
+            | WorldEvent::HitPoints { spawn_id, .. }
+            | WorldEvent::Appearance { spawn_id, .. }
+            | WorldEvent::Posture { spawn_id, .. } => *spawn_id == *own,
+            WorldEvent::Spawns(spawns) => spawns.iter().any(|spawn| spawn.spawn_id == *own),
+            WorldEvent::Buff(buff) => u32::from(*own) == buff.entity_id,
+            WorldEvent::SpellEffect(effect) => *own == effect.target_id,
+            WorldEvent::Death(death) => death.spawn_id == u32::from(*own),
+            WorldEvent::DeathBind { session_id: visit }
+            | WorldEvent::InventoryAction {
+                session_id: visit,
+                update: Some(_),
+                error: None,
+                ..
+            } => *visit == *session_id,
+            WorldEvent::BuffSnapshot(_)
+            | WorldEvent::Inventory(_)
+            | WorldEvent::Level { .. }
+            | WorldEvent::SpellTable(_)
+            | WorldEvent::ZoneDescription(_)
+            | WorldEvent::ZoneTransfer(_)
+            | WorldEvent::ZoneTransferRejected { .. } => true,
+            _ => false,
+        };
+        if !changes_inputs {
+            return None;
+        }
+        *revision = revision.wrapping_add(1);
+        Some(WorldEvent::LiquidHazardRevision {
+            session_id: *session_id,
+            revision: *revision,
+        })
+    }
+
+    fn matches(&self, session_id: u64, spawn_id: u16, revision: u64) -> bool {
+        self.current == Some((session_id, spawn_id, revision))
+    }
+}
+
+fn same_finite_xyz(current: [f32; 3], observed: Position) -> bool {
+    current.into_iter().all(f32::is_finite)
+        && current.map(f32::to_bits) == [observed.x, observed.y, observed.z].map(f32::to_bits)
+}
 
 /// Reports the world's damage to the server.
 pub(super) struct Hazards {
@@ -22,44 +104,111 @@ pub(super) struct Hazards {
     /// Whether the client generation sends a notice before each report, as
     /// the `EQMac` program does.
     notice: bool,
+    last_liquid_sample: [Option<Instant>; 2],
 }
 
 impl Hazards {
     /// Reports these hazards, each after a notice where `notice` says the
     /// generation sends one, and refuses the rest.
     pub(super) fn new(taken: &'static [Hazard], notice: bool) -> Self {
-        Self { taken, notice }
+        Self {
+            taken,
+            notice,
+            last_liquid_sample: [None; 2],
+        }
     }
 }
 
 impl Feature for Hazards {
     fn capabilities(&self) -> Vec<crate::world::Capability> {
-        vec![crate::world::Capability::EnvironmentalDamage]
+        let mut capabilities = vec![Capability::EnvironmentalDamage];
+        if self.taken.contains(&Hazard::Drowning) {
+            capabilities.push(Capability::Drowning);
+        }
+        if self.taken.contains(&Hazard::Lava) {
+            capabilities.push(Capability::LavaHeat);
+        }
+        capabilities
     }
 
     fn owns(&self, command: &ClientCommand) -> bool {
-        matches!(command, ClientCommand::EnvironmentalDamage { .. })
+        matches!(
+            command,
+            ClientCommand::EnvironmentalDamage { .. } | ClientCommand::LiquidDamage { .. }
+        )
     }
 
     fn handle(
         &mut self,
         command: &ClientCommand,
-        _world: &mut World,
+        world: &mut World,
         out: &mut Out<'_, '_>,
     ) -> Result<()> {
-        let ClientCommand::EnvironmentalDamage {
-            hazard,
-            amount,
-            safe_fall,
-            ..
-        } = *command
-        else {
-            return Ok(());
+        let (hazard, amount, safe_fall) = match *command {
+            ClientCommand::EnvironmentalDamage {
+                hazard: Hazard::Falling,
+                amount,
+                safe_fall,
+                ..
+            } => (Hazard::Falling, amount, safe_fall),
+            ClientCommand::EnvironmentalDamage { .. } => {
+                return actions::refuse(
+                    command,
+                    "Only a completed fall is reported here; drowning and lava go through LiquidDamage, and freezing is not reported",
+                    out.log,
+                );
+            }
+            ClientCommand::LiquidDamage {
+                session_id,
+                hazard,
+                amount,
+                observation,
+            } => {
+                let (hazard, index) = match hazard {
+                    LiquidHazard::Drowning => (Hazard::Drowning, 0),
+                    LiquidHazard::Lava => (Hazard::Lava, 1),
+                };
+                if !self.taken.contains(&hazard) || !world.local_eqemu() {
+                    return actions::refuse(
+                        command,
+                        "Liquid reports are unavailable on this session",
+                        out.log,
+                    );
+                }
+                if let Some(reason) = actions::stale(command, world.session_id, Instant::now()) {
+                    return actions::refuse(command, reason, out.log);
+                }
+                let current = world.player_at().is_some_and(|(spawn_id, position)| {
+                    let current = [position.x, position.y, position.z];
+                    out.log
+                        .liquid_inputs
+                        .matches(session_id, spawn_id, observation.revision)
+                        && same_finite_xyz(current, observation.position)
+                });
+                if !world.ready() || world.lifecycle.blocks_motion() || !current {
+                    return actions::refuse(
+                        command,
+                        "The liquid observation is no longer current",
+                        out.log,
+                    );
+                }
+                if amount == 0
+                    || self.last_liquid_sample[index].is_some_and(|last| {
+                        observation.sampled_at.saturating_duration_since(last)
+                            < Duration::from_secs(1)
+                    })
+                {
+                    return actions::refuse(command, "The liquid tick has no new damage", out.log);
+                }
+                self.last_liquid_sample[index] = Some(observation.sampled_at);
+                (hazard, amount, false)
+            }
+            _ => return Ok(()),
         };
         if !self.taken.contains(&hazard) {
             return actions::refuse(
                 command,
-                &format!("This server does not take {hazard:?} damage from the client"),
+                &format!("{hazard:?} reports are unavailable on this session"),
                 out.log,
             );
         }
@@ -129,6 +278,18 @@ mod tests {
             &outcome.events[..],
             [ClientEvent::Diagnostic(line)] if line.contains("160")
         ));
+    }
+
+    #[test]
+    fn legacy_damage_command_cannot_bypass_liquid_observations() {
+        let mut feature = Hazards::new(&[Hazard::Falling, Hazard::Drowning, Hazard::Lava], false);
+        let mut world = World::new(5);
+        for hazard in [Hazard::Drowning, Hazard::Lava] {
+            let outcome = testing::run(|out| feature.handle(&report(hazard, 13), &mut world, out));
+            outcome.result.unwrap();
+            assert_eq!(outcome.sent, []);
+            assert_eq!(outcome.unreliable, []);
+        }
     }
 
     #[test]

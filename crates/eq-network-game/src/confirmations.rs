@@ -8,9 +8,10 @@
 //! an answer of 0, and the player's answer repeats the offer with their
 //! choice. Every server takes any answer to a sacrifice but 0 as a yes, and
 //! only 1 to a translocate (`Client::Handle_OP_Sacrifice`,
-//! `Client::Handle_OP_Translocate`). A no is 0, but `EQMac`'s to a
-//! translocate, which TAKP's layout names -1. What the official clients
-//! answer is unrecorded, so the answers here are inferred.
+//! `Client::Handle_OP_Translocate`). A no to a sacrifice is 0. A no to a
+//! translocate is -1 on both generations: the Titanium program sends it
+//! (`eqgame.exe` 0x499f08) and TAKP's layout names it. What the official
+//! clients answer to a sacrifice is unrecorded, so that answer is inferred.
 //!
 //! On a yes, `EQEmu` and Quarm take the player's life or move them
 //! themselves. TAKP sends a translocate's offer again with the answer 1, and
@@ -257,11 +258,18 @@ pub fn eqmac_sacrifice_answer(offer: &SacrificeOffer, accept: bool) -> EncodedCo
     )
 }
 
-/// Encodes Titanium's answer to a translocate: the offer, with 1 for yes
-/// and 0 for no.
+/// Encodes the Titanium translocate answer for `EQEmu`: the offer, with 1
+/// for yes and -1 for no, as the Titanium program sends them (`eqgame.exe`
+/// 0x499f08). `Client::Handle_OP_Translocate` treats only 1 as acceptance.
 #[must_use]
 pub fn titanium_translocate_answer(offer: &TranslocateOffer, accept: bool) -> EncodedCommand {
-    answer(TRANSLOCATE_OPCODE, &offer.body, COMPLETE, u32::from(accept))
+    let value = if accept { 1 } else { -1i32 };
+    answer(
+        TRANSLOCATE_OPCODE,
+        &offer.body,
+        COMPLETE,
+        value.cast_unsigned(),
+    )
 }
 
 /// Encodes `EQMac`'s answer to a translocate: the offer, with 1 for yes and
@@ -373,9 +381,9 @@ mod tests {
         assert_eq!(yes.body[COMPLETE..], [1, 0, 0, 0]);
         assert_eq!(
             titanium_translocate_answer(&offer, false).body[COMPLETE..],
-            [0; 4]
+            [0xff; 4]
         );
-        // EQMac's no is -1.
+        // EQMac's no is -1 as well.
         assert_eq!(
             eqmac_translocate(&body).unwrap(),
             Translocate::Offer(offer.clone())

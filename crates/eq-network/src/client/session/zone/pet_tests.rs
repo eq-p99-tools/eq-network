@@ -322,6 +322,10 @@ fn p99_refuses_later_commands_and_leader_can_ask_a_visible_pet_without_owning_on
     let pet = zone
         .hear(WorldEvent::Spawns(vec![npc(8, Some(7))]))
         .identity();
+    let mut expanded = Session::new(ServerProtocol::EqEmu, 5);
+    let expanded_pet = expanded
+        .hear(WorldEvent::Spawns(vec![npc(8, Some(7))]))
+        .identity();
     for order in [
         PetCommand::Hold,
         PetCommand::Feign,
@@ -331,6 +335,11 @@ fn p99_refuses_later_commands_and_leader_can_ask_a_visible_pet_without_owning_on
         refused(
             zone.send(zone.order(order, pet)),
             "That pet command is unavailable on this server",
+        );
+        sent(
+            expanded.send(expanded.order(order, expanded_pet)),
+            order,
+            None,
         );
     }
     sent(

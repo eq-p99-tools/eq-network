@@ -19,6 +19,8 @@ pub struct ItemBonuses {
     pub strength: i32,
     /// Raw stamina attribute modifier, not endurance.
     pub stamina: i32,
+    /// Fire resistance where the item decoder establishes it.
+    pub fire_resistance: Option<i32>,
     /// Raw agility modifier.
     pub agility: i32,
     /// Raw dexterity modifier.
@@ -35,6 +37,19 @@ pub struct ItemBonuses {
     pub mana: i32,
     /// Raw endurance capacity modifier.
     pub endurance: i32,
+}
+
+impl ItemBonuses {
+    /// Whether any decoded modifier is nonzero.
+    #[must_use]
+    pub fn has_modifiers(self) -> bool {
+        self.fire_resistance
+            .is_some_and(|resistance| resistance != 0)
+            || Self {
+                fire_resistance: None,
+                ..self
+            } != Self::default()
+    }
 }
 
 /// Static restrictions and passive spell metadata needed when applying equipment bonuses.
@@ -112,8 +127,7 @@ impl ItemDetails {
             "Range",
             "Damage",
         ];
-        self.bonuses
-            .is_some_and(|bonuses| bonuses != ItemBonuses::default())
+        self.bonuses.is_some_and(ItemBonuses::has_modifiers)
             || self
                 .stats
                 .iter()
@@ -325,6 +339,7 @@ fn bonuses(fields: &[&str]) -> Result<ItemBonuses> {
     Ok(ItemBonuses {
         strength: value(21)?,
         stamina: value(22)?,
+        fire_resistance: Some(value(20)?),
         agility: value(23)?,
         dexterity: value(24)?,
         charisma: value(25)?,
@@ -348,7 +363,14 @@ mod tests {
         fields[134] = "-1";
         let plain = definition(&fields).unwrap();
         assert!(!plain.has_modifiers(), "{:?}", plain.stats);
-        for (index, value) in [(25, "1"), (16, "-2"), (111, "5"), (134, "7"), (117, "3")] {
+        for (index, value) in [
+            (25, "1"),
+            (16, "-2"),
+            (20, "-2"),
+            (111, "5"),
+            (134, "7"),
+            (117, "3"),
+        ] {
             let mut fields = fields.clone();
             fields[index] = value;
             assert!(
@@ -407,6 +429,7 @@ mod tests {
         fields[1] = "Synthetic equipment";
         fields[4] = "123";
         for (index, value) in [
+            (20, "-2"),
             (21, "-3"),
             (22, "4"),
             (23, "5"),
@@ -425,6 +448,7 @@ mod tests {
             Some(ItemBonuses {
                 strength: -3,
                 stamina: 4,
+                fire_resistance: Some(-2),
                 agility: 5,
                 dexterity: 6,
                 charisma: 7,

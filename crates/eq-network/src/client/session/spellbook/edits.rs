@@ -4,7 +4,7 @@ use crate::client::ClientCommand;
 use eq_network_game::spells::{BookActionStatus, SpellUpdate};
 use std::time::{Duration, Instant};
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 enum Edit {
     Forget(u8, u32),
     Delete(u16),
@@ -12,21 +12,54 @@ enum Edit {
     Slot { slot: u32, spell_id: u32, mode: u32 },
 }
 
-/// A submitted edit is never retried or released by an unrelated spell notification.
+impl Edit {
+    fn command(command: &ClientCommand) -> Option<Self> {
+        Some(match *command {
+            ClientCommand::ForgetSpell { gem, spell_id, .. } => Self::Forget(gem, spell_id),
+            ClientCommand::DeleteSpell { slot, .. } => Self::Delete(slot),
+            ClientCommand::SwapSpell { from, to, .. } => Self::Swap(from, to),
+            ClientCommand::ScribeSpell { slot, spell_id, .. } => Self::Slot {
+                slot: u32::from(slot),
+                spell_id,
+                mode: 0,
+            },
+            ClientCommand::MemorizeSpell { gem, spell_id, .. } => Self::Slot {
+                slot: u32::from(gem),
+                spell_id,
+                mode: 1,
+            },
+            _ => return None,
+        })
+    }
+
+    /// An empty sentinel can answer any forget of the same gem.
+    fn shares_reply(self, other: Self) -> bool {
+        match (self, other) {
+            (Self::Forget(first, _), Self::Forget(second, _)) => first == second,
+            _ => self == other,
+        }
+    }
+}
+
+/// At most one tracked edit owns a reply. An abandoned reply identity stays
+/// ambiguous within this admission, even after a matching update arrives.
 #[derive(Default)]
-pub(super) struct BookEdits(Option<Outstanding>);
+pub(super) struct BookEdits {
+    active: Option<Outstanding>,
+    retired: Vec<Edit>,
+}
 
 #[derive(Clone, Copy)]
 struct Outstanding {
     edit: Edit,
-    notify_at: Option<Instant>,
+    notify_at: Instant,
 }
 
 impl Outstanding {
     fn new(edit: Edit, now: Instant) -> Self {
         Self {
             edit,
-            notify_at: Some(now + Duration::from_secs(30)),
+            notify_at: now + Duration::from_secs(30),
         }
     }
 }
@@ -34,7 +67,16 @@ impl Outstanding {
 impl BookEdits {
     /// Whether an edit awaits its result; the shared action table then holds the book.
     pub fn outstanding(&self) -> bool {
-        self.0.is_some()
+        self.active.is_some()
+    }
+
+    /// A fresh command needs a reply distinguishable from any timed-out edit.
+    pub fn ambiguous(&self, command: &ClientCommand) -> bool {
+        Edit::command(command).is_some_and(|edit| {
+            self.retired
+                .iter()
+                .any(|retired| retired.shares_reply(edit))
+        })
     }
 
     /// Whether the shared action table refuses this book mutation right now.
@@ -48,20 +90,17 @@ impl BookEdits {
     /// Whether a submitted scribe still awaits its result; the server consumes the
     /// cursor scroll when it answers.
     pub fn scribing(&self) -> bool {
-        self.0
+        self.active
             .is_some_and(|pending| matches!(pending.edit, Edit::Slot { mode: 0, .. }))
     }
 
     /// Called only after an edit has been validated and handed to transport.
     pub fn sent(&mut self, command: &ClientCommand, now: Instant) {
-        let edit = match command {
-            ClientCommand::ForgetSpell { gem, spell_id, .. } => Edit::Forget(*gem, *spell_id),
-            ClientCommand::DeleteSpell { slot, .. } => Edit::Delete(*slot),
-            ClientCommand::SwapSpell { from, to, .. } => Edit::Swap(*from, *to),
-            _ => return,
+        let Some(edit) = Edit::command(command) else {
+            return;
         };
         // Keep the first request and its deadline even if a caller reports it twice.
-        self.0.get_or_insert(Outstanding::new(edit, now));
+        self.active.get_or_insert(Outstanding::new(edit, now));
     }
 
     /// Tracks a prepared scribe/memorize request only after successful submission.
@@ -70,7 +109,7 @@ impl BookEdits {
             BookIntent::Memorize { gem, spell_id } => (u32::from(gem), spell_id, 1),
             BookIntent::Scribe { slot, spell_id, .. } => (u32::from(slot), spell_id, 0),
         };
-        self.0.get_or_insert(Outstanding::new(
+        self.active.get_or_insert(Outstanding::new(
             Edit::Slot {
                 slot,
                 spell_id,
@@ -82,7 +121,7 @@ impl BookEdits {
 
     /// Successful and failed deletion replies both resolve their exact outstanding slot.
     pub fn observe(&mut self, update: &SpellUpdate) -> Option<BookActionStatus> {
-        let matched = match (self.0.map(|pending| pending.edit), update) {
+        let matched = match (self.active.map(|pending| pending.edit), update) {
             (Some(Edit::Forget(gem, spell)), update) => update.clears_gem(u32::from(gem), spell),
             (Some(Edit::Delete(expected)), SpellUpdate::BookDeletion { slot, .. }) => {
                 expected == *slot
@@ -103,7 +142,7 @@ impl BookEdits {
             _ => false,
         };
         if matched {
-            self.0 = None;
+            self.active = None;
             Some(
                 if matches!(update, SpellUpdate::BookDeletion { success: false, .. }) {
                     BookActionStatus::Rejected("Server rejected spellbook deletion".into())
@@ -116,12 +155,10 @@ impl BookEdits {
         }
     }
 
-    /// Reports silence once while keeping ownership and the exact late-reply match.
+    /// Ends reply ownership on silence without accepting a matching retry.
     pub fn timeout(&mut self, now: Instant) -> Option<BookActionStatus> {
-        self.0
-            .as_mut()?
-            .notify_at
-            .take_if(|deadline| now >= *deadline)?;
+        let pending = self.active.take_if(|pending| now >= pending.notify_at)?;
+        self.retired.push(pending.edit);
         Some(BookActionStatus::Unconfirmed)
     }
 }
@@ -173,13 +210,8 @@ mod tests {
                 slot: 2,
                 success: true,
             });
-            guard.prepared_sent(&intent, now + Duration::from_secs(20));
             assert!(guard.blocks(&next));
             assert_eq!(guard.timeout(now + Duration::from_secs(29)), None);
-            assert_eq!(
-                guard.timeout(now + Duration::from_secs(30)),
-                Some(BookActionStatus::Unconfirmed)
-            );
             let result = guard.observe(&SpellUpdate::Slot {
                 slot: 2,
                 spell_id: 73,
@@ -238,10 +270,6 @@ mod tests {
         });
         assert!(guard.blocks(&swap));
         assert_eq!(guard.timeout(now + Duration::from_secs(29)), None);
-        assert_eq!(
-            guard.timeout(now + Duration::from_secs(30)),
-            Some(BookActionStatus::Unconfirmed)
-        );
         let _ = guard.observe(&SpellUpdate::BookSwap { from: 3, to: 4 });
         assert!(!guard.blocks(&swap) && guard.timeout(now + Duration::from_secs(31)).is_none());
         for success in [false, true] {
@@ -287,32 +315,43 @@ mod tests {
     }
 
     #[test]
-    fn an_unanswered_edit_retains_ownership_until_its_late_reply() {
+    fn timeout_retires_the_original_edit_without_refreshing_its_deadline() {
         let now = Instant::now();
         let mut edits = BookEdits::default();
-        edits.sent(
-            &ClientCommand::DeleteSpell {
-                session_id: 7,
-                slot: 3,
-                spell_id: 42,
-                created: now,
-            },
-            now,
-        );
+        let delete = |slot, spell_id| ClientCommand::DeleteSpell {
+            session_id: 7,
+            slot,
+            spell_id,
+            created: now,
+        };
+        edits.sent(&delete(3, 42), now);
+        edits.sent(&delete(4, 73), now + Duration::from_secs(20));
         assert_eq!(edits.timeout(now + Duration::from_secs(29)), None);
         assert_eq!(
             edits.timeout(now + Duration::from_secs(30)),
             Some(BookActionStatus::Unconfirmed)
         );
-        assert!(edits.outstanding());
+        assert!(!edits.outstanding());
+        assert!(edits.ambiguous(&delete(3, 99)));
+        assert!(!edits.ambiguous(&delete(4, 73)));
         assert_eq!(edits.timeout(now + Duration::from_secs(60)), None);
+        edits.sent(&delete(4, 73), now + Duration::from_secs(61));
+        for success in [true, true, false] {
+            assert_eq!(
+                edits.observe(&SpellUpdate::BookDeletion { slot: 3, success }),
+                None
+            );
+            assert!(edits.outstanding());
+        }
         assert_eq!(
             edits.observe(&SpellUpdate::BookDeletion {
-                slot: 3,
+                slot: 4,
                 success: true
             }),
             Some(BookActionStatus::Confirmed)
         );
         assert!(!edits.outstanding());
+        assert!(edits.ambiguous(&delete(3, 99)));
+        assert!(!BookEdits::default().ambiguous(&delete(3, 99)));
     }
 }

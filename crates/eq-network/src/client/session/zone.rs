@@ -35,14 +35,19 @@ struct Features {
 
 impl Features {
     /// The features the server type provides.
+    #[cfg(test)]
     fn new(
         server: &dyn servers::ServerType,
         name: &str,
         auto_eat: eq_network_game::food::AutoEat,
     ) -> Self {
+        Self::from_setup(server, &servers::Setup::new(name, auto_eat))
+    }
+
+    fn from_setup(server: &dyn servers::ServerType, setup: &servers::Setup<'_>) -> Self {
         let mut features = Vec::new();
         let (mut offered, mut choices) = (Vec::new(), Vec::new());
-        for provided in server.features(&servers::Setup::new(name, auto_eat)) {
+        for provided in server.features(setup) {
             let listed = provided.feature.capabilities();
             if provided.choice {
                 choices.extend(listed);
@@ -269,6 +274,7 @@ fn run_connected(
     let credentials = context.credentials;
     let stop = context.stop;
     let duration = context.duration;
+    log.liquid_inputs = super::hazards::Observations::default();
     let mut admission = server.wire().admit(
         &config.character,
         server.profile_turn(),
@@ -289,7 +295,9 @@ fn run_connected(
     let mut entry_position_superseded = false;
     let mut unheard = Unheard::new(Stage::Zone);
     let mut list_replies = super::list_poll::Replies::default();
-    let mut features = Features::new(server, &config.character, config.auto_eat);
+    let mut setup = servers::Setup::new(&config.character, config.auto_eat);
+    setup.local_only = world.local_eqemu();
+    let mut features = Features::from_setup(server, &setup);
     let offered = features.capabilities();
     let follows_zones = offered.contains(&Capability::Zoning);
     let repeats_position = offered.contains(&Capability::Moving);
@@ -809,7 +817,7 @@ mod tests {
     };
 
     /// How many kinds of command there are.
-    const KINDS: usize = 85;
+    const KINDS: usize = 86;
 
     /// The kinds the login and world servers take, before any zone session.
     const BEFORE_ZONES: [usize; 4] = [0, 1, 70, 75];
@@ -897,6 +905,7 @@ mod tests {
             ClientCommand::RaidMakeLeader { .. } => 64,
             ClientCommand::RaidRemove { .. } => 65,
             ClientCommand::EnvironmentalDamage { .. } => 66,
+            ClientCommand::LiquidDamage { .. } => 85,
             ClientCommand::BledOut { .. } => 67,
             ClientCommand::AnswerSacrifice { .. } => 68,
             ClientCommand::AnswerTranslocate { .. } => 69,
@@ -1337,6 +1346,16 @@ mod tests {
                 amount: 160,
                 safe_fall: false,
             },
+            ClientCommand::LiquidDamage {
+                session_id,
+                hazard: eq_network_game::hazards::LiquidHazard::Drowning,
+                amount: 13,
+                observation: eq_network_game::hazards::LiquidObservation {
+                    revision: 0,
+                    position: eq_network_game::world::Position::default(),
+                    sampled_at: created,
+                },
+            },
         ]
     }
 
@@ -1354,6 +1373,142 @@ mod tests {
     }
 
     #[test]
+    fn liquid_ticks_follow_current_worker_inputs_and_completed_falls_survive_corrections() {
+        use super::super::feature::testing;
+        use crate::client::{ClientConfig, ServerProtocol};
+        use eq_network_game::hazards::{Hazard, LiquidHazard, LiquidObservation};
+
+        let mut config = ClientConfig::new("Example", "Fixture", "Local", "Tester");
+        config.local_only = true;
+        config.protocol = ServerProtocol::EqEmu;
+        let mut world = World::for_zone(5, &config);
+        let player = testing::player(7);
+        let origin = player.position;
+        world.own_spawn = Some(7);
+        world.body.own(7);
+        world.body.place(origin);
+        world.player.admit(player.clone());
+        world.admitted = Some(Instant::now());
+        let mut setup = servers::Setup::new("Tester", config.auto_eat);
+        setup.local_only = true;
+        let mut features = Features::from_setup(servers::server_type(config.protocol), &setup);
+
+        let outcome = testing::run(|out| -> Result<bool> {
+            out.log.send(ClientEvent::World(WorldEvent::Entered {
+                capabilities: features.capabilities(),
+                choices: Vec::new(),
+                session_id: 5,
+                zone: "example".to_owned(),
+                player: Box::new(player),
+                far_clip: None,
+                spell_landing_flag: None,
+            }))?;
+            let liquid = |hazard, revision, position, sampled_at| ClientCommand::LiquidDamage {
+                session_id: 5,
+                hazard,
+                amount: 13,
+                observation: LiquidObservation {
+                    revision,
+                    position,
+                    sampled_at,
+                },
+            };
+            let drown = LiquidHazard::Drowning;
+            let lava = LiquidHazard::Lava;
+            let first = liquid(drown, 0, origin, Instant::now());
+            assert!(apply_commands(&[first], &mut features, &mut world, out, true)?.is_none());
+            let corrected = eq_network_game::world::Position {
+                z: origin.z + 25.0,
+                ..origin
+            };
+            hear(
+                vec![Message::Event(WorldEvent::Position {
+                    spawn_id: 7,
+                    position: corrected,
+                    velocity: [0.0; 3],
+                    forward: 0.0,
+                })],
+                &mut features,
+                &mut world,
+                out,
+                true,
+            )?;
+            // Buff news supersedes samples even when their position is current.
+            hear(
+                vec![Message::Event(WorldEvent::BuffSnapshot(vec![Some(
+                    eq_network_game::buffs::Buff {
+                        spell_id: 86,
+                        caster_level: 20,
+                        effect_type: 2,
+                        bard_modifier: 10,
+                        duration_ticks: 5,
+                        counters: 0,
+                        caster_id: 7,
+                    },
+                )]))],
+                &mut features,
+                &mut world,
+                out,
+                true,
+            )?;
+            let now = Instant::now();
+            let expired = now.checked_sub(Duration::from_secs(2));
+            if let Some(expired) = expired {
+                let tick = liquid(drown, 2, corrected, expired);
+                assert!(apply_commands(&[tick], &mut features, &mut world, out, true)?.is_none());
+            }
+            let current = liquid(lava, 2, corrected, now);
+            let commands = [
+                liquid(drown, 0, origin, now),
+                liquid(drown, 1, corrected, now),
+                liquid(lava, 2, origin, now),
+                current.clone(),
+                current,
+                ClientCommand::EnvironmentalDamage {
+                    session_id: 5,
+                    hazard: Hazard::Falling,
+                    amount: 160,
+                    safe_fall: false,
+                },
+            ];
+            assert!(apply_commands(&commands, &mut features, &mut world, out, true)?.is_none());
+            Ok(expired.is_some())
+        });
+        assert_liquid_tick_outcome(outcome);
+    }
+
+    fn assert_liquid_tick_outcome(outcome: super::super::feature::testing::Outcome<Result<bool>>) {
+        use eq_network_game::hazards::{self, Hazard};
+
+        let expiry_covered = outcome.result.unwrap();
+        assert_eq!(
+            outcome.sent,
+            [
+                hazards::titanium_damage(7, Hazard::Drowning, 13).unwrap(),
+                hazards::titanium_damage(7, Hazard::Lava, 13).unwrap(),
+                hazards::titanium_damage(7, Hazard::Falling, 160).unwrap(),
+            ]
+        );
+        assert_eq!(outcome.unreliable, []);
+        let rejected = outcome.events.iter().filter(|event| {
+            matches!(event, ClientEvent::Diagnostic(line) if line.contains("Rejected LiquidDamage"))
+        }).count();
+        assert_eq!(rejected, 4 + usize::from(expiry_covered));
+        let buffs = outcome
+            .events
+            .iter()
+            .position(|event| matches!(event, ClientEvent::World(WorldEvent::BuffSnapshot(_))))
+            .unwrap();
+        assert!(matches!(
+            outcome.events.get(buffs + 1),
+            Some(ClientEvent::World(WorldEvent::LiquidHazardRevision {
+                session_id: 5,
+                revision: 2
+            }))
+        ));
+    }
+
+    #[test]
     fn exactly_one_feature_owns_each_command_a_zone_takes() {
         // Every server type, so that each command has an owner somewhere:
         // EQEmu has every feature but the bleed-out report, which TAKP has.
@@ -1365,11 +1520,10 @@ mod tests {
         ]
         .into_iter()
         .map(|protocol| {
-            Features::new(
-                servers::server_type(protocol),
-                "Tester",
-                eq_network_game::food::AutoEat::default(),
-            )
+            let mut setup =
+                servers::Setup::new("Tester", eq_network_game::food::AutoEat::default());
+            setup.local_only = protocol == crate::client::ServerProtocol::EqEmu;
+            Features::from_setup(servers::server_type(protocol), &setup)
         })
         .collect();
         for command in zone_commands() {
@@ -2130,6 +2284,18 @@ mod tests {
             assert!(!p99.contains(&capability));
         }
         assert!(p99.contains(&Capability::EnvironmentalDamage));
+        let mut setup = servers::Setup::new("Tester", eq_network_game::food::AutoEat::default());
+        setup.local_only = true;
+        let local = Features::from_setup(
+            servers::server_type(crate::client::ServerProtocol::EqEmu),
+            &setup,
+        )
+        .capabilities();
+        for liquid in [Capability::Drowning, Capability::LavaHeat] {
+            assert!(!p99.contains(&liquid));
+            assert!(!eqemu.contains(&liquid));
+            assert!(local.contains(&liquid));
+        }
         assert!(p99.contains(&Capability::AnsweringListPolls));
         assert!(!eqemu.contains(&Capability::AnsweringListPolls));
         assert!(eqemu.contains(&Capability::GameplayDepartures));

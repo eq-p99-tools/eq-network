@@ -37,9 +37,10 @@ impl Inventory {
                         item.details
                             .equipment
                             .is_none_or(|rules| rules.worn.is_some())
-                            || item.details.bonuses.is_none_or(|bonuses| {
-                                bonuses != crate::items::ItemBonuses::default()
-                            })
+                            || item
+                                .details
+                                .bonuses
+                                .is_none_or(crate::items::ItemBonuses::has_modifiers)
                     })
             {
                 self.equipment_uncertainty.insert(*slot);

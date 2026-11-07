@@ -77,6 +77,101 @@ fn stack(slot: i32, count: u32) -> InventoryItem {
 }
 
 #[test]
+fn an_equip_invalidates_a_liquid_sample_at_the_same_position() {
+    use crate::client::ClientConfig;
+    use eq_network_game::{
+        hazards::{LiquidHazard, LiquidObservation},
+        inventory::titanium_move,
+        items::{EquipmentRules, ItemBonuses},
+    };
+
+    let mut config = ClientConfig::new("Example", "Fixture", "Local", "Tester");
+    config.local_only = true;
+    config.protocol = ServerProtocol::EqEmu;
+    let mut world = World::for_zone(5, &config);
+    let mut setup = servers::Setup::new("Tester", config.auto_eat);
+    setup.local_only = true;
+    let mut features = Features::from_setup(servers::server_type(config.protocol), &setup);
+    let mut player = testing::player(7);
+    player.class = Some(1);
+    player.race = 1;
+    player.level = 60;
+    let position = player.position;
+    world.own_spawn = Some(7);
+    world.body.own(7);
+    world.body.place(position);
+    world.player.admit(player.clone());
+    world.admitted = Some(Instant::now());
+
+    let cursor = InventorySlot::CURSOR;
+    let worn = InventorySlot(17);
+    let mut item = testing::item(cursor.0);
+    item.details.equipment = Some(EquipmentRules::default());
+    item.details.bonuses = Some(ItemBonuses {
+        fire_resistance: Some(15),
+        ..ItemBonuses::default()
+    });
+    item.details.slots = 1 << 17;
+    item.details.classes = 1;
+    item.details.races = 1;
+
+    let output = testing::run(|out| -> Result<()> {
+        out.log.send(ClientEvent::World(WorldEvent::Entered {
+            capabilities: features.capabilities(),
+            choices: Vec::new(),
+            session_id: 5,
+            zone: "example".to_owned(),
+            player: Box::new(player),
+            far_clip: None,
+            spell_landing_flag: None,
+        }))?;
+        hear(
+            vec![Message::Event(WorldEvent::Inventory(
+                InventoryUpdate::Snapshot(vec![item]),
+            ))],
+            &mut features,
+            &mut world,
+            out,
+            true,
+        )?;
+        let old_heat = ClientCommand::LiquidDamage {
+            session_id: 5,
+            hazard: LiquidHazard::Lava,
+            amount: 19,
+            observation: LiquidObservation {
+                revision: 1,
+                position,
+                sampled_at: Instant::now(),
+            },
+        };
+        let equip = command(&world, cursor.0, worn.0, MoveQuantity::Whole);
+        assert!(
+            apply_commands(&[equip, old_heat], &mut features, &mut world, out, true)?.is_none()
+        );
+        Ok(())
+    });
+    output.result.unwrap();
+    assert_eq!(
+        output.sent,
+        [titanium_move(cursor, worn, MoveQuantity::Whole).unwrap()]
+    );
+    assert_eq!(output.unreliable, []);
+    assert!(world.inventory.items().contains_key(&worn));
+    assert!(world.inventory.equipment_stats_uncertain());
+    assert_eq!(world.player_at(), Some((7, position)));
+    assert!(output.events.windows(3).any(|events| matches!(
+        events,
+        [
+            ClientEvent::World(WorldEvent::InventoryAction {
+                session_id: 5, update: Some(InventoryUpdate::Prediction(_)), error: None, ..
+            }),
+            ClientEvent::World(WorldEvent::LiquidHazardRevision { session_id: 5, revision: 2 }),
+            ClientEvent::Diagnostic(line),
+        ] if line.contains("The liquid observation is no longer current")
+    )));
+}
+
+#[test]
 fn explicit_destroy_is_single_submission_through_p99_and_eqemu_inventory_owner() {
     for protocol in [ServerProtocol::Project1999, ServerProtocol::EqEmu] {
         let cursor = stack(30, 7);

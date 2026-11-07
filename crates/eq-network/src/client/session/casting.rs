@@ -224,18 +224,20 @@ impl Casting {
         }
     }
 
-    /// The empty request can interrupt an item too. Only a known gem cast
-    /// can use the fallback that releases a cast without a server answer.
+    /// Stops a Bard's song. An active hold must belong to a known gem cast
+    /// because the empty server request can interrupt other cast sources.
     fn stop_song(&mut self, world: &World, out: &mut Out<'_, '_>) -> Result<()> {
-        if !self.song_stop
-            || world
-                .player
-                .as_ref()
-                .is_none_or(|p| p.class != Some(BARD_CLASS))
-        {
+        if !self.song_stop {
             return out
                 .log
-                .diagnostic("Stopping songs is unavailable for this character".into());
+                .diagnostic("Stopping songs is unavailable on this server".into());
+        }
+        if world
+            .player
+            .as_ref()
+            .is_none_or(|p| p.class != Some(BARD_CLASS))
+        {
+            return out.log.diagnostic("Only Bards can stop a song".into());
         }
         if self.guard.active() && !matches!(self.guard.source, Some(Source::Gem(_))) {
             return out
@@ -243,7 +245,9 @@ impl Casting {
                 .diagnostic("Wait for the current cast to finish before stopping a song".into());
         }
         if self.guard.stop_deadline.is_some() {
-            return Ok(());
+            return out
+                .log
+                .diagnostic("A song stop is already awaiting a cast update".into());
         }
         out.request(&Request::StopSong)?;
         if self.guard.active() {
@@ -529,6 +533,15 @@ mod tests {
         assert!(output.events.is_empty());
         assert_eq!(casting.guard.pending(), Some(202));
 
+        let duplicate = testing::run(|out| casting.handle(&stop, &mut world, out));
+        duplicate.result.unwrap();
+        assert_eq!(duplicate.sent, []);
+        assert!(matches!(
+            duplicate.events.as_slice(),
+            [ClientEvent::Diagnostic(reason)]
+                if reason == "A song stop is already awaiting a cast update"
+        ));
+
         let refresh = |slot| {
             Message::Event(WorldEvent::Spell(SpellUpdate::BarRefresh {
                 slot,
@@ -567,6 +580,14 @@ mod tests {
         output.result.unwrap();
         assert!(output.events.is_empty());
 
+        let unavailable = testing::run(|out| Casting::default().handle(&stop, &mut world, out));
+        unavailable.result.unwrap();
+        assert_eq!(unavailable.sent, []);
+        assert!(matches!(
+            unavailable.events.as_slice(),
+            [ClientEvent::Diagnostic(reason)] if reason == "Stopping songs is unavailable on this server"
+        ));
+
         world.player.admit(testing::player(7));
         let output = testing::run(|out| casting.handle(&stop, &mut world, out));
         output.result.unwrap();
@@ -574,6 +595,10 @@ mod tests {
             output.sent,
             [] as [eq_network_game::command::EncodedCommand; 0]
         );
+        assert!(matches!(
+            output.events.as_slice(),
+            [ClientEvent::Diagnostic(reason)] if reason == "Only Bards can stop a song"
+        ));
 
         // The requested gem's refresh still completes the normal cast path.
         casting.guard.submitted(202, Some(Source::Gem(2)), now);

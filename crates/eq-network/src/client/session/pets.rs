@@ -13,16 +13,22 @@ use eq_network_game::{
     world::{SpawnKind, WorldEvent},
 };
 
+/// The set of pet orders a server provider exposes.
+pub(super) enum PetOrderSet {
+    Classic,
+    Expanded,
+}
+
 /// Projects the entity table's commandable pet and sends its orders.
 pub(super) struct Pets {
-    project1999: bool,
+    orders: PetOrderSet,
     revision: u64,
 }
 
 impl Pets {
-    pub(super) const fn new(project1999: bool) -> Self {
+    pub(super) const fn new(orders: PetOrderSet) -> Self {
         Self {
-            project1999,
+            orders,
             revision: 0,
         }
     }
@@ -112,7 +118,7 @@ impl Feature for Pets {
         else {
             return Ok(());
         };
-        if self.project1999 && !order.project1999_available() {
+        if matches!(self.orders, PetOrderSet::Classic) && !order.in_classic_order_set() {
             return actions::refuse(
                 command,
                 "That pet command is unavailable on this server",
