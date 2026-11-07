@@ -159,6 +159,14 @@ impl<'a> Parser<'a> {
         ensure!(bag_slots <= 10, "too many bag slots");
         let serialized_slot: i32 = header[2].parse().context("invalid inventory slot")?;
         let slot = location.unwrap_or(InventorySlot(serialized_slot));
+        // SerializeItem supplies the serial and attuned flag in the instance
+        // header. The static NoDrop byte is nonzero for droppable items.
+        let ground_drop_serial = (fields[0] == "0"
+            && bag_slots == 0
+            && fields[7].parse::<u8>().is_ok_and(|flag| flag > 0)
+            && header[9] == "0")
+            .then(|| header[6].parse().ok())
+            .flatten();
         self.items.push(InventoryItem {
             activation: super::ItemActivation::decode(&fields, header[7])?,
             scroll_spell: {
@@ -169,6 +177,7 @@ impl<'a> Parser<'a> {
             },
             book: crate::books::Book::from_titanium_item(fields[0], fields[100], fields[102])?,
             rules: ItemPlacement {
+                ground_drop_serial,
                 eqmac: None,
                 stack_size: number(131)?,
                 size: u8::try_from(number(8)?)?,

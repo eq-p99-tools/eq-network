@@ -4,6 +4,7 @@ mod activation;
 mod banking;
 mod destruction;
 mod eqmac;
+mod ground_drop;
 mod titanium;
 mod weight;
 pub use actions::{
@@ -24,6 +25,7 @@ pub use eqmac::{
     move_item as eqmac_move, takp_item_hit_points, EqMacItemRules, EqMacStackFlag,
     ItemHitPointCount, ItemRules, UnsettledItem, Wearer,
 };
+pub use ground_drop::{titanium_ground_drop, InventoryDrop};
 pub use titanium::decode;
 pub(crate) use titanium::{parse as parse_items, parse_at};
 pub use weight::WeightUnavailable;
@@ -31,6 +33,7 @@ pub use weight::WeightUnavailable;
 use crate::items::ItemDetails;
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::num::NonZeroU32;
 
 /// The cursor; items pushed onto it queue behind the one shown there.
 const CURSOR: InventorySlot = InventorySlot::CURSOR;
@@ -231,6 +234,10 @@ impl InventorySlot {
 /// Placement constraints from the server's item definition.
 #[derive(Clone, Debug, Default, PartialEq, Serialize)]
 pub struct ItemPlacement {
+    /// Titanium instance serial when its received definition is eligible for
+    /// the ordinary drop action. Unknown or restricted items have no value.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ground_drop_serial: Option<NonZeroU32>,
     /// Common-item `EQMac` restrictions, retaining unknown values for inspection.
     pub eqmac: Option<EqMacItemRules>,
     /// Maximum stack quantity from the server definition; zero means unknown.
@@ -274,16 +281,18 @@ pub struct InventoryItem {
 }
 
 impl InventoryItem {
-    /// Compare slot contents for inventory decisions. A model ID is display
-    /// metadata and can be omitted or changed without changing the item here.
+    /// Compare slot contents for placement decisions. Model IDs and the
+    /// instance serial used to authorize a ground drop are checked separately.
     #[must_use]
     pub fn same_slot_contents(left: Option<&Self>, right: Option<&Self>) -> bool {
         match (left, right) {
             (Some(left), Some(right))
-                if left.details.base_held_model != right.details.base_held_model =>
+                if left.details.base_held_model != right.details.base_held_model
+                    || left.rules.ground_drop_serial != right.rules.ground_drop_serial =>
             {
                 let mut comparable = left.clone();
                 comparable.details.base_held_model = right.details.base_held_model;
+                comparable.rules.ground_drop_serial = right.rules.ground_drop_serial;
                 &comparable == right
             }
             _ => left == right,
@@ -299,6 +308,8 @@ pub enum InventoryUpdate {
     /// Local whole-cursor removal after a successful destroy submission. It
     /// remains uncertain across silence settlement; only received state settles it.
     DestroyCursor,
+    /// A drop was submitted for this cursor instance. Its custody is unresolved.
+    GroundDropPending(NonZeroU32),
     /// One server-reported stack unit or charge consumed.
     Consume {
         /// Slot affected by the server.
@@ -385,9 +396,18 @@ pub struct Inventory {
     /// Original cursor mass retained after explicit destructive submission.
     /// Never retired by the ordinary movement silence heuristic.
     destroyed: Option<InventoryItem>,
+    ground_drop: Option<NonZeroU32>,
+    #[serde(skip)]
+    drop_cursor: ground_drop::CursorBasis,
 }
 
 impl Inventory {
+    /// Whether a submitted drop still awaits authoritative cursor state.
+    #[must_use]
+    pub const fn ground_drop_pending(&self) -> bool {
+        self.ground_drop.is_some()
+    }
+
     /// Monotonic local revision used to reject stale UI intents.
     #[must_use]
     pub const fn revision(&self) -> u64 {
@@ -465,6 +485,7 @@ impl Inventory {
     /// Applies a fully decoded update; a new snapshot replaces previous admission data.
     pub fn apply(&mut self, update: InventoryUpdate) {
         self.revision = self.revision.wrapping_add(1);
+        let received_cursor = self.observe_drop_cursor(&update);
         self.change(update);
         // As the Titanium client does, the next queued item moves up as soon
         // as the cursor empties.
@@ -476,6 +497,9 @@ impl Inventory {
             self.items
                 .extend(next.into_iter().map(|item| (item.slot, item)));
         }
+        if received_cursor && !self.stale() {
+            self.record_drop_cursor();
+        }
     }
 
     fn change(&mut self, update: InventoryUpdate) {
@@ -486,6 +510,7 @@ impl Inventory {
         match update {
             InventoryUpdate::Prediction(items) => self.predict(items),
             InventoryUpdate::DestroyCursor => self.predict_destruction(),
+            InventoryUpdate::GroundDropPending(serial) => self.ground_drop = Some(serial),
             InventoryUpdate::Consume { slot, charge } => {
                 let consumed = self
                     .items
@@ -546,6 +571,20 @@ impl Inventory {
                 }
             }
             InventoryUpdate::Remove(slot) => {
+                if let Some(serial) = self.ground_drop.filter(|_| slot == CURSOR) {
+                    if self
+                        .items
+                        .get(&slot)
+                        .and_then(|item| item.rules.ground_drop_serial)
+                        != Some(serial)
+                    {
+                        // An unversioned removal might refer to the dropped
+                        // item, not the newer item now occupying the cursor.
+                        self.stale = true;
+                        return;
+                    }
+                    self.ground_drop = None;
+                }
                 if slot == CURSOR && self.destroyed.is_some() {
                     // A new cursor arrival/replacement cannot be identified as
                     // the item an unversioned late removal names.
@@ -587,6 +626,7 @@ impl Inventory {
     /// Replaces every inventory baseline with a complete received snapshot.
     fn replace_snapshot(&mut self, items: Vec<InventoryItem>) {
         self.destroyed = None;
+        self.ground_drop = None;
         self.items = items.into_iter().map(|item| (item.slot, item)).collect();
         self.queued.clear();
         self.received = true;
@@ -653,6 +693,7 @@ impl Inventory {
                 .collect()
         };
         updates.extend(self.queued.iter().cloned().map(InventoryUpdate::Cursor));
+        updates.extend(self.ground_drop.map(InventoryUpdate::GroundDropPending));
         if self.stale() {
             updates.push(InventoryUpdate::Invalidated);
         }

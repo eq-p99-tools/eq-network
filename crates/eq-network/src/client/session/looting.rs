@@ -180,6 +180,13 @@ impl Feature for Looting {
                 place,
                 ..
             } => {
+                if world.inventory.ground_drop_pending() {
+                    return actions::refuse(
+                        command,
+                        "Wait for received cursor state after the drop.",
+                        out.log,
+                    );
+                }
                 if self.require_empty_cursor
                     && (!world.inventory.received()
                         || world.inventory.stale()

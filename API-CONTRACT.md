@@ -410,6 +410,30 @@ be migrated; this is a breaking development API change for the next minor
 pre-1.0 release. Authoritative inventory updates remain ordinary inventory
 events, with existing uncertainty, correction and snapshot rules unchanged.
 
+## Ordinary cursor drops
+
+`Capability::GroundDropping` offers `GameCommand::DropItem` on the Titanium
+P99 and EQEmu paths. Pass the current admission, own spawn, inventory revision,
+and exact received cursor item in `InventoryDrop` after explicit user consent.
+`Inventory::plan_ground_drop` requires a positively identified ordinary
+droppable instance and an unqueued cursor. A predicted move settled by silence
+leaves the drop unavailable until the server identifies the new cursor.
+
+Titanium sends an empty `OP_GroundSpawn`. The server chooses the cursor item
+and position. A successful `InventoryAction` with
+`InventoryUpdate::GroundDropPending` reports local submission and fences
+cursor custody. Apply it once at the matching admission and inventory
+revision. A matching received cursor removal or a full inventory snapshot
+releases the fence. A later replacement cursor makes an unversioned removal
+ambiguous and requires a snapshot. Stock Titanium EQEmu can send the object
+without sending cursor removal, so recovery may require a fresh inventory
+admission. Do not retry on silence.
+
+Process received ground spawns and removals through the existing object
+owner. The spawn carries no cursor instance correlation, and pickup delivery
+still comes from received inventory. Downstream exhaustive command, capability
+and inventory-update matches and `ItemPlacement` literals need migration.
+
 ## Local loot request disposition
 
 `WorldEvent::LootRequest` adds an exhaustive event variant. Its `LootRequest`

@@ -228,6 +228,85 @@ fn explicit_destroy_is_single_submission_through_p99_and_eqemu_inventory_owner()
 }
 
 #[test]
+fn ordinary_drop_submits_once_and_nearby_objects_cannot_settle_custody() {
+    use eq_network_game::{
+        inventory::{titanium_ground_drop, InventoryDrop},
+        objects::{GroundObject, ObjectUpdate},
+    };
+
+    for protocol in [ServerProtocol::Project1999, ServerProtocol::EqEmu] {
+        let mut cursor = stack(30, 7);
+        cursor.rules.ground_drop_serial = NonZeroU32::new(17);
+        let (mut features, mut world) = setup(protocol, vec![cursor.clone()]);
+        let request = |world: &World, own_id| {
+            ClientCommand::DropItem(Box::new(InventoryDrop {
+                session_id: world.session_id,
+                own_id,
+                revision: world.inventory.revision(),
+                item: cursor.clone(),
+                created: Instant::now(),
+            }))
+        };
+        let wrong_actor = request(&world, 8);
+        let refused = submit(protocol, &mut features, &mut world, &wrong_actor);
+        assert!(refused.result.unwrap() && refused.sent.is_empty());
+        assert!(!world.inventory.ground_drop_pending());
+
+        let drop = request(&world, 7);
+        let output = submit(protocol, &mut features, &mut world, &drop);
+        assert!(output.result.unwrap());
+        assert_eq!(output.sent, [titanium_ground_drop()]);
+        assert!(output.unreliable.is_empty());
+        assert!(world.inventory.ground_drop_pending());
+        assert_eq!(
+            world.inventory.items().get(&InventorySlot::CURSOR),
+            Some(&cursor)
+        );
+
+        let object = Message::Event(WorldEvent::Objects(ObjectUpdate::Spawn(GroundObject {
+            drop_id: 41,
+            model: "IT63_ACTORDEF".into(),
+            position: Default::default(),
+            object_type: 0,
+        })));
+        testing::run_on(servers::server_type(protocol).wire(), |out| {
+            features.observe(&object, &mut world, out)
+        })
+        .result
+        .unwrap();
+        let repeat = request(&world, 7);
+        let rejected = submit(protocol, &mut features, &mut world, &repeat);
+        assert!(rejected.result.unwrap() && rejected.sent.is_empty());
+        assert!(world.inventory.ground_drop_pending());
+        let pickup = ClientCommand::PickUp {
+            session_id: world.session_id,
+            drop_id: 41,
+            created: Instant::now(),
+        };
+        let held = submit(protocol, &mut features, &mut world, &pickup);
+        assert!(held.result.unwrap() && held.sent.is_empty());
+
+        observe(
+            protocol,
+            &mut features,
+            &mut world,
+            InventoryUpdate::Remove(InventorySlot::CURSOR),
+        );
+        assert!(!world.inventory.ground_drop_pending());
+        let pickup = ClientCommand::PickUp {
+            session_id: world.session_id,
+            drop_id: 41,
+            created: Instant::now(),
+        };
+        let normal = submit(protocol, &mut features, &mut world, &pickup);
+        assert!(normal.result.unwrap());
+        assert_eq!(normal.sent.len(), 1);
+        assert_eq!(normal.sent[0].opcode, 0x3bc2);
+        assert!(!world.inventory.items().contains_key(&InventorySlot::CURSOR));
+    }
+}
+
+#[test]
 fn destroy_stale_admission_expiry_and_replacement_send_nothing() {
     for case in 0..4 {
         let protocol = ServerProtocol::Project1999;
@@ -272,54 +351,72 @@ fn destroy_stale_admission_expiry_and_replacement_send_nothing() {
 }
 
 #[test]
-fn destroy_transport_failure_attempts_once_without_committing_a_prediction() {
+fn cursor_actions_attempt_transport_once_and_leave_inventory_unchanged_on_failure() {
     use super::super::feature::{Out, Sink};
-    use eq_network_game::command::EncodedCommand;
+    use eq_network_game::{
+        command::EncodedCommand,
+        inventory::{InventoryDestroy, InventoryDrop},
+    };
     #[derive(Default)]
     struct FailingSink(usize);
     impl Sink for FailingSink {
         fn send(&mut self, _packet: &EncodedCommand) -> Result<()> {
             self.0 += 1;
-            anyhow::bail!("Synthetic destroy transport failure")
+            anyhow::bail!("Synthetic cursor action transport failure")
         }
         fn send_unreliable(&mut self, _packet: &EncodedCommand) -> Result<()> {
-            panic!("Destruction requires reliable transport")
+            panic!("Cursor actions require reliable transport")
         }
         fn last_received_seconds(&self) -> u64 {
             0
         }
     }
-    let protocol = ServerProtocol::EqEmu;
-    let cursor = stack(30, 7);
-    let (mut features, mut world) = setup(protocol, vec![cursor.clone()]);
-    let command =
-        ClientCommand::DestroyItem(Box::new(eq_network_game::inventory::InventoryDestroy {
-            session_id: world.session_id,
-            revision: world.inventory.revision(),
-            item: cursor,
-            created: Instant::now(),
-        }));
-    let original = world.inventory.clone();
-    let mut sink = FailingSink::default();
-    let output = testing::run_on(servers::server_type(protocol).wire(), |out| {
-        features.handle(
-            &command,
-            &mut world,
-            &mut Out {
-                sink: &mut sink,
-                log: out.log,
-                wire: out.wire,
-                sender: out.sender,
-            },
-        )
-    });
-    assert!(output.result.is_err());
-    assert_eq!(sink.0, 1);
-    assert_eq!(&*world.inventory, &original);
-    assert!(!output.events.iter().any(|event| matches!(
-        event,
-        ClientEvent::World(WorldEvent::InventoryAction { error: None, .. })
-    )));
+    for drop in [false, true] {
+        let protocol = ServerProtocol::EqEmu;
+        let mut cursor = stack(30, 7);
+        cursor.rules.ground_drop_serial = NonZeroU32::new(17);
+        let (mut features, mut world) = setup(protocol, vec![cursor.clone()]);
+        let session_id = world.session_id;
+        let revision = world.inventory.revision();
+        let created = Instant::now();
+        let command = if drop {
+            ClientCommand::DropItem(Box::new(InventoryDrop {
+                session_id,
+                own_id: 7,
+                revision,
+                item: cursor,
+                created,
+            }))
+        } else {
+            ClientCommand::DestroyItem(Box::new(InventoryDestroy {
+                session_id,
+                revision,
+                item: cursor,
+                created,
+            }))
+        };
+        let original = world.inventory.clone();
+        let mut sink = FailingSink::default();
+        let output = testing::run_on(servers::server_type(protocol).wire(), |out| {
+            features.handle(
+                &command,
+                &mut world,
+                &mut Out {
+                    sink: &mut sink,
+                    log: out.log,
+                    wire: out.wire,
+                    sender: out.sender,
+                },
+            )
+        });
+        assert!(output.result.is_err());
+        assert_eq!(sink.0, 1);
+        assert_eq!(&*world.inventory, &original);
+        assert!(!output.events.iter().any(|event| matches!(
+            event,
+            ClientEvent::World(WorldEvent::InventoryAction { error: None, .. })
+        )));
+    }
 }
 
 #[test]

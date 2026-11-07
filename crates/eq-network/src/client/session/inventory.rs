@@ -295,6 +295,7 @@ fn told(update: &InventoryUpdate) -> String {
         InventoryUpdate::DestroyCursor => {
             "a submitted cursor destruction (local prediction)".into()
         }
+        InventoryUpdate::GroundDropPending(_) => "a submitted cursor drop awaiting state".into(),
         InventoryUpdate::Prediction(items) => format!("a prediction for slots {}", slots(items)),
         InventoryUpdate::Consume { slot, charge } => format!(
             "a {} used from slot {}",
@@ -519,6 +520,47 @@ impl Belongings {
             .inventory
             .plan_destroy(self.rules, request)
             .and_then(|update| Ok((update, out.encode(&Request::DestroyCursor)?)));
+        let (update, error) = match planned {
+            Ok((update, packet)) => {
+                out.send(&packet)?;
+                world.inventory.0.apply(update.clone());
+                (Some(update), None)
+            }
+            Err(error) => (None, Some(error.to_string())),
+        };
+        out.log
+            .send(ClientEvent::World(WorldEvent::InventoryAction {
+                session_id: request.session_id,
+                revision: request.revision,
+                sequence: None,
+                update,
+                error,
+            }))
+    }
+
+    /// Submits a drop once and fences custody until received cursor state.
+    fn drop_item(
+        request: &eq_network_game::inventory::InventoryDrop,
+        world: &mut World,
+        out: &mut Out<'_, '_>,
+    ) -> Result<()> {
+        let planned: Result<_> = (|| {
+            anyhow::ensure!(
+                world.ready()
+                    && !world.lifecycle.blocks_motion()
+                    && request.session_id == world.session_id
+                    && world.own_spawn == Some(request.own_id)
+                    && world
+                        .player_at()
+                        .is_some_and(|(actor, _)| actor == request.own_id),
+                "That cursor drop belongs to another admission or actor"
+            );
+            let serial = world.inventory.plan_ground_drop(request)?;
+            Ok((
+                InventoryUpdate::GroundDropPending(serial),
+                out.encode(&Request::DropCursor)?,
+            ))
+        })();
         let (update, error) = match planned {
             Ok((update, packet)) => {
                 out.send(&packet)?;
@@ -877,6 +919,9 @@ impl Feature for Belongings {
         let mut offered = Vec::new();
         if self.allows.items {
             offered.push(Capability::Inventory);
+            if self.rules == MoveRules::EqEmu {
+                offered.push(Capability::GroundDropping);
+            }
         }
         if self.allows.merchants {
             offered.push(Capability::Trading);
@@ -919,11 +964,16 @@ impl Feature for Belongings {
         Ok(())
     }
 
-    /// Only a merchant reply holds the inventory. Neither generation's move
-    /// routine waits for a previous item move (`EQMac` 0x422b1c, Titanium 0x51a9a8).
-    fn holds(&self, _world: &World, _now: Instant) -> Vec<(Resource, &'static str)> {
+    /// Merchant and cursor drop custody hold the inventory. Ordinary moves
+    /// stay pipelined (`EQMac` 0x422b1c, Titanium 0x51a9a8).
+    fn holds(&self, world: &World, _now: Instant) -> Vec<(Resource, &'static str)> {
         if self.trades.active() {
             vec![(Resource::Inventory, "Wait for the merchant to answer")]
+        } else if world.inventory.ground_drop_pending() {
+            vec![(
+                Resource::Inventory,
+                "Wait for received cursor state after the drop",
+            )]
         } else {
             Vec::new()
         }
@@ -933,6 +983,7 @@ impl Feature for Belongings {
         match command {
             ClientCommand::MoveInventory(_) => self.allows.items,
             ClientCommand::DestroyItem(_) => self.allows.items && self.rules == MoveRules::EqEmu,
+            ClientCommand::DropItem(_) => self.allows.items && self.rules == MoveRules::EqEmu,
             ClientCommand::MoveCoins { .. } => self.allows.coins,
             ClientCommand::Shop { .. } | ClientCommand::Buy { .. } | ClientCommand::Sell { .. } => {
                 self.allows.merchants
@@ -954,6 +1005,7 @@ impl Feature for Belongings {
         match command {
             ClientCommand::MoveInventory(request) => self.move_item(request, world, out),
             ClientCommand::DestroyItem(request) => self.destroy_item(request, world, out),
+            ClientCommand::DropItem(request) => Self::drop_item(request, world, out),
             ClientCommand::MoveCoins { .. } => Self::move_coins(command, world, out),
             ClientCommand::Shop { .. } => self.shop(command, world, out),
             ClientCommand::AutoEat { auto_eat, .. } => {

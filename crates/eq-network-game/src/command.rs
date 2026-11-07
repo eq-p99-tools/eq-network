@@ -215,6 +215,8 @@ pub enum GameCommand {
     MoveInventory(crate::inventory::InventoryMove),
     /// Explicitly destroy the confirmed whole cursor item or stack.
     DestroyItem(Box<crate::inventory::InventoryDestroy>),
+    /// Drop the exact current ordinary cursor item into the zone.
+    DropItem(Box<crate::inventory::InventoryDrop>),
     /// Send one chat message.
     SendChat(OutboundChat),
     /// Remove the selected NPC in a network-constrained local `EQEmu` fixture.
@@ -815,6 +817,7 @@ impl GameCommand {
             Self::SetPosture { .. } => "SetPosture",
             Self::MoveInventory(..) => "MoveInventory",
             Self::DestroyItem(..) => "DestroyItem",
+            Self::DropItem(..) => "DropItem",
             Self::SendChat(..) => "SendChat",
             Self::DepopLocalNpc { .. } => "DepopLocalNpc",
             Self::InspectItem { .. } => "InspectItem",
@@ -898,6 +901,7 @@ impl GameCommand {
             Self::UseItem(request) => Some(request.session_id),
             Self::MoveInventory(request) => Some(request.session_id),
             Self::DestroyItem(request) => Some(request.session_id),
+            Self::DropItem(request) => Some(request.session_id),
             Self::Move(request) => Some(request.session_id),
             Self::SwapSpell { session_id, .. }
             | Self::ClickDoor { session_id, .. }
@@ -1022,6 +1026,7 @@ impl GameCommand {
                 crate::hazards::LiquidHazard::Lava => Capability::LavaHeat,
             },
             Self::MoveInventory(_) | Self::DestroyItem(_) => Capability::Inventory,
+            Self::DropItem(_) => Capability::GroundDropping,
             Self::Consume { .. } | Self::AutoEat { .. } => Capability::Meals,
             Self::AnswerListPolls { .. } => Capability::AnsweringListPolls,
             Self::SendChat(_) | Self::InspectItem { .. } | Self::DepopLocalNpc { .. } => {
@@ -1139,6 +1144,7 @@ impl GameCommand {
             Self::UseItem(request) => Some(request.created),
             Self::MoveInventory(request) => Some(request.created),
             Self::DestroyItem(request) => Some(request.created),
+            Self::DropItem(request) => Some(request.created),
             Self::Move(request) => Some(request.created),
             Self::SwapSpell { created, .. }
             | Self::ClickDoor { created, .. }
@@ -1350,6 +1356,7 @@ pub fn encode(
         // What these send depends on the admitted session's state.
         GameCommand::MoveInventory(_)
         | GameCommand::DestroyItem(_)
+        | GameCommand::DropItem(_)
         | GameCommand::ClickDoor { .. }
         | GameCommand::PickUp { .. }
         | GameCommand::OpenContainer { .. }

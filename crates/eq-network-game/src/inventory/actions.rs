@@ -260,6 +260,10 @@ impl Inventory {
         actor: InventoryActor,
     ) -> Result<InventoryUpdate> {
         ensure!(
+            !self.ground_drop_pending(),
+            "Wait for received cursor state after the drop"
+        );
+        ensure!(
             self.received && !self.stale(),
             "Wait for a current inventory snapshot"
         );

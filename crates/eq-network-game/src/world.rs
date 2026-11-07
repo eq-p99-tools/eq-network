@@ -580,12 +580,14 @@ pub enum Capability {
     Drowning,
     /// The Titanium client can report lava heat through environmental damage.
     LavaHeat,
+    /// Put one verified ordinary Titanium cursor item on the ground.
+    GroundDropping,
 }
 
 impl Capability {
     /// Every capability, in order: what a session offers when its server and
     /// client generation support everything.
-    pub const ALL: [Self; 52] = [
+    pub const ALL: [Self; 53] = [
         Self::Casting,
         Self::Spellbook,
         Self::Inventory,
@@ -638,6 +640,7 @@ impl Capability {
         Self::Swimming,
         Self::Drowning,
         Self::LavaHeat,
+        Self::GroundDropping,
     ];
 }
 
@@ -2162,6 +2165,7 @@ mod tests {
             Capability::Swimming => 49,
             Capability::Drowning => 50,
             Capability::LavaHeat => 51,
+            Capability::GroundDropping => 52,
         };
         for (index, capability) in Capability::ALL.into_iter().enumerate() {
             assert_eq!(place(capability), index, "{capability:?}");

@@ -113,6 +113,7 @@ pub(super) fn needs(command: &ClientCommand) -> &'static [Resource] {
         }
         // A pickup needs the cursor and its own duplicate-request gate.
         ClientCommand::PickUp { .. } => &[Inventory, GroundPickup],
+        ClientCommand::DropItem(_) => &[Casting, Inventory, GroundPickup],
         // Give hands the trade slots over.
         ClientCommand::MoveInventory(_)
         | ClientCommand::DestroyItem(_)
@@ -280,6 +281,13 @@ fn refusal(command: &ClientCommand, reason: &str) -> Option<WorldEvent> {
             error,
         },
         ClientCommand::DestroyItem(request) => WorldEvent::InventoryAction {
+            session_id: request.session_id,
+            revision: request.revision,
+            sequence: None,
+            update: None,
+            error,
+        },
+        ClientCommand::DropItem(request) => WorldEvent::InventoryAction {
             session_id: request.session_id,
             revision: request.revision,
             sequence: None,
