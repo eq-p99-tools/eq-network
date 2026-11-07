@@ -1,5 +1,7 @@
 //! Carried item weight from complete authoritative inventory definitions.
-use super::{Inventory, InventoryItem, InventorySlot, InventoryUpdate};
+use super::{
+    stack_weight::StackWeightBound, Inventory, InventoryItem, InventorySlot, InventoryUpdate,
+};
 use crate::GameDialect;
 use std::collections::BTreeMap;
 
@@ -34,7 +36,7 @@ impl DropWeight {
             || inventory
                 .stack_weight
                 .as_ref()
-                .is_some_and(|bound| bound.active())
+                .is_some_and(StackWeightBound::active)
             || inventory.queued().next().is_some()
             || inventory.items().keys().any(|slot| slot.is_in_cursor_bag())
         {
