@@ -2370,7 +2370,8 @@ mod tests {
         assert!(p99.contains(&Capability::GameplayDepartures));
         assert!(eqemu.contains(&Capability::Swimming));
         assert!(!p99.contains(&Capability::Swimming));
-        assert_eq!(eqemu.len(), p99.len() + 17);
+        // EQEmu also offers GroundDropping.
+        assert_eq!(eqemu.len(), p99.len() + 18);
     }
 
     #[test]
