@@ -922,15 +922,17 @@ the departures while the owner tests them (2026-11-06); a departure on a
 public server is faster or more permissive than the official client, and the
 accessor is the one place to withhold it per server type.
 
-`movement::MovementOptions` starts with all fields false. The admission-scoped
+`movement::MovementOptions` starts with both toggles off and ordinary running
+speed. The admission-scoped
 `SetMovementOptions { session_id, request_id, options, created }` command keeps ordinary movement
 unchanged when off. `walk_while_stunned` permits fresh movement input during a
 current stun without clearing it or admitting pre-transition input; casting,
-items and jumping retain their independent stun gates. `run_boost` raises
-only forward-running/Fall horizontal speed by `MovementOptions::RUN_BOOST`
-(1.1); other calibrated modes keep their speeds. Calibration events retain
-the unmodified source-derived speeds. The host applies the same explicit
-multiplier when proposing running movement. `fly` permits ascent/descent
+items and jumping retain their independent stun gates. `run_speed_multiplier`
+scales forward running, including the forward component of grounded diagonals,
+and the horizontal budget for a Fall sample. `RunSpeedMultiplier` holds 100
+through 140 percent in one-percentage-point steps, with 100 as the default.
+Calibration events retain the source-derived speeds. The host applies the
+same multiplier when proposing running movement. `fly` permits ascent/descent
 within the current mode's elapsed speed budget. These options never bypass
 session identity, input freshness, finite coordinates, fixed bounds, current
 known speed, corrections, death or transfer gates. Changes invalidate pre-toggle queued input using the caller stamp, preserve

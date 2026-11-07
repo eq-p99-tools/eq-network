@@ -339,23 +339,57 @@ impl MovementBounds {
     }
 }
 
+/// A selected forward running speed in hundredths of the calibrated speed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(transparent)]
+pub struct RunSpeedMultiplier(u16);
+
+impl RunSpeedMultiplier {
+    /// Ordinary calibrated speed.
+    pub const NORMAL: Self = Self(100);
+    /// Highest multiplier offered by the client.
+    pub const MAX: Self = Self(140);
+
+    /// A valid selection from 100 through 140 percent.
+    #[must_use]
+    pub const fn from_percent(percent: u16) -> Option<Self> {
+        if percent >= Self::NORMAL.0 && percent <= Self::MAX.0 {
+            Some(Self(percent))
+        } else {
+            None
+        }
+    }
+
+    /// The multiplier as a whole percentage.
+    #[must_use]
+    pub const fn percent(self) -> u16 {
+        self.0
+    }
+
+    /// The factor for scaling calibrated forward and fall speeds.
+    #[must_use]
+    pub fn factor(self) -> f32 {
+        f32::from(self.0) / 100.0
+    }
+}
+
+impl Default for RunSpeedMultiplier {
+    fn default() -> Self {
+        Self::NORMAL
+    }
+}
+
 /// Explicit movement departures, all disabled by default. These are local
 /// policy choices, not native movement rules or detection guarantees.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize)]
 pub struct MovementOptions {
     /// Permit fresh voluntary motion while stunned. Other stun gates remain.
     pub walk_while_stunned: bool,
-    /// Increase forward running speed by [`Self::RUN_BOOST`]. A forward
-    /// step that leaves ground keeps this horizontal budget as a fall sample.
-    pub run_boost: bool,
+    /// Scale the forward running component. A forward step that leaves ground
+    /// keeps this horizontal budget as a fall sample.
+    pub run_speed_multiplier: RunSpeedMultiplier,
     /// Permit vertical travel within the current mode's elapsed speed budget.
     pub fly: bool,
-}
-
-impl MovementOptions {
-    /// The explicit 10% run increase. This is application policy, with no
-    /// assertion about server acceptance or movement detection thresholds.
-    pub const RUN_BOOST: f32 = 1.1;
 }
 
 /// Validates proposed motion without trusting render-frame timing or accumulating idle credit.

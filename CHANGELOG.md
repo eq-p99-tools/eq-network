@@ -5,6 +5,10 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Accept a bounded 1.00 to 1.40 forward run speed multiplier in local
+  movement options. The worker budgets the same forward component and fall
+  drift as the host, with ordinary speed as the default.
+
 ### Added
 
 - Submit an ordinary Titanium cursor drop on EQEmu through

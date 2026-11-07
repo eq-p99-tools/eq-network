@@ -294,6 +294,7 @@ fn movement_policy_feedback_is_local_and_refusals_keep_prior_policy() {
     ));
     let options = eq_network_game::movement::MovementOptions {
         fly: true,
+        run_speed_multiplier: eq_network_game::movement::RunSpeedMultiplier::MAX,
         ..Default::default()
     };
     let command = ClientCommand::SetMovementOptions {

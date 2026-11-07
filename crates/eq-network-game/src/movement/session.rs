@@ -706,10 +706,8 @@ impl MotionSession {
         // The host can integrate a boosted forward step before collision
         // reclassifies it as Fall. Keep the same horizontal budget for the
         // transition and its bounded drift.
-        let speed = if self.options.run_boost
-            && matches!(along, MovementMode::Forward | MovementMode::Fall)
-        {
-            speed * super::MovementOptions::RUN_BOOST
+        let speed = if matches!(along, MovementMode::Forward | MovementMode::Fall) {
+            speed * self.options.run_speed_multiplier.factor()
         } else {
             speed
         };
