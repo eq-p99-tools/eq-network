@@ -49,6 +49,10 @@ selects the classic order set, which excludes Hold, Feign, NoCast and Focus.
 The EQEmu provider selects the expanded set. Local submission leaves
 execution and any further restrictions to the server.
 
+`PetCommand::project1999_available` is deprecated in favor of
+`PetCommand::in_classic_order_set`. The compatibility alias returns the
+same classification. The provider chooses the order set for each admission.
+
 ## Titanium EQEmu swimming bound
 
 Only the Titanium `EQEmu` policy offers `Capability::Swimming`; P99, Quarm
