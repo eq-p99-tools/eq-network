@@ -190,7 +190,8 @@ fn p99_completed_translocate_cannot_reopen_or_move_through_an_old_echo() {
         result.events.into_iter().any(|event| {
             matches!(
                 event,
-                ClientEvent::World(WorldEvent::Position { spawn_id: 7, .. })
+                ClientEvent::World(WorldEvent::SameZoneRelocated(arrival))
+                    if arrival.session_id == 5 && arrival.spawn_id == 7
             )
         })
     };
