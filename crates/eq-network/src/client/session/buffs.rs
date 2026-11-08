@@ -10,6 +10,7 @@ use eq_network_game::{
         cancel::{self, Progress, Request},
         Buff,
     },
+    command::EncodedCommand,
     message::Message,
     world::WorldEvent,
 };
@@ -26,9 +27,44 @@ pub(super) struct Buffs {
     slots: Option<BTreeMap<u32, Buff>>,
     revision: u64,
     pending: Option<(Request, Instant)>,
+    p99: bool,
 }
 
 impl Buffs {
+    /// Uses the two Titanium packets for one ordinary P99 cancel action.
+    pub(super) fn project1999() -> Self {
+        Self {
+            p99: true,
+            ..Self::default()
+        }
+    }
+
+    /// Revalidates the exact received slot and encodes the entire transaction
+    /// before submitting either packet.
+    fn cancellation_packets(
+        &self,
+        request: &Request,
+        world: &World,
+    ) -> Result<(EncodedCommand, Option<EncodedCommand>)> {
+        anyhow::ensure!(
+            self.pending.is_none(),
+            "Wait for the buff cancellation observation"
+        );
+        request.check(self.revision, self.slots.as_ref())?;
+        let own = world
+            .player
+            .as_ref()
+            .map(|player| player.spawn_id)
+            .ok_or_else(|| anyhow::anyhow!("The player is unavailable"))?;
+        if self.p99 {
+            let [fade, clear] = cancel::project1999_packets(own, request.slot, request.spell_id)?;
+            Ok((fade, Some(clear)))
+        } else {
+            let buff = &self.slots.as_ref().expect("checked slots")[&request.slot];
+            Ok((cancel::titanium_packet(own, request.slot, buff)?, None))
+        }
+    }
+
     fn snapshot(&mut self, buffs: &[Option<Buff>]) {
         self.slots = Some(
             buffs
@@ -77,26 +113,16 @@ impl Feature for Buffs {
         let ClientCommand::CancelBuff(request) = command else {
             return Ok(());
         };
-        let checked = (|| {
-            anyhow::ensure!(
-                self.pending.is_none(),
-                "Wait for the buff cancellation observation"
-            );
-            request.check(self.revision, self.slots.as_ref())?;
-            let own = world
-                .player
-                .as_ref()
-                .map(|player| player.spawn_id)
-                .ok_or_else(|| anyhow::anyhow!("The player is unavailable"))?;
-            let buff = &self.slots.as_ref().expect("checked slots")[&request.slot];
-            cancel::titanium_packet(own, request.slot, buff)
-        })();
-        let packet = match checked {
-            Ok(packet) => packet,
+        let (first, second) = match self.cancellation_packets(request, world) {
+            Ok(packets) => packets,
             Err(error) => return actions::refuse(command, &error.to_string(), out.log),
         };
-        out.send(&packet)?;
+        out.send(&first)?;
         self.pending = Some((request.clone(), Instant::now()));
+        if let Err(error) = second.map_or(Ok(()), |packet| out.send(&packet)) {
+            Self::report(request, Progress::PartiallySubmitted, out)?;
+            return Err(error);
+        }
         Self::report(request, Progress::Submitted, out)
     }
 
@@ -119,7 +145,10 @@ impl Feature for Buffs {
     }
 
     fn connection_ended(&mut self, _world: &mut World) {
-        *self = Self::default();
+        *self = Self {
+            p99: self.p99,
+            ..Self::default()
+        };
     }
 
     fn observe(
@@ -128,12 +157,21 @@ impl Feature for Buffs {
         world: &mut World,
         out: &mut Out<'_, '_>,
     ) -> Result<()> {
+        if world.lifecycle.blocks_motion()
+            || matches!(
+                message,
+                Message::ZoneOffer(_)
+                    | Message::ZoneAnswer(_)
+                    | Message::Handoff(_)
+                    | Message::LoggedOut
+            )
+            || matches!(message, Message::Event(event) if world.owns_death(event))
+        {
+            self.pending = None;
+        }
         let Message::Event(event) = message else {
             return Ok(());
         };
-        if world.lifecycle.is_dead() || world.lifecycle.blocks_motion() {
-            self.pending = None;
-        }
         // Keep reducing received slots even during a transfer: a refused
         // transfer resumes this admission without another profile snapshot.
         let mut faded = None;
@@ -201,13 +239,21 @@ mod tests {
     use eq_network_game::buffs::BuffUpdate;
 
     #[test]
-    fn a_failed_transport_send_creates_no_pending_or_success_report() {
+    fn failing_the_first_or_second_send_keeps_the_submitted_prefix_explicit() {
         use super::super::feature::Sink;
         use eq_network_game::{command::EncodedCommand, request::Sender};
-        struct Fails;
+        struct Fails {
+            accepted: usize,
+            before_failure: usize,
+        }
         impl Sink for Fails {
             fn send(&mut self, _packet: &EncodedCommand) -> Result<()> {
-                anyhow::bail!("constructed send failure")
+                anyhow::ensure!(
+                    self.accepted < self.before_failure,
+                    "constructed send failure"
+                );
+                self.accepted += 1;
+                Ok(())
             }
             fn send_unreliable(&mut self, _packet: &EncodedCommand) -> Result<()> {
                 anyhow::bail!("constructed send failure")
@@ -216,33 +262,50 @@ mod tests {
                 0
             }
         }
-        let (mut buffs, mut world, command) = fixture();
-        let config =
-            crate::client::ClientConfig::new("EXAMPLE", "EXAMPLE", "Constructed", "Constructed");
-        let mut events = Vec::new();
-        let mut handler = |event| {
-            events.push(event);
-            Ok(())
-        };
-        let mut log = super::super::Events::new(&config, &mut handler);
-        let result = buffs.handle(
-            &command,
-            &mut world,
-            &mut Out {
-                sink: &mut Fails,
-                log: &mut log,
-                wire: &super::super::wire::Titanium,
-                sender: Sender {
-                    name: "Constructed",
-                    spawn_id: Some(7),
+        for (p99, before_failure) in [(false, 0), (true, 0), (true, 1)] {
+            let (mut buffs, mut world, command) = fixture();
+            buffs.p99 = p99;
+            let config = crate::client::ClientConfig::new(
+                "EXAMPLE",
+                "EXAMPLE",
+                "Constructed",
+                "Constructed",
+            );
+            let mut events = Vec::new();
+            let mut handler = |event| {
+                events.push(event);
+                Ok(())
+            };
+            let mut log = super::super::Events::new(&config, &mut handler);
+            let mut sink = Fails {
+                accepted: 0,
+                before_failure,
+            };
+            let result = buffs.handle(
+                &command,
+                &mut world,
+                &mut Out {
+                    sink: &mut sink,
+                    log: &mut log,
+                    wire: &super::super::wire::Titanium,
+                    sender: Sender {
+                        name: "Constructed",
+                        spawn_id: Some(7),
+                    },
                 },
-            },
-        );
-        assert!(result.is_err());
-        drop(log);
-        assert!(events.is_empty());
-        assert!(buffs.pending.is_none());
-        assert_eq!(buffs.slots.as_ref().unwrap()[&3].spell_id, 42);
+            );
+            assert!(result.is_err());
+            assert_eq!(sink.accepted, before_failure);
+            drop(log);
+            if before_failure == 0 {
+                assert!(events.is_empty());
+                assert!(buffs.pending.is_none());
+            } else {
+                assert_eq!(progress(&events), [Progress::PartiallySubmitted]);
+                assert!(buffs.pending.is_some());
+            }
+            assert_eq!(buffs.slots.as_ref().unwrap()[&3].spell_id, 42);
+        }
     }
 
     fn buff(spell_id: u32) -> Buff {
@@ -295,6 +358,33 @@ mod tests {
             spell_id,
             buff: replacement,
         }))
+    }
+
+    #[test]
+    fn p99_pair_changes_no_membership_until_a_received_named_fade() {
+        let (mut buffs, mut world, command) = fixture();
+        buffs.p99 = true;
+        let [first, clear] = cancel::project1999_packets(7, 3, 42).unwrap();
+        let outcome = testing::run(|out| {
+            buffs.handle(&command, &mut world, out)?;
+            let packet = |body| eq_network_game::message::titanium(0x6a53, body).remove(0);
+            buffs.observe(&packet(&clear.body), &mut world, out)?;
+            buffs.observe(&update(8, 42, None), &mut world, out)?;
+            buffs.observe(&update(7, 43, None), &mut world, out)?;
+            assert_eq!(buffs.slots.as_ref().unwrap()[&3].spell_id, 42);
+            let mut fade = first.body.clone();
+            fade[28] = 1;
+            buffs.observe(&packet(&fade), &mut world, out)?;
+            assert!(buffs.slots.as_ref().unwrap().is_empty());
+            assert!(buffs.pending.is_none());
+            Ok::<(), anyhow::Error>(())
+        });
+        outcome.result.unwrap();
+        assert_eq!(outcome.sent, [first, clear]);
+        assert_eq!(
+            progress(&outcome.events),
+            [Progress::Submitted, Progress::FadeObserved]
+        );
     }
 
     #[test]

@@ -7,6 +7,11 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Use the native two-record beneficial-buff cancellation sequence on Project
+  1999. Keep the selected slot until received updates change it, report a
+  partially submitted pair separately, and never resend automatically.
+  Consumers matching `buffs::cancel::Progress` exhaustively must handle the
+  new `PartiallySubmitted` variant.
 - Offer skill training on Project 1999 through an addressed, admitted trainer
   reply and one practice request at a time. Keep received skill changes
   independent of provisional point and price estimates. Paid requests

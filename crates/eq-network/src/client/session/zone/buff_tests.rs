@@ -13,8 +13,7 @@ use eq_network_game::{
 
 #[test]
 fn cancellation_policy_gate_keeps_admission_age_and_lifecycle_boundaries() {
-    {
-        let protocol = ServerProtocol::EqEmu;
+    for (protocol, sends) in [(ServerProtocol::EqEmu, 1), (ServerProtocol::Project1999, 2)] {
         let mut features = Features::new(
             servers::server_type(protocol),
             "Constructed",
@@ -67,17 +66,19 @@ fn cancellation_policy_gate_keeps_admission_age_and_lifecycle_boundaries() {
         assert!(features.refusal(&make(5, now), &world, now).is_none());
         let outcome = testing::run(|out| features.handle(&make(5, now), &mut world, out));
         assert!(outcome.result.unwrap());
-        assert_eq!(outcome.sent.len(), 1);
+        assert_eq!(outcome.sent.len(), sends);
+        if protocol == ServerProtocol::Project1999 {
+            assert_eq!(
+                outcome.sent,
+                eq_network_game::buffs::cancel::project1999_packets(7, 1, 42).unwrap(),
+            );
+        }
         assert!(outcome.events.iter().any(|event| matches!(event,
             ClientEvent::World(WorldEvent::BuffCancellation(update)) if update.progress == Progress::Submitted)));
         world.died();
         assert!(features.refusal(&make(5, now), &world, now).is_some());
     }
-    for protocol in [
-        ServerProtocol::Project1999,
-        ServerProtocol::Quarm,
-        ServerProtocol::Takp,
-    ] {
+    for protocol in [ServerProtocol::Quarm, ServerProtocol::Takp] {
         let features = Features::new(
             servers::server_type(protocol),
             "Constructed",

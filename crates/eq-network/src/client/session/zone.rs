@@ -2629,12 +2629,13 @@ mod tests {
             Capability::Translocate,
             Capability::ServerTicks,
             Capability::ShowingHelm,
-            Capability::CancellingBuffs,
             Capability::StoppingSongs,
         ] {
             assert!(eqemu.contains(&capability));
             assert!(!p99.contains(&capability));
         }
+        assert!(p99.contains(&Capability::CancellingBuffs));
+        assert!(eqemu.contains(&Capability::CancellingBuffs));
         assert!(p99.contains(&Capability::EnvironmentalDamage));
         let mut setup = servers::Setup::new("Tester", eq_network_game::food::AutoEat::default());
         setup.local_only = true;

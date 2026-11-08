@@ -870,10 +870,9 @@ impl ServerType for Project1999 {
         offer(Box::new(Training::project1999()))
     }
 
-    /// The initialized `EQEmu` request differs from Titanium's two-send
-    /// cancellation path. The deployed P99 contract remains unverified.
+    /// The native fade and clear are a single explicit player action.
     fn buff_cancellation(&self, _setup: &Setup<'_>) -> Provided {
-        None
+        offer(Box::new(Buffs::project1999()))
     }
 
     /// Ordinary Titanium group senders and explicit consent (native
@@ -2219,7 +2218,7 @@ mod tests {
         // yet checked live; and only EQEmu takes the show-helm option.
         // Both Titanium policies retain the verified own-player stun timer.
         for (protocol, count) in [
-            (ServerProtocol::Project1999, 28),
+            (ServerProtocol::Project1999, 29),
             (ServerProtocol::EqEmu, 39),
         ] {
             let server = server_type(protocol);
