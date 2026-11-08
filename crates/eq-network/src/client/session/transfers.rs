@@ -151,14 +151,8 @@ impl Transfers {
     fn offered(offer: &zoning::ZoneOffer, world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
         let offer = offer.clone();
         if let Some(position) = offer.local_position(world.zone) {
-            let (_, current) = world.player_at().context("relocation before admission")?;
-            let position = if out.wire.dialect() == eq_network_game::GameDialect::Titanium {
-                offer
-                    .local_landing(world.zone, current)
-                    .context("invalid same-zone landing")?
-            } else {
-                position
-            };
+            // The explicit movement instruction supplies its own absolute
+            // landing. Preserve-value sentinels belong to zone-point routes.
             return relocate(position, world, out);
         }
         if let Some(pending) = world.lifecycle.pending() {
@@ -488,27 +482,24 @@ mod tests {
         ));
         assert_eq!(world.body.position(), Some(here));
 
-        let offer = zoning::ZoneOffer {
-            zone_id: 2,
-            instance_id: 0,
-            position: Position {
-                x: 999_999.0,
-                y: 72.0,
-                z: 8.0,
-                heading: 999.0,
-            },
-            reason: 1,
-            to_bind: false,
-            solicited: true,
-        };
+        // These finite values happen to equal the separate zone-point
+        // sentinels. The explicit move must preserve their wire meaning.
+        let mut packet = [0; 24];
+        packet[..2].copy_from_slice(&2u16.to_le_bytes());
+        for (offset, value) in [(4, 72.0f32), (8, 999_999.0), (12, 8.0), (16, 999.0)] {
+            packet[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+        }
+        packet[20..24].copy_from_slice(&1u32.to_le_bytes());
+        let offer = zoning::offer(zoning::MOVE_OPCODE, &packet).unwrap();
         let arrival =
             testing::run(|out| transfers.observe(&Message::ZoneOffer(offer), &mut world, out));
         arrival.result.unwrap();
         assert!(arrival.sent.is_empty());
         let landing = Position {
+            x: 999_999.0,
             y: 72.0,
             z: 8.0,
-            ..here
+            heading: 999.0,
         };
         assert_eq!(world.body.position(), Some(landing));
         assert!(
@@ -516,6 +507,41 @@ mod tests {
             if arrival.session_id == 5 && arrival.spawn_id == 7 && arrival.position == landing)
         );
         assert!(world.lifecycle.pending().is_none());
+    }
+
+    #[test]
+    fn explicit_offers_to_another_zone_or_instance_still_start_a_transfer() {
+        for (zone_id, instance_id) in [(3, 0), (2, 1)] {
+            let mut world = World::new(5);
+            world.zone = (2, 0);
+            world.player.admit(testing::player(7));
+            world.admitted = Some(Instant::now());
+            let mut transfers = Transfers::new("Tester", Home::Offered);
+            let offer = zoning::ZoneOffer {
+                zone_id,
+                instance_id,
+                position: Position {
+                    x: 30.0,
+                    y: 42.0,
+                    z: 3.0,
+                    heading: 6.0,
+                },
+                reason: 1,
+                to_bind: false,
+                solicited: true,
+            };
+            let answer = offer.response("Tester").unwrap();
+            let result = testing::run(|out| {
+                transfers.observe(&Message::ZoneOffer(offer.clone()), &mut world, out)
+            });
+            result.result.unwrap();
+            assert_eq!(result.sent, [answer]);
+            assert_eq!(world.lifecycle.pending(), Some(&offer));
+            assert!(!result.events.iter().any(|event| matches!(
+                event,
+                ClientEvent::World(WorldEvent::SameZoneRelocated(_))
+            )));
+        }
     }
 
     #[test]

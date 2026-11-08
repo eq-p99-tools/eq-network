@@ -375,6 +375,12 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- Publish staged discipline state separately from the buff-slot snapshot so
+  beneficial buff cancellation keeps the same slot revision at both ends.
+  Discipline fades require a matching observed spell.
+- Keep absolute coordinates on received same-zone moves. Zone-point
+  preservation applies to zone-point routes.
+
 - Keep reporting completed falls while a cursor drop awaits inventory evidence.
   A drop requires enough item and coin evidence to establish carried weight.
   Its landing bound retains the heaviest received cursor group through

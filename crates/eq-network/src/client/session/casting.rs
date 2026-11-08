@@ -530,7 +530,7 @@ impl Feature for Casting {
 
     fn admitted(&mut self, world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
         self.report_knight_reuse(world, out)?;
-        self.disciplines.report(out)
+        self.disciplines.report(world.session_id, out)
     }
 
     fn handle(

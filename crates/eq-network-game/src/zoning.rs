@@ -39,7 +39,7 @@ pub struct SameZoneRelocation {
     pub session_id: u64,
     /// The admitted player's spawn ID.
     pub spawn_id: u16,
-    /// Landing after preserving any sentinels against the current position.
+    /// Absolute landing from the received move.
     pub position: Position,
 }
 
@@ -196,13 +196,6 @@ impl ZoneOffer {
     pub fn local_position(&self, current_zone: (u16, u16)) -> Option<Position> {
         (!self.to_bind && self.zone_id != 0 && (self.zone_id, self.instance_id) == current_zone)
             .then_some(self.position)
-    }
-
-    /// Resolve preserve-value sentinels on an exact same-zone server offer.
-    #[must_use]
-    pub fn local_landing(&self, current_zone: (u16, u16), current: Position) -> Option<Position> {
-        let position = self.local_position(current_zone)?;
-        (finite(position) && finite(current)).then(|| points::preserve_axes(position, current))
     }
 
     /// Encodes the pending transfer request, preserving its destination and reason.

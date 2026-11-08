@@ -1683,6 +1683,14 @@ pub enum WorldEvent {
     /// `EQMac`'s servers: the discipline the player began, by the servers'
     /// number for it, or none as it ends.
     Discipline(Option<u8>),
+    /// Discipline state observed before admission and published separately
+    /// from the general buff-slot snapshot.
+    DisciplineAdmission {
+        /// Admission that owns the observation.
+        session_id: u64,
+        /// Received active state as of admission.
+        state: crate::disciplines::Active,
+    },
 }
 
 /// A profile heading on the 0..512 scale live movement uses. Project 1999 saves

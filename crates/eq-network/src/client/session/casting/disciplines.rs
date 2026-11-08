@@ -21,7 +21,7 @@ pub(super) struct DisciplineState {
     linked: Timers,
     active: Active,
     retry_at: Option<Instant>,
-    staged_active: Option<WorldEvent>,
+    staged_active: bool,
 }
 
 impl DisciplineState {
@@ -55,12 +55,13 @@ impl DisciplineState {
             _ => false,
         };
         if staging && active_changed {
-            self.staged_active = Some(event.clone());
+            self.staged_active = true;
         }
     }
 
-    /// Replay received timers staged before the host had a player snapshot.
-    pub(super) fn report(&mut self, out: &mut Out<'_, '_>) -> Result<()> {
+    /// Publish staged reuse and active state without replaying a buff update
+    /// that the worker's buff reducer never applied.
+    pub(super) fn report(&mut self, session_id: u64, out: &mut Out<'_, '_>) -> Result<()> {
         let now = Instant::now();
         let updates = self
             .reuse
@@ -70,8 +71,12 @@ impl DisciplineState {
         for event in updates {
             out.log.send(ClientEvent::World(event))?;
         }
-        if let Some(event) = self.staged_active.take() {
-            out.log.send(ClientEvent::World(event))?;
+        if std::mem::take(&mut self.staged_active) {
+            out.log
+                .send(ClientEvent::World(WorldEvent::DisciplineAdmission {
+                    session_id,
+                    state: self.active,
+                }))?;
         }
         Ok(())
     }

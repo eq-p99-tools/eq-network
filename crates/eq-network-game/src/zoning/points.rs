@@ -180,9 +180,9 @@ impl ZonePoint {
     }
 }
 
-/// The zone-point and same-zone landing formats share the preserve sentinels.
+/// Resolve the preserve sentinels of a zone-point destination.
 #[allow(clippy::float_cmp)] // Exact protocol sentinels.
-pub(super) fn preserve_axes(destination: Position, current: Position) -> Position {
+fn preserve_axes(destination: Position, current: Position) -> Position {
     let preserve = |target, source| if target == 999_999.0 { source } else { target };
     Position {
         x: preserve(destination.x, current.x),

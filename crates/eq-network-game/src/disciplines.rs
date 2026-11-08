@@ -132,12 +132,12 @@ pub fn titanium_cast(discipline: Discipline, own: u16) -> Result<EncodedCommand>
 
 /// An active discipline reported by the server. Titanium's buff slot and
 /// EQMac's numbered discipline are distinct authorities.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize)]
 pub enum Active {
     /// No current observation.
     #[default]
     Unknown,
-    /// The server explicitly cleared the slot or ended the discipline.
+    /// The server reported the end of the observed discipline.
     Inactive,
     /// The spell in the own Titanium discipline buff slot.
     Titanium(u32),
@@ -147,16 +147,15 @@ pub enum Active {
 
 impl Active {
     /// Applies an exact slot replacement or fade for the admitted player.
-    /// A named fade cannot clear a different spell.
+    /// A fade must name the observed spell. Empty sentinels have no verified
+    /// slot-clear semantics for this state.
     pub fn observe_titanium(&mut self, own: u16, update: &BuffUpdate) -> bool {
         if update.entity_id != u32::from(own) || update.slot != TITANIUM_BUFF_SLOT {
             return false;
         }
         if let Some(buff) = &update.buff {
             *self = Self::Titanium(buff.spell_id);
-        } else if !matches!(*self, Self::Titanium(spell) if spell != update.spell_id)
-            || matches!(update.spell_id, 0 | 0xffff | u32::MAX)
-        {
+        } else if matches!(*self, Self::Titanium(spell) if spell == update.spell_id) {
             *self = Self::Inactive;
         } else {
             return false;

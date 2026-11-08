@@ -3060,3 +3060,6 @@ mod buff_tests;
 
 #[cfg(test)]
 mod progression_tests;
+
+#[cfg(test)]
+mod discipline_tests;
