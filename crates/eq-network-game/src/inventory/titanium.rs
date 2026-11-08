@@ -174,6 +174,7 @@ impl<'a> Parser<'a> {
             && header[9] == "0")
             .then(|| header[6].parse().ok())
             .flatten();
+        let item_index = self.items.len();
         self.items.push(InventoryItem {
             activation: super::ItemActivation::decode(&fields, header[7])?,
             scroll_spell: {
@@ -184,7 +185,7 @@ impl<'a> Parser<'a> {
             },
             book: crate::books::Book::from_titanium_item(fields[0], fields[100], fields[102])?,
             rules: ItemPlacement {
-                titanium_link_hash: crate::items::owned::hash(&header, &fields),
+                titanium_link_hash: None,
                 ground_drop_serial,
                 eqmac: None,
                 stack_size: number(131)?,
@@ -218,6 +219,9 @@ impl<'a> Parser<'a> {
         } else {
             self.take("\0")?;
         }
+        let empty_children = self.items.len() == item_index + 1;
+        self.items[item_index].rules.titanium_link_hash =
+            crate::items::owned::hash(&header, &fields, empty_children);
         Ok(())
     }
 }

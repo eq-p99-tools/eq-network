@@ -4,7 +4,7 @@ use crate::{chat::ItemLink, inventory::InventoryItem};
 use anyhow::{ensure, Context, Result};
 use std::fmt::Write;
 
-pub(crate) fn hash(header: &[&str], fields: &[&str]) -> Option<u32> {
+pub(crate) fn hash(header: &[&str], fields: &[&str], empty_children: bool) -> Option<u32> {
     // The legacy header ends at the evolution flag for ordinary records.
     // An evolving record needs additional instance fields.
     if header.get(10) != Some(&"0") {
@@ -36,16 +36,16 @@ pub(crate) fn hash(header: &[&str], fields: &[&str]) -> Option<u32> {
             let book_type = i8::try_from(number(101)?).ok()?;
             write!(input, "{weight}{book_type}{price:09X}").ok()?;
         }
-        0 => {
-            // This inventory projection does not model augment custody.
-            // An item with any augment socket needs an instance provider.
-            for index in [84, 86, 88, 90, 92] {
-                if number(index)? != 0 {
-                    return None;
-                }
-            }
+        0 if empty_children => {
+            // The serialized child records carry installed augments. The
+            // static socket types only describe which augments could fit.
             input.push_str("-1-1-1-1-1");
-            let light = byte(43)?;
+            // EQEmu writes Light as a signed byte. The link hash reads its
+            // stored bits as an unsigned byte.
+            let light = match number(43)? {
+                value @ -128..=-1 => i8::try_from(value).ok()?.to_ne_bytes()[0],
+                value => u8::try_from(value).ok()?,
+            };
             let icon = number(11)?;
             let size = byte(8)?;
             let item_type = byte(56)?;
@@ -141,17 +141,20 @@ mod tests {
 
     fn inventory(class: &str, charm: &str) -> Inventory {
         let fields = record(class, charm);
-        let wire = format!(
-            "0|0|23|999|1|0|45|0|0|0|0|\"{}\"{}\0",
-            fields.join("|"),
-            "|".repeat(10)
-        );
+        let wire = wire(&fields, &"|".repeat(10));
         let update = crate::inventory::decode(0x5394, wire.as_bytes())
             .unwrap()
             .unwrap();
         let mut inventory = Inventory::default();
         inventory.apply(update);
         inventory
+    }
+
+    fn wire(fields: &[&str], children: &str) -> String {
+        format!(
+            "0|0|23|999|1|0|45|0|0|0|0|\"{}\"{children}\0",
+            fields.join("|"),
+        )
     }
 
     #[test]
@@ -177,15 +180,68 @@ mod tests {
     fn incomplete_or_unsupported_inputs_have_no_hash() {
         let header = ["0"; 11];
         let mut fields = record("0", "0");
-        assert_eq!(hash(&header[..10], &fields), None);
+        assert_eq!(hash(&header[..10], &fields, true), None);
         let mut evolving = header;
         evolving[10] = "1";
-        assert_eq!(hash(&evolving, &fields), None);
-        fields[84] = "1";
-        assert_eq!(hash(&header, &fields), None);
-        fields[84] = "0";
+        assert_eq!(hash(&evolving, &fields, true), None);
+        assert_eq!(hash(&header, &fields, false), None);
         fields[1] = "Épée";
-        assert_eq!(hash(&header, &fields), None);
+        assert_eq!(hash(&header, &fields, true), None);
+    }
+
+    #[test]
+    fn static_sockets_can_have_an_empty_instance() {
+        let mut fields = record("0", "0");
+        for index in [84, 86, 88, 90, 92] {
+            fields[index] = "1";
+        }
+        let empty = wire(&fields, &"|".repeat(10));
+        let item_packet = [0x69_u32.to_le_bytes().as_slice(), empty.as_bytes()].concat();
+        let mut inventory = Inventory::default();
+        for (opcode, body) in [(0x5394, empty.as_bytes()), (0x3397, item_packet.as_slice())] {
+            inventory.apply(crate::inventory::decode(opcode, body).unwrap().unwrap());
+            let link = inventory.owned_titanium_link(InventorySlot(23)).unwrap();
+            assert_eq!(&link.body[6..37], "0".repeat(31));
+            assert_eq!(&link.body[37..], "B0070342");
+        }
+
+        let malformed = wire(&fields, &"|".repeat(9));
+        assert!(crate::inventory::decode(0x5394, malformed.as_bytes()).is_err());
+
+        let mut child = record("0", "0");
+        child[4] = "292";
+        let children = format!(
+            "|\"0|0|0|0|1|0|46|0|0|0|0|\\\"{}\\\"{}\"{}",
+            child.join("|"),
+            "|".repeat(10),
+            "|".repeat(9)
+        );
+        let augmented = wire(&fields, &children);
+        assert!(crate::inventory::decode(0x5394, augmented.as_bytes()).is_err());
+
+        // A nonempty common record still cannot produce an empty-augment
+        // hash even when its static capacity allows this child to be parsed.
+        fields[97] = "1";
+        let nonempty = wire(&fields, &children);
+        let update = crate::inventory::decode(0x5394, nonempty.as_bytes())
+            .unwrap()
+            .unwrap();
+        inventory.apply(update);
+        assert!(inventory.owned_titanium_link(InventorySlot(23)).is_err());
+    }
+
+    #[test]
+    fn signed_light_keeps_its_unsigned_native_bits() {
+        let header = ["0"; 11];
+        let mut fields = record("0", "0");
+        fields[43] = "255";
+        assert_eq!(hash(&header, &fields, true), Some(0x65d7_8022));
+        fields[43] = "-1";
+        assert_eq!(hash(&header, &fields, true), Some(0x65d7_8022));
+        for invalid in ["-129", "256"] {
+            fields[43] = invalid;
+            assert_eq!(hash(&header, &fields, true), None);
+        }
     }
 
     #[test]

@@ -13,7 +13,7 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Station placement, close and combine resets do not grant inventory items.
 - Build ordinary Titanium item links from checked worn and carried item
   records. The source inventory must have current custody evidence.
-  Evolving records, items with augment sockets and labels outside ASCII
+  Evolving records, items with installed augments and labels outside ASCII
   need a received link.
 - Stamp world container closes with the object ID and intent time. Decode
   whole-container clears separately from the native one-slot form.
