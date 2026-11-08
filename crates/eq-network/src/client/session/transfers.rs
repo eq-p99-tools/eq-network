@@ -881,7 +881,11 @@ mod tests {
         let unknown = "zone identity is unavailable";
         assert_eq!(error(&world, cross(5, here, now)), unknown);
         world.zone = (2, 0);
-        let offer = transfers.zone_line(&cross(5, here, now), &world).unwrap();
+        let zoning::BoundaryRoute::Transfer(offer) =
+            transfers.zone_line(&cross(5, here, now), &world).unwrap()
+        else {
+            panic!("a boundary to another zone must start a transfer");
+        };
         assert_eq!((offer.zone_id, offer.solicited), (4, false));
     }
 
