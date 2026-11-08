@@ -260,7 +260,7 @@ fn eqemu_ordered_reopen_fences_close_after_a_reset_with_or_without_combine_clear
                 testing::item(4000),
             ])))
         };
-        let outcome = testing::run_on(server.wire(), |out| {
+        let outcome = testing::run_on(server.wire(), |out| -> Result<()> {
             hear(vec![object], &mut features, &mut world, out, true)?;
             features.handle(&open(), &mut world, out)?;
             hear(
