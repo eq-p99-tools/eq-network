@@ -98,6 +98,261 @@ fn stack(slot: i32, count: u32) -> InventoryItem {
     item
 }
 
+#[test]
+#[allow(clippy::too_many_lines)] // Keep result, late stock and retry in one fixture.
+fn p99_bandage_result_or_expiry_releases_unrelated_moves_but_keeps_stock_uncertain() {
+    use eq_network_game::{abilities::Ability, bind_wound, world::PostureState};
+    use std::time::Duration;
+
+    let protocol = ServerProtocol::Project1999;
+    let server = servers::server_type(protocol);
+    let wire = server.wire();
+    // Ended (including the refusal/interruption), released, or no answer.
+    for (ending, stock_first) in [
+        (Some(1), false),
+        (Some(7), false),
+        (Some(8), false),
+        (None, false),
+        (Some(1), true),
+    ] {
+        let mut bandage = stack(251, 2);
+        bandage.rules.item_type = bind_wound::BANDAGE;
+        let mut bag = testing::item(22);
+        bag.bag_slots = 8;
+        let (mut features, mut world) = setup(protocol, vec![bag, bandage, testing::item(24)]);
+        world.posture.observed(PostureState::Standing);
+        testing::run_on(wire, |out| {
+            hear(
+                vec![Message::Event(WorldEvent::Target(Some(7)))],
+                &mut features,
+                &mut world,
+                out,
+                true,
+            )
+        })
+        .result
+        .unwrap();
+        let bind = |world: &World| ClientCommand::UseAbility {
+            session_id: world.session_id,
+            target: Some(world.target.state()),
+            ability: Ability::BindWound,
+            created: Instant::now(),
+        };
+        let attempt = bind(&world);
+        let sent = testing::run_on(wire, |out| {
+            apply_commands(&[attempt], &mut features, &mut world, out, true)
+        });
+        sent.result.unwrap();
+        assert_eq!(sent.sent, [bind_wound::encode(7)]);
+        assert!(world.inventory.bandage_stock_pending());
+        let unrelated_move = command(&world, 24, 30, MoveQuantity::Whole);
+        assert_eq!(
+            submit(protocol, &mut features, &mut world, &unrelated_move).sent,
+            []
+        );
+
+        let slot = InventorySlot(251);
+        // Titanium DeleteItem names the actual stock slot and removes one unit.
+        let mut deletion = slot.0.to_le_bytes().to_vec();
+        deletion.extend([0xff; 8]);
+        let retired = testing::run_on(wire, |out| {
+            if stock_first {
+                hear(
+                    wire.messages(0x4d81, &deletion, server.item_rules()),
+                    &mut features,
+                    &mut world,
+                    out,
+                    true,
+                )?;
+                assert!(!world.inventory.bandage_stock_pending());
+            }
+            if let Some(kind) = ending {
+                hear(
+                    wire.messages(
+                        bind_wound::OPCODE,
+                        &[0, 0, 0, 0, kind, 0, 0, 0],
+                        server.item_rules(),
+                    ),
+                    &mut features,
+                    &mut world,
+                    out,
+                    true,
+                )
+            } else {
+                features.tick(Instant::now() + Duration::from_secs(13), &mut world, out)?;
+                settle(&mut features, &mut world, out, true)
+            }
+        });
+        retired.result.unwrap();
+        assert_eq!(
+            retired.events.iter().any(|event| matches!(
+                event,
+                ClientEvent::World(WorldEvent::BindWound(
+                    bind_wound::BindWoundUpdate::Unconfirmed
+                ))
+            )),
+            ending.is_none()
+        );
+        assert!(!world.inventory.bandage_stock_pending());
+        assert!(!world.inventory.predicted());
+        // Current stock leaves only the button's own wait, which the
+        // official client runs out in full whatever ended the bandaging.
+        let waits = |attempt: &testing::Outcome<Result<bool>>| {
+            attempt.sent.is_empty()
+                && attempt.events.iter().any(|event| {
+                    matches!(
+                        event,
+                        ClientEvent::World(WorldEvent::AbilityRefused { reason, .. })
+                            if reason == "You are bandaging already"
+                    )
+                })
+        };
+        if stock_first {
+            assert!(world.inventory.custody_known(slot));
+            assert_eq!(world.inventory.items()[&slot].stack_count, Some(1));
+            let retry = bind(&world);
+            assert!(waits(&submit(protocol, &mut features, &mut world, &retry)));
+            continue;
+        }
+        assert!(!world.inventory.custody_known(slot));
+        assert!(world.inventory.custody_known(InventorySlot(24)));
+        assert_eq!(world.inventory.items()[&slot].stack_count, Some(2));
+
+        let retry = bind(&world);
+        let attempt = submit(protocol, &mut features, &mut world, &retry);
+        assert_eq!(attempt.sent, []);
+        assert!(attempt.events.iter().any(|event| matches!(
+            event,
+            ClientEvent::World(WorldEvent::AbilityRefused { reason, .. })
+                if reason == "Bandage stock is not current"
+        )));
+        for from in [22, 251] {
+            let affected = command(&world, from, 30, MoveQuantity::Whole);
+            assert_eq!(
+                submit(protocol, &mut features, &mut world, &affected).sent,
+                []
+            );
+        }
+        let unrelated_move = command(&world, 24, 30, MoveQuantity::Whole);
+        assert_eq!(
+            submit(protocol, &mut features, &mut world, &unrelated_move)
+                .sent
+                .len(),
+            1
+        );
+        let unrelated = InventoryUpdate::Set(vec![testing::item(23)]);
+        observe(protocol, &mut features, &mut world, unrelated);
+        assert!(!world.inventory.custody_known(slot));
+
+        let receipt = testing::run_on(wire, |out| {
+            let messages = match ending {
+                // Replacing the covered bag contents can establish unchanged
+                // stock just as a later decrease can establish consumption.
+                Some(7) => vec![Message::Event(WorldEvent::Inventory(InventoryUpdate::Set(
+                    [InventorySlot(22), slot]
+                        .into_iter()
+                        .map(|key| world.inventory.items()[&key].clone())
+                        .collect(),
+                )))],
+                Some(8) => vec![Message::Event(WorldEvent::Inventory(
+                    InventoryUpdate::Snapshot(world.inventory.items().values().cloned().collect()),
+                ))],
+                _ => wire.messages(0x4d81, &deletion, server.item_rules()),
+            };
+            hear(messages, &mut features, &mut world, out, true)?;
+            features.tick(Instant::now() + Duration::from_secs(15), &mut world, out)?;
+            settle(&mut features, &mut world, out, true)
+        });
+        receipt.result.unwrap();
+        assert!(world.inventory.custody_known(slot));
+        let count = if matches!(ending, Some(7 | 8)) { 2 } else { 1 };
+        assert_eq!(world.inventory.items()[&slot].stack_count, Some(count));
+        let retry = bind(&world);
+        assert!(waits(&submit(protocol, &mut features, &mut world, &retry)));
+    }
+}
+
+#[test]
+fn p99_one_bandage_decrease_settles_every_carried_stack() {
+    use eq_network_game::{abilities::Ability, bind_wound, world::PostureState};
+
+    let protocol = ServerProtocol::Project1999;
+    let server = servers::server_type(protocol);
+    let wire = server.wire();
+    let mut bagged = stack(251, 2);
+    bagged.rules.item_type = bind_wound::BANDAGE;
+    let mut loose = stack(23, 3);
+    loose.rules.item_type = bind_wound::BANDAGE;
+    let mut bag = testing::item(22);
+    bag.bag_slots = 8;
+    let (mut features, mut world) = setup(protocol, vec![bag, bagged, loose, testing::item(24)]);
+    world.posture.observed(PostureState::Standing);
+    testing::run_on(wire, |out| {
+        hear(
+            vec![Message::Event(WorldEvent::Target(Some(7)))],
+            &mut features,
+            &mut world,
+            out,
+            true,
+        )
+    })
+    .result
+    .unwrap();
+    let attempt = ClientCommand::UseAbility {
+        session_id: world.session_id,
+        target: Some(world.target.state()),
+        ability: Ability::BindWound,
+        created: Instant::now(),
+    };
+    let sent = testing::run_on(wire, |out| {
+        apply_commands(&[attempt], &mut features, &mut world, out, true)
+    });
+    sent.result.unwrap();
+    assert_eq!(sent.sent, [bind_wound::encode(7)]);
+    assert!(world.inventory.bandage_stock_pending());
+
+    let mut deletion = 251_i32.to_le_bytes().to_vec();
+    deletion.extend([0xff; 8]);
+    testing::run_on(wire, |out| {
+        hear(
+            wire.messages(0x4d81, &deletion, server.item_rules()),
+            &mut features,
+            &mut world,
+            out,
+            true,
+        )?;
+        hear(
+            wire.messages(
+                bind_wound::OPCODE,
+                &[0, 0, 0, 0, 1, 0, 0, 0],
+                server.item_rules(),
+            ),
+            &mut features,
+            &mut world,
+            out,
+            true,
+        )
+    })
+    .result
+    .unwrap();
+    assert!(!world.inventory.bandage_stock_pending());
+    assert!(!world.inventory.bandage_placement_unconfirmed());
+    for slot in [InventorySlot(251), InventorySlot(23)] {
+        assert!(world.inventory.custody_known(slot), "{slot:?}");
+    }
+    assert_eq!(
+        world.inventory.items()[&InventorySlot(23)].stack_count,
+        Some(3)
+    );
+    let unrelated_move = command(&world, 24, 30, MoveQuantity::Whole);
+    assert_eq!(
+        submit(protocol, &mut features, &mut world, &unrelated_move)
+            .sent
+            .len(),
+        1
+    );
+}
+
 fn open_p99_forge_with_current_cursor(features: &mut Features, world: &mut World) {
     use eq_network_game::objects::{ContainerView, GroundObject};
 
@@ -137,18 +392,22 @@ fn open_p99_forge_with_current_cursor(features: &mut Features, world: &mut World
     let moved = submit(protocol, features, world, &stash);
     assert!(moved.result.unwrap());
     assert_eq!(moved.sent.len(), 1);
-    observe(protocol, features, world, InventoryUpdate::Settled);
-    assert!(!world.inventory.predicted());
-    assert!(!world.inventory.custody_known(InventorySlot::CURSOR));
     let denied = submit(protocol, features, world, &open());
     assert!(denied.result.unwrap());
     assert_eq!(denied.sent, []);
-    observe(
-        protocol,
-        features,
-        world,
-        InventoryUpdate::Remove(InventorySlot::CURSOR),
-    );
+    testing::run_on(server.wire(), |out| {
+        features.tick(
+            Instant::now() + std::time::Duration::from_secs(3),
+            world,
+            out,
+        )?;
+        settle(features, world, out, true)
+    })
+    .result
+    .unwrap();
+    assert!(!world.inventory.predicted());
+    assert!(!world.inventory.custody_known(InventorySlot::CURSOR));
+    assert!(world.inventory.projected_cursor_empty());
     let opened = submit(protocol, features, world, &open());
     assert!(opened.result.unwrap());
     assert_eq!(opened.sent.len(), 1);
@@ -167,7 +426,8 @@ fn open_p99_forge_with_current_cursor(features: &mut Features, world: &mut World
 }
 
 #[test]
-fn p99_forge_moves_require_single_whole_places_and_current_empty_withdrawal_cursor() {
+#[allow(clippy::too_many_lines)] // Exercise one ordered forge close and reopen.
+fn p99_forge_moves_use_the_ordered_visible_cursor_without_confirming_custody() {
     use eq_network_game::money::Wallet;
 
     let protocol = ServerProtocol::Project1999;
@@ -195,16 +455,27 @@ fn p99_forge_moves_require_single_whole_places_and_current_empty_withdrawal_curs
     assert!(world.inventory.station_moves_unconfirmed());
 
     let withdraw = |world: &World| command(world, 4000, 30, MoveQuantity::Whole);
-    let withdrawal = withdraw(&world);
-    let denied = submit(protocol, &mut features, &mut world, &withdrawal);
-    assert!(denied.result.unwrap());
-    assert_eq!(denied.sent, []);
+    let mut arrival = testing::item(30);
+    arrival.details.id = 43;
     observe(
         protocol,
         &mut features,
         &mut world,
-        InventoryUpdate::Remove(InventorySlot::CURSOR),
+        InventoryUpdate::Cursor(vec![arrival]),
     );
+    let withdrawal = withdraw(&world);
+    let denied = submit(protocol, &mut features, &mut world, &withdrawal);
+    assert!(denied.result.unwrap());
+    assert_eq!(denied.sent, []);
+    assert!(!world.inventory.custody_known(InventorySlot::CURSOR));
+    let stash = command(&world, 30, 24, MoveQuantity::Whole);
+    assert_eq!(
+        submit(protocol, &mut features, &mut world, &stash)
+            .sent
+            .len(),
+        1
+    );
+    assert!(world.inventory.projected_cursor_empty());
     world.coins = Wallet {
         cursor: Coins {
             copper: 1,
@@ -227,6 +498,55 @@ fn p99_forge_moves_require_single_whole_places_and_current_empty_withdrawal_curs
     let withdrawn = submit(protocol, &mut features, &mut world, &withdrawal);
     assert!(withdrawn.result.unwrap());
     assert_eq!(withdrawn.sent.len(), 1);
+    let stash = command(&world, 30, 25, MoveQuantity::Whole);
+    assert_eq!(
+        submit(protocol, &mut features, &mut world, &stash)
+            .sent
+            .len(),
+        1
+    );
+    let close = ClientCommand::CloseContainer {
+        session_id: 5,
+        drop_id: 71,
+        created: Instant::now(),
+    };
+    assert_eq!(
+        submit(protocol, &mut features, &mut world, &close)
+            .sent
+            .len(),
+        1
+    );
+    let server = servers::server_type(protocol);
+    let wire = server.wire();
+    testing::run_on(wire, |out| {
+        hear(
+            wire.messages(0x21ed, &[1, 0, 0, 0, 0, 0, 0, 0], server.item_rules()),
+            &mut features,
+            &mut world,
+            out,
+            true,
+        )?;
+        features.tick(
+            Instant::now() + std::time::Duration::from_secs(3),
+            &mut world,
+            out,
+        )?;
+        settle(&mut features, &mut world, out, true)
+    })
+    .result
+    .unwrap();
+    let open = ClientCommand::OpenContainer {
+        session_id: 5,
+        drop_id: 71,
+        created: Instant::now(),
+    };
+    assert_eq!(
+        submit(protocol, &mut features, &mut world, &open)
+            .sent
+            .len(),
+        1
+    );
+    assert!(!world.inventory.custody_known(InventorySlot::CURSOR));
 }
 
 #[test]
@@ -381,6 +701,7 @@ fn explicit_destroy_is_single_submission_through_p99_and_eqemu_inventory_owner()
 }
 
 #[test]
+#[allow(clippy::too_many_lines)] // Keep the ordered drop settlement in one fixture.
 fn ordinary_drop_holds_after_object_and_cursor_updates_until_snapshot() {
     use eq_network_game::{
         command::EncodedCommand,
@@ -409,9 +730,22 @@ fn ordinary_drop_holds_after_object_and_cursor_updates_until_snapshot() {
 
     let drop = request(&world, 7);
     let known = std::mem::take(&mut world.coins);
-    let unweighed = submit(protocol, &mut features, &mut world, &drop);
-    assert!(unweighed.result.unwrap() && unweighed.sent.is_empty());
-    assert!(!world.inventory.ground_drop_pending());
+    for (purse, bank) in [(None, known.bank), (known.purse, None)] {
+        world.coins = eq_network_game::money::Wallet {
+            purse,
+            bank,
+            ..Default::default()
+        }
+        .into();
+        let unweighed = submit(protocol, &mut features, &mut world, &drop);
+        assert!(unweighed.result.unwrap() && unweighed.sent.is_empty());
+        assert!(unweighed.events.iter().any(|event| matches!(
+            event,
+            ClientEvent::World(WorldEvent::InventoryAction { error: Some(reason), .. })
+                if reason == "A cursor drop needs current carried coin information"
+        )));
+        assert!(!world.inventory.ground_drop_pending());
+    }
     world.coins = known;
 
     let output = submit(protocol, &mut features, &mut world, &drop);

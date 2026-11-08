@@ -534,10 +534,10 @@ pub enum GameCommand {
     ReadItem {
         /// Current zone admission.
         session_id: u64,
-        /// Worker inventory revision observed when selecting the readable item.
+        /// Worker revision at selection, for an intervening pending move.
         revision: u64,
-        /// Where the item is carried.
-        slot: crate::inventory::InventorySlot,
+        /// Exact readable item and container observed at selection.
+        selection: Box<crate::books::ReadSelection>,
         /// Reject delayed selections rather than reading a replacement item.
         created: std::time::Instant,
     },
@@ -576,6 +576,33 @@ pub enum GameCommand {
         session_id: u64,
         /// True accepts.
         accept: bool,
+    },
+    /// Choose a button on the exact popup that was displayed.
+    RespondToPopup {
+        /// Current zone admission.
+        session_id: u64,
+        /// The worker's local dialog serial.
+        serial: u64,
+        /// The explicit button action.
+        action: crate::popups::PopupAction,
+        /// When the choice was made.
+        created: std::time::Instant,
+    },
+    /// Inspect the currently selected player, if that selection still holds.
+    InspectPlayer {
+        /// Current zone admission.
+        session_id: u64,
+        /// The worker's confirmed selection, including its incarnation revision.
+        target: crate::targets::TargetState,
+        /// When inspection was requested.
+        created: std::time::Instant,
+    },
+    /// Configure the known native inspect note for this character and admission.
+    SetInspectNote {
+        /// Current zone admission.
+        session_id: u64,
+        /// User-authored note. None leaves the note unknown and sends no automatic replies.
+        note: Option<String>,
     },
     /// Drop the player's invisibility as the client generation's program
     /// does before a cast, a song or an item's click: the steps in order.
@@ -881,6 +908,9 @@ impl GameCommand {
             Self::AnswerResurrection { .. } => "AnswerResurrection",
             Self::AnswerSacrifice { .. } => "AnswerSacrifice",
             Self::AnswerTranslocate { .. } => "AnswerTranslocate",
+            Self::RespondToPopup { .. } => "RespondToPopup",
+            Self::InspectPlayer { .. } => "InspectPlayer",
+            Self::SetInspectNote { .. } => "SetInspectNote",
             Self::DropInvisibility { .. } => "DropInvisibility",
             Self::InviteToGroup { .. } => "InviteToGroup",
             Self::FollowGroup { .. } => "FollowGroup",
@@ -974,6 +1004,9 @@ impl GameCommand {
             | Self::AnswerResurrection { session_id, .. }
             | Self::AnswerSacrifice { session_id, .. }
             | Self::AnswerTranslocate { session_id, .. }
+            | Self::RespondToPopup { session_id, .. }
+            | Self::InspectPlayer { session_id, .. }
+            | Self::SetInspectNote { session_id, .. }
             | Self::DropInvisibility { session_id, .. }
             | Self::StopSong { session_id, .. }
             | Self::InviteToGroup { session_id, .. }
@@ -1088,6 +1121,10 @@ impl GameCommand {
             Self::AnswerResurrection { .. } => Capability::Resurrection,
             Self::AnswerSacrifice { .. } => Capability::Sacrifice,
             Self::AnswerTranslocate { .. } => Capability::Translocate,
+            Self::RespondToPopup { .. } => Capability::ServerDialogs,
+            Self::InspectPlayer { .. } | Self::SetInspectNote { .. } => {
+                Capability::PlayerInspection
+            }
             Self::InviteToGroup { .. }
             | Self::FollowGroup { .. }
             | Self::DeclineGroup { .. }
@@ -1143,6 +1180,7 @@ impl GameCommand {
             | Self::AnswerResurrection { .. }
             | Self::AnswerSacrifice { .. }
             | Self::AnswerTranslocate { .. }
+            | Self::SetInspectNote { .. }
             | Self::DropInvisibility { .. }
             | Self::InviteToGroup { .. }
             | Self::FollowGroup { .. }
@@ -1176,6 +1214,8 @@ impl GameCommand {
             Self::DropItem(request) => Some(request.created),
             Self::Move(request) => Some(request.created),
             Self::SwapSpell { created, .. }
+            | Self::RespondToPopup { created, .. }
+            | Self::InspectPlayer { created, .. }
             | Self::ClickDoor { created, .. }
             | Self::PickUp { created, .. }
             | Self::OpenContainer { created, .. }
@@ -1411,6 +1451,9 @@ pub fn encode(
         | GameCommand::AnswerResurrection { .. }
         | GameCommand::AnswerSacrifice { .. }
         | GameCommand::AnswerTranslocate { .. }
+        | GameCommand::RespondToPopup { .. }
+        | GameCommand::InspectPlayer { .. }
+        | GameCommand::SetInspectNote { .. }
         | GameCommand::DropInvisibility { .. }
         | GameCommand::StopSong { .. }
         | GameCommand::InviteToGroup { .. }

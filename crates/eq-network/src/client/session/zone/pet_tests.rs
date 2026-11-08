@@ -312,7 +312,7 @@ fn p99_refuses_later_commands_and_leader_can_ask_a_visible_pet_without_owning_on
     );
     let _ = zone.hear(WorldEvent::Visibility {
         spawn_id: 9,
-        invisible: true,
+        state: eq_network_game::vision::Invisibility::Titanium(1),
     });
     refused(
         zone.send(zone.order(PetCommand::Leader, None)),

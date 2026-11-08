@@ -9,6 +9,9 @@ use eq_network_game::{
 };
 use std::time::Instant;
 
+#[cfg(test)]
+mod tests;
+
 /// How the server profile admits a skill to the ranged action.
 pub(super) enum SkillAdmission {
     /// Stock `EQEmu` checks the class and level cap, which the profile does
@@ -19,23 +22,23 @@ pub(super) enum SkillAdmission {
     ReportedRank,
 }
 
-/// The local unmodified wait between manually submitted ranged attacks.
+/// The local wait between manually submitted ranged attacks.
 /// The server's attack and ranged timers remain independent.
 pub(super) struct Shots {
-    ready_at: Option<Instant>,
+    last_sent: Option<Instant>,
     skill_admission: SkillAdmission,
 }
 
 impl Shots {
     pub(super) const fn new(skill_admission: SkillAdmission) -> Self {
         Self {
-            ready_at: None,
+            last_sent: None,
             skill_admission,
         }
     }
 
     pub(super) fn reset(&mut self) {
-        self.ready_at = None;
+        self.last_sent = None;
     }
 
     /// Submit a shot using the target and inventory the session still holds.
@@ -58,7 +61,7 @@ impl Shots {
             target_id,
             kind: attack.loadout.kind(),
         })?;
-        self.ready_at = Some(now + attack.loadout.base_delay());
+        self.last_sent = Some(now);
         Ok(true)
     }
 
@@ -74,8 +77,7 @@ impl Shots {
             return Err("The ranged attack target has changed");
         }
         let target = world
-            .spawns
-            .visible(target_id)
+            .visible_spawn(target_id)
             .filter(|target| {
                 target_id != own_id && matches!(target.kind, SpawnKind::Npc | SpawnKind::Player)
             })
@@ -116,7 +118,12 @@ impl Shots {
             .find(|spawn| spawn.spawn_id == own_id && spawn.size > 0.0)
             .map_or_else(|| player_size(player.race), |spawn| spawn.size);
         check_range(position, target.position, size.max(target.size), loadout)?;
-        if self.ready_at.is_some_and(|ready| now < ready) {
+        // 0x48297b compares the last attack time to the interval derived
+        // from current equipment. An intervening loadout change can change it.
+        if self
+            .last_sent
+            .is_some_and(|last| now.saturating_duration_since(last) < loadout.local_reuse_delay())
+        {
             return Err("Your ranged weapon is still recovering");
         }
         Ok(target_id)

@@ -327,13 +327,13 @@ impl Casting {
     }
 
     /// Titanium policies with the class ability casting slot.
-    pub(super) fn with_titanium_combat(song_stop: bool) -> Self {
+    pub(super) fn with_titanium_combat(song_stop: bool, knight_estimate: Duration) -> Self {
         let mut casting = if song_stop {
             Self::with_song_stop()
         } else {
             Self::default()
         };
-        casting.knights = Some(knights::Reuse::default());
+        casting.knights = Some(knights::Reuse::new(knight_estimate));
         casting.use_disciplines = true;
         casting
     }
@@ -529,7 +529,7 @@ impl Feature for Casting {
     }
 
     fn admitted(&mut self, world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
-        self.report_knight_reuse(world, out)?;
+        self.report_knight_reuse(Instant::now(), world, out)?;
         self.disciplines.report(world.session_id, out)
     }
 
@@ -543,7 +543,7 @@ impl Feature for Casting {
             ClientCommand::StopSong { .. } => self.stop_song(world, out),
             ClientCommand::UseKnightAbility {
                 ability, target, ..
-            } => self.knight(command, *ability, *target, world, out),
+            } => self.knight(command, *ability, *target, Instant::now(), world, out),
             ClientCommand::UseDiscipline { discipline, .. } => {
                 self.use_discipline(command, *discipline, world, out)
             }
@@ -596,7 +596,7 @@ impl Feature for Casting {
     ) -> Result<()> {
         self.admit(message, world)?;
         match message {
-            Message::KnightRefresh(_) => self.report_knight_reuse(world, out)?,
+            Message::KnightRefresh(_) => self.report_knight_reuse(Instant::now(), world, out)?,
             Message::Event(WorldEvent::Spell(update)) => {
                 let Some(own) = world.player.as_ref().map(|player| player.spawn_id) else {
                     return Ok(());

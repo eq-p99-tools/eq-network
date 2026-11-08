@@ -6,47 +6,51 @@ use crate::client::session::{
 };
 use anyhow::{bail, ensure, Context, Result};
 use eq_network_game::{
-    knights::{titanium_cast, KnightAbility},
+    knights::{titanium_cast, KnightAbility, ReuseSource},
     targets::TargetState,
     world::{SpawnKind, WorldEvent},
 };
 use std::time::{Duration, Instant};
 
-/// Titanium holds the button for ten seconds after a send. This local retry
-/// guard is separate from the server's class ability recovery timer.
+/// Titanium `eqgame.exe` 0x411f3d writes the local clock plus 10,000 ms to
+/// the slot-9 button timer before the send.
 const RETRY_DELAY: Duration = Duration::from_secs(10);
 
-#[derive(Default)]
 pub(super) struct Reuse {
-    profile_ready: Option<Instant>,
+    estimate: Duration,
+    ready: Option<(Instant, ReuseSource)>,
     retry_at: Option<Instant>,
-    /// A send starts the server's recovery, which is reported only by the
-    /// next profile. Until then the ability stays spent, so it is never sent
-    /// while the official client would still hold it.
-    spent: bool,
 }
 
 impl Reuse {
+    pub(super) const fn new(estimate: Duration) -> Self {
+        Self {
+            estimate,
+            ready: None,
+            retry_at: None,
+        }
+    }
+
     /// Record remaining server reuse at receipt so admission delay cannot
     /// extend the timer.
     pub(super) fn received(&mut self, remaining: Duration, now: Instant) {
-        self.profile_ready = Some(now + remaining);
-        self.spent = false;
+        if let Some(ready) = now.checked_add(remaining) {
+            self.ready = Some((ready, ReuseSource::Profile));
+        }
     }
 
     fn spend(&mut self, now: Instant) {
-        self.retry_at = Some(now + RETRY_DELAY);
-        self.spent = true;
+        self.retry_at = now.checked_add(RETRY_DELAY);
+        self.ready = now
+            .checked_add(self.estimate)
+            .map(|ready| (ready, ReuseSource::LocalEstimate));
     }
 
     fn check(&self, now: Instant) -> Result<()> {
-        ensure!(!self.spent, "Ability recovery time not yet met");
-        if let Some(wait) = self
-            .profile_ready
-            .and_then(|ready| ready.checked_duration_since(now))
-        {
-            ensure!(wait.is_zero(), "Ability recovery time not yet met");
-        }
+        ensure!(
+            self.ready.is_none_or(|(ready, _)| now >= ready),
+            "Ability recovery time not yet met"
+        );
         ensure!(
             self.retry_at.is_none_or(|retry| now >= retry),
             "Wait before trying the knight ability again"
@@ -89,14 +93,20 @@ fn aim(ability: KnightAbility, target: TargetState, world: &World) -> Result<u16
 }
 
 impl Casting {
-    /// Publish received reuse for the new admission or a later profile update.
-    pub(super) fn report_knight_reuse(&self, world: &World, out: &mut Out<'_, '_>) -> Result<()> {
-        let Some(ready) = self.knights.as_ref().and_then(|reuse| reuse.profile_ready) else {
+    /// Publish the current estimate or observation with its provenance.
+    pub(super) fn report_knight_reuse(
+        &self,
+        now: Instant,
+        world: &World,
+        out: &mut Out<'_, '_>,
+    ) -> Result<()> {
+        let Some((ready, source)) = self.knights.as_ref().and_then(|reuse| reuse.ready) else {
             return Ok(());
         };
         out.log.send(ClientEvent::World(WorldEvent::KnightReuse {
             session_id: world.session_id,
-            remaining: ready.saturating_duration_since(Instant::now()),
+            remaining: ready.saturating_duration_since(now),
+            source,
         }))
     }
 
@@ -106,10 +116,10 @@ impl Casting {
         command: &ClientCommand,
         ability: KnightAbility,
         target: TargetState,
+        now: Instant,
         world: &World,
         out: &mut Out<'_, '_>,
     ) -> Result<()> {
-        let now = Instant::now();
         let checked = self
             .knights
             .as_ref()
@@ -123,6 +133,7 @@ impl Casting {
                 if let Some(reuse) = &mut self.knights {
                     reuse.spend(now);
                 }
+                self.report_knight_reuse(now, world, out)?;
                 self.submitted(ability.spell(), Source::Knight(ability), world, out)
             }
             Err(error) => {
@@ -154,7 +165,7 @@ mod tests {
         player.level = 1;
         world.player.admit(player);
         world.target = Target::from(7);
-        let mut casting = Casting::with_titanium_combat(false);
+        let mut casting = Casting::with_titanium_combat(false, Duration::from_mins(72));
         let command = |target, ability| ClientCommand::UseKnightAbility {
             session_id: 5,
             ability,
@@ -184,10 +195,16 @@ mod tests {
         assert_eq!(output.sent.len(), 1);
         assert!(matches!(
             output.events.as_slice(),
-            [ClientEvent::World(WorldEvent::CastPending {
-                spell_id: Some(87),
-                ..
-            })]
+            [
+                ClientEvent::World(WorldEvent::KnightReuse {
+                    source: ReuseSource::LocalEstimate,
+                    ..
+                }),
+                ClientEvent::World(WorldEvent::CastPending {
+                    spell_id: Some(87),
+                    ..
+                })
+            ]
         ));
 
         let result = Message::Event(WorldEvent::Spell(SpellUpdate::Mana {
@@ -244,7 +261,7 @@ mod tests {
     #[test]
     fn profile_timer_and_retry_delay_are_independent() {
         let now = Instant::now();
-        let mut reuse = Reuse::default();
+        let mut reuse = Reuse::new(Duration::from_mins(72));
         assert!(reuse.check(now).is_ok());
         reuse.retry_at = Some(now + RETRY_DELAY);
         reuse.received(Duration::ZERO, now);
@@ -256,15 +273,72 @@ mod tests {
     }
 
     #[test]
-    fn a_sent_ability_stays_spent_until_the_next_received_recovery() {
+    fn a_sent_knight_ability_can_be_sent_again_after_the_same_admission_estimate() {
         let now = Instant::now();
-        let mut reuse = Reuse::default();
-        reuse.received(Duration::ZERO, now);
-        reuse.spend(now);
-        for later in [RETRY_DELAY, Duration::from_mins(72)] {
-            assert!(reuse.check(now + later).is_err());
+        let estimate = Duration::from_mins(72);
+        let ability = KnightAbility::LayOnHands;
+        let mut world = World::new(5);
+        let mut player = testing::player(7);
+        player.class = Some(3);
+        player.level = 1;
+        world.player.admit(player);
+        world.target = Target::from(7);
+        let target = world.target.state();
+        let mut casting = Casting::with_titanium_combat(false, estimate);
+        let send = |casting: &mut Casting, world: &World, at| {
+            testing::run(|out| {
+                casting.knight(
+                    &ClientCommand::UseKnightAbility {
+                        session_id: 5,
+                        ability,
+                        target,
+                        created: at,
+                    },
+                    ability,
+                    target,
+                    at,
+                    world,
+                    out,
+                )
+            })
+        };
+        let first = send(&mut casting, &world, now);
+        first.result.unwrap();
+        assert_eq!(first.sent, [titanium_cast(ability, 7).unwrap()]);
+        assert!(first.events.iter().any(|event| matches!(
+            event,
+            ClientEvent::World(WorldEvent::KnightReuse {
+                session_id: 5,
+                remaining,
+                source: ReuseSource::LocalEstimate,
+            }) if *remaining == estimate
+        )));
+        let result = Message::Event(WorldEvent::Spell(SpellUpdate::Mana {
+            spell_id: 87,
+            keep_casting: false,
+        }));
+        testing::run(|out| casting.observe(&result, &mut world, out))
+            .result
+            .unwrap();
+        let before_estimate = estimate.checked_sub(Duration::from_secs(1)).unwrap();
+        for later in [RETRY_DELAY, before_estimate] {
+            assert_eq!(send(&mut casting, &world, now + later).sent, []);
         }
-        reuse.received(Duration::ZERO, now + RETRY_DELAY);
+        let again = send(&mut casting, &world, now + estimate);
+        again.result.unwrap();
+        assert_eq!(again.sent, [titanium_cast(ability, 7).unwrap()]);
+    }
+
+    #[test]
+    fn an_authoritative_profile_replaces_the_estimate_but_keeps_the_short_hold() {
+        let now = Instant::now();
+        let mut reuse = Reuse::new(Duration::from_secs(4300));
+        reuse.spend(now);
+        reuse.received(Duration::MAX, now);
+        assert_eq!(reuse.ready.unwrap().1, ReuseSource::LocalEstimate);
+        reuse.received(Duration::from_secs(3), now);
+        assert_eq!(reuse.ready.unwrap().1, ReuseSource::Profile);
+        assert!(reuse.check(now + Duration::from_secs(3)).is_err());
         assert!(reuse.check(now + RETRY_DELAY).is_ok());
     }
 }

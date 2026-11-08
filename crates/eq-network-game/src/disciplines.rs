@@ -47,10 +47,13 @@ pub const EQMAC_CHANGE_OPCODE: u16 = 0xf241;
 /// (`MAX_PP_DISCIPLINES`).
 pub const SLOTS: usize = 100;
 
-/// Titanium reserves one buff slot after its 25 long and 12 short buffs.
+/// Titanium reserves one buff slot after its 25 long and 12 short buffs
+/// (`EQEmu` `common/patches/titanium_limits.h`, `LONG_BUFFS` through `DISC_BUFFS`).
 pub const TITANIUM_BUFF_SLOT: u32 = 37;
 
-/// Self-targeted Titanium disciplines with verified class and timer mappings.
+/// Self-targeted Titanium disciplines from spell definition rows 4503 and
+/// 4499. The Warrior level is class field 104, self target is field 98,
+/// and the shared timer index is field 167 (see `EQEmu` `common/spdat.h`).
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 pub enum Discipline {
     /// Warrior level 52.
@@ -147,15 +150,17 @@ pub enum Active {
 
 impl Active {
     /// Applies an exact slot replacement or fade for the admitted player.
-    /// A fade must name the observed spell. Empty sentinels have no verified
-    /// slot-clear semantics for this state.
+    /// An ordinary fade must name the observed spell. An exact slot
+    /// replacement can clear the slot without naming its former spell.
     pub fn observe_titanium(&mut self, own: u16, update: &BuffUpdate) -> bool {
         if update.entity_id != u32::from(own) || update.slot != TITANIUM_BUFF_SLOT {
             return false;
         }
         if let Some(buff) = &update.buff {
             *self = Self::Titanium(buff.spell_id);
-        } else if matches!(*self, Self::Titanium(spell) if spell == update.spell_id) {
+        } else if update.replaces_slot
+            || matches!(*self, Self::Titanium(spell) if spell == update.spell_id)
+        {
             *self = Self::Inactive;
         } else {
             return false;

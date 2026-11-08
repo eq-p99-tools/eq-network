@@ -1,5 +1,46 @@
 use super::*;
 
+#[test]
+fn projected_cursor_eligibility_keeps_correction_drop_and_trade_fences() {
+    let cursor = InventorySlot::CURSOR;
+    let at = |slot, id| titanium::parse(wire(slot, id, 0, false, 0, &[]).as_bytes()).unwrap();
+    let mut inventory = Inventory::default();
+    inventory.apply(InventoryUpdate::Snapshot(at(cursor.0, 42)));
+    inventory.apply(InventoryUpdate::Prediction(at(22, 42)));
+    inventory.apply(InventoryUpdate::Settled);
+    assert!(inventory.projected_cursor_empty());
+    assert!(!inventory.custody_known(cursor));
+    assert!(!inventory.custody_known(InventorySlot(22)));
+
+    inventory.apply(InventoryUpdate::Set(at(24, 44)));
+    assert!(inventory.projected_cursor_empty());
+    inventory.apply(InventoryUpdate::Set(at(22, 43)));
+    assert!(!inventory.projected_cursor_empty());
+    inventory.apply(InventoryUpdate::Cursor(at(cursor.0, 45)));
+    assert!(!inventory.custody_known(cursor));
+    assert!(!inventory.projected_cursor_empty());
+    inventory.apply(InventoryUpdate::Snapshot(at(cursor.0, 46)));
+    assert!(inventory.custody_known(cursor));
+
+    let mut drop = inventory.clone();
+    drop.apply(InventoryUpdate::GroundDropPending(NonZeroU32::MIN));
+    drop.apply(InventoryUpdate::Settled);
+    assert!(!drop.projected_cursor_empty());
+
+    let mut destroy = inventory.clone();
+    destroy.apply(InventoryUpdate::DestroyCursor);
+    destroy.apply(InventoryUpdate::Settled);
+    assert!(!destroy.projected_cursor_empty());
+
+    inventory.apply(InventoryUpdate::Prediction(at(3000, 46)));
+    inventory.apply(InventoryUpdate::TradeEmptied);
+    inventory.apply(InventoryUpdate::Settled);
+    assert!(!inventory.projected_cursor_empty());
+    inventory.apply(InventoryUpdate::Snapshot(Vec::new()));
+    assert!(inventory.projected_cursor_empty());
+    assert!(inventory.custody_known(cursor));
+}
+
 fn held_wire(slot: i32, id: u32, id_file: &str, charges: &str) -> String {
     let fixture = wire(slot, id, 0, false, 0, &[]);
     let (header, rest) = fixture.split_once('"').unwrap();
@@ -757,6 +798,18 @@ fn snapshot_decodes_equipment_bags_stack_quantities_and_unlimited_charges() {
     assert_eq!(inventory.items[&InventorySlot(13)].scroll_spell, None);
     assert_eq!(inventory.items[&InventorySlot(22)].bag_slots, 8);
     assert_eq!(
+        inventory.items[&InventorySlot(13)]
+            .rules
+            .titanium_item_class,
+        Some(0)
+    );
+    assert_eq!(
+        inventory.items[&InventorySlot(22)]
+            .rules
+            .titanium_item_class,
+        Some(1)
+    );
+    assert_eq!(
         inventory.items[&InventorySlot(22)]
             .rules
             .bag_weight_reduction,
@@ -1167,4 +1220,32 @@ fn consumption_after_multiple_relocations_keeps_independent_prediction_uncertain
     assert_eq!(state.unresolved_predictions(), 0);
     assert!(!state.predicted());
     assert!(!state.stale());
+}
+
+#[test]
+fn carried_light_reads_static_metadata_and_respects_titanium_root_slots() {
+    let packet = |slot, kind: &str| {
+        let fixture = wire(slot, 42, 0, false, 0, &[]);
+        let (head, rest) = fixture.split_once('"').unwrap();
+        let (definition, tail) = rest.split_once('"').unwrap();
+        let mut fields: Vec<_> = definition.split('|').collect();
+        fields[43] = kind;
+        format!("{head}\"{}\"{tail}", fields.join("|"))
+    };
+    let mut inventory = Inventory::default();
+    assert_eq!(inventory.titanium_carried_light(), None);
+    for (entries, expected) in [
+        (vec![(13, "7"), (14, "11"), (21, "8"), (30, "8")], Some(7)),
+        (vec![(13, "8"), (22, "9"), (23, "13"), (24, "8")], Some(13)),
+        (vec![(13, "unknown"), (22, "10")], None),
+        (vec![(13, "99")], None),
+        (vec![(30, "8")], Some(0)),
+    ] {
+        let snapshot: String = entries
+            .into_iter()
+            .map(|(slot, kind)| packet(slot, kind))
+            .collect();
+        inventory.apply(decode(0x5394, snapshot.as_bytes()).unwrap().unwrap());
+        assert_eq!(inventory.titanium_carried_light(), expected);
+    }
 }

@@ -11,7 +11,6 @@ use eq_network_game::{
     appearance::AppearanceChange,
     inventory::MAX_CARRIED_WEIGHT,
     message::Message,
-    money::Coin,
     movement::{
         DiagonalRates, MotionCalibration, MotionSession, MovementMode, MovementRequest,
         PositionPacket, SpeedInputAcceptance, SpeedInputState, SpeedInputs, SpeedState,
@@ -73,6 +72,33 @@ impl Body {
     /// Where the player is now, once they can move.
     pub(super) fn position(&self) -> Option<Position> {
         self.motion.as_ref().map(MotionSession::position)
+    }
+
+    /// Previous accepted point for corroborating a current pad entrance.
+    pub(super) fn pad_approach(&self, created: Instant) -> Option<Position> {
+        self.motion.as_ref()?.pad_approach(created)
+    }
+
+    /// Submit a verified WLD pad entry through the ordinary Titanium codec,
+    /// then keep the local player record and movement owner in step.
+    pub(super) fn cross_pad(
+        &mut self,
+        player: &mut PlayerState,
+        pad: eq_network_game::zoning::LocalPad,
+        created: Instant,
+        out: &mut Out<'_, '_>,
+    ) -> Result<()> {
+        use anyhow::Context;
+        self.motion
+            .as_mut()
+            .context("pad entry before movement admission")?
+            .cross_pad(pad, created, Instant::now(), |sample| {
+                // Titanium's explicit entry report uses send mode 4 (0x48ab25–0x48ab37).
+                out.request(&Request::Position(*sample))
+            })?;
+        player.position = pad.landing();
+        self.place(player.position);
+        Ok(())
     }
 
     /// The existing movement owner's stop state; None means no such owner.
@@ -428,22 +454,12 @@ impl Motion {
         if let (SpeedInputState::Ready(inputs), true) =
             (state, world.inventory.ground_drop_pending())
         {
-            let bound = world
-                .coins
-                .purse
-                .zip(world.coins.bank)
-                .and_then(|(purse, _)| {
-                    let coins = Coin::ALL
-                        .iter()
-                        .map(|&coin| {
-                            u64::from(purse.of(coin)) + u64::from(world.coins.cursor.of(coin))
-                        })
-                        .sum();
-                    world
-                        .inventory
-                        .carried_weight_tenths(eq_network_game::GameDialect::Titanium, coins)
-                        .ok()
-                });
+            let bound = world.coins.carried_coin_count().and_then(|coins| {
+                world
+                    .inventory
+                    .carried_weight_tenths(eq_network_game::GameDialect::Titanium, coins)
+                    .ok()
+            });
             if bound.is_none_or(|tenths| {
                 u64::from(inputs.weight) < (tenths / 10).min(u64::from(MAX_CARRIED_WEIGHT))
             }) {
@@ -861,6 +877,82 @@ mod tests {
             z: 7.0,
             heading: 256.0,
         }
+    }
+
+    #[test]
+    fn p99_strokes_use_the_paced_titanium_position_stream() {
+        use super::super::servers::{server_type, Setup};
+        use crate::client::ServerProtocol;
+        use eq_network_game::food::AutoEat;
+        use eq_network_game::movement::{POSITION_OPCODE, TITANIUM_POSITION_SPACING};
+
+        let server = server_type(ServerProtocol::Project1999);
+        let setup = Setup::new("Tester", AutoEat::default());
+        let mut feature = server.motion(&setup).unwrap().feature;
+        let start = Instant::now();
+        let mut world = World::new(5);
+        world.admitted = Some(start);
+        world.own_spawn = Some(7);
+        world.player.admit(testing::player(7));
+        testing::run_on(server.wire(), |out| feature.admitted(&mut world, out))
+            .result
+            .unwrap();
+        world
+            .body
+            .motion_mut()
+            .unwrap()
+            .calibrate(
+                MotionCalibration {
+                    units_per_second: 6.0,
+                    velocity_scale: 0.05,
+                    animation: 12,
+                    backward: None,
+                    walk: None,
+                    strafe: None,
+                    diagonal: DiagonalRates::default(),
+                },
+                start,
+            )
+            .unwrap();
+
+        let sampled = start + Duration::from_millis(50);
+        let stroke = MovementRequest::new(
+            MovementMode::Swim,
+            5,
+            Position {
+                z: -0.03,
+                ..Position::default()
+            },
+            sampled,
+        );
+        let held = testing::run_on(server.wire(), |out| {
+            Motion::step_at(&stroke, sampled, &mut world, out)
+        });
+        held.result.unwrap();
+        assert_eq!(held.unreliable, []);
+        assert_eq!(held.sent, []);
+        assert!(held.events.iter().any(|event| matches!(
+            event,
+            ClientEvent::World(WorldEvent::MotionSent { position, refused: None, .. })
+                if *position == stroke.position
+        )));
+        assert_eq!(world.body.position(), Some(stroke.position));
+
+        let due = start + TITANIUM_POSITION_SPACING;
+        let before_due = due.checked_sub(Duration::from_millis(1)).unwrap();
+        let waiting = testing::run_on(server.wire(), |out| world.body.heartbeat(before_due, out));
+        waiting.result.unwrap();
+        assert_eq!(waiting.unreliable, []);
+        let sent = testing::run_on(server.wire(), |out| world.body.heartbeat(due, out));
+        sent.result.unwrap();
+        assert_eq!(sent.sent, []);
+        assert_eq!(sent.unreliable.len(), 1);
+        let packet = &sent.unreliable[0];
+        assert_eq!(packet.opcode, POSITION_OPCODE);
+        assert_eq!(packet.body.len(), 36);
+        assert_eq!(packet.body[28..32], stroke.position.z.to_le_bytes());
+        assert!(f32::from_le_bytes(packet.body[8..12].try_into().unwrap()) < 0.0);
+        assert!(sent.events.is_empty());
     }
 
     #[test]

@@ -7,7 +7,10 @@
 //! 45, and otherwise multiplies the magnitude by the modifier in tenths
 //! (0.1 at 0x640e38, integer conversion at 0x60e98c). Movement effect 3
 //! reaches the comparison at 0x410619 with the scaled value, including
-//! negative snares.
+//! negative snares. A stored zero reaches that multiply and contributes zero
+//! in the unpatched executable. The host still treats a received zero as a
+//! neutral compatibility value. Its use as a sentinel on deployed servers
+//! is inferred and needs a recording of the applied buff and movement.
 //!
 //! [`scale_instrument_effect`](crate::buffs::scale_instrument_effect) exposes
 //! the bounded host projection. It preserves the host's neutral encodings and
@@ -19,9 +22,10 @@ use serde::Serialize;
 pub mod cancel;
 
 /// Scales an evaluated movement-related buff magnitude using its received
-/// instrument modifier. Both dialects accept 0 and 10 as neutral for this
-/// projection. Boosts of 11 through 45 are supported on Titanium, and
-/// signed division truncates toward zero. Returns `None` for an unresolved
+/// instrument modifier. Both dialects use 10 as neutral. This projection
+/// also preserves the existing neutral convention for received zero pending
+/// a deployed-server recording. Boosts of 11 through 45 are supported on
+/// Titanium, with signed division truncating toward zero. Returns `None` for an unresolved
 /// modifier or a result outside `i64`.
 #[must_use]
 pub fn scale_instrument_effect(
@@ -260,6 +264,8 @@ pub struct BuffUpdate {
     pub entity_id: u32,
     /// Server slot number, preserved without allocating by its value.
     pub slot: u32,
+    /// The Titanium receiver replaces the exact slot, including an empty record.
+    pub replaces_slot: bool,
     /// Present for a replacement, absent for an explicit fade or empty record.
     pub buff: Option<Buff>,
 }
@@ -278,19 +284,27 @@ pub fn titanium_profile(profile: &[u8]) -> Result<Vec<Option<Buff>>> {
         .collect())
 }
 
-/// Decodes a Titanium server buff notification and its explicit fade flag.
+/// Decodes a Titanium server buff notification or exact discipline slot replacement.
 ///
 /// # Errors
 /// Rejects unexpected lengths and unknown fade flags rather than guessing a change.
 pub fn titanium_update(body: &[u8]) -> Result<BuffUpdate> {
     ensure!(body.len() == 32, "invalid Titanium buff update length");
-    let fade = word(body, 28);
-    ensure!(fade <= 1, "unknown Titanium buff fade flag");
+    let mode = word(body, 28);
+    let slot = word(body, 24);
+    // Titanium eqgame.exe 0x45f095 copies the whole record to the named
+    // slot in mode 3. Accept that form for the dedicated discipline slot.
+    let replaces_slot = mode == 3 && slot == crate::disciplines::TITANIUM_BUFF_SLOT;
+    ensure!(
+        mode <= 1 || replaces_slot,
+        "unknown Titanium buff update mode"
+    );
     Ok(BuffUpdate {
         spell_id: word(body, 8),
         entity_id: word(body, 0),
-        slot: word(body, 24),
-        buff: if fade == 1 {
+        slot,
+        replaces_slot,
+        buff: if mode == 1 {
             None
         } else {
             record(&body[4..24])
@@ -349,6 +363,7 @@ pub fn eqmac_update(body: &[u8]) -> Result<BuffUpdate> {
     let short = |offset| u16::from_le_bytes([body[offset], body[offset + 1]]);
     let fade = word(body, 16) == 1;
     Ok(BuffUpdate {
+        replaces_slot: false,
         spell_id: u32::from(short(6)),
         entity_id: u32::from(short(0)),
         slot: if fade {
@@ -473,6 +488,13 @@ mod tests {
         body[10..14].copy_from_slice(&f32::NAN.to_le_bytes());
         let effect = titanium_spell_effect(&body).unwrap().unwrap();
         assert_eq!((effect.spell_id, effect.push), (42, None));
+        body[6..10].fill(0);
+        let zero = titanium_spell_effect(&body).unwrap().unwrap();
+        assert_eq!(zero.instrument_modifier, 0);
+        assert_eq!(
+            scale_instrument_effect(crate::GameDialect::Titanium, 30, zero.instrument_modifier),
+            Some(30)
+        );
         assert!(titanium_spell_effect(&body[..30]).is_err());
         assert!(titanium_update(&body).is_err());
     }
@@ -487,7 +509,9 @@ mod tests {
         let buffs = titanium_profile(&profile).unwrap();
         assert_eq!(buffs.len(), 25);
         assert_eq!(buffs.iter().flatten().count(), 1);
-        assert_eq!(buffs[3].as_ref().unwrap().duration_ticks, -1);
+        let received = buffs[3].as_ref().unwrap();
+        assert_eq!(received.duration_ticks, -1);
+        assert_eq!(received.bard_modifier, 0);
         assert!(titanium_profile(&profile[..5507]).is_err());
         let mut body = [0; 32];
         body[..4].copy_from_slice(&7u32.to_le_bytes());
@@ -615,6 +639,7 @@ mod tests {
         assert_eq!(
             eqmac_update(&body).unwrap(),
             BuffUpdate {
+                replaces_slot: false,
                 spell_id: 42,
                 entity_id: 0,
                 slot: UNKNOWN_SLOT,

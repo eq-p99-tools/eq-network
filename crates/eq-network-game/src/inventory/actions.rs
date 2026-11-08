@@ -273,6 +273,11 @@ impl Inventory {
         );
         ensure!(request.from != request.to, "Choose a different destination");
         ensure!(
+            !self.bandage_stock_uncertain(request.from)
+                && !self.bandage_stock_uncertain(request.to),
+            "Wait for current stock in the affected bandage slot"
+        );
+        ensure!(
             movable(request.from, actor) && movable(request.to, actor),
             "Slot is unsupported or personal banking requires a nearby banker"
         );
@@ -284,18 +289,7 @@ impl Inventory {
             Self::check_eqmac_move(request)?;
         }
         if request.to.is_trade() {
-            check_trade(request, self.items.contains_key(&request.to))?;
-            // `EQEmu` disconnects a client that offers another player a NO
-            // DROP item, or a bag holding one.
-            ensure!(
-                actor.trade_no_drop
-                    || !self.items.iter().any(|(slot, item)| {
-                        (*slot == request.from
-                            || slot.parent().is_some_and(|(bag, _)| bag == request.from))
-                            && item.details.flags.iter().any(|flag| flag == "NO DROP")
-                    }),
-                "NO DROP items cannot be traded"
-            );
+            self.check_trade(request, actor)?;
         }
         if request.from.is_world() || request.to.is_world() {
             check_world(request, self.items.contains_key(&request.to))?;
@@ -601,6 +595,30 @@ impl Inventory {
     }
 }
 impl Inventory {
+    /// What servers accept into a trade slot. `EQEmu` may disconnect a
+    /// client that sends an invalid move or offers a NO DROP item.
+    fn check_trade(&self, request: &InventoryMove, actor: InventoryActor) -> Result<()> {
+        ensure!(
+            request.from == InventorySlot::CURSOR,
+            "Pick the item up to hand it over"
+        );
+        let occupied = self.items.contains_key(&request.to);
+        match request.quantity {
+            MoveQuantity::Whole => ensure!(!occupied, "That trade slot is taken"),
+            MoveQuantity::Count(_) => ensure!(occupied, "Hand over the whole stack on the cursor"),
+        }
+        ensure!(
+            actor.trade_no_drop
+                || !self.items.iter().any(|(slot, item)| {
+                    (*slot == request.from
+                        || slot.parent().is_some_and(|(bag, _)| bag == request.from))
+                        && item.details.flags.iter().any(|flag| flag == "NO DROP")
+                }),
+            "NO DROP items cannot be traded"
+        );
+        Ok(())
+    }
+
     /// An observed child can only move while its containing bag is known.
     fn check_source_container(&self, slot: InventorySlot) -> Result<()> {
         if let Some((parent, index)) = slot.parent() {
@@ -716,21 +734,6 @@ fn check_world(request: &InventoryMove, occupied: bool) -> Result<()> {
             request.from == InventorySlot::CURSOR,
             "Pick the item up to put it in the container"
         );
-    }
-    Ok(())
-}
-
-/// What servers accept into a trade slot: an item from the cursor, whole into
-/// an empty slot or merged onto the same stack. `EQEmu` disconnects a client
-/// that sends anything else (`Trade::AddEntity`, `Client::SwapItem`).
-fn check_trade(request: &InventoryMove, occupied: bool) -> Result<()> {
-    ensure!(
-        request.from == InventorySlot::CURSOR,
-        "Pick the item up to hand it over"
-    );
-    match request.quantity {
-        MoveQuantity::Whole => ensure!(!occupied, "That trade slot is taken"),
-        MoveQuantity::Count(_) => ensure!(occupied, "Hand over the whole stack on the cursor"),
     }
     Ok(())
 }

@@ -185,17 +185,15 @@ impl Feature for Buffs {
                 if let Some(slots) = &mut self.slots {
                     if let Some(buff) = &update.buff {
                         slots.insert(update.slot, buff.clone());
-                    } else {
-                        // Require both the slot and spell. A late old-spell
-                        // fade or a sentinel without established slot-clear
-                        // semantics cannot remove the current buff.
-                        if slots
-                            .get(&update.slot)
-                            .is_some_and(|buff| buff.spell_id == update.spell_id)
-                        {
-                            slots.remove(&update.slot);
-                            faded = Some((update.slot, update.spell_id));
-                        }
+                    } else if update.replaces_slot {
+                        slots.remove(&update.slot);
+                    } else if slots
+                        .get(&update.slot)
+                        .is_some_and(|buff| buff.spell_id == update.spell_id)
+                    {
+                        // Only an ordinary named fade supplies fade evidence.
+                        slots.remove(&update.slot);
+                        faded = Some((update.slot, update.spell_id));
                     }
                 }
             }
@@ -353,6 +351,7 @@ mod tests {
 
     fn update(entity_id: u32, spell_id: u32, replacement: Option<Buff>) -> Message {
         Message::Event(WorldEvent::Buff(BuffUpdate {
+            replaces_slot: false,
             entity_id,
             slot: 3,
             spell_id,

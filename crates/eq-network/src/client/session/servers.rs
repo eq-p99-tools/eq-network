@@ -30,6 +30,7 @@ use super::{
     control::Stuns,
     corpses::Corpses,
     creation::{self, Creation},
+    dialogs::Dialogs,
     doors::Doors,
     entities::Entities,
     exchange::Exchanges,
@@ -481,6 +482,10 @@ pub(super) trait ServerType: Sync {
         None
     }
 
+    fn dialogs(&self) -> Provided {
+        None
+    }
+
     /// Every feature the server type provides, in the order the zone session
     /// offers them each command, packet and timer.
     fn features(&self, setup: &Setup<'_>) -> Vec<Provision> {
@@ -525,6 +530,7 @@ pub(super) trait ServerType: Sync {
             self.hazards(setup),
             self.ticks(setup),
             self.helm(setup),
+            self.dialogs(),
         ]
         .into_iter()
         .flatten()
@@ -691,6 +697,10 @@ mod shared {
         Box::new(Abilities::new(listed))
     }
 
+    pub(super) fn abilities_with_self_bandage(listed: &'static [Ability]) -> Box<dyn Feature> {
+        Box::new(Abilities::with_self_bandage(listed))
+    }
+
     pub(super) fn hide_answer() -> Box<dyn Feature> {
         Box::new(HideAnswer)
     }
@@ -815,10 +825,8 @@ mod shared {
     }
 }
 
-/// The abilities offered on P99: every one but fishing, which came later, and
-/// binding wounds. The self-bandage path is withheld there until an unanswered
-/// or refused bandage stops holding the whole inventory until the next zone.
-const P99_ABILITIES: [Ability; 16] = [
+/// The abilities offered on P99: every one but fishing, which came later.
+const P99_ABILITIES: [Ability; 17] = [
     Ability::Kick,
     Ability::Bash,
     Ability::Backstab,
@@ -833,6 +841,7 @@ const P99_ABILITIES: [Ability; 16] = [
     Ability::Sneak,
     Ability::Forage,
     Ability::Mend,
+    Ability::BindWound,
     Ability::FeignDeath,
     Ability::SenseHeading,
 ];
@@ -840,10 +849,9 @@ const P99_ABILITIES: [Ability; 16] = [
 /// The hazards a local `EQEmu` takes from the client: falls, whose damage it
 /// lowers by the player's fall damage reductions from spells, items and AAs,
 /// and drowning and lava, whose amounts it takes as sent
-/// (`Client::Handle_OP_EnvDamage`). The Titanium program's own drowning and
-/// lava reports are unrecorded; the liquid reports reuse the fall record
-/// with the server reader's damage types 251 and 250, inferred (recording
-/// checklist 6.392), and stay local until recorded.
+/// (`Client::Handle_OP_EnvDamage`). Titanium's 0x4bdb3c and 0x41d4ba
+/// build types 251 and 250, sent by 0x41c905 as 31-byte `OP_EnvDamage`.
+/// Deployed P99 liquid report handling remains unverified.
 const LOCAL_EQEMU_HAZARDS: [Hazard; 3] = [Hazard::Falling, Hazard::Drowning, Hazard::Lava];
 
 /// The hazard every Titanium server takes from the client so far: falls. The
@@ -874,6 +882,10 @@ const P99_WORLD_PREFIXES: [&str; 2] = ["project 1999", "an interesting"];
 struct Project1999;
 
 impl ServerType for Project1999 {
+    fn dialogs(&self) -> Provided {
+        offer(Box::<Dialogs>::default())
+    }
+
     fn resurrection(&self, _setup: &Setup<'_>) -> Provided {
         offer(Box::new(Resurrection::project1999()))
     }
@@ -975,7 +987,11 @@ impl ServerType for Project1999 {
     }
 
     fn casting(&self, _setup: &Setup<'_>) -> Provided {
-        offer(Box::new(Casting::with_titanium_combat(false)))
+        // Inferred local estimate (recording checklist 6.399) from the classic once-per-game-day reuse.
+        offer(Box::new(Casting::with_titanium_combat(
+            false,
+            std::time::Duration::from_mins(72),
+        )))
     }
 
     /// Moving the book's spells works on P99 as on `EQEmu` (checked with the
@@ -1001,7 +1017,13 @@ impl ServerType for Project1999 {
     /// establish the arc: the shared client-derived physics remains an
     /// inference until a custom-client jump is checked there.
     fn motion(&self, _setup: &Setup<'_>) -> Provided {
-        offer(shared::motion(true, true, self.spell_landing_flag()))
+        // Titanium packs wet and dry movement through the same position
+        // sender (0x465244, 0x48aaa6). P99's client module passes 0x14cb,
+        // which is observed in official P99 traffic. The bound is local;
+        // wet animation, exact tuning and live swim acceptance remain open.
+        offer(Box::new(
+            Motion::new(true, true, self.spell_landing_flag()).with_swimming(),
+        ))
     }
 
     /// Falls only (6.332).
@@ -1039,7 +1061,7 @@ impl ServerType for Project1999 {
     }
 
     fn abilities(&self, _setup: &Setup<'_>) -> Provided {
-        offer(shared::abilities(&P99_ABILITIES))
+        offer(shared::abilities_with_self_bandage(&P99_ABILITIES))
     }
 
     fn talk(&self, _setup: &Setup<'_>) -> Provided {
@@ -1090,6 +1112,10 @@ impl ServerType for Project1999 {
 struct EqEmu;
 
 impl ServerType for EqEmu {
+    fn dialogs(&self) -> Provided {
+        offer(Box::<Dialogs>::default())
+    }
+
     fn buff_cancellation(&self, _setup: &Setup<'_>) -> Provided {
         offer(Box::<Buffs>::default())
     }
@@ -1136,7 +1162,11 @@ impl ServerType for EqEmu {
     }
 
     fn casting(&self, _setup: &Setup<'_>) -> Provided {
-        offer(Box::new(Casting::with_titanium_combat(true)))
+        // EQEmu common/features.h: LayOnHandsReuseTime and HarmTouchReuseTime.
+        offer(Box::new(Casting::with_titanium_combat(
+            true,
+            std::time::Duration::from_secs(4300),
+        )))
     }
 
     fn spellbook(&self, _setup: &Setup<'_>) -> Provided {
@@ -2238,10 +2268,10 @@ mod tests {
     }
 
     #[test]
-    fn p99_lists_every_ability_but_fishing_and_binding_wounds() {
+    fn p99_lists_every_ability_but_fishing() {
         assert!(!P99_ABILITIES.contains(&Ability::Fishing));
-        assert!(!P99_ABILITIES.contains(&Ability::BindWound));
-        assert_eq!(P99_ABILITIES.len(), Ability::ALL.len() - 2);
+        assert!(P99_ABILITIES.contains(&Ability::BindWound));
+        assert_eq!(P99_ABILITIES.len(), Ability::ALL.len() - 1);
     }
 
     #[test]
@@ -2255,8 +2285,8 @@ mod tests {
         // yet checked live; and only EQEmu takes the show-helm option.
         // Both Titanium policies retain the verified own-player stun timer.
         for (protocol, count) in [
-            (ServerProtocol::Project1999, 31),
-            (ServerProtocol::EqEmu, 39),
+            (ServerProtocol::Project1999, 32),
+            (ServerProtocol::EqEmu, 40),
         ] {
             let server = server_type(protocol);
             let setup = Setup::new("Tester", AutoEat::default());
@@ -2288,6 +2318,8 @@ mod tests {
             assert!(offers(server_type(protocol)).contains(&Capability::Translocate));
             assert!(offers(server_type(protocol)).contains(&Capability::Tradeskills));
             assert!(offers(server_type(protocol)).contains(&Capability::WorldContainers));
+            assert!(offers(server_type(protocol)).contains(&Capability::ServerDialogs));
+            assert!(offers(server_type(protocol)).contains(&Capability::PlayerInspection));
         }
     }
 

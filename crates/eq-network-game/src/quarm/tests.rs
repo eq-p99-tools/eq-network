@@ -353,14 +353,14 @@ fn visibility_and_mana_use_eqmac_fields_without_inventing_endurance() {
         updates(0xf540, &[7, 0, 3, 0, 1, 0, 0, 0]).unwrap(),
         vec![WorldEvent::Visibility {
             spawn_id: 7,
-            invisible: true
+            state: crate::vision::Invisibility::EqMac(1)
         }]
     );
     assert_eq!(
         updates(0xf540, &[7, 0, 3, 0, 0, 0, 0, 0]).unwrap(),
         vec![WorldEvent::Visibility {
             spawn_id: 7,
-            invisible: false
+            state: crate::vision::Invisibility::EqMac(0)
         }]
     );
     assert_eq!(
@@ -458,6 +458,7 @@ fn spell_notices_read_as_the_spell_news_every_wire_gives() {
     assert_eq!(
         updates(0x3241, &fade).unwrap(),
         vec![WorldEvent::Buff(BuffUpdate {
+            replaces_slot: false,
             spell_id: 42,
             entity_id: 0,
             slot: UNKNOWN_SLOT,

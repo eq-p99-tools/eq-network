@@ -1,7 +1,8 @@
 # Titanium movement history
 
 Status: record decoding only. Sessions do not emit movement-history packets.
-The capture comparison has not established a working P99 or EQEmu sender.
+The P99 DLL suppresses the opcode in P99 mode. Stock Titanium transmission
+still needs its packet trailer and scheduling established.
 
 ## Opcode and record layout
 
@@ -51,13 +52,19 @@ refreshes its timer before validating the body, then rejects a body shorter than
 that an empty body is a valid client report. Its port and warp handling also makes
 invented causes inappropriate.
 
-Existing private official-client recordings inspected for this change contain
-thousands of outgoing position updates but no `0x6a1b` or `0x6177` reports. That
-establishes absence only in those recordings, not a universal client behavior.
-No claim about P99's private server implementation follows from EQEmu source.
-This change makes no new claim about EQMac/TAKP/Quarm movement history.
+Observed P99 traffic contains ordinary position updates and no history
+reports. The P99 client extension suppresses `0x6a1b` in P99 mode while
+allowing `0x14cb`. The native WLD pad path at
+`0x48b52c`, `0x48b42b`, and `0x48aaa6` submits a 36-byte position at
+entry, snaps locally, and returns to the normal position stream. The local
+pad implementation uses the existing position encoder and update gate.
+Its event records local placement after entry submission. The entry uses
+the ordinary session position sequence. The native pad path uses a movement
+history cursor, so the entry word still needs a capture comparison
+(recording checklist 6.402). Live
+validation of pad crossings and server receipt is pending.
 
-Before implementing transmission, capture a real populated report; establish
-the trailer, clock/sequence evolution, record eligibility, flush boundaries and
-delivery flag; then compare the sender with the official client on a local server.
-Do not substitute packets that merely suppress a server diagnostic.
+Before implementing stock Titanium transmission, capture a populated report
+and establish its trailer, clock and sequence evolution, record eligibility,
+flush boundaries, and delivery mode. Compare the sender with the official
+client on a local server.

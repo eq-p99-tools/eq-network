@@ -43,6 +43,32 @@ impl CastStream {
         }
     }
 
+    fn click(&mut self) -> ClientCommand {
+        let slot = InventorySlot(22);
+        let mut item = testing::item(slot.0);
+        item.activation.effect = Some(ClickEffect {
+            spell_id: u32::from(REQUESTED),
+            kind: ClickKind::Expendable,
+            required_level: 0,
+            effect_level: 1,
+            cast_time_ms: 3000,
+            recast_delay_seconds: 0,
+            recast_type: 0,
+        });
+        item.charges = 1;
+        let mut inventory = Inventory::default();
+        inventory.apply(InventoryUpdate::Snapshot(vec![item]));
+        self.world.inventory = inventory.into();
+        ClientCommand::UseItem(ItemUse {
+            request_id: 1,
+            session_id: self.world.session_id,
+            revision: self.world.inventory.revision(),
+            slot,
+            target_id: OWN,
+            created: Instant::now(),
+        })
+    }
+
     fn gem(&self) -> ClientCommand {
         ClientCommand::CastSpell {
             session_id: self.world.session_id,
@@ -151,36 +177,25 @@ fn only_takp_associates_the_stock_luclin_port_alias() {
 #[test]
 fn a_late_item_start_keeps_its_takp_alias_until_spell_bearing_mana() {
     let mut stream = CastStream::new(ServerProtocol::Takp, 5);
-    let slot = InventorySlot(22);
-    let mut item = testing::item(slot.0);
-    item.activation.effect = Some(ClickEffect {
-        spell_id: u32::from(REQUESTED),
-        kind: ClickKind::Expendable,
-        required_level: 0,
-        effect_level: 1,
-        cast_time_ms: 3000,
-        recast_delay_seconds: 0,
-        recast_type: 0,
-    });
-    item.charges = 1;
-    let mut inventory = Inventory::default();
-    inventory.apply(InventoryUpdate::Snapshot(vec![item]));
-    stream.world.inventory = inventory.into();
-    let item = ClientCommand::UseItem(ItemUse {
-        request_id: 1,
-        session_id: 5,
-        revision: stream.world.inventory.revision(),
-        slot,
-        target_id: OWN,
-        created: Instant::now(),
-    });
+    let item = stream.click();
     let outcome = testing::run_on(stream.server.wire(), |out| -> Result<()> {
         stream.time_out(item, out)?;
         stream.begin(8, PORT_BEGIN, out)?;
         assert!(!stream.held());
         stream.begin(OWN, UNRELATED, out)?;
         assert!(stream.held());
-        stream.mana(UNRELATED, out)?;
+        // An unrelated own interruption has no spell ID and retires only
+        // the active hold. It cannot identify the timed-out item request.
+        stream.hear(
+            vec![Message::Event(WorldEvent::Spell(
+                SpellUpdate::Interrupted {
+                    caster_id: u32::from(OWN),
+                    message_id: 1,
+                    caster_name: None,
+                },
+            ))],
+            out,
+        )?;
         assert!(!stream.held());
         stream.begin(OWN, PORT_BEGIN, out)?;
         stream.begin(OWN, PORT_BEGIN, out)?;
@@ -229,14 +244,42 @@ fn a_late_item_start_keeps_its_takp_alias_until_spell_bearing_mana() {
 }
 
 #[test]
-fn an_old_result_or_lifecycle_change_retires_the_timed_out_context() {
+fn a_late_item_cast_answers_only_to_the_item_slot_refresh() {
+    let mut stream = CastStream::new(ServerProtocol::EqEmu, 5);
+    let item = stream.click();
+    let output = testing::run_on(stream.server.wire(), |out| -> Result<()> {
+        stream.time_out(item, out)?;
+        stream.begin(OWN, REQUESTED, out)?;
+        assert!(stream.held());
+        let refresh = |slot: u32| {
+            let mut body = [0; 16];
+            body[..4].copy_from_slice(&slot.to_le_bytes());
+            body[4..8].copy_from_slice(&u32::from(REQUESTED).to_le_bytes());
+            body[8..12].copy_from_slice(&3u32.to_le_bytes());
+            body
+        };
+        stream.packet(0x308e, &refresh(0), out)?;
+        assert!(stream.held());
+        let item_slot = u32::from(eq_network_game::spells::ITEM_CAST_SLOT);
+        stream.packet(0x308e, &refresh(item_slot), out)?;
+        assert!(!stream.held());
+        Ok(())
+    });
+    output.result.unwrap();
+    assert!(output.events.iter().any(|event| matches!(
+        event,
+        ClientEvent::World(WorldEvent::CastLateBegin { session_id: 5, .. })
+    )));
+}
+
+#[test]
+fn an_old_result_or_death_retires_the_timed_out_context() {
     enum End {
         Mana,
         Death,
-        Admission,
     }
 
-    for end in [End::Mana, End::Death, End::Admission] {
+    for end in [End::Mana, End::Death] {
         let mut stream = CastStream::new(ServerProtocol::Takp, 5);
         let outcome = testing::run_on(stream.server.wire(), |out| -> Result<()> {
             stream.time_out(stream.gem(), out)?;
@@ -253,7 +296,6 @@ fn an_old_result_or_lifecycle_change_retires_the_timed_out_context() {
                         out,
                     )?;
                 }
-                End::Admission => stream = CastStream::new(ServerProtocol::Takp, 6),
             }
             assert!(!stream.held());
             stream.begin(OWN, PORT_BEGIN, out)?;

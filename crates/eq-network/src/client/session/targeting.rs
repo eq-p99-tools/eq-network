@@ -5,7 +5,9 @@ use super::{
     ClientCommand, ClientEvent,
 };
 use anyhow::Result;
-use eq_network_game::{message::Message, targets::TargetState, world::WorldEvent};
+use eq_network_game::{
+    appearance::AppearanceChange, message::Message, targets::TargetState, world::WorldEvent,
+};
 
 /// The spawn the server holds as the player's target: the last one sent, or
 /// the one the server set since. Every feature reads it; only the targeting
@@ -89,22 +91,44 @@ impl Targeting {
                 world.target.awaiting_spawn && world.visible(id)
             }
             WorldEvent::Despawn(gone) if *gone == id => false,
-            WorldEvent::Visibility {
-                spawn_id,
-                invisible: true,
-            } if *spawn_id == id => false,
             _ => return false,
         };
         world.target.set(Some(id), available, false);
         true
     }
 
-    fn publish(world: &World, out: &mut Out<'_, '_>) -> Result<()> {
-        out.log.send(ClientEvent::World(WorldEvent::TargetChanged {
+    fn reconcile_sight(world: &mut World) -> bool {
+        let Some(sees_invisible) = world.sight.changed() else {
+            return false;
+        };
+        world.happened(Message::Event(WorldEvent::ObserverSight {
+            session_id: world.session_id,
+            sees_invisible,
+        }));
+        true
+    }
+
+    fn lost_visibility(world: &mut World) -> bool {
+        let Some(id) = *world.target else {
+            return false;
+        };
+        if world.target.state().available && !world.visible(id) {
+            world.target.set(Some(id), false, false);
+            return true;
+        }
+        false
+    }
+
+    fn target_event(world: &World) -> WorldEvent {
+        WorldEvent::TargetChanged {
             session_id: world.session_id,
             request_id: world.target.request_id,
             state: world.target.state(),
-        }))
+        }
+    }
+
+    fn publish(world: &World, out: &mut Out<'_, '_>) -> Result<()> {
+        out.log.send(ClientEvent::World(Self::target_event(world)))
     }
 }
 
@@ -182,13 +206,38 @@ impl Feature for Targeting {
 
     fn admit(&mut self, message: &Message, world: &mut World) -> Result<()> {
         if let Message::Event(event) = message {
-            Self::apply(event, world);
+            if !Self::apply(event, world) {
+                Self::lost_visibility(world);
+            }
         }
         Ok(())
     }
 
     fn admitted(&mut self, world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
+        if let Some(sees_invisible) = world.sight.changed() {
+            out.log.send(ClientEvent::World(WorldEvent::ObserverSight {
+                session_id: world.session_id,
+                sees_invisible,
+            }))?;
+        }
         Self::publish(world, out)
+    }
+
+    fn tick(
+        &mut self,
+        _now: std::time::Instant,
+        world: &mut World,
+        _out: &mut Out<'_, '_>,
+    ) -> Result<()> {
+        // P99's spell replay reaches the host provider outside ordinary
+        // zone-event delivery. Reevaluate before handling more zone input.
+        if !world.ready() {
+            return Ok(());
+        }
+        if Self::reconcile_sight(world) && Self::lost_visibility(world) {
+            world.happened(Message::Event(Self::target_event(world)));
+        }
+        Ok(())
     }
 
     /// Follows the target the server sets: a spell's or a quest's pick, or
@@ -202,14 +251,26 @@ impl Feature for Targeting {
         let Message::Event(event) = message else {
             return Ok(());
         };
-        if Self::apply(event, world) {
-            // The host must see the entity change before this projection,
-            // so it can bind its own incarnation of a newly arrived spawn.
-            world.happened(Message::Event(WorldEvent::TargetChanged {
-                session_id: world.session_id,
-                request_id: world.target.request_id,
-                state: world.target.state(),
-            }));
+        let sight_changed = Self::reconcile_sight(world);
+        let target_appearance_changed = match event {
+            WorldEvent::Visibility { spawn_id, .. }
+            | WorldEvent::Appearance {
+                spawn_id,
+                change: AppearanceChange::TitaniumGm(_),
+            } => *world.target == Some(*spawn_id),
+            WorldEvent::Death(death) => world
+                .target
+                .state()
+                .spawn_id
+                .is_some_and(|id| u32::from(id) == death.spawn_id),
+            _ => false,
+        };
+        if Self::apply(event, world)
+            || ((sight_changed || target_appearance_changed) && Self::lost_visibility(world))
+        {
+            // The host sees the underlying change first so it can bind the
+            // same incarnation of a newly arrived spawn.
+            world.happened(Message::Event(Self::target_event(world)));
         }
         Ok(())
     }

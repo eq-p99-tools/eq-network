@@ -3,7 +3,7 @@ use super::*;
 use crate::client::{session::feature::testing, ServerProtocol};
 use eq_network_game::{
     food::AutoEat,
-    inventory::{Inventory, InventorySlot, InventoryUpdate},
+    inventory::{Inventory, InventoryMove, InventorySlot, InventoryUpdate, MoveQuantity},
     objects::{ContainerView, GroundObject},
     tradeskills::{CombineUpdate, WORLD_CONTAINER},
     world::{Capability, WorldEvent},
@@ -41,6 +41,18 @@ fn combine(slot: InventorySlot) -> ClientCommand {
         container: slot,
         created: Instant::now(),
     }
+}
+
+fn move_item(world: &World, from: i32, to: i32) -> ClientCommand {
+    ClientCommand::MoveInventory(InventoryMove {
+        session_id: world.session_id,
+        revision: world.inventory.revision(),
+        sequence: None,
+        from: InventorySlot(from),
+        to: InventorySlot(to),
+        quantity: MoveQuantity::Whole,
+        created: Instant::now(),
+    })
 }
 
 fn hear_packets(features: &mut Features, world: &mut World, opcode: u16, body: &[u8]) {
@@ -226,6 +238,7 @@ fn p99_forge_candidates_need_a_matching_server_forge_reply_before_combining() {
 }
 
 #[test]
+#[allow(clippy::too_many_lines)] // Verify the complete reset, close and reopen order.
 fn eqemu_ordered_reopen_fences_close_after_a_reset_with_or_without_combine_clear() {
     let server = servers::server_type(ServerProtocol::EqEmu);
     for combine_clears in [false, true] {
@@ -248,7 +261,13 @@ fn eqemu_ordered_reopen_fences_close_after_a_reset_with_or_without_combine_clear
             hear(vec![object], &mut features, &mut world, out, true)?;
             features.handle(&open(), &mut world, out)?;
             hear(
-                vec![reply(), content()],
+                vec![
+                    reply(),
+                    content(),
+                    Message::Event(WorldEvent::Inventory(InventoryUpdate::Set(vec![
+                        testing::item(24),
+                    ]))),
+                ],
                 &mut features,
                 &mut world,
                 out,
@@ -256,14 +275,27 @@ fn eqemu_ordered_reopen_fences_close_after_a_reset_with_or_without_combine_clear
             )?;
             assert!(world.container.is_open());
             features.handle(&combine(WORLD_CONTAINER), &mut world, out)?;
+            let wire = server.wire();
             hear(
-                vec![Message::Event(WorldEvent::Combine(CombineUpdate::Answered))],
+                wire.messages(0x0b40, &[], server.item_rules()),
                 &mut features,
                 &mut world,
                 out,
                 true,
             )?;
-            assert_ne!(features.holds(&world, Instant::now()), []);
+            assert_eq!(
+                features.holds(&world, Instant::now()),
+                [(
+                    actions::Resource::CursorAndStation,
+                    "Wait for the station and cursor updates"
+                )]
+            );
+            assert!(world.inventory.items().contains_key(&InventorySlot(4000)));
+            let withdraw = move_item(&world, 4000, 30);
+            apply_commands(&[withdraw], &mut features, &mut world, out, true)?;
+            let unrelated = move_item(&world, 24, 25);
+            apply_commands(&[unrelated], &mut features, &mut world, out, true)?;
+            assert!(world.inventory.items().contains_key(&InventorySlot(25)));
             features.handle(
                 &ClientCommand::CloseContainer {
                     session_id: 5,
@@ -315,7 +347,7 @@ fn eqemu_ordered_reopen_fences_close_after_a_reset_with_or_without_combine_clear
                 .iter()
                 .map(|packet| packet.opcode)
                 .collect::<Vec<_>>(),
-            [0x3bc2, 0x0b40, 0x6937, 0x3bc2]
+            [0x3bc2, 0x0b40, 0x420f, 0x6937, 0x3bc2]
         );
         assert_eq!(
             outcome
@@ -329,6 +361,97 @@ fn eqemu_ordered_reopen_fences_close_after_a_reset_with_or_without_combine_clear
             2
         );
     }
+}
+
+#[test]
+fn eqemu_ordinary_moves_settle_with_pending_or_blocked_station_custody() {
+    use eq_network_game::{inventory::WeightUnavailable, GameDialect};
+
+    let server = servers::server_type(ServerProtocol::EqEmu);
+    let mut features = Features::new(server, "Tester", AutoEat::default());
+    let (_, mut world) = setup();
+    let (object, reply) = eqemu_forge();
+    let Message::Event(WorldEvent::Objects(replacement)) = &object else {
+        unreachable!();
+    };
+    let replacement = replacement.clone();
+    let wire = server.wire();
+    let outcome = testing::run_on(wire, |out| -> Result<()> {
+        hear(vec![object], &mut features, &mut world, out, true)?;
+        apply_commands(
+            &[ClientCommand::OpenContainer {
+                session_id: 5,
+                drop_id: 71,
+                created: Instant::now(),
+            }],
+            &mut features,
+            &mut world,
+            out,
+            true,
+        )?;
+        let mut cursor = testing::item(30);
+        cursor.details.weight_tenths = 15;
+        hear(
+            vec![
+                Message::Event(WorldEvent::Objects(reply)),
+                Message::Event(WorldEvent::Inventory(InventoryUpdate::Cursor(vec![cursor]))),
+                Message::Event(WorldEvent::Inventory(InventoryUpdate::Set(vec![
+                    testing::item(24),
+                ]))),
+            ],
+            &mut features,
+            &mut world,
+            out,
+            true,
+        )?;
+        let place = move_item(&world, 30, 4000);
+        apply_commands(&[place], &mut features, &mut world, out, true)?;
+        for destination in [25, 26] {
+            let move_away = move_item(&world, destination - 1, destination);
+            apply_commands(&[move_away], &mut features, &mut world, out, true)?;
+            assert_eq!(world.inventory.unresolved_predictions(), 2);
+            features.tick(Instant::now() + Duration::from_secs(3), &mut world, out)?;
+            settle(&mut features, &mut world, out, true)?;
+            assert_eq!(world.inventory.unresolved_predictions(), 1);
+            assert!(!world.inventory.has_settleable_moves());
+            assert!(world.inventory.station_moves_unconfirmed());
+            assert!(world.inventory.items().contains_key(&InventorySlot(4000)));
+            assert_eq!(
+                world
+                    .inventory
+                    .carried_weight_tenths(GameDialect::Titanium, 0),
+                Err(WeightUnavailable::Prediction)
+            );
+            if destination == 25 {
+                hear(
+                    vec![Message::Event(WorldEvent::Objects(replacement.clone()))],
+                    &mut features,
+                    &mut world,
+                    out,
+                    true,
+                )?;
+                assert!(!world.container.is_open());
+                // The clear cannot be attributed to the displaced station.
+                hear(
+                    wire.messages(0x21ed, &[1, 0, 0, 0, 0, 0, 0, 0], server.item_rules()),
+                    &mut features,
+                    &mut world,
+                    out,
+                    true,
+                )?;
+            }
+        }
+        Ok(())
+    });
+    outcome.result.unwrap();
+    assert_eq!(
+        outcome
+            .sent
+            .iter()
+            .map(|packet| packet.opcode)
+            .collect::<Vec<_>>(),
+        [0x3bc2, 0x420f, 0x420f, 0x420f]
+    );
 }
 
 fn eqemu_forge() -> (Message, ObjectUpdate) {

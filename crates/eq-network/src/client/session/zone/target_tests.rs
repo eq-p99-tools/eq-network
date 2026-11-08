@@ -447,3 +447,214 @@ fn target_before_admission_is_staged_and_an_old_admission_cannot_send_an_ability
     world.session_id = 6;
     refused(ability(protocol, &mut features, &mut world, 5, Some(old)));
 }
+
+#[test]
+#[allow(clippy::too_many_lines)] // Exercise the complete selection and fade sequence.
+fn titanium_observer_sight_gates_the_normal_target_queue_and_revokes_on_fade() {
+    use eq_network_game::{
+        buffs::{Buff, BuffUpdate},
+        vision::{Invisibility, SightCatalog},
+    };
+
+    #[derive(Debug)]
+    struct Catalog;
+    impl SightCatalog for Catalog {
+        fn sees_invisible(&self, spell_id: u32, _caster_level: u16, _landed: bool) -> bool {
+            spell_id == 42
+        }
+    }
+
+    let protocol = ServerProtocol::EqEmu;
+    let mut config = ClientConfig::for_protocol(protocol, "Example", "Example", "Test", "Tester");
+    config.sight_catalog = Some(std::sync::Arc::new(Catalog));
+    let (mut features, mut world) = setup_world(protocol, World::for_zone(5, &config));
+    let mut ordinary = testing::spawn(42, SpawnKind::Npc);
+    ordinary.appearance.titanium_gm = Some(0);
+    Invisibility::Titanium(1).apply(&mut ordinary);
+    let mut special = ordinary.clone();
+    special.spawn_id = 43;
+    Invisibility::Titanium(255).apply(&mut special);
+    let mut gm = ordinary.clone();
+    gm.spawn_id = 44;
+    gm.appearance.titanium_gm = Some(1);
+    hear_events(
+        protocol,
+        &mut features,
+        &mut world,
+        vec![Message::Event(WorldEvent::Spawns(vec![
+            ordinary, special, gm,
+        ]))],
+    )
+    .result
+    .unwrap();
+
+    let select = |request_id, id, features: &mut Features, world: &mut World| {
+        testing::run_on(servers::server_type(protocol).wire(), |out| {
+            apply_commands(
+                &[ClientCommand::SelectTarget {
+                    session_id: 5,
+                    request_id,
+                    spawn_id: Some(id),
+                    expected_pet: None,
+                }],
+                features,
+                world,
+                out,
+                true,
+            )
+        })
+    };
+    let rejected = select(1, 42, &mut features, &mut world);
+    rejected.result.unwrap();
+    assert_eq!(rejected.sent, []);
+
+    let buff = Buff {
+        spell_id: 42,
+        caster_level: 20,
+        effect_type: 2,
+        bard_modifier: 10,
+        duration_ticks: 10,
+        counters: 0,
+        caster_id: 7,
+    };
+    let update = |entity_id, spell_id, buff| {
+        Message::Event(WorldEvent::Buff(BuffUpdate {
+            replaces_slot: false,
+            entity_id,
+            spell_id,
+            slot: 2,
+            buff,
+        }))
+    };
+    let applied = hear_events(
+        protocol,
+        &mut features,
+        &mut world,
+        vec![
+            update(8, 42, Some(buff.clone())),
+            update(7, 42, Some(buff)),
+            update(7, 43, None),
+        ],
+    );
+    applied.result.unwrap();
+    assert!(applied.events.iter().any(|event| matches!(
+        event,
+        ClientEvent::World(WorldEvent::ObserverSight {
+            session_id: 5,
+            sees_invisible: true
+        })
+    )));
+    let sent = select(2, 42, &mut features, &mut world);
+    sent.result.unwrap();
+    assert_eq!(sent.sent.len(), 1);
+    for (request, id) in [(3, 43), (4, 44), (5, 45)] {
+        let rejected = select(request, id, &mut features, &mut world);
+        rejected.result.unwrap();
+        assert_eq!(rejected.sent, []);
+    }
+
+    let faded = hear_events(
+        protocol,
+        &mut features,
+        &mut world,
+        vec![update(7, 42, None)],
+    );
+    faded.result.unwrap();
+    assert!(faded.events.iter().any(|event| matches!(
+        event,
+        ClientEvent::World(WorldEvent::ObserverSight {
+            session_id: 5,
+            sees_invisible: false
+        })
+    )));
+    assert!(!world.target.state().available);
+    assert_eq!(world.target.state().spawn_id, Some(42));
+}
+
+#[test]
+fn a_landing_waits_for_sight_mechanics_and_a_fade_retires_it() {
+    use eq_network_game::{
+        buffs::{BuffUpdate, SpellEffect},
+        vision::{Invisibility, SightCatalog},
+    };
+    use std::sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    };
+
+    #[derive(Debug, Default)]
+    struct Catalog(AtomicBool);
+    impl SightCatalog for Catalog {
+        fn sees_invisible(&self, spell_id: u32, caster_level: u16, landed: bool) -> bool {
+            self.0.load(Ordering::Relaxed) && spell_id == 42 && caster_level == 20 && landed
+        }
+    }
+
+    let protocol = ServerProtocol::Project1999;
+    let catalog = Arc::new(Catalog::default());
+    let mut config = ClientConfig::for_protocol(protocol, "Example", "Example", "Test", "Tester");
+    config.sight_catalog = Some(catalog.clone());
+    let (mut features, mut world) = setup_world(protocol, World::for_zone(5, &config));
+    let mut hidden = testing::spawn(45, SpawnKind::Npc);
+    hidden.appearance.titanium_gm = Some(0);
+    Invisibility::Titanium(1).apply(&mut hidden);
+    let landing = |spell_id| {
+        Message::Event(WorldEvent::SpellEffect(SpellEffect {
+            target_id: 7,
+            caster_id: 7,
+            caster_level: 20,
+            instrument_modifier: 10,
+            spell_id,
+            spell_level: 20,
+            effect_flag: 4,
+            push: None,
+        }))
+    };
+    let observed = hear_events(
+        protocol,
+        &mut features,
+        &mut world,
+        vec![
+            Message::Event(WorldEvent::Spawns(vec![hidden])),
+            landing(42),
+            landing(43),
+        ],
+    );
+    observed.result.unwrap();
+    assert!(!world.visible(45));
+    catalog.0.store(true, Ordering::Relaxed);
+    let refreshed = testing::run_on(servers::server_type(protocol).wire(), |out| {
+        features.tick(Instant::now(), &mut world, out)?;
+        settle(&mut features, &mut world, out, true)
+    });
+    refreshed.result.unwrap();
+    assert!(world.visible(45));
+    assert!(refreshed.events.iter().any(|event| matches!(
+        event,
+        ClientEvent::World(WorldEvent::ObserverSight {
+            session_id: 5,
+            sees_invisible: true,
+        })
+    )));
+    let faded = hear_events(
+        protocol,
+        &mut features,
+        &mut world,
+        vec![Message::Event(WorldEvent::Buff(BuffUpdate {
+            replaces_slot: false,
+            entity_id: 7,
+            spell_id: 42,
+            slot: 2,
+            buff: None,
+        }))],
+    );
+    faded.result.unwrap();
+    assert!(!world.visible(45));
+    assert!(faded.events.iter().any(|event| matches!(
+        event,
+        ClientEvent::World(WorldEvent::ObserverSight {
+            session_id: 5,
+            sees_invisible: false,
+        })
+    )));
+}

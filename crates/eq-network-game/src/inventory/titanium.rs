@@ -185,7 +185,14 @@ impl<'a> Parser<'a> {
             },
             book: crate::books::Book::from_titanium_item(fields[0], fields[100], fields[102])?,
             rules: ItemPlacement {
+                titanium_item_class: fields[0].parse().ok(),
                 titanium_link_hash: None,
+                // Titanium item fields: class 0 (common), Light at index 43.
+                titanium_light: match fields[0] {
+                    "0" => fields[43].parse().ok(),
+                    "1" | "2" => Some(0),
+                    _ => None,
+                },
                 ground_drop_serial,
                 eqmac: None,
                 stack_size: number(131)?,

@@ -257,7 +257,7 @@ pub struct SpawnState {
     pub run_speed: f32,
     /// Requested model size; zero selects the racial default.
     pub size: f32,
-    /// Server visibility flag; consumers must not expose invisible entities.
+    /// Whether the received spawn or appearance carries a nonzero invisibility value.
     pub invisible: bool,
     /// Worn gear and features; default where the dialect does not report them.
     pub appearance: crate::appearance::Appearance,
@@ -586,12 +586,16 @@ pub enum Capability {
     KnightAbilities,
     /// Use the supported Titanium Warrior disciplines.
     UsingDisciplines,
+    /// Respond to the current server dialog.
+    ServerDialogs,
+    /// Request and display player inspection reports.
+    PlayerInspection,
 }
 
 impl Capability {
     /// Every capability, in order: what a session offers when its server and
     /// client generation support everything.
-    pub const ALL: [Self; 55] = [
+    pub const ALL: [Self; 57] = [
         Self::Casting,
         Self::Spellbook,
         Self::Inventory,
@@ -647,6 +651,8 @@ impl Capability {
         Self::GroundDropping,
         Self::KnightAbilities,
         Self::UsingDisciplines,
+        Self::ServerDialogs,
+        Self::PlayerInspection,
     ];
 }
 
@@ -686,6 +692,13 @@ pub enum WorldEvent {
     SpellEffect(crate::buffs::SpellEffect),
     /// Admission buff slots; holes retain their original indexes.
     BuffSnapshot(Vec<Option<crate::buffs::Buff>>),
+    /// Worker projection of received own buffs using the host's effective Titanium spell data.
+    ObserverSight {
+        /// Admission that supplied the buffs.
+        session_id: u64,
+        /// Whether a known active effect grants ordinary see-invisibility.
+        sees_invisible: bool,
+    },
     /// A server-owned slot replacement or fade for an entity.
     Buff(crate::buffs::BuffUpdate),
     /// Progress of an exact, admission-scoped buff cancellation selection.
@@ -818,6 +831,8 @@ pub enum WorldEvent {
     },
     /// Received movement within this exact zone admission.
     SameZoneRelocated(crate::zoning::SameZoneRelocation),
+    /// A local WLD pad snap, independent of any received move.
+    LocalPadCrossed(crate::zoning::LocalPadCrossing),
     /// Complete indexed spellbook for the current admission.
     SpellBook(crate::spells::SpellBook),
     /// Local progress of a spellbook request, separate from server confirmation.
@@ -1037,12 +1052,12 @@ pub enum WorldEvent {
     Spawns(Vec<SpawnState>),
     /// One texture slot of a spawn's worn gear changed, the player's own included.
     WearChange(crate::appearance::WearChange),
-    /// Server visibility changed; consumers must remove invisible entities.
+    /// Server invisibility appearance changed. The actor's code is separate from observer sight.
     Visibility {
         /// Zone-local entity identifier.
         spawn_id: u16,
-        /// Whether the server marks this entity invisible.
-        invisible: bool,
+        /// The raw value in its own dialect.
+        state: crate::vision::Invisibility,
     },
     /// A change in how a spawn shows that lasts, such as its size or light,
     /// or that the host hears once, such as an area's regeneration.
@@ -1067,10 +1082,17 @@ pub enum WorldEvent {
     /// sound or as a projectile's flight. The session's spawn table keeps
     /// none.
     Effect(crate::effects::Effect),
-    /// A popup window the server opens on the player's screen, for quests
-    /// and game masters' commands ([`crate::popups`]). Nothing answers it
-    /// yet.
+    /// A decoded popup window the server opens on the player's screen.
     Popup(crate::popups::Popup),
+    /// The active, admission-scoped dialog the host may present.
+    PopupOpened(crate::popups::PopupOffer),
+    /// The identified dialog was closed by the worker.
+    PopupClosed {
+        /// The admission that owned the dialog.
+        session_id: u64,
+        /// The dialog that closed.
+        serial: u64,
+    },
     /// Large text the server shows across the player's screen, for quests,
     /// bots and the world's broadcasts ([`crate::popups`]).
     Marquee(crate::popups::Marquee),
@@ -1525,12 +1547,23 @@ pub enum WorldEvent {
     /// their raid ([`crate::socials`]).
     VoiceMacro(crate::socials::VoiceMacro),
     /// Another player asks to inspect the player: the server passes the
-    /// request on for the player's client to answer with what the player
-    /// wears. Nothing answers it yet, so the inspector sees no window
-    /// ([`crate::socials`]).
+    /// request on for the player's client to answer.
     InspectRequest {
+        /// The player who was inspected.
+        target_id: u16,
         /// Who asks, as their client names them.
         inspector_id: u16,
+    },
+    /// A decoded Titanium inspection response.
+    InspectAnswer(crate::inspection::Inspection),
+    /// A received response matched to the host's current inspection request.
+    PlayerInspection(crate::inspection::PlayerInspection),
+    /// The worker could not send the requested inspection.
+    PlayerInspectionRefused {
+        /// The requesting admission.
+        session_id: u64,
+        /// The local refusal reason.
+        reason: String,
     },
     /// News of a duel: a challenge or its acceptance, its start, or a
     /// client turning it down ([`crate::socials`]). Nothing answers a
@@ -1671,12 +1704,14 @@ pub enum WorldEvent {
     /// zone-in of timers 11 to 19 carry its other reuse timers
     /// ([`crate::disciplines`]).
     DisciplineReuse(crate::disciplines::Reuse),
-    /// Received ability-slot reuse from the admitted knight's profile.
+    /// Ability-slot recovery from the server profile or a local estimate.
     KnightReuse {
-        /// Admission that supplied the profile.
+        /// Admission that owns the estimate or received the profile.
         session_id: u64,
-        /// Remaining time received, including an explicit zero.
+        /// Remaining time, including an explicit zero.
         remaining: std::time::Duration,
+        /// Profile observation or local estimate.
+        source: crate::knights::ReuseSource,
     },
     /// A reuse timer a group of spells shares, as the server set it.
     LinkedReuse(crate::disciplines::Reuse),
@@ -2226,6 +2261,8 @@ mod tests {
             Capability::GroundDropping => 52,
             Capability::KnightAbilities => 53,
             Capability::UsingDisciplines => 54,
+            Capability::ServerDialogs => 55,
+            Capability::PlayerInspection => 56,
         };
         for (index, capability) in Capability::ALL.into_iter().enumerate() {
             assert_eq!(place(capability), index, "{capability:?}");
@@ -2308,7 +2345,7 @@ mod tests {
         for value in [0u32, 1, 2] {
             packet[4..].copy_from_slice(&value.to_le_bytes());
             assert!(matches!(super::titanium_update(0x7c32, &packet).unwrap(),
-                Some(super::WorldEvent::Visibility { spawn_id: 73, invisible }) if invisible == (value != 0)));
+                Some(super::WorldEvent::Visibility { spawn_id: 73, state }) if state == crate::vision::Invisibility::Titanium(value)));
         }
         for length in 0..8 {
             assert!(super::titanium_update(0x7c32, &packet[..length]).is_err());

@@ -125,6 +125,7 @@ enum Transition {
     Death,
     Departure,
     Exit,
+    SettleError,
 }
 
 /// Only the first command should reach this owner. Its outcome changes
@@ -162,6 +163,7 @@ impl Feature for Transition {
                 world.lifecycle.finish(true, now)?;
             }
             Self::Exit => world.end(ZoneExit::CharacterSelect),
+            Self::SettleError => world.happened(Message::LoggedOut),
         }
         Ok(())
     }
@@ -237,4 +239,86 @@ fn a_transition_refuses_each_command_already_drained_behind_it() {
         };
         assert_eq!(refusals, doors);
     }
+}
+
+#[test]
+fn settlement_failure_refuses_every_move_behind_the_completed_command() {
+    let mut features = Features {
+        provided: vec![Box::new(Transition::SettleError)],
+        choices: vec![],
+        spell_landing_flag: None,
+        answers_list_polls: false,
+        gameplay_departures: false,
+    };
+    let mut world = World::new(5);
+    let created = Instant::now();
+    world.admitted = Some(created);
+    world.own_spawn = Some(7);
+    world.player.admit(testing::player(7));
+    let movement = |session_id| {
+        ClientCommand::Move(MovementRequest::new(
+            MovementMode::Forward,
+            session_id,
+            Position::default(),
+            created,
+        ))
+    };
+    let commands = [
+        ClientCommand::ClickDoor {
+            session_id: 5,
+            door_id: 1,
+            created,
+        },
+        movement(4),
+        movement(5),
+    ];
+    let outcome =
+        testing::run(|out| apply_commands(&commands, &mut features, &mut world, out, true));
+    assert_eq!(outcome.sent.len(), 1);
+    assert!(outcome
+        .result
+        .is_err_and(|error| error.to_string() == "server logged the character out"));
+    let refused: Vec<_> = outcome
+        .events
+        .iter()
+        .filter_map(|event| match event {
+            ClientEvent::World(WorldEvent::MotionRefused {
+                session_id,
+                created,
+                reason,
+            }) => Some((*session_id, *created, reason.as_str())),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        refused,
+        [
+            (4, created, "The zone connection ended"),
+            (5, created, "The zone connection ended"),
+        ]
+    );
+}
+
+#[test]
+fn a_delivery_error_does_not_attempt_to_publish_remaining_move_results() {
+    let config = crate::client::ClientConfig::new("Tester", "Fixture", "Local", "Tester");
+    let mut deliveries = 0;
+    let mut handler = |_| {
+        deliveries += 1;
+        anyhow::bail!("scripted host delivery failure");
+    };
+    let mut log = Events::new(&config, &mut handler);
+    let created = Instant::now();
+    let command = ClientCommand::Move(MovementRequest::new(
+        MovementMode::Forward,
+        5,
+        Position::default(),
+        created,
+    ));
+    let delivery = log
+        .refuse_move(&command, "trigger delivery failure")
+        .unwrap_err();
+    let error = abort_commands(std::iter::once(&command), delivery, &mut log);
+    assert!(error.is::<crate::client::EventDeliveryError>());
+    assert_eq!(deliveries, 1);
 }

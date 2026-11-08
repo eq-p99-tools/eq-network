@@ -3,7 +3,8 @@
 //! when the server puts what it still holds back in the inventory. The
 //! session sends a combine for a tradeskill container carried in a pack
 //! slot, or for the world container open for the player, and holds the
-//! inventory through the server's reset and any expected station clear.
+//! inventory through the server's reset. After an `EQEmu` station reset, only
+//! the station and cursor wait for any following clear.
 //! Independent inventory updates supply consumption and any product. As the
 //! official client does, it refuses a combine while the cursor holds an
 //! item or coins, and names the official client's own words for that.
@@ -177,10 +178,14 @@ impl OpenContainer {
                 "Put one whole item from the cursor into an empty forge slot; stacking and swaps are outside this workflow"
             );
         } else {
+            // Titanium (0x51a9a8) places whole items using the visible cursor
+            // and station slots before sending. The projection supplies the
+            // ordinary move prerequisite, not a received item record.
             ensure!(
-                world.inventory.custody_known(InventorySlot::CURSOR)
-                    && world.coins.cursor.is_empty(),
-                "Wait for a current empty cursor before withdrawing from the forge"
+                world.inventory.projected_cursor_empty()
+                    && world.coins.cursor.is_empty()
+                    && world.exchange.is_none(),
+                "Empty the cursor before withdrawing from the forge"
             );
             if request.from.is_world() {
                 ensure!(
@@ -217,6 +222,33 @@ enum Scope {
 }
 
 impl Tradeskills {
+    fn check_station_combine(
+        &self,
+        world: &World,
+        created: Instant,
+        reach: eq_network_game::reach::Reach,
+    ) -> Result<()> {
+        world.container.check_action(world, created, reach)?;
+        ensure!(
+            self.combining.is_none()
+                && !self.station_clear_pending
+                && self
+                    .inventory_changed
+                    .is_none_or(|changed| created >= changed),
+            "Wait for the current world container and inventory."
+        );
+        ensure!(
+            world.inventory.received()
+                && !world.inventory.stale()
+                && !world.inventory.ground_drop_pending(),
+            "The world container inventory is unavailable."
+        );
+        if self.scope == Scope::Forge {
+            station_ingredients(&world.inventory).map_err(|reason| anyhow!(reason))?;
+        }
+        Ok(())
+    }
+
     /// Native carried combines and an ordinary forge opened by the server.
     pub(super) fn forge() -> Self {
         Self {
@@ -347,14 +379,25 @@ impl Feature for Tradeskills {
     }
 
     fn holds(&self, world: &World, _now: Instant) -> Vec<(Resource, &'static str)> {
-        // When the station lease is blocked, no world-only inventory update
-        // can reach the inventory. Ordinary inventory may resume after reset.
-        (self.combining.is_some()
+        if self.scope == Scope::All
+            && (self.station_clear_pending || self.combining == Some(WORLD_CONTAINER))
+            && (self.combining.is_none() || !world.container.is_open())
+        {
+            // EQEmu HandleCombine can reset without clearing the ingredients
+            // (e.g. insufficient skill). A possible clear holds its own
+            // station and cursor; it cannot hold unrelated carried slots.
+            vec![(
+                Resource::CursorAndStation,
+                "Wait for the station and cursor updates",
+            )]
+        } else if self.combining.is_some()
             || (self.station_clear_pending
-                && !matches!(world.container.0, Some(Container::Blocked))))
-        .then_some((Resource::Inventory, "Wait for the combine to finish"))
-        .into_iter()
-        .collect()
+                && !matches!(world.container.0, Some(Container::Blocked)))
+        {
+            vec![(Resource::Inventory, "Wait for the combine to finish")]
+        } else {
+            Vec::new()
+        }
     }
 
     fn owns(&self, command: &ClientCommand) -> bool {
@@ -399,6 +442,13 @@ impl Feature for Tradeskills {
             }
             _ => return Ok(()),
         };
+        if world.inventory.bandage_stock_uncertain(container) {
+            return actions::refuse(
+                command,
+                "Wait for current stock in the affected bandage slot",
+                out.log,
+            );
+        }
         if self.scope == Scope::Forge && container != WORLD_CONTAINER {
             if let Some(refusal) = self.carried_refusal(container, created, world) {
                 return out.log.send(ClientEvent::World(WorldEvent::CombineRefused {
@@ -410,38 +460,9 @@ impl Feature for Tradeskills {
         }
         if container == WORLD_CONTAINER {
             if let Err(error) =
-                world
-                    .container
-                    .check_action(world, created, out.wire.reaches().objects)
+                self.check_station_combine(world, created, out.wire.reaches().objects)
             {
                 return actions::refuse(command, &error.to_string(), out.log);
-            }
-            if self.combining.is_some()
-                || self.station_clear_pending
-                || self
-                    .inventory_changed
-                    .is_some_and(|changed| created < changed)
-            {
-                return actions::refuse(
-                    command,
-                    "Wait for the current world container and inventory.",
-                    out.log,
-                );
-            }
-            if !world.inventory.received()
-                || world.inventory.stale()
-                || world.inventory.ground_drop_pending()
-            {
-                return actions::refuse(
-                    command,
-                    "The world container inventory is unavailable.",
-                    out.log,
-                );
-            }
-            if self.scope == Scope::Forge {
-                if let Err(reason) = station_ingredients(&world.inventory) {
-                    return actions::refuse(command, reason, out.log);
-                }
             }
         } else if !world
             .inventory
@@ -656,14 +677,11 @@ fn open(
                         "too far away to use that"
                     );
                     ensure!(
-                        world.inventory.received()
-                            && !world.inventory.stale()
+                        world.inventory.projected_cursor_empty()
                             && !world.inventory.predicted()
-                            && !world.inventory.ground_drop_pending()
-                            && world.inventory.custody_known(InventorySlot::CURSOR)
-                            && !world.inventory.items().contains_key(&InventorySlot::CURSOR)
-                            && world.coins.cursor.is_empty(),
-                        "a forge click needs current inventory and an empty cursor"
+                            && world.coins.cursor.is_empty()
+                            && world.exchange.is_none(),
+                        "a forge click needs an empty cursor and no pending inventory moves"
                     );
                 } else {
                     world.objects.check_open(

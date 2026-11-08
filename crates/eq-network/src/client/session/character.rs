@@ -170,6 +170,7 @@ mod tests {
             }
         }
         let mut player = testing::player(7);
+        player.appearance = Appearance::default();
         player.appearance.materials[TextureSlot::Chest.index()] = 3;
         character.shape(&mut player);
         assert_eq!(player.appearance.material(TextureSlot::Primary), 31);
@@ -195,6 +196,7 @@ mod tests {
         assert_eq!(look.material(TextureSlot::Chest), 3);
         // Staging is consumed, not carried to another admitted record.
         let mut next = testing::player(7);
+        next.appearance = Appearance::default();
         character.shape(&mut next);
         assert_eq!(next.appearance, Appearance::default());
     }

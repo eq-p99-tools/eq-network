@@ -63,10 +63,21 @@ server reply with forge kind 17 makes the container usable. The command's
 required capability, skin control, nearest-use selector and station script
 lookup use that distinction.
 
-Opening a P99 forge needs a current empty cursor. Place one whole item
-from the cursor into each empty station slot. Withdrawing an item needs a
-current empty cursor. Stack transfers and swaps are outside this P99
-workflow. EQEmu keeps its existing station transfers.
+Opening a P99 forge needs an empty visible cursor and the ordinary move
+settlement window to have elapsed. Place one whole item from the cursor into
+each empty station slot. Withdrawing an item uses the ordered visible cursor
+projection, like the local Titanium item move at `0x51a9a8`. The cursor
+queue, cursor coins, drops, destruction, unresolved trade placement or a
+contradictory item update can still prevent the move. Stack transfers and
+swaps are outside this P99 workflow. The cursor projection does not confirm
+server item placement. The `0x3397` kind `0x6a` append can join a queue
+and cannot confirm an earlier move.
+
+Stock EQEmu's world-slot withdrawal uses the cursor queue when the
+destination is the cursor. The ordinary withdrawal disables the separate
+item update. Its cursor append path sends an item record only when the
+caller requests an update. [World-slot move](https://github.com/EQEmu/EQEmu/blob/4aceae18b94ffaafc08e2b17bc41cd72c77f795d/zone/inventory.cpp#L1772-L1781)
+[Cursor queue](https://github.com/EQEmu/EQEmu/blob/4aceae18b94ffaafc08e2b17bc41cd72c77f795d/zone/inventory.cpp#L959-L981)
 
 Moves into the station are provisional. The station's separate item
 updates and whole or single-place clears establish its contents. The
@@ -76,6 +87,17 @@ close, re-enter the zone before using another forge. EQEmu's ordered
 open reply can fence an earlier station's stream after a close and clear.
 Project 1999 has documented returning remaining items on close.
 [Project 1999 patch notes](https://www.project1999.com/forums/showthread.php?mode=threaded&p=21513)
+
+EQEmu can send a combine reset before the full clear, or a reset alone
+when preconditions fail, including insufficient skill or a recipe the
+character has yet to learn. The no-recipe notice is `TRADESKILL_NOCOMBINE`
+(string 334). After another reset, unrelated inventory moves can resume
+while the station and cursor wait for the clear or an explicit close.
+The ordinary move timer leaves affected station origins pending even if
+the lease is displaced. A clear or a reset alone does not establish a
+return or product. [EQEmu combine](https://github.com/EQEmu/EQEmu/blob/4aceae18b94ffaafc08e2b17bc41cd72c77f795d/zone/tradeskills.cpp)
+[EQEmu string IDs](https://github.com/EQEmu/EQEmu/blob/master/zone/string_ids.h#L122)
+[EQEmu close](https://github.com/EQEmu/EQEmu/blob/master/zone/object.cpp#L412-L435)
 
 Combine waits for queued local item-move results before operating on the
 worker's container state. Buttons grey while those moves or a combine wait;

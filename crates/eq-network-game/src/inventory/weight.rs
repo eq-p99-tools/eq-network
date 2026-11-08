@@ -94,6 +94,7 @@ impl DropWeight {
             | InventoryUpdate::Used(_)
             | InventoryUpdate::Set(_)
             | InventoryUpdate::BandageStockPending(_)
+            | InventoryUpdate::BandageStockUncertain(_)
             | InventoryUpdate::Settled => (),
         }
         Some(self)
@@ -225,6 +226,8 @@ impl Inventory {
                 return Err(WeightUnavailable::Prediction);
             }
         }
+        // Unconfirmed bandaging can only reduce the recorded stock. The
+        // unchanged item records keep the heavier load in this bound.
         // Keep the destroyed instance's whole mass as an upper bound until
         // received cursor/snapshot evidence arrives. No lighter load is inferred.
         Ok(weight
@@ -366,6 +369,37 @@ mod tests {
         inventory.apply(InventoryUpdate::Cursor(vec![item(30, 2_500)]));
         assert_eq!(inventory.ground_drop_weight_tenths(40), None);
         assert!(inventory.ground_drop_pending());
+    }
+
+    #[test]
+    fn an_unbounded_drop_discards_the_fall_bound_until_a_fresh_snapshot() {
+        let inside = InventorySlot::CURSOR.child(0).unwrap().0;
+        let serial = std::num::NonZeroU32::new(17).unwrap();
+        let mut original = item(30, 50);
+        original.rules.ground_drop_serial = Some(serial);
+        for update in [
+            InventoryUpdate::Set(vec![item(5, 1_500)]),
+            InventoryUpdate::Set(vec![item(inside, 1_500)]),
+            InventoryUpdate::Cursor(vec![item(30, 40), item(inside, 1_500)]),
+            InventoryUpdate::TradeEmptied,
+            InventoryUpdate::WorldEmptied,
+        ] {
+            let mut inventory = Inventory::default();
+            inventory.apply(InventoryUpdate::Snapshot(vec![original.clone()]));
+            inventory.apply(InventoryUpdate::GroundDropPending(serial));
+            assert_eq!(inventory.ground_drop_weight_tenths(0), Some(50));
+            inventory.apply(update);
+            assert!(inventory.ground_drop_pending());
+            assert_eq!(inventory.ground_drop_weight_tenths(0), None);
+            inventory.apply(InventoryUpdate::Cursor(vec![item(30, 80)]));
+            assert_eq!(inventory.ground_drop_weight_tenths(0), None);
+            inventory.apply(InventoryUpdate::Snapshot(vec![]));
+            assert!(!inventory.ground_drop_pending());
+            assert_eq!(
+                inventory.carried_weight_tenths(GameDialect::Titanium, 0),
+                Ok(0)
+            );
+        }
     }
 
     fn planned_move(inventory: &mut Inventory, rules: super::super::MoveRules, from: i32, to: i32) {

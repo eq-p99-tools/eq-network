@@ -13,6 +13,8 @@ const BOW: u8 = 5;
 const LARGE_THROWING: u8 = 7;
 const SMALL_THROWING: u8 = 19;
 const ARROW: u8 = 27;
+const CONTAINER_CLASS: u8 = 1;
+const QUIVER_BAG_TYPE: u8 = 2;
 const RANGED: InventorySlot = InventorySlot(11);
 const AMMO: InventorySlot = InventorySlot(21);
 
@@ -46,6 +48,7 @@ pub struct RangedLoadout {
     kind: RangedKind,
     range: u16,
     delay: u8,
+    quiver_weight_reduction: Option<u8>,
 }
 
 impl RangedLoadout {
@@ -91,6 +94,11 @@ impl RangedLoadout {
             kind,
             range: u16::from(range) + ammo.map_or(0, |item| u16::from(property(item, "Range"))),
             delay,
+            quiver_weight_reduction: if kind == RangedKind::Archery {
+                confirmed_quiver_weight_reduction(inventory)
+            } else {
+                None
+            },
         })
     }
 
@@ -111,6 +119,48 @@ impl RangedLoadout {
     pub fn base_delay(self) -> Duration {
         Duration::from_millis(u64::from(self.delay) * 100)
     }
+
+    /// The local Titanium reuse estimate from weapon delay and verified quiver
+    /// placement. The native haste/slow rate is unavailable to this estimate.
+    #[must_use]
+    pub fn local_reuse_delay(self) -> Duration {
+        let base = self.base_delay();
+        let Some(weight_reduction) = self.quiver_weight_reduction else {
+            return base;
+        };
+        // Titanium 0x47f01e truncates delay_ms * WR * float32(0.0025)
+        // and adds one. The constant is just below 1/400 and the game
+        // loop uses x87 round-toward-zero (0x4acf33). For delay_ms =
+        // 100 * delay, this is ceil(delay * WR / 4) for positive byte
+        // values, including products exactly divisible by four.
+        let reduction = (u64::from(self.delay) * u64::from(weight_reduction)).div_ceil(4);
+        let adjusted = base.saturating_sub(Duration::from_millis(reduction));
+        if adjusted > Duration::from_secs(1) {
+            adjusted
+        } else {
+            base
+        }
+    }
+}
+
+fn confirmed_quiver_weight_reduction(inventory: &Inventory) -> Option<u8> {
+    // 0x47f01e uses the first eligible general slot, regardless of contents.
+    for slot in (22..=29).map(InventorySlot) {
+        if !inventory.custody_known(slot) {
+            return None;
+        }
+        let Some(item) = inventory.items().get(&slot) else {
+            continue;
+        };
+        let rules = &item.rules;
+        if rules.bag_type == QUIVER_BAG_TYPE && rules.bag_weight_reduction > 0 {
+            // An earlier unreadable class could itself be the first quiver.
+            if rules.titanium_item_class? == CONTAINER_CLASS {
+                return Some(rules.bag_weight_reduction);
+            }
+        }
+    }
+    None
 }
 
 fn has_projectile(item: &InventoryItem) -> bool {

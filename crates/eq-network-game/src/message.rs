@@ -137,6 +137,8 @@ pub fn titanium(opcode: u16, body: &[u8]) -> Vec<Message> {
         ),
         zoning::HANDOFF_OPCODE => Message::Handoff(body.to_vec()),
         LOGOUT_REPLY_OPCODE => Message::LoggedOut,
+        // EQEmu's TRADESKILL_NOCOMBINE (zone/string_ids.h) accompanies
+        // the early return that sends a reset without a station clear.
         0x673c if body.len() == 12 && body[..4] == 334_u32.to_le_bytes() => {
             Message::TradeskillNoRecipe
         }

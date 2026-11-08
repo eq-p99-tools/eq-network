@@ -59,6 +59,8 @@ pub(super) enum Resource {
     Spellbook,
     /// Inventory contents, including the cursor.
     Inventory,
+    /// Item placement on the cursor or in an open station.
+    CursorAndStation,
     /// Another request to pick an item up from the ground.
     GroundPickup,
 }
@@ -83,13 +85,40 @@ impl Held {
         let needs = needs(command);
         self.0
             .iter()
-            .find(|(resource, _)| needs.contains(resource))
+            .find(|(resource, _)| {
+                if *resource == Resource::CursorAndStation {
+                    touches_cursor_or_station(command)
+                } else {
+                    needs.contains(resource)
+                }
+            })
             .map(|(_, reason)| *reason)
+    }
+}
+
+fn touches_cursor_or_station(command: &ClientCommand) -> bool {
+    let touches = |slot: InventorySlot| {
+        slot == InventorySlot::CURSOR || slot.is_in_cursor_bag() || slot.is_world()
+    };
+    match command {
+        ClientCommand::MoveInventory(request) => touches(request.from) || touches(request.to),
+        ClientCommand::Sell { slot, .. } => touches(InventorySlot(*slot)),
+        ClientCommand::Consume { slot, .. } => touches(*slot),
+        ClientCommand::DestroyItem(_)
+        | ClientCommand::DropItem(_)
+        | ClientCommand::PickUp { .. }
+        | ClientCommand::ScribeSpell { .. }
+        | ClientCommand::LootItem { .. }
+        | ClientCommand::Buy { .. }
+        | ClientCommand::AcceptTrade { .. }
+        | ClientCommand::Combine { .. } => true,
+        _ => false,
     }
 }
 
 /// What a command needs exclusively. Every command is named, so a new one is
 /// a decision here.
+#[allow(clippy::too_many_lines)] // Keep the exhaustive resource table together.
 pub(super) fn needs(command: &ClientCommand) -> &'static [Resource] {
     use Resource::{Casting, GroundPickup, Inventory, Spellbook};
     match command {
@@ -172,6 +201,9 @@ pub(super) fn needs(command: &ClientCommand) -> &'static [Resource] {
         | ClientCommand::AnswerResurrection { .. }
         | ClientCommand::AnswerSacrifice { .. }
         | ClientCommand::AnswerTranslocate { .. }
+        | ClientCommand::RespondToPopup { .. }
+        | ClientCommand::InspectPlayer { .. }
+        | ClientCommand::SetInspectNote { .. }
         | ClientCommand::InviteToGroup { .. }
         | ClientCommand::FollowGroup { .. }
         | ClientCommand::DeclineGroup { .. }
@@ -324,6 +356,9 @@ fn refusal(command: &ClientCommand, reason: &str) -> Option<WorldEvent> {
         | ClientCommand::AnswerResurrection { session_id, .. }
         | ClientCommand::AnswerSacrifice { session_id, .. }
         | ClientCommand::AnswerTranslocate { session_id, .. }
+        | ClientCommand::RespondToPopup { session_id, .. }
+        | ClientCommand::InspectPlayer { session_id, .. }
+        | ClientCommand::SetInspectNote { session_id, .. }
         | ClientCommand::InviteToGroup { session_id, .. }
         | ClientCommand::FollowGroup { session_id, .. }
         | ClientCommand::DeclineGroup { session_id, .. }
@@ -471,6 +506,9 @@ fn reasoned(command: &ClientCommand, session_id: u64, reason: String) -> Option<
             session_id,
             reason,
         },
+        ClientCommand::InspectPlayer { .. } => {
+            WorldEvent::PlayerInspectionRefused { session_id, reason }
+        }
         ClientCommand::InviteToGroup { .. }
         | ClientCommand::FollowGroup { .. }
         | ClientCommand::DeclineGroup { .. }

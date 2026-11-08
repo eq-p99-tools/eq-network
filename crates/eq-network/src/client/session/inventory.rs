@@ -33,7 +33,7 @@ use eq_network_game::{
     loot::{LootResponse, LootUpdate},
     merchant::{MerchantUpdate, Quotes},
     message::{Message, Part},
-    money::Wallet,
+    money::{Coin, Wallet},
     request::Request,
     training::TrainingUpdate,
     world::Coins,
@@ -73,6 +73,20 @@ impl std::ops::Deref for Ledger {
 
     fn deref(&self) -> &Wallet {
         &self.0
+    }
+}
+
+impl Ledger {
+    /// The profile supplies bank and cursor balances together. Bank presence
+    /// records receipt of the cursor balance, whose default alone is unknown.
+    pub(super) fn carried_coin_count(&self) -> Option<u64> {
+        let (purse, _) = self.purse.zip(self.bank)?;
+        Some(
+            Coin::ALL
+                .iter()
+                .map(|&coin| u64::from(purse.of(coin)) + u64::from(self.cursor.of(coin)))
+                .sum(),
+        )
     }
 }
 
@@ -231,8 +245,12 @@ impl Settlement {
         if now.saturating_duration_since(sent) < REFUSAL_WINDOW {
             return None;
         }
-        self.0 = None;
-        inventory.predicted().then_some(InventoryUpdate::Settled)
+        if !inventory.station_moves_unconfirmed() {
+            self.0 = None;
+        }
+        inventory
+            .has_settleable_moves()
+            .then_some(InventoryUpdate::Settled)
     }
 }
 
@@ -298,6 +316,9 @@ fn told(update: &InventoryUpdate) -> String {
         InventoryUpdate::BandageStockPending(false) => {
             "received stock released the bandage hold".into()
         }
+        InventoryUpdate::BandageStockUncertain(_) => {
+            "the bandage hold ended with unconfirmed stock".into()
+        }
         InventoryUpdate::DestroyCursor => {
             "a submitted cursor destruction (local prediction)".into()
         }
@@ -317,7 +338,7 @@ fn told(update: &InventoryUpdate) -> String {
             format!("{quantity} taken from slot {}", slot.0)
         }
         InventoryUpdate::Invalidated => "the inventory needs refreshing".to_owned(),
-        InventoryUpdate::Settled => "the moves in flight settled".to_owned(),
+        InventoryUpdate::Settled => "ordinary moves passed the refusal window".to_owned(),
         InventoryUpdate::TradeEmptied => "the trade slots emptied".to_owned(),
         InventoryUpdate::WorldEmptied => "the world container emptied".to_owned(),
     };
@@ -575,7 +596,7 @@ impl Belongings {
                 "That cursor drop needs a current local EQEmu admission and actor"
             );
             anyhow::ensure!(
-                world.coins.purse.is_some() && world.coins.bank.is_some(),
+                world.coins.carried_coin_count().is_some(),
                 "A cursor drop needs current carried coin information"
             );
             let serial = world.inventory.plan_ground_drop(request)?;
@@ -737,6 +758,9 @@ impl Belongings {
 
     /// A sale may only offer the current item and a known available quantity.
     fn sale_refusal(world: &World, slot: InventorySlot, quantity: u32) -> Option<&'static str> {
+        if world.inventory.bandage_stock_uncertain(slot) {
+            return Some("Wait for current stock in the affected bandage slot");
+        }
         let inventory = world.inventory.items();
         let Some(item) = inventory.get(&slot).filter(|_| {
             world.inventory.received()
@@ -1054,7 +1078,7 @@ impl Feature for Belongings {
     /// Retains the legacy Titanium refusal window. `EQMac` predictions await
     /// server evidence, regardless of how long or how many moves ago they arose.
     fn tick(&mut self, now: Instant, world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
-        if self.rules.settles_by_silence() && !world.inventory.station_moves_unconfirmed() {
+        if self.rules.settles_by_silence() {
             if let Some(update) = self.settlement.due(&world.inventory, now) {
                 change(update, world, out)?;
             }

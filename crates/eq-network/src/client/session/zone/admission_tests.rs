@@ -5,6 +5,7 @@ use crate::client::{
 };
 use eq_network_game::{
     chat::OutboundChat,
+    list_poll,
     movement::{MovementMode, MovementRequest, POSITION_OPCODE},
     world::WorldEvent,
     zoning::{DEPART_OPCODE, HANDOFF_OPCODE, MOVE_OPCODE},
@@ -21,6 +22,7 @@ struct Script {
     stop_when_drained: Option<CancellationToken>,
     sent: Vec<u16>,
     closed: bool,
+    refuse_list_reply: bool,
 }
 
 impl Script {
@@ -39,6 +41,7 @@ impl Script {
             stop_when_drained: None,
             sent: Vec::new(),
             closed: false,
+            refuse_list_reply: false,
         };
         for (opcode, body) in [
             (0x75df, profile),
@@ -57,12 +60,27 @@ impl Script {
     fn packet(&mut self, opcode: u16, body: Vec<u8>) {
         self.incoming.push_back(Application { opcode, body });
     }
+
+    fn transfer(&mut self) -> Vec<u8> {
+        let mut offer = vec![0; 24];
+        offer[..2].copy_from_slice(&2u16.to_le_bytes());
+        self.packet(MOVE_OPCODE, offer);
+        let mut address = vec![0; 130];
+        address[..9].copy_from_slice(b"127.0.0.1");
+        address[128..].copy_from_slice(&7000u16.to_le_bytes());
+        self.packet(HANDOFF_OPCODE, address.clone());
+        address
+    }
 }
 
 impl Transport for Script {
-    fn send(&mut self, opcode: u16, _: &[u8]) -> Result<()> {
+    fn send(&mut self, opcode: u16, body: &[u8]) -> Result<()> {
         assert!(!self.closed);
         self.sent.push(opcode);
+        if opcode == list_poll::OPCODE {
+            assert_eq!(body, [3, 0, 0, 0, 0]);
+            ensure!(!self.refuse_list_reply, "scripted list reply send failure");
+        }
         Ok(())
     }
 
@@ -137,7 +155,166 @@ fn run_script(
         &mut None,
         Vec::new(),
         log,
+        Instant::now,
     )
+}
+
+#[test]
+fn a_failed_due_list_reply_refuses_every_move_drained_by_the_zone_loop() {
+    let mut config = config();
+    config.protocol = ServerProtocol::Project1999;
+    let identity = ClientIdentity::new("example-host", "example-user");
+    let credentials = credentials();
+    let stop = CancellationToken::default();
+    let (sender, commands) = mpsc::channel();
+    let context = context(&config, &identity, &credentials, &stop, Some(&commands));
+    let mut script = Script::titanium(1.0);
+    script.refuse_list_reply = true;
+    script.packet(list_poll::OPCODE, vec![2]);
+    let clock = Cell::new(Instant::now());
+    let mut admitted = None;
+    let mut requested = Vec::new();
+    let mut refused = Vec::new();
+    let mut handler = |event| {
+        match event {
+            ClientEvent::World(WorldEvent::Entered {
+                session_id, player, ..
+            }) => {
+                admitted = Some((session_id, player.position));
+                sender.send(ClientCommand::AnswerListPolls {
+                    session_id,
+                    enabled: true,
+                })?;
+            }
+            ClientEvent::Diagnostic(line) if line == "Received a /list presence poll." => {
+                let (session_id, position) = admitted.expect("poll after admission");
+                let created = Instant::now();
+                for (session_id, created) in [
+                    (session_id, created),
+                    (
+                        session_id.wrapping_add(1),
+                        created + Duration::from_millis(1),
+                    ),
+                ] {
+                    requested.push((session_id, created));
+                    sender.send(ClientCommand::Move(MovementRequest::new(
+                        MovementMode::Forward,
+                        session_id,
+                        position,
+                        created,
+                    )))?;
+                }
+                clock.set(clock.get() + Duration::from_secs(61));
+            }
+            ClientEvent::World(WorldEvent::MotionRefused {
+                session_id,
+                created,
+                reason,
+            }) => {
+                assert_eq!(reason, "The zone connection ended");
+                refused.push((session_id, created));
+            }
+            ClientEvent::World(WorldEvent::MotionSent { .. }) => {
+                panic!("no command can reach the movement owner");
+            }
+            ClientEvent::Diagnostic(line) if line.starts_with("Sent a /list presence reply") => {
+                panic!("the refused transport send cannot be reported as sent");
+            }
+            _ => (),
+        }
+        Ok(())
+    };
+    let result = run_connected(
+        &context,
+        servers::server_type(config.protocol),
+        &mut script,
+        &mut None,
+        Vec::new(),
+        &mut Events::new(&config, &mut handler),
+        || clock.get(),
+    );
+    assert_eq!(
+        result.err().unwrap().to_string(),
+        "scripted list reply send failure"
+    );
+    assert_eq!(script.sent.last(), Some(&list_poll::OPCODE));
+    assert_eq!(requested.len(), 2);
+    assert_eq!(refused, requested);
+    assert!(commands.try_recv().is_err());
+}
+
+#[test]
+fn a_zone_transfer_keeps_the_list_choice_without_sending_the_old_reply() {
+    let mut config = config();
+    config.protocol = ServerProtocol::Project1999;
+    let identity = ClientIdentity::new("example-host", "example-user");
+    let credentials = credentials();
+    let stop = CancellationToken::default();
+    let (_sender, commands) = mpsc::channel();
+    let mut context = context(&config, &identity, &credentials, &stop, Some(&commands));
+    context.answer_list_polls.set(true);
+    let mut first = Script::titanium(1.0);
+    first.packet(list_poll::OPCODE, vec![2]);
+    let address = first.transfer();
+    let clock = Cell::new(Instant::now());
+    let mut admissions = Vec::new();
+    let mut polls = 0;
+    let mut handler = |event| {
+        match event {
+            ClientEvent::World(WorldEvent::Entered { session_id, .. }) => {
+                admissions.push(session_id);
+            }
+            ClientEvent::Diagnostic(line) if line == "Received a /list presence poll." => {
+                polls += 1;
+                if polls == 2 {
+                    clock.set(clock.get() + Duration::from_secs(61));
+                }
+            }
+            _ => (),
+        }
+        Ok(())
+    };
+    let server = servers::server_type(config.protocol);
+    let mut log = Events::new(&config, &mut handler);
+    let exit = run_connected(
+        &context,
+        server,
+        &mut first,
+        &mut None,
+        Vec::new(),
+        &mut log,
+        || clock.get(),
+    )
+    .unwrap();
+    assert!(matches!(&exit, ZoneExit::Direct(next) if *next == address));
+    assert!(!first.sent.contains(&list_poll::OPCODE));
+    context.on_zone_exit(&exit);
+    clock.set(clock.get() + Duration::from_secs(61));
+
+    let mut second = Script::titanium(1.0);
+    second.packet(list_poll::OPCODE, vec![2]);
+    second.stop_when_drained = Some(stop.clone());
+    let exit = run_connected(
+        &context,
+        server,
+        &mut second,
+        &mut None,
+        Vec::new(),
+        &mut log,
+        || clock.get(),
+    )
+    .unwrap();
+    assert!(matches!(exit, ZoneExit::Stopped));
+    assert_eq!(polls, 2);
+    assert!(matches!(admissions.as_slice(), [old, new] if old != new));
+    assert_eq!(
+        second
+            .sent
+            .iter()
+            .filter(|&&code| code == list_poll::OPCODE)
+            .count(),
+        1
+    );
 }
 
 #[test]
@@ -272,13 +449,7 @@ fn a_transfer_destination_requires_its_own_usable_player() {
     };
     let mut log = Events::new(&config, &mut handler);
     let mut first = Script::titanium(1.0);
-    let mut offer = vec![0; 24];
-    offer[..2].copy_from_slice(&2u16.to_le_bytes());
-    first.packet(MOVE_OPCODE, offer);
-    let mut address = vec![0; 130];
-    address[..9].copy_from_slice(b"127.0.0.1");
-    address[128..].copy_from_slice(&7000u16.to_le_bytes());
-    first.packet(HANDOFF_OPCODE, address.clone());
+    let address = first.transfer();
     assert!(matches!(
         run_script(&context, &mut first, &mut log).unwrap(),
         ZoneExit::Direct(next) if next == address

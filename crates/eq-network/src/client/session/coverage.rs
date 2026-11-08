@@ -301,9 +301,9 @@ const NIMBUS: &[Part] = &[Part(
 )];
 /// What the session leaves unread of a popup.
 const POPUP: &[Part] = &[Part(
-    "the last two words",
+    "the last word",
     Reason::Needless(
-        "EQEmu's Titanium encoder always sets them to 0 and 0xffffffff \
+        "EQEmu's Titanium encoder always sets it to 0xffffffff \
          (common/patches/titanium.cpp ENCODE(OP_OnLevelMessage))",
     ),
 )];
@@ -320,11 +320,8 @@ const VOICE_MACRO: &[Part] = &[Part(
     "the word after whom it is spoken to, and the last 60 bytes",
     Reason::Needless("EQEmu leaves them zero (zone/worldserver.cpp WorldServer::HandleMessage)"),
 )];
-/// What the session leaves unread of a request to inspect the player.
-const INSPECT_REQUEST: &[Part] = &[Part(
-    "the player's own spawn",
-    Reason::Needless("the servers pass a request on only to the player it names"),
-)];
+/// What the session leaves unimplemented for an `EQMac` inspect request.
+const INSPECT_REQUEST: &[Part] = &[Part("the response", Reason::Planned(Step::Social))];
 /// What the session leaves unread of a challenge to a duel.
 const DUEL_REQUEST: &[Part] = &[Part(
     "the first spawn",

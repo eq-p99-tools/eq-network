@@ -7,6 +7,15 @@ use std::time::Duration;
 /// The Titanium cast slot reserved for these two abilities.
 pub const CAST_SLOT: u8 = 9;
 
+/// Where a reported knight recovery value came from.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+pub enum ReuseSource {
+    /// The server's ability-slot refresh in a received profile.
+    Profile,
+    /// The local recovery estimate started when the cast request was sent.
+    LocalEstimate,
+}
+
 /// Class abilities available from level one.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 pub enum KnightAbility {

@@ -165,8 +165,8 @@ mod tests {
             ("1", "0", 0x54dc_bc1d),
             ("2", "0", 0xc2bb_8e9d),
         ] {
-            let link = inventory(class, charm)
-                .owned_titanium_link(InventorySlot(23))
+            let link = inventory(class, charm).items()[&InventorySlot(23)]
+                .titanium_link()
                 .unwrap();
             assert_eq!(link.body.len(), 45);
             assert_eq!(&link.body[..6], "000123");
@@ -200,7 +200,9 @@ mod tests {
         let mut inventory = Inventory::default();
         for (opcode, body) in [(0x5394, empty.as_bytes()), (0x3397, item_packet.as_slice())] {
             inventory.apply(crate::inventory::decode(opcode, body).unwrap().unwrap());
-            let link = inventory.owned_titanium_link(InventorySlot(23)).unwrap();
+            let link = inventory.items()[&InventorySlot(23)]
+                .titanium_link()
+                .unwrap();
             assert_eq!(&link.body[6..37], "0".repeat(31));
             assert_eq!(&link.body[37..], "B0070342");
         }
@@ -227,7 +229,9 @@ mod tests {
             .unwrap()
             .unwrap();
         inventory.apply(update);
-        assert!(inventory.owned_titanium_link(InventorySlot(23)).is_err());
+        assert!(inventory.items()[&InventorySlot(23)]
+            .titanium_link()
+            .is_err());
     }
 
     #[test]
@@ -245,16 +249,32 @@ mod tests {
     }
 
     #[test]
-    fn an_inventory_prediction_and_silence_do_not_establish_link_custody() {
+    fn link_metadata_is_independent_of_placement_and_custody() {
         let mut inventory = inventory("0", "0");
         let mut item = inventory.items()[&InventorySlot(23)].clone();
+        let body = item.titanium_link().unwrap().body;
+        item.slot = InventorySlot(4000);
+        assert_eq!(item.titanium_link().unwrap().body, body);
+
         item.slot = InventorySlot(24);
-        inventory.apply(InventoryUpdate::Prediction(vec![item.clone()]));
-        assert!(inventory.owned_titanium_link(item.slot).is_err());
+        inventory.apply(InventoryUpdate::Prediction(vec![item]));
+        assert!(inventory.predicted());
+        assert!(!inventory.custody_known(InventorySlot(24)));
+        assert_eq!(
+            inventory.items()[&InventorySlot(24)]
+                .titanium_link()
+                .unwrap()
+                .body,
+            body
+        );
         inventory.apply(InventoryUpdate::Settled);
-        assert!(inventory.owned_titanium_link(item.slot).is_err());
-        inventory.apply(InventoryUpdate::Set(vec![item]));
-        assert!(inventory.owned_titanium_link(InventorySlot(24)).is_ok());
-        assert!(inventory.owned_titanium_link(InventorySlot(4000)).is_err());
+        assert!(!inventory.custody_known(InventorySlot(24)));
+        assert_eq!(
+            inventory.items()[&InventorySlot(24)]
+                .titanium_link()
+                .unwrap()
+                .body,
+            body
+        );
     }
 }
