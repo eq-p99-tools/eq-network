@@ -28,16 +28,20 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Offer ordinary Project 1999 resurrection and translocate consent using
   admission-scoped offer identities and Titanium's five-minute timeout.
   A named translocate completion can start a move only after a matching
-  Yes. Received movement, recovery and admission remain authoritative.
+  Yes. Byte-identical prompts already issued in the same P99 admission
+  cannot authorize another answer. Received movement and recovery remain
+  authoritative.
 - Use the native two-record beneficial-buff cancellation sequence on Project
   1999. Keep the selected slot until received updates change it, report a
   partially submitted pair separately, and never resend automatically.
   Consumers matching `buffs::cancel::Progress` exhaustively must handle the
   new `PartiallySubmitted` variant.
-- Offer skill training on Project 1999 through an addressed, admitted trainer
-  reply and one practice request at a time. Keep received skill changes
-  independent of provisional point and price estimates. Paid requests
-  invalidate the purse projection until a fresh balance arrives.
+- Offer skill training on Project 1999 through an addressed trainer reply.
+  Each trainer ID gets one opening request per admission. A submitted
+  practice withdraws the point balance until a fresh admission. Received
+  skill changes remain authoritative and carry no receipt for the spend.
+  The displayed price is an estimate. Paid requests invalidate the purse
+  projection until a fresh balance arrives.
   Consumers matching training requests, training updates or decoded messages
   exhaustively must handle the new variants.
 

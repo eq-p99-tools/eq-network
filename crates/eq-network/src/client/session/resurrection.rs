@@ -91,6 +91,7 @@ impl Feature for Resurrection {
             world,
             ConsentKind::Resurrection,
             Instant::now() + TITANIUM_TIMEOUT,
+            self.p99.then(|| offer.wire_identity()),
         ) {
             out.log
                 .send(ClientEvent::World(WorldEvent::Resurrection(question)))?;

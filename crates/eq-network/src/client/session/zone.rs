@@ -3057,3 +3057,6 @@ mod stun_tests;
 
 #[cfg(test)]
 mod buff_tests;
+
+#[cfg(test)]
+mod progression_tests;

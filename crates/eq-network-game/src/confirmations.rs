@@ -235,6 +235,12 @@ pub fn titanium_translocate_record(body: &[u8]) -> Result<TitaniumTranslocate> {
 }
 
 impl TranslocateOffer {
+    /// Exact received bytes used to withhold an ambiguous replay.
+    #[must_use]
+    pub fn wire_identity(&self) -> &[u8] {
+        &self.body
+    }
+
     /// Whether P99 has a meaningful question to display. A bind spell's
     /// destination is described as the bind point, even when the wire zone is absent.
     #[must_use]

@@ -104,6 +104,12 @@ pub fn titanium_offer(body: &[u8]) -> Result<ResurrectionOffer> {
 }
 
 impl ResurrectionOffer {
+    /// Exact received bytes used to withhold an ambiguous replay.
+    #[must_use]
+    pub fn wire_identity(&self) -> &[u8] {
+        &self.body
+    }
+
     /// P99 presents an ordinary spell offer with a named corpse and destination.
     /// A missing spell or zone cannot identify that offer.
     #[must_use]

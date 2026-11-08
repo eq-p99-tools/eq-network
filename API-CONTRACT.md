@@ -1050,8 +1050,13 @@ its server policy supports the operation. Read the decoded fields from
 admission, question kind and sequence and has no wire representation.
 
 An identical pending offer keeps its original token and deadline. A distinct
-offer of the same kind replaces it. A stale or repeated answer produces a
-refusal naming the attempted token and leaves a replacement untouched.
+offer of the same kind replaces it. On P99, an exact packet already issued
+as a question is withheld for the rest of that admission, including after a
+replacement, answer, expiry or interrupted transfer. The packet has no
+established discriminator for an identical new offer. Each kind retains
+up to 1,024 identities and withholds new questions after that limit. A stale
+or repeated answer produces a refusal naming the attempted token and leaves
+a replacement untouched.
 Death, an outstanding zone transfer and logout invalidate old consent.
 The in-process `expires_at` is a monotonic local deadline omitted from
 serialization. The Titanium EQEmu and P99 policies use a five-minute local answer

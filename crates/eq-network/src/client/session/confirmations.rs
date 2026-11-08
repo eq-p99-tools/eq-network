@@ -17,7 +17,10 @@ use eq_network_game::{
     world::WorldEvent,
 };
 
-use std::time::{Duration, Instant};
+use std::{
+    collections::BTreeSet,
+    time::{Duration, Instant},
+};
 
 /// Titanium's five-minute consent window. `eqgame.exe` opens translocate at
 /// 0x4561bd and resurrection at 0x459b61. The timer at 0x547f0a dismisses
@@ -25,10 +28,15 @@ use std::time::{Duration, Instant};
 /// (translocate at 0x499ef3 and resurrection at 0x499f3a).
 pub(super) const TITANIUM_TIMEOUT: Duration = Duration::from_secs(300);
 
+/// Bound the replay history without ever evicting an identity that could replay.
+const MAX_ISSUED_CONSENT: usize = 1024;
+
 /// The latest live question of one kind in a zone feature.
 pub(super) struct Pending<T> {
     sequence: u64,
     current: Option<ConsentOffer<T>>,
+    /// Exact P99 packets already issued as questions during this admission.
+    issued_wire: BTreeSet<Box<[u8]>>,
 }
 
 impl<T> Default for Pending<T> {
@@ -36,19 +44,22 @@ impl<T> Default for Pending<T> {
         Self {
             sequence: 0,
             current: None,
+            issued_wire: BTreeSet::new(),
         }
     }
 }
 
 impl<T: Clone + PartialEq> Pending<T> {
     /// Registers a new question. A duplicate of the pending packet retains
-    /// its identity and deadline.
+    /// its identity and deadline. P99 supplies an exact wire identity because
+    /// no established nonce distinguishes a replay from a fresh identical offer.
     pub(super) fn open(
         &mut self,
         offer: &T,
         world: &World,
         kind: ConsentKind,
         deadline: Instant,
+        wire_identity: Option<&[u8]>,
     ) -> Option<ConsentOffer<T>> {
         if !world.ready()
             || world.lifecycle.blocks_motion()
@@ -59,7 +70,14 @@ impl<T: Clone + PartialEq> Pending<T> {
         {
             return None;
         }
-        self.sequence = self.sequence.checked_add(1)?;
+        let next_sequence = self.sequence.checked_add(1)?;
+        if let Some(bytes) = wire_identity {
+            if self.issued_wire.len() >= MAX_ISSUED_CONSENT || self.issued_wire.contains(bytes) {
+                return None;
+            }
+            self.issued_wire.insert(bytes.into());
+        }
+        self.sequence = next_sequence;
         let question = ConsentOffer {
             id: ConsentId {
                 session_id: world.session_id,
@@ -293,6 +311,7 @@ impl Feature for Translocate {
             world,
             ConsentKind::Translocate,
             Instant::now() + self.timeout,
+            self.p99.then(|| offer.wire_identity()),
         ) {
             out.log
                 .send(ClientEvent::World(WorldEvent::TranslocateOffer(question)))?;
@@ -328,6 +347,39 @@ mod tests {
         eqmac_translocate_answer, sacrifice, titanium_sacrifice_answer, titanium_translocate,
         titanium_translocate_answer,
     };
+
+    #[test]
+    fn replay_history_saturation_never_evicts_an_issued_question() {
+        let mut world = World::new(5);
+        world.admitted = Some(Instant::now());
+        let mut pending = Pending::<usize>::default();
+        let deadline = Instant::now() + TITANIUM_TIMEOUT;
+        for id in 0..MAX_ISSUED_CONSENT {
+            assert!(pending
+                .open(
+                    &id,
+                    &world,
+                    ConsentKind::Resurrection,
+                    deadline,
+                    Some(&id.to_le_bytes())
+                )
+                .is_some());
+        }
+        let extra = MAX_ISSUED_CONSENT;
+        assert!(pending
+            .open(
+                &extra,
+                &world,
+                ConsentKind::Resurrection,
+                deadline,
+                Some(&extra.to_le_bytes())
+            )
+            .is_none());
+        assert!(pending
+            .issued_wire
+            .contains(0usize.to_le_bytes().as_slice()));
+        assert_eq!(pending.current.as_ref().unwrap().offer, extra - 1);
+    }
 
     #[test]
     fn a_sacrifice_is_answered_once_and_only_on_the_players_word() {
@@ -552,11 +604,14 @@ mod tests {
             .unwrap();
         assert!(world.take_news().is_empty());
 
-        let offered = testing::run(|out| feature.observe(&message(4, 0), &mut world, out));
+        let replay = testing::run(|out| feature.observe(&message(4, 0), &mut world, out));
+        replay.result.unwrap();
+        assert!(replay.events.is_empty());
+        let offered = testing::run(|out| feature.observe(&message(7, 0), &mut world, out));
         let [ClientEvent::World(WorldEvent::TranslocateOffer(question))] =
             offered.events.as_slice()
         else {
-            panic!("expected the next offer");
+            panic!("expected a distinct offer");
         };
         let selected =
             testing::run(|out| feature.handle(&answer(question.id, true), &mut world, out));
@@ -564,7 +619,7 @@ mod tests {
         let expired = testing::run(|out| feature.tick(question.expires_at, &mut world, out));
         expired.result.unwrap();
         assert!(expired.sent.is_empty());
-        testing::run(|out| feature.observe(&complete, &mut world, out))
+        testing::run(|out| feature.observe(&message(7, 1), &mut world, out))
             .result
             .unwrap();
         assert!(world.take_news().is_empty());

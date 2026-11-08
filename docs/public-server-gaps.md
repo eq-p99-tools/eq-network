@@ -211,7 +211,7 @@ it adds no live combat/death evidence to this report.
 | Raid group-leader removal | No policy offers it; generic EQEmu lacks the handler | No verified implementation | Remains a gap unless the specific public server proves it inapplicable. |
 | Raids | Disabled; native raid-window restriction reported below | Disabled | Quarm has raid handlers and opcodes: this is a gap, not an established Quarm restriction. |
 | Pets | Ordinary orders offered | Disabled | Public verification of orders and charm ownership. Hold, feign, spellhold and focus are withheld on Project 1999. EQMac orders still need wire/action integration. |
-| Skill training | Source-backed; public exchange pending | Disabled | One practice at a time. Skills follow received updates. Prices and projected point balances are estimates. |
+| Skill training | Source-backed; public exchange pending | Disabled | One opening per trainer ID and one unresolved practice per admission. Skills follow received updates. Point authority returns on fresh admission. |
 | Reading / tradeskills | See individual capability | See individual capability | Book and carried-combine support varies by server. |
 | Resurrection / translocate | Source-backed; public exchange pending | Disabled (TAKP translocate exists) | Offer-bound consent. Named translocate continuation and ordinary server-directed movement. Bind continuation without a server-directed destination remains unverified. |
 | Sacrifice | Disabled | Disabled | Separate consent path. |

@@ -2,9 +2,9 @@
 //! window does. Asking a guildmaster of the player's own class opens
 //! training, and the guildmaster answers with how far each skill can be
 //! trained; each practice raises one skill by a point for a practice point
-//! and, past a skill of 10, coins; leaving says goodbye. Servers answer a
-//! practice only with the skill's new value, so the cost and the practice
-//! point are counted on this side, as the official client counts them.
+//! and, past a skill of 10, coins; leaving says goodbye. An ordinary skill
+//! update has no receipt fields. EQEmu retains the existing local point
+//! and purse projection. P99 waits for a fresh balance after a practice.
 //!
 //! Layout reference: `EQEmu`'s `GMTrainee_Struct`, `GMSkillChange_Struct` and
 //! `GMTrainEnd_Struct` (`common/eq_packet_structs.h`) and the Titanium
@@ -110,33 +110,27 @@ pub enum PracticePoints {
     Unknown,
     /// Balance from the profile or the existing EQEmu policy.
     Balance(u32),
-    /// Projected from the profile and subsequent skill updates.
-    Estimate(u32),
 }
 
 /// Progress of a Project 1999 practice. A regular skill update does not
 /// contain a practice receipt, a point balance or a price.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 pub enum PracticeUpdate {
-    /// One request was sent; this is the client-side price estimate.
+    /// One request was sent, making the current point balance unknown.
     Requested {
         /// The requested skill.
         skill: u32,
         /// The client-side price estimate in copper.
         estimated_cost: u64,
     },
-    /// The requested skill rose. Point and cost projections remain estimates.
+    /// The requested skill rose during observation. This carries no spend receipt.
     SkillRaised {
         /// The requested skill.
         skill: u32,
         /// Its received new value.
         value: u32,
-        /// The client-side price estimate in copper.
-        estimated_cost: u64,
-        /// The remaining point estimate, if still available.
-        estimated_points: Option<u32>,
     },
-    /// No matching skill increase was received before the local deadline.
+    /// Observation ended without a confirmed practice outcome.
     Unanswered {
         /// The requested skill.
         skill: u32,
