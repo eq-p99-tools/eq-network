@@ -120,6 +120,10 @@ pub enum GameCommand {
     CloseContainer {
         /// Current zone admission.
         session_id: u64,
+        /// The open object's ID.
+        drop_id: u32,
+        /// Host intent time, scoped to the current open of this object.
+        created: std::time::Instant,
     },
     /// Request a transfer after entering a boundary in the local zone assets.
     CrossZoneLine {
@@ -929,7 +933,7 @@ impl GameCommand {
             | Self::ClickDoor { session_id, .. }
             | Self::PickUp { session_id, .. }
             | Self::OpenContainer { session_id, .. }
-            | Self::CloseContainer { session_id }
+            | Self::CloseContainer { session_id, .. }
             | Self::CrossZoneLine { session_id, .. }
             | Self::ScribeSpell { session_id, .. }
             | Self::DeleteSpell { session_id, .. }
@@ -1159,7 +1163,6 @@ impl GameCommand {
             | Self::RaidMove { .. }
             | Self::RaidMakeLeader { .. }
             | Self::RaidRemove { .. }
-            | Self::CloseContainer { .. }
             | Self::Consent { .. }
             | Self::SummonCorpse { .. }
             | Self::DragCorpse { .. }
@@ -1176,6 +1179,7 @@ impl GameCommand {
             | Self::ClickDoor { created, .. }
             | Self::PickUp { created, .. }
             | Self::OpenContainer { created, .. }
+            | Self::CloseContainer { created, .. }
             | Self::CrossZoneLine { created, .. }
             | Self::ScribeSpell { created, .. }
             | Self::DeleteSpell { created, .. }

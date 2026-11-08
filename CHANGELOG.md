@@ -7,6 +7,17 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Offer self-targeted Bind Wound and ordinary forge interaction on Project
+  1999. Bandage stock stays provisional until received inventory evidence.
+  A forge candidate needs a matching server open before it can take items.
+  Station placement, close and combine resets do not grant inventory items.
+- Build ordinary Titanium item links from checked worn and carried item
+  records. The source inventory must have current custody evidence.
+  Evolving records, items with augment sockets and labels outside ASCII
+  need a received link.
+- Stamp world container closes with the object ID and intent time. Decode
+  whole-container clears separately from the native one-slot form.
+
 - Compose ordinary chat with genuine received item-link metadata for the
   selected client dialect. The helper rejects quest links and malformed data.
 - Report same-zone server relocation separately from normal position updates.

@@ -684,6 +684,10 @@ mod shared {
         Box::new(Abilities::new(listed))
     }
 
+    pub(super) fn abilities_with_self_bandage(listed: &'static [Ability]) -> Box<dyn Feature> {
+        Box::new(Abilities::with_self_bandage(listed))
+    }
+
     pub(super) fn hide_answer() -> Box<dyn Feature> {
         Box::new(HideAnswer)
     }
@@ -763,8 +767,8 @@ mod shared {
         Box::<Tradeskills>::default()
     }
 
-    pub(super) fn carried_combines() -> Box<dyn Feature> {
-        Box::new(Tradeskills::carried())
+    pub(super) fn forge_combines() -> Box<dyn Feature> {
+        Box::new(Tradeskills::forge())
     }
 
     pub(super) fn map() -> Box<dyn Feature> {
@@ -808,9 +812,8 @@ mod shared {
     }
 }
 
-/// The abilities checked on P99: every one but fishing, which came later,
-/// and binding wounds, not yet checked there.
-const P99_ABILITIES: [Ability; 16] = [
+/// The abilities offered on P99. Bind Wound is scoped to the admitted player.
+const P99_ABILITIES: [Ability; 17] = [
     Ability::Kick,
     Ability::Bash,
     Ability::Backstab,
@@ -827,6 +830,7 @@ const P99_ABILITIES: [Ability; 16] = [
     Ability::Mend,
     Ability::FeignDeath,
     Ability::SenseHeading,
+    Ability::BindWound,
 ];
 
 /// The hazards a local `EQEmu` takes from the client: falls, whose damage it
@@ -897,7 +901,7 @@ impl ServerType for Project1999 {
     }
 
     fn tradeskills(&self, _setup: &Setup<'_>) -> Provided {
-        offer(shared::carried_combines())
+        offer(shared::forge_combines())
     }
 
     fn inventory_move_rules(&self) -> Option<MoveRules> {
@@ -1031,7 +1035,7 @@ impl ServerType for Project1999 {
     }
 
     fn abilities(&self, _setup: &Setup<'_>) -> Provided {
-        offer(shared::abilities(&P99_ABILITIES))
+        offer(shared::abilities_with_self_bandage(&P99_ABILITIES))
     }
 
     fn talk(&self, _setup: &Setup<'_>) -> Provided {
@@ -2209,15 +2213,15 @@ mod tests {
     }
 
     #[test]
-    fn p99_lists_every_ability_but_fishing_and_binding_wounds() {
+    fn p99_lists_every_ability_but_fishing() {
         assert!(!P99_ABILITIES.contains(&Ability::Fishing));
-        assert!(!P99_ABILITIES.contains(&Ability::BindWound));
-        assert_eq!(P99_ABILITIES.len(), Ability::ALL.len() - 2);
+        assert!(P99_ABILITIES.contains(&Ability::BindWound));
+        assert_eq!(P99_ABILITIES.len(), Ability::ALL.len() - 1);
     }
 
     #[test]
     fn p99_and_eqemu_provide_every_feature_one_each() {
-        // World containers, the map, deleting
+        // The map, deleting
         // spells, merchants' offers, the player's listing, dice,
         // emotes, assisting, raids and the server's tick are checked on
         // EQEmu alone so far; P99 takes falls' damage by the Titanium
@@ -2235,7 +2239,6 @@ mod tests {
         }
         for capability in [
             Capability::Sacrifice,
-            Capability::WorldContainers,
             Capability::Map,
             Capability::DeletingSpells,
             Capability::MerchantOffers,
@@ -2259,6 +2262,7 @@ mod tests {
             assert!(offers(server_type(protocol)).contains(&Capability::Resurrection));
             assert!(offers(server_type(protocol)).contains(&Capability::Translocate));
             assert!(offers(server_type(protocol)).contains(&Capability::Tradeskills));
+            assert!(offers(server_type(protocol)).contains(&Capability::WorldContainers));
         }
     }
 

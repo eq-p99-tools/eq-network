@@ -6,9 +6,8 @@
 //! bandage reaches (`Client::BindWound`, `zone/client.cpp`).
 //!
 //! Layout reference: `BindWound_Struct` (`common/patches/titanium_structs.h`):
-//! the spawn bandaged and a type, 16 bits each, each followed by 16 unused
-//! bits. The client asks with type 0; the server answers with the same
-//! opcode, its type saying what happened.
+//! the spawn bandaged and a type, each in a four-byte word. The client asks
+//! with type 0. The native receiver reads the full second word.
 use crate::command::EncodedCommand;
 use anyhow::{bail, ensure, Result};
 use serde::Serialize;
@@ -53,9 +52,17 @@ pub enum BindWoundUpdate {
         /// Whom, if not the player.
         target: Option<String>,
     },
+    /// A local self-bandage request was sent. The server's result is pending.
+    RequestedSelf,
     /// The server lets the player act again: as a bandaging starts, and
     /// after one failed.
     Unlocked,
+    /// The server reported bandaging without ending the local attempt.
+    Bandaged,
+    /// The server released the attempt without a completion or interruption report.
+    Released,
+    /// The local waiting period elapsed while the result remained unknown.
+    Unconfirmed,
     /// The bandaging ended, and how. What it healed arrives as hit points.
     Ended(BindWoundEnd),
 }
@@ -106,7 +113,7 @@ impl BindWoundEnd {
 /// bandage themselves.
 #[must_use]
 pub fn encode(target: u16) -> EncodedCommand {
-    let mut body = target.to_le_bytes().to_vec();
+    let mut body = u32::from(target).to_le_bytes().to_vec();
     body.resize(8, 0);
     EncodedCommand {
         opcode: OPCODE,
@@ -124,13 +131,15 @@ pub fn decode(opcode: u16, body: &[u8]) -> Result<Option<BindWoundUpdate>> {
     }
     ensure!(body.len() == 8, "invalid bind wound length");
     let ended = BindWoundUpdate::Ended;
-    Ok(Some(match u16::from_le_bytes([body[4], body[5]]) {
+    Ok(Some(match u32::from_le_bytes(body[4..8].try_into()?) {
+        0 => BindWoundUpdate::Bandaged,
         1 => ended(BindWoundEnd::Complete),
         3 => BindWoundUpdate::Unlocked,
         4 => ended(BindWoundEnd::Died),
         5 => ended(BindWoundEnd::Left),
         6 => ended(BindWoundEnd::TheyMoved),
         7 => ended(BindWoundEnd::YouMoved),
+        8 => BindWoundUpdate::Released,
         other => bail!("unknown bind wound answer {other}"),
     }))
 }
@@ -149,6 +158,7 @@ mod tests {
             }
         );
         let answer = |kind: u8| decode(OPCODE, &[0, 0, 0, 0, kind, 0, 0, 0]);
+        assert_eq!(answer(0).unwrap(), Some(BindWoundUpdate::Bandaged));
         assert_eq!(answer(3).unwrap(), Some(BindWoundUpdate::Unlocked));
         assert_eq!(
             answer(1).unwrap(),
@@ -159,6 +169,8 @@ mod tests {
             Some(BindWoundUpdate::Ended(BindWoundEnd::YouMoved))
         );
         assert!(answer(2).is_err());
+        assert_eq!(answer(8).unwrap(), Some(BindWoundUpdate::Released));
+        assert!(decode(OPCODE, &[0, 0, 0, 0, 1, 0, 1, 0]).is_err());
         assert!(decode(OPCODE, &[0; 6]).is_err());
         assert_eq!(decode(0x1234, &[0; 8]).unwrap(), None);
     }

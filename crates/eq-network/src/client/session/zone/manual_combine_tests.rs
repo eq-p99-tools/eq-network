@@ -58,10 +58,10 @@ fn hear_packets(features: &mut Features, world: &mut World, opcode: u16, body: &
 }
 
 #[test]
-fn p99_handles_carried_combines_but_owns_no_station_action() {
+fn p99_handles_carried_combines_and_refuses_missing_station_state() {
     let (mut features, mut world) = setup();
     assert!(features.capabilities().contains(&Capability::Tradeskills));
-    assert!(!features
+    assert!(features
         .capabilities()
         .contains(&Capability::WorldContainers));
     for command in [
@@ -70,40 +70,32 @@ fn p99_handles_carried_combines_but_owns_no_station_action() {
             drop_id: 71,
             created: Instant::now(),
         },
-        ClientCommand::CloseContainer { session_id: 5 },
+        ClientCommand::CloseContainer {
+            session_id: 5,
+            drop_id: 42,
+            created: Instant::now(),
+        },
         combine(WORLD_CONTAINER),
     ] {
         assert_eq!(command.capability(), Some(Capability::WorldContainers));
-        // The session dispatches through the actual provider, then reports
-        // unowned commands with its existing refusal path.
-        let outcome = testing::run(|out| -> Result<bool> {
-            let handled = features.handle(&command, &mut world, out)?;
-            if !handled {
-                unoffered(&command, out.log)?;
-            }
-            Ok(handled)
-        });
-        assert!(!outcome.result.unwrap());
+        let outcome = testing::run(|out| features.handle(&command, &mut world, out));
+        assert!(outcome.result.unwrap());
         assert_eq!(outcome.sent, []);
-        assert!(outcome.events.iter().any(
-            |event| matches!(event, ClientEvent::Diagnostic(reason) if reason.contains(UNOFFERED))
-        ));
         match command {
             ClientCommand::OpenContainer { .. } => assert!(matches!(
                 outcome.events.first(),
                 Some(ClientEvent::World(WorldEvent::ObjectAction {
                     session_id: 5,
                     drop_id: 71,
-                    error: Some(reason),
-                })) if reason == UNOFFERED
+                    error: Some(_),
+                }))
             )),
             ClientCommand::Combine { .. } => assert!(matches!(
                 outcome.events.first(),
                 Some(ClientEvent::World(WorldEvent::CombineRefused {
                     session_id: 5,
-                    reason,
                     ..
-                })) if reason == UNOFFERED
+                }))
             )),
             _ => assert_eq!(outcome.events.len(), 1),
         }
@@ -142,6 +134,70 @@ fn p99_and_eqemu_providers_send_the_exact_native_four_byte_carried_slot() {
         assert_eq!(outcome.sent[0].opcode, 0x0b40, "{protocol:?}");
         assert_eq!(outcome.sent[0].body, [23, 0, 0, 0], "{protocol:?}");
     }
+}
+
+#[test]
+fn p99_forge_candidates_need_a_matching_server_forge_reply_before_combining() {
+    use eq_network_game::objects;
+    let (mut features, mut world) = setup();
+    let object = |model: &[u8]| {
+        let mut body = [0; 92];
+        body[12..16].copy_from_slice(&71_u32.to_le_bytes());
+        body[44..44 + model.len()].copy_from_slice(model);
+        body
+    };
+    hear_packets(
+        &mut features,
+        &mut world,
+        objects::SPAWN_OPCODE,
+        &object(b"OTHER_ACTORDEF"),
+    );
+    let open = || ClientCommand::OpenContainer {
+        session_id: 5,
+        drop_id: 71,
+        created: Instant::now(),
+    };
+    let unknown = testing::run(|out| features.handle(&open(), &mut world, out));
+    assert!(unknown.result.unwrap());
+    assert!(unknown.sent.is_empty());
+    hear_packets(
+        &mut features,
+        &mut world,
+        objects::SPAWN_OPCODE,
+        &object(b"FORGE_ACTORDEF"),
+    );
+    let sent = testing::run(|out| features.handle(&open(), &mut world, out));
+    assert!(sent.result.unwrap());
+    assert_eq!(sent.sent, [objects::titanium_pickup(71, 7)]);
+    assert!(!world.container.is_open());
+
+    let mut answer = [0; 92];
+    answer[..4].copy_from_slice(&7_u32.to_le_bytes());
+    answer[4..8].copy_from_slice(&71_u32.to_le_bytes());
+    answer[8..12].copy_from_slice(&1_u32.to_le_bytes());
+    answer[12..16].copy_from_slice(&15_u32.to_le_bytes()); // An oven is outside this offer.
+    hear_packets(
+        &mut features,
+        &mut world,
+        objects::CONTAINER_OPCODE,
+        &answer,
+    );
+    assert!(!world.container.is_open());
+    let retried = testing::run(|out| features.handle(&open(), &mut world, out));
+    assert!(retried.result.unwrap());
+    assert_eq!(retried.sent, [objects::titanium_pickup(71, 7)]);
+    answer[12..16].copy_from_slice(&u32::from(eq_network_game::tradeskills::FORGE).to_le_bytes());
+    hear_packets(
+        &mut features,
+        &mut world,
+        objects::CONTAINER_OPCODE,
+        &answer,
+    );
+    assert!(world.container.is_open());
+    assert!(world.inventory.items().keys().all(|slot| !slot.is_world()));
+    let empty = testing::run(|out| features.handle(&combine(WORLD_CONTAINER), &mut world, out));
+    assert!(empty.result.unwrap());
+    assert!(empty.sent.is_empty());
 }
 
 #[test]
@@ -298,7 +354,7 @@ fn a_new_admission_drops_a_pending_combine_and_other_profiles_keep_their_offers(
         Some("That was meant for an earlier zone visit")
     );
     for (protocol, carried, station) in [
-        (ServerProtocol::Project1999, true, false),
+        (ServerProtocol::Project1999, true, true),
         (ServerProtocol::EqEmu, true, true),
         (ServerProtocol::Quarm, false, false),
         (ServerProtocol::Takp, false, false),
@@ -326,7 +382,11 @@ fn a_new_admission_drops_a_pending_combine_and_other_profiles_keep_their_offers(
                     drop_id: 71,
                     created: Instant::now(),
                 },
-                ClientCommand::CloseContainer { session_id: 5 },
+                ClientCommand::CloseContainer {
+                    session_id: 5,
+                    drop_id: 42,
+                    created: Instant::now(),
+                },
             ] {
                 let outcome = testing::run_on(server.wire(), |out| {
                     features.handle(&command, &mut world, out)

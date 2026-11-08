@@ -292,6 +292,12 @@ fn told(update: &InventoryUpdate) -> String {
             .join(", ")
     };
     let what = match update {
+        InventoryUpdate::BandageStockPending(true) => {
+            "a bandage request awaits stock confirmation".into()
+        }
+        InventoryUpdate::BandageStockPending(false) => {
+            "received stock released the bandage hold".into()
+        }
         InventoryUpdate::DestroyCursor => {
             "a submitted cursor destruction (local prediction)".into()
         }
@@ -468,19 +474,28 @@ impl Belongings {
         out: &mut Out<'_, '_>,
     ) -> Result<()> {
         let now = Instant::now();
-        let planned = self.moves.check(request).and_then(|()| {
-            actor(world)
-                .context("Character equipment data is unavailable")
-                .and_then(|actor| world.inventory.0.plan_move_for(self.rules, request, actor))
-                .and_then(|update| {
-                    let packet = out.encode(&Request::MoveItem {
-                        from: request.from,
-                        to: request.to,
-                        quantity: request.quantity,
-                    })?;
-                    Ok((update, packet))
-                })
-        });
+        let station = if request.from.is_world() || request.to.is_world() {
+            world
+                .container
+                .check_action(world, request.created, out.wire.reaches().objects)
+        } else {
+            Ok(())
+        };
+        let planned = station
+            .and_then(|()| self.moves.check(request))
+            .and_then(|()| {
+                actor(world)
+                    .context("Character equipment data is unavailable")
+                    .and_then(|actor| world.inventory.0.plan_move_for(self.rules, request, actor))
+                    .and_then(|update| {
+                        let packet = out.encode(&Request::MoveItem {
+                            from: request.from,
+                            to: request.to,
+                            quantity: request.quantity,
+                        })?;
+                        Ok((update, packet))
+                    })
+            });
         let result = match planned {
             Ok((update, packet)) => {
                 // A failed send ends the admission; an uncertain move is
@@ -1039,7 +1054,13 @@ impl Feature for Belongings {
     /// Retains the legacy Titanium refusal window. `EQMac` predictions await
     /// server evidence, regardless of how long or how many moves ago they arose.
     fn tick(&mut self, now: Instant, world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
-        if self.rules.settles_by_silence() {
+        if self.rules.settles_by_silence()
+            && world
+                .inventory
+                .items()
+                .keys()
+                .all(|slot| !slot.is_world() || world.inventory.custody_known(*slot))
+        {
             if let Some(update) = self.settlement.due(&world.inventory, now) {
                 change(update, world, out)?;
             }

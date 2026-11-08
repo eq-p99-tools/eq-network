@@ -164,11 +164,10 @@ standing. See [the inspected handlers](https://github.com/SecretsOTheP/EQMacEmu/
 
 ## Confirmed implementation and policy gaps
 
-The carried manual-combine follow-up now offers P99's source-backed carried
-path, independently of world containers. Native request bytes and local
-prerequisites are implemented; live success/refusal and result ordering remain
-unverified. World-station discovery/open/close/combine remains a client gap,
-not a server-unsupported facility. See [carried combine evidence and limits](p99-manual-combines.md).
+P99 offers carried manual combines and the ordinary forge path. The session
+requires a matching server open before accepting moves or a combine for that
+forge. Live P99 response ordering and custody remain to be verified.
+[Manual combine evidence and limits](p99-manual-combines.md)
 
 This table records the baseline above; completed fixes and follow-up checks are
 called out separately so a new capability is not mistaken for live verification.
@@ -204,7 +203,7 @@ it adds no live combat/death evidence to this report.
 | Casting / spellbook / click effects | Offered; book moving enabled | Disabled | Quarm port of casting and authoritative bar recovery; P99 spell-action landing flag remains unset. Public scenario coverage for resisted casts, interruption, clicks, scribing and memorization. |
 | Cooldowns / buffs / resource bars | Partial | Partial | Linked reuse groups, complete effective resource denominators, buff replacement ambiguity and item-effect accounting. Quarm saved gem cooldowns are already decoded from profile offset 4972 and covered by synthetic tests; public behavior still needs verification. Unknown values must remain distinguishable from zero. |
 | Target / consider / combat | Offered | Offered by policy (2026-11-03 stack); live unverified | Quarm attack, consider and death coverage still need the attended live check. |
-| Abilities | Most offered; fishing and bind wound excluded | Disabled | Evidence for each unavailable action, including resource/reuse and failure responses. |
+| Abilities | Most offered, including self-targeted Bind Wound. Fishing excluded. | Disabled | Verify the P99 bandage result and stock update independently. |
 | Loot / corpses / consent | Offered | Manual looting offered by policy (2026-11-03 stack); live unverified | Quarm corpse commands, own-corpse recovery and the NPC loot flow still need the attended live check; no automatic loot-all. |
 | Doors / ground objects | Offered | Source-backed ground pickups and receive-only door state on both TAKP/Quarm | Door interaction stays disabled pending ordinary padding/type/state review. Pickups use authoritative inventory delivery; an unanswered pickup holds only further pickups and expires locally after three seconds, a duplicate-suppression bound of ours rather than an official-client timing, and an ambiguous result keeps later waits for their full window; see [protocol evidence and live checklist](eqmac-world-objects.md). A map marker never grants an item. |
 | Groups | Disabled | Disabled; TAKP implementation exists | Invitation, refusal, roster changes, leader changes, zoning and disband checks on each. |

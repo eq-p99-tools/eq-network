@@ -404,6 +404,11 @@ fn a_world_container_shows_what_it_holds_until_the_server_empties_it() {
     state.apply(emptied);
     assert!(!state.items.contains_key(&InventorySlot(4003)));
     assert!(decode(0x21ed, &[1]).is_err());
+    assert_eq!(
+        decode(0x21ed, &[0, 0, 0, 0, 3, 0, 0, 0]).unwrap(),
+        Some(InventoryUpdate::Remove(InventorySlot(4003)))
+    );
+    assert!(decode(0x21ed, &[0, 0, 0, 0, 10, 0, 0, 0]).is_err());
 }
 
 fn limbo_packet(id: u32, children: &[(usize, String)], bag: u8) -> InventoryUpdate {

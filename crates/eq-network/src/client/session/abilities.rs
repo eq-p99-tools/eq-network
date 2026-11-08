@@ -7,7 +7,10 @@
 //! if the player had moved (no bandage at all).
 //! It keeps the generation's unmodified recovery waits and tells
 //! the host which abilities are offered and when a timer starts.
+mod self_bandage;
+
 use super::{
+    actions::Resource,
     feature::{Feature, Out, World},
     ClientCommand, ClientEvent,
 };
@@ -16,6 +19,7 @@ use eq_network_game::{
     abilities::{eqmac, in_melee_range, player_size, Ability, Body, Recovery},
     appearance::AppearanceChange,
     bind_wound::{self, strings, BindWoundUpdate},
+    inventory::InventoryUpdate,
     message::Message,
     request::Request,
     world::{PlayerState, Position, PostureState, SpawnKind, WorldEvent},
@@ -31,6 +35,7 @@ pub(super) struct Abilities {
     ready: BTreeMap<Recovery, Instant>,
     /// Set only by the server's own appearance or cancellation.
     sneaking: bool,
+    self_bandage: Option<self_bandage::SelfBandage>,
 }
 
 impl Default for Abilities {
@@ -163,6 +168,14 @@ impl Abilities {
             listed,
             ready: BTreeMap::new(),
             sneaking: false,
+            self_bandage: None,
+        }
+    }
+
+    pub(super) fn with_self_bandage(listed: &'static [Ability]) -> Self {
+        Self {
+            self_bandage: Some(self_bandage::SelfBandage::default()),
+            ..Self::new(listed)
         }
     }
 
@@ -323,6 +336,25 @@ impl Abilities {
         now: Instant,
     ) -> Result<()> {
         if ability == Ability::BindWound {
+            if let Some(state) = &self.self_bandage {
+                let checked = self.usable(ability, world, GameDialect::Titanium).and_then(
+                    |((actor, _), _)| state.check(world, actor).map(|stock| (actor, stock)),
+                );
+                let (actor, stock) = match checked {
+                    Ok(checked) => checked,
+                    Err(refusal) => return refuse(session_id, ability, refusal, out),
+                };
+                self.send(session_id, ability, Some(actor), out, now)?;
+                if let Some(state) = &mut self.self_bandage {
+                    state.submitted(actor, stock, now);
+                }
+                world.happened(Message::Event(WorldEvent::Inventory(
+                    InventoryUpdate::BandageStockPending(true),
+                )));
+                return out.log.send(ClientEvent::World(WorldEvent::BindWound(
+                    BindWoundUpdate::RequestedSelf,
+                )));
+            }
             return match self.bandage(world, now, out.wire.reaches()) {
                 Ok((spawn_id, target)) => {
                     self.send(session_id, ability, Some(spawn_id), out, now)?;
@@ -387,11 +419,35 @@ impl Feature for Abilities {
         matches!(command, ClientCommand::UseAbility { .. })
     }
 
+    fn holds(&self, _world: &World, _now: Instant) -> Vec<(Resource, &'static str)> {
+        self.self_bandage
+            .as_ref()
+            .filter(|state| state.holds_inventory())
+            .map(|_| (Resource::Inventory, "Wait for the bandage stock update"))
+            .into_iter()
+            .collect()
+    }
+
+    fn tick(&mut self, now: Instant, _world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
+        if self
+            .self_bandage
+            .as_mut()
+            .is_some_and(|state| state.timed_out(now))
+        {
+            out.log.send(ClientEvent::World(WorldEvent::BindWound(
+                BindWoundUpdate::Unconfirmed,
+            )))?;
+        }
+        Ok(())
+    }
+
     /// Authoritative reset frees the shared recovery group, not just the
     /// named button. Stealth cancellation changes state, never cooldowns.
     fn admit(&mut self, message: &Message, world: &mut World) -> Result<()> {
         match message {
-            Message::Event(WorldEvent::BindWound(BindWoundUpdate::Ended(_))) => {
+            Message::Event(WorldEvent::BindWound(
+                BindWoundUpdate::Ended(_) | BindWoundUpdate::Released,
+            )) => {
                 self.ready.remove(&Recovery::BindWound);
             }
             Message::Event(WorldEvent::SkillReady(skill)) => {
@@ -418,6 +474,15 @@ impl Feature for Abilities {
         world: &mut World,
         _out: &mut Out<'_, '_>,
     ) -> Result<()> {
+        if self
+            .self_bandage
+            .as_mut()
+            .is_some_and(|state| state.observe(message, world))
+        {
+            world.happened(Message::Event(WorldEvent::Inventory(
+                InventoryUpdate::BandageStockPending(false),
+            )));
+        }
         self.admit(message, world)
     }
 
@@ -729,6 +794,96 @@ mod tests {
             .unwrap();
         let outcome = try_ability(&mut abilities, &mut world, Ability::BindWound, now);
         assert_eq!(outcome.sent, [bind_wound::encode(7)]);
+    }
+
+    #[test]
+    fn a_self_bandage_waits_for_the_result_and_a_received_stock_update() {
+        let mut abilities = Abilities::with_self_bandage(&Ability::ALL);
+        let mut world = bandager();
+        let now = Instant::now();
+        world.admitted = Some(now);
+        world.posture.observed(PostureState::Standing);
+        assert!(
+            try_ability(&mut abilities, &mut world, Ability::BindWound, now)
+                .sent
+                .is_empty()
+        );
+
+        world.target = Target::from(7);
+        let sent = try_ability(&mut abilities, &mut world, Ability::BindWound, now);
+        assert_eq!(sent.sent, [bind_wound::encode(7)]);
+        assert!(sent.events.iter().any(|event| matches!(
+            event,
+            ClientEvent::World(WorldEvent::BindWound(BindWoundUpdate::RequestedSelf))
+        )));
+        assert_eq!(world.inventory.items().len(), 2);
+        let answer = Message::Event(WorldEvent::BindWound(BindWoundUpdate::Unlocked));
+        testing::run(|out| abilities.observe(&answer, &mut world, out))
+            .result
+            .unwrap();
+        assert!(
+            try_ability(&mut abilities, &mut world, Ability::BindWound, now)
+                .sent
+                .is_empty()
+        );
+
+        let answer = Message::Event(WorldEvent::BindWound(BindWoundUpdate::Ended(
+            BindWoundEnd::YouMoved,
+        )));
+        testing::run(|out| abilities.observe(&answer, &mut world, out))
+            .result
+            .unwrap();
+        assert!(
+            try_ability(&mut abilities, &mut world, Ability::BindWound, now)
+                .sent
+                .is_empty()
+        );
+        // Server inventory state is applied by its owner before abilities observe it.
+        let mut inventory = (*world.inventory).clone();
+        let snapshot = InventoryUpdate::Snapshot(inventory.items().values().cloned().collect());
+        inventory.apply(snapshot.clone());
+        world.inventory = inventory.into();
+        let answer = Message::Event(WorldEvent::Inventory(snapshot));
+        testing::run(|out| abilities.observe(&answer, &mut world, out))
+            .result
+            .unwrap();
+        assert_eq!(
+            try_ability(&mut abilities, &mut world, Ability::BindWound, now).sent,
+            [bind_wound::encode(7)]
+        );
+    }
+
+    #[test]
+    fn a_self_bandage_timeout_does_not_consume_stock_or_start_another_attempt() {
+        let mut abilities = Abilities::with_self_bandage(&Ability::ALL);
+        let mut world = bandager();
+        let now = Instant::now();
+        world.admitted = Some(now);
+        world.posture.observed(PostureState::Sitting);
+        world.target = Target::from(7);
+        assert_eq!(
+            try_ability(&mut abilities, &mut world, Ability::BindWound, now).sent,
+            [bind_wound::encode(7)]
+        );
+        let later = now + Duration::from_secs(15);
+        let timeout = testing::run(|out| abilities.tick(later, &mut world, out));
+        assert_eq!(timeout.sent, []);
+        assert!(matches!(
+            timeout.events.as_slice(),
+            [ClientEvent::World(WorldEvent::BindWound(
+                BindWoundUpdate::Unconfirmed
+            ))]
+        ));
+        assert_eq!(world.inventory.items().len(), 2);
+        assert_eq!(
+            abilities.holds(&world, later),
+            [(Resource::Inventory, "Wait for the bandage stock update")]
+        );
+        assert!(
+            try_ability(&mut abilities, &mut world, Ability::BindWound, later)
+                .sent
+                .is_empty()
+        );
     }
 
     #[test]

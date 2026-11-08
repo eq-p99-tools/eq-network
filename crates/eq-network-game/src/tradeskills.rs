@@ -27,6 +27,9 @@ pub const COMBINE_OPCODE: u16 = 0x0b40;
 /// such as a forge (`SLOT_TRADESKILL_EXPERIMENT_COMBINE`).
 pub const WORLD_CONTAINER: InventorySlot = InventorySlot(1000);
 
+/// The ordinary forge bag type, distinct from cultural and quest forges.
+pub const FORGE: u8 = 17;
+
 /// The official client's string (`eqstr_us.txt`) refusing a combine while
 /// the cursor holds an item or coins: a combine's product lands there.
 pub const HANDS_FULL: u32 = 12024;

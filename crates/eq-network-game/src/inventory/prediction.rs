@@ -26,6 +26,7 @@ impl Inventory {
             .filter(|slot| !InventoryItem::same_slot_contents(self.items.get(slot), next.get(slot)))
             .collect();
         for slot in &changed {
+            self.projected_custody.insert(*slot);
             // Charm through waist: the slots whose items' statistics and worn
             // effects the servers apply (EQEmu `BONUS_BEGIN`..`BONUS_STAT_END`);
             // the ammo slot (21) contributes skill modifiers only.
@@ -64,7 +65,8 @@ impl Inventory {
             slot == root || slot.parent().is_some_and(|(parent, _)| parent == root)
         };
         self.relocations.retain(|slot, origin| match update {
-            InventoryUpdate::Prediction(_)
+            InventoryUpdate::BandageStockPending(_)
+            | InventoryUpdate::Prediction(_)
             | InventoryUpdate::DestroyCursor
             | InventoryUpdate::GroundDropPending(_)
             | InventoryUpdate::Cursor(_)

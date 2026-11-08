@@ -3,6 +3,8 @@ use anyhow::{ensure, Context, Result};
 use serde::Serialize;
 use std::num::NonZeroU16;
 
+pub(crate) mod owned;
+
 /// Displayable numeric property from the server's item definition.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct ItemStat {

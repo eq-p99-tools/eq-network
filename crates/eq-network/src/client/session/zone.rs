@@ -1397,7 +1397,11 @@ mod tests {
                 drop_id: 9,
                 created,
             },
-            ClientCommand::CloseContainer { session_id },
+            ClientCommand::CloseContainer {
+                session_id,
+                drop_id: 5,
+                created,
+            },
             ClientCommand::EnvironmentalDamage {
                 session_id,
                 hazard: eq_network_game::hazards::Hazard::Falling,
@@ -2618,7 +2622,7 @@ mod tests {
         assert!(!eqemu.contains(&Capability::GroundDropping));
         assert!(eqemu.contains(&Capability::Falling));
         assert!(eqemu.contains(&Capability::WorldContainers));
-        assert!(!p99.contains(&Capability::WorldContainers));
+        assert!(p99.contains(&Capability::WorldContainers));
         assert!(eqemu.contains(&Capability::Map));
         assert!(eqemu.contains(&Capability::DeletingSpells));
         assert!(!p99.contains(&Capability::DeletingSpells));

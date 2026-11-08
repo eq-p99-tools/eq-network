@@ -93,6 +93,7 @@ impl DropWeight {
             | InventoryUpdate::Deduct { .. }
             | InventoryUpdate::Used(_)
             | InventoryUpdate::Set(_)
+            | InventoryUpdate::BandageStockPending(_)
             | InventoryUpdate::Settled => (),
         }
         Some(self)
