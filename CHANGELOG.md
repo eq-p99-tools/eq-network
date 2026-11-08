@@ -195,6 +195,10 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   and the observer's current Titanium sight in `WorldEvent::ObserverSight`.
   `AppearanceChange` can report the Titanium GM flag, and item placement
   records carry optional Titanium Light and item-class metadata.
+- **Breaking:** Struct literals and exhaustive matches need the new fields:
+  `WorldEvent::InspectRequest` gains `target_id`, `popups::Popup` gains
+  `negative_id`, `Appearance` gains `titanium_invisibility` and
+  `titanium_gm`, and `Capability::ALL` grows from 55 to 57.
 - **Breaking:** Preserve the unanswered spell and cast source for a
   compatible own start after the local cast wait. Match the spell ID or
   stock TAKP's documented Luclin port rewrite. Unrelated own starts keep
@@ -431,6 +435,16 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- Bind Wound's own button time now runs out in full after every use, as the
+  official client's does, whatever ended the bandaging; the self-bandage path
+  checks it too, so a moved or released P99 self-bandage cannot be resent at
+  once.
+- One received decrease from a self-bandage settles every carried bandage
+  stack, so a second stack no longer holds the inventory until the result
+  window ends or stays uncertain for the rest of the zone.
+- A player inspection waits for its answer before another request goes to
+  the same player, for up to five seconds (inferred, recording checklist
+  6.400), so a held key or script cannot repeat requests every frame.
 - Let unrelated EQEmu inventory moves settle during an unresolved station
   transfer. After a combine reset, keep any remaining hold on the station
   and cursor until covering evidence arrives.

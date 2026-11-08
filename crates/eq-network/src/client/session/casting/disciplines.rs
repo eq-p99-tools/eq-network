@@ -12,7 +12,8 @@ use eq_network_game::{
 };
 use std::time::{Duration, Instant};
 
-/// An inferred one-second local duplicate guard independent of observed reuse.
+/// An inferred one-second local duplicate guard independent of observed reuse
+/// (recording checklist 6.403).
 /// The native `eqgame.exe` 0x4bb39d checks a received group timer in seconds
 /// and supplies no standalone one-second retry rule.
 const RETRY_DELAY: Duration = Duration::from_secs(1);

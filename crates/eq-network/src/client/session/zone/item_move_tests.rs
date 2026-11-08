@@ -195,14 +195,23 @@ fn p99_bandage_result_or_expiry_releases_unrelated_moves_but_keeps_stock_uncerta
         );
         assert!(!world.inventory.bandage_stock_pending());
         assert!(!world.inventory.predicted());
+        // Current stock leaves only the button's own wait, which the
+        // official client runs out in full whatever ended the bandaging.
+        let waits = |attempt: &testing::Outcome<Result<bool>>| {
+            attempt.sent.is_empty()
+                && attempt.events.iter().any(|event| {
+                    matches!(
+                        event,
+                        ClientEvent::World(WorldEvent::AbilityRefused { reason, .. })
+                            if reason == "You are bandaging already"
+                    )
+                })
+        };
         if stock_first {
             assert!(world.inventory.custody_known(slot));
             assert_eq!(world.inventory.items()[&slot].stack_count, Some(1));
             let retry = bind(&world);
-            assert_eq!(
-                submit(protocol, &mut features, &mut world, &retry).sent,
-                [bind_wound::encode(7)]
-            );
+            assert!(waits(&submit(protocol, &mut features, &mut world, &retry)));
             continue;
         }
         assert!(!world.inventory.custody_known(slot));
@@ -259,11 +268,89 @@ fn p99_bandage_result_or_expiry_releases_unrelated_moves_but_keeps_stock_uncerta
         let count = if matches!(ending, Some(7 | 8)) { 2 } else { 1 };
         assert_eq!(world.inventory.items()[&slot].stack_count, Some(count));
         let retry = bind(&world);
-        assert_eq!(
-            submit(protocol, &mut features, &mut world, &retry).sent,
-            [bind_wound::encode(7)]
-        );
+        assert!(waits(&submit(protocol, &mut features, &mut world, &retry)));
     }
+}
+
+#[test]
+fn p99_one_bandage_decrease_settles_every_carried_stack() {
+    use eq_network_game::{abilities::Ability, bind_wound, world::PostureState};
+
+    let protocol = ServerProtocol::Project1999;
+    let server = servers::server_type(protocol);
+    let wire = server.wire();
+    let mut bagged = stack(251, 2);
+    bagged.rules.item_type = bind_wound::BANDAGE;
+    let mut loose = stack(23, 3);
+    loose.rules.item_type = bind_wound::BANDAGE;
+    let mut bag = testing::item(22);
+    bag.bag_slots = 8;
+    let (mut features, mut world) = setup(protocol, vec![bag, bagged, loose, testing::item(24)]);
+    world.posture.observed(PostureState::Standing);
+    testing::run_on(wire, |out| {
+        hear(
+            vec![Message::Event(WorldEvent::Target(Some(7)))],
+            &mut features,
+            &mut world,
+            out,
+            true,
+        )
+    })
+    .result
+    .unwrap();
+    let attempt = ClientCommand::UseAbility {
+        session_id: world.session_id,
+        target: Some(world.target.state()),
+        ability: Ability::BindWound,
+        created: Instant::now(),
+    };
+    let sent = testing::run_on(wire, |out| {
+        apply_commands(&[attempt], &mut features, &mut world, out, true)
+    });
+    sent.result.unwrap();
+    assert_eq!(sent.sent, [bind_wound::encode(7)]);
+    assert!(world.inventory.bandage_stock_pending());
+
+    let mut deletion = 251_i32.to_le_bytes().to_vec();
+    deletion.extend([0xff; 8]);
+    testing::run_on(wire, |out| {
+        hear(
+            wire.messages(0x4d81, &deletion, server.item_rules()),
+            &mut features,
+            &mut world,
+            out,
+            true,
+        )?;
+        hear(
+            wire.messages(
+                bind_wound::OPCODE,
+                &[0, 0, 0, 0, 1, 0, 0, 0],
+                server.item_rules(),
+            ),
+            &mut features,
+            &mut world,
+            out,
+            true,
+        )
+    })
+    .result
+    .unwrap();
+    assert!(!world.inventory.bandage_stock_pending());
+    assert!(!world.inventory.bandage_placement_unconfirmed());
+    for slot in [InventorySlot(251), InventorySlot(23)] {
+        assert!(world.inventory.custody_known(slot), "{slot:?}");
+    }
+    assert_eq!(
+        world.inventory.items()[&InventorySlot(23)].stack_count,
+        Some(3)
+    );
+    let unrelated_move = command(&world, 24, 30, MoveQuantity::Whole);
+    assert_eq!(
+        submit(protocol, &mut features, &mut world, &unrelated_move)
+            .sent
+            .len(),
+        1
+    );
 }
 
 fn open_p99_forge_with_current_cursor(features: &mut Features, world: &mut World) {

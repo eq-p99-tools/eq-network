@@ -101,6 +101,7 @@ impl Popup {
 }
 
 /// Encodes the response only if the chosen button has a nonzero response ID.
+/// The first word as the button index is uncited (recording checklist 6.401).
 #[must_use]
 pub fn titanium_response(popup: &Popup, action: PopupAction) -> Option<EncodedCommand> {
     if !popup.allows(action) {
@@ -165,7 +166,8 @@ fn field(bytes: &[u8], what: &str) -> Result<String> {
 /// bytes and the text in 4,096, each ended by a NUL within its field; the
 /// buttons, how long it stays open in milliseconds (0xffffffff until the
 /// player closes it) and the popup's number, each 32 bits; then the No
-/// response ID and a word this client leaves uninterpreted.
+/// response ID and a word this client leaves uninterpreted. A zero duration
+/// is read as no expiry, which is uncited (recording checklist 6.401).
 ///
 /// # Errors
 /// Rejects a wrong length, and a title or text that fills its field.

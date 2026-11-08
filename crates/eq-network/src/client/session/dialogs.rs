@@ -32,7 +32,14 @@ pub(super) struct Dialogs {
 struct PendingInspection {
     name: String,
     outstanding: u64,
+    sent: Instant,
 }
+
+/// How long an unanswered request holds the next one to the same player.
+/// Inferred, not read from the official program (recording checklist
+/// 6.400): it keeps a held key or a script from repeating requests faster
+/// than a player clicking.
+const ANSWER_WAIT: Duration = Duration::from_secs(5);
 
 fn in_range(own: Position, target: Position, inclusive: bool) -> bool {
     let distance_squared =
@@ -104,13 +111,30 @@ impl Dialogs {
                 out.log,
             );
         }
+        let ClientCommand::InspectPlayer { created, .. } = command else {
+            unreachable!("only inspection commands inspect");
+        };
+        if self.pending.get(&id).is_some_and(|pending| {
+            pending
+                .sent
+                .checked_add(ANSWER_WAIT)
+                .is_none_or(|ready| *created < ready)
+        }) {
+            return actions::refuse(
+                command,
+                "Wait for the earlier inspection of that player.",
+                out.log,
+            );
+        }
         out.send(&inspection::titanium_request(id, own)?)?;
         self.latest = Some(id);
         let pending = self.pending.entry(id).or_insert_with(|| PendingInspection {
             name: name.to_owned(),
             outstanding: 0,
+            sent: *created,
         });
         pending.outstanding += 1;
+        pending.sent = *created;
         Ok(())
     }
 
@@ -179,7 +203,8 @@ impl Dialogs {
         let Some(note) = self.note.as_deref() else {
             return Ok(());
         };
-        // Titanium uses a single one-second reply timer, regardless of inspector.
+        // Titanium uses a single one-second reply timer, regardless of inspector
+        // (uncited; recording checklist 6.400).
         if !world.is_player(target)
             || self
                 .last_reply
@@ -421,16 +446,27 @@ mod tests {
         })
         .result
         .unwrap();
-        let inspect = ClientCommand::InspectPlayer {
+        let first = Instant::now();
+        let target = world.target.state();
+        let inspect_at = |created| ClientCommand::InspectPlayer {
             session_id: 5,
-            target: world.target.state(),
-            created: Instant::now(),
+            target,
+            created,
         };
-        for _ in 0..2 {
-            let request = testing::run(|out| feature.handle(&inspect, &mut world, out));
-            request.result.unwrap();
-            assert_eq!(request.sent, [inspection::titanium_request(12, 7).unwrap()]);
-        }
+        let inspect = inspect_at(first);
+        let request = testing::run(|out| feature.handle(&inspect, &mut world, out));
+        request.result.unwrap();
+        assert_eq!(request.sent, [inspection::titanium_request(12, 7).unwrap()]);
+        // An unanswered request holds the next one to the same player.
+        assert_eq!(ANSWER_WAIT, Duration::from_secs(5));
+        let early = inspect_at(first + Duration::from_millis(4_999));
+        let held = testing::run(|out| feature.handle(&early, &mut world, out));
+        held.result.unwrap();
+        assert_eq!(held.sent, []);
+        let again = inspect_at(first + ANSWER_WAIT);
+        let request = testing::run(|out| feature.handle(&again, &mut world, out));
+        request.result.unwrap();
+        assert_eq!(request.sent, [inspection::titanium_request(12, 7).unwrap()]);
         let reply = |recipient| {
             Message::Event(WorldEvent::InspectAnswer(Inspection {
                 recipient_id: recipient,

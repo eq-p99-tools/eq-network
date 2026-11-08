@@ -987,7 +987,7 @@ impl ServerType for Project1999 {
     }
 
     fn casting(&self, _setup: &Setup<'_>) -> Provided {
-        // Inferred local estimate from the classic once-per-game-day reuse.
+        // Inferred local estimate (recording checklist 6.399) from the classic once-per-game-day reuse.
         offer(Box::new(Casting::with_titanium_combat(
             false,
             std::time::Duration::from_mins(72),

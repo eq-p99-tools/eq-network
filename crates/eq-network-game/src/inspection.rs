@@ -7,6 +7,7 @@ use serde::Serialize;
 /// `OP_InspectAnswer` in both directions for Titanium.
 pub const INSPECT_ANSWER_OPCODE: u16 = 0x2403;
 /// Titanium refuses to start an inspection at or beyond this distance.
+/// Uncited; recording checklist 6.400.
 pub const REQUEST_RANGE: f32 = 20.0;
 const SLOTS: usize = 22;
 const NAME: usize = 64;

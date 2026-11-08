@@ -9,6 +9,9 @@ use std::{
     time::{Duration, Instant},
 };
 
+/// How long a self-bandage waits for its result before the stock it could
+/// have used is called uncertain. Inferred (recording checklist 6.403): it
+/// outlasts the stock `EQEmu` ten-second bandage timer.
 const RESULT_WINDOW: Duration = Duration::from_secs(12);
 
 #[derive(Default)]
@@ -149,16 +152,21 @@ impl SelfBandage {
             | InventoryUpdate::Remove(slot) => *slot,
             _ => return None,
         };
-        attempt.stock.retain(|&slot, before| {
-            (slot != root && slot.parent().is_none_or(|(parent, _)| parent != root))
-                || !inventory.custody_known(slot)
-                || inventory
+        // A bandaging takes one bandage from one place, so one observed
+        // decrease settles the whole stock, other stacks included.
+        let decreased = attempt.stock.iter().any(|(&slot, &before)| {
+            (slot == root || slot.parent().is_some_and(|(parent, _)| parent == root))
+                && inventory.custody_known(slot)
+                && inventory
                     .items()
                     .get(&slot)
                     .filter(|item| item.rules.item_type == bind_wound::BANDAGE)
                     .map_or(0, |item| item.stack_count.unwrap_or(1))
-                    >= *before
+                    < before
         });
+        if decreased {
+            attempt.stock.clear();
+        }
         attempt
             .stock
             .is_empty()

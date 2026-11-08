@@ -60,7 +60,8 @@ entry, snaps locally, and returns to the normal position stream. The local
 pad implementation uses the existing position encoder and update gate.
 Its event records local placement after entry submission. The entry uses
 the ordinary session position sequence. The native pad path uses a movement
-history cursor, so the entry word still needs a capture comparison. Live
+history cursor, so the entry word still needs a capture comparison
+(recording checklist 6.402). Live
 validation of pad crossings and server receipt is pending.
 
 Before implementing stock Titanium transmission, capture a populated report

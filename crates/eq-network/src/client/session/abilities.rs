@@ -338,9 +338,20 @@ impl Abilities {
     ) -> Result<()> {
         if ability == Ability::BindWound {
             if let Some(state) = &self.self_bandage {
-                let checked = self.usable(ability, world, GameDialect::Titanium).and_then(
-                    |((actor, _), _)| state.check(world, actor).map(|stock| (actor, stock)),
-                );
+                let checked = self
+                    .usable(ability, world, GameDialect::Titanium)
+                    .and_then(|((actor, _), _)| {
+                        state.check(world, actor).map(|stock| (actor, stock))
+                    })
+                    .and_then(|checked| {
+                        // The official client waits out the whole button
+                        // time since the last use, however the bandaging ended.
+                        if self.waiting(ability, now) {
+                            Err("You are bandaging already".into())
+                        } else {
+                            Ok(checked)
+                        }
+                    });
                 let (actor, stock) = match checked {
                     Ok(checked) => checked,
                     Err(refusal) => return refuse(session_id, ability, refusal, out),
@@ -447,13 +458,11 @@ impl Feature for Abilities {
 
     /// Authoritative reset frees the shared recovery group, not just the
     /// named button. Stealth cancellation changes state, never cooldowns.
+    /// A bandaging's end leaves Bind Wound's timer running: the official
+    /// client waits it out in full since the last use
+    /// ([`Ability::reuse`]).
     fn admit(&mut self, message: &Message, world: &mut World) -> Result<()> {
         match message {
-            Message::Event(WorldEvent::BindWound(
-                BindWoundUpdate::Ended(_) | BindWoundUpdate::Released,
-            )) => {
-                self.ready.remove(&Recovery::BindWound);
-            }
             Message::Event(WorldEvent::SkillReady(skill)) => {
                 if let Some(recovery) = Ability::from_skill(*skill)
                     .filter(|ability| self.listed.contains(ability))
@@ -787,7 +796,8 @@ mod tests {
         let outcome = try_ability(&mut abilities, &mut world, Ability::BindWound, now);
         assert!(outcome.sent.is_empty(), "sent {:?}", outcome.sent);
         assert_eq!(refused(&outcome.events), ["You are bandaging already"]);
-        // The server's answer that it ended frees the next at once.
+        // The server's answer that it ended leaves the button's own time
+        // running, as the official client does.
         let ended = Message::Event(WorldEvent::BindWound(BindWoundUpdate::Ended(
             BindWoundEnd::YouMoved,
         )));
@@ -795,6 +805,9 @@ mod tests {
             .result
             .unwrap();
         let outcome = try_ability(&mut abilities, &mut world, Ability::BindWound, now);
+        assert_eq!(refused(&outcome.events), ["You are bandaging already"]);
+        let reuse = Ability::BindWound.reuse(GameDialect::Titanium);
+        let outcome = try_ability(&mut abilities, &mut world, Ability::BindWound, now + reuse);
         assert_eq!(outcome.sent, [bind_wound::encode(7)]);
     }
 
