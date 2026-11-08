@@ -1,5 +1,4 @@
-//! Read-only item-link inspection, in Titanium's and `EQMac`'s packets; never
-//! equips, trades, or activates items.
+//! Item-link inspection and chat composition for Titanium and `EQMac`.
 use anyhow::{ensure, Context, Result};
 use serde::Serialize;
 use std::num::NonZeroU16;
@@ -184,6 +183,47 @@ pub fn eqmac_request(link: &str) -> Result<[u8; 66]> {
     Ok(body)
 }
 
+/// Wrap a received item's link body and label for an ordinary outbound chat message.
+///
+/// The body is retained verbatim. The label is the decoded display text, escaped
+/// for chat markup. This function creates no link metadata from an item ID.
+///
+/// # Errors
+/// Rejects mismatched dialects, non-item links, invalid labels and ID mismatches.
+pub fn chat_link(dialect: crate::GameDialect, link: &crate::chat::ItemLink) -> Result<String> {
+    let item_id = match dialect {
+        crate::GameDialect::Titanium => {
+            let inspected = request(&link.body)?;
+            u32::from_le_bytes(inspected[..4].try_into()?)
+        }
+        crate::GameDialect::EqMac => {
+            let inspected = eqmac_request(&link.body)?;
+            u32::from(u16::from_le_bytes(inspected[..2].try_into()?))
+        }
+    };
+    ensure!(link.item_id == item_id, "item link ID mismatch");
+    ensure!(
+        !link.text.trim().is_empty()
+            && !link.text.chars().any(|c| c.is_control() || c == '\u{fffd}'),
+        "invalid item link label"
+    );
+
+    let mut encoded = String::with_capacity(link.body.len() + link.text.len() + 2);
+    encoded.push('\x12');
+    encoded.push_str(&link.body);
+    for character in link.text.chars() {
+        match character {
+            '&' => encoded.push_str("&AMP;"),
+            '<' => encoded.push_str("&LT;"),
+            '>' => encoded.push_str("&GT;"),
+            '"' => encoded.push_str("&QUOT;"),
+            _ => encoded.push(character),
+        }
+    }
+    encoded.push('\x12');
+    Ok(encoded)
+}
+
 /// Decode `EQMac`'s answer to an inspection: the linked item's 360-byte
 /// record.
 ///
@@ -354,6 +394,62 @@ fn bonuses(fields: &[&str]) -> Result<ItemBonuses> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{
+        chat::{encode_outbound_for, parse_for, ItemLink, OutboundChat},
+        GameDialect,
+    };
+
+    fn received_link(body: &str, item_id: u32, label: &str) -> ItemLink {
+        ItemLink {
+            body: body.into(),
+            text: label.into(),
+            item_id,
+            start: 0,
+            end: 0,
+            text_start: 0,
+            text_end: label.len(),
+        }
+    }
+
+    #[test]
+    fn received_link_bodies_round_trip_through_each_outbound_channel_layout() {
+        let titanium_body = format!("00002a{:031X}aBcD0123", 0);
+        for (dialect, body, opcode) in [
+            (GameDialect::Titanium, titanium_body.as_str(), 0x1004),
+            (GameDialect::EqMac, "1000042", 0x0741),
+        ] {
+            let received = received_link(body, 42, "<Épée &PCT; 95%>");
+            let formatted = chat_link(dialect, &received).unwrap();
+            assert_eq!(&formatted[1..1 + body.len()], body);
+            let message = OutboundChat::Tell {
+                recipient: "Recipient".into(),
+                message: format!("See {formatted} please"),
+            };
+            let bytes = encode_outbound_for(dialect, &message, "Example").unwrap();
+            let event = parse_for(dialect, opcode, &bytes, false).unwrap().unwrap();
+            assert_eq!(event.target.as_deref(), Some("Recipient"));
+            let message = event.message.unwrap();
+            assert_eq!(message.text, "See <Épée &PCT; 95%> please");
+            assert_eq!(message.item_links.len(), 1);
+            assert_eq!(message.item_links[0].item_id, 42);
+            assert_eq!(message.item_links[0].body, body);
+        }
+    }
+
+    #[test]
+    fn composing_rejects_cross_dialect_links_quest_links_and_unsafe_labels() {
+        let mut link = received_link("1000042", 42, "Example");
+        assert!(chat_link(GameDialect::Titanium, &link).is_err());
+        link.item_id = 41;
+        assert!(chat_link(GameDialect::EqMac, &link).is_err());
+        link.item_id = 42;
+        link.text = "Bad\x12Label".into();
+        assert!(chat_link(GameDialect::EqMac, &link).is_err());
+        let quest = received_link("1032769", 32769, "Quest");
+        assert!(chat_link(GameDialect::EqMac, &quest).is_err());
+        let quest = received_link(&format!("0FFFFF{:039X}", 0), 0xfffff, "Quest");
+        assert!(chat_link(GameDialect::Titanium, &quest).is_err());
+    }
     #[test]
     fn modifiers_are_what_an_item_changes_not_what_it_requires() {
         let mut fields = vec!["0"; 159];

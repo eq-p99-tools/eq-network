@@ -7,6 +7,8 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Compose ordinary chat with genuine received item-link metadata for the
+  selected client dialect. The helper rejects quest links and malformed data.
 - Report same-zone server relocation separately from normal position updates.
   A same-zone boundary on local-only EQEmu releases the crossing hold and
   lets normal movement reach a server-owned trigger. The landing is applied
