@@ -9,6 +9,7 @@
 use super::{casting, ClientCommand, ClientEvent, Events};
 use anyhow::Result;
 use eq_network_game::{
+    abilities::Ability,
     inventory::InventorySlot,
     spells::BookActionStatus,
     world::{CampStatus, WorldEvent},
@@ -97,13 +98,12 @@ pub(super) fn needs(command: &ClientCommand) -> &'static [Resource] {
         | ClientCommand::UseDiscipline { .. } => &[Casting],
         // `EQEmu` ignores a strike during a cast; bards may strike while they
         // sing, but the session cannot tell songs apart, so they wait too.
-        ClientCommand::UseAbility { ability, .. } if ability.strikes() => &[Casting],
-        ClientCommand::UseAbility {
-            ability: eq_network_game::abilities::Ability::BindWound,
-            ..
-        }
-        | ClientCommand::UseItem(_)
-        | ClientCommand::RangedAttack(_) => &[Casting, Inventory],
+        ClientCommand::UseAbility { ability, .. } => match ability {
+            Ability::BindWound => &[Casting, Inventory],
+            ability if ability.strikes() => &[Casting],
+            _ => &[],
+        },
+        ClientCommand::UseItem(_) | ClientCommand::RangedAttack(_) => &[Casting, Inventory],
         ClientCommand::ScribeSpell { .. } => &[Casting, Spellbook, Inventory],
         ClientCommand::MemorizeSpell { .. }
         | ClientCommand::ForgetSpell { .. }
@@ -165,7 +165,6 @@ pub(super) fn needs(command: &ClientCommand) -> &'static [Resource] {
         | ClientCommand::DropInvisibility { .. }
         | ClientCommand::StopSong { .. }
         | ClientCommand::AutoAttack { .. }
-        | ClientCommand::UseAbility { .. }
         | ClientCommand::SelectTarget { .. }
         | ClientCommand::WhoAll { .. }
         | ClientCommand::Pet { .. }
