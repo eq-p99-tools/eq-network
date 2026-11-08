@@ -2615,14 +2615,9 @@ mod tests {
         assert!(p99.contains(&Capability::Jumping));
         assert!(p99.contains(&Capability::Reading));
         assert!(!p99.contains(&Capability::GroundDropping));
-        assert!(p99.contains(&Capability::Training));
-        assert!(p99.contains(&Capability::Resurrection));
-        assert!(p99.contains(&Capability::Translocate));
         let eqemu = features(crate::client::ServerProtocol::EqEmu).capabilities();
         assert!(!eqemu.contains(&Capability::GroundDropping));
         assert!(eqemu.contains(&Capability::Falling));
-        assert!(eqemu.contains(&Capability::Training));
-        assert!(eqemu.contains(&Capability::Resurrection));
         assert!(eqemu.contains(&Capability::Reading));
         assert!(eqemu.contains(&Capability::Tradeskills));
         assert!(p99.contains(&Capability::Tradeskills));
@@ -2652,8 +2647,17 @@ mod tests {
             assert!(eqemu.contains(&capability));
             assert!(!p99.contains(&capability));
         }
-        assert!(p99.contains(&Capability::CancellingBuffs));
-        assert!(eqemu.contains(&Capability::CancellingBuffs));
+        for capability in [
+            Capability::Training,
+            Capability::Resurrection,
+            Capability::Translocate,
+            Capability::CancellingBuffs,
+            Capability::KnightAbilities,
+            Capability::UsingDisciplines,
+        ] {
+            assert!(p99.contains(&capability), "{capability:?}");
+            assert!(eqemu.contains(&capability), "{capability:?}");
+        }
         assert!(p99.contains(&Capability::EnvironmentalDamage));
         let mut setup = servers::Setup::new("Tester", eq_network_game::food::AutoEat::default());
         setup.local_only = true;
@@ -2674,7 +2678,9 @@ mod tests {
         assert!(p99.contains(&Capability::GameplayDepartures));
         assert!(eqemu.contains(&Capability::Swimming));
         assert!(!p99.contains(&Capability::Swimming));
-        assert_eq!(eqemu.len(), p99.len() + 17);
+        // P99 gained the four progression capabilities above. Both policies
+        // gained the two combat capabilities, leaving a difference of 13.
+        assert_eq!(eqemu.len(), p99.len() + 13);
     }
 
     #[test]

@@ -31,9 +31,11 @@ impl Visit {
         world.own_spawn = Some(7);
         world.zone = (4, 0);
         world.admitted = Some(Instant::now());
-        testing::run(|out| features.admitted(&mut world, out))
-            .result
-            .unwrap();
+        let admission = testing::run(|out| {
+            features.admitted(&mut world, out)?;
+            settle(&mut features, &mut world, out, true)
+        });
+        assert!(admission.result.unwrap().is_none());
         Self { features, world }
     }
 
