@@ -850,7 +850,7 @@ mod tests {
     };
 
     /// How many kinds of command there are.
-    const KINDS: usize = 87;
+    const KINDS: usize = 88;
 
     /// The kinds the login and world servers take, before any zone session.
     const BEFORE_ZONES: [usize; 4] = [0, 1, 70, 75];
@@ -874,6 +874,7 @@ mod tests {
             ClientCommand::ForgetSpell { .. } => 9,
             ClientCommand::MemorizeSpell { .. } => 10,
             ClientCommand::CastSpell { .. } => 11,
+            ClientCommand::UseKnightAbility { .. } => 87,
             ClientCommand::CancelBuff(_) => 81,
             ClientCommand::RangedAttack(_) => 82,
             ClientCommand::StopSong { .. } => 83,
@@ -1039,6 +1040,16 @@ mod tests {
                 session_id,
                 gem: 0,
                 spell_id: 202,
+                created,
+            },
+            ClientCommand::UseKnightAbility {
+                session_id,
+                ability: eq_network_game::knights::KnightAbility::HarmTouch,
+                target: eq_network_game::targets::TargetState {
+                    revision: 1,
+                    spawn_id: Some(7),
+                    available: true,
+                },
                 created,
             },
             ClientCommand::CastSpell {

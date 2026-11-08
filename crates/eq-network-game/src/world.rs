@@ -582,12 +582,14 @@ pub enum Capability {
     LavaHeat,
     /// Put one verified ordinary Titanium cursor item on the ground.
     GroundDropping,
+    /// Titanium's Lay on Hands and Harm Touch.
+    KnightAbilities,
 }
 
 impl Capability {
     /// Every capability, in order: what a session offers when its server and
     /// client generation support everything.
-    pub const ALL: [Self; 53] = [
+    pub const ALL: [Self; 54] = [
         Self::Casting,
         Self::Spellbook,
         Self::Inventory,
@@ -641,6 +643,7 @@ impl Capability {
         Self::Drowning,
         Self::LavaHeat,
         Self::GroundDropping,
+        Self::KnightAbilities,
     ];
 }
 
@@ -1657,6 +1660,13 @@ pub enum WorldEvent {
     /// zone-in of timers 11 to 19 carry its other reuse timers
     /// ([`crate::disciplines`]).
     DisciplineReuse(crate::disciplines::Reuse),
+    /// Received ability-slot reuse from the admitted knight's profile.
+    KnightReuse {
+        /// Admission that supplied the profile.
+        session_id: u64,
+        /// Remaining time received, including an explicit zero.
+        remaining: std::time::Duration,
+    },
     /// A reuse timer a group of spells shares, as the server set it.
     LinkedReuse(crate::disciplines::Reuse),
     /// `EQMac`'s servers: the discipline the player began, by the servers'
@@ -2195,6 +2205,7 @@ mod tests {
             Capability::Drowning => 50,
             Capability::LavaHeat => 51,
             Capability::GroundDropping => 52,
+            Capability::KnightAbilities => 53,
         };
         for (index, capability) in Capability::ALL.into_iter().enumerate() {
             assert_eq!(place(capability), index, "{capability:?}");

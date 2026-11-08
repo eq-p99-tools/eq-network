@@ -55,6 +55,8 @@ pub enum Message {
     /// The player's bind point, from their profile: where a client that asks
     /// for its own way home after death asks to go.
     Bind(zoning::BindPoint),
+    /// Ability-slot reuse received in a Titanium knight profile.
+    KnightRefresh(std::time::Duration),
     /// The server logging the character out.
     LoggedOut,
     /// A message a session feature withholds, to pass on later as it was or
@@ -127,6 +129,7 @@ pub fn titanium(opcode: u16, body: &[u8]) -> Vec<Message> {
             Message::ZoneOffer,
         ),
         PROFILE_OPCODE => {
+            messages.extend(crate::knights::titanium_profile(body).map(Message::KnightRefresh));
             match crate::group::titanium_profile(body) {
                 Ok(group) => {
                     messages.extend(group.map(|update| Message::Event(WorldEvent::Group(update))));

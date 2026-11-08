@@ -967,7 +967,7 @@ impl ServerType for Project1999 {
     }
 
     fn casting(&self, _setup: &Setup<'_>) -> Provided {
-        offer(shared::casting())
+        offer(Box::new(Casting::with_knights(false)))
     }
 
     /// Moving the book's spells works on P99 as on `EQEmu` (checked with the
@@ -1124,7 +1124,7 @@ impl ServerType for EqEmu {
     }
 
     fn casting(&self, _setup: &Setup<'_>) -> Provided {
-        offer(Box::new(Casting::with_song_stop()))
+        offer(Box::new(Casting::with_knights(true)))
     }
 
     fn spellbook(&self, _setup: &Setup<'_>) -> Provided {

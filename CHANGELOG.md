@@ -7,6 +7,10 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Added guarded Titanium knight ability casts and the admission's received
+  ability-slot recovery, including the server's alternate Harm Touch rank.
+  Downstream exhaustive matches on commands, capabilities, and world events
+  need to include the knight actions.
 - Offer ordinary Project 1999 resurrection and translocate consent using
   admission-scoped offer identities and Titanium's five-minute timeout.
   A named translocate completion can start a move only after a matching

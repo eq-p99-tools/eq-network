@@ -733,6 +733,17 @@ pub enum GameCommand {
     },
     /// Fire or throw once with the current ranged loadout.
     RangedAttack(crate::combat::ranged::RangedAttack),
+    /// Cast a Paladin or Shadow Knight class ability at the selected target.
+    UseKnightAbility {
+        /// Admission in which the ability was chosen.
+        session_id: u64,
+        /// Which class ability was selected.
+        ability: crate::knights::KnightAbility,
+        /// The settled target selection, including an explicit self target.
+        target: crate::targets::TargetState,
+        /// When the player requested the action.
+        created: Instant,
+    },
     /// Select or clear a target in the current zone session, without attacking.
     SelectTarget {
         /// Connection identifier supplied by zone admission.
@@ -844,6 +855,7 @@ impl GameCommand {
             Self::SetBookOptions { .. } => "SetBookOptions",
             Self::ExitAtOnce { .. } => "ExitAtOnce",
             Self::UseAbility { .. } => "UseAbility",
+            Self::UseKnightAbility { .. } => "UseKnightAbility",
             Self::Consent { .. } => "Consent",
             Self::SummonCorpse { .. } => "SummonCorpse",
             Self::DragCorpse { .. } => "DragCorpse",
@@ -940,6 +952,7 @@ impl GameCommand {
             | Self::SetBookOptions { session_id, .. }
             | Self::ExitAtOnce { session_id, .. }
             | Self::UseAbility { session_id, .. }
+            | Self::UseKnightAbility { session_id, .. }
             | Self::WhoAll { session_id, .. }
             | Self::Pet { session_id, .. }
             | Self::Training { session_id, .. }
@@ -1052,6 +1065,7 @@ impl GameCommand {
             }
             Self::SelectTarget { .. } => Capability::Targeting,
             Self::UseAbility { .. } => Capability::Abilities,
+            Self::UseKnightAbility { .. } => Capability::KnightAbilities,
             Self::WhoAll { .. } => Capability::Who,
             Self::Pet { .. } => Capability::Pets,
             Self::Training { .. } => Capability::Training,
@@ -1175,6 +1189,7 @@ impl GameCommand {
             | Self::AutoAttack { created, .. }
             | Self::Consume { created, .. }
             | Self::UseAbility { created, .. }
+            | Self::UseKnightAbility { created, .. }
             | Self::Pet { created, .. }
             | Self::Training { created, .. }
             | Self::ReadItem { created, .. }
@@ -1210,16 +1225,7 @@ fn encode_cast(
         "invalid spell cast"
     );
     match dialect {
-        GameDialect::Titanium => {
-            let mut body = Vec::with_capacity(20);
-            for value in [u32::from(gem), spell_id, u32::MAX, u32::from(target_id), 0] {
-                body.extend_from_slice(&value.to_le_bytes());
-            }
-            Ok(EncodedCommand {
-                opcode: 0x304b,
-                body,
-            })
-        }
+        GameDialect::Titanium => Ok(crate::spells::titanium_cast(gem, spell_id, target_id)),
         GameDialect::EqMac => crate::spells::eqmac_cast(gem, spell_id, target_id),
     }
 }
@@ -1380,6 +1386,7 @@ pub fn encode(
         | GameCommand::SetBookOptions { .. }
         | GameCommand::ExitAtOnce { .. }
         | GameCommand::UseAbility { .. }
+        | GameCommand::UseKnightAbility { .. }
         | GameCommand::WhoAll { .. }
         | GameCommand::Pet { .. }
         | GameCommand::Training { .. }
