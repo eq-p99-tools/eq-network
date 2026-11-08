@@ -161,7 +161,7 @@ fn p99_forge_candidates_need_a_matching_server_forge_reply_before_combining() {
     };
     let unknown = testing::run(|out| features.handle(&open(), &mut world, out));
     assert!(unknown.result.unwrap());
-    assert!(unknown.sent.is_empty());
+    assert_eq!(unknown.sent, []);
     hear_packets(
         &mut features,
         &mut world,
@@ -206,7 +206,7 @@ fn p99_forge_candidates_need_a_matching_server_forge_reply_before_combining() {
     assert!(!world.container.is_open());
     let waiting = testing::run(|out| features.handle(&open(), &mut world, out));
     assert!(waiting.result.unwrap());
-    assert!(waiting.sent.is_empty());
+    assert_eq!(waiting.sent, []);
     hear_packets(&mut features, &mut world, 0x21ed, &[1, 0, 0, 0, 0, 0, 0, 0]);
     let retried = testing::run(|out| features.handle(&open(), &mut world, out));
     assert!(retried.result.unwrap());
@@ -222,7 +222,7 @@ fn p99_forge_candidates_need_a_matching_server_forge_reply_before_combining() {
     assert!(world.inventory.items().keys().all(|slot| !slot.is_world()));
     let empty = testing::run(|out| features.handle(&combine(WORLD_CONTAINER), &mut world, out));
     assert!(empty.result.unwrap());
-    assert!(empty.sent.is_empty());
+    assert_eq!(empty.sent, []);
 }
 
 #[test]
@@ -263,7 +263,7 @@ fn eqemu_ordered_reopen_fences_close_after_a_reset_with_or_without_combine_clear
                 out,
                 true,
             )?;
-            assert!(!features.holds(&world, Instant::now()).is_empty());
+            assert_ne!(features.holds(&world, Instant::now()), []);
             features.handle(
                 &ClientCommand::CloseContainer {
                     session_id: 5,
@@ -283,7 +283,7 @@ fn eqemu_ordered_reopen_fences_close_after_a_reset_with_or_without_combine_clear
             }
             first.push(clear());
             hear(first, &mut features, &mut world, out, true)?;
-            assert!(features.holds(&world, Instant::now()).is_empty());
+            assert_eq!(features.holds(&world, Instant::now()), []);
             assert!(!world.container.is_open());
             assert!(world.inventory.items().keys().all(|slot| !slot.is_world()));
             assert_eq!(

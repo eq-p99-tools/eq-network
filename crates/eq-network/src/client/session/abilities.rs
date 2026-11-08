@@ -803,10 +803,9 @@ mod tests {
         let now = Instant::now();
         world.admitted = Some(now);
         world.posture.observed(PostureState::Standing);
-        assert!(
-            try_ability(&mut abilities, &mut world, Ability::BindWound, now)
-                .sent
-                .is_empty()
+        assert_eq!(
+            try_ability(&mut abilities, &mut world, Ability::BindWound, now).sent,
+            []
         );
 
         world.target = Target::from(7);
@@ -821,10 +820,9 @@ mod tests {
         testing::run(|out| abilities.observe(&answer, &mut world, out))
             .result
             .unwrap();
-        assert!(
-            try_ability(&mut abilities, &mut world, Ability::BindWound, now)
-                .sent
-                .is_empty()
+        assert_eq!(
+            try_ability(&mut abilities, &mut world, Ability::BindWound, now).sent,
+            []
         );
 
         let answer = Message::Event(WorldEvent::BindWound(BindWoundUpdate::Ended(
@@ -833,10 +831,9 @@ mod tests {
         testing::run(|out| abilities.observe(&answer, &mut world, out))
             .result
             .unwrap();
-        assert!(
-            try_ability(&mut abilities, &mut world, Ability::BindWound, now)
-                .sent
-                .is_empty()
+        assert_eq!(
+            try_ability(&mut abilities, &mut world, Ability::BindWound, now).sent,
+            []
         );
         // Server inventory state is applied by its owner before abilities observe it.
         let mut inventory = (*world.inventory).clone();
@@ -879,10 +876,9 @@ mod tests {
             abilities.holds(&world, later),
             [(Resource::Inventory, "Wait for the bandage stock update")]
         );
-        assert!(
-            try_ability(&mut abilities, &mut world, Ability::BindWound, later)
-                .sent
-                .is_empty()
+        assert_eq!(
+            try_ability(&mut abilities, &mut world, Ability::BindWound, later).sent,
+            []
         );
 
         let mut inventory = (*world.inventory).clone();
@@ -897,7 +893,7 @@ mod tests {
         testing::run(|out| abilities.observe(&delayed, &mut world, out))
             .result
             .unwrap();
-        assert!(abilities.holds(&world, later).is_empty());
+        assert_eq!(abilities.holds(&world, later), []);
         assert!(world.take_news().iter().any(|news| matches!(
             news,
             Message::Event(WorldEvent::Inventory(InventoryUpdate::BandageStockPending(
@@ -905,10 +901,9 @@ mod tests {
             )))
         )));
         assert!(!world.inventory.items().contains_key(&InventorySlot(251)));
-        assert!(
-            try_ability(&mut abilities, &mut world, Ability::BindWound, later)
-                .sent
-                .is_empty()
+        assert_eq!(
+            try_ability(&mut abilities, &mut world, Ability::BindWound, later).sent,
+            []
         );
     }
 
@@ -939,7 +934,7 @@ mod tests {
             world.inventory = inventory.into();
             let mut abilities = Abilities::with_self_bandage(&Ability::ALL);
             let refused = try_ability(&mut abilities, &mut world, Ability::BindWound, now);
-            assert!(refused.sent.is_empty());
+            assert_eq!(refused.sent, []);
             assert_eq!(official(&refused.events), [(None, vec![])]);
             assert!(refused.events.iter().any(|event| matches!(
                 event,

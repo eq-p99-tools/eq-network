@@ -385,12 +385,9 @@ impl Feature for Tradeskills {
             }
             ClientCommand::CloseContainer {
                 drop_id, created, ..
-            } => {
-                return if world.container.may_close(drop_id, created) {
-                    close(world, out)
-                } else {
-                    actions::refuse(command, "That container is no longer open", out.log)
-                };
+            } if world.container.may_close(drop_id, created) => return close(world, out),
+            ClientCommand::CloseContainer { .. } => {
+                return actions::refuse(command, "That container is no longer open", out.log);
             }
             _ => return Ok(()),
         };
@@ -524,7 +521,7 @@ impl Feature for Tradeskills {
             Message::Event(WorldEvent::Objects(ObjectUpdate::Container(view)))
                 if world.is_player(view.player_id) =>
             {
-                self.container_reply(view, world, out)?
+                self.container_reply(view, world, out)?;
             }
             Message::Event(WorldEvent::Objects(
                 ObjectUpdate::Snapshot(_) | ObjectUpdate::Spawn(_) | ObjectUpdate::Remove { .. },
@@ -1052,12 +1049,12 @@ mod tests {
         let clear = Message::Event(WorldEvent::Inventory(InventoryUpdate::WorldEmptied));
         testing::run(|out| {
             features.tradeskills.observe(&reset, &mut world, out)?;
-            assert!(!features.tradeskills.holds(&world, now).is_empty());
+            assert_ne!(features.tradeskills.holds(&world, now), []);
             features.tradeskills.observe(&clear, &mut world, out)
         })
         .result
         .unwrap();
-        assert!(features.tradeskills.holds(&world, now).is_empty());
+        assert_eq!(features.tradeskills.holds(&world, now), []);
         assert_eq!(
             command(&combine(WORLD_CONTAINER.0), &mut features, &mut world),
             1
@@ -1066,12 +1063,12 @@ mod tests {
             features
                 .tradeskills
                 .observe(&Message::TradeskillNoRecipe, &mut world, out)?;
-            assert!(!features.tradeskills.holds(&world, now).is_empty());
+            assert_ne!(features.tradeskills.holds(&world, now), []);
             features.tradeskills.observe(&reset, &mut world, out)
         })
         .result
         .unwrap();
-        assert!(features.tradeskills.holds(&world, now).is_empty());
+        assert_eq!(features.tradeskills.holds(&world, now), []);
     }
 
     #[test]

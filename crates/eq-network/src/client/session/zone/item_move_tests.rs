@@ -142,7 +142,7 @@ fn open_p99_forge_with_current_cursor(features: &mut Features, world: &mut World
     assert!(!world.inventory.custody_known(InventorySlot::CURSOR));
     let denied = submit(protocol, features, world, &open());
     assert!(denied.result.unwrap());
-    assert!(denied.sent.is_empty());
+    assert_eq!(denied.sent, []);
     observe(
         protocol,
         features,
@@ -185,7 +185,7 @@ fn p99_forge_moves_require_single_whole_places_and_current_empty_withdrawal_curs
         let placement = place(&world, quantity);
         let denied = submit(protocol, &mut features, &mut world, &placement);
         assert!(denied.result.unwrap());
-        assert!(denied.sent.is_empty());
+        assert_eq!(denied.sent, []);
         assert!(!world.inventory.items().contains_key(&InventorySlot(4000)));
     }
     let placement = place(&world, MoveQuantity::Whole);
@@ -198,7 +198,7 @@ fn p99_forge_moves_require_single_whole_places_and_current_empty_withdrawal_curs
     let withdrawal = withdraw(&world);
     let denied = submit(protocol, &mut features, &mut world, &withdrawal);
     assert!(denied.result.unwrap());
-    assert!(denied.sent.is_empty());
+    assert_eq!(denied.sent, []);
     observe(
         protocol,
         &mut features,
@@ -216,7 +216,7 @@ fn p99_forge_moves_require_single_whole_places_and_current_empty_withdrawal_curs
     let withdrawal = withdraw(&world);
     let denied = submit(protocol, &mut features, &mut world, &withdrawal);
     assert!(denied.result.unwrap());
-    assert!(denied.sent.is_empty());
+    assert_eq!(denied.sent, []);
     world.coins = Wallet::default().into();
     let withdrawal = withdraw(&world);
     let withdrawn = submit(protocol, &mut features, &mut world, &withdrawal);

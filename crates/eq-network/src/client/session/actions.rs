@@ -101,8 +101,9 @@ pub(super) fn needs(command: &ClientCommand) -> &'static [Resource] {
         ClientCommand::UseAbility {
             ability: eq_network_game::abilities::Ability::BindWound,
             ..
-        } => &[Casting, Inventory],
-        ClientCommand::UseItem(_) | ClientCommand::RangedAttack(_) => &[Casting, Inventory],
+        }
+        | ClientCommand::UseItem(_)
+        | ClientCommand::RangedAttack(_) => &[Casting, Inventory],
         ClientCommand::ScribeSpell { .. } => &[Casting, Spellbook, Inventory],
         ClientCommand::MemorizeSpell { .. }
         | ClientCommand::ForgetSpell { .. }
