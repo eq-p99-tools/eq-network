@@ -113,7 +113,7 @@ impl Request {
     }
 }
 
-/// EQEmu's initialized Titanium C2S `OP_Buff` after slot validation.
+/// `EQEmu`'s initialized Titanium C2S `OP_Buff` after slot validation.
 ///
 /// # Errors
 /// Refuses a missing own-player identity or a sentinel spell.

@@ -131,7 +131,7 @@ pub fn titanium_cast(discipline: Discipline, own: u16) -> Result<EncodedCommand>
 }
 
 /// An active discipline reported by the server. Titanium's buff slot and
-/// EQMac's numbered discipline are distinct authorities.
+/// `EQMac`'s numbered discipline are distinct authorities.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize)]
 pub enum Active {
     /// No current observation.
@@ -141,7 +141,7 @@ pub enum Active {
     Inactive,
     /// The spell in the own Titanium discipline buff slot.
     Titanium(u32),
-    /// The received EQMac discipline number.
+    /// The received `EQMac` discipline number.
     EqMac(u8),
 }
 

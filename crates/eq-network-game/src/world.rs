@@ -810,7 +810,7 @@ pub enum WorldEvent {
         /// Credential-free reason for the rejection.
         reason: String,
     },
-    /// A local-only EQEmu boundary is staying in this admission. Ordinary
+    /// A local-only `EQEmu` boundary is staying in this admission. Ordinary
     /// movement may continue. No landing has been received.
     SameZoneBoundary {
         /// Admission that submitted the crossing.

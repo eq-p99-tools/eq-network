@@ -108,7 +108,7 @@ pub enum PracticePoints {
     /// No current balance is known.
     #[default]
     Unknown,
-    /// Balance from the profile or the existing EQEmu policy.
+    /// Balance from the profile or the existing `EQEmu` policy.
     Balance(u32),
 }
 
@@ -228,6 +228,7 @@ pub fn titanium_reply(body: &[u8]) -> Result<TrainingReply> {
 }
 
 /// Applies the native skill-bank display rules to a received P99 offer.
+#[must_use]
 pub fn p99_offer(mut offer: TrainingOffer) -> TrainingOffer {
     for (skill, cap) in offer.caps.iter_mut().enumerate() {
         if matches!(skill, 15 | 33 | 72) || i32::try_from(*cap).is_err() {

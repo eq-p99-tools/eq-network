@@ -58,7 +58,7 @@ impl KnightAbility {
         }
     }
 
-    /// The spell ID the Titanium ability button sends. EQEmu can substitute
+    /// The spell ID the Titanium ability button sends. `EQEmu` can substitute
     /// 2821 for Harm Touch at level 40 or above.
     #[must_use]
     pub const fn spell(self) -> u32 {
@@ -90,8 +90,8 @@ pub fn titanium_profile(profile: &[u8]) -> Option<Duration> {
 }
 
 /// Encode the ordinary ability cast. Its class, target and reuse checks belong
-/// to the admitted session. See EQEmu's Titanium CastSpell decoder and
-/// Client::Handle_OP_CastSpell.
+/// to the admitted session. See `EQEmu`'s Titanium `CastSpell` decoder and
+/// `Client::Handle_OP_CastSpell`.
 ///
 /// # Errors
 /// Refuses an absent target.

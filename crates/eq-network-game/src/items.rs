@@ -420,7 +420,7 @@ mod tests {
         ] {
             let received = received_link(body, 42, "<Épée &PCT; 95%>");
             let formatted = chat_link(dialect, &received).unwrap();
-            assert_eq!(&formatted[1..1 + body.len()], body);
+            assert_eq!(&formatted[1..=body.len()], body);
             let message = OutboundChat::Tell {
                 recipient: "Recipient".into(),
                 message: format!("See {formatted} please"),

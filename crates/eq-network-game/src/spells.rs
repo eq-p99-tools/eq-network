@@ -51,7 +51,7 @@ pub enum BookActionStatus {
     Rejected(String),
 }
 
-/// Titanium CastSpell for a checked slot and a cast without an inventory item.
+/// Titanium `CastSpell` for a checked slot and a cast without an inventory item.
 pub(crate) fn titanium_cast(slot: u8, spell_id: u32, target: u16) -> EncodedCommand {
     let mut body = Vec::with_capacity(20);
     for word in [u32::from(slot), spell_id, u32::MAX, u32::from(target), 0] {
