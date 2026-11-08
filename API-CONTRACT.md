@@ -457,7 +457,7 @@ droppable instance and an unqueued cursor. A predicted move settled by silence
 leaves the drop unavailable until the server identifies the new cursor.
 Stock EQEmu's ordinary move to cursor saves the slot without a matching item
 packet, so a later received update or snapshot is needed.
-[EQEmu move and persistence](https://github.com/EQEmu/EQEmu/blob/4aceae18b94ffaafc08e2b17bc41cd72c77f795d/zone/inventory.cpp#L2049-L2077)
+[EQEmu move and persistence](https://github.com/EQEmu/EQEmu/blob/4aceae18b94ffaafc08e2b17bc41cd72c77f795d/zone/inventory.cpp#L2210-L2230)
 
 Titanium sends an empty `OP_GroundSpawn`. The server chooses the cursor item
 and position. A successful `InventoryAction` with
@@ -482,9 +482,12 @@ bound through slot-only reductions and complete cursor-only replacements,
 including a temporary resync token. It retains the heaviest candidate seen.
 An unreadable inventory update or a carried-slot change that can increase
 weight invalidates this proof. A host with unknown load can report only a
-landing cost established independently of load.
-[EQEmu cursor buffer](https://github.com/EQEmu/EQEmu/blob/4aceae18b94ffaafc08e2b17bc41cd72c77f795d/zone/inventory.cpp#L851-L862)
-[EQEmu weight calculation](https://github.com/EQEmu/EQEmu/blob/4aceae18b94ffaafc08e2b17bc41cd72c77f795d/zone/client_mods.cpp#L686-L749)
+landing cost established independently of load. A landing whose cost
+depends on an unknown load during the hold is not reported. That is more
+lenient than the official client, and the local-only EQEmu drop fence keeps
+it off public servers.
+[EQEmu cursor buffer](https://github.com/EQEmu/EQEmu/blob/4aceae18b94ffaafc08e2b17bc41cd72c77f795d/zone/inventory.cpp#L916-L957)
+[EQEmu weight calculation](https://github.com/EQEmu/EQEmu/blob/4aceae18b94ffaafc08e2b17bc41cd72c77f795d/zone/client_mods.cpp#L720-L784)
 
 Process received ground spawns and removals through the existing object
 owner. The spawn carries no cursor instance correlation, and pickup delivery

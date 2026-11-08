@@ -343,6 +343,8 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   cursor-only resync while the worker withdraws movement until recovery.
   Clean state accepts fresh movement inputs that meet the bound.
   Ground drops are restricted to local-only EQEmu pending live validation.
+  A landing whose cost depends on a load the hold cannot bound is not
+  reported, which the local-only fence keeps off public servers.
 - **Breaking:** Preserve the unanswered spell and cast source for a
   compatible own start after the local cast wait. Match the spell ID or
   stock TAKP's documented Luclin port rewrite. Unrelated own starts keep
