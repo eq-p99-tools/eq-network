@@ -7,7 +7,7 @@ use crate::{command::EncodedCommand, world::Position};
 use anyhow::{ensure, Result};
 use serde::Serialize;
 mod points;
-pub use points::{ZoneLineDestination, ZonePoint, ZonePoints};
+pub use points::{BoundaryRoute, ZoneLineDestination, ZonePoint, ZonePoints};
 
 /// `OP_ZoneChange`: the client's transfer request, and the server's answer.
 pub const CHANGE_OPCODE: u16 = 0x5dd8;
@@ -30,6 +30,18 @@ pub const DEPART_OPCODE: u16 = 0x55bc;
 pub const TITANIUM_UNAVAILABLE_OPCODE: u16 = 0x407c;
 /// `EQMac`'s `OP_ZoneUnavail`.
 pub const EQMAC_UNAVAILABLE_OPCODE: u16 = 0x0580;
+
+/// A received repositioning within the current zone admission. The server
+/// can issue this for a pad, spell, or scripted movement.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
+pub struct SameZoneRelocation {
+    /// Admission that supplied this server instruction.
+    pub session_id: u64,
+    /// The admitted player's spawn ID.
+    pub spawn_id: u16,
+    /// Absolute landing from the received move.
+    pub position: Position,
+}
 
 /// A pending destination selected by a server offer or local boundary.
 #[derive(Clone, Debug, PartialEq, Serialize)]

@@ -98,6 +98,137 @@ fn stack(slot: i32, count: u32) -> InventoryItem {
     item
 }
 
+fn open_p99_forge_with_current_cursor(features: &mut Features, world: &mut World) {
+    use eq_network_game::objects::{ContainerView, GroundObject};
+
+    let protocol = ServerProtocol::Project1999;
+    let server = servers::server_type(protocol);
+    let object = ObjectUpdate::Spawn(GroundObject {
+        drop_id: 71,
+        model: "FORGE_ACTORDEF".into(),
+        position: eq_network_game::world::Position::default(),
+        object_type: 0,
+    });
+    let reply = ObjectUpdate::Container(ContainerView {
+        player_id: 7,
+        drop_id: 71,
+        open: true,
+        object_type: 17,
+        icon: 1,
+        name: "Forge".into(),
+    });
+    testing::run_on(server.wire(), |out| {
+        hear(
+            vec![Message::Event(WorldEvent::Objects(object))],
+            features,
+            world,
+            out,
+            true,
+        )
+    })
+    .result
+    .unwrap();
+    let open = || ClientCommand::OpenContainer {
+        session_id: 5,
+        drop_id: 71,
+        created: Instant::now(),
+    };
+    let stash = command(world, 30, 23, MoveQuantity::Whole);
+    let moved = submit(protocol, features, world, &stash);
+    assert!(moved.result.unwrap());
+    assert_eq!(moved.sent.len(), 1);
+    observe(protocol, features, world, InventoryUpdate::Settled);
+    assert!(!world.inventory.predicted());
+    assert!(!world.inventory.custody_known(InventorySlot::CURSOR));
+    let denied = submit(protocol, features, world, &open());
+    assert!(denied.result.unwrap());
+    assert_eq!(denied.sent, []);
+    observe(
+        protocol,
+        features,
+        world,
+        InventoryUpdate::Remove(InventorySlot::CURSOR),
+    );
+    let opened = submit(protocol, features, world, &open());
+    assert!(opened.result.unwrap());
+    assert_eq!(opened.sent.len(), 1);
+    testing::run_on(server.wire(), |out| {
+        hear(
+            vec![Message::Event(WorldEvent::Objects(reply))],
+            features,
+            world,
+            out,
+            true,
+        )
+    })
+    .result
+    .unwrap();
+    assert!(world.container.is_open());
+}
+
+#[test]
+fn p99_forge_moves_require_single_whole_places_and_current_empty_withdrawal_cursor() {
+    use eq_network_game::money::Wallet;
+
+    let protocol = ServerProtocol::Project1999;
+    let (mut features, mut world) = setup(protocol, vec![stack(30, 1)]);
+    open_p99_forge_with_current_cursor(&mut features, &mut world);
+    let place = |world: &World, quantity| command(world, 30, 4000, quantity);
+    let count_one = MoveQuantity::Count(NonZeroU32::new(1).unwrap());
+    for (count, quantity) in [(2, MoveQuantity::Whole), (2, count_one), (1, count_one)] {
+        observe(
+            protocol,
+            &mut features,
+            &mut world,
+            InventoryUpdate::Set(vec![stack(30, count)]),
+        );
+        let placement = place(&world, quantity);
+        let denied = submit(protocol, &mut features, &mut world, &placement);
+        assert!(denied.result.unwrap());
+        assert_eq!(denied.sent, []);
+        assert!(!world.inventory.items().contains_key(&InventorySlot(4000)));
+    }
+    let placement = place(&world, MoveQuantity::Whole);
+    let placed = submit(protocol, &mut features, &mut world, &placement);
+    assert!(placed.result.unwrap());
+    assert_eq!(placed.sent.len(), 1);
+    assert!(world.inventory.station_moves_unconfirmed());
+
+    let withdraw = |world: &World| command(world, 4000, 30, MoveQuantity::Whole);
+    let withdrawal = withdraw(&world);
+    let denied = submit(protocol, &mut features, &mut world, &withdrawal);
+    assert!(denied.result.unwrap());
+    assert_eq!(denied.sent, []);
+    observe(
+        protocol,
+        &mut features,
+        &mut world,
+        InventoryUpdate::Remove(InventorySlot::CURSOR),
+    );
+    world.coins = Wallet {
+        cursor: Coins {
+            copper: 1,
+            ..Coins::default()
+        },
+        ..Wallet::default()
+    }
+    .into();
+    let withdrawal = withdraw(&world);
+    let denied = submit(protocol, &mut features, &mut world, &withdrawal);
+    assert!(denied.result.unwrap());
+    assert_eq!(denied.sent, []);
+    world.coins = Wallet::default().into();
+    // A forge withdrawal goes whole to the empty cursor, never into a pack slot.
+    let elsewhere = command(&world, 4000, 22, MoveQuantity::Whole);
+    let denied = submit(protocol, &mut features, &mut world, &elsewhere);
+    assert!(denied.result.unwrap());
+    assert_eq!(denied.sent, []);
+    let withdrawal = withdraw(&world);
+    let withdrawn = submit(protocol, &mut features, &mut world, &withdrawal);
+    assert!(withdrawn.result.unwrap());
+    assert_eq!(withdrawn.sent.len(), 1);
+}
+
 #[test]
 fn an_equip_invalidates_a_liquid_sample_at_the_same_position() {
     use crate::client::ClientConfig;

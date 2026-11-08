@@ -9,6 +9,7 @@
 use super::{casting, ClientCommand, ClientEvent, Events};
 use anyhow::Result;
 use eq_network_game::{
+    abilities::Ability,
     inventory::InventorySlot,
     spells::BookActionStatus,
     world::{CampStatus, WorldEvent},
@@ -92,10 +93,16 @@ impl Held {
 pub(super) fn needs(command: &ClientCommand) -> &'static [Resource] {
     use Resource::{Casting, GroundPickup, Inventory, Spellbook};
     match command {
-        ClientCommand::CastSpell { .. } => &[Casting],
+        ClientCommand::CastSpell { .. }
+        | ClientCommand::UseKnightAbility { .. }
+        | ClientCommand::UseDiscipline { .. } => &[Casting],
         // `EQEmu` ignores a strike during a cast; bards may strike while they
         // sing, but the session cannot tell songs apart, so they wait too.
-        ClientCommand::UseAbility { ability, .. } if ability.strikes() => &[Casting],
+        ClientCommand::UseAbility { ability, .. } => match ability {
+            Ability::BindWound => &[Casting, Inventory],
+            ability if ability.strikes() => &[Casting],
+            _ => &[],
+        },
         ClientCommand::UseItem(_) | ClientCommand::RangedAttack(_) => &[Casting, Inventory],
         ClientCommand::ScribeSpell { .. } => &[Casting, Spellbook, Inventory],
         ClientCommand::MemorizeSpell { .. }
@@ -158,7 +165,6 @@ pub(super) fn needs(command: &ClientCommand) -> &'static [Resource] {
         | ClientCommand::DropInvisibility { .. }
         | ClientCommand::StopSong { .. }
         | ClientCommand::AutoAttack { .. }
-        | ClientCommand::UseAbility { .. }
         | ClientCommand::SelectTarget { .. }
         | ClientCommand::WhoAll { .. }
         | ClientCommand::Pet { .. }
@@ -267,7 +273,11 @@ fn refusal(command: &ClientCommand, reason: &str) -> Option<WorldEvent> {
             progress: eq_network_game::deletion::Progress::NotSent(eq_network_game::deletion::Refusal::NotAtSelection),
         }),
         ClientCommand::CancelBuff(request) => WorldEvent::BuffCancellation(request.update(eq_network_game::buffs::cancel::Progress::Refused(reason.into()))),
-        ClientCommand::CastSpell { .. } => return casting::rejected(command, reason),
+        ClientCommand::CastSpell { .. }
+        | ClientCommand::UseKnightAbility { .. }
+        | ClientCommand::UseDiscipline { .. } => {
+            return casting::rejected(command, reason);
+        }
         ClientCommand::Consider { .. }
         | ClientCommand::AutoAttack { .. }
         | ClientCommand::RangedAttack(_) => {

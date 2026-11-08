@@ -12,6 +12,7 @@ use super::coverage::{Stage, Unheard};
 use crate::client::PlayerAdmissionError;
 use eq_network_game::{
     message::{Message, Part},
+    objects::ObjectUpdate,
     world::{Capability, WorldEvent},
 };
 use eq_network_transport::Transport;
@@ -659,6 +660,14 @@ fn hear(
     let mut news = 0;
     while let Some(mut message) = queue.pop_front() {
         features.explain(&mut message, world);
+        let own_open = match &message {
+            Message::Event(WorldEvent::Objects(ObjectUpdate::Container(view)))
+                if view.open && world.is_player(view.player_id) =>
+            {
+                Some(world.container.expects(view.drop_id))
+            }
+            _ => None,
+        };
         if let Message::Unreadable { part, error } = &message {
             out.log.diagnostic(format!("{part} rejected: {error}"))?;
         }
@@ -682,7 +691,16 @@ fn hear(
         );
         // Before the admission, the features staged what they need of it.
         if let (Message::Event(event), true) = (message, world.ready()) {
-            out.log.send(ClientEvent::World(event))?;
+            // Own opens are shown only when this reply granted the current lease.
+            let publish = match (&event, own_open) {
+                (WorldEvent::Objects(ObjectUpdate::Container(view)), Some(asked)) => {
+                    asked && world.container.opened(view)
+                }
+                _ => true,
+            };
+            if publish {
+                out.log.send(ClientEvent::World(event))?;
+            }
         }
         let made = world.take_news();
         news += made.len();
@@ -850,7 +868,7 @@ mod tests {
     };
 
     /// How many kinds of command there are.
-    const KINDS: usize = 87;
+    const KINDS: usize = 89;
 
     /// The kinds the login and world servers take, before any zone session.
     const BEFORE_ZONES: [usize; 4] = [0, 1, 70, 75];
@@ -874,6 +892,8 @@ mod tests {
             ClientCommand::ForgetSpell { .. } => 9,
             ClientCommand::MemorizeSpell { .. } => 10,
             ClientCommand::CastSpell { .. } => 11,
+            ClientCommand::UseKnightAbility { .. } => 87,
+            ClientCommand::UseDiscipline { .. } => 88,
             ClientCommand::CancelBuff(_) => 81,
             ClientCommand::RangedAttack(_) => 82,
             ClientCommand::StopSong { .. } => 83,
@@ -1039,6 +1059,21 @@ mod tests {
                 session_id,
                 gem: 0,
                 spell_id: 202,
+                created,
+            },
+            ClientCommand::UseDiscipline {
+                session_id,
+                discipline: eq_network_game::disciplines::Discipline::Evasive,
+                created,
+            },
+            ClientCommand::UseKnightAbility {
+                session_id,
+                ability: eq_network_game::knights::KnightAbility::HarmTouch,
+                target: eq_network_game::targets::TargetState {
+                    revision: 1,
+                    spawn_id: Some(7),
+                    available: true,
+                },
                 created,
             },
             ClientCommand::CastSpell {
@@ -1380,7 +1415,11 @@ mod tests {
                 drop_id: 9,
                 created,
             },
-            ClientCommand::CloseContainer { session_id },
+            ClientCommand::CloseContainer {
+                session_id,
+                drop_id: 5,
+                created,
+            },
             ClientCommand::EnvironmentalDamage {
                 session_id,
                 hazard: eq_network_game::hazards::Hazard::Falling,
@@ -2596,28 +2635,17 @@ mod tests {
         }
         assert!(p99.contains(&Capability::Falling));
         assert!(p99.contains(&Capability::Jumping));
-        assert!(p99.contains(&Capability::Reading));
         assert!(!p99.contains(&Capability::GroundDropping));
-        assert!(!p99.contains(&Capability::Training));
         let eqemu = features(crate::client::ServerProtocol::EqEmu).capabilities();
         assert!(!eqemu.contains(&Capability::GroundDropping));
         assert!(eqemu.contains(&Capability::Falling));
-        assert!(eqemu.contains(&Capability::Training));
-        assert!(eqemu.contains(&Capability::Resurrection));
-        assert!(eqemu.contains(&Capability::Reading));
-        assert!(eqemu.contains(&Capability::Tradeskills));
-        assert!(p99.contains(&Capability::Tradeskills));
         assert!(eqemu.contains(&Capability::WorldContainers));
-        assert!(!p99.contains(&Capability::WorldContainers));
+        assert!(p99.contains(&Capability::WorldContainers));
         assert!(eqemu.contains(&Capability::Map));
         assert!(eqemu.contains(&Capability::DeletingSpells));
-        assert!(eqemu.contains(&Capability::MovingSpells));
         assert!(!p99.contains(&Capability::DeletingSpells));
-        assert!(p99.contains(&Capability::MovingSpells));
         assert!(eqemu.contains(&Capability::MerchantOffers));
         assert!(!p99.contains(&Capability::MerchantOffers));
-        assert!(eqemu.contains(&Capability::Grouping));
-        assert!(p99.contains(&Capability::Grouping));
         assert!(eqemu.contains(&Capability::Listing));
         assert!(!p99.contains(&Capability::Listing));
         for capability in [
@@ -2626,14 +2654,28 @@ mod tests {
             Capability::Assisting,
             Capability::Raiding,
             Capability::Sacrifice,
-            Capability::Translocate,
             Capability::ServerTicks,
             Capability::ShowingHelm,
-            Capability::CancellingBuffs,
             Capability::StoppingSongs,
         ] {
             assert!(eqemu.contains(&capability));
             assert!(!p99.contains(&capability));
+        }
+        for capability in [
+            Capability::Training,
+            Capability::Resurrection,
+            Capability::Translocate,
+            Capability::CancellingBuffs,
+            Capability::KnightAbilities,
+            Capability::UsingDisciplines,
+            Capability::Reading,
+            Capability::Tradeskills,
+            Capability::MovingSpells,
+            Capability::Grouping,
+            Capability::GameplayDepartures,
+        ] {
+            assert!(p99.contains(&capability), "{capability:?}");
+            assert!(eqemu.contains(&capability), "{capability:?}");
         }
         assert!(p99.contains(&Capability::EnvironmentalDamage));
         let mut setup = servers::Setup::new("Tester", eq_network_game::food::AutoEat::default());
@@ -2651,11 +2693,10 @@ mod tests {
         }
         assert!(p99.contains(&Capability::AnsweringListPolls));
         assert!(!eqemu.contains(&Capability::AnsweringListPolls));
-        assert!(eqemu.contains(&Capability::GameplayDepartures));
-        assert!(p99.contains(&Capability::GameplayDepartures));
         assert!(eqemu.contains(&Capability::Swimming));
         assert!(!p99.contains(&Capability::Swimming));
-        assert_eq!(eqemu.len(), p99.len() + 17);
+        // Both policies now offer world containers, leaving a difference of 12.
+        assert_eq!(eqemu.len(), p99.len() + 12);
     }
 
     #[test]
@@ -3038,3 +3079,9 @@ mod stun_tests;
 
 #[cfg(test)]
 mod buff_tests;
+
+#[cfg(test)]
+mod progression_tests;
+
+#[cfg(test)]
+mod discipline_tests;

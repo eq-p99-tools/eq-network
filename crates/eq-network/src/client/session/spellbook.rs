@@ -367,6 +367,8 @@ impl Feature for Spellbook {
             command,
             ClientCommand::Move(_)
                 | ClientCommand::CastSpell { .. }
+                | ClientCommand::UseKnightAbility { .. }
+                | ClientCommand::UseDiscipline { .. }
                 | ClientCommand::UseItem(_)
                 | ClientCommand::SetPosture { .. }
         ) {

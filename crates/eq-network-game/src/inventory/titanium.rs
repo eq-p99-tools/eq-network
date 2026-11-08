@@ -48,10 +48,17 @@ pub fn decode(opcode: u16, body: &[u8]) -> Result<Option<InventoryUpdate>> {
             }
             Ok(Some(InventoryUpdate::Set(items)))
         }
-        // `OP_ClearObject`: the open world container emptied.
+        // `OP_ClearObject`: a nonzero flag clears the whole container;
+        // zero clears the addressed place in the open container.
         0x21ed => {
             ensure!(body.len() == 8, "invalid world container clear length");
-            Ok(Some(InventoryUpdate::WorldEmptied))
+            if body[0] != 0 {
+                Ok(Some(InventoryUpdate::WorldEmptied))
+            } else {
+                let index = i32::from_le_bytes(body[4..8].try_into()?);
+                ensure!((0..=9).contains(&index), "invalid world container place");
+                Ok(Some(InventoryUpdate::Remove(InventorySlot(4000 + index))))
+            }
         }
         0x420f | 0x4d81 | 0x1c4a => {
             ensure!(body.len() == 12, "invalid inventory mutation length");
@@ -167,6 +174,7 @@ impl<'a> Parser<'a> {
             && header[9] == "0")
             .then(|| header[6].parse().ok())
             .flatten();
+        let item_index = self.items.len();
         self.items.push(InventoryItem {
             activation: super::ItemActivation::decode(&fields, header[7])?,
             scroll_spell: {
@@ -177,6 +185,7 @@ impl<'a> Parser<'a> {
             },
             book: crate::books::Book::from_titanium_item(fields[0], fields[100], fields[102])?,
             rules: ItemPlacement {
+                titanium_link_hash: None,
                 ground_drop_serial,
                 eqmac: None,
                 stack_size: number(131)?,
@@ -210,6 +219,9 @@ impl<'a> Parser<'a> {
         } else {
             self.take("\0")?;
         }
+        let empty_children = self.items.len() == item_index + 1;
+        self.items[item_index].rules.titanium_link_hash =
+            crate::items::owned::hash(&header, &fields, empty_children);
         Ok(())
     }
 }

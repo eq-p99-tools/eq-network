@@ -120,6 +120,10 @@ pub enum GameCommand {
     CloseContainer {
         /// Current zone admission.
         session_id: u64,
+        /// The open object's ID.
+        drop_id: u32,
+        /// Host intent time, scoped to the current open of this object.
+        created: std::time::Instant,
     },
     /// Request a transfer after entering a boundary in the local zone assets.
     CrossZoneLine {
@@ -733,6 +737,26 @@ pub enum GameCommand {
     },
     /// Fire or throw once with the current ranged loadout.
     RangedAttack(crate::combat::ranged::RangedAttack),
+    /// Use one supported self-targeted Warrior discipline.
+    UseDiscipline {
+        /// Admission where the player selected the discipline.
+        session_id: u64,
+        /// The bounded discipline to use.
+        discipline: crate::disciplines::Discipline,
+        /// When the player requested it.
+        created: std::time::Instant,
+    },
+    /// Cast a Paladin or Shadow Knight class ability at the selected target.
+    UseKnightAbility {
+        /// Admission in which the ability was chosen.
+        session_id: u64,
+        /// Which class ability was selected.
+        ability: crate::knights::KnightAbility,
+        /// The settled target selection, including an explicit self target.
+        target: crate::targets::TargetState,
+        /// When the player requested the action.
+        created: std::time::Instant,
+    },
     /// Select or clear a target in the current zone session, without attacking.
     SelectTarget {
         /// Connection identifier supplied by zone admission.
@@ -844,6 +868,8 @@ impl GameCommand {
             Self::SetBookOptions { .. } => "SetBookOptions",
             Self::ExitAtOnce { .. } => "ExitAtOnce",
             Self::UseAbility { .. } => "UseAbility",
+            Self::UseKnightAbility { .. } => "UseKnightAbility",
+            Self::UseDiscipline { .. } => "UseDiscipline",
             Self::Consent { .. } => "Consent",
             Self::SummonCorpse { .. } => "SummonCorpse",
             Self::DragCorpse { .. } => "DragCorpse",
@@ -907,7 +933,7 @@ impl GameCommand {
             | Self::ClickDoor { session_id, .. }
             | Self::PickUp { session_id, .. }
             | Self::OpenContainer { session_id, .. }
-            | Self::CloseContainer { session_id }
+            | Self::CloseContainer { session_id, .. }
             | Self::CrossZoneLine { session_id, .. }
             | Self::ScribeSpell { session_id, .. }
             | Self::DeleteSpell { session_id, .. }
@@ -940,6 +966,8 @@ impl GameCommand {
             | Self::SetBookOptions { session_id, .. }
             | Self::ExitAtOnce { session_id, .. }
             | Self::UseAbility { session_id, .. }
+            | Self::UseKnightAbility { session_id, .. }
+            | Self::UseDiscipline { session_id, .. }
             | Self::WhoAll { session_id, .. }
             | Self::Pet { session_id, .. }
             | Self::Training { session_id, .. }
@@ -1052,6 +1080,8 @@ impl GameCommand {
             }
             Self::SelectTarget { .. } => Capability::Targeting,
             Self::UseAbility { .. } => Capability::Abilities,
+            Self::UseKnightAbility { .. } => Capability::KnightAbilities,
+            Self::UseDiscipline { .. } => Capability::UsingDisciplines,
             Self::WhoAll { .. } => Capability::Who,
             Self::Pet { .. } => Capability::Pets,
             Self::Training { .. } => Capability::Training,
@@ -1133,7 +1163,6 @@ impl GameCommand {
             | Self::RaidMove { .. }
             | Self::RaidMakeLeader { .. }
             | Self::RaidRemove { .. }
-            | Self::CloseContainer { .. }
             | Self::Consent { .. }
             | Self::SummonCorpse { .. }
             | Self::DragCorpse { .. }
@@ -1150,6 +1179,7 @@ impl GameCommand {
             | Self::ClickDoor { created, .. }
             | Self::PickUp { created, .. }
             | Self::OpenContainer { created, .. }
+            | Self::CloseContainer { created, .. }
             | Self::CrossZoneLine { created, .. }
             | Self::ScribeSpell { created, .. }
             | Self::DeleteSpell { created, .. }
@@ -1175,6 +1205,8 @@ impl GameCommand {
             | Self::AutoAttack { created, .. }
             | Self::Consume { created, .. }
             | Self::UseAbility { created, .. }
+            | Self::UseKnightAbility { created, .. }
+            | Self::UseDiscipline { created, .. }
             | Self::Pet { created, .. }
             | Self::Training { created, .. }
             | Self::ReadItem { created, .. }
@@ -1210,16 +1242,7 @@ fn encode_cast(
         "invalid spell cast"
     );
     match dialect {
-        GameDialect::Titanium => {
-            let mut body = Vec::with_capacity(20);
-            for value in [u32::from(gem), spell_id, u32::MAX, u32::from(target_id), 0] {
-                body.extend_from_slice(&value.to_le_bytes());
-            }
-            Ok(EncodedCommand {
-                opcode: 0x304b,
-                body,
-            })
-        }
+        GameDialect::Titanium => Ok(crate::spells::titanium_cast(gem, spell_id, target_id)),
         GameDialect::EqMac => crate::spells::eqmac_cast(gem, spell_id, target_id),
     }
 }
@@ -1380,6 +1403,8 @@ pub fn encode(
         | GameCommand::SetBookOptions { .. }
         | GameCommand::ExitAtOnce { .. }
         | GameCommand::UseAbility { .. }
+        | GameCommand::UseKnightAbility { .. }
+        | GameCommand::UseDiscipline { .. }
         | GameCommand::WhoAll { .. }
         | GameCommand::Pet { .. }
         | GameCommand::Training { .. }

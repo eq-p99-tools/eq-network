@@ -36,6 +36,16 @@ pub enum ZoneLineDestination {
     },
 }
 
+/// What crossing a zone boundary can ask of the session.
+#[derive(Clone, Debug, PartialEq)]
+pub enum BoundaryRoute {
+    /// A normal zone or instance transfer.
+    Transfer(ZoneOffer),
+    /// The WLD boundary resolves to this admission. Any landing must come
+    /// from the server; a destination entry is not a relocation instruction.
+    SameZone,
+}
+
 impl ZonePoints {
     /// Decodes the counted Titanium table, accepting its optional unused final record.
     ///
@@ -105,6 +115,25 @@ impl ZonePoints {
         current_zone: u16,
         current_instance: u16,
     ) -> Result<ZoneOffer> {
+        match self.crossing(destination, current, (current_zone, current_instance))? {
+            BoundaryRoute::Transfer(offer) => Ok(offer),
+            BoundaryRoute::SameZone => {
+                anyhow::bail!("same-zone boundary needs a server relocation")
+            }
+        }
+    }
+
+    /// Classify a boundary without returning client-controlled coordinates
+    /// for a local jump. Current zone and instance must both match.
+    ///
+    /// # Errors
+    /// Rejects unknown references and invalid coordinates.
+    pub fn crossing(
+        &self,
+        destination: &ZoneLineDestination,
+        current: Position,
+        zone: (u16, u16),
+    ) -> Result<BoundaryRoute> {
         let request = match destination {
             ZoneLineDestination::Reference(number) => self
                 .get(*number)
@@ -121,11 +150,11 @@ impl ZonePoints {
                 .request(current)?
             }
         };
-        ensure!(
-            request.zone_id != current_zone || request.instance_id != current_instance,
-            "same-zone teleports are not implemented"
-        );
-        Ok(request)
+        Ok(if (request.zone_id, request.instance_id) == zone {
+            BoundaryRoute::SameZone
+        } else {
+            BoundaryRoute::Transfer(request)
+        })
     }
 }
 
@@ -140,24 +169,30 @@ impl ZonePoint {
             finite(current) && finite(self.destination),
             "invalid zone-line position"
         );
-        let preserve = |target, source| if target == 999_999.0 { source } else { target };
         Ok(ZoneOffer {
             solicited: false,
             zone_id: self.zone_id,
             instance_id: self.instance_id,
-            position: Position {
-                x: preserve(self.destination.x, current.x),
-                y: preserve(self.destination.y, current.y),
-                z: preserve(self.destination.z, current.z),
-                heading: if self.destination.heading == 999.0 {
-                    current.heading
-                } else {
-                    self.destination.heading
-                },
-            },
+            position: preserve_axes(self.destination, current),
             reason: 0,
             to_bind: false,
         })
+    }
+}
+
+/// Resolve the preserve sentinels of a zone-point destination.
+#[allow(clippy::float_cmp)] // Exact protocol sentinels.
+fn preserve_axes(destination: Position, current: Position) -> Position {
+    let preserve = |target, source| if target == 999_999.0 { source } else { target };
+    Position {
+        x: preserve(destination.x, current.x),
+        y: preserve(destination.y, current.y),
+        z: preserve(destination.z, current.z),
+        heading: if destination.heading == 999.0 {
+            current.heading
+        } else {
+            destination.heading
+        },
     }
 }
 
@@ -234,6 +269,18 @@ mod tests {
         assert!(table
             .request(&ZoneLineDestination::Reference(7), current, 42, 3)
             .is_err());
+        assert_eq!(
+            table
+                .crossing(&ZoneLineDestination::Reference(7), current, (42, 3))
+                .unwrap(),
+            BoundaryRoute::SameZone,
+        );
+        assert!(matches!(
+            table
+                .crossing(&ZoneLineDestination::Reference(7), current, (42, 0))
+                .unwrap(),
+            BoundaryRoute::Transfer(_)
+        ));
         let destination = ZoneLineDestination::Absolute {
             zone_id: 42,
             position: Position {

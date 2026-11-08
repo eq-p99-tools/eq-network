@@ -63,6 +63,8 @@ pub mod hazards;
 pub mod inventory;
 /// Read-only item inspection requests and definitions.
 pub mod items;
+/// Titanium Paladin and Shadow Knight class abilities.
+pub mod knights;
 pub mod list_poll;
 /// How `/who` lists a player: guild and rank, anonymity and flags, and guild
 /// names.

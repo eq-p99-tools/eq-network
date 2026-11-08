@@ -46,6 +46,17 @@ pub struct GroundObject {
 }
 
 impl GroundObject {
+    /// Whether this received object is a candidate for an ordinary forge click.
+    /// A legacy type-zero actor name identifies a candidate only. The open
+    /// reply must supply the actual bag type before it can take ingredients.
+    #[must_use]
+    pub fn is_forge_candidate(&self) -> bool {
+        self.object_type == u32::from(crate::tradeskills::FORGE)
+            || (self.object_type == 0
+                && (self.model.eq_ignore_ascii_case("FORGE")
+                    || self.model.eq_ignore_ascii_case("FORGE_ACTORDEF")))
+    }
+
     /// Whether this is a world container to combine in, such as a forge or
     /// an oven: a fixture of a tradeskill container's type.
     #[must_use]

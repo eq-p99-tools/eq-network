@@ -7,6 +7,12 @@ future movement, zoning, inventory, and character actions.
 
 The crate does not open sockets or retain credentials.
 
+Hosts can compose an outbound item link with `items::chat_link` and insert
+the returned span into the text of an ordinary `OutboundChat` message. Use a
+received item link from the same dialect and session. The link's original
+body carries the item identity and any hash. An inventory ID alone cannot
+supply those fields.
+
 ## Crate family
 
 | Crate | Role |

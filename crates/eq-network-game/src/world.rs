@@ -582,12 +582,16 @@ pub enum Capability {
     LavaHeat,
     /// Put one verified ordinary Titanium cursor item on the ground.
     GroundDropping,
+    /// Titanium's Lay on Hands and Harm Touch.
+    KnightAbilities,
+    /// Use the supported Titanium Warrior disciplines.
+    UsingDisciplines,
 }
 
 impl Capability {
     /// Every capability, in order: what a session offers when its server and
     /// client generation support everything.
-    pub const ALL: [Self; 53] = [
+    pub const ALL: [Self; 55] = [
         Self::Casting,
         Self::Spellbook,
         Self::Inventory,
@@ -641,6 +645,8 @@ impl Capability {
         Self::Drowning,
         Self::LavaHeat,
         Self::GroundDropping,
+        Self::KnightAbilities,
+        Self::UsingDisciplines,
     ];
 }
 
@@ -804,6 +810,14 @@ pub enum WorldEvent {
         /// Credential-free reason for the rejection.
         reason: String,
     },
+    /// A local-only `EQEmu` boundary is staying in this admission. Ordinary
+    /// movement may continue. No landing has been received.
+    SameZoneBoundary {
+        /// Admission that submitted the crossing.
+        session_id: u64,
+    },
+    /// Received movement within this exact zone admission.
+    SameZoneRelocated(crate::zoning::SameZoneRelocation),
     /// Complete indexed spellbook for the current admission.
     SpellBook(crate::spells::SpellBook),
     /// Local progress of a spellbook request, separate from server confirmation.
@@ -1657,11 +1671,26 @@ pub enum WorldEvent {
     /// zone-in of timers 11 to 19 carry its other reuse timers
     /// ([`crate::disciplines`]).
     DisciplineReuse(crate::disciplines::Reuse),
+    /// Received ability-slot reuse from the admitted knight's profile.
+    KnightReuse {
+        /// Admission that supplied the profile.
+        session_id: u64,
+        /// Remaining time received, including an explicit zero.
+        remaining: std::time::Duration,
+    },
     /// A reuse timer a group of spells shares, as the server set it.
     LinkedReuse(crate::disciplines::Reuse),
     /// `EQMac`'s servers: the discipline the player began, by the servers'
     /// number for it, or none as it ends.
     Discipline(Option<u8>),
+    /// Discipline state observed before admission and published separately
+    /// from the general buff-slot snapshot.
+    DisciplineAdmission {
+        /// Admission that owns the observation.
+        session_id: u64,
+        /// Received active state as of admission.
+        state: crate::disciplines::Active,
+    },
 }
 
 /// A profile heading on the 0..512 scale live movement uses. Project 1999 saves
@@ -2195,6 +2224,8 @@ mod tests {
             Capability::Drowning => 50,
             Capability::LavaHeat => 51,
             Capability::GroundDropping => 52,
+            Capability::KnightAbilities => 53,
+            Capability::UsingDisciplines => 54,
         };
         for (index, capability) in Capability::ALL.into_iter().enumerate() {
             assert_eq!(place(capability), index, "{capability:?}");

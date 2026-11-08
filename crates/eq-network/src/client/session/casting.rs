@@ -15,6 +15,10 @@ use eq_network_game::{
 };
 use std::time::{Duration, Instant};
 
+mod disciplines;
+mod knights;
+use eq_network_game::knights::KnightAbility;
+
 /// Local retry policy, not a protocol timeout. Never resends a request automatically.
 const ACK_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -24,17 +28,27 @@ const SONG_STOP_WAIT: Duration = Duration::from_secs(1);
 
 /// Reports only cast rejections, preserving the caller's admission for host filtering.
 pub(super) fn rejected(command: &ClientCommand, reason: &str) -> Option<crate::world::WorldEvent> {
-    let ClientCommand::CastSpell {
-        session_id,
-        spell_id,
-        ..
-    } = command
-    else {
-        return None;
+    let (session_id, spell_id) = match *command {
+        ClientCommand::CastSpell {
+            session_id,
+            spell_id,
+            ..
+        } => (session_id, spell_id),
+        ClientCommand::UseKnightAbility {
+            session_id,
+            ability,
+            ..
+        } => (session_id, ability.spell()),
+        ClientCommand::UseDiscipline {
+            session_id,
+            discipline,
+            ..
+        } => (session_id, discipline.spell()),
+        _ => return None,
     };
     Some(crate::world::WorldEvent::CastRejected {
-        session_id: *session_id,
-        spell_id: *spell_id,
+        session_id,
+        spell_id,
         reason: reason.into(),
     })
 }
@@ -57,15 +71,28 @@ enum Phase {
 pub(super) enum Source {
     Gem(u8),
     Item,
+    Knight(KnightAbility),
+    Discipline,
 }
 
 impl Source {
+    /// Match a different server spell ID only for the knight request that
+    /// can receive that rank.
+    fn matches_rank(source: Option<Self>, spell: u32) -> bool {
+        matches!(source, Some(Self::Knight(ability)) if ability.matches_spell(spell))
+    }
+
     fn accepts_refresh(source: Option<Self>, slot: u32) -> bool {
-        source.is_none_or(|source| {
-            slot == match source {
-                Self::Gem(gem) => u32::from(gem),
-                Self::Item => u32::from(ITEM_CAST_SLOT),
+        source.is_none_or(|source| match source {
+            Self::Gem(gem) => slot == u32::from(gem),
+            Self::Item => slot == u32::from(ITEM_CAST_SLOT),
+            // EQEmu's ServerToTitaniumCastingSlot falls back to the
+            // discipline slot for its internal Ability slot.
+            Self::Knight(_) => {
+                slot == u32::from(eq_network_game::knights::CAST_SLOT)
+                    || slot == u32::from(eq_network_game::disciplines::CAST_SLOT)
             }
+            Self::Discipline => slot == u32::from(eq_network_game::disciplines::CAST_SLOT),
         })
     }
 }
@@ -167,7 +194,9 @@ impl CastGuard {
     /// requested, or the one the server began.
     fn answers(&self, spell_id: u32) -> bool {
         match self.phase {
-            Some(Phase::Awaiting { spell, .. }) => spell == spell_id,
+            Some(Phase::Awaiting { spell, .. }) => {
+                spell == spell_id || Source::matches_rank(self.source, spell_id)
+            }
             Some(Phase::Casting { spell, requested }) => {
                 spell == spell_id || requested == Some(spell_id)
             }
@@ -191,6 +220,7 @@ impl CastGuard {
 
     fn matches_late_begin(&self, requested: u32, received: u32) -> bool {
         requested == received
+            || self.unconfirmed.is_some_and(|(_, source)| Source::matches_rank(source, received))
             // EQMacEmu Mob::DoCastSpell reports IsLuclinPortSpell as 2935.
             // An exact 2935 request is handled by the first comparison.
             || (self.luclin_port_begins && received == 2935 && matches!(requested, 2062 | 2706..=2709))
@@ -253,7 +283,9 @@ impl CastGuard {
                 if self.answers(spell_id) {
                     self.release();
                 }
-                if self.unconfirmed.is_some_and(|(spell, _)| spell == spell_id) {
+                if self.unconfirmed.is_some_and(|(spell, source)| {
+                    spell == spell_id || Source::matches_rank(source, spell_id)
+                }) {
                     self.unconfirmed = None;
                 }
             }
@@ -262,7 +294,8 @@ impl CastGuard {
                     self.release();
                 }
                 if self.unconfirmed.is_some_and(|(spell, source)| {
-                    spell == spell_id && Source::accepts_refresh(source, slot)
+                    (spell == spell_id || Source::matches_rank(source, spell_id))
+                        && Source::accepts_refresh(source, slot)
                 }) {
                     self.unconfirmed = None;
                 }
@@ -278,6 +311,9 @@ impl CastGuard {
 pub(super) struct Casting {
     guard: CastGuard,
     song_stop: bool,
+    knights: Option<knights::Reuse>,
+    disciplines: disciplines::DisciplineState,
+    use_disciplines: bool,
 }
 
 const BARD_CLASS: u32 = 8;
@@ -288,6 +324,18 @@ impl Casting {
             song_stop: true,
             ..Self::default()
         }
+    }
+
+    /// Titanium policies with the class ability casting slot.
+    pub(super) fn with_titanium_combat(song_stop: bool) -> Self {
+        let mut casting = if song_stop {
+            Self::with_song_stop()
+        } else {
+            Self::default()
+        };
+        casting.knights = Some(knights::Reuse::default());
+        casting.use_disciplines = true;
+        casting
     }
 
     /// Stock `EQMacEmu` rewrites the received start of selected Luclin ports.
@@ -432,11 +480,17 @@ impl Casting {
 impl Feature for Casting {
     fn capabilities(&self) -> Vec<crate::world::Capability> {
         use crate::world::Capability;
+        let mut offered = vec![Capability::Casting];
         if self.song_stop {
-            vec![Capability::Casting, Capability::StoppingSongs]
-        } else {
-            vec![Capability::Casting]
+            offered.push(Capability::StoppingSongs);
         }
+        if self.knights.is_some() {
+            offered.push(Capability::KnightAbilities);
+        }
+        if self.use_disciplines {
+            offered.push(Capability::UsingDisciplines);
+        }
+        offered
     }
 
     fn holds(&self, _world: &World, _now: Instant) -> Vec<(Resource, &'static str)> {
@@ -450,7 +504,33 @@ impl Feature for Casting {
                 | ClientCommand::UseItem(_)
                 | ClientCommand::DropInvisibility { .. }
                 | ClientCommand::StopSong { .. }
+                | ClientCommand::UseKnightAbility { .. }
+                | ClientCommand::UseDiscipline { .. }
         )
+    }
+
+    fn admit(&mut self, message: &Message, world: &mut World) -> Result<()> {
+        let now = Instant::now();
+        if let (Some(reuse), Message::KnightRefresh(remaining)) = (&mut self.knights, message) {
+            reuse.received(*remaining, now);
+        }
+        let own = self
+            .use_disciplines
+            .then(|| {
+                world
+                    .player
+                    .as_ref()
+                    .map(|player| player.spawn_id)
+                    .or(world.own_spawn)
+            })
+            .flatten();
+        self.disciplines.observe(message, own, now, !world.ready());
+        Ok(())
+    }
+
+    fn admitted(&mut self, world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
+        self.report_knight_reuse(world, out)?;
+        self.disciplines.report(world.session_id, out)
     }
 
     fn handle(
@@ -461,6 +541,12 @@ impl Feature for Casting {
     ) -> Result<()> {
         match command {
             ClientCommand::StopSong { .. } => self.stop_song(world, out),
+            ClientCommand::UseKnightAbility {
+                ability, target, ..
+            } => self.knight(command, *ability, *target, world, out),
+            ClientCommand::UseDiscipline { discipline, .. } => {
+                self.use_discipline(command, *discipline, world, out)
+            }
             ClientCommand::UseItem(request) => self.use_item(request, world, out),
             ClientCommand::DropInvisibility { steps, .. } => drop_invisibility(steps, out),
             _ => self.cast(command, world, out),
@@ -508,7 +594,9 @@ impl Feature for Casting {
         world: &mut World,
         out: &mut Out<'_, '_>,
     ) -> Result<()> {
+        self.admit(message, world)?;
         match message {
+            Message::KnightRefresh(_) => self.report_knight_reuse(world, out)?,
             Message::Event(WorldEvent::Spell(update)) => {
                 let Some(own) = world.player.as_ref().map(|player| player.spawn_id) else {
                     return Ok(());
@@ -536,6 +624,7 @@ impl Feature for Casting {
                 }
             }
             Message::Event(event) if world.owns_death(event) => {
+                self.disciplines.clear_active();
                 self.guard.clear();
             }
             _ => (),

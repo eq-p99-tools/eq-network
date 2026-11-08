@@ -103,6 +103,21 @@ pub fn titanium_offer(body: &[u8]) -> Result<ResurrectionOffer> {
     })
 }
 
+impl ResurrectionOffer {
+    /// Exact received bytes used to withhold an ambiguous replay.
+    #[must_use]
+    pub fn wire_identity(&self) -> &[u8] {
+        &self.body
+    }
+
+    /// P99 presents an ordinary spell offer with a named corpse and destination.
+    /// A missing spell or zone cannot identify that offer.
+    #[must_use]
+    pub const fn valid_p99_question(&self) -> bool {
+        self.zone_id != 0 && !matches!(self.spell_id, 0 | 0xffff | u32::MAX)
+    }
+}
+
 /// Encodes the player's answer: the offer as it came, with the choice.
 #[must_use]
 pub fn titanium_answer(offer: &ResurrectionOffer, accept: bool) -> EncodedCommand {

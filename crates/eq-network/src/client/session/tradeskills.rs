@@ -3,27 +3,28 @@
 //! when the server puts what it still holds back in the inventory. The
 //! session sends a combine for a tradeskill container carried in a pack
 //! slot, or for the world container open for the player, and holds the
-//! inventory until the server's reset. That reset releases only the local
-//! operation gate; independent inventory updates supply consumption and any
-//! product, with no result inferred from their order or absence. As the
-//! official client does, it refuses a combine while the cursor holds an item
-//! or coins, and names the official client's own words for that.
+//! inventory through the server's reset and any expected station clear.
+//! Independent inventory updates supply consumption and any product. As the
+//! official client does, it refuses a combine while the cursor holds an
+//! item or coins, and names the official client's own words for that.
 use super::{
     actions::{self, Resource},
     feature::{Feature, Out, World},
     objects::close_request,
     ClientCommand, ClientEvent,
 };
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, ensure, Result};
 use eq_network_game::{
-    inventory::InventorySlot,
+    inventory::{InventoryMove, InventorySlot, InventoryUpdate, MoveQuantity},
     message::Message,
     objects::{ContainerView, ObjectUpdate},
     request::Request,
     tradeskills::{self, CombineUpdate, HANDS_FULL, WORLD_CONTAINER},
     world::WorldEvent,
 };
-use std::time::Instant;
+use std::time::{Duration, Instant};
+
+const OPEN_WINDOW: Duration = Duration::from_secs(8);
 
 /// The world container the player asked to open, or has open. Every
 /// feature reads it; only this module changes it.
@@ -34,28 +35,163 @@ pub(super) struct OpenContainer(Option<Container>);
 #[derive(Clone, Debug)]
 enum Container {
     /// Asked to open; the server has not answered.
-    Asked(u32),
+    Asked {
+        drop_id: u32,
+        actor: u16,
+        placement: Instant,
+        submitted: Instant,
+        retired: bool,
+    },
     /// Open for the player.
-    Open(ContainerView),
+    Open {
+        view: ContainerView,
+        placement: Instant,
+        received: Instant,
+        scope: Scope,
+    },
+    /// The close was sent. Its station-only inventory stream is retiring.
+    Closing {
+        view: ContainerView,
+        /// Whether this retires a station the client was allowed to use.
+        owned: bool,
+        /// A full clear arrived, but it may have belonged to a combine.
+        cleared: bool,
+    },
+    /// The untagged station inventory stream can no longer be attributed.
+    Blocked,
 }
 
 impl OpenContainer {
     /// Whether a world container is open for the player.
     pub(super) const fn is_open(&self) -> bool {
-        matches!(self.0, Some(Container::Open(_)))
+        matches!(self.0, Some(Container::Open { .. }))
     }
 
     /// Whether the player asked to open this container and waits for it.
     pub(super) const fn expects(&self, drop_id: u32) -> bool {
-        matches!(self.0, Some(Container::Asked(asked)) if asked == drop_id)
+        matches!(self.0, Some(Container::Asked { drop_id: asked, .. }) if asked == drop_id)
     }
-}
 
-/// Lets another feature's tests start with a container open.
-#[cfg(test)]
-impl From<ContainerView> for OpenContainer {
-    fn from(view: ContainerView) -> Self {
-        Self(Some(Container::Open(view)))
+    pub(super) fn represents(&self, view: &ContainerView) -> bool {
+        match &self.0 {
+            Some(
+                Container::Open { view: current, .. } | Container::Closing { view: current, .. },
+            ) => current == view,
+            Some(Container::Blocked) => true,
+            _ => false,
+        }
+    }
+
+    pub(super) fn opened(&self, view: &ContainerView) -> bool {
+        matches!(&self.0, Some(Container::Open { view: opened, .. }) if opened == view)
+    }
+
+    fn may_close(&self, drop_id: u32, created: Instant) -> bool {
+        match &self.0 {
+            Some(Container::Open { view, received, .. }) => {
+                view.drop_id == drop_id && created >= *received
+            }
+            Some(Container::Asked {
+                drop_id: asked,
+                submitted,
+                ..
+            }) => *asked == drop_id && created >= *submitted,
+            _ => false,
+        }
+    }
+
+    fn closing(view: &ContainerView, owned: bool) -> Container {
+        Container::Closing {
+            view: view.clone(),
+            owned,
+            cleared: false,
+        }
+    }
+
+    pub(super) fn check_action(
+        &self,
+        world: &World,
+        created: Instant,
+        reach: eq_network_game::reach::Reach,
+    ) -> Result<()> {
+        let Some(Container::Open {
+            view,
+            placement,
+            received,
+            ..
+        }) = &self.0
+        else {
+            return Err(anyhow!("No world container is open"));
+        };
+        let (actor, position) = world
+            .player_at()
+            .ok_or_else(|| anyhow!("Player is unavailable"))?;
+        ensure!(
+            world.is_player(actor) && u32::from(actor) == view.player_id,
+            "The container actor changed"
+        );
+        ensure!(
+            created >= *received && world.objects.placement(view.drop_id) == Some(*placement),
+            "The world container changed"
+        );
+        ensure!(
+            world.body.stop_pending() != Some(true),
+            "Stop moving to use the world container"
+        );
+        let object = world
+            .objects
+            .entries()
+            .get(&view.drop_id)
+            .ok_or_else(|| anyhow!("That container is no longer there"))?;
+        ensure!(
+            reach.admits(position, object.position),
+            "Too far away to use that container"
+        );
+        Ok(())
+    }
+
+    pub(super) fn check_move(
+        &self,
+        request: &InventoryMove,
+        world: &World,
+        reach: eq_network_game::reach::Reach,
+    ) -> Result<()> {
+        self.check_action(world, request.created, reach)?;
+        if !matches!(
+            self.0,
+            Some(Container::Open {
+                scope: Scope::Forge,
+                ..
+            })
+        ) {
+            return Ok(());
+        }
+        if request.to.is_world() {
+            ensure!(
+                request.from == InventorySlot::CURSOR
+                    && request.quantity == MoveQuantity::Whole
+                    && !world.inventory.items().contains_key(&request.to)
+                    && world.inventory.items().get(&request.from).is_some_and(|item| {
+                        item.bag_slots == 0 && item.stack_count.is_none_or(|count| count == 1)
+                    }),
+                "Put one whole item from the cursor into an empty forge slot; stacking and swaps are outside this workflow"
+            );
+        } else {
+            ensure!(
+                world.inventory.custody_known(InventorySlot::CURSOR)
+                    && world.coins.cursor.is_empty(),
+                "Wait for a current empty cursor before withdrawing from the forge"
+            );
+            if request.from.is_world() {
+                ensure!(
+                    request.to == InventorySlot::CURSOR
+                        && request.quantity == MoveQuantity::Whole
+                        && !world.inventory.items().contains_key(&InventorySlot::CURSOR),
+                    "Withdraw one whole forge item to an empty cursor; swaps are outside this workflow"
+                );
+            }
+        }
+        Ok(())
     }
 }
 
@@ -69,20 +205,22 @@ pub(super) struct Tradeskills {
     reach_checked: Option<Instant>,
     scope: Scope,
     inventory_changed: Option<Instant>,
+    /// A world combine may emit an untagged full clear after its reset.
+    station_clear_pending: bool,
 }
 
-#[derive(Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 enum Scope {
     #[default]
     All,
-    Carried,
+    Forge,
 }
 
 impl Tradeskills {
-    /// Manual carried combines with the native predicates, without stations.
-    pub(super) fn carried() -> Self {
+    /// Native carried combines and an ordinary forge opened by the server.
+    pub(super) fn forge() -> Self {
         Self {
-            scope: Scope::Carried,
+            scope: Scope::Forge,
             ..Self::default()
         }
     }
@@ -124,29 +262,102 @@ impl Tradeskills {
         )
         .err()
     }
+
+    fn container_reply(
+        &self,
+        view: &ContainerView,
+        world: &mut World,
+        out: &mut Out<'_, '_>,
+    ) -> Result<()> {
+        if !world.container.expects(view.drop_id) {
+            if view.open && !world.container.represents(view) {
+                // GroundObjects closed this unasked open. Preserve its
+                // retirement stream or discard ambiguous station-only data.
+                world.container.0 = Some(if world.container.0.is_none() {
+                    OpenContainer::closing(view, false)
+                } else {
+                    Container::Blocked
+                });
+            }
+            return Ok(());
+        }
+        let Some(Container::Asked {
+            actor,
+            placement,
+            submitted,
+            retired,
+            ..
+        }) = world.container.0.take()
+        else {
+            return Ok(());
+        };
+        if !view.open {
+            return Ok(());
+        }
+        let same_placement = world.objects.placement(view.drop_id) == Some(placement);
+        let current = !retired
+            && Instant::now().saturating_duration_since(submitted) < OPEN_WINDOW
+            && view.player_id == u32::from(actor)
+            && same_placement
+            && world
+                .objects
+                .entries()
+                .get(&view.drop_id)
+                .is_some_and(|object| {
+                    if self.scope == Scope::Forge {
+                        object.is_forge_candidate()
+                            && view.object_type == u32::from(tradeskills::FORGE)
+                    } else {
+                        object.object_type == view.object_type
+                    }
+                });
+        if current {
+            world.container.0 = Some(Container::Open {
+                view: view.clone(),
+                placement,
+                received: Instant::now(),
+                scope: self.scope,
+            });
+        } else {
+            if same_placement {
+                out.request(&close_request(view))?;
+                world.container.0 = Some(OpenContainer::closing(view, false));
+            } else {
+                world.container.0 = Some(Container::Blocked);
+            }
+            world.happened(Message::Event(WorldEvent::Objects(ObjectUpdate::Closed {
+                drop_id: view.drop_id,
+            })));
+            if !retired {
+                out.log.send(ClientEvent::World(WorldEvent::ObjectAction {
+                    session_id: world.session_id,
+                    drop_id: view.drop_id,
+                    error: Some("The server reply did not open the requested station".into()),
+                }))?;
+            }
+        }
+        Ok(())
+    }
 }
 
 impl Feature for Tradeskills {
     fn capabilities(&self) -> Vec<crate::world::Capability> {
         use crate::world::Capability;
-        if self.scope == Scope::Carried {
-            vec![Capability::Tradeskills]
-        } else {
-            vec![Capability::Tradeskills, Capability::WorldContainers]
-        }
+        vec![Capability::Tradeskills, Capability::WorldContainers]
     }
 
-    fn holds(&self, _world: &World, _now: Instant) -> Vec<(Resource, &'static str)> {
-        self.combining
-            .map(|_| (Resource::Inventory, "Wait for the combine to finish"))
-            .into_iter()
-            .collect()
+    fn holds(&self, world: &World, _now: Instant) -> Vec<(Resource, &'static str)> {
+        // When the station lease is blocked, no world-only inventory update
+        // can reach the inventory. Ordinary inventory may resume after reset.
+        (self.combining.is_some()
+            || (self.station_clear_pending
+                && !matches!(world.container.0, Some(Container::Blocked))))
+        .then_some((Resource::Inventory, "Wait for the combine to finish"))
+        .into_iter()
+        .collect()
     }
 
     fn owns(&self, command: &ClientCommand) -> bool {
-        if self.scope == Scope::Carried {
-            return matches!(command, ClientCommand::Combine { container, .. } if *container != WORLD_CONTAINER);
-        }
         matches!(
             command,
             ClientCommand::Combine { .. }
@@ -161,20 +372,34 @@ impl Feature for Tradeskills {
         world: &mut World,
         out: &mut Out<'_, '_>,
     ) -> Result<()> {
-        if self.scope == Scope::Carried && !self.owns(command) {
-            return actions::refuse(command, "World containers are not available.", out.log);
-        }
         let (session_id, container, created) = match *command {
             ClientCommand::Combine {
                 session_id,
                 container,
                 created,
             } => (session_id, container, created),
-            ClientCommand::OpenContainer { drop_id, .. } => return open(drop_id, world, out),
-            ClientCommand::CloseContainer { .. } => return close(world, out),
+            ClientCommand::OpenContainer {
+                drop_id, created, ..
+            } => {
+                let ordered_reopen = self.scope == Scope::All && self.combining.is_none();
+                return open(
+                    drop_id,
+                    created,
+                    self.scope == Scope::Forge,
+                    ordered_reopen,
+                    world,
+                    out,
+                );
+            }
+            ClientCommand::CloseContainer {
+                drop_id, created, ..
+            } if world.container.may_close(drop_id, created) => return close(world, out),
+            ClientCommand::CloseContainer { .. } => {
+                return actions::refuse(command, "That container is no longer open", out.log);
+            }
             _ => return Ok(()),
         };
-        if self.scope == Scope::Carried {
+        if self.scope == Scope::Forge && container != WORLD_CONTAINER {
             if let Some(refusal) = self.carried_refusal(container, created, world) {
                 return out.log.send(ClientEvent::World(WorldEvent::CombineRefused {
                     session_id,
@@ -184,8 +409,39 @@ impl Feature for Tradeskills {
             }
         }
         if container == WORLD_CONTAINER {
-            if !world.container.is_open() {
-                return actions::refuse(command, "No world container is open.", out.log);
+            if let Err(error) =
+                world
+                    .container
+                    .check_action(world, created, out.wire.reaches().objects)
+            {
+                return actions::refuse(command, &error.to_string(), out.log);
+            }
+            if self.combining.is_some()
+                || self.station_clear_pending
+                || self
+                    .inventory_changed
+                    .is_some_and(|changed| created < changed)
+            {
+                return actions::refuse(
+                    command,
+                    "Wait for the current world container and inventory.",
+                    out.log,
+                );
+            }
+            if !world.inventory.received()
+                || world.inventory.stale()
+                || world.inventory.ground_drop_pending()
+            {
+                return actions::refuse(
+                    command,
+                    "The world container inventory is unavailable.",
+                    out.log,
+                );
+            }
+            if self.scope == Scope::Forge {
+                if let Err(reason) = station_ingredients(&world.inventory) {
+                    return actions::refuse(command, reason, out.log);
+                }
             }
         } else if !world
             .inventory
@@ -209,6 +465,9 @@ impl Feature for Tradeskills {
         }
         out.request(&Request::Combine(container))?;
         self.combining = Some(container);
+        if container == WORLD_CONTAINER {
+            self.station_clear_pending = true;
+        }
         out.log.send(ClientEvent::World(WorldEvent::Combine(
             CombineUpdate::Started(container),
         )))
@@ -216,6 +475,28 @@ impl Feature for Tradeskills {
 
     /// Checks whether an open world container has moved out of reach.
     fn tick(&mut self, now: Instant, world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
+        if let Some(Container::Asked {
+            drop_id,
+            submitted,
+            retired,
+            ..
+        }) = &mut world.container.0
+        {
+            if !*retired && now.saturating_duration_since(*submitted) >= OPEN_WINDOW {
+                *retired = true;
+                let drop_id = *drop_id;
+                world.happened(Message::Event(WorldEvent::Objects(ObjectUpdate::Closed {
+                    drop_id,
+                })));
+                out.log.send(ClientEvent::World(WorldEvent::ObjectAction {
+                    session_id: world.session_id,
+                    drop_id,
+                    error: Some(
+                        "No station open received. Re-enter the zone if the wait persists".into(),
+                    ),
+                }))?;
+            }
+        }
         let reach = out.wire.reaches().containers;
         keep_in_reach((&mut self.reach_checked, reach), now, world, out)
     }
@@ -224,32 +505,81 @@ impl Feature for Tradeskills {
         &mut self,
         message: &Message,
         world: &mut World,
-        _out: &mut Out<'_, '_>,
+        out: &mut Out<'_, '_>,
     ) -> Result<()> {
         self.admit(message, world)?;
         match message {
             Message::Event(WorldEvent::Combine(CombineUpdate::Answered)) => self.combining = None,
+            Message::TradeskillNoRecipe if self.combining == Some(WORLD_CONTAINER) => {
+                self.station_clear_pending = false;
+            }
+            Message::Event(WorldEvent::Inventory(InventoryUpdate::WorldEmptied)) => {
+                let may_be_combine_clear = std::mem::take(&mut self.station_clear_pending);
+                if let Some(Container::Closing { owned, cleared, .. }) = &mut world.container.0 {
+                    if *owned && may_be_combine_clear {
+                        // With a reset-only failure this can be the close's only
+                        // clear. EQEmu's next matching reply can fence the old
+                        // stream after the reset.
+                        *cleared = true;
+                    } else {
+                        world.container.0 = None;
+                    }
+                }
+            }
             Message::Event(WorldEvent::Objects(ObjectUpdate::Container(view)))
-                if world.is_player(view.player_id) && world.container.expects(view.drop_id) =>
+                if world.is_player(view.player_id) =>
             {
-                world.container.0 = view.open.then(|| Container::Open(view.clone()));
+                self.container_reply(view, world, out)?;
+            }
+            Message::Event(WorldEvent::Objects(
+                ObjectUpdate::Snapshot(_) | ObjectUpdate::Spawn(_) | ObjectUpdate::Remove { .. },
+            )) => {
+                if let Some(Container::Open {
+                    view, placement, ..
+                }) = &world.container.0
+                {
+                    if world.objects.placement(view.drop_id) != Some(*placement) {
+                        let drop_id = view.drop_id;
+                        world.container.0 = Some(Container::Blocked);
+                        self.station_clear_pending = false;
+                        world.happened(Message::Event(WorldEvent::Objects(ObjectUpdate::Closed {
+                            drop_id,
+                        })));
+                    }
+                }
             }
             _ => (),
         }
         Ok(())
     }
 
+    fn explain(&mut self, message: &mut Message, world: &World) {
+        let Message::Event(WorldEvent::Inventory(update)) = message else {
+            return;
+        };
+        let withheld = match update {
+            InventoryUpdate::WorldEmptied => !matches!(
+                world.container.0,
+                Some(Container::Open { .. } | Container::Closing { .. })
+            ),
+            InventoryUpdate::Set(items) => {
+                !world.container.is_open() && items.first().is_some_and(|root| root.slot.is_world())
+            }
+            InventoryUpdate::Remove(slot) => !world.container.is_open() && slot.is_world(),
+            _ => false,
+        };
+        if withheld {
+            *message = Message::Withheld;
+        }
+    }
+
     fn admit(&mut self, message: &Message, _world: &mut World) -> Result<()> {
-        if self.scope == Scope::Carried
-            && matches!(
-                message,
-                Message::Event(
-                    WorldEvent::Inventory(_)
-                        | WorldEvent::Coins(_)
-                        | WorldEvent::CoinsElsewhere { .. }
-                )
+        if matches!(
+            message,
+            Message::Event(
+                WorldEvent::Inventory(_) | WorldEvent::Coins(_) | WorldEvent::CoinsElsewhere { .. }
             )
-        {
+        ) {
             self.inventory_changed = Some(Instant::now());
         }
         Ok(())
@@ -259,23 +589,103 @@ impl Feature for Tradeskills {
 /// Opens a world container within reach, unless one is open or asked for
 /// already; the host hears how the request went as it does for a pickup,
 /// and the server's answer as a container update.
-fn open(drop_id: u32, world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
-    let checked = if world.container.0.is_some() {
-        Err(anyhow!("close the container you are using first"))
+fn open(
+    drop_id: u32,
+    created: Instant,
+    forge_only: bool,
+    ordered_reopen: bool,
+    world: &mut World,
+    out: &mut Out<'_, '_>,
+) -> Result<()> {
+    // EQEmu queues close returns and the final clear before handling a later
+    // click, and queues the new open reply before its contents. While waiting
+    // for that reply, all untagged station records are still fenced.
+    let blocked = world.container.0.as_ref().filter(|container| {
+        !ordered_reopen
+            || !matches!(
+                container,
+                Container::Closing {
+                    owned: true,
+                    cleared: true,
+                    ..
+                }
+            )
+    });
+    let checked = if let Some(container) = blocked {
+        let reason = match container {
+            Container::Asked { .. } => "wait for the previous station open result",
+            Container::Open { .. } => "close the container you are using first",
+            Container::Closing { .. } => "wait for the previous station to clear",
+            Container::Blocked => "the station changed. Re-enter the zone before opening a station",
+        };
+        Err(anyhow!(reason))
     } else {
         world
             .player_at()
             .ok_or_else(|| anyhow!("player is unavailable"))
             .and_then(|(spawn_id, position)| {
-                world
+                let placement = world
                     .objects
-                    .check_open(drop_id, spawn_id, position, out.wire.reaches().objects)
+                    .placement(drop_id)
+                    .ok_or_else(|| anyhow!("that is no longer there"))?;
+                ensure!(created >= placement, "stale world container request");
+                ensure!(
+                    world.body.stop_pending() != Some(true),
+                    "stop moving to open the world container"
+                );
+                ensure!(
+                    world.inventory.items().keys().all(|slot| !slot.is_world()),
+                    "wait for the previous container contents to update"
+                );
+                if forge_only {
+                    let object = world
+                        .objects
+                        .entries()
+                        .get(&drop_id)
+                        .ok_or_else(|| anyhow!("that is no longer there"))?;
+                    ensure!(
+                        object.is_forge_candidate(),
+                        "only an ordinary forge is available"
+                    );
+                    ensure!(
+                        spawn_id != 0 && world.is_player(spawn_id),
+                        "player is unavailable"
+                    );
+                    ensure!(
+                        out.wire.reaches().objects.admits(position, object.position),
+                        "too far away to use that"
+                    );
+                    ensure!(
+                        world.inventory.received()
+                            && !world.inventory.stale()
+                            && !world.inventory.predicted()
+                            && !world.inventory.ground_drop_pending()
+                            && world.inventory.custody_known(InventorySlot::CURSOR)
+                            && !world.inventory.items().contains_key(&InventorySlot::CURSOR)
+                            && world.coins.cursor.is_empty(),
+                        "a forge click needs current inventory and an empty cursor"
+                    );
+                } else {
+                    world.objects.check_open(
+                        drop_id,
+                        spawn_id,
+                        position,
+                        out.wire.reaches().objects,
+                    )?;
+                }
+                Ok((spawn_id, placement))
             })
     };
     let error = match checked {
-        Ok(()) => {
+        Ok((actor, placement)) => {
             out.request(&Request::OpenContainer(drop_id))?;
-            world.container.0 = Some(Container::Asked(drop_id));
+            world.container.0 = Some(Container::Asked {
+                drop_id,
+                actor,
+                placement,
+                submitted: Instant::now(),
+                retired: false,
+            });
             None
         }
         Err(error) => Some(error.to_string()),
@@ -285,6 +695,23 @@ fn open(drop_id: u32, world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
         drop_id,
         error,
     }))
+}
+
+fn station_ingredients(
+    inventory: &eq_network_game::inventory::Inventory,
+) -> Result<(), &'static str> {
+    let mut items = inventory
+        .items()
+        .values()
+        .filter(|item| item.slot.is_world())
+        .peekable();
+    if items.peek().is_none() {
+        return Err("Place the ingredients in the world container first.");
+    }
+    if items.any(|item| item.stack_count.is_some_and(|count| count != 1)) {
+        return Err("Place one unit of each ingredient in its own slot.");
+    }
+    Ok(())
 }
 
 /// Closes the world container open for the player once they are out of the
@@ -305,7 +732,7 @@ fn keep_in_reach(
         return Ok(());
     }
     *checked = Some(now);
-    let Some(Container::Open(view)) = &world.container.0 else {
+    let Some(Container::Open { view, .. }) = &world.container.0 else {
         return Ok(());
     };
     let drop_id = view.drop_id;
@@ -327,10 +754,18 @@ fn keep_in_reach(
 /// still holds back in the inventory. One still waiting for the server's
 /// answer is forgotten, and that answer closed when it comes.
 fn close(world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
-    match world.container.0.take() {
-        Some(Container::Open(view)) => out.request(&close_request(&view)),
-        Some(Container::Asked(_)) | None => Ok(()),
+    match &mut world.container.0 {
+        Some(Container::Open { view, .. }) => {
+            out.request(&close_request(view))?;
+            world.container.0 = Some(OpenContainer::closing(view, true));
+        }
+        Some(Container::Asked { retired, .. }) => {
+            *retired = true;
+            return Ok(());
+        }
+        _ => (),
     }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -492,7 +927,11 @@ mod tests {
         let opened = ObjectUpdate::Container(view(true));
         assert_eq!(hear(opened, &mut features, &mut world), 0);
         assert!(world.container.is_open());
-        let close = ClientCommand::CloseContainer { session_id: 5 };
+        let close = ClientCommand::CloseContainer {
+            session_id: 5,
+            drop_id: 5,
+            created: Instant::now(),
+        };
         assert_eq!(command(&close, &mut features, &mut world), 1);
         assert!(!world.container.is_open());
         // Closing nothing sends nothing.
@@ -508,12 +947,136 @@ mod tests {
         assert_eq!(hear(in_use, &mut features, &mut world), 0);
         assert!(!world.container.is_open());
         assert_eq!(command(&open_forge(), &mut features, &mut world), 1);
-        let close = ClientCommand::CloseContainer { session_id: 5 };
+        let close = ClientCommand::CloseContainer {
+            session_id: 5,
+            drop_id: 5,
+            created: Instant::now(),
+        };
         command(&close, &mut features, &mut world);
         // An answer nobody waits for is closed again.
         let opened = ObjectUpdate::Container(view(true));
         assert_eq!(hear(opened, &mut features, &mut world), 1);
         assert!(!world.container.is_open());
+    }
+
+    #[test]
+    fn an_open_request_and_reply_cannot_follow_a_reused_drop_id() {
+        let (mut features, mut world) = at_forge();
+        let stale = open_forge();
+        let object = world.objects.entries()[&5].clone();
+        hear(
+            ObjectUpdate::Spawn(object.clone()),
+            &mut features,
+            &mut world,
+        );
+        assert_eq!(command(&stale, &mut features, &mut world), 0);
+        assert_eq!(command(&open_forge(), &mut features, &mut world), 1);
+        hear(ObjectUpdate::Spawn(object), &mut features, &mut world);
+        assert_eq!(
+            hear(
+                ObjectUpdate::Container(view(true)),
+                &mut features,
+                &mut world
+            ),
+            0
+        );
+        assert!(!world.container.is_open());
+    }
+
+    #[test]
+    fn closing_a_forge_does_not_manufacture_inventory_returns() {
+        let (mut features, mut world) = at_forge();
+        assert_eq!(command(&open_forge(), &mut features, &mut world), 1);
+        hear(
+            ObjectUpdate::Container(view(true)),
+            &mut features,
+            &mut world,
+        );
+        let mut inventory = Inventory::default();
+        inventory.apply(InventoryUpdate::Snapshot(vec![testing::item(4000)]));
+        world.inventory = inventory.into();
+        let before = world.inventory.revision();
+        let close = ClientCommand::CloseContainer {
+            session_id: 5,
+            drop_id: 5,
+            created: Instant::now(),
+        };
+        assert_eq!(command(&close, &mut features, &mut world), 1);
+        assert_eq!(world.inventory.revision(), before);
+        assert!(world.inventory.items().contains_key(&InventorySlot(4000)));
+        assert!(!world.inventory.items().contains_key(&InventorySlot::CURSOR));
+        assert_eq!(command(&open_forge(), &mut features, &mut world), 0);
+    }
+
+    #[test]
+    fn world_only_inventory_needs_an_open_or_retiring_lease() {
+        let (mut features, mut world) = at_forge();
+        let message = || {
+            Message::Event(WorldEvent::Inventory(InventoryUpdate::Set(vec![
+                testing::item(4000),
+            ])))
+        };
+        let check = |tradeskills: &mut Tradeskills, world: &World| {
+            let mut news = message();
+            tradeskills.explain(&mut news, world);
+            !matches!(news, Message::Withheld)
+        };
+        assert!(!check(&mut features.tradeskills, &world));
+        assert_eq!(command(&open_forge(), &mut features, &mut world), 1);
+        assert!(!check(&mut features.tradeskills, &world));
+        hear(
+            ObjectUpdate::Container(view(true)),
+            &mut features,
+            &mut world,
+        );
+        assert!(check(&mut features.tradeskills, &world));
+        let object = world.objects.entries()[&5].clone();
+        hear(ObjectUpdate::Spawn(object), &mut features, &mut world);
+        assert!(!check(&mut features.tradeskills, &world));
+        assert_eq!(command(&open_forge(), &mut features, &mut world), 0);
+    }
+
+    #[test]
+    fn combine_reset_does_not_release_an_outstanding_station_clear() {
+        let (mut features, mut world) = at_forge();
+        assert_eq!(command(&open_forge(), &mut features, &mut world), 1);
+        hear(
+            ObjectUpdate::Container(view(true)),
+            &mut features,
+            &mut world,
+        );
+        let mut inventory = Inventory::default();
+        inventory.apply(InventoryUpdate::Snapshot(vec![testing::item(4000)]));
+        world.inventory = inventory.into();
+        let now = Instant::now();
+        assert_eq!(
+            command(&combine(WORLD_CONTAINER.0), &mut features, &mut world),
+            1
+        );
+        let reset = Message::Event(WorldEvent::Combine(CombineUpdate::Answered));
+        let clear = Message::Event(WorldEvent::Inventory(InventoryUpdate::WorldEmptied));
+        testing::run(|out| {
+            features.tradeskills.observe(&reset, &mut world, out)?;
+            assert_ne!(features.tradeskills.holds(&world, now), []);
+            features.tradeskills.observe(&clear, &mut world, out)
+        })
+        .result
+        .unwrap();
+        assert_eq!(features.tradeskills.holds(&world, now), []);
+        assert_eq!(
+            command(&combine(WORLD_CONTAINER.0), &mut features, &mut world),
+            1
+        );
+        testing::run(|out| {
+            features
+                .tradeskills
+                .observe(&Message::TradeskillNoRecipe, &mut world, out)?;
+            assert_ne!(features.tradeskills.holds(&world, now), []);
+            features.tradeskills.observe(&reset, &mut world, out)
+        })
+        .result
+        .unwrap();
+        assert_eq!(features.tradeskills.holds(&world, now), []);
     }
 
     #[test]
@@ -582,23 +1145,31 @@ mod tests {
 
     #[test]
     fn the_world_container_combines_only_while_open() {
-        let mut tradeskills = Tradeskills::default();
-        let mut world = world();
-        let outcome =
-            testing::run(|out| tradeskills.handle(&combine(WORLD_CONTAINER.0), &mut world, out));
+        let (mut features, mut world) = at_forge();
+        let outcome = testing::run(|out| {
+            features
+                .tradeskills
+                .handle(&combine(WORLD_CONTAINER.0), &mut world, out)
+        });
         assert!(outcome.sent.is_empty(), "sent {:?}", outcome.sent);
         assert!(refused(&outcome));
-        world.container = ContainerView {
-            player_id: 7,
-            drop_id: 5,
-            open: true,
-            object_type: 17,
-            icon: 1,
-            name: "Forge".into(),
-        }
-        .into();
-        let outcome =
-            testing::run(|out| tradeskills.handle(&combine(WORLD_CONTAINER.0), &mut world, out));
+        assert_eq!(command(&open_forge(), &mut features, &mut world), 1);
+        assert_eq!(
+            hear(
+                ObjectUpdate::Container(view(true)),
+                &mut features,
+                &mut world
+            ),
+            0
+        );
+        let mut inventory = Inventory::default();
+        inventory.apply(InventoryUpdate::Snapshot(vec![testing::item(4000)]));
+        world.inventory = inventory.into();
+        let outcome = testing::run(|out| {
+            features
+                .tradeskills
+                .handle(&combine(WORLD_CONTAINER.0), &mut world, out)
+        });
         assert_eq!(outcome.sent, [titanium_combine(WORLD_CONTAINER).unwrap()]);
     }
 

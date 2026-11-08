@@ -64,6 +64,7 @@ use super::{
 use crate::p99::{self, WorldCodec};
 use eq_network_game::{
     abilities::Ability,
+    chat::LinkExpansion,
     hazards::Hazard,
     inventory::{ItemRules, MoveRules},
     merchant::Quotes,
@@ -145,6 +146,12 @@ pub(super) trait ServerType: Sync {
     /// Each server needs its own evidence for selecting this estimate.
     fn consider_npcs_by_level(&self) -> bool {
         false
+    }
+
+    /// How the server's chat handler grows Titanium item links before its own
+    /// buffer limit, where that is known. None adds no host-side budget.
+    fn titanium_chat_link_expansion(&self) -> Option<LinkExpansion> {
+        None
     }
 
     /// Placement rules shared by worker validation and host projections.
@@ -763,8 +770,8 @@ mod shared {
         Box::<Tradeskills>::default()
     }
 
-    pub(super) fn carried_combines() -> Box<dyn Feature> {
-        Box::new(Tradeskills::carried())
+    pub(super) fn forge_combines() -> Box<dyn Feature> {
+        Box::new(Tradeskills::forge())
     }
 
     pub(super) fn map() -> Box<dyn Feature> {
@@ -808,8 +815,9 @@ mod shared {
     }
 }
 
-/// The abilities checked on P99: every one but fishing, which came later,
-/// and binding wounds, not yet checked there.
+/// The abilities offered on P99: every one but fishing, which came later, and
+/// binding wounds. The self-bandage path is withheld there until an unanswered
+/// or refused bandage stops holding the whole inventory until the next zone.
 const P99_ABILITIES: [Ability; 16] = [
     Ability::Kick,
     Ability::Bash,
@@ -866,10 +874,21 @@ const P99_WORLD_PREFIXES: [&str; 2] = ["project 1999", "an interesting"];
 struct Project1999;
 
 impl ServerType for Project1999 {
-    /// The initialized `EQEmu` request differs from Titanium's two-send
-    /// cancellation path. The deployed P99 contract remains unverified.
+    fn resurrection(&self, _setup: &Setup<'_>) -> Provided {
+        offer(Box::new(Resurrection::project1999()))
+    }
+
+    fn translocate(&self, _setup: &Setup<'_>) -> Provided {
+        offer(Box::new(Translocate::project1999()))
+    }
+
+    fn training(&self, _setup: &Setup<'_>) -> Provided {
+        offer(Box::new(Training::project1999()))
+    }
+
+    /// The native fade and clear are a single explicit player action.
     fn buff_cancellation(&self, _setup: &Setup<'_>) -> Provided {
-        None
+        offer(Box::new(Buffs::project1999()))
     }
 
     /// Ordinary Titanium group senders and explicit consent (native
@@ -886,7 +905,7 @@ impl ServerType for Project1999 {
     }
 
     fn tradeskills(&self, _setup: &Setup<'_>) -> Provided {
-        offer(shared::carried_combines())
+        offer(shared::forge_combines())
     }
 
     fn inventory_move_rules(&self) -> Option<MoveRules> {
@@ -956,7 +975,7 @@ impl ServerType for Project1999 {
     }
 
     fn casting(&self, _setup: &Setup<'_>) -> Provided {
-        offer(shared::casting())
+        offer(Box::new(Casting::with_titanium_combat(false)))
     }
 
     /// Moving the book's spells works on P99 as on `EQEmu` (checked with the
@@ -1075,6 +1094,10 @@ impl ServerType for EqEmu {
         offer(Box::<Buffs>::default())
     }
 
+    fn titanium_chat_link_expansion(&self) -> Option<LinkExpansion> {
+        Some(LinkExpansion::EQEMU_TITANIUM)
+    }
+
     fn inventory_move_rules(&self) -> Option<MoveRules> {
         Some(MoveRules::EqEmu)
     }
@@ -1113,7 +1136,7 @@ impl ServerType for EqEmu {
     }
 
     fn casting(&self, _setup: &Setup<'_>) -> Provided {
-        offer(Box::new(Casting::with_song_stop()))
+        offer(Box::new(Casting::with_titanium_combat(true)))
     }
 
     fn spellbook(&self, _setup: &Setup<'_>) -> Provided {
@@ -1763,6 +1786,23 @@ mod tests {
     }
 
     #[test]
+    fn only_eqemu_budgets_titanium_chat_link_expansion() {
+        for (protocol, expected) in [
+            (ServerProtocol::Project1999, None),
+            (ServerProtocol::EqEmu, Some(LinkExpansion::EQEMU_TITANIUM)),
+            (ServerProtocol::Quarm, None),
+            (ServerProtocol::Takp, None),
+        ] {
+            assert_eq!(
+                super::super::titanium_chat_link_expansion(protocol),
+                expected
+            );
+        }
+        assert!(LinkExpansion::EQEMU_TITANIUM.fits(4095 - 22, 2));
+        assert!(!LinkExpansion::EQEMU_TITANIUM.fits(4095 - 21, 2));
+    }
+
+    #[test]
     fn every_current_consider_policy_uses_the_received_color() {
         for protocol in [
             ServerProtocol::Project1999,
@@ -2206,7 +2246,7 @@ mod tests {
 
     #[test]
     fn p99_and_eqemu_provide_every_feature_one_each() {
-        // Training, resurrection, world containers, the map, deleting
+        // The map, deleting
         // spells, merchants' offers, the player's listing, dice,
         // emotes, assisting, raids and the server's tick are checked on
         // EQEmu alone so far; P99 takes falls' damage by the Titanium
@@ -2215,7 +2255,7 @@ mod tests {
         // yet checked live; and only EQEmu takes the show-helm option.
         // Both Titanium policies retain the verified own-player stun timer.
         for (protocol, count) in [
-            (ServerProtocol::Project1999, 27),
+            (ServerProtocol::Project1999, 31),
             (ServerProtocol::EqEmu, 39),
         ] {
             let server = server_type(protocol);
@@ -2223,11 +2263,7 @@ mod tests {
             assert_eq!(server.features(&setup).len(), count, "{protocol:?}");
         }
         for capability in [
-            Capability::Training,
-            Capability::Resurrection,
             Capability::Sacrifice,
-            Capability::Translocate,
-            Capability::WorldContainers,
             Capability::Map,
             Capability::DeletingSpells,
             Capability::MerchantOffers,
@@ -2247,7 +2283,11 @@ mod tests {
         for protocol in [ServerProtocol::Project1999, ServerProtocol::EqEmu] {
             assert!(offers(server_type(protocol)).contains(&Capability::MovingSpells));
             assert!(offers(server_type(protocol)).contains(&Capability::Reading));
+            assert!(offers(server_type(protocol)).contains(&Capability::Training));
+            assert!(offers(server_type(protocol)).contains(&Capability::Resurrection));
+            assert!(offers(server_type(protocol)).contains(&Capability::Translocate));
             assert!(offers(server_type(protocol)).contains(&Capability::Tradeskills));
+            assert!(offers(server_type(protocol)).contains(&Capability::WorldContainers));
         }
     }
 

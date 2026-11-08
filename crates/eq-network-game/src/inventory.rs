@@ -31,6 +31,7 @@ pub(crate) use titanium::{parse as parse_items, parse_at};
 pub use weight::{WeightUnavailable, MAX_CARRIED_WEIGHT};
 
 use crate::items::ItemDetails;
+use anyhow::{ensure, Context, Result};
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::num::NonZeroU32;
@@ -234,6 +235,10 @@ impl InventorySlot {
 /// Placement constraints from the server's item definition.
 #[derive(Clone, Debug, Default, PartialEq, Serialize)]
 pub struct ItemPlacement {
+    /// Titanium link hash computed from the complete supported item record.
+    /// Used for composition only, never for inventory reconciliation.
+    #[serde(skip)]
+    pub titanium_link_hash: Option<u32>,
     /// Titanium instance serial when its received definition is eligible for
     /// the ordinary drop action. Unknown or restricted items have no value.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -288,11 +293,13 @@ impl InventoryItem {
         match (left, right) {
             (Some(left), Some(right))
                 if left.details.base_held_model != right.details.base_held_model
-                    || left.rules.ground_drop_serial != right.rules.ground_drop_serial =>
+                    || left.rules.ground_drop_serial != right.rules.ground_drop_serial
+                    || left.rules.titanium_link_hash != right.rules.titanium_link_hash =>
             {
                 let mut comparable = left.clone();
                 comparable.details.base_held_model = right.details.base_held_model;
                 comparable.rules.ground_drop_serial = right.rules.ground_drop_serial;
+                comparable.rules.titanium_link_hash = right.rules.titanium_link_hash;
                 &comparable == right
             }
             _ => left == right,
@@ -303,6 +310,9 @@ impl InventoryItem {
 /// Authoritative updates and explicitly identified local predictions.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub enum InventoryUpdate {
+    /// A submitted self-bandage may have spent stock. Only received stock
+    /// evidence closes this local custody fence.
+    BandageStockPending(bool),
     /// Local post-send projection, not a server acknowledgment.
     Prediction(Vec<InventoryItem>),
     /// Local whole-cursor removal after a successful destroy submission. It
@@ -374,6 +384,13 @@ pub struct Inventory {
     /// This is evidence bookkeeping, never a queue that delays sending.
     #[serde(skip)]
     predictions: VecDeque<BTreeSet<InventorySlot>>,
+    /// Predicted slots that have yet to receive a covering inventory record,
+    /// with a flag for any change that could have moved a carried bandage.
+    /// Retained when the general move policy settles by silence.
+    #[serde(skip)]
+    projected_custody: BTreeMap<InventorySlot, bool>,
+    #[serde(skip)]
+    bandage_stock_pending: bool,
     /// Slots whose history included affecting or unreadable equipment since
     /// the last full snapshot or existing policy-driven settlement. Unversioned
     /// partial updates cannot certify which pending prefix the server applied.
@@ -405,10 +422,59 @@ pub struct Inventory {
 }
 
 impl Inventory {
+    /// Compose a Titanium item tag from a current carried or equipped item.
+    ///
+    /// # Errors
+    /// Rejects stale or projected inventory, non-owned slots and incomplete metadata.
+    pub fn owned_titanium_link(&self, slot: InventorySlot) -> Result<crate::chat::ItemLink> {
+        ensure!(
+            slot.is_equipment() || slot.is_carried(),
+            "Choose a worn or carried item"
+        );
+        ensure!(
+            self.received() && !self.stale() && !self.predicted() && !self.ground_drop_pending(),
+            "Wait for current inventory before linking an item"
+        );
+        ensure!(
+            self.custody_known(slot),
+            "That item's placement is unconfirmed"
+        );
+        let item = self
+            .items
+            .get(&slot)
+            .context("That inventory slot is empty")?;
+        crate::items::owned::link(item)
+    }
+
     /// Whether a submitted drop still awaits a fresh inventory snapshot.
     #[must_use]
     pub const fn ground_drop_pending(&self) -> bool {
         self.ground_drop.is_some()
+    }
+
+    /// Whether a slot has escaped projection since its last covering record.
+    /// Callers still require a current inventory and an item in that slot.
+    #[must_use]
+    pub fn custody_known(&self, slot: InventorySlot) -> bool {
+        !self.projected_custody.contains_key(&slot)
+    }
+
+    /// A submitted self-bandage is awaiting a received stock change or snapshot.
+    #[must_use]
+    pub const fn bandage_stock_pending(&self) -> bool {
+        self.bandage_stock_pending
+    }
+
+    /// A moved station slot remains provisional, including an emptied place.
+    #[must_use]
+    pub fn station_moves_unconfirmed(&self) -> bool {
+        self.projected_custody.keys().any(|slot| slot.is_world())
+    }
+
+    /// A local move may have changed which carried slot supplies a bandage.
+    #[must_use]
+    pub fn bandage_placement_unconfirmed(&self) -> bool {
+        self.projected_custody.values().any(|bandage| *bandage)
     }
 
     /// Monotonic local revision used to reject stale UI intents.
@@ -419,7 +485,7 @@ impl Inventory {
     /// Whether any contents include post-send predictions.
     #[must_use]
     pub const fn predicted(&self) -> bool {
-        self.predicted || self.destroyed.is_some()
+        self.predicted || self.destroyed.is_some() || self.bandage_stock_pending
     }
 
     /// Number of local predictions with slots still awaiting server evidence.
@@ -518,6 +584,7 @@ impl Inventory {
         self.observe_rebased_weight(&update, arrival);
         self.retain_relocations(&update);
         match update {
+            InventoryUpdate::BandageStockPending(pending) => self.bandage_stock_pending = pending,
             InventoryUpdate::Prediction(items) => self.predict(items),
             InventoryUpdate::DestroyCursor => self.predict_destruction(),
             InventoryUpdate::GroundDropPending(serial) => self.hold_ground_drop(serial),
@@ -575,12 +642,14 @@ impl Inventory {
             InventoryUpdate::Invalidated => self.stale = true,
             InventoryUpdate::TradeEmptied => {
                 self.items.retain(|slot, _| !slot.is_in_trade());
+                self.projected_custody.retain(|slot, _| !slot.is_in_trade());
                 // A prediction into a trade slot is resolved: the item is gone.
                 self.unconfirmed.retain(|slot, _| !slot.is_in_trade());
                 self.resolved();
             }
             InventoryUpdate::WorldEmptied => {
                 self.items.retain(|slot, _| !slot.is_world());
+                self.projected_custody.retain(|slot, _| !slot.is_world());
                 self.unconfirmed.retain(|slot, _| !slot.is_world());
                 self.resolved();
             }
@@ -638,6 +707,8 @@ impl Inventory {
         self.stale = false;
         self.unconfirmed.clear();
         self.predictions.clear();
+        self.projected_custody.clear();
+        self.bandage_stock_pending = false;
         self.equipment_uncertainty.clear();
         self.weight_rebased.clear();
         self.weight_history_uncertain = false;
@@ -705,8 +776,11 @@ impl Inventory {
     }
 
     fn remove(&mut self, slot: InventorySlot) {
-        self.items
-            .retain(|key, _| *key != slot && key.parent().is_none_or(|(parent, _)| parent != slot));
+        let outside = |key: InventorySlot| {
+            key != slot && key.parent().is_none_or(|(parent, _)| parent != slot)
+        };
+        self.items.retain(|key, _| outside(*key));
+        self.projected_custody.retain(|key, _| outside(*key));
     }
 
     /// A slot update confirms only that slot and its serialized container contents.

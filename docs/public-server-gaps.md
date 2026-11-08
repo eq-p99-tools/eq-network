@@ -164,11 +164,10 @@ standing. See [the inspected handlers](https://github.com/SecretsOTheP/EQMacEmu/
 
 ## Confirmed implementation and policy gaps
 
-The carried manual-combine follow-up now offers P99's source-backed carried
-path, independently of world containers. Native request bytes and local
-prerequisites are implemented; live success/refusal and result ordering remain
-unverified. World-station discovery/open/close/combine remains a client gap,
-not a server-unsupported facility. See [carried combine evidence and limits](p99-manual-combines.md).
+P99 offers carried manual combines and the ordinary forge path. The session
+requires a matching server open before accepting moves or a combine for that
+forge. Live P99 response ordering and custody remain to be verified.
+[Manual combine evidence and limits](p99-manual-combines.md)
 
 This table records the baseline above; completed fixes and follow-up checks are
 called out separately so a new capability is not mistaken for live verification.
@@ -204,15 +203,17 @@ it adds no live combat/death evidence to this report.
 | Casting / spellbook / click effects | Offered; book moving enabled | Disabled | Quarm port of casting and authoritative bar recovery; P99 spell-action landing flag remains unset. Public scenario coverage for resisted casts, interruption, clicks, scribing and memorization. |
 | Cooldowns / buffs / resource bars | Partial | Partial | Linked reuse groups, complete effective resource denominators, buff replacement ambiguity and item-effect accounting. Quarm saved gem cooldowns are already decoded from profile offset 4972 and covered by synthetic tests; public behavior still needs verification. Unknown values must remain distinguishable from zero. |
 | Target / consider / combat | Offered | Offered by policy (2026-11-03 stack); live unverified | Quarm attack, consider and death coverage still need the attended live check. |
-| Abilities | Most offered; fishing and bind wound excluded | Disabled | Evidence for each unavailable action, including resource/reuse and failure responses. |
+| Abilities | Most offered. Fishing and Bind Wound excluded. | Disabled | The self-targeted Bind Wound path exists but is withheld on P99: an unanswered or refused bandage holds the whole inventory until the next zone. Fix that, then verify the P99 bandage result and stock update. |
 | Loot / corpses / consent | Offered | Manual looting offered by policy (2026-11-03 stack); live unverified | Quarm corpse commands, own-corpse recovery and the NPC loot flow still need the attended live check; no automatic loot-all. |
 | Doors / ground objects | Offered | Source-backed ground pickups and receive-only door state on both TAKP/Quarm | Door interaction stays disabled pending ordinary padding/type/state review. Pickups use authoritative inventory delivery; an unanswered pickup holds only further pickups and expires locally after three seconds, a duplicate-suppression bound of ours rather than an official-client timing, and an ambiguous result keeps later waits for their full window; see [protocol evidence and live checklist](eqmac-world-objects.md). A map marker never grants an item. |
 | Groups | Disabled | Disabled; TAKP implementation exists | Invitation, refusal, roster changes, leader changes, zoning and disband checks on each. |
 | Raid group-leader removal | No policy offers it; generic EQEmu lacks the handler | No verified implementation | Remains a gap unless the specific public server proves it inapplicable. |
 | Raids | Disabled; native raid-window restriction reported below | Disabled | Quarm has raid handlers and opcodes: this is a gap, not an established Quarm restriction. |
 | Pets | Ordinary orders offered | Disabled | Public verification of orders and charm ownership. Hold, feign, spellhold and focus are withheld on Project 1999. EQMac orders still need wire/action integration. |
-| Training / reading / tradeskills | Disabled | Disabled | Generic client paths exist; verify/implement each dialect's packets and eligibility. |
-| Resurrection / sacrifice / translocate | Disabled | Disabled (TAKP translocate exists) | Source-backed offers, explicit consent, rejection and transfer/death lifecycles. |
+| Skill training | Source-backed; public exchange pending | Disabled | One opening per trainer ID and one unresolved practice per admission. Skills follow received updates. Point authority returns on fresh admission. |
+| Reading / tradeskills | See individual capability | See individual capability | Book and carried-combine support varies by server. |
+| Resurrection / translocate | Source-backed; public exchange pending | Disabled (TAKP translocate exists) | Offer-bound consent. Named translocate continuation and ordinary server-directed movement. Bind continuation without a server-directed destination remains unverified. |
+| Sacrifice | Disabled | Disabled | Separate consent path. |
 | Who / time of day | Offered | Disabled | Quarm handlers/policy; do not confuse received entity state with a complete `/who` answer. |
 | AFK / anonymous / roleplay | Disabled | Disabled; TAKP offers anon/roleplay | Server-specific appearance rules and replies; TAKP itself does not establish AFK support. |
 | Roll / emote / assist / show helm / regen ticks | Disabled | Disabled | Per-action codecs/policy and evidence. Do not grant these merely because a sibling server does. |

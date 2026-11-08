@@ -7,6 +7,67 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Breaking:** Offer ordinary forge interaction on Project 1999, and add a
+  self-targeted Bind Wound path that P99 withholds for now: an unanswered or
+  refused bandage would hold the whole inventory until the next zone.
+  `GameCommand::CloseContainer` gains `drop_id` and `created`,
+  `InventoryUpdate::BandageStockPending` and four `BindWoundUpdate` variants
+  are new, and `ItemPlacement` gains `titanium_link_hash`.
+  Bandage stock stays provisional until received inventory evidence.
+  A forge candidate needs a matching server open before it can take items.
+  Station placement, close and combine resets do not grant inventory items.
+- Build ordinary Titanium item links from checked worn and carried item
+  records. The source inventory must have current custody evidence.
+  Evolving records, items with installed augments and labels outside ASCII
+  need a received link.
+- Stamp world container closes with the object ID and intent time. Decode
+  whole-container clears separately from the native one-slot form.
+
+- Compose ordinary chat with genuine received item-link metadata for the
+  selected client dialect. The helper rejects quest links and malformed data.
+- **Breaking:** Report same-zone server relocation separately from normal position updates.
+  A same-zone boundary on local-only EQEmu releases the crossing hold and
+  lets normal movement reach a server-owned trigger. The landing is applied
+  only on receipt of the server's move instruction. Exhaustive world event
+  matches need to handle these two outcomes.
+
+- **Breaking:** Offer the learned, self-targeted Titanium Warrior disciplines Evasive and
+  Defensive. Stage received discipline and linked spell timers during
+  admission, and use the shared discipline timer and active buff slot to
+  guard both actions. Downstream exhaustive command and capability matches
+  need to include the new action.
+
+- **Breaking:** Added guarded Titanium knight ability casts and the
+  admission's received ability-slot recovery, including the server's
+  alternate Harm Touch rank. A sent ability stays unavailable until the next
+  received recovery report, normally the next zone entry, because the server
+  reports recovery only in the profile. Downstream exhaustive matches on
+  commands, capabilities, and world events need to include the knight actions.
+- Offer ordinary Project 1999 resurrection and translocate consent using
+  admission-scoped offer identities and Titanium's five-minute timeout.
+  A named translocate completion can start a move only after a matching
+  Yes. Byte-identical prompts already issued in the same P99 admission
+  cannot authorize another answer. Received movement and recovery remain
+  authoritative.
+- **Breaking:** Use a two-record beneficial-buff cancellation sequence on
+  Project 1999 (its source is not yet cited; recording checklist 6.396). Keep the selected slot until received updates change it, report a
+  partially submitted pair separately, and never resend automatically.
+  Consumers matching `buffs::cancel::Progress` exhaustively must handle the
+  new `PartiallySubmitted` variant.
+- **Breaking:** Offer skill training on Project 1999 through an addressed
+  trainer reply. Titanium opcode `0x238f` now decodes to
+  `Message::TrainingReply` instead of a training-offered world event.
+  Each trainer ID gets one opening request per admission. A submitted
+  practice withdraws the point balance until a fresh admission. Received
+  skill changes remain authoritative and carry no receipt for the spend.
+  The displayed price is an estimate. Paid requests invalidate the purse
+  projection until a fresh balance arrives.
+  Consumers matching training requests, training updates or decoded messages
+  exhaustively must handle the new variants.
+
+- `Client::titanium_chat_link_expansion` exposes how the selected server's
+  chat handler grows Titanium item links before its own buffer limit, as
+  `chat::LinkExpansion`. Only stock EQEmu reports one.
 - `Client::consider_npcs_by_level` exposes the selected server's NPC
   consider presentation policy. All current policies use the received
   color. The consider reply documents the faction code swaps in EQEmu
@@ -336,6 +397,13 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   silence (60 s) timers are unchanged.
 
 ### Fixed
+
+- **Breaking:** Publish staged discipline state separately from the buff-slot snapshot so
+  beneficial buff cancellation keeps the same slot revision at both ends.
+  Discipline fades require a matching observed spell. Exhaustive world event
+  matches need to handle `WorldEvent::DisciplineAdmission`.
+- Keep absolute coordinates on received same-zone moves. Zone-point
+  preservation applies to zone-point routes.
 
 - Keep reporting completed falls while a cursor drop awaits inventory evidence.
   A drop requires enough item and coin evidence to establish carried weight.

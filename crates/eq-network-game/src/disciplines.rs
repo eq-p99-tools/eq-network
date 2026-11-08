@@ -27,10 +27,13 @@
 //! start) in `EQEmu`'s `common/eq_packet_structs.h`, and TAKP's
 //! `ClientDiscipline_Struct` (the discipline's number and three bytes of
 //! padding).
-use crate::world::WorldEvent;
+use crate::{buffs::BuffUpdate, command::EncodedCommand, spells, world::WorldEvent};
 use anyhow::{ensure, Result};
 use serde::Serialize;
-use std::time::Duration;
+use std::{
+    collections::BTreeMap,
+    time::{Duration, Instant},
+};
 
 /// `OP_DisciplineUpdate`: the disciplines the player knows.
 pub const UPDATE_OPCODE: u16 = 0x7180;
@@ -43,6 +46,151 @@ pub const EQMAC_CHANGE_OPCODE: u16 = 0xf241;
 /// How many disciplines a Titanium list has room for
 /// (`MAX_PP_DISCIPLINES`).
 pub const SLOTS: usize = 100;
+
+/// Titanium reserves one buff slot after its 25 long and 12 short buffs.
+pub const TITANIUM_BUFF_SLOT: u32 = 37;
+
+/// Self-targeted Titanium disciplines with verified class and timer mappings.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+pub enum Discipline {
+    /// Warrior level 52.
+    Evasive,
+    /// Warrior level 55.
+    Defensive,
+}
+
+impl Discipline {
+    /// The supported activation set in level order.
+    pub const SUPPORTED: [Self; 2] = [Self::Evasive, Self::Defensive];
+
+    /// Exact discipline spell ID in the received list.
+    #[must_use]
+    pub const fn spell(self) -> u32 {
+        match self {
+            Self::Evasive => 4503,
+            Self::Defensive => 4499,
+        }
+    }
+
+    /// Display name.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Evasive => "Evasive",
+            Self::Defensive => "Defensive",
+        }
+    }
+
+    /// Stable binding and command name.
+    #[must_use]
+    pub const fn key(self) -> &'static str {
+        match self {
+            Self::Evasive => "evasive",
+            Self::Defensive => "defensive",
+        }
+    }
+
+    /// Parse a supported name without interpreting a raw spell number.
+    #[must_use]
+    pub fn named(name: &str) -> Option<Self> {
+        Self::SUPPORTED
+            .into_iter()
+            .find(|discipline| discipline.key().eq_ignore_ascii_case(name))
+    }
+
+    /// The received discipline reuse group shared by both actions.
+    #[must_use]
+    pub const fn timer(self) -> u32 {
+        1
+    }
+
+    /// Requires a Warrior at the correct level and an explicit list entry.
+    #[must_use]
+    pub fn learned(self, class: Option<u32>, level: u8, list: Option<&[u32]>) -> bool {
+        class == Some(1)
+            && level
+                >= match self {
+                    Self::Evasive => 52,
+                    Self::Defensive => 55,
+                }
+            && list.is_some_and(|known| known.contains(&self.spell()))
+    }
+}
+
+/// The Titanium item/discipline slot. No item is named for a discipline.
+pub const CAST_SLOT: u8 = 10;
+
+/// Cast a supported self-targeted discipline. The caller supplies only the
+/// session's own spawn ID after eligibility and reuse checks.
+///
+/// # Errors
+/// Refuses an absent own spawn.
+pub fn titanium_cast(discipline: Discipline, own: u16) -> Result<EncodedCommand> {
+    ensure!(own != 0, "invalid discipline self target");
+    Ok(spells::titanium_cast(CAST_SLOT, discipline.spell(), own))
+}
+
+/// An active discipline reported by the server. Titanium's buff slot and
+/// `EQMac`'s numbered discipline are distinct authorities.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize)]
+pub enum Active {
+    /// No current observation.
+    #[default]
+    Unknown,
+    /// The server reported the end of the observed discipline.
+    Inactive,
+    /// The spell in the own Titanium discipline buff slot.
+    Titanium(u32),
+    /// The received `EQMac` discipline number.
+    EqMac(u8),
+}
+
+impl Active {
+    /// Applies an exact slot replacement or fade for the admitted player.
+    /// A fade must name the observed spell. Empty sentinels have no verified
+    /// slot-clear semantics for this state.
+    pub fn observe_titanium(&mut self, own: u16, update: &BuffUpdate) -> bool {
+        if update.entity_id != u32::from(own) || update.slot != TITANIUM_BUFF_SLOT {
+            return false;
+        }
+        if let Some(buff) = &update.buff {
+            *self = Self::Titanium(buff.spell_id);
+        } else if matches!(*self, Self::Titanium(spell) if spell == update.spell_id) {
+            *self = Self::Inactive;
+        } else {
+            return false;
+        }
+        true
+    }
+}
+
+/// Received timer records in one namespace. An unknown timer ID remains
+/// addressable. A missing timer and an observed zero have different meanings.
+#[derive(Clone, Debug, Default)]
+pub struct Timers(BTreeMap<u32, Instant>);
+
+impl Timers {
+    /// Replace only the timer named by the server.
+    pub fn set(&mut self, reuse: Reuse, now: Instant) {
+        if let Some(ready) = now.checked_add(reuse.remaining) {
+            self.0.insert(reuse.timer, ready);
+        }
+    }
+
+    /// Time left on a received timer, including an elapsed timer's zero.
+    #[must_use]
+    pub fn remaining(&self, timer: u32, now: Instant) -> Option<Duration> {
+        Some(self.0.get(&timer)?.saturating_duration_since(now))
+    }
+
+    /// Received timer records with the time already spent staging removed.
+    pub fn updates(&self, now: Instant) -> impl Iterator<Item = Reuse> + '_ {
+        self.0.iter().map(move |(&timer, ready)| Reuse {
+            timer,
+            remaining: ready.saturating_duration_since(now),
+        })
+    }
+}
 
 /// A reuse timer as the server set it.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
@@ -136,6 +284,44 @@ fn words<const N: usize>(body: &[u8], what: &str) -> Result<[u32; N]> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_exact_self_disciplines_use_the_cast_slot_and_share_reuse() {
+        assert!(!Discipline::Defensive.learned(Some(1), 54, Some(&[4499])));
+        assert!(!Discipline::Defensive.learned(Some(2), 55, Some(&[4499])));
+        assert!(!Discipline::Defensive.learned(Some(1), 55, None));
+        assert!(Discipline::Defensive.learned(Some(1), 55, Some(&[4503, 4499])));
+        assert_eq!(Discipline::Evasive.timer(), Discipline::Defensive.timer());
+        let packet = titanium_cast(Discipline::Defensive, 81).unwrap();
+        assert_eq!(packet.opcode, 0x304b);
+        assert_eq!(packet.body, record(&[10, 4499, u32::MAX, 81, 0]));
+    }
+
+    #[test]
+    fn reset_and_unknown_group_remain_distinct() {
+        let now = Instant::now();
+        let mut timers = Timers::default();
+        timers.set(
+            Reuse {
+                timer: 99,
+                remaining: Duration::from_secs(17),
+            },
+            now,
+        );
+        timers.set(
+            Reuse {
+                timer: 1,
+                remaining: Duration::ZERO,
+            },
+            now,
+        );
+        assert_eq!(
+            timers.remaining(99, now + Duration::from_secs(1)),
+            Some(Duration::from_secs(16))
+        );
+        assert_eq!(timers.remaining(1, now), Some(Duration::ZERO));
+        assert_eq!(timers.remaining(0, now), None);
+    }
 
     fn record(fields: &[u32]) -> Vec<u8> {
         fields

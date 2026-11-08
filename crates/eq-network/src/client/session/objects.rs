@@ -147,11 +147,14 @@ impl ZoneObjects {
     fn check_current(&self, drop_id: u32, created: Instant) -> Result<()> {
         ensure!(self.pickup.is_none(), "wait for the ground pickup result");
         let placed = self
-            .placed_at
-            .get(&drop_id)
+            .placement(drop_id)
             .ok_or_else(|| anyhow!("that is no longer there"))?;
-        ensure!(created >= *placed, "stale ground object request");
+        ensure!(created >= placed, "stale ground object request");
         Ok(())
+    }
+
+    pub(super) fn placement(&self, drop_id: u32) -> Option<Instant> {
+        self.placed_at.get(&drop_id).copied()
     }
 
     /// Cancels duplicate suppression, without acknowledging or granting an item.
@@ -325,7 +328,11 @@ impl Feature for GroundObjects {
         let ObjectUpdate::Container(view) = update else {
             return Ok(());
         };
-        if view.open && world.is_player(view.player_id) && !world.container.expects(view.drop_id) {
+        if view.open
+            && world.is_player(view.player_id)
+            && !world.container.expects(view.drop_id)
+            && !world.container.represents(view)
+        {
             out.request(&close_request(view))?;
             out.log.diagnostic(format!(
                 "Closed world container {}, which opened unasked",

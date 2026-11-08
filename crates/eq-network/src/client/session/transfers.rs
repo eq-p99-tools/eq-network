@@ -88,7 +88,7 @@ impl Transfers {
     }
 
     /// The transfer for crossing a zone line where the player stands.
-    fn zone_line(&self, command: &ClientCommand, world: &World) -> Result<zoning::ZoneOffer> {
+    fn zone_line(&self, command: &ClientCommand, world: &World) -> Result<zoning::BoundaryRoute> {
         let ClientCommand::CrossZoneLine {
             destination,
             position,
@@ -102,8 +102,12 @@ impl Transfers {
             "zone-line position is no longer current"
         );
         ensure!(world.zone.0 != 0, "zone identity is unavailable");
-        self.points
-            .request(destination, *position, world.zone.0, world.zone.1)
+        let crossing = self.points.crossing(destination, *position, world.zone)?;
+        ensure!(
+            world.local_eqemu() || crossing != zoning::BoundaryRoute::SameZone,
+            "same-zone boundary needs a server relocation"
+        );
+        Ok(crossing)
     }
 
     /// Asks for a transfer: the player stops, and every later command waits
@@ -147,6 +151,8 @@ impl Transfers {
     fn offered(offer: &zoning::ZoneOffer, world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
         let offer = offer.clone();
         if let Some(position) = offer.local_position(world.zone) {
+            // The explicit movement instruction supplies its own absolute
+            // landing. Preserve-value sentinels belong to zone-point routes.
             return relocate(position, world, out);
         }
         if let Some(pending) = world.lifecycle.pending() {
@@ -241,16 +247,18 @@ fn relocate(position: Position, world: &mut World, out: &mut Out<'_, '_>) -> Res
         !world.lifecycle.blocks_motion(),
         "same-zone relocation conflicts with death or transfer"
     );
+    let (spawn_id, _) = world.player_at().context("relocation before admission")?;
     world.correct_own(position, Instant::now())?;
     out.log
         .send(ClientEvent::World(motion::withdrawn(world.session_id)))?;
-    out.log.send(ClientEvent::World(WorldEvent::Position {
-        spawn_id: world.player.as_ref().map_or(0, |player| player.spawn_id),
-        position,
-        velocity: [0.0; 3],
-        forward: 0.0,
-    }))?;
-    Ok(())
+    out.log
+        .send(ClientEvent::World(WorldEvent::SameZoneRelocated(
+            zoning::SameZoneRelocation {
+                session_id: world.session_id,
+                spawn_id,
+                position,
+            },
+        )))
 }
 
 impl Feature for Transfers {
@@ -274,7 +282,13 @@ impl Feature for Transfers {
             return Ok(());
         };
         match self.zone_line(command, world) {
-            Ok(offer) => Self::start(offer, world, out)?,
+            Ok(zoning::BoundaryRoute::Transfer(offer)) => Self::start(offer, world, out)?,
+            Ok(zoning::BoundaryRoute::SameZone) => {
+                out.log
+                    .send(ClientEvent::World(WorldEvent::SameZoneBoundary {
+                        session_id: *session_id,
+                    }))?;
+            }
             Err(error) => out
                 .log
                 .send(ClientEvent::World(WorldEvent::ZoneLineRejected {
@@ -426,6 +440,109 @@ mod tests {
     use super::super::feature::testing;
     use super::*;
     use eq_network_game::movement::{DiagonalRates, MotionSession};
+
+    #[test]
+    fn only_the_server_moves_a_character_through_a_same_zone_boundary() {
+        use crate::client::{ClientConfig, ServerProtocol};
+        let mut config = ClientConfig::new("Example", "Example", "Example", "Tester");
+        config.local_only = true;
+        config.protocol = ServerProtocol::EqEmu;
+        let here = Position {
+            x: 12.0,
+            y: -4.0,
+            z: 3.0,
+            heading: 64.0,
+        };
+        let mut world = World::for_zone(5, &config);
+        world
+            .body
+            .admit(MotionSession::new(5, 7, here, Instant::now()).unwrap());
+        world.player.admit(testing::player(7));
+        world.zone = (2, 0);
+        world.admitted = Some(Instant::now());
+        let mut transfers = Transfers::new("Tester", Home::Offered);
+
+        let cross = ClientCommand::CrossZoneLine {
+            session_id: 5,
+            destination: zoning::ZoneLineDestination::Absolute {
+                zone_id: 2,
+                position: Position::default(),
+            },
+            position: here,
+            created: Instant::now(),
+        };
+        let trigger = testing::run(|out| transfers.handle(&cross, &mut world, out));
+        trigger.result.unwrap();
+        assert_eq!(trigger.sent, []);
+        assert!(matches!(
+            trigger.events.as_slice(),
+            [ClientEvent::World(WorldEvent::SameZoneBoundary {
+                session_id: 5
+            })]
+        ));
+        assert_eq!(world.body.position(), Some(here));
+
+        // These finite values happen to equal the separate zone-point
+        // sentinels. The explicit move must preserve their wire meaning.
+        let mut packet = [0; 24];
+        packet[..2].copy_from_slice(&2u16.to_le_bytes());
+        for (offset, value) in [(4, 72.0f32), (8, 999_999.0), (12, 8.0), (16, 999.0)] {
+            packet[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+        }
+        packet[20..24].copy_from_slice(&1u32.to_le_bytes());
+        let offer = zoning::offer(zoning::MOVE_OPCODE, &packet).unwrap();
+        let arrival =
+            testing::run(|out| transfers.observe(&Message::ZoneOffer(offer), &mut world, out));
+        arrival.result.unwrap();
+        assert_eq!(arrival.sent, []);
+        let landing = Position {
+            x: 999_999.0,
+            y: 72.0,
+            z: 8.0,
+            heading: 999.0,
+        };
+        assert_eq!(world.body.position(), Some(landing));
+        assert!(
+            matches!(arrival.events.as_slice(), [_, ClientEvent::World(WorldEvent::SameZoneRelocated(arrival))]
+            if arrival.session_id == 5 && arrival.spawn_id == 7 && arrival.position == landing)
+        );
+        assert!(world.lifecycle.pending().is_none());
+    }
+
+    #[test]
+    fn explicit_offers_to_another_zone_or_instance_still_start_a_transfer() {
+        for (zone_id, instance_id) in [(3, 0), (2, 1)] {
+            let mut world = World::new(5);
+            world.zone = (2, 0);
+            world.player.admit(testing::player(7));
+            world.admitted = Some(Instant::now());
+            let mut transfers = Transfers::new("Tester", Home::Offered);
+            let offer = zoning::ZoneOffer {
+                zone_id,
+                instance_id,
+                position: Position {
+                    x: 30.0,
+                    y: 42.0,
+                    z: 3.0,
+                    heading: 6.0,
+                },
+                reason: 1,
+                to_bind: false,
+                solicited: true,
+            };
+            let answer = offer.response("Tester").unwrap();
+            let result = testing::run(|out| {
+                transfers.observe(&Message::ZoneOffer(offer.clone()), &mut world, out)
+            });
+            result.result.unwrap();
+            assert_eq!(result.sent, [answer]);
+            assert_eq!(world.lifecycle.pending(), Some(&offer));
+            assert!(!result.events.iter().any(|event| matches!(
+                event,
+                ClientEvent::World(WorldEvent::SameZoneRelocated(_))
+            )));
+        }
+    }
 
     #[test]
     fn quarm_same_zone_bind_alias_is_narrow_and_duplicate_approval_is_quiet() {
@@ -764,7 +881,11 @@ mod tests {
         let unknown = "zone identity is unavailable";
         assert_eq!(error(&world, cross(5, here, now)), unknown);
         world.zone = (2, 0);
-        let offer = transfers.zone_line(&cross(5, here, now), &world).unwrap();
+        let zoning::BoundaryRoute::Transfer(offer) =
+            transfers.zone_line(&cross(5, here, now), &world).unwrap()
+        else {
+            panic!("a boundary to another zone must start a transfer");
+        };
         assert_eq!((offer.zone_id, offer.solicited), (4, false));
     }
 

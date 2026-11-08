@@ -18,10 +18,14 @@ const PROFILE_OPCODE: u16 = 0x75df;
 pub enum Message {
     /// News the host hears about too.
     Event(WorldEvent),
+    /// A decoded trainer reply that still needs session checks.
+    TrainingReply(crate::training::TrainingReply),
     /// A decoded resurrection that still needs admission and consent checks.
     Resurrection(crate::resurrection::ResurrectionOffer),
     /// A decoded translocate that still needs admission and consent checks.
     TranslocateOffer(crate::confirmations::TranslocateOffer),
+    /// A received Titanium completion that still needs exact consent correlation.
+    TranslocateCompleted(crate::confirmations::TranslocateOffer),
     /// A merchant's whole list, which replaces what it listed before, as
     /// `EQMac`'s comes on every change, its places numbered afresh. The
     /// feature keeping the merchant window tells the host the places that
@@ -51,8 +55,12 @@ pub enum Message {
     /// The player's bind point, from their profile: where a client that asks
     /// for its own way home after death asks to go.
     Bind(zoning::BindPoint),
+    /// Ability-slot reuse received in a Titanium knight profile.
+    KnightRefresh(std::time::Duration),
     /// The server logging the character out.
     LoggedOut,
+    /// A Titanium system notice identifying an invalid tradeskill recipe.
+    TradeskillNoRecipe,
     /// A message a session feature withholds, to pass on later as it was or
     /// as what the next one shows it to be; no other feature hears it, and
     /// the host hears nothing of it.
@@ -122,47 +130,16 @@ pub fn titanium(opcode: u16, body: &[u8]) -> Vec<Message> {
             |error| unreadable(Part::ZoneOffer, &error),
             Message::ZoneOffer,
         ),
-        PROFILE_OPCODE => {
-            match crate::group::titanium_profile(body) {
-                Ok(group) => {
-                    messages.extend(group.map(|update| Message::Event(WorldEvent::Group(update))));
-                }
-                Err(error) => messages.push(unreadable(Part::World, &error)),
-            }
-            messages.push(crate::buffs::titanium_profile(body).map_or_else(
-                |error| unreadable(Part::World, &error),
-                |buffs| Message::Event(WorldEvent::BuffSnapshot(buffs)),
-            ));
-            messages.push(crate::world::titanium_coins(body).map_or_else(
-                |error| unreadable(Part::World, &error),
-                |coins| Message::Event(WorldEvent::Coins(coins)),
-            ));
-            messages.push(crate::food::titanium_profile(body).map_or_else(
-                |error| unreadable(Part::World, &error),
-                |nourishment| Message::Event(WorldEvent::Nourishment(nourishment)),
-            ));
-            messages.push(crate::money::titanium_elsewhere(body).map_or_else(
-                |error| unreadable(Part::World, &error),
-                |(cursor, bank)| {
-                    Message::Event(WorldEvent::CoinsElsewhere {
-                        cursor,
-                        bank,
-                        given: crate::world::Coins::default(),
-                        offered: crate::world::Coins::default(),
-                    })
-                },
-            ));
-            spells::SpellBook::titanium_profile(body).map_or_else(
-                |error| unreadable(Part::Spells, &error),
-                |book| Message::Event(WorldEvent::SpellBook(book)),
-            )
-        }
+        PROFILE_OPCODE => titanium_profile_messages(body, &mut messages),
         zoning::CHANGE_OPCODE => zoning::ZoneAnswer::titanium(body).map_or_else(
             |error| unreadable(Part::ZoneAnswer, &error),
             Message::ZoneAnswer,
         ),
         zoning::HANDOFF_OPCODE => Message::Handoff(body.to_vec()),
         LOGOUT_REPLY_OPCODE => Message::LoggedOut,
+        0x673c if body.len() == 12 && body[..4] == 334_u32.to_le_bytes() => {
+            Message::TradeskillNoRecipe
+        }
         crate::merchant::BUY_OPCODE
         | crate::merchant::SELL_OPCODE
         | crate::merchant::DELETE_OPCODE => match crate::merchant::decode_scoped(opcode, body) {
@@ -172,15 +149,21 @@ pub fn titanium(opcode: u16, body: &[u8]) -> Vec<Message> {
             },
             Err(error) => unreadable(Part::World, &error),
         },
+        crate::training::OFFER_OPCODE => crate::training::titanium_reply(body).map_or_else(
+            |error| unreadable(Part::World, &error),
+            Message::TrainingReply,
+        ),
         crate::resurrection::OFFER_OPCODE => crate::resurrection::titanium_offer(body).map_or_else(
             |error| unreadable(Part::World, &error),
             Message::Resurrection,
         ),
         crate::confirmations::TRANSLOCATE_OPCODE => {
-            crate::confirmations::titanium_translocate(body).map_or_else(
-                |error| unreadable(Part::World, &error),
-                Message::TranslocateOffer,
-            )
+            use crate::confirmations::TitaniumTranslocate;
+            match crate::confirmations::titanium_translocate_record(body) {
+                Ok(TitaniumTranslocate::Offer(offer)) => Message::TranslocateOffer(offer),
+                Ok(TitaniumTranslocate::Completed(offer)) => Message::TranslocateCompleted(offer),
+                Err(error) => unreadable(Part::World, &error),
+            }
         }
         crate::buffs::TITANIUM_ACTION_OPCODE => action(crate::buffs::titanium_action(body)),
         crate::zones::TITANIUM_HEADER_OPCODE => {
@@ -199,6 +182,41 @@ pub fn titanium(opcode: u16, body: &[u8]) -> Vec<Message> {
     };
     messages.push(message);
     messages
+}
+
+fn titanium_profile_messages(body: &[u8], messages: &mut Vec<Message>) -> Message {
+    messages.extend(crate::knights::titanium_profile(body).map(Message::KnightRefresh));
+    match crate::group::titanium_profile(body) {
+        Ok(group) => messages.extend(group.map(|update| Message::Event(WorldEvent::Group(update)))),
+        Err(error) => messages.push(unreadable(Part::World, &error)),
+    }
+    messages.push(crate::buffs::titanium_profile(body).map_or_else(
+        |error| unreadable(Part::World, &error),
+        |buffs| Message::Event(WorldEvent::BuffSnapshot(buffs)),
+    ));
+    messages.push(crate::world::titanium_coins(body).map_or_else(
+        |error| unreadable(Part::World, &error),
+        |coins| Message::Event(WorldEvent::Coins(coins)),
+    ));
+    messages.push(crate::food::titanium_profile(body).map_or_else(
+        |error| unreadable(Part::World, &error),
+        |nourishment| Message::Event(WorldEvent::Nourishment(nourishment)),
+    ));
+    messages.push(crate::money::titanium_elsewhere(body).map_or_else(
+        |error| unreadable(Part::World, &error),
+        |(cursor, bank)| {
+            Message::Event(WorldEvent::CoinsElsewhere {
+                cursor,
+                bank,
+                given: crate::world::Coins::default(),
+                offered: crate::world::Coins::default(),
+            })
+        },
+    ));
+    spells::SpellBook::titanium_profile(body).map_or_else(
+        |error| unreadable(Part::Spells, &error),
+        |book| Message::Event(WorldEvent::SpellBook(book)),
+    )
 }
 
 /// What one `EQMac` zone packet says: the spawns and the player's news that

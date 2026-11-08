@@ -1,13 +1,7 @@
-//! Training skills at a guildmaster. The session opens training only with a
-//! guildmaster of the player's class within reach, and refuses a practice
-//! the server would ignore without a word: no training open, a skill the
-//! guildmaster does not teach or one at its cap, no practice point left or
-//! coins too few. The server answers a practice only with the skill's new
-//! value, so the session counts the practice points itself, from the
-//! profile's on admission, and turns that answer into the practice it was,
-//! with its cost, for the coins and the host. Levels above the highest the
-//! player reached in this zone bring five points each, as they do on the
-//! server, which counts from the highest level the character ever reached.
+//! Training skills at an in-reach guildmaster of the player's class.
+//! `EQEmu` retains its existing skill and balance projection. P99 permits one
+//! opening per trainer and one unresolved practice per admission. Received
+//! skill values remain authoritative without establishing a practice spend.
 use super::{
     actions,
     feature::{Feature, Out, World},
@@ -17,11 +11,13 @@ use anyhow::Result;
 use eq_network_game::{
     message::Message,
     request::Request,
-    training::{self, TrainingOffer, TrainingRequest, TrainingUpdate},
+    training::{
+        self, PracticeUpdate, TrainingOffer, TrainingReply, TrainingRequest, TrainingUpdate,
+    },
     world::{SpawnKind, WorldEvent},
 };
 use std::{
-    collections::VecDeque,
+    collections::{BTreeSet, VecDeque},
     time::{Duration, Instant},
 };
 
@@ -44,6 +40,10 @@ pub(super) struct Training {
     points: Option<u32>,
     /// The highest level the player reached in this zone.
     highest_level: u8,
+    /// P99 follows native admission and requires new balance evidence after a spend.
+    p99: bool,
+    /// Each trainer ID can receive one opening request in this P99 admission.
+    requested_trainers: BTreeSet<u16>,
 }
 
 /// A guildmaster the player asked to train with.
@@ -52,6 +52,7 @@ struct Trainer {
     spawn_id: u16,
     /// Their answer, once it came.
     offer: Option<TrainingOffer>,
+    requested_at: Instant,
 }
 
 /// A practice sent to the server.
@@ -64,22 +65,26 @@ struct Practice {
     cost: u64,
     /// When it was sent.
     sent: Instant,
+    /// Whether a same-skill increase was reported while the spend was unresolved.
+    skill_rise_reported: bool,
 }
 
 impl Training {
-    /// Opens training with a guildmaster, leaving any other first.
-    fn open(
-        &mut self,
-        command: &ClientCommand,
-        trainer: u16,
-        world: &World,
-        out: &mut Out<'_, '_>,
-    ) -> Result<()> {
+    /// P99 uses native admission fields and keeps skill and point authority separate.
+    pub(super) fn project1999() -> Self {
+        Self {
+            p99: true,
+            ..Self::default()
+        }
+    }
+
+    /// Checks the current trainer spawn and reach before interacting.
+    fn eligible(trainer: u16, world: &World) -> Result<(), &'static str> {
         let Some(((_, position), player)) = world.player_at().zip(world.player.as_ref()) else {
-            return actions::refuse(command, "Not in the zone yet", out.log);
+            return Err("Not in the zone yet");
         };
         let Some(spawn) = world.spawns.visible(trainer) else {
-            return actions::refuse(command, "You must first target your guildmaster.", out.log);
+            return Err("You must first target your guildmaster.");
         };
         let teaches = spawn.kind == SpawnKind::Npc
             && spawn
@@ -87,19 +92,30 @@ impl Training {
                 .zip(player.class)
                 .is_some_and(|(trainer, player)| training::trains(trainer, player));
         if !teaches {
-            return actions::refuse(command, "That is not your guildmaster.", out.log);
+            return Err("That is not your guildmaster.");
         }
         let (dx, dy, dz) = (
             spawn.position.x - position.x,
             spawn.position.y - position.y,
             spawn.position.z - position.z,
         );
-        if dx * dx + dy * dy + dz * dz > training::RANGE * training::RANGE {
-            return actions::refuse(
-                command,
-                "You are too far away from your guildmaster.",
-                out.log,
-            );
+        let distance = dx * dx + dy * dy + dz * dz;
+        if !distance.is_finite() || distance > training::RANGE * training::RANGE {
+            return Err("You are too far away from your guildmaster.");
+        }
+        Ok(())
+    }
+
+    /// Opens training with a guildmaster, leaving any other first on `EQEmu`.
+    fn open(
+        &mut self,
+        command: &ClientCommand,
+        trainer: u16,
+        world: &World,
+        out: &mut Out<'_, '_>,
+    ) -> Result<()> {
+        if let Err(reason) = Self::eligible(trainer, world) {
+            return actions::refuse(command, reason, out.log);
         }
         if self
             .trainer
@@ -108,13 +124,33 @@ impl Training {
         {
             return Ok(());
         }
+        if self.p99 {
+            if self.requested_trainers.contains(&trainer) {
+                return actions::refuse(
+                    command,
+                    "Re-enter the zone before asking this guildmaster again.",
+                    out.log,
+                );
+            }
+            if self.trainer.is_some() {
+                return actions::refuse(
+                    command,
+                    "Finish training with the current guildmaster first.",
+                    out.log,
+                );
+            }
+        }
         if let Some(open) = self.trainer.take() {
             out.request(&Request::EndTraining(open.spawn_id))?;
         }
         out.request(&Request::OpenTraining(trainer))?;
+        if self.p99 {
+            self.requested_trainers.insert(trainer);
+        }
         self.trainer = Some(Trainer {
             spawn_id: trainer,
             offer: None,
+            requested_at: Instant::now(),
         });
         Ok(())
     }
@@ -130,6 +166,17 @@ impl Training {
         }) else {
             return Err("You are not training with a guildmaster.");
         };
+        if self.p99 {
+            Self::eligible(trainer, world)?;
+            if !self.pending.is_empty() {
+                return Err("The practice outcome is unknown. Re-enter the zone to refresh practice points.");
+            }
+            if self.points.is_none() {
+                return Err(
+                    "The practice point balance is unknown. Re-enter the zone to refresh it.",
+                );
+            }
+        }
         let cap = offer.cap(skill);
         if cap == 0 {
             return Err("Your guildmaster cannot train you in that skill.");
@@ -143,15 +190,22 @@ impl Training {
             .as_ref()
             .and_then(|player| player.skills.as_ref())
             .and_then(|skills| skills.get(usize::try_from(skill).ok()?))
-            .copied()
-            .unwrap_or(0);
+            .copied();
+        let value = match value {
+            Some(value) => value,
+            None if self.p99 => return Err("Your current skill value is unknown."),
+            None => 0,
+        };
         if value >= cap {
             return Err("You cannot be trained any further in that skill.");
         }
         let cost = training::practice_cost(value);
         let owed: u64 = self.pending.iter().map(|practice| practice.cost).sum();
+        if self.p99 && cost > 0 && world.coins.purse.is_none() {
+            return Err("Your purse balance is unknown.");
+        }
         let purse = world.coins.purse.map_or(0, |coins| coins.total_copper());
-        if purse < owed + cost {
+        if purse < owed.saturating_add(cost) {
             return Err("You cannot afford to train that skill.");
         }
         Ok((trainer, value, cost))
@@ -162,7 +216,7 @@ impl Training {
         &mut self,
         command: &ClientCommand,
         skill: u32,
-        world: &World,
+        world: &mut World,
         out: &mut Out<'_, '_>,
         now: Instant,
     ) -> Result<()> {
@@ -176,7 +230,17 @@ impl Training {
             from,
             cost,
             sent: now,
+            skill_rise_reported: false,
         });
+        if self.p99 {
+            self.points = None;
+            world.happened(Message::Event(WorldEvent::Training(
+                TrainingUpdate::Practice(PracticeUpdate::Requested {
+                    skill,
+                    estimated_cost: cost,
+                }),
+            )));
+        }
         Ok(())
     }
 
@@ -185,10 +249,123 @@ impl Training {
         let Some(trainer) = self.trainer.take() else {
             return Ok(());
         };
-        out.request(&Request::EndTraining(trainer.spawn_id))?;
+        if !self.p99 || trainer.offer.is_some() {
+            out.request(&Request::EndTraining(trainer.spawn_id))?;
+        }
+        if self.p99 {
+            self.retire_practice(out)?;
+        }
         out.log.send(ClientEvent::World(WorldEvent::Training(
             TrainingUpdate::Ended,
         )))
+    }
+
+    /// Drops an offer when its trainer or zone is no longer current.
+    fn invalidate_trainer(&mut self, out: &mut Out<'_, '_>) -> Result<()> {
+        self.retire_practice(out)?;
+        if self.trainer.take().is_some() {
+            out.log.send(ClientEvent::World(WorldEvent::Training(
+                TrainingUpdate::Ended,
+            )))?;
+        }
+        Ok(())
+    }
+
+    /// Ends the local observation interval while keeping the spend unresolved.
+    fn retire_practice(&mut self, out: &mut Out<'_, '_>) -> Result<()> {
+        if let Some(practice) = self.pending.pop_front() {
+            Self::report_practice(
+                PracticeUpdate::Unanswered {
+                    skill: practice.skill,
+                },
+                out,
+            )?;
+        }
+        Ok(())
+    }
+
+    /// Both reply values require the same live, unexpired opening.
+    fn p99_reply_current(&self, reply: &TrainingReply, world: &World) -> bool {
+        world.ready()
+            && !world.lifecycle.blocks_motion()
+            && world.own_spawn.map(u32::from) == Some(reply.trainee)
+            && self.trainer.as_ref().is_some_and(|trainer| {
+                trainer.spawn_id == reply.offer.trainer
+                    && trainer.offer.is_none()
+                    && trainer.requested_at.elapsed() < ANSWER_WAIT
+            })
+            && Self::eligible(reply.offer.trainer, world).is_ok()
+    }
+
+    /// Emits local practice status separately from authoritative skill news.
+    fn report_practice(update: PracticeUpdate, out: &mut Out<'_, '_>) -> Result<()> {
+        out.log.send(ClientEvent::World(WorldEvent::Training(
+            TrainingUpdate::Practice(update),
+        )))
+    }
+
+    /// Tracks the received skill and retains point/cost uncertainty.
+    fn observe_p99(
+        &mut self,
+        message: &Message,
+        world: &mut World,
+        out: &mut Out<'_, '_>,
+    ) -> Result<()> {
+        let trainer = self.trainer.as_ref().map(|trainer| trainer.spawn_id);
+        match message {
+            Message::TrainingReply(reply)
+                if !reply.accepted && self.p99_reply_current(reply, world) =>
+            {
+                self.trainer = None;
+                out.log
+                    .send(ClientEvent::World(WorldEvent::TrainingRefused {
+                        session_id: world.session_id,
+                        reason: "The guildmaster declined to open training.".into(),
+                    }))?;
+            }
+            Message::Event(WorldEvent::Skill { skill_id, value }) => {
+                if world.lifecycle.blocks_motion() {
+                    self.invalidate_trainer(out)?;
+                } else if let Some(practice) = self.pending.front_mut().filter(|practice| {
+                    !practice.skill_rise_reported
+                        && practice.skill == *skill_id
+                        && practice.sent.elapsed() < ANSWER_WAIT
+                        && *value > practice.from
+                }) {
+                    practice.skill_rise_reported = true;
+                    world.happened(Message::Event(WorldEvent::Training(
+                        TrainingUpdate::Practice(PracticeUpdate::SkillRaised {
+                            skill: practice.skill,
+                            value: *value,
+                        }),
+                    )));
+                }
+            }
+            Message::Event(WorldEvent::Level {
+                current, previous, ..
+            }) if current != previous && self.points.take().is_some() => {
+                Self::report_practice(PracticeUpdate::PointsUncertain, out)?;
+            }
+            Message::Event(WorldEvent::Despawn(id)) if trainer == Some(*id) => {
+                self.invalidate_trainer(out)?;
+            }
+            Message::Event(WorldEvent::Spawns(spawns))
+                if spawns.iter().any(|spawn| trainer == Some(spawn.spawn_id)) =>
+            {
+                self.invalidate_trainer(out)?;
+            }
+            Message::Event(event) if world.owns_death(event) => {
+                self.invalidate_trainer(out)?;
+            }
+            Message::ZoneOffer(_)
+            | Message::ZoneAnswer(_)
+            | Message::Handoff(_)
+            | Message::LoggedOut => {
+                self.invalidate_trainer(out)?;
+            }
+            _ => (),
+        }
+        Ok(())
     }
 
     /// Tells the host how many practice points are left.
@@ -233,20 +410,69 @@ impl Feature for Training {
             TrainingRequest::Train { skill } => {
                 self.train(command, skill, world, out, Instant::now())
             }
+            TrainingRequest::TrainAt { trainer, skill } => {
+                if self.trainer.as_ref().map(|offer| offer.spawn_id) != Some(trainer) {
+                    return actions::refuse(
+                        command,
+                        "That training window is no longer current.",
+                        out.log,
+                    );
+                }
+                self.train(command, skill, world, out, Instant::now())
+            }
             TrainingRequest::End => self.end(out),
         }
     }
 
-    fn tick(&mut self, now: Instant, _world: &mut World, _out: &mut Out<'_, '_>) -> Result<()> {
-        self.pending
-            .retain(|practice| now.duration_since(practice.sent) < ANSWER_WAIT);
+    fn tick(&mut self, now: Instant, world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
+        if !self.p99 {
+            self.pending
+                .retain(|practice| now.saturating_duration_since(practice.sent) < ANSWER_WAIT);
+            return Ok(());
+        }
+        if let Some(trainer) = self.trainer.as_ref() {
+            if trainer.offer.is_none()
+                && now.saturating_duration_since(trainer.requested_at) >= ANSWER_WAIT
+            {
+                self.trainer = None;
+                out.log
+                    .send(ClientEvent::World(WorldEvent::TrainingRefused {
+                        session_id: world.session_id,
+                        reason: "The guildmaster has not answered. The outcome is unknown.".into(),
+                    }))?;
+            } else if world.lifecycle.blocks_motion()
+                || Self::eligible(trainer.spawn_id, world).is_err()
+            {
+                self.invalidate_trainer(out)?;
+            }
+        }
+        if self
+            .pending
+            .front()
+            .is_some_and(|practice| now.saturating_duration_since(practice.sent) >= ANSWER_WAIT)
+        {
+            self.retire_practice(out)?;
+        }
         Ok(())
     }
 
-    /// A skill's new value that answers a practice is that practice: it
-    /// spends a point and its cost when the skill rose, and nothing when the
-    /// guildmaster refused, which the server says in chat.
-    fn explain(&mut self, message: &mut Message, _world: &World) {
+    /// Scopes opening replies and preserves `EQEmu`'s existing skill projection.
+    fn explain(&mut self, message: &mut Message, world: &World) {
+        if let Message::TrainingReply(reply) = message {
+            if !self.p99 {
+                *message = Message::Event(WorldEvent::Training(TrainingUpdate::Offered(
+                    reply.offer.clone(),
+                )));
+            } else if reply.accepted && self.p99_reply_current(reply, world) {
+                *message = Message::Event(WorldEvent::Training(TrainingUpdate::Offered(
+                    training::p99_offer(reply.offer.clone()),
+                )));
+            }
+            return;
+        }
+        if self.p99 {
+            return;
+        }
         let Message::Event(WorldEvent::Skill { skill_id, value }) = message else {
             return;
         };
@@ -272,9 +498,12 @@ impl Feature for Training {
     fn observe(
         &mut self,
         message: &Message,
-        _world: &mut World,
+        world: &mut World,
         out: &mut Out<'_, '_>,
     ) -> Result<()> {
+        if self.p99 {
+            self.observe_p99(message, world, out)?;
+        }
         let Message::Event(event) = message else {
             return Ok(());
         };
@@ -293,7 +522,7 @@ impl Feature for Training {
                 self.points = self.points.map(|points| points.saturating_sub(1));
                 self.tell_points(out)
             }
-            WorldEvent::Level { current, .. } if *current > self.highest_level => {
+            WorldEvent::Level { current, .. } if !self.p99 && *current > self.highest_level => {
                 let gained = u32::from(*current - self.highest_level);
                 self.highest_level = *current;
                 self.points = self
@@ -334,7 +563,7 @@ mod tests {
             ..eq_network_game::money::Wallet::default()
         }
         .into();
-        for (spawn_id, class, x) in [(42, 20, 5.0), (43, 21, 5.0), (44, 20, 300.0)] {
+        for (spawn_id, class, x) in [(42, 20, 5.0), (43, 21, 5.0), (44, 20, 300.0), (45, 20, 5.0)] {
             let mut guildmaster = testing::spawn(spawn_id, SpawnKind::Npc);
             guildmaster.class = Some(class);
             guildmaster.position = Position {
@@ -541,6 +770,252 @@ mod tests {
             refusals(&outcome.events),
             ["You cannot afford to train that skill."]
         );
+    }
+
+    fn p99() -> (Training, World) {
+        let (_, mut world) = warrior();
+        world.admitted = Some(Instant::now());
+        let mut training = Training::project1999();
+        testing::run(|out| training.admitted(&mut world, out))
+            .result
+            .unwrap();
+        (training, world)
+    }
+
+    fn hear(
+        training: &mut Training,
+        world: &mut World,
+        mut message: Message,
+    ) -> (Message, Vec<ClientEvent>) {
+        training.explain(&mut message, world);
+        let outcome = testing::run(|out| training.observe(&message, world, out));
+        outcome.result.unwrap();
+        (message, outcome.events)
+    }
+
+    fn reply(trainer: u16, recipient: u16, accepted: bool) -> Message {
+        let mut body = training::titanium_open(trainer, recipient).body;
+        body[412] = u8::from(accepted);
+        body[8 + 30 * 4] = 200;
+        eq_network_game::message::titanium(training::OFFER_OPCODE, &body).remove(0)
+    }
+
+    fn open(
+        training: &mut Training,
+        world: &mut World,
+        trainer: u16,
+    ) -> testing::Outcome<Result<()>> {
+        handle(training, world, TrainingRequest::Open { trainer })
+    }
+
+    fn open_and_admit(training: &mut Training, world: &mut World, trainer: u16) {
+        let opened = open(training, world, trainer);
+        opened.result.unwrap();
+        assert_eq!(opened.sent, [training::titanium_open(trainer, 7)]);
+        assert!(matches!(
+            hear(training, world, reply(trainer, 7, true)).0,
+            Message::Event(WorldEvent::Training(TrainingUpdate::Offered(_)))
+        ));
+    }
+
+    #[test]
+    fn p99_requires_the_requested_trainer_recipient_and_admission_flag() {
+        let (mut training, mut world) = p99();
+        assert!(matches!(
+            hear(&mut training, &mut world, reply(42, 7, true)).0,
+            Message::TrainingReply(_)
+        ));
+        open(&mut training, &mut world, 42).result.unwrap();
+        for message in [reply(43, 7, true), reply(42, 9, true), reply(42, 9, false)] {
+            let (message, events) = hear(&mut training, &mut world, message);
+            assert!(matches!(message, Message::TrainingReply(_)));
+            assert!(events.is_empty());
+        }
+        assert!(matches!(
+            hear(&mut training, &mut world, reply(42, 7, true)).0,
+            Message::Event(WorldEvent::Training(TrainingUpdate::Offered(_)))
+        ));
+    }
+
+    #[test]
+    fn a_p99_trainer_opening_is_single_use_after_either_reply() {
+        for accepted in [true, false] {
+            let (mut training, mut world) = p99();
+            open(&mut training, &mut world, 42).result.unwrap();
+            let (message, events) = hear(&mut training, &mut world, reply(42, 7, accepted));
+            if accepted {
+                assert!(matches!(
+                    message,
+                    Message::Event(WorldEvent::Training(TrainingUpdate::Offered(_)))
+                ));
+                let closed = handle(&mut training, &mut world, TrainingRequest::End);
+                assert_eq!(closed.sent, [training::titanium_end(42, 7)]);
+            } else {
+                assert_eq!(
+                    refusals(&events),
+                    ["The guildmaster declined to open training."]
+                );
+            }
+            let repeated = open(&mut training, &mut world, 42);
+            assert_eq!(repeated.sent, []);
+            assert_eq!(
+                refusals(&repeated.events),
+                ["Re-enter the zone before asking this guildmaster again."]
+            );
+
+            let distinct = open(&mut training, &mut world, 45);
+            assert_eq!(distinct.sent, [training::titanium_open(45, 7)]);
+            for old_reply in [reply(42, 7, true), reply(42, 7, false)] {
+                let (message, events) = hear(&mut training, &mut world, old_reply);
+                assert!(matches!(message, Message::TrainingReply(_)));
+                assert!(events.is_empty());
+            }
+            assert!(matches!(
+                hear(&mut training, &mut world, reply(45, 7, true)).0,
+                Message::Event(WorldEvent::Training(TrainingUpdate::Offered(_)))
+            ));
+        }
+    }
+
+    #[test]
+    fn positive_and_negative_p99_opening_replies_share_the_deadline() {
+        let (mut training, mut world) = p99();
+        open(&mut training, &mut world, 42).result.unwrap();
+        let now = Instant::now();
+        training.trainer.as_mut().unwrap().requested_at = now.checked_sub(ANSWER_WAIT).unwrap();
+        for late in [reply(42, 7, false), reply(42, 7, true)] {
+            let (message, events) = hear(&mut training, &mut world, late);
+            assert!(matches!(message, Message::TrainingReply(_)));
+            assert!(events.is_empty());
+        }
+        let expired = testing::run(|out| training.tick(now, &mut world, out));
+        assert_eq!(
+            refusals(&expired.events),
+            ["The guildmaster has not answered. The outcome is unknown."]
+        );
+        assert!(training.trainer.is_none());
+        assert_eq!(open(&mut training, &mut world, 42).sent, []);
+    }
+
+    #[test]
+    fn p99_same_skill_increases_cannot_settle_an_unanswered_spend() {
+        for (from, value) in [(12, 13), (0, 5)] {
+            let (mut training, mut world) = p99();
+            world.player.corrected().unwrap().skills.as_mut().unwrap()[30] = from;
+            open_and_admit(&mut training, &mut world, 42);
+            let request = TrainingRequest::TrainAt {
+                trainer: 42,
+                skill: 30,
+            };
+            assert_eq!(
+                handle(&mut training, &mut world, request).sent,
+                [training::titanium_train(42, 30).unwrap()]
+            );
+            assert_eq!(training.points, None);
+            assert!(matches!(
+                world.take_news().as_slice(),
+                [Message::Event(WorldEvent::Training(
+                    TrainingUpdate::Practice(PracticeUpdate::Requested {
+                        skill: 30,
+                        estimated_cost: 0
+                    })
+                ))]
+            ));
+            let skill = |skill_id, value| Message::Event(WorldEvent::Skill { skill_id, value });
+            hear(&mut training, &mut world, skill(29, 13));
+            hear(&mut training, &mut world, skill(30, from));
+            assert!(world.take_news().is_empty());
+            assert!(matches!(
+                hear(&mut training, &mut world, skill(30, value)).0,
+                Message::Event(WorldEvent::Skill { skill_id: 30, value: got }) if got == value
+            ));
+            assert!(matches!(
+                world.take_news().as_slice(),
+                [Message::Event(WorldEvent::Training(TrainingUpdate::Practice(
+                    PracticeUpdate::SkillRaised { skill: 30, value: got }
+                )))] if *got == value
+            ));
+            assert_eq!(training.pending.len(), 1);
+            assert_eq!(handle(&mut training, &mut world, request).sent, []);
+            let expired =
+                testing::run(|out| training.tick(Instant::now() + ANSWER_WAIT, &mut world, out));
+            assert!(matches!(
+                expired.events.as_slice(),
+                [ClientEvent::World(WorldEvent::Training(
+                    TrainingUpdate::Practice(PracticeUpdate::Unanswered { skill: 30 })
+                ))]
+            ));
+            assert_eq!(expired.sent, []);
+            assert_eq!(handle(&mut training, &mut world, request).sent, []);
+            assert_eq!(training.points, None);
+        }
+    }
+
+    #[test]
+    fn p99_trainer_replacement_or_transfer_retires_the_spend_observation() {
+        for interrupt in [
+            Message::Event(WorldEvent::Spawns(vec![testing::spawn(42, SpawnKind::Npc)])),
+            Message::ZoneOffer(eq_network_game::zoning::ZoneOffer {
+                zone_id: 8,
+                instance_id: 0,
+                position: Position::default(),
+                reason: 0,
+                to_bind: false,
+                solicited: true,
+            }),
+        ] {
+            let (mut training, mut world) = p99();
+            open_and_admit(&mut training, &mut world, 42);
+            let skill = 30;
+            assert_eq!(
+                handle(
+                    &mut training,
+                    &mut world,
+                    TrainingRequest::TrainAt { trainer: 42, skill }
+                )
+                .sent
+                .len(),
+                1
+            );
+            drop(world.take_news());
+            let (_, events) = hear(&mut training, &mut world, interrupt);
+            assert!(matches!(
+                events.as_slice(),
+                [
+                    ClientEvent::World(WorldEvent::Training(TrainingUpdate::Practice(
+                        PracticeUpdate::Unanswered { skill: 30 }
+                    ))),
+                    ClientEvent::World(WorldEvent::Training(TrainingUpdate::Ended))
+                ]
+            ));
+            open_and_admit(&mut training, &mut world, 45);
+            let (late, events) = hear(
+                &mut training,
+                &mut world,
+                Message::Event(WorldEvent::Skill {
+                    skill_id: skill,
+                    value: 13,
+                }),
+            );
+            assert!(matches!(
+                late,
+                Message::Event(WorldEvent::Skill {
+                    skill_id: 30,
+                    value: 13
+                })
+            ));
+            assert!(events.is_empty());
+            assert!(world.take_news().is_empty());
+            assert_eq!(
+                handle(
+                    &mut training,
+                    &mut world,
+                    TrainingRequest::TrainAt { trainer: 45, skill }
+                )
+                .sent,
+                []
+            );
+        }
     }
 
     #[test]

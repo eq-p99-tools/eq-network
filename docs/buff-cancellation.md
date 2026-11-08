@@ -11,9 +11,11 @@ its own eligibility check.
 The session revalidates received membership, rejects stale and duplicate-spell
 selections, and sends only for its own player. An observed landing without a slot
 invalidates an older assignment for that spell; it never supplies a guessed slot.
-Only Titanium EQEmu offers `CancellingBuffs`. P99 remains an unresolved evidence
-gap: the variant below is not offered by its policy pending source/capture
-follow-up. Quarm and TAKP are deferred.
+Titanium EQEmu and P99 offer `CancellingBuffs`. P99 sends the two-record
+sequence built by `buffs::cancel::project1999_packets`: the first record names
+the old spell with cleared buff fields, the second names an empty slot with its
+clear flag. Its source is not yet cited in this repository (recording checklist
+6.396). Quarm and TAKP are deferred.
 
 The initialized request uses Titanium `OP_Buff` (`0x6a53`), 32 bytes: own entity
 at 0, the received 20-byte buff record at 4, slot at 24 and zero at 28. The unused
@@ -41,7 +43,8 @@ alone cannot identify the buff or remove a replacement.
 This implementation sends one initialized current-record request, which the
 EQEmu handler supports, and awaits received membership. A client-side sender
 layout alone leaves both request sequencing and the server's fade contract
-unresolved. P99 remains gated pending that evidence and an attended check.
+unresolved. P99's two-record sequence still awaits its citation and an attended
+check.
 
 Regression fixtures are constructed. Domain checks, worker submission/fade/echo/
 replacement/timeout/reset/send-failure cases and selected-policy lifecycle gates

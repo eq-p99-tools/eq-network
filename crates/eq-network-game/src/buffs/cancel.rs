@@ -32,6 +32,8 @@ pub struct Request {
 pub enum Progress {
     /// Transport submission only; received membership is unchanged.
     Submitted,
+    /// The first packet was submitted, but the second could not be sent.
+    PartiallySubmitted,
     /// A received fade matched the selected slot and spell during the local
     /// wait. It may be natural expiry; it does not acknowledge cancellation.
     FadeObserved,
@@ -111,7 +113,7 @@ impl Request {
     }
 }
 
-/// Titanium's C2S `OP_Buff`, after identity and provider validation.
+/// `EQEmu`'s initialized Titanium C2S `OP_Buff` after slot validation.
 ///
 /// # Errors
 /// Refuses a missing own-player identity or a sentinel spell.
@@ -134,6 +136,33 @@ pub fn titanium_packet(own_id: u16, slot: u32, buff: &Buff) -> Result<EncodedCom
         opcode: 0x6a53,
         body,
     })
+}
+
+/// Builds P99's Titanium cancellation pair in send order, after slot validation.
+///
+/// The first record names the old spell in the cleared buff fields. Its
+/// unwritten trailing word is initialized to zero here. The second names an
+/// empty slot with its explicit clear flag.
+///
+/// # Errors
+/// Refuses a missing own-player identity, a non-player slot or a sentinel spell.
+pub fn project1999_packets(own_id: u16, slot: u32, spell_id: u32) -> Result<[EncodedCommand; 2]> {
+    ensure!(
+        own_id != 0 && slot < 38 && !matches!(spell_id, 0 | 0xffff | u32::MAX),
+        "Invalid P99 buff cancellation"
+    );
+    let packet = |spell: u32, clear: u32| {
+        let mut body = vec![0; 32];
+        body[..4].copy_from_slice(&u32::from(own_id).to_le_bytes());
+        body[8..12].copy_from_slice(&spell.to_le_bytes());
+        body[24..28].copy_from_slice(&slot.to_le_bytes());
+        body[28..].copy_from_slice(&clear.to_le_bytes());
+        EncodedCommand {
+            opcode: 0x6a53,
+            body,
+        }
+    };
+    Ok([packet(spell_id, 0), packet(u32::MAX, 1)])
 }
 
 #[cfg(test)]
@@ -188,6 +217,31 @@ mod tests {
         assert!(request.check(7, Some(&slots)).is_err());
         slots.clear();
         assert!(request.check(7, Some(&slots)).is_err());
+    }
+
+    #[test]
+    fn p99_cancellation_sends_a_named_fade_then_the_sentinel_clear() {
+        let [fade, clear] = project1999_packets(7, 3, 42).unwrap();
+        assert_eq!((fade.opcode, clear.opcode), (0x6a53, 0x6a53));
+        assert_eq!(
+            fade.body,
+            [
+                7, 0, 0, 0, 0, 0, 0, 0, 42, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 3, 0, 0,
+                0, 0, 0, 0, 0,
+            ]
+        );
+        assert_eq!(
+            clear.body,
+            [
+                7, 0, 0, 0, 0, 0, 0, 0, 255, 255, 255, 255, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 3,
+                0, 0, 0, 1, 0, 0, 0,
+            ]
+        );
+        assert!(project1999_packets(0, 3, 42).is_err());
+        assert!(project1999_packets(7, 38, 42).is_err());
+        for spell in [0, 0xffff, u32::MAX] {
+            assert!(project1999_packets(7, 3, spell).is_err());
+        }
     }
 
     #[test]
