@@ -12,6 +12,7 @@ use super::coverage::{Stage, Unheard};
 use crate::client::PlayerAdmissionError;
 use eq_network_game::{
     message::{Message, Part},
+    objects::ObjectUpdate,
     world::{Capability, WorldEvent},
 };
 use eq_network_transport::Transport;
@@ -659,6 +660,14 @@ fn hear(
     let mut news = 0;
     while let Some(mut message) = queue.pop_front() {
         features.explain(&mut message, world);
+        let own_open = match &message {
+            Message::Event(WorldEvent::Objects(ObjectUpdate::Container(view)))
+                if view.open && world.is_player(view.player_id) =>
+            {
+                Some(world.container.expects(view.drop_id))
+            }
+            _ => None,
+        };
         if let Message::Unreadable { part, error } = &message {
             out.log.diagnostic(format!("{part} rejected: {error}"))?;
         }
@@ -682,7 +691,16 @@ fn hear(
         );
         // Before the admission, the features staged what they need of it.
         if let (Message::Event(event), true) = (message, world.ready()) {
-            out.log.send(ClientEvent::World(event))?;
+            // Own opens are shown only when this reply granted the current lease.
+            let publish = match (&event, own_open) {
+                (WorldEvent::Objects(ObjectUpdate::Container(view)), Some(asked)) => {
+                    asked && world.container.opened(view)
+                }
+                _ => true,
+            };
+            if publish {
+                out.log.send(ClientEvent::World(event))?;
+            }
         }
         let made = world.take_news();
         news += made.len();

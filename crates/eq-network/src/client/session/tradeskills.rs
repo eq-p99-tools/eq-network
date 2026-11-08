@@ -50,7 +50,13 @@ enum Container {
         received: Instant,
     },
     /// The close was sent. Its station-only inventory stream is retiring.
-    Closing(ContainerView),
+    Closing {
+        view: ContainerView,
+        /// Whether this retires a station the client was allowed to use.
+        owned: bool,
+        /// A full clear arrived, but it may have belonged to a combine.
+        cleared: bool,
+    },
     /// The untagged station inventory stream can no longer be attributed.
     Blocked,
 }
@@ -68,16 +74,24 @@ impl OpenContainer {
 
     pub(super) fn represents(&self, view: &ContainerView) -> bool {
         match &self.0 {
-            Some(Container::Open { view: current, .. } | Container::Closing(current)) => {
-                current == view
-            }
+            Some(
+                Container::Open { view: current, .. } | Container::Closing { view: current, .. },
+            ) => current == view,
             Some(Container::Blocked) => true,
             _ => false,
         }
     }
 
-    fn owns_station_inventory(&self) -> bool {
-        matches!(self.0, Some(Container::Open { .. } | Container::Closing(_)))
+    pub(super) fn opened(&self, view: &ContainerView) -> bool {
+        matches!(&self.0, Some(Container::Open { view: opened, .. }) if opened == view)
+    }
+
+    fn closing(view: &ContainerView, owned: bool) -> Container {
+        Container::Closing {
+            view: view.clone(),
+            owned,
+            cleared: false,
+        }
     }
 
     pub(super) fn check_action(
@@ -201,7 +215,7 @@ impl Tradeskills {
                 // GroundObjects closed this unasked open. Preserve its
                 // retirement stream or discard ambiguous station-only data.
                 world.container.0 = Some(if world.container.0.is_none() {
-                    Container::Closing(view.clone())
+                    OpenContainer::closing(view, false)
                 } else {
                     Container::Blocked
                 });
@@ -247,13 +261,20 @@ impl Tradeskills {
         } else {
             if same_placement {
                 out.request(&close_request(view))?;
-                world.container.0 = Some(Container::Closing(view.clone()));
+                world.container.0 = Some(OpenContainer::closing(view, false));
             } else {
                 world.container.0 = Some(Container::Blocked);
             }
             world.happened(Message::Event(WorldEvent::Objects(ObjectUpdate::Closed {
                 drop_id: view.drop_id,
             })));
+            if !retired {
+                out.log.send(ClientEvent::World(WorldEvent::ObjectAction {
+                    session_id: world.session_id,
+                    drop_id: view.drop_id,
+                    error: Some("The server reply did not open the requested station".into()),
+                }))?;
+            }
         }
         Ok(())
     }
@@ -265,11 +286,15 @@ impl Feature for Tradeskills {
         vec![Capability::Tradeskills, Capability::WorldContainers]
     }
 
-    fn holds(&self, _world: &World, _now: Instant) -> Vec<(Resource, &'static str)> {
-        (self.combining.is_some() || self.station_clear_pending)
-            .then_some((Resource::Inventory, "Wait for the combine to finish"))
-            .into_iter()
-            .collect()
+    fn holds(&self, world: &World, _now: Instant) -> Vec<(Resource, &'static str)> {
+        // When the station lease is blocked, no world-only inventory update
+        // can reach the inventory. Ordinary inventory may resume after reset.
+        (self.combining.is_some()
+            || (self.station_clear_pending
+                && !matches!(world.container.0, Some(Container::Blocked))))
+        .then_some((Resource::Inventory, "Wait for the combine to finish"))
+        .into_iter()
+        .collect()
     }
 
     fn owns(&self, command: &ClientCommand) -> bool {
@@ -295,7 +320,17 @@ impl Feature for Tradeskills {
             } => (session_id, container, created),
             ClientCommand::OpenContainer {
                 drop_id, created, ..
-            } => return open(drop_id, created, self.scope == Scope::Forge, world, out),
+            } => {
+                let ordered_reopen = self.scope == Scope::All && self.combining.is_none();
+                return open(
+                    drop_id,
+                    created,
+                    self.scope == Scope::Forge,
+                    ordered_reopen,
+                    world,
+                    out,
+                );
+            }
             ClientCommand::CloseContainer {
                 drop_id, created, ..
             } => {
@@ -432,16 +467,17 @@ impl Feature for Tradeskills {
             Message::TradeskillNoRecipe if self.combining == Some(WORLD_CONTAINER) => {
                 self.station_clear_pending = false;
             }
-            Message::Event(WorldEvent::Inventory(InventoryUpdate::WorldEmptied))
-                if world.container.owns_station_inventory() =>
-            {
-                // A combine reset and the following clear are independent.
-                // If closing overlaps an unresolved combine, the first clear
-                // cannot establish that the close's stream has ended.
-                if !std::mem::take(&mut self.station_clear_pending)
-                    && matches!(world.container.0, Some(Container::Closing(_)))
-                {
-                    world.container.0 = None;
+            Message::Event(WorldEvent::Inventory(InventoryUpdate::WorldEmptied)) => {
+                let may_be_combine_clear = std::mem::take(&mut self.station_clear_pending);
+                if let Some(Container::Closing { owned, cleared, .. }) = &mut world.container.0 {
+                    if *owned && may_be_combine_clear {
+                        // With a reset-only failure this can be the close's only
+                        // clear. EQEmu's next matching reply can fence the old
+                        // stream after the reset.
+                        *cleared = true;
+                    } else {
+                        world.container.0 = None;
+                    }
                 }
             }
             Message::Event(WorldEvent::Objects(ObjectUpdate::Container(view)))
@@ -459,6 +495,7 @@ impl Feature for Tradeskills {
                     if world.objects.placement(view.drop_id) != Some(*placement) {
                         let drop_id = view.drop_id;
                         world.container.0 = Some(Container::Blocked);
+                        self.station_clear_pending = false;
                         world.happened(Message::Event(WorldEvent::Objects(ObjectUpdate::Closed {
                             drop_id,
                         })));
@@ -474,13 +511,18 @@ impl Feature for Tradeskills {
         let Message::Event(WorldEvent::Inventory(update)) = message else {
             return;
         };
-        let station_only = match update {
-            InventoryUpdate::Set(items) => items.first().is_some_and(|root| root.slot.is_world()),
-            InventoryUpdate::Remove(slot) => slot.is_world(),
-            InventoryUpdate::WorldEmptied => true,
+        let withheld = match update {
+            InventoryUpdate::WorldEmptied => !matches!(
+                world.container.0,
+                Some(Container::Open { .. } | Container::Closing { .. })
+            ),
+            InventoryUpdate::Set(items) => {
+                !world.container.is_open() && items.first().is_some_and(|root| root.slot.is_world())
+            }
+            InventoryUpdate::Remove(slot) => !world.container.is_open() && slot.is_world(),
             _ => false,
         };
-        if station_only && !world.container.owns_station_inventory() {
+        if withheld {
             *message = Message::Withheld;
         }
     }
@@ -505,14 +547,29 @@ fn open(
     drop_id: u32,
     created: Instant,
     forge_only: bool,
+    ordered_reopen: bool,
     world: &mut World,
     out: &mut Out<'_, '_>,
 ) -> Result<()> {
-    let checked = if let Some(container) = &world.container.0 {
+    // EQEmu queues close returns and the final clear before handling a later
+    // click, and queues the new open reply before its contents. While waiting
+    // for that reply, all untagged station records are still fenced.
+    let blocked = world.container.0.as_ref().filter(|container| {
+        !ordered_reopen
+            || !matches!(
+                container,
+                Container::Closing {
+                    owned: true,
+                    cleared: true,
+                    ..
+                }
+            )
+    });
+    let checked = if let Some(container) = blocked {
         let reason = match container {
             Container::Asked { .. } => "wait for the previous station open result",
             Container::Open { .. } => "close the container you are using first",
-            Container::Closing(_) => "wait for the previous station to clear",
+            Container::Closing { .. } => "wait for the previous station to clear",
             Container::Blocked => "the station changed. Re-enter the zone before opening a station",
         };
         Err(anyhow!(reason))
@@ -653,7 +710,7 @@ fn close(world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
     match &mut world.container.0 {
         Some(Container::Open { view, .. }) => {
             out.request(&close_request(view))?;
-            world.container.0 = Some(Container::Closing(view.clone()));
+            world.container.0 = Some(OpenContainer::closing(view, true));
         }
         Some(Container::Asked { retired, .. }) => {
             *retired = true;

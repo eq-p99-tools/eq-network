@@ -4,6 +4,7 @@ use crate::client::{session::feature::testing, ServerProtocol};
 use eq_network_game::{
     food::AutoEat,
     inventory::{Inventory, InventorySlot, InventoryUpdate},
+    objects::{ContainerView, GroundObject},
     tradeskills::{CombineUpdate, WORLD_CONTAINER},
     world::{Capability, WorldEvent},
 };
@@ -177,12 +178,31 @@ fn p99_forge_candidates_need_a_matching_server_forge_reply_before_combining() {
     answer[4..8].copy_from_slice(&71_u32.to_le_bytes());
     answer[8..12].copy_from_slice(&1_u32.to_le_bytes());
     answer[12..16].copy_from_slice(&15_u32.to_le_bytes()); // An oven is outside this offer.
-    hear_packets(
-        &mut features,
-        &mut world,
-        objects::CONTAINER_OPCODE,
-        &answer,
-    );
+    let server = servers::server_type(ServerProtocol::Project1999);
+    let rejection = testing::run_on(server.wire(), |out| {
+        hear(
+            server
+                .wire()
+                .messages(objects::CONTAINER_OPCODE, &answer, server.item_rules()),
+            &mut features,
+            &mut world,
+            out,
+            true,
+        )
+    });
+    rejection.result.unwrap();
+    assert_eq!(rejection.sent.len(), 1);
+    assert!(!rejection.events.iter().any(|event| matches!(
+        event,
+        ClientEvent::World(WorldEvent::Objects(ObjectUpdate::Container(_)))
+    )));
+    let content = Message::Event(WorldEvent::Inventory(InventoryUpdate::Set(vec![
+        testing::item(4000),
+    ])));
+    let late = testing::run(|out| hear(vec![content], &mut features, &mut world, out, true));
+    late.result.unwrap();
+    assert!(late.events.is_empty());
+    assert!(world.inventory.items().keys().all(|slot| !slot.is_world()));
     assert!(!world.container.is_open());
     let waiting = testing::run(|out| features.handle(&open(), &mut world, out));
     assert!(waiting.result.unwrap());
@@ -203,6 +223,128 @@ fn p99_forge_candidates_need_a_matching_server_forge_reply_before_combining() {
     let empty = testing::run(|out| features.handle(&combine(WORLD_CONTAINER), &mut world, out));
     assert!(empty.result.unwrap());
     assert!(empty.sent.is_empty());
+}
+
+#[test]
+fn eqemu_ordered_reopen_fences_close_after_a_reset_with_or_without_combine_clear() {
+    let server = servers::server_type(ServerProtocol::EqEmu);
+    for combine_clears in [false, true] {
+        let mut features = Features::new(server, "Tester", AutoEat::default());
+        let (_, mut world) = setup();
+        let object = Message::Event(WorldEvent::Objects(ObjectUpdate::Spawn(GroundObject {
+            drop_id: 71,
+            model: "FORGE".into(),
+            position: Default::default(),
+            object_type: 17,
+        })));
+        let open = || ClientCommand::OpenContainer {
+            session_id: 5,
+            drop_id: 71,
+            created: Instant::now(),
+        };
+        let reply = || {
+            Message::Event(WorldEvent::Objects(ObjectUpdate::Container(
+                ContainerView {
+                    player_id: 7,
+                    drop_id: 71,
+                    open: true,
+                    object_type: 17,
+                    icon: 1,
+                    name: "Forge".into(),
+                },
+            )))
+        };
+        let clear = || Message::Event(WorldEvent::Inventory(InventoryUpdate::WorldEmptied));
+        let content = || {
+            Message::Event(WorldEvent::Inventory(InventoryUpdate::Set(vec![
+                testing::item(4000),
+            ])))
+        };
+        let outcome = testing::run_on(server.wire(), |out| {
+            hear(vec![object], &mut features, &mut world, out, true)?;
+            features.handle(&open(), &mut world, out)?;
+            hear(
+                vec![reply(), content()],
+                &mut features,
+                &mut world,
+                out,
+                true,
+            )?;
+            assert!(world.container.is_open());
+            features.handle(&combine(WORLD_CONTAINER), &mut world, out)?;
+            hear(
+                vec![Message::Event(WorldEvent::Combine(CombineUpdate::Answered))],
+                &mut features,
+                &mut world,
+                out,
+                true,
+            )?;
+            assert!(!features.holds(&world, Instant::now()).is_empty());
+            features.handle(
+                &ClientCommand::CloseContainer {
+                    session_id: 5,
+                    drop_id: 71,
+                    created: Instant::now(),
+                },
+                &mut world,
+                out,
+            )?;
+            let mut first = Vec::new();
+            if !combine_clears {
+                // This was a reset-only failure. The sole clear belongs to
+                // close, following the independent return.
+                first.push(Message::Event(WorldEvent::Inventory(
+                    InventoryUpdate::Cursor(vec![testing::item(30)]),
+                )));
+            }
+            first.push(clear());
+            hear(first, &mut features, &mut world, out, true)?;
+            assert!(features.holds(&world, Instant::now()).is_empty());
+            assert!(!world.container.is_open());
+            assert!(world.inventory.items().keys().all(|slot| !slot.is_world()));
+            assert_eq!(
+                world.inventory.items().contains_key(&InventorySlot::CURSOR),
+                !combine_clears,
+            );
+            features.handle(&open(), &mut world, out)?;
+            if combine_clears {
+                // This is the close's clear arriving before the matching
+                // newer reply on the same ordered stream.
+                hear(vec![clear()], &mut features, &mut world, out, true)?;
+            }
+            assert!(!world.container.is_open());
+            hear(
+                vec![reply(), content()],
+                &mut features,
+                &mut world,
+                out,
+                true,
+            )?;
+            assert!(world.container.is_open());
+            assert!(world.inventory.items().contains_key(&InventorySlot(4000)));
+            Ok(())
+        });
+        outcome.result.unwrap();
+        assert_eq!(
+            outcome
+                .sent
+                .iter()
+                .map(|packet| packet.opcode)
+                .collect::<Vec<_>>(),
+            [0x3bc2, 0x0b40, 0x6937, 0x3bc2]
+        );
+        assert_eq!(
+            outcome
+                .events
+                .iter()
+                .filter(|event| matches!(
+                    event,
+                    ClientEvent::World(WorldEvent::Objects(ObjectUpdate::Container(_)))
+                ))
+                .count(),
+            2
+        );
+    }
 }
 
 #[test]
