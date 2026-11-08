@@ -1117,6 +1117,17 @@ impl Feature for Belongings {
         if matches!(message, Message::Event(WorldEvent::Coins(_))) {
             self.trades.coins_replaced();
         }
+        if matches!(
+            message,
+            Message::Event(WorldEvent::Training(TrainingUpdate::Practice(
+                eq_network_game::training::PracticeUpdate::Requested {
+                    estimated_cost: 1..,
+                    ..
+                },
+            )))
+        ) {
+            purse_uncertain(world, out)?;
+        }
         let known_coins = match message {
             Message::Event(WorldEvent::Merchant(update)) => {
                 let known = self.trades.coins_current(update);

@@ -7,6 +7,13 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Offer skill training on Project 1999 through an addressed, admitted trainer
+  reply and one practice request at a time. Keep received skill changes
+  independent of provisional point and price estimates. Paid requests
+  invalidate the purse projection until a fresh balance arrives.
+  Consumers matching training requests, training updates or decoded messages
+  exhaustively must handle the new variants.
+
 - `Client::consider_npcs_by_level` exposes the selected server's NPC
   consider presentation policy. All current policies use the received
   color. The consider reply documents the faction code swaps in EQEmu

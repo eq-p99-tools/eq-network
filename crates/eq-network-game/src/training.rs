@@ -46,6 +46,13 @@ pub enum TrainingRequest {
         /// The skill's number.
         skill: u32,
     },
+    /// Practices against the trainer shown in the host's window.
+    TrainAt {
+        /// The guildmaster shown in the open offer.
+        trainer: u16,
+        /// The selected skill.
+        skill: u32,
+    },
     /// Leaves training.
     End,
 }
@@ -89,8 +96,64 @@ pub enum TrainingUpdate {
         /// What the practice cost, in copper.
         cost: u64,
     },
+    /// A Titanium practice and the limits of what can be inferred from its updates.
+    Practice(PracticeUpdate),
     /// Training ended.
     Ended,
+}
+
+/// Authority of the point count displayed in the training window.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum PracticePoints {
+    /// No current balance is known.
+    #[default]
+    Unknown,
+    /// Balance from the profile or the existing EQEmu policy.
+    Balance(u32),
+    /// Projected from the profile and subsequent skill updates.
+    Estimate(u32),
+}
+
+/// Progress of a Project 1999 practice. A regular skill update does not
+/// contain a practice receipt, a point balance or a price.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+pub enum PracticeUpdate {
+    /// One request was sent; this is the client-side price estimate.
+    Requested {
+        /// The requested skill.
+        skill: u32,
+        /// The client-side price estimate in copper.
+        estimated_cost: u64,
+    },
+    /// The requested skill rose. Point and cost projections remain estimates.
+    SkillRaised {
+        /// The requested skill.
+        skill: u32,
+        /// Its received new value.
+        value: u32,
+        /// The client-side price estimate in copper.
+        estimated_cost: u64,
+        /// The remaining point estimate, if still available.
+        estimated_points: Option<u32>,
+    },
+    /// No matching skill increase was received before the local deadline.
+    Unanswered {
+        /// The requested skill.
+        skill: u32,
+    },
+    /// The profile point count can no longer be projected.
+    PointsUncertain,
+}
+
+/// A Titanium training reply before admission and policy checks.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TrainingReply {
+    /// The player spawn named by the reply.
+    pub trainee: u32,
+    /// Whether the trainer admitted the player.
+    pub accepted: bool,
+    /// The trainer and their skill limits.
+    pub offer: TrainingOffer,
 }
 
 /// Whether a guildmaster of this class trains a player of that one: each
@@ -107,7 +170,7 @@ pub fn trains(trainer_class: u8, player_class: u32) -> bool {
 #[must_use]
 pub fn practice_cost(value: u32) -> u64 {
     let over = u64::from(value.saturating_sub(10));
-    over * over * over / 100
+    u64::try_from(u128::from(over).pow(3) / 100).unwrap_or(u64::MAX)
 }
 
 /// Decodes a Titanium training packet from the server: the guildmaster's
@@ -156,6 +219,28 @@ pub fn titanium_offer(body: &[u8]) -> Result<TrainingOffer> {
         trainer,
         caps: (0..100).map(|skill| word(8 + skill * 4)).collect(),
     })
+}
+
+/// Reads the admission flag and intended player alongside the ordinary offer.
+///
+/// # Errors
+/// Rejects a malformed training record or invalid trainer.
+pub fn titanium_reply(body: &[u8]) -> Result<TrainingReply> {
+    Ok(TrainingReply {
+        offer: titanium_offer(body)?,
+        trainee: u32::from_le_bytes(body[4..8].try_into()?),
+        accepted: body[412] != 0,
+    })
+}
+
+/// Applies the native skill-bank display rules to a received P99 offer.
+pub fn p99_offer(mut offer: TrainingOffer) -> TrainingOffer {
+    for (skill, cap) in offer.caps.iter_mut().enumerate() {
+        if matches!(skill, 15 | 33 | 72) || i32::try_from(*cap).is_err() {
+            *cap = 0;
+        }
+    }
+    offer
 }
 
 /// Encodes one practice of a skill with a guildmaster.
@@ -223,6 +308,26 @@ mod tests {
         let end = titanium_end(42, 7);
         assert_eq!(end.opcode, END_OPCODE);
         assert_eq!(end.body, [42, 0, 0, 0, 7, 0, 0, 0]);
+    }
+
+    #[test]
+    fn native_reply_carries_trainee_admission_and_positive_visible_caps() {
+        let mut body = titanium_open(42, 7).body;
+        assert!(!titanium_reply(&body).unwrap().accepted);
+        body[412] = 1;
+        for (skill, cap) in [(15, 200u32), (30, 200), (31, u32::MAX), (72, 200)] {
+            let at = 8 + skill * 4;
+            body[at..at + 4].copy_from_slice(&cap.to_le_bytes());
+        }
+        let reply = titanium_reply(&body).unwrap();
+        assert!(reply.accepted);
+        assert_eq!(reply.trainee, 7);
+        let offer = p99_offer(reply.offer);
+        assert_eq!(
+            (offer.cap(15), offer.cap(30), offer.cap(31), offer.cap(72)),
+            (0, 200, 0, 0)
+        );
+        assert!(titanium_reply(&body[..412]).is_err());
     }
 
     #[test]

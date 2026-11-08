@@ -18,6 +18,8 @@ const PROFILE_OPCODE: u16 = 0x75df;
 pub enum Message {
     /// News the host hears about too.
     Event(WorldEvent),
+    /// A decoded trainer reply that still needs session checks.
+    TrainingReply(crate::training::TrainingReply),
     /// A decoded resurrection that still needs admission and consent checks.
     Resurrection(crate::resurrection::ResurrectionOffer),
     /// A decoded translocate that still needs admission and consent checks.
@@ -172,6 +174,10 @@ pub fn titanium(opcode: u16, body: &[u8]) -> Vec<Message> {
             },
             Err(error) => unreadable(Part::World, &error),
         },
+        crate::training::OFFER_OPCODE => crate::training::titanium_reply(body).map_or_else(
+            |error| unreadable(Part::World, &error),
+            Message::TrainingReply,
+        ),
         crate::resurrection::OFFER_OPCODE => crate::resurrection::titanium_offer(body).map_or_else(
             |error| unreadable(Part::World, &error),
             Message::Resurrection,

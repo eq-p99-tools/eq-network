@@ -2598,7 +2598,7 @@ mod tests {
         assert!(p99.contains(&Capability::Jumping));
         assert!(p99.contains(&Capability::Reading));
         assert!(!p99.contains(&Capability::GroundDropping));
-        assert!(!p99.contains(&Capability::Training));
+        assert!(p99.contains(&Capability::Training));
         let eqemu = features(crate::client::ServerProtocol::EqEmu).capabilities();
         assert!(!eqemu.contains(&Capability::GroundDropping));
         assert!(eqemu.contains(&Capability::Falling));
