@@ -378,10 +378,13 @@ fn titanium_owned(
         deletion.tick(log)?;
         suggestions.tick(log)?;
         if !entered {
-            match selection
-                .as_ref()
-                .and_then(|list: &crate::client::selection::Selection| list.poll(context.commands))
-            {
+            let choice = match &selection {
+                Some(list) => {
+                    crate::client::selection::Selection::poll(list, context.commands, log)?
+                }
+                None => None,
+            };
+            match choice {
                 Some(crate::client::selection::Choice::GenerateName(
                     list,
                     request,

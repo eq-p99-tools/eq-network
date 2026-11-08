@@ -119,9 +119,31 @@ requested ID. After five seconds without a matching update, the worker
 instead emits `WorldEvent::CastRequestUnconfirmed` for the unanswered
 request and allows a fresh manual attempt. That event reports only the end
 of the local wait. It precedes any later submission in that admission,
-including a manual retry of the same spell. An already begun cast still
-awaits a matching update. Downstream exhaustive `WorldEvent` matches must
-handle the new timeout variant.
+including a manual retry of the same spell. The worker retains the last
+timed-out spell and gem/item source until a compatible own start, an
+answering result naming the spell, a fresh submission, death, or the end of
+the admission. An unrelated own start can hold casting independently.
+An interruption carries no spell ID and releases the active hold.
+
+A late start matches the request by spell ID. Stock TAKP also accepts
+the documented Luclin port rewrite from 2062 or 2706–2709 to 2935. The
+worker emits `WorldEvent::CastLateBegin` with the request spell before
+forwarding the compatible own `SpellUpdate::Began`. Starts carry no
+request ID, so overlapping retries with the same spell or alias remain
+ambiguous. An already begun cast still awaits a matching result. Own
+death clears cast state through the death event. Exhaustive `WorldEvent`
+matches must handle `CastLateBegin` and `CastRequestUnconfirmed`.
+[EQMacEmu start](https://github.com/EQMacEmu/Server/blob/d8d589a0ce486ee47ec990d3c3bbbf604b2572a1/zone/spells.cpp#L501-L511),
+[EQMacEmu port spell IDs](https://github.com/EQMacEmu/Server/blob/d8d589a0ce486ee47ec990d3c3bbbf604b2572a1/common/spdat.cpp#L1305-L1311)
+
+Stock EQEmu and EQMacEmu use spell-bearing `SpellUpdate::Mana` to
+re-enable ordinary casts, including item clicks. That update settles a
+matching cast when `keep_casting` is false. Standalone item-slot
+`BarRefresh` remains a worker compatibility path. The paired host's
+refresh handling covers memorized gems, so standalone item refresh is
+outside the delayed-item completion contract.
+[EQEmu spell bar](https://github.com/EQEmu/EQEmu/blob/4aceae18b94ffaafc08e2b17bc41cd72c77f795d/zone/spells.cpp#L5377-L5390),
+[EQMacEmu spell bar](https://github.com/EQMacEmu/Server/blob/d8d589a0ce486ee47ec990d3c3bbbf604b2572a1/zone/spells.cpp#L3945-L3957)
 
 An unanswered book edit emits terminal `BookActionStatus::Unconfirmed` once
 after 30 seconds and releases the spellbook hold. A fresh edit can proceed
@@ -424,14 +446,18 @@ events, with existing uncertainty, correction and snapshot rules unchanged.
 
 ## Ordinary cursor drops
 
-`Capability::GroundDropping` offers `GameCommand::DropItem` on Titanium
-EQEmu. P99 drop support awaits attended validation of the server's item
-serialization, eligibility and cursor updates. Pass the current admission,
+`Capability::GroundDropping` offers `GameCommand::DropItem` on local-only
+Titanium EQEmu. Public servers await separate validation of item serialization,
+eligibility and cursor updates. Pass the current admission,
 own spawn, inventory revision and exact received cursor item in
-`InventoryDrop` after explicit user consent.
+`InventoryDrop` after explicit user consent. Submission requires current
+carried item and coin evidence sufficient to bound the load.
 `Inventory::plan_ground_drop` requires a positively identified ordinary
 droppable instance and an unqueued cursor. A predicted move settled by silence
 leaves the drop unavailable until the server identifies the new cursor.
+Stock EQEmu's ordinary move to cursor saves the slot without a matching item
+packet, so a later received update or snapshot is needed.
+[EQEmu move and persistence](https://github.com/EQEmu/EQEmu/blob/4aceae18b94ffaafc08e2b17bc41cd72c77f795d/zone/inventory.cpp#L2210-L2230)
 
 Titanium sends an empty `OP_GroundSpawn`. The server chooses the cursor item
 and position. A successful `InventoryAction` with
@@ -443,11 +469,25 @@ cursor removal or quantity update identifies the slot only, and may refer to
 another item after a silent drop. Preserve the last view and mark inventory
 stale on such an update. Re-enter the world for a fresh inventory baseline.
 
-During that hold `Inventory::carried_weight_tenths` returns
-`WeightUnavailable::Inventory`. The queued item may already be the server's
-current cursor, so the displayed load can be too low. The worker withdraws
-active movement input, refuses ready speed reports and withholds fall-damage
-and Safe Fall reports. Supported passive descent remains available.
+During the hold, a received limbo item may already be the server's current
+cursor. On a complete, otherwise unambiguous inventory,
+`Inventory::carried_weight_tenths` takes the heaviest of the displayed and
+queued cursor groups, plus the ordinary non-cursor load. It counts one
+possible cursor group. The worker validates fresh speed inputs against that
+bound before granting active movement. A conflicting cursor update or
+invalidation withdraws active movement until received recovery. Supported
+passive descent and ordinary completed-fall reporting continue during the hold.
+For a landing, `Inventory::ground_drop_weight_tenths` also preserves the
+bound through slot-only reductions and complete cursor-only replacements,
+including a temporary resync token. It retains the heaviest candidate seen.
+An unreadable inventory update or a carried-slot change that can increase
+weight invalidates this proof. A host with unknown load can report only a
+landing cost established independently of load. A landing whose cost
+depends on an unknown load during the hold is not reported. That is more
+lenient than the official client, and the local-only EQEmu drop fence keeps
+it off public servers.
+[EQEmu cursor buffer](https://github.com/EQEmu/EQEmu/blob/4aceae18b94ffaafc08e2b17bc41cd72c77f795d/zone/inventory.cpp#L916-L957)
+[EQEmu weight calculation](https://github.com/EQEmu/EQEmu/blob/4aceae18b94ffaafc08e2b17bc41cd72c77f795d/zone/client_mods.cpp#L720-L784)
 
 Process received ground spawns and removals through the existing object
 owner. The spawn carries no cursor instance correlation, and pickup delivery
@@ -547,11 +587,16 @@ destination validation. The stand-in is not stored as the real destination.
 `WorldEvent::MotionSent` reports the worker's current accepted position and
 the local outcome of the proposal. A locally accepted sample can be submitted
 immediately, held for pacing, or left unchanged by the update gate. The event
-describes worker state only. `WorldEvent::MotionRefused` reports an early
-discard before the worker can return a movement position. It carries the
-original admission and process-local request stamp, with the stamp omitted
-from serialized logs. The new variant requires downstream exhaustive
-`WorldEvent` matches to be updated.
+describes worker state only. `WorldEvent::MotionRefused` reports a discard
+without an accepted position to publish. Both events carry the original
+admission and process-local `created` stamp. The stamp is omitted from
+serialized logs. Match both fields to complete a pending proposal. A Move
+dequeued by zone dispatch or selection has one local terminal result while
+the event handler can receive it. A fatal zone error refuses Moves already
+drained into the abandoned batch. Commands still in the host queue when the
+worker stops have no per-request result. Exhaustive consumers must handle
+`MotionRefused`. `MotionSent` constructors and exact field patterns must
+include `created`.
 
 ## Camping and the movement owner's pending stop
 
@@ -720,6 +765,12 @@ has since selected. Unknown con/damage values remain observable. Neither target
 range nor weapon eligibility is recalculated by the normal toggle owner.
 See [combat evidence and limits](docs/quarm-combat.md).
 
+Hosts can read `Client::consider_npcs_by_level` before connecting. Every
+current server policy prefers the reply's color. The policy affects display
+only and leaves the received color and faction available separately. The
+`combat::Consideration::faction` docs give the wire order and cite the pinned
+server swaps.
+
 This library workspace intentionally does not commit `Cargo.lock`. CI resolves
 dependencies for each toolchain: stable format, Clippy, tests and docs on Linux;
 native tests on Windows. These checks
@@ -844,6 +895,10 @@ fallback or partial application. Hosts must route these facts before their
 own player/profile gates. This networking API applies no installed definitions.
 
 ## Checked local movement preparation
+
+`eq_network_game::buffs::scale_instrument_effect` takes an already evaluated
+signed magnitude and a received modifier. The result is a host projection
+for movement-related effects. An unresolved modifier returns `None`.
 
 `MotionSession::send_move_sample` keeps its existing signature and result
 semantics. Internally it prepares one checked candidate while exclusively

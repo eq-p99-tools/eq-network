@@ -377,7 +377,9 @@ fn run_connected(
             && world.ready()
             && !world.lifecycle.blocks_motion()
             && session.termination().is_none();
-        list_replies.tick(Instant::now(), may_reply, session, log)?;
+        list_replies
+            .tick(Instant::now(), may_reply, session, log)
+            .map_err(|error| abort_commands(commands.iter(), error, log))?;
         let exit = apply_commands(
             &commands,
             &mut features,
@@ -745,8 +747,22 @@ fn apply_commands(
             continue;
         }
         out.sender = sender(out.sender.name, world);
-        let handled = features.handle(command, world, out)?;
-        if let Some(exit) = settle(features, world, out, follows_zones)? {
+        let mut handled = features.handle(command, world, out).map_err(|error| {
+            abort_commands(
+                std::iter::once(command).chain(pending.by_ref()),
+                error,
+                out.log,
+            )
+        })?;
+        // An unowned move cannot publish a position. Complete it before
+        // settling notices, which can independently end the zone.
+        if !handled && matches!(command, ClientCommand::Move(_)) {
+            unoffered(command, out.log)?;
+            handled = true;
+        }
+        if let Some(exit) = settle(features, world, out, follows_zones)
+            .map_err(|error| abort_commands(pending.by_ref(), error, out.log))?
+        {
             let reason = if world.lifecycle.blocks_motion() {
                 hold_reason(world)
             } else {
@@ -762,6 +778,23 @@ fn apply_commands(
         }
     }
     Ok(None)
+}
+
+/// Terminal failures can abandon already-dequeued moves. Publish their
+/// refusals before returning the original error if the event sink still works.
+fn abort_commands<'a>(
+    pending: impl Iterator<Item = &'a ClientCommand>,
+    error: anyhow::Error,
+    log: &mut Events<'_>,
+) -> anyhow::Error {
+    if !error.is::<crate::client::EventDeliveryError>() {
+        for command in pending {
+            if let Err(delivery) = log.refuse_move(command, "The zone connection ended") {
+                return delivery;
+            }
+        }
+    }
+    error
 }
 
 /// Tells the host the zone admitted the player, as the features shape them,
@@ -2130,6 +2163,122 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::too_many_lines, reason = "assert the full ordered cast stream")]
+    fn a_late_begin_keeps_its_request_and_gem_through_the_zone_stream() {
+        use super::super::{casting::Casting, feature::testing};
+        use eq_network_game::spells::SpellUpdate;
+
+        let mut features = Features {
+            provided: vec![Box::new(Casting::default())],
+            choices: Vec::new(),
+            spell_landing_flag: None,
+            answers_list_polls: false,
+            gameplay_departures: false,
+        };
+        let mut world = World::new(5);
+        world.admitted = Some(Instant::now());
+        world.own_spawn = Some(7);
+        let mut player = testing::player(7);
+        player.memorized_spells[2] = Some(202);
+        world.player.admit(player);
+        let cast = || ClientCommand::CastSpell {
+            session_id: 5,
+            gem: 2,
+            spell_id: 202,
+            target_id: 7,
+            created: Instant::now(),
+        };
+        let began = |caster_id| {
+            WorldEvent::Spell(SpellUpdate::Began {
+                caster_id,
+                spell_id: 202,
+                duration_ms: 3000,
+            })
+        };
+        let refresh = |slot| {
+            WorldEvent::Spell(SpellUpdate::BarRefresh {
+                slot,
+                spell_id: 202,
+                reduction_ms: 0,
+            })
+        };
+        let outcome = testing::run(|out| -> Result<()> {
+            apply_commands(&[cast()], &mut features, &mut world, out, true)?;
+            features.tick(Instant::now() + Duration::from_secs(5), &mut world, out)?;
+            assert_eq!(features.refusal(&cast(), &world, Instant::now()), None);
+
+            for event in [began(8), refresh(1)] {
+                hear(
+                    vec![Message::Event(event)],
+                    &mut features,
+                    &mut world,
+                    out,
+                    true,
+                )?;
+                assert_eq!(features.refusal(&cast(), &world, Instant::now()), None);
+            }
+            for event in [began(7), began(7), refresh(1)] {
+                hear(
+                    vec![Message::Event(event)],
+                    &mut features,
+                    &mut world,
+                    out,
+                    true,
+                )?;
+                assert_eq!(
+                    features.refusal(&cast(), &world, Instant::now()),
+                    Some("Wait for the current cast to finish or interrupt it")
+                );
+            }
+            hear(
+                vec![Message::Event(refresh(2))],
+                &mut features,
+                &mut world,
+                out,
+                true,
+            )?;
+            assert_eq!(features.refusal(&cast(), &world, Instant::now()), None);
+            apply_commands(&[cast()], &mut features, &mut world, out, true)?;
+            Ok(())
+        });
+        outcome.result.unwrap();
+        assert_eq!(outcome.sent.len(), 2);
+        let updates: Vec<_> = outcome
+            .events
+            .iter()
+            .filter_map(|event| match event {
+                ClientEvent::World(event) => Some(event.clone()),
+                _ => None,
+            })
+            .collect();
+        let pending = WorldEvent::CastPending {
+            session_id: 5,
+            spell_id: Some(202),
+        };
+        assert_eq!(
+            updates,
+            [
+                pending.clone(),
+                WorldEvent::CastRequestUnconfirmed {
+                    session_id: 5,
+                    spell_id: 202
+                },
+                began(8),
+                refresh(1),
+                WorldEvent::CastLateBegin {
+                    session_id: 5,
+                    requested_spell: 202
+                },
+                began(7),
+                began(7),
+                refresh(1),
+                refresh(2),
+                pending,
+            ]
+        );
+    }
+
+    #[test]
     fn news_that_never_settles_ends_the_session() {
         use crate::client::session::feature::{testing, Feature};
         /// A feature that answers every message with another.
@@ -2451,7 +2600,7 @@ mod tests {
         assert!(!p99.contains(&Capability::GroundDropping));
         assert!(!p99.contains(&Capability::Training));
         let eqemu = features(crate::client::ServerProtocol::EqEmu).capabilities();
-        assert!(eqemu.contains(&Capability::GroundDropping));
+        assert!(!eqemu.contains(&Capability::GroundDropping));
         assert!(eqemu.contains(&Capability::Falling));
         assert!(eqemu.contains(&Capability::Training));
         assert!(eqemu.contains(&Capability::Resurrection));
@@ -2494,6 +2643,7 @@ mod tests {
             &setup,
         )
         .capabilities();
+        assert!(local.contains(&Capability::GroundDropping));
         for liquid in [Capability::Drowning, Capability::LavaHeat] {
             assert!(!p99.contains(&liquid));
             assert!(!eqemu.contains(&liquid));
@@ -2505,8 +2655,7 @@ mod tests {
         assert!(p99.contains(&Capability::GameplayDepartures));
         assert!(eqemu.contains(&Capability::Swimming));
         assert!(!p99.contains(&Capability::Swimming));
-        // EQEmu also offers GroundDropping.
-        assert_eq!(eqemu.len(), p99.len() + 18);
+        assert_eq!(eqemu.len(), p99.len() + 17);
     }
 
     #[test]
@@ -2880,6 +3029,9 @@ mod admission_tests;
 
 #[cfg(test)]
 mod command_batch_tests;
+
+#[cfg(test)]
+mod cast_result_tests;
 
 #[cfg(test)]
 mod stun_tests;

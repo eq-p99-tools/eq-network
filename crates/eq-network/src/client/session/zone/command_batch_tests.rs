@@ -1,9 +1,124 @@
 use super::{super::feature::testing, *};
 use eq_network_game::{
+    command::EncodedCommand,
+    movement::{MotionSession, MovementMode, MovementRequest},
     request::Request,
     world::{Position, WorldEvent},
     zoning::ZoneOffer,
 };
+
+#[derive(Default)]
+struct FailSecondMove(usize);
+
+impl super::super::feature::Sink for FailSecondMove {
+    fn send(&mut self, _: &EncodedCommand) -> Result<()> {
+        panic!("this move batch has no reliable sends");
+    }
+
+    fn send_unreliable(&mut self, _: &EncodedCommand) -> Result<()> {
+        self.0 += 1;
+        ensure!(self.0 == 1, "scripted movement send failure");
+        Ok(())
+    }
+
+    fn last_received_seconds(&self) -> u64 {
+        0
+    }
+}
+
+#[test]
+fn every_dequeued_move_gets_one_stamped_result_even_when_a_send_ends_the_batch() {
+    use super::super::motion::Motion;
+
+    let now = Instant::now();
+    let at = |millis| now.checked_sub(Duration::from_millis(millis)).unwrap();
+    let mut world = World::new(5);
+    world.admitted = Some(at(1000));
+    world.own_spawn = Some(7);
+    world.player.admit(testing::player(7));
+    let mut features = Features {
+        provided: vec![Box::new(Motion::new(true, false, None))],
+        choices: Vec::new(),
+        spell_landing_flag: None,
+        answers_list_polls: false,
+        gameplay_departures: false,
+    };
+    let original = Position::default();
+    let request = |mode, session_id, created| {
+        ClientCommand::Move(MovementRequest::new(mode, session_id, original, created))
+    };
+    let commands = [
+        request(MovementMode::Fall, 4, at(120)),
+        request(MovementMode::Forward, 5, at(115)),
+        request(MovementMode::Fall, 5, at(100)),
+        request(MovementMode::Fall, 5, at(20)),
+        request(MovementMode::Fall, 4, at(10)),
+        request(MovementMode::Fall, 5, now),
+    ];
+    let mut sink = FailSecondMove::default();
+    let outcome = testing::run(|out| {
+        features.admitted(&mut world, out)?;
+        // Replace only the pacing gate so both checked samples reach the fake
+        // transport during this single production command batch.
+        world
+            .body
+            .admit(MotionSession::new(5, 7, original, at(1000))?.with_falls(true));
+        apply_commands(
+            &commands,
+            &mut features,
+            &mut world,
+            &mut Out {
+                sink: &mut sink,
+                log: &mut *out.log,
+                wire: out.wire,
+                sender: out.sender,
+            },
+            true,
+        )
+    });
+    assert_eq!(sink.0, 2);
+    let Err(error) = outcome.result else {
+        panic!("the scripted send failure should end the batch");
+    };
+    assert_eq!(error.to_string(), "scripted movement send failure");
+    assert_eq!(world.body.position(), Some(original));
+    let results: Vec<_> = outcome
+        .events
+        .iter()
+        .filter_map(|event| match event {
+            ClientEvent::World(WorldEvent::MotionSent {
+                session_id,
+                created,
+                position,
+                refused,
+            }) => {
+                assert_eq!(*position, original);
+                Some((*session_id, *created, refused.as_deref()))
+            }
+            ClientEvent::World(WorldEvent::MotionRefused {
+                session_id,
+                created,
+                reason,
+            }) => Some((*session_id, *created, Some(reason.as_str()))),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        results,
+        [
+            (4, at(120), Some("That was meant for an earlier zone visit")),
+            (
+                5,
+                at(115),
+                Some("player input is withdrawn; only vertical descent is allowed")
+            ),
+            (5, at(100), None),
+            (5, at(20), Some("The zone connection ended")),
+            (4, at(10), Some("The zone connection ended")),
+            (5, now, Some("The zone connection ended")),
+        ]
+    );
+}
 
 #[derive(Clone, Copy)]
 enum Transition {

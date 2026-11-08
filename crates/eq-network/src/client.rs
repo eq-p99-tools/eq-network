@@ -654,6 +654,14 @@ pub struct Client {
 }
 
 impl Client {
+    /// Whether the selected server policy asks the host to estimate NPC
+    /// consider difficulty from the classic level scale. All current policies
+    /// display the received color. This setting does not change the reply.
+    #[must_use]
+    pub fn consider_npcs_by_level(&self) -> bool {
+        session::consider_npcs_by_level(self.config.protocol)
+    }
+
     /// Item placement rules used by the selected server's inventory owner.
     /// Available before connection so host projections use the same policy.
     /// None means the server type does not provide inventory movement.
@@ -890,6 +898,14 @@ impl<'a> Events<'a> {
         self.send(ClientEvent::Diagnostic(message))
     }
 
+    /// Completes a move discarded outside normal zone action routing.
+    fn refuse_move(&mut self, command: &ClientCommand, reason: &str) -> Result<()> {
+        if let ClientCommand::Move(request) = command {
+            self.send(ClientEvent::World(motion_refused(request, reason)))?;
+        }
+        Ok(())
+    }
+
     fn status(
         &mut self,
         state: ConnectionState,
@@ -924,6 +940,17 @@ impl<'a> Events<'a> {
             message_id: self.messages,
             event,
         })))
+    }
+}
+
+fn motion_refused(
+    request: &eq_network_game::movement::MovementRequest,
+    reason: &str,
+) -> eq_network_game::world::WorldEvent {
+    eq_network_game::world::WorldEvent::MotionRefused {
+        session_id: request.session_id,
+        created: request.created,
+        reason: reason.into(),
     }
 }
 

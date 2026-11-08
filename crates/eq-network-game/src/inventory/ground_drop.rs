@@ -53,6 +53,7 @@ pub(super) fn unidentified_cursor_mutation(update: &InventoryUpdate) -> bool {
 impl Inventory {
     /// Records submission and withdraws the basis for another cursor action.
     pub(super) fn hold_ground_drop(&mut self, serial: NonZeroU32) {
+        self.drop_weight = super::weight::DropWeight::start(self);
         self.ground_drop = Some(serial);
         self.drop_cursor = CursorBasis::Unknown;
     }
@@ -155,6 +156,10 @@ impl Inventory {
         ensure!(
             self.drop_cursor == CursorBasis::Item(serial),
             "Wait for the server to identify the current cursor item"
+        );
+        ensure!(
+            super::weight::DropWeight::start(self).is_some(),
+            "A cursor drop needs a current carried item weight"
         );
         Ok(serial)
     }
@@ -321,5 +326,19 @@ mod tests {
         assert!(inventory
             .plan_ground_drop(&request(&inventory, item))
             .is_ok());
+    }
+
+    #[test]
+    fn a_drop_requires_an_established_non_cursor_weight() {
+        let item = decoded("17", "255", "0");
+        let mut orphan = item.clone();
+        orphan.slot = InventorySlot(251);
+        let mut inventory = Inventory::default();
+        inventory.apply(InventoryUpdate::Snapshot(vec![item.clone(), orphan]));
+        assert!(inventory
+            .plan_ground_drop(&request(&inventory, item))
+            .unwrap_err()
+            .to_string()
+            .contains("carried item weight"));
     }
 }

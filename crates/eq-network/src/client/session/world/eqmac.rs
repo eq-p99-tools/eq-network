@@ -96,10 +96,11 @@ fn world_owned(
         );
         deletion.tick(log)?;
         if !entered {
-            match selection
-                .as_ref()
-                .and_then(|list: &Selection| list.poll(context.commands))
-            {
+            let choice = match &selection {
+                Some(list) => Selection::poll(list, context.commands, log)?,
+                None => None,
+            };
+            match choice {
                 // EQMac's official generator is local; never send Titanium's opcode.
                 Some(Choice::GenerateName(list, request, _, _)) => {
                     super::super::creation::names::answer(list, request, None, log)?;

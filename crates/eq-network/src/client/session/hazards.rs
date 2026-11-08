@@ -191,16 +191,7 @@ impl Feature for Hazards {
                 amount,
                 safe_fall,
                 ..
-            } => {
-                if world.inventory.ground_drop_pending() {
-                    return actions::refuse(
-                        command,
-                        "Fall damage needs a fresh inventory snapshot after the drop",
-                        out.log,
-                    );
-                }
-                (Hazard::Falling, amount, safe_fall)
-            }
+            } => (Hazard::Falling, amount, safe_fall),
             ClientCommand::EnvironmentalDamage { .. } => {
                 return actions::refuse(
                     command,
@@ -279,11 +270,8 @@ mod tests {
     }
 
     #[test]
-    fn pending_ground_drop_withholds_fall_and_safe_fall_reports() {
-        use eq_network_game::{
-            command::EncodedCommand,
-            inventory::{Inventory, InventorySlot, InventoryUpdate},
-        };
+    fn pending_ground_drop_still_reports_fall_and_safe_fall() {
+        use eq_network_game::inventory::{Inventory, InventorySlot, InventoryUpdate};
         use std::num::NonZeroU32;
 
         let mut inventory = Inventory::default();
@@ -293,7 +281,7 @@ mod tests {
         inventory.apply(InventoryUpdate::Snapshot(vec![item]));
         inventory.apply(InventoryUpdate::GroundDropPending(serial));
         let mut world = World::new(5);
-        world.inventory = inventory.clone().into();
+        world.inventory = inventory.into();
         let mut feature = Hazards::new(&[Hazard::Falling], false);
         let command = ClientCommand::EnvironmentalDamage {
             session_id: 5,
@@ -301,21 +289,16 @@ mod tests {
             amount: 160,
             safe_fall: true,
         };
-        let held = testing::run(|out| feature.handle(&command, &mut world, out));
-        held.result.unwrap();
-        assert_eq!(held.sent, Vec::<EncodedCommand>::new());
-
-        inventory.apply(InventoryUpdate::Snapshot(Vec::new()));
-        world.inventory = inventory.into();
-        let recovered = testing::run(|out| feature.handle(&command, &mut world, out));
-        recovered.result.unwrap();
+        let reported = testing::run(|out| feature.handle(&command, &mut world, out));
+        reported.result.unwrap();
         assert_eq!(
-            recovered.sent,
+            reported.sent,
             [
                 hazards::safe_fall(true),
                 hazards::titanium_damage(7, Hazard::Falling, 160).unwrap(),
             ]
         );
+        assert!(world.inventory.ground_drop_pending());
     }
 
     #[test]
