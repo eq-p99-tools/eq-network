@@ -740,7 +740,7 @@ pub enum GameCommand {
         /// The bounded discipline to use.
         discipline: crate::disciplines::Discipline,
         /// When the player requested it.
-        created: Instant,
+        created: std::time::Instant,
     },
     /// Cast a Paladin or Shadow Knight class ability at the selected target.
     UseKnightAbility {
@@ -751,7 +751,7 @@ pub enum GameCommand {
         /// The settled target selection, including an explicit self target.
         target: crate::targets::TargetState,
         /// When the player requested the action.
-        created: Instant,
+        created: std::time::Instant,
     },
     /// Select or clear a target in the current zone session, without attacking.
     SelectTarget {
