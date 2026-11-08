@@ -117,6 +117,12 @@ pub struct Appearance {
     pub show_helm: bool,
     /// The type of light the spawn carries, 0 for none.
     pub light: u8,
+    /// Titanium's raw invisibility parameter, retaining special and unknown codes.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub titanium_invisibility: Option<u32>,
+    /// Titanium's spawn GM byte or subsequent appearance kind 20 value.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub titanium_gm: Option<u32>,
     /// How the spawn keeps to the ground.
     pub fly_mode: FlyMode,
     /// Open to player combat, from `EQMac`'s record and updates. Titanium's
@@ -244,6 +250,7 @@ impl Appearance {
         match *change {
             AppearanceChange::Pvp(on) => self.pvp = on,
             AppearanceChange::Light(light) => self.light = light,
+            AppearanceChange::TitaniumGm(value) => self.titanium_gm = Some(value),
             AppearanceChange::Sneaking(on) => self.sneaking = on,
             AppearanceChange::Linkdead(on) => self.linkdead = on,
             AppearanceChange::FlyMode(mode) => self.fly_mode = mode,
@@ -301,6 +308,8 @@ pub(crate) fn titanium_spawn(record: &[u8]) -> Appearance {
         beard_color: record[146],
         show_helm: record[139] != 0,
         light: record[330],
+        titanium_invisibility: Some(u32::from(record[84])),
+        titanium_gm: Some(u32::from(record[1])),
         fly_mode: FlyMode::from_wire(u32::from(record[333])),
         states: SpawnStates(word(152)),
         ..Appearance::default()
@@ -533,6 +542,8 @@ pub enum AppearanceChange {
     Pvp(bool),
     /// Kind 5: the type of light the spawn carries, 0 for none.
     Light(u8),
+    /// Titanium appearance kind 20: raw GM flag.
+    TitaniumGm(u32),
     /// Kind 15: sneaking, or no longer.
     Sneaking(bool),
     /// Kind 18: link-dead, or back; the servers also mark a charmed or
@@ -626,6 +637,10 @@ impl AppearanceChange {
 /// Rejects a wrong length, a value out of its kind's range, and a listing,
 /// visibility, posture or pet update naming no spawn.
 pub(crate) fn update(body: &[u8]) -> Result<Option<WorldEvent>> {
+    spawn_update(body, crate::GameDialect::EqMac)
+}
+
+fn spawn_update(body: &[u8], dialect: crate::GameDialect) -> Result<Option<WorldEvent>> {
     ensure!(body.len() == 8, "invalid appearance length");
     let spawn_id = u16::from_le_bytes([body[0], body[1]]);
     let kind = u16::from_le_bytes([body[2], body[3]]);
@@ -643,7 +658,7 @@ pub(crate) fn update(body: &[u8]) -> Result<Option<WorldEvent>> {
         (_, Some(change)) => WorldEvent::Listing { spawn_id, change },
         (INVISIBILITY, None) => WorldEvent::Visibility {
             spawn_id,
-            invisible: value != 0,
+            state: crate::vision::Invisibility::from_wire(dialect, value),
         },
         (POSTURE, None) => WorldEvent::Posture {
             spawn_id,
@@ -656,6 +671,10 @@ pub(crate) fn update(body: &[u8]) -> Result<Option<WorldEvent>> {
                 owner: (owner != 0).then_some(owner),
             }
         }
+        (20, None) if dialect == crate::GameDialect::Titanium => WorldEvent::Appearance {
+            spawn_id,
+            change: AppearanceChange::TitaniumGm(value),
+        },
         (kind, None) => WorldEvent::Appearance {
             spawn_id,
             change: AppearanceChange::read(kind, value)?,
@@ -670,7 +689,7 @@ pub(crate) fn update(body: &[u8]) -> Result<Option<WorldEvent>> {
 /// Rejects malformed records of those messages.
 pub(crate) fn titanium(opcode: u16, body: &[u8]) -> Result<Option<WorldEvent>> {
     Ok(match opcode {
-        crate::listing::APPEARANCE_OPCODE => update(body)?,
+        crate::listing::APPEARANCE_OPCODE => spawn_update(body, crate::GameDialect::Titanium)?,
         WEAR_CHANGE_OPCODE => Some(WorldEvent::WearChange(titanium_wear_change(body)?)),
         STATES_ADDED_OPCODE | STATES_REMOVED_OPCODE => Some(titanium_states(opcode, body)?),
         ILLUSION_OPCODE => Some(titanium_illusion(body)?),

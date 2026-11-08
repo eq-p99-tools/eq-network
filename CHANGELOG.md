@@ -7,6 +7,18 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Breaking:** Resolve P99 same-zone pads against installed boundaries
+  and current zone points. `BoundaryRoute::SameZone` carries a resolved
+  route, `ClientConfig` accepts an installed-boundary provider and
+  `WorldEvent::LocalPadCrossed` reports the local placement.
+- **Breaking:** Add Titanium server dialogs and player inspection. Hosts can
+  respond to a current popup, inspect a current player and configure an
+  admission-scoped inspect note. Exhaustive command, capability and event
+  matches need to handle the new variants.
+- Offer bounded swimming on Project 1999 through the existing Titanium
+  position stream. Local movement validation, packet pacing and received
+  server placements retain their separate roles. Live wet movement and
+  environmental damage handling remain to be verified.
 - **Breaking:** Offer ordinary forge interaction on Project 1999, and add a
   self-targeted Bind Wound path that P99 withholds for now: an unanswered or
   refused bandage would hold the whole inventory until the next zone.
@@ -16,13 +28,11 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Bandage stock stays provisional until received inventory evidence.
   A forge candidate needs a matching server open before it can take items.
   Station placement, close and combine resets do not grant inventory items.
-- Build ordinary Titanium item links from checked worn and carried item
-  records. The source inventory must have current custody evidence.
+- Build ordinary Titanium item links from checked item records.
   Evolving records, items with installed augments and labels outside ASCII
   need a received link.
 - Stamp world container closes with the object ID and intent time. Decode
   whole-container clears separately from the native one-slot form.
-
 - Compose ordinary chat with genuine received item-link metadata for the
   selected client dialect. The helper rejects quest links and malformed data.
 - **Breaking:** Report same-zone server relocation separately from normal position updates.
@@ -108,8 +118,8 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **Breaking:** `WorldEvent::CastRequestUnconfirmed` reports the existing
   cast acknowledgement timeout with its admission and spell. A
   `CastPending` clear precedes a received update that answers the request.
-- **Breaking:** `WorldEvent::MotionRefused` identifies an early movement
-  discard by admission and request stamp. `MotionSent` describes local
+- **Breaking:** `WorldEvent::MotionRefused` identifies a discarded movement
+  request by admission and request stamp. `MotionSent` describes local
   worker acceptance or refusal, including accepted samples held for pacing.
 - `BookActionStatus::Unconfirmed` releases the spellbook after 30 seconds
   without a matching result. Distinguishable edits can proceed. A retry with
@@ -178,6 +188,26 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Breaking:** Report the raw dialect-tagged state in `WorldEvent::Visibility`
+  and the observer's current Titanium sight in `WorldEvent::ObserverSight`.
+  `AppearanceChange` can report the Titanium GM flag, and item placement
+  records carry optional Titanium Light and item-class metadata.
+- **Breaking:** Preserve the unanswered spell and cast source for a
+  compatible own start after the local cast wait. Match the spell ID or
+  stock TAKP's documented Luclin port rewrite. Unrelated own starts keep
+  separate cast state. Handle `WorldEvent::CastLateBegin` before the
+  received spell update.
+- **Breaking:** Both movement results now carry the original local request
+  stamp. A Move discarded at selection or abandoned in a failed zone batch
+  receives a typed refusal while the event stream can still deliver it.
+  Supply or match `WorldEvent::MotionSent.created`.
+
+- **Breaking:** Replace `Inventory::owned_titanium_link` with metadata-based
+  `InventoryItem::titanium_link`,
+  including for a record displayed during an inventory move.
+- **Breaking:** Keep queued book and note requests valid across unrelated inventory updates.
+  `ReadItem` takes a captured selection so the worker can check the item and
+  container before asking for the text.
 - **Breaking:** `MovementOptions::run_boost` and `MovementOptions::RUN_BOOST`
   are replaced by `run_speed_multiplier: RunSpeedMultiplier`, a bounded 100
   through 140 percent forward run speed multiplier with 100 as the default.
@@ -398,6 +428,8 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- Use the current weapon delay and eligible quiver when checking Titanium
+  ranged recovery. Haste and slow remain outside the local estimate.
 - **Breaking:** Publish staged discipline state separately from the buff-slot snapshot so
   beneficial buff cancellation keeps the same slot revision at both ends.
   Discipline fades require a matching observed spell. Exhaustive world event
@@ -407,22 +439,14 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Keep reporting completed falls while a cursor drop awaits inventory evidence.
   A drop requires enough item and coin evidence to establish carried weight.
-  Its landing bound retains the heaviest received cursor group through
-  cursor-only resync while the worker withdraws movement until recovery.
-  Clean state accepts fresh movement inputs that meet the bound.
+  `Inventory::ground_drop_weight_tenths` retains the heaviest received
+  cursor group through cursor-only resync for landing reports.
+  `Inventory::carried_weight_tenths` returns the bound during a clean
+  Titanium drop hold. Fresh movement inputs must meet that bound, capped
+  at `MAX_CARRIED_WEIGHT` in whole units.
   Ground drops are restricted to local-only EQEmu pending live validation.
   A landing whose cost depends on a load the hold cannot bound is not
   reported, which the local-only fence keeps off public servers.
-- **Breaking:** Preserve the unanswered spell and cast source for a
-  compatible own start after the local cast wait. Match the spell ID or
-  stock TAKP's documented Luclin port rewrite. Unrelated own starts keep
-  separate cast state. Handle `WorldEvent::CastLateBegin` before the
-  received spell update.
-- **Breaking:** Both movement results now carry the original local request
-  stamp. A Move discarded at selection or abandoned in a failed zone batch
-  receives a typed refusal while the event stream can still deliver it.
-  Supply or match `WorldEvent::MotionSent.created`.
-
 - Keep merchant commands and Titanium receipts scoped to the relevant shop.
   Check stock, quantity, and sale custody before sending. Preserve an
   unanswered transaction across a shop close and await server evidence.

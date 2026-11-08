@@ -9,7 +9,7 @@
 //! under its rule `Chat:EnableVoiceMacros`, on by default, and quests send
 //! one as a tell. Every server passes an inspect request
 //! (`OP_InspectRequest`) on to the player inspected, for their client to
-//! answer with what they wear; nothing here answers one yet.
+//! answer. Titanium's responses are decoded in [`crate::inspection`].
 //!
 //! A challenge to a duel (`OP_RequestDuel`) reaches the player challenged
 //! naming the challenger, and their acceptance reaches the challenger the
@@ -313,6 +313,9 @@ pub(crate) fn titanium(opcode: u16, body: &[u8]) -> Result<Option<WorldEvent>> {
         YELL_OPCODE => yell(body)?,
         VOICE_MACRO_OPCODE => WorldEvent::VoiceMacro(voice_macro(body)?),
         INSPECT_REQUEST_OPCODE => titanium_inspect_request(body)?,
+        crate::inspection::INSPECT_ANSWER_OPCODE => {
+            WorldEvent::InspectAnswer(crate::inspection::titanium_answer(body)?)
+        }
         REQUEST_DUEL_OPCODE => WorldEvent::Duel(titanium_challenge(body)?),
         DUEL_ACCEPT_OPCODE => WorldEvent::Duel(titanium_accepted(body)?),
         _ => return Ok(None),
@@ -358,6 +361,7 @@ fn voice_macro(body: &[u8]) -> Result<VoiceMacro> {
 fn titanium_inspect_request(body: &[u8]) -> Result<WorldEvent> {
     ensure!(body.len() == 8, "invalid inspect request length");
     Ok(WorldEvent::InspectRequest {
+        target_id: spawn(body, 0, "inspect request")?,
         inspector_id: spawn(body, 4, "inspect request")?,
     })
 }
@@ -370,6 +374,7 @@ fn titanium_inspect_request(body: &[u8]) -> Result<WorldEvent> {
 pub(crate) fn eqmac_inspect_request(body: &[u8]) -> Result<WorldEvent> {
     ensure!(body.len() == 4, "invalid inspect request length");
     Ok(WorldEvent::InspectRequest {
+        target_id: u16::from_le_bytes([body[0], body[1]]),
         inspector_id: short_spawn(body, 2, "inspect request")?,
     })
 }
@@ -533,7 +538,10 @@ mod tests {
     #[test]
     fn inspect_requests_name_the_inspector_on_both_generations() {
         // The player's own spawn, then the inspector's.
-        let asked = WorldEvent::InspectRequest { inspector_id: 300 };
+        let asked = WorldEvent::InspectRequest {
+            target_id: 7,
+            inspector_id: 300,
+        };
         assert_eq!(
             titanium_update(INSPECT_REQUEST_OPCODE, &[7, 0, 0, 0, 44, 1, 0, 0]).unwrap(),
             Some(asked.clone())

@@ -381,6 +381,7 @@ fn explicit_destroy_is_single_submission_through_p99_and_eqemu_inventory_owner()
 }
 
 #[test]
+#[allow(clippy::too_many_lines)] // Keep the ordered drop settlement in one fixture.
 fn ordinary_drop_holds_after_object_and_cursor_updates_until_snapshot() {
     use eq_network_game::{
         command::EncodedCommand,
@@ -409,9 +410,22 @@ fn ordinary_drop_holds_after_object_and_cursor_updates_until_snapshot() {
 
     let drop = request(&world, 7);
     let known = std::mem::take(&mut world.coins);
-    let unweighed = submit(protocol, &mut features, &mut world, &drop);
-    assert!(unweighed.result.unwrap() && unweighed.sent.is_empty());
-    assert!(!world.inventory.ground_drop_pending());
+    for (purse, bank) in [(None, known.bank), (known.purse, None)] {
+        world.coins = eq_network_game::money::Wallet {
+            purse,
+            bank,
+            ..Default::default()
+        }
+        .into();
+        let unweighed = submit(protocol, &mut features, &mut world, &drop);
+        assert!(unweighed.result.unwrap() && unweighed.sent.is_empty());
+        assert!(unweighed.events.iter().any(|event| matches!(
+            event,
+            ClientEvent::World(WorldEvent::InventoryAction { error: Some(reason), .. })
+                if reason == "A cursor drop needs current carried coin information"
+        )));
+        assert!(!world.inventory.ground_drop_pending());
+    }
     world.coins = known;
 
     let output = submit(protocol, &mut features, &mut world, &drop);

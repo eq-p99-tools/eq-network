@@ -353,14 +353,14 @@ fn visibility_and_mana_use_eqmac_fields_without_inventing_endurance() {
         updates(0xf540, &[7, 0, 3, 0, 1, 0, 0, 0]).unwrap(),
         vec![WorldEvent::Visibility {
             spawn_id: 7,
-            invisible: true
+            state: crate::vision::Invisibility::EqMac(1)
         }]
     );
     assert_eq!(
         updates(0xf540, &[7, 0, 3, 0, 0, 0, 0, 0]).unwrap(),
         vec![WorldEvent::Visibility {
             spawn_id: 7,
-            invisible: false
+            state: crate::vision::Invisibility::EqMac(0)
         }]
     );
     assert_eq!(

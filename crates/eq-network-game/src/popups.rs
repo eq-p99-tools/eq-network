@@ -6,8 +6,7 @@
 //! quests and for game masters' commands such as `#show version`. It shows
 //! a marquee (`OP_Marquee`) for quests, bots, a spell effect and the
 //! world's broadcasts, and, under its rule `Character:MarqueeHPUpdates`,
-//! off by default, for the player's own health. Nothing here answers a
-//! popup; its answer, `OP_PopupResponse`, waits for the client pieces.
+//! off by default, for the player's own health.
 //!
 //! Layout reference: `EQEmu`'s Titanium `OnLevelMessage_Struct`
 //! (`common/patches/titanium_structs.h`), which `ENCODE(OP_OnLevelMessage)`
@@ -16,13 +15,18 @@
 //! The senders are `Client::SendPopupToClient`, `Client::SendFullPopup`,
 //! `Client::SendWindow` and `Client::SendMarqueeMessage`
 //! (`zone/client.cpp`).
-use crate::world::{until_nul, WorldEvent};
+use crate::{
+    command::EncodedCommand,
+    world::{until_nul, WorldEvent},
+};
 use anyhow::{ensure, Result};
 use serde::Serialize;
 use std::time::Duration;
 
 /// `OP_OnLevelMessage`: a popup window (Titanium).
 pub const POPUP_OPCODE: u16 = 0x1dde;
+/// `OP_PopupResponse`: the explicitly chosen button's response (Titanium).
+pub const POPUP_RESPONSE_OPCODE: u16 = 0x3816;
 /// `OP_Marquee`: large text across the screen (Titanium).
 pub const MARQUEE_OPCODE: u16 = 0x1d4d;
 
@@ -49,6 +53,68 @@ pub struct Popup {
     pub duration: Option<Duration>,
     /// Its number, which the player's answer names.
     pub popup_id: u32,
+    /// The No button's response ID. `EQEmu`'s Titanium encoder sets it to zero.
+    pub negative_id: u32,
+}
+
+/// The locally offered dialog, scoped to one admission and one receipt.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct PopupOffer {
+    /// Current zone admission.
+    pub session_id: u64,
+    /// Increases even when a replacement has the same server ID and text.
+    pub serial: u64,
+    /// When the server's dialog stops accepting a response.
+    #[serde(skip)]
+    pub expires_at: Option<std::time::Instant>,
+    /// What the server sent.
+    pub popup: Popup,
+}
+
+/// One explicit action on a displayed dialog.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PopupAction {
+    /// OK on a notice or Yes on a question.
+    Positive,
+    /// No on a Yes/No question.
+    Negative,
+    /// Close the dialog locally.
+    Dismiss,
+}
+
+impl Popup {
+    /// Whether this dialog uses the known Yes/No layout.
+    #[must_use]
+    pub const fn asks_question(&self) -> bool {
+        self.buttons == 1
+    }
+
+    /// Whether a particular action belongs to this dialog's button layout.
+    #[must_use]
+    pub const fn allows(&self, action: PopupAction) -> bool {
+        match action {
+            PopupAction::Positive => self.buttons <= 1,
+            PopupAction::Negative => self.asks_question(),
+            PopupAction::Dismiss => true,
+        }
+    }
+}
+
+/// Encodes the response only if the chosen button has a nonzero response ID.
+#[must_use]
+pub fn titanium_response(popup: &Popup, action: PopupAction) -> Option<EncodedCommand> {
+    if !popup.allows(action) {
+        return None;
+    }
+    let (button, id) = match action {
+        PopupAction::Positive => (0u32, popup.popup_id),
+        PopupAction::Negative => (1u32, popup.negative_id),
+        PopupAction::Dismiss => return None,
+    };
+    (id != 0).then(|| EncodedCommand {
+        opcode: POPUP_RESPONSE_OPCODE,
+        body: [button.to_le_bytes(), id.to_le_bytes()].concat(),
+    })
 }
 
 /// Large text the server shows across the player's screen, fading in and
@@ -98,21 +164,25 @@ fn field(bytes: &[u8], what: &str) -> Result<String> {
 /// Decodes Titanium's `OP_OnLevelMessage` (4,244 bytes): the title in 128
 /// bytes and the text in 4,096, each ended by a NUL within its field; the
 /// buttons, how long it stays open in milliseconds (0xffffffff until the
-/// player closes it) and the popup's number, each 32 bits; then two words
-/// `EQEmu`'s encoder always sets to 0 and 0xffffffff.
+/// player closes it) and the popup's number, each 32 bits; then the No
+/// response ID and a word this client leaves uninterpreted.
 ///
 /// # Errors
 /// Rejects a wrong length, and a title or text that fills its field.
 fn titanium_popup(body: &[u8]) -> Result<Popup> {
     ensure!(body.len() == POPUP_LENGTH, "invalid popup length");
     let words = TITLE + TEXT;
-    let duration = word(body, words + 4);
+    let duration = i32::from_le_bytes(body[words + 4..words + 8].try_into()?);
     Ok(Popup {
         title: field(&body[..TITLE], "popup title")?,
         text: field(&body[TITLE..words], "popup text")?,
         buttons: word(body, words),
-        duration: (duration != u32::MAX).then(|| Duration::from_millis(duration.into())),
+        duration: u64::try_from(duration)
+            .ok()
+            .filter(|duration| *duration != 0)
+            .map(Duration::from_millis),
         popup_id: word(body, words + 8),
+        negative_id: word(body, words + 12),
     })
 }
 
@@ -171,6 +241,7 @@ mod tests {
                 buttons: 0,
                 duration: None,
                 popup_id: 0,
+                negative_id: 0,
             }))
         );
         // A quest's question with two buttons, open for ten seconds.
@@ -183,6 +254,7 @@ mod tests {
                 buttons: 1,
                 duration: Some(Duration::from_secs(10)),
                 popup_id: 42,
+                negative_id: 0,
             }))
         );
         // The longest title and text fit with their NULs; one more byte
@@ -196,6 +268,26 @@ mod tests {
         }
         assert!(titanium(POPUP_OPCODE, &body[..POPUP_LENGTH - 1]).is_err());
         assert!(titanium(POPUP_OPCODE, &[body, vec![0]].concat()).is_err());
+    }
+
+    #[test]
+    fn an_explicit_button_uses_only_its_own_nonzero_response_id() {
+        let mut body = popup(b"Question", b"Choose", [1, 0, 42]);
+        let at = TITLE + TEXT + 12;
+        body[at..at + 4].copy_from_slice(&65u32.to_le_bytes());
+        let offer = titanium_popup(&body).unwrap();
+        assert_eq!(offer.duration, None);
+        let yes = titanium_response(&offer, PopupAction::Positive).unwrap();
+        let no = titanium_response(&offer, PopupAction::Negative).unwrap();
+        assert_eq!(yes.opcode, POPUP_RESPONSE_OPCODE);
+        assert_eq!(yes.body, [0, 0, 0, 0, 42, 0, 0, 0]);
+        assert_eq!(no.body, [1, 0, 0, 0, 65, 0, 0, 0]);
+        assert!(titanium_response(&offer, PopupAction::Dismiss).is_none());
+        let unknown = Popup {
+            buttons: 3,
+            ..offer
+        };
+        assert!(titanium_response(&unknown, PopupAction::Positive).is_none());
     }
 
     #[test]

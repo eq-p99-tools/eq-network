@@ -1,5 +1,41 @@
 # API and integration contracts
 
+## P99 local pads
+
+A P99 host can provide `InstalledZoneBoundaries` in `ClientConfig`.
+The worker corroborates the entered boundary with the current approach,
+admission and indexed zone-point record where required. A same-zone pad
+submits an ordinary position report at entry and stages a local landing.
+`LocalPadCrossed` describes that placement. Continue to use received
+relocation events for server-directed placement.
+
+## Titanium dialogs and player inspection
+
+Project 1999 and EQEmu offer `Capability::ServerDialogs` and
+`Capability::PlayerInspection`. Present a `PopupOpened` offer using its
+admission and serial. Pass both to `GameCommand::RespondToPopup`.
+`PopupClosed` identifies which presentation to dismiss. The worker sends a
+reply only for a supported choice with a response ID. Closing and expiration
+are local, and a successful send does not establish a quest outcome.
+
+`GameCommand::InspectPlayer` uses the current available `TargetState`.
+`WorldEvent::PlayerInspection` carries the equipment names, icons and note
+received for the matching nearby player. These fields carry no inventory
+custody. `GameCommand::SetInspectNote` supplies the admission's known note
+for automatic replies. A known empty string can be sent. An absent note
+leaves the automatic reply withheld.
+
+## Titanium observer sight
+
+`WorldEvent::Visibility` retains the dialect and raw invisibility value.
+Titanium spawn appearance carries optional raw invisibility and GM fields.
+Hosts can install a `vision::SightCatalog` with `Client::with_sight_catalog`
+to evaluate observed own buffs using their effective spell definitions.
+`WorldEvent::ObserverSight` reports a change within one admission. Reset
+this projection on entry or loss of the world. A known ordinary invisible
+player or NPC with a known non-GM flag can be visible to an observer with
+See Invisible. Other values and incomplete metadata stay conservative.
+
 ## Local EQEmu fixture cleanup
 
 `GameCommand::DepopLocalNpc` carries the current admission, creation time
@@ -26,8 +62,11 @@ The zone checks readiness, posture, casting/inventory holds, equipped items and
 range before it sends. Stock EQEmu applies its class/level skill cap, so a raw
 rank of zero or an unavailable rank does not settle eligibility locally. P99
 retains a conservative positive-rank prerequisite in the recognized 1–252
-range while its first-use behavior is unverified. A successful send starts a
-local wait based on unmodified item delay. The server applies its own timers,
+range while its first-use behavior is unverified. Local recovery compares
+time since the last submission with the current weapon delay. Bows use the
+first confirmed eligible quiver in general inventory when its reduction
+leaves more than one second. Haste and slow remain outside the local
+estimate. The server applies its own timers,
 targeting rules and combat resolution. The `CombatRequest` disposition reports
 only local submission or refusal. Existing received damage, inventory and chat events
 carry the outcomes. The server chooses whether and from which stack to consume
@@ -53,10 +92,10 @@ execution and any further restrictions to the server.
 `PetCommand::in_classic_order_set`. The compatibility alias returns the
 same classification. The provider chooses the order set for each admission.
 
-## Titanium EQEmu swimming bound
+## Titanium swimming bound
 
-Only the Titanium `EQEmu` policy offers `Capability::Swimming`; P99, Quarm
-and TAKP reject `MovementMode::Swim` samples. A swim sample is bounded by one
+Titanium EQEmu and Project 1999 offer `Capability::Swimming`. Quarm and
+TAKP reject `MovementMode::Swim` samples. A swim sample is bounded by one
 three-dimensional budget of `movement::swim_speed` of the unboosted grant,
 with no run boost, and is refused while flying or stunned. The native wet
 pair is read at Titanium `eqgame.exe` 0x4c052d and 0x4c0534, and the land
@@ -123,11 +162,18 @@ including a manual retry of the same spell. The worker retains the last
 timed-out spell and gem/item source until a compatible own start, an
 answering result naming the spell, a fresh submission, death, or the end of
 the admission. An unrelated own start can hold casting independently.
-An interruption carries no spell ID and releases the active hold.
+An own interruption carries no spell ID. It releases the active hold
+and leaves any separate timed-out request intact. Timed-out provenance has
+no wall-clock expiration within those lifecycle bounds.
 
 A late start matches the request by spell ID. Stock TAKP also accepts
 the documented Luclin port rewrite from 2062 or 2706–2709 to 2935. The
-worker emits `WorldEvent::CastLateBegin` with the request spell before
+rewrite is unverified on Project 1999 and Quarm. A late 2935 there begins
+an independent hold that can end on a result for 2935, own interruption,
+death, or departure. The late-port recording case captures the requested
+spell, own start, and spell-bearing result or interruption on each server.
+
+The worker emits `WorldEvent::CastLateBegin` with the request spell before
 forwarding the compatible own `SpellUpdate::Began`. Starts carry no
 request ID, so overlapping retries with the same spell or alias remain
 ambiguous. An already begun cast still awaits a matching result. Own
@@ -470,7 +516,10 @@ another item after a silent drop. Preserve the last view and mark inventory
 stale on such an update. Re-enter the world for a fresh inventory baseline.
 
 During the hold, a received limbo item may already be the server's current
-cursor. On a complete, otherwise unambiguous inventory,
+cursor. Both drop submission and bound calculations require known purse and
+cursor coin balances. The worker receives the cursor balance with the bank
+balance and forwards them in `CoinsElsewhere`. Bank coins add no carried
+weight. On a complete, otherwise unambiguous inventory,
 `Inventory::carried_weight_tenths` takes the heaviest of the displayed and
 queued cursor groups, plus the ordinary non-cursor load. It counts one
 possible cursor group. The worker validates fresh speed inputs against that
@@ -898,7 +947,11 @@ own player/profile gates. This networking API applies no installed definitions.
 
 `eq_network_game::buffs::scale_instrument_effect` takes an already evaluated
 signed magnitude and a received modifier. The result is a host projection
-for movement-related effects. An unresolved modifier returns `None`.
+for movement-related effects. An unresolved modifier returns `None`. The
+host's neutral handling of a received zero is a compatibility inference.
+Unpatched Titanium scales a stored zero to zero at `eqgame.exe` 0x4102a6–0x4102cb.
+The zero-modifier recording case compares the received action and buff slot
+with the movement effect on the deployed client.
 
 `MotionSession::send_move_sample` keeps its existing signature and result
 semantics. Internally it prepares one checked candidate while exclusively

@@ -92,6 +92,7 @@ impl Transfers {
         let ClientCommand::CrossZoneLine {
             destination,
             position,
+            created,
             ..
         } = command
         else {
@@ -103,10 +104,33 @@ impl Transfers {
         );
         ensure!(world.zone.0 != 0, "zone identity is unavailable");
         let crossing = self.points.crossing(destination, *position, world.zone)?;
-        ensure!(
-            world.local_eqemu() || crossing != zoning::BoundaryRoute::SameZone,
-            "same-zone boundary needs a server relocation"
-        );
+        if matches!(crossing, zoning::BoundaryRoute::SameZone(_)) && !world.local_eqemu() {
+            let boundaries = world
+                .pad_boundaries
+                .as_ref()
+                .context("same-zone boundary needs a server relocation")?;
+            ensure!(
+                world.ready() && !world.lifecycle.blocks_motion() && world.player.is_some(),
+                "pad entry outside active admission"
+            );
+            if let Some(reason) = world.control.input_refusal(*created) {
+                bail!("{reason}");
+            }
+            let approach = world
+                .body
+                .pad_approach(*created)
+                .context("stale pad entry")?;
+            ensure!(
+                boundaries
+                    .entered(&world.zone_name, approach, *position)
+                    .as_ref()
+                    == Some(destination),
+                "no matching pad entrance in the installed zone"
+            );
+            if let Some(reason) = super::actions::stale(command, world.session_id, Instant::now()) {
+                bail!("{reason}");
+            }
+        }
         Ok(crossing)
     }
 
@@ -278,16 +302,38 @@ impl Feature for Transfers {
         world: &mut World,
         out: &mut Out<'_, '_>,
     ) -> Result<()> {
-        let ClientCommand::CrossZoneLine { session_id, .. } = command else {
+        let ClientCommand::CrossZoneLine {
+            session_id,
+            created,
+            ..
+        } = command
+        else {
             return Ok(());
         };
         match self.zone_line(command, world) {
             Ok(zoning::BoundaryRoute::Transfer(offer)) => Self::start(offer, world, out)?,
-            Ok(zoning::BoundaryRoute::SameZone) => {
+            Ok(zoning::BoundaryRoute::SameZone(_)) if world.local_eqemu() => {
                 out.log
                     .send(ClientEvent::World(WorldEvent::SameZoneBoundary {
                         session_id: *session_id,
                     }))?;
+            }
+            Ok(zoning::BoundaryRoute::SameZone(pad)) => {
+                let player = world
+                    .player
+                    .corrected()
+                    .context("pad entry before admission")?;
+                world.body.cross_pad(player, pad, *created, out)?;
+                let crossing = zoning::LocalPadCrossing {
+                    session_id: world.session_id,
+                    spawn_id: player.spawn_id,
+                    entry: pad.entry(),
+                    landing: pad.landing(),
+                };
+                out.log
+                    .send(ClientEvent::World(motion::withdrawn(world.session_id)))?;
+                out.log
+                    .send(ClientEvent::World(WorldEvent::LocalPadCrossed(crossing)))?;
             }
             Err(error) => out
                 .log
@@ -442,7 +488,7 @@ mod tests {
     use eq_network_game::movement::{DiagonalRates, MotionSession};
 
     #[test]
-    fn only_the_server_moves_a_character_through_a_same_zone_boundary() {
+    fn local_eqemu_boundary_waits_for_a_server_instruction() {
         use crate::client::{ClientConfig, ServerProtocol};
         let mut config = ClientConfig::new("Example", "Example", "Example", "Tester");
         config.local_only = true;
@@ -507,6 +553,140 @@ mod tests {
             if arrival.session_id == 5 && arrival.spawn_id == 7 && arrival.position == landing)
         );
         assert!(world.lifecycle.pending().is_none());
+    }
+
+    #[test]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "Keeps the pad route, gate and packet assertions together"
+    )]
+    fn p99_pad_checks_installed_entry_and_submits_only_ordinary_positions() {
+        use crate::client::{ClientConfig, InstalledZoneBoundaries};
+        use eq_network_game::movement::{
+            MotionCalibration, MovementMode, MovementRequest, UpdateGate, POSITION_OPCODE,
+            TITANIUM_POSITION_SPACING,
+        };
+
+        #[derive(Debug)]
+        struct Boundaries {
+            from: Position,
+            to: Position,
+        }
+
+        impl InstalledZoneBoundaries for Boundaries {
+            fn entered(
+                &self,
+                zone: &str,
+                from: Position,
+                to: Position,
+            ) -> Option<zoning::ZoneLineDestination> {
+                (zone == "example" && from == self.from && to == self.to)
+                    .then_some(zoning::ZoneLineDestination::Reference(7))
+            }
+        }
+
+        let start = Instant::now().checked_sub(Duration::from_secs(1)).unwrap();
+        let from = Position {
+            y: 3.0,
+            heading: 64.0,
+            ..Position::default()
+        };
+        let entry = Position { x: 0.5, ..from };
+        let landing = Position {
+            x: -20.0,
+            z: 6.0,
+            ..entry
+        };
+        let mut config = ClientConfig::new("Example", "Example", "Example", "Tester");
+        config.installed_zone_boundaries =
+            Some(std::sync::Arc::new(Boundaries { from, to: entry }));
+        let mut world = World::for_zone(5, &config);
+        world.zone = (42, 3);
+        world.zone_name = "example".to_owned();
+        world.admitted = Some(start);
+        world.player.admit(testing::player(7));
+        let mut motion = MotionSession::new(5, 7, from, start)
+            .unwrap()
+            .with_gate(Some(UpdateGate::Changed {
+                spacing: TITANIUM_POSITION_SPACING,
+            }));
+        motion
+            .calibrate(
+                MotionCalibration {
+                    units_per_second: 6.0,
+                    velocity_scale: 0.05,
+                    animation: 12,
+                    walk: None,
+                    strafe: None,
+                    backward: None,
+                    diagonal: DiagonalRates::default(),
+                },
+                start,
+            )
+            .unwrap();
+        let moved = start + Duration::from_millis(300);
+        motion
+            .send_move_sample(
+                &MovementRequest::new(MovementMode::Forward, 5, entry, moved),
+                moved,
+                |_| Ok(()),
+            )
+            .unwrap();
+        world.body.admit(motion);
+
+        let mut transfers = Transfers::new("Tester", Home::Offered);
+        let mut points = [0; 28];
+        points[..4].copy_from_slice(&1u32.to_le_bytes());
+        points[4..8].copy_from_slice(&7u32.to_le_bytes());
+        for (offset, value) in [(8, 1_000_000.0_f32), (12, -20.0), (16, 6.0), (20, 513.0)] {
+            points[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+        }
+        points[24..26].copy_from_slice(&42u16.to_le_bytes());
+        points[26..28].copy_from_slice(&3u16.to_le_bytes());
+        transfers.points = zoning::ZonePoints::decode(&points).unwrap();
+        let crossing = ClientCommand::CrossZoneLine {
+            session_id: 5,
+            destination: zoning::ZoneLineDestination::Reference(7),
+            position: entry,
+            created: Instant::now(),
+        };
+        world.zone_name = "different".to_owned();
+        let refused = testing::run(|out| transfers.handle(&crossing, &mut world, out));
+        refused.result.unwrap();
+        assert_eq!(refused.sent, []);
+        assert!(matches!(
+            refused.events.as_slice(),
+            [ClientEvent::World(WorldEvent::ZoneLineRejected { .. })]
+        ));
+        world.zone_name = "example".to_owned();
+        let crossed = testing::run(|out| transfers.handle(&crossing, &mut world, out));
+        crossed.result.unwrap();
+        let [packet] = crossed.sent.as_slice() else {
+            panic!("expected one entry report");
+        };
+        assert_eq!(packet.opcode, POSITION_OPCODE);
+        assert_eq!(packet.body.len(), 36);
+        assert_eq!(&packet.body[..4], &[7, 0, 1, 0]);
+        assert_eq!(&packet.body[24..28], &entry.x.to_le_bytes());
+        assert!(matches!(
+            crossed.events.as_slice(),
+            [_, ClientEvent::World(WorldEvent::LocalPadCrossed(pad))]
+                if pad.entry == entry && pad.landing == landing && pad.session_id == 5
+        ));
+        assert_eq!(world.body.position(), Some(landing));
+        assert_eq!(world.player.as_ref().unwrap().position, landing);
+        let repeated = testing::run(|out| transfers.handle(&crossing, &mut world, out));
+        repeated.result.unwrap();
+        assert_eq!(repeated.sent, []);
+        let due = testing::run(|out| world.body.heartbeat(Instant::now(), out));
+        due.result.unwrap();
+        assert_eq!(due.sent, []);
+        let [packet] = due.unreliable.as_slice() else {
+            panic!("expected one landing report");
+        };
+        assert_eq!(packet.opcode, POSITION_OPCODE);
+        assert_eq!(&packet.body[..4], &[7, 0, 2, 0]);
+        assert_eq!(&packet.body[24..28], &landing.x.to_le_bytes());
     }
 
     #[test]

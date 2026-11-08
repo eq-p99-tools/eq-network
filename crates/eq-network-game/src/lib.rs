@@ -59,6 +59,8 @@ pub mod guild;
 /// Damage the world does to the player, which the client reports: falls,
 /// drowning, lava and freezing.
 pub mod hazards;
+/// Inspecting another player's equipment.
+pub mod inspection;
 /// Read-only inventory packets, slots, instances, and state.
 pub mod inventory;
 /// Read-only item inspection requests and definitions.
@@ -123,6 +125,8 @@ pub mod ticks;
 pub mod tradeskills;
 /// Training skills at a guildmaster.
 pub mod training;
+/// Received invisibility codes and observer eligibility.
+pub mod vision;
 /// Who is online: `/who all` and the world's answer.
 pub mod who;
 /// Renderer-independent world-state packet decoding.

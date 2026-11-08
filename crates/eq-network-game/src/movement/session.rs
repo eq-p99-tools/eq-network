@@ -144,6 +144,9 @@ pub struct MotionSession {
     spawn_id: u16,
     sequence: u16,
     position: Position,
+    /// Approach point of the latest accepted move. A correction or any
+    /// other placement cannot serve as a pad entry.
+    previous_position: Option<Position>,
     calibration: Option<MotionCalibration>,
     options: super::MovementOptions,
     last_sent: Instant,
@@ -217,6 +220,7 @@ impl PreparedMove<'_> {
         }
         owner.flags = flags;
         owner.guard = guard;
+        owner.previous_position = Some(owner.position);
         owner.position = sample.position;
         owner.moving = moving;
         owner.last_input = now;
@@ -417,6 +421,7 @@ impl MotionSession {
             spawn_id,
             sequence: 0,
             position,
+            previous_position: None,
             calibration: None,
             options: super::MovementOptions::default(),
             last_sent: now,
@@ -504,6 +509,7 @@ impl MotionSession {
     pub fn withdraw(&mut self) {
         self.calibration = None;
         self.held = None;
+        self.previous_position = None;
         self.guard.correct(self.position, Instant::now());
     }
 
@@ -511,6 +517,69 @@ impl MotionSession {
     #[must_use]
     pub const fn position(&self) -> Position {
         self.position
+    }
+
+    /// The movement segment the host's boundary observation can still name.
+    #[must_use]
+    pub fn pad_approach(&self, created: Instant) -> Option<Position> {
+        self.previous_position.filter(|_| {
+            !self.suspended && created > self.guard.sampled && created > self.guard.input_epoch
+        })
+    }
+
+    /// Submit the entry report and stage the landing for the ordinary update
+    /// gate. The caller must corroborate the current WLD entry with
+    /// [`Self::pad_approach`] and apply its server-specific policy.
+    ///
+    /// # Errors
+    /// Rejects stale placement and invalid samples. A failed entry send
+    /// preserves the previous motion state.
+    pub fn cross_pad(
+        &mut self,
+        pad: crate::zoning::LocalPad,
+        created: Instant,
+        now: Instant,
+        send_entry: impl FnOnce(&PositionPacket) -> Result<()>,
+    ) -> Result<()> {
+        ensure!(
+            self.pad_approach(created).is_some() && self.position == pad.entry(),
+            "pad entry is no longer current"
+        );
+        let still = PositionPacket {
+            spawn_id: self.spawn_id,
+            sequence: self.sequence,
+            position: self.position,
+            delta: [0.0; 3],
+            animation: 0,
+            delta_heading: 0,
+        };
+        let entry = PositionPacket {
+            sequence: self.sequence,
+            ..self
+                .held
+                .or(self.last_update)
+                .filter(|sample| sample.position == self.position)
+                .unwrap_or(still)
+        };
+        let landing = PositionPacket {
+            position: pad.landing(),
+            ..still
+        };
+        landing.check()?;
+        entry.check()?;
+        send_entry(&entry)?;
+
+        // The 0x48aaa6 branch submits entry outside the ordinary gate.
+        // Keep the existing periodic deadline for the landing or movement from it.
+        self.correct(landing.position, now)?;
+        self.sequence = self.sequence.wrapping_add(1);
+        self.last_update = Some(PositionPacket {
+            sequence: 0,
+            ..entry
+        });
+        self.held = Some(landing);
+        self.moving = false;
+        Ok(())
     }
 
     /// Stops voluntary motion at the current owner point without revoking
@@ -568,6 +637,7 @@ impl MotionSession {
         self.suspended = false;
         self.calibration = None;
         self.held = None;
+        self.previous_position = None;
         self.moving = false;
         self.guard.correct(self.position, now);
     }
@@ -944,6 +1014,7 @@ impl MotionSession {
         }
         .check()?;
         self.position = position;
+        self.previous_position = None;
         self.guard.correct(position, now);
         self.calibration = None;
         self.held = None;
@@ -956,6 +1027,7 @@ impl MotionSession {
         self.suspended = true;
         self.calibration = None;
         self.held = None;
+        self.previous_position = None;
         self.moving = false;
     }
 }

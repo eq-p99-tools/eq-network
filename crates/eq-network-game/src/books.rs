@@ -9,7 +9,11 @@
 //! `Client::ReadBook` (`zone/client.cpp`) for the rules.
 //! `EQMac` uses `BookRequest_Struct` and `BookText_Struct` from TAKP/Quarm
 //! `common/eq_packet_structs.h`: a kind byte without Titanium's window byte.
-use crate::{command::EncodedCommand, GameDialect};
+use crate::{
+    command::EncodedCommand,
+    inventory::{Inventory, InventoryItem, InventorySlot},
+    GameDialect,
+};
 use anyhow::{ensure, Context, Result};
 use serde::Serialize;
 
@@ -28,6 +32,83 @@ pub const MAX_FILE: usize = 19;
 /// The item class of what can be read (`ItemClassBook`), beside common
 /// items (0) and containers (1).
 const READABLE_CLASS: &str = "2";
+
+/// A selected readable record and, for a bag slot, its container.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ReadSelection {
+    item: InventoryItem,
+    parent: Option<InventoryItem>,
+}
+
+impl ReadSelection {
+    /// Capture the selected item and any eligible parent from the replica.
+    ///
+    /// # Errors
+    /// Rejects an empty or unreadable slot and unavailable container records.
+    pub fn capture(inventory: &Inventory, slot: InventorySlot) -> Result<Self> {
+        let item = inventory
+            .items()
+            .get(&slot)
+            .filter(|item| item.book.is_some())
+            .context("That is not something you can read.")?;
+        let parent = slot
+            .parent()
+            .map(|(parent, index)| {
+                inventory
+                    .items()
+                    .get(&parent)
+                    .filter(|bag| index < bag.bag_slots)
+                    .context("The readable item's container is not known")
+                    .cloned()
+            })
+            .transpose()?;
+        Ok(Self {
+            item: item.clone(),
+            parent,
+        })
+    }
+
+    /// Where the selected item was carried.
+    #[must_use]
+    pub const fn slot(&self) -> InventorySlot {
+        self.item.slot
+    }
+
+    /// Read metadata from the current inventory after checking the exact records.
+    ///
+    /// # Errors
+    /// Rejects a changed or absent item or container.
+    pub fn current_book<'a>(&self, inventory: &'a Inventory) -> Result<&'a Book> {
+        let current = inventory
+            .items()
+            .get(&self.slot())
+            .filter(|item| same_record(&self.item, item))
+            .context("The readable item changed; select it again")?;
+        if let Some(parent) = &self.parent {
+            ensure!(
+                inventory
+                    .items()
+                    .get(&parent.slot)
+                    .is_some_and(|item| same_record(parent, item)),
+                "The readable item's container changed; select the item again"
+            );
+        }
+        current
+            .book
+            .as_ref()
+            .context("That is not something you can read.")
+    }
+}
+
+fn same_record(expected: &InventoryItem, current: &InventoryItem) -> bool {
+    // Ignore display enrichment, but preserve differences in known serials.
+    InventoryItem::same_slot_contents(Some(expected), Some(current))
+        && expected
+            .rules
+            .ground_drop_serial
+            .zip(current.rules.ground_drop_serial)
+            .is_none_or(|(expected, current)| expected == current)
+}
 
 /// What a readable item reads as.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]

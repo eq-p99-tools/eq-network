@@ -41,9 +41,30 @@ pub enum ZoneLineDestination {
 pub enum BoundaryRoute {
     /// A normal zone or instance transfer.
     Transfer(ZoneOffer),
-    /// The WLD boundary resolves to this admission. Any landing must come
-    /// from the server; a destination entry is not a relocation instruction.
-    SameZone,
+    /// A WLD boundary resolving to the current zone and instance. The session
+    /// must still verify the actual region entry and the server's pad policy.
+    SameZone(LocalPad),
+}
+
+/// Entry and landing resolved from an installed WLD boundary.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct LocalPad {
+    entry: Position,
+    landing: Position,
+}
+
+impl LocalPad {
+    /// Position at the checked entrance.
+    #[must_use]
+    pub const fn entry(self) -> Position {
+        self.entry
+    }
+
+    /// Landing after applying Titanium's preserve thresholds.
+    #[must_use]
+    pub const fn landing(self) -> Position {
+        self.landing
+    }
 }
 
 impl ZonePoints {
@@ -117,14 +138,14 @@ impl ZonePoints {
     ) -> Result<ZoneOffer> {
         match self.crossing(destination, current, (current_zone, current_instance))? {
             BoundaryRoute::Transfer(offer) => Ok(offer),
-            BoundaryRoute::SameZone => {
+            BoundaryRoute::SameZone(_) => {
                 anyhow::bail!("same-zone boundary needs a server relocation")
             }
         }
     }
 
-    /// Classify a boundary without returning client-controlled coordinates
-    /// for a local jump. Current zone and instance must both match.
+    /// Resolve an asset boundary. Current zone and instance must both match
+    /// for a local pad.
     ///
     /// # Errors
     /// Rejects unknown references and invalid coordinates.
@@ -134,11 +155,11 @@ impl ZonePoints {
         current: Position,
         zone: (u16, u16),
     ) -> Result<BoundaryRoute> {
-        let request = match destination {
+        let point = match destination {
             ZoneLineDestination::Reference(number) => self
                 .get(*number)
                 .ok_or_else(|| anyhow::anyhow!("unknown zone-line reference"))?
-                .request(current)?,
+                .clone(),
             ZoneLineDestination::Absolute { zone_id, position } => {
                 ensure!(*zone_id != 0, "zone line has no destination");
                 ZonePoint {
@@ -147,14 +168,33 @@ impl ZonePoints {
                     instance_id: 0,
                     destination: *position,
                 }
-                .request(current)?
             }
         };
-        Ok(if (request.zone_id, request.instance_id) == zone {
-            BoundaryRoute::SameZone
+        let request = point.request(current)?;
+        Ok(if (point.zone_id, point.instance_id) == zone {
+            BoundaryRoute::SameZone(LocalPad {
+                entry: current,
+                landing: pad_landing(point.destination, current),
+            })
         } else {
             BoundaryRoute::Transfer(request)
         })
+    }
+}
+
+/// Titanium's local branch at 0x48aaa6 uses upper thresholds for all four
+/// fields. Transfer offers have a separate exact-sentinel contract.
+fn pad_landing(target: Position, entry: Position) -> Position {
+    let axis = |to, from| if to < 999_999.0 { to } else { from };
+    Position {
+        x: axis(target.x, entry.x),
+        y: axis(target.y, entry.y),
+        z: axis(target.z, entry.z),
+        heading: if target.heading < 513.0 {
+            target.heading
+        } else {
+            entry.heading
+        },
     }
 }
 
@@ -269,12 +309,12 @@ mod tests {
         assert!(table
             .request(&ZoneLineDestination::Reference(7), current, 42, 3)
             .is_err());
-        assert_eq!(
+        assert!(matches!(
             table
                 .crossing(&ZoneLineDestination::Reference(7), current, (42, 3))
                 .unwrap(),
-            BoundaryRoute::SameZone,
-        );
+            BoundaryRoute::SameZone(_)
+        ));
         assert!(matches!(
             table
                 .crossing(&ZoneLineDestination::Reference(7), current, (42, 0))

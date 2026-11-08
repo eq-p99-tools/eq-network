@@ -31,7 +31,6 @@ pub(crate) use titanium::{parse as parse_items, parse_at};
 pub use weight::{WeightUnavailable, MAX_CARRIED_WEIGHT};
 
 use crate::items::ItemDetails;
-use anyhow::{ensure, Context, Result};
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::num::NonZeroU32;
@@ -235,10 +234,17 @@ impl InventorySlot {
 /// Placement constraints from the server's item definition.
 #[derive(Clone, Debug, Default, PartialEq, Serialize)]
 pub struct ItemPlacement {
+    /// Class byte from the Titanium item definition, when present and readable.
+    #[serde(skip)]
+    pub titanium_item_class: Option<u8>,
     /// Titanium link hash computed from the complete supported item record.
     /// Used for composition only, never for inventory reconciliation.
     #[serde(skip)]
     pub titanium_link_hash: Option<u32>,
+    /// Raw Titanium Light field for a common item, or explicit zero for
+    /// a known non-common item. Missing/malformed metadata stays unavailable.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub titanium_light: Option<u8>,
     /// Titanium instance serial when its received definition is eligible for
     /// the ordinary drop action. Unknown or restricted items have no value.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -286,6 +292,14 @@ pub struct InventoryItem {
 }
 
 impl InventoryItem {
+    /// Build a Titanium chat link from the metadata retained with this record.
+    ///
+    /// # Errors
+    /// Rejects missing hash metadata and IDs that cannot form ordinary links.
+    pub fn titanium_link(&self) -> anyhow::Result<crate::chat::ItemLink> {
+        crate::items::owned::link(self)
+    }
+
     /// Compare slot contents for placement decisions. Model IDs and the
     /// instance serial used to authorize a ground drop are checked separately.
     #[must_use]
@@ -294,12 +308,14 @@ impl InventoryItem {
             (Some(left), Some(right))
                 if left.details.base_held_model != right.details.base_held_model
                     || left.rules.ground_drop_serial != right.rules.ground_drop_serial
-                    || left.rules.titanium_link_hash != right.rules.titanium_link_hash =>
+                    || left.rules.titanium_link_hash != right.rules.titanium_link_hash
+                    || left.rules.titanium_light != right.rules.titanium_light =>
             {
                 let mut comparable = left.clone();
                 comparable.details.base_held_model = right.details.base_held_model;
                 comparable.rules.ground_drop_serial = right.rules.ground_drop_serial;
                 comparable.rules.titanium_link_hash = right.rules.titanium_link_hash;
+                comparable.rules.titanium_light = right.rules.titanium_light;
                 &comparable == right
             }
             _ => left == right,
@@ -422,28 +438,36 @@ pub struct Inventory {
 }
 
 impl Inventory {
-    /// Compose a Titanium item tag from a current carried or equipped item.
-    ///
-    /// # Errors
-    /// Rejects stale or projected inventory, non-owned slots and incomplete metadata.
-    pub fn owned_titanium_link(&self, slot: InventorySlot) -> Result<crate::chat::ItemLink> {
-        ensure!(
-            slot.is_equipment() || slot.is_carried(),
-            "Choose a worn or carried item"
-        );
-        ensure!(
-            self.received() && !self.stale() && !self.predicted() && !self.ground_drop_pending(),
-            "Wait for current inventory before linking an item"
-        );
-        ensure!(
-            self.custody_known(slot),
-            "That item's placement is unconfirmed"
-        );
-        let item = self
-            .items
-            .get(&slot)
-            .context("That inventory slot is empty")?;
-        crate::items::owned::link(item)
+    /// A local Titanium light estimate from the displayed inventory. A
+    /// complete known set without an eligible source yields zero.
+    /// Native eqgame.exe 0x474597 scans worn roots 0..21 in ascending order,
+    /// choosing the first greatest rank (0x439546), then considers only
+    /// types 9..=13 in top-level general slots 22..30, with the last winning.
+    /// Children, ammo, cursor and bank do not participate in this scan.
+    #[must_use]
+    pub fn titanium_carried_light(&self) -> Option<u8> {
+        const RANK: [u8; 16] = [0, 1, 2, 3, 6, 7, 8, 9, 10, 3, 7, 9, 4, 5, 4, 5];
+        if !self.received() || self.stale() {
+            return None;
+        }
+        let mut light = 0;
+        let mut rank = 0;
+        for (&InventorySlot(slot), item) in self.items.range(InventorySlot(0)..InventorySlot(30)) {
+            if slot == 21 {
+                continue;
+            }
+            let kind = item.rules.titanium_light?;
+            let strength = *RANK.get(usize::from(kind))?;
+            if slot < 21 {
+                if strength > rank {
+                    light = kind;
+                    rank = strength;
+                }
+            } else if (9..=13).contains(&kind) {
+                light = kind;
+            }
+        }
+        Some(light)
     }
 
     /// Whether a submitted drop still awaits a fresh inventory snapshot.

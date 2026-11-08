@@ -757,6 +757,18 @@ fn snapshot_decodes_equipment_bags_stack_quantities_and_unlimited_charges() {
     assert_eq!(inventory.items[&InventorySlot(13)].scroll_spell, None);
     assert_eq!(inventory.items[&InventorySlot(22)].bag_slots, 8);
     assert_eq!(
+        inventory.items[&InventorySlot(13)]
+            .rules
+            .titanium_item_class,
+        Some(0)
+    );
+    assert_eq!(
+        inventory.items[&InventorySlot(22)]
+            .rules
+            .titanium_item_class,
+        Some(1)
+    );
+    assert_eq!(
         inventory.items[&InventorySlot(22)]
             .rules
             .bag_weight_reduction,
@@ -1167,4 +1179,32 @@ fn consumption_after_multiple_relocations_keeps_independent_prediction_uncertain
     assert_eq!(state.unresolved_predictions(), 0);
     assert!(!state.predicted());
     assert!(!state.stale());
+}
+
+#[test]
+fn carried_light_reads_static_metadata_and_respects_titanium_root_slots() {
+    let packet = |slot, kind: &str| {
+        let fixture = wire(slot, 42, 0, false, 0, &[]);
+        let (head, rest) = fixture.split_once('"').unwrap();
+        let (definition, tail) = rest.split_once('"').unwrap();
+        let mut fields: Vec<_> = definition.split('|').collect();
+        fields[43] = kind;
+        format!("{head}\"{}\"{tail}", fields.join("|"))
+    };
+    let mut inventory = Inventory::default();
+    assert_eq!(inventory.titanium_carried_light(), None);
+    for (entries, expected) in [
+        (vec![(13, "7"), (14, "11"), (21, "8"), (30, "8")], Some(7)),
+        (vec![(13, "8"), (22, "9"), (23, "13"), (24, "8")], Some(13)),
+        (vec![(13, "unknown"), (22, "10")], None),
+        (vec![(13, "99")], None),
+        (vec![(30, "8")], Some(0)),
+    ] {
+        let snapshot: String = entries
+            .into_iter()
+            .map(|(slot, kind)| packet(slot, kind))
+            .collect();
+        inventory.apply(decode(0x5394, snapshot.as_bytes()).unwrap().unwrap());
+        assert_eq!(inventory.titanium_carried_light(), expected);
+    }
 }

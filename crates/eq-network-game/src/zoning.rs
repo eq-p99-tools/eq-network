@@ -7,7 +7,7 @@ use crate::{command::EncodedCommand, world::Position};
 use anyhow::{ensure, Result};
 use serde::Serialize;
 mod points;
-pub use points::{BoundaryRoute, ZoneLineDestination, ZonePoint, ZonePoints};
+pub use points::{BoundaryRoute, LocalPad, ZoneLineDestination, ZonePoint, ZonePoints};
 
 /// `OP_ZoneChange`: the client's transfer request, and the server's answer.
 pub const CHANGE_OPCODE: u16 = 0x5dd8;
@@ -41,6 +41,20 @@ pub struct SameZoneRelocation {
     pub spawn_id: u16,
     /// Absolute landing from the received move.
     pub position: Position,
+}
+
+/// A local WLD pad snap after submitting its entry position. The ordinary
+/// movement stream will carry the landing. This event reports no server reply.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
+pub struct LocalPadCrossing {
+    /// Current zone admission.
+    pub session_id: u64,
+    /// The admitted player's spawn ID.
+    pub spawn_id: u16,
+    /// Position submitted on entry.
+    pub entry: Position,
+    /// Local position after crossing.
+    pub landing: Position,
 }
 
 /// A pending destination selected by a server offer or local boundary.

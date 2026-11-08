@@ -7,10 +7,9 @@ use super::{
     Reason::{Needless, Planned, Unmapped},
     ServerMessage,
     Step::{AlternateAdvancement, Bazaar, LaterSystems, PlayerState, Raids, Social},
-    BECOME_NPC, DISCIPLINE_TIMER, DUEL_REQUEST, EQEMU, ILLUSION, INSPECT_REQUEST, INVITE, KICK,
-    MARQUEE, MEMBER_ADD, MEMBER_LIST, MEMBER_RANK, MEMBER_UPDATE, NIMBUS, P99, POPUP, PROJECTILE,
-    RENAME, REWARD, SACRIFICE, STATS, TITANIUM_DESCRIPTION, TITANIUM_PROFILE, TRANSLOCATE,
-    VOICE_MACRO,
+    BECOME_NPC, DISCIPLINE_TIMER, DUEL_REQUEST, EQEMU, ILLUSION, INVITE, KICK, MARQUEE, MEMBER_ADD,
+    MEMBER_LIST, MEMBER_RANK, MEMBER_UPDATE, NIMBUS, P99, POPUP, PROJECTILE, RENAME, REWARD,
+    SACRIFICE, STATS, TITANIUM_DESCRIPTION, TITANIUM_PROFILE, TRANSLOCATE, VOICE_MACRO,
 };
 
 /// What the session does with a message Titanium's servers send; nothing
@@ -138,7 +137,7 @@ pub(in crate::client) fn titanium(opcode: u16) -> Option<ServerMessage> {
         0x2372 => sent("OP_SpecialMesg", EQEMU, Read(&[Chat])),
         0x238f => sent("OP_GMTraining", EQEMU, Read(&[Zone])),
         0x23a1 => sent("OP_GMLastName", EQEMU, Read(&[Zone])),
-        0x2403 => sent("OP_InspectAnswer", EQEMU, unasked(Social)),
+        0x2403 => sent("OP_InspectAnswer", EQEMU, Read(&[Zone])),
         0x246a => sent(
             "OP_PVPLeaderBoardDetailsReply",
             EQEMU,
@@ -357,7 +356,7 @@ pub(in crate::client) fn titanium(opcode: u16) -> Option<ServerMessage> {
         ),
         0x76a2 => sent("OP_CompletedTasks", EQEMU, planned(LaterSystems)),
         0x7709 => sent("OP_Assist", EQEMU, Read(&[Zone])),
-        0x775d => sent("OP_InspectRequest", EQEMU, Partly(&[Zone], INSPECT_REQUEST)),
+        0x775d => sent("OP_InspectRequest", EQEMU, Read(&[Zone])),
         0x77d0 => sent("OP_RemoveAllDoors", EQEMU, Read(&[Zone])),
         0x7834 => sent("OP_RequestClientZoneChange", EQEMU, Read(&[Zone])),
         0x7864 => sent("OP_GMBecomeNPC", EQEMU, Partly(&[Zone], BECOME_NPC)),

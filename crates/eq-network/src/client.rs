@@ -170,6 +170,19 @@ impl fmt::Debug for Credentials {
     }
 }
 
+/// Read the installed zone geometry for a boundary entered by ordinary motion.
+/// Only a trusted asset reader should supply this policy.
+pub trait InstalledZoneBoundaries: fmt::Debug + Send + Sync {
+    /// Return the boundary entered between two accepted player positions in
+    /// the admitted zone. Missing or unreadable geometry returns no route.
+    fn entered(
+        &self,
+        zone: &str,
+        from: eq_network_game::world::Position,
+        to: eq_network_game::world::Position,
+    ) -> Option<eq_network_game::zoning::ZoneLineDestination>;
+}
+
 /// Connection and logging preferences.
 #[derive(Clone, Debug)]
 #[non_exhaustive]
@@ -217,6 +230,12 @@ pub struct ClientConfig {
     ///
     /// [`eq_network_game::sysinfo`]: eq_network_game::sysinfo::Machine
     pub sysinfo: Option<std::sync::Arc<dyn eq_network_game::sysinfo::Machine>>,
+    /// Optional host lookup for observed Titanium vision buffs. Without installed
+    /// mechanics ordinary invisibility remains gated as it was before.
+    pub sight_catalog: Option<std::sync::Arc<dyn eq_network_game::vision::SightCatalog>>,
+    /// Installed WLD boundaries for P99's local pads. The current server
+    /// admission and any indexed server route still control resolution.
+    pub installed_zone_boundaries: Option<std::sync::Arc<dyn InstalledZoneBoundaries>>,
 }
 
 impl ClientConfig {
@@ -253,6 +272,8 @@ impl ClientConfig {
             auto_eat: eq_network_game::food::AutoEat::default(),
             answer_list_polls: false,
             sysinfo: None,
+            sight_catalog: None,
+            installed_zone_boundaries: None,
         }
     }
 
@@ -705,6 +726,16 @@ impl Client {
             identity,
             assets: Assets::bundled()?,
         })
+    }
+
+    /// Supply installed vision mechanics for the selected Titanium spell provider.
+    #[must_use]
+    pub fn with_sight_catalog(
+        mut self,
+        catalog: std::sync::Arc<dyn eq_network_game::vision::SightCatalog>,
+    ) -> Self {
+        self.config.sight_catalog = Some(catalog);
+        self
     }
 
     /// Replace the bundled checksum inventory with an application-supplied one.

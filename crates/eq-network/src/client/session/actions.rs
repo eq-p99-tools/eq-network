@@ -90,6 +90,7 @@ impl Held {
 
 /// What a command needs exclusively. Every command is named, so a new one is
 /// a decision here.
+#[allow(clippy::too_many_lines)] // Keep the exhaustive resource table together.
 pub(super) fn needs(command: &ClientCommand) -> &'static [Resource] {
     use Resource::{Casting, GroundPickup, Inventory, Spellbook};
     match command {
@@ -172,6 +173,9 @@ pub(super) fn needs(command: &ClientCommand) -> &'static [Resource] {
         | ClientCommand::AnswerResurrection { .. }
         | ClientCommand::AnswerSacrifice { .. }
         | ClientCommand::AnswerTranslocate { .. }
+        | ClientCommand::RespondToPopup { .. }
+        | ClientCommand::InspectPlayer { .. }
+        | ClientCommand::SetInspectNote { .. }
         | ClientCommand::InviteToGroup { .. }
         | ClientCommand::FollowGroup { .. }
         | ClientCommand::DeclineGroup { .. }
@@ -324,6 +328,9 @@ fn refusal(command: &ClientCommand, reason: &str) -> Option<WorldEvent> {
         | ClientCommand::AnswerResurrection { session_id, .. }
         | ClientCommand::AnswerSacrifice { session_id, .. }
         | ClientCommand::AnswerTranslocate { session_id, .. }
+        | ClientCommand::RespondToPopup { session_id, .. }
+        | ClientCommand::InspectPlayer { session_id, .. }
+        | ClientCommand::SetInspectNote { session_id, .. }
         | ClientCommand::InviteToGroup { session_id, .. }
         | ClientCommand::FollowGroup { session_id, .. }
         | ClientCommand::DeclineGroup { session_id, .. }
@@ -471,6 +478,9 @@ fn reasoned(command: &ClientCommand, session_id: u64, reason: String) -> Option<
             session_id,
             reason,
         },
+        ClientCommand::InspectPlayer { .. } => {
+            WorldEvent::PlayerInspectionRefused { session_id, reason }
+        }
         ClientCommand::InviteToGroup { .. }
         | ClientCommand::FollowGroup { .. }
         | ClientCommand::DeclineGroup { .. }

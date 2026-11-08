@@ -176,6 +176,10 @@ pub(in crate::client) struct World {
     pub(super) session_id: u64,
     /// Whether this admission is on a network-constrained local `EQEmu` connection.
     local_eqemu: bool,
+    /// Installed geometry corroboration, enabled only for the P99 profile.
+    pub(super) pad_boundaries: Option<std::sync::Arc<dyn crate::client::InstalledZoneBoundaries>>,
+    /// The zone short name received on this admission.
+    pub(super) zone_name: String,
     /// The admitted player, once the zone is ready; see [`PlayerRecord`] for
     /// who writes it.
     pub(super) player: PlayerRecord,
@@ -206,6 +210,8 @@ pub(in crate::client) struct World {
     pub(in crate::client) packets: u64,
     /// The zone's spawns, which only the entities feature changes.
     pub(super) spawns: Spawns,
+    /// Own Titanium buff observations used to evaluate observer visibility.
+    pub(super) sight: super::sight::Sight,
     /// The give or trade window asked for or open, which only the exchange
     /// feature changes.
     pub(super) exchange: Exchanging,
@@ -230,6 +236,8 @@ impl World {
         Self {
             session_id,
             local_eqemu: false,
+            pad_boundaries: None,
+            zone_name: String::new(),
             player: PlayerRecord::default(),
             body: Body::default(),
             control: OwnControl::default(),
@@ -244,6 +252,7 @@ impl World {
             gravity: None,
             packets: 0,
             spawns: Spawns::default(),
+            sight: super::sight::Sight::default(),
             exchange: Exchanging::default(),
             target: super::targeting::Target::default(),
             own_pet: None,
@@ -257,6 +266,17 @@ impl World {
     pub(super) fn for_zone(session_id: u64, config: &ClientConfig) -> Self {
         Self {
             local_eqemu: config.local_only && config.protocol == ServerProtocol::EqEmu,
+            sight: super::sight::Sight::new(
+                config
+                    .sight_catalog
+                    .clone()
+                    .filter(|_| config.protocol.is_titanium()),
+            ),
+            pad_boundaries: if config.protocol == ServerProtocol::Project1999 {
+                config.installed_zone_boundaries.clone()
+            } else {
+                None
+            },
             ..Self::new(session_id)
         }
     }
@@ -280,7 +300,14 @@ impl World {
     /// Whether a spawn is the player or one the player can see: what a
     /// target, a spell or an item's effect may be aimed at.
     pub(super) fn visible(&self, spawn_id: u16) -> bool {
-        self.is_player(spawn_id) || self.spawns.visible(spawn_id).is_some()
+        self.is_player(spawn_id) || self.visible_spawn(spawn_id).is_some()
+    }
+
+    /// The spawn record for an actor the current observer can see.
+    pub(super) fn visible_spawn(&self, spawn_id: u16) -> Option<&crate::world::SpawnState> {
+        self.spawns.get(spawn_id).filter(|spawn| {
+            !spawn.invisible || eq_network_game::vision::can_see(spawn, self.sight.sees_invisible())
+        })
     }
 
     /// Ends the zone session the way a feature decided: the one place the

@@ -155,8 +155,8 @@ const TITANIUM: Generation = Generation {
 /// tracked (nor the small modifier the ability gives with no buffs), and
 /// strafing takes the walk speed, where the program takes the run speed
 /// while running, since a strafe doesn't say which it is. Crouching,
-/// riding and native swim skill tuning are left out. An `EQEmu` session may
-/// instead apply the conservative bound in [`super::swim_speed`].
+/// riding and native swim skill tuning are left out. A Titanium swim
+/// admission can apply the conservative bound in [`super::swim_speed`].
 #[must_use]
 pub fn eqmac(state: &SpeedState) -> Speeds {
     speeds(EQMAC, state)

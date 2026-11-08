@@ -25,7 +25,12 @@ const MOST_SPAWNS: usize = 65_535;
 pub(super) struct Spawns(BTreeMap<u16, SpawnState>);
 
 impl Spawns {
-    /// A spawn the player can see.
+    pub(super) fn get(&self, id: u16) -> Option<&SpawnState> {
+        self.0.get(&id)
+    }
+
+    /// A spawn without an invisibility appearance. Transaction checks
+    /// using this view keep their own existing eligibility.
     pub(super) fn visible(&self, id: u16) -> Option<&SpawnState> {
         self.0.get(&id).filter(|spawn| !spawn.invisible)
     }
@@ -70,12 +75,9 @@ impl Spawns {
                 self.0.remove(id);
             }
             WorldEvent::Death(death) => self.mark_corpse(death.spawn_id, own_spawn),
-            WorldEvent::Visibility {
-                spawn_id,
-                invisible,
-            } => {
+            WorldEvent::Visibility { spawn_id, state } => {
                 if let Some(spawn) = self.0.get_mut(spawn_id) {
-                    spawn.invisible = *invisible;
+                    state.apply(spawn);
                 }
             }
             WorldEvent::Position {
@@ -259,6 +261,11 @@ impl Feature for Entities {
             return Ok(());
         };
         world.spawns.apply(event, world.own_spawn);
+        if world.owns_death(event) {
+            world.sight.clear();
+        } else {
+            world.sight.apply(event, world.own_spawn);
+        }
         match event {
             WorldEvent::Spawns(_) => {
                 ensure!(
@@ -307,6 +314,11 @@ impl Feature for Entities {
             return Ok(());
         };
         world.spawns.apply(event, world.own_spawn);
+        if world.owns_death(event) {
+            world.sight.clear();
+        } else {
+            world.sight.apply(event, world.own_spawn);
+        }
         if self.dialect == GameDialect::EqMac && matches!(event, WorldEvent::HideAndSneakEnded) {
             if let Some(spawn_id) = world.own_spawn {
                 let ended = WorldEvent::Appearance {
@@ -404,7 +416,7 @@ mod tests {
         }
         let hidden = WorldEvent::Visibility {
             spawn_id: 8,
-            invisible: true,
+            state: eq_network_game::vision::Invisibility::EqMac(1),
         };
         entities.admit(&event(hidden), &mut world).unwrap();
         assert!(world.spawns.visible(8).is_none());

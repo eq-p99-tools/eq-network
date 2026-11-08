@@ -258,7 +258,15 @@ pub(super) fn run(
         crate::client::endpoint(host, port, config.local_only)?,
         context.stop.flag(),
     )?;
-    run_connected(context, server, &mut session, shield, checksums, log)
+    run_connected(
+        context,
+        server,
+        &mut session,
+        shield,
+        checksums,
+        log,
+        Instant::now,
+    )
 }
 
 // The linear handshake keeps packet ordering and state transitions together.
@@ -270,6 +278,7 @@ fn run_connected(
     shield: &mut Option<Box<dyn Shield>>,
     mut checksums: Vec<u8>,
     log: &mut Events<'_>,
+    list_now: impl Fn() -> Instant,
 ) -> Result<ZoneExit> {
     let config = &context.config;
     let credentials = context.credentials;
@@ -379,7 +388,7 @@ fn run_connected(
             && !world.lifecycle.blocks_motion()
             && session.termination().is_none();
         list_replies
-            .tick(Instant::now(), may_reply, session, log)
+            .tick(list_now(), may_reply, session, log)
             .map_err(|error| abort_commands(commands.iter(), error, log))?;
         let exit = apply_commands(
             &commands,
@@ -431,7 +440,7 @@ fn run_connected(
             may_reply,
             packet.opcode,
             &packet.body,
-            Instant::now(),
+            list_now(),
             log,
         )? {
             continue;
@@ -828,6 +837,7 @@ fn admit(
     out.sender.spawn_id = Some(player.spawn_id);
     world.player.admit(player.clone());
     world.admitted = Some(Instant::now());
+    world.zone_name.clone_from(&zone.name);
     out.log
         .send(ClientEvent::World(crate::world::WorldEvent::Entered {
             capabilities: features.capabilities(),
@@ -868,7 +878,7 @@ mod tests {
     };
 
     /// How many kinds of command there are.
-    const KINDS: usize = 89;
+    const KINDS: usize = 92;
 
     /// The kinds the login and world servers take, before any zone session.
     const BEFORE_ZONES: [usize; 4] = [0, 1, 70, 75];
@@ -969,6 +979,9 @@ mod tests {
             ClientCommand::ShowHelm { .. } => 73,
             ClientCommand::ClimbReach { .. } => 74,
             ClientCommand::LiquidDamage { .. } => 85,
+            ClientCommand::RespondToPopup { .. } => 89,
+            ClientCommand::InspectPlayer { .. } => 90,
+            ClientCommand::SetInspectNote { .. } => 91,
         }
     }
 
@@ -983,6 +996,15 @@ mod tests {
         let inventory = super::super::combat::test_ranged_inventory(
             eq_network_game::combat::ranged::RangedKind::Archery,
         );
+        let mut note = super::super::feature::testing::item(23);
+        note.book = Some(eq_network_game::books::Book {
+            kind: 0,
+            file: "SyntheticText".into(),
+        });
+        let mut reading_inventory = eq_network_game::inventory::Inventory::default();
+        reading_inventory.apply(eq_network_game::inventory::InventoryUpdate::Snapshot(vec![
+            note,
+        ]));
         vec![
             ClientCommand::StopSong {
                 session_id,
@@ -1401,8 +1423,14 @@ mod tests {
             },
             ClientCommand::ReadItem {
                 session_id,
-                revision: 0,
-                slot: InventorySlot(23),
+                revision: reading_inventory.revision(),
+                selection: Box::new(
+                    eq_network_game::books::ReadSelection::capture(
+                        &reading_inventory,
+                        InventorySlot(23),
+                    )
+                    .unwrap(),
+                ),
                 created,
             },
             ClientCommand::Combine {
@@ -1435,6 +1463,21 @@ mod tests {
                     position: eq_network_game::world::Position::default(),
                     sampled_at: created,
                 },
+            },
+            ClientCommand::RespondToPopup {
+                session_id,
+                serial: 1,
+                action: eq_network_game::popups::PopupAction::Positive,
+                created,
+            },
+            ClientCommand::InspectPlayer {
+                session_id,
+                target: eq_network_game::targets::TargetState::default(),
+                created,
+            },
+            ClientCommand::SetInspectNote {
+                session_id,
+                note: None,
             },
         ]
     }
@@ -2668,6 +2711,8 @@ mod tests {
             Capability::CancellingBuffs,
             Capability::KnightAbilities,
             Capability::UsingDisciplines,
+            Capability::ServerDialogs,
+            Capability::PlayerInspection,
             Capability::Reading,
             Capability::Tradeskills,
             Capability::MovingSpells,
@@ -2694,9 +2739,7 @@ mod tests {
         assert!(p99.contains(&Capability::AnsweringListPolls));
         assert!(!eqemu.contains(&Capability::AnsweringListPolls));
         assert!(eqemu.contains(&Capability::Swimming));
-        assert!(!p99.contains(&Capability::Swimming));
-        // Both policies now offer world containers, leaving a difference of 12.
-        assert_eq!(eqemu.len(), p99.len() + 12);
+        assert!(p99.contains(&Capability::Swimming));
     }
 
     #[test]

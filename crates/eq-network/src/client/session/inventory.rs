@@ -33,7 +33,7 @@ use eq_network_game::{
     loot::{LootResponse, LootUpdate},
     merchant::{MerchantUpdate, Quotes},
     message::{Message, Part},
-    money::Wallet,
+    money::{Coin, Wallet},
     request::Request,
     training::TrainingUpdate,
     world::Coins,
@@ -73,6 +73,20 @@ impl std::ops::Deref for Ledger {
 
     fn deref(&self) -> &Wallet {
         &self.0
+    }
+}
+
+impl Ledger {
+    /// The profile supplies bank and cursor balances together. Bank presence
+    /// records receipt of the cursor balance, whose default alone is unknown.
+    pub(super) fn carried_coin_count(&self) -> Option<u64> {
+        let (purse, _) = self.purse.zip(self.bank)?;
+        Some(
+            Coin::ALL
+                .iter()
+                .map(|&coin| u64::from(purse.of(coin)) + u64::from(self.cursor.of(coin)))
+                .sum(),
+        )
     }
 }
 
@@ -575,7 +589,7 @@ impl Belongings {
                 "That cursor drop needs a current local EQEmu admission and actor"
             );
             anyhow::ensure!(
-                world.coins.purse.is_some() && world.coins.bank.is_some(),
+                world.coins.carried_coin_count().is_some(),
                 "A cursor drop needs current carried coin information"
             );
             let serial = world.inventory.plan_ground_drop(request)?;

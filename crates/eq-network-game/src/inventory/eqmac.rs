@@ -415,7 +415,9 @@ fn item_at_for(
             &record.text(231, 30),
         ),
         rules: ItemPlacement {
+            titanium_item_class: None,
             titanium_link_hash: None,
+            titanium_light: None,
             ground_drop_serial: None,
             eqmac: common.then(|| EqMacItemRules {
                 stack_flag: EqMacStackFlag::of(record.byte(276)),

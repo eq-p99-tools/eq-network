@@ -96,8 +96,8 @@ pub struct Consideration {
     /// NPC handler (`eqgame.exe` 0x49ba39–0x49baa7) maps wire codes 1–9
     /// to string IDs 12212–12220 in order.
     ///
-    /// [`EQEmu`]: https://github.com/EQEmu/EQEmu/blob/4aceae18b94ffaafc08e2b17bc41cd72c77f795d/zone/client_packet.cpp
-    /// [`EQMacEmu`]: https://github.com/EQMacEmu/Server/blob/d8d589a0ce486ee47ec990d3c3bbbf604b2572a1/zone/client_packet.cpp
+    /// [`EQEmu`]: https://github.com/EQEmu/EQEmu/blob/4aceae18b94ffaafc08e2b17bc41cd72c77f795d/zone/client_packet.cpp#L4861-L4869
+    /// [`EQMacEmu`]: https://github.com/EQMacEmu/Server/blob/d8d589a0ce486ee47ec990d3c3bbbf604b2572a1/zone/client_packet.cpp#L2939-L2950
     pub faction: u32,
     /// The server's level-difference color code. A client may display a
     /// separate assessment based on the player and target levels.
