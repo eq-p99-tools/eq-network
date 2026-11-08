@@ -7,6 +7,12 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Offer the learned, self-targeted Titanium Warrior disciplines Evasive and
+  Defensive. Stage received discipline and linked spell timers during
+  admission, and use the shared discipline timer and active buff slot to
+  guard both actions. Downstream exhaustive command and capability matches
+  need to include the new action.
+
 - Added guarded Titanium knight ability casts and the admission's received
   ability-slot recovery, including the server's alternate Harm Touch rank.
   Downstream exhaustive matches on commands, capabilities, and world events

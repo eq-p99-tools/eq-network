@@ -15,6 +15,7 @@ use eq_network_game::{
 };
 use std::time::{Duration, Instant};
 
+mod disciplines;
 mod knights;
 use eq_network_game::knights::KnightAbility;
 
@@ -38,6 +39,11 @@ pub(super) fn rejected(command: &ClientCommand, reason: &str) -> Option<crate::w
             ability,
             ..
         } => (session_id, ability.spell()),
+        ClientCommand::UseDiscipline {
+            session_id,
+            discipline,
+            ..
+        } => (session_id, discipline.spell()),
         _ => return None,
     };
     Some(crate::world::WorldEvent::CastRejected {
@@ -66,6 +72,7 @@ pub(super) enum Source {
     Gem(u8),
     Item,
     Knight(KnightAbility),
+    Discipline,
 }
 
 impl Source {
@@ -81,6 +88,7 @@ impl Source {
                 Self::Gem(gem) => u32::from(gem),
                 Self::Item => u32::from(ITEM_CAST_SLOT),
                 Self::Knight(_) => u32::from(eq_network_game::knights::CAST_SLOT),
+                Self::Discipline => u32::from(eq_network_game::disciplines::CAST_SLOT),
             }
         })
     }
@@ -301,6 +309,8 @@ pub(super) struct Casting {
     guard: CastGuard,
     song_stop: bool,
     knights: Option<knights::Reuse>,
+    disciplines: disciplines::DisciplineState,
+    use_disciplines: bool,
 }
 
 const BARD_CLASS: u32 = 8;
@@ -314,13 +324,14 @@ impl Casting {
     }
 
     /// Titanium policies with the class ability casting slot.
-    pub(super) fn with_knights(song_stop: bool) -> Self {
+    pub(super) fn with_titanium_combat(song_stop: bool) -> Self {
         let mut casting = if song_stop {
             Self::with_song_stop()
         } else {
             Self::default()
         };
         casting.knights = Some(knights::Reuse::default());
+        casting.use_disciplines = true;
         casting
     }
 
@@ -473,6 +484,9 @@ impl Feature for Casting {
         if self.knights.is_some() {
             offered.push(Capability::KnightAbilities);
         }
+        if self.use_disciplines {
+            offered.push(Capability::UsingDisciplines);
+        }
         offered
     }
 
@@ -488,18 +502,32 @@ impl Feature for Casting {
                 | ClientCommand::DropInvisibility { .. }
                 | ClientCommand::StopSong { .. }
                 | ClientCommand::UseKnightAbility { .. }
+                | ClientCommand::UseDiscipline { .. }
         )
     }
 
-    fn admit(&mut self, message: &Message, _world: &mut World) -> Result<()> {
+    fn admit(&mut self, message: &Message, world: &mut World) -> Result<()> {
+        let now = Instant::now();
         if let (Some(reuse), Message::KnightRefresh(remaining)) = (&mut self.knights, message) {
-            reuse.received(*remaining, Instant::now());
+            reuse.received(*remaining, now);
         }
+        let own = self
+            .use_disciplines
+            .then(|| {
+                world
+                    .player
+                    .as_ref()
+                    .map(|player| player.spawn_id)
+                    .or(world.own_spawn)
+            })
+            .flatten();
+        self.disciplines.observe(message, own, now, !world.ready());
         Ok(())
     }
 
     fn admitted(&mut self, world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
-        self.report_knight_reuse(world, out)
+        self.report_knight_reuse(world, out)?;
+        self.disciplines.report(out)
     }
 
     fn handle(
@@ -513,6 +541,9 @@ impl Feature for Casting {
             ClientCommand::UseKnightAbility {
                 ability, target, ..
             } => self.knight(command, *ability, *target, world, out),
+            ClientCommand::UseDiscipline { discipline, .. } => {
+                self.use_discipline(command, *discipline, world, out)
+            }
             ClientCommand::UseItem(request) => self.use_item(request, world, out),
             ClientCommand::DropInvisibility { steps, .. } => drop_invisibility(steps, out),
             _ => self.cast(command, world, out),
@@ -560,11 +591,9 @@ impl Feature for Casting {
         world: &mut World,
         out: &mut Out<'_, '_>,
     ) -> Result<()> {
+        self.admit(message, world)?;
         match message {
-            Message::KnightRefresh(_) => {
-                self.admit(message, world)?;
-                self.report_knight_reuse(world, out)?;
-            }
+            Message::KnightRefresh(_) => self.report_knight_reuse(world, out)?,
             Message::Event(WorldEvent::Spell(update)) => {
                 let Some(own) = world.player.as_ref().map(|player| player.spawn_id) else {
                     return Ok(());
@@ -592,6 +621,7 @@ impl Feature for Casting {
                 }
             }
             Message::Event(event) if world.owns_death(event) => {
+                self.disciplines.clear_active();
                 self.guard.clear();
             }
             _ => (),

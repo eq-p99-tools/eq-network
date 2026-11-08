@@ -733,6 +733,15 @@ pub enum GameCommand {
     },
     /// Fire or throw once with the current ranged loadout.
     RangedAttack(crate::combat::ranged::RangedAttack),
+    /// Use one supported self-targeted Warrior discipline.
+    UseDiscipline {
+        /// Admission where the player selected the discipline.
+        session_id: u64,
+        /// The bounded discipline to use.
+        discipline: crate::disciplines::Discipline,
+        /// When the player requested it.
+        created: Instant,
+    },
     /// Cast a Paladin or Shadow Knight class ability at the selected target.
     UseKnightAbility {
         /// Admission in which the ability was chosen.
@@ -856,6 +865,7 @@ impl GameCommand {
             Self::ExitAtOnce { .. } => "ExitAtOnce",
             Self::UseAbility { .. } => "UseAbility",
             Self::UseKnightAbility { .. } => "UseKnightAbility",
+            Self::UseDiscipline { .. } => "UseDiscipline",
             Self::Consent { .. } => "Consent",
             Self::SummonCorpse { .. } => "SummonCorpse",
             Self::DragCorpse { .. } => "DragCorpse",
@@ -953,6 +963,7 @@ impl GameCommand {
             | Self::ExitAtOnce { session_id, .. }
             | Self::UseAbility { session_id, .. }
             | Self::UseKnightAbility { session_id, .. }
+            | Self::UseDiscipline { session_id, .. }
             | Self::WhoAll { session_id, .. }
             | Self::Pet { session_id, .. }
             | Self::Training { session_id, .. }
@@ -1066,6 +1077,7 @@ impl GameCommand {
             Self::SelectTarget { .. } => Capability::Targeting,
             Self::UseAbility { .. } => Capability::Abilities,
             Self::UseKnightAbility { .. } => Capability::KnightAbilities,
+            Self::UseDiscipline { .. } => Capability::UsingDisciplines,
             Self::WhoAll { .. } => Capability::Who,
             Self::Pet { .. } => Capability::Pets,
             Self::Training { .. } => Capability::Training,
@@ -1190,6 +1202,7 @@ impl GameCommand {
             | Self::Consume { created, .. }
             | Self::UseAbility { created, .. }
             | Self::UseKnightAbility { created, .. }
+            | Self::UseDiscipline { created, .. }
             | Self::Pet { created, .. }
             | Self::Training { created, .. }
             | Self::ReadItem { created, .. }
@@ -1387,6 +1400,7 @@ pub fn encode(
         | GameCommand::ExitAtOnce { .. }
         | GameCommand::UseAbility { .. }
         | GameCommand::UseKnightAbility { .. }
+        | GameCommand::UseDiscipline { .. }
         | GameCommand::WhoAll { .. }
         | GameCommand::Pet { .. }
         | GameCommand::Training { .. }

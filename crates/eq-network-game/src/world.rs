@@ -584,12 +584,14 @@ pub enum Capability {
     GroundDropping,
     /// Titanium's Lay on Hands and Harm Touch.
     KnightAbilities,
+    /// Use the supported Titanium Warrior disciplines.
+    UsingDisciplines,
 }
 
 impl Capability {
     /// Every capability, in order: what a session offers when its server and
     /// client generation support everything.
-    pub const ALL: [Self; 54] = [
+    pub const ALL: [Self; 55] = [
         Self::Casting,
         Self::Spellbook,
         Self::Inventory,
@@ -644,6 +646,7 @@ impl Capability {
         Self::LavaHeat,
         Self::GroundDropping,
         Self::KnightAbilities,
+        Self::UsingDisciplines,
     ];
 }
 
@@ -2206,6 +2209,7 @@ mod tests {
             Capability::LavaHeat => 51,
             Capability::GroundDropping => 52,
             Capability::KnightAbilities => 53,
+            Capability::UsingDisciplines => 54,
         };
         for (index, capability) in Capability::ALL.into_iter().enumerate() {
             assert_eq!(place(capability), index, "{capability:?}");

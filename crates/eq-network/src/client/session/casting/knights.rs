@@ -143,7 +143,7 @@ mod tests {
         player.level = 1;
         world.player.admit(player);
         world.target = Target::from(7);
-        let mut casting = Casting::with_knights(false);
+        let mut casting = Casting::with_titanium_combat(false);
         let command = |target, ability| ClientCommand::UseKnightAbility {
             session_id: 5,
             ability,
