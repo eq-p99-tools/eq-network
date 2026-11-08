@@ -67,7 +67,7 @@ impl SelfBandage {
         {
             return Err("Stay still while standing or sitting to bind your wounds".into());
         }
-        if !current(&world.inventory) {
+        if !current(&world.inventory) || world.inventory.bandage_placement_unconfirmed() {
             return Err("Bandage stock is not current".into());
         }
         let stock = stock(&world.inventory);

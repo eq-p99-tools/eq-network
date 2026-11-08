@@ -45,7 +45,8 @@ fn combine(slot: InventorySlot) -> ClientCommand {
 fn hear_packets(features: &mut Features, world: &mut World, opcode: u16, body: &[u8]) {
     let server = servers::server_type(ServerProtocol::Project1999);
     let outcome = testing::run_on(server.wire(), |out| -> Result<()> {
-        for message in server.wire().messages(opcode, body, server.item_rules()) {
+        for mut message in server.wire().messages(opcode, body, server.item_rules()) {
+            features.explain(&mut message, world);
             features.observe(&message, world, out)?;
         }
         Ok(())
@@ -183,6 +184,10 @@ fn p99_forge_candidates_need_a_matching_server_forge_reply_before_combining() {
         &answer,
     );
     assert!(!world.container.is_open());
+    let waiting = testing::run(|out| features.handle(&open(), &mut world, out));
+    assert!(waiting.result.unwrap());
+    assert!(waiting.sent.is_empty());
+    hear_packets(&mut features, &mut world, 0x21ed, &[1, 0, 0, 0, 0, 0, 0, 0]);
     let retried = testing::run(|out| features.handle(&open(), &mut world, out));
     assert!(retried.result.unwrap());
     assert_eq!(retried.sent, [objects::titanium_pickup(71, 7)]);

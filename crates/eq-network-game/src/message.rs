@@ -59,6 +59,8 @@ pub enum Message {
     KnightRefresh(std::time::Duration),
     /// The server logging the character out.
     LoggedOut,
+    /// A Titanium system notice identifying an invalid tradeskill recipe.
+    TradeskillNoRecipe,
     /// A message a session feature withholds, to pass on later as it was or
     /// as what the next one shows it to be; no other feature hears it, and
     /// the host hears nothing of it.
@@ -170,6 +172,9 @@ pub fn titanium(opcode: u16, body: &[u8]) -> Vec<Message> {
         ),
         zoning::HANDOFF_OPCODE => Message::Handoff(body.to_vec()),
         LOGOUT_REPLY_OPCODE => Message::LoggedOut,
+        0x673c if body.len() == 12 && body[..4] == 334_u32.to_le_bytes() => {
+            Message::TradeskillNoRecipe
+        }
         crate::merchant::BUY_OPCODE
         | crate::merchant::SELL_OPCODE
         | crate::merchant::DELETE_OPCODE => match crate::merchant::decode_scoped(opcode, body) {

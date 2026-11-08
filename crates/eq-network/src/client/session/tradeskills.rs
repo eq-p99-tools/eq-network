@@ -16,7 +16,7 @@ use super::{
 };
 use anyhow::{anyhow, ensure, Result};
 use eq_network_game::{
-    inventory::InventorySlot,
+    inventory::{InventorySlot, InventoryUpdate},
     message::Message,
     objects::{ContainerView, ObjectUpdate},
     request::Request,
@@ -49,6 +49,10 @@ enum Container {
         placement: Instant,
         received: Instant,
     },
+    /// The close was sent. Its station-only inventory stream is retiring.
+    Closing(ContainerView),
+    /// The untagged station inventory stream can no longer be attributed.
+    Blocked,
 }
 
 impl OpenContainer {
@@ -63,7 +67,17 @@ impl OpenContainer {
     }
 
     pub(super) fn represents(&self, view: &ContainerView) -> bool {
-        matches!(&self.0, Some(Container::Open { view: current, .. }) if current == view)
+        match &self.0 {
+            Some(Container::Open { view: current, .. } | Container::Closing(current)) => {
+                current == view
+            }
+            Some(Container::Blocked) => true,
+            _ => false,
+        }
+    }
+
+    fn owns_station_inventory(&self) -> bool {
+        matches!(self.0, Some(Container::Open { .. } | Container::Closing(_)))
     }
 
     pub(super) fn check_action(
@@ -118,6 +132,8 @@ pub(super) struct Tradeskills {
     reach_checked: Option<Instant>,
     scope: Scope,
     inventory_changed: Option<Instant>,
+    /// A world combine may emit an untagged full clear after its reset.
+    station_clear_pending: bool,
 }
 
 #[derive(Default, PartialEq, Eq)]
@@ -173,6 +189,74 @@ impl Tradeskills {
         )
         .err()
     }
+
+    fn container_reply(
+        &self,
+        view: &ContainerView,
+        world: &mut World,
+        out: &mut Out<'_, '_>,
+    ) -> Result<()> {
+        if !world.container.expects(view.drop_id) {
+            if view.open && !world.container.represents(view) {
+                // GroundObjects closed this unasked open. Preserve its
+                // retirement stream or discard ambiguous station-only data.
+                world.container.0 = Some(if world.container.0.is_none() {
+                    Container::Closing(view.clone())
+                } else {
+                    Container::Blocked
+                });
+            }
+            return Ok(());
+        }
+        let Some(Container::Asked {
+            actor,
+            placement,
+            submitted,
+            retired,
+            ..
+        }) = world.container.0.take()
+        else {
+            return Ok(());
+        };
+        if !view.open {
+            return Ok(());
+        }
+        let same_placement = world.objects.placement(view.drop_id) == Some(placement);
+        let current = !retired
+            && Instant::now().saturating_duration_since(submitted) < OPEN_WINDOW
+            && view.player_id == u32::from(actor)
+            && same_placement
+            && world
+                .objects
+                .entries()
+                .get(&view.drop_id)
+                .is_some_and(|object| {
+                    if self.scope == Scope::Forge {
+                        object.is_forge_candidate()
+                            && view.object_type == u32::from(tradeskills::FORGE)
+                    } else {
+                        object.object_type == view.object_type
+                    }
+                });
+        if current {
+            world.container.0 = Some(Container::Open {
+                view: view.clone(),
+                placement,
+                received: Instant::now(),
+            });
+        } else {
+            if same_placement {
+                out.request(&close_request(view))?;
+                world.container.0 = Some(Container::Closing(view.clone()));
+            } else {
+                world.container.0 = Some(Container::Blocked);
+            }
+            world.happened(Message::Event(WorldEvent::Objects(ObjectUpdate::Closed {
+                drop_id: view.drop_id,
+            })));
+        }
+        Ok(())
+    }
 }
 
 impl Feature for Tradeskills {
@@ -182,8 +266,8 @@ impl Feature for Tradeskills {
     }
 
     fn holds(&self, _world: &World, _now: Instant) -> Vec<(Resource, &'static str)> {
-        self.combining
-            .map(|_| (Resource::Inventory, "Wait for the combine to finish"))
+        (self.combining.is_some() || self.station_clear_pending)
+            .then_some((Resource::Inventory, "Wait for the combine to finish"))
             .into_iter()
             .collect()
     }
@@ -224,7 +308,7 @@ impl Feature for Tradeskills {
                         submitted,
                         ..
                     }) => *asked == drop_id && created >= *submitted,
-                    None => false,
+                    _ => false,
                 };
                 return if current {
                     close(world, out)
@@ -252,6 +336,7 @@ impl Feature for Tradeskills {
                 return actions::refuse(command, &error.to_string(), out.log);
             }
             if self.combining.is_some()
+                || self.station_clear_pending
                 || self
                     .inventory_changed
                     .is_some_and(|changed| created < changed)
@@ -272,8 +357,10 @@ impl Feature for Tradeskills {
                     out.log,
                 );
             }
-            if let Err(reason) = station_ingredients(&world.inventory) {
-                return actions::refuse(command, reason, out.log);
+            if self.scope == Scope::Forge {
+                if let Err(reason) = station_ingredients(&world.inventory) {
+                    return actions::refuse(command, reason, out.log);
+                }
             }
         } else if !world
             .inventory
@@ -297,6 +384,9 @@ impl Feature for Tradeskills {
         }
         out.request(&Request::Combine(container))?;
         self.combining = Some(container);
+        if container == WORLD_CONTAINER {
+            self.station_clear_pending = true;
+        }
         out.log.send(ClientEvent::World(WorldEvent::Combine(
             CombineUpdate::Started(container),
         )))
@@ -339,51 +429,25 @@ impl Feature for Tradeskills {
         self.admit(message, world)?;
         match message {
             Message::Event(WorldEvent::Combine(CombineUpdate::Answered)) => self.combining = None,
-            Message::Event(WorldEvent::Objects(ObjectUpdate::Container(view)))
-                if world.is_player(view.player_id) && world.container.expects(view.drop_id) =>
+            Message::TradeskillNoRecipe if self.combining == Some(WORLD_CONTAINER) => {
+                self.station_clear_pending = false;
+            }
+            Message::Event(WorldEvent::Inventory(InventoryUpdate::WorldEmptied))
+                if world.container.owns_station_inventory() =>
             {
-                let Some(Container::Asked {
-                    actor,
-                    placement,
-                    submitted,
-                    retired,
-                    ..
-                }) = world.container.0.take()
-                else {
-                    return Ok(());
-                };
-                if view.open {
-                    let current = !retired
-                        && Instant::now().saturating_duration_since(submitted) < OPEN_WINDOW
-                        && view.player_id == u32::from(actor)
-                        && world.objects.placement(view.drop_id) == Some(placement)
-                        && world
-                            .objects
-                            .entries()
-                            .get(&view.drop_id)
-                            .is_some_and(|object| {
-                                if self.scope == Scope::Forge {
-                                    object.is_forge_candidate()
-                                        && view.object_type == u32::from(tradeskills::FORGE)
-                                } else {
-                                    object.object_type == view.object_type
-                                }
-                            });
-                    if current {
-                        world.container.0 = Some(Container::Open {
-                            view: view.clone(),
-                            placement,
-                            received: Instant::now(),
-                        });
-                    } else {
-                        if world.objects.placement(view.drop_id) == Some(placement) {
-                            out.request(&close_request(view))?;
-                        }
-                        world.happened(Message::Event(WorldEvent::Objects(ObjectUpdate::Closed {
-                            drop_id: view.drop_id,
-                        })));
-                    }
+                // A combine reset and the following clear are independent.
+                // If closing overlaps an unresolved combine, the first clear
+                // cannot establish that the close's stream has ended.
+                if !std::mem::take(&mut self.station_clear_pending)
+                    && matches!(world.container.0, Some(Container::Closing(_)))
+                {
+                    world.container.0 = None;
                 }
+            }
+            Message::Event(WorldEvent::Objects(ObjectUpdate::Container(view)))
+                if world.is_player(view.player_id) =>
+            {
+                self.container_reply(view, world, out)?
             }
             Message::Event(WorldEvent::Objects(
                 ObjectUpdate::Snapshot(_) | ObjectUpdate::Spawn(_) | ObjectUpdate::Remove { .. },
@@ -394,7 +458,7 @@ impl Feature for Tradeskills {
                 {
                     if world.objects.placement(view.drop_id) != Some(*placement) {
                         let drop_id = view.drop_id;
-                        world.container.0 = None;
+                        world.container.0 = Some(Container::Blocked);
                         world.happened(Message::Event(WorldEvent::Objects(ObjectUpdate::Closed {
                             drop_id,
                         })));
@@ -404,6 +468,21 @@ impl Feature for Tradeskills {
             _ => (),
         }
         Ok(())
+    }
+
+    fn explain(&mut self, message: &mut Message, world: &World) {
+        let Message::Event(WorldEvent::Inventory(update)) = message else {
+            return;
+        };
+        let station_only = match update {
+            InventoryUpdate::Set(items) => items.first().is_some_and(|root| root.slot.is_world()),
+            InventoryUpdate::Remove(slot) => slot.is_world(),
+            InventoryUpdate::WorldEmptied => true,
+            _ => false,
+        };
+        if station_only && !world.container.owns_station_inventory() {
+            *message = Message::Withheld;
+        }
     }
 
     fn admit(&mut self, message: &Message, _world: &mut World) -> Result<()> {
@@ -429,11 +508,12 @@ fn open(
     world: &mut World,
     out: &mut Out<'_, '_>,
 ) -> Result<()> {
-    let checked = if world.container.0.is_some() {
-        let reason = if matches!(&world.container.0, Some(Container::Asked { .. })) {
-            "wait for the previous station open result"
-        } else {
-            "close the container you are using first"
+    let checked = if let Some(container) = &world.container.0 {
+        let reason = match container {
+            Container::Asked { .. } => "wait for the previous station open result",
+            Container::Open { .. } => "close the container you are using first",
+            Container::Closing(_) => "wait for the previous station to clear",
+            Container::Blocked => "the station changed. Re-enter the zone before opening a station",
         };
         Err(anyhow!(reason))
     } else {
@@ -571,14 +651,16 @@ fn keep_in_reach(
 /// answer is forgotten, and that answer closed when it comes.
 fn close(world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
     match &mut world.container.0 {
-        Some(Container::Open { view, .. }) => out.request(&close_request(view))?,
+        Some(Container::Open { view, .. }) => {
+            out.request(&close_request(view))?;
+            world.container.0 = Some(Container::Closing(view.clone()));
+        }
         Some(Container::Asked { retired, .. }) => {
             *retired = true;
             return Ok(());
         }
-        None => (),
+        _ => (),
     }
-    world.container.0 = None;
     Ok(())
 }
 
@@ -820,6 +902,77 @@ mod tests {
         assert!(world.inventory.items().contains_key(&InventorySlot(4000)));
         assert!(!world.inventory.items().contains_key(&InventorySlot::CURSOR));
         assert_eq!(command(&open_forge(), &mut features, &mut world), 0);
+    }
+
+    #[test]
+    fn world_only_inventory_needs_an_open_or_retiring_lease() {
+        let (mut features, mut world) = at_forge();
+        let message = || {
+            Message::Event(WorldEvent::Inventory(InventoryUpdate::Set(vec![
+                testing::item(4000),
+            ])))
+        };
+        let check = |tradeskills: &mut Tradeskills, world: &World| {
+            let mut news = message();
+            tradeskills.explain(&mut news, world);
+            !matches!(news, Message::Withheld)
+        };
+        assert!(!check(&mut features.tradeskills, &world));
+        assert_eq!(command(&open_forge(), &mut features, &mut world), 1);
+        assert!(!check(&mut features.tradeskills, &world));
+        hear(
+            ObjectUpdate::Container(view(true)),
+            &mut features,
+            &mut world,
+        );
+        assert!(check(&mut features.tradeskills, &world));
+        let object = world.objects.entries()[&5].clone();
+        hear(ObjectUpdate::Spawn(object), &mut features, &mut world);
+        assert!(!check(&mut features.tradeskills, &world));
+        assert_eq!(command(&open_forge(), &mut features, &mut world), 0);
+    }
+
+    #[test]
+    fn combine_reset_does_not_release_an_outstanding_station_clear() {
+        let (mut features, mut world) = at_forge();
+        assert_eq!(command(&open_forge(), &mut features, &mut world), 1);
+        hear(
+            ObjectUpdate::Container(view(true)),
+            &mut features,
+            &mut world,
+        );
+        let mut inventory = Inventory::default();
+        inventory.apply(InventoryUpdate::Snapshot(vec![testing::item(4000)]));
+        world.inventory = inventory.into();
+        let now = Instant::now();
+        assert_eq!(
+            command(&combine(WORLD_CONTAINER.0), &mut features, &mut world),
+            1
+        );
+        let reset = Message::Event(WorldEvent::Combine(CombineUpdate::Answered));
+        let clear = Message::Event(WorldEvent::Inventory(InventoryUpdate::WorldEmptied));
+        testing::run(|out| {
+            features.tradeskills.observe(&reset, &mut world, out)?;
+            assert!(!features.tradeskills.holds(&world, now).is_empty());
+            features.tradeskills.observe(&clear, &mut world, out)
+        })
+        .result
+        .unwrap();
+        assert!(features.tradeskills.holds(&world, now).is_empty());
+        assert_eq!(
+            command(&combine(WORLD_CONTAINER.0), &mut features, &mut world),
+            1
+        );
+        testing::run(|out| {
+            features
+                .tradeskills
+                .observe(&Message::TradeskillNoRecipe, &mut world, out)?;
+            assert!(!features.tradeskills.holds(&world, now).is_empty());
+            features.tradeskills.observe(&reset, &mut world, out)
+        })
+        .result
+        .unwrap();
+        assert!(features.tradeskills.holds(&world, now).is_empty());
     }
 
     #[test]

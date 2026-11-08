@@ -26,7 +26,12 @@ impl Inventory {
             .filter(|slot| !InventoryItem::same_slot_contents(self.items.get(slot), next.get(slot)))
             .collect();
         for slot in &changed {
-            self.projected_custody.insert(*slot);
+            let bandage = (slot.is_equipment() || slot.is_carried())
+                && [self.items.get(slot), next.get(slot)]
+                    .into_iter()
+                    .flatten()
+                    .any(|item| item.rules.item_type == crate::bind_wound::BANDAGE);
+            *self.projected_custody.entry(*slot).or_default() |= bandage;
             // Charm through waist: the slots whose items' statistics and worn
             // effects the servers apply (EQEmu `BONUS_BEGIN`..`BONUS_STAT_END`);
             // the ammo slot (21) contributes skill modifiers only.

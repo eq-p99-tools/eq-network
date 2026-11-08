@@ -384,10 +384,11 @@ pub struct Inventory {
     /// This is evidence bookkeeping, never a queue that delays sending.
     #[serde(skip)]
     predictions: VecDeque<BTreeSet<InventorySlot>>,
-    /// Predicted slots that have yet to receive a covering inventory record.
+    /// Predicted slots that have yet to receive a covering inventory record,
+    /// with a flag for any change that could have moved a carried bandage.
     /// Retained when the general move policy settles by silence.
     #[serde(skip)]
-    projected_custody: BTreeSet<InventorySlot>,
+    projected_custody: BTreeMap<InventorySlot, bool>,
     #[serde(skip)]
     bandage_stock_pending: bool,
     /// Slots whose history included affecting or unreadable equipment since
@@ -455,7 +456,7 @@ impl Inventory {
     /// Callers still require a current inventory and an item in that slot.
     #[must_use]
     pub fn custody_known(&self, slot: InventorySlot) -> bool {
-        !self.projected_custody.contains(&slot)
+        !self.projected_custody.contains_key(&slot)
     }
 
     /// A submitted self-bandage is awaiting a received stock change or snapshot.
@@ -467,7 +468,13 @@ impl Inventory {
     /// A moved station slot remains provisional, including an emptied place.
     #[must_use]
     pub fn station_moves_unconfirmed(&self) -> bool {
-        self.projected_custody.iter().any(|slot| slot.is_world())
+        self.projected_custody.keys().any(|slot| slot.is_world())
+    }
+
+    /// A local move may have changed which carried slot supplies a bandage.
+    #[must_use]
+    pub fn bandage_placement_unconfirmed(&self) -> bool {
+        self.projected_custody.values().any(|bandage| *bandage)
     }
 
     /// Monotonic local revision used to reject stale UI intents.
@@ -635,14 +642,14 @@ impl Inventory {
             InventoryUpdate::Invalidated => self.stale = true,
             InventoryUpdate::TradeEmptied => {
                 self.items.retain(|slot, _| !slot.is_in_trade());
-                self.projected_custody.retain(|slot| !slot.is_in_trade());
+                self.projected_custody.retain(|slot, _| !slot.is_in_trade());
                 // A prediction into a trade slot is resolved: the item is gone.
                 self.unconfirmed.retain(|slot, _| !slot.is_in_trade());
                 self.resolved();
             }
             InventoryUpdate::WorldEmptied => {
                 self.items.retain(|slot, _| !slot.is_world());
-                self.projected_custody.retain(|slot| !slot.is_world());
+                self.projected_custody.retain(|slot, _| !slot.is_world());
                 self.unconfirmed.retain(|slot, _| !slot.is_world());
                 self.resolved();
             }
@@ -773,7 +780,7 @@ impl Inventory {
             key != slot && key.parent().is_none_or(|(parent, _)| parent != slot)
         };
         self.items.retain(|key, _| outside(*key));
-        self.projected_custody.retain(|key| outside(*key));
+        self.projected_custody.retain(|key, _| outside(*key));
     }
 
     /// A slot update confirms only that slot and its serialized container contents.

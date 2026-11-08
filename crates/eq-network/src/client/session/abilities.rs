@@ -913,6 +913,43 @@ mod tests {
     }
 
     #[test]
+    fn a_silent_move_of_possible_stock_cannot_authorize_self_bandaging() {
+        let now = Instant::now();
+        for spare in [false, true] {
+            let mut world = bandager();
+            world.admitted = Some(now);
+            world.posture.observed(PostureState::Standing);
+            world.target = Target::from(7);
+            let mut inventory = (*world.inventory).clone();
+            let mut original: Vec<_> = inventory.items().values().cloned().collect();
+            if spare {
+                let mut item = testing::item(24);
+                item.rules.item_type = bind_wound::BANDAGE;
+                original.push(item);
+            }
+            inventory.apply(InventoryUpdate::Snapshot(original.clone()));
+            let moved = original
+                .iter_mut()
+                .find(|item| item.slot == InventorySlot(251))
+                .unwrap();
+            moved.slot = InventorySlot::CURSOR;
+            inventory.apply(InventoryUpdate::Prediction(original));
+            inventory.apply(InventoryUpdate::Settled);
+            assert!(!inventory.predicted());
+            world.inventory = inventory.into();
+            let mut abilities = Abilities::with_self_bandage(&Ability::ALL);
+            let refused = try_ability(&mut abilities, &mut world, Ability::BindWound, now);
+            assert!(refused.sent.is_empty());
+            assert_eq!(official(&refused.events), [(None, vec![])]);
+            assert!(refused.events.iter().any(|event| matches!(
+                event,
+                ClientEvent::World(WorldEvent::AbilityRefused { reason, .. })
+                    if reason == "Bandage stock is not current"
+            )));
+        }
+    }
+
+    #[test]
     fn strikes_share_a_timer_and_other_abilities_keep_their_own() {
         let mut abilities = Abilities::default();
         let mut world = warrior();
