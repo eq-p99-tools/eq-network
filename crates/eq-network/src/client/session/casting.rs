@@ -83,13 +83,16 @@ impl Source {
     }
 
     fn accepts_refresh(source: Option<Self>, slot: u32) -> bool {
-        source.is_none_or(|source| {
-            slot == match source {
-                Self::Gem(gem) => u32::from(gem),
-                Self::Item => u32::from(ITEM_CAST_SLOT),
-                Self::Knight(_) => u32::from(eq_network_game::knights::CAST_SLOT),
-                Self::Discipline => u32::from(eq_network_game::disciplines::CAST_SLOT),
+        source.is_none_or(|source| match source {
+            Self::Gem(gem) => slot == u32::from(gem),
+            Self::Item => slot == u32::from(ITEM_CAST_SLOT),
+            // EQEmu's ServerToTitaniumCastingSlot falls back to the
+            // discipline slot for its internal Ability slot.
+            Self::Knight(_) => {
+                slot == u32::from(eq_network_game::knights::CAST_SLOT)
+                    || slot == u32::from(eq_network_game::disciplines::CAST_SLOT)
             }
+            Self::Discipline => slot == u32::from(eq_network_game::disciplines::CAST_SLOT),
         })
     }
 }

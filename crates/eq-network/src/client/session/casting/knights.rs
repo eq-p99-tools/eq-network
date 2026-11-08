@@ -210,6 +210,27 @@ mod tests {
     }
 
     #[test]
+    fn an_alternate_rank_refresh_uses_the_class_or_eqemu_translated_slot() {
+        for (slot, released) in [(8, false), (9, true), (10, true)] {
+            let mut guard = super::super::CastGuard::default();
+            guard.submitted(
+                88,
+                Some(Source::Knight(KnightAbility::HarmTouch)),
+                Instant::now(),
+            );
+            guard.observe(
+                7,
+                &SpellUpdate::BarRefresh {
+                    slot,
+                    spell_id: 2821,
+                    reduction_ms: 0,
+                },
+            );
+            assert_eq!(!guard.active(), released);
+        }
+    }
+
+    #[test]
     fn profile_timer_and_retry_delay_are_independent() {
         let now = Instant::now();
         let mut reuse = Reuse::default();
