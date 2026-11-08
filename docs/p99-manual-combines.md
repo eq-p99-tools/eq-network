@@ -63,11 +63,19 @@ server reply with forge kind 17 makes the container usable. The command's
 required capability, skin control, nearest-use selector and station script
 lookup use that distinction.
 
-Moves into the station are provisional. The station's separate item updates
-and whole or single-place clears establish its contents. The close request
-names the same open instance and does not grant any items. Inspect subsequent
-inventory updates for returns. Project 1999 has documented returning
-remaining items on close. [Project 1999 patch notes](https://www.project1999.com/forums/showthread.php?mode=threaded&p=21513)
+Opening a P99 forge needs a current empty cursor. Place one whole item
+from the cursor into each empty station slot. Withdrawing an item needs a
+current empty cursor. Stack transfers and swaps are outside this P99
+workflow. EQEmu keeps its existing station transfers.
+
+Moves into the station are provisional. The station's separate item
+updates and whole or single-place clears establish its contents. The
+close request names the same open instance. Inspect subsequent inventory
+updates for returns. If the P99 station stream cannot be attributed after
+close, re-enter the zone before using another forge. EQEmu's ordered
+open reply can fence an earlier station's stream after a close and clear.
+Project 1999 has documented returning remaining items on close.
+[Project 1999 patch notes](https://www.project1999.com/forums/showthread.php?mode=threaded&p=21513)
 
 Combine waits for queued local item-move results before operating on the
 worker's container state. Buttons grey while those moves or a combine wait;

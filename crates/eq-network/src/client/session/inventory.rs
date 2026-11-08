@@ -477,7 +477,7 @@ impl Belongings {
         let station = if request.from.is_world() || request.to.is_world() {
             world
                 .container
-                .check_action(world, request.created, out.wire.reaches().objects)
+                .check_move(request, world, out.wire.reaches().objects)
         } else {
             Ok(())
         };

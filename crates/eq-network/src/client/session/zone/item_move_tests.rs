@@ -99,6 +99,118 @@ fn stack(slot: i32, count: u32) -> InventoryItem {
 }
 
 #[test]
+fn p99_forge_moves_are_single_whole_places_and_need_current_empty_cursor_custody_to_withdraw() {
+    use eq_network_game::objects::{ContainerView, GroundObject};
+
+    let protocol = ServerProtocol::Project1999;
+    let (mut features, mut world) = setup(protocol, vec![stack(30, 1)]);
+    let server = servers::server_type(protocol);
+    let object = ObjectUpdate::Spawn(GroundObject {
+        drop_id: 71,
+        model: "FORGE_ACTORDEF".into(),
+        position: Default::default(),
+        object_type: 0,
+    });
+    let reply = ObjectUpdate::Container(ContainerView {
+        player_id: 7,
+        drop_id: 71,
+        open: true,
+        object_type: 17,
+        icon: 1,
+        name: "Forge".into(),
+    });
+    testing::run_on(server.wire(), |out| {
+        hear(
+            vec![Message::Event(WorldEvent::Objects(object))],
+            &mut features,
+            &mut world,
+            out,
+            true,
+        )
+    })
+    .result
+    .unwrap();
+    let open = || ClientCommand::OpenContainer {
+        session_id: 5,
+        drop_id: 71,
+        created: Instant::now(),
+    };
+    let stash = command(&world, 30, 23, MoveQuantity::Whole);
+    let moved = submit(protocol, &mut features, &mut world, &stash);
+    assert!(moved.result.unwrap());
+    assert_eq!(moved.sent.len(), 1);
+    observe(
+        protocol,
+        &mut features,
+        &mut world,
+        InventoryUpdate::Settled,
+    );
+    assert!(!world.inventory.predicted());
+    assert!(!world.inventory.custody_known(InventorySlot::CURSOR));
+    let denied = submit(protocol, &mut features, &mut world, &open());
+    assert!(denied.result.unwrap());
+    assert!(denied.sent.is_empty());
+    observe(
+        protocol,
+        &mut features,
+        &mut world,
+        InventoryUpdate::Remove(InventorySlot::CURSOR),
+    );
+    let opened = submit(protocol, &mut features, &mut world, &open());
+    assert!(opened.result.unwrap());
+    assert_eq!(opened.sent.len(), 1);
+    testing::run_on(server.wire(), |out| {
+        hear(
+            vec![Message::Event(WorldEvent::Objects(reply))],
+            &mut features,
+            &mut world,
+            out,
+            true,
+        )
+    })
+    .result
+    .unwrap();
+    assert!(world.container.is_open());
+
+    let place = |world: &World, quantity| command(world, 30, 4000, quantity);
+    let count_one = MoveQuantity::Count(NonZeroU32::new(1).unwrap());
+    for (count, quantity) in [(2, MoveQuantity::Whole), (2, count_one), (1, count_one)] {
+        observe(
+            protocol,
+            &mut features,
+            &mut world,
+            InventoryUpdate::Set(vec![stack(30, count)]),
+        );
+        let placement = place(&world, quantity);
+        let denied = submit(protocol, &mut features, &mut world, &placement);
+        assert!(denied.result.unwrap());
+        assert!(denied.sent.is_empty());
+        assert!(!world.inventory.items().contains_key(&InventorySlot(4000)));
+    }
+    let placement = place(&world, MoveQuantity::Whole);
+    let placed = submit(protocol, &mut features, &mut world, &placement);
+    assert!(placed.result.unwrap());
+    assert_eq!(placed.sent.len(), 1);
+    assert!(world.inventory.station_moves_unconfirmed());
+
+    let withdraw = |world: &World| command(world, 4000, 30, MoveQuantity::Whole);
+    let withdrawal = withdraw(&world);
+    let denied = submit(protocol, &mut features, &mut world, &withdrawal);
+    assert!(denied.result.unwrap());
+    assert!(denied.sent.is_empty());
+    observe(
+        protocol,
+        &mut features,
+        &mut world,
+        InventoryUpdate::Remove(InventorySlot::CURSOR),
+    );
+    let withdrawal = withdraw(&world);
+    let withdrawn = submit(protocol, &mut features, &mut world, &withdrawal);
+    assert!(withdrawn.result.unwrap());
+    assert_eq!(withdrawn.sent.len(), 1);
+}
+
+#[test]
 fn an_equip_invalidates_a_liquid_sample_at_the_same_position() {
     use crate::client::ClientConfig;
     use eq_network_game::{

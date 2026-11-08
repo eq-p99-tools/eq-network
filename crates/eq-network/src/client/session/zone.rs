@@ -2695,9 +2695,8 @@ mod tests {
         assert!(!eqemu.contains(&Capability::AnsweringListPolls));
         assert!(eqemu.contains(&Capability::Swimming));
         assert!(!p99.contains(&Capability::Swimming));
-        // P99 gained the four progression capabilities above. Both policies
-        // gained the two combat capabilities, leaving a difference of 13.
-        assert_eq!(eqemu.len(), p99.len() + 13);
+        // Both policies now offer world containers, leaving a difference of 12.
+        assert_eq!(eqemu.len(), p99.len() + 12);
     }
 
     #[test]

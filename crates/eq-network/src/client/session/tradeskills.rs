@@ -3,11 +3,10 @@
 //! when the server puts what it still holds back in the inventory. The
 //! session sends a combine for a tradeskill container carried in a pack
 //! slot, or for the world container open for the player, and holds the
-//! inventory until the server's reset. That reset releases only the local
-//! operation gate; independent inventory updates supply consumption and any
-//! product, with no result inferred from their order or absence. As the
-//! official client does, it refuses a combine while the cursor holds an item
-//! or coins, and names the official client's own words for that.
+//! inventory through the server's reset and any expected station clear.
+//! Independent inventory updates supply consumption and any product. As the
+//! official client does, it refuses a combine while the cursor holds an
+//! item or coins, and names the official client's own words for that.
 use super::{
     actions::{self, Resource},
     feature::{Feature, Out, World},
@@ -16,7 +15,7 @@ use super::{
 };
 use anyhow::{anyhow, ensure, Result};
 use eq_network_game::{
-    inventory::{InventorySlot, InventoryUpdate},
+    inventory::{InventoryMove, InventorySlot, InventoryUpdate, MoveQuantity},
     message::Message,
     objects::{ContainerView, ObjectUpdate},
     request::Request,
@@ -48,6 +47,7 @@ enum Container {
         view: ContainerView,
         placement: Instant,
         received: Instant,
+        scope: Scope,
     },
     /// The close was sent. Its station-only inventory stream is retiring.
     Closing {
@@ -104,6 +104,7 @@ impl OpenContainer {
             view,
             placement,
             received,
+            ..
         }) = &self.0
         else {
             return Err(anyhow!("No world container is open"));
@@ -134,6 +135,41 @@ impl OpenContainer {
         );
         Ok(())
     }
+
+    pub(super) fn check_move(
+        &self,
+        request: &InventoryMove,
+        world: &World,
+        reach: eq_network_game::reach::Reach,
+    ) -> Result<()> {
+        self.check_action(world, request.created, reach)?;
+        if !matches!(
+            self.0,
+            Some(Container::Open {
+                scope: Scope::Forge,
+                ..
+            })
+        ) {
+            return Ok(());
+        }
+        if request.to.is_world() {
+            ensure!(
+                request.from == InventorySlot::CURSOR
+                    && request.quantity == MoveQuantity::Whole
+                    && !world.inventory.items().contains_key(&request.to)
+                    && world.inventory.items().get(&request.from).is_some_and(|item| {
+                        item.bag_slots == 0 && item.stack_count.is_none_or(|count| count == 1)
+                    }),
+                "Put one whole item from the cursor into an empty forge slot; stacking and swaps are outside this workflow"
+            );
+        } else {
+            ensure!(
+                world.inventory.custody_known(InventorySlot::CURSOR),
+                "Wait for a current empty cursor before withdrawing from the forge"
+            );
+        }
+        Ok(())
+    }
 }
 
 /// Combines in the player's tradeskill containers, and opens and closes
@@ -150,7 +186,7 @@ pub(super) struct Tradeskills {
     station_clear_pending: bool,
 }
 
-#[derive(Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 enum Scope {
     #[default]
     All,
@@ -257,6 +293,7 @@ impl Tradeskills {
                 view: view.clone(),
                 placement,
                 received: Instant::now(),
+                scope: self.scope,
             });
         } else {
             if same_placement {
@@ -614,6 +651,7 @@ fn open(
                             && !world.inventory.stale()
                             && !world.inventory.predicted()
                             && !world.inventory.ground_drop_pending()
+                            && world.inventory.custody_known(InventorySlot::CURSOR)
                             && !world.inventory.items().contains_key(&InventorySlot::CURSOR)
                             && world.coins.cursor.is_empty(),
                         "a forge click needs current inventory and an empty cursor"
