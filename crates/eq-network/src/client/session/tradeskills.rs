@@ -182,6 +182,14 @@ impl OpenContainer {
                     && world.coins.cursor.is_empty(),
                 "Wait for a current empty cursor before withdrawing from the forge"
             );
+            if request.from.is_world() {
+                ensure!(
+                    request.to == InventorySlot::CURSOR
+                        && request.quantity == MoveQuantity::Whole
+                        && !world.inventory.items().contains_key(&InventorySlot::CURSOR),
+                    "Withdraw one whole forge item to an empty cursor; swaps are outside this workflow"
+                );
+            }
         }
         Ok(())
     }

@@ -64,6 +64,7 @@ use super::{
 use crate::p99::{self, WorldCodec};
 use eq_network_game::{
     abilities::Ability,
+    chat::LinkExpansion,
     hazards::Hazard,
     inventory::{ItemRules, MoveRules},
     merchant::Quotes,
@@ -145,6 +146,12 @@ pub(super) trait ServerType: Sync {
     /// Each server needs its own evidence for selecting this estimate.
     fn consider_npcs_by_level(&self) -> bool {
         false
+    }
+
+    /// How the server's chat handler grows Titanium item links before its own
+    /// buffer limit, where that is known. None adds no host-side budget.
+    fn titanium_chat_link_expansion(&self) -> Option<LinkExpansion> {
+        None
     }
 
     /// Placement rules shared by worker validation and host projections.
@@ -684,10 +691,6 @@ mod shared {
         Box::new(Abilities::new(listed))
     }
 
-    pub(super) fn abilities_with_self_bandage(listed: &'static [Ability]) -> Box<dyn Feature> {
-        Box::new(Abilities::with_self_bandage(listed))
-    }
-
     pub(super) fn hide_answer() -> Box<dyn Feature> {
         Box::new(HideAnswer)
     }
@@ -812,8 +815,10 @@ mod shared {
     }
 }
 
-/// The abilities offered on P99. Bind Wound is scoped to the admitted player.
-const P99_ABILITIES: [Ability; 17] = [
+/// The abilities offered on P99: every one but fishing, which came later, and
+/// binding wounds. The self-bandage path is withheld there until an unanswered
+/// or refused bandage stops holding the whole inventory until the next zone.
+const P99_ABILITIES: [Ability; 16] = [
     Ability::Kick,
     Ability::Bash,
     Ability::Backstab,
@@ -830,7 +835,6 @@ const P99_ABILITIES: [Ability; 17] = [
     Ability::Mend,
     Ability::FeignDeath,
     Ability::SenseHeading,
-    Ability::BindWound,
 ];
 
 /// The hazards a local `EQEmu` takes from the client: falls, whose damage it
@@ -1035,7 +1039,7 @@ impl ServerType for Project1999 {
     }
 
     fn abilities(&self, _setup: &Setup<'_>) -> Provided {
-        offer(shared::abilities_with_self_bandage(&P99_ABILITIES))
+        offer(shared::abilities(&P99_ABILITIES))
     }
 
     fn talk(&self, _setup: &Setup<'_>) -> Provided {
@@ -1088,6 +1092,10 @@ struct EqEmu;
 impl ServerType for EqEmu {
     fn buff_cancellation(&self, _setup: &Setup<'_>) -> Provided {
         offer(Box::<Buffs>::default())
+    }
+
+    fn titanium_chat_link_expansion(&self) -> Option<LinkExpansion> {
+        Some(LinkExpansion::EQEMU_TITANIUM)
     }
 
     fn inventory_move_rules(&self) -> Option<MoveRules> {
@@ -1778,6 +1786,23 @@ mod tests {
     }
 
     #[test]
+    fn only_eqemu_budgets_titanium_chat_link_expansion() {
+        for (protocol, expected) in [
+            (ServerProtocol::Project1999, None),
+            (ServerProtocol::EqEmu, Some(LinkExpansion::EQEMU_TITANIUM)),
+            (ServerProtocol::Quarm, None),
+            (ServerProtocol::Takp, None),
+        ] {
+            assert_eq!(
+                super::super::titanium_chat_link_expansion(protocol),
+                expected
+            );
+        }
+        assert!(LinkExpansion::EQEMU_TITANIUM.fits(4095 - 22, 2));
+        assert!(!LinkExpansion::EQEMU_TITANIUM.fits(4095 - 21, 2));
+    }
+
+    #[test]
     fn every_current_consider_policy_uses_the_received_color() {
         for protocol in [
             ServerProtocol::Project1999,
@@ -2213,10 +2238,10 @@ mod tests {
     }
 
     #[test]
-    fn p99_lists_every_ability_but_fishing() {
+    fn p99_lists_every_ability_but_fishing_and_binding_wounds() {
         assert!(!P99_ABILITIES.contains(&Ability::Fishing));
-        assert!(P99_ABILITIES.contains(&Ability::BindWound));
-        assert_eq!(P99_ABILITIES.len(), Ability::ALL.len() - 1);
+        assert!(!P99_ABILITIES.contains(&Ability::BindWound));
+        assert_eq!(P99_ABILITIES.len(), Ability::ALL.len() - 2);
     }
 
     #[test]

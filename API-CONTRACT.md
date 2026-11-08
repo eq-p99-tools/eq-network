@@ -929,7 +929,9 @@ keeps the prior accepted heading when it uses those limits.
 combines; `OpenContainer`, `CloseContainer` and `Combine(WORLD_CONTAINER)`
 require `WorldContainers`. `tradeskills::combine_capability` supplies the
 same distinction to frontends. EQEmu offers both; P99 offers carried combines
-only, with no change to the current TAKP/Quarm offers. Exhaustive capability
+and the guarded ordinary forge (`WorldContainers` scoped to one-unit placements
+into empty forge slots and whole withdrawals to an empty cursor), with no change
+to the current TAKP/Quarm offers. Exhaustive capability
 matches and station controls must handle the new variant.
 
 `titanium_combine` retains its signature but writes the native full 32-bit

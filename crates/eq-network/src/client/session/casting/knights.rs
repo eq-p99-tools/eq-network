@@ -20,6 +20,10 @@ const RETRY_DELAY: Duration = Duration::from_secs(10);
 pub(super) struct Reuse {
     profile_ready: Option<Instant>,
     retry_at: Option<Instant>,
+    /// A send starts the server's recovery, which is reported only by the
+    /// next profile. Until then the ability stays spent, so it is never sent
+    /// while the official client would still hold it.
+    spent: bool,
 }
 
 impl Reuse {
@@ -27,9 +31,16 @@ impl Reuse {
     /// extend the timer.
     pub(super) fn received(&mut self, remaining: Duration, now: Instant) {
         self.profile_ready = Some(now + remaining);
+        self.spent = false;
+    }
+
+    fn spend(&mut self, now: Instant) {
+        self.retry_at = Some(now + RETRY_DELAY);
+        self.spent = true;
     }
 
     fn check(&self, now: Instant) -> Result<()> {
+        ensure!(!self.spent, "Ability recovery time not yet met");
         if let Some(wait) = self
             .profile_ready
             .and_then(|ready| ready.checked_duration_since(now))
@@ -110,7 +121,7 @@ impl Casting {
             Ok(packet) => {
                 out.send(&packet)?;
                 if let Some(reuse) = &mut self.knights {
-                    reuse.retry_at = Some(now + RETRY_DELAY);
+                    reuse.spend(now);
                 }
                 self.submitted(ability.spell(), Source::Knight(ability), world, out)
             }
@@ -242,5 +253,18 @@ mod tests {
         reuse.received(Duration::from_secs(30), now);
         assert!(reuse.check(now + RETRY_DELAY).is_err());
         assert!(reuse.check(now + Duration::from_secs(30)).is_ok());
+    }
+
+    #[test]
+    fn a_sent_ability_stays_spent_until_the_next_received_recovery() {
+        let now = Instant::now();
+        let mut reuse = Reuse::default();
+        reuse.received(Duration::ZERO, now);
+        reuse.spend(now);
+        for later in [RETRY_DELAY, Duration::from_mins(72)] {
+            assert!(reuse.check(now + later).is_err());
+        }
+        reuse.received(Duration::ZERO, now + RETRY_DELAY);
+        assert!(reuse.check(now + RETRY_DELAY).is_ok());
     }
 }

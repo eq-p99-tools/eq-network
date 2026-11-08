@@ -16,6 +16,32 @@ const STML_ENTITIES: &[(&[u8], char)] = &[
     (b"&NBSP;", ' '),
 ];
 
+/// A server chat handler that rewrites each Titanium item-link body before
+/// copying the message into its own fixed buffer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LinkExpansion {
+    /// Bytes the server's rewrite adds to each link body.
+    pub per_link: usize,
+    /// The longest message, in bytes, the server's buffer holds after it.
+    pub limit: usize,
+}
+
+impl LinkExpansion {
+    /// Stock `EQEmu`: `TitaniumToServerSayLink` expands each 45-byte body to 56
+    /// bytes, and `ChannelMessageReceived` copies into `char message[4096]`.
+    pub const EQEMU_TITANIUM: Self = Self {
+        per_link: 11,
+        limit: 4095,
+    };
+
+    /// Whether a message of `wire_len` bytes carrying `links` item links still
+    /// fits the server's buffer after the rewrite.
+    #[must_use]
+    pub const fn fits(self, wire_len: usize, links: usize) -> bool {
+        wire_len.saturating_add(self.per_link.saturating_mul(links)) <= self.limit
+    }
+}
+
 /// Titanium uses mixed polarity: guild/social/group/shout/auction/OOC and
 /// melee-miss filters show messages when set to one. Most spell filters use
 /// zero. This matches the successful stock client's 29-word filter packet.

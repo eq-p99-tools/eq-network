@@ -218,6 +218,11 @@ fn p99_forge_moves_require_single_whole_places_and_current_empty_withdrawal_curs
     assert!(denied.result.unwrap());
     assert_eq!(denied.sent, []);
     world.coins = Wallet::default().into();
+    // A forge withdrawal goes whole to the empty cursor, never into a pack slot.
+    let elsewhere = command(&world, 4000, 22, MoveQuantity::Whole);
+    let denied = submit(protocol, &mut features, &mut world, &elsewhere);
+    assert!(denied.result.unwrap());
+    assert_eq!(denied.sent, []);
     let withdrawal = withdraw(&world);
     let withdrawn = submit(protocol, &mut features, &mut world, &withdrawal);
     assert!(withdrawn.result.unwrap());

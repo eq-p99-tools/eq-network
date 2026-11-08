@@ -662,6 +662,13 @@ impl Client {
         session::consider_npcs_by_level(self.config.protocol)
     }
 
+    /// How the selected server's chat handler grows Titanium item links
+    /// before its own buffer limit. None means no extra host-side budget.
+    #[must_use]
+    pub fn titanium_chat_link_expansion(&self) -> Option<eq_network_game::chat::LinkExpansion> {
+        session::titanium_chat_link_expansion(self.config.protocol)
+    }
+
     /// Item placement rules used by the selected server's inventory owner.
     /// Available before connection so host projections use the same policy.
     /// None means the server type does not provide inventory movement.

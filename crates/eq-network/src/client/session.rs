@@ -66,6 +66,13 @@ use std::{
 
 use login::Credentials;
 
+/// The selected server type owns the host's chat budget for Titanium links.
+pub(super) fn titanium_chat_link_expansion(
+    protocol: ServerProtocol,
+) -> Option<eq_network_game::chat::LinkExpansion> {
+    servers::server_type(protocol).titanium_chat_link_expansion()
+}
+
 /// The selected server type owns the host's consider presentation policy.
 pub(super) fn consider_npcs_by_level(protocol: ServerProtocol) -> bool {
     servers::server_type(protocol).consider_npcs_by_level()

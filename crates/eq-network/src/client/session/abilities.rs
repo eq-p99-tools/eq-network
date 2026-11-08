@@ -172,6 +172,15 @@ impl Abilities {
         }
     }
 
+    /// The self-bandage path, withheld by every server type until an
+    /// unanswered or refused bandage stops holding the whole inventory.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "withheld on P99 until the inventory hold is bounded"
+        )
+    )]
     pub(super) fn with_self_bandage(listed: &'static [Ability]) -> Self {
         Self {
             self_bandage: Some(self_bandage::SelfBandage::default()),
