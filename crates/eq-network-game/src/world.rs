@@ -810,6 +810,14 @@ pub enum WorldEvent {
         /// Credential-free reason for the rejection.
         reason: String,
     },
+    /// A local-only EQEmu boundary is staying in this admission. Ordinary
+    /// movement may continue. No landing has been received.
+    SameZoneBoundary {
+        /// Admission that submitted the crossing.
+        session_id: u64,
+    },
+    /// Received movement within this exact zone admission.
+    SameZoneRelocated(crate::zoning::SameZoneRelocation),
     /// Complete indexed spellbook for the current admission.
     SpellBook(crate::spells::SpellBook),
     /// Local progress of a spellbook request, separate from server confirmation.

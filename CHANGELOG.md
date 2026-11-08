@@ -7,6 +7,12 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Report same-zone server relocation separately from normal position updates.
+  A same-zone boundary on local-only EQEmu releases the crossing hold and
+  lets normal movement reach a server-owned trigger. The landing is applied
+  only on receipt of the server's move instruction. Exhaustive world event
+  matches need to handle these two outcomes.
+
 - Offer the learned, self-targeted Titanium Warrior disciplines Evasive and
   Defensive. Stage received discipline and linked spell timers during
   admission, and use the shared discipline timer and active buff slot to

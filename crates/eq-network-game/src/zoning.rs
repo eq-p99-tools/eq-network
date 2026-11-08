@@ -7,7 +7,7 @@ use crate::{command::EncodedCommand, world::Position};
 use anyhow::{ensure, Result};
 use serde::Serialize;
 mod points;
-pub use points::{ZoneLineDestination, ZonePoint, ZonePoints};
+pub use points::{BoundaryRoute, ZoneLineDestination, ZonePoint, ZonePoints};
 
 /// `OP_ZoneChange`: the client's transfer request, and the server's answer.
 pub const CHANGE_OPCODE: u16 = 0x5dd8;
@@ -30,6 +30,18 @@ pub const DEPART_OPCODE: u16 = 0x55bc;
 pub const TITANIUM_UNAVAILABLE_OPCODE: u16 = 0x407c;
 /// `EQMac`'s `OP_ZoneUnavail`.
 pub const EQMAC_UNAVAILABLE_OPCODE: u16 = 0x0580;
+
+/// A received repositioning within the current zone admission. The server
+/// can issue this for a pad, spell, or scripted movement.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
+pub struct SameZoneRelocation {
+    /// Admission that supplied this server instruction.
+    pub session_id: u64,
+    /// The admitted player's spawn ID.
+    pub spawn_id: u16,
+    /// Landing after preserving any sentinels against the current position.
+    pub position: Position,
+}
 
 /// A pending destination selected by a server offer or local boundary.
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -184,6 +196,13 @@ impl ZoneOffer {
     pub fn local_position(&self, current_zone: (u16, u16)) -> Option<Position> {
         (!self.to_bind && self.zone_id != 0 && (self.zone_id, self.instance_id) == current_zone)
             .then_some(self.position)
+    }
+
+    /// Resolve preserve-value sentinels on an exact same-zone server offer.
+    #[must_use]
+    pub fn local_landing(&self, current_zone: (u16, u16), current: Position) -> Option<Position> {
+        let position = self.local_position(current_zone)?;
+        (finite(position) && finite(current)).then(|| points::preserve_axes(position, current))
     }
 
     /// Encodes the pending transfer request, preserving its destination and reason.
