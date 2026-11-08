@@ -59,6 +59,8 @@ pub(super) enum Resource {
     Spellbook,
     /// Inventory contents, including the cursor.
     Inventory,
+    /// Item placement on the cursor or in an open station.
+    CursorAndStation,
     /// Another request to pick an item up from the ground.
     GroundPickup,
 }
@@ -83,8 +85,34 @@ impl Held {
         let needs = needs(command);
         self.0
             .iter()
-            .find(|(resource, _)| needs.contains(resource))
+            .find(|(resource, _)| {
+                if *resource == Resource::CursorAndStation {
+                    touches_cursor_or_station(command)
+                } else {
+                    needs.contains(resource)
+                }
+            })
             .map(|(_, reason)| *reason)
+    }
+}
+
+fn touches_cursor_or_station(command: &ClientCommand) -> bool {
+    let touches = |slot: InventorySlot| {
+        slot == InventorySlot::CURSOR || slot.is_in_cursor_bag() || slot.is_world()
+    };
+    match command {
+        ClientCommand::MoveInventory(request) => touches(request.from) || touches(request.to),
+        ClientCommand::Sell { slot, .. } => touches(InventorySlot(*slot)),
+        ClientCommand::Consume { slot, .. } => touches(*slot),
+        ClientCommand::DestroyItem(_)
+        | ClientCommand::DropItem(_)
+        | ClientCommand::PickUp { .. }
+        | ClientCommand::ScribeSpell { .. }
+        | ClientCommand::LootItem { .. }
+        | ClientCommand::Buy { .. }
+        | ClientCommand::AcceptTrade { .. }
+        | ClientCommand::Combine { .. } => true,
+        _ => false,
     }
 }
 

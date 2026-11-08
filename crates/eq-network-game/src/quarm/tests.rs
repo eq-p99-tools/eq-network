@@ -458,6 +458,7 @@ fn spell_notices_read_as_the_spell_news_every_wire_gives() {
     assert_eq!(
         updates(0x3241, &fade).unwrap(),
         vec![WorldEvent::Buff(BuffUpdate {
+            replaces_slot: false,
             spell_id: 42,
             entity_id: 0,
             slot: UNKNOWN_SLOT,

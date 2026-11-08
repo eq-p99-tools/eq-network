@@ -1704,12 +1704,14 @@ pub enum WorldEvent {
     /// zone-in of timers 11 to 19 carry its other reuse timers
     /// ([`crate::disciplines`]).
     DisciplineReuse(crate::disciplines::Reuse),
-    /// Received ability-slot reuse from the admitted knight's profile.
+    /// Ability-slot recovery from the server profile or a local estimate.
     KnightReuse {
-        /// Admission that supplied the profile.
+        /// Admission that owns the estimate or received the profile.
         session_id: u64,
-        /// Remaining time received, including an explicit zero.
+        /// Remaining time, including an explicit zero.
         remaining: std::time::Duration,
+        /// Profile observation or local estimate.
+        source: crate::knights::ReuseSource,
     },
     /// A reuse timer a group of spells shares, as the server set it.
     LinkedReuse(crate::disciplines::Reuse),

@@ -766,6 +766,7 @@ mod tests {
         };
         let fade = |entity_id| {
             WorldEvent::Buff(BuffUpdate {
+                replaces_slot: false,
                 spell_id: 42,
                 entity_id,
                 slot: UNKNOWN_SLOT,

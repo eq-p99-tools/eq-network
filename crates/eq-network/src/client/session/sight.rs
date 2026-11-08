@@ -43,10 +43,11 @@ impl Sight {
                 }
                 if let Some(buff) = &update.buff {
                     self.slots.insert(update.slot, buff.clone());
-                } else if self
-                    .slots
-                    .get(&update.slot)
-                    .is_some_and(|buff| buff.spell_id == update.spell_id)
+                } else if update.replaces_slot
+                    || self
+                        .slots
+                        .get(&update.slot)
+                        .is_some_and(|buff| buff.spell_id == update.spell_id)
                 {
                     self.slots.remove(&update.slot);
                 }

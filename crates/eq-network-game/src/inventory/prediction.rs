@@ -25,13 +25,34 @@ impl Inventory {
             .copied()
             .filter(|slot| !InventoryItem::same_slot_contents(self.items.get(slot), next.get(slot)))
             .collect();
+        let cursor = changed.iter().any(|slot| {
+            *slot == InventorySlot::CURSOR
+                || slot.is_in_cursor_bag()
+                || self
+                    .projected_custody
+                    .get(slot)
+                    .is_some_and(|custody| custody.cursor)
+        });
+        if cursor && changed.iter().any(|slot| slot.is_in_trade()) {
+            self.cursor_projection_blocked = true;
+        }
+        let station = changed.iter().any(|slot| {
+            slot.is_world()
+                || self
+                    .projected_custody
+                    .get(slot)
+                    .is_some_and(|custody| custody.station)
+        });
         for slot in &changed {
             let bandage = (slot.is_equipment() || slot.is_carried())
                 && [self.items.get(slot), next.get(slot)]
                     .into_iter()
                     .flatten()
                     .any(|item| item.rules.item_type == crate::bind_wound::BANDAGE);
-            *self.projected_custody.entry(*slot).or_default() |= bandage;
+            let custody = self.projected_custody.entry(*slot).or_default();
+            custody.bandage |= bandage;
+            custody.cursor |= cursor;
+            custody.station |= station;
             // Charm through waist: the slots whose items' statistics and worn
             // effects the servers apply (EQEmu `BONUS_BEGIN`..`BONUS_STAT_END`);
             // the ammo slot (21) contributes skill modifiers only.
@@ -69,8 +90,10 @@ impl Inventory {
         let covers = |root, slot: InventorySlot| {
             slot == root || slot.parent().is_some_and(|(parent, _)| parent == root)
         };
+        let station_pending = self.station_moves_unconfirmed();
         self.relocations.retain(|slot, origin| match update {
             InventoryUpdate::BandageStockPending(_)
+            | InventoryUpdate::BandageStockUncertain(_)
             | InventoryUpdate::Prediction(_)
             | InventoryUpdate::DestroyCursor
             | InventoryUpdate::GroundDropPending(_)
@@ -91,9 +114,15 @@ impl Inventory {
             }
             InventoryUpdate::TradeEmptied => !slot.is_in_trade() && !origin.is_in_trade(),
             InventoryUpdate::WorldEmptied => !slot.is_world() && !origin.is_world(),
-            InventoryUpdate::Snapshot(_)
-            | InventoryUpdate::Invalidated
-            | InventoryUpdate::Settled => false,
+            InventoryUpdate::Settled => {
+                station_pending
+                    && [slot, origin].into_iter().any(|key| {
+                        self.projected_custody
+                            .get(key)
+                            .is_some_and(|custody| custody.station)
+                    })
+            }
+            InventoryUpdate::Snapshot(_) | InventoryUpdate::Invalidated => false,
         });
     }
 

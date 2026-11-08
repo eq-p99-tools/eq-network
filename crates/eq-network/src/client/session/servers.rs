@@ -697,6 +697,10 @@ mod shared {
         Box::new(Abilities::new(listed))
     }
 
+    pub(super) fn abilities_with_self_bandage(listed: &'static [Ability]) -> Box<dyn Feature> {
+        Box::new(Abilities::with_self_bandage(listed))
+    }
+
     pub(super) fn hide_answer() -> Box<dyn Feature> {
         Box::new(HideAnswer)
     }
@@ -821,10 +825,8 @@ mod shared {
     }
 }
 
-/// The abilities offered on P99: every one but fishing, which came later, and
-/// binding wounds. The self-bandage path is withheld there until an unanswered
-/// or refused bandage stops holding the whole inventory until the next zone.
-const P99_ABILITIES: [Ability; 16] = [
+/// The abilities offered on P99: every one but fishing, which came later.
+const P99_ABILITIES: [Ability; 17] = [
     Ability::Kick,
     Ability::Bash,
     Ability::Backstab,
@@ -839,6 +841,7 @@ const P99_ABILITIES: [Ability; 16] = [
     Ability::Sneak,
     Ability::Forage,
     Ability::Mend,
+    Ability::BindWound,
     Ability::FeignDeath,
     Ability::SenseHeading,
 ];
@@ -984,7 +987,11 @@ impl ServerType for Project1999 {
     }
 
     fn casting(&self, _setup: &Setup<'_>) -> Provided {
-        offer(Box::new(Casting::with_titanium_combat(false)))
+        // Inferred local estimate from the classic once-per-game-day reuse.
+        offer(Box::new(Casting::with_titanium_combat(
+            false,
+            std::time::Duration::from_mins(72),
+        )))
     }
 
     /// Moving the book's spells works on P99 as on `EQEmu` (checked with the
@@ -1054,7 +1061,7 @@ impl ServerType for Project1999 {
     }
 
     fn abilities(&self, _setup: &Setup<'_>) -> Provided {
-        offer(shared::abilities(&P99_ABILITIES))
+        offer(shared::abilities_with_self_bandage(&P99_ABILITIES))
     }
 
     fn talk(&self, _setup: &Setup<'_>) -> Provided {
@@ -1155,7 +1162,11 @@ impl ServerType for EqEmu {
     }
 
     fn casting(&self, _setup: &Setup<'_>) -> Provided {
-        offer(Box::new(Casting::with_titanium_combat(true)))
+        // EQEmu common/features.h: LayOnHandsReuseTime and HarmTouchReuseTime.
+        offer(Box::new(Casting::with_titanium_combat(
+            true,
+            std::time::Duration::from_secs(4300),
+        )))
     }
 
     fn spellbook(&self, _setup: &Setup<'_>) -> Provided {
@@ -2257,10 +2268,10 @@ mod tests {
     }
 
     #[test]
-    fn p99_lists_every_ability_but_fishing_and_binding_wounds() {
+    fn p99_lists_every_ability_but_fishing() {
         assert!(!P99_ABILITIES.contains(&Ability::Fishing));
-        assert!(!P99_ABILITIES.contains(&Ability::BindWound));
-        assert_eq!(P99_ABILITIES.len(), Ability::ALL.len() - 2);
+        assert!(P99_ABILITIES.contains(&Ability::BindWound));
+        assert_eq!(P99_ABILITIES.len(), Ability::ALL.len() - 1);
     }
 
     #[test]

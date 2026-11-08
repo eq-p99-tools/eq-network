@@ -326,9 +326,11 @@ impl InventoryItem {
 /// Authoritative updates and explicitly identified local predictions.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub enum InventoryUpdate {
-    /// A submitted self-bandage may have spent stock. Only received stock
-    /// evidence closes this local custody fence.
+    /// The active self-bandage is waiting for stock evidence.
     BandageStockPending(bool),
+    /// The self-bandage ended or expired without covering stock evidence.
+    /// Only these carried slots may differ from the last received inventory.
+    BandageStockUncertain(Vec<InventorySlot>),
     /// Local post-send projection, not a server acknowledgment.
     Prediction(Vec<InventoryItem>),
     /// Local whole-cursor removal after a successful destroy submission. It
@@ -370,9 +372,10 @@ pub enum InventoryUpdate {
     },
     /// A mutation needs a refreshed definition before quantities can be trusted.
     Invalidated,
-    /// Pending predictions the server had time to refuse and did not; they now
-    /// count as its contents. Servers such as `EQEmu` never acknowledge a
-    /// successful move and answer a refused one at once, by resending its slots.
+    /// Ordinary moves passed the refusal window. This does not confirm custody.
+    /// Unresolved station transfers and destructive submissions keep their
+    /// prediction origins. Servers such as `EQEmu` never acknowledge an
+    /// ordinary successful move and can resend the slots of a refused one.
     Settled,
     /// The give or trade window closed: what the trade slots held left them,
     /// handed over, or on its way back as the server's item updates. Servers
@@ -400,13 +403,18 @@ pub struct Inventory {
     /// This is evidence bookkeeping, never a queue that delays sending.
     #[serde(skip)]
     predictions: VecDeque<BTreeSet<InventorySlot>>,
-    /// Predicted slots that have yet to receive a covering inventory record,
-    /// with a flag for any change that could have moved a carried bandage.
+    /// Predicted slots that have yet to receive a covering inventory record.
     /// Retained when the general move policy settles by silence.
     #[serde(skip)]
-    projected_custody: BTreeMap<InventorySlot, bool>,
+    projected_custody: BTreeMap<InventorySlot, ProjectedCustody>,
+    /// A projected handoff may leave a delayed return, or an incoming record
+    /// contradicted an earlier projected cursor move.
+    #[serde(skip)]
+    cursor_projection_blocked: bool,
     #[serde(skip)]
     bandage_stock_pending: bool,
+    #[serde(skip)]
+    bandage_stock_uncertain: BTreeSet<InventorySlot>,
     /// Slots whose history included affecting or unreadable equipment since
     /// the last full snapshot or existing policy-driven settlement. Unversioned
     /// partial updates cannot certify which pending prefix the server applied.
@@ -435,6 +443,13 @@ pub struct Inventory {
     drop_weight: Option<weight::DropWeight>,
     #[serde(skip)]
     drop_cursor: ground_drop::CursorBasis,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+struct ProjectedCustody {
+    bandage: bool,
+    cursor: bool,
+    station: bool,
 }
 
 impl Inventory {
@@ -480,13 +495,38 @@ impl Inventory {
     /// Callers still require a current inventory and an item in that slot.
     #[must_use]
     pub fn custody_known(&self, slot: InventorySlot) -> bool {
-        !self.projected_custody.contains_key(&slot)
+        !self.projected_custody.contains_key(&slot) && !self.bandage_stock_uncertain(slot)
     }
 
-    /// A submitted self-bandage is awaiting a received stock change or snapshot.
+    /// Whether the visible Titanium cursor can take an ordinary station move.
+    /// Ordered item moves update that projection. This does not establish
+    /// received cursor placement or authorize destruction or a ground drop.
+    #[must_use]
+    pub fn projected_cursor_empty(&self) -> bool {
+        self.received()
+            && !self.stale()
+            && self.destroyed.is_none()
+            && !self.ground_drop_pending()
+            && !self.cursor_projection_blocked
+            && self.queued.is_empty()
+            && !self
+                .items
+                .keys()
+                .any(|&slot| slot == CURSOR || slot.is_in_cursor_bag())
+    }
+
+    /// An active self-bandage is awaiting stock evidence.
     #[must_use]
     pub const fn bandage_stock_pending(&self) -> bool {
         self.bandage_stock_pending
+    }
+
+    /// A retired bandage attempt may have spent stock in this slot or its bag contents.
+    #[must_use]
+    pub fn bandage_stock_uncertain(&self, slot: InventorySlot) -> bool {
+        self.bandage_stock_uncertain
+            .iter()
+            .any(|&stock| stock == slot || stock.parent().is_some_and(|(parent, _)| parent == slot))
     }
 
     /// A moved station slot remains provisional, including an emptied place.
@@ -495,10 +535,29 @@ impl Inventory {
         self.projected_custody.keys().any(|slot| slot.is_world())
     }
 
+    /// Whether the ordinary Titanium refusal window can retire any moves
+    /// while keeping unresolved station transfers and destruction separate.
+    #[must_use]
+    pub fn has_settleable_moves(&self) -> bool {
+        let station_pending = self.station_moves_unconfirmed();
+        self.unconfirmed.keys().any(|&slot| {
+            (slot != CURSOR || self.destroyed.is_none())
+                && !(station_pending
+                    && self
+                        .projected_custody
+                        .get(&slot)
+                        .is_some_and(|custody| custody.station))
+        })
+    }
+
     /// A local move may have changed which carried slot supplies a bandage.
     #[must_use]
     pub fn bandage_placement_unconfirmed(&self) -> bool {
-        self.projected_custody.values().any(|bandage| *bandage)
+        !self.bandage_stock_uncertain.is_empty()
+            || self
+                .projected_custody
+                .values()
+                .any(|custody| custody.bandage)
     }
 
     /// Monotonic local revision used to reject stale UI intents.
@@ -531,6 +590,10 @@ impl Inventory {
     #[must_use]
     pub fn equipment_stats_uncertain(&self) -> bool {
         !self.equipment_uncertainty.is_empty()
+            || self
+                .bandage_stock_uncertain
+                .iter()
+                .any(|slot| slot.is_equipment())
     }
 
     /// Slots changed by pending predictions and their contents before the first change.
@@ -609,6 +672,10 @@ impl Inventory {
         self.retain_relocations(&update);
         match update {
             InventoryUpdate::BandageStockPending(pending) => self.bandage_stock_pending = pending,
+            InventoryUpdate::BandageStockUncertain(slots) => {
+                self.bandage_stock_pending = false;
+                self.bandage_stock_uncertain.extend(slots);
+            }
             InventoryUpdate::Prediction(items) => self.predict(items),
             InventoryUpdate::DestroyCursor => self.predict_destruction(),
             InventoryUpdate::GroundDropPending(serial) => self.hold_ground_drop(serial),
@@ -630,6 +697,9 @@ impl Inventory {
                     Some(_) => self.remove(slot),
                     None if charge => self.stale = true,
                     None => (),
+                }
+                if !charge {
+                    self.bandage_stock_uncertain.remove(&slot);
                 }
                 self.reconcile_consumed(slot, consumed.as_ref());
             }
@@ -658,6 +728,9 @@ impl Inventory {
                     }
                     self.destroyed = None;
                 }
+                if slot == CURSOR {
+                    self.cursor_projection_blocked = false;
+                }
                 self.reconcile(slot, &[]);
                 self.remove(slot);
             }
@@ -674,19 +747,33 @@ impl Inventory {
             InventoryUpdate::WorldEmptied => {
                 self.items.retain(|slot, _| !slot.is_world());
                 self.projected_custody.retain(|slot, _| !slot.is_world());
+                for custody in self.projected_custody.values_mut() {
+                    custody.station = false;
+                }
                 self.unconfirmed.retain(|slot, _| !slot.is_world());
                 self.resolved();
             }
-            InventoryUpdate::Settled => {
-                self.unconfirmed
-                    .retain(|slot, _| self.destroyed.is_some() && *slot == CURSOR);
-                self.equipment_uncertainty.clear();
-                self.weight_rebased.clear();
-                self.weight_history_uncertain = false;
-                self.stack_weight = None;
-                self.resolved();
-            }
+            InventoryUpdate::Settled => self.settle_predictions(),
         }
+    }
+
+    fn settle_predictions(&mut self) {
+        let station_pending = self.station_moves_unconfirmed();
+        self.unconfirmed.retain(|slot, _| {
+            (self.destroyed.is_some() && *slot == CURSOR)
+                || (station_pending
+                    && self
+                        .projected_custody
+                        .get(slot)
+                        .is_some_and(|custody| custody.station))
+        });
+        if !station_pending {
+            self.equipment_uncertainty.clear();
+            self.weight_rebased.clear();
+            self.weight_history_uncertain = false;
+            self.stack_weight = None;
+        }
+        self.resolved();
     }
 
     fn replace_items(&mut self, items: Vec<InventoryItem>, arrival: bool) {
@@ -701,6 +788,7 @@ impl Inventory {
         if let Some(root) = items.first() {
             if root.slot == CURSOR {
                 self.destroyed = None;
+                self.cursor_projection_blocked = false;
             }
             if self.ground_drop_pending() && (root.slot == CURSOR || root.slot.is_in_cursor_bag()) {
                 // A cursor correction can be a temporary resync token.
@@ -732,7 +820,9 @@ impl Inventory {
         self.unconfirmed.clear();
         self.predictions.clear();
         self.projected_custody.clear();
+        self.cursor_projection_blocked = false;
         self.bandage_stock_pending = false;
+        self.bandage_stock_uncertain.clear();
         self.equipment_uncertainty.clear();
         self.weight_rebased.clear();
         self.weight_history_uncertain = false;
@@ -805,12 +895,25 @@ impl Inventory {
         };
         self.items.retain(|key, _| outside(*key));
         self.projected_custody.retain(|key, _| outside(*key));
+        self.bandage_stock_uncertain.retain(|key| outside(*key));
     }
 
     /// A slot update confirms only that slot and its serialized container contents.
     /// Contradictions freeze new moves until every outstanding slot is authoritative
     /// or settled.
     fn reconcile(&mut self, root: InventorySlot, authoritative: &[InventoryItem]) {
+        if root != CURSOR
+            && self.projected_custody.iter().any(|(&slot, custody)| {
+                custody.cursor
+                    && (slot == root || slot.parent().is_some_and(|(parent, _)| parent == root))
+                    && !InventoryItem::same_slot_contents(
+                        self.items.get(&slot),
+                        authoritative.iter().find(|item| item.slot == slot),
+                    )
+            })
+        {
+            self.cursor_projection_blocked = true;
+        }
         for slot in self.covered(root) {
             let actual = authoritative.iter().find(|item| item.slot == slot);
             if !InventoryItem::same_slot_contents(self.items.get(&slot), actual) {

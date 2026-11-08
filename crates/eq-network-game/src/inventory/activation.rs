@@ -202,6 +202,10 @@ impl super::Inventory {
             "Place the item in equipment or a main inventory slot"
         );
         ensure!(target_id != 0, "Item casting requires a target");
+        ensure!(
+            !self.bandage_stock_uncertain(slot),
+            "Wait for current stock in the affected bandage slot"
+        );
         let item = self.items.get(&slot).context("The item slot is empty")?;
         let effect = item
             .activation

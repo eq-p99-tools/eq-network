@@ -1,5 +1,46 @@
 use super::*;
 
+#[test]
+fn projected_cursor_eligibility_keeps_correction_drop_and_trade_fences() {
+    let cursor = InventorySlot::CURSOR;
+    let at = |slot, id| titanium::parse(wire(slot, id, 0, false, 0, &[]).as_bytes()).unwrap();
+    let mut inventory = Inventory::default();
+    inventory.apply(InventoryUpdate::Snapshot(at(cursor.0, 42)));
+    inventory.apply(InventoryUpdate::Prediction(at(22, 42)));
+    inventory.apply(InventoryUpdate::Settled);
+    assert!(inventory.projected_cursor_empty());
+    assert!(!inventory.custody_known(cursor));
+    assert!(!inventory.custody_known(InventorySlot(22)));
+
+    inventory.apply(InventoryUpdate::Set(at(24, 44)));
+    assert!(inventory.projected_cursor_empty());
+    inventory.apply(InventoryUpdate::Set(at(22, 43)));
+    assert!(!inventory.projected_cursor_empty());
+    inventory.apply(InventoryUpdate::Cursor(at(cursor.0, 45)));
+    assert!(!inventory.custody_known(cursor));
+    assert!(!inventory.projected_cursor_empty());
+    inventory.apply(InventoryUpdate::Snapshot(at(cursor.0, 46)));
+    assert!(inventory.custody_known(cursor));
+
+    let mut drop = inventory.clone();
+    drop.apply(InventoryUpdate::GroundDropPending(NonZeroU32::MIN));
+    drop.apply(InventoryUpdate::Settled);
+    assert!(!drop.projected_cursor_empty());
+
+    let mut destroy = inventory.clone();
+    destroy.apply(InventoryUpdate::DestroyCursor);
+    destroy.apply(InventoryUpdate::Settled);
+    assert!(!destroy.projected_cursor_empty());
+
+    inventory.apply(InventoryUpdate::Prediction(at(3000, 46)));
+    inventory.apply(InventoryUpdate::TradeEmptied);
+    inventory.apply(InventoryUpdate::Settled);
+    assert!(!inventory.projected_cursor_empty());
+    inventory.apply(InventoryUpdate::Snapshot(Vec::new()));
+    assert!(inventory.projected_cursor_empty());
+    assert!(inventory.custody_known(cursor));
+}
+
 fn held_wire(slot: i32, id: u32, id_file: &str, charges: &str) -> String {
     let fixture = wire(slot, id, 0, false, 0, &[]);
     let (header, rest) = fixture.split_once('"').unwrap();

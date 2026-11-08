@@ -19,13 +19,13 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   position stream. Local movement validation, packet pacing and received
   server placements retain their separate roles. Live wet movement and
   environmental damage handling remain to be verified.
-- **Breaking:** Offer ordinary forge interaction on Project 1999, and add a
-  self-targeted Bind Wound path that P99 withholds for now: an unanswered or
-  refused bandage would hold the whole inventory until the next zone.
+- **Breaking:** Offer ordinary forge interaction and self-targeted Bind Wound
+  on Project 1999.
   `GameCommand::CloseContainer` gains `drop_id` and `created`,
-  `InventoryUpdate::BandageStockPending` and four `BindWoundUpdate` variants
-  are new, and `ItemPlacement` gains `titanium_link_hash`.
-  Bandage stock stays provisional until received inventory evidence.
+  `InventoryUpdate::BandageStockPending`, `BandageStockUncertain` and four
+  `BindWoundUpdate` variants are new. `ItemPlacement` gains `titanium_link_hash`.
+  A terminal or unanswered request releases other inventory actions while
+  affected bandage slots still await received inventory evidence.
   A forge candidate needs a matching server open before it can take items.
   Station placement, close and combine resets do not grant inventory items.
 - Build ordinary Titanium item links from checked item records.
@@ -44,15 +44,18 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **Breaking:** Offer the learned, self-targeted Titanium Warrior disciplines Evasive and
   Defensive. Stage received discipline and linked spell timers during
   admission, and use the shared discipline timer and active buff slot to
-  guard both actions. Downstream exhaustive command and capability matches
-  need to include the new action.
+  guard both actions. Exact empty replacements of the discipline slot clear
+  its active state. `BuffUpdate` gains `replaces_slot`. Staged active state
+  is published as `WorldEvent::DisciplineAdmission` without advancing the
+  buff-slot revision. Downstream exhaustive matches need to include the new
+  command, capability and event.
 
 - **Breaking:** Added guarded Titanium knight ability casts and the
   admission's received ability-slot recovery, including the server's
-  alternate Harm Touch rank. A sent ability stays unavailable until the next
-  received recovery report, normally the next zone entry, because the server
-  reports recovery only in the profile. Downstream exhaustive matches on
-  commands, capabilities, and world events need to include the knight actions.
+  alternate Harm Touch rank. The local post-send estimate permits a later
+  attempt during the same admission. A received profile replaces the estimate.
+  `WorldEvent::KnightReuse` distinguishes the two sources. Downstream
+  exhaustive matches need to include the new command, capability and event.
 - Offer ordinary Project 1999 resurrection and translocate consent using
   admission-scoped offer identities and Titanium's five-minute timeout.
   A named translocate completion can start a move only after a matching
@@ -428,12 +431,13 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- Let unrelated EQEmu inventory moves settle during an unresolved station
+  transfer. After a combine reset, keep any remaining hold on the station
+  and cursor until covering evidence arrives.
+- Let a P99 forge use the ordered empty cursor projection for opening and
+  whole-item withdrawal. Received item placement remains separate.
 - Use the current weapon delay and eligible quiver when checking Titanium
   ranged recovery. Haste and slow remain outside the local estimate.
-- **Breaking:** Publish staged discipline state separately from the buff-slot snapshot so
-  beneficial buff cancellation keeps the same slot revision at both ends.
-  Discipline fades require a matching observed spell. Exhaustive world event
-  matches need to handle `WorldEvent::DisciplineAdmission`.
 - Keep absolute coordinates on received same-zone moves. Zone-point
   preservation applies to zone-point routes.
 

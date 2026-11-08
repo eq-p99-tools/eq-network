@@ -1,5 +1,15 @@
 # API and integration contracts
 
+## P99 self-bandage stock
+
+A self-targeted P99 Bind Wound request can hold inventory while awaiting
+stock evidence. A terminal reply or local expiry releases that hold.
+`InventoryUpdate::BandageStockUncertain` lists possible spent slots still
+awaiting a covering update. `Inventory::bandage_stock_uncertain` includes
+a parent bag when any of its contents are uncertain. The older item count
+stays visible and bounds carried weight from above. An expiry reports an
+unconfirmed outcome. A server update still owns the stock result.
+
 ## P99 local pads
 
 A P99 host can provide `InstalledZoneBoundaries` in `ClientConfig`.

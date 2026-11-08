@@ -172,15 +172,7 @@ impl Abilities {
         }
     }
 
-    /// The self-bandage path, withheld by every server type until an
-    /// unanswered or refused bandage stops holding the whole inventory.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "withheld on P99 until the inventory hold is bounded"
-        )
-    )]
+    /// A self-targeted bandage waits independently for its result and stock evidence.
     pub(super) fn with_self_bandage(listed: &'static [Ability]) -> Self {
         Self {
             self_bandage: Some(self_bandage::SelfBandage::default()),
@@ -437,12 +429,15 @@ impl Feature for Abilities {
             .collect()
     }
 
-    fn tick(&mut self, now: Instant, _world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
-        if self
+    fn tick(&mut self, now: Instant, world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
+        if let Some(state) = self
             .self_bandage
             .as_mut()
-            .is_some_and(|state| state.timed_out(now))
+            .filter(|state| state.expired(now))
         {
+            if let Some(update) = state.retire() {
+                world.happened(Message::Event(WorldEvent::Inventory(update)));
+            }
             out.log.send(ClientEvent::World(WorldEvent::BindWound(
                 BindWoundUpdate::Unconfirmed,
             )))?;
@@ -483,14 +478,12 @@ impl Feature for Abilities {
         world: &mut World,
         _out: &mut Out<'_, '_>,
     ) -> Result<()> {
-        if self
+        if let Some(update) = self
             .self_bandage
             .as_mut()
-            .is_some_and(|state| state.observe(message, world))
+            .and_then(|state| state.observe(message, world))
         {
-            world.happened(Message::Event(WorldEvent::Inventory(
-                InventoryUpdate::BandageStockPending(false),
-            )));
+            world.happened(Message::Event(WorldEvent::Inventory(update)));
         }
         self.admit(message, world)
     }
@@ -803,117 +796,6 @@ mod tests {
             .unwrap();
         let outcome = try_ability(&mut abilities, &mut world, Ability::BindWound, now);
         assert_eq!(outcome.sent, [bind_wound::encode(7)]);
-    }
-
-    #[test]
-    fn a_self_bandage_waits_for_the_result_and_a_received_stock_update() {
-        let mut abilities = Abilities::with_self_bandage(&Ability::ALL);
-        let mut world = bandager();
-        let now = Instant::now();
-        world.admitted = Some(now);
-        world.posture.observed(PostureState::Standing);
-        assert_eq!(
-            try_ability(&mut abilities, &mut world, Ability::BindWound, now).sent,
-            []
-        );
-
-        world.target = Target::from(7);
-        let sent = try_ability(&mut abilities, &mut world, Ability::BindWound, now);
-        assert_eq!(sent.sent, [bind_wound::encode(7)]);
-        assert!(sent.events.iter().any(|event| matches!(
-            event,
-            ClientEvent::World(WorldEvent::BindWound(BindWoundUpdate::RequestedSelf))
-        )));
-        assert_eq!(world.inventory.items().len(), 2);
-        let answer = Message::Event(WorldEvent::BindWound(BindWoundUpdate::Unlocked));
-        testing::run(|out| abilities.observe(&answer, &mut world, out))
-            .result
-            .unwrap();
-        assert_eq!(
-            try_ability(&mut abilities, &mut world, Ability::BindWound, now).sent,
-            []
-        );
-
-        let answer = Message::Event(WorldEvent::BindWound(BindWoundUpdate::Ended(
-            BindWoundEnd::YouMoved,
-        )));
-        testing::run(|out| abilities.observe(&answer, &mut world, out))
-            .result
-            .unwrap();
-        assert_eq!(
-            try_ability(&mut abilities, &mut world, Ability::BindWound, now).sent,
-            []
-        );
-        // Server inventory state is applied by its owner before abilities observe it.
-        let mut inventory = (*world.inventory).clone();
-        let snapshot = InventoryUpdate::Snapshot(inventory.items().values().cloned().collect());
-        inventory.apply(snapshot.clone());
-        world.inventory = inventory.into();
-        let answer = Message::Event(WorldEvent::Inventory(snapshot));
-        testing::run(|out| abilities.observe(&answer, &mut world, out))
-            .result
-            .unwrap();
-        assert_eq!(
-            try_ability(&mut abilities, &mut world, Ability::BindWound, now).sent,
-            [bind_wound::encode(7)]
-        );
-    }
-
-    #[test]
-    fn a_self_bandage_timeout_does_not_consume_stock_or_start_another_attempt() {
-        let mut abilities = Abilities::with_self_bandage(&Ability::ALL);
-        let mut world = bandager();
-        let now = Instant::now();
-        world.admitted = Some(now);
-        world.posture.observed(PostureState::Sitting);
-        world.target = Target::from(7);
-        assert_eq!(
-            try_ability(&mut abilities, &mut world, Ability::BindWound, now).sent,
-            [bind_wound::encode(7)]
-        );
-        let later = now + Duration::from_secs(15);
-        let timeout = testing::run(|out| abilities.tick(later, &mut world, out));
-        assert_eq!(timeout.sent, []);
-        assert!(matches!(
-            timeout.events.as_slice(),
-            [ClientEvent::World(WorldEvent::BindWound(
-                BindWoundUpdate::Unconfirmed
-            ))]
-        ));
-        assert_eq!(world.inventory.items().len(), 2);
-        assert_eq!(
-            abilities.holds(&world, later),
-            [(Resource::Inventory, "Wait for the bandage stock update")]
-        );
-        assert_eq!(
-            try_ability(&mut abilities, &mut world, Ability::BindWound, later).sent,
-            []
-        );
-
-        let mut inventory = (*world.inventory).clone();
-        inventory.apply(InventoryUpdate::BandageStockPending(true));
-        let consumed = InventoryUpdate::Consume {
-            slot: InventorySlot(251),
-            charge: false,
-        };
-        inventory.apply(consumed.clone());
-        world.inventory = inventory.into();
-        let delayed = Message::Event(WorldEvent::Inventory(consumed));
-        testing::run(|out| abilities.observe(&delayed, &mut world, out))
-            .result
-            .unwrap();
-        assert_eq!(abilities.holds(&world, later), []);
-        assert!(world.take_news().iter().any(|news| matches!(
-            news,
-            Message::Event(WorldEvent::Inventory(InventoryUpdate::BandageStockPending(
-                false
-            )))
-        )));
-        assert!(!world.inventory.items().contains_key(&InventorySlot(251)));
-        assert_eq!(
-            try_ability(&mut abilities, &mut world, Ability::BindWound, later).sent,
-            []
-        );
     }
 
     #[test]

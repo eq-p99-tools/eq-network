@@ -94,6 +94,7 @@ impl DropWeight {
             | InventoryUpdate::Used(_)
             | InventoryUpdate::Set(_)
             | InventoryUpdate::BandageStockPending(_)
+            | InventoryUpdate::BandageStockUncertain(_)
             | InventoryUpdate::Settled => (),
         }
         Some(self)
@@ -225,6 +226,8 @@ impl Inventory {
                 return Err(WeightUnavailable::Prediction);
             }
         }
+        // Unconfirmed bandaging can only reduce the recorded stock. The
+        // unchanged item records keep the heavier load in this bound.
         // Keep the destroyed instance's whole mass as an upper bound until
         // received cursor/snapshot evidence arrives. No lighter load is inferred.
         Ok(weight

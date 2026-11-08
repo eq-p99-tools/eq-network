@@ -264,6 +264,8 @@ pub struct BuffUpdate {
     pub entity_id: u32,
     /// Server slot number, preserved without allocating by its value.
     pub slot: u32,
+    /// The Titanium receiver replaces the exact slot, including an empty record.
+    pub replaces_slot: bool,
     /// Present for a replacement, absent for an explicit fade or empty record.
     pub buff: Option<Buff>,
 }
@@ -282,19 +284,27 @@ pub fn titanium_profile(profile: &[u8]) -> Result<Vec<Option<Buff>>> {
         .collect())
 }
 
-/// Decodes a Titanium server buff notification and its explicit fade flag.
+/// Decodes a Titanium server buff notification or exact discipline slot replacement.
 ///
 /// # Errors
 /// Rejects unexpected lengths and unknown fade flags rather than guessing a change.
 pub fn titanium_update(body: &[u8]) -> Result<BuffUpdate> {
     ensure!(body.len() == 32, "invalid Titanium buff update length");
-    let fade = word(body, 28);
-    ensure!(fade <= 1, "unknown Titanium buff fade flag");
+    let mode = word(body, 28);
+    let slot = word(body, 24);
+    // Titanium eqgame.exe 0x45f095 copies the whole record to the named
+    // slot in mode 3. Accept that form for the dedicated discipline slot.
+    let replaces_slot = mode == 3 && slot == crate::disciplines::TITANIUM_BUFF_SLOT;
+    ensure!(
+        mode <= 1 || replaces_slot,
+        "unknown Titanium buff update mode"
+    );
     Ok(BuffUpdate {
         spell_id: word(body, 8),
         entity_id: word(body, 0),
-        slot: word(body, 24),
-        buff: if fade == 1 {
+        slot,
+        replaces_slot,
+        buff: if mode == 1 {
             None
         } else {
             record(&body[4..24])
@@ -353,6 +363,7 @@ pub fn eqmac_update(body: &[u8]) -> Result<BuffUpdate> {
     let short = |offset| u16::from_le_bytes([body[offset], body[offset + 1]]);
     let fade = word(body, 16) == 1;
     Ok(BuffUpdate {
+        replaces_slot: false,
         spell_id: u32::from(short(6)),
         entity_id: u32::from(short(0)),
         slot: if fade {
@@ -628,6 +639,7 @@ mod tests {
         assert_eq!(
             eqmac_update(&body).unwrap(),
             BuffUpdate {
+                replaces_slot: false,
                 spell_id: 42,
                 entity_id: 0,
                 slot: UNKNOWN_SLOT,

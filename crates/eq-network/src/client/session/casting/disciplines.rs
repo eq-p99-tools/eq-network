@@ -12,7 +12,9 @@ use eq_network_game::{
 };
 use std::time::{Duration, Instant};
 
-/// A short local duplicate guard independent of observed reuse.
+/// An inferred one-second local duplicate guard independent of observed reuse.
+/// The native `eqgame.exe` 0x4bb39d checks a received group timer in seconds
+/// and supplies no standalone one-second retry rule.
 const RETRY_DELAY: Duration = Duration::from_secs(1);
 
 #[derive(Default)]
@@ -166,7 +168,7 @@ mod tests {
         player.level = 55;
         player.disciplines = Some(vec![4499, 4503]);
         world.player.admit(player);
-        let mut casting = Casting::with_titanium_combat(false);
+        let mut casting = Casting::with_titanium_combat(false, Duration::from_mins(72));
         let command = |discipline| ClientCommand::UseDiscipline {
             session_id: 1,
             discipline,

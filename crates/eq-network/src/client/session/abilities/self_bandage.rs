@@ -17,10 +17,7 @@ pub(super) struct SelfBandage(Option<Attempt>);
 struct Attempt {
     actor: u16,
     stock: BTreeMap<InventorySlot, u32>,
-    updated: bool,
-    ended: bool,
     expires: Instant,
-    notified: bool,
 }
 
 fn stock(inventory: &Inventory) -> BTreeMap<InventorySlot, u32> {
@@ -90,82 +87,81 @@ impl SelfBandage {
         self.0 = Some(Attempt {
             actor,
             stock,
-            updated: false,
-            ended: false,
             expires: now + RESULT_WINDOW,
-            notified: false,
         });
     }
 
     pub(super) fn holds_inventory(&self) -> bool {
-        self.0.as_ref().is_some_and(|attempt| !attempt.updated)
+        self.0
+            .as_ref()
+            .is_some_and(|attempt| !attempt.stock.is_empty())
     }
 
-    pub(super) fn timed_out(&mut self, now: Instant) -> bool {
-        let Some(attempt) = self
-            .0
-            .as_mut()
-            .filter(|attempt| now >= attempt.expires && !attempt.notified)
-        else {
-            return false;
-        };
-        attempt.notified = true;
-        true
+    pub(super) fn expired(&self, now: Instant) -> bool {
+        self.0
+            .as_ref()
+            .is_some_and(|attempt| now >= attempt.expires)
     }
 
-    pub(super) fn observe(&mut self, message: &Message, world: &World) -> bool {
-        let Some(attempt) = self
+    /// Release the operation. The inventory replicas retain only the slots
+    /// that could still have supplied stock.
+    pub(super) fn retire(&mut self) -> Option<InventoryUpdate> {
+        let attempt = self.0.take()?;
+        (!attempt.stock.is_empty())
+            .then(|| InventoryUpdate::BandageStockUncertain(attempt.stock.into_keys().collect()))
+    }
+
+    pub(super) fn observe(&mut self, message: &Message, world: &World) -> Option<InventoryUpdate> {
+        let attempt = self
             .0
             .as_mut()
-            .filter(|attempt| world.is_player(attempt.actor))
-        else {
-            return false;
-        };
-        let was_current = attempt.updated;
-        match message {
+            .filter(|attempt| world.is_player(attempt.actor))?;
+        if matches!(
+            message,
             Message::Event(WorldEvent::BindWound(
-                BindWoundUpdate::Ended(_) | BindWoundUpdate::Released,
-            )) => attempt.ended = true,
-            Message::Event(WorldEvent::Inventory(update))
-                if world.inventory.received()
-                    && !world.inventory.stale()
-                    && !world.inventory.ground_drop_pending() =>
-            {
-                attempt.updated |= match update {
-                    InventoryUpdate::Snapshot(_) => true,
-                    InventoryUpdate::Set(items) => items.first().is_some_and(|root| {
-                        stock_decreased(&world.inventory, &attempt.stock, root.slot)
-                    }),
-                    InventoryUpdate::Consume { slot, .. } | InventoryUpdate::Remove(slot) => {
-                        stock_decreased(&world.inventory, &attempt.stock, *slot)
-                    }
-                    _ => false,
-                };
+                BindWoundUpdate::Ended(_) | BindWoundUpdate::Released
+            ))
+        ) {
+            return self.retire();
+        }
+        let inventory = &world.inventory;
+        if attempt.stock.is_empty()
+            || !inventory.received()
+            || inventory.stale()
+            || inventory.ground_drop_pending()
+        {
+            return None;
+        }
+        let Message::Event(WorldEvent::Inventory(update)) = message else {
+            return None;
+        };
+        if matches!(update, InventoryUpdate::Snapshot(_)) {
+            // Applying the snapshot already cleared the inventory flag.
+            attempt.stock.clear();
+            return None;
+        }
+        let root = match update {
+            InventoryUpdate::Set(items) => items.first()?.slot,
+            InventoryUpdate::Consume {
+                slot,
+                charge: false,
             }
-            _ => (),
-        }
-        let received_stock = !was_current && attempt.updated;
-        if attempt.ended && attempt.updated {
-            self.0 = None;
-        }
-        received_stock
+            | InventoryUpdate::Remove(slot) => *slot,
+            _ => return None,
+        };
+        attempt.stock.retain(|&slot, before| {
+            (slot != root && slot.parent().is_none_or(|(parent, _)| parent != root))
+                || !inventory.custody_known(slot)
+                || inventory
+                    .items()
+                    .get(&slot)
+                    .filter(|item| item.rules.item_type == bind_wound::BANDAGE)
+                    .map_or(0, |item| item.stack_count.unwrap_or(1))
+                    >= *before
+        });
+        attempt
+            .stock
+            .is_empty()
+            .then_some(InventoryUpdate::BandageStockPending(false))
     }
-}
-
-fn stock_decreased(
-    inventory: &Inventory,
-    stock: &BTreeMap<InventorySlot, u32>,
-    root: InventorySlot,
-) -> bool {
-    stock.iter().any(|(&slot, &before)| {
-        (slot == root || slot.parent().is_some_and(|(parent, _)| parent == root))
-            && inventory.custody_known(slot)
-            && inventory.items().get(&slot).map_or(0, |item| {
-                if item.rules.item_type == bind_wound::BANDAGE {
-                    item.stack_count.unwrap_or(1)
-                } else {
-                    0
-                }
-            }) < before
-    })
 }
