@@ -1054,13 +1054,7 @@ impl Feature for Belongings {
     /// Retains the legacy Titanium refusal window. `EQMac` predictions await
     /// server evidence, regardless of how long or how many moves ago they arose.
     fn tick(&mut self, now: Instant, world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
-        if self.rules.settles_by_silence()
-            && world
-                .inventory
-                .items()
-                .keys()
-                .all(|slot| !slot.is_world() || world.inventory.custody_known(*slot))
-        {
+        if self.rules.settles_by_silence() && !world.inventory.station_moves_unconfirmed() {
             if let Some(update) = self.settlement.due(&world.inventory, now) {
                 change(update, world, out)?;
             }

@@ -529,7 +529,7 @@ mod tests {
     use super::*;
     use eq_network_game::{
         bind_wound::BindWoundEnd,
-        inventory::{Inventory, InventoryUpdate},
+        inventory::{Inventory, InventorySlot, InventoryUpdate},
         world::Position,
         GameDialect,
     };
@@ -879,6 +879,32 @@ mod tests {
             abilities.holds(&world, later),
             [(Resource::Inventory, "Wait for the bandage stock update")]
         );
+        assert!(
+            try_ability(&mut abilities, &mut world, Ability::BindWound, later)
+                .sent
+                .is_empty()
+        );
+
+        let mut inventory = (*world.inventory).clone();
+        inventory.apply(InventoryUpdate::BandageStockPending(true));
+        let consumed = InventoryUpdate::Consume {
+            slot: InventorySlot(251),
+            charge: false,
+        };
+        inventory.apply(consumed.clone());
+        world.inventory = inventory.into();
+        let delayed = Message::Event(WorldEvent::Inventory(consumed));
+        testing::run(|out| abilities.observe(&delayed, &mut world, out))
+            .result
+            .unwrap();
+        assert!(abilities.holds(&world, later).is_empty());
+        assert!(world.take_news().iter().any(|news| matches!(
+            news,
+            Message::Event(WorldEvent::Inventory(InventoryUpdate::BandageStockPending(
+                false
+            )))
+        )));
+        assert!(!world.inventory.items().contains_key(&InventorySlot(251)));
         assert!(
             try_ability(&mut abilities, &mut world, Ability::BindWound, later)
                 .sent

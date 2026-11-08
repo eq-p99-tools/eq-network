@@ -458,6 +458,18 @@ impl Inventory {
         !self.projected_custody.contains(&slot)
     }
 
+    /// A submitted self-bandage is awaiting a received stock change or snapshot.
+    #[must_use]
+    pub const fn bandage_stock_pending(&self) -> bool {
+        self.bandage_stock_pending
+    }
+
+    /// A moved station slot remains provisional, including an emptied place.
+    #[must_use]
+    pub fn station_moves_unconfirmed(&self) -> bool {
+        self.projected_custody.iter().any(|slot| slot.is_world())
+    }
+
     /// Monotonic local revision used to reject stale UI intents.
     #[must_use]
     pub const fn revision(&self) -> u64 {
