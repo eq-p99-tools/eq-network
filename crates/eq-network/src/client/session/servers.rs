@@ -866,6 +866,14 @@ const P99_WORLD_PREFIXES: [&str; 2] = ["project 1999", "an interesting"];
 struct Project1999;
 
 impl ServerType for Project1999 {
+    fn resurrection(&self, _setup: &Setup<'_>) -> Provided {
+        offer(Box::new(Resurrection::project1999()))
+    }
+
+    fn translocate(&self, _setup: &Setup<'_>) -> Provided {
+        offer(Box::new(Translocate::project1999()))
+    }
+
     fn training(&self, _setup: &Setup<'_>) -> Provided {
         offer(Box::new(Training::project1999()))
     }
@@ -2209,7 +2217,7 @@ mod tests {
 
     #[test]
     fn p99_and_eqemu_provide_every_feature_one_each() {
-        // Resurrection, world containers, the map, deleting
+        // World containers, the map, deleting
         // spells, merchants' offers, the player's listing, dice,
         // emotes, assisting, raids and the server's tick are checked on
         // EQEmu alone so far; P99 takes falls' damage by the Titanium
@@ -2218,7 +2226,7 @@ mod tests {
         // yet checked live; and only EQEmu takes the show-helm option.
         // Both Titanium policies retain the verified own-player stun timer.
         for (protocol, count) in [
-            (ServerProtocol::Project1999, 29),
+            (ServerProtocol::Project1999, 31),
             (ServerProtocol::EqEmu, 39),
         ] {
             let server = server_type(protocol);
@@ -2226,9 +2234,7 @@ mod tests {
             assert_eq!(server.features(&setup).len(), count, "{protocol:?}");
         }
         for capability in [
-            Capability::Resurrection,
             Capability::Sacrifice,
-            Capability::Translocate,
             Capability::WorldContainers,
             Capability::Map,
             Capability::DeletingSpells,
@@ -2250,6 +2256,8 @@ mod tests {
             assert!(offers(server_type(protocol)).contains(&Capability::MovingSpells));
             assert!(offers(server_type(protocol)).contains(&Capability::Reading));
             assert!(offers(server_type(protocol)).contains(&Capability::Training));
+            assert!(offers(server_type(protocol)).contains(&Capability::Resurrection));
+            assert!(offers(server_type(protocol)).contains(&Capability::Translocate));
             assert!(offers(server_type(protocol)).contains(&Capability::Tradeskills));
         }
     }

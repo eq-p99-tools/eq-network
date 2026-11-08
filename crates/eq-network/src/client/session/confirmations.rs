@@ -74,13 +74,11 @@ impl<T: Clone + PartialEq> Pending<T> {
     }
 
     /// Consumes the exact offer once. A stale answer leaves its replacement.
-    pub(super) fn take(&mut self, id: ConsentId, world: &World) -> Option<T> {
-        if id.session_id != world.session_id || world.lifecycle.blocks_motion() {
+    pub(super) fn take(&mut self, id: ConsentId, world: &World) -> Option<ConsentOffer<T>> {
+        if id.session_id != world.session_id || !world.ready() || world.lifecycle.blocks_motion() {
             return None;
         }
-        self.current
-            .take_if(|current| current.id == id)
-            .map(|current| current.offer)
+        self.current.take_if(|current| current.id == id)
     }
 
     /// Discards consent across death, zoning and logout.
@@ -90,13 +88,7 @@ impl<T: Clone + PartialEq> Pending<T> {
         world: &World,
         out: &mut Out<'_, '_>,
     ) -> Result<()> {
-        let invalid = world.lifecycle.blocks_motion()
-            || matches!(
-                message,
-                Message::ZoneAnswer(_) | Message::Handoff(_) | Message::LoggedOut
-            )
-            || matches!(message, Message::Event(event) if world.owns_death(event));
-        if let Some(current) = self.current.take_if(|_| invalid) {
+        if let Some(current) = self.current.take_if(|_| interrupted(message, world)) {
             closed(out, current.id, ConsentClosure::Interrupted)?;
         }
         Ok(())
@@ -118,6 +110,20 @@ impl<T: Clone + PartialEq> Pending<T> {
         }
         Ok(self.current.take_if(|current| now >= current.expires_at))
     }
+}
+
+/// Both open questions and accepted continuations lose their admission
+/// context on any transfer or own death.
+fn interrupted(message: &Message, world: &World) -> bool {
+    world.lifecycle.blocks_motion()
+        || matches!(
+            message,
+            Message::ZoneOffer(_)
+                | Message::ZoneAnswer(_)
+                | Message::Handoff(_)
+                | Message::LoggedOut
+        )
+        || matches!(message, Message::Event(event) if world.owns_death(event))
 }
 
 pub(super) fn closed(out: &mut Out<'_, '_>, id: ConsentId, closure: ConsentClosure) -> Result<()> {
@@ -175,6 +181,9 @@ impl Feature for Sacrifice {
 pub(super) struct Translocate {
     pending: Pending<TranslocateOffer>,
     timeout: Duration,
+    p99: bool,
+    /// One explicit Yes awaiting a matching received continuation.
+    accepted: Option<ConsentOffer<TranslocateOffer>>,
 }
 
 impl Translocate {
@@ -182,6 +191,38 @@ impl Translocate {
         Self {
             pending: Pending::default(),
             timeout,
+            p99: false,
+            accepted: None,
+        }
+    }
+
+    /// P99's Titanium continuation requires the same accepted offer.
+    pub(super) fn project1999() -> Self {
+        Self {
+            p99: true,
+            ..Self::new(TITANIUM_TIMEOUT)
+        }
+    }
+
+    /// Follows one received completion for a still-current acceptance.
+    fn complete(&mut self, completed: &TranslocateOffer, world: &mut World) {
+        let Some(accepted) = self.accepted.as_ref() else {
+            return;
+        };
+        let Some((_, position)) = world.player_at() else {
+            return;
+        };
+        if Instant::now() >= accepted.expires_at || accepted.id.session_id != world.session_id {
+            self.accepted = None;
+            return;
+        }
+        if let Some(move_offer) =
+            accepted
+                .offer
+                .p99_completion(completed, world.zone, position.heading)
+        {
+            self.accepted = None;
+            world.happened(Message::ZoneOffer(move_offer));
         }
     }
 }
@@ -208,14 +249,20 @@ impl Feature for Translocate {
             return Ok(());
         };
         self.tick(Instant::now(), world, out)?;
-        let Some(offer) = self.pending.take(offer_id, world) else {
+        let Some(question) = self.pending.take(offer_id, world) else {
             return actions::refuse(
                 command,
                 "That translocate offer is no longer current.",
                 out.log,
             );
         };
-        out.request(&Request::AnswerTranslocate { offer, accept })?;
+        out.request(&Request::AnswerTranslocate {
+            offer: question.offer.clone(),
+            accept,
+        })?;
+        if self.p99 && accept {
+            self.accepted = Some(question);
+        }
         closed(out, offer_id, ConsentClosure::AnswerSent { accept })
     }
 
@@ -226,9 +273,21 @@ impl Feature for Translocate {
         out: &mut Out<'_, '_>,
     ) -> Result<()> {
         self.pending.invalidate(message, world, out)?;
+        if interrupted(message, world) {
+            self.accepted = None;
+        }
+        if let Message::TranslocateCompleted(completed) = message {
+            if self.p99 {
+                self.complete(completed, world);
+            }
+            return Ok(());
+        }
         let Message::TranslocateOffer(offer) = message else {
             return Ok(());
         };
+        if self.p99 && (self.accepted.is_some() || !offer.valid_p99_question()) {
+            return Ok(());
+        }
         if let Some(question) = self.pending.open(
             offer,
             world,
@@ -242,6 +301,14 @@ impl Feature for Translocate {
     }
 
     fn tick(&mut self, now: Instant, world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
+        if world.lifecycle.blocks_motion()
+            || self
+                .accepted
+                .as_ref()
+                .is_some_and(|question| now >= question.expires_at)
+        {
+            self.accepted = None;
+        }
         if let Some(ConsentOffer { id, offer, .. }) = self.pending.elapsed(now, world, out)? {
             out.request(&Request::AnswerTranslocate {
                 offer,
@@ -424,6 +491,83 @@ mod tests {
             Some(ClientEvent::World(WorldEvent::TranslocateRefused { offer_id, .. }))
                 if *offer_id == question.id
         ));
+    }
+
+    #[test]
+    fn p99_completion_requires_a_current_exact_yes_and_is_consumed_once() {
+        use eq_network_game::confirmations::TRANSLOCATE_OPCODE;
+
+        let message = |zone, answer: u32| {
+            let mut body = translocate_record(zone);
+            body[4..8].copy_from_slice(&2000u32.to_le_bytes());
+            body[76..80].copy_from_slice(&12.0f32.to_le_bytes());
+            body[80..84].copy_from_slice(&34.0f32.to_le_bytes());
+            body[88..].copy_from_slice(&answer.to_le_bytes());
+            eq_network_game::message::titanium(TRANSLOCATE_OPCODE, &body).remove(0)
+        };
+        let mut feature = Translocate::project1999();
+        let mut world = World::new(5);
+        let mut player = testing::player(7);
+        player.position.heading = 64.0;
+        world.player.admit(player);
+        world.zone = (8, 0);
+        world.admitted = Some(Instant::now());
+        let complete = message(4, 1);
+        testing::run(|out| feature.observe(&complete, &mut world, out))
+            .result
+            .unwrap();
+        assert!(world.take_news().is_empty());
+
+        let offered = testing::run(|out| feature.observe(&message(4, 0), &mut world, out));
+        let [ClientEvent::World(WorldEvent::TranslocateOffer(question))] =
+            offered.events.as_slice()
+        else {
+            panic!("expected the named question");
+        };
+        assert!(offered.sent.is_empty());
+        let selected =
+            testing::run(|out| feature.handle(&answer(question.id, true), &mut world, out));
+        assert_eq!(
+            selected.sent,
+            [titanium_translocate_answer(&question.offer, true)]
+        );
+        assert!(world.take_news().is_empty());
+        assert!(world.lifecycle.pending().is_none());
+
+        testing::run(|out| feature.observe(&message(7, 1), &mut world, out))
+            .result
+            .unwrap();
+        assert!(world.take_news().is_empty());
+        testing::run(|out| feature.observe(&complete, &mut world, out))
+            .result
+            .unwrap();
+        assert!(matches!(
+            world.take_news().as_slice(),
+            [Message::ZoneOffer(move_offer)] if move_offer.zone_id == 4
+                && move_offer.reason == 8 && move_offer.position.heading == 64.0
+                && move_offer.position.x == 34.0 && move_offer.position.y == 12.0
+        ));
+        testing::run(|out| feature.observe(&complete, &mut world, out))
+            .result
+            .unwrap();
+        assert!(world.take_news().is_empty());
+
+        let offered = testing::run(|out| feature.observe(&message(4, 0), &mut world, out));
+        let [ClientEvent::World(WorldEvent::TranslocateOffer(question))] =
+            offered.events.as_slice()
+        else {
+            panic!("expected the next offer");
+        };
+        let selected =
+            testing::run(|out| feature.handle(&answer(question.id, true), &mut world, out));
+        selected.result.unwrap();
+        let expired = testing::run(|out| feature.tick(question.expires_at, &mut world, out));
+        expired.result.unwrap();
+        assert!(expired.sent.is_empty());
+        testing::run(|out| feature.observe(&complete, &mut world, out))
+            .result
+            .unwrap();
+        assert!(world.take_news().is_empty());
     }
 
     #[test]

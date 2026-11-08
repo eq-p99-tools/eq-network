@@ -1054,7 +1054,7 @@ offer of the same kind replaces it. A stale or repeated answer produces a
 refusal naming the attempted token and leaves a replacement untouched.
 Death, an outstanding zone transfer and logout invalidate old consent.
 The in-process `expires_at` is a monotonic local deadline omitted from
-serialization. The Titanium `EQEmu` policy uses a five-minute local answer
+serialization. The Titanium EQEmu and P99 policies use a five-minute local answer
 window and submits a decline when it elapses during the same live admission.
 Titanium `eqgame.exe` sets the timer at 0x4561bd (translocate) and 0x459b61
 (resurrection). Expiry at 0x547f0a passes dismissal result 2 at 0x547eff.
@@ -1066,13 +1066,17 @@ window (6.253). A server may apply its own timing rule.
 submitted decline, and a lifecycle interruption. Movement and recovery
 follow the ordinary server messages and admission. EQEmu translocate uses
 the server's pending destination and resurrection echoes the offered packet with
-the answer selected. P99's resurrection and translocate answer policies
-remain gated.
+the answer selected. P99 uses the same offer-bound consent controls. An
+exact named translocate completion can enter the regular zone transfer
+path after a matching Yes during the original offer lifetime. Bind spell
+consent follows explicit server-directed moves. A bind completion alone
+does not establish the current bind coordinates.
 
 Raw wire readers should use `message::titanium` or `message::eqmac`
 for consent records. The corresponding `Message::Resurrection` or
 `Message::TranslocateOffer` carries decoded facts without a session
-token. `world::titanium_update` no longer treats these as world events.
+token. `Message::TranslocateCompleted` carries a Titanium continuation for
+session correlation. `world::titanium_update` leaves consent to the session.
 TAKP's distinct server move still enters the existing zone-transfer path.
 
 See EQEmu's [resurrection offer routing](https://github.com/EQEmu/EQEmu/blob/master/zone/worldserver.cpp#L865-L893),

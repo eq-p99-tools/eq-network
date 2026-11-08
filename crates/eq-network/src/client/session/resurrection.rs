@@ -20,6 +20,17 @@ use std::time::Instant;
 #[derive(Default)]
 pub(super) struct Resurrection {
     pending: Pending<ResurrectionOffer>,
+    p99: bool,
+}
+
+impl Resurrection {
+    /// Uses Titanium consent for ordinary addressed P99 resurrection spells.
+    pub(super) fn project1999() -> Self {
+        Self {
+            p99: true,
+            ..Self::default()
+        }
+    }
 }
 
 impl Feature for Resurrection {
@@ -44,7 +55,7 @@ impl Feature for Resurrection {
             return Ok(());
         };
         self.tick(Instant::now(), world, out)?;
-        let Some(offer) = self.pending.take(offer_id, world) else {
+        let Some(ConsentOffer { offer, .. }) = self.pending.take(offer_id, world) else {
             return actions::refuse(
                 command,
                 "That resurrection offer is no longer current.",
@@ -65,6 +76,9 @@ impl Feature for Resurrection {
         let Message::Resurrection(offer) = message else {
             return Ok(());
         };
+        if self.p99 && !offer.valid_p99_question() {
+            return Ok(());
+        }
         if world
             .player
             .as_ref()
@@ -121,6 +135,47 @@ mod tests {
         eq_network_game::message::titanium(OFFER_OPCODE, &body)
             .pop()
             .unwrap()
+    }
+
+    #[test]
+    fn p99_resurrection_answers_the_current_addressed_offer_without_local_recovery() {
+        let mut resurrection = Resurrection::project1999();
+        let mut world = World::new(5);
+        let mut player = testing::player(7);
+        player.name = "Tester".into();
+        world.player.admit(player);
+        world.admitted = Some(Instant::now());
+        let Message::Resurrection(missing) = offer(b"Tester") else {
+            unreachable!();
+        };
+        let ignored = testing::run(|out| {
+            resurrection.observe(&Message::Resurrection(missing), &mut world, out)
+        });
+        assert!(ignored.events.is_empty());
+        let mut body = vec![0; 228];
+        body[4..6].copy_from_slice(&8u16.to_le_bytes());
+        body[24..30].copy_from_slice(b"Tester");
+        body[92..98].copy_from_slice(b"Helper");
+        body[156..160].copy_from_slice(&392u32.to_le_bytes());
+        body[160..173].copy_from_slice(b"Tester's body");
+        let message = eq_network_game::message::titanium(OFFER_OPCODE, &body).remove(0);
+        let opened = testing::run(|out| resurrection.observe(&message, &mut world, out));
+        let [ClientEvent::World(WorldEvent::Resurrection(question))] = opened.events.as_slice()
+        else {
+            panic!("expected the addressed offer");
+        };
+        let result =
+            testing::run(|out| resurrection.handle(&answer(question.id, true), &mut world, out));
+        assert_eq!(result.sent, [titanium_answer(&question.offer, true)]);
+        assert!(matches!(
+            result.events.as_slice(),
+            [ClientEvent::World(WorldEvent::ConsentClosed {
+                closure: ConsentClosure::AnswerSent { accept: true },
+                ..
+            })]
+        ));
+        assert!(world.take_news().is_empty());
+        assert!(world.lifecycle.pending().is_none());
     }
 
     #[test]

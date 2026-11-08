@@ -7,6 +7,10 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Offer ordinary Project 1999 resurrection and translocate consent using
+  admission-scoped offer identities and Titanium's five-minute timeout.
+  A named translocate completion can start a move only after a matching
+  Yes. Received movement, recovery and admission remain authoritative.
 - Use the native two-record beneficial-buff cancellation sequence on Project
   1999. Keep the selected slot until received updates change it, report a
   partially submitted pair separately, and never resend automatically.

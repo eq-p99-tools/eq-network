@@ -2599,6 +2599,8 @@ mod tests {
         assert!(p99.contains(&Capability::Reading));
         assert!(!p99.contains(&Capability::GroundDropping));
         assert!(p99.contains(&Capability::Training));
+        assert!(p99.contains(&Capability::Resurrection));
+        assert!(p99.contains(&Capability::Translocate));
         let eqemu = features(crate::client::ServerProtocol::EqEmu).capabilities();
         assert!(!eqemu.contains(&Capability::GroundDropping));
         assert!(eqemu.contains(&Capability::Falling));
@@ -2626,7 +2628,6 @@ mod tests {
             Capability::Assisting,
             Capability::Raiding,
             Capability::Sacrifice,
-            Capability::Translocate,
             Capability::ServerTicks,
             Capability::ShowingHelm,
             Capability::StoppingSongs,

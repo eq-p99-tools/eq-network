@@ -133,6 +133,18 @@ pub struct TranslocateOffer {
     body: Vec<u8>,
 }
 
+/// What a Titanium translocate record carries.
+#[derive(Clone, Debug, PartialEq)]
+pub enum TitaniumTranslocate {
+    /// A consent prompt.
+    Offer(TranslocateOffer),
+    /// A received completion. The session must correlate it to an accepted offer.
+    Completed(TranslocateOffer),
+}
+
+/// Native spells whose confirmation describes the player's bind point.
+pub const TITANIUM_TRANSLOCATE_BIND_SPELLS: &[u32] = &[1334, 1422, 3243];
+
 /// What an `EQMac` translocate record is.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Translocate {
@@ -203,6 +215,67 @@ pub fn titanium_translocate(body: &[u8]) -> Result<TranslocateOffer> {
         "translocate offer without a caster"
     );
     Ok(offer)
+}
+
+/// Decodes a named Titanium translocate prompt or received completion.
+///
+/// # Errors
+/// Rejects an invalid record, missing caster or unrecognized answer value.
+pub fn titanium_translocate_record(body: &[u8]) -> Result<TitaniumTranslocate> {
+    let (offer, complete) = translocate(body)?;
+    ensure!(
+        !offer.caster.is_empty(),
+        "translocate record without a caster"
+    );
+    match complete {
+        0 => Ok(TitaniumTranslocate::Offer(offer)),
+        1 => Ok(TitaniumTranslocate::Completed(offer)),
+        _ => bail!("unrecognized Titanium translocate answer"),
+    }
+}
+
+impl TranslocateOffer {
+    /// Whether P99 has a meaningful question to display. A bind spell's
+    /// destination is described as the bind point, even when the wire zone is absent.
+    #[must_use]
+    pub fn valid_p99_question(&self) -> bool {
+        !matches!(self.spell_id, 0 | 0xffff | u32::MAX)
+            && (self.zone_id != 0 || TITANIUM_TRANSLOCATE_BIND_SPELLS.contains(&self.spell_id))
+    }
+
+    /// Converts an exact named completion into a server-directed move.
+    /// Native bind variants read the player's bind coordinates separately.
+    #[must_use]
+    pub fn p99_completion(
+        &self,
+        completed: &Self,
+        current_zone: (u16, u16),
+        heading: f32,
+    ) -> Option<ZoneOffer> {
+        if word(&self.body, COMPLETE) != 0
+            || word(&completed.body, COMPLETE) != 1
+            || self.body[..COMPLETE] != completed.body[..COMPLETE]
+            || self.zone_id == 0
+            || current_zone.0 == 0
+            || !heading.is_finite()
+            || TITANIUM_TRANSLOCATE_BIND_SPELLS.contains(&self.spell_id)
+        {
+            return None;
+        }
+        let mut position = completed.position;
+        // The completion contains XYZ only. The character keeps their heading.
+        position.heading = heading;
+        Some(ZoneOffer {
+            zone_id: completed.zone_id,
+            // The native transfer sender copies the received destination zone
+            // dword to the 16-bit zone and instance fields together.
+            instance_id: 0,
+            position,
+            reason: TRANSLOCATED,
+            to_bind: false,
+            solicited: true,
+        })
+    }
 }
 
 /// Decodes `EQMac`'s translocate record: an offer, or with the answer 1,
@@ -435,6 +508,48 @@ mod tests {
         let mut offer = translocate_record(0);
         offer[CASTER..CASTER + NAME].fill(0);
         assert!(eqmac_translocate(&offer).is_err());
+    }
+
+    #[test]
+    fn named_titanium_completion_matches_the_frozen_offer_and_uses_received_coordinates() {
+        let offer = titanium_translocate(&translocate_record(0)).unwrap();
+        let go = translocate_record(1);
+        let TitaniumTranslocate::Completed(completed) = titanium_translocate_record(&go).unwrap()
+        else {
+            panic!("expected a completion");
+        };
+        let destination = offer.p99_completion(&completed, (4, 0), 87.0).unwrap();
+        assert_eq!(destination.reason, TRANSLOCATED);
+        assert_eq!((destination.zone_id, destination.instance_id), (4, 0));
+        assert_eq!(
+            (
+                destination.position.x,
+                destination.position.y,
+                destination.position.z
+            ),
+            (263.0, 1748.0, 27.0)
+        );
+        assert_eq!(destination.local_position((4, 0)).unwrap().heading, 87.0);
+        assert!(destination.local_position((8, 0)).is_none());
+        assert!(offer.p99_completion(&offer, (4, 0), 87.0).is_none());
+        let mut changed = go;
+        changed[POSITION..POSITION + 4].copy_from_slice(&1.0f32.to_le_bytes());
+        let TitaniumTranslocate::Completed(changed) =
+            titanium_translocate_record(&changed).unwrap()
+        else {
+            panic!("expected a changed completion");
+        };
+        assert!(offer.p99_completion(&changed, (4, 0), 87.0).is_none());
+        let mut bind = translocate_record(0);
+        bind[SPELL..SPELL + 4].copy_from_slice(&1334u32.to_le_bytes());
+        let bind_offer = titanium_translocate(&bind).unwrap();
+        bind[COMPLETE..].copy_from_slice(&1u32.to_le_bytes());
+        let TitaniumTranslocate::Completed(bind) = titanium_translocate_record(&bind).unwrap()
+        else {
+            panic!("expected a bind completion");
+        };
+        assert!(bind_offer.valid_p99_question());
+        assert!(bind_offer.p99_completion(&bind, (4, 0), 87.0).is_none());
     }
 
     #[test]

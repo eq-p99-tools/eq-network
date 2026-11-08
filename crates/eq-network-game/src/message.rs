@@ -24,6 +24,8 @@ pub enum Message {
     Resurrection(crate::resurrection::ResurrectionOffer),
     /// A decoded translocate that still needs admission and consent checks.
     TranslocateOffer(crate::confirmations::TranslocateOffer),
+    /// A received Titanium completion that still needs exact consent correlation.
+    TranslocateCompleted(crate::confirmations::TranslocateOffer),
     /// A merchant's whole list, which replaces what it listed before, as
     /// `EQMac`'s comes on every change, its places numbered afresh. The
     /// feature keeping the merchant window tells the host the places that
@@ -183,10 +185,12 @@ pub fn titanium(opcode: u16, body: &[u8]) -> Vec<Message> {
             Message::Resurrection,
         ),
         crate::confirmations::TRANSLOCATE_OPCODE => {
-            crate::confirmations::titanium_translocate(body).map_or_else(
-                |error| unreadable(Part::World, &error),
-                Message::TranslocateOffer,
-            )
+            use crate::confirmations::TitaniumTranslocate;
+            match crate::confirmations::titanium_translocate_record(body) {
+                Ok(TitaniumTranslocate::Offer(offer)) => Message::TranslocateOffer(offer),
+                Ok(TitaniumTranslocate::Completed(offer)) => Message::TranslocateCompleted(offer),
+                Err(error) => unreadable(Part::World, &error),
+            }
         }
         crate::buffs::TITANIUM_ACTION_OPCODE => action(crate::buffs::titanium_action(body)),
         crate::zones::TITANIUM_HEADER_OPCODE => {

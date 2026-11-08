@@ -213,7 +213,8 @@ it adds no live combat/death evidence to this report.
 | Pets | Ordinary orders offered | Disabled | Public verification of orders and charm ownership. Hold, feign, spellhold and focus are withheld on Project 1999. EQMac orders still need wire/action integration. |
 | Skill training | Source-backed; public exchange pending | Disabled | One practice at a time. Skills follow received updates. Prices and projected point balances are estimates. |
 | Reading / tradeskills | See individual capability | See individual capability | Book and carried-combine support varies by server. |
-| Resurrection / sacrifice / translocate | Disabled | Disabled (TAKP translocate exists) | Source-backed offers, explicit consent, rejection and transfer/death lifecycles. |
+| Resurrection / translocate | Source-backed; public exchange pending | Disabled (TAKP translocate exists) | Offer-bound consent. Named translocate continuation and ordinary server-directed movement. Bind continuation without a server-directed destination remains unverified. |
+| Sacrifice | Disabled | Disabled | Separate consent path. |
 | Who / time of day | Offered | Disabled | Quarm handlers/policy; do not confuse received entity state with a complete `/who` answer. |
 | AFK / anonymous / roleplay | Disabled | Disabled; TAKP offers anon/roleplay | Server-specific appearance rules and replies; TAKP itself does not establish AFK support. |
 | Roll / emote / assist / show helm / regen ticks | Disabled | Disabled | Per-action codecs/policy and evidence. Do not grant these merely because a sibling server does. |
