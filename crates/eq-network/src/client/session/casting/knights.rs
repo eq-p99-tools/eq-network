@@ -162,7 +162,7 @@ mod tests {
         ] {
             let output = testing::run(|out| casting.handle(&command, &mut world, out));
             output.result.unwrap();
-            assert!(output.sent.is_empty());
+            assert_eq!(output.sent, []);
             assert!(matches!(
                 output.events.first(),
                 Some(ClientEvent::World(WorldEvent::CastRejected { .. }))
@@ -188,7 +188,7 @@ mod tests {
             .unwrap();
         let duplicate = testing::run(|out| casting.handle(&heal, &mut world, out));
         duplicate.result.unwrap();
-        assert!(duplicate.sent.is_empty());
+        assert_eq!(duplicate.sent, []);
     }
 
     #[test]

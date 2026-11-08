@@ -8,6 +8,38 @@ use eq_network_game::{
     food::AutoEat,
 };
 
+fn staged_discipline_input(faded: bool) -> Vec<Message> {
+    let ordinary = Buff {
+        spell_id: 42,
+        caster_level: 12,
+        effect_type: 2,
+        bard_modifier: 10,
+        duration_ticks: 30,
+        counters: 0,
+        caster_id: 7,
+    };
+    let discipline = Buff {
+        spell_id: 4499,
+        ..ordinary.clone()
+    };
+    let slot = |buff| {
+        Message::Event(WorldEvent::Buff(BuffUpdate {
+            entity_id: 7,
+            slot: TITANIUM_BUFF_SLOT,
+            spell_id: 4499,
+            buff,
+        }))
+    };
+    let mut input = vec![
+        Message::Event(WorldEvent::BuffSnapshot(vec![None, Some(ordinary)])),
+        slot(Some(discipline)),
+    ];
+    if faded {
+        input.push(slot(None));
+    }
+    input
+}
+
 #[test]
 fn staged_discipline_presence_or_fade_keeps_cancellation_revision_aligned() {
     for faded in [false, true] {
@@ -18,36 +50,9 @@ fn staged_discipline_presence_or_fade_keeps_cancellation_revision_aligned() {
         );
         let mut world = World::new(5);
         world.own_spawn = Some(7);
-        let ordinary = Buff {
-            spell_id: 42,
-            caster_level: 12,
-            effect_type: 2,
-            bard_modifier: 10,
-            duration_ticks: 30,
-            counters: 0,
-            caster_id: 7,
-        };
-        let discipline = Buff {
-            spell_id: 4499,
-            ..ordinary.clone()
-        };
-        let slot = |buff| {
-            Message::Event(WorldEvent::Buff(BuffUpdate {
-                entity_id: 7,
-                slot: TITANIUM_BUFF_SLOT,
-                spell_id: 4499,
-                buff,
-            }))
-        };
-        let mut input = vec![
-            Message::Event(WorldEvent::BuffSnapshot(vec![None, Some(ordinary)])),
-            slot(Some(discipline)),
-        ];
-        if faded {
-            input.push(slot(None));
-        }
 
         let admission = testing::run(|out| -> Result<()> {
+            let input = staged_discipline_input(faded);
             assert!(hear(input, &mut features, &mut world, out, true)?.is_none());
             let zone = Zone {
                 name: "constructed".into(),
@@ -58,7 +63,7 @@ fn staged_discipline_presence_or_fade_keeps_cancellation_revision_aligned() {
             admit(testing::player(7), &zone, &mut features, &mut world, out)
         });
         admission.result.unwrap();
-        assert!(admission.sent.is_empty());
+        assert_eq!(admission.sent, []);
         let expected = if faded {
             Active::Inactive
         } else {

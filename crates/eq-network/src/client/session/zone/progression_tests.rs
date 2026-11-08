@@ -100,7 +100,7 @@ fn issued(visit: &mut Visit, kind: ConsentKind, x: f32) -> (ConsentId, Instant) 
     let (opcode, body) = prompt(kind, x);
     let result = visit.packet(opcode, &body);
     assert!(result.result.unwrap().is_none());
-    assert!(result.sent.is_empty());
+    assert_eq!(result.sent, []);
     match result.events.as_slice() {
         [ClientEvent::World(WorldEvent::Resurrection(question))] => {
             (question.id, question.expires_at)
@@ -127,7 +127,7 @@ fn p99_retired_consent_stays_withheld_after_replacement_answer_and_expiry() {
         let (b, _) = issued(&mut visit, kind, 20.0);
         assert_ne!(a, b);
         assert_replay_withheld(&mut visit, kind, 10.0);
-        assert!(visit.answer(a, true).sent.is_empty());
+        assert_eq!(visit.answer(a, true).sent, []);
         assert_eq!(visit.answer(b, false).sent.len(), 1);
         assert_replay_withheld(&mut visit, kind, 20.0);
 
@@ -173,7 +173,7 @@ fn p99_interrupted_consent_stays_retired_when_the_same_zone_resumes() {
         assert!(refused.result.unwrap().is_none());
         assert!(!visit.world.lifecycle.blocks_motion());
         assert_replay_withheld(&mut visit, kind, 10.0);
-        assert!(visit.answer(a, true).sent.is_empty());
+        assert_eq!(visit.answer(a, true).sent, []);
         let (next, _) = issued(&mut visit, kind, 20.0);
         assert_eq!(visit.answer(next, false).sent.len(), 1);
     }
@@ -188,7 +188,7 @@ fn p99_completed_translocate_cannot_reopen_or_move_through_an_old_echo() {
         body[88..].copy_from_slice(&1u32.to_le_bytes());
         let result = visit.packet(opcode, &body);
         assert!(result.result.unwrap().is_none());
-        assert!(result.sent.is_empty());
+        assert_eq!(result.sent, []);
         result.events.into_iter().any(|event| {
             matches!(
                 event,
@@ -205,7 +205,7 @@ fn p99_completed_translocate_cannot_reopen_or_move_through_an_old_echo() {
         10.0f32.to_bits()
     );
     assert_replay_withheld(&mut visit, kind, 10.0);
-    assert!(visit.answer(first, true).sent.is_empty());
+    assert_eq!(visit.answer(first, true).sent, []);
     assert!(!complete(&mut visit, 10.0));
 
     let (next, _) = issued(&mut visit, kind, 20.0);
@@ -262,5 +262,5 @@ fn p99_skill_update_remains_authoritative_without_releasing_practice() {
     let player = visit.world.player.as_ref().unwrap();
     assert_eq!(player.skills.as_ref().unwrap()[30], 13);
     assert_eq!(player.practice_points, Some(3));
-    assert!(visit.command(request(train)).sent.is_empty());
+    assert_eq!(visit.command(request(train)).sent, []);
 }

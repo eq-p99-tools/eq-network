@@ -192,7 +192,7 @@ mod tests {
         for discipline in Discipline::SUPPORTED {
             let report = testing::run(|out| casting.handle(&command(discipline), &mut world, out));
             report.result.unwrap();
-            assert!(report.sent.is_empty());
+            assert_eq!(report.sent, []);
         }
         let admission = testing::run(|out| casting.admitted(&mut world, out));
         admission.result.unwrap();

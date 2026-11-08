@@ -576,7 +576,7 @@ mod tests {
         else {
             panic!("expected the named question");
         };
-        assert!(offered.sent.is_empty());
+        assert_eq!(offered.sent, []);
         let selected =
             testing::run(|out| feature.handle(&answer(question.id, true), &mut world, out));
         assert_eq!(
@@ -596,8 +596,10 @@ mod tests {
         assert!(matches!(
             world.take_news().as_slice(),
             [Message::ZoneOffer(move_offer)] if move_offer.zone_id == 4
-                && move_offer.reason == 8 && move_offer.position.heading == 64.0
-                && move_offer.position.x == 34.0 && move_offer.position.y == 12.0
+                && move_offer.reason == 8
+                && move_offer.position.heading.to_bits() == 64.0_f32.to_bits()
+                && move_offer.position.x.to_bits() == 34.0_f32.to_bits()
+                && move_offer.position.y.to_bits() == 12.0_f32.to_bits()
         ));
         testing::run(|out| feature.observe(&complete, &mut world, out))
             .result
@@ -618,7 +620,7 @@ mod tests {
         selected.result.unwrap();
         let expired = testing::run(|out| feature.tick(question.expires_at, &mut world, out));
         expired.result.unwrap();
-        assert!(expired.sent.is_empty());
+        assert_eq!(expired.sent, []);
         testing::run(|out| feature.observe(&message(7, 1), &mut world, out))
             .result
             .unwrap();

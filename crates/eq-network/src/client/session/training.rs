@@ -1,5 +1,5 @@
 //! Training skills at an in-reach guildmaster of the player's class.
-//! EQEmu retains its existing skill and balance projection. P99 permits one
+//! `EQEmu` retains its existing skill and balance projection. P99 permits one
 //! opening per trainer and one unresolved practice per admission. Received
 //! skill values remain authoritative without establishing a practice spend.
 use super::{
@@ -106,7 +106,7 @@ impl Training {
         Ok(())
     }
 
-    /// Opens training with a guildmaster, leaving any other first on EQEmu.
+    /// Opens training with a guildmaster, leaving any other first on `EQEmu`.
     fn open(
         &mut self,
         command: &ClientCommand,
@@ -456,7 +456,7 @@ impl Feature for Training {
         Ok(())
     }
 
-    /// Scopes opening replies and preserves EQEmu's existing skill projection.
+    /// Scopes opening replies and preserves `EQEmu`'s existing skill projection.
     fn explain(&mut self, message: &mut Message, world: &World) {
         if let Message::TrainingReply(reply) = message {
             if !self.p99 {
@@ -793,8 +793,8 @@ mod tests {
         (message, outcome.events)
     }
 
-    fn reply(trainer: u16, trainee: u16, accepted: bool) -> Message {
-        let mut body = training::titanium_open(trainer, trainee).body;
+    fn reply(trainer: u16, recipient: u16, accepted: bool) -> Message {
+        let mut body = training::titanium_open(trainer, recipient).body;
         body[412] = u8::from(accepted);
         body[8 + 30 * 4] = 200;
         eq_network_game::message::titanium(training::OFFER_OPCODE, &body).remove(0)
@@ -857,7 +857,7 @@ mod tests {
                 );
             }
             let repeated = open(&mut training, &mut world, 42);
-            assert!(repeated.sent.is_empty());
+            assert_eq!(repeated.sent, []);
             assert_eq!(
                 refusals(&repeated.events),
                 ["Re-enter the zone before asking this guildmaster again."]
@@ -894,7 +894,7 @@ mod tests {
             ["The guildmaster has not answered. The outcome is unknown."]
         );
         assert!(training.trainer.is_none());
-        assert!(open(&mut training, &mut world, 42).sent.is_empty());
+        assert_eq!(open(&mut training, &mut world, 42).sent, []);
     }
 
     #[test]
@@ -936,7 +936,7 @@ mod tests {
                 )))] if *got == value
             ));
             assert_eq!(training.pending.len(), 1);
-            assert!(handle(&mut training, &mut world, request).sent.is_empty());
+            assert_eq!(handle(&mut training, &mut world, request).sent, []);
             let expired =
                 testing::run(|out| training.tick(Instant::now() + ANSWER_WAIT, &mut world, out));
             assert!(matches!(
@@ -945,8 +945,8 @@ mod tests {
                     TrainingUpdate::Practice(PracticeUpdate::Unanswered { skill: 30 })
                 ))]
             ));
-            assert!(expired.sent.is_empty());
-            assert!(handle(&mut training, &mut world, request).sent.is_empty());
+            assert_eq!(expired.sent, []);
+            assert_eq!(handle(&mut training, &mut world, request).sent, []);
             assert_eq!(training.points, None);
         }
     }
@@ -1006,13 +1006,15 @@ mod tests {
             ));
             assert!(events.is_empty());
             assert!(world.take_news().is_empty());
-            assert!(handle(
-                &mut training,
-                &mut world,
-                TrainingRequest::TrainAt { trainer: 45, skill }
-            )
-            .sent
-            .is_empty());
+            assert_eq!(
+                handle(
+                    &mut training,
+                    &mut world,
+                    TrainingRequest::TrainAt { trainer: 45, skill }
+                )
+                .sent,
+                []
+            );
         }
     }
 

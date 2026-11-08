@@ -2613,25 +2613,17 @@ mod tests {
         }
         assert!(p99.contains(&Capability::Falling));
         assert!(p99.contains(&Capability::Jumping));
-        assert!(p99.contains(&Capability::Reading));
         assert!(!p99.contains(&Capability::GroundDropping));
         let eqemu = features(crate::client::ServerProtocol::EqEmu).capabilities();
         assert!(!eqemu.contains(&Capability::GroundDropping));
         assert!(eqemu.contains(&Capability::Falling));
-        assert!(eqemu.contains(&Capability::Reading));
-        assert!(eqemu.contains(&Capability::Tradeskills));
-        assert!(p99.contains(&Capability::Tradeskills));
         assert!(eqemu.contains(&Capability::WorldContainers));
         assert!(!p99.contains(&Capability::WorldContainers));
         assert!(eqemu.contains(&Capability::Map));
         assert!(eqemu.contains(&Capability::DeletingSpells));
-        assert!(eqemu.contains(&Capability::MovingSpells));
         assert!(!p99.contains(&Capability::DeletingSpells));
-        assert!(p99.contains(&Capability::MovingSpells));
         assert!(eqemu.contains(&Capability::MerchantOffers));
         assert!(!p99.contains(&Capability::MerchantOffers));
-        assert!(eqemu.contains(&Capability::Grouping));
-        assert!(p99.contains(&Capability::Grouping));
         assert!(eqemu.contains(&Capability::Listing));
         assert!(!p99.contains(&Capability::Listing));
         for capability in [
@@ -2654,6 +2646,11 @@ mod tests {
             Capability::CancellingBuffs,
             Capability::KnightAbilities,
             Capability::UsingDisciplines,
+            Capability::Reading,
+            Capability::Tradeskills,
+            Capability::MovingSpells,
+            Capability::Grouping,
+            Capability::GameplayDepartures,
         ] {
             assert!(p99.contains(&capability), "{capability:?}");
             assert!(eqemu.contains(&capability), "{capability:?}");
@@ -2674,8 +2671,6 @@ mod tests {
         }
         assert!(p99.contains(&Capability::AnsweringListPolls));
         assert!(!eqemu.contains(&Capability::AnsweringListPolls));
-        assert!(eqemu.contains(&Capability::GameplayDepartures));
-        assert!(p99.contains(&Capability::GameplayDepartures));
         assert!(eqemu.contains(&Capability::Swimming));
         assert!(!p99.contains(&Capability::Swimming));
         // P99 gained the four progression capabilities above. Both policies

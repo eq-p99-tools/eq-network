@@ -473,7 +473,7 @@ mod tests {
         };
         let trigger = testing::run(|out| transfers.handle(&cross, &mut world, out));
         trigger.result.unwrap();
-        assert!(trigger.sent.is_empty());
+        assert_eq!(trigger.sent, []);
         assert!(matches!(
             trigger.events.as_slice(),
             [ClientEvent::World(WorldEvent::SameZoneBoundary {
@@ -494,7 +494,7 @@ mod tests {
         let arrival =
             testing::run(|out| transfers.observe(&Message::ZoneOffer(offer), &mut world, out));
         arrival.result.unwrap();
-        assert!(arrival.sent.is_empty());
+        assert_eq!(arrival.sent, []);
         let landing = Position {
             x: 999_999.0,
             y: 72.0,
