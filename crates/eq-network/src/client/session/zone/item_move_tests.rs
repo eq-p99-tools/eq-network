@@ -98,17 +98,15 @@ fn stack(slot: i32, count: u32) -> InventoryItem {
     item
 }
 
-#[test]
-fn p99_forge_moves_are_single_whole_places_and_need_current_empty_cursor_custody_to_withdraw() {
+fn open_p99_forge_with_current_cursor(features: &mut Features, world: &mut World) {
     use eq_network_game::objects::{ContainerView, GroundObject};
 
     let protocol = ServerProtocol::Project1999;
-    let (mut features, mut world) = setup(protocol, vec![stack(30, 1)]);
     let server = servers::server_type(protocol);
     let object = ObjectUpdate::Spawn(GroundObject {
         drop_id: 71,
         model: "FORGE_ACTORDEF".into(),
-        position: Default::default(),
+        position: eq_network_game::world::Position::default(),
         object_type: 0,
     });
     let reply = ObjectUpdate::Container(ContainerView {
@@ -122,8 +120,8 @@ fn p99_forge_moves_are_single_whole_places_and_need_current_empty_cursor_custody
     testing::run_on(server.wire(), |out| {
         hear(
             vec![Message::Event(WorldEvent::Objects(object))],
-            &mut features,
-            &mut world,
+            features,
+            world,
             out,
             true,
         )
@@ -135,35 +133,30 @@ fn p99_forge_moves_are_single_whole_places_and_need_current_empty_cursor_custody
         drop_id: 71,
         created: Instant::now(),
     };
-    let stash = command(&world, 30, 23, MoveQuantity::Whole);
-    let moved = submit(protocol, &mut features, &mut world, &stash);
+    let stash = command(world, 30, 23, MoveQuantity::Whole);
+    let moved = submit(protocol, features, world, &stash);
     assert!(moved.result.unwrap());
     assert_eq!(moved.sent.len(), 1);
-    observe(
-        protocol,
-        &mut features,
-        &mut world,
-        InventoryUpdate::Settled,
-    );
+    observe(protocol, features, world, InventoryUpdate::Settled);
     assert!(!world.inventory.predicted());
     assert!(!world.inventory.custody_known(InventorySlot::CURSOR));
-    let denied = submit(protocol, &mut features, &mut world, &open());
+    let denied = submit(protocol, features, world, &open());
     assert!(denied.result.unwrap());
     assert!(denied.sent.is_empty());
     observe(
         protocol,
-        &mut features,
-        &mut world,
+        features,
+        world,
         InventoryUpdate::Remove(InventorySlot::CURSOR),
     );
-    let opened = submit(protocol, &mut features, &mut world, &open());
+    let opened = submit(protocol, features, world, &open());
     assert!(opened.result.unwrap());
     assert_eq!(opened.sent.len(), 1);
     testing::run_on(server.wire(), |out| {
         hear(
             vec![Message::Event(WorldEvent::Objects(reply))],
-            &mut features,
-            &mut world,
+            features,
+            world,
             out,
             true,
         )
@@ -171,7 +164,15 @@ fn p99_forge_moves_are_single_whole_places_and_need_current_empty_cursor_custody
     .result
     .unwrap();
     assert!(world.container.is_open());
+}
 
+#[test]
+fn p99_forge_moves_require_single_whole_places_and_current_empty_withdrawal_cursor() {
+    use eq_network_game::money::Wallet;
+
+    let protocol = ServerProtocol::Project1999;
+    let (mut features, mut world) = setup(protocol, vec![stack(30, 1)]);
+    open_p99_forge_with_current_cursor(&mut features, &mut world);
     let place = |world: &World, quantity| command(world, 30, 4000, quantity);
     let count_one = MoveQuantity::Count(NonZeroU32::new(1).unwrap());
     for (count, quantity) in [(2, MoveQuantity::Whole), (2, count_one), (1, count_one)] {
@@ -204,6 +205,19 @@ fn p99_forge_moves_are_single_whole_places_and_need_current_empty_cursor_custody
         &mut world,
         InventoryUpdate::Remove(InventorySlot::CURSOR),
     );
+    world.coins = Wallet {
+        cursor: Coins {
+            copper: 1,
+            ..Coins::default()
+        },
+        ..Wallet::default()
+    }
+    .into();
+    let withdrawal = withdraw(&world);
+    let denied = submit(protocol, &mut features, &mut world, &withdrawal);
+    assert!(denied.result.unwrap());
+    assert!(denied.sent.is_empty());
+    world.coins = Wallet::default().into();
     let withdrawal = withdraw(&world);
     let withdrawn = submit(protocol, &mut features, &mut world, &withdrawal);
     assert!(withdrawn.result.unwrap());

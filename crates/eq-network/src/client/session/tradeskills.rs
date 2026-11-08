@@ -86,6 +86,20 @@ impl OpenContainer {
         matches!(&self.0, Some(Container::Open { view: opened, .. }) if opened == view)
     }
 
+    fn may_close(&self, drop_id: u32, created: Instant) -> bool {
+        match &self.0 {
+            Some(Container::Open { view, received, .. }) => {
+                view.drop_id == drop_id && created >= *received
+            }
+            Some(Container::Asked {
+                drop_id: asked,
+                submitted,
+                ..
+            }) => *asked == drop_id && created >= *submitted,
+            _ => false,
+        }
+    }
+
     fn closing(view: &ContainerView, owned: bool) -> Container {
         Container::Closing {
             view: view.clone(),
@@ -164,7 +178,8 @@ impl OpenContainer {
             );
         } else {
             ensure!(
-                world.inventory.custody_known(InventorySlot::CURSOR),
+                world.inventory.custody_known(InventorySlot::CURSOR)
+                    && world.coins.cursor.is_empty(),
                 "Wait for a current empty cursor before withdrawing from the forge"
             );
         }
@@ -371,18 +386,7 @@ impl Feature for Tradeskills {
             ClientCommand::CloseContainer {
                 drop_id, created, ..
             } => {
-                let current = match &world.container.0 {
-                    Some(Container::Open { view, received, .. }) => {
-                        view.drop_id == drop_id && created >= *received
-                    }
-                    Some(Container::Asked {
-                        drop_id: asked,
-                        submitted,
-                        ..
-                    }) => *asked == drop_id && created >= *submitted,
-                    _ => false,
-                };
-                return if current {
+                return if world.container.may_close(drop_id, created) {
                     close(world, out)
                 } else {
                     actions::refuse(command, "That container is no longer open", out.log)

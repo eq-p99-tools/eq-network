@@ -231,28 +231,12 @@ fn eqemu_ordered_reopen_fences_close_after_a_reset_with_or_without_combine_clear
     for combine_clears in [false, true] {
         let mut features = Features::new(server, "Tester", AutoEat::default());
         let (_, mut world) = setup();
-        let object = Message::Event(WorldEvent::Objects(ObjectUpdate::Spawn(GroundObject {
-            drop_id: 71,
-            model: "FORGE".into(),
-            position: Default::default(),
-            object_type: 17,
-        })));
+        let (object, reply) = eqemu_forge();
+        let reply = || Message::Event(WorldEvent::Objects(reply.clone()));
         let open = || ClientCommand::OpenContainer {
             session_id: 5,
             drop_id: 71,
             created: Instant::now(),
-        };
-        let reply = || {
-            Message::Event(WorldEvent::Objects(ObjectUpdate::Container(
-                ContainerView {
-                    player_id: 7,
-                    drop_id: 71,
-                    open: true,
-                    object_type: 17,
-                    icon: 1,
-                    name: "Forge".into(),
-                },
-            )))
         };
         let clear = || Message::Event(WorldEvent::Inventory(InventoryUpdate::WorldEmptied));
         let content = || {
@@ -345,6 +329,24 @@ fn eqemu_ordered_reopen_fences_close_after_a_reset_with_or_without_combine_clear
             2
         );
     }
+}
+
+fn eqemu_forge() -> (Message, ObjectUpdate) {
+    let object = ObjectUpdate::Spawn(GroundObject {
+        drop_id: 71,
+        model: "FORGE".into(),
+        position: eq_network_game::world::Position::default(),
+        object_type: 17,
+    });
+    let reply = ObjectUpdate::Container(ContainerView {
+        player_id: 7,
+        drop_id: 71,
+        open: true,
+        object_type: 17,
+        icon: 1,
+        name: "Forge".into(),
+    });
+    (Message::Event(WorldEvent::Objects(object)), reply)
 }
 
 #[test]

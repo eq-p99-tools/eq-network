@@ -2,6 +2,7 @@
 //! different hash inputs for bags, books, charms, and ordinary items.
 use crate::{chat::ItemLink, inventory::InventoryItem};
 use anyhow::{ensure, Context, Result};
+use std::fmt::Write;
 
 pub(crate) fn hash(header: &[&str], fields: &[&str]) -> Option<u32> {
     // The legacy header ends at the evolution flag for ordinary records.
@@ -29,11 +30,11 @@ pub(crate) fn hash(header: &[&str], fields: &[&str]) -> Option<u32> {
         1 => {
             let capacity = byte(97)?;
             let reduction = byte(99)?;
-            input.push_str(&format!("{capacity:x}{reduction}{price:09X}{weight}"));
+            write!(input, "{capacity:x}{reduction}{price:09X}{weight}").ok()?;
         }
         2 => {
             let book_type = i8::try_from(number(101)?).ok()?;
-            input.push_str(&format!("{weight}{book_type}{price:09X}"));
+            write!(input, "{weight}{book_type}{price:09X}").ok()?;
         }
         0 => {
             // This inventory projection does not model augment custody.
@@ -55,13 +56,13 @@ pub(crate) fn hash(header: &[&str], fields: &[&str]) -> Option<u32> {
                 let hp = number(28)?;
                 let required_level = number(40)?.max(0);
                 let ac = number(30)?;
-                input.push_str(&format!(
+                write!(input,
                     "{mana} {hp} {favor} {light} {icon} {price} {weight} {required_level} {size} {item_class} {item_type} {ac} {guild_favor}"
-                ));
+                ).ok()?;
             } else {
-                input.push_str(&format!(
+                write!(input,
                     "{light} {icon} {price} {size} {weight} {item_class} {item_type} {favor} {guild_favor}"
-                ));
+                ).ok()?;
             }
         }
         _ => return None,

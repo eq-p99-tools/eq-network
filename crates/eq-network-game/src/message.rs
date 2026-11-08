@@ -130,42 +130,7 @@ pub fn titanium(opcode: u16, body: &[u8]) -> Vec<Message> {
             |error| unreadable(Part::ZoneOffer, &error),
             Message::ZoneOffer,
         ),
-        PROFILE_OPCODE => {
-            messages.extend(crate::knights::titanium_profile(body).map(Message::KnightRefresh));
-            match crate::group::titanium_profile(body) {
-                Ok(group) => {
-                    messages.extend(group.map(|update| Message::Event(WorldEvent::Group(update))));
-                }
-                Err(error) => messages.push(unreadable(Part::World, &error)),
-            }
-            messages.push(crate::buffs::titanium_profile(body).map_or_else(
-                |error| unreadable(Part::World, &error),
-                |buffs| Message::Event(WorldEvent::BuffSnapshot(buffs)),
-            ));
-            messages.push(crate::world::titanium_coins(body).map_or_else(
-                |error| unreadable(Part::World, &error),
-                |coins| Message::Event(WorldEvent::Coins(coins)),
-            ));
-            messages.push(crate::food::titanium_profile(body).map_or_else(
-                |error| unreadable(Part::World, &error),
-                |nourishment| Message::Event(WorldEvent::Nourishment(nourishment)),
-            ));
-            messages.push(crate::money::titanium_elsewhere(body).map_or_else(
-                |error| unreadable(Part::World, &error),
-                |(cursor, bank)| {
-                    Message::Event(WorldEvent::CoinsElsewhere {
-                        cursor,
-                        bank,
-                        given: crate::world::Coins::default(),
-                        offered: crate::world::Coins::default(),
-                    })
-                },
-            ));
-            spells::SpellBook::titanium_profile(body).map_or_else(
-                |error| unreadable(Part::Spells, &error),
-                |book| Message::Event(WorldEvent::SpellBook(book)),
-            )
-        }
+        PROFILE_OPCODE => titanium_profile_messages(body, &mut messages),
         zoning::CHANGE_OPCODE => zoning::ZoneAnswer::titanium(body).map_or_else(
             |error| unreadable(Part::ZoneAnswer, &error),
             Message::ZoneAnswer,
@@ -217,6 +182,41 @@ pub fn titanium(opcode: u16, body: &[u8]) -> Vec<Message> {
     };
     messages.push(message);
     messages
+}
+
+fn titanium_profile_messages(body: &[u8], messages: &mut Vec<Message>) -> Message {
+    messages.extend(crate::knights::titanium_profile(body).map(Message::KnightRefresh));
+    match crate::group::titanium_profile(body) {
+        Ok(group) => messages.extend(group.map(|update| Message::Event(WorldEvent::Group(update)))),
+        Err(error) => messages.push(unreadable(Part::World, &error)),
+    }
+    messages.push(crate::buffs::titanium_profile(body).map_or_else(
+        |error| unreadable(Part::World, &error),
+        |buffs| Message::Event(WorldEvent::BuffSnapshot(buffs)),
+    ));
+    messages.push(crate::world::titanium_coins(body).map_or_else(
+        |error| unreadable(Part::World, &error),
+        |coins| Message::Event(WorldEvent::Coins(coins)),
+    ));
+    messages.push(crate::food::titanium_profile(body).map_or_else(
+        |error| unreadable(Part::World, &error),
+        |nourishment| Message::Event(WorldEvent::Nourishment(nourishment)),
+    ));
+    messages.push(crate::money::titanium_elsewhere(body).map_or_else(
+        |error| unreadable(Part::World, &error),
+        |(cursor, bank)| {
+            Message::Event(WorldEvent::CoinsElsewhere {
+                cursor,
+                bank,
+                given: crate::world::Coins::default(),
+                offered: crate::world::Coins::default(),
+            })
+        },
+    ));
+    spells::SpellBook::titanium_profile(body).map_or_else(
+        |error| unreadable(Part::Spells, &error),
+        |book| Message::Event(WorldEvent::SpellBook(book)),
+    )
 }
 
 /// What one `EQMac` zone packet says: the spawns and the player's news that
