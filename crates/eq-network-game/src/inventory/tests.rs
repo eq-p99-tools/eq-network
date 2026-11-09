@@ -33,12 +33,98 @@ fn projected_cursor_eligibility_keeps_correction_drop_and_trade_fences() {
     assert!(!destroy.projected_cursor_empty());
 
     inventory.apply(InventoryUpdate::Prediction(at(3000, 46)));
-    inventory.apply(InventoryUpdate::TradeEmptied);
     inventory.apply(InventoryUpdate::Settled);
     assert!(!inventory.projected_cursor_empty());
+    let mut kept = inventory.clone();
     inventory.apply(InventoryUpdate::Snapshot(Vec::new()));
     assert!(inventory.projected_cursor_empty());
     assert!(inventory.custody_known(cursor));
+
+    // The window closed and its refusal window passed without a return:
+    // the receiver kept the item, so nothing more comes back to the cursor.
+    kept.apply(InventoryUpdate::TradeEmptied);
+    assert!(!kept.projected_cursor_empty());
+    assert!(kept.has_settleable_moves());
+    kept.apply(InventoryUpdate::Settled);
+    assert!(kept.projected_cursor_empty());
+    assert!(!kept.has_settleable_moves());
+}
+
+#[test]
+fn a_closed_give_bounds_later_pickups_and_settles() {
+    use crate::GameDialect::Titanium;
+
+    let cursor = InventorySlot::CURSOR;
+    let at = |slot: InventorySlot, serial: u32| {
+        let mut item = titanium::parse(wire(slot.0, 42, 0, false, 0, &[]).as_bytes())
+            .unwrap()
+            .remove(0);
+        item.rules.ground_drop_serial = NonZeroU32::new(serial);
+        item.details.weight_tenths = 50;
+        item
+    };
+    let mut inventory = Inventory::default();
+    inventory.apply(InventoryUpdate::Snapshot(vec![
+        at(cursor, 1),
+        at(InventorySlot(23), 2),
+        at(InventorySlot(24), 3),
+    ]));
+    inventory.apply(InventoryUpdate::Prediction(vec![
+        at(InventorySlot(3000), 1),
+        at(InventorySlot(23), 2),
+        at(InventorySlot(24), 3),
+    ]));
+    inventory.apply(InventoryUpdate::Settled);
+    inventory.apply(InventoryUpdate::TradeEmptied);
+
+    // A pickup after the close keeps the given item as an upper bound.
+    let mut single = inventory.clone();
+    single.apply(InventoryUpdate::Prediction(vec![
+        at(cursor, 2),
+        at(InventorySlot(24), 3),
+    ]));
+    assert_eq!(single.carried_weight_tenths(Titanium, 0), Ok(150));
+    assert!(single.carried_weight_is_conservative());
+    assert!(single.has_settleable_moves());
+    single.apply(InventoryUpdate::Settled);
+    assert_eq!(single.carried_weight_tenths(Titanium, 0), Ok(100));
+    assert!(!single.carried_weight_is_conservative());
+    assert!(!single.has_settleable_moves());
+
+    // A second item offered while the window is open makes the return
+    // unknown until the window closes and settles.
+    let mut multiple = Inventory::default();
+    multiple.apply(InventoryUpdate::Snapshot(vec![
+        at(cursor, 1),
+        at(InventorySlot(23), 2),
+        at(InventorySlot(24), 3),
+    ]));
+    multiple.apply(InventoryUpdate::Prediction(vec![
+        at(InventorySlot(3000), 1),
+        at(InventorySlot(23), 2),
+        at(InventorySlot(24), 3),
+    ]));
+    multiple.apply(InventoryUpdate::Prediction(vec![
+        at(cursor, 2),
+        at(InventorySlot(3000), 1),
+        at(InventorySlot(24), 3),
+    ]));
+    multiple.apply(InventoryUpdate::Prediction(vec![
+        at(InventorySlot(3000), 1),
+        at(InventorySlot(3001), 2),
+        at(InventorySlot(24), 3),
+    ]));
+    multiple.apply(InventoryUpdate::Settled);
+    assert_eq!(
+        multiple.carried_weight_tenths(Titanium, 0),
+        Err(WeightUnavailable::Prediction)
+    );
+    assert!(!multiple.has_settleable_moves());
+    multiple.apply(InventoryUpdate::TradeEmptied);
+    assert!(multiple.has_settleable_moves());
+    multiple.apply(InventoryUpdate::Settled);
+    assert_eq!(multiple.carried_weight_tenths(Titanium, 0), Ok(50));
+    assert!(multiple.projected_cursor_empty());
 }
 
 #[test]
@@ -58,10 +144,10 @@ fn a_received_same_instance_in_carried_inventory_resolves_cursor_trade_custody()
         let mut inventory = Inventory::default();
         inventory.apply(InventoryUpdate::Snapshot(vec![at(cursor)]));
         inventory.apply(InventoryUpdate::Prediction(vec![at(InventorySlot(3000))]));
+        inventory.apply(InventoryUpdate::Settled);
         if !received_before_close {
             inventory.apply(InventoryUpdate::TradeEmptied);
         }
-        inventory.apply(InventoryUpdate::Settled);
         assert!(!inventory.projected_cursor_empty());
         assert!(!inventory.custody_known(cursor));
         assert_eq!(inventory.carried_weight_tenths(Titanium, 0), Ok(50));

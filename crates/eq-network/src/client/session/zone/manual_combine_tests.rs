@@ -488,8 +488,15 @@ fn eqemu_ordinary_moves_settle_with_pending_or_blocked_station_custody() {
             let move_away = move_item(&world, destination - 1, destination);
             apply_commands(&[move_away], &mut features, &mut world, out, true)?;
             assert_eq!(world.inventory.unresolved_predictions(), 2);
-            features.tick(Instant::now() + Duration::from_secs(3), &mut world, out)?;
-            settle(&mut features, &mut world, out, true)?;
+            // A detached station gets its own refusal window first.
+            for seconds in [3, 6] {
+                features.tick(
+                    Instant::now() + Duration::from_secs(seconds),
+                    &mut world,
+                    out,
+                )?;
+                settle(&mut features, &mut world, out, true)?;
+            }
             let still_open = destination == 25;
             assert_eq!(
                 world.inventory.unresolved_predictions(),
@@ -501,12 +508,14 @@ fn eqemu_ordinary_moves_settle_with_pending_or_blocked_station_custody() {
                 world.inventory.items().contains_key(&InventorySlot(4000)),
                 still_open
             );
-            assert_eq!(
-                world
-                    .inventory
-                    .carried_weight_tenths(GameDialect::Titanium, 0),
-                Err(WeightUnavailable::Prediction)
-            );
+            let weight = world
+                .inventory
+                .carried_weight_tenths(GameDialect::Titanium, 0);
+            if still_open {
+                assert_eq!(weight, Err(WeightUnavailable::Prediction));
+            } else {
+                assert!(weight.is_ok());
+            }
             if destination == 25 {
                 hear(
                     vec![Message::Event(WorldEvent::Objects(replacement.clone()))],
@@ -527,20 +536,7 @@ fn eqemu_ordinary_moves_settle_with_pending_or_blocked_station_custody() {
             }
         }
         assert!(!world.inventory.custody_known(InventorySlot::CURSOR));
-        hear(
-            vec![Message::Event(WorldEvent::Inventory(
-                InventoryUpdate::Remove(InventorySlot::CURSOR),
-            ))],
-            &mut features,
-            &mut world,
-            out,
-            true,
-        )?;
-        assert!(world.inventory.custody_known(InventorySlot::CURSOR));
-        assert!(world
-            .inventory
-            .carried_weight_tenths(GameDialect::Titanium, 0)
-            .is_ok());
+        assert!(!world.inventory.handoff_returns_unsettled());
         assert!(!world.container.is_open());
         Ok(())
     });
@@ -552,6 +548,108 @@ fn eqemu_ordinary_moves_settle_with_pending_or_blocked_station_custody() {
             .map(|packet| packet.opcode)
             .collect::<Vec<_>>(),
         [0x3bc2, 0x420f, 0x420f, 0x420f]
+    );
+}
+
+#[test]
+fn an_eqemu_combine_product_on_the_cursor_settles_ingredients_from_packs() {
+    use eq_network_game::{inventory::WeightUnavailable, GameDialect};
+
+    let server = servers::server_type(ServerProtocol::EqEmu);
+    let mut features = Features::new(server, "Tester", AutoEat::default());
+    let (_, mut world) = setup();
+    let (object, reply) = eqemu_forge();
+    let ingredient = |slot: i32, id: u32| {
+        let mut item = testing::item(slot);
+        item.details.id = id;
+        item.details.weight_tenths = 15;
+        item
+    };
+    let mut kept = testing::item(25);
+    kept.details.id = 9;
+    kept.details.weight_tenths = 10;
+    let mut inventory = Inventory::default();
+    inventory.apply(InventoryUpdate::Snapshot(vec![
+        ingredient(22, 7),
+        ingredient(23, 8),
+        kept,
+    ]));
+    world.inventory = inventory.into();
+    let outcome = testing::run_on(server.wire(), |out| -> Result<()> {
+        hear(vec![object], &mut features, &mut world, out, true)?;
+        apply_commands(
+            &[ClientCommand::OpenContainer {
+                session_id: 5,
+                drop_id: 71,
+                created: Instant::now(),
+            }],
+            &mut features,
+            &mut world,
+            out,
+            true,
+        )?;
+        hear(
+            vec![Message::Event(WorldEvent::Objects(reply))],
+            &mut features,
+            &mut world,
+            out,
+            true,
+        )?;
+        for (from, place) in [(22, 4000), (23, 4001)] {
+            let pick = move_item(&world, from, 30);
+            apply_commands(&[pick], &mut features, &mut world, out, true)?;
+            let place = move_item(&world, 30, place);
+            apply_commands(&[place], &mut features, &mut world, out, true)?;
+        }
+        assert_eq!(
+            world
+                .inventory
+                .carried_weight_tenths(GameDialect::Titanium, 0),
+            Err(WeightUnavailable::Prediction)
+        );
+        // Stock EQEmu clears the station, then pushes the product on the cursor.
+        let mut product = testing::item(30);
+        product.details.id = 11;
+        product.details.weight_tenths = 20;
+        hear(
+            vec![
+                Message::Event(WorldEvent::Inventory(InventoryUpdate::WorldEmptied)),
+                Message::Event(WorldEvent::Inventory(InventoryUpdate::Cursor(vec![
+                    product,
+                ]))),
+            ],
+            &mut features,
+            &mut world,
+            out,
+            true,
+        )?;
+        features.tick(Instant::now() + Duration::from_secs(3), &mut world, out)?;
+        settle(&mut features, &mut world, out, true)?;
+        assert_eq!(
+            world
+                .inventory
+                .carried_weight_tenths(GameDialect::Titanium, 0),
+            Err(WeightUnavailable::Prediction)
+        );
+        features.tick(Instant::now() + Duration::from_secs(6), &mut world, out)?;
+        settle(&mut features, &mut world, out, true)?;
+        assert!(!world.inventory.handoff_returns_unsettled());
+        assert_eq!(
+            world
+                .inventory
+                .carried_weight_tenths(GameDialect::Titanium, 0),
+            Ok(30)
+        );
+        Ok(())
+    });
+    outcome.result.unwrap();
+    assert_eq!(
+        outcome
+            .sent
+            .iter()
+            .map(|packet| packet.opcode)
+            .collect::<Vec<_>>(),
+        [0x3bc2, 0x420f, 0x420f, 0x420f, 0x420f]
     );
 }
 

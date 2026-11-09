@@ -413,11 +413,13 @@ pub struct Inventory {
     /// An incoming record contradicted an earlier projected cursor move.
     #[serde(skip)]
     cursor_projection_blocked: bool,
-    /// A projected handoff may leave a delayed return after the window closes.
+    /// A projected handoff may leave a return until the trade slots empty and
+    /// the refusal window after that settles.
     #[serde(skip)]
     trade_cursor: TradeCursor,
     /// Carried endpoints touched by a station move, including empty slots.
-    /// A station clear or a detached view has no coverage for these slots.
+    /// A station clear or a detached view does not cover these slots itself;
+    /// the refusal window after it settles them.
     #[serde(skip)]
     station_carried: BTreeSet<InventorySlot>,
     /// Identity of a single whole item placed directly from the cursor.
@@ -567,7 +569,8 @@ impl Inventory {
     #[must_use]
     pub fn has_settleable_moves(&self) -> bool {
         let station_pending = self.station_moves_unconfirmed();
-        self.weight_history_uncertain
+        self.handoff_returns_settleable()
+            || self.weight_history_uncertain
             || !self.weight_rebased.is_empty()
             || self
                 .stack_weight
@@ -582,6 +585,35 @@ impl Inventory {
                             .get(&slot)
                             .is_some_and(|custody| custody.station))
             })
+    }
+
+    /// A station or trade route still holds carried weight or equipment
+    /// uncertain until its window closes and the refusal window settles it.
+    #[must_use]
+    pub fn handoff_returns_unsettled(&self) -> bool {
+        !self.station_carried.is_empty()
+            || !self.station_equipment_uncertainty.is_empty()
+            || self.trade_cursor != TradeCursor::Clear
+    }
+
+    /// A station or trade route whose window closed (station cleared or
+    /// detached, trade slots empty). `EQEmu` sends what it hands back as item
+    /// records in the same frame as the close, so once the refusal window
+    /// passes after the close they have covered the slots they landed in.
+    #[must_use]
+    pub fn handoff_returns_settleable(&self) -> bool {
+        (!self.station_moves_unconfirmed()
+            && (!self.station_carried.is_empty() || !self.station_equipment_uncertainty.is_empty()))
+            || (self.trade_cursor != TradeCursor::Clear && !self.trade_escrow_open())
+    }
+
+    /// Whether a trade or give window still holds, or is predicted to hold,
+    /// anything.
+    fn trade_escrow_open(&self) -> bool {
+        self.items
+            .keys()
+            .chain(self.projected_custody.keys())
+            .any(|slot| slot.is_in_trade())
     }
 
     /// A local move may have changed which carried slot supplies a bandage.
@@ -815,6 +847,18 @@ impl Inventory {
                         .get(slot)
                         .is_some_and(|custody| custody.station))
         });
+        if !station_pending {
+            // The station cleared or detached a refusal window ago: what it
+            // returned or produced came as item records covering their slots.
+            self.station_carried.clear();
+            self.station_equipment_uncertainty.clear();
+            self.station_cursor_return = None;
+        }
+        if !self.trade_escrow_open() {
+            // A handed-back item arrives with the window's close as its own
+            // record; one the receiver kept is not coming back.
+            self.trade_cursor = TradeCursor::Clear;
+        }
         self.equipment_uncertainty.clear();
         self.weight_rebased.clear();
         self.weight_history_uncertain = false;

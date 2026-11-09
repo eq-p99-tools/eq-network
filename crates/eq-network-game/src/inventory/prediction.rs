@@ -30,7 +30,11 @@ impl Inventory {
         });
         let cursor_slot = InventorySlot::CURSOR;
         if changed.contains(&cursor_slot) && self.trade_cursor != TradeCursor::Clear {
-            self.trade_cursor = TradeCursor::Uncertain;
+            // Once the window is empty, the offered item can only come back
+            // as its own record: its weight stays the upper bound until then.
+            if self.trade_escrow_open() || changed.iter().any(|slot| slot.is_in_trade()) {
+                self.trade_cursor = TradeCursor::Uncertain;
+            }
         } else if cursor && changed.iter().any(|slot| slot.is_in_trade()) {
             self.trade_cursor = self
                 .trade_offer(&changed, &next)

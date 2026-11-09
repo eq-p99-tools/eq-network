@@ -338,7 +338,7 @@ mod tests {
     }
 
     #[test]
-    fn a_station_clear_keeps_carried_custody_but_independent_equipment_settles() {
+    fn a_station_clear_settles_carried_custody_after_the_refusal_window() {
         use crate::GameDialect::Titanium;
 
         let ingredient = item(30, 50);
@@ -370,14 +370,15 @@ mod tests {
         ] {
             let mut inventory = inventory.clone();
             inventory.apply(clear);
-            inventory.apply(InventoryUpdate::Settled);
             assert!(!inventory.station_moves_unconfirmed());
-            assert!(!inventory.custody_known(InventorySlot::CURSOR));
+            assert!(inventory.handoff_returns_settleable());
             assert_eq!(
                 inventory.carried_weight_tenths(Titanium, 0),
                 Err(WeightUnavailable::Prediction)
             );
-            inventory.apply(InventoryUpdate::Remove(InventorySlot::CURSOR));
+            inventory.apply(InventoryUpdate::Settled);
+            assert!(!inventory.custody_known(InventorySlot::CURSOR));
+            assert!(!inventory.handoff_returns_unsettled());
             assert_eq!(inventory.carried_weight_tenths(Titanium, 0), Ok(100));
         }
     }

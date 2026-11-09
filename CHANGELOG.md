@@ -445,11 +445,17 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Fixed
 
 - Retire a displaced station's local view and settle unrelated Titanium
-  moves independently. Carried endpoints still need covering inventory
-  evidence. A P99 forge combine reset limits the remaining hold to station
+  moves independently. Carried slots a station route touched settle one
+  refusal window after the station clears or detaches, so a combine product
+  pushed on the cursor or a close no longer pauses movement for the rest of
+  the zone. A P99 forge combine reset limits the remaining hold to station
   and cursor actions while any clear is pending.
-- Let a received same-instance return resolve a whole cursor handoff.
-  Closing a trade window alone leaves its cursor custody unresolved.
+- Let a received same-instance return resolve a whole cursor handoff. Once
+  the trade slots empty, a later pickup keeps the given item's weight as an
+  upper bound, and one refusal window after the close retires the handoff,
+  so a give the receiver kept no longer pauses movement or holds the forge
+  until zoning. `Inventory::handoff_returns_unsettled` and
+  `Inventory::handoff_returns_settleable` report this state.
 - Distinguish stock evidence from a missing P99 bandaging result at expiry.
 - Keep both knight reuse deadlines if computing their replacements overflows.
 - Bind Wound's own button time now runs out in full after every use, as the

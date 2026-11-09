@@ -648,11 +648,14 @@ fn p99_forge_moves_use_the_ordered_visible_cursor_without_confirming_custody() {
             out,
             true,
         )?;
-        features.tick(
-            Instant::now() + std::time::Duration::from_secs(3),
-            &mut world,
-            out,
-        )?;
+        // The clear starts its own refusal window for what the close returns.
+        for seconds in [3, 6] {
+            features.tick(
+                Instant::now() + std::time::Duration::from_secs(seconds),
+                &mut world,
+                out,
+            )?;
+        }
         settle(&mut features, &mut world, out, true)
     })
     .result

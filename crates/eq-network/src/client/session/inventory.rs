@@ -230,23 +230,35 @@ const REFUSAL_WINDOW: Duration = Duration::from_secs(2);
 
 /// Settles moves the server has not refused in time.
 #[derive(Default)]
-struct Settlement(Option<Instant>);
+struct Settlement {
+    since: Option<Instant>,
+    /// The wait already restarted for a closed station or trade window.
+    closure_waited: bool,
+}
 
 impl Settlement {
     /// Notes a move sent at `now`; every move restarts the wait.
     fn sent(&mut self, now: Instant) {
-        self.0 = Some(now);
+        self.since = Some(now);
+        self.closure_waited = false;
     }
 
     /// The settling update, once the last move has gone unrefused for the window
-    /// and predictions remain.
+    /// and predictions remain. A station or trade window that closed later
+    /// gets its own full window, for the products and returns `EQEmu` sends
+    /// right after the clear.
     fn due(&mut self, inventory: &Inventory, now: Instant) -> Option<InventoryUpdate> {
-        let sent = self.0?;
-        if now.saturating_duration_since(sent) < REFUSAL_WINDOW {
+        let since = self.since?;
+        if now.saturating_duration_since(since) < REFUSAL_WINDOW {
             return None;
         }
-        if !inventory.station_moves_unconfirmed() {
-            self.0 = None;
+        if inventory.handoff_returns_settleable() && !self.closure_waited {
+            self.since = Some(now);
+            self.closure_waited = true;
+            return None;
+        }
+        if !inventory.station_moves_unconfirmed() && !inventory.handoff_returns_unsettled() {
+            self.since = None;
         }
         inventory
             .has_settleable_moves()
