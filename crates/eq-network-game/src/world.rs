@@ -958,6 +958,12 @@ pub enum WorldEvent {
         diagonal: crate::movement::DiagonalRates,
         /// Whether this server's session accepts `MovementMode::Fall` samples.
         falls: bool,
+        /// The share of the generation's jump speed a jump starts with now:
+        /// the health and weight factor that also slows running
+        /// (`movement::Speeds::jump_factor`); 1 where the session does not
+        /// work speeds out itself.
+        #[serde(default = "crate::movement::full_jump")]
+        jump_factor: f32,
     },
     /// The worker's local result for a movement sample. Accepted samples may
     /// be held for pacing or left unchanged by the update gate.

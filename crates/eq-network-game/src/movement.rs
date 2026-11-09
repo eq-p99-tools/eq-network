@@ -111,6 +111,13 @@ pub fn fall_speed(gravity: Option<f32>) -> f32 {
 /// sitting 2, M1), 44.55 units a second.
 pub const JUMP_SPEED: f32 = 1.65 * 1.35 * 20.0;
 
+/// A jump's whole starting speed: the factor of a player whose health and
+/// weight take nothing from it.
+#[must_use]
+pub const fn full_jump() -> f32 {
+    1.0
+}
+
 /// A zone's gravity in world units per second squared: the header's +420
 /// field is the fall speed added each 50 ms step, so 160 at the default 0.4.
 /// A header the program would read as the default counts as it, as in
@@ -439,6 +446,11 @@ pub struct MovementGuard {
     /// starting speed and the zone's gravity, in units a second and a second
     /// squared.
     jump: Option<(f32, f32)>,
+    /// The share of the jump's starting speed the player has now: the
+    /// program's health and weight factor ([`Self::set_jump_factor`]).
+    jump_factor: f32,
+    /// The share the latest announced jump started with.
+    launch_factor: f32,
     /// When the latest jump the session announced started, until gravity
     /// has spent its speed.
     jumped_at: Option<JumpStart>,
@@ -481,6 +493,8 @@ impl MovementGuard {
             fall_speed: MAX_FALL_SPEED,
             climb: None,
             jump: None,
+            jump_factor: 1.0,
+            launch_factor: 1.0,
             jumped_at: None,
             last_shoreline: None,
             shoreline: None,
@@ -499,12 +513,31 @@ impl MovementGuard {
         });
     }
 
+    /// Sets the share of the jump's starting speed the player has: the
+    /// Titanium program launches a jump at its health and weight factor
+    /// times the jump speed (0x4193c5, read at 0x4aca9f and 0x4acc18), the
+    /// factor that also slows running ([`Speeds::jump_factor`]).
+    /// Held to 0..1; anything else counts as 1.
+    ///
+    /// When health or weight changes, a frontend may launch one more jump at
+    /// the old factor before the new `MotionState` reaches it. A jump
+    /// announced after this call is bounded by the new factor, so at most
+    /// that one sample is refused and sent again; nothing desyncs.
+    pub fn set_jump_factor(&mut self, factor: f32) {
+        self.jump_factor = if factor.is_finite() {
+            factor.clamp(0.0, 1.0)
+        } else {
+            1.0
+        };
+    }
+
     /// The session announced a jump: the next sample may rise as the jump
     /// does over its whole interval, and the ones after it on, until gravity
-    /// has spent its speed.
+    /// has spent its speed. The jump keeps the factor it started with.
     pub fn jumped(&mut self) {
         if self.jump.is_some() {
             self.jumped_at = Some(JumpStart::Next);
+            self.launch_factor = self.jump_factor;
         }
     }
 
@@ -515,6 +548,7 @@ impl MovementGuard {
         let Some((speed, gravity)) = self.jump else {
             return 0.0;
         };
+        let speed = speed * self.launch_factor;
         let height = |t: f32| {
             let t = if gravity > 0.0 {
                 t.min(speed / gravity)
@@ -1021,6 +1055,28 @@ mod tests {
         // Past the top, one step only.
         assert!(guard.accept(&rising(14.1, at(400)), at(400)).is_err());
         assert!(guard.accept(&rising(14.0, at(400)), at(400)).is_ok());
+    }
+
+    #[test]
+    fn a_hurt_or_burdened_jump_rises_from_its_share_of_the_speed() {
+        let start = Instant::now();
+        let at = |ms| start + Duration::from_millis(ms);
+        let mut guard = jumping_guard(start);
+        // At half the speed, 0.1 s rises 2.2275 - 0.8 = 1.4275 units, and
+        // one step more is allowed.
+        guard.set_jump_factor(0.5);
+        guard.jumped();
+        // A factor that changes in the air leaves the jump as it started.
+        guard.set_jump_factor(1.0);
+        assert!(guard.accept(&rising(3.5, at(100)), at(100)).is_err());
+        assert!(guard.accept(&rising(3.3, at(100)), at(100)).is_ok());
+        // Out of range, the factor is held to 0..1 or counts as 1.
+        guard.set_jump_factor(f32::NAN);
+        assert!((guard.jump_factor - 1.0).abs() < f32::EPSILON);
+        guard.set_jump_factor(2.0);
+        assert!((guard.jump_factor - 1.0).abs() < f32::EPSILON);
+        guard.set_jump_factor(-1.0);
+        assert!(guard.jump_factor.abs() < f32::EPSILON);
     }
 
     #[test]

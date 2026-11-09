@@ -41,6 +41,13 @@ pub struct Speeds {
     /// prints once as the player enters it; None where the generation's
     /// rule for it is unread.
     pub encumbrance: Option<(bool, u32)>,
+    /// The share of the jump's starting speed the player has: the same
+    /// health and weight multiplier that slows running. The Titanium program
+    /// launches both its jumps at this factor times the jump speed, for the
+    /// player's own character (0x4193c5, read at 0x4aca9f and 0x4acc18); for
+    /// `EQMac` that its jump takes the factor too is inferred (recording
+    /// checklist 6.414).
+    pub jump_factor: f32,
 }
 
 /// Forward input on normal ground per unit of steady speed, in units per
@@ -186,6 +193,7 @@ fn speeds(generation: Generation, state: &SpeedState) -> Speeds {
         } else {
             (false, EQMAC_UNENCUMBERED)
         }),
+        jump_factor: multiplier(generation, state),
     }
 }
 
@@ -387,6 +395,35 @@ mod tests {
         .motion
         .unwrap();
         assert_eq!(sneaking.diagonal, DiagonalRates::default());
+    }
+
+    #[test]
+    fn a_jump_starts_at_the_health_and_weight_factor() {
+        let factor = |state: SpeedState| titanium(&state).jump_factor;
+        assert!(close(factor(player()), 1.0));
+        let hurt = |current| SpeedState {
+            hit_points: Some((current, 500)),
+            ..player()
+        };
+        assert!(close(factor(hurt(49)), 0.5));
+        assert!(close(factor(hurt(99)), 0.75));
+        // Carrying 150 of 100 takes a quarter more; twice the capacity
+        // takes all of it.
+        assert!(close(
+            factor(SpeedState {
+                weight: 150,
+                ..player()
+            }),
+            0.75
+        ));
+        assert!(close(
+            factor(SpeedState {
+                weight: 250,
+                ..hurt(99)
+            }),
+            0.0
+        ));
+        assert!(close(eqmac(&hurt(49)).jump_factor, 0.5));
     }
 
     #[test]

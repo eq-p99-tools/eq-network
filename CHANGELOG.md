@@ -7,6 +7,14 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Breaking:** A hurt or burdened player's jump starts at the program's
+  health and weight factor times the jump speed, as Titanium launches its
+  jumps (0x4193c5). `Speeds` gains `jump_factor`, the multiplier that also
+  slows running; `WorldEvent::MotionState` carries it as `jump_factor`
+  (serde default 1), and the movement guard bounds an announced jump's rise
+  by the factor it started with (`MovementGuard::set_jump_factor`,
+  `MotionSession::set_jump_factor`). That `EQMac`'s jump takes the factor
+  too is inferred (recording checklist 6.414).
 - **Breaking:** Add friends who, guild requests, splitting and a banker's
   coin change on the Titanium wire, offered on `EQEmu` and Project 1999:
   `Capability::FriendsWho`, `GuildRoster`, `GuildManagement`,
