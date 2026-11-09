@@ -3,14 +3,15 @@
 //! when the server puts what it still holds back in the inventory. The
 //! session sends a combine for a tradeskill container carried in a pack
 //! slot, or for the world container open for the player, and holds the
-//! inventory through the server's reset. After an `EQEmu` station reset, only
-//! the station and cursor wait for any following clear.
+//! inventory through the server's reset. After a station reset, only the
+//! station and cursor wait for any following clear.
 //! Independent inventory updates supply consumption and any product. As the
 //! official client does, it refuses a combine while the cursor holds an
 //! item or coins, and names the official client's own words for that.
 use super::{
     actions::{self, Resource},
     feature::{Feature, Out, World},
+    inventory,
     objects::close_request,
     ClientCommand, ClientEvent,
 };
@@ -296,7 +297,7 @@ impl Tradeskills {
     }
 
     fn container_reply(
-        &self,
+        &mut self,
         view: &ContainerView,
         world: &mut World,
         out: &mut Out<'_, '_>,
@@ -305,11 +306,11 @@ impl Tradeskills {
             if view.open && !world.container.represents(view) {
                 // GroundObjects closed this unasked open. Preserve its
                 // retirement stream or discard ambiguous station-only data.
-                world.container.0 = Some(if world.container.0.is_none() {
-                    OpenContainer::closing(view, false)
+                if world.container.0.is_none() {
+                    world.container.0 = Some(OpenContainer::closing(view, false));
                 } else {
-                    Container::Blocked
-                });
+                    self.block_station(world, out)?;
+                }
             }
             return Ok(());
         }
@@ -355,7 +356,7 @@ impl Tradeskills {
                 out.request(&close_request(view))?;
                 world.container.0 = Some(OpenContainer::closing(view, false));
             } else {
-                world.container.0 = Some(Container::Blocked);
+                self.block_station(world, out)?;
             }
             world.happened(Message::Event(WorldEvent::Objects(ObjectUpdate::Closed {
                 drop_id: view.drop_id,
@@ -370,6 +371,21 @@ impl Tradeskills {
         }
         Ok(())
     }
+
+    fn block_station(&mut self, world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
+        if let Some(Container::Open { view, .. }) = world.container.0.replace(Container::Blocked) {
+            world.happened(Message::Event(WorldEvent::Objects(ObjectUpdate::Closed {
+                drop_id: view.drop_id,
+            })));
+        }
+        self.station_clear_pending = false;
+        if world.inventory.items().keys().any(|slot| slot.is_world())
+            || world.inventory.station_moves_unconfirmed()
+        {
+            inventory::change(InventoryUpdate::WorldDetached, world, out)?;
+        }
+        Ok(())
+    }
 }
 
 impl Feature for Tradeskills {
@@ -379,8 +395,7 @@ impl Feature for Tradeskills {
     }
 
     fn holds(&self, world: &World, _now: Instant) -> Vec<(Resource, &'static str)> {
-        if self.scope == Scope::All
-            && (self.station_clear_pending || self.combining == Some(WORLD_CONTAINER))
+        if (self.station_clear_pending || self.combining == Some(WORLD_CONTAINER))
             && (self.combining.is_none() || !world.container.is_open())
         {
             // EQEmu HandleCombine can reset without clearing the ingredients
@@ -560,12 +575,7 @@ impl Feature for Tradeskills {
                 }) = &world.container.0
                 {
                     if world.objects.placement(view.drop_id) != Some(*placement) {
-                        let drop_id = view.drop_id;
-                        world.container.0 = Some(Container::Blocked);
-                        self.station_clear_pending = false;
-                        world.happened(Message::Event(WorldEvent::Objects(ObjectUpdate::Closed {
-                            drop_id,
-                        })));
+                        self.block_station(world, out)?;
                     }
                 }
             }

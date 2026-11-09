@@ -341,12 +341,17 @@ fn told(update: &InventoryUpdate) -> String {
         InventoryUpdate::Settled => "ordinary moves passed the refusal window".to_owned(),
         InventoryUpdate::TradeEmptied => "the trade slots emptied".to_owned(),
         InventoryUpdate::WorldEmptied => "the world container emptied".to_owned(),
+        InventoryUpdate::WorldDetached => "the local world container view was detached".to_owned(),
     };
     format!("Zone sent an inventory update: {what}")
 }
 
 /// Changes the inventory and tells the host.
-fn change(update: InventoryUpdate, world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
+pub(super) fn change(
+    update: InventoryUpdate,
+    world: &mut World,
+    out: &mut Out<'_, '_>,
+) -> Result<()> {
     world.inventory.0.apply(update.clone());
     out.log
         .send(ClientEvent::World(WorldEvent::Inventory(update)))

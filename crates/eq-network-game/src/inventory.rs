@@ -385,6 +385,9 @@ pub enum InventoryUpdate {
     /// it held, or it closed and the server put what was left back in the
     /// inventory, as its item updates say (`OP_ClearObject`).
     WorldEmptied,
+    /// The local station view was displaced. Its untagged updates can no longer
+    /// be attributed; carried slots still require their own evidence.
+    WorldDetached,
 }
 
 /// Current inventory projection; an absent snapshot is distinct from an empty one.
@@ -407,10 +410,19 @@ pub struct Inventory {
     /// Retained when the general move policy settles by silence.
     #[serde(skip)]
     projected_custody: BTreeMap<InventorySlot, ProjectedCustody>,
-    /// A projected handoff may leave a delayed return, or an incoming record
-    /// contradicted an earlier projected cursor move.
+    /// An incoming record contradicted an earlier projected cursor move.
     #[serde(skip)]
     cursor_projection_blocked: bool,
+    /// A projected handoff may leave a delayed return after the window closes.
+    #[serde(skip)]
+    trade_cursor: TradeCursor,
+    /// Carried endpoints touched by a station move, including empty slots.
+    /// A station clear or a detached view has no coverage for these slots.
+    #[serde(skip)]
+    station_carried: BTreeSet<InventorySlot>,
+    /// Identity of a single whole item placed directly from the cursor.
+    #[serde(skip)]
+    station_cursor_return: Option<(u32, NonZeroU32)>,
     #[serde(skip)]
     bandage_stock_pending: bool,
     #[serde(skip)]
@@ -420,6 +432,8 @@ pub struct Inventory {
     /// partial updates cannot certify which pending prefix the server applied.
     #[serde(skip)]
     equipment_uncertainty: BTreeSet<InventorySlot>,
+    #[serde(skip)]
+    station_equipment_uncertainty: BTreeSet<InventorySlot>,
     /// Origins of plain whole-item relocations, separate from slot confirmation.
     #[serde(skip)]
     relocations: BTreeMap<InventorySlot, InventorySlot>,
@@ -450,6 +464,18 @@ struct ProjectedCustody {
     bandage: bool,
     cursor: bool,
     station: bool,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+enum TradeCursor {
+    #[default]
+    Clear,
+    Offered {
+        id: u32,
+        serial: NonZeroU32,
+        weight_tenths: u32,
+    },
+    Uncertain,
 }
 
 impl Inventory {
@@ -508,6 +534,7 @@ impl Inventory {
             && self.destroyed.is_none()
             && !self.ground_drop_pending()
             && !self.cursor_projection_blocked
+            && self.trade_cursor == TradeCursor::Clear
             && self.queued.is_empty()
             && !self
                 .items
@@ -540,14 +567,21 @@ impl Inventory {
     #[must_use]
     pub fn has_settleable_moves(&self) -> bool {
         let station_pending = self.station_moves_unconfirmed();
-        self.unconfirmed.keys().any(|&slot| {
-            (slot != CURSOR || self.destroyed.is_none())
-                && !(station_pending
-                    && self
-                        .projected_custody
-                        .get(&slot)
-                        .is_some_and(|custody| custody.station))
-        })
+        self.weight_history_uncertain
+            || !self.weight_rebased.is_empty()
+            || self
+                .stack_weight
+                .as_ref()
+                .is_some_and(stack_weight::StackWeightBound::active)
+            || !self.equipment_uncertainty.is_empty()
+            || self.unconfirmed.keys().any(|&slot| {
+                (slot != CURSOR || self.destroyed.is_none())
+                    && !(station_pending
+                        && self
+                            .projected_custody
+                            .get(&slot)
+                            .is_some_and(|custody| custody.station))
+            })
     }
 
     /// A local move may have changed which carried slot supplies a bandage.
@@ -590,6 +624,7 @@ impl Inventory {
     #[must_use]
     pub fn equipment_stats_uncertain(&self) -> bool {
         !self.equipment_uncertainty.is_empty()
+            || !self.station_equipment_uncertainty.is_empty()
             || self
                 .bandage_stock_uncertain
                 .iter()
@@ -680,6 +715,12 @@ impl Inventory {
             InventoryUpdate::DestroyCursor => self.predict_destruction(),
             InventoryUpdate::GroundDropPending(serial) => self.hold_ground_drop(serial),
             InventoryUpdate::Consume { slot, charge } => {
+                let spent_bandage = !charge
+                    && self.bandage_stock_uncertain.contains(&slot)
+                    && self.items.get(&slot).is_some_and(|item| {
+                        item.rules.item_type == crate::bind_wound::BANDAGE
+                            && item.stack_count != Some(0)
+                    });
                 let consumed = self
                     .items
                     .get(&slot)
@@ -698,7 +739,11 @@ impl Inventory {
                     None if charge => self.stale = true,
                     None => (),
                 }
-                if !charge {
+                if spent_bandage {
+                    // An exact late deletion settles the same possible sources
+                    // as an in-window deletion. No other stack was spent.
+                    self.bandage_stock_uncertain.clear();
+                } else if !charge {
                     self.bandage_stock_uncertain.remove(&slot);
                 }
                 self.reconcile_consumed(slot, consumed.as_ref());
@@ -706,6 +751,7 @@ impl Inventory {
             InventoryUpdate::Snapshot(items) => self.replace_snapshot(items),
             InventoryUpdate::Set(items) => self.replace_items(items, arrival),
             InventoryUpdate::Cursor(items) => {
+                self.station_cursor_return = None;
                 let queued: usize = self.queued.iter().map(Vec::len).sum();
                 if self.items.len() + queued + items.len() > 1024 {
                     self.stale = true;
@@ -730,7 +776,9 @@ impl Inventory {
                 }
                 if slot == CURSOR {
                     self.cursor_projection_blocked = false;
+                    self.trade_cursor = TradeCursor::Clear;
                 }
+                self.cover_station_carried(slot);
                 self.reconcile(slot, &[]);
                 self.remove(slot);
             }
@@ -744,7 +792,7 @@ impl Inventory {
                 self.unconfirmed.retain(|slot, _| !slot.is_in_trade());
                 self.resolved();
             }
-            InventoryUpdate::WorldEmptied => {
+            InventoryUpdate::WorldEmptied | InventoryUpdate::WorldDetached => {
                 self.items.retain(|slot, _| !slot.is_world());
                 self.projected_custody.retain(|slot, _| !slot.is_world());
                 for custody in self.projected_custody.values_mut() {
@@ -767,12 +815,10 @@ impl Inventory {
                         .get(slot)
                         .is_some_and(|custody| custody.station))
         });
-        if !station_pending {
-            self.equipment_uncertainty.clear();
-            self.weight_rebased.clear();
-            self.weight_history_uncertain = false;
-            self.stack_weight = None;
-        }
+        self.equipment_uncertainty.clear();
+        self.weight_rebased.clear();
+        self.weight_history_uncertain = false;
+        self.stack_weight = None;
         self.resolved();
     }
 
@@ -789,6 +835,9 @@ impl Inventory {
             if root.slot == CURSOR {
                 self.destroyed = None;
                 self.cursor_projection_blocked = false;
+                self.trade_cursor = TradeCursor::Clear;
+            } else {
+                self.cover_returned_cursor_instance(root);
             }
             if self.ground_drop_pending() && (root.slot == CURSOR || root.slot.is_in_cursor_bag()) {
                 // A cursor correction can be a temporary resync token.
@@ -800,6 +849,7 @@ impl Inventory {
             } else {
                 self.reconcile(root.slot, &items);
             }
+            self.cover_station_carried(root.slot);
             self.remove(root.slot);
         }
         for item in items {
@@ -821,9 +871,13 @@ impl Inventory {
         self.predictions.clear();
         self.projected_custody.clear();
         self.cursor_projection_blocked = false;
+        self.trade_cursor = TradeCursor::Clear;
+        self.station_carried.clear();
+        self.station_cursor_return = None;
         self.bandage_stock_pending = false;
         self.bandage_stock_uncertain.clear();
         self.equipment_uncertainty.clear();
+        self.station_equipment_uncertainty.clear();
         self.weight_rebased.clear();
         self.weight_history_uncertain = false;
         self.stack_weight = None;
@@ -896,6 +950,47 @@ impl Inventory {
         self.items.retain(|key, _| outside(*key));
         self.projected_custody.retain(|key, _| outside(*key));
         self.bandage_stock_uncertain.retain(|key| outside(*key));
+    }
+
+    fn cover_station_carried(&mut self, root: InventorySlot) {
+        if root == CURSOR {
+            self.station_cursor_return = None;
+        }
+        let outside = |slot: InventorySlot| {
+            slot != root && slot.parent().is_none_or(|(parent, _)| parent != root)
+        };
+        self.station_carried.retain(|&slot| outside(slot));
+        self.station_equipment_uncertainty
+            .retain(|&slot| outside(slot));
+    }
+
+    fn cover_returned_cursor_instance(&mut self, root: &InventoryItem) {
+        if !root.slot.is_carried()
+            || self.items.contains_key(&CURSOR)
+            || !self.queued.is_empty()
+            || root.stack_count.is_some()
+            || root.bag_slots != 0
+        {
+            return;
+        }
+        let Some(serial) = root.rules.ground_drop_serial else {
+            return;
+        };
+        let id = root.details.id;
+        if matches!(self.trade_cursor, TradeCursor::Offered { id: offered, serial: sent, .. }
+            if (offered, sent) == (id, serial))
+        {
+            self.trade_cursor = TradeCursor::Clear;
+        } else if self.station_cursor_return == Some((id, serial)) {
+            // EQEmu can return an ingredient straight to a pack slot on
+            // close. The receipt covers this cursor route, not other moves.
+            self.cover_station_carried(CURSOR);
+        } else {
+            return;
+        }
+        self.projected_custody.remove(&CURSOR);
+        self.unconfirmed.remove(&CURSOR);
+        self.resolved();
     }
 
     /// A slot update confirms only that slot and its serialized container contents.

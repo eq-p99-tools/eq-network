@@ -41,6 +41,81 @@ fn projected_cursor_eligibility_keeps_correction_drop_and_trade_fences() {
     assert!(inventory.custody_known(cursor));
 }
 
+#[test]
+fn a_received_same_instance_in_carried_inventory_resolves_cursor_trade_custody() {
+    use crate::GameDialect::Titanium;
+
+    let cursor = InventorySlot::CURSOR;
+    let at = |slot: InventorySlot| {
+        let mut item = titanium::parse(wire(slot.0, 42, 0, false, 0, &[]).as_bytes())
+            .unwrap()
+            .remove(0);
+        item.rules.ground_drop_serial = Some(NonZeroU32::MIN);
+        item.details.weight_tenths = 50;
+        item
+    };
+    for received_before_close in [false, true] {
+        let mut inventory = Inventory::default();
+        inventory.apply(InventoryUpdate::Snapshot(vec![at(cursor)]));
+        inventory.apply(InventoryUpdate::Prediction(vec![at(InventorySlot(3000))]));
+        if !received_before_close {
+            inventory.apply(InventoryUpdate::TradeEmptied);
+        }
+        inventory.apply(InventoryUpdate::Settled);
+        assert!(!inventory.projected_cursor_empty());
+        assert!(!inventory.custody_known(cursor));
+        assert_eq!(inventory.carried_weight_tenths(Titanium, 0), Ok(50));
+        assert!(inventory.carried_weight_is_conservative());
+
+        let mut other = at(InventorySlot(24));
+        other.rules.ground_drop_serial = NonZeroU32::new(2);
+        inventory.apply(InventoryUpdate::Set(vec![other]));
+        assert!(!inventory.projected_cursor_empty());
+        let mut queued = inventory.clone();
+        queued.apply(InventoryUpdate::Cursor(vec![at(cursor)]));
+        assert!(!queued.custody_known(cursor));
+
+        let returned = InventorySlot(23);
+        inventory.apply(InventoryUpdate::Set(vec![at(returned)]));
+        if received_before_close {
+            inventory.apply(InventoryUpdate::TradeEmptied);
+        }
+        assert!(inventory.projected_cursor_empty());
+        assert!(inventory.custody_known(cursor));
+        assert!(inventory.custody_known(returned));
+        assert_eq!(inventory.carried_weight_tenths(Titanium, 0), Ok(100));
+        assert!(!inventory.carried_weight_is_conservative());
+    }
+}
+
+#[test]
+fn a_late_exact_bandage_deletion_resolves_every_possible_stock_slot() {
+    let worn = InventorySlot(14);
+    let carried = InventorySlot(24);
+    let bandages = [worn, carried].map(|slot| {
+        let mut item = titanium::parse(wire(slot.0, 42, 0, false, 0, &[]).as_bytes())
+            .unwrap()
+            .remove(0);
+        item.rules.item_type = crate::bind_wound::BANDAGE;
+        item.stack_count = Some(2);
+        item
+    });
+    let mut inventory = Inventory::default();
+    inventory.apply(InventoryUpdate::Snapshot(bandages.to_vec()));
+    inventory.apply(InventoryUpdate::BandageStockUncertain(vec![worn, carried]));
+    assert!(!inventory.custody_known(worn));
+    assert!(!inventory.custody_known(carried));
+
+    inventory.apply(InventoryUpdate::Consume {
+        slot: worn,
+        charge: false,
+    });
+    assert!(inventory.custody_known(worn));
+    assert!(inventory.custody_known(carried));
+    assert_eq!(inventory.items()[&worn].stack_count, Some(1));
+    assert_eq!(inventory.items()[&carried].stack_count, Some(2));
+}
+
 fn held_wire(slot: i32, id: u32, id_file: &str, charges: &str) -> String {
     let fixture = wire(slot, id, 0, false, 0, &[]);
     let (header, rest) = fixture.split_once('"').unwrap();

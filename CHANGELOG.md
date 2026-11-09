@@ -23,7 +23,9 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   on Project 1999.
   `GameCommand::CloseContainer` gains `drop_id` and `created`,
   `InventoryUpdate::BandageStockPending`, `BandageStockUncertain` and four
-  `BindWoundUpdate` variants are new. `ItemPlacement` gains `titanium_link_hash`.
+  `BindWoundUpdate` variants are new. `BindWoundUpdate::Unconfirmed` carries
+  `stock_uncertain`. `InventoryUpdate::WorldDetached` retires a displaced
+  station view. `ItemPlacement` gains `titanium_link_hash`.
   A terminal or unanswered request releases other inventory actions while
   affected bandage slots still await received inventory evidence.
   A forge candidate needs a matching server open before it can take items.
@@ -435,6 +437,14 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- Retire a displaced station's local view and settle unrelated Titanium
+  moves independently. Carried endpoints still need covering inventory
+  evidence. A P99 forge combine reset limits the remaining hold to station
+  and cursor actions while any clear is pending.
+- Let a received same-instance return resolve a whole cursor handoff.
+  Closing a trade window alone leaves its cursor custody unresolved.
+- Distinguish stock evidence from a missing P99 bandaging result at expiry.
+- Keep both knight reuse deadlines if computing their replacements overflows.
 - Bind Wound's own button time now runs out in full after every use, as the
   official client's does, whatever ended the bandaging; the self-bandage path
   checks it too, so a moved or released P99 self-bandage cannot be resent at

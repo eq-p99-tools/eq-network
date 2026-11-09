@@ -1,5 +1,5 @@
 //! Follow only unambiguous whole-item relocations through local predictions.
-use super::{Inventory, InventoryItem, InventorySlot, InventoryUpdate};
+use super::{Inventory, InventoryItem, InventorySlot, InventoryUpdate, TradeCursor};
 use std::collections::{BTreeMap, BTreeSet};
 
 pub(super) fn same_item(left: &InventoryItem, right: &InventoryItem) -> bool {
@@ -13,11 +13,6 @@ impl Inventory {
     /// into server authority or delaying the next move.
     pub(super) fn predict(&mut self, items: Vec<InventoryItem>) {
         let next: BTreeMap<_, _> = items.into_iter().map(|item| (item.slot, item)).collect();
-        // Equal endpoints cannot certify an affecting intermediate prefix.
-        let preserved = self.preserves_weight(&next);
-        let bounded = self.record_stack_weight(&next, preserved);
-        self.weight_history_uncertain |= !preserved && !bounded;
-        self.trace_relocation(&next);
         let changed: BTreeSet<_> = self
             .items
             .keys()
@@ -33,8 +28,13 @@ impl Inventory {
                     .get(slot)
                     .is_some_and(|custody| custody.cursor)
         });
-        if cursor && changed.iter().any(|slot| slot.is_in_trade()) {
-            self.cursor_projection_blocked = true;
+        let cursor_slot = InventorySlot::CURSOR;
+        if changed.contains(&cursor_slot) && self.trade_cursor != TradeCursor::Clear {
+            self.trade_cursor = TradeCursor::Uncertain;
+        } else if cursor && changed.iter().any(|slot| slot.is_in_trade()) {
+            self.trade_cursor = self
+                .trade_offer(&changed, &next)
+                .unwrap_or(TradeCursor::Uncertain);
         }
         let station = changed.iter().any(|slot| {
             slot.is_world()
@@ -43,6 +43,26 @@ impl Inventory {
                     .get(slot)
                     .is_some_and(|custody| custody.station)
         });
+        self.track_station_cursor_return(&changed, &next, station);
+        // Equal endpoints cannot certify an affecting intermediate prefix.
+        // A station route keeps its carried footprint beyond ordinary settlement.
+        let preserved = self.preserves_weight(&next);
+        let bounded = self.record_stack_weight(&next, preserved);
+        self.weight_history_uncertain |= !station && !preserved && !bounded;
+        self.trace_relocation(&next);
+        let station_carried = station
+            || changed
+                .iter()
+                .any(|slot| self.station_carried.contains(slot));
+        if station_carried {
+            self.station_carried
+                .extend(changed.iter().copied().filter(|&slot| {
+                    slot == cursor_slot
+                        || slot.is_carried()
+                        || slot.is_equipment()
+                        || slot.is_in_cursor_bag()
+                }));
+        }
         for slot in &changed {
             let bandage = (slot.is_equipment() || slot.is_carried())
                 && [self.items.get(slot), next.get(slot)]
@@ -70,7 +90,11 @@ impl Inventory {
                                 .is_none_or(crate::items::ItemBonuses::has_modifiers)
                     })
             {
-                self.equipment_uncertainty.insert(*slot);
+                if station_carried {
+                    self.station_equipment_uncertainty.insert(*slot);
+                } else {
+                    self.equipment_uncertainty.insert(*slot);
+                }
             }
             self.unconfirmed
                 .entry(*slot)
@@ -81,6 +105,61 @@ impl Inventory {
         }
         self.items = next;
         self.predicted = !self.unconfirmed.is_empty();
+    }
+
+    /// A received non-stack cursor item moved whole into an empty escrow slot.
+    fn trade_offer(
+        &self,
+        changed: &BTreeSet<InventorySlot>,
+        next: &BTreeMap<InventorySlot, InventoryItem>,
+    ) -> Option<TradeCursor> {
+        let (item, serial) = self.whole_cursor_offer(changed, next, InventorySlot::is_trade)?;
+        Some(TradeCursor::Offered {
+            id: item.details.id,
+            serial,
+            weight_tenths: item.details.weight_tenths,
+        })
+    }
+
+    fn track_station_cursor_return(
+        &mut self,
+        changed: &BTreeSet<InventorySlot>,
+        next: &BTreeMap<InventorySlot, InventoryItem>,
+        station: bool,
+    ) {
+        let cursor = InventorySlot::CURSOR;
+        if changed.contains(&cursor) {
+            self.station_cursor_return = if station && !self.station_carried.contains(&cursor) {
+                self.whole_cursor_offer(changed, next, InventorySlot::is_world)
+                    .map(|(item, serial)| (item.details.id, serial))
+            } else {
+                None
+            };
+        }
+    }
+
+    fn whole_cursor_offer(
+        &self,
+        changed: &BTreeSet<InventorySlot>,
+        next: &BTreeMap<InventorySlot, InventoryItem>,
+        accepts: impl Fn(InventorySlot) -> bool,
+    ) -> Option<(&InventoryItem, std::num::NonZeroU32)> {
+        let cursor = InventorySlot::CURSOR;
+        if changed.len() != 2
+            || next.contains_key(&cursor)
+            || !self.queued.is_empty()
+            || !self.custody_known(cursor)
+        {
+            return None;
+        }
+        let item = self.items.get(&cursor)?;
+        let serial = item.rules.ground_drop_serial?;
+        let slot = changed.iter().find(|&&slot| accepts(slot))?;
+        (item.bag_slots == 0
+            && item.stack_count.is_none()
+            && !self.items.contains_key(slot)
+            && next.get(slot).is_some_and(|placed| same_item(item, placed)))
+        .then_some((item, serial))
     }
 
     /// Matching replacements preserve a trace; conflicting or quantity-changing
@@ -113,7 +192,9 @@ impl Inventory {
                 !covers(*root, *slot) && !covers(*root, *origin)
             }
             InventoryUpdate::TradeEmptied => !slot.is_in_trade() && !origin.is_in_trade(),
-            InventoryUpdate::WorldEmptied => !slot.is_world() && !origin.is_world(),
+            InventoryUpdate::WorldEmptied | InventoryUpdate::WorldDetached => {
+                !slot.is_world() && !origin.is_world()
+            }
             InventoryUpdate::Settled => {
                 station_pending
                     && [slot, origin].into_iter().any(|key| {

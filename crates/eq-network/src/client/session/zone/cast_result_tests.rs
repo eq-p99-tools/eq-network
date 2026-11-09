@@ -273,13 +273,14 @@ fn a_late_item_cast_answers_only_to_the_item_slot_refresh() {
 }
 
 #[test]
-fn an_old_result_or_death_retires_the_timed_out_context() {
+fn an_old_result_or_lifecycle_change_retires_the_timed_out_context() {
     enum End {
         Mana,
         Death,
+        Admission,
     }
 
-    for end in [End::Mana, End::Death] {
+    for end in [End::Mana, End::Death, End::Admission] {
         let mut stream = CastStream::new(ServerProtocol::Takp, 5);
         let outcome = testing::run_on(stream.server.wire(), |out| -> Result<()> {
             stream.time_out(stream.gem(), out)?;
@@ -296,6 +297,7 @@ fn an_old_result_or_death_retires_the_timed_out_context() {
                         out,
                     )?;
                 }
+                End::Admission => stream = CastStream::new(ServerProtocol::Takp, 6),
             }
             assert!(!stream.held());
             stream.begin(OWN, PORT_BEGIN, out)?;

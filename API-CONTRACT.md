@@ -7,8 +7,20 @@ stock evidence. A terminal reply or local expiry releases that hold.
 `InventoryUpdate::BandageStockUncertain` lists possible spent slots still
 awaiting a covering update. `Inventory::bandage_stock_uncertain` includes
 a parent bag when any of its contents are uncertain. The older item count
-stays visible and bounds carried weight from above. An expiry reports an
-unconfirmed outcome. A server update still owns the stock result.
+stays visible and bounds carried weight from above. An expiry reports
+`BindWoundUpdate::Unconfirmed { stock_uncertain }`. A received stock change
+can settle the inventory side without resolving the bandaging outcome.
+An expired P99 result retains ownership of its untagged reply until it
+arrives or the admission ends. The held result does not extend the
+inventory action hold.
+
+## Station custody
+
+`InventoryUpdate::WorldDetached` retires the displaced station's local
+inventory. A matching `ObjectUpdate::Closed` retires an open view.
+Carried slots remain provisional until covered by received inventory.
+A pack receipt for the same serialized whole item can resolve a single
+direct cursor-to-station route, separately from the station clear.
 
 ## P99 local pads
 
