@@ -23,7 +23,7 @@ pub use session::{
 };
 pub use shoreline::{
     ShorelineFrame, ShorelineStroke, ShorelineTrace, ShorelineVelocity, SHORELINE_COOLDOWN,
-    SHORELINE_FRAMES,
+    SHORELINE_FRAMES, SHORELINE_FRAME_MILLIS,
 };
 pub use speeds::{eqmac as eqmac_speeds, titanium as titanium_speeds, SpeedState, Speeds};
 

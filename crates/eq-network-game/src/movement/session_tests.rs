@@ -1876,6 +1876,37 @@ fn shoreline_replays_wet_and_dry_frames_without_borrowing_from_another_sample() 
     session
         .send_move_sample(&swim, at(100), |_| Ok(()))
         .unwrap();
+    // A frame longer than the bound cannot be built at all.
+    assert!(ShorelineFrame::new(51, true, false, ShorelineStroke::new([0.0, 0.9, 0.4])).is_none());
+    // A start must be one wet, upward frame.
+    let level =
+        ShorelineFrame::new(16, true, false, ShorelineStroke::new([0.0, 1.0, 0.0])).unwrap();
+    for bad in [
+        make(true, false, &[level]),
+        make(true, false, &[dry]),
+        make(true, false, &[wet, wet]),
+    ] {
+        let request = MovementRequest::new(bad, 11, Position::default(), at(200));
+        assert!(session
+            .send_move_sample(&request, at(200), |_| panic!("bad start frame"))
+            .is_err());
+    }
+    // Motion beyond the replayed travel is refused on every axis. Shorter
+    // motion inside the box stays allowed: collision may stop a frame early.
+    let travel = proposal.position;
+    for (x, y, z) in [
+        (travel.x + 0.5, travel.y, travel.z),
+        (travel.x, travel.y + 0.5, travel.z),
+        (travel.x, travel.y, travel.z + 0.5),
+        (travel.x, travel.y, -0.5),
+    ] {
+        let beyond = Position { x, y, z, ..travel };
+        let request = MovementRequest::new(proposal.mode, 11, beyond, at(200));
+        assert!(session
+            .send_move_sample(&request, at(200), |_| panic!("beyond replayed travel"))
+            .is_err());
+    }
+    assert_eq!(session.position(), swim.position);
     assert!(session
         .send_move_sample(&proposal, at(200), |_| anyhow::bail!("transport"))
         .is_err());

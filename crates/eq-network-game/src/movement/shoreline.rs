@@ -9,6 +9,13 @@ pub const SHORELINE_COOLDOWN: Duration = Duration::from_millis(1500);
 /// Maximum number of renderer frames carried by one paced position sample.
 pub const SHORELINE_FRAMES: usize = 32;
 
+/// Longest renderer frame one trace slot may carry. The damping below runs
+/// once per frame, so a longer frame would lift the arc higher. Whether the
+/// native update is frame-length dependent is unrecorded; this bound only
+/// ever lowers an arc (inferred, recording checklist 6.407, as are the arc
+/// lifetime and the per-frame damping).
+pub const SHORELINE_FRAME_MILLIS: u8 = 50;
+
 const PRESENT: u8 = 1;
 const WATER: u8 = 2;
 const STOP_VERTICAL: u8 = 4;
@@ -71,7 +78,7 @@ impl ShorelineFrame {
     ) -> Option<Self> {
         let medium = if water { WATER } else { 0 };
         let stop = if stop_vertical { STOP_VERTICAL } else { 0 };
-        (millis <= 150).then_some(Self {
+        (millis <= SHORELINE_FRAME_MILLIS).then_some(Self {
             millis,
             flags: PRESENT | medium | stop,
             stroke,
