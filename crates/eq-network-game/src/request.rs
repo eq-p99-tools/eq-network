@@ -11,7 +11,7 @@ use crate::{
     confirmations::{self, SacrificeOffer, TranslocateOffer},
     corpses, doors, exchange,
     food::{self, Meal},
-    group,
+    group, guild,
     hazards::{self, Hazard},
     inventory::{self, InventorySlot, MoveQuantity},
     listing::{self, Anonymity},
@@ -157,6 +157,49 @@ pub enum Request {
     Emote(String),
     /// Take the target of this spawn.
     Assist(u16),
+    /// Ask which of these friends are online.
+    WhoFriends(Vec<String>),
+    /// Ask the banker nearest the player to change the coins.
+    ChangeCoins,
+    /// Share these coins from the purse with the group.
+    SplitCoins(crate::world::Coins),
+    /// Share looted coins with the group (true), or stop.
+    AutoSplit(bool),
+    /// Ask for the guild's message of the day, of the player's guild.
+    GuildMotd(u32),
+    /// Answer a guild invitation.
+    AnswerGuildInvite {
+        /// Who invited the player.
+        inviter: String,
+        /// The guild they invited the player into.
+        guild_id: u32,
+        /// The rank offered.
+        rank: crate::listing::GuildRank,
+        /// The answer.
+        answer: crate::guild::InviteAnswer,
+    },
+    /// Invite a player into the player's guild, as a member or an officer.
+    GuildInvite {
+        /// Who is invited.
+        name: String,
+        /// The player's guild.
+        guild_id: u32,
+        /// Whether the offer is an officer's rank.
+        officer: bool,
+    },
+    /// Remove a member from the player's guild.
+    GuildRemove {
+        /// Who is removed; the player themself leaves.
+        name: String,
+        /// The player's guild.
+        guild_id: u32,
+    },
+    /// Set the guild's message of the day.
+    SetGuildMotd(String),
+    /// Hand the guild's lead to a member.
+    GuildMakeLeader(String),
+    /// Lower a member's rank.
+    GuildDemote(String),
     /// Invite a player into the player's raid, by name.
     RaidInvite(String),
     /// Join the raid of the one who invited the player, by their name.
@@ -403,6 +446,37 @@ pub fn titanium(request: &Request, sender: Sender<'_>) -> Result<EncodedCommand>
         Request::Random { low, high } => socials::random(*low, *high),
         Request::Emote(text) => socials::emote(text)?,
         Request::Assist(spawn_id) => socials::assist(*spawn_id),
+        Request::WhoFriends(names) => crate::friends::titanium_request(names)?,
+        Request::ChangeCoins => crate::banker::titanium_request(),
+        Request::SplitCoins(coins) => crate::split::titanium_split(*coins)?,
+        Request::AutoSplit(on) => crate::split::titanium_auto_split(sender.spawn(), *on)?,
+        Request::GuildMotd(guild_id) => guild::titanium_get_motd(*guild_id, sender.name)?,
+        Request::AnswerGuildInvite {
+            inviter,
+            guild_id,
+            rank,
+            answer,
+        } => guild::titanium_answer_invite(inviter, sender.name, *guild_id, *rank, *answer)?,
+        Request::GuildInvite {
+            name,
+            guild_id,
+            officer,
+        } => guild::titanium_invite(
+            name,
+            sender.name,
+            *guild_id,
+            if *officer {
+                crate::listing::GuildRank::Officer
+            } else {
+                crate::listing::GuildRank::Member
+            },
+        )?,
+        Request::GuildRemove { name, guild_id } => {
+            guild::titanium_remove(name, sender.name, *guild_id)?
+        }
+        Request::SetGuildMotd(motd) => guild::titanium_set_motd(sender.name, motd)?,
+        Request::GuildMakeLeader(member) => guild::titanium_make_leader(sender.name, member)?,
+        Request::GuildDemote(member) => guild::titanium_demote(sender.name, member)?,
         Request::RaidInvite(name) => raid::invite(name, sender.name)?,
         Request::RaidAccept(inviter) => raid::accept(inviter, sender.name)?,
         Request::RaidLeave => raid::remove(sender.name, sender.name)?,

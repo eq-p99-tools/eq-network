@@ -20,6 +20,7 @@ mod entities;
 mod exchange;
 pub(super) mod feature;
 mod groups;
+mod guilds;
 pub(super) mod hazards;
 mod hiding;
 mod inventory;

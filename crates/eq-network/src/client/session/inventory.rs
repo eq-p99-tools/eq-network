@@ -17,6 +17,7 @@ mod merchant;
 #[cfg(test)]
 mod merchant_outcomes;
 mod resync;
+mod sharing;
 
 use super::{
     actions::Resource,
@@ -176,6 +177,12 @@ fn coins_news(message: &Message, wallet: &mut Wallet) -> Option<bool> {
         WorldEvent::Coins(coins) => {
             wallet.purse = Some(*coins);
             None
+        }
+        // A banker's change says how both now stand.
+        WorldEvent::CoinsChanged(changed) => {
+            wallet.purse = Some(changed.purse);
+            wallet.bank = Some(changed.bank);
+            Some(true)
         }
         WorldEvent::CoinsElsewhere { cursor, bank, .. } => {
             wallet.cursor = *cursor;
@@ -408,6 +415,10 @@ pub(super) struct Allowances {
     pub(super) merchants: bool,
     /// Eating and drinking, by hand and on the session's own.
     pub(super) meals: bool,
+    /// Sharing coins with the group, at once and as they are looted.
+    pub(super) splitting: bool,
+    /// Asking a banker to change the purse's and the bank's coins.
+    pub(super) banker_change: bool,
 }
 
 impl Allowances {
@@ -418,6 +429,8 @@ impl Allowances {
         coins: true,
         merchants: true,
         meals: true,
+        splitting: false,
+        banker_change: false,
     };
 }
 
@@ -461,6 +474,8 @@ pub(super) struct Belongings {
     quotes: Quotes,
     /// How fed and watered the player is, which decides when to eat.
     meals: meals::Meals,
+    /// A split or a banker's change waiting for its answer.
+    sharing: sharing::Sharing,
 }
 
 impl Belongings {
@@ -500,6 +515,7 @@ impl Belongings {
             merchant: OpenMerchant::default(),
             quotes,
             meals: meals::Meals::new(auto_eat, hungry),
+            sharing: sharing::Sharing::default(),
         }
     }
 
@@ -922,6 +938,7 @@ impl Belongings {
         out.log.send(ClientEvent::World(WorldEvent::CoinsRefused {
             session_id: *session_id,
             reason: reason.clone(),
+            string_id: None,
         }))?;
         out.log.diagnostic(format!("Coin move refused: {reason}"))
     }
@@ -993,6 +1010,12 @@ impl Feature for Belongings {
         if self.allows.meals {
             offered.push(Capability::Meals);
         }
+        if self.allows.splitting {
+            offered.push(Capability::Splitting);
+        }
+        if self.allows.banker_change {
+            offered.push(Capability::BankerChange);
+        }
         offered
     }
 
@@ -1006,6 +1029,7 @@ impl Feature for Belongings {
             self.meals.admit(*nourishment);
         }
         coins_news(message, &mut world.coins.0);
+        self.sharing.admit(message);
         Ok(())
     }
 
@@ -1021,6 +1045,7 @@ impl Feature for Belongings {
             change(update, world, out)?;
         }
         tell_coins(world, true, out)?;
+        self.sharing.admitted(out)?;
         if let Some(nourishment) = self.meals.snapshot() {
             out.log
                 .send(ClientEvent::World(WorldEvent::Nourishment(nourishment)))?;
@@ -1053,6 +1078,10 @@ impl Feature for Belongings {
                 self.allows.merchants
             }
             ClientCommand::Consume { .. } | ClientCommand::AutoEat { .. } => self.allows.meals,
+            ClientCommand::SplitCoins { .. } | ClientCommand::SetAutoSplit { .. } => {
+                self.allows.splitting
+            }
+            ClientCommand::ChangeCoins { .. } => self.allows.banker_change,
             _ => false,
         }
     }
@@ -1070,7 +1099,17 @@ impl Feature for Belongings {
             ClientCommand::MoveInventory(request) => self.move_item(request, world, out),
             ClientCommand::DestroyItem(request) => self.destroy_item(request, world, out),
             ClientCommand::DropItem(request) => Self::drop_item(request, world, out),
+            ClientCommand::MoveCoins { .. } if self.sharing.changing() => {
+                super::actions::refuse(command, "Wait for the banker's change.", out.log)
+            }
             ClientCommand::MoveCoins { .. } => Self::move_coins(command, world, out),
+            ClientCommand::SplitCoins { coins, .. } => {
+                self.sharing.split(command, *coins, world, out)
+            }
+            ClientCommand::SetAutoSplit { on, .. } => {
+                sharing::Sharing::auto_split(command, *on, world, out)
+            }
+            ClientCommand::ChangeCoins { .. } => self.sharing.change(command, world, out),
             ClientCommand::Shop { .. } => self.shop(command, world, out),
             ClientCommand::AutoEat { auto_eat, .. } => {
                 self.meals.choose(*auto_eat);
@@ -1103,7 +1142,7 @@ impl Feature for Belongings {
         if self.trades.expire(now) {
             merchant_unanswered(world, out)?;
         }
-        Ok(())
+        self.sharing.tick(now, world, out)
     }
 
     /// Follows the open merchant's list before anyone hears it, so a list
@@ -1115,6 +1154,9 @@ impl Feature for Belongings {
     /// session remembers adds nothing, so the purse never rises past what
     /// the server added.
     fn explain(&mut self, message: &mut Message, _world: &World) {
+        if let Message::Event(event) = message {
+            self.sharing.heard(event);
+        }
         if let Message::MerchantScoped {
             merchant_id,
             update,
@@ -3153,5 +3195,202 @@ mod tests {
             [&InventoryUpdate::Invalidated]
         );
         assert!(world.inventory.stale());
+    }
+
+    #[test]
+    fn a_split_leaves_the_purse_at_once_until_the_money_update_or_the_wait_ends() {
+        let (mut belongings, mut world, _) = with_gold();
+        belongings.allows.splitting = true;
+        assert!(belongings
+            .capabilities()
+            .contains(&crate::world::Capability::Splitting));
+        let split = |gold| ClientCommand::SplitCoins {
+            session_id: 5,
+            coins: Coins {
+                gold,
+                ..Coins::default()
+            },
+        };
+        let outcome = testing::run(|out| belongings.handle(&split(1), &mut world, out));
+        outcome.result.unwrap();
+        assert_eq!(outcome.sent, []);
+        assert_eq!(coins_refused(&outcome.events), ["You are not in a group."]);
+        world.grouped = true;
+        let outcome = testing::run(|out| belongings.handle(&split(6), &mut world, out));
+        outcome.result.unwrap();
+        assert_eq!(outcome.sent, []);
+        assert_eq!(
+            coins_refused(&outcome.events),
+            ["You do not have that many coins."]
+        );
+        assert!(outcome.events.iter().any(|event| matches!(
+            event,
+            ClientEvent::World(WorldEvent::CoinsRefused {
+                string_id: Some(0x302d),
+                ..
+            })
+        )));
+        let outcome = testing::run(|out| belongings.handle(&split(0), &mut world, out));
+        assert_eq!(coins_refused(&outcome.events), ["Name the coins to split."]);
+        let outcome = testing::run(|out| belongings.handle(&split(2), &mut world, out));
+        outcome.result.unwrap();
+        assert_eq!(
+            outcome.sent,
+            [eq_network_game::split::titanium_split(Coins {
+                gold: 2,
+                ..Coins::default()
+            })
+            .unwrap()]
+        );
+        assert_eq!(world.coins.purse.map(|purse| purse.gold), Some(3));
+        assert!(outcome.events.iter().any(
+            |event| matches!(event, ClientEvent::World(WorldEvent::Coins(coins)) if coins.gold == 3)
+        ));
+        // The share comes back as a money update, which settles the split.
+        let share = Message::Event(WorldEvent::Coins(Coins {
+            gold: 4,
+            ..Coins::default()
+        }));
+        let mut heard = Message::Event(WorldEvent::Coins(Coins {
+            gold: 4,
+            ..Coins::default()
+        }));
+        belongings.explain(&mut heard, &world);
+        testing::run(|out| belongings.observe(&share, &mut world, out))
+            .result
+            .unwrap();
+        belongings.sharing.backdate(sharing::SPLIT_ANSWER);
+        let outcome = testing::run(|out| belongings.tick(Instant::now(), &mut world, out));
+        outcome.result.unwrap();
+        assert_eq!(world.coins.purse.map(|purse| purse.gold), Some(4));
+        // A refused split sends no update, so the purse becomes unknown.
+        testing::run(|out| belongings.handle(&split(1), &mut world, out))
+            .result
+            .unwrap();
+        belongings.sharing.backdate(sharing::SPLIT_ANSWER);
+        let outcome = testing::run(|out| belongings.tick(Instant::now(), &mut world, out));
+        outcome.result.unwrap();
+        assert_eq!(world.coins.purse, None);
+        assert!(outcome
+            .events
+            .iter()
+            .any(|event| matches!(event, ClientEvent::World(WorldEvent::PurseUncertain { .. }))));
+        let auto = ClientCommand::SetAutoSplit {
+            session_id: 5,
+            on: true,
+        };
+        assert!(belongings.owns(&auto));
+        let outcome = testing::run(|out| belongings.handle(&auto, &mut world, out));
+        outcome.result.unwrap();
+        assert_eq!(
+            outcome.sent,
+            [eq_network_game::split::titanium_auto_split(7, true).unwrap()]
+        );
+        assert!(outcome.events.iter().any(|event| matches!(
+            event,
+            ClientEvent::World(WorldEvent::AutoSplitSet { on: true, .. })
+        )));
+    }
+
+    #[test]
+    fn the_profiles_automatic_splitting_reaches_the_host_at_admission() {
+        let mut belongings = Belongings::new(eq_network_game::food::AutoEat::default());
+        let mut world = World::new(5);
+        // It comes with the profile, before the admission publishes news.
+        belongings
+            .admit(&Message::Event(WorldEvent::AutoSplit(true)), &mut world)
+            .unwrap();
+        world.own_spawn = Some(7);
+        world.player.admit(testing::player(7));
+        let outcome = testing::run(|out| belongings.admitted(&mut world, out));
+        outcome.result.unwrap();
+        assert!(outcome
+            .events
+            .iter()
+            .any(|event| matches!(event, ClientEvent::World(WorldEvent::AutoSplit(true)))));
+        // Only once: the next admission without a profile word says nothing.
+        let again = testing::run(|out| belongings.admitted(&mut world, out));
+        assert!(!again
+            .events
+            .iter()
+            .any(|event| matches!(event, ClientEvent::World(WorldEvent::AutoSplit(_)))));
+    }
+
+    #[test]
+    fn a_banker_change_holds_coin_moves_and_its_answer_sets_purse_and_bank() {
+        use eq_network_game::{banker::Changed, money::CoinPlace};
+        let (mut belongings, mut world, move_coins) = with_gold();
+        belongings.allows.banker_change = true;
+        assert!(belongings
+            .capabilities()
+            .contains(&crate::world::Capability::BankerChange));
+        let change = ClientCommand::ChangeCoins { session_id: 5 };
+        assert!(belongings.owns(&change));
+        let outcome = testing::run(|out| belongings.handle(&change, &mut world, out));
+        outcome.result.unwrap();
+        assert_eq!(outcome.sent, []);
+        assert_eq!(
+            coins_refused(&outcome.events),
+            ["Stand near a banker to use the bank"]
+        );
+        let mut banker = testing::spawn(9, SpawnKind::Npc);
+        banker.class = Some(40);
+        world.spawns.insert(banker);
+        let outcome = testing::run(|out| belongings.handle(&change, &mut world, out));
+        outcome.result.unwrap();
+        assert_eq!(outcome.sent, [eq_network_game::banker::titanium_request()]);
+        // Coins wait for the banker, and so does a second change.
+        let outcome = testing::run(|out| {
+            belongings.handle(
+                &move_coins(CoinPlace::Purse, CoinPlace::Cursor),
+                &mut world,
+                out,
+            )
+        });
+        outcome.result.unwrap();
+        assert_eq!(outcome.sent, []);
+        assert_eq!(
+            coins_refused(&outcome.events),
+            ["Wait for the banker's change."]
+        );
+        let outcome = testing::run(|out| belongings.handle(&change, &mut world, out));
+        assert_eq!(outcome.sent, []);
+        let changed = Changed {
+            purse: Coins {
+                platinum: 1,
+                ..Coins::default()
+            },
+            bank: Coins {
+                gold: 2,
+                ..Coins::default()
+            },
+        };
+        let answer = Message::Event(WorldEvent::CoinsChanged(changed));
+        belongings.explain(
+            &mut Message::Event(WorldEvent::CoinsChanged(changed)),
+            &world,
+        );
+        let outcome = testing::run(|out| belongings.observe(&answer, &mut world, out));
+        outcome.result.unwrap();
+        assert_eq!(world.coins.purse, Some(changed.purse));
+        assert_eq!(world.coins.bank, Some(changed.bank));
+        assert!(outcome
+            .events
+            .iter()
+            .any(|event| matches!(event, ClientEvent::World(WorldEvent::Coins(coins)) if *coins == changed.purse)));
+        assert!(!belongings.sharing.changing());
+        // Silence past the wait is a refusal, and the coins stay as they were.
+        testing::run(|out| belongings.handle(&change, &mut world, out))
+            .result
+            .unwrap();
+        belongings.sharing.backdate(sharing::CHANGE_ANSWER);
+        let outcome = testing::run(|out| belongings.tick(Instant::now(), &mut world, out));
+        outcome.result.unwrap();
+        assert_eq!(
+            coins_refused(&outcome.events),
+            ["The banker did not change your coins."]
+        );
+        assert_eq!(world.coins.purse, Some(changed.purse));
+        assert!(!belongings.sharing.changing());
     }
 }

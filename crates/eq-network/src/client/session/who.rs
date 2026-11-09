@@ -38,6 +38,39 @@ impl Feature for Who {
     }
 }
 
+/// Asks the world which of the player's friends are online: `/who all
+/// friends`, whose answer comes as an ordinary who listing.
+pub(super) struct FriendsWho;
+
+impl Feature for FriendsWho {
+    fn capabilities(&self) -> Vec<crate::world::Capability> {
+        vec![crate::world::Capability::FriendsWho]
+    }
+
+    fn owns(&self, command: &ClientCommand) -> bool {
+        matches!(command, ClientCommand::WhoFriends { .. })
+    }
+
+    fn handle(
+        &mut self,
+        command: &ClientCommand,
+        _world: &mut World,
+        out: &mut Out<'_, '_>,
+    ) -> Result<()> {
+        let ClientCommand::WhoFriends { names, .. } = command else {
+            return Ok(());
+        };
+        match out.encode(&Request::WhoFriends(names.clone())) {
+            Ok(request) => out.send(&request),
+            // The host keeps the list; one it let through that cannot be
+            // sent is not worth the session.
+            Err(error) => out
+                .log
+                .diagnostic(format!("Friends who request not sent: {error}")),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::feature::testing;
@@ -66,6 +99,28 @@ mod tests {
         );
         let outcome = testing::run(|out| Who.handle(&ask(&"x".repeat(64)), &mut world, out));
         outcome.result.unwrap();
-        assert!(outcome.sent.is_empty(), "sent {:?}", outcome.sent);
+        assert_eq!(outcome.sent, []);
+    }
+
+    #[test]
+    fn friends_who_sends_the_list_and_drops_one_it_cannot_carry() {
+        let mut world = World::new(5);
+        let ask = |names: &[&str]| ClientCommand::WhoFriends {
+            session_id: 5,
+            names: names.iter().map(|name| (*name).to_owned()).collect(),
+        };
+        let outcome =
+            testing::run(|out| FriendsWho.handle(&ask(&["Alpha", "Beta"]), &mut world, out));
+        outcome.result.unwrap();
+        assert_eq!(
+            outcome.sent,
+            [
+                eq_network_game::friends::titanium_request(&["Alpha".into(), "Beta".into()])
+                    .unwrap()
+            ]
+        );
+        let outcome = testing::run(|out| FriendsWho.handle(&ask(&[]), &mut world, out));
+        outcome.result.unwrap();
+        assert_eq!(outcome.sent, []);
     }
 }

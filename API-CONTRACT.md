@@ -1,5 +1,43 @@
 # API and integration contracts
 
+## Friends who, guild requests, splitting and banker change
+
+`EQEmu` and Project 1999 offer `Capability::FriendsWho`, `GuildRoster`,
+`GuildManagement`, `BankerChange` and `Splitting`. Each sends what the
+Titanium program sends, and the server decides what it allows.
+
+- `GameCommand::WhoFriends` carries the host's friends list. The answer is an
+  ordinary `WorldEvent::WhoList`. A list the packet cannot carry is not sent.
+- `GameCommand::SplitCoins` names platinum, gold, silver and copper. It is
+  refused outside a group, for nothing, and for more of a kind than the purse
+  holds, each with the official client's string ID on `CoinsRefused`. It is
+  withheld without a word while a banker's change is unanswered. A sent split
+  takes the coins from the purse at once, as the official client does, and
+  reports `WorldEvent::Coins`. If no money update follows within the wait,
+  the purse becomes uncertain (`PurseUncertain`).
+- `GameCommand::SetAutoSplit` sends the appearance update and reports
+  `WorldEvent::AutoSplitSet`, as the server answers nothing. The Titanium
+  profile's setting arrives at admission as `WorldEvent::AutoSplit`, so a
+  host can toggle it as the official client does.
+- `GameCommand::ChangeCoins` needs a banker within the bank reach. It holds
+  coin moves until `WorldEvent::CoinsChanged` arrives, which the worker
+  follows with `Coins` and `CoinsElsewhere`. If no answer arrives within the
+  wait, `CoinsRefused` reports it and the coins stay as they were.
+- `GameCommand::RequestGuildMotd` names the player's guild; outside one it
+  is refused with the official string ID. The reply arrives as chat on
+  `ChannelName::GuildMotdReply`, which the official client always shows.
+  `ChannelName::GuildMotd` arrives unasked, and the official client shows
+  it only when its text differs from the one shown last.
+- `GameCommand::AnswerGuildInvite` answers the invitation of the inviter it
+  names, once, with an `InviteAnswer`: accept, decline, or one of the
+  official client's automatic answers (in another guild, another dialog
+  open, the rank already held). The host decides which, as the official
+  client does from its dialog and its state. `GameCommand::GuildInvite`
+  says whether it offers an officer's rank. `SetGuildMotd` with 512 bytes or
+  more sends an empty message, as the official client does. Guild removal, leader and demote requests name a member of the
+  list the server sent, spelled as it spells them. The server decides who
+  may do what and says so in its own lines.
+
 ## P99 self-bandage stock
 
 A self-targeted P99 Bind Wound request can hold inventory while awaiting

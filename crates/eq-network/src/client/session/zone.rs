@@ -878,7 +878,7 @@ mod tests {
     };
 
     /// How many kinds of command there are.
-    const KINDS: usize = 92;
+    const KINDS: usize = 103;
 
     /// The kinds the login and world servers take, before any zone session.
     const BEFORE_ZONES: [usize; 4] = [0, 1, 70, 75];
@@ -886,6 +886,7 @@ mod tests {
     /// Which kind of command this is. A new command is a compile error here
     /// until it has a number, and then a test failure until the list below
     /// has one of it, so no command can go without an owner unnoticed.
+    #[allow(clippy::too_many_lines, reason = "one number for each kind of command")]
     fn kind(command: &ClientCommand) -> usize {
         match command {
             // The world server's, before any zone session.
@@ -981,6 +982,17 @@ mod tests {
             ClientCommand::LiquidDamage { .. } => 85,
             ClientCommand::RespondToPopup { .. } => 89,
             ClientCommand::InspectPlayer { .. } => 90,
+            ClientCommand::WhoFriends { .. } => 92,
+            ClientCommand::ChangeCoins { .. } => 93,
+            ClientCommand::SplitCoins { .. } => 94,
+            ClientCommand::SetAutoSplit { .. } => 95,
+            ClientCommand::RequestGuildMotd { .. } => 96,
+            ClientCommand::AnswerGuildInvite { .. } => 97,
+            ClientCommand::GuildInvite { .. } => 98,
+            ClientCommand::GuildRemove { .. } => 99,
+            ClientCommand::SetGuildMotd { .. } => 100,
+            ClientCommand::GuildMakeLeader { .. } => 101,
+            ClientCommand::GuildDemote { .. } => 102,
             ClientCommand::SetInspectNote { .. } => 91,
         }
     }
@@ -1474,6 +1486,49 @@ mod tests {
                 session_id,
                 target: eq_network_game::targets::TargetState::default(),
                 created,
+            },
+            ClientCommand::WhoFriends {
+                session_id,
+                names: vec!["Friend".into()],
+            },
+            ClientCommand::ChangeCoins { session_id },
+            ClientCommand::SplitCoins {
+                session_id,
+                coins: eq_network_game::world::Coins {
+                    platinum: 1,
+                    ..eq_network_game::world::Coins::default()
+                },
+            },
+            ClientCommand::SetAutoSplit {
+                session_id,
+                on: true,
+            },
+            ClientCommand::RequestGuildMotd { session_id },
+            ClientCommand::AnswerGuildInvite {
+                session_id,
+                inviter: "Friend".into(),
+                answer: eq_network_game::guild::InviteAnswer::Accept,
+            },
+            ClientCommand::GuildInvite {
+                session_id,
+                name: "Friend".into(),
+                officer: false,
+            },
+            ClientCommand::GuildRemove {
+                session_id,
+                name: "Friend".into(),
+            },
+            ClientCommand::SetGuildMotd {
+                session_id,
+                motd: "Hello".into(),
+            },
+            ClientCommand::GuildMakeLeader {
+                session_id,
+                name: "Friend".into(),
+            },
+            ClientCommand::GuildDemote {
+                session_id,
+                name: "Friend".into(),
             },
             ClientCommand::SetInspectNote {
                 session_id,

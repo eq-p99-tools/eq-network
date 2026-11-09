@@ -746,6 +746,89 @@ pub enum GameCommand {
         /// Who is removed; the player themself leaves.
         name: String,
     },
+    /// Ask which of the player's friends are online: `/who all friends`.
+    WhoFriends {
+        /// Current zone admission.
+        session_id: u64,
+        /// The names on the player's friends list.
+        names: Vec<String>,
+    },
+    /// Ask the banker nearest the player to change the purse's and the
+    /// bank's coins into the fewest coins of the largest kinds: the bank
+    /// window's Change button.
+    ChangeCoins {
+        /// Current zone admission.
+        session_id: u64,
+    },
+    /// Share coins from the purse with the player's group: `/split`.
+    SplitCoins {
+        /// Current zone admission.
+        session_id: u64,
+        /// The coins to share, which leave the purse at once.
+        coins: crate::world::Coins,
+    },
+    /// Share the coins the player loots with their group, or stop:
+    /// `/autosplit`.
+    SetAutoSplit {
+        /// Current zone admission.
+        session_id: u64,
+        /// Whether looted coins are shared.
+        on: bool,
+    },
+    /// Ask for the guild's message of the day: `/getguildmotd`.
+    RequestGuildMotd {
+        /// Current zone admission.
+        session_id: u64,
+    },
+    /// Answer a guild invitation that waits, by who sent it.
+    AnswerGuildInvite {
+        /// Current zone admission.
+        session_id: u64,
+        /// Who invited the player.
+        inviter: String,
+        /// The answer, as the official client gives it.
+        answer: crate::guild::InviteAnswer,
+    },
+    /// Invite a player into the player's guild, as a member or, by its
+    /// leader, as an officer: `/guildinvite`.
+    GuildInvite {
+        /// Current zone admission.
+        session_id: u64,
+        /// Who is invited.
+        name: String,
+        /// Whether the offer is an officer's rank.
+        officer: bool,
+    },
+    /// Remove a member from the player's guild, or, naming the player,
+    /// leave it: `/guildremove`.
+    GuildRemove {
+        /// Current zone admission.
+        session_id: u64,
+        /// Who is removed.
+        name: String,
+    },
+    /// Set the guild's message of the day: `/guildmotd`.
+    SetGuildMotd {
+        /// Current zone admission.
+        session_id: u64,
+        /// The new message.
+        motd: String,
+    },
+    /// Hand the lead of the player's guild to a member: `/guildleader`.
+    GuildMakeLeader {
+        /// Current zone admission.
+        session_id: u64,
+        /// The new leader.
+        name: String,
+    },
+    /// Lower a guild member's rank, as the guild window's Demote button
+    /// does; the Titanium client has no slash command for it.
+    GuildDemote {
+        /// Current zone admission.
+        session_id: u64,
+        /// Who is demoted.
+        name: String,
+    },
     /// Ask the world who is online: `/who all`.
     WhoAll {
         /// Current zone admission.
@@ -844,6 +927,10 @@ impl GameCommand {
     /// The command variant's name, without any payload, for diagnostics.
     /// Exhaustive so new commands cannot silently lose their diagnostic identity.
     #[must_use]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "every kind of command named, so that a new one is a decision here"
+    )]
     pub const fn name(&self) -> &'static str {
         match self {
             Self::SelectServer { .. } => "SelectServer",
@@ -932,6 +1019,17 @@ impl GameCommand {
             Self::RaidMakeLeader { .. } => "RaidMakeLeader",
             Self::RaidRemove { .. } => "RaidRemove",
             Self::WhoAll { .. } => "WhoAll",
+            Self::WhoFriends { .. } => "WhoFriends",
+            Self::ChangeCoins { .. } => "ChangeCoins",
+            Self::SplitCoins { .. } => "SplitCoins",
+            Self::SetAutoSplit { .. } => "SetAutoSplit",
+            Self::RequestGuildMotd { .. } => "RequestGuildMotd",
+            Self::AnswerGuildInvite { .. } => "AnswerGuildInvite",
+            Self::GuildInvite { .. } => "GuildInvite",
+            Self::GuildRemove { .. } => "GuildRemove",
+            Self::SetGuildMotd { .. } => "SetGuildMotd",
+            Self::GuildMakeLeader { .. } => "GuildMakeLeader",
+            Self::GuildDemote { .. } => "GuildDemote",
             Self::AutoAttack { .. } => "AutoAttack",
             Self::RangedAttack(_) => "RangedAttack",
             Self::SelectTarget { .. } => "SelectTarget",
@@ -944,6 +1042,10 @@ impl GameCommand {
 
     /// The zone admission the command was made for, if it names one.
     #[must_use]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "every kind of command named, so that a new one is a decision here"
+    )]
     pub const fn session_id(&self) -> Option<u64> {
         match self {
             Self::SelectServer { .. }
@@ -1020,6 +1122,17 @@ impl GameCommand {
             | Self::Random { session_id, .. }
             | Self::Emote { session_id, .. }
             | Self::Assist { session_id, .. }
+            | Self::WhoFriends { session_id, .. }
+            | Self::ChangeCoins { session_id, .. }
+            | Self::SplitCoins { session_id, .. }
+            | Self::SetAutoSplit { session_id, .. }
+            | Self::RequestGuildMotd { session_id, .. }
+            | Self::AnswerGuildInvite { session_id, .. }
+            | Self::GuildInvite { session_id, .. }
+            | Self::GuildRemove { session_id, .. }
+            | Self::SetGuildMotd { session_id, .. }
+            | Self::GuildMakeLeader { session_id, .. }
+            | Self::GuildDemote { session_id, .. }
             | Self::RaidInvite { session_id, .. }
             | Self::RaidAccept { session_id }
             | Self::RaidDecline { session_id }
@@ -1046,6 +1159,10 @@ impl GameCommand {
     /// for the world server's commands, which come before any zone session.
     /// A front end greys out a command whose capability the session lacks.
     #[must_use]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "every kind of command named, so that a new one is a decision here"
+    )]
     pub const fn capability(&self) -> Option<crate::world::Capability> {
         use crate::world::Capability;
         Some(match self {
@@ -1116,6 +1233,17 @@ impl GameCommand {
             Self::UseKnightAbility { .. } => Capability::KnightAbilities,
             Self::UseDiscipline { .. } => Capability::UsingDisciplines,
             Self::WhoAll { .. } => Capability::Who,
+            Self::WhoFriends { .. } => Capability::FriendsWho,
+            Self::ChangeCoins { .. } => Capability::BankerChange,
+            Self::SplitCoins { .. } | Self::SetAutoSplit { .. } => Capability::Splitting,
+            Self::RequestGuildMotd { .. } | Self::AnswerGuildInvite { .. } => {
+                Capability::GuildRoster
+            }
+            Self::GuildInvite { .. }
+            | Self::GuildRemove { .. }
+            | Self::SetGuildMotd { .. }
+            | Self::GuildMakeLeader { .. }
+            | Self::GuildDemote { .. } => Capability::GuildManagement,
             Self::Pet { .. } => Capability::Pets,
             Self::Training { .. } => Capability::Training,
             Self::AnswerResurrection { .. } => Capability::Resurrection,
@@ -1157,6 +1285,10 @@ impl GameCommand {
     /// When the host made the command, if it says; commands that may wait,
     /// such as closing a loot window, do not.
     #[must_use]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "every kind of command named, so that a new one is a decision here"
+    )]
     pub const fn created(&self) -> Option<std::time::Instant> {
         match self {
             Self::LiquidDamage { observation, .. } => Some(observation.sampled_at),
@@ -1193,6 +1325,17 @@ impl GameCommand {
             | Self::Random { .. }
             | Self::Emote { .. }
             | Self::Assist { .. }
+            | Self::WhoFriends { .. }
+            | Self::ChangeCoins { .. }
+            | Self::SplitCoins { .. }
+            | Self::SetAutoSplit { .. }
+            | Self::RequestGuildMotd { .. }
+            | Self::AnswerGuildInvite { .. }
+            | Self::GuildInvite { .. }
+            | Self::GuildRemove { .. }
+            | Self::SetGuildMotd { .. }
+            | Self::GuildMakeLeader { .. }
+            | Self::GuildDemote { .. }
             | Self::RaidInvite { .. }
             | Self::RaidAccept { .. }
             | Self::RaidDecline { .. }
@@ -1467,6 +1610,17 @@ pub fn encode(
         | GameCommand::Random { .. }
         | GameCommand::Emote { .. }
         | GameCommand::Assist { .. }
+        | GameCommand::WhoFriends { .. }
+        | GameCommand::ChangeCoins { .. }
+        | GameCommand::SplitCoins { .. }
+        | GameCommand::SetAutoSplit { .. }
+        | GameCommand::RequestGuildMotd { .. }
+        | GameCommand::AnswerGuildInvite { .. }
+        | GameCommand::GuildInvite { .. }
+        | GameCommand::GuildRemove { .. }
+        | GameCommand::SetGuildMotd { .. }
+        | GameCommand::GuildMakeLeader { .. }
+        | GameCommand::GuildDemote { .. }
         | GameCommand::RaidInvite { .. }
         | GameCommand::RaidAccept { .. }
         | GameCommand::RaidDecline { .. }

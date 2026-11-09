@@ -194,6 +194,9 @@ pub(in crate::client) struct World {
     pub(super) coins: Ledger,
     /// The player's spawn ID, from the zone's first spawn record for them.
     pub(super) own_spawn: Option<u16>,
+    /// Whether the player is in a group, as the group feature follows it;
+    /// only that feature changes it.
+    pub(super) grouped: bool,
     /// The player's posture as last sent or reported.
     pub(super) posture: OwnPosture,
     /// How the zone session ends, once a feature has decided; see [`World::end`].
@@ -244,6 +247,7 @@ impl World {
             inventory: Carried::default(),
             coins: Ledger::default(),
             own_spawn: None,
+            grouped: false,
             posture: OwnPosture::default(),
             exit: None,
             lifecycle: ZoneLifecycle::default(),

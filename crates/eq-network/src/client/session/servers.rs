@@ -36,6 +36,7 @@ use super::{
     exchange::Exchanges,
     feature::Feature,
     groups::Groups,
+    guilds::Guilds,
     hazards::Hazards,
     hiding::HideAnswer,
     inventory::{Allowances, Belongings},
@@ -58,7 +59,7 @@ use super::{
     tradeskills::Tradeskills,
     training::Training,
     transfers::{Home, Transfers},
-    who::Who,
+    who::{FriendsWho, Who},
     wire::{EqMac, Titanium, Wire},
     CharacterSession, Events, ServerProtocol, ZoneExit,
 };
@@ -486,6 +487,17 @@ pub(super) trait ServerType: Sync {
         None
     }
 
+    /// Asking which of the player's friends are online.
+    fn friends_who(&self, _setup: &Setup<'_>) -> Provided {
+        None
+    }
+
+    /// The player's guild: its message of the day, invitations, and its
+    /// officers' and leader's requests.
+    fn guilds(&self, _setup: &Setup<'_>) -> Provided {
+        None
+    }
+
     /// Every feature the server type provides, in the order the zone session
     /// offers them each command, packet and timer.
     fn features(&self, setup: &Setup<'_>) -> Vec<Provision> {
@@ -513,6 +525,8 @@ pub(super) trait ServerType: Sync {
             self.bleeding_out(setup),
             self.clock(setup),
             self.who(setup),
+            self.friends_who(setup),
+            self.guilds(setup),
             self.corpses(setup),
             self.pets(setup),
             self.training(setup),
@@ -640,10 +654,6 @@ mod shared {
 
     pub(super) fn spellbook(edits: Edits) -> Box<dyn Feature> {
         Box::new(Spellbook::new(edits))
-    }
-
-    pub(super) fn inventory(rules: MoveRules, setup: &Setup<'_>) -> Box<dyn Feature> {
-        inventory_under(rules, Quotes::WithRate, Allowances::STANDARD, setup)
     }
 
     /// The inventory, whose items the player moves under the server type's
@@ -1004,8 +1014,32 @@ impl ServerType for Project1999 {
         }))
     }
 
+    /// Splitting and a banker's change send what the Titanium program sends
+    /// (program read R6: 0x4848 from `/split`, 0x6a5b from the bank window's
+    /// Change button); the server decides what it allows.
     fn inventory(&self, setup: &Setup<'_>) -> Provided {
-        offer(shared::inventory(self.inventory_move_rules()?, setup))
+        offer(shared::inventory_under(
+            self.inventory_move_rules()?,
+            Quotes::WithRate,
+            Allowances {
+                splitting: true,
+                banker_change: true,
+                ..Allowances::STANDARD
+            },
+            setup,
+        ))
+    }
+
+    /// Asking which friends are online sends the Titanium program's request
+    /// (program read R8, `/who all friends`).
+    fn friends_who(&self, _setup: &Setup<'_>) -> Provided {
+        offer(Box::new(FriendsWho))
+    }
+
+    /// The Titanium guild requests and answers the program sends (program
+    /// read R11); the server checks who may do what.
+    fn guilds(&self, _setup: &Setup<'_>) -> Provided {
+        offer(Box::<Guilds>::default())
     }
 
     /// The Titanium program's floor is whatever surface lies under the
@@ -1193,6 +1227,8 @@ impl ServerType for EqEmu {
             Quotes::WithRate,
             Allowances {
                 ground_drop: setup.local_only,
+                splitting: true,
+                banker_change: true,
                 ..Allowances::STANDARD
             },
             setup,
@@ -1349,6 +1385,18 @@ impl ServerType for EqEmu {
         offer(shared::raids())
     }
 
+    /// `Client::Handle_OP_FriendsWho` hands the list to the world, which
+    /// answers with an ordinary who listing (`ClientList::SendFriendsWho`).
+    fn friends_who(&self, _setup: &Setup<'_>) -> Provided {
+        offer(Box::new(FriendsWho))
+    }
+
+    /// The Titanium guild requests `EQEmu`'s `zone/client_packet.cpp`
+    /// handlers take; the server checks who may do what.
+    fn guilds(&self, _setup: &Setup<'_>) -> Provided {
+        offer(Box::<Guilds>::default())
+    }
+
     fn hazards(&self, setup: &Setup<'_>) -> Provided {
         let hazards: &[Hazard] = if setup.local_only {
             &LOCAL_EQEMU_HAZARDS
@@ -1449,6 +1497,8 @@ impl ServerType for Quarm {
                 coins: true,
                 merchants: true,
                 meals: true,
+                splitting: false,
+                banker_change: false,
             },
             setup,
         ))
@@ -2294,8 +2344,8 @@ mod tests {
         // yet checked live; and only EQEmu takes the show-helm option.
         // Both Titanium policies retain the verified own-player stun timer.
         for (protocol, count) in [
-            (ServerProtocol::Project1999, 34),
-            (ServerProtocol::EqEmu, 40),
+            (ServerProtocol::Project1999, 36),
+            (ServerProtocol::EqEmu, 42),
         ] {
             let server = server_type(protocol);
             let setup = Setup::new("Tester", AutoEat::default());
@@ -2314,6 +2364,23 @@ mod tests {
             assert!(offers(server_type(ServerProtocol::EqEmu)).contains(&capability));
         }
         assert!(offers(server_type(ServerProtocol::Project1999)).contains(&Capability::Grouping));
+        // Both Titanium providers offer the contacts, guild and coin-sharing
+        // requests the program sends.
+        for protocol in [ServerProtocol::Project1999, ServerProtocol::EqEmu] {
+            let capabilities = offers(server_type(protocol));
+            for capability in [
+                Capability::FriendsWho,
+                Capability::GuildRoster,
+                Capability::GuildManagement,
+                Capability::BankerChange,
+                Capability::Splitting,
+            ] {
+                assert!(
+                    capabilities.contains(&capability),
+                    "{protocol:?} {capability:?}"
+                );
+            }
+        }
         // Both Titanium providers offer the ordinary social commands.
         for protocol in [ServerProtocol::Project1999, ServerProtocol::EqEmu] {
             let capabilities = offers(server_type(protocol));
