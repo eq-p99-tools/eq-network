@@ -1506,11 +1506,13 @@ mod tests {
             ClientCommand::RequestGuildMotd { session_id },
             ClientCommand::AnswerGuildInvite {
                 session_id,
-                accept: true,
+                inviter: "Friend".into(),
+                answer: eq_network_game::guild::InviteAnswer::Accept,
             },
             ClientCommand::GuildInvite {
                 session_id,
                 name: "Friend".into(),
+                officer: false,
             },
             ClientCommand::GuildRemove {
                 session_id,

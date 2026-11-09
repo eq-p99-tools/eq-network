@@ -780,20 +780,24 @@ pub enum GameCommand {
         /// Current zone admission.
         session_id: u64,
     },
-    /// Accept or decline the guild invitation waiting for an answer.
+    /// Answer a guild invitation that waits, by who sent it.
     AnswerGuildInvite {
         /// Current zone admission.
         session_id: u64,
-        /// Join (true) or decline.
-        accept: bool,
+        /// Who invited the player.
+        inviter: String,
+        /// The answer, as the official client gives it.
+        answer: crate::guild::InviteAnswer,
     },
-    /// Invite a player into the player's guild as a member:
-    /// `/guildinvite`.
+    /// Invite a player into the player's guild, as a member or, by its
+    /// leader, as an officer: `/guildinvite`.
     GuildInvite {
         /// Current zone admission.
         session_id: u64,
         /// Who is invited.
         name: String,
+        /// Whether the offer is an officer's rank.
+        officer: bool,
     },
     /// Remove a member from the player's guild, or, naming the player,
     /// leave it: `/guildremove`.

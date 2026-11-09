@@ -175,15 +175,17 @@ pub enum Request {
         guild_id: u32,
         /// The rank offered.
         rank: crate::listing::GuildRank,
-        /// Join (true) or decline.
-        accept: bool,
+        /// The answer.
+        answer: crate::guild::InviteAnswer,
     },
-    /// Invite a player into the player's guild as a member.
+    /// Invite a player into the player's guild, as a member or an officer.
     GuildInvite {
         /// Who is invited.
         name: String,
         /// The player's guild.
         guild_id: u32,
+        /// Whether the offer is an officer's rank.
+        officer: bool,
     },
     /// Remove a member from the player's guild.
     GuildRemove {
@@ -453,13 +455,21 @@ pub fn titanium(request: &Request, sender: Sender<'_>) -> Result<EncodedCommand>
             inviter,
             guild_id,
             rank,
-            accept,
-        } => guild::titanium_answer_invite(inviter, sender.name, *guild_id, *rank, *accept)?,
-        Request::GuildInvite { name, guild_id } => guild::titanium_invite(
+            answer,
+        } => guild::titanium_answer_invite(inviter, sender.name, *guild_id, *rank, *answer)?,
+        Request::GuildInvite {
+            name,
+            guild_id,
+            officer,
+        } => guild::titanium_invite(
             name,
             sender.name,
             *guild_id,
-            crate::listing::GuildRank::Member,
+            if *officer {
+                crate::listing::GuildRank::Officer
+            } else {
+                crate::listing::GuildRank::Member
+            },
         )?,
         Request::GuildRemove { name, guild_id } => {
             guild::titanium_remove(name, sender.name, *guild_id)?

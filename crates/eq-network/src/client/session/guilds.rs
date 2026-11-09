@@ -8,8 +8,12 @@
 //! checks only what a request cannot be built without: a guild to name, an
 //! invitation to answer, and, for a member the request names, that the
 //! member list the server sent holds them, spelled as the list spells them
-//! (inferred, recording checklist 6.411). An answer goes once, to the
-//! invitation that waits; a new invitation replaces an older one.
+//! (inferred, recording checklist 6.411). Each answer goes once, to the
+//! invitation of the inviter it names; a new invitation from the same
+//! inviter replaces their older one. The host decides the answer, as the
+//! official client does from its dialog and its own state (program read
+//! R11). `/guildmotd` with nothing, or with 512 bytes or more, sends an
+//! empty message, as the program does.
 use super::{
     actions,
     feature::{Feature, Out, World},
@@ -43,8 +47,16 @@ struct Invitation {
 pub(super) struct Guilds {
     /// The members the server last listed, by name.
     members: Option<Vec<String>>,
-    invitation: Option<Invitation>,
+    /// The invitations waiting for an answer, oldest first.
+    invitations: Vec<Invitation>,
 }
+
+/// The most invitations kept waiting: the oldest goes when another comes.
+const INVITATIONS: usize = 8;
+
+/// The longest message of the day the official client sends; a longer one
+/// goes empty (0x4666e3).
+const MOTD_LIMIT: usize = 512;
 
 impl Guilds {
     /// Follows a guild update: a full member list, a member joining or
@@ -79,7 +91,12 @@ impl Guilds {
                 guild_id,
                 rank,
             } => {
-                self.invitation = Some(Invitation {
+                self.invitations
+                    .retain(|invitation| invitation.inviter != *inviter);
+                if self.invitations.len() == INVITATIONS {
+                    self.invitations.remove(0);
+                }
+                self.invitations.push(Invitation {
                     inviter: inviter.clone(),
                     guild_id: *guild_id,
                     rank: *rank,
@@ -120,19 +137,25 @@ impl Guilds {
                     .filter(|guild| *guild <= LAST_GUILD)
                     .ok_or(("You are not in a guild.", Some(NO_GUILD)))?,
             ),
-            ClientCommand::AnswerGuildInvite { accept, .. } => {
-                let invitation = self
-                    .invitation
-                    .take()
-                    .ok_or(unofficial("No guild invitation is waiting for an answer."))?;
+            ClientCommand::AnswerGuildInvite {
+                inviter, answer, ..
+            } => {
+                let index = self
+                    .invitations
+                    .iter()
+                    .position(|invitation| invitation.inviter == *inviter)
+                    .ok_or(unofficial(
+                        "No guild invitation from them is waiting for an answer.",
+                    ))?;
+                let invitation = self.invitations.remove(index);
                 Request::AnswerGuildInvite {
                     inviter: invitation.inviter,
                     guild_id: invitation.guild_id,
                     rank: invitation.rank,
-                    accept: *accept,
+                    answer: *answer,
                 }
             }
-            ClientCommand::GuildInvite { name, .. } => {
+            ClientCommand::GuildInvite { name, officer, .. } => {
                 let guild_id = in_guild()?;
                 let name = name.trim();
                 if name.is_empty() {
@@ -141,6 +164,7 @@ impl Guilds {
                 Request::GuildInvite {
                     name: name.to_owned(),
                     guild_id,
+                    officer: *officer,
                 }
             }
             ClientCommand::GuildRemove { name, .. } => {
@@ -152,7 +176,12 @@ impl Guilds {
             }
             ClientCommand::SetGuildMotd { motd, .. } => {
                 in_guild()?;
-                Request::SetGuildMotd(motd.trim().to_owned())
+                let motd = motd.trim();
+                Request::SetGuildMotd(if motd.len() >= MOTD_LIMIT {
+                    String::new()
+                } else {
+                    motd.to_owned()
+                })
             }
             ClientCommand::GuildMakeLeader { name, .. } => {
                 in_guild()?;
@@ -221,7 +250,7 @@ impl Feature for Guilds {
 mod tests {
     use super::super::feature::testing;
     use super::*;
-    use eq_network_game::guild;
+    use eq_network_game::guild::{self, InviteAnswer};
 
     fn guild_world(guild_id: Option<u32>) -> World {
         let mut world = World::new(5);
@@ -269,16 +298,19 @@ mod tests {
     fn an_invitation_is_answered_once_with_what_it_offered() {
         let mut feature = Guilds::default();
         let mut world = guild_world(None);
-        let answer = |accept| ClientCommand::AnswerGuildInvite {
+        let answer = |inviter: &str, answer| ClientCommand::AnswerGuildInvite {
             session_id: 5,
-            accept,
+            inviter: inviter.into(),
+            answer,
         };
-        let outcome = testing::run(|out| feature.handle(&answer(true), &mut world, out));
+        let outcome = testing::run(|out| {
+            feature.handle(&answer("Inviter", InviteAnswer::Accept), &mut world, out)
+        });
         outcome.result.unwrap();
         assert_eq!(outcome.sent, []);
         assert_eq!(
             refusal(&outcome.events).as_deref(),
-            Some("No guild invitation is waiting for an answer.")
+            Some("No guild invitation from them is waiting for an answer.")
         );
         let invite = Message::Event(WorldEvent::Guild(GuildUpdate::Invite {
             inviter: "Inviter".into(),
@@ -288,16 +320,48 @@ mod tests {
         testing::run(|out| feature.observe(&invite, &mut world, out))
             .result
             .unwrap();
-        let outcome = testing::run(|out| feature.handle(&answer(false), &mut world, out));
+        let other = Message::Event(WorldEvent::Guild(GuildUpdate::Invite {
+            inviter: "Second".into(),
+            guild_id: 4,
+            rank: GuildRank::Officer,
+        }));
+        testing::run(|out| feature.observe(&other, &mut world, out))
+            .result
+            .unwrap();
+        // Each invitation is answered by its inviter, with what it offered.
+        let outcome = testing::run(|out| {
+            feature.handle(&answer("Second", InviteAnswer::Busy), &mut world, out)
+        });
         outcome.result.unwrap();
         assert_eq!(
             outcome.sent,
-            [
-                guild::titanium_answer_invite("Inviter", "Tester", 3, GuildRank::Member, false)
-                    .unwrap()
-            ]
+            [guild::titanium_answer_invite(
+                "Second",
+                "Tester",
+                4,
+                GuildRank::Officer,
+                InviteAnswer::Busy
+            )
+            .unwrap()]
         );
-        let outcome = testing::run(|out| feature.handle(&answer(true), &mut world, out));
+        let outcome = testing::run(|out| {
+            feature.handle(&answer("Inviter", InviteAnswer::Decline), &mut world, out)
+        });
+        outcome.result.unwrap();
+        assert_eq!(
+            outcome.sent,
+            [guild::titanium_answer_invite(
+                "Inviter",
+                "Tester",
+                3,
+                GuildRank::Member,
+                InviteAnswer::Decline
+            )
+            .unwrap()]
+        );
+        let outcome = testing::run(|out| {
+            feature.handle(&answer("Inviter", InviteAnswer::Accept), &mut world, out)
+        });
         outcome.result.unwrap();
         assert_eq!(outcome.sent, [], "a second answer must not go");
     }
@@ -373,6 +437,7 @@ mod tests {
             ClientCommand::GuildInvite {
                 session_id: 5,
                 name: "Friend".into(),
+                officer: false,
             },
             ClientCommand::SetGuildMotd {
                 session_id: 5,
@@ -397,12 +462,13 @@ mod tests {
         let invite = ClientCommand::GuildInvite {
             session_id: 5,
             name: " Friend ".into(),
+            officer: true,
         };
         let outcome = testing::run(|out| feature.handle(&invite, &mut world, out));
         outcome.result.unwrap();
         assert_eq!(
             outcome.sent,
-            [guild::titanium_invite("Friend", "Tester", 3, GuildRank::Member).unwrap()]
+            [guild::titanium_invite("Friend", "Tester", 3, GuildRank::Officer).unwrap()]
         );
         let motd = ClientCommand::SetGuildMotd {
             session_id: 5,
@@ -410,7 +476,17 @@ mod tests {
         };
         let outcome = testing::run(|out| feature.handle(&motd, &mut world, out));
         outcome.result.unwrap();
-        assert_eq!(outcome.sent, []);
+        // The program sends a message of 512 bytes or more as an empty one.
+        assert_eq!(
+            outcome.sent,
+            [guild::titanium_set_motd("Tester", "").unwrap()]
+        );
+        let motd = ClientCommand::SetGuildMotd {
+            session_id: 5,
+            motd: "line\nbreak".into(),
+        };
+        let outcome = testing::run(|out| feature.handle(&motd, &mut world, out));
+        outcome.result.unwrap();
         assert_eq!(
             refusal(&outcome.events).as_deref(),
             Some("That guild request cannot be sent.")

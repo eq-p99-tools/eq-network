@@ -574,8 +574,6 @@ pub const SET_MOTD_OPCODE: u16 = 0x591c;
 pub const LEADER_OPCODE: u16 = 0x12b1;
 /// `OP_GuildDemote`: lowering a member's rank (Titanium).
 pub const DEMOTE_OPCODE: u16 = 0x4eb9;
-/// The answer that turns an invitation down (`GUILD_INVITE_DECLINE`).
-const DECLINE: u32 = 9;
 /// `GuildMOTD_Struct`'s message field.
 const MOTD: usize = 512;
 
@@ -647,9 +645,41 @@ pub fn titanium_invite(
     })
 }
 
-/// Answers an invitation: accepting takes the rank offered, declining
-/// answers 9 (`GuildInviteAccept_Struct`, 136 bytes: the inviter's name,
-/// the player's, the answer and the guild, 32 bits each).
+/// How the player answers a guild invitation, as the Titanium program
+/// answers on `OP_GuildInviteAccept` (program read R11, 0x455134 and
+/// 0x499e28).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum InviteAnswer {
+    /// Yes on the dialog, or at once an offer of a lower rank: the rank
+    /// offered.
+    Accept,
+    /// No on the dialog, or at once while the player takes no guild
+    /// invitations: 5.
+    Decline,
+    /// At once, from a player in another guild: 3.
+    InAnotherGuild,
+    /// At once, while another guild invitation's dialog is open: 4.
+    Busy,
+    /// At once, offering the rank the player holds: that rank plus 10.
+    AlreadyHeld,
+}
+
+impl InviteAnswer {
+    /// The answer's number on the wire for an offer of this rank.
+    #[must_use]
+    pub const fn wire(self, rank: GuildRank) -> u32 {
+        match self {
+            Self::Accept => rank_wire(rank),
+            Self::Decline => 5,
+            Self::InAnotherGuild => 3,
+            Self::Busy => 4,
+            Self::AlreadyHeld => rank_wire(rank).saturating_add(10),
+        }
+    }
+}
+
+/// Answers an invitation (`GuildInviteAccept_Struct`, 136 bytes: the
+/// inviter's name, the player's, the answer and the guild, 32 bits each).
 ///
 /// # Errors
 /// Rejects a name the record cannot carry.
@@ -658,11 +688,11 @@ pub fn titanium_answer_invite(
     player: &str,
     guild_id: u32,
     rank: GuildRank,
-    accept: bool,
+    answer: InviteAnswer,
 ) -> Result<crate::command::EncodedCommand> {
     let mut body = name_field(inviter, NAME)?;
     body.extend(name_field(player, NAME)?);
-    let answer = if accept { rank_wire(rank) } else { DECLINE };
+    let answer = answer.wire(rank);
     body.extend_from_slice(&answer.to_le_bytes());
     body.extend_from_slice(&guild_id.to_le_bytes());
     Ok(crate::command::EncodedCommand {
@@ -1115,13 +1145,29 @@ mod tests {
                 rank: GuildRank::Officer
             }
         );
-        let yes = titanium_answer_invite("Inviter", "Player", 7, GuildRank::Member, true).unwrap();
+        let yes = titanium_answer_invite(
+            "Inviter",
+            "Player",
+            7,
+            GuildRank::Member,
+            InviteAnswer::Accept,
+        )
+        .unwrap();
         assert_eq!(yes.opcode, INVITE_ACCEPT_OPCODE);
         assert_eq!(yes.body.len(), 136);
         assert_eq!(word(&yes.body, 128), 0);
         assert_eq!(word(&yes.body, 132), 7);
-        let no = titanium_answer_invite("Inviter", "Player", 7, GuildRank::Member, false).unwrap();
-        assert_eq!(word(&no.body, 128), 9);
+        // The program's answers (R11): the rank, 5, 3, 4, or the rank plus 10.
+        for (answer, rank, wire) in [
+            (InviteAnswer::Accept, GuildRank::Officer, 1),
+            (InviteAnswer::Decline, GuildRank::Member, 5),
+            (InviteAnswer::InAnotherGuild, GuildRank::Member, 3),
+            (InviteAnswer::Busy, GuildRank::Member, 4),
+            (InviteAnswer::AlreadyHeld, GuildRank::Officer, 11),
+        ] {
+            let sent = titanium_answer_invite("Inviter", "Player", 7, rank, answer).unwrap();
+            assert_eq!(word(&sent.body, 128), wire, "{answer:?}");
+        }
         let remove = titanium_remove("Member", "Player", 7).unwrap();
         assert_eq!(remove.opcode, REMOVE_OPCODE);
         assert_eq!(remove.body.len(), 136);

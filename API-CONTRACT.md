@@ -28,8 +28,13 @@ has exercised each one.
   `ChannelName::GuildMotdReply`, which the official client always shows.
   `ChannelName::GuildMotd` arrives unasked, and the official client shows
   it only when its text differs from the one shown last.
-- `GameCommand::AnswerGuildInvite` answers the last invitation the worker
-  heard, once. Guild removal, leader and demote requests name a member of the
+- `GameCommand::AnswerGuildInvite` answers the invitation of the inviter it
+  names, once, with an `InviteAnswer`: accept, decline, or one of the
+  official client's automatic answers (in another guild, another dialog
+  open, the rank already held). The host decides which, as the official
+  client does from its dialog and its state. `GameCommand::GuildInvite`
+  says whether it offers an officer's rank. `SetGuildMotd` with 512 bytes or
+  more sends an empty message, as the official client does. Guild removal, leader and demote requests name a member of the
   list the server sent, spelled as it spells them. The server decides who
   may do what and says so in its own lines.
 

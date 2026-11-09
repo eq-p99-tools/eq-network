@@ -14,7 +14,9 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `GameCommand` gains `WhoFriends`, `ChangeCoins`, `SplitCoins`,
   `SetAutoSplit`, `RequestGuildMotd`, `AnswerGuildInvite`, `GuildInvite`,
   `GuildRemove`, `SetGuildMotd`, `GuildMakeLeader` and `GuildDemote`, and
-  `Request` the matching variants. `WorldEvent::CoinsChanged` carries a
+  `Request` the matching variants; guild invitations are answered by
+  inviter with `guild::InviteAnswer`, whose wire values follow the Titanium
+  program (read R11). `WorldEvent::CoinsChanged` carries a
   banker's answer, `WorldEvent::GuildRefused` a refused guild request,
   `WorldEvent::AutoSplit` the profile's automatic splitting and
   `WorldEvent::AutoSplitSet` a change of it, and
