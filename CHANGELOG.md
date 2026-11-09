@@ -484,8 +484,9 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Eating, drinking, looting or any other change in the player's belongings
   no longer withdraws movement while the session waits for the new speed
-  inputs. The last grant stays, unchanged, until the answer lands, so a
-  jump, a crouch or autorun under way goes on. A refused answer, or none
+  inputs. The last inputs stay in force (health, stance and fatigue still
+  apply at once) until the answer lands, so a jump, a crouch or autorun
+  under way goes on. A refused answer, or none
   within a second, withdraws as before.
 - Retire a displaced station's local view and settle unrelated Titanium
   moves independently. Carried slots a station route touched settle one

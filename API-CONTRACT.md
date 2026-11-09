@@ -944,8 +944,8 @@ a wire counter, and consumers must not derive movement permission from it.
 
 A change in the player's belongings (inventory, purse or cursor coins) while
 the player holds a grant asks for the inputs again without withdrawing: the
-last `MotionState` stays in force, unchanged, until the answer to the new
-revision lands. An answer the session refuses, or no answer within one
+last inputs stay in force until the answer to the new revision lands; health,
+stance and fatigue changes still apply at once. An answer the session refuses, or no answer within one
 second, withdraws movement as any other input requirement does. Every other
 input requirement withdraws at once.
 

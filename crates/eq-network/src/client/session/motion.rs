@@ -270,9 +270,11 @@ pub(super) struct Motion {
         eq_network_game::world::Coins,
     )>,
     /// When a change in the player's belongings asked for the inputs again
-    /// while the player held a grant. Until the new inputs land the grant
-    /// stays as it was, never recomputed, and it lapses after
-    /// [`KEPT_GRANT_LIMIT`]; anything that withdraws movement ends it.
+    /// while the player held a grant. Until the answer lands the last
+    /// inputs stay in force (health, stance and fatigue still apply at
+    /// once); the answer replaces them, and without one movement is
+    /// withdrawn after [`KEPT_GRANT_LIMIT`]. Anything that withdraws
+    /// movement ends it.
     kept_since: Option<Instant>,
     /// Whether the player carried too much at the last grant, so the
     /// official client's line goes out once each way.
@@ -351,14 +353,6 @@ impl Motion {
     /// calibration from missing, withdrawn or rejected calibration. Receipt
     /// bookkeeping must not infer success from a prior positive calibration.
     fn apply_grant(&mut self, world: &mut World, out: &mut Out<'_, '_>) -> Result<bool> {
-        // A kept grant stays exactly as it was until the new inputs land.
-        if self.kept_since.is_some() {
-            return Ok(world
-                .body
-                .motion
-                .as_ref()
-                .is_some_and(|motion| motion.calibration().is_some()));
-        }
         let (Some(rule), Some(inputs), Some(player)) =
             (out.wire.speeds(), self.inputs, world.player.as_ref())
         else {
@@ -570,9 +564,9 @@ impl Motion {
         if !granted {
             return self.require_inputs(world, out);
         }
-        // Keep the grant while the host works the new inputs out: an item
-        // eaten or picked up must not drop a jump, a crouch or autorun.
-        // The grant is the last one, never more, and only until the answer
+        // Keep the last inputs in force while the host works the new ones
+        // out, so an item eaten or picked up does not drop a jump, a crouch
+        // or autorun. Only the weight stays stale, and only until the answer
         // lands or the limit passes (our own guard, not the program's).
         self.kept_since.get_or_insert_with(Instant::now);
         self.input_report_id = None;
@@ -1887,6 +1881,35 @@ mod tests {
         assert_eq!(speeds(&outcome.events), Vec::<Option<f32>>::new());
         assert_eq!(world_speed(&world), before);
         assert!(motion.kept_since.is_some());
+        // Health still applies at once while the weight is stale.
+        let hurt = Message::Event(WorldEvent::HitPoints {
+            spawn_id: 7,
+            current: 40,
+            maximum: 500,
+            items: eq_network_game::world::ItemHitPoints::LeftOutOfCurrent,
+        });
+        testing::run_on(EQMAC, |out| motion.observe(&hurt, &mut world, out))
+            .result
+            .unwrap();
+        testing::run_on(EQMAC, |out| motion.tick(Instant::now(), &mut world, out))
+            .result
+            .unwrap();
+        let slowed = world_speed(&world).unwrap();
+        assert!(slowed < before.unwrap());
+        assert!(motion.kept_since.is_some());
+        let healed = Message::Event(WorldEvent::HitPoints {
+            spawn_id: 7,
+            current: 500,
+            maximum: 500,
+            items: eq_network_game::world::ItemHitPoints::LeftOutOfCurrent,
+        });
+        testing::run_on(EQMAC, |out| motion.observe(&healed, &mut world, out))
+            .result
+            .unwrap();
+        testing::run_on(EQMAC, |out| motion.tick(Instant::now(), &mut world, out))
+            .result
+            .unwrap();
+        assert_eq!(world_speed(&world), before);
         // The answer replaces it: heavier, so slower.
         let answer = |revision| ClientCommand::SpeedInputs {
             session_id: 5,
