@@ -205,7 +205,7 @@ it adds no live combat/death evidence to this report.
 | Warrior disciplines | Learned Evasive and Defensive offered | No activation | Verify P99's post-use timer delivery and active-slot updates on the wire. EQEmu's `Client::UseDiscipline` sends `OP_DisciplineTimer` for a successful start with positive reuse. A missing timer stays unknown. [EQEmu discipline timer](https://github.com/EQEmu/EQEmu/blob/4aceae18b94ffaafc08e2b17bc41cd72c77f795d/zone/effects.cpp#L856-L885) |
 | Cooldowns / buffs / resource bars | Partial | Partial | Linked reuse groups, complete effective resource denominators, buff replacement ambiguity and item-effect accounting. Quarm saved gem cooldowns are already decoded from profile offset 4972 and covered by synthetic tests; public behavior still needs verification. Unknown values must remain distinguishable from zero. |
 | Target / consider / combat | Offered | Offered by policy (2026-11-03 stack); live unverified | Quarm attack, consider and death coverage still need the attended live check. |
-| Abilities | Most offered, including self-targeted Bind Wound. Fishing excluded. | Disabled | A terminal or unanswered bandage request releases other inventory actions. Unconfirmed stock slots require a covering inventory update before reuse. P99 result and stock updates await live verification (recording checklist 4.5–4.7). |
+| Abilities | Most offered. Bind Wound requires explicitly targeting yourself. Fishing excluded. | Disabled | Titanium `eqgame.exe` 0x41f4a0 requires a player target and also supports other players. P99 currently offers only the self-targeted case while reply and stock ordering await attended verification (recording checklist 4.5–4.7 and 6.7). A terminal or unanswered attempt releases unrelated inventory actions. Affected stock still needs covering inventory evidence. |
 | Loot / corpses / consent | Offered | Manual looting offered by policy (2026-11-03 stack); live unverified | Quarm corpse commands, own-corpse recovery and the NPC loot flow still need the attended live check; no automatic loot-all. |
 | Doors / ground objects | Offered | Source-backed ground pickups and receive-only door state on both TAKP/Quarm | Door interaction stays disabled pending ordinary padding/type/state review. Pickups use authoritative inventory delivery; an unanswered pickup holds only further pickups and expires locally after three seconds, a duplicate-suppression bound of ours rather than an official-client timing, and an ambiguous result keeps later waits for their full window; see [protocol evidence and live checklist](eqmac-world-objects.md). A map marker never grants an item. |
 | Groups | Disabled | Disabled; TAKP implementation exists | Invitation, refusal, roster changes, leader changes, zoning and disband checks on each. |
@@ -217,11 +217,42 @@ it adds no live combat/death evidence to this report.
 | Resurrection / translocate | Source-backed; public exchange pending | Disabled (TAKP translocate exists) | Offer-bound consent. Named translocate continuation and ordinary server-directed movement. Bind continuation without a server-directed destination remains unverified. |
 | Sacrifice | Disabled | Disabled | Separate consent path. |
 | Who / time of day | Offered | Disabled | Quarm handlers/policy; do not confuse received entity state with a complete `/who` answer. |
-| AFK / anonymous / roleplay | Disabled | Disabled; TAKP offers anon/roleplay | Server-specific appearance rules and replies; TAKP itself does not establish AFK support. |
-| Roll / emote / assist / show helm / regen ticks | Disabled | Disabled | Per-action codecs/policy and evidence. Do not grant these merely because a sibling server does. |
+| AFK / anonymous / roleplay | Ordinary requests offered from Titanium source | Disabled; TAKP offers anon/roleplay | Check observer listing, server pacing and reconnect state on P99. Submitted and received state are separate. |
+| Roll / emote / assist | Ordinary commands offered from Titanium source | Disabled | Check P99 request/reply and a partner's received chat and targets. |
+| Show helm / regen ticks | Disabled | Disabled | Per-action codecs and server evidence remain open. |
 | Hiding acknowledgement | P99 reply behavior unverified | EQMac ends hiding itself | P99 needs evidence; redundant EQMac acknowledgement is not a missing action. |
 | Local map/editor/help/free camera | Available independently of gameplay policy | Same | Target actions still need targeting capability. Existing local UI checks do not certify the whole public-server gameplay matrix. |
 | Art/UI completeness | Partial | Partial | Assets come from user installs; model variants, equipment tints, animations and UI coverage remain incomplete. |
+
+### Project 1999 ordinary socials (6.404)
+
+- Assist sends a reliable four-byte spawn ID and the same opcode carries a
+  target ID in reply (Titanium `eqgame.exe` 0x46ae6c, 0x46aeab, 0x45f40a).
+  One pending request owns the untagged reply. Its five-second selection
+  window is an inferred local limit. An expired or superseded request still
+  owns its eventual reply. A zero or unavailable target leaves selection
+  alone. The session applies a valid selection in receive order and sends
+  the ordinary target request for it, with no attack toggle: stock `EQEmu`
+  exempts exactly that following target request from its range check
+  (`Handle_OP_Assist`, `Handle_OP_TargetCommand`, zone/client_packet.cpp at
+  4aceae18), and abilities act on the server's stored target. Without the
+  request the server would keep the previous target.
+- Dice sends two ordered 32-bit endpoints from 0 through 32,000 (0x4669ab).
+  The receive path uses three words and a name at byte 12 (0x4611fd). The
+  fixed name-field width follows the shared Titanium layout. Only a received
+  result produces a roll.
+- Plain emotes use the reliable 1028-byte record and text at byte 4
+  (0x498449). The client bounds the leading-space wire string to 510 bytes
+  and displays the local line after submission. The text takes the same
+  `%`-to-`&PCT;` escape as ordinary chat (inferred; stock `EQEmu` forwards
+  emote text unchanged, so the escape is unverified for emotes). Incoming
+  emotes use the text at byte 4 (0x460d61, 0x454ccd). Language switching and native substitutions
+  are outside the plain-text path.
+- AFK, anonymous and roleplaying use eight-byte appearance updates with the
+  own spawn ID (0x4699a9, 0x472578, 0x46a265), and the receiver consumes
+  appearance types 24 and 21 (0x45242f). P99's 500 ms per-kind send spacing
+  is local pacing inferred from EQEmu's receiver guard. Public P99 echo
+  behavior and observer propagation await attended checks.
 
 Creation slot counts were addressed by the now-merged
 [client PR #325](https://github.com/eq-p99-tools/eq-client/pull/325), alongside

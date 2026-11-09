@@ -446,11 +446,13 @@ impl Feature for Abilities {
             .as_mut()
             .filter(|state| state.expired(now))
         {
-            if let Some(update) = state.retire() {
+            let unsettled_stock = state.expire();
+            let stock_uncertain = unsettled_stock.is_some();
+            if let Some(update) = unsettled_stock {
                 world.happened(Message::Event(WorldEvent::Inventory(update)));
             }
             out.log.send(ClientEvent::World(WorldEvent::BindWound(
-                BindWoundUpdate::Unconfirmed,
+                BindWoundUpdate::Unconfirmed { stock_uncertain },
             )))?;
         }
         Ok(())
@@ -809,6 +811,105 @@ mod tests {
         let reuse = Ability::BindWound.reuse(GameDialect::Titanium);
         let outcome = try_ability(&mut abilities, &mut world, Ability::BindWound, now + reuse);
         assert_eq!(outcome.sent, [bind_wound::encode(7)]);
+    }
+
+    #[test]
+    fn self_bandage_waits_eleven_seconds_after_a_terminal_reply() {
+        let now = Instant::now();
+        let mut world = bandager();
+        world.admitted = Some(now);
+        world
+            .posture
+            .observed(eq_network_game::world::PostureState::Standing);
+        world.target = Target::from(7);
+        let mut abilities = Abilities::with_self_bandage(&Ability::ALL);
+        let attempt = try_ability(&mut abilities, &mut world, Ability::BindWound, now);
+        attempt.result.unwrap();
+        assert_eq!(attempt.sent, [bind_wound::encode(7)]);
+        let stock = world.inventory.items().values().cloned().collect();
+        let ended = BindWoundUpdate::Ended(BindWoundEnd::YouMoved);
+        testing::run(|out| {
+            let update = InventoryUpdate::Snapshot(stock);
+            world.inventory = {
+                let mut inventory = (*world.inventory).clone();
+                inventory.apply(update.clone());
+                inventory.into()
+            };
+            abilities.observe(
+                &Message::Event(WorldEvent::Inventory(update)),
+                &mut world,
+                out,
+            )?;
+            abilities.observe(
+                &Message::Event(WorldEvent::BindWound(ended)),
+                &mut world,
+                out,
+            )
+        })
+        .result
+        .unwrap();
+
+        let last_millisecond = now + Duration::from_millis(10_999);
+        let too_soon = try_ability(
+            &mut abilities,
+            &mut world,
+            Ability::BindWound,
+            last_millisecond,
+        );
+        too_soon.result.unwrap();
+        assert_eq!(too_soon.sent, []);
+        assert_eq!(refused(&too_soon.events), ["You are bandaging already"]);
+        let ready = now + Duration::from_secs(11);
+        let again = try_ability(&mut abilities, &mut world, Ability::BindWound, ready);
+        again.result.unwrap();
+        assert_eq!(again.sent, [bind_wound::encode(7)]);
+    }
+
+    #[test]
+    fn self_bandage_expiry_keeps_result_ownership_after_stock_recovers() {
+        let now = Instant::now();
+        let mut world = bandager();
+        world.admitted = Some(now);
+        world.posture.observed(PostureState::Standing);
+        world.target = Target::from(7);
+        let mut abilities = Abilities::with_self_bandage(&Ability::ALL);
+        let attempt = try_ability(&mut abilities, &mut world, Ability::BindWound, now);
+        attempt.result.unwrap();
+        assert_eq!(attempt.sent, [bind_wound::encode(7)]);
+
+        let ready = now + Duration::from_secs(13);
+        testing::run(|out| {
+            let stock =
+                InventoryUpdate::Snapshot(world.inventory.items().values().cloned().collect());
+            abilities.observe(
+                &Message::Event(WorldEvent::Inventory(stock)),
+                &mut world,
+                out,
+            )?;
+            abilities.tick(ready, &mut world, out)
+        })
+        .result
+        .unwrap();
+        let held = try_ability(&mut abilities, &mut world, Ability::BindWound, ready);
+        held.result.unwrap();
+        assert_eq!(held.sent, []);
+        assert_eq!(
+            refused(&held.events),
+            ["The previous bandage result is unanswered. Wait for its reply or re-enter the zone"]
+        );
+
+        testing::run(|out| {
+            abilities.observe(
+                &Message::Event(WorldEvent::BindWound(BindWoundUpdate::Released)),
+                &mut world,
+                out,
+            )
+        })
+        .result
+        .unwrap();
+        let retry = try_ability(&mut abilities, &mut world, Ability::BindWound, ready);
+        retry.result.unwrap();
+        assert_eq!(retry.sent, [bind_wound::encode(7)]);
     }
 
     #[test]

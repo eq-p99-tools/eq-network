@@ -1,5 +1,6 @@
 //! The player's target: the spawn the player picks, which must be the player
-//! or someone they can see, or the one the server sets itself.
+//! or someone they can see, a correlated assist selection, or the one the
+//! server sets itself.
 use super::{
     feature::{Feature, Out, World},
     ClientCommand, ClientEvent,
@@ -9,9 +10,9 @@ use eq_network_game::{
     appearance::AppearanceChange, message::Message, targets::TargetState, world::WorldEvent,
 };
 
-/// The spawn the server holds as the player's target: the last one sent, or
-/// the one the server set since. Every feature reads it; only the targeting
-/// feature changes it.
+/// The session's selected spawn. A submitted choice or an assist selection
+/// does not establish the server's stored target. Every feature reads this
+/// state; only the targeting feature changes it.
 #[derive(Clone, Copy, Debug, Default)]
 pub(super) struct Target {
     state: TargetState,
@@ -246,8 +247,29 @@ impl Feature for Targeting {
         &mut self,
         message: &Message,
         world: &mut World,
-        _out: &mut Out<'_, '_>,
+        out: &mut Out<'_, '_>,
     ) -> Result<()> {
+        if let Message::AssistSelection(id) = message {
+            // The assist reply selects the target and the client tells the
+            // server, as for any selection: stock `EQEmu` exempts exactly that
+            // following target request from its range check
+            // (`Handle_OP_Assist`, `Handle_OP_TargetCommand` in
+            // zone/client_packet.cpp at 4aceae18), and abilities act on the
+            // server's stored target. It does not toggle auto-attack.
+            if world.visible(*id) {
+                let select = ClientCommand::SelectTarget {
+                    session_id: world.session_id,
+                    request_id: world.target.request_id,
+                    spawn_id: Some(*id),
+                    expected_pet: None,
+                };
+                if out.command(&select)? {
+                    world.target.set(Some(*id), true, false);
+                    world.happened(Message::Event(Self::target_event(world)));
+                }
+            }
+            return Ok(());
+        }
         let Message::Event(event) = message else {
             return Ok(());
         };

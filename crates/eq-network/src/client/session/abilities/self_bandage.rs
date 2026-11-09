@@ -15,7 +15,10 @@ use std::{
 const RESULT_WINDOW: Duration = Duration::from_secs(12);
 
 #[derive(Default)]
-pub(super) struct SelfBandage(Option<Attempt>);
+pub(super) struct SelfBandage {
+    attempt: Option<Attempt>,
+    unanswered_actor: Option<u16>,
+}
 
 struct Attempt {
     actor: u16,
@@ -53,7 +56,7 @@ impl SelfBandage {
         if !world.ready() || !world.is_player(actor) || world.lifecycle.blocks_motion() {
             return Err("The bandager is unavailable".into());
         }
-        if self.0.is_some() {
+        if self.attempt.is_some() {
             return Err("Wait for the previous bandage result and current stock".into());
         }
         if *world.target != Some(actor) {
@@ -69,6 +72,9 @@ impl SelfBandage {
         }
         if !current(&world.inventory) || world.inventory.bandage_placement_unconfirmed() {
             return Err("Bandage stock is not current".into());
+        }
+        if self.unanswered_actor.is_some() {
+            return Err("The previous bandage result is unanswered. Wait for its reply or re-enter the zone".into());
         }
         let stock = stock(&world.inventory);
         if stock.is_empty() {
@@ -87,7 +93,7 @@ impl SelfBandage {
         stock: BTreeMap<InventorySlot, u32>,
         now: Instant,
     ) {
-        self.0 = Some(Attempt {
+        self.attempt = Some(Attempt {
             actor,
             stock,
             expires: now + RESULT_WINDOW,
@@ -95,38 +101,55 @@ impl SelfBandage {
     }
 
     pub(super) fn holds_inventory(&self) -> bool {
-        self.0
+        self.attempt
             .as_ref()
             .is_some_and(|attempt| !attempt.stock.is_empty())
     }
 
     pub(super) fn expired(&self, now: Instant) -> bool {
-        self.0
+        self.attempt
             .as_ref()
             .is_some_and(|attempt| now >= attempt.expires)
     }
 
-    /// Release the operation. The inventory replicas retain only the slots
-    /// that could still have supplied stock.
-    pub(super) fn retire(&mut self) -> Option<InventoryUpdate> {
-        let attempt = self.0.take()?;
+    /// Release inventory while preserving ownership of the untagged reply.
+    pub(super) fn expire(&mut self) -> Option<InventoryUpdate> {
+        self.unanswered_actor = self.attempt.as_ref().map(|attempt| attempt.actor);
+        self.retire()
+    }
+
+    fn retire(&mut self) -> Option<InventoryUpdate> {
+        let attempt = self.attempt.take()?;
         (!attempt.stock.is_empty())
             .then(|| InventoryUpdate::BandageStockUncertain(attempt.stock.into_keys().collect()))
     }
 
     pub(super) fn observe(&mut self, message: &Message, world: &World) -> Option<InventoryUpdate> {
-        let attempt = self
-            .0
-            .as_mut()
-            .filter(|attempt| world.is_player(attempt.actor))?;
         if matches!(
             message,
             Message::Event(WorldEvent::BindWound(
                 BindWoundUpdate::Ended(_) | BindWoundUpdate::Released
             ))
         ) {
-            return self.retire();
+            if self
+                .unanswered_actor
+                .is_some_and(|actor| world.is_player(actor))
+            {
+                self.unanswered_actor = None;
+                return None;
+            }
+            if self
+                .attempt
+                .as_ref()
+                .is_some_and(|attempt| world.is_player(attempt.actor))
+            {
+                return self.retire();
+            }
         }
+        let attempt = self
+            .attempt
+            .as_mut()
+            .filter(|attempt| world.is_player(attempt.actor))?;
         let inventory = &world.inventory;
         if attempt.stock.is_empty()
             || !inventory.received()

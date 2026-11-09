@@ -20,6 +20,8 @@ pub enum Message {
     Event(WorldEvent),
     /// A decoded trainer reply that still needs session checks.
     TrainingReply(crate::training::TrainingReply),
+    /// A correlated P99 assist selection for the session's target owner.
+    AssistSelection(u16),
     /// A decoded resurrection that still needs admission and consent checks.
     Resurrection(crate::resurrection::ResurrectionOffer),
     /// A decoded translocate that still needs admission and consent checks.

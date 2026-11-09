@@ -22,6 +22,7 @@ impl Inventory {
     pub fn carried_weight_is_conservative(&self) -> bool {
         self.destroyed.is_some()
             || self.ground_drop_pending()
+            || matches!(self.trade_cursor, super::TradeCursor::Offered { .. })
             || !self.weight_rebased.is_empty()
             || self
                 .stack_weight

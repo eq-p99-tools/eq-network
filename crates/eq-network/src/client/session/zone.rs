@@ -2689,12 +2689,7 @@ mod tests {
         assert!(!p99.contains(&Capability::DeletingSpells));
         assert!(eqemu.contains(&Capability::MerchantOffers));
         assert!(!p99.contains(&Capability::MerchantOffers));
-        assert!(eqemu.contains(&Capability::Listing));
-        assert!(!p99.contains(&Capability::Listing));
         for capability in [
-            Capability::Rolling,
-            Capability::Emoting,
-            Capability::Assisting,
             Capability::Raiding,
             Capability::Sacrifice,
             Capability::ServerTicks,
@@ -2705,6 +2700,10 @@ mod tests {
             assert!(!p99.contains(&capability));
         }
         for capability in [
+            Capability::Listing,
+            Capability::Rolling,
+            Capability::Emoting,
+            Capability::Assisting,
             Capability::Training,
             Capability::Resurrection,
             Capability::Translocate,
@@ -3098,6 +3097,9 @@ mod diagnostic_tests;
 
 #[cfg(test)]
 mod target_tests;
+
+#[cfg(test)]
+mod social_tests;
 
 #[cfg(test)]
 mod pet_tests;

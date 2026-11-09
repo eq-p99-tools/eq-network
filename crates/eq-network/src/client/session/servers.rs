@@ -802,7 +802,7 @@ mod shared {
     }
 
     pub(super) fn socials() -> Box<dyn Feature> {
-        Box::new(Socials)
+        Box::<Socials>::default()
     }
 
     pub(super) fn helm() -> Box<dyn Feature> {
@@ -1090,6 +1090,17 @@ impl ServerType for Project1999 {
 
     fn who(&self, _setup: &Setup<'_>) -> Provided {
         offer(shared::who())
+    }
+
+    /// Ordinary Titanium requests and received dice/assist/emote paths
+    /// (6.404). The session guards the untagged assist answer.
+    fn socials(&self, _setup: &Setup<'_>) -> Provided {
+        offer(Box::new(Socials::project1999()))
+    }
+
+    /// The Titanium AFK and anonymity appearance types (6.404).
+    fn listing(&self, _setup: &Setup<'_>) -> Provided {
+        offer(Box::new(Listing::project1999()))
     }
 
     fn corpses(&self, _setup: &Setup<'_>) -> Provided {
@@ -2276,16 +2287,14 @@ mod tests {
 
     #[test]
     fn p99_and_eqemu_provide_every_feature_one_each() {
-        // The map, deleting
-        // spells, merchants' offers, the player's listing, dice,
-        // emotes, assisting, raids and the server's tick are checked on
-        // EQEmu alone so far; P99 takes falls' damage by the Titanium
-        // program (6.332); only EQEmu waits for the answer to the end of
+        // The map, deleting spells, merchants' offers, raids and the
+        // server's tick are offered on EQEmu alone. P99 takes falls' damage by
+        // the Titanium program (6.332); only EQEmu waits for the answer to the end of
         // hiding; only EQEmu answers sacrifices, read from its source and not
         // yet checked live; and only EQEmu takes the show-helm option.
         // Both Titanium policies retain the verified own-player stun timer.
         for (protocol, count) in [
-            (ServerProtocol::Project1999, 32),
+            (ServerProtocol::Project1999, 34),
             (ServerProtocol::EqEmu, 40),
         ] {
             let server = server_type(protocol);
@@ -2297,10 +2306,6 @@ mod tests {
             Capability::Map,
             Capability::DeletingSpells,
             Capability::MerchantOffers,
-            Capability::Listing,
-            Capability::Rolling,
-            Capability::Emoting,
-            Capability::Assisting,
             Capability::Raiding,
             Capability::ServerTicks,
             Capability::ShowingHelm,
@@ -2309,17 +2314,29 @@ mod tests {
             assert!(offers(server_type(ServerProtocol::EqEmu)).contains(&capability));
         }
         assert!(offers(server_type(ServerProtocol::Project1999)).contains(&Capability::Grouping));
-        // Reading, moving book spells and carried combines are offered on both.
+        // Both Titanium providers offer the ordinary social commands.
         for protocol in [ServerProtocol::Project1999, ServerProtocol::EqEmu] {
-            assert!(offers(server_type(protocol)).contains(&Capability::MovingSpells));
-            assert!(offers(server_type(protocol)).contains(&Capability::Reading));
-            assert!(offers(server_type(protocol)).contains(&Capability::Training));
-            assert!(offers(server_type(protocol)).contains(&Capability::Resurrection));
-            assert!(offers(server_type(protocol)).contains(&Capability::Translocate));
-            assert!(offers(server_type(protocol)).contains(&Capability::Tradeskills));
-            assert!(offers(server_type(protocol)).contains(&Capability::WorldContainers));
-            assert!(offers(server_type(protocol)).contains(&Capability::ServerDialogs));
-            assert!(offers(server_type(protocol)).contains(&Capability::PlayerInspection));
+            let capabilities = offers(server_type(protocol));
+            for capability in [
+                Capability::Listing,
+                Capability::Rolling,
+                Capability::Emoting,
+                Capability::Assisting,
+                Capability::MovingSpells,
+                Capability::Reading,
+                Capability::Training,
+                Capability::Resurrection,
+                Capability::Translocate,
+                Capability::Tradeskills,
+                Capability::WorldContainers,
+                Capability::ServerDialogs,
+                Capability::PlayerInspection,
+            ] {
+                assert!(
+                    capabilities.contains(&capability),
+                    "{protocol:?} {capability:?}"
+                );
+            }
         }
     }
 

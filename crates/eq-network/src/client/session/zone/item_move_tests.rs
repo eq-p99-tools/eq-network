@@ -114,6 +114,7 @@ fn p99_bandage_result_or_expiry_releases_unrelated_moves_but_keeps_stock_uncerta
         (Some(8), false),
         (None, false),
         (Some(1), true),
+        (None, true),
     ] {
         let mut bandage = stack(251, 2);
         bandage.rules.item_type = bind_wound::BANDAGE;
@@ -184,26 +185,29 @@ fn p99_bandage_result_or_expiry_releases_unrelated_moves_but_keeps_stock_uncerta
             }
         });
         retired.result.unwrap();
-        assert_eq!(
-            retired.events.iter().any(|event| matches!(
-                event,
-                ClientEvent::World(WorldEvent::BindWound(
-                    bind_wound::BindWoundUpdate::Unconfirmed
-                ))
-            )),
-            ending.is_none()
-        );
+        let expired = retired.events.iter().find_map(|event| match event {
+            ClientEvent::World(WorldEvent::BindWound(
+                bind_wound::BindWoundUpdate::Unconfirmed { stock_uncertain },
+            )) => Some(*stock_uncertain),
+            _ => None,
+        });
+        assert_eq!(expired, ending.is_none().then_some(!stock_first));
         assert!(!world.inventory.bandage_stock_pending());
         assert!(!world.inventory.predicted());
-        // Current stock leaves only the button's own wait, which the
-        // official client runs out in full whatever ended the bandaging.
+        // A result leaves the button's own wait. An expiry keeps the old
+        // result owner even after its stock is known.
+        let waiting = if ending.is_none() {
+            "The previous bandage result is unanswered. Wait for its reply or re-enter the zone"
+        } else {
+            "You are bandaging already"
+        };
         let waits = |attempt: &testing::Outcome<Result<bool>>| {
             attempt.sent.is_empty()
                 && attempt.events.iter().any(|event| {
                     matches!(
                         event,
                         ClientEvent::World(WorldEvent::AbilityRefused { reason, .. })
-                            if reason == "You are bandaging already"
+                            if reason == waiting
                     )
                 })
         };
@@ -281,7 +285,7 @@ fn p99_one_bandage_decrease_settles_every_carried_stack() {
     let wire = server.wire();
     let mut bagged = stack(251, 2);
     bagged.rules.item_type = bind_wound::BANDAGE;
-    let mut loose = stack(23, 3);
+    let mut loose = stack(14, 3);
     loose.rules.item_type = bind_wound::BANDAGE;
     let mut bag = testing::item(22);
     bag.bag_slots = 8;
@@ -311,7 +315,7 @@ fn p99_one_bandage_decrease_settles_every_carried_stack() {
     assert_eq!(sent.sent, [bind_wound::encode(7)]);
     assert!(world.inventory.bandage_stock_pending());
 
-    let mut deletion = 251_i32.to_le_bytes().to_vec();
+    let mut deletion = 14_i32.to_le_bytes().to_vec();
     deletion.extend([0xff; 8]);
     testing::run_on(wire, |out| {
         hear(
@@ -337,12 +341,16 @@ fn p99_one_bandage_decrease_settles_every_carried_stack() {
     .unwrap();
     assert!(!world.inventory.bandage_stock_pending());
     assert!(!world.inventory.bandage_placement_unconfirmed());
-    for slot in [InventorySlot(251), InventorySlot(23)] {
+    for slot in [InventorySlot(251), InventorySlot(14)] {
         assert!(world.inventory.custody_known(slot), "{slot:?}");
     }
     assert_eq!(
-        world.inventory.items()[&InventorySlot(23)].stack_count,
-        Some(3)
+        world.inventory.items()[&InventorySlot(251)].stack_count,
+        Some(2)
+    );
+    assert_eq!(
+        world.inventory.items()[&InventorySlot(14)].stack_count,
+        Some(2)
     );
     let unrelated_move = command(&world, 24, 30, MoveQuantity::Whole);
     assert_eq!(
@@ -350,6 +358,120 @@ fn p99_one_bandage_decrease_settles_every_carried_stack() {
             .sent
             .len(),
         1
+    );
+}
+
+#[test]
+#[allow(
+    clippy::too_many_lines,
+    reason = "compare alternate inventory replies in one admission"
+)]
+fn p99_can_open_a_forge_after_received_custody_resolves_an_npc_give() {
+    use eq_network_game::{exchange, objects::GroundObject, world::SpawnKind};
+    use std::time::Duration;
+
+    let protocol = ServerProtocol::Project1999;
+    let server = servers::server_type(protocol);
+    let wire = server.wire();
+    let mut item = testing::item(30);
+    item.rules.ground_drop_serial = Some(NonZeroU32::MIN);
+    let (mut features, mut world) = setup(protocol, vec![item.clone()]);
+    world.spawns.insert(testing::spawn(42, SpawnKind::Npc));
+    let outcome = testing::run_on(wire, |out| -> Result<()> {
+        hear(
+            vec![Message::Event(WorldEvent::Objects(ObjectUpdate::Spawn(
+                GroundObject {
+                    drop_id: 71,
+                    model: "FORGE_ACTORDEF".into(),
+                    position: eq_network_game::world::Position::default(),
+                    object_type: 0,
+                },
+            )))],
+            &mut features,
+            &mut world,
+            out,
+            true,
+        )?;
+        apply_commands(
+            &[ClientCommand::OfferTrade {
+                session_id: 5,
+                with_id: 42,
+                created: Instant::now(),
+            }],
+            &mut features,
+            &mut world,
+            out,
+            true,
+        )?;
+        hear(
+            wire.messages(
+                exchange::ACKNOWLEDGE_OPCODE,
+                &[7, 0, 0, 0, 42, 0, 0, 0],
+                server.item_rules(),
+            ),
+            &mut features,
+            &mut world,
+            out,
+            true,
+        )?;
+        let place = command(&world, 30, 3000, MoveQuantity::Whole);
+        apply_commands(&[place], &mut features, &mut world, out, true)?;
+        apply_commands(
+            &[ClientCommand::AcceptTrade {
+                session_id: 5,
+                created: Instant::now(),
+            }],
+            &mut features,
+            &mut world,
+            out,
+            true,
+        )?;
+        hear(
+            wire.messages(exchange::FINISH_OPCODE, &[], server.item_rules()),
+            &mut features,
+            &mut world,
+            out,
+            true,
+        )?;
+        features.tick(Instant::now() + Duration::from_secs(3), &mut world, out)?;
+        settle(&mut features, &mut world, out, true)?;
+        let open = || ClientCommand::OpenContainer {
+            session_id: 5,
+            drop_id: 71,
+            created: Instant::now(),
+        };
+        apply_commands(&[open()], &mut features, &mut world, out, true)?;
+        assert!(!world.inventory.custody_known(InventorySlot::CURSOR));
+        assert!(!world.container.expects(71));
+
+        item.slot = InventorySlot(24);
+        hear(
+            vec![Message::Event(WorldEvent::Inventory(InventoryUpdate::Set(
+                vec![item],
+            )))],
+            &mut features,
+            &mut world,
+            out,
+            true,
+        )?;
+        apply_commands(&[open()], &mut features, &mut world, out, true)?;
+        assert!(world.inventory.custody_known(InventorySlot::CURSOR));
+        assert!(world.container.expects(71));
+        Ok(())
+    });
+    outcome.result.unwrap();
+    assert_eq!(
+        outcome
+            .sent
+            .iter()
+            .map(|packet| packet.opcode)
+            .collect::<Vec<_>>(),
+        [
+            exchange::REQUEST_OPCODE,
+            0x420f,
+            exchange::ACCEPT_OPCODE,
+            0x3bc2
+        ]
     );
 }
 
@@ -526,11 +648,14 @@ fn p99_forge_moves_use_the_ordered_visible_cursor_without_confirming_custody() {
             out,
             true,
         )?;
-        features.tick(
-            Instant::now() + std::time::Duration::from_secs(3),
-            &mut world,
-            out,
-        )?;
+        // The clear starts its own refusal window for what the close returns.
+        for seconds in [3, 6] {
+            features.tick(
+                Instant::now() + std::time::Duration::from_secs(seconds),
+                &mut world,
+                out,
+            )?;
+        }
         settle(&mut features, &mut world, out, true)
     })
     .result

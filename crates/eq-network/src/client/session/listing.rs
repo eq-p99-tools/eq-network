@@ -1,16 +1,9 @@
 //! How `/who` lists the player: away from the keyboard, anonymous or
-//! roleplaying. The player says so with an appearance update, which Titanium
-//! servers never echo (`EQEmu`'s `Client::Handle_OP_SpawnAppearance` queues
-//! it to everyone else), so the session keeps the listing the admission gave
-//! and each change since, its own or the server's, and reports each change
-//! it sends. `EQEmu` drops a second change of either kind within 250 ms of
-//! the last (`anon_toggle_timer`, `afk_toggle_timer`), measured between its
-//! own receipts, so the session refuses one within twice that of its own
-//! last send: jitter on the way cannot then make the server drop a change
-//! the session reported as made. `/roleplay` flips the roleplaying bit and
-//! keeps the anonymous one, and `/anonymous` sets anonymous or clears both,
-//! as both programs do (Titanium sitting 9l; TAKP, read 10-31): neither
-//! refuses one while the other is on.
+//! roleplaying. The player sends an appearance update. `EQEmu`'s
+//! `Client::Handle_OP_SpawnAppearance` relays it to other players and can
+//! drop repeated updates within 250 ms of each other. Its local display
+//! follows the last submitted value. Project 1999 uses the Titanium slash
+//! toggle rules and reports submission separately from received appearance.
 //!
 //! On a client generation whose away update is unread (the `EQMac` client),
 //! the session lists anonymity and roleplaying only.
@@ -28,8 +21,8 @@ use eq_network_game::{
 };
 use std::time::{Duration, Instant};
 
-/// How soon after a change of a kind the session sends another: twice the
-/// 250 ms the server waits between its receipts.
+/// Time between sends of the same kind. Twice `EQEmu`'s 250 ms receiver
+/// interval and an inferred local pacing limit on P99 (6.404).
 const SETTLING: Duration = Duration::from_millis(500);
 
 /// Away, anonymous and roleplaying, as the player turns them.
@@ -37,6 +30,9 @@ const SETTLING: Duration = Duration::from_millis(500);
 pub(super) struct Listing {
     /// Whether the generation's away update is known, so `/afk` is sent.
     away_known: bool,
+    /// Use the native P99 toggle rules and keep sent values separate from
+    /// received listing state.
+    project1999: bool,
     /// Whether the player is away, once a change says; until then, as the
     /// admission listed them.
     away: Option<bool>,
@@ -52,6 +48,14 @@ impl Listing {
     pub(super) fn new(away_known: bool) -> Self {
         Self {
             away_known,
+            ..Self::default()
+        }
+    }
+
+    pub(super) fn project1999() -> Self {
+        Self {
+            away_known: true,
+            project1999: true,
             ..Self::default()
         }
     }
@@ -72,11 +76,11 @@ impl Listing {
         world: &World,
         now: Instant,
     ) -> Result<ListingChange, (&'static str, Option<u32>)> {
-        let listed = world
-            .player
-            .as_ref()
-            .map(|player| player.listing)
-            .unwrap_or_default();
+        let player = world.player.as_ref();
+        if self.project1999 && player.is_none_or(|player| player.spawn_id == 0) {
+            return Err(("Your listing is not ready yet.", None));
+        }
+        let listed = player.map(|player| player.listing).unwrap_or_default();
         let anonymity = self.anonymity.unwrap_or(listed.anonymity);
         let wait = ("Wait a moment before changing that again.", None);
         match command {
@@ -95,7 +99,17 @@ impl Listing {
                 }
                 Ok(ListingChange::Anonymity(
                     if matches!(command, ClientCommand::ToggleAnonymous { .. }) {
-                        anonymity.anonymous_toggled()
+                        if self.project1999 && anonymity == Anonymity::Roleplaying {
+                            // Titanium's slash command toggles any nonzero value off
+                            // (0x472578); its options control is a different path.
+                            Anonymity::Open
+                        } else {
+                            anonymity.anonymous_toggled()
+                        }
+                    } else if self.project1999 && anonymity == Anonymity::Anonymous {
+                        // The Titanium slash command refuses enabling roleplay
+                        // from anonymous (0x46a302).
+                        return Err(("Turn off anonymity before enabling roleplay.", Some(8873)));
                     } else {
                         anonymity.roleplay_toggled()
                     },
@@ -157,9 +171,16 @@ impl Feature for Listing {
             _ => return Ok(()),
         })?;
         self.note(change, Some(now));
-        out.log.send(ClientEvent::World(WorldEvent::ListingSet {
-            session_id: world.session_id,
-            change,
+        out.log.send(ClientEvent::World(if self.project1999 {
+            WorldEvent::ListingRequested {
+                session_id: world.session_id,
+                change,
+            }
+        } else {
+            WorldEvent::ListingSet {
+                session_id: world.session_id,
+                change,
+            }
         }))
     }
 
@@ -260,6 +281,27 @@ mod tests {
         assert_eq!(
             run(&mut feature, &mut world, &away),
             Outcome::Sent(vec![listing::titanium_away(7, false).unwrap()])
+        );
+    }
+
+    #[test]
+    fn p99_slash_toggles_follow_the_native_anonymity_transitions() {
+        let mut feature = Listing::project1999();
+        let mut world = World::new(5);
+        world.player.admit(testing::player(7));
+        let anonymous = ClientCommand::ToggleAnonymous { session_id: 5 };
+        let roleplay = ClientCommand::ToggleRoleplay { session_id: 5 };
+        feature.anonymity = Some(Anonymity::Anonymous);
+        assert_eq!(
+            run(&mut feature, &mut world, &roleplay),
+            Outcome::Refused(Some(8873))
+        );
+        feature.anonymity = Some(Anonymity::Roleplaying);
+        assert_eq!(
+            run(&mut feature, &mut world, &anonymous),
+            Outcome::Sent(vec![
+                listing::titanium_anonymity(7, Anonymity::Open).unwrap()
+            ])
         );
     }
 

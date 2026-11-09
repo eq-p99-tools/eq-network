@@ -7,6 +7,13 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Breaking:** Offer ordinary assist, dice, emotes and AFK/anonymity/roleplay
+  controls on Project 1999 from Titanium source. Handle
+  `WorldEvent::ListingRequested` separately from received listing state.
+  `Message::AssistSelection` is a new variant. An accepted P99 assist reply
+  sends the ordinary target request, so the server's stored target follows
+  the selection. Public P99 social exchanges still await attended validation.
+
 - **Breaking:** Resolve P99 same-zone pads against installed boundaries
   and current zone points. `BoundaryRoute::SameZone` carries a resolved
   route, `ClientConfig` accepts an installed-boundary provider and
@@ -23,7 +30,9 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   on Project 1999.
   `GameCommand::CloseContainer` gains `drop_id` and `created`,
   `InventoryUpdate::BandageStockPending`, `BandageStockUncertain` and four
-  `BindWoundUpdate` variants are new. `ItemPlacement` gains `titanium_link_hash`.
+  `BindWoundUpdate` variants are new. `BindWoundUpdate::Unconfirmed` carries
+  `stock_uncertain`. `InventoryUpdate::WorldDetached` retires a displaced
+  station view. `ItemPlacement` gains `titanium_link_hash`.
   A terminal or unanswered request releases other inventory actions while
   affected bandage slots still await received inventory evidence.
   A forge candidate needs a matching server open before it can take items.
@@ -435,6 +444,20 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- Retire a displaced station's local view and settle unrelated Titanium
+  moves independently. Carried slots a station route touched settle one
+  refusal window after the station clears or detaches, so a combine product
+  pushed on the cursor or a close no longer pauses movement for the rest of
+  the zone. A P99 forge combine reset limits the remaining hold to station
+  and cursor actions while any clear is pending.
+- Let a received same-instance return resolve a whole cursor handoff. Once
+  the trade slots empty, a later pickup keeps the given item's weight as an
+  upper bound, and one refusal window after the close retires the handoff,
+  so a give the receiver kept no longer pauses movement or holds the forge
+  until zoning. `Inventory::handoff_returns_unsettled` and
+  `Inventory::handoff_returns_settleable` report this state.
+- Distinguish stock evidence from a missing P99 bandaging result at expiry.
+- Keep both knight reuse deadlines if computing their replacements overflows.
 - Bind Wound's own button time now runs out in full after every use, as the
   official client's does, whatever ended the bandaging; the self-bandage path
   checks it too, so a moved or released P99 self-bandage cannot be resent at

@@ -162,7 +162,7 @@ impl OutboundChat {
 
 /// Escape literal percent signs as Titanium's command path does before chat
 /// reaches the wire packet.
-fn encode_chat_text(text: &str) -> String {
+pub(crate) fn encode_chat_text(text: &str) -> String {
     let mut encoded = String::with_capacity(text.len());
     for character in text.chars() {
         if character == '%' {
@@ -653,6 +653,18 @@ impl ChatEvent {
     fn with_message(mut self, message: Message) -> Self {
         self.message = Some(message);
         self
+    }
+
+    pub(crate) fn local_emote(opcode: u16, name: &str, text: &str) -> Self {
+        let mut event = Self::new(opcode, &[], ChannelName::Emote, false);
+        event.kind = "local_emote";
+        event.message_type = Some(314);
+        event.with_message(Message {
+            message: None,
+            message_hex: None,
+            text: format!("{name} {text}"),
+            item_links: Vec::new(),
+        })
     }
 }
 

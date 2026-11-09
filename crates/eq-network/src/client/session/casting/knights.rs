@@ -40,10 +40,12 @@ impl Reuse {
     }
 
     fn spend(&mut self, now: Instant) {
-        self.retry_at = now.checked_add(RETRY_DELAY);
-        self.ready = now
-            .checked_add(self.estimate)
-            .map(|ready| (ready, ReuseSource::LocalEstimate));
+        if let (Some(retry_at), Some(ready)) =
+            (now.checked_add(RETRY_DELAY), now.checked_add(self.estimate))
+        {
+            self.retry_at = Some(retry_at);
+            self.ready = Some((ready, ReuseSource::LocalEstimate));
+        }
     }
 
     fn check(&self, now: Instant) -> Result<()> {
@@ -270,6 +272,22 @@ mod tests {
         reuse.received(Duration::from_secs(30), now);
         assert!(reuse.check(now + RETRY_DELAY).is_err());
         assert!(reuse.check(now + Duration::from_secs(30)).is_ok());
+    }
+
+    #[test]
+    fn an_overflowing_spend_keeps_both_previous_holds() {
+        let now = Instant::now();
+        let mut reuse = Reuse::new(Duration::MAX);
+        let retry_at = now + RETRY_DELAY;
+        let ready = now + Duration::from_secs(30);
+        reuse.retry_at = Some(retry_at);
+        reuse.received(Duration::from_secs(30), now);
+
+        reuse.spend(now + Duration::from_secs(1));
+
+        assert_eq!(reuse.retry_at, Some(retry_at));
+        assert_eq!(reuse.ready, Some((ready, ReuseSource::Profile)));
+        assert!(reuse.check(retry_at).is_err());
     }
 
     #[test]

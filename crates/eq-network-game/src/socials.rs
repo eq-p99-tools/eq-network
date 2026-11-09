@@ -247,6 +247,28 @@ pub fn emote(text: &str) -> Result<EncodedCommand> {
     })
 }
 
+/// An ordinary Project 1999 emote. The Titanium sender (0x498449) prefixes
+/// a space and bounds the resulting wire string to 510 bytes. Preserve a
+/// whole literal message rather than cutting its text or escape sequence.
+/// The text takes the ordinary chat escapes; for emotes that is inferred
+/// (6.404).
+///
+/// # Errors
+/// Rejects empty, overlong or control-character text.
+pub fn project1999_emote(text: &str) -> Result<EncodedCommand> {
+    ensure!(!text.chars().any(char::is_control), "invalid emote text");
+    let text = crate::chat::encode_chat_text(text);
+    ensure!(text.len() < 510, "emote exceeds the Titanium wire limit");
+    emote(&text)
+}
+
+/// Local display of an emote after submission, matching the Titanium
+/// sender's own line. The recording identifies it as local.
+#[must_use]
+pub fn local_emote(name: &str, text: &str) -> crate::chat::ChatEvent {
+    crate::chat::ChatEvent::local_emote(EMOTE_OPCODE, name, text)
+}
+
 /// An emote as the server passes it on to the players near the one who
 /// made it: their name, then their words.
 #[must_use]

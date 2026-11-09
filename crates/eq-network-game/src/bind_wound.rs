@@ -62,7 +62,10 @@ pub enum BindWoundUpdate {
     /// The server released the attempt without a completion or interruption report.
     Released,
     /// The local waiting period elapsed while the result remained unknown.
-    Unconfirmed,
+    Unconfirmed {
+        /// The attempt ended without covering inventory evidence for its stock.
+        stock_uncertain: bool,
+    },
     /// The bandaging ended, and how. What it healed arrives as hit points.
     Ended(BindWoundEnd),
 }

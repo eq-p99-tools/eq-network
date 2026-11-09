@@ -1,6 +1,7 @@
 //! Carried item weight from complete authoritative inventory definitions.
 use super::{
     stack_weight::StackWeightBound, Inventory, InventoryItem, InventorySlot, InventoryUpdate,
+    TradeCursor,
 };
 use crate::GameDialect;
 use std::collections::BTreeMap;
@@ -32,6 +33,8 @@ impl DropWeight {
             || inventory.stale()
             || inventory.predicted()
             || inventory.ground_drop_pending()
+            || !inventory.station_carried.is_empty()
+            || inventory.trade_cursor != TradeCursor::Clear
             || inventory.weight_history_uncertain
             || inventory
                 .stack_weight
@@ -84,7 +87,8 @@ impl DropWeight {
             | InventoryUpdate::DestroyCursor
             | InventoryUpdate::GroundDropPending(_)
             | InventoryUpdate::TradeEmptied
-            | InventoryUpdate::WorldEmptied => return None,
+            | InventoryUpdate::WorldEmptied
+            | InventoryUpdate::WorldDetached => return None,
             // Slot-only reductions cannot increase the old group's mass.
             // Even when one promotes a new cursor item, every received
             // candidate remains in the bound.
@@ -191,6 +195,14 @@ impl Inventory {
         if !self.received() || self.stale() {
             return Err(WeightUnavailable::Inventory);
         }
+        if !self.station_carried.is_empty() {
+            return Err(WeightUnavailable::Prediction);
+        }
+        let possibly_offered_weight = match self.trade_cursor {
+            TradeCursor::Clear => 0,
+            TradeCursor::Offered { weight_tenths, .. } => u64::from(weight_tenths),
+            TradeCursor::Uncertain => return Err(WeightUnavailable::Prediction),
+        };
         if self.ground_drop_pending() {
             return self
                 .ground_drop_weight_tenths(coins)
@@ -206,6 +218,7 @@ impl Inventory {
         if let Some(bound) = stack_bound {
             return bound
                 .weight(&self.items, weight)
+                .map(|weight| weight + possibly_offered_weight)
                 .ok_or(WeightUnavailable::Prediction);
         }
         if self.predicted() {
@@ -231,6 +244,7 @@ impl Inventory {
         // Keep the destroyed instance's whole mass as an upper bound until
         // received cursor/snapshot evidence arrives. No lighter load is inferred.
         Ok(weight
+            + possibly_offered_weight
             + self
                 .destroyed
                 .as_ref()
@@ -320,6 +334,52 @@ mod tests {
                 price: None,
                 icon: None,
             },
+        }
+    }
+
+    #[test]
+    fn a_station_clear_settles_carried_custody_after_the_refusal_window() {
+        use crate::GameDialect::Titanium;
+
+        let ingredient = item(30, 50);
+        let mut station = ingredient.clone();
+        station.slot = InventorySlot(4000);
+        let mut charm = item(24, 100);
+        charm.details.id = 2;
+        charm.details.bonuses.as_mut().unwrap().strength = 7;
+        let mut inventory = Inventory::default();
+        inventory.apply(InventoryUpdate::Snapshot(vec![ingredient, charm.clone()]));
+        inventory.apply(InventoryUpdate::Prediction(vec![
+            station.clone(),
+            charm.clone(),
+        ]));
+        charm.slot = InventorySlot(0);
+        inventory.apply(InventoryUpdate::Prediction(vec![station, charm]));
+        assert!(inventory.equipment_stats_uncertain());
+
+        inventory.apply(InventoryUpdate::Settled);
+        assert!(!inventory.equipment_stats_uncertain());
+        assert!(inventory.station_moves_unconfirmed());
+        assert_eq!(
+            inventory.carried_weight_tenths(Titanium, 0),
+            Err(WeightUnavailable::Prediction)
+        );
+        for clear in [
+            InventoryUpdate::WorldEmptied,
+            InventoryUpdate::WorldDetached,
+        ] {
+            let mut inventory = inventory.clone();
+            inventory.apply(clear);
+            assert!(!inventory.station_moves_unconfirmed());
+            assert!(inventory.handoff_returns_settleable());
+            assert_eq!(
+                inventory.carried_weight_tenths(Titanium, 0),
+                Err(WeightUnavailable::Prediction)
+            );
+            inventory.apply(InventoryUpdate::Settled);
+            assert!(!inventory.custody_known(InventorySlot::CURSOR));
+            assert!(!inventory.handoff_returns_unsettled());
+            assert_eq!(inventory.carried_weight_tenths(Titanium, 0), Ok(100));
         }
     }
 
