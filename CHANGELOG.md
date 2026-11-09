@@ -8,7 +8,7 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Added
 
 - **Breaking:** Add friends who, guild requests, splitting and a banker's
-  coin change on the Titanium wire, offered on `EQEmu` for now:
+  coin change on the Titanium wire, offered on `EQEmu` and Project 1999:
   `Capability::FriendsWho`, `GuildRoster`, `GuildManagement`,
   `BankerChange` and `Splitting` (`Capability::ALL` grows to 62).
   `GameCommand` gains `WhoFriends`, `ChangeCoins`, `SplitCoins`,

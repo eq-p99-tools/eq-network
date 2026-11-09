@@ -656,10 +656,6 @@ mod shared {
         Box::new(Spellbook::new(edits))
     }
 
-    pub(super) fn inventory(rules: MoveRules, setup: &Setup<'_>) -> Box<dyn Feature> {
-        inventory_under(rules, Quotes::WithRate, Allowances::STANDARD, setup)
-    }
-
     /// The inventory, whose items the player moves under the server type's
     /// rules, with what else it allows, and merchant packets priced as
     /// `quotes` says; the session eats as the player chose.
@@ -1018,8 +1014,32 @@ impl ServerType for Project1999 {
         }))
     }
 
+    /// Splitting and a banker's change send what the Titanium program sends
+    /// (program read R6: 0x4848 from `/split`, 0x6a5b from the bank window's
+    /// Change button); the server decides what it allows.
     fn inventory(&self, setup: &Setup<'_>) -> Provided {
-        offer(shared::inventory(self.inventory_move_rules()?, setup))
+        offer(shared::inventory_under(
+            self.inventory_move_rules()?,
+            Quotes::WithRate,
+            Allowances {
+                splitting: true,
+                banker_change: true,
+                ..Allowances::STANDARD
+            },
+            setup,
+        ))
+    }
+
+    /// Asking which friends are online sends the Titanium program's request
+    /// (program read R8, `/who all friends`).
+    fn friends_who(&self, _setup: &Setup<'_>) -> Provided {
+        offer(Box::new(FriendsWho))
+    }
+
+    /// The Titanium guild requests and answers the program sends (program
+    /// read R11); the server checks who may do what.
+    fn guilds(&self, _setup: &Setup<'_>) -> Provided {
+        offer(Box::<Guilds>::default())
     }
 
     /// The Titanium program's floor is whatever surface lies under the
@@ -2317,15 +2337,14 @@ mod tests {
 
     #[test]
     fn p99_and_eqemu_provide_every_feature_one_each() {
-        // The map, deleting spells, merchants' offers, raids, the server's
-        // tick, friends who, guild requests, splitting and a banker's change
-        // are offered on EQEmu alone. P99 takes falls' damage by
+        // The map, deleting spells, merchants' offers, raids and the
+        // server's tick are offered on EQEmu alone. P99 takes falls' damage by
         // the Titanium program (6.332); only EQEmu waits for the answer to the end of
         // hiding; only EQEmu answers sacrifices, read from its source and not
         // yet checked live; and only EQEmu takes the show-helm option.
         // Both Titanium policies retain the verified own-player stun timer.
         for (protocol, count) in [
-            (ServerProtocol::Project1999, 34),
+            (ServerProtocol::Project1999, 36),
             (ServerProtocol::EqEmu, 42),
         ] {
             let server = server_type(protocol);
@@ -2340,18 +2359,28 @@ mod tests {
             Capability::Raiding,
             Capability::ServerTicks,
             Capability::ShowingHelm,
-            // Offered on P99 once the unattended EQEmu run has exercised
-            // each of them.
-            Capability::FriendsWho,
-            Capability::GuildRoster,
-            Capability::GuildManagement,
-            Capability::BankerChange,
-            Capability::Splitting,
         ] {
             assert!(!offers(server_type(ServerProtocol::Project1999)).contains(&capability));
             assert!(offers(server_type(ServerProtocol::EqEmu)).contains(&capability));
         }
         assert!(offers(server_type(ServerProtocol::Project1999)).contains(&Capability::Grouping));
+        // Both Titanium providers offer the contacts, guild and coin-sharing
+        // requests the program sends.
+        for protocol in [ServerProtocol::Project1999, ServerProtocol::EqEmu] {
+            let capabilities = offers(server_type(protocol));
+            for capability in [
+                Capability::FriendsWho,
+                Capability::GuildRoster,
+                Capability::GuildManagement,
+                Capability::BankerChange,
+                Capability::Splitting,
+            ] {
+                assert!(
+                    capabilities.contains(&capability),
+                    "{protocol:?} {capability:?}"
+                );
+            }
+        }
         // Both Titanium providers offer the ordinary social commands.
         for protocol in [ServerProtocol::Project1999, ServerProtocol::EqEmu] {
             let capabilities = offers(server_type(protocol));

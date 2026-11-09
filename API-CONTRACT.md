@@ -2,9 +2,9 @@
 
 ## Friends who, guild requests, splitting and banker change
 
-`EQEmu` offers `Capability::FriendsWho`, `GuildRoster`, `GuildManagement`,
-`BankerChange` and `Splitting`; Project 1999 offers them once a local run
-has exercised each one.
+`EQEmu` and Project 1999 offer `Capability::FriendsWho`, `GuildRoster`,
+`GuildManagement`, `BankerChange` and `Splitting`. Each sends what the
+Titanium program sends, and the server decides what it allows.
 
 - `GameCommand::WhoFriends` carries the host's friends list. The answer is an
   ordinary `WorldEvent::WhoList`. A list the packet cannot carry is not sent.

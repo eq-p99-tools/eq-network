@@ -821,7 +821,8 @@ pub enum GameCommand {
         /// The new leader.
         name: String,
     },
-    /// Lower a guild member's rank: `/guilddemote`.
+    /// Lower a guild member's rank, as the guild window's Demote button
+    /// does; the Titanium client has no slash command for it.
     GuildDemote {
         /// Current zone admission.
         session_id: u64,
