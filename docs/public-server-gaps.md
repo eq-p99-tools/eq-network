@@ -243,8 +243,10 @@ it adds no live combat/death evidence to this report.
   result produces a roll.
 - Plain emotes use the reliable 1028-byte record and text at byte 4
   (0x498449). The client bounds the leading-space wire string to 510 bytes
-  and displays the local line after submission. Incoming emotes use the text
-  at byte 4 (0x460d61, 0x454ccd). Language switching and native substitutions
+  and displays the local line after submission. The text takes the same
+  `%`-to-`&PCT;` escape as ordinary chat (inferred; stock `EQEmu` forwards
+  emote text unchanged, so the escape is unverified for emotes). Incoming
+  emotes use the text at byte 4 (0x460d61, 0x454ccd). Language switching and native substitutions
   are outside the plain-text path.
 - AFK, anonymous and roleplaying use eight-byte appearance updates with the
   own spawn ID (0x4699a9, 0x472578, 0x46a265), and the receiver consumes

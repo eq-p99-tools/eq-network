@@ -250,6 +250,8 @@ pub fn emote(text: &str) -> Result<EncodedCommand> {
 /// An ordinary Project 1999 emote. The Titanium sender (0x498449) prefixes
 /// a space and bounds the resulting wire string to 510 bytes. Preserve a
 /// whole literal message rather than cutting its text or escape sequence.
+/// The text takes the ordinary chat escapes; for emotes that is inferred
+/// (6.404).
 ///
 /// # Errors
 /// Rejects empty, overlong or control-character text.
