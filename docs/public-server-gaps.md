@@ -231,9 +231,12 @@ it adds no live combat/death evidence to this report.
   One pending request owns the untagged reply. Its five-second selection
   window is an inferred local limit. An expired or superseded request still
   owns its eventual reply. A zero or unavailable target leaves selection
-  alone. The session applies a valid selection in receive order, with no
-  target packet or attack toggle. The selection does not establish what
-  target the server has stored.
+  alone. The session applies a valid selection in receive order and sends
+  the ordinary target request for it, with no attack toggle: stock `EQEmu`
+  exempts exactly that following target request from its range check
+  (`Handle_OP_Assist`, `Handle_OP_TargetCommand`, zone/client_packet.cpp at
+  4aceae18), and abilities act on the server's stored target. Without the
+  request the server would keep the previous target.
 - Dice sends two ordered 32-bit endpoints from 0 through 32,000 (0x4669ab).
   The receive path uses three words and a name at byte 12 (0x4611fd). The
   fixed name-field width follows the shared Titanium layout. Only a received

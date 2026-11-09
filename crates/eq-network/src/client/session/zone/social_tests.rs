@@ -40,6 +40,21 @@ impl Visit {
     }
 }
 
+/// The ordinary Titanium target request naming the spawn.
+fn target_request(spawn_id: u16) -> eq_network_game::command::EncodedCommand {
+    let select = ClientCommand::SelectTarget {
+        session_id: 5,
+        request_id: 0,
+        spawn_id: Some(spawn_id),
+        expected_pet: None,
+    };
+    let packet =
+        eq_network_game::command::encode(eq_network_game::GameDialect::Titanium, &select, "Tester")
+            .unwrap();
+    assert_eq!(packet.opcode, 0x6c47);
+    packet
+}
+
 #[test]
 fn p99_assist_requires_a_live_request_and_does_not_send_a_combat_action() {
     let mut visit = Visit::new();
@@ -69,7 +84,8 @@ fn p99_assist_requires_a_live_request_and_does_not_send_a_combat_action() {
 
     let reply = visit.packet(ASSIST_OPCODE, &answer);
     assert!(reply.result.unwrap().is_none());
-    assert_eq!(reply.sent, []);
+    // The selection goes to the server as an ordinary target request.
+    assert_eq!(reply.sent, [target_request(9)]);
     assert!(matches!(
         reply.events.as_slice(),
         [ClientEvent::World(WorldEvent::TargetChanged { state, .. })]
@@ -104,7 +120,7 @@ fn p99_assist_selection_is_ordered_with_newer_target_and_spawn_updates() {
     messages.push(Message::Event(WorldEvent::Target(Some(7))));
     let received = visit.hear(messages);
     assert!(received.result.unwrap().is_none());
-    assert_eq!(received.sent, []);
+    assert_eq!(received.sent, [target_request(9)]);
     let selections: Vec<_> = received
         .events
         .iter()

@@ -10,7 +10,9 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **Breaking:** Offer ordinary assist, dice, emotes and AFK/anonymity/roleplay
   controls on Project 1999 from Titanium source. Handle
   `WorldEvent::ListingRequested` separately from received listing state.
-  Public P99 social exchanges still await attended validation.
+  `Message::AssistSelection` is a new variant. An accepted P99 assist reply
+  sends the ordinary target request, so the server's stored target follows
+  the selection. Public P99 social exchanges still await attended validation.
 
 - **Breaking:** Resolve P99 same-zone pads against installed boundaries
   and current zone points. `BoundaryRoute::SameZone` carries a resolved

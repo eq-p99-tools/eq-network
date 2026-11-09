@@ -247,14 +247,26 @@ impl Feature for Targeting {
         &mut self,
         message: &Message,
         world: &mut World,
-        _out: &mut Out<'_, '_>,
+        out: &mut Out<'_, '_>,
     ) -> Result<()> {
         if let Message::AssistSelection(id) = message {
-            // Titanium's assist reply selects locally. The reply does not
-            // submit a target request or toggle auto-attack in this client.
+            // The assist reply selects the target and the client tells the
+            // server, as for any selection: stock `EQEmu` exempts exactly that
+            // following target request from its range check
+            // (`Handle_OP_Assist`, `Handle_OP_TargetCommand` in
+            // zone/client_packet.cpp at 4aceae18), and abilities act on the
+            // server's stored target. It does not toggle auto-attack.
             if world.visible(*id) {
-                world.target.set(Some(*id), true, false);
-                world.happened(Message::Event(Self::target_event(world)));
+                let select = ClientCommand::SelectTarget {
+                    session_id: world.session_id,
+                    request_id: world.target.request_id,
+                    spawn_id: Some(*id),
+                    expected_pet: None,
+                };
+                if out.command(&select)? {
+                    world.target.set(Some(*id), true, false);
+                    world.happened(Message::Event(Self::target_event(world)));
+                }
             }
             return Ok(());
         }
