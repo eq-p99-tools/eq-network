@@ -7,6 +7,15 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Breaking:** Add `MovementMode::Shoreline` for bounded Titanium shoreline
+  transitions. Hosts submit a frame trace from local collision, and the worker
+  replays it to bound the elapsed time and motion before sending ordinary
+  position updates. As for ordinary swimming, the host's water and ceiling
+  flags are trusted. Each frame carries at most `SHORELINE_FRAME_MILLIS`
+  (50 ms); that bound, the 1.5 s arc lifetime and the per-frame damping are
+  inferred (recording checklist 6.407). Exhaustive matches on movement mode
+  need the new variant.
+
 - **Breaking:** Offer ordinary assist, dice, emotes and AFK/anonymity/roleplay
   controls on Project 1999 from Titanium source. Handle
   `WorldEvent::ListingRequested` separately from received listing state.

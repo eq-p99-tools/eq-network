@@ -1825,6 +1825,167 @@ fn swim_budget_is_three_dimensional_and_vertical_strokes_are_voluntary() {
 }
 
 #[test]
+#[allow(
+    clippy::too_many_lines,
+    reason = "One chronological trace checks accept, rejection, correction, and rearm"
+)]
+fn shoreline_replays_wet_and_dry_frames_without_borrowing_from_another_sample() {
+    use crate::movement::{
+        ShorelineFrame, ShorelineStroke, ShorelineTrace, ShorelineVelocity, SHORELINE_FRAMES,
+    };
+
+    let start = Instant::now();
+    let at = |ms| start + Duration::from_millis(ms);
+    let mut session = setup(start)
+        .with_swimming(true)
+        .with_heading_snapshots(true)
+        .with_jump(Some((44.55, 160.0)));
+    let grant = session.calibration().unwrap().units_per_second;
+    let swim = MovementRequest::new(MovementMode::Swim, 11, Position::default(), at(100));
+    let make = |start, finish, times: &[ShorelineFrame]| {
+        let mut frames = [ShorelineFrame::EMPTY; SHORELINE_FRAMES];
+        frames[..times.len()].copy_from_slice(times);
+        MovementMode::Shoreline(ShorelineTrace {
+            start,
+            finish,
+            frames,
+        })
+    };
+    let wet = ShorelineFrame::new(16, true, false, ShorelineStroke::new([0.0, 0.9, 0.4])).unwrap();
+    let turned =
+        ShorelineFrame::new(16, true, false, ShorelineStroke::new([0.9, 0.0, -0.4])).unwrap();
+    let released = ShorelineFrame::new(0, true, false, ShorelineStroke::default()).unwrap();
+    let dry = ShorelineFrame::new(7, false, false, ShorelineStroke::default()).unwrap();
+    let mut physics = ShorelineVelocity::start(0.0);
+    physics.advance(wet, grant, 160.0);
+    let ([x, y], z) = physics.travel(wet);
+    let proposal = MovementRequest::new(
+        make(true, false, &[wet]),
+        11,
+        Position {
+            x,
+            y,
+            z,
+            ..Position::default()
+        },
+        at(200),
+    );
+    assert!(session
+        .send_move_sample(&proposal, at(200), |_| panic!("start without swim"))
+        .is_err());
+    session
+        .send_move_sample(&swim, at(100), |_| Ok(()))
+        .unwrap();
+    // A frame longer than the bound cannot be built at all.
+    assert!(ShorelineFrame::new(51, true, false, ShorelineStroke::new([0.0, 0.9, 0.4])).is_none());
+    // A start must be one wet, upward frame.
+    let level =
+        ShorelineFrame::new(16, true, false, ShorelineStroke::new([0.0, 1.0, 0.0])).unwrap();
+    for bad in [
+        make(true, false, &[level]),
+        make(true, false, &[dry]),
+        make(true, false, &[wet, wet]),
+    ] {
+        let request = MovementRequest::new(bad, 11, Position::default(), at(200));
+        assert!(session
+            .send_move_sample(&request, at(200), |_| panic!("bad start frame"))
+            .is_err());
+    }
+    // Motion beyond the replayed travel is refused on every axis. Shorter
+    // motion inside the box stays allowed: collision may stop a frame early.
+    let travel = proposal.position;
+    for (x, y, z) in [
+        (travel.x + 0.5, travel.y, travel.z),
+        (travel.x, travel.y + 0.5, travel.z),
+        (travel.x, travel.y, travel.z + 0.5),
+        (travel.x, travel.y, -0.5),
+    ] {
+        let beyond = Position { x, y, z, ..travel };
+        let request = MovementRequest::new(proposal.mode, 11, beyond, at(200));
+        assert!(session
+            .send_move_sample(&request, at(200), |_| panic!("beyond replayed travel"))
+            .is_err());
+    }
+    assert_eq!(session.position(), swim.position);
+    assert!(session
+        .send_move_sample(&proposal, at(200), |_| anyhow::bail!("transport"))
+        .is_err());
+    assert_eq!(session.position(), swim.position);
+    session
+        .send_move_sample(&proposal, at(200), |packet| {
+            assert!((packet.delta[2] - physics.vertical).abs() < 1e-6);
+            assert_eq!(packet.packet()?.body.len(), 36);
+            Ok(())
+        })
+        .unwrap();
+
+    let old_position = session.position();
+    let mut too_long =
+        MovementRequest::new(make(false, false, &[wet; 7]), 11, old_position, at(300));
+    assert!(session
+        .send_move_sample(&too_long, at(300), |_| panic!("borrowed time"))
+        .is_err());
+    too_long.session_id = 12;
+    assert!(session
+        .send_move_sample(&too_long, at(300), |_| panic!("other admission"))
+        .is_err());
+
+    let mut next = old_position;
+    let frames = [turned, released, dry, dry];
+    for frame in frames {
+        physics.advance(frame, grant, 160.0);
+        let ([x, y], z) = physics.travel(frame);
+        next.x += x;
+        next.y += y;
+        next.z += z;
+    }
+    assert!(next.x > old_position.x);
+    next.heading = 128.0;
+    let mut continued = MovementRequest::new(make(false, false, &frames), 11, next, at(300));
+    continued.heading = HeadingUpdate::Snapshot;
+    session
+        .send_move_sample(&continued, at(300), |packet| {
+            assert_eq!(packet.position.heading, 128.0);
+            assert_eq!(
+                packet.delta,
+                [
+                    physics.horizontal[0],
+                    physics.horizontal[1],
+                    physics.vertical,
+                ]
+            );
+            Ok(())
+        })
+        .unwrap();
+    let swim = MovementRequest::new(MovementMode::Swim, 11, next, at(400));
+    session
+        .send_move_sample(&swim, at(400), |_| Ok(()))
+        .unwrap();
+    let early = MovementRequest::new(proposal.mode, 11, next, at(500));
+    assert!(session
+        .send_move_sample(&early, at(500), |_| panic!("cooldown bypass"))
+        .is_err());
+
+    let mut corrected = setup(start)
+        .with_swimming(true)
+        .with_jump(Some((44.55, 160.0)));
+    let calibration = corrected.calibration().unwrap();
+    let initial = MovementRequest::new(MovementMode::Swim, 11, Position::default(), at(100));
+    corrected
+        .send_move_sample(&initial, at(100), |_| Ok(()))
+        .unwrap();
+    corrected
+        .send_move_sample(&proposal, at(200), |_| Ok(()))
+        .unwrap();
+    corrected.correct(next, at(250)).unwrap();
+    corrected.calibrate(calibration, at(250)).unwrap();
+    let stale = MovementRequest::new(make(false, true, &[dry]), 11, next, at(350));
+    assert!(corrected
+        .send_move_sample(&stale, at(350), |_| panic!("correction retained arc"))
+        .is_err());
+}
+
+#[test]
 fn correction_drops_held_swim_and_requires_a_new_grant_and_input() {
     let start = Instant::now();
     let stroke = start + Duration::from_millis(100);

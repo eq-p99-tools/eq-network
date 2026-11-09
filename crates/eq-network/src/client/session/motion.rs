@@ -7,14 +7,15 @@ use super::{
     ClientCommand, ClientEvent,
 };
 use anyhow::Result;
+#[cfg(test)]
+use eq_network_game::movement::MovementMode;
 use eq_network_game::{
     appearance::AppearanceChange,
     inventory::MAX_CARRIED_WEIGHT,
     message::Message,
     movement::{
-        DiagonalRates, MotionCalibration, MotionSession, MovementMode, MovementRequest,
-        PositionPacket, SpeedInputAcceptance, SpeedInputState, SpeedInputs, SpeedState,
-        STATIONARY_HEARTBEAT,
+        DiagonalRates, MotionCalibration, MotionSession, MovementRequest, PositionPacket,
+        SpeedInputAcceptance, SpeedInputState, SpeedInputs, SpeedState, STATIONARY_HEARTBEAT,
     },
     request::Request,
     world::{PlayerState, Position, WorldEvent},
@@ -547,7 +548,7 @@ impl Motion {
         };
         let (to, from) = (request.position, motion.position());
         let may_walk_while_stunned =
-            request.mode != MovementMode::Swim && motion.options().walk_while_stunned;
+            !request.mode.is_water_motion() && motion.options().walk_while_stunned;
         if let Some(reason) = world.control.motion_refusal(
             request,
             motion.is_passive(request),

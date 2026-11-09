@@ -9,6 +9,7 @@ pub use inputs::{
     EqMacFatigueInputs, SpeedInputAcceptance, SpeedInputState, SpeedInputUnavailable, SpeedInputs,
 };
 mod session;
+mod shoreline;
 mod speeds;
 pub use carry::{between_reports, carry, Carried, ZBetween};
 pub use diagonal::{DiagonalAlong, DiagonalRates, GroundedDiagonal, StrafeSide};
@@ -19,6 +20,10 @@ pub use gate::{
 pub use session::{
     titanium_jump, BackwardCalibration, MotionCalibration, MotionSession, StrafeCalibration,
     WalkCalibration,
+};
+pub use shoreline::{
+    ShorelineFrame, ShorelineStroke, ShorelineTrace, ShorelineVelocity, SHORELINE_COOLDOWN,
+    SHORELINE_FRAMES, SHORELINE_FRAME_MILLIS,
 };
 pub use speeds::{eqmac as eqmac_speeds, titanium as titanium_speeds, SpeedState, Speeds};
 
@@ -157,6 +162,16 @@ pub enum MovementMode {
     Fall,
     /// Locally collision-checked water motion. Never serialized as a mode.
     Swim,
+    /// One bounded Titanium shoreline arc, using ordinary position updates.
+    Shoreline(ShorelineTrace),
+}
+
+impl MovementMode {
+    /// Voluntary water motion never receives the walk-while-stunned allowance.
+    #[must_use]
+    pub const fn is_water_motion(self) -> bool {
+        matches!(self, Self::Swim | Self::Shoreline(_))
+    }
 }
 
 /// Conservative three-dimensional swim budget for a Titanium session.
@@ -427,6 +442,18 @@ pub struct MovementGuard {
     /// When the latest jump the session announced started, until gravity
     /// has spent its speed.
     jumped_at: Option<JumpStart>,
+    last_shoreline: Option<Instant>,
+    shoreline: Option<ShorelineArc>,
+    shoreline_velocity: Option<[f32; 3]>,
+    previous_swim: bool,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct ShorelineArc {
+    start: Instant,
+    spent: u32,
+    dry: bool,
+    velocity: ShorelineVelocity,
 }
 
 /// When an announced jump started, for [`MovementGuard`].
@@ -455,6 +482,10 @@ impl MovementGuard {
             climb: None,
             jump: None,
             jumped_at: None,
+            last_shoreline: None,
+            shoreline: None,
+            shoreline_velocity: None,
+            previous_swim: false,
         }
     }
 
@@ -538,6 +569,7 @@ impl MovementGuard {
         self.speed = speed.filter(|speed| speed.is_finite() && *speed > 0.0);
         self.sampled = now;
         self.input_epoch = now;
+        self.clear_shoreline();
     }
 
     /// Resets both position and pending motion after a server correction.
@@ -547,6 +579,102 @@ impl MovementGuard {
         self.input_epoch = now;
         self.speed = None;
         self.jumped_at = None;
+        self.clear_shoreline();
+    }
+
+    fn clear_shoreline(&mut self) {
+        self.shoreline = None;
+        self.shoreline_velocity = None;
+        self.previous_swim = false;
+    }
+
+    fn check_shoreline(
+        &self,
+        request: &MovementRequest,
+        trace: ShorelineTrace,
+        granted: f32,
+        displacement: [f32; 3],
+    ) -> Result<(ShorelineArc, [f32; 3])> {
+        let Some((_, gravity)) = self.jump else {
+            anyhow::bail!("shoreline gravity is not calibrated");
+        };
+        let mut arc = if trace.start {
+            ensure!(
+                self.previous_swim
+                    && self.shoreline.is_none()
+                    && trace.frames[0].upward()
+                    && trace.frames[0].water()
+                    && trace.frames[1] == ShorelineFrame::EMPTY
+                    && self.last_shoreline.is_none_or(|last| {
+                        request.created.saturating_duration_since(last) >= SHORELINE_COOLDOWN
+                    }),
+                "shoreline impulse is not ready"
+            );
+            ShorelineArc {
+                start: request.created,
+                spent: 0,
+                dry: false,
+                velocity: ShorelineVelocity::start(self.position.heading),
+            }
+        } else {
+            self.shoreline
+                .ok_or_else(|| anyhow::anyhow!("shoreline continuation has no impulse"))?
+        };
+        ensure!(
+            request.created.saturating_duration_since(arc.start) < SHORELINE_COOLDOWN,
+            "shoreline input expired"
+        );
+        let mut millis = 0;
+        let mut horizontal = 0.0;
+        let mut lower = [0.0; 3];
+        let mut upper = [0.0; 3];
+        let mut empty = false;
+        for frame in trace.frames {
+            if frame == ShorelineFrame::EMPTY {
+                empty = true;
+                continue;
+            }
+            ensure!(
+                !empty && (!arc.dry || !frame.water()),
+                "invalid shoreline frame order"
+            );
+            arc.dry |= !frame.water();
+            millis += u32::from(frame.millis());
+            arc.velocity.advance(frame, granted, gravity);
+            let ([x, y], vertical) = arc.velocity.travel(frame);
+            horizontal += x.hypot(y);
+            for (axis, step) in [x, y, vertical].into_iter().enumerate() {
+                lower[axis] += step.min(0.0);
+                upper[axis] += step.max(0.0);
+            }
+            frame.stop(&mut arc.velocity);
+        }
+        arc.spent += millis;
+        let available = request
+            .created
+            .saturating_duration_since(self.sampled)
+            .as_millis()
+            .min(250);
+        ensure!(
+            millis > 0
+                && u128::from(millis) <= available
+                && u128::from(arc.spent) <= SHORELINE_COOLDOWN.as_millis()
+                && displacement[0].hypot(displacement[1]) <= horizontal + 0.01
+                && displacement.iter().enumerate().all(|(axis, value)| {
+                    (lower[axis] - 0.01..=upper[axis] + 0.01).contains(value)
+                }),
+            "shoreline proposal exceeds its frame budget"
+        );
+        let wire = if trace.finish {
+            [0.0; 3]
+        } else {
+            [
+                arc.velocity.horizontal[0],
+                arc.velocity.horizontal[1],
+                arc.velocity.vertical,
+            ]
+        };
+        Ok((arc, wire))
     }
 
     /// Validates one fresh proposal. Failure never changes the accepted position.
@@ -596,6 +724,9 @@ impl MovementGuard {
             request.position.y - self.position.y,
             request.position.z - self.position.z,
         ];
+        if let MovementMode::Shoreline(trace) = request.mode {
+            return self.accept_shoreline(request, trace, speed, delta, swimming);
+        }
         if request.mode == MovementMode::Swim {
             ensure!(swimming && !self.flying, "swimming is not available");
             ensure!(
@@ -644,7 +775,7 @@ impl MovementGuard {
             }
         });
         let rise = since_jump.map_or(0.0, |(from, to)| self.jump_rise(from, to));
-        let vertical = if request.mode == MovementMode::Swim {
+        let vertical = if request.mode.is_water_motion() {
             true // The single 3D budget already checks vertical movement.
         } else if self.flying {
             // Flight uses the unscaled mode rate for ascent and descent.
@@ -662,10 +793,39 @@ impl MovementGuard {
             vertical,
             "vertical motion requires a supported movement mode"
         );
-        self.position = request.position;
-        self.sampled = request.created;
+        self.record_move(request);
         self.update_jump_after_move(request.mode, request.created, since_jump.map(|(_, to)| to));
         Ok(delta)
+    }
+
+    fn accept_shoreline(
+        &mut self,
+        request: &MovementRequest,
+        trace: ShorelineTrace,
+        speed: f32,
+        delta: [f32; 3],
+        swimming: bool,
+    ) -> Result<[f32; 3]> {
+        ensure!(
+            swimming && !self.flying,
+            "shoreline swimming is not available"
+        );
+        let (arc, wire) = self.check_shoreline(request, trace, speed, delta)?;
+        self.record_move(request);
+        if trace.start {
+            self.last_shoreline = Some(arc.start);
+        }
+        self.shoreline = (!trace.finish).then_some(arc);
+        self.shoreline_velocity = Some(wire);
+        self.jumped_at = None;
+        Ok(delta)
+    }
+
+    fn record_move(&mut self, request: &MovementRequest) {
+        self.position = request.position;
+        self.sampled = request.created;
+        self.clear_shoreline();
+        self.previous_swim = request.mode == MovementMode::Swim;
     }
 
     /// Ends jump tracking on water entry or once its upward allowance is spent.
@@ -675,7 +835,7 @@ impl MovementGuard {
         created: Instant,
         since_jump: Option<f32>,
     ) {
-        if mode == MovementMode::Swim {
+        if mode.is_water_motion() {
             self.jumped_at = None;
         } else if let (Some((speed, gravity)), Some(to)) = (self.jump, since_jump) {
             self.jumped_at = if gravity > 0.0 && to >= speed / gravity {

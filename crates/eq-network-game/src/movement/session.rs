@@ -587,6 +587,7 @@ impl MotionSession {
     /// Replace any paced moving update with its stationary stop; the normal
     /// update gate still decides when that existing position sample is sent.
     pub fn stop_voluntary(&mut self) {
+        self.guard.clear_shoreline();
         if self.stop_pending() {
             self.held = Some(PositionPacket {
                 spawn_id: self.spawn_id,
@@ -613,6 +614,9 @@ impl MotionSession {
             || request.position.y != self.position.y
             || request.position.heading != self.position.heading
         {
+            return false;
+        }
+        if matches!(request.mode, MovementMode::Shoreline(_)) {
             return false;
         }
         if request.mode == MovementMode::Swim {
@@ -768,6 +772,7 @@ impl MotionSession {
                     calibration.velocity_scale,
                     0, // Swim animation/skill calibration is unverified.
                 ),
+                MovementMode::Shoreline(_) => (calibration.units_per_second, 0.0, 0),
                 MovementMode::GroundedDiagonal(_) => unreachable!("longitudinal mode is cardinal"),
             }
         } else {
@@ -787,7 +792,7 @@ impl MotionSession {
         // The wire's velocity and turn rate cover the same interval the guard
         // budgets: from the last accepted request's stamp to this one's.
         let elapsed = guard.interval(request.created);
-        let swimming = request.mode == MovementMode::Swim;
+        let swimming = request.mode.is_water_motion();
         let displacement = guard.accept_with_modes(
             request,
             now,
@@ -798,7 +803,7 @@ impl MotionSession {
         // Following a slope has no vertical stroke. Ordinary falls still
         // carry their descent in absolute Z. For a swim stroke Titanium
         // copies all three tick velocities into its existing update fields.
-        let delta = [
+        let delta = guard.shoreline_velocity.unwrap_or([
             displacement[0] / elapsed * velocity_scale,
             displacement[1] / elapsed * velocity_scale,
             if swimming {
@@ -806,7 +811,7 @@ impl MotionSession {
             } else {
                 0.0
             },
-        ];
+        ]);
         let moving = displacement[..if swimming { 3 } else { 2 }]
             .iter()
             .any(|d| d.abs() > f32::EPSILON);
