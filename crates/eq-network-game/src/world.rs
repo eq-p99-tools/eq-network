@@ -1295,6 +1295,17 @@ pub enum WorldEvent {
     /// follows it with [`WorldEvent::Coins`] and
     /// [`WorldEvent::CoinsElsewhere`] as it keeps them.
     CoinsChanged(crate::banker::Changed),
+    /// Whether looted coins are shared with the group, as the profile says
+    /// at admission.
+    AutoSplit(bool),
+    /// The player turned the sharing of looted coins on or off
+    /// (`/autosplit`); the server answers nothing.
+    AutoSplitSet {
+        /// Admission from the request.
+        session_id: u64,
+        /// Whether looted coins are now shared.
+        on: bool,
+    },
     /// A guild request that was not sent, and why.
     GuildRefused {
         /// Admission from the request.

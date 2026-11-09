@@ -15,7 +15,9 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `SetAutoSplit`, `RequestGuildMotd`, `AnswerGuildInvite`, `GuildInvite`,
   `GuildRemove`, `SetGuildMotd`, `GuildMakeLeader` and `GuildDemote`, and
   `Request` the matching variants. `WorldEvent::CoinsChanged` carries a
-  banker's answer, `WorldEvent::GuildRefused` a refused guild request, and
+  banker's answer, `WorldEvent::GuildRefused` a refused guild request,
+  `WorldEvent::AutoSplit` the profile's automatic splitting and
+  `WorldEvent::AutoSplitSet` a change of it, and
   `WorldEvent::CoinsRefused` gains `string_id`. The asked-for message of the
   day decodes as `ChannelName::GuildMotdReply`. Layouts and checks follow
   `EQEmu`'s handlers and the Titanium program (read R6); the split and

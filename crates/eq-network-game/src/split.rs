@@ -27,6 +27,22 @@ pub const NO_GROUP: u32 = 12328;
 /// The server's line when the purse cannot cover the split.
 pub const TOO_LITTLE: u32 = 13112;
 
+/// Where the Titanium profile says whether looted coins are shared: a
+/// 32-bit `autosplit`, 1 on and 0 off (`EQEmu`'s Titanium
+/// `PlayerProfile_Struct`).
+const PROFILE_AUTO_SPLIT: usize = 13256;
+
+/// Whether the Titanium profile says looted coins are shared.
+///
+/// # Errors
+/// Rejects a profile too short to say.
+pub fn titanium_profile(profile: &[u8]) -> Result<bool> {
+    let field = profile
+        .get(PROFILE_AUTO_SPLIT..PROFILE_AUTO_SPLIT + 4)
+        .ok_or_else(|| anyhow::anyhow!("profile too short for automatic splitting"))?;
+    Ok(u32::from_le_bytes([field[0], field[1], field[2], field[3]]) != 0)
+}
+
 /// Shares coins from the purse with the group (16 bytes: platinum, gold,
 /// silver, copper).
 ///
@@ -73,5 +89,10 @@ mod tests {
         assert_eq!(on.body, [7, 0, 28, 0, 1, 0, 0, 0]);
         assert_eq!(titanium_auto_split(7, false).unwrap().body[4], 0);
         assert!(titanium_auto_split(0, true).is_err());
+        let mut profile = vec![0; 13260];
+        assert!(!titanium_profile(&profile).unwrap());
+        profile[13256] = 1;
+        assert!(titanium_profile(&profile).unwrap());
+        assert!(titanium_profile(&profile[..13259]).is_err());
     }
 }

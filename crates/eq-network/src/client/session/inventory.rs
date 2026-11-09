@@ -1106,7 +1106,7 @@ impl Feature for Belongings {
                 self.sharing.split(command, *coins, world, out)
             }
             ClientCommand::SetAutoSplit { on, .. } => {
-                sharing::Sharing::auto_split(command, *on, out)
+                sharing::Sharing::auto_split(command, *on, world, out)
             }
             ClientCommand::ChangeCoins { .. } => self.sharing.change(command, world, out),
             ClientCommand::Shop { .. } => self.shop(command, world, out),
@@ -3285,6 +3285,10 @@ mod tests {
             outcome.sent,
             [eq_network_game::split::titanium_auto_split(7, true).unwrap()]
         );
+        assert!(outcome.events.iter().any(|event| matches!(
+            event,
+            ClientEvent::World(WorldEvent::AutoSplitSet { on: true, .. })
+        )));
     }
 
     #[test]

@@ -127,16 +127,22 @@ impl Sharing {
         tell_coins(world, true, out)
     }
 
-    /// Turns sharing of looted coins on or off.
+    /// Turns sharing of looted coins on or off, and says so, as the server
+    /// answers nothing.
     pub(super) fn auto_split(
         command: &ClientCommand,
         on: bool,
+        world: &World,
         out: &mut Out<'_, '_>,
     ) -> Result<()> {
-        match out.encode(&Request::AutoSplit(on)) {
-            Ok(packet) => out.send(&packet),
-            Err(_) => actions::refuse(command, "Your character is not ready yet.", out.log),
-        }
+        let Ok(packet) = out.encode(&Request::AutoSplit(on)) else {
+            return actions::refuse(command, "Your character is not ready yet.", out.log);
+        };
+        out.send(&packet)?;
+        out.log.send(ClientEvent::World(WorldEvent::AutoSplitSet {
+            session_id: world.session_id,
+            on,
+        }))
     }
 
     /// Asks the banker nearest the player to change the coins.

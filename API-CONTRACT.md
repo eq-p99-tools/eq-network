@@ -15,8 +15,10 @@ has exercised each one.
   takes the coins from the purse at once, as the official client does, and
   reports `WorldEvent::Coins`. If no money update follows within the wait,
   the purse becomes uncertain (`PurseUncertain`).
-- `GameCommand::SetAutoSplit` sends the appearance update. The host keeps
-  the toggle's state.
+- `GameCommand::SetAutoSplit` sends the appearance update and reports
+  `WorldEvent::AutoSplitSet`, as the server answers nothing. The Titanium
+  profile's setting arrives at admission as `WorldEvent::AutoSplit`, so a
+  host can toggle it as the official client does.
 - `GameCommand::ChangeCoins` needs a banker within the bank reach. It holds
   coin moves until `WorldEvent::CoinsChanged` arrives, which the worker
   follows with `Coins` and `CoinsElsewhere`. If no answer arrives within the

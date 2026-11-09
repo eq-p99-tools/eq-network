@@ -202,6 +202,10 @@ fn titanium_profile_messages(body: &[u8], messages: &mut Vec<Message>) -> Messag
         |error| unreadable(Part::World, &error),
         |coins| Message::Event(WorldEvent::Coins(coins)),
     ));
+    messages.push(crate::split::titanium_profile(body).map_or_else(
+        |error| unreadable(Part::World, &error),
+        |on| Message::Event(WorldEvent::AutoSplit(on)),
+    ));
     messages.push(crate::food::titanium_profile(body).map_or_else(
         |error| unreadable(Part::World, &error),
         |nourishment| Message::Event(WorldEvent::Nourishment(nourishment)),
@@ -483,12 +487,14 @@ mod tests {
         let mut profile = vec![0; 19592];
         profile[12940..12946].copy_from_slice(b"Tester");
         profile[2312..2316].copy_from_slice(&73u32.to_le_bytes());
+        profile[13256] = 1;
         assert!(matches!(
             &titanium(PROFILE_OPCODE, &profile)[..],
             [
                 Message::Event(WorldEvent::Group(crate::group::GroupUpdate::Disbanded)),
                 Message::Event(WorldEvent::BuffSnapshot(_)),
                 Message::Event(WorldEvent::Coins(_)),
+                Message::Event(WorldEvent::AutoSplit(true)),
                 Message::Event(WorldEvent::Nourishment(_)),
                 Message::Event(WorldEvent::CoinsElsewhere { .. }),
                 Message::Event(WorldEvent::SpellBook(book)),
@@ -497,6 +503,10 @@ mod tests {
         assert!(matches!(
             titanium(PROFILE_OPCODE, &[0; 8])[..],
             [
+                Message::Unreadable {
+                    part: Part::World,
+                    ..
+                },
                 Message::Unreadable {
                     part: Part::World,
                     ..
