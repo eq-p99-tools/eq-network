@@ -518,6 +518,11 @@ impl MovementGuard {
     /// times the jump speed (0x4193c5, read at 0x4aca9f and 0x4acc18), the
     /// factor that also slows running ([`Speeds::jump_factor`]).
     /// Held to 0..1; anything else counts as 1.
+    ///
+    /// When health or weight changes, a frontend may launch one more jump at
+    /// the old factor before the new `MotionState` reaches it. A jump
+    /// announced after this call is bounded by the new factor, so at most
+    /// that one sample is refused and sent again; nothing desyncs.
     pub fn set_jump_factor(&mut self, factor: f32) {
         self.jump_factor = if factor.is_finite() {
             factor.clamp(0.0, 1.0)
