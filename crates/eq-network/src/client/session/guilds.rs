@@ -244,6 +244,13 @@ impl Feature for Guilds {
         self.follow(message);
         Ok(())
     }
+
+    /// A new zone sends the member list again, and the server forgets an
+    /// invitation its old zone made, so neither outlives the connection.
+    fn connection_ended(&mut self, _world: &mut World) {
+        self.members = None;
+        self.invitations.clear();
+    }
 }
 
 #[cfg(test)]
@@ -364,6 +371,16 @@ mod tests {
         });
         outcome.result.unwrap();
         assert_eq!(outcome.sent, [], "a second answer must not go");
+        // An invitation from the zone the player left is not answered.
+        testing::run(|out| feature.observe(&invite, &mut world, out))
+            .result
+            .unwrap();
+        feature.connection_ended(&mut world);
+        let outcome = testing::run(|out| {
+            feature.handle(&answer("Inviter", InviteAnswer::Accept), &mut world, out)
+        });
+        outcome.result.unwrap();
+        assert_eq!(outcome.sent, [], "an old zone's invitation must not go");
     }
 
     #[test]

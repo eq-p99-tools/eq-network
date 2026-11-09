@@ -24,8 +24,9 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   day decodes as `ChannelName::GuildMotdReply`. Layouts and checks follow
   `EQEmu`'s handlers and the Titanium program (read R6); the split and
   change answer waits and the guild member-name rule are inferred
-  (recording checklist 6.410, 6.411). Exhaustive command, capability and
-  event matches need the new variants.
+  (recording checklist 6.410, 6.411). A waiting invitation and the member
+  list do not outlive the zone connection. Exhaustive command, capability
+  and event matches need the new variants.
 
 - **Breaking:** Add `MovementMode::Shoreline` for bounded Titanium shoreline
   transitions. Hosts submit a frame trace from local collision, and the worker
