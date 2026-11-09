@@ -1,5 +1,6 @@
 //! The player's target: the spawn the player picks, which must be the player
-//! or someone they can see, or the one the server sets itself.
+//! or someone they can see, a correlated assist selection, or the one the
+//! server sets itself.
 use super::{
     feature::{Feature, Out, World},
     ClientCommand, ClientEvent,
@@ -9,9 +10,9 @@ use eq_network_game::{
     appearance::AppearanceChange, message::Message, targets::TargetState, world::WorldEvent,
 };
 
-/// The spawn the server holds as the player's target: the last one sent, or
-/// the one the server set since. Every feature reads it; only the targeting
-/// feature changes it.
+/// The session's selected spawn. A submitted choice or an assist selection
+/// does not establish the server's stored target. Every feature reads this
+/// state; only the targeting feature changes it.
 #[derive(Clone, Copy, Debug, Default)]
 pub(super) struct Target {
     state: TargetState,
@@ -248,6 +249,15 @@ impl Feature for Targeting {
         world: &mut World,
         _out: &mut Out<'_, '_>,
     ) -> Result<()> {
+        if let Message::AssistSelection(id) = message {
+            // Titanium's assist reply selects locally. The reply does not
+            // submit a target request or toggle auto-attack in this client.
+            if world.visible(*id) {
+                world.target.set(Some(*id), true, false);
+                world.happened(Message::Event(Self::target_event(world)));
+            }
+            return Ok(());
+        }
         let Message::Event(event) = message else {
             return Ok(());
         };

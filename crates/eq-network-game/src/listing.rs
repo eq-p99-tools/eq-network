@@ -44,8 +44,7 @@ pub enum Anonymity {
     Anonymous,
     /// `/roleplay`: as anonymous, but the guild shows.
     Roleplaying,
-    /// Both bits: anonymous and roleplaying at once, which `/roleplay`
-    /// reaches from anonymous.
+    /// Both bits: anonymous and roleplaying at once.
     AnonymousRoleplaying,
 }
 
@@ -78,15 +77,15 @@ impl Anonymity {
         self.wire() & 1 != 0
     }
 
-    /// What `/roleplay` turns it into: the roleplaying bit flipped and the
-    /// anonymous bit kept (0→2, 1→3, 2→0, 3→1), as both programs do.
+    /// The roleplaying bit flipped and the anonymous bit kept
+    /// (0→2, 1→3, 2→0, 3→1). A server policy may refuse some transitions.
     #[must_use]
     pub const fn roleplay_toggled(self) -> Self {
         Self::from_wire(self.wire() ^ 2)
     }
 
-    /// What `/anonymous` turns it into: the program writes 1, or 0 when the
-    /// anonymous bit is already set, whatever the roleplaying bit was.
+    /// Toggle anonymity in the shared `EQEmu` and `EQMac` policy. Writing 0
+    /// clears both bits when anonymity was set.
     #[must_use]
     pub const fn anonymous_toggled(self) -> Self {
         if self.anonymous() {

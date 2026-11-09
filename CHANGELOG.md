@@ -7,6 +7,11 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Breaking:** Offer ordinary assist, dice, emotes and AFK/anonymity/roleplay
+  controls on Project 1999 from Titanium source. Handle
+  `WorldEvent::ListingRequested` separately from received listing state.
+  Public P99 social exchanges still await attended validation.
+
 - **Breaking:** Resolve P99 same-zone pads against installed boundaries
   and current zone points. `BoundaryRoute::SameZone` carries a resolved
   route, `ClientConfig` accepts an installed-boundary provider and

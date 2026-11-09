@@ -217,11 +217,37 @@ it adds no live combat/death evidence to this report.
 | Resurrection / translocate | Source-backed; public exchange pending | Disabled (TAKP translocate exists) | Offer-bound consent. Named translocate continuation and ordinary server-directed movement. Bind continuation without a server-directed destination remains unverified. |
 | Sacrifice | Disabled | Disabled | Separate consent path. |
 | Who / time of day | Offered | Disabled | Quarm handlers/policy; do not confuse received entity state with a complete `/who` answer. |
-| AFK / anonymous / roleplay | Disabled | Disabled; TAKP offers anon/roleplay | Server-specific appearance rules and replies; TAKP itself does not establish AFK support. |
-| Roll / emote / assist / show helm / regen ticks | Disabled | Disabled | Per-action codecs/policy and evidence. Do not grant these merely because a sibling server does. |
+| AFK / anonymous / roleplay | Ordinary requests offered from Titanium source | Disabled; TAKP offers anon/roleplay | Check observer listing, server pacing and reconnect state on P99. Submitted and received state are separate. |
+| Roll / emote / assist | Ordinary commands offered from Titanium source | Disabled | Check P99 request/reply and a partner's received chat and targets. |
+| Show helm / regen ticks | Disabled | Disabled | Per-action codecs and server evidence remain open. |
 | Hiding acknowledgement | P99 reply behavior unverified | EQMac ends hiding itself | P99 needs evidence; redundant EQMac acknowledgement is not a missing action. |
 | Local map/editor/help/free camera | Available independently of gameplay policy | Same | Target actions still need targeting capability. Existing local UI checks do not certify the whole public-server gameplay matrix. |
 | Art/UI completeness | Partial | Partial | Assets come from user installs; model variants, equipment tints, animations and UI coverage remain incomplete. |
+
+### Project 1999 ordinary socials (6.404)
+
+- Assist sends a reliable four-byte spawn ID and the same opcode carries a
+  target ID in reply (Titanium `eqgame.exe` 0x46ae6c, 0x46aeab, 0x45f40a).
+  One pending request owns the untagged reply. Its five-second selection
+  window is an inferred local limit. An expired or superseded request still
+  owns its eventual reply. A zero or unavailable target leaves selection
+  alone. The session applies a valid selection in receive order, with no
+  target packet or attack toggle. The selection does not establish what
+  target the server has stored.
+- Dice sends two ordered 32-bit endpoints from 0 through 32,000 (0x4669ab).
+  The receive path uses three words and a name at byte 12 (0x4611fd). The
+  fixed name-field width follows the shared Titanium layout. Only a received
+  result produces a roll.
+- Plain emotes use the reliable 1028-byte record and text at byte 4
+  (0x498449). The client bounds the leading-space wire string to 510 bytes
+  and displays the local line after submission. Incoming emotes use the text
+  at byte 4 (0x460d61, 0x454ccd). Language switching and native substitutions
+  are outside the plain-text path.
+- AFK, anonymous and roleplaying use eight-byte appearance updates with the
+  own spawn ID (0x4699a9, 0x472578, 0x46a265), and the receiver consumes
+  appearance types 24 and 21 (0x45242f). P99's 500 ms per-kind send spacing
+  is local pacing inferred from EQEmu's receiver guard. Public P99 echo
+  behavior and observer propagation await attended checks.
 
 Creation slot counts were addressed by the now-merged
 [client PR #325](https://github.com/eq-p99-tools/eq-client/pull/325), alongside

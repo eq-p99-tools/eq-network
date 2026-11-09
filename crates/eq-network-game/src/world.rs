@@ -1009,8 +1009,9 @@ pub enum WorldEvent {
         /// Session target after submission, not server acceptance.
         state: crate::targets::TargetState,
     },
-    /// Admission-scoped session projection of a server-directed target or
-    /// a change to the selected incarnation. Never echo this as a request.
+    /// Admission-scoped session projection of a server-directed target, a
+    /// correlated assist selection, or a change to the selected incarnation.
+    /// Never echo this as a request.
     TargetChanged {
         /// Current admission.
         session_id: u64,
@@ -1520,6 +1521,14 @@ pub enum WorldEvent {
         /// Admission from the request.
         session_id: u64,
         /// What changed.
+        change: crate::listing::ListingChange,
+    },
+    /// A listing update submitted on Project 1999. The received listing
+    /// changes only on a separate appearance or admission update.
+    ListingRequested {
+        /// Admission from the request.
+        session_id: u64,
+        /// The requested value.
         change: crate::listing::ListingChange,
     },
     /// A listing change was not sent, and why.
