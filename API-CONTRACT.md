@@ -942,6 +942,13 @@ retain that identity when retrying a full local queue. Recovery to identical
 ready values after an unavailable report is a new report. Neither identity is
 a wire counter, and consumers must not derive movement permission from it.
 
+A change in the player's belongings (inventory, purse or cursor coins) while
+the player holds a grant asks for the inputs again without withdrawing: the
+last inputs stay in force until the answer to the new revision lands; health,
+stance and fatigue changes still apply at once. An answer the session refuses, or no answer within one
+second, withdraws movement as any other input requirement does. Every other
+input requirement withdraws at once.
+
 After normal admission/revision validation and generation-rule evaluation,
 `WorldEvent::SpeedInputsAccepted(SpeedInputAcceptance)` echoes the exact ready
 inputs and report identity with `granted`. A new report is acknowledged even
