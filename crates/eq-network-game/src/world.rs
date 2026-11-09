@@ -951,8 +951,14 @@ pub enum WorldEvent {
         backward_units_per_second: Option<f32>,
         /// Optional separately calibrated walking speed.
         walk_units_per_second: Option<f32>,
-        /// Optional separately calibrated sideways speed.
+        /// Optional separately calibrated sideways speed; with
+        /// `strafe_walk_units_per_second`, the rate running.
         strafe_units_per_second: Option<f32>,
+        /// The sideways speed with walking selected, where it is slower
+        /// (`movement::StrafeCalibration::walk_units_per_second`); None
+        /// strafes at `strafe_units_per_second` either way.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        strafe_walk_units_per_second: Option<f32>,
         /// Lateral rates while longitudinal input is active.
         #[serde(skip_serializing_if = "crate::movement::DiagonalRates::is_unavailable")]
         diagonal: crate::movement::DiagonalRates,

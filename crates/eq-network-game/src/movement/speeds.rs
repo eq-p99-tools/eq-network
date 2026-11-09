@@ -93,6 +93,10 @@ struct Generation {
     unslowed_zone: Option<u16>,
     /// Grounded combined longitudinal and lateral input is calibrated.
     grounded_diagonal: bool,
+    /// Strafing alone takes whichever base speed is selected, the run
+    /// speed running (the Titanium speeds read; the R5 audit's S1). The
+    /// `EQMac` rule reads it as the walk speed, so `EQMac` keeps that.
+    strafes_on_selected_base: bool,
 }
 
 /// `EQMac`'s side of the table.
@@ -101,6 +105,7 @@ const EQMAC: Generation = Generation {
     animation_per_input: 10.0,
     unslowed_zone: Some(EQMAC_UNSLOWED_ZONE),
     grounded_diagonal: false,
+    strafes_on_selected_base: false,
 };
 
 /// Titanium's side of the table, from the Titanium speeds read and the
@@ -110,6 +115,7 @@ const TITANIUM: Generation = Generation {
     animation_per_input: 40.0,
     unslowed_zone: None,
     grounded_diagonal: true,
+    strafes_on_selected_base: true,
 };
 
 /// `EQMac`'s speeds, from the program (TAKP sitting 2 M1, "Speeds", and the
@@ -157,12 +163,17 @@ const TITANIUM: Generation = Generation {
 /// the halved decay and model 141. Sneaking takes `EQMac`'s rule, the slower
 /// side. Its values on the wire are [`titanium`]'s.
 ///
+/// Titanium strafes on whichever base speed is selected: the run speed
+/// running, the walk speed walking. A strafe doesn't say which is selected,
+/// so the session bounds it by the running rate and gives the walking rate
+/// beside it ([`StrafeCalibration::walk_units_per_second`]) for the player
+/// to keep to; `EQMac` strafes on the walk speed. Ducking halves the strafe
+/// on the player's side, which the session doesn't track.
+///
 /// What the session doesn't know, it takes the slower side of: the
 /// modifier's cap is the base one, as the run-speed ability's ranks aren't
-/// tracked (nor the small modifier the ability gives with no buffs), and
-/// strafing takes the walk speed, where the program takes the run speed
-/// while running, since a strafe doesn't say which it is. Crouching,
-/// riding and native swim skill tuning are left out. A Titanium swim
+/// tracked (nor the small modifier the ability gives with no buffs).
+/// Riding and native swim skill tuning are left out. A Titanium swim
 /// admission can apply the conservative bound in [`super::swim_speed`].
 #[must_use]
 pub fn eqmac(state: &SpeedState) -> Speeds {
@@ -230,8 +241,14 @@ fn motion(generation: Generation, state: &SpeedState) -> Option<MotionCalibratio
             input
         }
     };
-    let strafing =
-        state.walk * 0.5 * 2.0 * multiplier * if state.sneaking || slowed { 0.5 } else { 1.0 };
+    let strafe_share = if state.sneaking || slowed { 0.5 } else { 1.0 };
+    let strafing_walking = state.walk * 0.5 * 2.0 * multiplier * strafe_share;
+    // Sneaking takes `EQMac`'s rule on both generations, the slower side.
+    let strafing = if generation.strafes_on_selected_base && !state.sneaking {
+        state.run * multiplier * strafe_share
+    } else {
+        strafing_walking
+    };
     let speed = |input: f32| input.abs() * EQMAC_UNITS_PER_INPUT;
     let diagonal = if generation.grounded_diagonal && !state.sneaking {
         // Titanium eqgame.exe (0x4bfe0f, 0x4c00d7–0x4c01c2) takes half
@@ -273,6 +290,8 @@ fn motion(generation: Generation, state: &SpeedState) -> Option<MotionCalibratio
             units_per_second: speed(strafing),
             velocity_scale: VELOCITY_SCALE,
             animation: 0,
+            walk_units_per_second: (strafing_walking > 0.0 && strafing_walking < strafing)
+                .then(|| speed(strafing_walking)),
         }),
     };
     calibration.validate().ok().map(|()| calibration)
@@ -351,6 +370,52 @@ mod tests {
         // Strafing takes the walk speed, the slower of the two.
         let strafe = speeds.strafe.unwrap();
         assert!(close(strafe.units_per_second, 19.6) && strafe.animation == 0);
+    }
+
+    #[test]
+    fn titanium_strafes_on_the_selected_base_bounded_by_the_running_rate() {
+        // R5 audit S1: running strafes at the run speed, walking at the walk
+        // speed, times the multiplier, with no modifier.
+        let strafe = titanium(&player()).motion.unwrap().strafe.unwrap();
+        assert!(close(strafe.units_per_second, 29.9), "{strafe:?}");
+        assert!(close(strafe.walk_units_per_second.unwrap(), 19.6));
+        assert_eq!(strafe.animation, 0);
+        // A slow halves both, without its modifier.
+        let slowed = titanium(&SpeedState {
+            rate: -40,
+            ..player()
+        })
+        .motion
+        .unwrap()
+        .strafe
+        .unwrap();
+        assert!(close(slowed.units_per_second, 29.9 / 2.0), "{slowed:?}");
+        assert!(close(slowed.walk_units_per_second.unwrap(), 19.6 / 2.0));
+        // Hurt, the multiplier slows both alike.
+        let hurt = titanium(&SpeedState {
+            hit_points: Some((49, 500)),
+            level: 50,
+            ..player()
+        })
+        .motion
+        .unwrap()
+        .strafe
+        .unwrap();
+        assert!(close(hurt.units_per_second, 29.9 / 2.0), "{hurt:?}");
+        // Sneaking keeps `EQMac`'s rule, one rate for both.
+        let sneaking = titanium(&SpeedState {
+            sneaking: true,
+            ..player()
+        })
+        .motion
+        .unwrap()
+        .strafe
+        .unwrap();
+        assert!(close(sneaking.units_per_second, 9.8), "{sneaking:?}");
+        assert_eq!(sneaking.walk_units_per_second, None);
+        // `EQMac` strafes on the walk speed only.
+        let mac = eqmac(&player()).motion.unwrap().strafe.unwrap();
+        assert_eq!(mac.walk_units_per_second, None);
     }
 
     #[test]

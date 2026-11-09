@@ -7,6 +7,14 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Breaking:** Titanium strafes on the selected base speed: the run speed
+  running, the walk speed walking, times the health and weight multiplier
+  and halved when slowed, as its program does (the R5 audit's S1). The
+  strafe calibration's rate is the running one, which bounds a strafe;
+  `StrafeCalibration` gains `walk_units_per_second` and
+  `WorldEvent::MotionState` gains `strafe_walk_units_per_second` (both serde
+  default None) for the walking rate. Sneaking and `EQMac` keep the walk
+  speed's rule.
 - **Breaking:** A hurt or burdened player's jump starts at the program's
   health and weight factor times the jump speed, as Titanium launches its
   jumps (0x4193c5). `Speeds` gains `jump_factor`, the multiplier that also

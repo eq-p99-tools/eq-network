@@ -78,6 +78,13 @@ pub struct StrafeCalibration {
     pub velocity_scale: f32,
     /// Signed 10-bit animation observed while strafing; `EQMac` sends 0.
     pub animation: i16,
+    /// The strafe rate with walking selected, where it is slower than
+    /// [`Self::units_per_second`], which is then the rate running: the
+    /// Titanium program strafes on whichever base speed is selected. The
+    /// session bounds a strafe by the running rate, since a strafe doesn't
+    /// say which is selected. None strafes at the one rate either way.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub walk_units_per_second: Option<f32>,
 }
 
 impl MotionCalibration {
@@ -121,7 +128,10 @@ impl MotionCalibration {
                     && strafe.units_per_second > 0.0
                     && strafe.velocity_scale.is_finite()
                     && strafe.velocity_scale > 0.0
-                    && (-512..=511).contains(&strafe.animation),
+                    && (-512..=511).contains(&strafe.animation)
+                    && strafe.walk_units_per_second.is_none_or(|walk| {
+                        walk.is_finite() && walk > 0.0 && walk <= strafe.units_per_second
+                    }),
                 "invalid strafing calibration"
             );
         }
