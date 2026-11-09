@@ -215,6 +215,17 @@ pub(super) fn needs(command: &ClientCommand) -> &'static [Resource] {
         | ClientCommand::Random { .. }
         | ClientCommand::Emote { .. }
         | ClientCommand::Assist { .. }
+        | ClientCommand::WhoFriends { .. }
+        | ClientCommand::ChangeCoins { .. }
+        | ClientCommand::SplitCoins { .. }
+        | ClientCommand::SetAutoSplit { .. }
+        | ClientCommand::RequestGuildMotd { .. }
+        | ClientCommand::AnswerGuildInvite { .. }
+        | ClientCommand::GuildInvite { .. }
+        | ClientCommand::GuildRemove { .. }
+        | ClientCommand::SetGuildMotd { .. }
+        | ClientCommand::GuildMakeLeader { .. }
+        | ClientCommand::GuildDemote { .. }
         | ClientCommand::RaidInvite { .. }
         | ClientCommand::RaidAccept { .. }
         | ClientCommand::RaidDecline { .. }
@@ -277,6 +288,8 @@ pub(super) fn refuse_naming(
         | WorldEvent::PetRefused { string_id, .. }
         | WorldEvent::CombineRefused { string_id, .. }
         | WorldEvent::GroupRefused { string_id, .. }
+        | WorldEvent::GuildRefused { string_id, .. }
+        | WorldEvent::CoinsRefused { string_id, .. }
         | WorldEvent::ListingRefused { string_id, .. }
         | WorldEvent::SocialRefused { string_id, .. }
         | WorldEvent::RaidRefused { string_id, .. }
@@ -370,6 +383,16 @@ fn refusal(command: &ClientCommand, reason: &str) -> Option<WorldEvent> {
         | ClientCommand::Random { session_id, .. }
         | ClientCommand::Emote { session_id, .. }
         | ClientCommand::Assist { session_id, .. }
+        | ClientCommand::ChangeCoins { session_id, .. }
+        | ClientCommand::SplitCoins { session_id, .. }
+        | ClientCommand::SetAutoSplit { session_id, .. }
+        | ClientCommand::RequestGuildMotd { session_id, .. }
+        | ClientCommand::AnswerGuildInvite { session_id, .. }
+        | ClientCommand::GuildInvite { session_id, .. }
+        | ClientCommand::GuildRemove { session_id, .. }
+        | ClientCommand::SetGuildMotd { session_id, .. }
+        | ClientCommand::GuildMakeLeader { session_id, .. }
+        | ClientCommand::GuildDemote { session_id, .. }
         | ClientCommand::RaidInvite { session_id, .. }
         | ClientCommand::RaidAccept { session_id }
         | ClientCommand::RaidDecline { session_id }
@@ -452,6 +475,7 @@ fn refusal(command: &ClientCommand, reason: &str) -> Option<WorldEvent> {
         | ClientCommand::DropInvisibility { .. }
         | ClientCommand::StopSong { .. }
         | ClientCommand::WhoAll { .. }
+        | ClientCommand::WhoFriends { .. }
         | ClientCommand::ConfigureMotion { .. }
         | ClientCommand::SpeedInputs { .. }
         | ClientCommand::ClimbReach { .. }
@@ -467,6 +491,10 @@ fn refusal(command: &ClientCommand, reason: &str) -> Option<WorldEvent> {
 /// The refusal that is only a reason, for the admission that asked: what a
 /// merchant, a trade, coins, food, an ability, a pet, a guildmaster, a
 /// corpse or a zone line would not do.
+#[allow(
+    clippy::too_many_lines,
+    reason = "one arm for each family of result events"
+)]
 fn reasoned(command: &ClientCommand, session_id: u64, reason: String) -> Option<WorldEvent> {
     Some(match command {
         ClientCommand::Buy { .. } | ClientCommand::Sell { .. } => {
@@ -475,7 +503,25 @@ fn reasoned(command: &ClientCommand, session_id: u64, reason: String) -> Option<
         ClientCommand::OfferTrade { .. } | ClientCommand::AcceptTrade { .. } => {
             WorldEvent::ExchangeRefused { session_id, reason }
         }
-        ClientCommand::MoveCoins { .. } => WorldEvent::CoinsRefused { session_id, reason },
+        ClientCommand::MoveCoins { .. }
+        | ClientCommand::ChangeCoins { .. }
+        | ClientCommand::SplitCoins { .. }
+        | ClientCommand::SetAutoSplit { .. } => WorldEvent::CoinsRefused {
+            session_id,
+            reason,
+            string_id: None,
+        },
+        ClientCommand::RequestGuildMotd { .. }
+        | ClientCommand::AnswerGuildInvite { .. }
+        | ClientCommand::GuildInvite { .. }
+        | ClientCommand::GuildRemove { .. }
+        | ClientCommand::SetGuildMotd { .. }
+        | ClientCommand::GuildMakeLeader { .. }
+        | ClientCommand::GuildDemote { .. } => WorldEvent::GuildRefused {
+            session_id,
+            reason,
+            string_id: None,
+        },
         ClientCommand::Consume { .. } => WorldEvent::ConsumeRefused {
             session_id,
             reason,

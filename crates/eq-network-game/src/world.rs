@@ -590,12 +590,27 @@ pub enum Capability {
     ServerDialogs,
     /// Request and display player inspection reports.
     PlayerInspection,
+    /// Asking which of the player's friends are online: `/who all friends`.
+    FriendsWho,
+    /// The member's side of a guild: asking for its message of the day and
+    /// answering an invitation into it.
+    GuildRoster,
+    /// An officer's and a leader's side of a guild: inviting and removing
+    /// members, setting the message of the day, handing on the lead and
+    /// demoting.
+    GuildManagement,
+    /// Asking a banker to change the purse's and the bank's coins into the
+    /// fewest coins of the largest kinds.
+    BankerChange,
+    /// Sharing coins with the player's group, at once (`/split`) or as they
+    /// are looted (`/autosplit`).
+    Splitting,
 }
 
 impl Capability {
     /// Every capability, in order: what a session offers when its server and
     /// client generation support everything.
-    pub const ALL: [Self; 57] = [
+    pub const ALL: [Self; 62] = [
         Self::Casting,
         Self::Spellbook,
         Self::Inventory,
@@ -653,6 +668,11 @@ impl Capability {
         Self::UsingDisciplines,
         Self::ServerDialogs,
         Self::PlayerInspection,
+        Self::FriendsWho,
+        Self::GuildRoster,
+        Self::GuildManagement,
+        Self::BankerChange,
+        Self::Splitting,
     ];
 }
 
@@ -1270,12 +1290,30 @@ pub enum WorldEvent {
         /// In the trade, put there by the other player.
         offered: Coins,
     },
+    /// A banker changed the purse's and the bank's coins into the fewest
+    /// coins of the largest kinds, and says how both now stand. The session
+    /// follows it with [`WorldEvent::Coins`] and
+    /// [`WorldEvent::CoinsElsewhere`] as it keeps them.
+    CoinsChanged(crate::banker::Changed),
+    /// A guild request that was not sent, and why.
+    GuildRefused {
+        /// Admission from the request.
+        session_id: u64,
+        /// Why it was not sent.
+        reason: String,
+        /// The official client's line for it, an `eqstr_us.txt` string ID,
+        /// where it says one.
+        string_id: Option<u32>,
+    },
     /// A coin move that was not sent, and why.
     CoinsRefused {
         /// Admission from the request.
         session_id: u64,
         /// Why it was not sent.
         reason: String,
+        /// The official client's line for it, an `eqstr_us.txt` string ID,
+        /// where it says one.
+        string_id: Option<u32>,
     },
     /// What a quest or a task gives the player: coins the server added to
     /// the purse with no money update, and the experience and items it gave,
@@ -1952,6 +1990,7 @@ pub fn titanium_update(opcode: u16, body: &[u8]) -> Result<Option<WorldEvent>> {
             }
         }
         0x267c => WorldEvent::Coins(money_update(body)?),
+        crate::banker::CHANGE_OPCODE => WorldEvent::CoinsChanged(crate::banker::decode(body)?),
         0x5ecd => {
             ensure!(body.len() >= 8, "truncated experience update");
             WorldEvent::Experience(word(body, 0).min(330))
@@ -2272,6 +2311,11 @@ mod tests {
             Capability::UsingDisciplines => 54,
             Capability::ServerDialogs => 55,
             Capability::PlayerInspection => 56,
+            Capability::FriendsWho => 57,
+            Capability::GuildRoster => 58,
+            Capability::GuildManagement => 59,
+            Capability::BankerChange => 60,
+            Capability::Splitting => 61,
         };
         for (index, capability) in Capability::ALL.into_iter().enumerate() {
             assert_eq!(place(capability), index, "{capability:?}");

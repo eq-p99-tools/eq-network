@@ -91,8 +91,14 @@ pub enum ChannelName {
     Motd,
     /// Formatted or special system message.
     System,
-    /// Guild message of the day.
+    /// Guild message of the day, as the server sends it at zone entry and
+    /// when an officer changes it. The official client shows it only when
+    /// its text differs from the one it showed last (`EQEmu`'s
+    /// `Client::SendGuildMOTD`, `zone/guild.cpp`).
     GuildMotd,
+    /// Guild message of the day as `/getguildmotd` asked for it, which the
+    /// official client always shows.
+    GuildMotdReply,
     /// Unrecognized channel identifier retained for forward compatibility.
     Unknown,
 }
@@ -276,6 +282,7 @@ enum CommunicationOpcode {
     FormattedMessage,
     SimpleMessage,
     GuildMotd,
+    GuildMotdReply,
     ColoredText,
     MultiLineMessage,
     SpellText,
@@ -294,6 +301,7 @@ impl CommunicationOpcode {
                 0x5a48 => Self::FormattedMessage,
                 0x673c => Self::SimpleMessage,
                 0x475a => Self::GuildMotd,
+                crate::guild::MOTD_REPLY_OPCODE => Self::GuildMotdReply,
                 0x0b2d => Self::ColoredText,
                 value => Self::Unknown(value),
             },
@@ -735,6 +743,32 @@ pub fn parse(opcode: u16, body: &[u8], include_raw: bool) -> Result<Option<ChatE
     parse_for(GameDialect::Titanium, opcode, body, include_raw)
 }
 
+/// A guild's message of the day, as told or as asked for: the `EQMac`
+/// record's setter then message at 68, Titanium's player, setter and
+/// message at 4, 68 and 136.
+fn guild_motd(
+    protocol: GameDialect,
+    opcode: u16,
+    body: &[u8],
+    channel: ChannelName,
+    include_raw: bool,
+) -> Result<ChatEvent> {
+    Ok(if protocol == GameDialect::EqMac {
+        ensure!(body.len() > 68, "truncated guild MOTD");
+        let mut event = ChatEvent::new(opcode, body, channel, include_raw)
+            .with_message(message_for(protocol, &body[68..], include_raw));
+        event.sender = nonempty_text(&body[..64]);
+        event
+    } else {
+        ensure!(body.len() >= 137, "truncated guild MOTD");
+        let mut event = ChatEvent::new(opcode, body, channel, include_raw)
+            .with_message(message_for(protocol, &body[136..], include_raw));
+        event.sender = Some(text(&body[68..132]));
+        event.target = nonempty_text(&body[4..68]);
+        event
+    })
+}
+
 /// Decode communication packets for the selected server protocol.
 ///
 /// # Errors
@@ -821,21 +855,15 @@ pub fn parse_for(
             event
         }
         CommunicationOpcode::GuildMotd => {
-            if protocol == GameDialect::EqMac {
-                ensure!(body.len() > 68, "truncated guild MOTD");
-                let mut event = ChatEvent::new(opcode, body, ChannelName::GuildMotd, include_raw)
-                    .with_message(message_for(protocol, &body[68..], include_raw));
-                event.sender = nonempty_text(&body[..64]);
-                event
-            } else {
-                ensure!(body.len() >= 137, "truncated guild MOTD");
-                let mut event = ChatEvent::new(opcode, body, ChannelName::GuildMotd, include_raw)
-                    .with_message(message_for(protocol, &body[136..], include_raw));
-                event.sender = Some(text(&body[68..132]));
-                event.target = nonempty_text(&body[4..68]);
-                event
-            }
+            guild_motd(protocol, opcode, body, ChannelName::GuildMotd, include_raw)?
         }
+        CommunicationOpcode::GuildMotdReply => guild_motd(
+            protocol,
+            opcode,
+            body,
+            ChannelName::GuildMotdReply,
+            include_raw,
+        )?,
         CommunicationOpcode::ColoredText => colored_text(opcode, body, include_raw)?,
         CommunicationOpcode::MultiLineMessage => eqmac_world_text(opcode, body, include_raw),
         CommunicationOpcode::SpellText => eqmac_spell_text(opcode, body, include_raw)?,

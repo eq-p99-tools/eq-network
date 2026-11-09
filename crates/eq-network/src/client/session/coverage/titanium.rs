@@ -161,7 +161,7 @@ pub(in crate::client) fn titanium(opcode: u16) -> Option<ServerMessage> {
         0x31f8 => sent("OP_RecipeReply", EQEMU, unasked(LaterSystems)),
         0x3230 => sent("OP_GuildDeleteGuild", EQEMU, Read(&[Zone])),
         // The answer to /getguildmotd.
-        0x3246 => sent("OP_GetGuildMOTDReply", EQEMU, unasked(Social)),
+        0x3246 => sent("OP_GetGuildMOTDReply", EQEMU, Read(&[Chat])),
         0x32c0 => sent("OP_GuildTributeDonateItem", EQEMU, planned(LaterSystems)),
         0x32cf => sent("OP_GuildMemberPublicNote", EQEMU, Read(&[Zone])),
         0x330d => sent("OP_DzMemberListStatus", EQEMU, planned(LaterSystems)),
@@ -317,7 +317,7 @@ pub(in crate::client) fn titanium(opcode: u16) -> Option<ServerMessage> {
         0x6a12 => sent("OP_TargetHoTT", EQEMU, Read(&[Zone])),
         0x6a1d => sent("OP_TaskRequestTimer", EQEMU, planned(LaterSystems)),
         0x6a53 => sent("OP_Buff", EQEMU, Read(&[Zone])),
-        0x6a5b => sent("OP_BankerChange", EQEMU, unasked(PlayerState)),
+        0x6a5b => sent("OP_BankerChange", EQEMU, Read(&[Zone])),
         0x6a93 => sent("OP_SkillUpdate", EQEMU, Read(&[Zone])),
         0x6cd5 => sent("OP_RandomReply", EQEMU, Read(&[Zone])),
         0x6d44 => sent("OP_LevelUpdate", EQEMU, Read(&[Zone])),

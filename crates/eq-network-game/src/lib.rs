@@ -5,6 +5,9 @@ pub mod abilities;
 /// How spawns look: worn gear, features, lights and the like, and the
 /// updates, states and illusions that change them.
 pub mod appearance;
+/// A banker's change of the purse's and the bank's coins into the fewest
+/// coins of the largest kinds.
+pub mod banker;
 /// Binding wounds with bandages.
 pub mod bind_wound;
 /// Reading books and notes.
@@ -46,6 +49,8 @@ pub mod effects;
 pub mod exchange;
 /// Food and drink: hunger, thirst, and eating and drinking.
 pub mod food;
+/// Asking which of the player's friends are online.
+pub mod friends;
 /// What game masters and the world tell the zone of a player: kicks,
 /// kills, and a player made to look like an NPC; and, to game masters, the
 /// petition queue.
@@ -113,6 +118,8 @@ pub mod socials;
 pub mod spell_tables;
 /// Server-driven spellbook and casting notifications.
 pub mod spells;
+/// Splitting coins with the player's group, at once or as they are looted.
+pub mod split;
 /// A quest's word on the player's base stats.
 pub mod stats;
 /// What machine the player enters the world on, as the world is told it.

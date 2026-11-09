@@ -7,6 +7,22 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Breaking:** Add friends who, guild requests, splitting and a banker's
+  coin change on the Titanium wire, offered on `EQEmu` for now:
+  `Capability::FriendsWho`, `GuildRoster`, `GuildManagement`,
+  `BankerChange` and `Splitting` (`Capability::ALL` grows to 62).
+  `GameCommand` gains `WhoFriends`, `ChangeCoins`, `SplitCoins`,
+  `SetAutoSplit`, `RequestGuildMotd`, `AnswerGuildInvite`, `GuildInvite`,
+  `GuildRemove`, `SetGuildMotd`, `GuildMakeLeader` and `GuildDemote`, and
+  `Request` the matching variants. `WorldEvent::CoinsChanged` carries a
+  banker's answer, `WorldEvent::GuildRefused` a refused guild request, and
+  `WorldEvent::CoinsRefused` gains `string_id`. The asked-for message of the
+  day decodes as `ChannelName::GuildMotdReply`. Layouts and checks follow
+  `EQEmu`'s handlers and the Titanium program (read R6); the split and
+  change answer waits and the guild member-name rule are inferred
+  (recording checklist 6.410, 6.411). Exhaustive command, capability and
+  event matches need the new variants.
+
 - **Breaking:** Add `MovementMode::Shoreline` for bounded Titanium shoreline
   transitions. Hosts submit a frame trace from local collision, and the worker
   replays it to bound the elapsed time and motion before sending ordinary

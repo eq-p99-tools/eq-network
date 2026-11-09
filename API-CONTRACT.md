@@ -1,5 +1,36 @@
 # API and integration contracts
 
+## Friends who, guild requests, splitting and banker change
+
+`EQEmu` offers `Capability::FriendsWho`, `GuildRoster`, `GuildManagement`,
+`BankerChange` and `Splitting`; Project 1999 offers them once a local run
+has exercised each one.
+
+- `GameCommand::WhoFriends` carries the host's friends list. The answer is an
+  ordinary `WorldEvent::WhoList`. A list the packet cannot carry is not sent.
+- `GameCommand::SplitCoins` names platinum, gold, silver and copper. It is
+  refused outside a group, for nothing, and for more of a kind than the purse
+  holds, each with the official client's string ID on `CoinsRefused`. It is
+  withheld without a word while a banker's change is unanswered. A sent split
+  takes the coins from the purse at once, as the official client does, and
+  reports `WorldEvent::Coins`. If no money update follows within the wait,
+  the purse becomes uncertain (`PurseUncertain`).
+- `GameCommand::SetAutoSplit` sends the appearance update. The host keeps
+  the toggle's state.
+- `GameCommand::ChangeCoins` needs a banker within the bank reach. It holds
+  coin moves until `WorldEvent::CoinsChanged` arrives, which the worker
+  follows with `Coins` and `CoinsElsewhere`. If no answer arrives within the
+  wait, `CoinsRefused` reports it and the coins stay as they were.
+- `GameCommand::RequestGuildMotd` names the player's guild; outside one it
+  is refused with the official string ID. The reply arrives as chat on
+  `ChannelName::GuildMotdReply`, which the official client always shows.
+  `ChannelName::GuildMotd` arrives unasked, and the official client shows
+  it only when its text differs from the one shown last.
+- `GameCommand::AnswerGuildInvite` answers the last invitation the worker
+  heard, once. Guild removal, leader and demote requests name a member of the
+  list the server sent, spelled as it spells them. The server decides who
+  may do what and says so in its own lines.
+
 ## P99 self-bandage stock
 
 A self-targeted P99 Bind Wound request can hold inventory while awaiting

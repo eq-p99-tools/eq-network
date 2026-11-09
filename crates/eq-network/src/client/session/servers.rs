@@ -36,6 +36,7 @@ use super::{
     exchange::Exchanges,
     feature::Feature,
     groups::Groups,
+    guilds::Guilds,
     hazards::Hazards,
     hiding::HideAnswer,
     inventory::{Allowances, Belongings},
@@ -58,7 +59,7 @@ use super::{
     tradeskills::Tradeskills,
     training::Training,
     transfers::{Home, Transfers},
-    who::Who,
+    who::{FriendsWho, Who},
     wire::{EqMac, Titanium, Wire},
     CharacterSession, Events, ServerProtocol, ZoneExit,
 };
@@ -486,6 +487,17 @@ pub(super) trait ServerType: Sync {
         None
     }
 
+    /// Asking which of the player's friends are online.
+    fn friends_who(&self, _setup: &Setup<'_>) -> Provided {
+        None
+    }
+
+    /// The player's guild: its message of the day, invitations, and its
+    /// officers' and leader's requests.
+    fn guilds(&self, _setup: &Setup<'_>) -> Provided {
+        None
+    }
+
     /// Every feature the server type provides, in the order the zone session
     /// offers them each command, packet and timer.
     fn features(&self, setup: &Setup<'_>) -> Vec<Provision> {
@@ -513,6 +525,8 @@ pub(super) trait ServerType: Sync {
             self.bleeding_out(setup),
             self.clock(setup),
             self.who(setup),
+            self.friends_who(setup),
+            self.guilds(setup),
             self.corpses(setup),
             self.pets(setup),
             self.training(setup),
@@ -1193,6 +1207,8 @@ impl ServerType for EqEmu {
             Quotes::WithRate,
             Allowances {
                 ground_drop: setup.local_only,
+                splitting: true,
+                banker_change: true,
                 ..Allowances::STANDARD
             },
             setup,
@@ -1349,6 +1365,18 @@ impl ServerType for EqEmu {
         offer(shared::raids())
     }
 
+    /// `Client::Handle_OP_FriendsWho` hands the list to the world, which
+    /// answers with an ordinary who listing (`ClientList::SendFriendsWho`).
+    fn friends_who(&self, _setup: &Setup<'_>) -> Provided {
+        offer(Box::new(FriendsWho))
+    }
+
+    /// The Titanium guild requests `EQEmu`'s `zone/client_packet.cpp`
+    /// handlers take; the server checks who may do what.
+    fn guilds(&self, _setup: &Setup<'_>) -> Provided {
+        offer(Box::<Guilds>::default())
+    }
+
     fn hazards(&self, setup: &Setup<'_>) -> Provided {
         let hazards: &[Hazard] = if setup.local_only {
             &LOCAL_EQEMU_HAZARDS
@@ -1449,6 +1477,8 @@ impl ServerType for Quarm {
                 coins: true,
                 merchants: true,
                 meals: true,
+                splitting: false,
+                banker_change: false,
             },
             setup,
         ))
@@ -2287,15 +2317,16 @@ mod tests {
 
     #[test]
     fn p99_and_eqemu_provide_every_feature_one_each() {
-        // The map, deleting spells, merchants' offers, raids and the
-        // server's tick are offered on EQEmu alone. P99 takes falls' damage by
+        // The map, deleting spells, merchants' offers, raids, the server's
+        // tick, friends who, guild requests, splitting and a banker's change
+        // are offered on EQEmu alone. P99 takes falls' damage by
         // the Titanium program (6.332); only EQEmu waits for the answer to the end of
         // hiding; only EQEmu answers sacrifices, read from its source and not
         // yet checked live; and only EQEmu takes the show-helm option.
         // Both Titanium policies retain the verified own-player stun timer.
         for (protocol, count) in [
             (ServerProtocol::Project1999, 34),
-            (ServerProtocol::EqEmu, 40),
+            (ServerProtocol::EqEmu, 42),
         ] {
             let server = server_type(protocol);
             let setup = Setup::new("Tester", AutoEat::default());
@@ -2309,6 +2340,13 @@ mod tests {
             Capability::Raiding,
             Capability::ServerTicks,
             Capability::ShowingHelm,
+            // Offered on P99 once the unattended EQEmu run has exercised
+            // each of them.
+            Capability::FriendsWho,
+            Capability::GuildRoster,
+            Capability::GuildManagement,
+            Capability::BankerChange,
+            Capability::Splitting,
         ] {
             assert!(!offers(server_type(ServerProtocol::Project1999)).contains(&capability));
             assert!(offers(server_type(ServerProtocol::EqEmu)).contains(&capability));

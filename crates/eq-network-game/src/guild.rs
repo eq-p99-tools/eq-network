@@ -555,6 +555,185 @@ pub(crate) fn eqmac_removal(body: &[u8]) -> Result<GuildUpdate> {
     })
 }
 
+/// `OP_GetGuildMOTD`: `/getguildmotd`, which the server answers with
+/// [`MOTD_REPLY_OPCODE`] (Titanium; `EQEmu`'s `Client::Handle_OP_GetGuildMOTD`
+/// reads nothing of its body).
+pub const GET_MOTD_OPCODE: u16 = 0x7fec;
+/// `OP_GetGuildMOTDReply`: the guild's message of the day as asked for,
+/// which the official client shows whether or not it showed it before,
+/// where an `OP_GuildMOTD` it showed already is not shown again (`EQEmu`'s
+/// `Client::SendGuildMOTD`, `zone/guild.cpp`). The chat decoder reads it.
+pub const MOTD_REPLY_OPCODE: u16 = 0x3246;
+/// `OP_GuildInviteAccept`: the invited player's answer (Titanium).
+pub const INVITE_ACCEPT_OPCODE: u16 = 0x61d0;
+/// `OP_GuildRemove`: removing a member, or the player leaving (Titanium).
+pub const REMOVE_OPCODE: u16 = 0x0179;
+/// `OP_SetGuildMOTD`: a new message of the day (Titanium).
+pub const SET_MOTD_OPCODE: u16 = 0x591c;
+/// `OP_GuildLeader`: handing the guild's lead to a member (Titanium).
+pub const LEADER_OPCODE: u16 = 0x12b1;
+/// `OP_GuildDemote`: lowering a member's rank (Titanium).
+pub const DEMOTE_OPCODE: u16 = 0x4eb9;
+/// The answer that turns an invitation down (`GUILD_INVITE_DECLINE`).
+const DECLINE: u32 = 9;
+/// `GuildMOTD_Struct`'s message field.
+const MOTD: usize = 512;
+
+/// A name in a field of its size, ended by a NUL within it.
+fn name_field(name: &str, size: usize) -> Result<Vec<u8>> {
+    ensure!(
+        !name.is_empty() && name.len() < size && !name.chars().any(char::is_control),
+        "a name the guild request cannot carry"
+    );
+    let mut field = vec![0; size];
+    field[..name.len()].copy_from_slice(name.as_bytes());
+    Ok(field)
+}
+
+/// `GuildCommand_Struct` (136 bytes): the other player's name and the
+/// player's, the guild in 16 bits, two bytes left 0, and a rank word.
+fn guild_command(other: &str, player: &str, guild_id: u32, rank: u32) -> Result<Vec<u8>> {
+    let mut body = name_field(other, NAME)?;
+    body.extend(name_field(player, NAME)?);
+    let guild = u16::try_from(guild_id).context("a guild number too large for Titanium")?;
+    body.extend_from_slice(&guild.to_le_bytes());
+    body.extend_from_slice(&[0, 0]);
+    body.extend_from_slice(&rank.to_le_bytes());
+    Ok(body)
+}
+
+/// The rank a Titanium guild request names: member 0, officer 1, leader 2.
+const fn rank_wire(rank: GuildRank) -> u32 {
+    match rank {
+        GuildRank::Member => 0,
+        GuildRank::Officer => 1,
+        GuildRank::Leader => 2,
+        GuildRank::Other(value) => value,
+    }
+}
+
+/// Asks for the guild's message of the day as `/getguildmotd` does
+/// (0x4667dc): the `GuildMOTD_Struct`'s 648 bytes, holding only the guild
+/// and the player's name. The official client asks for nothing at zone
+/// entry, where the message arrives unasked.
+///
+/// # Errors
+/// Rejects a name the record cannot carry.
+pub fn titanium_get_motd(guild_id: u32, player: &str) -> Result<crate::command::EncodedCommand> {
+    let mut body = guild_id.to_le_bytes().to_vec();
+    body.extend(name_field(player, NAME)?);
+    body.resize(648, 0);
+    Ok(crate::command::EncodedCommand {
+        opcode: GET_MOTD_OPCODE,
+        body,
+    })
+}
+
+/// Invites a player into the player's guild at a rank, or offers a member a
+/// higher one, which `EQEmu`'s `Client::Handle_OP_GuildInvite` takes the
+/// same request for.
+///
+/// # Errors
+/// Rejects a name the record cannot carry and a guild number past 16 bits.
+pub fn titanium_invite(
+    invitee: &str,
+    player: &str,
+    guild_id: u32,
+    rank: GuildRank,
+) -> Result<crate::command::EncodedCommand> {
+    Ok(crate::command::EncodedCommand {
+        opcode: INVITE_OPCODE,
+        body: guild_command(invitee, player, guild_id, rank_wire(rank))?,
+    })
+}
+
+/// Answers an invitation: accepting takes the rank offered, declining
+/// answers 9 (`GuildInviteAccept_Struct`, 136 bytes: the inviter's name,
+/// the player's, the answer and the guild, 32 bits each).
+///
+/// # Errors
+/// Rejects a name the record cannot carry.
+pub fn titanium_answer_invite(
+    inviter: &str,
+    player: &str,
+    guild_id: u32,
+    rank: GuildRank,
+    accept: bool,
+) -> Result<crate::command::EncodedCommand> {
+    let mut body = name_field(inviter, NAME)?;
+    body.extend(name_field(player, NAME)?);
+    let answer = if accept { rank_wire(rank) } else { DECLINE };
+    body.extend_from_slice(&answer.to_le_bytes());
+    body.extend_from_slice(&guild_id.to_le_bytes());
+    Ok(crate::command::EncodedCommand {
+        opcode: INVITE_ACCEPT_OPCODE,
+        body,
+    })
+}
+
+/// Removes a member from the guild, or, naming the player, leaves it.
+///
+/// # Errors
+/// Rejects a name the record cannot carry and a guild number past 16 bits.
+pub fn titanium_remove(
+    member: &str,
+    player: &str,
+    guild_id: u32,
+) -> Result<crate::command::EncodedCommand> {
+    Ok(crate::command::EncodedCommand {
+        opcode: REMOVE_OPCODE,
+        body: guild_command(member, player, guild_id, 0)?,
+    })
+}
+
+/// Sets the guild's message of the day (`GuildMOTD_Struct`, 648 bytes: a
+/// word 0, the player's name, the setter's, a word 0 and the message with
+/// its NUL). `EQEmu` takes the setter from the session, not the record.
+///
+/// # Errors
+/// Rejects a message of control characters or too long for its field.
+pub fn titanium_set_motd(player: &str, motd: &str) -> Result<crate::command::EncodedCommand> {
+    ensure!(
+        motd.len() < MOTD && !motd.chars().any(char::is_control),
+        "that message of the day cannot be sent"
+    );
+    let mut body = vec![0; 4];
+    body.extend(name_field(player, NAME)?);
+    body.extend(name_field(player, NAME)?);
+    body.extend_from_slice(&[0; 4]);
+    let mut text = vec![0; MOTD];
+    text[..motd.len()].copy_from_slice(motd.as_bytes());
+    body.extend(text);
+    Ok(crate::command::EncodedCommand {
+        opcode: SET_MOTD_OPCODE,
+        body,
+    })
+}
+
+/// Two names, the player's then the member's (`GuildMakeLeader` and
+/// `GuildDemoteStruct`, 128 bytes).
+fn two_names(opcode: u16, player: &str, member: &str) -> Result<crate::command::EncodedCommand> {
+    let mut body = name_field(player, NAME)?;
+    body.extend(name_field(member, NAME)?);
+    Ok(crate::command::EncodedCommand { opcode, body })
+}
+
+/// Hands the guild's lead to a member.
+///
+/// # Errors
+/// Rejects a name the record cannot carry.
+pub fn titanium_make_leader(player: &str, member: &str) -> Result<crate::command::EncodedCommand> {
+    two_names(LEADER_OPCODE, player, member)
+}
+
+/// Lowers a member's rank.
+///
+/// # Errors
+/// Rejects a name the record cannot carry.
+pub fn titanium_demote(player: &str, member: &str) -> Result<crate::command::EncodedCommand> {
+    two_names(DEMOTE_OPCODE, player, member)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -911,5 +1090,77 @@ mod tests {
         // A name without its end.
         assert!(titanium(MEMBER_LIST_OPCODE, b"Synthetic Guild").is_err());
         assert!(titanium(MEMBER_LIST_OPCODE, &[]).is_err());
+    }
+
+    #[test]
+    fn guild_requests_carry_the_records_emu_reads() {
+        let invite = titanium_invite("Invitee", "Player", 7, GuildRank::Member).unwrap();
+        assert_eq!(invite.opcode, INVITE_OPCODE);
+        assert_eq!(invite.body.len(), COMMAND_LENGTH);
+        assert_eq!(&invite.body[..7], b"Invitee");
+        assert_eq!(&invite.body[64..70], b"Player");
+        assert_eq!(&invite.body[128..132], [7, 0, 0, 0]);
+        assert_eq!(word(&invite.body, 132), 0);
+        // What the session hears back from its own record reads the same.
+        assert_eq!(
+            super::invite(
+                &titanium_invite("Player", "Inviter", 7, GuildRank::Officer)
+                    .unwrap()
+                    .body
+            )
+            .unwrap(),
+            GuildUpdate::Invite {
+                inviter: "Inviter".into(),
+                guild_id: 7,
+                rank: GuildRank::Officer
+            }
+        );
+        let yes = titanium_answer_invite("Inviter", "Player", 7, GuildRank::Member, true).unwrap();
+        assert_eq!(yes.opcode, INVITE_ACCEPT_OPCODE);
+        assert_eq!(yes.body.len(), 136);
+        assert_eq!(word(&yes.body, 128), 0);
+        assert_eq!(word(&yes.body, 132), 7);
+        let no = titanium_answer_invite("Inviter", "Player", 7, GuildRank::Member, false).unwrap();
+        assert_eq!(word(&no.body, 128), 9);
+        let remove = titanium_remove("Member", "Player", 7).unwrap();
+        assert_eq!(remove.opcode, REMOVE_OPCODE);
+        assert_eq!(remove.body.len(), 136);
+        assert!(titanium_remove("Member", "Player", 70_000).is_err());
+        let motd = titanium_set_motd("Player", "Raid at eight").unwrap();
+        assert_eq!(motd.opcode, SET_MOTD_OPCODE);
+        assert_eq!(motd.body.len(), 648);
+        assert_eq!(&motd.body[136..149], b"Raid at eight");
+        assert!(titanium_set_motd("Player", &"x".repeat(512)).is_err());
+        assert!(titanium_set_motd("Player", "line\nbreak").is_err());
+        let leader = titanium_make_leader("Player", "Member").unwrap();
+        assert_eq!((leader.opcode, leader.body.len()), (LEADER_OPCODE, 128));
+        assert_eq!(&leader.body[64..70], b"Member");
+        let demote = titanium_demote("Player", "Member").unwrap();
+        assert_eq!((demote.opcode, demote.body.len()), (DEMOTE_OPCODE, 128));
+        assert!(titanium_demote("Player", "").is_err());
+        assert!(titanium_demote("Player", &"x".repeat(64)).is_err());
+        let ask = titanium_get_motd(7, "Player").unwrap();
+        assert_eq!((ask.opcode, ask.body.len()), (GET_MOTD_OPCODE, 648));
+        assert_eq!(word(&ask.body, 0), 7);
+        assert_eq!(&ask.body[4..11], b"Player\0");
+    }
+
+    #[test]
+    fn the_asked_motd_reads_as_its_own_channel() {
+        let mut body = vec![0; 648];
+        body[4..10].copy_from_slice(b"Player");
+        body[68..74].copy_from_slice(b"Leader");
+        body[136..149].copy_from_slice(b"Raid at eight");
+        let asked = crate::chat::parse(MOTD_REPLY_OPCODE, &body, false)
+            .unwrap()
+            .unwrap();
+        assert_eq!(asked.channel_name, crate::chat::ChannelName::GuildMotdReply);
+        assert_eq!(
+            asked.message.map(|message| message.text).as_deref(),
+            Some("Raid at eight")
+        );
+        assert_eq!(asked.sender.as_deref(), Some("Leader"));
+        let told = crate::chat::parse(0x475a, &body, false).unwrap().unwrap();
+        assert_eq!(told.channel_name, crate::chat::ChannelName::GuildMotd);
     }
 }

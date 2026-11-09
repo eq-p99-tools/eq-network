@@ -84,6 +84,7 @@ mod tests {
                 coins: bits & 2 != 0,
                 merchants: bits & 4 != 0,
                 meals: bits & 8 != 0,
+                ..Allowances::default()
             };
             let belongings = Belongings::under(
                 MoveRules::Quarm,

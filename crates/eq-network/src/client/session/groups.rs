@@ -351,7 +351,7 @@ impl Feature for Groups {
     fn observe(
         &mut self,
         message: &Message,
-        _world: &mut World,
+        world: &mut World,
         out: &mut Out<'_, '_>,
     ) -> Result<()> {
         if let Some((inviter, reason)) = self.rejected.take() {
@@ -364,6 +364,7 @@ impl Feature for Groups {
         }
         if let Message::Event(WorldEvent::Group(update)) = message {
             self.follow_news(update, out.sender.name);
+            world.grouped = self.group.is_some();
         }
         Ok(())
     }
@@ -383,16 +384,18 @@ impl Feature for Groups {
         Ok(())
     }
 
-    fn admitted(&mut self, _world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
+    fn admitted(&mut self, world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
         for update in std::mem::take(&mut self.staged) {
             self.follow_news(&update, out.sender.name);
+            world.grouped = self.group.is_some();
             out.log
                 .send(ClientEvent::World(WorldEvent::Group(update)))?;
         }
         Ok(())
     }
 
-    fn connection_ended(&mut self, _world: &mut World) {
+    fn connection_ended(&mut self, world: &mut World) {
+        world.grouped = false;
         self.invitation = None;
         self.rejected = None;
         self.group = None;
