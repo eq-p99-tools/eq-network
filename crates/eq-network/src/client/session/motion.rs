@@ -207,7 +207,12 @@ impl Body {
 }
 
 /// The player's movement at these speeds.
-fn granted(session_id: u64, speeds: &MotionCalibration, falls: bool) -> WorldEvent {
+fn granted(
+    session_id: u64,
+    speeds: &MotionCalibration,
+    falls: bool,
+    jump_factor: f32,
+) -> WorldEvent {
     WorldEvent::MotionState {
         session_id,
         units_per_second: Some(speeds.units_per_second),
@@ -216,6 +221,7 @@ fn granted(session_id: u64, speeds: &MotionCalibration, falls: bool) -> WorldEve
         backward_units_per_second: speeds.backward.map(|value| value.units_per_second),
         diagonal: speeds.diagonal,
         falls,
+        jump_factor,
     }
 }
 
@@ -230,6 +236,7 @@ pub(super) fn withdrawn(session_id: u64) -> WorldEvent {
         backward_units_per_second: None,
         diagonal: DiagonalRates::default(),
         falls: false,
+        jump_factor: eq_network_game::movement::full_jump(),
     }
 }
 
@@ -370,6 +377,10 @@ impl Motion {
         let Some(motion) = world.body.motion.as_mut() else {
             return Ok(false);
         };
+        // The factor moves with the speeds it also slows, so a changed
+        // factor comes with a changed calibration and its grant.
+        motion.set_jump_factor(speeds.jump_factor);
+        let jump_factor = speeds.jump_factor;
         if motion.calibration() == speeds.motion {
             return Ok(speeds.motion.is_some());
         }
@@ -389,6 +400,7 @@ impl Motion {
                     world.session_id,
                     &speeds,
                     motion.falls(),
+                    jump_factor,
                 )))?;
                 Ok(true)
             }
@@ -622,6 +634,7 @@ impl Motion {
                 world.session_id,
                 calibration,
                 motion.falls(),
+                eq_network_game::movement::full_jump(),
             ))),
             Err(error) => out
                 .log

@@ -354,6 +354,12 @@ impl MotionSession {
         self
     }
 
+    /// Sets the share of the jump's starting speed the player has, the
+    /// health and weight factor ([`MovementGuard::set_jump_factor`]).
+    pub fn set_jump_factor(&mut self, factor: f32) {
+        self.guard.set_jump_factor(factor);
+    }
+
     /// The session announced a jump: the samples after it may rise as it
     /// does ([`MovementGuard::jumped`]).
     pub fn jumped(&mut self) {

@@ -952,7 +952,11 @@ is false without a current positive calibration or while lifecycle blocks
 movement. This is a local session receipt, not a remote server acknowledgement.
 
 Keep this receipt separate from `MotionState`, which alone carries movement
-speeds. Withdrawals, input requirements and admission/lifecycle resets invalidate
+speeds. `MotionState.jump_factor` is the share of the generation's
+jump speed a jump starts with now (the health and weight factor, 1 where the
+session does not work speeds out itself); a frontend launches its jumps at it,
+and the session's guard bounds an announced jump's rise by the factor the jump
+started with. Withdrawals, input requirements and admission/lifecycle resets invalidate
 cached acceptance. A frontend may clear a waiting status only for the exact
 posted admission/revision/report/input identity with a current positive grant;
 a cached prior speed, successful enqueue, or mismatching receipt is insufficient.
