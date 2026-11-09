@@ -32,6 +32,7 @@ use crate::client::session::{
 };
 use anyhow::Result;
 use eq_network_game::{
+    message::Message,
     money::Coin,
     request::Request,
     world::{Coins, WorldEvent},
@@ -52,11 +53,13 @@ const NOTHING: u32 = 0x3029;
 /// purse holds (0x302c-0x302f).
 const TOO_MUCH: [u32; 4] = [0x302c, 0x302d, 0x302e, 0x302f];
 
-/// The split and the change in flight.
+/// The split and the change in flight, and the profile's automatic
+/// splitting until the admission reports it.
 #[derive(Debug, Default)]
 pub(super) struct Sharing {
     split: Option<Instant>,
     change: Option<Instant>,
+    profile_auto_split: Option<bool>,
 }
 
 /// Tells the host a banker's change went unanswered.
@@ -199,9 +202,24 @@ impl Sharing {
         Ok(())
     }
 
-    /// Starts the waits over, as at a new admission.
-    pub(super) fn clear(&mut self) {
+    /// Keeps the profile's automatic splitting, which arrives before the
+    /// admission and so is not yet the host's news.
+    pub(super) fn admit(&mut self, message: &Message) {
+        if let Message::Event(WorldEvent::AutoSplit(on)) = message {
+            self.profile_auto_split = Some(*on);
+        }
+    }
+
+    /// Starts the waits over, as at a new admission, and tells the host the
+    /// profile's automatic splitting.
+    pub(super) fn admitted(&mut self, out: &mut Out<'_, '_>) -> Result<()> {
+        let profile = self.profile_auto_split.take();
         *self = Self::default();
+        if let Some(on) = profile {
+            out.log
+                .send(ClientEvent::World(WorldEvent::AutoSplit(on)))?;
+        }
+        Ok(())
     }
 
     /// Lets tests run a wait out.

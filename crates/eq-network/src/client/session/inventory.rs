@@ -1029,6 +1029,7 @@ impl Feature for Belongings {
             self.meals.admit(*nourishment);
         }
         coins_news(message, &mut world.coins.0);
+        self.sharing.admit(message);
         Ok(())
     }
 
@@ -1036,7 +1037,6 @@ impl Feature for Belongings {
     /// this one count the same revisions.
     fn admitted(&mut self, world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
         self.moves = MoveOrder::default();
-        self.sharing.clear();
         self.trades.clear();
         self.merchant.clear();
         let admission = world.inventory.admission_updates();
@@ -1045,6 +1045,7 @@ impl Feature for Belongings {
             change(update, world, out)?;
         }
         tell_coins(world, true, out)?;
+        self.sharing.admitted(out)?;
         if let Some(nourishment) = self.meals.snapshot() {
             out.log
                 .send(ClientEvent::World(WorldEvent::Nourishment(nourishment)))?;
@@ -3289,6 +3290,30 @@ mod tests {
             event,
             ClientEvent::World(WorldEvent::AutoSplitSet { on: true, .. })
         )));
+    }
+
+    #[test]
+    fn the_profiles_automatic_splitting_reaches_the_host_at_admission() {
+        let mut belongings = Belongings::new(eq_network_game::food::AutoEat::default());
+        let mut world = World::new(5);
+        // It comes with the profile, before the admission publishes news.
+        belongings
+            .admit(&Message::Event(WorldEvent::AutoSplit(true)), &mut world)
+            .unwrap();
+        world.own_spawn = Some(7);
+        world.player.admit(testing::player(7));
+        let outcome = testing::run(|out| belongings.admitted(&mut world, out));
+        outcome.result.unwrap();
+        assert!(outcome
+            .events
+            .iter()
+            .any(|event| matches!(event, ClientEvent::World(WorldEvent::AutoSplit(true)))));
+        // Only once: the next admission without a profile word says nothing.
+        let again = testing::run(|out| belongings.admitted(&mut world, out));
+        assert!(!again
+            .events
+            .iter()
+            .any(|event| matches!(event, ClientEvent::World(WorldEvent::AutoSplit(_)))));
     }
 
     #[test]
