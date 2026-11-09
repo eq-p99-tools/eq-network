@@ -7,6 +7,11 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Breaking:** Add `MovementMode::Shoreline` for bounded Titanium shoreline
+  transitions. Hosts submit a frame trace from local collision, and the worker
+  validates the elapsed time and motion before sending ordinary position
+  updates. Exhaustive matches on movement mode need the new variant.
+
 - **Breaking:** Offer ordinary assist, dice, emotes and AFK/anonymity/roleplay
   controls on Project 1999 from Titanium source. Handle
   `WorldEvent::ListingRequested` separately from received listing state.
