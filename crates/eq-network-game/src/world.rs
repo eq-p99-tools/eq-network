@@ -1318,6 +1318,12 @@ pub enum WorldEvent {
     /// follows it with [`WorldEvent::Coins`] and
     /// [`WorldEvent::CoinsElsewhere`] as it keeps them.
     CoinsChanged(crate::banker::Changed),
+    /// The server's answer to the player's Begging or Pick Pockets
+    /// (Titanium). The host prints its line
+    /// ([`AskAnswer::line`](crate::abilities::AskAnswer::line)); the
+    /// session adds its coins to the purse, as the program does, and follows
+    /// with [`WorldEvent::Coins`].
+    AskAnswered(crate::abilities::AskAnswer),
     /// Whether looted coins are shared with the group, as the profile says
     /// at admission.
     AutoSplit(bool),
@@ -2028,6 +2034,12 @@ pub fn titanium_update(opcode: u16, body: &[u8]) -> Result<Option<WorldEvent>> {
         }
         0x267c => WorldEvent::Coins(money_update(body)?),
         crate::banker::CHANGE_OPCODE => WorldEvent::CoinsChanged(crate::banker::decode(body)?),
+        crate::abilities::BEGGING_OPCODE | crate::abilities::PICK_POCKET_OPCODE => {
+            match crate::abilities::titanium_answer(opcode, body)? {
+                Some(answer) => WorldEvent::AskAnswered(answer),
+                None => return Ok(None),
+            }
+        }
         0x5ecd => {
             ensure!(body.len() >= 8, "truncated experience update");
             WorldEvent::Experience(word(body, 0).min(330))

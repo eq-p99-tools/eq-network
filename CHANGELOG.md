@@ -22,6 +22,12 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     - The trap skills send the program's treasure messages at a target of
       class 62 (`Request::AtTreasure`; checklist 6.432, inferred).
     - Each waits ten seconds on its own timer, the program's value.
+    - The server's answer to a beg or a pick comes as the new
+      `WorldEvent::AskAnswered` (`abilities::titanium_answer`), read as the
+      program reads it: nothing, coins of one kind, or on a pick an item by
+      name. `AskAnswer::line` gives the program's line and what it names.
+      The session adds the coins to the purse, as the program does, and
+      tells `WorldEvent::Coins`; the server sends no money update.
     - A player's pockets are refused with the program's line for a target
       not in PvP (6.438): the session does not yet follow the PvP flag.
     - Begging's unseen check reads the player's own invisibility (6.430),

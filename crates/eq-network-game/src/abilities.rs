@@ -472,6 +472,126 @@ pub fn titanium_ask(
     Ok(EncodedCommand { opcode, body })
 }
 
+/// What a beg or a pick brought (read R16d).
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub enum AskOutcome {
+    /// Nothing.
+    Failed,
+    /// Coins of one kind, which the program adds to the purse itself: the
+    /// server adds them too and sends no money update.
+    Coins {
+        /// The kind.
+        coin: crate::money::Coin,
+        /// How many.
+        amount: u32,
+    },
+    /// An item by name; the item itself comes in its own packet.
+    Item(String),
+}
+
+/// The server's answer to the player's Begging or Pick Pockets.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct AskAnswer {
+    /// Begging or Pick Pockets.
+    pub ability: Ability,
+    /// What it brought.
+    pub outcome: AskOutcome,
+}
+
+impl AskAnswer {
+    /// The coins it brought, to add to the purse.
+    #[must_use]
+    pub fn coins(&self) -> crate::world::Coins {
+        let mut coins = crate::world::Coins::default();
+        if let AskOutcome::Coins { coin, amount } = self.outcome {
+            *match coin {
+                crate::money::Coin::Platinum => &mut coins.platinum,
+                crate::money::Coin::Gold => &mut coins.gold,
+                crate::money::Coin::Silver => &mut coins.silver,
+                crate::money::Coin::Copper => &mut coins.copper,
+            } = amount;
+        }
+        coins
+    }
+
+    /// The program's line for it (`eqstr_us.txt` string ID, read R16d),
+    /// with what the line names: the amount of coins, or the item.
+    #[must_use]
+    pub fn line(&self) -> (u32, Vec<String>) {
+        // Each ability's failure line, then its four coin lines from
+        // platinum down; Pick Pockets' item line follows its copper line.
+        let base = if self.ability == Ability::Begging {
+            0x325c
+        } else {
+            0x3262
+        };
+        match &self.outcome {
+            AskOutcome::Failed => (base, Vec::new()),
+            AskOutcome::Coins { coin, amount } => {
+                let kind = match coin {
+                    crate::money::Coin::Platinum => 1,
+                    crate::money::Coin::Gold => 2,
+                    crate::money::Coin::Silver => 3,
+                    crate::money::Coin::Copper => 4,
+                };
+                (base + kind, vec![amount.to_string()])
+            }
+            AskOutcome::Item(name) => (base + 5, vec![name.clone()]),
+        }
+    }
+}
+
+/// The length of `EQEmu`'s answer to a beg (`BeggingResponse_Struct`).
+const BEGGING_ANSWER_LENGTH: usize = 20;
+/// The length of its answer to a pick (`sPickPocket_Struct`): four ids and
+/// values, the amount, and a 64-byte item name.
+const PICK_POCKET_ANSWER_LENGTH: usize = 84;
+
+/// Reads the server's answer to a beg or a pick, as the Titanium program
+/// does (read R16d, 0x455900 and 0x455b05): the result byte at +0xc, the
+/// amount at +0x10 and, for an item, its name at +0x14. A result of 0 is
+/// nothing, 1 to 4 coins from platinum down to copper, and on a pick 5 an
+/// item. The program passes over a pick's -1, which `EQEmu` names the
+/// answer to a player being picked; it reads no other result, which this
+/// passes over too.
+///
+/// Layout reference: `EQEmu`'s `BeggingResponse_Struct` and
+/// `sPickPocket_Struct` (`common/patches/titanium_structs.h`).
+///
+/// # Errors
+/// Rejects a body too short for its fields, and another opcode.
+pub fn titanium_answer(opcode: u16, body: &[u8]) -> anyhow::Result<Option<AskAnswer>> {
+    let (ability, length) = match opcode {
+        BEGGING_OPCODE => (Ability::Begging, BEGGING_ANSWER_LENGTH),
+        PICK_POCKET_OPCODE => (Ability::PickPockets, PICK_POCKET_ANSWER_LENGTH),
+        _ => anyhow::bail!("opcode {opcode:#06x} answers no ask"),
+    };
+    anyhow::ensure!(
+        body.len() >= length,
+        "an answer to {ability:?} is {length} bytes, not {}",
+        body.len()
+    );
+    let amount = u32::from_le_bytes([body[0x10], body[0x11], body[0x12], body[0x13]]);
+    let coins = |coin| AskOutcome::Coins { coin, amount };
+    let outcome = match body[0xc] {
+        0 => AskOutcome::Failed,
+        1 => coins(crate::money::Coin::Platinum),
+        2 => coins(crate::money::Coin::Gold),
+        3 => coins(crate::money::Coin::Silver),
+        4 => coins(crate::money::Coin::Copper),
+        5 if ability == Ability::PickPockets => {
+            let name = &body[0x14..length];
+            let end = name
+                .iter()
+                .position(|byte| *byte == 0)
+                .unwrap_or(name.len());
+            AskOutcome::Item(String::from_utf8_lossy(&name[..end]).into_owned())
+        }
+        _ => return Ok(None),
+    };
+    Ok(Some(AskAnswer { ability, outcome }))
+}
+
 /// The Titanium client's answer to the server's end of its hiding, as
 /// `EQEmu`'s source describes it (not yet recorded from the client): the
 /// player's own appearance, invisibility 0. `EQEmu` ends the player's
@@ -800,5 +920,41 @@ mod tests {
         assert!(!in_melee_range(body(1, 0.0, 0.0), body(49, 1.0, 60.5)));
         assert!(in_melee_range(body(1, 0.0, 0.0), body(1, 200.0, 75.0)));
         assert!(!in_melee_range(body(1, 0.0, 0.0), body(1, 200.0, 76.0)));
+    }
+
+    #[test]
+    fn a_beg_or_a_pick_is_answered_with_its_result_byte_and_amount() {
+        let answer = |opcode, length: usize, result: u8, amount: u32, name: &[u8]| {
+            let mut body = vec![0; length];
+            body[0xc] = result;
+            body[0x10..0x14].copy_from_slice(&amount.to_le_bytes());
+            body[0x14..0x14 + name.len()].copy_from_slice(name);
+            titanium_answer(opcode, &body).unwrap()
+        };
+        let begged = answer(BEGGING_OPCODE, 20, 3, 7, b"").unwrap();
+        assert_eq!(
+            begged.outcome,
+            AskOutcome::Coins {
+                coin: crate::money::Coin::Silver,
+                amount: 7
+            }
+        );
+        assert_eq!(begged.coins().silver, 7);
+        assert_eq!(begged.line(), (0x325f, vec!["7".to_owned()]));
+        let failed = answer(BEGGING_OPCODE, 20, 0, 0, b"").unwrap();
+        assert_eq!(failed.line(), (0x325c, Vec::new()));
+        assert_eq!(failed.coins(), crate::world::Coins::default());
+        let picked = answer(PICK_POCKET_OPCODE, 84, 1, 2, b"").unwrap();
+        assert_eq!(picked.line(), (0x3263, vec!["2".to_owned()]));
+        assert_eq!(picked.coins().platinum, 2);
+        let item = answer(PICK_POCKET_OPCODE, 84, 5, 0, b"Rusty Dagger\0junk").unwrap();
+        assert_eq!(item.outcome, AskOutcome::Item("Rusty Dagger".to_owned()));
+        assert_eq!(item.line(), (0x3267, vec!["Rusty Dagger".to_owned()]));
+        // A pick of the player (-1) and results the program does not read
+        // are passed over; a beg names no item.
+        assert_eq!(answer(PICK_POCKET_OPCODE, 84, 0xff, 0, b""), None);
+        assert_eq!(answer(BEGGING_OPCODE, 20, 5, 0, b""), None);
+        assert!(titanium_answer(BEGGING_OPCODE, &[0; 19]).is_err());
+        assert!(titanium_answer(PICK_POCKET_OPCODE, &[0; 28]).is_err());
     }
 }
