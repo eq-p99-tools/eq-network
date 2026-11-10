@@ -959,6 +959,12 @@ pub enum WorldEvent {
         /// strafes at `strafe_units_per_second` either way.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         strafe_walk_units_per_second: Option<f32>,
+        /// Backing up in water, in the land's units per second before the
+        /// water's share applies
+        /// (`movement::MotionCalibration::swim_backward_units_per_second`):
+        /// 0 backs up not at all. None backs up in water as any swim stroke.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        swim_backward_units_per_second: Option<f32>,
         /// Lateral rates while longitudinal input is active.
         #[serde(skip_serializing_if = "crate::movement::DiagonalRates::is_unavailable")]
         diagonal: crate::movement::DiagonalRates,

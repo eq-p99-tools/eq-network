@@ -97,6 +97,10 @@ struct Generation {
     /// speed running (the Titanium speeds read; the R5 audit's S1). The
     /// `EQMac` rule reads it as the walk speed, so `EQMac` keeps that.
     strafes_on_selected_base: bool,
+    /// Backing up in water, unless sneaking, takes only the buffs' speed
+    /// modifier (Titanium 0x4a2bd8-0x4a2c06; read R13 b). `EQMac`'s is
+    /// unread, so it keeps backing up in water as any swim stroke.
+    swim_backs_on_modifier: bool,
 }
 
 /// `EQMac`'s side of the table.
@@ -106,6 +110,7 @@ const EQMAC: Generation = Generation {
     unslowed_zone: Some(EQMAC_UNSLOWED_ZONE),
     grounded_diagonal: false,
     strafes_on_selected_base: false,
+    swim_backs_on_modifier: false,
 };
 
 /// Titanium's side of the table, from the Titanium speeds read and the
@@ -116,6 +121,7 @@ const TITANIUM: Generation = Generation {
     unslowed_zone: None,
     grounded_diagonal: true,
     strafes_on_selected_base: true,
+    swim_backs_on_modifier: true,
 };
 
 /// `EQMac`'s speeds, from the program (TAKP sitting 2 M1, "Speeds", and the
@@ -243,6 +249,18 @@ fn motion(generation: Generation, state: &SpeedState) -> Option<MotionCalibratio
             input
         }
     };
+    // In water, not sneaking, the base is 0: the player backs up only by
+    // the modifier, as slowly as a slow lets them when it would go the
+    // other way. Sneaking keeps the land rule. Ducking is the host's, and
+    // keeps the land rule there too.
+    let swim_backing = (generation.swim_backs_on_modifier && !state.sneaking).then(|| {
+        let input = -modifier;
+        if input > 0.0 {
+            -EQMAC_SLOWEST
+        } else {
+            input
+        }
+    });
     let strafe_share = if state.sneaking || slowed { 0.5 } else { 1.0 };
     let strafing_walking = state.walk * 0.5 * 2.0 * multiplier * strafe_share;
     // Sneaking takes `EQMac`'s rule on both generations, the slower side.
@@ -274,6 +292,9 @@ fn motion(generation: Generation, state: &SpeedState) -> Option<MotionCalibratio
         (input.clamp(WIRE_INPUTS.0, WIRE_INPUTS.1) * generation.animation_per_input) as i16
     };
     let calibration = MotionCalibration {
+        swim_backward_units_per_second: generation
+            .swim_backs_on_modifier
+            .then(|| swim_backing.map_or_else(|| speed(backing), speed)),
         diagonal,
         units_per_second: speed(running),
         velocity_scale: VELOCITY_SCALE,
@@ -462,6 +483,55 @@ mod tests {
         .motion
         .unwrap();
         assert_eq!(sneaking.diagonal, DiagonalRates::default());
+    }
+
+    #[test]
+    fn titanium_backs_up_in_water_only_by_the_modifier() {
+        let water = |state: SpeedState| {
+            titanium(&state)
+                .motion
+                .unwrap()
+                .swim_backward_units_per_second
+        };
+        // Unbuffed, not at all.
+        assert_eq!(water(player()), Some(0.0));
+        // A run buff of 50% of the run speed backs up at that modifier.
+        let buffed = water(SpeedState {
+            rate: 50,
+            ..player()
+        })
+        .unwrap();
+        assert!(close(buffed, 0.35 * 42.667), "{buffed}");
+        // A slow, which would go the other way, creeps at 0.01.
+        let slowed = water(SpeedState {
+            rate: -30,
+            ..player()
+        })
+        .unwrap();
+        assert!(close(slowed, 0.01 * 42.667), "{slowed}");
+        // A root of -1000 or below leaves nothing to calibrate.
+        assert!(titanium(&SpeedState {
+            rate: -1000,
+            ..player()
+        })
+        .motion
+        .is_none());
+        // Sneaking keeps the land rule: half the walk speed.
+        let sneaking = SpeedState {
+            sneaking: true,
+            ..player()
+        };
+        let land = titanium(&sneaking).motion.unwrap().backward.unwrap();
+        assert!(close(water(sneaking).unwrap(), land.units_per_second));
+        assert!(close(land.units_per_second, 0.23 * 42.667));
+        // `EQMac`'s rule is unread: it backs up in water as any stroke.
+        assert_eq!(
+            eqmac(&player())
+                .motion
+                .unwrap()
+                .swim_backward_units_per_second,
+            None
+        );
     }
 
     #[test]

@@ -103,6 +103,13 @@ pub(super) trait Wire: Sync {
         None
     }
 
+    /// How the generation's client numbers the player's own updates. A
+    /// per-generation constant today; a client-supplied frame count
+    /// replaces Titanium's fixed rate when a history sender comes.
+    fn update_counter(&self) -> eq_network_game::movement::UpdateCounter {
+        eq_network_game::movement::UpdateCounter::PerUpdate
+    }
+
     /// How long the generation's client waits after its logout before it
     /// closes the zone connection itself, reply or not; none where unread.
     fn logout_close(&self) -> Option<std::time::Duration> {
@@ -247,9 +254,14 @@ impl Wire for Titanium {
     }
 
     fn update_gate(&self) -> Option<eq_network_game::movement::UpdateGate> {
-        Some(eq_network_game::movement::UpdateGate::Changed {
-            spacing: eq_network_game::movement::TITANIUM_POSITION_SPACING,
+        Some(eq_network_game::movement::UpdateGate::Flagged {
+            pack: |sample| sample.packet(),
+            rule: eq_network_game::movement::TITANIUM_FLAGS,
         })
+    }
+
+    fn update_counter(&self) -> eq_network_game::movement::UpdateCounter {
+        eq_network_game::movement::TITANIUM_UPDATE_COUNTER
     }
 
     fn speeds(&self) -> Option<SpeedRule> {
@@ -360,6 +372,7 @@ impl Wire for EqMac {
     fn update_gate(&self) -> Option<eq_network_game::movement::UpdateGate> {
         Some(eq_network_game::movement::UpdateGate::Flagged {
             pack: eq_network_game::quarm::client_update,
+            rule: eq_network_game::movement::EQMAC_FLAGS,
         })
     }
 

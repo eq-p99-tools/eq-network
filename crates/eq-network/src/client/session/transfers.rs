@@ -613,6 +613,7 @@ mod tests {
         motion
             .calibrate(
                 MotionCalibration {
+                    swim_backward_units_per_second: None,
                     units_per_second: 6.0,
                     velocity_scale: 0.05,
                     animation: 12,
@@ -851,6 +852,7 @@ mod tests {
             .map(|(_, at)| *at)
             .unwrap();
         let calibration = eq_network_game::movement::MotionCalibration {
+            swim_backward_units_per_second: None,
             diagonal: DiagonalRates::default(),
             units_per_second: 6.0,
             velocity_scale: 0.05,

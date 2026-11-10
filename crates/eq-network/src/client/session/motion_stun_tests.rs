@@ -16,6 +16,7 @@ fn setup(start: Instant) -> World {
     motion
         .calibrate(
             MotionCalibration {
+                swim_backward_units_per_second: None,
                 diagonal: DiagonalRates::default(),
                 units_per_second: 6.0,
                 velocity_scale: 0.05,

@@ -1,6 +1,7 @@
 //! Zone-scoped movement submission with caller-supplied calibration.
 use super::{
-    gate::{Flags, UpdateGate},
+    counter::{Counter, UpdateCounter},
+    gate::{FlagRule, Flags, Hold, UpdateGate},
     DiagonalRates, HeadingUpdate, MovementGuard, MovementMode, MovementRequest, PositionPacket,
     JUMP_OPCODE,
 };
@@ -40,6 +41,15 @@ pub struct MotionCalibration {
     /// Signed animation/speed value for this mode; 0 where the generation
     /// sends none for a very slow move.
     pub animation: i16,
+    /// Backing up in water, in the land's units per second before the
+    /// water's share ([`super::swim_speed`]) applies: Titanium backs up in
+    /// water, unless ducking or sneaking, at only the buffs' speed
+    /// modifier, so not at all without one (0x4a2bd8-0x4a2c06; read R13 b).
+    /// None, for streams from before it, bounds backing up in water as any
+    /// swim stroke; the session always fills it on Titanium. `EQMac` keeps
+    /// that rule until its program is read.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub swim_backward_units_per_second: Option<f32>,
 }
 
 /// Measured backward motion, kept separate from forward speed and animation.
@@ -101,6 +111,12 @@ impl MotionCalibration {
                 && (0..=511).contains(&self.animation),
             "invalid movement calibration"
         );
+        if let Some(rate) = self.swim_backward_units_per_second {
+            ensure!(
+                rate.is_finite() && rate >= 0.0 && rate <= self.units_per_second,
+                "invalid water backing-up calibration"
+            );
+        }
         if let Some(backward) = self.backward {
             ensure!(
                 backward.units_per_second.is_finite()
@@ -152,7 +168,8 @@ impl MotionCalibration {
 pub struct MotionSession {
     guard: MovementGuard,
     spawn_id: u16,
-    sequence: u16,
+    /// What the next update's counter field carries ([`UpdateCounter`]).
+    counter: Counter,
     position: Position,
     /// Approach point of the latest accepted move. A correction or any
     /// other placement cannot serve as a pad entry.
@@ -170,13 +187,13 @@ pub struct MotionSession {
     gate: Option<UpdateGate>,
     /// The latest accepted sample the gate has not let out yet.
     held: Option<PositionPacket>,
-    /// The last update sent, without its sequence: Titanium's gate sends
+    /// The last update sent, without its counter: Titanium's gate sends
     /// only after a change.
     last_update: Option<PositionPacket>,
-    /// The `EQMac` gate's pending flag and what it compares against.
+    /// A flagged gate's pending flag and what it compares against.
     flags: Flags,
-    /// When the host's latest sample was accepted.
-    last_input: Instant,
+    /// The server's hold on the player ([`Self::set_hold`]).
+    hold: Hold,
 }
 
 /// What the gate does with an accepted sample.
@@ -219,7 +236,7 @@ impl PreparedMove<'_> {
                 send(&sample)?;
                 owner.held = None;
                 owner.last_sent = now;
-                owner.sequence = owner.sequence.wrapping_add(1);
+                owner.counter.sent(sample.sequence);
                 owner.last_update = Some(PositionPacket {
                     sequence: 0,
                     ..sample
@@ -233,7 +250,6 @@ impl PreparedMove<'_> {
         owner.previous_position = Some(owner.position);
         owner.position = sample.position;
         owner.moving = moving;
-        owner.last_input = now;
         Ok(())
     }
 }
@@ -319,7 +335,7 @@ impl MotionSession {
     pub fn with_gate(mut self, gate: Option<UpdateGate>) -> Self {
         // The program's resets clear the last update's time, so the first
         // update after zoning in isn't held back (TAKP gate read Q1 6e).
-        if matches!(gate, Some(UpdateGate::Flagged { .. })) {
+        if matches!(gate, Some(UpdateGate::Flagged { rule, .. }) if rule.first_unheld) {
             self.last_sent = self
                 .last_sent
                 .checked_sub(super::EQMAC_UPDATE_TICK)
@@ -327,6 +343,21 @@ impl MotionSession {
         }
         self.gate = gate;
         self
+    }
+
+    /// Numbers the player's own updates as the client generation's program
+    /// does ([`UpdateCounter`]), counting from this admission.
+    #[must_use]
+    pub const fn with_counter(mut self, rule: UpdateCounter) -> Self {
+        self.counter = self.counter.with_rule(rule);
+        self
+    }
+
+    /// Tells the gate of the server's hold on the player, which some
+    /// generations' rules send differently under ([`FlagRule`]). The caller
+    /// passes [`Hold::None`] while a departure lets a stunned player move.
+    pub fn set_hold(&mut self, hold: Hold) {
+        self.hold = hold;
     }
 
     /// The least time between two updates under a spacing gate.
@@ -374,7 +405,8 @@ impl MotionSession {
     /// does ([`MovementGuard::jumped`]).
     pub fn jumped(&mut self) {
         self.guard.jumped();
-        // The `EQMac` program's jump marks an update due (Q1 6c).
+        // The program's jump marks an update due (`EQMac` Q1 6c; Titanium
+        // 0x4aca7f, 0x4acb83, 0x4acbf8).
         if matches!(self.gate, Some(UpdateGate::Flagged { .. })) {
             self.flags.raise();
         }
@@ -435,7 +467,7 @@ impl MotionSession {
         Ok(Self {
             guard: MovementGuard::new(session_id, position, now),
             spawn_id,
-            sequence: 0,
+            counter: Counter::new(now),
             position,
             previous_position: None,
             calibration: None,
@@ -450,7 +482,7 @@ impl MotionSession {
             held: None,
             last_update: None,
             flags: Flags::default(),
-            last_input: now,
+            hold: Hold::None,
         })
     }
 
@@ -524,9 +556,25 @@ impl MotionSession {
     /// next calibration.
     pub fn withdraw(&mut self) {
         self.calibration = None;
-        self.held = None;
         self.previous_position = None;
         self.guard.correct(self.position, Instant::now());
+        // The speed falls to 0, which the program sends as a stop.
+        self.hold_stop();
+    }
+
+    /// Holds a stop at the current point for a moving player, for the
+    /// update gate to send; a gap without input never stops one.
+    fn hold_stop(&mut self) {
+        self.held = self.stop_pending().then_some(PositionPacket {
+            spawn_id: self.spawn_id,
+            // The counter is the send's own, set as the held sample goes out.
+            sequence: 0,
+            position: self.position,
+            delta: [0.0; 3],
+            animation: 0,
+            delta_heading: 0,
+        });
+        self.moving = false;
     }
 
     /// Latest accepted world position, without implying a server acknowledgment.
@@ -561,16 +609,22 @@ impl MotionSession {
             self.pad_approach(created).is_some() && self.position == pad.entry(),
             "pad entry is no longer current"
         );
+        // Entering the pad's region and finding its zone is this one record
+        // two entries (causes 4 and 5, 0x48b60e and 0x48b647), and the warp
+        // one more at the old place before its update copies the counter.
+        let mut counter = self.counter;
+        counter.zone_line_region();
+        counter.before_warp();
         let still = PositionPacket {
             spawn_id: self.spawn_id,
-            sequence: self.sequence,
+            sequence: counter.value(now),
             position: self.position,
             delta: [0.0; 3],
             animation: 0,
             delta_heading: 0,
         };
         let entry = PositionPacket {
-            sequence: self.sequence,
+            sequence: counter.value(now),
             ..self
                 .held
                 .or(self.last_update)
@@ -588,7 +642,9 @@ impl MotionSession {
         // The 0x48aaa6 branch submits entry outside the ordinary gate.
         // Keep the existing periodic deadline for the landing or movement from it.
         self.correct(landing.position, now)?;
-        self.sequence = self.sequence.wrapping_add(1);
+        counter.sent(entry.sequence);
+        counter.after_warp();
+        self.counter = counter;
         self.last_update = Some(PositionPacket {
             sequence: 0,
             ..entry
@@ -604,17 +660,7 @@ impl MotionSession {
     /// update gate still decides when that existing position sample is sent.
     pub fn stop_voluntary(&mut self) {
         self.guard.clear_shoreline();
-        if self.stop_pending() {
-            self.held = Some(PositionPacket {
-                spawn_id: self.spawn_id,
-                sequence: self.sequence,
-                position: self.position,
-                delta: [0.0; 3],
-                animation: 0,
-                delta_heading: 0,
-            });
-        }
-        self.moving = false;
+        self.hold_stop();
     }
 
     /// Whether a proposal contains only passive vertical motion. A rise
@@ -809,12 +855,16 @@ impl MotionSession {
         // budgets: from the last accepted request's stamp to this one's.
         let elapsed = guard.interval(request.created);
         let swimming = request.mode.is_water_motion();
+        let swim_backward = self
+            .calibration
+            .and_then(|value| value.swim_backward_units_per_second)
+            .map(super::swim_speed);
         let displacement = guard.accept_with_modes(
             request,
             now,
             run_speed_multiplier,
             lateral_rate,
-            self.swimming,
+            (self.swimming, swim_backward),
         )?;
         // Following a slope has no vertical stroke. Ordinary falls still
         // carry their descent in absolute Z. For a swim stroke Titanium
@@ -839,7 +889,7 @@ impl MotionSession {
         };
         let sample = PositionPacket {
             spawn_id: self.spawn_id,
-            sequence: self.sequence,
+            sequence: self.counter.value(now),
             position: request.position,
             delta,
             animation: if moving { animation } else { 0 },
@@ -847,7 +897,8 @@ impl MotionSession {
         };
         sample.check()?;
         let mut flags = self.flags.clone();
-        let release = self.release(&sample, &mut flags, now)?;
+        let strafing = diagonal.is_some() || along == MovementMode::Strafe;
+        let release = self.release(&sample, &mut flags, now, strafing)?;
         Ok(PreparedMove {
             owner: self,
             guard,
@@ -861,7 +912,13 @@ impl MotionSession {
 
     /// What the generation's gate does with an accepted sample at `now`;
     /// `flags` is the `EQMac` gate's state, committed by the caller.
-    fn release(&self, sample: &PositionPacket, flags: &mut Flags, now: Instant) -> Result<Release> {
+    fn release(
+        &self,
+        sample: &PositionPacket,
+        flags: &mut Flags,
+        now: Instant,
+        strafing: bool,
+    ) -> Result<Release> {
         let since = now.saturating_duration_since(self.last_sent);
         Ok(match self.gate {
             None => Release::Send,
@@ -878,9 +935,9 @@ impl MotionSession {
                     Release::Send
                 }
             }
-            Some(UpdateGate::Flagged { pack }) => {
-                flags.observe(sample, now);
-                if flags.release(sample, since, pack)? {
+            Some(UpdateGate::Flagged { pack, rule }) => {
+                flags.observe(sample, now, &rule, strafing);
+                if flags.release(sample, since, pack, &rule)? {
                     Release::Send
                 } else {
                     Release::Hold
@@ -889,9 +946,10 @@ impl MotionSession {
         })
     }
 
-    /// Sends a held sample once the spacing has passed, a stop after 250 ms
-    /// without input (or the spacing, if longer), or a stationary heartbeat
-    /// every [`super::STATIONARY_HEARTBEAT`].
+    /// Sends a held sample once the spacing has passed, or a stationary
+    /// player's heartbeat every [`super::STATIONARY_HEARTBEAT`]. A moving
+    /// player stops only by the host's own zero request: a gap without
+    /// input sends nothing new.
     ///
     /// # Errors
     /// Propagates encoding and transport failures without advancing state.
@@ -918,20 +976,27 @@ impl MotionSession {
         if self.suspended {
             return Ok(false);
         }
-        if let Some(UpdateGate::Flagged { pack }) = self.gate {
-            return self.tick_flagged(now, since, pack, send);
+        if let Some(UpdateGate::Flagged { pack, rule }) = self.gate {
+            match (self.hold, rule.frozen_spacing) {
+                (Hold::Frozen, Some(spacing)) => {
+                    return self.tick_frozen(now, since, (spacing, &rule), send);
+                }
+                (Hold::Stunned, _) if rule.stun_silent => return Ok(false),
+                _ => {}
+            }
+            return self.tick_flagged(now, since, (pack, &rule), send);
         }
         if let Some(held) = self.held {
             if since < spacing {
                 return Ok(false);
             }
             let sample = PositionPacket {
-                sequence: self.sequence,
+                sequence: self.counter.value(now),
                 ..held
             };
             send(&sample)?;
             self.held = None;
-            self.sequence = self.sequence.wrapping_add(1);
+            self.counter.sent(sample.sequence);
             self.last_sent = now;
             self.last_update = Some(PositionPacket {
                 sequence: 0,
@@ -939,17 +1004,15 @@ impl MotionSession {
             });
             return Ok(true);
         }
-        let interval = if self.moving {
-            Duration::from_millis(250).max(spacing)
-        } else {
-            super::STATIONARY_HEARTBEAT
-        };
-        if since < interval {
+        // A moving player stops only by the host's own zero request: a gap
+        // without input is a stall, which only delays the next update, as
+        // the program's one loop does.
+        if self.moving || since < super::STATIONARY_HEARTBEAT {
             return Ok(false);
         }
         let sample = PositionPacket {
             spawn_id: self.spawn_id,
-            sequence: self.sequence,
+            sequence: self.counter.value(now),
             position: self.position,
             delta: [0.0; 3],
             animation: 0,
@@ -957,7 +1020,7 @@ impl MotionSession {
         };
         sample.check()?;
         send(&sample)?;
-        self.sequence = self.sequence.wrapping_add(1);
+        self.counter.sent(sample.sequence);
         self.last_sent = now;
         self.moving = false;
         self.last_update = Some(PositionPacket {
@@ -967,54 +1030,88 @@ impl MotionSession {
         Ok(true)
     }
 
-    /// The `EQMac` gate's pass: the timer and the stop mark an update due,
+    /// A frozen player's pass ([`FlagRule::frozen_spacing`]): only the timer
+    /// marks an update due, and it carries the last counter written and
+    /// records no history entry.
+    fn tick_frozen(
+        &mut self,
+        now: Instant,
+        since: Duration,
+        (spacing, rule): (Duration, &FlagRule),
+        send: impl FnOnce(&PositionPacket) -> Result<()>,
+    ) -> Result<bool> {
+        let mut flags = self.flags.clone();
+        flags.observe_tick(now, rule);
+        if !flags.release_frozen(since, spacing) {
+            self.flags = flags;
+            return Ok(false);
+        }
+        let sample = PositionPacket {
+            spawn_id: self.spawn_id,
+            sequence: self.counter.written(),
+            position: self.position,
+            delta: [0.0; 3],
+            animation: 0,
+            delta_heading: 0,
+        };
+        sample.check()?;
+        send(&sample)?;
+        self.flags = flags;
+        // A frozen player moves for nobody, so any movement held back for
+        // the gate is dropped rather than sent after the freeze.
+        self.held = None;
+        self.moving = false;
+        self.last_sent = now;
+        self.last_update = Some(PositionPacket {
+            sequence: 0,
+            ..sample
+        });
+        Ok(true)
+    }
+
+    /// A flagged gate's pass: the timer and the stop mark an update due,
     /// and the latest state goes out once the gate lets it.
     fn tick_flagged(
         &mut self,
         now: Instant,
         since: Duration,
-        pack: fn(&PositionPacket) -> Result<EncodedCommand>,
+        (pack, rule): (fn(&PositionPacket) -> Result<EncodedCommand>, &FlagRule),
         send: impl FnOnce(&PositionPacket) -> Result<()>,
     ) -> Result<bool> {
-        // A move without input for 250 ms has stopped: its speed falls to 0,
-        // a change the program flags at once.
-        let stopped = self.moving
-            && now.saturating_duration_since(self.last_input) >= Duration::from_millis(250);
         let still = PositionPacket {
             spawn_id: self.spawn_id,
-            sequence: self.sequence,
+            sequence: self.counter.value(now),
             position: self.position,
             delta: [0.0; 3],
             animation: 0,
             delta_heading: 0,
         };
         let candidate = match self.held {
-            _ if stopped => still,
             Some(held) => PositionPacket {
-                sequence: self.sequence,
+                sequence: self.counter.value(now),
                 ..held
             },
-            // The latest move went out and the host's next has not come.
+            // The latest move went out and the host's next has not come. A
+            // moving player stops only by the host's own zero request; a
+            // gap without input, however long, is a stall, which in the
+            // program's one loop only delays the next update.
             None if self.moving => return Ok(false),
             None => still,
         };
         candidate.check()?;
         let mut flags = self.flags.clone();
-        flags.observe(&candidate, now);
-        let released = flags.release(&candidate, since, pack)?;
+        // A held strafe already marked its update due as it was accepted.
+        flags.observe(&candidate, now, rule, false);
+        let released = flags.release(&candidate, since, pack, rule)?;
         if released {
             send(&candidate)?;
             self.held = None;
-            self.sequence = self.sequence.wrapping_add(1);
+            self.counter.sent(candidate.sequence);
             self.last_sent = now;
             self.last_update = Some(PositionPacket {
                 sequence: 0,
                 ..candidate
             });
-        }
-        if stopped {
-            self.moving = false;
-            self.held = None;
         }
         self.flags = flags;
         Ok(released)
@@ -1027,7 +1124,7 @@ impl MotionSession {
     pub fn correct(&mut self, position: Position, now: Instant) -> Result<()> {
         PositionPacket {
             spawn_id: self.spawn_id,
-            sequence: self.sequence,
+            sequence: self.counter.value(now),
             position,
             delta: [0.0; 3],
             animation: 0,
@@ -1038,8 +1135,9 @@ impl MotionSession {
         self.previous_position = None;
         self.guard.correct(position, now);
         self.calibration = None;
-        self.held = None;
-        // Keep the pending stop deadline if the last transmitted sample was moving.
+        // Movement waits for a new calibration, so a moving player stops
+        // where the server put them.
+        self.hold_stop();
         Ok(())
     }
 

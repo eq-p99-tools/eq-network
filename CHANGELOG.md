@@ -7,6 +7,15 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Breaking:** Titanium backs up in water, unless ducking or sneaking, only
+  by the buffs' speed modifier (0x4a2bd8-0x4a2c06), so not at all without
+  one; a slow that would go the other way creeps at 0.01, and -1000 or less
+  roots. `MotionCalibration` gains `swim_backward_units_per_second` and
+  `WorldEvent::MotionState` the same field (both serde default None, which
+  keeps the old rule for old streams); the session always fills it on
+  Titanium, and the guard bounds a swim stroke's component behind its
+  heading by it. `EQMac`'s rule is unread and keeps backing up in water as
+  any swim stroke.
 - **Breaking:** Titanium strafes on the selected base speed: the run speed
   running, the walk speed walking, times the health and weight multiplier
   and halved when slowed, as its program does (the R5 audit's S1). The
@@ -246,6 +255,40 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Breaking:** A moving player stops only by the host's own stop (a request
+  at the current point with no turn), or by a stun, withdrawal or
+  correction, which now each hold a stop for the update gate. A gap without
+  input no longer sends an inferred stop after 250 ms: in the program the
+  movement and the sending share one loop, so a stall only delays the next
+  update, and a client frame stall had made a straight run send a stop and
+  then a speed change about every 300 ms. Hosts must submit a stop before
+  they stop driving movement; a camp waits for it.
+- **Breaking:** Titanium's own update goes out on its program's flag rule
+  (0x4aba14, 0x4a2ef2, 0x4a2f3f, 0x4a2f67, 0x4231c2): a heading change of 2
+  or more units, or a speed change of 0.2 or more (8 in the forward field),
+  each from the last value that flagged one; every strafing sample; a jump;
+  and the 1 s character tick; then more than 280 ms after the last update.
+  Running straight now sends once a second. While the server holds the
+  player frozen (posture 102, 0x4ac842), updates come only from the tick,
+  more than 560 ms apart, with the counter field repeating the last value
+  and no history entry; while stunned without that posture, and unless a
+  departure moves the player, nothing goes out. `UpdateGate::Flagged` gains
+  `rule: FlagRule` (`EQMAC_FLAGS`, `TITANIUM_FLAGS`), and
+  `MotionSession::set_hold` takes `movement::Hold`. Spell and contact pushes,
+  which the program also flags, are the server's moves here, and a
+  recording's few short straight gaps they don't explain are open
+  (recording checklist 6.421).
+- Titanium's own position update carries the program's movement-history
+  entry counter in its counter field (0x14cb offset 2; 0x4ac5c1, 0x4b70db)
+  in place of one more per update: the frames since admission at a fixed
+  65 a second, plus one entry for each earlier update, and for a local pad
+  the region's two entries and the warp's entry at the old place (R5 audit
+  U1). The per-frame history sender stays gated off on public servers by
+  our policy, and the counter counts regardless. The rate and the left-out
+  spell-path entries are inferred (recording checklist 6.420). `EQMac`'s
+  field is unread and keeps one more per update. New
+  `movement::UpdateCounter`, `TITANIUM_UPDATE_COUNTER` and
+  `MotionSession::with_counter`.
 - **Breaking:** Report the raw dialect-tagged state in `WorldEvent::Visibility`
   and the observer's current Titanium sight in `WorldEvent::ObserverSight`.
   `AppearanceChange` can report the Titanium GM flag, and item placement

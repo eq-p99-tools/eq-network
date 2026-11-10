@@ -54,6 +54,11 @@ pub struct LocalPad {
 }
 
 impl LocalPad {
+    #[cfg(test)]
+    pub(crate) const fn new(entry: Position, landing: Position) -> Self {
+        Self { entry, landing }
+    }
+
     /// Position at the checked entrance.
     #[must_use]
     pub const fn entry(self) -> Position {

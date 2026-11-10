@@ -1,6 +1,7 @@
 //! Titanium movement encoding and session-scoped displacement validation.
 
 mod carry;
+mod counter;
 mod diagonal;
 mod gate;
 pub mod history;
@@ -12,10 +13,12 @@ mod session;
 mod shoreline;
 mod speeds;
 pub use carry::{between_reports, carry, Carried, ZBetween};
+pub use counter::{UpdateCounter, TITANIUM_HISTORY_FRAMES_PER_SECOND, TITANIUM_UPDATE_COUNTER};
 pub use diagonal::{DiagonalAlong, DiagonalRates, GroundedDiagonal, StrafeSide};
 pub use gate::{
-    UpdateGate, EQMAC_HEADING_STEP, EQMAC_REPEATS, EQMAC_SPEED_STEP, EQMAC_UPDATE_SPACING,
-    EQMAC_UPDATE_TICK,
+    FlagRule, Hold, UpdateGate, EQMAC_FLAGS, EQMAC_HEADING_STEP, EQMAC_REPEATS, EQMAC_SPEED_STEP,
+    EQMAC_UPDATE_SPACING, EQMAC_UPDATE_TICK, TITANIUM_FLAGS, TITANIUM_FROZEN_SPACING,
+    TITANIUM_HEADING_STEP, TITANIUM_SPEED_STEP, TITANIUM_UPDATE_TICK,
 };
 pub use session::{
     titanium_jump, BackwardCalibration, MotionCalibration, MotionSession, StrafeCalibration,
@@ -136,10 +139,8 @@ pub const STATIONARY_HEARTBEAT: Duration = Duration::from_secs(1);
 
 /// The least time between two of the player's own position updates in the
 /// Titanium program: it sends one only after more than 280 ms since the last
-/// (from the program, Titanium sitting 6, T1; checklist 1.6). The program
-/// also sends only after a change flag is set ([`UpdateGate::Changed`]), and
-/// whether anything sets it on a timer while the player stands still is
-/// unsure, so the stationary heartbeat stays as recorded on P99.
+/// (from the program, Titanium sitting 6, T1; checklist 1.6; 0x4ac50b-0x4ac549,
+/// read R13 a), and only once its update flag is set ([`TITANIUM_FLAGS`]).
 pub const TITANIUM_POSITION_SPACING: Duration = Duration::from_millis(280);
 
 /// `OP_Jump` (Titanium): an empty notice that the character jumped. `EQEmu` only
@@ -192,6 +193,20 @@ impl MovementMode {
 #[must_use]
 pub fn swim_speed(granted_units_per_second: f32) -> f32 {
     granted_units_per_second * 0.156_25
+}
+
+/// Checks that a swim stroke's displacement `delta` goes no further than
+/// `limit` behind `heading`, the heading the stroke ends facing, on the
+/// ground plane.
+fn swim_backing(heading: f32, delta: [f32; 3], limit: f32) -> Result<()> {
+    let (sin, cos) = (heading / 512.0 * std::f32::consts::TAU).sin_cos();
+    let behind = -(delta[0] * sin + delta[1] * cos);
+    // The tolerance covers f32 rounding, as the other budgets'.
+    ensure!(
+        behind <= limit + 0.01,
+        "backing up in water exceeds its rate"
+    );
+    Ok(())
 }
 
 /// How the heading in a movement request was produced.
@@ -250,7 +265,9 @@ impl MovementRequest {
 pub struct PositionPacket {
     /// Active character's own zone spawn ID.
     pub spawn_id: u16,
-    /// Wrapping packet counter, owned by the zone session.
+    /// Wrapping counter, owned by the zone session: Titanium's
+    /// movement-history entry count, `EQMac`'s count of updates
+    /// ([`UpdateCounter`]).
     pub sequence: u16,
     /// Server coordinates and canonical 0..512 heading.
     pub position: Position,
@@ -716,16 +733,25 @@ impl MovementGuard {
     /// # Errors
     /// Rejects disabled, stale, foreign-session, non-finite, or excessive motion.
     pub fn accept(&mut self, request: &MovementRequest, now: Instant) -> Result<[f32; 3]> {
-        self.accept_with_modes(request, now, RunSpeedMultiplier::NORMAL, None, false)
+        self.accept_with_modes(
+            request,
+            now,
+            RunSpeedMultiplier::NORMAL,
+            None,
+            (false, None),
+        )
     }
 
+    /// `swimming` says whether the session swims, and `swim_backward` bounds
+    /// a swim stroke's backward component, in units a second, where the
+    /// generation reads one ([`MotionCalibration::swim_backward_units_per_second`]).
     fn accept_with_modes(
         &mut self,
         request: &MovementRequest,
         now: Instant,
         run_speed_multiplier: RunSpeedMultiplier,
         lateral_rate: Option<f32>,
-        swimming: bool,
+        (swimming, swim_backward): (bool, Option<f32>),
     ) -> Result<[f32; 3]> {
         ensure!(
             request.session_id == self.session_id,
@@ -767,6 +793,9 @@ impl MovementGuard {
                 delta[0].hypot(delta[1]).hypot(delta[2]) <= speed * elapsed + 0.01,
                 "swimming exceeds its three-dimensional time budget"
             );
+            if let Some(backward) = swim_backward {
+                swim_backing(request.position.heading, delta, backward * elapsed)?;
+            }
         } else if let MovementMode::GroundedDiagonal(diagonal) = request.mode {
             // A known jump excludes fresh grounded diagonal input. The
             // ascent tracker does not establish where the player lands.
@@ -899,6 +928,18 @@ fn valid_position(p: Position) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn swim_backing_bounds_only_the_share_behind_the_ending_heading() {
+        // Heading 128 faces +x and 384 faces -x; a stroke the other way backs up.
+        for (heading, forward) in [(128.0, 1.0), (384.0, -1.0)] {
+            assert!(swim_backing(heading, [-2.0 * forward, 0.0, 0.0], 1.0).is_err());
+            assert!(swim_backing(heading, [-0.5 * forward, 0.0, 0.0], 1.0).is_ok());
+            assert!(swim_backing(heading, [2.0 * forward, 0.0, 0.0], 0.0).is_ok());
+            // Sideways or up and down is not behind.
+            assert!(swim_backing(heading, [0.0, 3.0, -3.0], 0.0).is_ok());
+        }
+    }
 
     #[test]
     fn a_fall_tends_to_99_steps_of_the_zones_gravity() {

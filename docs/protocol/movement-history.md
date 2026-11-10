@@ -1,8 +1,9 @@
 # Titanium movement history
 
-Status: record decoding only. Sessions do not emit movement-history packets.
-The P99 DLL suppresses the opcode in P99 mode. Stock Titanium transmission
-still needs its packet trailer and scheduling established.
+Status: record decoding only. Sessions do not emit movement-history packets;
+by this library's policy the sender stays off on public servers. Stock
+Titanium transmission still needs its packet trailer and scheduling
+established.
 
 ## Opcode and record layout
 
@@ -52,16 +53,18 @@ refreshes its timer before validating the body, then rejects a body shorter than
 that an empty body is a valid client report. Its port and warp handling also makes
 invented causes inappropriate.
 
-Observed P99 traffic contains ordinary position updates and no history
-reports. The P99 client extension suppresses `0x6a1b` in P99 mode while
-allowing `0x14cb`. The native WLD pad path at
+Observed public-server traffic contains ordinary position updates and no
+history reports. The native WLD pad path at
 `0x48b52c`, `0x48b42b`, and `0x48aaa6` submits a 36-byte position at
 entry, snaps locally, and returns to the normal position stream. The local
 pad implementation uses the existing position encoder and update gate.
-Its event records local placement after entry submission. The entry uses
-the ordinary session position sequence. The native pad path uses a movement
-history cursor, so the entry word still needs a capture comparison
-(recording checklist 6.402). Live
+Its event records local placement after entry submission. Every Titanium
+update, the entry included, carries the movement-history entry counter
+(`movement::UpdateCounter`): frames since admission at a fixed rate, one
+entry for each earlier update, and for a pad the region's two entries and
+the warp's entry at the old place before the entry report copies it. The
+rate and the left-out spell-path entries are inferred (recording checklist
+6.420); the entry word still needs a capture comparison (6.402). Live
 validation of pad crossings and server receipt is pending.
 
 Before implementing stock Titanium transmission, capture a populated report

@@ -722,6 +722,13 @@ so a rejected trailing stop cannot later start camping on an idle heartbeat.
 An accepted held stop still waits for its actual submission. These queries
 do not infer success from the host's `MotionSent` notification.
 
+A moving player stops only by the host's own request at the current point
+(zero displacement and no turn), or by a stun, withdrawal or correction,
+each of which holds a stop for the update gate. A gap without input, however
+long, sends nothing new: the program's movement and sending share one loop,
+so a stall there only delays the next update. A host that stops driving
+movement while the player moves must submit that stop first.
+
 Camp retains its own waiting intent while the existing paced stop is pending,
 then starts its countdown only after camp submission succeeds. New movement,
 refusal, withdrawal or admission/lifecycle loss cancels that waiting intent.
@@ -968,6 +975,15 @@ the strafe rate with walking selected: Titanium strafes on the selected base
 speed, so `strafe_units_per_second` is then the running rate, which bounds a
 `MovementMode::Strafe` sample either way; a frontend keeps a walking strafe to
 the walking rate, and halves either while the player ducks.
+`MotionState.swim_backward_units_per_second`, where present, is how fast the
+player backs up in water, in the land's units per second before the water's
+share (`movement::swim_speed`) applies: Titanium backs up in water, unless
+ducking or sneaking, only by the buffs' speed modifier, so 0 without one. The
+guard bounds the component of a `MovementMode::Swim` stroke behind the
+heading it ends facing by it; a frontend keeps backing up in water to it. A
+ducking or sneaking player's backing in water goes as a
+`MovementMode::Backward` sample and takes the land's backward rule by its
+mode.
 Withdrawals, input requirements and admission/lifecycle resets invalidate
 cached acceptance. A frontend may clear a waiting status only for the exact
 posted admission/revision/report/input identity with a current positive grant;
