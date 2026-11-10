@@ -306,10 +306,23 @@ impl CastGuard {
     }
 }
 
+/// The program's song state (actor +0xf98 and +0x104c, read R16): the spell
+/// of the player's own last cast start, and whether an item cast it. No song
+/// ends on its own; the server's cast update, a stop, or a new cast ends it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Song {
+    spell: u32,
+    item: bool,
+}
+
+/// The shortest cast the program keeps as a song: over 100 ms (read R16).
+const SONG_CAST_MS: u32 = 100;
+
 /// Casts spells and item effects for the player, one at a time.
 #[derive(Default)]
 pub(super) struct Casting {
     guard: CastGuard,
+    song: Option<Song>,
     song_stop: bool,
     knights: Option<knights::Reuse>,
     disciplines: disciplines::DisciplineState,
@@ -349,8 +362,11 @@ impl Casting {
         }
     }
 
-    /// Stops a Bard's song. An active hold must belong to a known gem cast
-    /// because the empty server request can interrupt other cast sources.
+    /// Stops a Bard's song as the program does (0x47020e, 0x40f06d mode 0;
+    /// read R16): a song of the class's spell, from a gem or an item, sends
+    /// the empty stop and ends here, whatever else is being cast; another
+    /// song, from an item, ends here only; with no song nothing happens.
+    /// Other classes stop nothing.
     fn stop_song(&mut self, world: &World, out: &mut Out<'_, '_>) -> Result<()> {
         if !self.song_stop {
             return out
@@ -364,22 +380,46 @@ impl Casting {
         {
             return out.log.diagnostic("Only Bards can stop a song".into());
         }
-        if self.guard.active() && !matches!(self.guard.source, Some(Source::Gem(_))) {
+        let Some(song) = self.song else {
+            return out.log.diagnostic("No song is playing".into());
+        };
+        // A memorized spell is taken as the class's (6.442).
+        if !world
+            .player
+            .as_ref()
+            .is_some_and(|p| p.memorized_spells.contains(&Some(song.spell)))
+        {
+            self.song = None;
             return out
                 .log
-                .diagnostic("Wait for the current cast to finish before stopping a song".into());
-        }
-        if self.guard.stop_deadline.is_some() {
-            return out
-                .log
-                .diagnostic("A song stop is already awaiting a cast update".into());
+                .diagnostic("A song not of the class stops here only; nothing is sent".into());
         }
         out.request(&Request::StopSong)?;
+        self.song = None;
         if self.guard.active() {
             self.guard.stop_deadline = Some(Instant::now() + SONG_STOP_WAIT);
             Ok(())
         } else {
             report_unconfirmed_stop(world.session_id, None, out)
+        }
+    }
+
+    /// The server's cast update for a spell, keep-casting clear, ends the
+    /// song as the program's 0x40f06d does (read R16): the current one for
+    /// spell -1; any song for a spell of the player's class, or for another
+    /// class's player; and for a Bard a song from an item, or the very spell
+    /// named. A memorized spell is taken as the class's (6.442); the
+    /// program's added test of an item-flag-clear song is not followed
+    /// (6.429).
+    fn song_reported(&mut self, spell: u32, world: &World) {
+        let Some(song) = self.song else {
+            return;
+        };
+        let player = world.player.as_ref();
+        let bard = player.is_some_and(|p| p.class == Some(BARD_CLASS));
+        let class_spell = player.is_some_and(|p| p.memorized_spells.contains(&Some(spell)));
+        if spell == u32::MAX || !bard || class_spell || song.item || song.spell == spell {
+            self.song = None;
         }
     }
 
@@ -407,6 +447,12 @@ impl Casting {
             match out.encode_command(command) {
                 Ok(packet) => {
                     out.send(&packet)?;
+                    // The session does not know a gem's cast time; every gem
+                    // cast is taken as over 100 ms (6.442).
+                    self.song = Some(Song {
+                        spell: *spell_id,
+                        item: false,
+                    });
                     return self.submitted(*spell_id, Source::Gem(*gem), world, out);
                 }
                 Err(error) => (
@@ -449,6 +495,16 @@ impl Casting {
         let error = match prepared {
             Ok((spell_id, packet)) => {
                 out.send(&packet)?;
+                if world
+                    .inventory
+                    .click_cast_time_ms(request.slot)
+                    .is_some_and(|ms| ms > SONG_CAST_MS)
+                {
+                    self.song = Some(Song {
+                        spell: spell_id,
+                        item: true,
+                    });
+                }
                 self.submitted(spell_id, Source::Item, world, out)?;
                 None
             }
@@ -595,6 +651,13 @@ impl Feature for Casting {
         out: &mut Out<'_, '_>,
     ) -> Result<()> {
         self.admit(message, world)?;
+        if let Message::Event(WorldEvent::Spell(SpellUpdate::Mana {
+            spell_id,
+            keep_casting: false,
+        })) = message
+        {
+            self.song_reported(*spell_id, world);
+        }
         match message {
             Message::KnightRefresh(_) => self.report_knight_reuse(Instant::now(), world, out)?,
             Message::Event(WorldEvent::Spell(update)) => {
@@ -713,8 +776,7 @@ mod tests {
         assert_eq!(duplicate.sent, []);
         assert!(matches!(
             duplicate.events.as_slice(),
-            [ClientEvent::Diagnostic(reason)]
-                if reason == "A song stop is already awaiting a cast update"
+            [ClientEvent::Diagnostic(reason)] if reason == "No song is playing"
         ));
 
         let refresh = |slot| {
@@ -739,17 +801,11 @@ mod tests {
             .unwrap();
         assert!(!casting.guard.active());
 
-        // An already pulsing song need not be an active cast.
+        // The song stopped with the first stop; an interrupt does not bring
+        // it back (read R16).
         let output = testing::run(|out| casting.handle(&stop, &mut world, out));
         output.result.unwrap();
-        assert_eq!(output.sent.len(), 1);
-        assert!(matches!(
-            output.events.as_slice(),
-            [ClientEvent::World(WorldEvent::SongStopUnconfirmed {
-                session_id: 5,
-                spell_id: None
-            })]
-        ));
+        assert_eq!(output.sent, []);
         let output =
             testing::run(|out| casting.tick(Instant::now() + SONG_STOP_WAIT, &mut world, out));
         output.result.unwrap();
@@ -784,7 +840,7 @@ mod tests {
     }
 
     #[test]
-    fn a_same_spell_gem_refresh_cannot_expose_an_item_cast_to_stop_song() {
+    fn an_item_song_of_a_class_spell_stops_as_the_program_stops_it() {
         use eq_network_game::inventory::{
             ClickEffect, ClickKind, Inventory, InventorySlot, InventoryUpdate,
         };
@@ -838,16 +894,18 @@ mod tests {
                 reduction_ms: 0,
             }))
         };
+        // The gem's refresh does not end the item's cast.
         testing::run(|out| casting.observe(&refresh(2), &mut world, out))
             .result
             .unwrap();
+        assert!(casting.guard.active());
+        // The item casts a spell of the class, which the program stops with
+        // the empty request even while the item's cast is held (read R16).
         let output = testing::run(|out| casting.handle(&stop, &mut world, out));
         output.result.unwrap();
-        assert_eq!(
-            output.sent,
-            [] as [eq_network_game::command::EncodedCommand; 0]
-        );
-        assert!(casting.guard.active());
+        assert_eq!(output.sent.len(), 1);
+        assert_eq!(output.sent[0].opcode, 0x4839);
+        assert_eq!(output.sent[0].body, [] as [u8; 0]);
 
         testing::run(|out| casting.observe(&refresh(10), &mut world, out))
             .result
@@ -855,9 +913,7 @@ mod tests {
         assert!(!casting.guard.active());
         let output = testing::run(|out| casting.handle(&stop, &mut world, out));
         output.result.unwrap();
-        assert_eq!(output.sent.len(), 1);
-        assert_eq!(output.sent[0].opcode, 0x4839);
-        assert_eq!(output.sent[0].body, [] as [u8; 0]);
+        assert_eq!(output.sent, []);
     }
 
     #[test]

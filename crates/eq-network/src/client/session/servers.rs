@@ -982,10 +982,11 @@ impl ServerType for Project1999 {
         true
     }
 
+    /// A Bard's `/stopsong` sends what the Titanium program sends (read R16).
     fn casting(&self, _setup: &Setup<'_>) -> Provided {
         // Inferred local estimate (recording checklist 6.399) from the classic once-per-game-day reuse.
         offer(Box::new(Casting::with_titanium_combat(
-            false,
+            true,
             std::time::Duration::from_mins(72),
         )))
     }
@@ -1979,7 +1980,7 @@ mod tests {
     }
 
     #[test]
-    fn only_eqemu_offers_the_bard_stop_request() {
+    fn the_titanium_servers_offer_the_bard_stop_request() {
         for protocol in [
             ServerProtocol::Project1999,
             ServerProtocol::EqEmu,
@@ -1988,7 +1989,10 @@ mod tests {
         ] {
             assert_eq!(
                 offers(server_type(protocol)).contains(&Capability::StoppingSongs),
-                protocol == ServerProtocol::EqEmu
+                matches!(
+                    protocol,
+                    ServerProtocol::EqEmu | ServerProtocol::Project1999
+                )
             );
         }
     }

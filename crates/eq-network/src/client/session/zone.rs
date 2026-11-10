@@ -2760,11 +2760,12 @@ mod tests {
             Capability::Sacrifice,
             Capability::ServerTicks,
             Capability::ShowingHelm,
-            Capability::StoppingSongs,
         ] {
             assert!(eqemu.contains(&capability));
             assert!(!p99.contains(&capability));
         }
+        assert!(eqemu.contains(&Capability::StoppingSongs));
+        assert!(p99.contains(&Capability::StoppingSongs));
         for capability in [
             Capability::Listing,
             Capability::Rolling,

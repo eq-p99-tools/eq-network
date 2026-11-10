@@ -306,3 +306,170 @@ fn a_refused_or_failed_song_stop_leaves_the_existing_hold() {
     assert!(bard.tick(Instant::now() + SONG_STOP_WAIT).is_empty());
     assert!(bard.casting.guard.active());
 }
+
+fn refreshed(gem: u32, spell_id: u32) -> Message {
+    Message::Event(WorldEvent::Spell(SpellUpdate::BarRefresh {
+        slot: gem,
+        spell_id,
+        reduction_ms: 0,
+    }))
+}
+
+/// Sings a gem's song through its cast, so that it plays on with no cast held.
+fn sung(bard: &mut Bard, gem: u8, spell_id: u32) {
+    bard.cast(gem, spell_id);
+    bard.hear(began(7, u16::try_from(spell_id).unwrap()));
+    bard.hear(refreshed(u32::from(gem), spell_id));
+    assert!(!bard.casting.guard.active());
+}
+
+fn nothing_sent(bard: &mut Bard, reason: &str) {
+    let stop = bard.stop_command();
+    let output = bard.command(&stop);
+    output.result.unwrap();
+    assert_eq!(output.sent, []);
+    assert!(matches!(
+        output.events.as_slice(),
+        [ClientEvent::Diagnostic(said)] if said == reason
+    ));
+}
+
+fn stopped_with_no_cast_held(bard: &mut Bard) {
+    let stop = bard.stop_command();
+    let output = bard.command(&stop);
+    output.result.unwrap();
+    assert_eq!(output.sent, [eq_network_game::spells::titanium_stop_song()]);
+    assert!(matches!(
+        output.events.as_slice(),
+        [ClientEvent::World(WorldEvent::SongStopUnconfirmed {
+            spell_id: None,
+            ..
+        })]
+    ));
+}
+
+#[test]
+fn a_song_from_a_gem_plays_on_after_its_cast_and_stops_once() {
+    let mut bard = Bard::new();
+    nothing_sent(&mut bard, "No song is playing");
+    sung(&mut bard, 0, 202);
+    stopped_with_no_cast_held(&mut bard);
+    nothing_sent(&mut bard, "No song is playing");
+}
+
+#[test]
+fn a_twisted_next_song_is_the_one_playing() {
+    let mut bard = Bard::new();
+    sung(&mut bard, 0, 202);
+    sung(&mut bard, 1, 203);
+    assert_eq!(
+        bard.casting.song,
+        Some(Song {
+            spell: 203,
+            item: false
+        })
+    );
+    stopped_with_no_cast_held(&mut bard);
+}
+
+#[test]
+fn a_fizzled_next_cast_ends_the_song_as_the_program_does() {
+    // The next cast's start takes the song's place, and the server's update
+    // for that spell clears it (read R16b), so the old song does not survive.
+    let mut bard = Bard::new();
+    sung(&mut bard, 0, 202);
+    bard.cast(1, 203);
+    bard.hear(mana_ended(203));
+    assert!(!bard.casting.guard.active());
+    nothing_sent(&mut bard, "No song is playing");
+}
+
+#[test]
+fn the_servers_update_ends_a_song_as_the_program_reads_it() {
+    let mut bard = Bard::new();
+    // Keep-casting set changes nothing.
+    sung(&mut bard, 0, 202);
+    bard.hear(Message::Event(WorldEvent::Spell(SpellUpdate::Mana {
+        spell_id: 202,
+        keep_casting: true,
+    })));
+    assert!(bard.casting.song.is_some());
+    // Spell -1 ends the current song; so does any spell of the class.
+    bard.hear(mana_ended(u32::MAX));
+    assert_eq!(bard.casting.song, None);
+    sung(&mut bard, 0, 202);
+    bard.hear(mana_ended(203));
+    assert_eq!(bard.casting.song, None);
+    // Another class's spell ends a Bard's gem song only when it is the one
+    // playing.
+    sung(&mut bard, 0, 202);
+    bard.hear(mana_ended(999));
+    assert!(bard.casting.song.is_some());
+}
+
+#[test]
+fn an_items_song_not_of_the_class_stops_here_only() {
+    use eq_network_game::inventory::{
+        ClickEffect, ClickKind, Inventory, InventorySlot, InventoryUpdate, ItemUse,
+    };
+    let mut bard = Bard::new();
+    let slot = InventorySlot(22);
+    let mut inventory = Inventory::default();
+    let mut items = Vec::new();
+    for (slot, cast_time_ms) in [(slot, 1000), (InventorySlot(23), 100)] {
+        let mut item = testing::item(slot.0);
+        item.activation.effect = Some(ClickEffect {
+            spell_id: 999,
+            kind: ClickKind::Expendable,
+            required_level: 0,
+            effect_level: 1,
+            cast_time_ms,
+            recast_delay_seconds: 0,
+            recast_type: 0,
+        });
+        item.charges = 1;
+        items.push(item);
+    }
+    inventory.apply(InventoryUpdate::Snapshot(items));
+    bard.world.inventory = inventory.into();
+    let used = |bard: &mut Bard, slot| {
+        let command = ClientCommand::UseItem(ItemUse {
+            request_id: 1,
+            session_id: 5,
+            revision: bard.world.inventory.revision(),
+            slot,
+            target_id: 7,
+            created: Instant::now(),
+        });
+        let output = bard.command(&command);
+        output.result.unwrap();
+        bard.hear(refreshed(10, 999));
+    };
+    // A cast of 100 ms or less is no song (read R16).
+    used(&mut bard, InventorySlot(23));
+    assert_eq!(bard.casting.song, None);
+    used(&mut bard, slot);
+    assert_eq!(
+        bard.casting.song,
+        Some(Song {
+            spell: 999,
+            item: true
+        })
+    );
+    nothing_sent(
+        &mut bard,
+        "A song not of the class stops here only; nothing is sent",
+    );
+    nothing_sent(&mut bard, "No song is playing");
+}
+
+#[test]
+fn only_a_bard_stops_a_song() {
+    let mut bard = Bard::new();
+    sung(&mut bard, 0, 202);
+    let mut player = testing::player(7);
+    player.class = Some(1);
+    player.memorized_spells[0] = Some(202);
+    bard.world.player.admit(player);
+    nothing_sent(&mut bard, "Only Bards can stop a song");
+}
