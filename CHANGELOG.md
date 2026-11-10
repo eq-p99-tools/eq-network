@@ -96,6 +96,10 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     while riding, is not followed, since the host does not tell the session
     when the player rides; a mounted player's request goes out where the
     program refuses it (6.443).
+- Between a beg or a pick and its answer, the Titanium program holds
+  casting and some window actions until the server replies (its
+  reply-pending count, read at 0x9248d0); the session does not yet
+  (checklist 6.452).
 - **Breaking:** a Bard's `/stopsong` follows the Titanium program's song
   state (read R16) and is offered on P99 too. The song is the player's last
   own cast start: every gem cast, and an item cast over 100 ms. No song ends
