@@ -252,7 +252,11 @@ fn no_faster(bound: SpeedInputs, in_force: SpeedInputs) -> SpeedInputs {
     SpeedInputs {
         rate: bound.rate.min(in_force.rate),
         weight: bound.weight.max(in_force.weight),
-        capacity: bound.capacity.min(in_force.capacity),
+        // A capacity of 0 means no encumbrance, so it is no limit.
+        capacity: match (bound.capacity, in_force.capacity) {
+            (0, other) | (other, 0) => other,
+            (bound, in_force) => bound.min(in_force),
+        },
         eqmac_fatigue: match (bound.eqmac_fatigue, in_force.eqmac_fatigue) {
             (Some(bound), Some(in_force)) => Some(eq_network_game::movement::EqMacFatigueInputs {
                 strength: bound.strength.min(in_force.strength),
@@ -551,16 +555,15 @@ impl Motion {
                     );
                 }
                 // The drop's bound is a weight the player is proven to carry
-                // at least, so it bounds the report; without a bound a grant
-                // in force is kept.
-                state = match floor {
-                    Some(weight) => SpeedInputState::Bounded {
-                        inputs: SpeedInputs { weight, ..inputs },
-                        missing: eq_network_game::movement::SpeedInputUnavailable::Inventory,
+                // at least, so it bounds the report. Without a bound the
+                // report is still a bound: the clamp keeps the weight in
+                // force, and a root or a lower rate in it still applies.
+                state = SpeedInputState::Bounded {
+                    inputs: SpeedInputs {
+                        weight: floor.unwrap_or(inputs.weight),
+                        ..inputs
                     },
-                    None => SpeedInputState::Unavailable(
-                        eq_network_game::movement::SpeedInputUnavailable::Inventory,
-                    ),
+                    missing: eq_network_game::movement::SpeedInputUnavailable::Inventory,
                 };
             }
         }
@@ -2507,10 +2510,14 @@ mod tests {
         world.inventory = inventory.clone().into();
         let outcome = testing::run(|out| motion.tick(Instant::now(), &mut world, out));
         outcome.result.unwrap();
+        // No bound to check: the report is taken as a bound, the weight no
+        // lower than in force.
         let stale = report_at(motion.revision, 150);
         let outcome = testing::run(|out| motion.handle(&stale, &mut world, out));
         outcome.result.unwrap();
-        assert_eq!(acceptances(&outcome.events), none);
+        assert!(!withdrew(&outcome.events));
+        assert_eq!(motion.inputs.map(|inputs| inputs.weight), Some(150));
+        assert!(motion.unproven.is_some());
 
         inventory.apply(InventoryUpdate::Snapshot(vec![heavier]));
         assert_eq!(weight(&inventory), Ok(1_500));
@@ -2530,6 +2537,86 @@ mod tests {
             }]
         ));
         assert!(!world.inventory.ground_drop_pending());
+    }
+
+    /// A capacity of 0 means no encumbrance: as a bound it is no limit, so
+    /// it never lifts the encumbrance in force, and a grant at 0 takes a
+    /// bound's proven limit.
+    #[test]
+    fn a_bound_takes_a_zero_capacity_as_no_limit() {
+        let inputs = |capacity| SpeedInputs {
+            eqmac_fatigue: None,
+            rate: 0,
+            weight: 50,
+            capacity,
+        };
+        let capacity = |bound, in_force| no_faster(inputs(bound), inputs(in_force)).capacity;
+        assert_eq!(capacity(0, 100), 100);
+        assert_eq!(capacity(100, 0), 100);
+        assert_eq!(capacity(0, 0), 0);
+        assert_eq!(capacity(80, 100), 80);
+        assert_eq!(capacity(120, 100), 100);
+    }
+
+    /// While a ground drop is pending and no weight bound can be worked out,
+    /// a report over a grant in force is still taken as a bound: a lighter
+    /// weight changes nothing, and a root in it withdraws.
+    #[test]
+    fn a_pending_drop_without_a_bound_never_masks_a_root() {
+        use eq_network_game::inventory::{
+            Inventory, InventorySlot, InventoryUpdate, WeightUnavailable,
+        };
+        use std::num::NonZeroU32;
+
+        let mut held = testing::item(InventorySlot::CURSOR.0);
+        held.details.weight_tenths = 50;
+        held.rules.ground_drop_serial = NonZeroU32::new(17);
+        let mut inventory = Inventory::default();
+        inventory.apply(InventoryUpdate::Snapshot(vec![held.clone()]));
+        let (mut world, mut motion) = motion_with_known_inventory(inventory.clone());
+        let report_at = |revision, report_id, rate, weight| ClientCommand::SpeedInputs {
+            session_id: 5,
+            revision,
+            report_id,
+            state: SpeedInputState::Ready(SpeedInputs {
+                eqmac_fatigue: None,
+                rate,
+                weight,
+                capacity: 200,
+            }),
+        };
+        let first = report_at(motion.revision, 1, 0, 5);
+        testing::run(|out| motion.handle(&first, &mut world, out))
+            .result
+            .unwrap();
+        let full = world.body.motion.as_ref().unwrap().calibration().is_some();
+        assert!(full);
+
+        inventory.apply(InventoryUpdate::GroundDropPending(
+            held.rules.ground_drop_serial.unwrap(),
+        ));
+        inventory.apply(InventoryUpdate::Remove(InventorySlot::CURSOR));
+        assert_eq!(
+            inventory.carried_weight_tenths(eq_network_game::GameDialect::Titanium, 0),
+            Err(WeightUnavailable::Inventory)
+        );
+        world.inventory = inventory.into();
+        assert!(world.inventory.ground_drop_pending());
+        let outcome = testing::run(|out| motion.tick(Instant::now(), &mut world, out));
+        outcome.result.unwrap();
+        assert!(!withdrew(&outcome.events));
+
+        let lighter = report_at(motion.revision, 2, 0, 3);
+        let outcome = testing::run(|out| motion.handle(&lighter, &mut world, out));
+        outcome.result.unwrap();
+        assert!(!withdrew(&outcome.events));
+        assert!(world.body.motion.as_ref().unwrap().calibration().is_some());
+        assert_eq!(motion.inputs.map(|inputs| inputs.weight), Some(5));
+
+        let rooted = report_at(motion.revision, 3, -1000, 3);
+        let outcome = testing::run(|out| motion.handle(&rooted, &mut world, out));
+        outcome.result.unwrap();
+        assert!(withdrew(&outcome.events));
     }
 
     /// A same-zone relocation or a refused transfer's rewind corrects the

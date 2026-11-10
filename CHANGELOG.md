@@ -26,17 +26,20 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   left out where none does, with every term it can prove slower applied (a
   root or a snare it can evaluate, a weight it knows). The host proves the
   terms; the session never lets a bound speed up a grant in force (the rate
-  no higher, the weight no lower, the capacity no higher than in force), and
-  without a grant a bound starts one, so a root that fades while a song runs,
-  or a zone-in with a term unproven from the start, moves at once. Only
-  `Unavailable`, with nothing provable, still waits. A report under a pending
-  ground drop's weight bound is taken at the bound. The first exact report
-  replaces kept or bounded inputs in place, noted in the diagnostics. Root, stun, freeze, death and zone transfer still stop movement
-  as before. The same rules apply on every server type; only the waits are
-  removed. Recording checklist 6.451, a stated excess by Adam's decision of
-  11-10: while the speed inputs are unproven, the last grant is kept without
-  a time limit and can be faster than the official client would allow; where
-  no earlier report exists, unproven terms are left out.
+  no higher, the weight no lower, the capacity no higher than in force, a
+  capacity of 0 meaning no encumbrance and so no limit), and without a grant
+  a bound starts one, so a root that fades while a song runs, or a zone-in
+  with a term unproven from the start, moves at once. Only `Unavailable`,
+  with nothing provable, still waits. A report under a pending ground drop's
+  weight bound is taken at the bound; with a grant in force and no bound to
+  check, it is taken as a bound, so a root in it still applies. The first
+  exact report replaces kept or bounded inputs in place, noted in the
+  diagnostics. Root, stun, freeze, death and zone transfer still stop
+  movement as before. The same rules apply on every server type; only the
+  waits are removed. Recording checklist 6.451, a stated excess by Adam's
+  decision of 11-10: while the speed inputs are unproven, the last grant is
+  kept without a time limit and can be faster than the official client
+  would allow; where no earlier report exists, unproven terms are left out.
 
 - **Breaking:** Titanium class tools (Batch B2). On EQEmu and P99:
   - Fishing is offered on P99 too. Before it is sent, the program's checks
