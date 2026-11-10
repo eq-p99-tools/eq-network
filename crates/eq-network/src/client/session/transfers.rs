@@ -177,7 +177,7 @@ impl Transfers {
         if let Some(position) = offer.local_position(world.zone) {
             // The explicit movement instruction supplies its own absolute
             // landing. Preserve-value sentinels belong to zone-point routes.
-            return relocate(position, world, out);
+            return relocate(position, world);
         }
         if let Some(pending) = world.lifecycle.pending() {
             ensure!(pending == &offer, "conflicting zone transfer offer");
@@ -266,23 +266,23 @@ fn noted(out: &mut Out<'_, '_>, request: &Request, what: &str) -> Result<()> {
 }
 
 /// Moves the player within the zone, as the server asked.
-fn relocate(position: Position, world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
+fn relocate(position: Position, world: &mut World) -> Result<()> {
     ensure!(
         !world.lifecycle.blocks_motion(),
         "same-zone relocation conflicts with death or transfer"
     );
     let (spawn_id, _) = world.player_at().context("relocation before admission")?;
     world.correct_own(position, Instant::now())?;
-    out.log
-        .send(ClientEvent::World(motion::withdrawn(world.session_id)))?;
-    out.log
-        .send(ClientEvent::World(WorldEvent::SameZoneRelocated(
-            zoning::SameZoneRelocation {
-                session_id: world.session_id,
-                spawn_id,
-                position,
-            },
-        )))
+    // The motion feature hears it next and keeps a grant in force (read
+    // R18, the same-zone warp 0x48aaa6); the host hears it after.
+    world.happened(Message::Event(WorldEvent::SameZoneRelocated(
+        zoning::SameZoneRelocation {
+            session_id: world.session_id,
+            spawn_id,
+            position,
+        },
+    )));
+    Ok(())
 }
 
 impl Feature for Transfers {
@@ -330,10 +330,8 @@ impl Feature for Transfers {
                     entry: pad.entry(),
                     landing: pad.landing(),
                 };
-                out.log
-                    .send(ClientEvent::World(motion::withdrawn(world.session_id)))?;
-                out.log
-                    .send(ClientEvent::World(WorldEvent::LocalPadCrossed(crossing)))?;
+                // As for a relocation: the motion feature hears it next.
+                world.happened(Message::Event(WorldEvent::LocalPadCrossed(crossing)));
             }
             Err(error) => out
                 .log
@@ -548,8 +546,11 @@ mod tests {
             heading: 999.0,
         };
         assert_eq!(world.body.position(), Some(landing));
+        // No withdrawal here: the motion feature hears the relocation next
+        // and keeps a grant in force.
+        assert!(arrival.events.is_empty());
         assert!(
-            matches!(arrival.events.as_slice(), [_, ClientEvent::World(WorldEvent::SameZoneRelocated(arrival))]
+            matches!(world.take_news().as_slice(), [Message::Event(WorldEvent::SameZoneRelocated(arrival))]
             if arrival.session_id == 5 && arrival.spawn_id == 7 && arrival.position == landing)
         );
         assert!(world.lifecycle.pending().is_none());
@@ -669,9 +670,10 @@ mod tests {
         assert_eq!(packet.body.len(), 36);
         assert_eq!(&packet.body[..4], &[7, 0, 1, 0]);
         assert_eq!(&packet.body[24..28], &entry.x.to_le_bytes());
+        assert!(crossed.events.is_empty());
         assert!(matches!(
-            crossed.events.as_slice(),
-            [_, ClientEvent::World(WorldEvent::LocalPadCrossed(pad))]
+            world.take_news().as_slice(),
+            [Message::Event(WorldEvent::LocalPadCrossed(pad))]
                 if pad.entry == entry && pad.landing == landing && pad.session_id == 5
         ));
         assert_eq!(world.body.position(), Some(landing));

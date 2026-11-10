@@ -323,6 +323,10 @@ pub(super) struct Motion {
     /// server type says ([`ServerType::spell_landing_flag`](super::servers::ServerType::spell_landing_flag)); none where it
     /// is unchecked, and then no action is taken as a landing.
     spell_landing: Option<u8>,
+    /// Whether the host was last told a positive grant from this feature,
+    /// with nothing withdrawn since. A server's move clears the movement
+    /// session's calibration, so this is what says the grant goes on.
+    grant_in_force: bool,
 }
 
 impl Motion {
@@ -343,6 +347,7 @@ impl Motion {
             encumbered: None,
             sneaking: false,
             hit_points: None,
+            grant_in_force: false,
         }
     }
 
@@ -426,7 +431,8 @@ impl Motion {
         motion.set_jump_factor(speeds.jump_factor);
         let jump_factor = speeds.jump_factor;
         if motion.calibration() == speeds.motion {
-            return Ok(speeds.motion.is_some());
+            self.grant_in_force = speeds.motion.is_some();
+            return Ok(self.grant_in_force);
         }
         let Some(speeds) = speeds.motion else {
             self.withdraw_input(world, out)?;
@@ -434,6 +440,7 @@ impl Motion {
         };
         match motion.calibrate(speeds, Instant::now()) {
             Ok(()) => {
+                self.grant_in_force = true;
                 // A fresh calibration follows a withdrawal the host heard: a
                 // correction, a same-zone relocation or a refused transfer's
                 // rewind lose the calibration without asking for the inputs
@@ -449,6 +456,7 @@ impl Motion {
                 Ok(true)
             }
             Err(error) => {
+                self.grant_in_force = false;
                 out.log
                     .diagnostic(format!("Rejected movement speeds: {error}"))?;
                 Ok(false)
@@ -587,6 +595,7 @@ impl Motion {
 
     /// Withdraws input while retaining bounded passive descent and heartbeats.
     fn withdraw_input(&mut self, world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
+        self.grant_in_force = false;
         self.accepted_inputs = None;
         self.kept_since = None;
         self.unproven = None;
@@ -649,12 +658,21 @@ impl Motion {
 
     /// Whether the player holds a grant from inputs the host reported.
     fn holds_grant(&self, world: &World) -> bool {
-        self.inputs.is_some()
-            && world
-                .body
-                .motion
-                .as_ref()
-                .is_some_and(|motion| motion.calibration().is_some())
+        self.inputs.is_some() && self.grant_in_force && !world.lifecycle.blocks_motion()
+    }
+
+    /// After the server moved the player (a correction to the player's own
+    /// spawn, a same-zone relocation or a local pad crossing), which stopped
+    /// them there: a grant in force goes on at once while the host works out
+    /// new inputs, so autorun and held keys keep driving from the new place
+    /// (read R18: 0x451aba and the same-zone warp 0x48aaa6 touch no input).
+    /// Without a grant the inputs are asked for as before.
+    fn server_moved(&mut self, world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
+        if !self.holds_grant(world) {
+            return self.require_inputs(world, out);
+        }
+        self.keep_and_ask(world);
+        self.grant(world, out)
     }
 
     /// Asks the host for the inputs again after a change they depend on. A
@@ -1026,13 +1044,17 @@ impl Feature for Motion {
             WorldEvent::Position {
                 spawn_id, position, ..
             } if world.is_player(*spawn_id) => {
-                let held = self.holds_grant(world);
                 world.correct_own(*position, Instant::now())?;
-                if !held {
-                    return self.require_inputs(world, out);
-                }
-                self.keep_and_ask(world);
-                self.grant(world, out)
+                self.server_moved(world, out)
+            }
+            // The transfers feature has already moved the player.
+            WorldEvent::SameZoneRelocated(relocation)
+                if relocation.session_id == world.session_id =>
+            {
+                self.server_moved(world, out)
+            }
+            WorldEvent::LocalPadCrossed(crossing) if crossing.session_id == world.session_id => {
+                self.server_moved(world, out)
             }
             // What the player's speeds depend on; the next tick grants them.
             WorldEvent::HitPoints {
@@ -1057,6 +1079,7 @@ impl Feature for Motion {
             }
             // The transfers feature stops the body when the player dies.
             event if world.owns_death(event) => {
+                self.grant_in_force = false;
                 self.kept_since = None;
                 self.unproven = None;
                 self.accepted_inputs = None;
@@ -2259,6 +2282,64 @@ mod tests {
     }
 
     /// The speed the session grants the player now, if any.
+    /// A same-zone relocation (summon, GM move) or a local pad crossing,
+    /// which the transfers feature has already made, keeps a grant in force
+    /// as a correction does: no withdrawal, the calibration again at once,
+    /// the inputs asked for again (read R18, the same-zone warp 0x48aaa6).
+    /// Without a grant both wait for the host as before.
+    #[test]
+    fn a_relocation_or_pad_crossing_keeps_a_grant_in_force() {
+        let landing = |world: &World| Position {
+            x: world.body.position().unwrap().x + 40.0,
+            ..world.body.position().unwrap()
+        };
+        let moves = |position: Position| {
+            [
+                WorldEvent::SameZoneRelocated(eq_network_game::zoning::SameZoneRelocation {
+                    session_id: 5,
+                    spawn_id: 7,
+                    position,
+                }),
+                WorldEvent::LocalPadCrossed(eq_network_game::zoning::LocalPadCrossing {
+                    session_id: 5,
+                    spawn_id: 7,
+                    entry: position,
+                    landing: position,
+                }),
+            ]
+        };
+        for index in 0..2 {
+            // With a grant in force.
+            let (mut world, mut motion) = eqmac_admitted();
+            testing::run_on(EQMAC, |out| motion.handle(&report(0, 0), &mut world, out))
+                .result
+                .unwrap();
+            let full = world_speed(&world);
+            assert!(full.is_some());
+            let position = landing(&world);
+            world.correct_own(position, Instant::now()).unwrap();
+            let revision = motion.revision;
+            let event = Message::Event(moves(position)[index].clone());
+            let output = testing::run_on(EQMAC, |out| motion.observe(&event, &mut world, out));
+            output.result.unwrap();
+            assert!(!withdrew(&output.events), "{index}: {:?}", output.events);
+            assert_eq!(world_speed(&world), full, "{index}");
+            assert_eq!(motion.revision, revision + 1, "{index}");
+            assert_eq!(world.body.position(), Some(position));
+            // Without one: the host is asked and movement waits.
+            let (mut world, mut motion) = eqmac_admitted();
+            let position = landing(&world);
+            world.correct_own(position, Instant::now()).unwrap();
+            let revision = motion.revision;
+            let event = Message::Event(moves(position)[index].clone());
+            let output = testing::run_on(EQMAC, |out| motion.observe(&event, &mut world, out));
+            output.result.unwrap();
+            assert!(withdrew(&output.events), "{index}: {:?}", output.events);
+            assert_eq!(world_speed(&world), None, "{index}");
+            assert_eq!(motion.revision, revision + 1, "{index}");
+        }
+    }
+
     fn world_speed(world: &World) -> Option<f32> {
         world
             .body

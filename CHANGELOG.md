@@ -17,8 +17,12 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   pulse), a buff list, a level, a spell landing, an EqMac fatigue change, a
   change in belongings and a server's correction now ask the host for new
   inputs while the grant in force goes on: no `MotionState` withdrawal and no
-  stop sent. A correction still moves the player and stops them there, then
-  grants the speeds in force again at once. With a grant in force, an
+  stop sent. A correction, a same-zone relocation (a summon or GM move) and
+  a local pad crossing take one path: they move the player and stop them
+  there, then grant the speeds in force again at once, with no withdrawal
+  (read R18: 0x451aba and the same-zone warp 0x48aaa6 touch no input).
+  `SameZoneRelocated` and `LocalPadCrossed` now reach the host after the
+  grant rather than after a withdrawal; without a grant both still wait. With a grant in force, an
   `Unavailable` answer, or none, keeps the last inputs in force with no time
   limit, noted once in the diagnostics. `SpeedInputState` gains
   `Bounded { inputs, missing }`: the inputs from every term the host can
