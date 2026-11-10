@@ -7,6 +7,28 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Breaking:** Titanium lifts. `doors::titanium` holds the program's door
+  rules: vertical travel and speeds by open type, the type 15 and 78-81
+  slides, floor and wall solidity, the client's own return times, and the
+  +0x66 field (the param's low 16 bits). `Lifts` steps each vertical door
+  from the received updates, and the session keeps one for the zone.
+  `MovementRequest` gains `support`, a non-exhaustive `Support`
+  (`Support::Door` today) set with `MovementRequest::supported_by`; while a
+  sample names the same floor door, the rider may rise in all as far as it
+  has risen since they named it (`MovementGuard::lift_since`,
+  `MovementGuard::allow_lift_rise`, `MotionSession::allow_lift_rise`), and
+  only a sample naming a support spends any of it. `Lifts::returns_at` and
+  `Lifts::sinks` give a vertical door's own return and descent. Types 40 and 45 return by a click with
+  no player, `Request::ReturnDoor`. A door's click reach runs in 3-D to its
+  origin where it stands now (`Doors::check_click_raised`), within 20. The
+  program measures from the clicked point on the door as drawn to the
+  player, within the player's size and 20 (0x4906c5, 0x435b55, 0x644368;
+  read R16b, R16e), so ours is short of it where a part of the model is
+  nearer than the origin, and by the size (checklist 6.436). `WorldEvent::Entered` gains `zone_id`
+  (serde default 0), the zone number the program's door rules name. The
+  lift rider radius and a hinged door's return start are inferred
+  (recording checklist 6.424, 6.426).
+
 - **Breaking:** Titanium backs up in water, unless ducking or sneaking, only
   by the buffs' speed modifier (0x4a2bd8-0x4a2c06), so not at all without
   one; a slow that would go the other way creeps at 0.01, and -1000 or less

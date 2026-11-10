@@ -1,5 +1,43 @@
 # API and integration contracts
 
+## Titanium lifts and door mechanisms
+
+`doors::titanium` holds Titanium's own door rules, read from `eqgame.exe`:
+`Vertical::of` (rise or sink, travel and speeds by open type, 0x4368b3), `Slide::of`
+(type 15 and 78-81, 0x4366e8), `Solidity::of` (whether the floor sweep stands a
+player on a door, 0x490370, and whether its wall stops them, 0x42ce5d),
+`returns_after` and `returns_at` (the client's own return, 0x48faa5) and `field`
+(door +0x66, the param's low 16 bits as an i16). The field stays as spawned; the
+server message that changes it later (0x45e626) is not traced. `Solidity` is a
+Titanium rule only; another generation keeps its own (`Solidity::BOTH`).
+
+`Lifts` steps every vertical door from the received spawn and actions with the
+program's rule, including the client's own return, so the session and a frontend
+that follow the same updates agree on a door's height. Motion starts only on the
+server's 0x700d action; a click sends 0x043b and predicts nothing. The return is
+local and sends nothing, except for types 40 and 45, whose return the session sends
+as `Request::ReturnDoor`: 0x043b with the door id, 0xfe and zeros, naming no player
+(0x490b20, read R1c).
+
+`MovementRequest::support` names what the frontend's floor sweep stands the
+player on, as a `Support` (non-exhaustive; `Support::Door(id)` today), set with
+`MovementRequest::supported_by`. While a request names the same lift, the session
+keeps an account with it: the rider may rise in all as far as the lift has risen
+since they first named it, less what they have risen while naming it, so a
+frontend whose lift runs behind the session's spends late what it did not spend
+early and never rises past the lift (`MovementGuard::lift_since`,
+`MovementGuard::allow_lift_rise`, `Lifts::carry`). The door must be a floor the
+program stands players on, with the last accepted position within `RIDER_REACH`
+(310 units in 3D) of where the door stood at that sample, so a lift taller than
+the reach carries its rider all the way. A request naming nothing, another door, or a lift that
+sank over the interval closes the account; only a request that names a support
+spends any of it. The rise composes with the ordinary grant: horizontal motion
+keeps its speed budget, a still rider is passive, and a lift carries (or holds
+at its top) a player whose input is withdrawn only straight up. Nothing
+lift-specific is sent; the risen height goes out by the generation's ordinary
+gate. `Lifts::returns_at` and `Lifts::sinks` give a vertical door's own return
+time, from where it stood, and whether it sank over an interval.
+
 ## Friends who, guild requests, splitting and banker change
 
 `EQEmu` and Project 1999 offer `Capability::FriendsWho`, `GuildRoster`,

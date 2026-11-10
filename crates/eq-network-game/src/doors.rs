@@ -1,6 +1,7 @@
 //! Door definitions and server movement instructions.
 
 pub mod eqmac;
+pub mod titanium;
 use crate::{command::EncodedCommand, world::Position};
 use anyhow::{ensure, Result};
 use serde::Serialize;
@@ -139,13 +140,38 @@ impl Doors {
         position: Position,
         reach: crate::reach::Reach,
     ) -> Result<()> {
+        self.check_click_raised(id, player_id, position, reach, 0.0)
+    }
+
+    /// [`Self::check_click`] for a door standing `raised` above its placed
+    /// height now, as a Titanium lift does ([`titanium::Lifts::offset`]):
+    /// the reach runs to the door's origin where it stands now. The program
+    /// measures from the clicked point on the door as drawn to the player,
+    /// within the player's size and 20 (0x4906c5, 0x435b55, 0x644368; read
+    /// R16b, R16e); this check, without the clicked point or the size, is
+    /// short of that rule (recording checklist 6.436).
+    ///
+    /// # Errors
+    /// As [`Self::check_click`].
+    pub fn check_click_raised(
+        &self,
+        id: u8,
+        player_id: u16,
+        position: Position,
+        reach: crate::reach::Reach,
+        raised: f32,
+    ) -> Result<()> {
         ensure!(id != STATIC_ID, "a static object cannot be used");
         let door = self
             .doors
             .get(&id)
             .ok_or_else(|| anyhow::anyhow!("door is no longer available"))?;
         ensure!(player_id != 0, "player position is unavailable");
-        ensure!(reach.admits(position, door.position), OutOfReach);
+        let now = Position {
+            z: door.position.z + raised,
+            ..door.position
+        };
+        ensure!(reach.admits(position, now), OutOfReach);
         Ok(())
     }
     /// Current server-provided definitions in stable door-ID order. Static

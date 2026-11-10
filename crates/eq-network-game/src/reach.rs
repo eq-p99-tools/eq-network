@@ -64,8 +64,14 @@ pub const CONTAINER_CHECK: Duration = Duration::from_millis(500);
 
 /// The Titanium program's reaches.
 pub const TITANIUM: Reaches = Reaches {
-    // 20 (0x644368) plus two size terms, at most (s8a T6); the distance
-    // routine's dimension is unread, so height counts as before.
+    // The use key and a left click (0x4906c5, 0x435b55) measure in 3-D from
+    // the point the click ray hit on the door as drawn to the player, within
+    // the player's size and 20 (0x644368; read R16b, R16e); only walking
+    // into a door of types 50, 57, 35 or 115 and up measures in 2-D. Ours
+    // measures in 3-D to the door's origin where it stands now, within 20:
+    // inside the program's rule where the origin is on the model, and short
+    // of it where a part of the model is nearer than the origin, and by the
+    // player's size (recording checklist 6.436).
     doors: Reach {
         distance: 20.0,
         flat: false,

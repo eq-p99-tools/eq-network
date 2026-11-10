@@ -7,7 +7,7 @@ use super::{
 };
 use anyhow::{anyhow, ensure, Result};
 use eq_network_game::{
-    doors::{eqmac, DoorUpdate, OutOfReach},
+    doors::{eqmac, titanium, DoorUpdate, OutOfReach},
     inventory::InventorySlot,
     message::Message,
     request::Request,
@@ -24,6 +24,8 @@ pub(super) struct Doors {
     dialect: GameDialect,
     /// Local ordinary-hinge motion; sending a request never changes it.
     hinges: BTreeMap<u8, eqmac::Hinge>,
+    /// Titanium doors whose own return is a click to the server, and when.
+    return_clicks: BTreeMap<u8, Instant>,
 }
 
 impl Default for Doors {
@@ -33,6 +35,7 @@ impl Default for Doors {
             changed_at: Instant::now(),
             dialect: GameDialect::Titanium,
             hinges: BTreeMap::new(),
+            return_clicks: BTreeMap::new(),
         }
     }
 }
@@ -47,8 +50,12 @@ impl Doors {
         }
     }
 
-    fn apply(&mut self, update: &DoorUpdate, now: Instant) {
+    fn apply(&mut self, update: &DoorUpdate, now: Instant, world: &mut World) {
         self.table.apply(update);
+        if self.dialect == GameDialect::Titanium {
+            self.follow(update, now, world);
+            return;
+        }
         if self.dialect != GameDialect::EqMac {
             return;
         }
@@ -78,6 +85,36 @@ impl Doors {
         }
     }
 
+    /// Follows Titanium's own door motion and returns from the received update.
+    fn follow(&mut self, update: &DoorUpdate, now: Instant, world: &mut World) {
+        match update {
+            DoorUpdate::RemoveAll => {
+                world.lifts.clear();
+                self.return_clicks.clear();
+            }
+            DoorUpdate::Spawn(doors) => {
+                for door in doors {
+                    world.lifts.spawned(door, now);
+                    // A type 40 or 45 door spawned away from its rest
+                    // schedules no return click: whether the program sends
+                    // one then is unread, and sending none is the cautious
+                    // side (recording checklist 6.423).
+                    self.return_clicks.remove(&door.id);
+                }
+            }
+            DoorUpdate::Move { id, .. } => {
+                let Some(door) = self.table.entries().get(id) else {
+                    return;
+                };
+                world.lifts.moved(door, now);
+                match titanium::returns_at(door, now).filter(|_| titanium::returns_by_click(door)) {
+                    Some(at) => self.return_clicks.insert(*id, at),
+                    None => self.return_clicks.remove(id),
+                };
+            }
+        }
+    }
+
     /// The request for a door in reach, clicked since the door table last
     /// changed.
     fn click(
@@ -96,8 +133,9 @@ impl Doors {
         let (spawn_id, position) = world
             .player_at()
             .ok_or_else(|| anyhow!("player is unavailable"))?;
+        let raised = world.lifts.offset(*door_id, Instant::now()).unwrap_or(0.0);
         self.table
-            .check_click(*door_id, spawn_id, position, reach)?;
+            .check_click_raised(*door_id, spawn_id, position, reach, raised)?;
         if self.dialect == GameDialect::EqMac {
             let door = self
                 .table
@@ -138,9 +176,9 @@ impl Feature for Doors {
         vec![Capability::Doors]
     }
 
-    fn admit(&mut self, message: &Message, _world: &mut World) -> Result<()> {
+    fn admit(&mut self, message: &Message, world: &mut World) -> Result<()> {
         if let Message::Event(WorldEvent::Doors(update)) = message {
-            self.apply(update, Instant::now());
+            self.apply(update, Instant::now(), world);
         }
         Ok(())
     }
@@ -187,21 +225,31 @@ impl Feature for Doors {
     fn observe(
         &mut self,
         message: &Message,
-        _world: &mut World,
+        world: &mut World,
         _out: &mut Out<'_, '_>,
     ) -> Result<()> {
         if let Message::Event(WorldEvent::Doors(update)) = message {
             if matches!(update, DoorUpdate::Spawn(_) | DoorUpdate::RemoveAll) {
                 self.changed_at = Instant::now();
             }
-            self.apply(update, Instant::now());
+            self.apply(update, Instant::now(), world);
         }
         Ok(())
     }
 
-    fn tick(&mut self, now: Instant, _world: &mut World, _out: &mut Out<'_, '_>) -> Result<()> {
+    fn tick(&mut self, now: Instant, _world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
         for hinge in self.hinges.values_mut() {
             hinge.tick(now);
+        }
+        let due: Vec<u8> = self
+            .return_clicks
+            .iter()
+            .filter(|(_, at)| **at <= now)
+            .map(|(id, _)| *id)
+            .collect();
+        for id in due {
+            self.return_clicks.remove(&id);
+            out.request(&Request::ReturnDoor(id))?;
         }
         Ok(())
     }
@@ -213,6 +261,102 @@ mod tests {
     use super::*;
     use eq_network_game::{doors::Door, world::Position};
     use std::time::Duration;
+
+    fn titanium_door(id: u8, open_type: u8, parameter: u32) -> Door {
+        Door {
+            id,
+            model: "LIFT".into(),
+            position: Position::default(),
+            incline: 0,
+            size: 100,
+            open_type,
+            state_at_spawn: 0,
+            invert_state: 0,
+            parameter,
+            action: None,
+        }
+    }
+
+    #[test]
+    fn titanium_follows_its_lifts_and_returns_forty_and_forty_five_by_a_click() {
+        let mut doors = Doors::default();
+        let mut world = World::new(5);
+        let spawn = WorldEvent::Doors(DoorUpdate::Spawn(vec![
+            titanium_door(1, 59, 45),
+            titanium_door(2, 40, 300),
+            titanium_door(3, 50, 300),
+        ]));
+        doors.admit(&Message::Event(spawn), &mut world).unwrap();
+        let start = Instant::now();
+        assert_eq!(world.lifts.offset(1, start), Some(0.0));
+        for id in 1..=3 {
+            let moved = WorldEvent::Doors(DoorUpdate::Move { id, action: 2 });
+            let outcome =
+                testing::run(|out| doors.observe(&Message::Event(moved), &mut world, out));
+            outcome.result.unwrap();
+        }
+        let later = Instant::now() + Duration::from_secs(1);
+        assert!(world.lifts.offset(1, later).unwrap() > 8.9);
+        // Type 40's own return 300 ms after it opens is a click naming no
+        // player; type 50's is a local move and sends nothing.
+        let early =
+            testing::run(|out| doors.tick(start + Duration::from_millis(100), &mut world, out));
+        early.result.unwrap();
+        assert_eq!(early.sent, []);
+        let due = testing::run(|out| doors.tick(later, &mut world, out));
+        due.result.unwrap();
+        assert_eq!(
+            due.sent,
+            [eq_network_game::doors::titanium::return_click(2)]
+        );
+        let again = testing::run(|out| doors.tick(later + Duration::from_secs(1), &mut world, out));
+        again.result.unwrap();
+        assert_eq!(again.sent, []);
+        let removed = WorldEvent::Doors(DoorUpdate::RemoveAll);
+        testing::run(|out| doors.observe(&Message::Event(removed), &mut world, out))
+            .result
+            .unwrap();
+        assert_eq!(world.lifts.offset(1, later), None);
+    }
+
+    #[test]
+    fn a_lift_is_clicked_where_it_stands_now() {
+        let mut doors = Doors::default();
+        let mut world = World::new(5);
+        // A lift spawned raised, 45 up.
+        let mut lift = titanium_door(1, 59, 45);
+        lift.state_at_spawn = 1;
+        let spawn = WorldEvent::Doors(DoorUpdate::Spawn(vec![lift]));
+        doors.admit(&Message::Event(spawn), &mut world).unwrap();
+        let click = ClientCommand::ClickDoor {
+            session_id: 5,
+            door_id: 1,
+            created: Instant::now(),
+        };
+        let at = |z: f32| {
+            let mut player = testing::player(7);
+            player.position.z = z;
+            player
+        };
+        let at = |x: f32, z: f32| {
+            let mut player = at(z);
+            player.position.x = x;
+            player
+        };
+        // Reach runs to where it stands now: used from its top, not from its
+        // base, halfway, or 21 units across its top.
+        for (x, z, sent) in [
+            (0.0, 0.0, 0),
+            (0.0, 45.0, 1),
+            (0.0, 22.5, 0),
+            (21.0, 45.0, 0),
+        ] {
+            world.player.admit(at(x, z));
+            let clicked = testing::run(|out| doors.handle(&click, &mut world, out));
+            clicked.result.unwrap();
+            assert_eq!(clicked.sent.len(), sent, "from {x}, {z}");
+        }
+    }
 
     #[test]
     fn each_generation_reaches_a_door_as_its_program_does() {

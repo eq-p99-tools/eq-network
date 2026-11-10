@@ -654,6 +654,26 @@ impl MotionSession {
         Ok(())
     }
 
+    /// When the rider's account with lift `door` began
+    /// ([`super::MovementGuard::lift_since`]).
+    #[must_use]
+    pub fn lift_since(&self, door: u8) -> Instant {
+        self.guard.lift_since(door)
+    }
+
+    /// Lets the next sample also rise what is left of how far the lift its
+    /// request names has risen ([`super::MovementGuard::allow_lift_rise`]).
+    pub fn allow_lift_rise(&mut self, lift: Option<(u8, f32)>) {
+        self.guard.allow_lift_rise(lift);
+    }
+
+    /// When the last accepted sample was made, where the next one's interval
+    /// starts.
+    #[must_use]
+    pub const fn sampled(&self) -> Instant {
+        self.guard.sampled()
+    }
+
     /// Stops voluntary motion at the current owner point without revoking
     /// speed prerequisites, a prior jump, gravity or server corrections.
     /// Replace any paced moving update with its stationary stop; the normal
@@ -664,7 +684,8 @@ impl MotionSession {
     }
 
     /// Whether a proposal contains only passive vertical motion. A rise
-    /// must fit a jump already announced by this owner; no new climb or
+    /// must fit a jump already announced by this owner, or the lift the
+    /// request stands on ([`Self::allow_lift_rise`]); no new climb or
     /// jump allowance is created. Normal sample checks still apply.
     #[must_use]
     #[allow(
@@ -695,7 +716,7 @@ impl MotionSession {
             };
             self.guard.jump_rise(from, to)
         });
-        request.position.z <= self.position.z + rise
+        request.position.z <= self.position.z + rise + self.guard.lift_rise_for(request)
     }
 
     /// Resumes stationary heartbeats after a denied transfer; walking stays disabled.
@@ -760,11 +781,19 @@ impl MotionSession {
         // calibration, turn, climb, or horizontal rounding allowance is granted.
         if self.calibration.is_none() {
             ensure!(
-                request.mode == MovementMode::Fall
-                    && request.position.x == self.position.x
+                request.position.x == self.position.x
                     && request.position.y == self.position.y
                     && request.position.heading == self.position.heading
-                    && request.position.z <= self.position.z,
+                    && match request.mode {
+                        MovementMode::Fall => request.position.z <= self.position.z,
+                        // A lift may still carry a player who can't move,
+                        // and one stopped at the top holds them there.
+                        MovementMode::Forward => {
+                            request.support.is_some()
+                                && request.position.z <= self.position.z + self.guard.lift_rise()
+                        }
+                        _ => false,
+                    },
                 "player input is withdrawn; only vertical descent is allowed"
             );
         }
@@ -1150,6 +1179,9 @@ impl MotionSession {
         self.moving = false;
     }
 }
+#[cfg(test)]
+#[path = "lift_tests.rs"]
+mod lift_tests;
 #[cfg(test)]
 #[path = "session_tests.rs"]
 mod tests;

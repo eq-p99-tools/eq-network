@@ -844,6 +844,7 @@ fn admit(
             choices: features.choices(),
             session_id: world.session_id,
             zone: zone.name.clone(),
+            zone_id: world.zone.0,
             player: Box::new(player),
             far_clip: zone.far_clip,
             spell_landing_flag: features.spell_landing_flag,
@@ -1257,6 +1258,7 @@ mod tests {
                 session_id,
                 position,
                 created,
+                support: None,
             }),
             ClientCommand::OfferTrade {
                 session_id,
@@ -1593,6 +1595,7 @@ mod tests {
                     player: Box::new(player),
                     far_clip: None,
                     spell_landing_flag: None,
+                    zone_id: 0,
                 }))?;
                 let commands = [LiquidHazard::Drowning, LiquidHazard::Lava].map(|hazard| {
                     ClientCommand::LiquidDamage {
@@ -1645,6 +1648,7 @@ mod tests {
                 player: Box::new(player),
                 far_clip: None,
                 spell_landing_flag: None,
+                zone_id: 0,
             }))?;
             let liquid = |hazard, revision, position, sampled_at| ClientCommand::LiquidDamage {
                 session_id: 5,

@@ -97,6 +97,7 @@ fn request(created: Instant, position: Position) -> ClientCommand {
         heading: eq_network_game::movement::HeadingUpdate::Rate,
         position,
         created,
+        support: None,
     })
 }
 

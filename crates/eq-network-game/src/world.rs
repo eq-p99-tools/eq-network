@@ -1195,6 +1195,11 @@ pub enum WorldEvent {
         session_id: u64,
         /// Zone asset short name.
         zone: String,
+        /// The zone's number, from the player's profile: some of the
+        /// program's rules, such as which doors a player stands on, name
+        /// zones by it. 0 where the stream predates it.
+        #[serde(default)]
+        zone_id: u16,
         /// Initial character state.
         player: Box<PlayerState>,
         /// The zone's far clip distance. The official client draws and targets
