@@ -225,6 +225,9 @@ pub(in crate::client) struct World {
     pub(super) own_pet: Option<eq_network_game::pets::PetIdentity>,
     /// The zone's objects, which only the ground objects feature changes.
     pub(super) objects: ZoneObjects,
+    /// The zone's vertical doors as Titanium steps them, which only the doors
+    /// feature changes.
+    pub(super) lifts: eq_network_game::doors::titanium::Lifts,
     /// The world container asked for or open, which only the tradeskills
     /// feature changes.
     pub(super) container: OpenContainer,
@@ -256,6 +259,7 @@ impl World {
             gravity: None,
             packets: 0,
             spawns: Spawns::default(),
+            lifts: eq_network_game::doors::titanium::Lifts::default(),
             sight: super::sight::Sight::default(),
             exchange: Exchanging::default(),
             target: super::targeting::Target::default(),

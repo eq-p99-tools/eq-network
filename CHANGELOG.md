@@ -7,6 +7,18 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Breaking:** Titanium lifts. `doors::titanium` holds the program's door
+  rules: vertical travel and speeds by open type, the type 15 and 78-81
+  slides, floor and wall solidity, the client's own return times, and the
+  +0x66 field (the param's low 16 bits). `Lifts` steps each vertical door
+  from the received updates, and the session keeps one for the zone.
+  `MovementRequest` gains `support`, the door underfoot
+  (`MovementRequest::on_door`); a sample naming a floor door that rose may
+  rise as far as it did (`MovementGuard::allow_lift_rise`,
+  `MotionSession::allow_lift_rise`). Types 40 and 45 return by a click with
+  no player, `Request::ReturnDoor`. The lift rider radius and a hinged
+  door's return start are inferred (recording checklist 6.424, 6.426).
+
 - **Breaking:** Titanium backs up in water, unless ducking or sneaking, only
   by the buffs' speed modifier (0x4a2bd8-0x4a2c06), so not at all without
   one; a slow that would go the other way creeps at 0.01, and -1000 or less

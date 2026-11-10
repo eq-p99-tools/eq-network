@@ -620,6 +620,13 @@ impl Motion {
             );
         };
         let (to, from) = (request.position, motion.position());
+        // A lift the client stands the player on may carry them up as far as
+        // it rose since the last sample.
+        motion.allow_lift_rise(request.support.map_or(0.0, |door| {
+            world
+                .lifts
+                .carry(door, world.zone.0, from, motion.sampled(), request.created)
+        }));
         let may_walk_while_stunned =
             !request.mode.is_water_motion() && motion.options().walk_while_stunned;
         if let Some(reason) = world.control.motion_refusal(

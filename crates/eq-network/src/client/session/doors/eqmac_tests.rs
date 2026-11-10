@@ -30,7 +30,7 @@ fn setup() -> (Doors, World) {
     let mut inventory = Inventory::default();
     inventory.apply(InventoryUpdate::Snapshot(Vec::new()));
     world.inventory = inventory.into();
-    owner.apply(&DoorUpdate::Spawn(vec![door()]), Instant::now());
+    owner.apply(&DoorUpdate::Spawn(vec![door()]), Instant::now(), &mut world);
     (owner, world)
 }
 
@@ -101,7 +101,7 @@ fn received_motion_blocks_repeated_use_until_the_local_hinge_settles() {
         let wire = super::super::servers::server_type(protocol).wire();
         let (mut owner, mut world) = setup();
         let started = Instant::now();
-        owner.apply(&DoorUpdate::Move { id: 7, action: 2 }, started);
+        owner.apply(&DoorUpdate::Move { id: 7, action: 2 }, started, &mut world);
         let outcome = testing::run_on(wire, |out| owner.handle(&click(), &mut world, out));
         outcome.result.unwrap();
         assert_eq!(outcome.sent, []);
@@ -151,7 +151,11 @@ fn special_unknown_stale_and_held_item_requests_are_refused_without_a_packet() {
         for open_type in [9, 54, 55, 56, 57, 58, 120, 255] {
             let mut definition = door();
             definition.open_type = open_type;
-            owner.apply(&DoorUpdate::Spawn(vec![definition]), Instant::now());
+            owner.apply(
+                &DoorUpdate::Spawn(vec![definition]),
+                Instant::now(),
+                &mut world,
+            );
             let outcome = testing::run_on(wire, |out| owner.handle(&click(), &mut world, out));
             outcome.result.unwrap();
             assert_eq!(outcome.sent, []);
@@ -168,7 +172,7 @@ fn special_unknown_stale_and_held_item_requests_are_refused_without_a_packet() {
             matches!(&outcome.events[..], [ClientEvent::World(DoorAction { error: Some(reason), .. })] if reason == "stale door request")
         );
         owner.changed_at = Instant::now();
-        owner.apply(&DoorUpdate::Spawn(vec![door()]), Instant::now());
+        owner.apply(&DoorUpdate::Spawn(vec![door()]), Instant::now(), &mut world);
         let mut inventory = Inventory::default();
         inventory.apply(InventoryUpdate::Snapshot(vec![testing::item(30)]));
         world.inventory = inventory.into();

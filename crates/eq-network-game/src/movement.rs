@@ -239,6 +239,10 @@ pub struct MovementRequest {
     pub heading: HeadingUpdate,
     /// Local creation time; queued input expires instead of replaying after a stall.
     pub created: Instant,
+    /// The door the client's floor sweep stands the player on, if any: a
+    /// rising lift may carry the player up with it
+    /// ([`MovementGuard::allow_lift_rise`]).
+    pub support: Option<u8>,
 }
 
 impl MovementRequest {
@@ -256,7 +260,15 @@ impl MovementRequest {
             position,
             heading: HeadingUpdate::Rate,
             created,
+            support: None,
         }
+    }
+
+    /// The same request, standing on door `door`.
+    #[must_use]
+    pub const fn on_door(mut self, door: u8) -> Self {
+        self.support = Some(door);
+        self
     }
 }
 
@@ -471,6 +483,9 @@ pub struct MovementGuard {
     /// When the latest jump the session announced started, until gravity
     /// has spent its speed.
     jumped_at: Option<JumpStart>,
+    /// How far the next sample may rise with the lift its request names
+    /// ([`Self::allow_lift_rise`]).
+    lift_rise: f32,
     last_shoreline: Option<Instant>,
     shoreline: Option<ShorelineArc>,
     shoreline_velocity: Option<[f32; 3]>,
@@ -513,6 +528,7 @@ impl MovementGuard {
             jump_factor: 1.0,
             launch_factor: 1.0,
             jumped_at: None,
+            lift_rise: 0.0,
             last_shoreline: None,
             shoreline: None,
             shoreline_velocity: None,
@@ -589,6 +605,34 @@ impl MovementGuard {
         if per_step.is_finite() && per_step > 0.0 {
             self.climb = Some(per_step);
         }
+    }
+
+    /// Lets the next sample also rise `rise` units, with rounding, on top of
+    /// its own climb or jump: how far the lift its request names as
+    /// underfoot rose over the sample's interval, which the owner of the
+    /// zone's doors works out ([`crate::doors::titanium::Lifts::carry`]). The
+    /// program's floor sweep stands a rider on a rising lift and sends
+    /// nothing of its own (read R1). Any other value than a positive number
+    /// allows none.
+    pub fn allow_lift_rise(&mut self, rise: f32) {
+        self.lift_rise = if rise.is_finite() && rise > 0.0 {
+            rise + 0.01
+        } else {
+            0.0
+        };
+    }
+
+    /// The rise [`Self::allow_lift_rise`] allows the next sample.
+    #[must_use]
+    pub const fn lift_rise(&self) -> f32 {
+        self.lift_rise
+    }
+
+    /// When the last accepted sample was made: the start of the next one's
+    /// interval.
+    #[must_use]
+    pub const fn sampled(&self) -> Instant {
+        self.sampled
     }
 
     /// Lets a fall sample descend as fast as the client generation's own
@@ -837,7 +881,7 @@ impl MovementGuard {
                 ((to - elapsed).max(0.0), to)
             }
         });
-        let rise = since_jump.map_or(0.0, |(from, to)| self.jump_rise(from, to));
+        let rise = since_jump.map_or(0.0, |(from, to)| self.jump_rise(from, to)) + self.lift_rise;
         let vertical = if request.mode.is_water_motion() {
             true // The single 3D budget already checks vertical movement.
         } else if self.flying {
@@ -885,6 +929,7 @@ impl MovementGuard {
     }
 
     fn record_move(&mut self, request: &MovementRequest) {
+        self.lift_rise = 0.0;
         self.position = request.position;
         self.sampled = request.created;
         self.clear_shoreline();
@@ -967,6 +1012,7 @@ mod tests {
                 ..Position::default()
             },
             created: now,
+            support: None,
         };
         assert!(guard.accept(&request, now).is_err());
         request.position.z = 2.0;
@@ -989,6 +1035,7 @@ mod tests {
                 ..Position::default()
             },
             created: now,
+            support: None,
         };
         // Without the player's climb, one riser a sample however long.
         assert!(guard.accept(&request, now).is_err());
@@ -1041,6 +1088,7 @@ mod tests {
                 ..Position::default()
             },
             created: now,
+            support: None,
         };
         // Grounded modes still refuse the drop.
         assert!(guard.accept(&request, now).is_err());
@@ -1065,6 +1113,7 @@ mod tests {
                 ..Position::default()
             },
             created,
+            support: None,
         }
     }
 
@@ -1155,6 +1204,7 @@ mod tests {
                 ..Position::default()
             },
             created,
+            support: None,
         }
     }
 
@@ -1242,6 +1292,7 @@ mod tests {
                 ..Position::default()
             },
             created: now,
+            support: None,
         };
         assert!(guard.accept(&request, now).is_err());
         request.position.x = 0.5;
@@ -1262,6 +1313,7 @@ mod tests {
                 ..Position::default()
             },
             created: start,
+            support: None,
         };
         assert!(guard.accept(&request, start).is_err());
         guard
@@ -1300,6 +1352,7 @@ mod tests {
                 ..Position::default()
             },
             created: now,
+            support: None,
         };
         assert!(guard.accept(&request, now).is_err());
         request.position.x = 0.5;
@@ -1338,7 +1391,8 @@ mod tests {
                         x: 10.0,
                         ..Position::default()
                     },
-                    created: now
+                    created: now,
+                    support: None,
                 },
                 now
             )

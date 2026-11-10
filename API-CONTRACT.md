@@ -1,5 +1,34 @@
 # API and integration contracts
 
+## Titanium lifts and door mechanisms
+
+`doors::titanium` holds Titanium's own door rules, read from `eqgame.exe`:
+`Vertical::of` (rise or sink, travel and speeds by open type, 0x4368b3), `Slide::of`
+(type 15 and 78-81, 0x4366e8), `Solidity::of` (whether the floor sweep stands a
+player on a door, 0x490370, and whether its wall stops them, 0x42ce5d),
+`returns_after` and `returns_at` (the client's own return, 0x48faa5) and `field`
+(door +0x66, the param's low 16 bits as an i16). The field stays as spawned; the
+server message that changes it later (0x45e626) is not traced. `Solidity` is a
+Titanium rule only; another generation keeps its own (`Solidity::BOTH`).
+
+`Lifts` steps every vertical door from the received spawn and actions with the
+program's rule, including the client's own return, so the session and a frontend
+that follow the same updates agree on a door's height. Motion starts only on the
+server's 0x700d action; a click sends 0x043b and predicts nothing. The return is
+local and sends nothing, except for types 40 and 45, whose return the session sends
+as `Request::ReturnDoor`: 0x043b with the door id, 0xfe and zeros, naming no player
+(0x490b20, read R1c).
+
+`MovementRequest::support` names the door the frontend's floor sweep stands the
+player on (`MovementRequest::on_door`). The session lets that sample also rise as
+far as the door rose since the last accepted sample, when the door is a floor the
+program stands players on and the last accepted position is within `RIDER_REACH`
+(310 units in 3D) of it (`Lifts::carry`, `MovementGuard::allow_lift_rise`). The rise
+composes with the ordinary grant: horizontal motion keeps its speed budget, a
+still rider is passive, and a lift carries a player whose input is withdrawn only
+straight up. Nothing lift-specific is sent; the risen height goes out by the
+generation's ordinary gate.
+
 ## Friends who, guild requests, splitting and banker change
 
 `EQEmu` and Project 1999 offer `Capability::FriendsWho`, `GuildRoster`,

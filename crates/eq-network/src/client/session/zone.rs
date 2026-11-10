@@ -1257,6 +1257,7 @@ mod tests {
                 session_id,
                 position,
                 created,
+                support: None,
             }),
             ClientCommand::OfferTrade {
                 session_id,

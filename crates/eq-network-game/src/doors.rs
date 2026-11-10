@@ -1,6 +1,7 @@
 //! Door definitions and server movement instructions.
 
 pub mod eqmac;
+pub mod titanium;
 use crate::{command::EncodedCommand, world::Position};
 use anyhow::{ensure, Result};
 use serde::Serialize;

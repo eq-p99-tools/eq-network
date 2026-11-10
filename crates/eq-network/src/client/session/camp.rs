@@ -513,6 +513,7 @@ mod tests {
             session_id: 5,
             position: eq_network_game::world::Position::default(),
             created: Instant::now(),
+            support: None,
         });
         let sit = ClientCommand::SetPosture {
             session_id: 5,

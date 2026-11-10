@@ -52,6 +52,7 @@ fn request(created: Instant, position: Position) -> MovementRequest {
         heading: eq_network_game::movement::HeadingUpdate::Rate,
         created,
         position,
+        support: None,
     }
 }
 
@@ -335,4 +336,64 @@ fn movement_policy_feedback_is_local_and_refusals_keep_prior_policy() {
         ]
     ));
     assert_eq!(world.body.motion.as_ref().unwrap().options(), options);
+}
+
+#[test]
+fn a_named_rising_lift_carries_the_player_even_stunned_and_nothing_else_does() {
+    use eq_network_game::doors::Door;
+    let start = Instant::now();
+    let mut world = setup(start);
+    let mut lift = Door {
+        id: 4,
+        model: "LIFT".into(),
+        position: Position::default(),
+        incline: 0,
+        size: 100,
+        open_type: 59,
+        state_at_spawn: 0,
+        invert_state: 0,
+        parameter: 90,
+        action: None,
+    };
+    world.lifts.spawned(&lift, start);
+    lift.action = Some(2);
+    world.lifts.moved(&lift, start);
+    let now = start + Duration::from_millis(200);
+    // The lift rose 1.8 in 200 ms; past a riser, so only the lift's rise
+    // lets the sample out.
+    let mut rising = request(
+        now,
+        Position {
+            z: 1.8 + 2.0,
+            ..Position::default()
+        },
+    );
+    rising.mode = MovementMode::Forward;
+    let unnamed = testing::run(|out| Motion::step_at(&rising, now, &mut world, out));
+    unnamed.result.unwrap();
+    assert_eq!(world.body.position(), Some(Position::default()));
+    let mut wrong = rising.clone();
+    wrong.support = Some(9);
+    testing::run(|out| Motion::step_at(&wrong, now, &mut world, out))
+        .result
+        .unwrap();
+    assert_eq!(world.body.position(), Some(Position::default()));
+    let named = rising.clone().on_door(4);
+    let output = testing::run(|out| Motion::step_at(&named, now, &mut world, out));
+    output.result.unwrap();
+    assert_eq!(world.body.position(), Some(named.position));
+    // Stunned, a still rider is passive and the lift still carries them.
+    stun(&mut world, now);
+    let later = now + Duration::from_millis(200);
+    let carried = MovementRequest {
+        created: later,
+        position: Position {
+            z: named.position.z + 1.8,
+            ..Position::default()
+        },
+        ..named
+    };
+    let output = testing::run(|out| Motion::step_at(&carried, later, &mut world, out));
+    output.result.unwrap();
+    assert_eq!(world.body.position(), Some(carried.position));
 }
