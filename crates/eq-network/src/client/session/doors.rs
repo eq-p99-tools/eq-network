@@ -343,12 +343,12 @@ mod tests {
             player.position.x = x;
             player
         };
-        // Reach is 2-D to where it stands now: used from its base, its top
-        // or anywhere between alike, but not from 21 units across.
+        // Reach runs to where it stands now: used from its top, not from its
+        // base, halfway, or 21 units across its top.
         for (x, z, sent) in [
-            (0.0, 0.0, 1),
+            (0.0, 0.0, 0),
             (0.0, 45.0, 1),
-            (0.0, 22.5, 1),
+            (0.0, 22.5, 0),
             (21.0, 45.0, 0),
         ] {
             world.player.admit(at(x, z));
@@ -364,9 +364,9 @@ mod tests {
         let spawn = WorldEvent::Doors(DoorUpdate::Spawn(vec![Door {
             id: 1,
             model: "DOOR".into(),
-            // 21 across: out of reach on the ground.
+            // 15 across and 15 up: 21.2 away, 15 on the ground.
             position: Position {
-                x: 21.0,
+                x: 15.0,
                 z: 15.0,
                 ..Position::default()
             },
@@ -396,20 +396,13 @@ mod tests {
                 ..
             })]
         ));
-        // Both generations measure it in 2-D (Titanium read R16b), so 15
-        // up counts for nothing.
-        let mut nearer = testing::player(7);
-        nearer.position.x = 6.0;
-        world.player.admit(nearer);
-        for reach in [
-            eq_network_game::reach::TITANIUM.doors,
-            eq_network_game::reach::EQMAC.doors,
-        ] {
-            assert_eq!(
-                doors.click(&click, &world, reach).unwrap(),
-                Request::ClickDoor(1)
-            );
-        }
+        // EQMac's conservative base door reach is 2-D.
+        assert_eq!(
+            doors
+                .click(&click, &world, eq_network_game::reach::EQMAC.doors)
+                .unwrap(),
+            Request::ClickDoor(1)
+        );
     }
 
     #[test]

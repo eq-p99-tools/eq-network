@@ -145,13 +145,11 @@ impl Doors {
 
     /// [`Self::check_click`] for a door standing `raised` above its placed
     /// height now, as a Titanium lift does ([`titanium::Lifts::offset`]):
-    /// the reach runs to where the door stands now, never where it was
-    /// placed. The program measures a mouse click (0x4906c5) in 3-D to the
-    /// point it hit on the door as drawn, and a use with no hit point
-    /// (0x47f7dc) in 2-D to the door's current position within its radius
-    /// (read R16b). Ours applies the 2-D rule to every use, without the
-    /// radius terms (recording checklist 6.440), so a lift resting raised is
-    /// used from below and from its top alike.
+    /// the reach runs to the door's origin where it stands now. The program
+    /// measures from the clicked point on the door as drawn to the player,
+    /// within the player's size and 20 (0x4906c5, 0x435b55, 0x644368; read
+    /// R16b, R16e); this check, without the clicked point or the size, is
+    /// short of that rule (recording checklist 6.436).
     ///
     /// # Errors
     /// As [`Self::check_click`].
@@ -387,11 +385,8 @@ mod tests {
         assert_eq!(&packet.body[12..], &[0x34, 0x12, 0, 0]);
         assert!(admitted.click_packet(7, 0, position).is_err());
         assert!(admitted.click_packet(8, 1, position).is_err());
-        // Titanium measures across, not up (read R16b).
         let mut distant = position;
         distant.z += Doors::USE_DISTANCE + 1.0;
-        assert!(admitted.click_packet(7, 1, distant).is_ok());
-        distant.x += Doors::USE_DISTANCE + 1.0;
         assert!(admitted.click_packet(7, 1, distant).is_err());
         distant.z = f32::NAN;
         assert!(admitted.click_packet(7, 1, distant).is_err());
