@@ -185,7 +185,7 @@ impl Feature for Buffs {
                 if let Some(slots) = &mut self.slots {
                     if let Some(buff) = &update.buff {
                         slots.insert(update.slot, buff.clone());
-                    } else if update.replaces_slot {
+                    } else if update.replaces_slot() {
                         slots.remove(&update.slot);
                     } else if slots
                         .get(&update.slot)
@@ -351,7 +351,8 @@ mod tests {
 
     fn update(entity_id: u32, spell_id: u32, replacement: Option<Buff>) -> Message {
         Message::Event(WorldEvent::Buff(BuffUpdate {
-            replaces_slot: false,
+            applies: eq_network_game::buffs::Applies::Received,
+            record_type: 0,
             entity_id,
             slot: 3,
             spell_id,

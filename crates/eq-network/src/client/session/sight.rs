@@ -43,7 +43,7 @@ impl Sight {
                 }
                 if let Some(buff) = &update.buff {
                     self.slots.insert(update.slot, buff.clone());
-                } else if update.replaces_slot
+                } else if update.replaces_slot()
                     || self
                         .slots
                         .get(&update.slot)

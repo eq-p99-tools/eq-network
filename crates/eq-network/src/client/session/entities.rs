@@ -769,7 +769,8 @@ mod tests {
         };
         let fade = |entity_id| {
             WorldEvent::Buff(BuffUpdate {
-                replaces_slot: false,
+                applies: eq_network_game::buffs::Applies::Received,
+                record_type: 0,
                 spell_id: 42,
                 entity_id,
                 slot: UNKNOWN_SLOT,

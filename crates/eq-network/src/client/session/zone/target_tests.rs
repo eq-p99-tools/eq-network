@@ -520,7 +520,8 @@ fn titanium_observer_sight_gates_the_normal_target_queue_and_revokes_on_fade() {
     };
     let update = |entity_id, spell_id, buff| {
         Message::Event(WorldEvent::Buff(BuffUpdate {
-            replaces_slot: false,
+            applies: eq_network_game::buffs::Applies::Received,
+            record_type: 0,
             entity_id,
             spell_id,
             slot: 2,
@@ -642,7 +643,8 @@ fn a_landing_waits_for_sight_mechanics_and_a_fade_retires_it() {
         &mut features,
         &mut world,
         vec![Message::Event(WorldEvent::Buff(BuffUpdate {
-            replaces_slot: false,
+            applies: eq_network_game::buffs::Applies::Received,
+            record_type: 0,
             entity_id: 7,
             spell_id: 42,
             slot: 2,

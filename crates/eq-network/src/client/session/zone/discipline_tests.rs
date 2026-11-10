@@ -24,7 +24,8 @@ fn staged_discipline_input(faded: bool) -> Vec<Message> {
     };
     let slot = |buff| {
         Message::Event(WorldEvent::Buff(BuffUpdate {
-            replaces_slot: false,
+            applies: eq_network_game::buffs::Applies::Received,
+            record_type: 0,
             entity_id: 7,
             slot: TITANIUM_BUFF_SLOT,
             spell_id: 4499,

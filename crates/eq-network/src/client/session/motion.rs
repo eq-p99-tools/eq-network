@@ -2282,7 +2282,8 @@ mod tests {
                 spell_id: 700,
                 entity_id: 7,
                 slot: 0,
-                replaces_slot: true,
+                applies: eq_network_game::buffs::Applies::BySlot,
+                record_type: 2,
                 buff: None,
             }));
             let output = testing::run_on(EQMAC, |out| motion.observe(&refreshed, &mut world, out));
