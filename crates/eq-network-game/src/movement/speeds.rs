@@ -168,7 +168,9 @@ const TITANIUM: Generation = Generation {
 /// so the session bounds it by the running rate and gives the walking rate
 /// beside it ([`StrafeCalibration::walk_units_per_second`]) for the player
 /// to keep to; `EQMac` strafes on the walk speed. Ducking halves the strafe
-/// on the player's side, which the session doesn't track.
+/// on the player's side, which the session doesn't track. That a buff's
+/// speed modifier adds nothing to a strafe is read from the routine's shape
+/// only; if it does add, ours is the slower side.
 ///
 /// What the session doesn't know, it takes the slower side of: the
 /// modifier's cap is the base one, as the run-speed ability's ranks aren't
