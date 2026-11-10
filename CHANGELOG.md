@@ -8,7 +8,7 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Added
 
 - **Breaking:** Feign Death and the lying posture as the Titanium program
-  handles them (program reads R19 and R19b), through the new
+  handles them (program reads R19, R19b and R19cd), through the new
   `GameDialect::lying()` rules (`feign::LyingRules`). The Mac-era client
   keeps the earlier rules until its program is read.
   - The press lies the player down with `OP_SpawnAppearance` (type 14, 115)
@@ -27,6 +27,9 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     not withdrawn.
   - Any `OP_Damage` record of more than 0 to the player stands a sitter or a
     looter, whatever its type; lying and ducking players stay as they are.
+  - `GameDialect::posture_ends_attack()` tells a host whether a posture other
+    than standing ends auto attack: not on Titanium (read R19cd 3), still
+    on the Mac-era client (unread, checklist 6.455).
   - A cast while lying is refused with the program's line, whether a gem,
     a knight's special or an item click (items inferred, checklist 6.455):
     `WorldEvent::CastRejected` and `WorldEvent::ItemUseAction` have a new

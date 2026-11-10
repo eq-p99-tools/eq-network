@@ -1,5 +1,5 @@
 //! Feign Death and the lying posture, as each client generation's program
-//! handles them. Read for Titanium in program reads R19 and R19b
+//! handles them. Read for Titanium in program reads R19, R19b and R19cd
 //! (`eqgame.exe`); the Mac-era client keeps this library's earlier rules
 //! until its own program is read.
 //!
@@ -83,8 +83,8 @@ pub fn titanium_posture(spawn_id: u16) -> Result<EncodedCommand> {
 }
 
 /// Titanium's feign request, 12 bytes as the program builds it (R19 a):
-/// {u32 own spawn id, u32 [0x923848], u8 0}, and three bytes this library
-/// sends as zeros (unread). [0x923848] is written only by the program's own
+/// {u32 own spawn id, u32 `[0x923848]`, u8 0}, and three bytes this library
+/// sends as zeros (unread). `[0x923848]` is written only by the program's own
 /// damage reports (falls, lava, door contact, drowning), whose source is 0
 /// (R19b 1 and its recheck), so it is sent as 0: inferred, recording
 /// checklist 6.455.

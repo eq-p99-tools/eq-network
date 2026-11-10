@@ -199,6 +199,19 @@ impl GameDialect {
             Self::EqMac => feign::EQMAC,
         }
     }
+
+    /// Whether a change of the player's posture from standing turns auto
+    /// attack off. Titanium's posture routine does not, for any posture
+    /// (program read R19cd 3): auto attack stays on through a sit, a duck
+    /// or a lie, the attack key alone refusing to turn it on (line 0x3051),
+    /// and the server decides the swings; its Feign Death press turns it
+    /// off ([`feign::LyingRules::press_ends_attack`]). The Mac-era client's
+    /// program is unread, so it keeps this library's earlier rule that any
+    /// posture but standing ends auto attack (recording checklist 6.455).
+    #[must_use]
+    pub const fn posture_ends_attack(self) -> bool {
+        matches!(self, Self::EqMac)
+    }
 }
 
 #[cfg(test)]
@@ -213,5 +226,11 @@ mod tests {
             serde_json::to_string(&GameDialect::Titanium).unwrap(),
             "\"titanium\""
         );
+    }
+
+    #[test]
+    fn only_the_unread_mac_client_ends_auto_attack_on_a_posture() {
+        assert!(!GameDialect::Titanium.posture_ends_attack());
+        assert!(GameDialect::EqMac.posture_ends_attack());
     }
 }
