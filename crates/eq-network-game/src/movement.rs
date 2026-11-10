@@ -438,7 +438,7 @@ impl Default for RunSpeedMultiplier {
     }
 }
 
-/// Explicit movement departures, all disabled by default. These are local
+/// Explicit movement and posture departures, all disabled by default. These are local
 /// policy choices, not native movement rules or detection guarantees.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize)]
 pub struct MovementOptions {
@@ -449,6 +449,28 @@ pub struct MovementOptions {
     pub run_speed_multiplier: RunSpeedMultiplier,
     /// Permit vertical travel within the current mode's elapsed speed budget.
     pub fly: bool,
+    /// Departures for Feign Death and for a seated player who is hit.
+    pub posture: PostureOptions,
+}
+
+/// Departures for Feign Death and for a seated player who is hit, both off
+/// by default, where the session does what the generation's program does.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize)]
+pub struct PostureOptions {
+    /// The Feign Death press sends only the feign request, never the lying
+    /// posture report both programs send first, on either generation. The
+    /// player stays standing, to the session and to others, and moves as
+    /// any standing player; a server that clears a feign only on a posture
+    /// report keeps it (`EQEmu`). The next stand the player asks for still
+    /// goes out, once, to end it. Only the press changes: a feign by a spell
+    /// and a lying posture the server reports are as before. Recording
+    /// checklist 6.454.
+    pub feign_standing: bool,
+    /// A hit leaves a sitting or looting player as they are, where the
+    /// generation's program stands them
+    /// ([`crate::feign::LyingRules::hit_stands`]). Recording checklist
+    /// 6.453.
+    pub stay_seated_when_hit: bool,
 }
 
 impl MovementOptions {

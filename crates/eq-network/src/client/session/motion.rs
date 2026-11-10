@@ -7,8 +7,6 @@ use super::{
     ClientCommand, ClientEvent,
 };
 use anyhow::Result;
-#[cfg(test)]
-use eq_network_game::movement::MovementMode;
 use eq_network_game::{
     appearance::AppearanceChange,
     inventory::MAX_CARRIED_WEIGHT,
@@ -146,6 +144,11 @@ impl Body {
         }
     }
 
+    /// The player's movement and posture departures, once admitted.
+    pub(super) fn options(&self) -> Option<eq_network_game::movement::MovementOptions> {
+        self.motion.as_ref().map(MotionSession::options)
+    }
+
     /// Preserve physics and calibration while replacing paced voluntary
     /// motion with its normal stationary stop.
     pub(super) fn stop_voluntary(&mut self) {
@@ -222,6 +225,12 @@ fn hold(
     } else {
         Hold::None
     }
+}
+
+/// Whether the player lies where the generation's program moves nothing
+/// ([`eq_network_game::feign::LyingRules::holds_still`]).
+fn lies_still(world: &World, out: &Out<'_, '_>) -> bool {
+    out.wire.dialect().lying().holds_still && world.posture.current() == Some(PostureState::Lying)
 }
 
 /// The player's movement at these speeds.
@@ -714,6 +723,7 @@ impl Motion {
         world: &mut World,
         out: &mut Out<'_, '_>,
     ) -> Result<()> {
+        let lying = lies_still(world, out);
         let Some(motion) = world.body.motion.as_mut() else {
             return actions::refuse(
                 &ClientCommand::Move(request.clone()),
@@ -758,9 +768,21 @@ impl Motion {
                 refused: Some(reason.into()),
             }));
         }
+        // The program moves nothing while the player lies and stands no one
+        // to move (read R19 c), so a step that goes anywhere is refused and
+        // no stand is sent. A fall, a lift's carry and a turn alone go on:
+        // mouse look turns a lying player in the chase views.
+        let moves = (to.x, to.y, to.z) != (from.x, from.y, from.z);
+        if lying && !motion.is_passive(request) && moves {
+            return out.log.send(ClientEvent::World(WorldEvent::MotionSent {
+                session_id: world.session_id,
+                created: request.created,
+                position: from,
+                refused: Some("The player lies on the ground".into()),
+            }));
+        }
         if let (true, Some(player)) = (
-            (!world.control.stunned() || motion.options().walk_while_stunned)
-                && (to.x, to.y, to.z) != (from.x, from.y, from.z),
+            (!world.control.stunned() || motion.options().walk_while_stunned) && moves,
             world.player.as_ref(),
         ) {
             world.posture.stand_to_move(player.spawn_id, out)?;
@@ -833,6 +855,11 @@ impl Motion {
     fn jump(&self, created: Instant, world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
         if let Some(reason) = world.control.input_refusal(created) {
             return out.log.diagnostic(format!("Rejected jump: {reason}"));
+        }
+        // Jumping waits on the can-move flag, off while the player lies
+        // (read R19 c).
+        if lies_still(world, out) {
+            return out.log.diagnostic("Rejected jump: the player lies".into());
         }
         let jump = world
             .body
@@ -1096,9 +1123,14 @@ impl Feature for Motion {
 mod stun_tests;
 
 #[cfg(test)]
+#[path = "motion_lying_tests.rs"]
+mod lying_tests;
+
+#[cfg(test)]
 mod tests {
     use super::super::feature::testing;
     use super::*;
+    use eq_network_game::movement::MovementMode;
     use std::time::Duration;
 
     fn at(x: f32) -> Position {

@@ -122,6 +122,24 @@ impl Casting {
         world: &World,
         out: &mut Out<'_, '_>,
     ) -> Result<()> {
+        if let Some(string_id) = super::lying_refusal(world, out) {
+            if let Some(WorldEvent::CastRejected {
+                session_id,
+                spell_id,
+                ..
+            }) = rejected(command, super::LYING)
+            {
+                out.log.send(ClientEvent::World(WorldEvent::CastRejected {
+                    session_id,
+                    spell_id,
+                    reason: super::LYING.into(),
+                    string_id: Some(string_id),
+                }))?;
+            }
+            return out
+                .log
+                .diagnostic("Refused a knight's special: the player lies".into());
+        }
         let checked = self
             .knights
             .as_ref()
@@ -219,6 +237,44 @@ mod tests {
         let duplicate = testing::run(|out| casting.handle(&heal, &mut world, out));
         duplicate.result.unwrap();
         assert_eq!(duplicate.sent, []);
+    }
+
+    #[test]
+    fn titanium_refuses_a_knights_special_while_the_player_lies() {
+        let mut world = World::new(5);
+        world.own_spawn = Some(7);
+        let mut player = testing::player(7);
+        player.class = Some(3);
+        player.level = 1;
+        world.player.admit(player);
+        world.target = Target::from(7);
+        world.posture.observed(crate::world::PostureState::Lying);
+        let mut casting = Casting::with_titanium_combat(false, Duration::from_mins(72));
+        let heal = ClientCommand::UseKnightAbility {
+            session_id: 5,
+            ability: KnightAbility::LayOnHands,
+            target: world.target.state(),
+            created: Instant::now(),
+        };
+        let output = testing::run(|out| casting.handle(&heal, &mut world, out));
+        output.result.unwrap();
+        assert_eq!(output.sent, []);
+        assert!(matches!(
+            output.events.as_slice(),
+            [
+                ClientEvent::World(WorldEvent::CastRejected {
+                    spell_id: 87,
+                    string_id: Some(0x3099),
+                    ..
+                }),
+                ClientEvent::Diagnostic(_)
+            ]
+        ));
+        // Nothing was spent: the reuse timer still allows the special.
+        world.posture.observed(crate::world::PostureState::Standing);
+        let output = testing::run(|out| casting.handle(&heal, &mut world, out));
+        output.result.unwrap();
+        assert_eq!(output.sent.len(), 1);
     }
 
     #[test]

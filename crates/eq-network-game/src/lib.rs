@@ -47,6 +47,8 @@ pub mod doors;
 pub mod effects;
 /// Handing items to another character: the give and trade windows.
 pub mod exchange;
+/// Feign Death and the lying posture, by client generation.
+pub mod feign;
 /// Food and drink: hunger, thirst, and eating and drinking.
 pub mod food;
 /// Asking which of the player's friends are online.
@@ -187,6 +189,49 @@ impl GameDialect {
     pub const fn requires_clear_cursor_for_doors(self) -> bool {
         matches!(self, Self::EqMac)
     }
+
+    /// How this generation's program treats Feign Death and a lying player
+    /// ([`feign::LyingRules`]).
+    #[must_use]
+    pub const fn lying(self) -> feign::LyingRules {
+        match self {
+            Self::Titanium => feign::TITANIUM,
+            Self::EqMac => feign::EQMAC,
+        }
+    }
+
+    /// Whether a change of the player's posture from standing turns auto
+    /// attack off. Titanium's posture routine does not, for any posture
+    /// (program read R19cd 3): auto attack stays on through a sit, a duck
+    /// or a lie, the attack key alone refusing to turn it on (line 0x3051),
+    /// and the server decides the swings; its Feign Death press turns it
+    /// off ([`feign::LyingRules::press_ends_attack`]). The Mac-era client's
+    /// program is unread, so it keeps this library's earlier rule that any
+    /// posture but standing ends auto attack (recording checklist 6.455).
+    #[must_use]
+    pub const fn posture_ends_attack(self) -> bool {
+        matches!(self, Self::EqMac)
+    }
+
+    /// How this generation's sit/stand toggle chooses
+    /// ([`feign::SitToggle`]).
+    #[must_use]
+    pub const fn sit_toggle(self) -> feign::SitToggle {
+        match self {
+            Self::Titanium => feign::TITANIUM_SIT_TOGGLE,
+            Self::EqMac => feign::EQMAC_SIT_TOGGLE,
+        }
+    }
+
+    /// Whether asking for the posture the player already has sends nothing.
+    /// Titanium's posture routine makes no change then (program read R19,
+    /// 0x483556). The Mac-era client's is read only for lying, so it keeps
+    /// this library's earlier rule of sending every request but a second lie
+    /// (recording checklist 6.455).
+    #[must_use]
+    pub const fn skips_unchanged_posture(self) -> bool {
+        matches!(self, Self::Titanium)
+    }
 }
 
 #[cfg(test)]
@@ -201,5 +246,27 @@ mod tests {
             serde_json::to_string(&GameDialect::Titanium).unwrap(),
             "\"titanium\""
         );
+    }
+
+    #[test]
+    fn only_the_unread_mac_client_ends_auto_attack_on_a_posture() {
+        assert!(!GameDialect::Titanium.posture_ends_attack());
+        assert!(GameDialect::EqMac.posture_ends_attack());
+    }
+
+    #[test]
+    fn only_titaniums_sit_toggle_is_read() {
+        let titanium = GameDialect::Titanium.sit_toggle();
+        assert!(titanium.stands_lying_and_looting);
+        assert_eq!(titanium.mesmerize_refusal, Some(0x3050));
+        let eqmac = GameDialect::EqMac.sit_toggle();
+        assert!(!eqmac.stands_lying_and_looting);
+        assert_eq!(eqmac.mesmerize_refusal, None);
+    }
+
+    #[test]
+    fn only_titanium_is_read_to_skip_an_unchanged_posture() {
+        assert!(GameDialect::Titanium.skips_unchanged_posture());
+        assert!(!GameDialect::EqMac.skips_unchanged_posture());
     }
 }

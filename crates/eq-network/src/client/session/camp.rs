@@ -286,7 +286,14 @@ impl Feature for Camp {
             // character out of its group and guild 29 seconds after /camp. Moving,
             // ducking, opening a door or picking something up stands the camping
             // character up first.
+            // The stand is for the server's timer, so it goes even when the
+            // player already stands (Titanium skips an unchanged posture,
+            // read R19); a player's own stand, which its owner sends next,
+            // goes the same way.
             let own_spawn = world.player.as_ref().map(|player| player.spawn_id);
+            if !waiting {
+                world.posture.owe_stand();
+            }
             if let (false, Some(spawn_id)) = (waiting || by == CampEnd::Standing, own_spawn) {
                 world.posture.set(spawn_id, Posture::Standing, out)?;
             }
@@ -479,6 +486,48 @@ mod tests {
             ]
         ));
         assert!(!camp.active());
+    }
+
+    /// The camp's stand is for the server's timer, so it goes on Titanium
+    /// even when the player already stands, as the player's own stand does.
+    #[test]
+    fn a_camp_ended_while_standing_still_sends_one_stand() {
+        let click = ClientCommand::ClickDoor {
+            session_id: 5,
+            door_id: 1,
+            created: Instant::now(),
+        };
+        let stand = ClientCommand::SetPosture {
+            session_id: 5,
+            spawn_id: 7,
+            posture: Posture::Standing,
+            created: Instant::now(),
+        };
+        for ending in [click, stand] {
+            let mut camp = Camp::default();
+            let mut world = World::new(5);
+            world.own_spawn = Some(7);
+            world.player.admit(testing::player(7));
+            world
+                .posture
+                .observed(eq_network_game::world::PostureState::Standing);
+            camp.start(Instant::now());
+            let outcome = testing::run(|out| {
+                camp.notice(&ending, &mut world, out)?;
+                let mut stances = super::super::posture::Stances;
+                if stances.owns(&ending) {
+                    stances.handle(&ending, &mut world, out)?;
+                }
+                anyhow::Ok(())
+            });
+            outcome.result.unwrap();
+            assert_eq!(
+                outcome.sent,
+                [command::titanium_posture(7, Posture::Standing).unwrap()],
+                "{ending:?}"
+            );
+            assert!(!world.posture.stand_owed());
+        }
     }
 
     #[test]

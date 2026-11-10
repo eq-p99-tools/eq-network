@@ -336,6 +336,7 @@ fn refusal(command: &ClientCommand, reason: &str) -> Option<WorldEvent> {
             session_id: request.session_id,
             request_id: request.request_id,
             error,
+            string_id: None,
         },
         ClientCommand::DestroyItem(request) => WorldEvent::InventoryAction {
             session_id: request.session_id,

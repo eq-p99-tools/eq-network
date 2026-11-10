@@ -7,6 +7,50 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Breaking:** Feign Death and the lying posture as the Titanium program
+  handles them (program reads R19, R19b and R19cd), through the new
+  `GameDialect::lying()` rules (`feign::LyingRules`). The Mac-era client
+  keeps the earlier rules until its program is read.
+  - The press lies the player down with `OP_SpawnAppearance` (type 14, 115)
+    before the feign request, as the program does; until now Titanium sent
+    only the request, so the player never lay down and moving never ended
+    the feign. A press while lying sends the request alone.
+    `Request::FeignDeathPosture` now encodes on Titanium.
+  - The feign request carries the program's 12 bytes
+    (`feign::titanium_request`): the player's own id, then a word the
+    program fills only from its own damage reports, sent as 0, and zeros
+    (checklist 6.455, inferred). `Ability::encode` returns `None` for Feign
+    Death.
+  - While the player lies, a step that goes anywhere is refused and nothing
+    stands them to move; a turn alone, a fall and a lift's carry go on, and
+    jumping is refused. Lying down stops the movement in hand. The grant is
+    not withdrawn.
+  - Any `OP_Damage` record of more than 0 to the player stands a sitter or a
+    looter, whatever its type; lying and ducking players stay as they are.
+  - `GameDialect::posture_ends_attack()` tells a host whether a posture other
+    than standing ends auto attack: not on Titanium (read R19cd 3), still
+    on the Mac-era client (unread, checklist 6.455).
+  - A cast while lying is refused with the program's line, whether a gem,
+    a knight's special or an item click (items inferred, checklist 6.455):
+    `WorldEvent::CastRejected` and `WorldEvent::ItemUseAction` have a new
+    `string_id`. Disciplines are not refused (the program does not check).
+  - `GameDialect::sit_toggle()` (`feign::SitToggle`) tells a host how the
+    sit/stand toggle chooses: Titanium's stands a lying or looting player
+    and refuses under a mesmerize with line 0x3050 (reads R19, R19b 5); the
+    Mac-era client's is unread and does neither (checklist 6.455).
+  - On Titanium a posture request for the posture the player already has
+    sends nothing, as the program's posture routine does (read R19); the
+    Mac-era client still sends it (`GameDialect::skips_unchanged_posture()`,
+    unread, checklist 6.455). A stand the server still needs goes out once
+    whatever the posture: the one that ends a feign pressed standing, and
+    the one that stops a camp's timer.
+  - Two departures in `MovementOptions`'s new `posture`
+    (`movement::PostureOptions`), both off by default and on both
+    generations: `feign_standing`, where the Feign Death press sends the
+    feign request alone and the player stays standing, and the next stand
+    asked for still goes out once to end the feign (checklist 6.454),
+    and `stay_seated_when_hit`, where a hit leaves a sitter or a looter
+    seated (checklist 6.453).
 - **Breaking:** movement is no longer stopped while the player's speeds
   are worked out again. The program stops input only for a stun, a freeze
   (posture 0x66) or a posture other than standing or ducking (read R7,

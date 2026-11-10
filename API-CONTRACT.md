@@ -1173,7 +1173,14 @@ and the horizontal budget for a Fall sample. `RunSpeedMultiplier` holds 100
 through 140 percent in one-percentage-point steps, with 100 as the default.
 Calibration events retain the source-derived speeds. The host applies the
 same multiplier when proposing running movement. `fly` permits ascent/descent
-within the current mode's unscaled elapsed speed budget. These options never
+within the current mode's unscaled elapsed speed budget. `posture`
+(`PostureOptions`) holds two departures, on both generations: with
+`feign_standing` the Feign Death press sends the feign request alone,
+without the lying posture report both programs send first, so the player
+stays standing and moves as any standing player; with
+`stay_seated_when_hit` an `OP_Damage` hit leaves a sitter or a looter
+seated where the generation's program stands them (`GameDialect::lying()`).
+These options never
 bypass session identity, input freshness, finite coordinates, fixed bounds, current
 known speed, corrections, death or transfer gates. Changes invalidate pre-toggle queued input using the caller stamp and preserve
 the accepted sample time for same-frame FIFO movement. A change of flight or

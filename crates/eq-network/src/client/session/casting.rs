@@ -11,7 +11,7 @@ use eq_network_game::{
     message::Message,
     request::Request,
     spells::{SpellUpdate, ITEM_CAST_SLOT},
-    world::WorldEvent,
+    world::{PostureState, WorldEvent},
 };
 use std::time::{Duration, Instant};
 
@@ -19,12 +19,30 @@ mod disciplines;
 mod knights;
 use eq_network_game::knights::KnightAbility;
 
+/// This library's words for a cast refused while the player lies.
+const LYING: &str = "You can't cast lying down";
+
 /// Local retry policy, not a protocol timeout. Never resends a request automatically.
 const ACK_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Allow ordered cast results already in flight to arrive. `EQEmu` can stop a
 /// song without sending the Bard an interrupt or spell-bar refresh.
 const SONG_STOP_WAIT: Duration = Duration::from_secs(1);
+
+/// The line the program refuses a cast with while the player lies, if it
+/// does (read R19 d and R19cd 2): every spell cast passes 0x411f3d's
+/// posture check, gems and the knights' specials read, item clicks inferred.
+/// The program lets a spell whose record sets its byte at +0x1fc through;
+/// the session has no spell table, so it refuses every one (stricter;
+/// recording checklist 6.455). A discipline is not refused: no posture
+/// check was found on its path (6.455).
+fn lying_refusal(world: &World, out: &Out<'_, '_>) -> Option<u32> {
+    out.wire
+        .dialect()
+        .lying()
+        .casting_refusal
+        .filter(|_| world.posture.current() == Some(PostureState::Lying))
+}
 
 /// Reports only cast rejections, preserving the caller's admission for host filtering.
 pub(super) fn rejected(command: &ClientCommand, reason: &str) -> Option<crate::world::WorldEvent> {
@@ -50,6 +68,7 @@ pub(super) fn rejected(command: &ClientCommand, reason: &str) -> Option<crate::w
         session_id,
         spell_id,
         reason: reason.into(),
+        string_id: None,
     })
 }
 
@@ -436,6 +455,7 @@ impl Casting {
         out: &mut Out<'_, '_>,
     ) -> Result<()> {
         let ClientCommand::CastSpell {
+            session_id,
             gem,
             spell_id,
             target_id,
@@ -444,6 +464,17 @@ impl Casting {
         else {
             return Ok(());
         };
+        // The program refuses a cast while the player lies, and neither
+        // stands them nor casts (read R19 d, 0x411f3d).
+        if let Some(string_id) = lying_refusal(world, out) {
+            out.log.send(ClientEvent::World(WorldEvent::CastRejected {
+                session_id: *session_id,
+                spell_id: *spell_id,
+                reason: LYING.into(),
+                string_id: Some(string_id),
+            }))?;
+            return out.log.diagnostic("Refused a cast: the player lies".into());
+        }
         let ready = world.visible(*target_id)
             && world.player.as_ref().is_some_and(|player| {
                 player.memorized_spells.get(usize::from(*gem)) == Some(&Some(*spell_id))
@@ -479,6 +510,14 @@ impl Casting {
 
     /// Casts an item's click effect at a target the player can see.
     fn use_item(&mut self, request: &ItemUse, world: &World, out: &mut Out<'_, '_>) -> Result<()> {
+        if let Some(string_id) = lying_refusal(world, out) {
+            return out.log.send(ClientEvent::World(WorldEvent::ItemUseAction {
+                session_id: request.session_id,
+                request_id: request.request_id,
+                error: Some(LYING.into()),
+                string_id: Some(string_id),
+            }));
+        }
         let target_available = world.player.is_some() && world.visible(request.target_id);
         let prepared = world
             .player
@@ -519,6 +558,7 @@ impl Casting {
             session_id: request.session_id,
             request_id: request.request_id,
             error,
+            string_id: None,
         }))
     }
 
@@ -964,6 +1004,78 @@ mod tests {
         ));
     }
 
+    /// The Titanium program refuses a cast while the player lies, with its
+    /// own line, and neither stands them nor casts (read R19 d).
+    #[test]
+    fn titanium_refuses_a_cast_while_the_player_lies() {
+        let mut casting = Casting::default();
+        let mut world = World::new(5);
+        world.own_spawn = Some(7);
+        let mut player = testing::player(7);
+        player.memorized_spells[0] = Some(202);
+        world.player.admit(player);
+        world.posture.observed(PostureState::Lying);
+        let cast = ClientCommand::CastSpell {
+            session_id: 5,
+            gem: 0,
+            spell_id: 202,
+            target_id: 7,
+            created: Instant::now(),
+        };
+        let outcome = testing::run(|out| casting.handle(&cast, &mut world, out));
+        outcome.result.unwrap();
+        assert!(outcome.sent.is_empty(), "sent {:?}", outcome.sent);
+        assert!(matches!(
+            outcome.events[..],
+            [
+                ClientEvent::World(WorldEvent::CastRejected {
+                    spell_id: 202,
+                    string_id: Some(0x3099),
+                    ..
+                }),
+                ClientEvent::Diagnostic(_)
+            ]
+        ));
+        assert_eq!(world.posture.current(), Some(PostureState::Lying));
+        assert_eq!(casting.holds(&world, Instant::now()).len(), 0);
+        // The Mac-era client's rule is unread, so it casts as before.
+        let outcome = testing::run_on(&super::super::wire::EqMac, |out| {
+            casting.handle(&cast, &mut world, out)
+        });
+        outcome.result.unwrap();
+        assert_eq!(outcome.sent.len(), 1);
+    }
+
+    #[test]
+    fn titanium_refuses_an_item_click_while_the_player_lies() {
+        let mut casting = Casting::default();
+        let mut world = World::new(5);
+        world.own_spawn = Some(7);
+        world.player.admit(testing::player(7));
+        world.posture.observed(PostureState::Lying);
+        let item = ClientCommand::UseItem(ItemUse {
+            request_id: 3,
+            session_id: 5,
+            revision: 1,
+            slot: eq_network_game::inventory::InventorySlot(22),
+            target_id: 7,
+            created: Instant::now(),
+        });
+        let outcome = testing::run(|out| casting.handle(&item, &mut world, out));
+        outcome.result.unwrap();
+        assert!(outcome.sent.is_empty(), "sent {:?}", outcome.sent);
+        assert!(matches!(
+            &outcome.events[..],
+            [ClientEvent::World(WorldEvent::ItemUseAction {
+                request_id: 3,
+                error: Some(_),
+                string_id: Some(0x3099),
+                ..
+            })]
+        ));
+        assert_eq!(casting.holds(&world, Instant::now()).len(), 0);
+    }
+
     #[test]
     fn takps_wire_casts_a_gem_in_its_own_packet_and_the_spell_bar_ends_the_hold() {
         let eqmac = &super::super::wire::EqMac;
@@ -1010,7 +1122,7 @@ mod tests {
         let mut guard = CastGuard::default();
         guard.submitted(42, None, Instant::now());
         assert!(matches!(rejected(&request, "Target unavailable"),
-            Some(crate::world::WorldEvent::CastRejected { session_id: 12, spell_id: 73, reason })
+            Some(crate::world::WorldEvent::CastRejected { session_id: 12, spell_id: 73, reason, .. })
             if reason == "Target unavailable"));
         assert!(guard.blocks(&request));
         assert!(rejected(
