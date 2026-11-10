@@ -9,6 +9,7 @@ use super::{
 };
 use anyhow::Result;
 use eq_network_game::{
+    combat::{Damage, DamageOutcome},
     command::Posture,
     message::Message,
     request::Request,
@@ -52,15 +53,57 @@ impl Feature for Stances {
         &mut self,
         message: &Message,
         world: &mut World,
-        _out: &mut Out<'_, '_>,
+        out: &mut Out<'_, '_>,
     ) -> Result<()> {
-        if let Message::Event(WorldEvent::Posture { spawn_id, posture }) = message {
-            if world.is_player(*spawn_id) {
+        match message {
+            Message::Event(WorldEvent::Posture { spawn_id, posture })
+                if world.is_player(*spawn_id) =>
+            {
                 world.posture.observed(*posture);
+                // The program applies a server's posture for the player as
+                // its own (read R19 f), so a lying report holds them still
+                // as the press does.
+                if *posture == PostureState::Lying && out.wire.dialect().lying().holds_still {
+                    world.body.stop_voluntary();
+                }
+                Ok(())
             }
+            Message::Event(WorldEvent::Damage(damage)) => stand_when_hit(damage, world, out),
+            _ => Ok(()),
         }
-        Ok(())
     }
+}
+
+/// Stands the player up when a hit lands while they sit or kneel to loot,
+/// as the Titanium program's `OP_Damage` handler does (read R19 b, 0x4a56e3,
+/// rechecked 11-10): any record of more than 0 to the player, whatever its
+/// type, and never a miss. Lying and ducking stay as they are, unless the
+/// player chose to stand when hit while lying (6.453). The handler's early
+/// return for a source it does not know is kept; the one for a spell it does
+/// not know is not, since the session has no spell table (6.455).
+fn stand_when_hit(damage: &Damage, world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
+    let (Some(spawn_id), DamageOutcome::Hit(1..)) = (world.own_spawn, damage.outcome) else {
+        return Ok(());
+    };
+    let known = |id: u16| id == 0 || world.is_player(id) || world.spawns.get(id).is_some();
+    if !out.wire.dialect().lying().hit_stands
+        || damage.target_id != spawn_id
+        || !known(damage.source_id)
+    {
+        return Ok(());
+    }
+    let stands = match world.posture.current() {
+        Some(PostureState::Sitting | PostureState::Looting) => true,
+        Some(PostureState::Lying) => world
+            .body
+            .options()
+            .is_some_and(|options| options.lying.stand_when_hit),
+        _ => false,
+    };
+    if stands {
+        world.posture.set(spawn_id, Posture::Standing, out)?;
+    }
+    Ok(())
 }
 
 /// The player's stance in this zone admission; unknown counts as standing.
@@ -69,10 +112,11 @@ pub(super) struct OwnPosture(Option<PostureState>);
 
 impl OwnPosture {
     /// Reports the requested lying posture, without asserting feign success.
-    /// `EQMac` accepts the stance but excludes the sender from its broadcast.
-    /// The `EQMac` program's posture setter (0x50be3c, from the feign-death
-    /// case of its skill dispatcher 0x4bdf2f) returns at once when the
-    /// player already lies, so nothing is sent then.
+    /// The servers accept the stance but exclude the sender from their
+    /// broadcast. Both programs' posture setters (Titanium 0x483556 from
+    /// read R19 a, `EQMac` 0x50be3c from the feign-death case of its skill
+    /// dispatcher 0x4bdf2f) return at once when the player already lies, so
+    /// nothing is sent then.
     pub(super) fn lie_for_feign(&mut self, spawn_id: u16, out: &mut Out<'_, '_>) -> Result<()> {
         if self.0 == Some(PostureState::Lying) {
             return Ok(());
@@ -124,17 +168,20 @@ impl OwnPosture {
         }))
     }
 
-    /// Whether the character must stand up before it can move.
-    fn grounded(&self) -> bool {
-        matches!(
-            self.0,
-            Some(PostureState::Sitting | PostureState::Ducking | PostureState::Lying)
-        )
+    /// Whether the character must stand up before it can move. Where the
+    /// program holds a lying player still, nothing stands them to move
+    /// (read R19 c), and a walk while lying (6.454) stays lying.
+    fn grounded(&self, lying_holds_still: bool) -> bool {
+        match self.0 {
+            Some(PostureState::Sitting | PostureState::Ducking) => true,
+            Some(PostureState::Lying) => !lying_holds_still,
+            _ => false,
+        }
     }
 
     /// Stands a seated, crouched or prone character up before it moves.
     pub(super) fn stand_to_move(&mut self, spawn_id: u16, out: &mut Out<'_, '_>) -> Result<()> {
-        if !self.grounded() {
+        if !self.grounded(out.wire.dialect().lying().holds_still) {
             return Ok(());
         }
         self.set(spawn_id, Posture::Standing, out)
@@ -203,10 +250,170 @@ mod tests {
         assert_eq!(outcome.sent.len(), 1);
     }
 
+    fn hit(target_id: u16, source_id: u16, outcome: DamageOutcome) -> Message {
+        Message::Event(WorldEvent::Damage(Damage {
+            target_id,
+            source_id,
+            kind: 231,
+            spell_id: Some(5),
+            outcome,
+            push: None,
+        }))
+    }
+
+    fn hit_world(posture: PostureState) -> World {
+        let mut world = World::new(5);
+        world.own_spawn = Some(7);
+        world.player.admit(testing::player(7));
+        world
+            .spawns
+            .insert(testing::spawn(42, eq_network_game::world::SpawnKind::Npc));
+        world.posture.observed(posture);
+        world
+    }
+
+    /// Titanium's `OP_Damage` handler stands a sitter or a looter on any
+    /// record over 0 to them, whatever its type, and leaves a lying or
+    /// ducking player as they are (read R19 b and R19b 2).
+    #[test]
+    fn a_hit_stands_a_sitter_or_a_looter_and_leaves_a_lying_player_lying() {
+        for (posture, stands) in [
+            (PostureState::Sitting, true),
+            (PostureState::Looting, true),
+            (PostureState::Lying, false),
+            (PostureState::Ducking, false),
+            (PostureState::Standing, false),
+            (PostureState::Frozen, false),
+        ] {
+            let mut world = hit_world(posture);
+            let outcome = testing::run(|out| {
+                Stances.observe(&hit(7, 42, DamageOutcome::Hit(3)), &mut world, out)
+            });
+            outcome.result.unwrap();
+            let expected = if stands {
+                vec![command::titanium_posture(7, command::Posture::Standing).unwrap()]
+            } else {
+                Vec::new()
+            };
+            assert_eq!(outcome.sent, expected, "{posture:?}");
+            let now = if stands {
+                PostureState::Standing
+            } else {
+                posture
+            };
+            assert_eq!(world.posture.current(), Some(now), "{posture:?}");
+        }
+    }
+
+    #[test]
+    fn misses_hits_on_others_and_unknown_sources_stand_no_one() {
+        for message in [
+            hit(7, 42, DamageOutcome::Miss),
+            hit(7, 42, DamageOutcome::Hit(0)),
+            hit(42, 7, DamageOutcome::Hit(3)),
+            hit(7, 99, DamageOutcome::Hit(3)),
+        ] {
+            let mut world = hit_world(PostureState::Sitting);
+            let outcome = testing::run(|out| Stances.observe(&message, &mut world, out));
+            outcome.result.unwrap();
+            assert!(outcome.sent.is_empty(), "{message:?}");
+            assert_eq!(world.posture.current(), Some(PostureState::Sitting));
+        }
+        // A record with no source, such as a fall, still counts.
+        let mut world = hit_world(PostureState::Sitting);
+        let outcome =
+            testing::run(|out| Stances.observe(&hit(7, 0, DamageOutcome::Hit(3)), &mut world, out));
+        outcome.result.unwrap();
+        assert_eq!(outcome.sent.len(), 1);
+    }
+
+    #[test]
+    fn a_hit_stands_a_lying_player_only_when_they_chose_it() {
+        let start = Instant::now();
+        let mut world = hit_world(PostureState::Lying);
+        let mut motion = eq_network_game::movement::MotionSession::new(
+            5,
+            7,
+            eq_network_game::world::Position::default(),
+            start,
+        )
+        .unwrap();
+        motion
+            .set_options(
+                eq_network_game::movement::MovementOptions {
+                    lying: eq_network_game::movement::LyingOptions {
+                        stand_when_hit: true,
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+                start,
+            )
+            .unwrap();
+        world.body.admit(motion);
+        let outcome = testing::run(|out| {
+            Stances.observe(&hit(7, 42, DamageOutcome::Hit(3)), &mut world, out)
+        });
+        outcome.result.unwrap();
+        assert_eq!(
+            outcome.sent,
+            [command::titanium_posture(7, command::Posture::Standing).unwrap()]
+        );
+        assert_eq!(world.posture.current(), Some(PostureState::Standing));
+    }
+
+    #[test]
+    fn the_mac_client_stands_no_one_when_hit() {
+        const EQMAC: &dyn super::super::wire::Wire = &super::super::wire::EqMac;
+        let mut world = hit_world(PostureState::Sitting);
+        let outcome = testing::run_on(EQMAC, |out| {
+            Stances.observe(&hit(7, 42, DamageOutcome::Hit(3)), &mut world, out)
+        });
+        outcome.result.unwrap();
+        assert!(outcome.sent.is_empty(), "{:?}", outcome.sent);
+    }
+
+    /// The press lies the player down on Titanium too, before the feign
+    /// request (read R19 a).
+    #[test]
+    fn titanium_lies_down_once_for_a_feign() {
+        let mut posture = OwnPosture::default();
+        let outcome = testing::run(|out| posture.lie_for_feign(7, out));
+        outcome.result.unwrap();
+        assert_eq!(
+            outcome.sent,
+            [eq_network_game::feign::titanium_posture(7).unwrap()]
+        );
+        let outcome = testing::run(|out| posture.lie_for_feign(7, out));
+        outcome.result.unwrap();
+        assert!(outcome.sent.is_empty(), "{:?}", outcome.sent);
+    }
+
+    #[test]
+    fn a_server_lying_report_holds_the_player_still_and_keeps_auto_attack() {
+        let mut world = hit_world(PostureState::Standing);
+        world.attacking = true;
+        let outcome = testing::run(|out| {
+            Stances.observe(
+                &Message::Event(WorldEvent::Posture {
+                    spawn_id: 7,
+                    posture: PostureState::Lying,
+                }),
+                &mut world,
+                out,
+            )
+        });
+        outcome.result.unwrap();
+        assert!(outcome.sent.is_empty(), "{:?}", outcome.sent);
+        assert_eq!(world.posture.current(), Some(PostureState::Lying));
+        // Only the press turns auto attack off, never a lying report.
+        assert!(world.attacking);
+    }
+
     #[test]
     fn only_seated_crouched_or_prone_characters_stand_to_move() {
         let mut posture = OwnPosture::default();
-        assert!(!posture.grounded());
+        assert!(!posture.grounded(false));
         for (state, grounded) in [
             (PostureState::Sitting, true),
             (PostureState::Ducking, true),
@@ -216,7 +423,10 @@ mod tests {
             (PostureState::Frozen, false),
         ] {
             posture.observed(state);
-            assert_eq!(posture.grounded(), grounded, "{state:?}");
+            assert_eq!(posture.grounded(false), grounded, "{state:?}");
+            // Titanium stands no lying player to move (read R19 c).
+            let titanium = grounded && state != PostureState::Lying;
+            assert_eq!(posture.grounded(true), titanium, "{state:?}");
         }
     }
 }

@@ -393,14 +393,15 @@ impl Ability {
     /// must be the server's target too, and a bandaging the one bandaged.
     /// None for an ability that [`asks`](Self::asks), whose packet
     /// [`titanium_ask`] builds, and for Pick Lock, which has a message only
-    /// at a treasure ([`Self::titanium_at_treasure`]), and for Tracking, whose
-    /// messages [`crate::tracking`] builds.
+    /// at a treasure ([`Self::titanium_at_treasure`]), for Tracking, whose
+    /// messages [`crate::tracking`] builds, and for Feign Death, which
+    /// carries the player's own id ([`crate::feign::titanium_request`]).
     #[must_use]
     pub fn encode(self, target: u16) -> Option<EncodedCommand> {
         if self == Self::BindWound {
             return Some(crate::bind_wound::encode(target));
         }
-        if self.asks() || matches!(self, Self::PickLock | Self::Tracking) {
+        if self.asks() || matches!(self, Self::PickLock | Self::Tracking | Self::FeignDeath) {
             return None;
         }
         let word = |value: u32| value.to_le_bytes();
@@ -416,13 +417,12 @@ impl Ability {
                 .concat(),
             ),
             // The rest carry no body: `OP_Hide`, `OP_Sneak`, `OP_Forage`,
-            // `OP_Fishing`, `OP_Mend`, `OP_FeignDeath` and `OP_SenseHeading`.
+            // `OP_Fishing`, `OP_Mend` and `OP_SenseHeading`.
             Self::Hide => (0x4312, Vec::new()),
             Self::Sneak => (0x74e1, Vec::new()),
             Self::Forage => (0x4796, Vec::new()),
             Self::Fishing => (FISHING_OPCODE, Vec::new()),
             Self::Mend => (0x14ef, Vec::new()),
-            Self::FeignDeath => (0x7489, Vec::new()),
             // The Titanium program's own messages (read R14 section 3).
             Self::SenseTraps => (0x5666, Vec::new()),
             Self::DisarmTraps => (0x1241, Vec::new()),
@@ -759,7 +759,6 @@ mod tests {
             (Ability::Forage, 0x4796),
             (Ability::Fishing, 0x0b36),
             (Ability::Mend, 0x14ef),
-            (Ability::FeignDeath, 0x7489),
             (Ability::SenseHeading, 0x05ac),
             (Ability::SenseTraps, 0x5666),
             (Ability::DisarmTraps, 0x1241),
@@ -774,6 +773,24 @@ mod tests {
             );
             assert!(!ability.at_target());
         }
+    }
+
+    #[test]
+    fn feign_death_is_built_with_the_players_own_id() {
+        // `crate::feign::titanium_request` builds it, as the program does.
+        assert_eq!(Ability::FeignDeath.encode(42), None);
+        let sender = crate::request::Sender {
+            name: "Player",
+            spawn_id: Some(7),
+        };
+        let request = crate::request::Request::Ability {
+            ability: Ability::FeignDeath,
+            target: Some(42),
+        };
+        assert_eq!(
+            crate::request::titanium(&request, sender).unwrap(),
+            crate::feign::titanium_request(7).unwrap()
+        );
     }
 
     #[test]

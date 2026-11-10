@@ -438,7 +438,7 @@ impl Default for RunSpeedMultiplier {
     }
 }
 
-/// Explicit movement departures, all disabled by default. These are local
+/// Explicit movement and posture departures, all disabled by default. These are local
 /// policy choices, not native movement rules or detection guarantees.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize)]
 pub struct MovementOptions {
@@ -449,13 +449,32 @@ pub struct MovementOptions {
     pub run_speed_multiplier: RunSpeedMultiplier,
     /// Permit vertical travel within the current mode's elapsed speed budget.
     pub fly: bool,
+    /// Departures for a player who lies on the ground.
+    pub lying: LyingOptions,
+}
+
+/// Departures for a player who lies on the ground, as a feign leaves them,
+/// both off by default.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize)]
+pub struct LyingOptions {
+    /// Permit walking, at walk speed only and without jumping, where the
+    /// program moves nothing ([`crate::feign::LyingRules::holds_still`]). No
+    /// stand is sent, so a server keeps a feign it granted. Recording
+    /// checklist 6.454.
+    pub walk: bool,
+    /// Stand the player up when a hit lands, as the program does only for a
+    /// sitter or a looter ([`crate::feign::LyingRules::hit_stands`]). The
+    /// stand ends a feign on the server. Recording checklist 6.453.
+    pub stand_when_hit: bool,
 }
 
 impl MovementOptions {
     /// Whether two choices allow the same motion modes, regardless of run speed.
     #[must_use]
     pub const fn same_permissions(self, other: Self) -> bool {
-        self.walk_while_stunned == other.walk_while_stunned && self.fly == other.fly
+        self.walk_while_stunned == other.walk_while_stunned
+            && self.fly == other.fly
+            && self.lying.walk == other.lying.walk
     }
 }
 

@@ -47,6 +47,8 @@ pub mod doors;
 pub mod effects;
 /// Handing items to another character: the give and trade windows.
 pub mod exchange;
+/// Feign Death and the lying posture, by client generation.
+pub mod feign;
 /// Food and drink: hunger, thirst, and eating and drinking.
 pub mod food;
 /// Asking which of the player's friends are online.
@@ -186,6 +188,16 @@ impl GameDialect {
     #[must_use]
     pub const fn requires_clear_cursor_for_doors(self) -> bool {
         matches!(self, Self::EqMac)
+    }
+
+    /// How this generation's program treats Feign Death and a lying player
+    /// ([`feign::LyingRules`]).
+    #[must_use]
+    pub const fn lying(self) -> feign::LyingRules {
+        match self {
+            Self::Titanium => feign::TITANIUM,
+            Self::EqMac => feign::EQMAC,
+        }
     }
 }
 

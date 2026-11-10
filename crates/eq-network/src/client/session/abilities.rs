@@ -384,13 +384,21 @@ impl Abilities {
         }
         match self.aim(ability, world, now, out.wire.dialect()) {
             Ok(target) => {
-                if ability == Ability::FeignDeath && out.wire.dialect() == GameDialect::EqMac {
+                if ability == Ability::FeignDeath {
                     // All refusals precede this intentional stance change.
-                    // Lying is visible even when the feign roll fails.
+                    // Lying is visible even when the feign roll fails: both
+                    // programs lie down before the feign request (Titanium
+                    // read R19 a), and the servers send nothing on success.
                     world
                         .posture
                         .lie_for_feign(world.own_spawn.unwrap_or(0), out)?;
+                    if out.wire.dialect().lying().holds_still {
+                        world.body.stop_voluntary();
+                    }
                 }
+                // The host hears the press after the request goes, and turns
+                // its auto attack off where the generation's press does
+                // ([`eq_network_game::feign::LyingRules::press_ends_attack`]).
                 self.send(session_id, ability, target, out, now)
             }
             Err(refusal) => refuse(session_id, ability, refusal, out),
@@ -682,6 +690,48 @@ mod tests {
         let outcome = try_ability(&mut abilities, &mut world, Ability::Fishing, Instant::now());
         assert!(outcome.sent.is_empty(), "sent {:?}", outcome.sent);
         assert_eq!(refused(&outcome.events), ["Not available on this server"]);
+    }
+
+    /// The Titanium press lies the player down, then sends the program's
+    /// 12 bytes; a press while lying sends the request alone (read R19 a).
+    #[test]
+    fn titanium_feign_death_lies_down_first_then_feigns() {
+        let mut abilities = Abilities::default();
+        let mut world = warrior();
+        world.player.corrected().unwrap().skills.as_mut().unwrap()[25] = 50;
+        let now = Instant::now();
+        let outcome = try_ability(&mut abilities, &mut world, Ability::FeignDeath, now);
+        outcome.result.unwrap();
+        assert_eq!(
+            outcome.sent,
+            [
+                eq_network_game::feign::titanium_posture(7).unwrap(),
+                eq_network_game::feign::titanium_request(7).unwrap(),
+            ]
+        );
+        assert_eq!(world.posture.current(), Some(PostureState::Lying));
+        // The host hears the press after the request, and turns its auto
+        // attack off on it.
+        assert!(matches!(
+            outcome.events[..],
+            [
+                ClientEvent::World(WorldEvent::Posture {
+                    posture: PostureState::Lying,
+                    ..
+                }),
+                ClientEvent::World(WorldEvent::AbilityUsed {
+                    ability: Ability::FeignDeath,
+                    ..
+                })
+            ]
+        ));
+        let later = now + Duration::from_secs(11);
+        let outcome = try_ability(&mut abilities, &mut world, Ability::FeignDeath, later);
+        outcome.result.unwrap();
+        assert_eq!(
+            outcome.sent,
+            [eq_network_game::feign::titanium_request(7).unwrap()]
+        );
     }
 
     #[test]

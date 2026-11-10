@@ -1173,7 +1173,12 @@ and the horizontal budget for a Fall sample. `RunSpeedMultiplier` holds 100
 through 140 percent in one-percentage-point steps, with 100 as the default.
 Calibration events retain the source-derived speeds. The host applies the
 same multiplier when proposing running movement. `fly` permits ascent/descent
-within the current mode's unscaled elapsed speed budget. These options never
+within the current mode's unscaled elapsed speed budget. `lying`
+(`LyingOptions`) holds two departures for a player who lies on the ground
+where the generation's program holds them still (`GameDialect::lying()`):
+`walk` accepts `Walk` samples there, with no stand sent and no jump, and
+`stand_when_hit` stands the player on an `OP_Damage` hit while they lie, as
+the program does only for a sitter or a looter. These options never
 bypass session identity, input freshness, finite coordinates, fixed bounds, current
 known speed, corrections, death or transfer gates. Changes invalidate pre-toggle queued input using the caller stamp and preserve
 the accepted sample time for same-frame FIFO movement. A change of flight or

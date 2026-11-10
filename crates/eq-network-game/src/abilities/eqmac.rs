@@ -282,7 +282,6 @@ mod tests {
             }
         )
         .is_err());
-        assert!(request::titanium(&Request::FeignDeathPosture, sender).is_err());
     }
 
     #[test]

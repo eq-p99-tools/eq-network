@@ -49,7 +49,8 @@ impl Sender<'_> {
 /// What the zone session asks of the server.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Request {
-    /// Lie down for an `EQMac` feign attempt; this does not assert success.
+    /// Lie down for a feign attempt, as the press does before the feign
+    /// request; this does not assert success.
     FeignDeathPosture,
     /// Start the server's camp timer.
     Camp,
@@ -448,6 +449,11 @@ pub fn titanium(request: &Request, sender: Sender<'_>) -> Result<EncodedCommand>
         Request::DragCorpse(corpse) => corpses::drag(corpse, sender.name)?,
         Request::DropCorpse { corpse } => corpses::release(corpse.as_deref())?,
         Request::Pet { command, target } => pets::command(*command, *target),
+        // The program's 12 bytes (read R19 a), where the server reads none.
+        Request::Ability {
+            ability: Ability::FeignDeath,
+            ..
+        } => crate::feign::titanium_request(sender.spawn())?,
         Request::Ability { ability, target } => ability
             .encode(target.unwrap_or(0))
             .ok_or_else(|| anyhow::anyhow!("{ability:?} asks of its target with the skill"))?,
@@ -567,8 +573,8 @@ pub fn titanium(request: &Request, sender: Sender<'_>) -> Result<EncodedCommand>
         Request::EnvironmentalNotice { .. }
         | Request::AttackNotice { .. }
         | Request::DropInvisibility(_)
-        | Request::FeignDeathPosture
         | Request::BledOut { .. } => anyhow::bail!("the Titanium client cannot send {request:?}"),
+        Request::FeignDeathPosture => crate::feign::titanium_posture(sender.spawn())?,
         Request::StopSong => spells::titanium_stop_song(),
         Request::Memorize { gem, spell_id } => spells::titanium_memorize(*gem, *spell_id),
         Request::Forget { gem, spell_id } => spells::titanium_forget(*gem, *spell_id),

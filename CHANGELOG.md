@@ -7,6 +7,32 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Breaking:** Feign Death and the lying posture as the Titanium program
+  handles them (program reads R19 and R19b), through the new
+  `GameDialect::lying()` rules (`feign::LyingRules`). The Mac-era client
+  keeps the earlier rules until its program is read.
+  - The press lies the player down with `OP_SpawnAppearance` (type 14, 115)
+    before the feign request, as the program does; until now Titanium sent
+    only the request, so the player never lay down and moving never ended
+    the feign. A press while lying sends the request alone.
+    `Request::FeignDeathPosture` now encodes on Titanium.
+  - The feign request carries the program's 12 bytes
+    (`feign::titanium_request`): the player's own id, then a word the
+    program fills only from its own damage reports, sent as 0, and zeros
+    (checklist 6.455, inferred). `Ability::encode` returns `None` for Feign
+    Death.
+  - While the player lies, a step that goes anywhere is refused and nothing
+    stands them to move; a turn alone, a fall and a lift's carry go on, and
+    jumping is refused. Lying down stops the movement in hand. The grant is
+    not withdrawn.
+  - Any `OP_Damage` record of more than 0 to the player stands a sitter or a
+    looter, whatever its type; lying and ducking players stay as they are.
+  - A cast while lying is refused with the program's line:
+    `WorldEvent::CastRejected` has a new `string_id`.
+  - Two departures in `MovementOptions`'s new `lying`
+    (`movement::LyingOptions`), both off by default: `walk` (walk speed
+    only, no jump, no stand; checklist 6.454) and `stand_when_hit`
+    (checklist 6.453).
 - **Breaking:** Titanium class tools (Batch B2). On EQEmu and P99:
   - Fishing is offered on P99 too. Before it is sent, the program's checks
     run in its order, each refusing with the program's own line: already

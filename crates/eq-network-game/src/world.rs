@@ -915,6 +915,9 @@ pub enum WorldEvent {
         spell_id: u32,
         /// Human-readable local rejection reason.
         reason: String,
+        /// The installed client's own line for the refusal (`eqstr_us.txt`),
+        /// where the program says one.
+        string_id: Option<u32>,
     },
     /// Result of local validation and transport submission, not a server acknowledgment.
     InventoryAction {
