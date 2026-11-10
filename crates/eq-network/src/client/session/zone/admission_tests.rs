@@ -674,3 +674,42 @@ fn a_later_profile_cannot_restore_a_superseded_recording_heartbeat() {
     record_chat_through(&mut script);
     assert!(!script.sent.contains(&POSITION_OPCODE));
 }
+
+/// A Titanium zone that sends no inventory message, as after a death that
+/// left everything on the corpse: the admitted player holds nothing, and the host is asked for speed inputs it can supply.
+#[test]
+fn a_titanium_admission_without_an_inventory_admits_an_empty_one() {
+    let config = config();
+    let identity = ClientIdentity::new("example-host", "example-user");
+    let credentials = credentials();
+    let stop = CancellationToken::default();
+    let context = context(&config, &identity, &credentials, &stop, None);
+    let mut script = Script::titanium(1.0);
+    script.stop_when_drained = Some(stop.clone());
+    let mut inventory = Vec::new();
+    let mut entered = false;
+    let mut handler = |event| {
+        match event {
+            ClientEvent::World(WorldEvent::Entered { .. }) => entered = true,
+            ClientEvent::World(WorldEvent::Inventory(update)) => {
+                assert!(entered, "inventory reported before admission");
+                inventory.push(update);
+            }
+            _ => (),
+        }
+        Ok(())
+    };
+    assert!(matches!(
+        run_script(
+            &context,
+            &mut script,
+            &mut Events::new(&config, &mut handler)
+        )
+        .unwrap(),
+        ZoneExit::Stopped
+    ));
+    assert!(matches!(
+        &inventory[..],
+        [eq_network_game::inventory::InventoryUpdate::Snapshot(items)] if items.is_empty()
+    ));
+}

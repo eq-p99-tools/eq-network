@@ -476,6 +476,9 @@ pub(super) struct Belongings {
     meals: meals::Meals,
     /// A split or a banker's change waiting for its answer.
     sharing: sharing::Sharing,
+    /// Whether the zone said anything of the inventory before admitting
+    /// the player: a snapshot, an item or a packet it could not read.
+    heard: bool,
 }
 
 impl Belongings {
@@ -516,6 +519,7 @@ impl Belongings {
             quotes,
             meals: meals::Meals::new(auto_eat, hungry),
             sharing: sharing::Sharing::default(),
+            heard: false,
         }
     }
 
@@ -1023,6 +1027,7 @@ impl Feature for Belongings {
     /// inventory and the ledger the admission reports.
     fn admit(&mut self, message: &Message, world: &mut World) -> Result<()> {
         if let Some(update) = update(message) {
+            self.heard = true;
             world.inventory.0.apply(update);
         }
         if let Message::Event(WorldEvent::Nourishment(nourishment)) = message {
@@ -1035,11 +1040,25 @@ impl Feature for Belongings {
 
     /// Reports the inventory, replayed from empty so that the host's copy and
     /// this one count the same revisions.
+    ///
+    /// A zone sends its whole inventory, when it sends one, before the
+    /// weather the client waits for to request the zone, on the same ordered
+    /// stream; admission ends later on every generation. When a zone sent no
+    /// inventory message by admission, the player holds nothing, as the
+    /// original client then holds (inferred, recording checklist 6.437). An
+    /// unreadable or partial inventory is news, and stays as unknown as it
+    /// was; a later snapshot replaces the empty one.
     fn admitted(&mut self, world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
         self.moves = MoveOrder::default();
         self.trades.clear();
         self.merchant.clear();
-        let admission = world.inventory.admission_updates();
+        let mut admission = world.inventory.admission_updates();
+        if !self.heard {
+            out.log.diagnostic(
+                "Zone sent no inventory message before admission; the player holds nothing".into(),
+            )?;
+            admission.insert(0, InventoryUpdate::Snapshot(Vec::new()));
+        }
         world.inventory = Carried::default();
         for update in admission {
             change(update, world, out)?;
@@ -1455,6 +1474,91 @@ mod tests {
         assert!(!world.inventory.stale());
         assert!(output.events.iter().any(|event| matches!(event,
             ClientEvent::World(WorldEvent::Inventory(InventoryUpdate::Snapshot(items))) if items.is_empty())));
+    }
+
+    #[test]
+    fn an_admission_without_any_inventory_news_leaves_the_player_holding_nothing() {
+        // A zone that sends no inventory message, as after a death that
+        // left everything on the corpse.
+        let mut belongings = Belongings::new(eq_network_game::food::AutoEat::default());
+        let mut world = World::new(5);
+        belongings
+            .admit(
+                &Message::Event(WorldEvent::Coins(Coins::default())),
+                &mut world,
+            )
+            .unwrap();
+        let output = testing::run(|out| belongings.admitted(&mut world, out));
+        output.result.unwrap();
+        assert!(world.inventory.received());
+        assert!(!world.inventory.stale());
+        assert!(world.inventory.items().is_empty());
+        let snapshots: Vec<_> = output
+            .events
+            .iter()
+            .filter_map(|event| match event {
+                ClientEvent::World(WorldEvent::Inventory(update)) => Some(update),
+                _ => None,
+            })
+            .collect();
+        assert!(matches!(&snapshots[..], [InventoryUpdate::Snapshot(items)] if items.is_empty()));
+        assert!(output.events.iter().any(|event| matches!(event,
+            ClientEvent::Diagnostic(line) if line.contains("no inventory message"))));
+    }
+
+    #[test]
+    fn a_snapshot_after_an_empty_admission_replaces_it_and_the_weight_follows() {
+        let mut belongings = Belongings::new(eq_network_game::food::AutoEat::default());
+        let mut world = World::new(5);
+        world.own_spawn = Some(7);
+        world.player.admit(testing::player(7));
+        testing::run(|out| belongings.admitted(&mut world, out))
+            .result
+            .unwrap();
+        let weight = |world: &World| {
+            world
+                .inventory
+                .carried_weight_tenths(eq_network_game::GameDialect::Titanium, 0)
+        };
+        assert_eq!(weight(&world), Ok(0));
+        let revision = world.inventory.revision();
+        let mut carried = item(22);
+        carried.details.weight_tenths = 37;
+        let output = testing::run(|out| {
+            belongings.observe(
+                &Message::Event(WorldEvent::Inventory(InventoryUpdate::Snapshot(vec![
+                    carried.clone(),
+                ]))),
+                &mut world,
+                out,
+            )
+        });
+        output.result.unwrap();
+        assert_ne!(world.inventory.revision(), revision);
+        assert_eq!(world.inventory.items().len(), 1);
+        assert_eq!(weight(&world), Ok(37));
+    }
+
+    #[test]
+    fn an_unreadable_or_partial_inventory_at_admission_stays_unknown() {
+        for news in [
+            Message::Unreadable {
+                part: Part::Inventory,
+                error: "truncated".into(),
+            },
+            Message::Event(WorldEvent::Inventory(InventoryUpdate::Set(vec![item(30)]))),
+        ] {
+            let mut belongings = Belongings::new(eq_network_game::food::AutoEat::default());
+            let mut world = World::new(5);
+            belongings.admit(&news, &mut world).unwrap();
+            let output = testing::run(|out| belongings.admitted(&mut world, out));
+            output.result.unwrap();
+            assert!(!world.inventory.received());
+            assert!(!output.events.iter().any(|event| matches!(
+                event,
+                ClientEvent::World(WorldEvent::Inventory(InventoryUpdate::Snapshot(_)))
+            )));
+        }
     }
 
     #[test]
