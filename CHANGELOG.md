@@ -7,6 +7,44 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Breaking:** movement is no longer stopped while the player's speeds
+  are worked out again. The program stops input only for a stun, a freeze
+  (posture 0x66) or a posture other than standing or ducking (read R7,
+  0x4a1d74); it recomputes its speed modifier on buff and effect changes and
+  once a second, and input reads the result as it stands, without waiting
+  (read R18, 0x410fdb); a server position update to the player's own spawn
+  touches no input (R18, 0x451aba). A buff on the player (each Bard song
+  pulse), a buff list, a level, a spell landing, an EqMac fatigue change, a
+  change in belongings and a server's correction now ask the host for new
+  inputs while the grant in force goes on: no `MotionState` withdrawal and no
+  stop sent. A correction, a same-zone relocation (a summon or GM move) and
+  a local pad crossing take one path: they move the player and stop them
+  there, then grant the speeds in force again at once, with no withdrawal
+  (read R18: 0x451aba and the same-zone warp 0x48aaa6 touch no input).
+  `SameZoneRelocated` and `LocalPadCrossed` now reach the host after the
+  grant rather than after a withdrawal; without a grant both still wait. With a grant in force, an
+  `Unavailable` answer, or none, keeps the last inputs in force with no time
+  limit, noted once in the diagnostics. `SpeedInputState` gains
+  `Bounded { inputs, missing }`: the inputs from every term the host can
+  prove, each unproven term taken from the last report where one exists and
+  left out where none does, with every term it can prove slower applied (a
+  root or a snare it can evaluate, a weight it knows). The host proves the
+  terms, and the session takes a bound as reported, with or without a grant
+  in force: a bound is faster than the last one only where a proven slower
+  term ended, and without a grant it starts one, so a root that fades while
+  a song runs, or a zone-in with a term unproven from the start, moves at
+  once. Only `Unavailable`, with nothing provable, still waits. A report
+  under a pending ground drop's weight bound is taken at the bound; with a
+  grant in force and no bound to check, it is taken as a bound with the
+  weight no lower than in force, so a root in it still applies. The first
+  exact report replaces kept or bounded inputs in place, noted in the
+  diagnostics. Root, stun, freeze, death and zone transfer still stop
+  movement as before. The same rules apply on every server type; only the
+  waits are removed. Recording checklist 6.451, a stated excess by Adam's
+  decision of 11-10: while the speed inputs are unproven, the last grant is
+  kept without a time limit and can be faster than the official client
+  would allow; where no earlier report exists, unproven terms are left out.
+
 - **Breaking:** Titanium class tools (Batch B2). On EQEmu and P99:
   - Fishing is offered on P99 too. Before it is sent, the program's checks
     run in its order, each refusing with the program's own line: already
@@ -65,6 +103,10 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     while riding, is not followed, since the host does not tell the session
     when the player rides; a mounted player's request goes out where the
     program refuses it (6.443).
+- Between a beg or a pick and its answer, the Titanium program holds
+  casting and some window actions until the server replies (its
+  reply-pending count, read at 0x9248d0); the session does not yet
+  (checklist 6.452).
 - **Breaking:** a Bard's `/stopsong` follows the Titanium program's song
   state (read R16) and is offered on P99 too. The song is the player's last
   own cast start: every gem cast, and an item cast over 100 ms. No song ends

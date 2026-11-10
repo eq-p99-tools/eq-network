@@ -117,8 +117,18 @@ fn input_revision(world: &mut World) -> u64 {
         .expect("new input revision")
 }
 
+/// The run speed granted now, if any.
+fn speed(world: &mut World) -> Option<f32> {
+    world
+        .body
+        .motion_mut()
+        .unwrap()
+        .calibration()
+        .map(|speeds| speeds.units_per_second)
+}
+
 #[test]
-fn quarm_prediction_pacing_never_restores_a_withdrawn_weight_grant() {
+fn quarm_prediction_pacing_keeps_an_unproven_weight_grant() {
     use eq_network_game::{
         inventory::WeightUnavailable,
         movement::{SpeedInputState, SpeedInputUnavailable, SpeedInputs},
@@ -167,8 +177,8 @@ fn quarm_prediction_pacing_never_restores_a_withdrawn_weight_grant() {
     submit(&mut features, &mut world, &ready(cursor_revision))
         .result
         .unwrap();
-    assert!(world.body.motion_mut().unwrap().calibration().is_some());
-    // Putting it inside a reduction bag changes weight; pacing grants nothing.
+    let full = speed(&mut world).unwrap();
+    // Into a reduction bag: weight changes, pacing proves nothing.
     let reduce = request(&world, 30, 261, None);
     assert_eq!(submit(&mut features, &mut world, &reduce).sent.len(), 1);
     paced(&mut features, &mut world);
@@ -180,7 +190,8 @@ fn quarm_prediction_pacing_never_restores_a_withdrawn_weight_grant() {
     submit(&mut features, &mut world, &ready(cursor_revision))
         .result
         .unwrap();
-    assert!(world.body.motion_mut().unwrap().calibration().is_none());
+    // The old report answers nothing; the grant goes on (6.451).
+    assert_eq!(speed(&mut world), Some(full));
     submit(
         &mut features,
         &mut world,
@@ -194,7 +205,8 @@ fn quarm_prediction_pacing_never_restores_a_withdrawn_weight_grant() {
     .result
     .unwrap();
     paced(&mut features, &mut world);
-    assert!(world.body.motion_mut().unwrap().calibration().is_none());
+    // Unproven: the grant in force stays (6.451).
+    assert_eq!(speed(&mut world), Some(full));
     assert!(world.inventory.predicted());
     // A contradiction stays unusable after pacing; only the full snapshot recovers.
     observe(
@@ -221,7 +233,7 @@ fn quarm_prediction_pacing_never_restores_a_withdrawn_weight_grant() {
     submit(&mut features, &mut world, &ready(recovered))
         .result
         .unwrap();
-    assert!(world.body.motion_mut().unwrap().calibration().is_some());
+    assert_eq!(speed(&mut world), Some(full));
 }
 
 #[test]
