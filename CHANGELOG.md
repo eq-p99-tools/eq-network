@@ -23,7 +23,9 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
       class 62 (`Request::AtTreasure`; checklist 6.432, inferred). Pick Lock
       has only that message, and does nothing and says nothing at any
       other target; `Ability::encode` returns `None` for it.
-    - Each waits ten seconds on its own timer, the program's value.
+    - Each waits ten seconds on its own timer, the program's value. A press
+      while a class tool's wait runs, Fishing's 12 s too, is passed over in
+      silence, as the program does: nothing is sent and nothing said.
     - The server's answer to a beg or a pick comes as the new
       `WorldEvent::AskAnswered` (`abilities::titanium_answer`), read as the
       program reads it: nothing, coins of one kind, or on a pick an item by

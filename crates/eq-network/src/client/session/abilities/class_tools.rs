@@ -70,7 +70,9 @@ pub(super) const fn checks(ability: Ability) -> bool {
     )
 }
 
-/// What the player sends, and the line printed as they do.
+/// What the player sends, and the line printed as they do; by default,
+/// nothing.
+#[derive(Default)]
 struct Use {
     requests: Vec<Request>,
     string_id: Option<u32>,
@@ -133,9 +135,10 @@ impl Abilities {
                 Vec::new(),
             ));
         }
-        // The program passes over a press while the wait runs, silently.
+        // The program passes over a press while the wait runs, silently
+        // (read R14 section 0): nothing is sent and nothing said.
         if self.waiting(ability, now) {
-            return Err("Ability recovery time not yet met.".into());
+            return Ok(Use::default());
         }
         let target = world
             .target
@@ -531,10 +534,10 @@ mod tests {
         assert_eq!(opcodes(&cast), [0x2acf, 0x0b36]);
         assert_eq!(cast.sent[0].body, [7, 0, 5, 5]);
         assert_eq!(cast.sent[1].body, [0_u8; 0]);
-        // The wait runs first and says nothing of the program's.
+        // The wait runs first and is passed over in silence.
         let again = press(&mut abilities, &world, fish(false), now);
-        assert_eq!(line(&again), None);
-        assert_eq!(again.sent, []);
+        again.result.as_ref().unwrap();
+        assert_eq!((again.sent.len(), again.events.len()), (0, 0));
         // With the server's word that it is ready again, the program's own
         // two-second flag still holds the next cast.
         abilities
@@ -629,8 +632,11 @@ mod tests {
             [42, 0, 0, 0, 7, 0, 0, 0, 37, 0, 0, 0, 0xff, 0, 0, 0, 0, 0]
         );
         assert_eq!(opcodes(&picked), [0x2ad8]);
-        // Its own ten-second wait, apart from Begging's.
-        assert_eq!(press(&mut abilities, &world, pick, now).sent, []);
+        // Its own ten-second wait, apart from Begging's, passed over in
+        // silence.
+        let waiting = press(&mut abilities, &world, pick, now);
+        waiting.result.as_ref().unwrap();
+        assert_eq!((waiting.sent.len(), waiting.events.len()), (0, 0));
         let mut beggar = player(&[(48, 37), (67, 5)]);
         beggar.target = crate::client::session::targeting::Target::from(42);
         assert_eq!(
