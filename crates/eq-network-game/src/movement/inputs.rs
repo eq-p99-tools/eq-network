@@ -140,6 +140,19 @@ pub enum SpeedInputUnavailable {
 pub enum SpeedInputState {
     /// Complete inputs for the revision requested by the session.
     Ready(SpeedInputs),
-    /// Withdraw player input until a complete report is available.
+    /// The slowest inputs still possible while `missing` is unproven: every
+    /// unproven term at its slowest plausible value, so the speeds granted
+    /// from them are never faster than the exact ones (recording checklist
+    /// 6.451). The session takes these only while it already holds a grant;
+    /// without one they withdraw input as [`Self::Unavailable`] does.
+    Conservative {
+        /// The slowest inputs still possible.
+        inputs: SpeedInputs,
+        /// What is not yet proven.
+        missing: SpeedInputUnavailable,
+    },
+    /// Withdraw player input until a complete report is available. While
+    /// the session holds a grant, it keeps that grant at the walk rate
+    /// instead (recording checklist 6.452).
     Unavailable(SpeedInputUnavailable),
 }

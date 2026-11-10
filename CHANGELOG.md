@@ -7,6 +7,27 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Breaking:** movement is no longer stopped while the player's speeds
+  are worked out again. The program reads its speed modifier live and stops
+  input only for a stun, a freeze (posture 0x66) or a posture other than
+  standing or ducking (read R7, 0x4a1d74). A buff on the player (each Bard
+  song pulse), a buff list, a level, a spell landing, an EqMac fatigue change,
+  a change in belongings and a server's correction now ask the host for new
+  inputs while the grant in force goes on: no `MotionState` withdrawal and no
+  stop sent. A correction still moves the player and stops them there, then
+  grants the speeds in force again at once. `SpeedInputState` gains
+  `Conservative { inputs, missing }`: the slowest inputs still possible while
+  `missing` is unproven, taken only while a grant is in force (recording
+  checklist 6.451; without a grant they withdraw as `Unavailable`). An
+  `Unavailable` answer, or an answer later than 1 s, holds the grant in force
+  at the walk rate instead of withdrawing it (6.452). A report under a
+  pending ground drop's weight bound is taken at the bound rather than
+  withdrawing. Root, stun, freeze, death and zone transfer still stop
+  movement as before. The same rules apply on every server type; only the
+  waits are removed. Both sides of 6.451: a grant kept across the host's
+  round trip may briefly run at the old, faster rate after a snare lands;
+  conservative inputs run slower than the program until the exact ones land.
+
 - **Breaking:** Titanium lifts. `doors::titanium` holds the program's door
   rules: vertical travel and speeds by open type, the type 15 and 78-81
   slides, floor and wall solidity, the client's own return times, and the
