@@ -19,10 +19,13 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `MovementGuard::allow_lift_rise`, `MotionSession::allow_lift_rise`), and
   only a sample naming a support spends any of it. `Lifts::returns_at` and
   `Lifts::sinks` give a vertical door's own return and descent. Types 40 and 45 return by a click with
-  no player, `Request::ReturnDoor`. Titanium measures a door's click reach
-  in 2-D to where the door stands now (`Doors::check_click_raised`; read
-  R16b, 0x47f7dc), so a lift resting raised is used from below and from its
-  top alike; the program's two radius terms are left out (checklist 6.440). `WorldEvent::Entered` gains `zone_id`
+  no player, `Request::ReturnDoor`. A door's click reach runs to where the
+  door stands now, never where it was placed (`Doors::check_click_raised`,
+  read R16b): the program measures a mouse click (0x4906c5) in 3-D to the
+  point hit on the door, and a use with no hit point (0x47f7dc) in 2-D to
+  the door within its radius. Titanium's door reach is now the 2-D rule for
+  every use, without the radius terms (checklist 6.440), so a lift resting
+  raised is used from below and from its top alike. `WorldEvent::Entered` gains `zone_id`
   (serde default 0), the zone number the program's door rules name. The
   lift rider radius and a hinged door's return start are inferred
   (recording checklist 6.424, 6.426).

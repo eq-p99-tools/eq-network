@@ -146,8 +146,12 @@ impl Doors {
     /// [`Self::check_click`] for a door standing `raised` above its placed
     /// height now, as a Titanium lift does ([`titanium::Lifts::offset`]):
     /// the reach runs to where the door stands now, never where it was
-    /// placed (read R16b, 0x4906c5 and 0x47f7dc). Titanium's reach is 2-D,
-    /// so a lift resting raised is used from below and from its top alike.
+    /// placed. The program measures a mouse click (0x4906c5) in 3-D to the
+    /// point it hit on the door as drawn, and a use with no hit point
+    /// (0x47f7dc) in 2-D to the door's current position within its radius
+    /// (read R16b). Ours applies the 2-D rule to every use, without the
+    /// radius terms (recording checklist 6.440), so a lift resting raised is
+    /// used from below and from its top alike.
     ///
     /// # Errors
     /// As [`Self::check_click`].

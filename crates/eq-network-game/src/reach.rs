@@ -64,11 +64,14 @@ pub const CONTAINER_CHECK: Duration = Duration::from_millis(500);
 
 /// The Titanium program's reaches.
 pub const TITANIUM: Reaches = Reaches {
-    // A door used with no point on it clicked (contact, 0x47f7dc; read
-    // R16b): a 2-D distance, x and y, to where the door stands now (+0x38,
-    // +0x3c), of at most the door's radius, the player's and 20 (0x644368).
-    // The two radii are left out, so this reach is never longer than the
-    // program's (recording checklist 6.440).
+    // The program has two door reaches, neither to the placed position
+    // (read R16b). A mouse click (0x49812e to 0x4906c5) measures in 3-D to
+    // the point the click ray hit on the door as drawn, within the player's
+    // +0x23c and 20. A use with no hit point (0x47f7dc) measures in 2-D, x
+    // and y, to where the door stands now (+0x38, +0x3c), within the door's
+    // radius, the player's +0x23c and 20 (0x644368). Ours applies the
+    // second to every use, as the session has no hit point, without the two
+    // radius terms (recording checklist 6.440).
     doors: Reach {
         distance: 20.0,
         flat: true,
