@@ -128,6 +128,8 @@ pub mod sysinfo;
 pub mod targets;
 /// The server's regeneration tick and how often it comes.
 pub mod ticks;
+/// Tracking: the server's list and following a spawn.
+pub mod tracking;
 /// Tradeskill combines in the player's own containers.
 pub mod tradeskills;
 /// Training skills at a guildmaster.

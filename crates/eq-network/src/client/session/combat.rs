@@ -140,6 +140,9 @@ impl Feature for Combat {
             out.command(command)?
         };
         if sent {
+            if let ClientCommand::AutoAttack { enabled, .. } = *command {
+                world.attacking = enabled;
+            }
             out.log.send(ClientEvent::World(WorldEvent::CombatRequest {
                 session_id,
                 request,
@@ -150,6 +153,11 @@ impl Feature for Combat {
     }
 
     fn observe(&mut self, message: &Message, world: &mut World, _: &mut Out<'_, '_>) -> Result<()> {
+        if let Message::Event(event) = message {
+            if world.owns_death(event) {
+                world.attacking = false;
+            }
+        }
         let (Some(shots), Message::Event(event)) = (&mut self.shots, message) else {
             return Ok(());
         };

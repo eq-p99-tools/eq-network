@@ -21,17 +21,100 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   grants the speeds in force again at once. With a grant in force, an
   `Unavailable` answer, or none, keeps the last inputs in force with no time
   limit, noted once in the diagnostics. `SpeedInputState` gains
-  `Bounded { inputs, missing }`: the last inputs with every term the host
-  can prove slower applied (a root or a snare it can evaluate, a weight it
-  knows), taken in place of a grant in force; without a grant they withdraw
-  as `Unavailable`. A report under a pending ground drop's weight bound is
-  taken at the bound. The first exact report replaces kept or bounded inputs
-  in place. Root, stun, freeze, death and zone transfer still stop movement
+  `Bounded { inputs, missing }`: the inputs from every term the host can
+  prove, each unproven term taken from the last report where one exists and
+  left out where none does, with every term it can prove slower applied (a
+  root or a snare it can evaluate, a weight it knows). The host proves the
+  terms; the session never lets a bound speed up a grant in force (the rate
+  no higher, the weight no lower, the capacity no higher than in force), and
+  without a grant a bound starts one, so a root that fades while a song runs,
+  or a zone-in with a term unproven from the start, moves at once. Only
+  `Unavailable`, with nothing provable, still waits. A report under a pending
+  ground drop's weight bound is taken at the bound. The first exact report
+  replaces kept or bounded inputs in place, noted in the diagnostics. Root, stun, freeze, death and zone transfer still stop movement
   as before. The same rules apply on every server type; only the waits are
   removed. Recording checklist 6.451, a stated excess by Adam's decision of
   11-10: while the speed inputs are unproven, the last grant is kept without
-  a time limit and can be faster than the official client would allow.
+  a time limit and can be faster than the official client would allow; where
+  no earlier report exists, unproven terms are left out.
 
+- **Breaking:** Titanium class tools (Batch B2). On EQEmu and P99:
+  - Fishing is offered on P99 too. Before it is sent, the program's checks
+    run in its order, each refusing with the program's own line: already
+    fishing (its own 2 s flag, apart from the 12 s wait), in water, an item
+    held, attacking, no pole, the pole not in hand, no bait. A standing
+    player sends the pole's cast animation first, and the cast's line comes
+    with `WorldEvent::AbilityUsed`'s new `string_id`.
+  - New abilities `PickPockets`, `Begging`, `SenseTraps`, `DisarmTraps`,
+    `PickLock` and `Tracking`.
+    - Pick Pockets and Begging send the program's 18-byte ask, carrying the
+      player's own skill value (`Request::AskOf`,
+      `abilities::titanium_ask`).
+    - The trap skills send the program's treasure messages at a target of
+      class 62 (`Request::AtTreasure`; checklist 6.432, inferred). Pick Lock
+      has only that message, and does nothing and says nothing at any
+      other target; `Ability::encode` returns `None` for it.
+    - Each waits ten seconds on its own timer, the program's value. A press
+      while a class tool's wait runs, Fishing's 12 s too, sends nothing. The
+      program passes over it in silence; the session refuses it as for any
+      other ability, with no line of the program's, so the host says its
+      own (a chat-only departure, checklist 6.447).
+    - The server's answer to a beg or a pick comes as the new
+      `WorldEvent::AskAnswered` (`abilities::titanium_answer`), read as the
+      program reads it: nothing, coins of one kind, or on a pick an item by
+      name. `AskAnswer::line` gives the program's line and what it names.
+      The session adds the coins to the purse, as the program does, and
+      tells `WorldEvent::Coins`; the server sends no money update.
+    - A player's pockets are picked only with both open to player combat,
+      each spawn's flag from its appearance updates, refused otherwise with
+      the program's line for whichever is not, and then only within five
+      levels each way, refused in this library's words since the read does
+      not yet tell the two lines apart; its ruleset term is unread (6.438).
+    - Begging's unseen check reads the player's own invisibility (6.430),
+      and the 15-unit reach is measured as the bandage's (6.431).
+  - Tracking, as the program does it (`tracking`, `Capability::Tracking`).
+    - Pressing it asks for the list and then sends the program's empty
+      second message. The new `GameCommand::Track` refreshes the list,
+      follows a spawn from it, or stops (`TrackAction`).
+    - The server's list comes as `WorldEvent::Tracking` with
+      `TrackingUpdate::Listed`: the server's order, at most 1,000 entries,
+      leaving out spawns the session does not know.
+    - Following names the spawn to the server and starts a six-minute
+      limit. The session tells the host every two seconds where the spawn
+      lies against the player's heading, as one of the program's five
+      bearing lines (`TrackingUpdate::Bearing`), and sends nothing more.
+      The side word follows the heading's sense, turning left raising it:
+      a spawn the way the heading grows lies on the left. This was checked
+      against 22 side lines of a local run, which fixed the side; the
+      program's own bearing routine and sign test are unread (6.441).
+    - Following ends with the program's line when the spawn is gone or
+      six minutes pass. Stopping while following sends the program's stop
+      and says nothing.
+    - The Ranger's sort and colour filter are not offered.
+  - A frozen player uses none of these, with the program's line. The
+    program's mount gate, which allows only Tracking and Fishing of these
+    while riding, is not followed, since the host does not tell the session
+    when the player rides; a mounted player's request goes out where the
+    program refuses it (6.443).
+- **Breaking:** a Bard's `/stopsong` follows the Titanium program's song
+  state (read R16) and is offered on P99 too. The song is the player's last
+  own cast start: every gem cast, and an item cast over 100 ms. No song ends
+  on its own. The server's cast update with keep-casting clear ends it as
+  the program does: spell -1 or a spell of the class always, and for a Bard
+  an item's song or the very spell named; a new cast takes its place.
+  `StopSong` sends the empty request only for a song of a class spell,
+  even while another cast is held, as the program does. An item's song of
+  another spell ends locally with nothing sent. With no song, or for any
+  other class, nothing is sent. A memorized spell is taken as the class's,
+  and every gem cast as over 100 ms, since the session has no spell table:
+  so an item's song of a class spell that is not memorized ends locally
+  where the program sends the stop. The program's memorize path, where a
+  Bard memorizing a spell stops the song with the stop sent and restarts
+  that gem's, is not followed (checklist 6.442).
+  - `GameCommand::UseAbility` gains `in_liquid`, the host's own liquid test,
+    which Fishing refuses on. `Ability::encode` returns `None` for the two
+    asks. The session follows the auto-attack toggle it sent, and the
+    player's death turns it off.
 - **Breaking:** Titanium lifts. `doors::titanium` holds the program's door
   rules: vertical travel and speeds by open type, the type 15 and 78-81
   slides, floor and wall solidity, the client's own return times, and the

@@ -56,6 +56,7 @@ use super::{
     talk::Talk,
     targeting::Targeting,
     ticks::{Marks, Regeneration, Ticks},
+    tracking::Tracking,
     tradeskills::Tradeskills,
     training::Training,
     transfers::{Home, Transfers},
@@ -498,6 +499,11 @@ pub(super) trait ServerType: Sync {
         None
     }
 
+    /// Tracking's window and following a spawn from it.
+    fn tracking(&self, _setup: &Setup<'_>) -> Provided {
+        None
+    }
+
     /// Every feature the server type provides, in the order the zone session
     /// offers them each command, packet and timer.
     fn features(&self, setup: &Setup<'_>) -> Vec<Provision> {
@@ -527,6 +533,7 @@ pub(super) trait ServerType: Sync {
             self.who(setup),
             self.friends_who(setup),
             self.guilds(setup),
+            self.tracking(setup),
             self.corpses(setup),
             self.pets(setup),
             self.training(setup),
@@ -835,27 +842,6 @@ mod shared {
     }
 }
 
-/// The abilities offered on P99: every one but fishing, which came later.
-const P99_ABILITIES: [Ability; 17] = [
-    Ability::Kick,
-    Ability::Bash,
-    Ability::Backstab,
-    Ability::Frenzy,
-    Ability::FlyingKick,
-    Ability::RoundKick,
-    Ability::TigerClaw,
-    Ability::EagleStrike,
-    Ability::DragonPunch,
-    Ability::Taunt,
-    Ability::Hide,
-    Ability::Sneak,
-    Ability::Forage,
-    Ability::Mend,
-    Ability::BindWound,
-    Ability::FeignDeath,
-    Ability::SenseHeading,
-];
-
 /// The hazards a local `EQEmu` takes from the client: falls, whose damage it
 /// lowers by the player's fall damage reductions from spells, items and AAs,
 /// and drowning and lava, whose amounts it takes as sent
@@ -996,10 +982,11 @@ impl ServerType for Project1999 {
         true
     }
 
+    /// A Bard's `/stopsong` sends what the Titanium program sends (read R16).
     fn casting(&self, _setup: &Setup<'_>) -> Provided {
         // Inferred local estimate (recording checklist 6.399) from the classic once-per-game-day reuse.
         offer(Box::new(Casting::with_titanium_combat(
-            false,
+            true,
             std::time::Duration::from_mins(72),
         )))
     }
@@ -1040,6 +1027,12 @@ impl ServerType for Project1999 {
     /// read R11); the server checks who may do what.
     fn guilds(&self, _setup: &Setup<'_>) -> Provided {
         offer(Box::<Guilds>::default())
+    }
+
+    /// The Titanium program's track window and following (program reads
+    /// R14, R15a); the server decides who is listed.
+    fn tracking(&self, _setup: &Setup<'_>) -> Provided {
+        offer(Box::<Tracking>::default())
     }
 
     /// The Titanium program's floor is whatever surface lies under the
@@ -1095,7 +1088,7 @@ impl ServerType for Project1999 {
     }
 
     fn abilities(&self, _setup: &Setup<'_>) -> Provided {
-        offer(shared::abilities_with_self_bandage(&P99_ABILITIES))
+        offer(shared::abilities_with_self_bandage(&Ability::ALL))
     }
 
     fn talk(&self, _setup: &Setup<'_>) -> Provided {
@@ -1395,6 +1388,13 @@ impl ServerType for EqEmu {
     /// handlers take; the server checks who may do what.
     fn guilds(&self, _setup: &Setup<'_>) -> Provided {
         offer(Box::<Guilds>::default())
+    }
+
+    /// `Client::Handle_OP_Track` answers with the list, `Handle_OP_TrackTarget`
+    /// records the spawn followed, and `Handle_OP_TrackUnknown` ignores the
+    /// press's second message.
+    fn tracking(&self, _setup: &Setup<'_>) -> Provided {
+        offer(Box::<Tracking>::default())
     }
 
     fn hazards(&self, setup: &Setup<'_>) -> Provided {
@@ -1980,7 +1980,7 @@ mod tests {
     }
 
     #[test]
-    fn only_eqemu_offers_the_bard_stop_request() {
+    fn the_titanium_servers_offer_the_bard_stop_request() {
         for protocol in [
             ServerProtocol::Project1999,
             ServerProtocol::EqEmu,
@@ -1989,7 +1989,10 @@ mod tests {
         ] {
             assert_eq!(
                 offers(server_type(protocol)).contains(&Capability::StoppingSongs),
-                protocol == ServerProtocol::EqEmu
+                matches!(
+                    protocol,
+                    ServerProtocol::EqEmu | ServerProtocol::Project1999
+                )
             );
         }
     }
@@ -2329,13 +2332,6 @@ mod tests {
     }
 
     #[test]
-    fn p99_lists_every_ability_but_fishing() {
-        assert!(!P99_ABILITIES.contains(&Ability::Fishing));
-        assert!(P99_ABILITIES.contains(&Ability::BindWound));
-        assert_eq!(P99_ABILITIES.len(), Ability::ALL.len() - 1);
-    }
-
-    #[test]
     fn p99_and_eqemu_provide_every_feature_one_each() {
         // The map, deleting spells, merchants' offers, raids and the
         // server's tick are offered on EQEmu alone. P99 takes falls' damage by
@@ -2344,8 +2340,8 @@ mod tests {
         // yet checked live; and only EQEmu takes the show-helm option.
         // Both Titanium policies retain the verified own-player stun timer.
         for (protocol, count) in [
-            (ServerProtocol::Project1999, 36),
-            (ServerProtocol::EqEmu, 42),
+            (ServerProtocol::Project1999, 37),
+            (ServerProtocol::EqEmu, 43),
         ] {
             let server = server_type(protocol);
             let setup = Setup::new("Tester", AutoEat::default());
@@ -2364,8 +2360,8 @@ mod tests {
             assert!(offers(server_type(ServerProtocol::EqEmu)).contains(&capability));
         }
         assert!(offers(server_type(ServerProtocol::Project1999)).contains(&Capability::Grouping));
-        // Both Titanium providers offer the contacts, guild and coin-sharing
-        // requests the program sends.
+        // Both Titanium providers offer the contacts, guild, coin-sharing and
+        // tracking requests the program sends.
         for protocol in [ServerProtocol::Project1999, ServerProtocol::EqEmu] {
             let capabilities = offers(server_type(protocol));
             for capability in [
@@ -2374,6 +2370,7 @@ mod tests {
                 Capability::GuildManagement,
                 Capability::BankerChange,
                 Capability::Splitting,
+                Capability::Tracking,
             ] {
                 assert!(
                     capabilities.contains(&capability),

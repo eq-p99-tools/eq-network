@@ -879,7 +879,7 @@ mod tests {
     };
 
     /// How many kinds of command there are.
-    const KINDS: usize = 103;
+    const KINDS: usize = 104;
 
     /// The kinds the login and world servers take, before any zone session.
     const BEFORE_ZONES: [usize; 4] = [0, 1, 70, 75];
@@ -984,6 +984,7 @@ mod tests {
             ClientCommand::RespondToPopup { .. } => 89,
             ClientCommand::InspectPlayer { .. } => 90,
             ClientCommand::WhoFriends { .. } => 92,
+            ClientCommand::Track { .. } => 103,
             ClientCommand::ChangeCoins { .. } => 93,
             ClientCommand::SplitCoins { .. } => 94,
             ClientCommand::SetAutoSplit { .. } => 95,
@@ -1282,6 +1283,7 @@ mod tests {
                 created,
             },
             ClientCommand::UseAbility {
+                in_liquid: false,
                 target: None,
                 session_id,
                 ability: eq_network_game::abilities::Ability::Kick,
@@ -1493,6 +1495,10 @@ mod tests {
             ClientCommand::WhoFriends {
                 session_id,
                 names: vec!["Friend".into()],
+            },
+            ClientCommand::Track {
+                session_id,
+                action: eq_network_game::tracking::TrackAction::Stop,
             },
             ClientCommand::ChangeCoins { session_id },
             ClientCommand::SplitCoins {
@@ -2754,11 +2760,12 @@ mod tests {
             Capability::Sacrifice,
             Capability::ServerTicks,
             Capability::ShowingHelm,
-            Capability::StoppingSongs,
         ] {
             assert!(eqemu.contains(&capability));
             assert!(!p99.contains(&capability));
         }
+        assert!(eqemu.contains(&Capability::StoppingSongs));
+        assert!(p99.contains(&Capability::StoppingSongs));
         for capability in [
             Capability::Listing,
             Capability::Rolling,
