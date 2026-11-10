@@ -7,6 +7,30 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Breaking:** Titanium class tools (Batch B2). On EQEmu and P99:
+  - Fishing is offered on P99 too. Before it is sent, the program's checks
+    run in its order, each refusing with the program's own line: already
+    fishing (its own 2 s flag, apart from the 12 s wait), in water, an item
+    held, attacking, no pole, the pole not in hand, no bait. A standing
+    player sends the pole's cast animation first, and the cast's line comes
+    with `WorldEvent::AbilityUsed`'s new `string_id`.
+  - New abilities `PickPockets`, `Begging`, `SenseTraps` and
+    `DisarmTraps`.
+    - Pick Pockets and Begging send the program's 18-byte ask, carrying the
+      player's own skill value (`Request::AskOf`,
+      `abilities::titanium_ask`).
+    - The trap skills send the program's treasure messages at a target of
+      class 62 (`Request::AtTreasure`; checklist 6.432, inferred).
+    - Each waits as long as EQEmu's own timer (checklist 6.435).
+    - A player's pockets are refused with the program's first PvP line
+      (6.438), as the PvP flag the program reads is not yet read.
+    - Begging's unseen check reads the player's own invisibility (6.430),
+      and the 15-unit reach is measured as the bandage's (6.431).
+  - A frozen player uses none of these, with the program's line.
+  - `GameCommand::UseAbility` gains `in_liquid`, the host's own liquid test,
+    which Fishing refuses on. `Ability::encode` returns `None` for the two
+    asks. The session follows the auto-attack toggle it sent, and the
+    player's death turns it off.
 - **Breaking:** Titanium lifts. `doors::titanium` holds the program's door
   rules: vertical travel and speeds by open type, the type 15 and 78-81
   slides, floor and wall solidity, the client's own return times, and the
