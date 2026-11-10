@@ -150,6 +150,7 @@ fn strafing_requires_its_own_calibration_and_preserves_heading() {
                 units_per_second: 3.0,
                 velocity_scale: 0.1,
                 animation: 8,
+                walk_units_per_second: None,
             }),
         };
         session.calibrate(calibration, start).unwrap();

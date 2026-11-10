@@ -963,7 +963,12 @@ speeds. `MotionState.jump_factor` is the share of the generation's
 jump speed a jump starts with now (the health and weight factor, 1 where the
 session does not work speeds out itself); a frontend launches its jumps at it,
 and the session's guard bounds an announced jump's rise by the factor the jump
-started with. Withdrawals, input requirements and admission/lifecycle resets invalidate
+started with. `MotionState.strafe_walk_units_per_second`, where present, is
+the strafe rate with walking selected: Titanium strafes on the selected base
+speed, so `strafe_units_per_second` is then the running rate, which bounds a
+`MovementMode::Strafe` sample either way; a frontend keeps a walking strafe to
+the walking rate, and halves either while the player ducks.
+Withdrawals, input requirements and admission/lifecycle resets invalidate
 cached acceptance. A frontend may clear a waiting status only for the exact
 posted admission/revision/report/input identity with a current positive grant;
 a cached prior speed, successful enqueue, or mismatching receipt is insufficient.
