@@ -722,6 +722,7 @@ fn an_equip_invalidates_a_liquid_sample_at_the_same_position() {
             player: Box::new(player),
             far_clip: None,
             spell_landing_flag: None,
+            zone_id: 0,
         }))?;
         hear(
             vec![Message::Event(WorldEvent::Inventory(

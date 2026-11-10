@@ -16,8 +16,10 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   (`MovementRequest::on_door`); a sample naming a floor door that rose may
   rise as far as it did (`MovementGuard::allow_lift_rise`,
   `MotionSession::allow_lift_rise`). Types 40 and 45 return by a click with
-  no player, `Request::ReturnDoor`. The lift rider radius and a hinged
-  door's return start are inferred (recording checklist 6.424, 6.426).
+  no player, `Request::ReturnDoor`. `WorldEvent::Entered` gains `zone_id`
+  (serde default 0), the zone number the program's door rules name. The
+  lift rider radius and a hinged door's return start are inferred
+  (recording checklist 6.424, 6.426).
 
 - **Breaking:** Titanium backs up in water, unless ducking or sneaking, only
   by the buffs' speed modifier (0x4a2bd8-0x4a2c06), so not at all without
