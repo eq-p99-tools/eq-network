@@ -200,6 +200,13 @@ fn coins_news(message: &Message, wallet: &mut Wallet) -> Option<bool> {
             wallet.pay(u64::from(*price));
             Some(true)
         }
+        // What a beg or a pick brought, which the Titanium program adds to
+        // the purse itself (read R16d) and `EQEmu` adds without a money
+        // update.
+        WorldEvent::AskAnswered(answer) if !answer.coins().is_empty() => {
+            wallet.add_to_purse(answer.coins());
+            Some(true)
+        }
         // A reward's coins, which every server adds to the purse without a
         // money update (inferred: the official client's purse after a
         // reward is unrecorded).
@@ -3283,6 +3290,51 @@ mod tests {
         outcome.result.unwrap();
         assert!(outcome.events.is_empty());
         assert_eq!(world.coins.purse.unwrap().gold, 7);
+    }
+
+    #[test]
+    fn a_begs_or_a_picks_coins_go_into_the_purse_and_are_told() {
+        use eq_network_game::{
+            abilities::{Ability, AskAnswer, AskOutcome},
+            money::Coin,
+        };
+        let (mut belongings, mut world) = admitted();
+        let purse = Message::Event(WorldEvent::Coins(Coins {
+            silver: 2,
+            ..Coins::default()
+        }));
+        testing::run(|out| belongings.observe(&purse, &mut world, out))
+            .result
+            .unwrap();
+        let answered = |ability, outcome| {
+            Message::Event(WorldEvent::AskAnswered(AskAnswer { ability, outcome }))
+        };
+        let begged = answered(
+            Ability::Begging,
+            AskOutcome::Coins {
+                coin: Coin::Silver,
+                amount: 4,
+            },
+        );
+        let outcome = testing::run(|out| belongings.observe(&begged, &mut world, out));
+        outcome.result.unwrap();
+        assert!(matches!(
+            outcome.events[..],
+            [ClientEvent::World(WorldEvent::Coins(Coins {
+                silver: 6,
+                ..
+            }))]
+        ));
+        // A failure or an item leaves the purse alone.
+        for nothing in [
+            answered(Ability::PickPockets, AskOutcome::Failed),
+            answered(Ability::PickPockets, AskOutcome::Item("Bone Chips".into())),
+        ] {
+            let outcome = testing::run(|out| belongings.observe(&nothing, &mut world, out));
+            outcome.result.unwrap();
+            assert!(outcome.events.is_empty());
+        }
+        assert_eq!(world.coins.purse.unwrap().silver, 6);
     }
 
     #[test]

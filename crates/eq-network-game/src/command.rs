@@ -473,6 +473,9 @@ pub enum GameCommand {
         /// Target state displayed when requested. Targeted actions require
         /// an available, unchanged session projection.
         target: Option<crate::targets::TargetState>,
+        /// Whether the player stands in liquid, as the host's world shows
+        /// it: the Titanium program refuses Fishing in water (read R15c).
+        in_liquid: bool,
         /// Reject delayed actions instead of replaying them after a stall.
         created: std::time::Instant,
     },
@@ -760,6 +763,14 @@ pub enum GameCommand {
         /// Current zone admission.
         session_id: u64,
     },
+    /// Tracking's window: ask for the list again, follow a spawn from it,
+    /// or stop following (`/stoptracking`); see [`crate::tracking`].
+    Track {
+        /// Current zone admission.
+        session_id: u64,
+        /// What to do.
+        action: crate::tracking::TrackAction,
+    },
     /// Share coins from the purse with the player's group: `/split`.
     SplitCoins {
         /// Current zone admission.
@@ -1021,6 +1032,7 @@ impl GameCommand {
             Self::WhoAll { .. } => "WhoAll",
             Self::WhoFriends { .. } => "WhoFriends",
             Self::ChangeCoins { .. } => "ChangeCoins",
+            Self::Track { .. } => "Track",
             Self::SplitCoins { .. } => "SplitCoins",
             Self::SetAutoSplit { .. } => "SetAutoSplit",
             Self::RequestGuildMotd { .. } => "RequestGuildMotd",
@@ -1124,6 +1136,7 @@ impl GameCommand {
             | Self::Assist { session_id, .. }
             | Self::WhoFriends { session_id, .. }
             | Self::ChangeCoins { session_id, .. }
+            | Self::Track { session_id, .. }
             | Self::SplitCoins { session_id, .. }
             | Self::SetAutoSplit { session_id, .. }
             | Self::RequestGuildMotd { session_id, .. }
@@ -1235,6 +1248,7 @@ impl GameCommand {
             Self::WhoAll { .. } => Capability::Who,
             Self::WhoFriends { .. } => Capability::FriendsWho,
             Self::ChangeCoins { .. } => Capability::BankerChange,
+            Self::Track { .. } => Capability::Tracking,
             Self::SplitCoins { .. } | Self::SetAutoSplit { .. } => Capability::Splitting,
             Self::RequestGuildMotd { .. } | Self::AnswerGuildInvite { .. } => {
                 Capability::GuildRoster
@@ -1327,6 +1341,7 @@ impl GameCommand {
             | Self::Assist { .. }
             | Self::WhoFriends { .. }
             | Self::ChangeCoins { .. }
+            | Self::Track { .. }
             | Self::SplitCoins { .. }
             | Self::SetAutoSplit { .. }
             | Self::RequestGuildMotd { .. }
@@ -1612,6 +1627,7 @@ pub fn encode(
         | GameCommand::Assist { .. }
         | GameCommand::WhoFriends { .. }
         | GameCommand::ChangeCoins { .. }
+        | GameCommand::Track { .. }
         | GameCommand::SplitCoins { .. }
         | GameCommand::SetAutoSplit { .. }
         | GameCommand::RequestGuildMotd { .. }

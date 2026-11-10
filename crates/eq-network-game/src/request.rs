@@ -229,6 +229,32 @@ pub enum Request {
         /// The target the server has for the player, if any.
         target: Option<u16>,
     },
+    /// Pick Pockets or Begging at a target, with the player's own value in
+    /// the skill, as the Titanium program sends them
+    /// ([`abilities::titanium_ask`]).
+    AskOf {
+        /// Pick Pockets or Begging.
+        ability: Ability,
+        /// The target.
+        target: u16,
+        /// The player's value in the skill.
+        skill_value: u32,
+    },
+    /// Sense Traps, Disarm Traps or Pick Lock at a target of the treasure class
+    /// ([`Ability::titanium_at_treasure`]).
+    AtTreasure(Ability),
+    /// Ask for the tracking list ([`crate::tracking::titanium_refresh`]).
+    TrackingList,
+    /// The empty message after every press of Tracking
+    /// ([`crate::tracking::titanium_pressed`]).
+    TrackingPressed,
+    /// Follow a spawn from the tracking list, or with 0 stop
+    /// ([`crate::tracking::titanium_follow`]).
+    TrackSpawn(u16),
+    /// The player's own animation of casting a fishing pole, which the
+    /// Titanium program sends before a standing player's Fishing
+    /// ([`abilities::titanium_fishing_cast`]).
+    FishingCast,
     /// Ask another character, or an NPC, to trade, by their spawn.
     Trade(u16),
     /// Take another player's request to trade, by the asker's spawn, or
@@ -422,7 +448,21 @@ pub fn titanium(request: &Request, sender: Sender<'_>) -> Result<EncodedCommand>
         Request::DragCorpse(corpse) => corpses::drag(corpse, sender.name)?,
         Request::DropCorpse { corpse } => corpses::release(corpse.as_deref())?,
         Request::Pet { command, target } => pets::command(*command, *target),
-        Request::Ability { ability, target } => ability.encode(target.unwrap_or(0)),
+        Request::Ability { ability, target } => ability
+            .encode(target.unwrap_or(0))
+            .ok_or_else(|| anyhow::anyhow!("{ability:?} asks of its target with the skill"))?,
+        Request::AskOf {
+            ability,
+            target,
+            skill_value,
+        } => abilities::titanium_ask(*ability, *target, sender.spawn(), *skill_value)?,
+        Request::AtTreasure(ability) => ability
+            .titanium_at_treasure()
+            .ok_or_else(|| anyhow::anyhow!("{ability:?} has no treasure message"))?,
+        Request::FishingCast => abilities::titanium_fishing_cast(sender.spawn())?,
+        Request::TrackingList => crate::tracking::titanium_refresh(),
+        Request::TrackingPressed => crate::tracking::titanium_pressed(),
+        Request::TrackSpawn(spawn_id) => crate::tracking::titanium_follow(*spawn_id),
         Request::OpenTraining(trainer) => training::titanium_open(*trainer, sender.spawn()),
         Request::Train { trainer, skill } => training::titanium_train(*trainer, *skill)?,
         Request::EndTraining(trainer) => training::titanium_end(*trainer, sender.spawn()),

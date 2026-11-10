@@ -7,6 +7,7 @@
 //! if the player had moved (no bandage at all).
 //! It keeps the generation's unmodified recovery waits and tells
 //! the host which abilities are offered and when a timer starts.
+mod class_tools;
 mod self_bandage;
 
 use super::{
@@ -36,6 +37,9 @@ pub(super) struct Abilities {
     /// Set only by the server's own appearance or cancellation.
     sneaking: bool,
     self_bandage: Option<self_bandage::SelfBandage>,
+    /// Until when the player is fishing, by the Titanium program's own
+    /// two-second flag, apart from Fishing's recovery (read R14 section 4).
+    fishing_until: Option<Instant>,
 }
 
 impl Default for Abilities {
@@ -169,6 +173,7 @@ impl Abilities {
             ready: BTreeMap::new(),
             sneaking: false,
             self_bandage: None,
+            fishing_until: None,
         }
     }
 
@@ -401,7 +406,26 @@ impl Abilities {
         out: &mut Out<'_, '_>,
         now: Instant,
     ) -> Result<()> {
-        out.request(&Request::Ability { ability, target })?;
+        self.send_request(
+            (session_id, ability),
+            &Request::Ability { ability, target },
+            None,
+            out,
+            now,
+        )
+    }
+
+    /// Sends the request that uses an ability and starts its timer, telling
+    /// the host, with the line the official client prints as it does.
+    fn send_request(
+        &mut self,
+        (session_id, ability): (u64, Ability),
+        request: &Request,
+        string_id: Option<u32>,
+        out: &mut Out<'_, '_>,
+        now: Instant,
+    ) -> Result<()> {
+        out.request(request)?;
         let reuse = ability.reuse(out.wire.dialect());
         if let Some(recovery) = ability.recovery() {
             self.ready.insert(recovery, now + reuse);
@@ -410,6 +434,7 @@ impl Abilities {
             session_id,
             ability,
             ready_in: reuse,
+            string_id,
         }))
     }
 }
@@ -509,6 +534,7 @@ impl Feature for Abilities {
             session_id,
             ability,
             target,
+            in_liquid,
             ..
         } = *command
         else {
@@ -522,14 +548,27 @@ impl Feature for Abilities {
                 out,
             );
         }
-        if (ability.at_target() || ability == Ability::BindWound)
-            && target.is_none_or(|target| !target.available || target != world.target.state())
+        let stale = |target: eq_network_game::targets::TargetState| {
+            !target.available || target != world.target.state()
+        };
+        // An ask with no target shown is refused with the program's line.
+        if ((ability.at_target() || ability == Ability::BindWound) && target.is_none_or(stale))
+            || (ability.asks() && target.is_some_and(stale))
         {
             return refuse(
                 session_id,
                 ability,
                 "Target changed or is not ready; choose it again".into(),
                 out,
+            );
+        }
+        if out.wire.dialect() == GameDialect::Titanium && class_tools::checks(ability) {
+            return self.use_class_tool(
+                (session_id, ability),
+                in_liquid,
+                world,
+                out,
+                Instant::now(),
             );
         }
         self.use_ability((session_id, ability), world, out, Instant::now())
@@ -664,7 +703,7 @@ mod tests {
         assert_eq!(refused(&outcome.events), ["You do not have that ability"]);
         world.target = super::super::targeting::Target::from(42);
         let outcome = try_ability(&mut abilities, &mut world, Ability::Kick, now);
-        assert_eq!(outcome.sent, [Ability::Kick.encode(42)]);
+        assert_eq!(outcome.sent, [Ability::Kick.encode(42).unwrap()]);
         assert!(matches!(
             outcome.events[..],
             [ClientEvent::World(WorldEvent::AbilityUsed {
@@ -693,11 +732,11 @@ mod tests {
         assert_eq!(refused(&outcome.events), ["Your target is out of reach"]);
         world.player.corrected().unwrap().race = 12;
         let outcome = try_ability(&mut Abilities::default(), &mut world, Ability::Kick, now);
-        assert_eq!(outcome.sent, [Ability::Kick.encode(45)]);
+        assert_eq!(outcome.sent, [Ability::Kick.encode(45).unwrap()]);
         // Taunt reaches past melee range, but never another player.
         world.target = super::super::targeting::Target::from(43);
         let outcome = try_ability(&mut Abilities::default(), &mut world, Ability::Taunt, now);
-        assert_eq!(outcome.sent, [Ability::Taunt.encode(43)]);
+        assert_eq!(outcome.sent, [Ability::Taunt.encode(43).unwrap()]);
         world.spawns.insert(testing::spawn(46, SpawnKind::Player));
         world.target = super::super::targeting::Target::from(46);
         let outcome = try_ability(&mut Abilities::default(), &mut world, Ability::Taunt, now);
@@ -706,7 +745,7 @@ mod tests {
             ["You cannot use that on your target"]
         );
         let outcome = try_ability(&mut Abilities::default(), &mut world, Ability::Kick, now);
-        assert_eq!(outcome.sent, [Ability::Kick.encode(46)]);
+        assert_eq!(outcome.sent, [Ability::Kick.encode(46).unwrap()]);
     }
 
     #[test]
@@ -966,7 +1005,7 @@ mod tests {
         );
         // Taunt waits on its own timer.
         let outcome = try_ability(&mut abilities, &mut world, Ability::Taunt, now);
-        assert_eq!(outcome.sent, [Ability::Taunt.encode(42)]);
+        assert_eq!(outcome.sent, [Ability::Taunt.encode(42).unwrap()]);
         // The official client waits longer than the emulator's own timer.
         let emulator = now + Duration::from_secs(4);
         let outcome = try_ability(&mut abilities, &mut world, Ability::Kick, emulator);
@@ -984,7 +1023,7 @@ mod tests {
         world.player.corrected().unwrap().race = 2;
         world.target = super::super::targeting::Target::from(42);
         let outcome = try_ability(&mut Abilities::default(), &mut world, Ability::Bash, now);
-        assert_eq!(outcome.sent, [Ability::Bash.encode(42)]);
+        assert_eq!(outcome.sent, [Ability::Bash.encode(42).unwrap()]);
         let outcome = try_ability(&mut Abilities::default(), &mut world, Ability::Hide, now);
         assert_eq!(refused(&outcome.events), ["You do not have that ability"]);
     }

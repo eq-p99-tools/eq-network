@@ -125,6 +125,20 @@ impl ItemActivation {
 }
 
 impl super::Inventory {
+    /// The cast time of the click effect of the item in this slot, if it has
+    /// one.
+    #[must_use]
+    pub fn click_cast_time_ms(&self, slot: super::InventorySlot) -> Option<u32> {
+        Some(
+            self.items
+                .get(&slot)?
+                .activation
+                .effect
+                .as_ref()?
+                .cast_time_ms,
+        )
+    }
+
     /// Validates an admitted item-use intent before encoding its current effect,
     /// returning the effect's spell and the cast packet. The zone session has
     /// already refused a request for an earlier admission or made too long ago.

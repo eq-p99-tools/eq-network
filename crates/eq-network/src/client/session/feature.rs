@@ -199,6 +199,9 @@ pub(in crate::client) struct World {
     pub(super) grouped: bool,
     /// The player's posture as last sent or reported.
     pub(super) posture: OwnPosture,
+    /// Whether the player's melee auto attack is on, as last sent; only the
+    /// combat feature changes it, and the player's death turns it off.
+    pub(super) attacking: bool,
     /// How the zone session ends, once a feature has decided; see [`World::end`].
     exit: Option<ZoneExit>,
     /// Death and zone transfers, which hold the player's actions.
@@ -252,6 +255,7 @@ impl World {
             own_spawn: None,
             grouped: false,
             posture: OwnPosture::default(),
+            attacking: false,
             exit: None,
             lifecycle: ZoneLifecycle::default(),
             zone: (0, 0),
