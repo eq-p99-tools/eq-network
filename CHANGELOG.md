@@ -30,8 +30,9 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
       tells `WorldEvent::Coins`; the server sends no money update.
     - A player's pockets are picked only with both open to player combat,
       each spawn's flag from its appearance updates, refused otherwise with
-      the program's line for whichever is not; its ruleset term is unread
-      (6.438).
+      the program's line for whichever is not, and then only within five
+      levels each way, refused in this library's words since the read does
+      not yet tell the two lines apart; its ruleset term is unread (6.438).
     - Begging's unseen check reads the player's own invisibility (6.430),
       and the 15-unit reach is measured as the bandage's (6.431).
   - A frozen player uses none of these, with the program's line.

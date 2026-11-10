@@ -332,16 +332,22 @@ fn pick_pockets<'w>(
                 Vec::new(),
             ));
         }
-        if !world
+        let Some(own) = world
             .spawns
             .visible(own_id)
-            .is_some_and(|own| own.appearance.pvp)
-        {
+            .filter(|own| own.appearance.pvp)
+        else {
             return Err(Refusal::official(
                 "You are not open to player combat",
                 lines::PICK_NOT_PVP,
                 Vec::new(),
             ));
+        };
+        // Then a level range of five each way, whose two lines (0x307c and
+        // 0x307d) are not yet told apart by the read: refused in this
+        // library's words (6.438).
+        if own.level.abs_diff(spawn.level) > 5 {
+            return Err("That player's level is too far from yours".into());
         }
     }
     Ok(spawn)
@@ -565,17 +571,25 @@ mod tests {
             line(&press(&mut abilities, &world, pick, now)),
             Some(0x307a)
         );
-        let open = |world: &mut World, id| {
+        let set = |world: &mut World, id, level: Option<u8>| {
             let mut spawn = world.spawns.visible(id).unwrap().clone();
             spawn.appearance.pvp = true;
+            spawn.level = level.unwrap_or(spawn.level);
             world.spawns.insert(spawn);
         };
+        let open = |world: &mut World, id| set(world, id, None);
         open(&mut world, 46);
         assert_eq!(
             line(&press(&mut abilities, &world, pick, now)),
             Some(0x307b)
         );
         open(&mut world, 7);
+        // Within five levels each way, its line not yet told apart.
+        let own_level = world.spawns.visible(7).unwrap().level;
+        set(&mut world, 46, Some(own_level + 6));
+        assert_eq!(line(&press(&mut abilities, &world, pick, now)), None);
+        assert_eq!(press(&mut abilities, &world, pick, now).sent, []);
+        set(&mut world, 46, Some(own_level + 5));
         let mut fresh = Abilities::new(&Ability::ALL);
         let player_picked = press(&mut fresh, &world, pick, now);
         assert_eq!(line(&player_picked), None);
