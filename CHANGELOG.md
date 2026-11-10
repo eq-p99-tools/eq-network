@@ -24,8 +24,10 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
       has only that message, and does nothing and says nothing at any
       other target; `Ability::encode` returns `None` for it.
     - Each waits ten seconds on its own timer, the program's value. A press
-      while a class tool's wait runs, Fishing's 12 s too, is passed over in
-      silence, as the program does: nothing is sent and nothing said.
+      while a class tool's wait runs, Fishing's 12 s too, sends nothing. The
+      program passes over it in silence; the session refuses it as for any
+      other ability, with no line of the program's, so the host says its
+      own (a chat-only departure, checklist 6.447).
     - The server's answer to a beg or a pick comes as the new
       `WorldEvent::AskAnswered` (`abilities::titanium_answer`), read as the
       program reads it: nothing, coins of one kind, or on a pick an item by
