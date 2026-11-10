@@ -338,15 +338,14 @@ mod tests {
             player.position.z = z;
             player
         };
-        // From its base it is out of reach; from its top it is not.
-        world.player.admit(at(0.0));
-        let below = testing::run(|out| doors.handle(&click, &mut world, out));
-        below.result.unwrap();
-        assert_eq!(below.sent, []);
-        world.player.admit(at(45.0));
-        let above = testing::run(|out| doors.handle(&click, &mut world, out));
-        above.result.unwrap();
-        assert_eq!(above.sent.len(), 1);
+        // It is called from its base and used from its top, but not from
+        // halfway between, out of reach of both.
+        for (z, sent) in [(0.0, 1), (45.0, 1), (22.5, 0)] {
+            world.player.admit(at(z));
+            let clicked = testing::run(|out| doors.handle(&click, &mut world, out));
+            clicked.result.unwrap();
+            assert_eq!(clicked.sent.len(), sent, "from {z}");
+        }
     }
 
     #[test]

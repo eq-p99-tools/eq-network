@@ -145,8 +145,10 @@ impl Doors {
 
     /// [`Self::check_click`] for a door standing `raised` above its placed
     /// height now, as a Titanium lift does ([`titanium::Lifts::offset`]):
-    /// the reach runs to where the door stands, as the program's door actor
-    /// moves with it (inferred, recording checklist 6.436).
+    /// it is in reach from where it was placed or from where it stands now,
+    /// so a lift resting raised is called from below and sent down from its
+    /// top (inferred, recording checklist 6.436; which position the program
+    /// measures to is unread).
     ///
     /// # Errors
     /// As [`Self::check_click`].
@@ -164,11 +166,14 @@ impl Doors {
             .get(&id)
             .ok_or_else(|| anyhow::anyhow!("door is no longer available"))?;
         ensure!(player_id != 0, "player position is unavailable");
-        let at = Position {
+        let now = Position {
             z: door.position.z + raised,
             ..door.position
         };
-        ensure!(reach.admits(position, at), OutOfReach);
+        ensure!(
+            reach.admits(position, door.position) || reach.admits(position, now),
+            OutOfReach
+        );
         Ok(())
     }
     /// Current server-provided definitions in stable door-ID order. Static
