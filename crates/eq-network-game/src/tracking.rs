@@ -45,7 +45,7 @@ pub mod lines {
     /// The five bearings, from straight ahead to straight behind; the middle
     /// three also name a side.
     pub const BEARINGS: [u32; 5] = [0x3184, 0x3185, 0x3186, 0x3187, 0x3188];
-    /// The two side words the middle bearings name.
+    /// The two side words the middle bearings name: right, then left.
     pub const SIDES: [u32; 2] = [0x3182, 0x3183];
 }
 
@@ -154,8 +154,11 @@ pub fn titanium_follow(spawn_id: u16) -> EncodedCommand {
 /// 160 and 224, and the side the middle three name comes from the sign of
 /// a cross product. The program's own bearing routine (0x46e42f) is unread;
 /// this measures the bearing as the heading's own direction runs, x by its
-/// sine and y by its cosine, and which side word belongs to which sign is
-/// unread too (recording checklist 6.441).
+/// sine and y by its cosine. Turning left raises the heading, so a spawn
+/// the way the heading grows lies on the left and gets 0x3183, and one the
+/// other way 0x3182: so 22 lines on a local server matched the geometry of
+/// where the spawn stood (recording checklist 6.441; the program's sign
+/// test itself is unread).
 #[must_use]
 pub fn titanium_bearing(from: Position, to: Position, name: &str) -> (u32, Vec<String>) {
     let (dx, dy) = (to.x - from.x, to.y - from.y);
@@ -169,7 +172,8 @@ pub fn titanium_bearing(from: Position, to: Position, name: &str) -> (u32, Vec<S
     let string_id = lines::BEARINGS[band];
     let mut arguments = vec![name.to_owned()];
     if (1..=3).contains(&band) {
-        let side = lines::SIDES[usize::from(off > 256.0)];
+        // Under half a turn on, the way the heading grows: the left.
+        let side = lines::SIDES[usize::from(off < 256.0)];
         arguments.push(side.to_string());
     }
     (string_id, arguments)
@@ -225,11 +229,22 @@ mod tests {
             titanium_bearing(me, at(0.0, -10.0, 0.0), "a"),
             (0x3188, vec!["a".to_owned()])
         );
-        let (line, right) = titanium_bearing(me, at(10.0, 0.0, 0.0), "a");
-        assert_eq!(line, 0x3186);
-        let (line, left) = titanium_bearing(me, at(-10.0, 0.0, 0.0), "a");
-        assert_eq!(line, 0x3186);
-        assert_ne!(right[1], left[1]);
+        // Heading 128 faces +x and turning left raises the heading, so +x
+        // lies on the left of one facing +y.
+        let (line, left) = titanium_bearing(me, at(10.0, 0.0, 0.0), "a");
+        assert_eq!((line, left[1].as_str()), (0x3186, "12675"));
+        let (line, right) = titanium_bearing(me, at(-10.0, 0.0, 0.0), "a");
+        assert_eq!((line, right[1].as_str()), (0x3186, "12674"));
+        // As a local run stood it: the spawn 49 degrees to the left, ahead.
+        assert_eq!(
+            titanium_bearing(at(523.0, -447.0, 341.6), at(466.0, -427.0, 0.0), "a"),
+            (0x3185, vec!["a".to_owned(), "12675".to_owned()])
+        );
+        // And 81 degrees to the right.
+        assert_eq!(
+            titanium_bearing(at(523.0, -447.0, 15.1), at(466.0, -427.0, 0.0), "a"),
+            (0x3186, vec!["a".to_owned(), "12674".to_owned()])
+        );
         // Turned to face the spawn, it lies ahead.
         assert_eq!(
             titanium_bearing(at(0.0, 0.0, 128.0), at(10.0, 0.0, 0.0), "a").0,
