@@ -156,8 +156,8 @@ pub fn titanium_follow(spawn_id: u16) -> EncodedCommand {
 /// this measures the bearing as the heading's own direction runs, x by its
 /// sine and y by its cosine. Turning left raises the heading, so a spawn
 /// the way the heading grows lies on the left and gets 0x3183, and one the
-/// other way 0x3182: so 22 lines on a local server matched the geometry of
-/// where the spawn stood (recording checklist 6.441; the program's sign
+/// other way 0x3182. This was checked against 22 side lines of a local
+/// run, which fixed the side (recording checklist 6.441; the program's sign
 /// test itself is unread).
 #[must_use]
 pub fn titanium_bearing(from: Position, to: Position, name: &str) -> (u32, Vec<String>) {

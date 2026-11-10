@@ -49,9 +49,9 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
       lies against the player's heading, as one of the program's five
       bearing lines (`TrackingUpdate::Bearing`), and sends nothing more.
       The side word follows the heading's sense, turning left raising it:
-      a spawn the way the heading grows lies on the left. A local run's
-      lines matched the geometry; the program's own bearing routine and
-      sign test are unread (6.441).
+      a spawn the way the heading grows lies on the left. This was checked
+      against 22 side lines of a local run, which fixed the side; the
+      program's own bearing routine and sign test are unread (6.441).
     - Following ends with the program's line when the spawn is gone or
       six minutes pass. Stopping while following sends the program's stop
       and says nothing.
