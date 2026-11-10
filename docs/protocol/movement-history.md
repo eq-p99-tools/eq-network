@@ -1,8 +1,9 @@
 # Titanium movement history
 
-Status: record decoding only. Sessions do not emit movement-history packets.
-The P99 DLL suppresses the opcode in P99 mode. Stock Titanium transmission
-still needs its packet trailer and scheduling established.
+Status: record decoding only. Sessions do not emit movement-history packets;
+by this library's policy the sender stays off on public servers. Stock
+Titanium transmission still needs its packet trailer and scheduling
+established.
 
 ## Opcode and record layout
 
@@ -52,9 +53,8 @@ refreshes its timer before validating the body, then rejects a body shorter than
 that an empty body is a valid client report. Its port and warp handling also makes
 invented causes inappropriate.
 
-Observed P99 traffic contains ordinary position updates and no history
-reports. The P99 client extension suppresses `0x6a1b` in P99 mode while
-allowing `0x14cb`. The native WLD pad path at
+Observed public-server traffic contains ordinary position updates and no
+history reports. The native WLD pad path at
 `0x48b52c`, `0x48b42b`, and `0x48aaa6` submits a 36-byte position at
 entry, snaps locally, and returns to the normal position stream. The local
 pad implementation uses the existing position encoder and update gate.

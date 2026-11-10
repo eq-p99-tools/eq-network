@@ -972,9 +972,11 @@ the walking rate, and halves either while the player ducks.
 player backs up in water, in the land's units per second before the water's
 share (`movement::swim_speed`) applies: Titanium backs up in water, unless
 ducking or sneaking, only by the buffs' speed modifier, so 0 without one. The
-guard bounds a swim stroke's component behind the heading it ends facing by
-it; a frontend keeps backing up in water to it, and a ducking or sneaking
-player to the land's backward rate.
+guard bounds the component of a `MovementMode::Swim` stroke behind the
+heading it ends facing by it; a frontend keeps backing up in water to it. A
+ducking or sneaking player's backing in water goes as a
+`MovementMode::Backward` sample and takes the land's backward rule by its
+mode.
 Withdrawals, input requirements and admission/lifecycle resets invalidate
 cached acceptance. A frontend may clear a waiting status only for the exact
 posted admission/revision/report/input identity with a current positive grant;

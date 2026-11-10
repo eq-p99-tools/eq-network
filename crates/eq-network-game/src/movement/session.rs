@@ -1057,6 +1057,8 @@ impl MotionSession {
         sample.check()?;
         send(&sample)?;
         self.flags = flags;
+        // A frozen player moves for nobody, so any movement held back for
+        // the gate is dropped rather than sent after the freeze.
         self.held = None;
         self.moving = false;
         self.last_sent = now;

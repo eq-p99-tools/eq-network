@@ -930,6 +930,18 @@ mod tests {
     use super::*;
 
     #[test]
+    fn swim_backing_bounds_only_the_share_behind_the_ending_heading() {
+        // Heading 128 faces +x and 384 faces -x; a stroke the other way backs up.
+        for (heading, forward) in [(128.0, 1.0), (384.0, -1.0)] {
+            assert!(swim_backing(heading, [-2.0 * forward, 0.0, 0.0], 1.0).is_err());
+            assert!(swim_backing(heading, [-0.5 * forward, 0.0, 0.0], 1.0).is_ok());
+            assert!(swim_backing(heading, [2.0 * forward, 0.0, 0.0], 0.0).is_ok());
+            // Sideways or up and down is not behind.
+            assert!(swim_backing(heading, [0.0, 3.0, -3.0], 0.0).is_ok());
+        }
+    }
+
+    #[test]
     fn a_fall_tends_to_99_steps_of_the_zones_gravity() {
         assert!((fall_speed(None) - 792.0).abs() < 0.01);
         assert!((EQMAC_FALL_SPEED - 792.0).abs() < 0.01);

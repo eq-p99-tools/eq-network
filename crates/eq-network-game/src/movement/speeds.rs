@@ -509,6 +509,13 @@ mod tests {
         })
         .unwrap();
         assert!(close(slowed, 0.01 * 42.667), "{slowed}");
+        // A root of -1000 or below leaves nothing to calibrate.
+        assert!(titanium(&SpeedState {
+            rate: -1000,
+            ..player()
+        })
+        .motion
+        .is_none());
         // Sneaking keeps the land rule: half the walk speed.
         let sneaking = SpeedState {
             sneaking: true,
