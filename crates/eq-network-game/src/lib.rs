@@ -213,6 +213,16 @@ impl GameDialect {
         matches!(self, Self::EqMac)
     }
 
+    /// How this generation's sit/stand toggle chooses
+    /// ([`feign::SitToggle`]).
+    #[must_use]
+    pub const fn sit_toggle(self) -> feign::SitToggle {
+        match self {
+            Self::Titanium => feign::TITANIUM_SIT_TOGGLE,
+            Self::EqMac => feign::EQMAC_SIT_TOGGLE,
+        }
+    }
+
     /// Whether asking for the posture the player already has sends nothing.
     /// Titanium's posture routine makes no change then (program read R19,
     /// 0x483556). The Mac-era client's is read only for lying, so it keeps
@@ -242,6 +252,16 @@ mod tests {
     fn only_the_unread_mac_client_ends_auto_attack_on_a_posture() {
         assert!(!GameDialect::Titanium.posture_ends_attack());
         assert!(GameDialect::EqMac.posture_ends_attack());
+    }
+
+    #[test]
+    fn only_titaniums_sit_toggle_is_read() {
+        let titanium = GameDialect::Titanium.sit_toggle();
+        assert!(titanium.stands_lying_and_looting);
+        assert_eq!(titanium.mesmerize_refusal, Some(0x3050));
+        let eqmac = GameDialect::EqMac.sit_toggle();
+        assert!(!eqmac.stands_lying_and_looting);
+        assert_eq!(eqmac.mesmerize_refusal, None);
     }
 
     #[test]

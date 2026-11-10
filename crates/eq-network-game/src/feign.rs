@@ -65,6 +65,35 @@ pub const EQMAC: LyingRules = LyingRules {
     casting_refusal: None,
 };
 
+/// How a client generation's sit/stand toggle (the sit key and `/sit`)
+/// chooses, beyond sitting a standing or ducking player and standing a
+/// seated one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct SitToggle {
+    /// The toggle stands a player who lies or kneels to loot (Titanium
+    /// 0x49dcfa, read R19: anything but standing or ducking stands). Frozen
+    /// keeps the earlier choice of nothing, that branch unread on its own
+    /// (recording checklist 6.455).
+    pub stands_lying_and_looting: bool,
+    /// The line the toggle refuses with while a buff carries effect 31,
+    /// mesmerize (Titanium read R19b 5: `eqstr_us.txt` 0x3050).
+    pub mesmerize_refusal: Option<u32>,
+}
+
+/// Titanium's sit toggle (program reads R19 and R19b).
+pub const TITANIUM_SIT_TOGGLE: SitToggle = SitToggle {
+    stands_lying_and_looting: true,
+    mesmerize_refusal: Some(0x3050),
+};
+
+/// The Mac-era client's sit toggle: unread, so this library's earlier one,
+/// which leaves a lying or looting player as they are and never refuses.
+pub const EQMAC_SIT_TOGGLE: SitToggle = SitToggle {
+    stands_lying_and_looting: false,
+    mesmerize_refusal: None,
+};
+
 /// Titanium's lying posture report, which the press sends before the feign
 /// request (R19 a): `OP_SpawnAppearance` {u16 spawn id, u16 type 14, u32
 /// 115}.

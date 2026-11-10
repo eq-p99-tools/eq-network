@@ -34,6 +34,10 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     a knight's special or an item click (items inferred, checklist 6.455):
     `WorldEvent::CastRejected` and `WorldEvent::ItemUseAction` have a new
     `string_id`. Disciplines are not refused (the program does not check).
+  - `GameDialect::sit_toggle()` (`feign::SitToggle`) tells a host how the
+    sit/stand toggle chooses: Titanium's stands a lying or looting player
+    and refuses under a mesmerize with line 0x3050 (reads R19, R19b 5); the
+    Mac-era client's is unread and does neither (checklist 6.455).
   - On Titanium a posture request for the posture the player already has
     sends nothing, as the program's posture routine does (read R19); the
     Mac-era client still sends it (`GameDialect::skips_unchanged_posture()`,
