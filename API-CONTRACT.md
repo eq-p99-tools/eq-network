@@ -722,6 +722,13 @@ so a rejected trailing stop cannot later start camping on an idle heartbeat.
 An accepted held stop still waits for its actual submission. These queries
 do not infer success from the host's `MotionSent` notification.
 
+A moving player stops only by the host's own request at the current point
+(zero displacement and no turn), or by a stun, withdrawal or correction,
+each of which holds a stop for the update gate. A gap without input, however
+long, sends nothing new: the program's movement and sending share one loop,
+so a stall there only delays the next update. A host that stops driving
+movement while the player moves must submit that stop first.
+
 Camp retains its own waiting intent while the existing paced stop is pending,
 then starts its countdown only after camp submission succeeds. New movement,
 refusal, withdrawal or admission/lifecycle loss cancels that waiting intent.

@@ -652,7 +652,7 @@ fn word(body: &[u8], offset: usize) -> u32 {
     u32::from_le_bytes(body[offset..offset + 4].try_into().unwrap())
 }
 #[test]
-fn stationary_turns_encode_rate_and_expire_to_a_zero_rate_stop() {
+fn stationary_turns_encode_rate_and_the_hosts_stop_sends_a_zero_rate() {
     let start = Instant::now();
     let mut session = setup(start);
     let now = start + Duration::from_millis(100);
@@ -668,16 +668,24 @@ fn stationary_turns_encode_rate_and_expire_to_a_zero_rate_stop() {
             Ok(())
         })
         .unwrap();
-    assert!(session
-        .tick(now + Duration::from_millis(250), |packet| {
-            let body = &packet.body[..];
-            assert_eq!((word(body, 20) >> 10) & 0x3ff, 0);
+    // A gap without input stops nothing; the host's own stop does.
+    assert!(!session
+        .tick(now + Duration::from_millis(250), |_| panic!(
+            "inferred stop"
+        ))
+        .unwrap());
+    let stopped = now + Duration::from_millis(250);
+    let mut stop = request(stopped, 0.0);
+    stop.position.heading = 488.0;
+    session
+        .send_move(&stop, stopped, |packet| {
+            assert_eq!((word(&packet.body, 20) >> 10) & 0x3ff, 0);
             Ok(())
         })
-        .unwrap());
+        .unwrap();
     // The rate is cut toward zero: 23.99 over 250 ms, 95.96 a second, sends
     // 95.
-    let later = now + Duration::from_millis(350);
+    let later = stopped + Duration::from_millis(250);
     let mut slower = request(later, 0.0);
     slower.position.heading = 488.0 + 23.99;
     session
@@ -687,7 +695,7 @@ fn stationary_turns_encode_rate_and_expire_to_a_zero_rate_stop() {
         })
         .unwrap();
     let before = session.position();
-    let mut snap = request(now + Duration::from_millis(450), 0.0);
+    let mut snap = request(later + Duration::from_millis(100), 0.0);
     snap.position.heading = 200.0;
     assert!(session
         .send_move(&snap, snap.created, |_| panic!(
@@ -772,18 +780,26 @@ fn failed_submission_preserves_position_sequence_and_budget() {
         .unwrap();
 }
 #[test]
-fn input_expiry_sends_one_stop_then_stationary_heartbeats() {
+fn a_gap_without_input_stops_nothing_and_the_hosts_stop_goes_out_then_heartbeats() {
     let start = Instant::now();
     let mut session = setup(start);
     let moving_at = start + Duration::from_millis(100);
     session
         .send_move(&request(moving_at, 0.5), moving_at, |_| Ok(()))
         .unwrap();
-    assert!(!session
-        .tick(start + Duration::from_millis(349), |_| panic!("early stop"))
-        .unwrap());
-    assert!(session
-        .tick(start + Duration::from_millis(350), |packet| {
+    // A stalled host, however long, leaves the player moving: the program's
+    // one loop only delays its next update.
+    for ms in [349, 350, 600, 1_350, 5_000] {
+        assert!(!session
+            .tick(start + Duration::from_millis(ms), |_| panic!(
+                "inferred stop"
+            ))
+            .unwrap());
+    }
+    assert!(session.stop_pending());
+    let stopped = start + Duration::from_millis(5_100);
+    session
+        .send_move(&request(stopped, 0.5), stopped, |packet| {
             let body = &packet.body[..];
             assert_eq!(&body[2..4], &[1, 0]);
             assert_eq!(word(body, 24), 0.5f32.to_bits());
@@ -791,25 +807,64 @@ fn input_expiry_sends_one_stop_then_stationary_heartbeats() {
             assert_eq!(&body[8..20], &[0; 12]);
             Ok(())
         })
-        .unwrap());
+        .unwrap();
+    assert!(!session.stop_pending());
     assert!(!session
-        .tick(start + Duration::from_millis(600), |_| panic!(
+        .tick(stopped + Duration::from_millis(250), |_| panic!(
             "duplicate stop"
         ))
         .unwrap());
     assert!(!session
-        .tick(start + Duration::from_millis(1349), |_| panic!(
+        .tick(stopped + Duration::from_millis(999), |_| panic!(
             "early heartbeat"
         ))
         .unwrap());
     assert!(session
-        .tick(start + Duration::from_millis(1350), |packet| {
+        .tick(stopped + Duration::from_millis(1000), |packet| {
             let body = &packet.body[..];
             assert_eq!(&body[2..4], &[2, 0]);
             Ok(())
         })
         .unwrap());
 }
+#[test]
+fn a_withdrawal_or_correction_stops_a_moving_player_as_the_speed_falls() {
+    let start = Instant::now();
+    for correct in [false, true] {
+        let mut session = setup(start);
+        let moving_at = start + Duration::from_millis(100);
+        session
+            .send_move(&request(moving_at, 0.5), moving_at, |_| Ok(()))
+            .unwrap();
+        let at = start + Duration::from_millis(150);
+        let place = Position {
+            x: 2.0,
+            ..Position::default()
+        };
+        if correct {
+            session.correct(place, at).unwrap();
+        } else {
+            session.withdraw();
+        }
+        assert!(session.stop_pending());
+        let mut stops = Vec::new();
+        session
+            .tick(start + Duration::from_millis(400), |packet| {
+                stops.push(packet.body.clone());
+                Ok(())
+            })
+            .unwrap();
+        let [stop] = &stops[..] else {
+            panic!("{stops:?}")
+        };
+        assert_eq!(word(stop, 20) & 0x3ff, 0);
+        assert_eq!(&stop[8..20], &[0; 12]);
+        let x = if correct { 2.0_f32 } else { 0.5 };
+        assert_eq!(word(stop, 24), x.to_bits());
+        assert!(!session.stop_pending());
+    }
+}
+
 #[test]
 fn correction_revokes_motion_and_old_input_cannot_replay_after_recalibration() {
     let start = Instant::now();
@@ -1018,7 +1073,12 @@ fn a_spacing_holds_the_latest_sample_until_it_passes_and_stops_no_sooner() {
     assert_eq!(word(held, 24), 1.5f32.to_bits());
     assert_eq!(word(held, 12), 0.25f32.to_bits());
     assert_ne!(word(held, 20) & 0x3ff, 0);
-    // The stop waits for the spacing too, then heartbeats resume.
+    // The host's stop waits for the spacing too, then heartbeats resume.
+    session
+        .send_move(&request(at(700), 1.5), at(700), |_| {
+            panic!("stop sent inside the spacing")
+        })
+        .unwrap();
     assert!(!session.tick(at(859), |_| panic!("early stop")).unwrap());
     assert!(session
         .tick(at(860), |packet| {
@@ -1291,10 +1351,13 @@ fn the_mac_era_gate_sends_a_steady_run_once_a_second() {
     #[allow(clippy::cast_precision_loss)]
     let sent = passes(&mut session, start, 1..=25, |step| Some(step as f32 * 0.5));
     assert_eq!(sent, [100, 1200, 2300]);
-    // The stop is a speed change: due at once, out on the first pass more
-    // than 150 ms after the last update.
-    let stop = passes(&mut session, start, 26..=29, |_| None);
-    assert_eq!(stop, [2800]);
+    // A gap without input sends nothing new for a moving player.
+    let gap = passes(&mut session, start, 26..=29, |_| None);
+    assert_eq!(gap, Vec::<u64>::new());
+    // The host's stop is a speed change: due at once, out on the first pass
+    // more than 150 ms after the last update.
+    let stop = passes(&mut session, start, 30..=33, |_| Some(12.5));
+    assert_eq!(stop, [3000]);
 }
 
 #[test]
@@ -1504,7 +1567,6 @@ fn unchanged_candidate_accepts_input_once_without_a_send_or_extra_budget() {
         .unwrap();
     assert_eq!(session.counter.entries(), 1);
     assert_eq!(session.last_sent, first);
-    assert_eq!(session.last_input, now);
     assert!(session
         .send_move_sample(&next, now, |_| panic!("duplicate input stamp"))
         .is_err());
@@ -1528,7 +1590,6 @@ fn failed_prepared_send_preserves_motion_without_undoing_external_effects() {
     assert_eq!(session.position(), Position::default());
     assert_eq!(session.counter.entries(), 0);
     assert_eq!(session.last_sent, start);
-    assert_eq!(session.last_input, start);
     // Test-only inspection of preserved state; session-level execution errors
     // may still require terminal teardown rather than a production retry.
     session
@@ -2211,6 +2272,40 @@ fn titanium_flag_sends_a_steady_run_once_a_second_and_a_turn_more_often() {
         Some(turn)
     });
     assert_eq!(times(&sent), [300, 600, 900, 1200]);
+}
+
+#[test]
+fn titanium_a_stall_mid_run_sends_no_stop_and_the_run_goes_on_by_the_tick() {
+    let start = Instant::now();
+    let mut session = titanium_flagged(start);
+    let mut sent = Vec::new();
+    let mut x = 0.0;
+    // Running 0.5 a step, with no input from 900 ms to 1300 ms: the host
+    // stalled, as a locked desktop stalls a client's frames, and goes on
+    // from where it was.
+    for step in 1..=25_u64 {
+        let now = start + Duration::from_millis(step * 100);
+        if !(9..=13).contains(&step) {
+            x += 0.5;
+            let moved = request(now, x);
+            session
+                .send_move_sample(&moved, now, |sample| {
+                    sent.push((step * 100, sample.animation));
+                    Ok(())
+                })
+                .unwrap();
+        }
+        session
+            .tick_sample(now, |sample| {
+                sent.push((step * 100, sample.animation));
+                Ok(())
+            })
+            .unwrap();
+    }
+    // No still went out: the tick in the gap sends the last move held, and
+    // the run goes on by the 1 s tick, not by a speed change from a stop.
+    assert_eq!(sent, [(300, 12), (1200, 12), (2300, 12)]);
+    assert!(session.stop_pending());
 }
 
 #[test]

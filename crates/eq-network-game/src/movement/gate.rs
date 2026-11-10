@@ -123,7 +123,7 @@ pub const EQMAC_FLAGS: FlagRule = FlagRule {
 /// frozen player's update goes out (0x4ac842): from the flag, so in practice
 /// the 1 s tick, more than 560 ms after the last, with no history record and
 /// the counter field not written, so it repeats the last one. A further
-/// condition there, [0x92478c] being 0, is unread and taken to hold; that
+/// condition there, `[0x92478c]` being 0, is unread and taken to hold; that
 /// +0x104 is the stun is inferred too (recording checklist 6.420). Whether
 /// the program holds back the first update after admission is unread, so it
 /// does not here.

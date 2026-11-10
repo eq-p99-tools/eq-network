@@ -224,22 +224,30 @@ fn the_33ms_camp_waits_for_the_100ms_trailing_stop_and_paced_submission() {
 }
 
 #[test]
-fn without_an_early_host_stop_the_existing_input_expiry_stop_precedes_camp() {
+fn without_the_hosts_stop_the_camp_waits_and_a_stall_sends_nothing() {
     let start = Instant::now();
     let (mut world, mut camp) = queued(start);
     let mut sink = Recording::default();
-    with_out(&EqMac, &mut sink, |out| {
-        pass(&mut camp, &mut world, at(start, 349), out)
-    })
-    .0
-    .unwrap();
+    // A gap without input never stops a moving player, so nothing goes out
+    // and the camp keeps waiting.
+    for ms in [349, 350, 1_000, 30_000] {
+        with_out(&EqMac, &mut sink, |out| {
+            pass(&mut camp, &mut world, at(start, ms), out)
+        })
+        .0
+        .unwrap();
+    }
     assert_eq!(sink.order, Vec::new());
+    assert!(matches!(camp.phase, Phase::WaitingForStop { .. }));
+    // The host's own stop lets the camp go after it.
+    accept_trailing_stop(&mut world, &mut camp, start);
     with_out(&EqMac, &mut sink, |out| {
-        pass(&mut camp, &mut world, at(start, 350), out)
+        pass(&mut camp, &mut world, at(start, 30_100), out)
     })
     .0
     .unwrap();
     assert_eq!(sink.order.len(), 2);
+    assert_eq!(sink.order[0].1.body[2], 0, "actual stop animation");
     assert_eq!(sink.order[1], (true, quarm::camp()));
 }
 
@@ -366,6 +374,7 @@ fn failed_camp_encoding_or_transport_leaves_no_timer_or_replayable_intent() {
     let start = Instant::now();
     for wire in [&RefuseCamp as &dyn Wire, &EqMac] {
         let (mut world, mut camp) = queued(start);
+        accept_trailing_stop(&mut world, &mut camp, start);
         let mut sink = Recording::default();
         with_out(&EqMac, &mut sink, |out| {
             world.body.heartbeat(at(start, 350), out)
@@ -752,6 +761,7 @@ fn titanium_flagged_refused_stop_or_new_movement_cancels_before_camp() {
 fn duplicate_camp_keeps_one_intent_and_stationary_repeats_do_not_delay_camp() {
     let start = Instant::now();
     let (mut world, mut camp) = queued(start);
+    accept_trailing_stop(&mut world, &mut camp, start);
     let mut sink = Recording::default();
     with_out(&EqMac, &mut sink, |out| {
         camp.request(at(start, 140), &world, out)

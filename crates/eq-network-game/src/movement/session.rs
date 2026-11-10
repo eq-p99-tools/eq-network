@@ -194,8 +194,6 @@ pub struct MotionSession {
     flags: Flags,
     /// The server's hold on the player ([`Self::set_hold`]).
     hold: Hold,
-    /// When the host's latest sample was accepted.
-    last_input: Instant,
 }
 
 /// What the gate does with an accepted sample.
@@ -252,7 +250,6 @@ impl PreparedMove<'_> {
         owner.previous_position = Some(owner.position);
         owner.position = sample.position;
         owner.moving = moving;
-        owner.last_input = now;
         Ok(())
     }
 }
@@ -486,7 +483,6 @@ impl MotionSession {
             last_update: None,
             flags: Flags::default(),
             hold: Hold::None,
-            last_input: now,
         })
     }
 
@@ -560,9 +556,25 @@ impl MotionSession {
     /// next calibration.
     pub fn withdraw(&mut self) {
         self.calibration = None;
-        self.held = None;
         self.previous_position = None;
         self.guard.correct(self.position, Instant::now());
+        // The speed falls to 0, which the program sends as a stop.
+        self.hold_stop();
+    }
+
+    /// Holds a stop at the current point for a moving player, for the
+    /// update gate to send; a gap without input never stops one.
+    fn hold_stop(&mut self) {
+        self.held = self.stop_pending().then_some(PositionPacket {
+            spawn_id: self.spawn_id,
+            // The counter is the send's own, set as the held sample goes out.
+            sequence: 0,
+            position: self.position,
+            delta: [0.0; 3],
+            animation: 0,
+            delta_heading: 0,
+        });
+        self.moving = false;
     }
 
     /// Latest accepted world position, without implying a server acknowledgment.
@@ -648,18 +660,7 @@ impl MotionSession {
     /// update gate still decides when that existing position sample is sent.
     pub fn stop_voluntary(&mut self) {
         self.guard.clear_shoreline();
-        if self.stop_pending() {
-            // The counter is the send's own, set as the held sample goes out.
-            self.held = Some(PositionPacket {
-                spawn_id: self.spawn_id,
-                sequence: 0,
-                position: self.position,
-                delta: [0.0; 3],
-                animation: 0,
-                delta_heading: 0,
-            });
-        }
-        self.moving = false;
+        self.hold_stop();
     }
 
     /// Whether a proposal contains only passive vertical motion. A rise
@@ -945,9 +946,10 @@ impl MotionSession {
         })
     }
 
-    /// Sends a held sample once the spacing has passed, a stop after 250 ms
-    /// without input (or the spacing, if longer), or a stationary heartbeat
-    /// every [`super::STATIONARY_HEARTBEAT`].
+    /// Sends a held sample once the spacing has passed, or a stationary
+    /// player's heartbeat every [`super::STATIONARY_HEARTBEAT`]. A moving
+    /// player stops only by the host's own zero request: a gap without
+    /// input sends nothing new.
     ///
     /// # Errors
     /// Propagates encoding and transport failures without advancing state.
@@ -1002,12 +1004,10 @@ impl MotionSession {
             });
             return Ok(true);
         }
-        let interval = if self.moving {
-            Duration::from_millis(250).max(spacing)
-        } else {
-            super::STATIONARY_HEARTBEAT
-        };
-        if since < interval {
+        // A moving player stops only by the host's own zero request: a gap
+        // without input is a stall, which only delays the next update, as
+        // the program's one loop does.
+        if self.moving || since < super::STATIONARY_HEARTBEAT {
             return Ok(false);
         }
         let sample = PositionPacket {
@@ -1078,10 +1078,6 @@ impl MotionSession {
         (pack, rule): (fn(&PositionPacket) -> Result<EncodedCommand>, &FlagRule),
         send: impl FnOnce(&PositionPacket) -> Result<()>,
     ) -> Result<bool> {
-        // A move without input for 250 ms has stopped: its speed falls to 0,
-        // a change the program flags at once.
-        let stopped = self.moving
-            && now.saturating_duration_since(self.last_input) >= Duration::from_millis(250);
         let still = PositionPacket {
             spawn_id: self.spawn_id,
             sequence: self.counter.value(now),
@@ -1091,12 +1087,14 @@ impl MotionSession {
             delta_heading: 0,
         };
         let candidate = match self.held {
-            _ if stopped => still,
             Some(held) => PositionPacket {
                 sequence: self.counter.value(now),
                 ..held
             },
-            // The latest move went out and the host's next has not come.
+            // The latest move went out and the host's next has not come. A
+            // moving player stops only by the host's own zero request; a
+            // gap without input, however long, is a stall, which in the
+            // program's one loop only delays the next update.
             None if self.moving => return Ok(false),
             None => still,
         };
@@ -1114,10 +1112,6 @@ impl MotionSession {
                 sequence: 0,
                 ..candidate
             });
-        }
-        if stopped {
-            self.moving = false;
-            self.held = None;
         }
         self.flags = flags;
         Ok(released)
@@ -1141,8 +1135,9 @@ impl MotionSession {
         self.previous_position = None;
         self.guard.correct(position, now);
         self.calibration = None;
-        self.held = None;
-        // Keep the pending stop deadline if the last transmitted sample was moving.
+        // Movement waits for a new calibration, so a moving player stops
+        // where the server put them.
+        self.hold_stop();
         Ok(())
     }
 

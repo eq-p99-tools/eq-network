@@ -255,6 +255,14 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Breaking:** A moving player stops only by the host's own stop (a request
+  at the current point with no turn), or by a stun, withdrawal or
+  correction, which now each hold a stop for the update gate. A gap without
+  input no longer sends an inferred stop after 250 ms: in the program the
+  movement and the sending share one loop, so a stall only delays the next
+  update, and a client frame stall had made a straight run send a stop and
+  then a speed change about every 300 ms. Hosts must submit a stop before
+  they stop driving movement; a camp waits for it.
 - **Breaking:** Titanium's own update goes out on its program's flag rule
   (0x4aba14, 0x4a2ef2, 0x4a2f3f, 0x4a2f67, 0x4231c2): a heading change of 2
   or more units, or a speed change of 0.2 or more (8 in the forward field),
