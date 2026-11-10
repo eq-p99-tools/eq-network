@@ -140,6 +140,23 @@ pub enum SpeedInputUnavailable {
 pub enum SpeedInputState {
     /// Complete inputs for the revision requested by the session.
     Ready(SpeedInputs),
-    /// Withdraw player input until a complete report is available.
+    /// Inputs from every term the host can prove while `missing` is still
+    /// unproven: each unproven term is taken from its last report where one
+    /// exists and left out where none does, and each term it can prove now
+    /// (a root or a snare it can evaluate, a weight it knows) is applied. The
+    /// host proves the terms, and the session takes a bound as reported, with
+    /// or without a grant in force, a root in it withdrawing. A bound is
+    /// faster than the last one only where a proven slower term ended
+    /// (recording checklist 6.451).
+    Bounded {
+        /// The inputs from every term the host can prove.
+        inputs: SpeedInputs,
+        /// What is not yet proven.
+        missing: SpeedInputUnavailable,
+    },
+    /// Withdraw player input until a complete report is available. While
+    /// the session holds a grant, it keeps that grant and its inputs in
+    /// force instead, with no time limit, which can be faster than the
+    /// official client would allow (recording checklist 6.451).
     Unavailable(SpeedInputUnavailable),
 }
