@@ -55,6 +55,18 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
       and says nothing.
     - The Ranger's sort and colour filter are not offered.
   - A frozen player uses none of these, with the program's line.
+- **Breaking:** a Bard's `/stopsong` follows the Titanium program's song
+  state (read R16) and is offered on P99 too. The song is the player's last
+  own cast start: every gem cast, and an item cast over 100 ms. No song ends
+  on its own. The server's cast update with keep-casting clear ends it as
+  the program does: spell -1 or a spell of the class always, and for a Bard
+  an item's song or the very spell named; a new cast takes its place.
+  `StopSong` sends the empty request only for a song of a class spell,
+  even while another cast is held, as the program does. An item's song of
+  another spell ends locally with nothing sent. With no song, or for any
+  other class, nothing is sent. A memorized spell is taken as the class's,
+  and every gem cast as over 100 ms, since the session has no spell table
+  (checklist 6.442).
   - `GameCommand::UseAbility` gains `in_liquid`, the host's own liquid test,
     which Fishing refuses on. `Ability::encode` returns `None` for the two
     asks. The session follows the auto-attack toggle it sent, and the
