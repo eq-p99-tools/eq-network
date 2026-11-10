@@ -133,8 +133,9 @@ impl Doors {
         let (spawn_id, position) = world
             .player_at()
             .ok_or_else(|| anyhow!("player is unavailable"))?;
+        let raised = world.lifts.offset(*door_id, Instant::now()).unwrap_or(0.0);
         self.table
-            .check_click(*door_id, spawn_id, position, reach)?;
+            .check_click_raised(*door_id, spawn_id, position, reach, raised)?;
         if self.dialect == GameDialect::EqMac {
             let door = self
                 .table
@@ -316,6 +317,36 @@ mod tests {
             .result
             .unwrap();
         assert_eq!(world.lifts.offset(1, later), None);
+    }
+
+    #[test]
+    fn a_lift_is_clicked_where_it_stands_now() {
+        let mut doors = Doors::default();
+        let mut world = World::new(5);
+        // A lift spawned raised, 45 up.
+        let mut lift = titanium_door(1, 59, 45);
+        lift.state_at_spawn = 1;
+        let spawn = WorldEvent::Doors(DoorUpdate::Spawn(vec![lift]));
+        doors.admit(&Message::Event(spawn), &mut world).unwrap();
+        let click = ClientCommand::ClickDoor {
+            session_id: 5,
+            door_id: 1,
+            created: Instant::now(),
+        };
+        let at = |z: f32| {
+            let mut player = testing::player(7);
+            player.position.z = z;
+            player
+        };
+        // From its base it is out of reach; from its top it is not.
+        world.player.admit(at(0.0));
+        let below = testing::run(|out| doors.handle(&click, &mut world, out));
+        below.result.unwrap();
+        assert_eq!(below.sent, []);
+        world.player.admit(at(45.0));
+        let above = testing::run(|out| doors.handle(&click, &mut world, out));
+        above.result.unwrap();
+        assert_eq!(above.sent.len(), 1);
     }
 
     #[test]

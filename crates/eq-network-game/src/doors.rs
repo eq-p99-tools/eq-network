@@ -140,13 +140,35 @@ impl Doors {
         position: Position,
         reach: crate::reach::Reach,
     ) -> Result<()> {
+        self.check_click_raised(id, player_id, position, reach, 0.0)
+    }
+
+    /// [`Self::check_click`] for a door standing `raised` above its placed
+    /// height now, as a Titanium lift does ([`titanium::Lifts::offset`]):
+    /// the reach runs to where the door stands, as the program's door actor
+    /// moves with it (inferred, recording checklist 6.436).
+    ///
+    /// # Errors
+    /// As [`Self::check_click`].
+    pub fn check_click_raised(
+        &self,
+        id: u8,
+        player_id: u16,
+        position: Position,
+        reach: crate::reach::Reach,
+        raised: f32,
+    ) -> Result<()> {
         ensure!(id != STATIC_ID, "a static object cannot be used");
         let door = self
             .doors
             .get(&id)
             .ok_or_else(|| anyhow::anyhow!("door is no longer available"))?;
         ensure!(player_id != 0, "player position is unavailable");
-        ensure!(reach.admits(position, door.position), OutOfReach);
+        let at = Position {
+            z: door.position.z + raised,
+            ..door.position
+        };
+        ensure!(reach.admits(position, at), OutOfReach);
         Ok(())
     }
     /// Current server-provided definitions in stable door-ID order. Static
