@@ -40,6 +40,7 @@ mod lines {
     pub(super) const PICK_ATTACKING: u32 = 0x3078;
     pub(super) const PICK_YOURSELF: u32 = 0x3079;
     pub(super) const PICK_PLAYER: u32 = 0x307a;
+    pub(super) const PICK_NOT_PVP: u32 = 0x307b;
     pub(super) const PICK_TOO_FAR: u32 = 0x307e;
 }
 
@@ -319,16 +320,29 @@ fn pick_pockets<'w>(
                 Vec::new(),
             ));
         }
-        // The program allows a player's pockets only under its PvP rules:
-        // 0x307a when the target is not in PvP, 0x307b when the target is
-        // and the player is not (read R16d). The session does not follow
-        // the PvP flag yet, so it refuses every player with the first of
-        // those lines (recording checklist 6.438).
-        return Err(Refusal::official(
-            "You cannot pick a player's pockets here",
-            lines::PICK_PLAYER,
-            Vec::new(),
-        ));
+        // The program allows a player's pockets only under its PvP rules
+        // (read R16d): each spawn's flag, from its appearance updates. Its
+        // first line also waits on a server ruleset of 4, which the session
+        // does not read: it refuses as under any other (recording
+        // checklist 6.438).
+        if !spawn.appearance.pvp {
+            return Err(Refusal::official(
+                "That player is not open to player combat",
+                lines::PICK_PLAYER,
+                Vec::new(),
+            ));
+        }
+        if !world
+            .spawns
+            .visible(own_id)
+            .is_some_and(|own| own.appearance.pvp)
+        {
+            return Err(Refusal::official(
+                "You are not open to player combat",
+                lines::PICK_NOT_PVP,
+                Vec::new(),
+            ));
+        }
     }
     Ok(spawn)
 }
@@ -539,7 +553,8 @@ mod tests {
             line(&press(&mut abilities, &world, pick, now)),
             Some(0x307e)
         );
-        // A player's pockets: never your own, and none without PvP.
+        // A player's pockets: never your own, and only with both open to
+        // player combat.
         world.target = crate::client::session::targeting::Target::from(7);
         assert_eq!(
             line(&press(&mut abilities, &world, pick, now)),
@@ -550,6 +565,21 @@ mod tests {
             line(&press(&mut abilities, &world, pick, now)),
             Some(0x307a)
         );
+        let open = |world: &mut World, id| {
+            let mut spawn = world.spawns.visible(id).unwrap().clone();
+            spawn.appearance.pvp = true;
+            world.spawns.insert(spawn);
+        };
+        open(&mut world, 46);
+        assert_eq!(
+            line(&press(&mut abilities, &world, pick, now)),
+            Some(0x307b)
+        );
+        open(&mut world, 7);
+        let mut fresh = Abilities::new(&Ability::ALL);
+        let player_picked = press(&mut fresh, &world, pick, now);
+        assert_eq!(line(&player_picked), None);
+        assert_eq!(opcodes(&player_picked), [0x2ad8]);
         world.target = crate::client::session::targeting::Target::from(42);
         let picked = press(&mut abilities, &world, pick, now);
         assert_eq!(line(&picked), None);
