@@ -216,6 +216,7 @@ pub(super) fn needs(command: &ClientCommand) -> &'static [Resource] {
         | ClientCommand::Emote { .. }
         | ClientCommand::Assist { .. }
         | ClientCommand::WhoFriends { .. }
+        | ClientCommand::Track { .. }
         | ClientCommand::ChangeCoins { .. }
         | ClientCommand::SplitCoins { .. }
         | ClientCommand::SetAutoSplit { .. }
@@ -476,6 +477,7 @@ fn refusal(command: &ClientCommand, reason: &str) -> Option<WorldEvent> {
         | ClientCommand::StopSong { .. }
         | ClientCommand::WhoAll { .. }
         | ClientCommand::WhoFriends { .. }
+        | ClientCommand::Track { .. }
         | ClientCommand::ConfigureMotion { .. }
         | ClientCommand::SpeedInputs { .. }
         | ClientCommand::ClimbReach { .. }

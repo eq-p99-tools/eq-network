@@ -240,9 +240,17 @@ pub enum Request {
         /// The player's value in the skill.
         skill_value: u32,
     },
-    /// Sense Traps or Disarm Traps at a target of the treasure class
+    /// Sense Traps, Disarm Traps or Pick Lock at a target of the treasure class
     /// ([`Ability::titanium_at_treasure`]).
     AtTreasure(Ability),
+    /// Ask for the tracking list ([`crate::tracking::titanium_refresh`]).
+    TrackingList,
+    /// The empty message after every press of Tracking
+    /// ([`crate::tracking::titanium_pressed`]).
+    TrackingPressed,
+    /// Follow a spawn from the tracking list, or with 0 stop
+    /// ([`crate::tracking::titanium_follow`]).
+    TrackSpawn(u16),
     /// The player's own animation of casting a fishing pole, which the
     /// Titanium program sends before a standing player's Fishing
     /// ([`abilities::titanium_fishing_cast`]).
@@ -452,6 +460,9 @@ pub fn titanium(request: &Request, sender: Sender<'_>) -> Result<EncodedCommand>
             .titanium_at_treasure()
             .ok_or_else(|| anyhow::anyhow!("{ability:?} has no treasure message"))?,
         Request::FishingCast => abilities::titanium_fishing_cast(sender.spawn())?,
+        Request::TrackingList => crate::tracking::titanium_refresh(),
+        Request::TrackingPressed => crate::tracking::titanium_pressed(),
+        Request::TrackSpawn(spawn_id) => crate::tracking::titanium_follow(*spawn_id),
         Request::OpenTraining(trainer) => training::titanium_open(*trainer, sender.spawn()),
         Request::Train { trainer, skill } => training::titanium_train(*trainer, *skill)?,
         Request::EndTraining(trainer) => training::titanium_end(*trainer, sender.spawn()),

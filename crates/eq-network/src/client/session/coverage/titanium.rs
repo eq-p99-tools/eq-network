@@ -271,7 +271,7 @@ pub(in crate::client) fn titanium(opcode: u16) -> Option<ServerMessage> {
         0x5b7b => sent("OP_IncreaseStats", EQEMU, Partly(&[Zone], STATS)),
         0x5c78 => sent("OP_Damage", EQEMU, Read(&[Zone])),
         0x5cc0 => sent("OP_PVPStats", EQEMU, planned(LaterSystems)),
-        0x5d11 => sent("OP_Track", EQEMU, unasked(PlayerState)),
+        0x5d11 => sent("OP_Track", EQEMU, Read(&[Zone])),
         0x5dd8 => sent("OP_ZoneChange", EQEMU, Read(&[Zone])),
         0x5e20 => sent(
             "OP_ClientReady",

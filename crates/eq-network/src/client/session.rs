@@ -46,6 +46,7 @@ mod spellbook;
 mod talk;
 mod targeting;
 mod ticks;
+mod tracking;
 mod tradeskills;
 mod training;
 mod transfers;

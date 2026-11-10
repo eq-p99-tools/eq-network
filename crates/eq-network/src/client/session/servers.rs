@@ -56,6 +56,7 @@ use super::{
     talk::Talk,
     targeting::Targeting,
     ticks::{Marks, Regeneration, Ticks},
+    tracking::Tracking,
     tradeskills::Tradeskills,
     training::Training,
     transfers::{Home, Transfers},
@@ -498,6 +499,11 @@ pub(super) trait ServerType: Sync {
         None
     }
 
+    /// Tracking's window and following a spawn from it.
+    fn tracking(&self, _setup: &Setup<'_>) -> Provided {
+        None
+    }
+
     /// Every feature the server type provides, in the order the zone session
     /// offers them each command, packet and timer.
     fn features(&self, setup: &Setup<'_>) -> Vec<Provision> {
@@ -527,6 +533,7 @@ pub(super) trait ServerType: Sync {
             self.who(setup),
             self.friends_who(setup),
             self.guilds(setup),
+            self.tracking(setup),
             self.corpses(setup),
             self.pets(setup),
             self.training(setup),
@@ -1021,6 +1028,12 @@ impl ServerType for Project1999 {
         offer(Box::<Guilds>::default())
     }
 
+    /// The Titanium program's track window and following (program reads
+    /// R14, R15a); the server decides who is listed.
+    fn tracking(&self, _setup: &Setup<'_>) -> Provided {
+        offer(Box::<Tracking>::default())
+    }
+
     /// The Titanium program's floor is whatever surface lies under the
     /// player, at any angle, and a step its floor drops away from falls
     /// (0x48a0fc, 0x48a2f4, 0x48b6c5; R-s), so P99 takes falls with the
@@ -1374,6 +1387,13 @@ impl ServerType for EqEmu {
     /// handlers take; the server checks who may do what.
     fn guilds(&self, _setup: &Setup<'_>) -> Provided {
         offer(Box::<Guilds>::default())
+    }
+
+    /// `Client::Handle_OP_Track` answers with the list, `Handle_OP_TrackTarget`
+    /// records the spawn followed, and `Handle_OP_TrackUnknown` ignores the
+    /// press's second message.
+    fn tracking(&self, _setup: &Setup<'_>) -> Provided {
+        offer(Box::<Tracking>::default())
     }
 
     fn hazards(&self, setup: &Setup<'_>) -> Provided {
@@ -2316,8 +2336,8 @@ mod tests {
         // yet checked live; and only EQEmu takes the show-helm option.
         // Both Titanium policies retain the verified own-player stun timer.
         for (protocol, count) in [
-            (ServerProtocol::Project1999, 36),
-            (ServerProtocol::EqEmu, 42),
+            (ServerProtocol::Project1999, 37),
+            (ServerProtocol::EqEmu, 43),
         ] {
             let server = server_type(protocol);
             let setup = Setup::new("Tester", AutoEat::default());
@@ -2336,8 +2356,8 @@ mod tests {
             assert!(offers(server_type(ServerProtocol::EqEmu)).contains(&capability));
         }
         assert!(offers(server_type(ServerProtocol::Project1999)).contains(&Capability::Grouping));
-        // Both Titanium providers offer the contacts, guild and coin-sharing
-        // requests the program sends.
+        // Both Titanium providers offer the contacts, guild, coin-sharing and
+        // tracking requests the program sends.
         for protocol in [ServerProtocol::Project1999, ServerProtocol::EqEmu] {
             let capabilities = offers(server_type(protocol));
             for capability in [
@@ -2346,6 +2366,7 @@ mod tests {
                 Capability::GuildManagement,
                 Capability::BankerChange,
                 Capability::Splitting,
+                Capability::Tracking,
             ] {
                 assert!(
                     capabilities.contains(&capability),

@@ -1,9 +1,8 @@
 //! The Titanium program's own checks for Fishing, Pick Pockets, Begging,
-//! Sense Traps, Disarm Traps and Pick Lock (read R14, sections 0, 3 and 4;
-//! R15c), in
-//! its order, each refusal with the program's own line. The shared gates
-//! come first: the skill known, a frozen posture, and the ability's wait,
-//! which the program passes over without a word. Its mount gate is not
+//! Sense Traps, Disarm Traps, Pick Lock and Tracking (read R14, sections 0,
+//! 2, 3 and 4; R15c), in its order, each refusal with the program's own
+//! line. The shared gates come first: the skill known, a frozen posture, and
+//! the ability's wait, which the program passes over without a word. Its mount gate is not
 //! followed: the session does not know when the player rides.
 use super::{refuse, Abilities, Refusal};
 use crate::client::session::feature::{Out, World};
@@ -64,6 +63,7 @@ pub(super) const fn checks(ability: Ability) -> bool {
             | Ability::SenseTraps
             | Ability::DisarmTraps
             | Ability::PickLock
+            | Ability::Tracking
     )
 }
 
@@ -71,6 +71,17 @@ pub(super) const fn checks(ability: Ability) -> bool {
 struct Use {
     requests: Vec<Request>,
     string_id: Option<u32>,
+}
+
+impl Use {
+    /// Tracking asks for the list, then sends its empty second message (R14
+    /// section 2); the window and following are the tracking feature's.
+    fn tracking() -> Self {
+        Self {
+            requests: vec![Request::TrackingList, Request::TrackingPressed],
+            string_id: None,
+        }
+    }
 }
 
 impl Abilities {
@@ -195,6 +206,7 @@ impl Abilities {
                     string_id: None,
                 })
             }
+            Ability::Tracking => Ok(Use::tracking()),
             // Pick Lock acts only on a treasure, and otherwise does nothing
             // and says nothing (R14 section 3).
             Ability::PickLock => Ok(Use {
@@ -710,5 +722,20 @@ mod tests {
         let picked = press(&mut abilities, &world, pick, now);
         assert_eq!(opcodes(&picked), [0x069d]);
         assert_eq!(picked.sent[0].body, Vec::<u8>::new());
+    }
+
+    #[test]
+    fn tracking_asks_for_the_list_then_sends_its_second_message() {
+        let mut abilities = Abilities::new(&Ability::ALL);
+        let world = player(&[(53, 5)]);
+        let pressed = press(
+            &mut abilities,
+            &world,
+            (Ability::Tracking, false),
+            Instant::now(),
+        );
+        pressed.result.as_ref().unwrap();
+        assert_eq!(opcodes(&pressed), [0x5d11, 0x6177]);
+        assert!(pressed.sent.iter().all(|sent| sent.body.is_empty()));
     }
 }

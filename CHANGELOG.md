@@ -14,8 +14,8 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     held, attacking, no pole, the pole not in hand, no bait. A standing
     player sends the pole's cast animation first, and the cast's line comes
     with `WorldEvent::AbilityUsed`'s new `string_id`.
-  - New abilities `PickPockets`, `Begging`, `SenseTraps`, `DisarmTraps`
-    and `PickLock`.
+  - New abilities `PickPockets`, `Begging`, `SenseTraps`, `DisarmTraps`,
+    `PickLock` and `Tracking`.
     - Pick Pockets and Begging send the program's 18-byte ask, carrying the
       player's own skill value (`Request::AskOf`,
       `abilities::titanium_ask`).
@@ -37,6 +37,23 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
       not yet tell the two lines apart; its ruleset term is unread (6.438).
     - Begging's unseen check reads the player's own invisibility (6.430),
       and the 15-unit reach is measured as the bandage's (6.431).
+  - Tracking, as the program does it (`tracking`, `Capability::Tracking`).
+    - Pressing it asks for the list and then sends the program's empty
+      second message. The new `GameCommand::Track` refreshes the list,
+      follows a spawn from it, or stops (`TrackAction`).
+    - The server's list comes as `WorldEvent::Tracking` with
+      `TrackingUpdate::Listed`: the server's order, at most 1,000 entries,
+      leaving out spawns the session does not know.
+    - Following names the spawn to the server and starts a six-minute
+      limit. The session tells the host every two seconds where the spawn
+      lies against the player's heading, as one of the program's five
+      bearing lines (`TrackingUpdate::Bearing`), and sends nothing more.
+      Which side word goes with which side, and the program's own bearing
+      routine, are unread (6.441).
+    - Following ends with the program's line when the spawn is gone or
+      six minutes pass. Stopping while following sends the program's stop
+      and says nothing.
+    - The Ranger's sort and colour filter are not offered.
   - A frozen player uses none of these, with the program's line.
   - `GameCommand::UseAbility` gains `in_liquid`, the host's own liquid test,
     which Fishing refuses on. `Ability::encode` returns `None` for the two

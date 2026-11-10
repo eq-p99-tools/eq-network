@@ -605,12 +605,14 @@ pub enum Capability {
     /// Sharing coins with the player's group, at once (`/split`) or as they
     /// are looted (`/autosplit`).
     Splitting,
+    /// Tracking's window: its list, following a spawn and stopping.
+    Tracking,
 }
 
 impl Capability {
     /// Every capability, in order: what a session offers when its server and
     /// client generation support everything.
-    pub const ALL: [Self; 62] = [
+    pub const ALL: [Self; 63] = [
         Self::Casting,
         Self::Spellbook,
         Self::Inventory,
@@ -673,6 +675,7 @@ impl Capability {
         Self::GuildManagement,
         Self::BankerChange,
         Self::Splitting,
+        Self::Tracking,
     ];
 }
 
@@ -1324,6 +1327,8 @@ pub enum WorldEvent {
     /// session adds its coins to the purse, as the program does, and follows
     /// with [`WorldEvent::Coins`].
     AskAnswered(crate::abilities::AskAnswer),
+    /// Tracking's list, following and its lines (Titanium).
+    Tracking(crate::tracking::TrackingUpdate),
     /// Whether looted coins are shared with the group, as the profile says
     /// at admission.
     AutoSplit(bool),
@@ -2034,11 +2039,11 @@ pub fn titanium_update(opcode: u16, body: &[u8]) -> Result<Option<WorldEvent>> {
         }
         0x267c => WorldEvent::Coins(money_update(body)?),
         crate::banker::CHANGE_OPCODE => WorldEvent::CoinsChanged(crate::banker::decode(body)?),
+        crate::tracking::LIST_OPCODE => WorldEvent::Tracking(crate::tracking::titanium_news(body)),
         crate::abilities::BEGGING_OPCODE | crate::abilities::PICK_POCKET_OPCODE => {
-            match crate::abilities::titanium_answer(opcode, body)? {
-                Some(answer) => WorldEvent::AskAnswered(answer),
-                None => return Ok(None),
-            }
+            return Ok(
+                crate::abilities::titanium_answer(opcode, body)?.map(WorldEvent::AskAnswered)
+            );
         }
         0x5ecd => {
             ensure!(body.len() >= 8, "truncated experience update");
@@ -2365,6 +2370,7 @@ mod tests {
             Capability::GuildManagement => 59,
             Capability::BankerChange => 60,
             Capability::Splitting => 61,
+            Capability::Tracking => 62,
         };
         for (index, capability) in Capability::ALL.into_iter().enumerate() {
             assert_eq!(place(capability), index, "{capability:?}");
