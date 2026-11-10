@@ -204,3 +204,57 @@ fn the_mac_client_still_stands_a_lying_player_to_move() {
     assert_eq!(output.sent.len(), 1, "the stand");
     assert_eq!(world.posture.current(), Some(PostureState::Standing));
 }
+
+#[test]
+fn the_mac_client_walks_a_lying_player_by_choice_and_stands_them_otherwise() {
+    let start = Instant::now();
+    let mut world = setup(start);
+    world
+        .body
+        .motion_mut()
+        .unwrap()
+        .set_options(
+            MovementOptions {
+                lying: LyingOptions {
+                    walk: true,
+                    ..LyingOptions::default()
+                },
+                ..MovementOptions::default()
+            },
+            start,
+        )
+        .unwrap();
+    let now = start + Duration::from_millis(500);
+    let output = testing::run_on(EQMAC, |out| {
+        Motion::step_at(
+            &request(MovementMode::Walk, now, ahead(0.5)),
+            now,
+            &mut world,
+            out,
+        )
+    });
+    output.result.unwrap();
+    assert!(output.sent.is_empty(), "no stand: {:?}", output.sent);
+    assert_eq!(output.unreliable.len(), 1);
+    assert_eq!(world.posture.current(), Some(PostureState::Lying));
+    let motion = Motion::new(true, true, None);
+    let output = testing::run_on(EQMAC, |out| motion.jump(now, &mut world, out));
+    output.result.unwrap();
+    assert!(
+        output.sent.is_empty(),
+        "no jump while lying: {:?}",
+        output.sent
+    );
+    let later = now + Duration::from_millis(500);
+    let output = testing::run_on(EQMAC, |out| {
+        Motion::step_at(
+            &request(MovementMode::Forward, later, ahead(1.5)),
+            later,
+            &mut world,
+            out,
+        )
+    });
+    output.result.unwrap();
+    assert_eq!(output.sent.len(), 1, "the stand");
+    assert_eq!(world.posture.current(), Some(PostureState::Standing));
+}

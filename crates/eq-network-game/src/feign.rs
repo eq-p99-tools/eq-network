@@ -3,10 +3,13 @@
 //! (`eqgame.exe`); the Mac-era client keeps this library's earlier rules
 //! until its own program is read.
 //!
-//! On the server a feign is one flag (`EQEmu`'s `Mob::SetFeigned`). The
-//! server sends nothing when it succeeds, so the player lies down only by the
-//! client's own posture report. It clears the flag when the client reports
-//! any other posture, never when the player is hit.
+//! On the reference server (`EQEmu`) a feign is one flag
+//! (`Mob::SetFeigned`). It sends nothing when the feign succeeds, so the
+//! player lies down only by the client's own posture report, and it clears
+//! the flag when the client reports any other posture, never when the player
+//! is hit. Another server may clear it or stand the player itself; the
+//! session follows such a stand through the posture report, as the program
+//! does.
 use crate::command::EncodedCommand;
 use anyhow::{ensure, Result};
 

@@ -78,7 +78,8 @@ impl Feature for Stances {
 /// as the Titanium program's `OP_Damage` handler does (read R19 b, 0x4a56e3,
 /// rechecked 11-10): any record of more than 0 to the player, whatever its
 /// type, and never a miss. Lying and ducking stay as they are, unless the
-/// player chose to stand when hit while lying (6.453). The handler's early
+/// player chose to stand when hit while lying (6.453), which holds on the
+/// Mac-era client too. The handler's early
 /// return for a source it does not know is kept; the one for a spell it does
 /// not know is not, since the session has no spell table (6.455).
 fn stand_when_hit(damage: &Damage, world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
@@ -86,14 +87,14 @@ fn stand_when_hit(damage: &Damage, world: &mut World, out: &mut Out<'_, '_>) -> 
         return Ok(());
     };
     let known = |id: u16| id == 0 || world.is_player(id) || world.spawns.get(id).is_some();
-    if !out.wire.dialect().lying().hit_stands
-        || damage.target_id != spawn_id
-        || !known(damage.source_id)
-    {
+    if damage.target_id != spawn_id || !known(damage.source_id) {
         return Ok(());
     }
+    // The player's choice for a lying player holds on either generation.
     let stands = match world.posture.current() {
-        Some(PostureState::Sitting | PostureState::Looting) => true,
+        Some(PostureState::Sitting | PostureState::Looting) => {
+            out.wire.dialect().lying().hit_stands
+        }
         Some(PostureState::Lying) => world
             .body
             .options()
@@ -327,10 +328,10 @@ mod tests {
         assert_eq!(outcome.sent.len(), 1);
     }
 
-    #[test]
-    fn a_hit_stands_a_lying_player_only_when_they_chose_it() {
+    /// A world whose player chose to stand when hit while lying.
+    fn choosing_world(posture: PostureState) -> World {
         let start = Instant::now();
-        let mut world = hit_world(PostureState::Lying);
+        let mut world = hit_world(posture);
         let mut motion = eq_network_game::movement::MotionSession::new(
             5,
             7,
@@ -351,6 +352,12 @@ mod tests {
             )
             .unwrap();
         world.body.admit(motion);
+        world
+    }
+
+    #[test]
+    fn a_hit_stands_a_lying_player_only_when_they_chose_it() {
+        let mut world = choosing_world(PostureState::Lying);
         let outcome = testing::run(|out| {
             Stances.observe(&hit(7, 42, DamageOutcome::Hit(3)), &mut world, out)
         });
@@ -363,7 +370,7 @@ mod tests {
     }
 
     #[test]
-    fn the_mac_client_stands_no_one_when_hit() {
+    fn the_mac_client_stands_a_sitter_never_and_a_lying_player_by_choice() {
         const EQMAC: &dyn super::super::wire::Wire = &super::super::wire::EqMac;
         let mut world = hit_world(PostureState::Sitting);
         let outcome = testing::run_on(EQMAC, |out| {
@@ -371,6 +378,15 @@ mod tests {
         });
         outcome.result.unwrap();
         assert!(outcome.sent.is_empty(), "{:?}", outcome.sent);
+        let mut world = choosing_world(PostureState::Lying);
+        let outcome = testing::run_on(EQMAC, |out| {
+            Stances.observe(&hit(7, 42, DamageOutcome::Hit(3)), &mut world, out)
+        });
+        outcome.result.unwrap();
+        assert_eq!(
+            outcome.sent,
+            [eq_network_game::quarm::posture(7, command::Posture::Standing).unwrap()]
+        );
     }
 
     /// The press lies the player down on Titanium too, before the feign

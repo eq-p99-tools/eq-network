@@ -27,12 +27,14 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     not withdrawn.
   - Any `OP_Damage` record of more than 0 to the player stands a sitter or a
     looter, whatever its type; lying and ducking players stay as they are.
-  - A cast while lying is refused with the program's line:
-    `WorldEvent::CastRejected` has a new `string_id`.
+  - A cast while lying is refused with the program's line, whether a gem,
+    a knight's special or an item click (items inferred, checklist 6.455):
+    `WorldEvent::CastRejected` and `WorldEvent::ItemUseAction` have a new
+    `string_id`. Disciplines are not refused (the program does not check).
   - Two departures in `MovementOptions`'s new `lying`
-    (`movement::LyingOptions`), both off by default: `walk` (walk speed
-    only, no jump, no stand; checklist 6.454) and `stand_when_hit`
-    (checklist 6.453).
+    (`movement::LyingOptions`), both off by default and on both
+    generations: `walk` (walk speed only, no jump, no stand; checklist
+    6.454) and `stand_when_hit` (checklist 6.453).
 - **Breaking:** Titanium class tools (Batch B2). On EQEmu and P99:
   - Fishing is offered on P99 too. Before it is sent, the program's checks
     run in its order, each refusing with the program's own line: already

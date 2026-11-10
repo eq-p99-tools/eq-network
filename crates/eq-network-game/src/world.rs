@@ -813,6 +813,9 @@ pub enum WorldEvent {
         request_id: u64,
         /// None means transport submission succeeded; otherwise a local rejection.
         error: Option<String>,
+        /// The installed client's own line for a rejection (`eqstr_us.txt`),
+        /// where the program says one.
+        string_id: Option<u32>,
     },
     /// Server-defined doors and their latest action instructions.
     Doors(crate::doors::DoorUpdate),

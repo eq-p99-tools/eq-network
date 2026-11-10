@@ -457,14 +457,16 @@ pub struct MovementOptions {
 /// both off by default.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize)]
 pub struct LyingOptions {
-    /// Permit walking, at walk speed only and without jumping, where the
-    /// program moves nothing ([`crate::feign::LyingRules::holds_still`]). No
-    /// stand is sent, so a server keeps a feign it granted. Recording
-    /// checklist 6.454.
+    /// Permit walking, at walk speed only and without jumping, with no stand
+    /// sent, so a server keeps a feign it granted, on either generation.
+    /// Titanium's program moves a lying player not at all
+    /// ([`crate::feign::LyingRules::holds_still`]), the Mac-era client's
+    /// stands them first. Recording checklist 6.454.
     pub walk: bool,
-    /// Stand the player up when a hit lands, as the program does only for a
-    /// sitter or a looter ([`crate::feign::LyingRules::hit_stands`]). The
-    /// stand ends a feign on the server. Recording checklist 6.453.
+    /// Stand the player up when a hit lands, on either generation. Titanium's
+    /// program does that only for a sitter or a looter
+    /// ([`crate::feign::LyingRules::hit_stands`]). The stand ends a feign on
+    /// the server. Recording checklist 6.453.
     pub stand_when_hit: bool,
 }
 

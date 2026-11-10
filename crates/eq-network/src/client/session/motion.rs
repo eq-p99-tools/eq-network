@@ -234,6 +234,16 @@ fn lies_still(world: &World, out: &Out<'_, '_>) -> bool {
     out.wire.dialect().lying().holds_still && world.posture.current() == Some(PostureState::Lying)
 }
 
+/// Whether the player lies and chose to walk while lying (6.454), which no
+/// generation's program does: walk speed only, no jump, no stand.
+fn walks_lying(world: &World) -> bool {
+    world.posture.current() == Some(PostureState::Lying)
+        && world
+            .body
+            .options()
+            .is_some_and(|options| options.lying.walk)
+}
+
 /// The player's movement at these speeds.
 fn granted(
     session_id: u64,
@@ -623,7 +633,7 @@ impl Motion {
         world: &mut World,
         out: &mut Out<'_, '_>,
     ) -> Result<()> {
-        let lying = lies_still(world, out);
+        let (lying, walk_lying) = (lies_still(world, out), walks_lying(world));
         let Some(motion) = world.body.motion.as_mut() else {
             return actions::refuse(
                 &ClientCommand::Move(request.clone()),
@@ -673,11 +683,10 @@ impl Motion {
         // no stand is sent. A fall, a lift's carry and a turn alone go on:
         // mouse look turns a lying player in the chase views. Walking while
         // lying, at walk speed only, is the player's departure (6.454).
-        if lying
-            && !motion.is_passive(request)
-            && (to.x, to.y, to.z) != (from.x, from.y, from.z)
-            && !(motion.options().lying.walk && request.mode == MovementMode::Walk)
-        {
+        // A walk while lying stays lying on either generation (6.454).
+        let walking_lying = walk_lying && request.mode == MovementMode::Walk;
+        let moves = (to.x, to.y, to.z) != (from.x, from.y, from.z);
+        if lying && !motion.is_passive(request) && moves && !walking_lying {
             return out.log.send(ClientEvent::World(WorldEvent::MotionSent {
                 session_id: world.session_id,
                 created: request.created,
@@ -687,7 +696,8 @@ impl Motion {
         }
         if let (true, Some(player)) = (
             (!world.control.stunned() || motion.options().walk_while_stunned)
-                && (to.x, to.y, to.z) != (from.x, from.y, from.z),
+                && moves
+                && !walking_lying,
             world.player.as_ref(),
         ) {
             world.posture.stand_to_move(player.spawn_id, out)?;
@@ -763,7 +773,7 @@ impl Motion {
         }
         // Jumping waits on the can-move flag, off while the player lies
         // (read R19 c); walking while lying never jumps either (6.454).
-        if lies_still(world, out) {
+        if lies_still(world, out) || walks_lying(world) {
             return out.log.diagnostic("Rejected jump: the player lies".into());
         }
         let jump = world
