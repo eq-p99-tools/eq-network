@@ -20,6 +20,7 @@ use anyhow::{ensure, Result};
 use serde::Serialize;
 
 pub mod cancel;
+pub mod placement;
 
 /// Scales an evaluated movement-related buff magnitude using its received
 /// instrument modifier. Both dialects use 10 as neutral. This projection
