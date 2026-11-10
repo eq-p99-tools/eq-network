@@ -31,6 +31,14 @@ The speed formulas are unchanged: capacity zero still means no encumbrance;
 `rate == -1000` means an actual root. Neither is an unavailable-state sentinel.
 The existing 42.667 conversion, HP/sneak rules, caps and snare floor remain.
 
+A zone sends its whole inventory, when it sends one, before the weather the
+client waits for to request the zone, on the same ordered stream; admission
+ends later on every generation. When a zone sent no inventory message by
+admission, the player holds nothing, as the original client then holds
+(inferred, recording checklist 6.437), and the session logs a diagnostic. An
+unreadable or partial inventory at admission is news and stays unavailable; a
+later snapshot replaces the empty one.
+
 ## Weight and fatigue data
 
 `Inventory::carried_weight_tenths(generation, coins)` requires a complete,

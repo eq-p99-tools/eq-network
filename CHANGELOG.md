@@ -552,6 +552,12 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- A player the zone admits without any inventory message now holds an empty
+  inventory instead of an unknown one, so movement is granted after a death
+  that left everything on the corpse; the original client then holds nothing
+  too (inferred, recording checklist 6.437). An unreadable or partial
+  inventory at admission stays unavailable, a later snapshot replaces the
+  empty one, and the session logs the empty admission as a diagnostic.
 - Eating, drinking, looting or any other change in the player's belongings
   no longer withdraws movement while the session waits for the new speed
   inputs. The last inputs stay in force (health, stance and fatigue still
