@@ -228,7 +228,7 @@ fn travel_time(door: &Door, from: f32, to: f32) -> Duration {
 /// door arrives (read R1b item 4).
 #[must_use]
 pub fn returns_at(door: &Door, at: Instant) -> Option<Instant> {
-    if door.active_endpoint()? == spawn_endpoint(door)? {
+    if !away(door) {
         return None;
     }
     let delay = returns_after(door)?;
@@ -264,13 +264,32 @@ pub fn return_click(id: u8) -> EncodedCommand {
     }
 }
 
-/// The end a door spawned at, which its return goes back to.
-fn spawn_endpoint(door: &Door) -> Option<bool> {
-    Door {
-        action: None,
-        ..door.clone()
+/// The server's open and close actions.
+const OPEN: u8 = 2;
+const CLOSE: u8 = 3;
+
+/// Whether a door stands away from its rest: open, or for a door the
+/// server inverts (normally open) shut, by the latest action or, before
+/// one, the state it spawned in. The client sends such a door back on its
+/// own.
+#[must_use]
+pub fn away(door: &Door) -> bool {
+    let inverted = door.invert_state != 0;
+    match door.action {
+        Some(action) => action == if inverted { CLOSE } else { OPEN },
+        None => (door.state_at_spawn != 0) != inverted,
     }
-    .active_endpoint()
+}
+
+/// The action the client's own return applies: a door goes back to its rest,
+/// which for an inverted door is the plain open action.
+#[must_use]
+pub const fn return_action(door: &Door) -> u8 {
+    if door.invert_state == 0 {
+        CLOSE
+    } else {
+        OPEN
+    }
 }
 
 /// How near a spawn must stand to a moving door for the program to sweep it
@@ -299,23 +318,23 @@ struct Leg {
 impl Leg {
     fn new(door: &Door, motion: Vertical, from: f32, to: f32, at: Instant) -> Self {
         let arrival = at + motion.time(from, to);
-        let returns = (door.active_endpoint() != spawn_endpoint(door))
+        let home = if return_action(door) == OPEN {
+            motion.travel
+        } else {
+            0.0
+        };
+        let returns = away(door)
             .then(|| returns_after(door))
             .flatten()
-            .and_then(|delay| {
-                let home = if spawn_endpoint(door)? {
-                    motion.travel
-                } else {
-                    0.0
-                };
-                Some((
+            .map(|delay| {
+                (
                     if at + delay < arrival {
                         at + delay
                     } else {
                         arrival + delay
                     },
                     home,
-                ))
+                )
             });
         Self {
             door: door.clone(),
@@ -365,7 +384,8 @@ impl Lifts {
     ///
     /// A door spawned open (state 1) stands at its full travel. One spawned
     /// opening (2) starts up from shut when it arrives; one spawned closing
-    /// (3) or shut stands shut (recording checklist 6.423).
+    /// (3) or shut stands shut. A door spawned away from its rest goes back
+    /// on its own timer from its arrival (recording checklist 6.423).
     pub fn spawned(&mut self, door: &Door, now: Instant) {
         let Some(motion) = Vertical::of(door) else {
             self.legs.remove(&door.id);
@@ -599,6 +619,25 @@ mod tests {
             click.body,
             [9, 0, 0, 0, 0xfe, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
         );
+    }
+
+    #[test]
+    fn a_door_away_from_its_rest_goes_back_and_an_inverted_one_by_the_open_action() {
+        let mut plain = door(5);
+        assert!(!away(&plain));
+        plain.state_at_spawn = 1;
+        assert!(away(&plain));
+        plain.action = Some(3);
+        assert!(!away(&plain));
+        assert_eq!(return_action(&plain), 3);
+        let mut inverted = door(5);
+        inverted.invert_state = 1;
+        assert!(away(&inverted));
+        inverted.state_at_spawn = 1;
+        assert!(!away(&inverted));
+        inverted.action = Some(3);
+        assert!(away(&inverted));
+        assert_eq!(return_action(&inverted), 2);
     }
 
     #[test]
