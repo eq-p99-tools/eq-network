@@ -14,13 +14,15 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     held, attacking, no pole, the pole not in hand, no bait. A standing
     player sends the pole's cast animation first, and the cast's line comes
     with `WorldEvent::AbilityUsed`'s new `string_id`.
-  - New abilities `PickPockets`, `Begging`, `SenseTraps` and
-    `DisarmTraps`.
+  - New abilities `PickPockets`, `Begging`, `SenseTraps`, `DisarmTraps`
+    and `PickLock`.
     - Pick Pockets and Begging send the program's 18-byte ask, carrying the
       player's own skill value (`Request::AskOf`,
       `abilities::titanium_ask`).
     - The trap skills send the program's treasure messages at a target of
-      class 62 (`Request::AtTreasure`; checklist 6.432, inferred).
+      class 62 (`Request::AtTreasure`; checklist 6.432, inferred). Pick Lock
+      has only that message, and does nothing and says nothing at any
+      other target; `Ability::encode` returns `None` for it.
     - Each waits ten seconds on its own timer, the program's value.
     - The server's answer to a beg or a pick comes as the new
       `WorldEvent::AskAnswered` (`abilities::titanium_answer`), read as the

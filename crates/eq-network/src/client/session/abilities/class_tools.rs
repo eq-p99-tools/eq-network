@@ -1,5 +1,6 @@
 //! The Titanium program's own checks for Fishing, Pick Pockets, Begging,
-//! Sense Traps and Disarm Traps (read R14, sections 0, 3 and 4; R15c), in
+//! Sense Traps, Disarm Traps and Pick Lock (read R14, sections 0, 3 and 4;
+//! R15c), in
 //! its order, each refusal with the program's own line. The shared gates
 //! come first: the skill known, a frozen posture, and the ability's wait,
 //! which the program passes over without a word. Its mount gate is not
@@ -62,6 +63,7 @@ pub(super) const fn checks(ability: Ability) -> bool {
             | Ability::Begging
             | Ability::SenseTraps
             | Ability::DisarmTraps
+            | Ability::PickLock
     )
 }
 
@@ -193,6 +195,16 @@ impl Abilities {
                     string_id: None,
                 })
             }
+            // Pick Lock acts only on a treasure, and otherwise does nothing
+            // and says nothing (R14 section 3).
+            Ability::PickLock => Ok(Use {
+                requests: target
+                    .filter(|(_, spawn)| spawn.class == Some(TREASURE_CLASS))
+                    .map(|_| Request::AtTreasure(ability))
+                    .into_iter()
+                    .collect(),
+                string_id: None,
+            }),
             // No other check; a target of the treasure class takes the
             // program's other message (recording checklist 6.432).
             _ => Ok(
@@ -675,5 +687,28 @@ mod tests {
             later,
         );
         assert_eq!(outcome.sent, []);
+    }
+
+    #[test]
+    fn pick_lock_acts_only_on_a_treasure_and_otherwise_says_nothing() {
+        let mut abilities = Abilities::new(&Ability::ALL);
+        let mut world = player(&[(35, 5)]);
+        let pick = (Ability::PickLock, false);
+        let now = Instant::now();
+        for target in [None, Some(42)] {
+            world.target = target.map_or_else(Default::default, |id| {
+                crate::client::session::targeting::Target::from(id)
+            });
+            let outcome = press(&mut abilities, &world, pick, now);
+            outcome.result.as_ref().unwrap();
+            assert_eq!((outcome.sent.len(), outcome.events.len()), (0, 0));
+        }
+        let mut chest = testing::spawn(50, SpawnKind::Npc);
+        chest.class = Some(TREASURE_CLASS);
+        world.spawns.insert(chest);
+        world.target = crate::client::session::targeting::Target::from(50);
+        let picked = press(&mut abilities, &world, pick, now);
+        assert_eq!(opcodes(&picked), [0x069d]);
+        assert_eq!(picked.sent[0].body, Vec::<u8>::new());
     }
 }

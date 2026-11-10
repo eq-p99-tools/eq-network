@@ -42,6 +42,8 @@ pub const BEGGING_OPCODE: u16 = 0x13e7;
 /// treasure class, instead of their own messages (read R14 section 3).
 const TREASURE_SENSE_TRAPS_OPCODE: u16 = 0x07a8;
 const TREASURE_DISARM_TRAPS_OPCODE: u16 = 0x41b9;
+/// And its Pick Lock, which sends nothing anywhere else.
+const TREASURE_PICK_LOCK_OPCODE: u16 = 0x069d;
 /// The class the Titanium program sends its treasure messages for: a class
 /// byte (read R15b), which `EQEmu` calls `LDoN` treasure (recording checklist
 /// 6.432, inferred).
@@ -109,6 +111,8 @@ pub enum Ability {
     SenseTraps,
     /// Disarm Traps.
     DisarmTraps,
+    /// Pick Lock, at a treasure; a door's lock is picked by clicking it.
+    PickLock,
 }
 
 /// The recovery timer an ability waits on. Servers keep one for all the
@@ -143,12 +147,14 @@ pub enum Recovery {
     SenseTraps,
     /// Disarm Traps.
     DisarmTraps,
+    /// Pick Lock.
+    PickLock,
 }
 
 impl Ability {
     /// Every ability, strikes first and those anyone has, binding wounds and
     /// fishing, last.
-    pub const ALL: [Self; 22] = [
+    pub const ALL: [Self; 23] = [
         Self::Kick,
         Self::Bash,
         Self::Backstab,
@@ -169,6 +175,7 @@ impl Ability {
         Self::Begging,
         Self::SenseTraps,
         Self::DisarmTraps,
+        Self::PickLock,
         Self::BindWound,
         Self::Fishing,
     ];
@@ -182,6 +189,7 @@ impl Ability {
             Self::BindWound => 9,
             Self::Bash => 10,
             Self::DisarmTraps => 17,
+            Self::PickLock => 35,
             Self::DragonPunch => 21,
             Self::EagleStrike => 23,
             Self::FeignDeath => 25,
@@ -250,6 +258,7 @@ impl Ability {
             Self::Begging => "Begging",
             Self::SenseTraps => "Sense Traps",
             Self::DisarmTraps => "Disarm Traps",
+            Self::PickLock => "Pick Lock",
         }
     }
 
@@ -292,6 +301,7 @@ impl Ability {
             Self::Begging => Recovery::Begging,
             Self::SenseTraps => Recovery::SenseTraps,
             Self::DisarmTraps => Recovery::DisarmTraps,
+            Self::PickLock => Recovery::PickLock,
         })
     }
 
@@ -323,10 +333,10 @@ impl Ability {
     /// (its `features.h` time less the second its handlers take off), as
     /// the TAKP read doesn't list it.
     ///
-    /// Pick Pockets, Begging, Sense Traps and Disarm Traps each wait ten
-    /// seconds on their own timer, the program's skill-record value (read
-    /// R16c, [0x851200 + id x 4] +4, in ms), which also gives the waits
-    /// above for the strikes, Feign Death, Hide and Mend.
+    /// Pick Pockets, Begging, Sense Traps, Disarm Traps and Pick Lock each
+    /// wait ten seconds on their own timer, the program's skill-record
+    /// value (read R16c, [0x851200 + id x 4] +4, in ms), which also gives
+    /// the waits above for the strikes, Feign Death, Hide and Mend.
     #[must_use]
     pub const fn reuse(self, dialect: GameDialect) -> Duration {
         Duration::from_millis(match self {
@@ -351,7 +361,8 @@ impl Ability {
             | Self::PickPockets
             | Self::Begging
             | Self::SenseTraps
-            | Self::DisarmTraps => 10_000,
+            | Self::DisarmTraps
+            | Self::PickLock => 10_000,
             Self::BindWound => match dialect {
                 GameDialect::Titanium => 11_000,
                 GameDialect::EqMac => 10_000,
@@ -372,13 +383,14 @@ impl Ability {
     /// The packet that uses it; a strike or taunt names the target, which
     /// must be the server's target too, and a bandaging the one bandaged.
     /// None for an ability that [`asks`](Self::asks), whose packet
-    /// [`titanium_ask`] builds.
+    /// [`titanium_ask`] builds, and for Pick Lock, which has a message only
+    /// at a treasure ([`Self::titanium_at_treasure`]).
     #[must_use]
     pub fn encode(self, target: u16) -> Option<EncodedCommand> {
         if self == Self::BindWound {
             return Some(crate::bind_wound::encode(target));
         }
-        if self.asks() {
+        if self.asks() || self == Self::PickLock {
             return None;
         }
         let word = |value: u32| value.to_le_bytes();
@@ -410,13 +422,14 @@ impl Ability {
     }
 
     /// The Titanium program's message for it at a target of the treasure
-    /// class ([`TREASURE_CLASS`]), where it has one: Sense Traps and Disarm
-    /// Traps, which carry nothing (read R14 section 3).
+    /// class ([`TREASURE_CLASS`]), where it has one: Sense Traps, Disarm
+    /// Traps and Pick Lock, which carry nothing (read R14 section 3).
     #[must_use]
     pub const fn titanium_at_treasure(self) -> Option<EncodedCommand> {
         let opcode = match self {
             Self::SenseTraps => TREASURE_SENSE_TRAPS_OPCODE,
             Self::DisarmTraps => TREASURE_DISARM_TRAPS_OPCODE,
+            Self::PickLock => TREASURE_PICK_LOCK_OPCODE,
             _ => return None,
         };
         Some(EncodedCommand {
@@ -780,6 +793,7 @@ mod tests {
         for (ability, opcode) in [
             (Ability::SenseTraps, 0x07a8),
             (Ability::DisarmTraps, 0x41b9),
+            (Ability::PickLock, 0x069d),
         ] {
             assert_eq!(
                 ability.titanium_at_treasure(),
@@ -856,6 +870,7 @@ mod tests {
             (Ability::Begging, 10_000),
             (Ability::SenseTraps, 10_000),
             (Ability::DisarmTraps, 10_000),
+            (Ability::PickLock, 10_000),
         ] {
             assert_eq!(titanium(ability), millis, "{ability:?}");
         }
