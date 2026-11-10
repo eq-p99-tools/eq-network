@@ -140,6 +140,7 @@ fn strafing_requires_its_own_calibration_and_preserves_heading() {
             .send_move(&motion, now, |_| panic!("uncalibrated strafe"))
             .is_err());
         let calibration = MotionCalibration {
+            swim_backward_units_per_second: None,
             diagonal: DiagonalRates::default(),
             units_per_second: 6.0,
             velocity_scale: 0.05,
@@ -189,6 +190,7 @@ fn walking_uses_its_own_budget_and_commits_only_after_transport() {
         .send_move(&motion, now, |_| panic!("missing walk calibration"))
         .is_err());
     let calibration = MotionCalibration {
+        swim_backward_units_per_second: None,
         diagonal: DiagonalRates::default(),
         units_per_second: 6.0,
         velocity_scale: 0.05,
@@ -253,6 +255,7 @@ fn backward_motion_has_its_own_budget_animation_and_transport_commit() {
         .send_move(&motion, now, |_| panic!("uncalibrated send"))
         .is_err());
     let calibration = MotionCalibration {
+        swim_backward_units_per_second: None,
         diagonal: DiagonalRates::default(),
         units_per_second: 6.0,
         velocity_scale: 0.05,
@@ -306,6 +309,7 @@ fn setup(now: Instant) -> MotionSession {
     session
         .calibrate(
             MotionCalibration {
+                swim_backward_units_per_second: None,
                 diagonal: DiagonalRates::default(),
                 walk: None,
                 strafe: None,
@@ -425,6 +429,7 @@ fn grant_grounded_diagonal(session: &mut MotionSession, start: Instant) {
     session
         .calibrate(
             MotionCalibration {
+                swim_backward_units_per_second: None,
                 diagonal: DiagonalRates {
                     run: Some(3.0),
                     walk: Some(1.0),
@@ -818,6 +823,7 @@ fn correction_revokes_motion_and_old_input_cannot_replay_after_recalibration() {
     session
         .calibrate(
             MotionCalibration {
+                swim_backward_units_per_second: None,
                 diagonal: DiagonalRates::default(),
                 walk: None,
                 strafe: None,
@@ -849,6 +855,7 @@ fn death_or_transfer_suppresses_heartbeats_and_cannot_resume_old_admission() {
     assert!(session
         .calibrate(
             MotionCalibration {
+                swim_backward_units_per_second: None,
                 diagonal: DiagonalRates::default(),
                 walk: None,
                 strafe: None,
@@ -864,6 +871,7 @@ fn death_or_transfer_suppresses_heartbeats_and_cannot_resume_old_admission() {
     new_zone
         .calibrate(
             MotionCalibration {
+                swim_backward_units_per_second: None,
                 diagonal: DiagonalRates::default(),
                 walk: None,
                 strafe: None,
@@ -943,6 +951,7 @@ fn queued_calibration_requires_valid_data_from_after_the_last_reset() {
         .is_err());
     for invalid in [
         MotionCalibration {
+            swim_backward_units_per_second: None,
             diagonal: DiagonalRates::default(),
             walk: None,
             strafe: None,
@@ -951,10 +960,12 @@ fn queued_calibration_requires_valid_data_from_after_the_last_reset() {
             ..calibration
         },
         MotionCalibration {
+            swim_backward_units_per_second: None,
             velocity_scale: 0.0,
             ..calibration
         },
         MotionCalibration {
+            swim_backward_units_per_second: None,
             animation: 512,
             ..calibration
         },
@@ -1233,6 +1244,7 @@ fn the_wire_velocity_covers_the_stamp_interval_not_the_processing_one() {
 fn mac_era(start: Instant) -> MotionSession {
     setup(start).with_gate(Some(UpdateGate::Flagged {
         pack: crate::quarm::client_update,
+        rule: crate::movement::EQMAC_FLAGS,
     }))
 }
 
@@ -2131,4 +2143,299 @@ fn titanium_counter_records_the_pad_region_and_its_warp() {
         .unwrap());
     // 45 frames, and the entry report's own entry and the landing's.
     assert_eq!(landed, Some(45 + 4 + 2));
+}
+
+fn titanium_flagged(start: Instant) -> MotionSession {
+    setup(start).with_gate(Some(UpdateGate::Flagged {
+        pack: |sample| sample.packet(),
+        rule: crate::movement::TITANIUM_FLAGS,
+    }))
+}
+
+/// As [`passes`], with the host's request built by `make` at each step.
+fn titanium_passes(
+    session: &mut MotionSession,
+    start: Instant,
+    steps: std::ops::RangeInclusive<u64>,
+    make: impl Fn(u64, Instant) -> Option<MovementRequest>,
+) -> Vec<(u64, u16)> {
+    let mut sent = Vec::new();
+    for step in steps {
+        let now = start + Duration::from_millis(step * 100);
+        if let Some(request) = make(step, now) {
+            session
+                .send_move_sample(&request, now, |sample| {
+                    sent.push((step * 100, sample.sequence));
+                    Ok(())
+                })
+                .unwrap();
+        }
+        let mut ticked = None;
+        if session
+            .tick_sample(now, |sample| {
+                sample.packet()?;
+                ticked = Some(sample.sequence);
+                Ok(())
+            })
+            .unwrap()
+        {
+            sent.push((step * 100, ticked.unwrap()));
+        }
+    }
+    sent
+}
+
+fn times(sent: &[(u64, u16)]) -> Vec<u64> {
+    sent.iter().map(|(at, _)| *at).collect()
+}
+
+#[test]
+fn titanium_flag_sends_a_steady_run_once_a_second_and_a_turn_more_often() {
+    let start = Instant::now();
+    let mut session = titanium_flagged(start);
+    // Running straight at 5 units a second: the start's speed change goes
+    // out more than 280 ms after admission, then only the 1 s tick.
+    #[allow(clippy::cast_precision_loss)]
+    let sent = titanium_passes(&mut session, start, 1..=25, |step, now| {
+        Some(request(now, step as f32 * 0.5))
+    });
+    assert_eq!(times(&sent), [300, 1200, 2300]);
+
+    // Turning 4 units a step: each turn of 2 or more marks one due, and it
+    // goes out more than 280 ms after the last.
+    let mut session = titanium_flagged(start);
+    #[allow(clippy::cast_precision_loss)]
+    let sent = titanium_passes(&mut session, start, 1..=12, |step, now| {
+        let mut turn = request(now, 0.0);
+        turn.position.heading = step as f32 * 4.0;
+        Some(turn)
+    });
+    assert_eq!(times(&sent), [300, 600, 900, 1200]);
+}
+
+#[test]
+fn titanium_flag_heading_wraps_and_drift_adds_up_from_the_last_flagged_value() {
+    use crate::movement::{gate::Flags, TITANIUM_FLAGS};
+    let start = Instant::now();
+    let sample = |heading: f32| PositionPacket {
+        spawn_id: 7,
+        sequence: 0,
+        position: Position {
+            heading,
+            ..Position::default()
+        },
+        delta: [0.0; 3],
+        animation: 0,
+        delta_heading: 0,
+    };
+    let mut flags = Flags::default();
+    // The first observation is the tick's; 0 to 510 is a turn of 2 back
+    // across the wrap, not 510.
+    flags.observe(&sample(510.0), start, &TITANIUM_FLAGS, false);
+    assert!(flags.release_frozen(Duration::from_secs(1), Duration::ZERO));
+    flags.observe(&sample(511.0), start, &TITANIUM_FLAGS, false);
+    assert!(!flags.release_frozen(Duration::from_secs(1), Duration::ZERO));
+    // 510 to 0 is a turn of 2 forward across the wrap.
+    flags.observe(&sample(0.0), start, &TITANIUM_FLAGS, false);
+    assert!(flags.release_frozen(Duration::from_secs(1), Duration::ZERO));
+    // Three drifts of 0.75 add up from the last flagged heading.
+    for (heading, due) in [(0.75, false), (1.5, false), (2.25, true)] {
+        flags.observe(&sample(heading), start, &TITANIUM_FLAGS, false);
+        assert_eq!(
+            flags.release_frozen(Duration::from_secs(1), Duration::ZERO),
+            due
+        );
+    }
+    // The speed is tracked apart: 8 in the field is 0.2 of the speed.
+    for (animation, due) in [(7, false), (8, true), (15, false), (16, true)] {
+        let moving = PositionPacket {
+            animation,
+            ..sample(2.25)
+        };
+        flags.observe(&moving, start, &TITANIUM_FLAGS, false);
+        assert_eq!(
+            flags.release_frozen(Duration::from_secs(1), Duration::ZERO),
+            due
+        );
+    }
+}
+
+#[test]
+fn titanium_flag_sends_strafing_and_a_jump_more_often_than_the_tick() {
+    let start = Instant::now();
+    let mut session = MotionSession::new(11, 7, Position::default(), start)
+        .unwrap()
+        .with_gate(Some(UpdateGate::Flagged {
+            pack: |sample| sample.packet(),
+            rule: crate::movement::TITANIUM_FLAGS,
+        }));
+    session
+        .calibrate(
+            MotionCalibration {
+                swim_backward_units_per_second: None,
+                diagonal: DiagonalRates::default(),
+                walk: None,
+                strafe: Some(StrafeCalibration {
+                    units_per_second: 6.0,
+                    velocity_scale: 0.05,
+                    animation: 12,
+                    walk_units_per_second: None,
+                }),
+                backward: None,
+                units_per_second: 6.0,
+                velocity_scale: 0.05,
+                animation: 12,
+            },
+            start,
+        )
+        .unwrap();
+    // A strafe at a steady speed: every sample marks one due.
+    #[allow(clippy::cast_precision_loss)]
+    let sent = titanium_passes(&mut session, start, 1..=12, |step, now| {
+        Some(MovementRequest::new(
+            MovementMode::Strafe,
+            11,
+            Position {
+                y: step as f32 * 0.5,
+                ..Position::default()
+            },
+            now,
+        ))
+    });
+    assert_eq!(times(&sent), [300, 600, 900, 1200]);
+
+    // A steady run, then a jump at 1500 ms: it goes out at once.
+    let mut session = titanium_flagged(start).with_jump(Some((44.55, 400.0)));
+    #[allow(clippy::cast_precision_loss)]
+    let sent = titanium_passes(&mut session, start, 1..=16, |step, now| {
+        Some(request(now, step as f32 * 0.5))
+    });
+    assert_eq!(times(&sent), [300, 1200]);
+    session.jumped();
+    let now = start + Duration::from_millis(1700);
+    let mut jumped = false;
+    session
+        .send_move_sample(&request(now, 8.5), now, |_| {
+            jumped = true;
+            Ok(())
+        })
+        .unwrap();
+    assert!(jumped);
+}
+
+#[test]
+fn titanium_frozen_sends_from_the_tick_with_the_last_counter_and_a_stun_sends_nothing() {
+    use crate::movement::{Hold, TITANIUM_UPDATE_COUNTER};
+    let start = Instant::now();
+    let mut session = titanium_flagged(start).with_counter(TITANIUM_UPDATE_COUNTER);
+    // One ordinary update first, at 300 ms: 19 frames.
+    let sent = titanium_passes(&mut session, start, 1..=3, |step, now| {
+        (step == 1).then(|| request(now, 0.5))
+    });
+    assert_eq!(sent, [(300, 19)]);
+    session.set_hold(Hold::Frozen);
+    let sent = titanium_passes(&mut session, start, 4..=40, |_, _| None);
+    // Only the tick marks one due, more than 560 ms after the last update,
+    // and each repeats the last counter written without recording one.
+    assert_eq!(sent, [(1200, 19), (2300, 19), (3400, 19)]);
+    // Unfrozen, the frames counted all along: 4,500 ms is 292 frames, and
+    // the frozen updates recorded nothing.
+    session.set_hold(Hold::None);
+    let sent = titanium_passes(&mut session, start, 45..=45, |_, now| {
+        Some(request(now, 1.0))
+    });
+    assert_eq!(sent, [(4500, 292 + 1)]);
+
+    // Stunned and not frozen: nothing goes out, not even the tick's.
+    session.set_hold(Hold::Stunned);
+    assert_eq!(
+        titanium_passes(&mut session, start, 46..=80, |_, _| None),
+        []
+    );
+}
+
+#[test]
+fn titanium_backs_up_in_water_at_its_rate_and_on_land_at_once_again() {
+    let start = Instant::now();
+    let at = |ms| start + Duration::from_millis(ms);
+    let mut session = MotionSession::new(11, 7, Position::default(), start)
+        .unwrap()
+        .with_swimming(true);
+    session
+        .calibrate(
+            MotionCalibration {
+                diagonal: DiagonalRates::default(),
+                walk: None,
+                strafe: None,
+                backward: Some(BackwardCalibration {
+                    units_per_second: 6.0,
+                    velocity_scale: 0.05,
+                    animation: -12,
+                }),
+                units_per_second: 6.0,
+                velocity_scale: 0.05,
+                animation: 12,
+                // Unbuffed: no backing up in water.
+                swim_backward_units_per_second: Some(0.0),
+            },
+            start,
+        )
+        .unwrap();
+    let to = |mode, y: f32, ms| {
+        MovementRequest::new(
+            mode,
+            11,
+            Position {
+                y,
+                ..Position::default()
+            },
+            at(ms),
+        )
+    };
+    // Heading 0 faces +y. Swimming forward is fine; backing into the water
+    // from land takes the water's rate at once.
+    session
+        .send_move_sample(&to(MovementMode::Swim, 0.05, 100), at(100), |_| Ok(()))
+        .unwrap();
+    let refused = session
+        .send_move_sample(&to(MovementMode::Swim, 0.0, 200), at(200), |_| {
+            panic!("backing up in water without a buff")
+        })
+        .unwrap_err();
+    assert!(
+        refused.to_string().contains("backing up in water"),
+        "{refused}"
+    );
+    // A swim stroke that only sinks or rises still goes.
+    let mut sink = to(MovementMode::Swim, 0.05, 200);
+    sink.position.z = -0.05;
+    session
+        .send_move_sample(&sink, at(200), |_| Ok(()))
+        .unwrap();
+    // Backing out of the water onto land resumes the land rate at once.
+    let mut ashore = to(MovementMode::Backward, -0.2, 300);
+    ashore.position.z = -0.05;
+    session
+        .send_move_sample(&ashore, at(300), |_| Ok(()))
+        .unwrap();
+    // And back into the water, the water's rate again.
+    let mut wet = to(MovementMode::Swim, -0.25, 400);
+    wet.position.z = -0.05;
+    let refused = session
+        .send_move_sample(&wet, at(400), |_| panic!("backing into water"))
+        .unwrap_err();
+    assert!(
+        refused.to_string().contains("backing up in water"),
+        "{refused}"
+    );
+    // With a buff's rate, backing up in water goes, within the water's share.
+    let mut buffed = session.calibration().unwrap();
+    buffed.swim_backward_units_per_second = Some(6.0);
+    session.calibrate(buffed, at(400)).unwrap();
+    let share = super::super::swim_speed(6.0) * 0.1;
+    let mut back = to(MovementMode::Swim, -0.2 - share, 500);
+    back.position.z = -0.05;
+    session
+        .send_move_sample(&back, at(500), |_| Ok(()))
+        .unwrap();
 }

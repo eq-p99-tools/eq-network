@@ -1227,6 +1227,7 @@ mod tests {
             ClientCommand::ConfigureMotion {
                 session_id,
                 calibration: MotionCalibration {
+                    swim_backward_units_per_second: None,
                     diagonal: DiagonalRates::default(),
                     units_per_second: 6.0,
                     velocity_scale: 0.05,

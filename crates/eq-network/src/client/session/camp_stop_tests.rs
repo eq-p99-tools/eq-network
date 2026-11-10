@@ -130,6 +130,7 @@ fn walking_on(start: Instant, wire: &'static dyn Wire, first_ms: u64) -> World {
     motion
         .calibrate(
             MotionCalibration {
+                swim_backward_units_per_second: None,
                 diagonal: DiagonalRates::default(),
                 units_per_second: 6.0,
                 velocity_scale: 0.05,
@@ -609,24 +610,24 @@ fn titanium_stop(world: &mut World, camp: &mut Camp, start: Instant) {
     });
     result.unwrap();
     assert!(events.is_empty());
-    assert!(sink.order.is_empty(), "Changed gate must hold the stop");
+    assert!(sink.order.is_empty(), "the gate must hold the stop");
     assert_eq!(world.body.stop_pending(), Some(true));
 }
 
 #[test]
-fn titanium_changed_submits_the_paced_stop_before_camp_and_starts_the_timer_then() {
+fn titanium_flagged_submits_the_paced_stop_before_camp_and_starts_the_timer_then() {
     let start = Instant::now();
     let (mut world, mut camp) = titanium_queued(start);
     titanium_stop(&mut world, &mut camp, start);
     let mut sink = Recording::default();
     let (result, events) = with_out(&Titanium, &mut sink, |out| {
-        pass(&mut camp, &mut world, at(start, 579), out)
+        pass(&mut camp, &mut world, at(start, 580), out)
     });
     result.unwrap();
     assert_eq!(sink.order, Vec::new());
     assert!(events.is_empty());
     let (result, events) = with_out(&Titanium, &mut sink, |out| {
-        pass(&mut camp, &mut world, at(start, 580), out)
+        pass(&mut camp, &mut world, at(start, 581), out)
     });
     result.unwrap();
     let stop = PositionPacket {
@@ -650,8 +651,8 @@ fn titanium_changed_submits_the_paced_stop_before_camp_and_starts_the_timer_then
         events.as_slice(),
         [ClientEvent::World(WorldEvent::Camp(CampStatus::Preparing))]
     ));
-    assert!(!camp.logout_due(at(start, 30_579)));
-    assert!(camp.logout_due(at(start, 30_580)));
+    assert!(!camp.logout_due(at(start, 30_580)));
+    assert!(camp.logout_due(at(start, 30_581)));
     let (result, events) = with_out(&Titanium, &mut sink, |out| {
         pass(&mut camp, &mut world, at(start, 1_580), out)
     });
@@ -682,7 +683,7 @@ impl Wire for RefuseTitaniumPosition {
 }
 
 #[test]
-fn titanium_changed_failed_stop_never_submits_camp_or_starts_its_timer() {
+fn titanium_flagged_failed_stop_never_submits_camp_or_starts_its_timer() {
     let start = Instant::now();
     for wire in [&RefuseTitaniumPosition as &dyn Wire, &Titanium] {
         let (mut world, mut camp) = titanium_queued(start);
@@ -692,7 +693,7 @@ fn titanium_changed_failed_stop_never_submits_camp_or_starts_its_timer() {
             ..Recording::default()
         };
         let (result, events) = with_out(wire, &mut sink, |out| {
-            pass(&mut camp, &mut world, at(start, 580), out)
+            pass(&mut camp, &mut world, at(start, 581), out)
         });
         assert!(result.is_err());
         assert!(events.is_empty());
@@ -709,7 +710,7 @@ fn titanium_changed_failed_stop_never_submits_camp_or_starts_its_timer() {
 }
 
 #[test]
-fn titanium_changed_refused_stop_or_new_movement_cancels_before_camp() {
+fn titanium_flagged_refused_stop_or_new_movement_cancels_before_camp() {
     let start = Instant::now();
     for refused in [true, false] {
         let (mut world, mut camp) = titanium_queued(start);

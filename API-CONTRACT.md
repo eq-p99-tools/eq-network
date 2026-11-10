@@ -968,6 +968,13 @@ the strafe rate with walking selected: Titanium strafes on the selected base
 speed, so `strafe_units_per_second` is then the running rate, which bounds a
 `MovementMode::Strafe` sample either way; a frontend keeps a walking strafe to
 the walking rate, and halves either while the player ducks.
+`MotionState.swim_backward_units_per_second`, where present, is how fast the
+player backs up in water, in the land's units per second before the water's
+share (`movement::swim_speed`) applies: Titanium backs up in water, unless
+ducking or sneaking, only by the buffs' speed modifier, so 0 without one. The
+guard bounds a swim stroke's component behind the heading it ends facing by
+it; a frontend keeps backing up in water to it, and a ducking or sneaking
+player to the land's backward rate.
 Withdrawals, input requirements and admission/lifecycle resets invalidate
 cached acceptance. A frontend may clear a waiting status only for the exact
 posted admission/revision/report/input identity with a current positive grant;

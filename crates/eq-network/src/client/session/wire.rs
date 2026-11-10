@@ -254,8 +254,9 @@ impl Wire for Titanium {
     }
 
     fn update_gate(&self) -> Option<eq_network_game::movement::UpdateGate> {
-        Some(eq_network_game::movement::UpdateGate::Changed {
-            spacing: eq_network_game::movement::TITANIUM_POSITION_SPACING,
+        Some(eq_network_game::movement::UpdateGate::Flagged {
+            pack: |sample| sample.packet(),
+            rule: eq_network_game::movement::TITANIUM_FLAGS,
         })
     }
 
@@ -371,6 +372,7 @@ impl Wire for EqMac {
     fn update_gate(&self) -> Option<eq_network_game::movement::UpdateGate> {
         Some(eq_network_game::movement::UpdateGate::Flagged {
             pack: eq_network_game::quarm::client_update,
+            rule: eq_network_game::movement::EQMAC_FLAGS,
         })
     }
 

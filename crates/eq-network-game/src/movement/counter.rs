@@ -56,6 +56,9 @@ pub(super) struct Counter {
     since: Instant,
     /// The entries other than the frames' own.
     entries: u16,
+    /// The value the last update carried: the update the program sends
+    /// while frozen leaves its counter as it was (0x4ac842).
+    written: u16,
 }
 
 impl Counter {
@@ -64,6 +67,7 @@ impl Counter {
             rule: UpdateCounter::PerUpdate,
             since,
             entries: 0,
+            written: 0,
         }
     }
 
@@ -85,10 +89,17 @@ impl Counter {
         }
     }
 
-    /// An update went out: the history records its entry (cause 2) after
-    /// the update copied the counter.
-    pub(super) fn sent(&mut self) {
+    /// An update carrying `value` went out: the history records its entry
+    /// (cause 2) after the update copied the counter.
+    pub(super) fn sent(&mut self, value: u16) {
+        self.written = value;
         self.entries = self.entries.wrapping_add(1);
+    }
+
+    /// The value the last update carried, which an update sent while
+    /// frozen repeats without recording an entry (0x4ac842).
+    pub(super) const fn written(&self) -> u16 {
+        self.written
     }
 
     /// The program's warp (0x48aaa6) records an entry at the old position
@@ -142,9 +153,9 @@ mod tests {
         let mut counter = Counter::new(start);
         assert_eq!(counter.value(start + Duration::from_secs(5)), 0);
         counter.before_warp();
-        counter.sent();
+        counter.sent(0);
         counter.after_warp();
-        counter.sent();
+        counter.sent(0);
         assert_eq!(counter.value(start + Duration::from_secs(9)), 2);
     }
 
@@ -157,13 +168,13 @@ mod tests {
         assert_eq!(counter.value(start + Duration::from_secs(1)), 65);
         assert_eq!(counter.value(start + Duration::from_millis(500)), 32);
         // Each update's own entry is recorded after it copied the counter.
-        counter.sent();
+        counter.sent(0);
         assert_eq!(counter.value(start + Duration::from_secs(1)), 66);
         // A warp: cause 1 before its update, cause 2 after, cause 3 at the
         // new place.
         counter.before_warp();
         let warp = counter.value(start + Duration::from_secs(1));
-        counter.sent();
+        counter.sent(0);
         counter.after_warp();
         assert_eq!(warp, 67);
         assert_eq!(counter.value(start + Duration::from_secs(1)), 69);

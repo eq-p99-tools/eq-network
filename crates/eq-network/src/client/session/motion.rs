@@ -18,7 +18,7 @@ use eq_network_game::{
         SpeedInputAcceptance, SpeedInputState, SpeedInputs, SpeedState, STATIONARY_HEARTBEAT,
     },
     request::Request,
-    world::{PlayerState, Position, WorldEvent},
+    world::{PlayerState, Position, PostureState, WorldEvent},
 };
 use std::time::{Duration, Instant};
 
@@ -206,6 +206,23 @@ impl Body {
     }
 }
 
+/// The server's hold on the player, as the update gate sees it: frozen by
+/// the player's own posture, or stunned unless a departure lets them move.
+fn hold(
+    posture: Option<PostureState>,
+    stunned: bool,
+    motion: &MotionSession,
+) -> eq_network_game::movement::Hold {
+    use eq_network_game::movement::Hold;
+    if posture == Some(PostureState::Frozen) {
+        Hold::Frozen
+    } else if stunned && !motion.options().walk_while_stunned {
+        Hold::Stunned
+    } else {
+        Hold::None
+    }
+}
+
 /// The player's movement at these speeds.
 fn granted(
     session_id: u64,
@@ -219,6 +236,7 @@ fn granted(
         walk_units_per_second: speeds.walk.map(|value| value.units_per_second),
         strafe_units_per_second: speeds.strafe.map(|value| value.units_per_second),
         strafe_walk_units_per_second: speeds.strafe.and_then(|value| value.walk_units_per_second),
+        swim_backward_units_per_second: speeds.swim_backward_units_per_second,
         backward_units_per_second: speeds.backward.map(|value| value.units_per_second),
         diagonal: speeds.diagonal,
         falls,
@@ -234,6 +252,7 @@ pub(super) fn withdrawn(session_id: u64) -> WorldEvent {
         units_per_second: None,
         strafe_units_per_second: None,
         strafe_walk_units_per_second: None,
+        swim_backward_units_per_second: None,
         walk_units_per_second: None,
         backward_units_per_second: None,
         diagonal: DiagonalRates::default(),
@@ -841,6 +860,13 @@ impl Feature for Motion {
             self.withdraw_input(world, out)?;
         }
         self.grant(world, out)?;
+        if let Some(motion) = world.body.motion.as_mut() {
+            motion.set_hold(hold(
+                world.posture.current(),
+                world.control.stunned(),
+                motion,
+            ));
+        }
         world.body.heartbeat(now, out)
     }
 
@@ -948,6 +974,39 @@ mod tests {
     }
 
     #[test]
+    fn the_gate_hears_a_freeze_by_posture_and_a_stun_unless_a_departure_moves() {
+        use eq_network_game::movement::{Hold, MovementOptions};
+        let start = Instant::now();
+        let mut motion = MotionSession::new(5, 7, at(0.0), start).unwrap();
+        assert_eq!(
+            hold(Some(PostureState::Frozen), false, &motion),
+            Hold::Frozen
+        );
+        assert_eq!(
+            hold(Some(PostureState::Frozen), true, &motion),
+            Hold::Frozen
+        );
+        assert_eq!(
+            hold(Some(PostureState::Standing), true, &motion),
+            Hold::Stunned
+        );
+        assert_eq!(hold(None, false, &motion), Hold::None);
+        motion
+            .set_options(
+                MovementOptions {
+                    walk_while_stunned: true,
+                    ..MovementOptions::default()
+                },
+                start,
+            )
+            .unwrap();
+        assert_eq!(
+            hold(Some(PostureState::Standing), true, &motion),
+            Hold::None
+        );
+    }
+
+    #[test]
     fn p99_strokes_use_the_paced_titanium_position_stream() {
         use super::super::servers::{server_type, Setup};
         use crate::client::ServerProtocol;
@@ -971,6 +1030,7 @@ mod tests {
             .unwrap()
             .calibrate(
                 MotionCalibration {
+                    swim_backward_units_per_second: None,
                     units_per_second: 6.0,
                     velocity_scale: 0.05,
                     animation: 12,
@@ -1006,8 +1066,9 @@ mod tests {
         )));
         assert_eq!(world.body.position(), Some(stroke.position));
 
-        let due = start + TITANIUM_POSITION_SPACING;
-        let before_due = due.checked_sub(Duration::from_millis(1)).unwrap();
+        // The program sends more than 280 ms after the last update.
+        let before_due = start + TITANIUM_POSITION_SPACING;
+        let due = before_due + Duration::from_millis(1);
         let waiting = testing::run_on(server.wire(), |out| world.body.heartbeat(before_due, out));
         waiting.result.unwrap();
         assert_eq!(waiting.unreliable, []);
@@ -1108,6 +1169,7 @@ mod tests {
         let configure = ClientCommand::ConfigureMotion {
             session_id: 5,
             calibration: eq_network_game::movement::MotionCalibration {
+                swim_backward_units_per_second: None,
                 diagonal: DiagonalRates::default(),
                 units_per_second: 6.0,
                 velocity_scale: 0.05,
