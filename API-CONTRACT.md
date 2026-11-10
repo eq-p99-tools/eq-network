@@ -28,7 +28,8 @@ frontend whose lift runs behind the session's spends late what it did not spend
 early and never rises past the lift (`MovementGuard::lift_since`,
 `MovementGuard::allow_lift_rise`, `Lifts::carry`). The door must be a floor the
 program stands players on, with the last accepted position within `RIDER_REACH`
-(310 units in 3D) of it. A request naming nothing, another door, or a lift that
+(310 units in 3D) of where the door stood at that sample, so a lift taller than
+the reach carries its rider all the way. A request naming nothing, another door, or a lift that
 sank over the interval closes the account; only a request that names a support
 spends any of it. The rise composes with the ordinary grant: horizontal motion
 keeps its speed budget, a still rider is passive, and a lift carries (or holds

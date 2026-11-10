@@ -631,9 +631,13 @@ impl Motion {
                 let since = motion.lift_since(door);
                 Some((
                     door,
-                    world
-                        .lifts
-                        .carry(door, world.zone.0, from, since, request.created),
+                    world.lifts.carry(
+                        door,
+                        world.zone.0,
+                        (from, motion.sampled()),
+                        since,
+                        request.created,
+                    ),
                 ))
             }
             _ => None,

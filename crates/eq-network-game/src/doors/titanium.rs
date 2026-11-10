@@ -441,7 +441,10 @@ impl Lifts {
     }
 
     /// How far door `id` rose between `from` and `to`; none if it sank or
-    /// stood still.
+    /// stood still. Only the door's current leg is kept, so an instant
+    /// before that leg began counts as its start: callers keep their
+    /// intervals within one leg, as the guard's account does by closing
+    /// when the door sinks.
     #[must_use]
     pub fn rise(&self, id: u8, from: Instant, to: Instant) -> f32 {
         self.legs
@@ -449,17 +452,17 @@ impl Lifts {
             .map_or(0.0, |leg| (leg.offset(to) - leg.offset(from)).max(0.0))
     }
 
-    /// How far a player at `at` may rise between `from` and `to` standing on
-    /// door `id` in zone `zone_id`: the door's own rise over the interval,
-    /// when it is a floor the program stands players on and `at` is within
-    /// [`RIDER_REACH`] of where the door stands at `from`. Anything else
-    /// carries no one.
+    /// How far a player standing on door `id` in zone `zone_id` may rise
+    /// between `from` and `to`: the door's own rise over the interval, when
+    /// it is a floor the program stands players on and the player, at `at`
+    /// at the instant `then`, is within [`RIDER_REACH`] of where the door
+    /// stood then. Anything else carries no one.
     #[must_use]
     pub fn carry(
         &self,
         id: u8,
         zone_id: u16,
-        at: crate::world::Position,
+        (at, then): (crate::world::Position, Instant),
         from: Instant,
         to: Instant,
     ) -> f32 {
@@ -472,7 +475,7 @@ impl Lifts {
         let door = leg.door.position;
         let distance = (door.x - at.x)
             .hypot(door.y - at.y)
-            .hypot(door.z + leg.offset(from) - at.z);
+            .hypot(door.z + leg.offset(then) - at.z);
         if distance > RIDER_REACH {
             return 0.0;
         }
@@ -791,22 +794,37 @@ mod tests {
         };
         // At 1 s the lift stands 9 up, at z 14: a rider 310 away in 3D rides.
         let edge = (RIDER_REACH * RIDER_REACH - 9.0 * 9.0).sqrt();
-        assert!(near(lifts.carry(3, 1, at(0.0, 14.0), from, to), 4.5));
-        assert!(near(lifts.carry(3, 1, at(edge - 0.01, 5.0), from, to), 4.5));
-        assert_eq!(lifts.carry(3, 1, at(edge + 0.01, 5.0), from, to), 0.0);
+        assert!(near(
+            lifts.carry(3, 1, (at(0.0, 14.0), from), from, to),
+            4.5
+        ));
+        assert!(near(
+            lifts.carry(3, 1, (at(edge - 0.01, 5.0), from), from, to),
+            4.5
+        ));
         assert_eq!(
-            lifts.carry(3, 1, at(RIDER_REACH, 14.0), from, to),
+            lifts.carry(3, 1, (at(edge + 0.01, 5.0), from), from, to),
+            0.0
+        );
+        assert_eq!(
+            lifts.carry(3, 1, (at(RIDER_REACH, 14.0), from), from, to),
             0.0 + 4.5 * 1.0
         );
         assert_eq!(
-            lifts.carry(3, 1, at(RIDER_REACH + 0.01, 14.0), from, to),
+            lifts.carry(3, 1, (at(RIDER_REACH + 0.01, 14.0), from), from, to),
             0.0
         );
-        assert_eq!(lifts.carry(9, 1, at(0.0, 14.0), from, to), 0.0);
+        assert_eq!(lifts.carry(9, 1, (at(0.0, 14.0), from), from, to), 0.0);
         // Once the lift stands still at the top it carries no one.
         let top = start + Duration::from_secs(6);
         assert_eq!(
-            lifts.carry(3, 1, at(0.0, 50.0), top, top + Duration::from_secs(1)),
+            lifts.carry(
+                3,
+                1,
+                (at(0.0, 50.0), top),
+                top,
+                top + Duration::from_secs(1)
+            ),
             0.0
         );
         // A vertical door the floor sweep skips carries no one.
@@ -815,7 +833,41 @@ mod tests {
         lifts.spawned(&step, start);
         step.action = Some(2);
         lifts.moved(&step, start);
-        assert_eq!(lifts.carry(4, 1, at(0.0, 0.0), start, from), 0.0);
+        assert_eq!(lifts.carry(4, 1, (at(0.0, 0.0), start), start, from), 0.0);
+    }
+
+    #[test]
+    fn a_tall_lift_carries_its_rider_all_the_way_up_judged_where_it_stands_now() {
+        let start = Instant::now();
+        let mut lifts = Lifts::default();
+        // Field 400: 400 up at 9 a second, past the rider reach.
+        let mut lift = with_field(59, 400);
+        lifts.spawned(&lift, start);
+        lift.action = Some(2);
+        lifts.moved(&lift, start);
+        let mut z = 0.0;
+        for step in 1..=450_u64 {
+            let then = start + Duration::from_millis((step - 1) * 100);
+            let now = start + Duration::from_millis(step * 100);
+            let rider = crate::world::Position {
+                z,
+                ..crate::world::Position::default()
+            };
+            // The account runs from the start; the reach from the last sample.
+            let risen = lifts.carry(3, 1, (rider, then), start, now);
+            assert!(risen >= lifts.rise(3, start, now) - 1e-3, "stranded at {z}");
+            z = lifts.offset(3, now).unwrap();
+        }
+        assert!((z - 400.0).abs() < 1e-3);
+        // Judged at the start instead, the rider is out of reach by now.
+        let top = crate::world::Position {
+            z: 400.0,
+            ..crate::world::Position::default()
+        };
+        assert_eq!(
+            lifts.carry(3, 1, (top, start), start, start + Duration::from_secs(45)),
+            0.0
+        );
     }
 
     #[test]
