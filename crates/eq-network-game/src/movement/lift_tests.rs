@@ -1,5 +1,6 @@
 //! A lift carrying the player: the guard's vertical allowance for the door
 //! the client names as underfoot, and how the risen height goes out.
+//! `allow_lift_rise` takes how far door 3 has risen since the rider named it.
 use super::*;
 use crate::movement::{DiagonalRates, MotionCalibration, UpdateGate, STATIONARY_HEARTBEAT};
 
@@ -42,7 +43,7 @@ fn riding(created: Instant, x: f32, z: f32) -> MovementRequest {
         },
         created,
     )
-    .on_door(3)
+    .supported_by(super::super::Support::Door(3))
 }
 
 #[test]
@@ -54,7 +55,7 @@ fn a_named_lift_lets_one_sample_rise_as_far_as_it_rose_and_no_further() {
     assert!(session
         .send_move(&riding(now, 0.0, 4.5), now, |_| panic!("no lift rose"))
         .is_err());
-    session.allow_lift_rise(4.5);
+    session.allow_lift_rise(Some((3, 4.5)));
     assert!(session
         .send_move(&riding(now, 0.0, 6.6), now, |_| panic!(
             "past the lift and a riser"
@@ -69,8 +70,8 @@ fn a_named_lift_lets_one_sample_rise_as_far_as_it_rose_and_no_further() {
     assert!(session
         .send_move(&riding(later, 0.0, 9.0), later, |_| panic!("spent"))
         .is_err());
-    for nothing in [0.0, -1.0, f32::NAN, f32::INFINITY] {
-        session.allow_lift_rise(nothing);
+    for nothing in [0.0, -1.0, 4.5, f32::NAN, f32::INFINITY] {
+        session.allow_lift_rise(Some((3, nothing)));
         assert!(session
             .send_move(&riding(later, 0.0, 9.0), later, |_| panic!("none"))
             .is_err());
@@ -82,7 +83,7 @@ fn the_lifts_rise_composes_with_walking_and_a_still_rider_stays_passive() {
     let start = Instant::now();
     let now = start + Duration::from_millis(250);
     let mut session = setup(start);
-    session.allow_lift_rise(4.5);
+    session.allow_lift_rise(Some((3, 4.5)));
     // Walking 1.5 in 0.25 s at 6 a second while the lift rises 4.5.
     assert!(!session.is_passive(&riding(now, 1.5, 4.5)));
     session
@@ -90,7 +91,7 @@ fn the_lifts_rise_composes_with_walking_and_a_still_rider_stays_passive() {
         .unwrap();
     // Walking further than the speed allows is still refused on a lift.
     let later = now + Duration::from_millis(250);
-    session.allow_lift_rise(4.5);
+    session.allow_lift_rise(Some((3, 9.0)));
     assert!(session
         .send_move(&riding(later, 3.1, 9.0), later, |_| panic!("too fast"))
         .is_err());
@@ -99,7 +100,18 @@ fn the_lifts_rise_composes_with_walking_and_a_still_rider_stays_passive() {
     assert!(session.is_passive(&riding(later, 1.5, 9.0)));
     assert!(!session.is_passive(&riding(later, 1.5, 9.1)));
     assert!(!session.is_passive(&riding(later, 1.6, 9.0)));
-    session.allow_lift_rise(0.0);
+    // Only a request that names the lift may spend its rise.
+    let unnamed = MovementRequest {
+        support: None,
+        ..riding(later, 1.5, 9.0)
+    };
+    assert!(!session.is_passive(&unnamed));
+    assert!(session
+        .send_move(&unnamed, later, |_| panic!("no lift named"))
+        .is_err());
+    session.allow_lift_rise(Some((3, 4.5)));
+    assert!(!session.is_passive(&riding(later, 1.5, 9.0)));
+    session.allow_lift_rise(None);
     assert!(!session.is_passive(&riding(later, 1.5, 9.0)));
 }
 
@@ -109,7 +121,7 @@ fn a_lift_still_carries_a_player_whose_input_is_withdrawn() {
     let mut session = setup(start);
     session.withdraw();
     let now = Instant::now() + Duration::from_millis(100);
-    session.allow_lift_rise(0.9);
+    session.allow_lift_rise(Some((3, 0.9)));
     let unnamed = MovementRequest {
         support: None,
         ..riding(now, 0.0, 0.9)
@@ -134,9 +146,9 @@ fn titanium_sends_a_still_riders_risen_height_on_its_one_second_tick() {
     // Standing on a lift rising 9 a second, sampled every 100 ms.
     for step in 1..=30_u64 {
         let now = start + Duration::from_millis(step * 100);
-        session.allow_lift_rise(0.9);
         #[allow(clippy::cast_precision_loss)]
         let z = 0.9 * step as f32;
+        session.allow_lift_rise(Some((3, z)));
         session
             .send_move_sample(&riding(now, 0.0, z), now, |sample| {
                 sent.push((step * 100, sample.position.z, sample.animation));
@@ -171,9 +183,10 @@ fn walking_off_a_lift_flags_its_update_as_on_the_ground() {
     for step in 1..=20_u64 {
         let now = start + Duration::from_millis(step * 100);
         let request = if step <= 10 {
-            session.allow_lift_rise(0.9);
             #[allow(clippy::cast_precision_loss)]
-            riding(now, 0.0, 0.9 * step as f32)
+            let z = 0.9 * step as f32;
+            session.allow_lift_rise(Some((3, z)));
+            riding(now, 0.0, z)
         } else {
             // At the top, the rider walks off at 6 a second.
             #[allow(clippy::cast_precision_loss)]
@@ -220,7 +233,7 @@ fn the_plain_path_heartbeats_a_still_riders_risen_height() {
     let start = Instant::now();
     let mut session = setup(start);
     let now = start + Duration::from_millis(250);
-    session.allow_lift_rise(4.5);
+    session.allow_lift_rise(Some((3, 4.5)));
     let mut sent = Vec::new();
     session
         .send_move_sample(&riding(now, 0.0, 4.5), now, |sample| {
@@ -237,4 +250,40 @@ fn the_plain_path_heartbeats_a_still_riders_risen_height() {
         })
         .unwrap());
     assert_eq!(sent, [4.5, 4.5]);
+}
+
+#[test]
+fn a_rider_behind_the_lift_spends_its_rise_late_but_never_more_than_it_rose() {
+    let start = Instant::now();
+    let mut session = setup(start);
+    session.withdraw();
+    // The session's lift rises 9 a second from `start` and stops at 9; the
+    // stunned rider's client runs 300 ms behind it.
+    #[allow(clippy::cast_precision_loss)]
+    let lift = |at: u64| (0.009 * at as f32).min(9.0);
+    let mut accepted = Vec::new();
+    let named = session.sampled();
+    for step in 1..=14_u64 {
+        let at = step * 100;
+        let now = start + Duration::from_millis(at);
+        // The account runs from when the rider first named the lift.
+        assert_eq!(session.lift_since(3), named);
+        session.allow_lift_rise(Some((3, lift(at))));
+        let z = lift(at.saturating_sub(300));
+        session
+            .send_move(&riding(now, 0.0, z), now, |_| Ok(()))
+            .unwrap_or_else(|error| panic!("at {at} ms to {z}: {error}"));
+        accepted.push(z);
+    }
+    // At the top, after the lift stopped, the rider caught up with it.
+    assert!((session.position().z - 9.0).abs() < 1e-3, "{accepted:?}");
+    // And may rise no higher than the lift did.
+    let now = start + Duration::from_millis(1500);
+    session.allow_lift_rise(Some((3, lift(1500))));
+    assert!(session
+        .send_move(&riding(now, 0.0, 9.1), now, |_| panic!("past the lift"))
+        .is_err());
+    // Another lift, or none, starts again from the last sample.
+    session.allow_lift_rise(None);
+    assert_eq!(session.lift_since(3), session.sampled());
 }

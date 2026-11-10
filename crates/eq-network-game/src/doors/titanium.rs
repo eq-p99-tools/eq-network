@@ -479,6 +479,22 @@ impl Lifts {
         self.rise(id, from, to)
     }
 
+    /// Whether door `id` sinks at all between `from` and `to`.
+    #[must_use]
+    pub fn sinks(&self, id: u8, from: Instant, to: Instant) -> bool {
+        self.legs
+            .get(&id)
+            .is_some_and(|leg| leg.offset(to) < leg.offset(from) - f32::EPSILON)
+    }
+
+    /// When door `id` goes back to its rest on its own, if it is a vertical
+    /// door that does: from its arrival, or during a long travel, after its
+    /// delay (0x48faa5).
+    #[must_use]
+    pub fn returns_at(&self, id: u8) -> Option<Instant> {
+        self.legs.get(&id)?.returns.map(|(at, _)| at)
+    }
+
     /// Whether door `id` moves at all between `from` and `to`.
     #[must_use]
     pub fn moves(&self, id: u8, from: Instant, to: Instant) -> bool {
@@ -638,6 +654,37 @@ mod tests {
         inverted.action = Some(3);
         assert!(away(&inverted));
         assert_eq!(return_action(&inverted), 2);
+    }
+
+    #[test]
+    fn a_lift_says_when_it_sinks_and_when_it_goes_back_from_where_it_stood() {
+        let start = Instant::now();
+        let mut lifts = Lifts::default();
+        // Spawned open (state 1), 90 up: back down 20 s from its spawn.
+        let mut open = Door {
+            parameter: 90,
+            state_at_spawn: 1,
+            ..door(59)
+        };
+        lifts.spawned(&open, start);
+        assert_eq!(lifts.returns_at(3), Some(start + Duration::from_secs(20)));
+        assert!(!lifts.sinks(3, start, start + Duration::from_secs(19)));
+        assert!(lifts.sinks(
+            3,
+            start + Duration::from_secs(19),
+            start + Duration::from_secs(21)
+        ));
+        // Opened again mid-return from 45 up: 5 s to the top, then 20 s.
+        open.action = Some(2);
+        let at = start + Duration::from_secs(25);
+        lifts.moved(&open, at);
+        assert!((lifts.offset(3, at).unwrap() - 45.0).abs() < 0.01);
+        assert_eq!(lifts.returns_at(3), Some(at + Duration::from_secs(25)));
+        assert_eq!(
+            returns_at(&open, at),
+            Some(at + Duration::from_secs(30)),
+            "the table's full-travel estimate differs"
+        );
     }
 
     #[test]

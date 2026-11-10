@@ -239,10 +239,18 @@ pub struct MovementRequest {
     pub heading: HeadingUpdate,
     /// Local creation time; queued input expires instead of replaying after a stall.
     pub created: Instant,
-    /// The door the client's floor sweep stands the player on, if any: a
+    /// What the client's floor sweep stands the player on, if it moves: a
     /// rising lift may carry the player up with it
     /// ([`MovementGuard::allow_lift_rise`]).
-    pub support: Option<u8>,
+    pub support: Option<Support>,
+}
+
+/// A moving thing the player stands on, which may carry them.
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Support {
+    /// A door by its id: a Titanium lift or other vertical door.
+    Door(u8),
 }
 
 impl MovementRequest {
@@ -264,10 +272,10 @@ impl MovementRequest {
         }
     }
 
-    /// The same request, standing on door `door`.
+    /// The same request, standing on `support`.
     #[must_use]
-    pub const fn on_door(mut self, door: u8) -> Self {
-        self.support = Some(door);
+    pub const fn supported_by(mut self, support: Support) -> Self {
+        self.support = Some(support);
         self
     }
 }
@@ -486,6 +494,9 @@ pub struct MovementGuard {
     /// How far the next sample may rise with the lift its request names
     /// ([`Self::allow_lift_rise`]).
     lift_rise: f32,
+    /// The lift the rider has named since `since`, and how far they have
+    /// risen while naming it.
+    lift: Option<LiftCredit>,
     last_shoreline: Option<Instant>,
     shoreline: Option<ShorelineArc>,
     shoreline_velocity: Option<[f32; 3]>,
@@ -498,6 +509,15 @@ struct ShorelineArc {
     spent: u32,
     dry: bool,
     velocity: ShorelineVelocity,
+}
+
+/// A rider's running account with one lift: they may rise in all as far as
+/// the lift has risen since they named it, and never more.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct LiftCredit {
+    door: u8,
+    since: Instant,
+    spent: f32,
 }
 
 /// When an announced jump started, for [`MovementGuard`].
@@ -529,6 +549,7 @@ impl MovementGuard {
             launch_factor: 1.0,
             jumped_at: None,
             lift_rise: 0.0,
+            lift: None,
             last_shoreline: None,
             shoreline: None,
             shoreline_velocity: None,
@@ -607,19 +628,50 @@ impl MovementGuard {
         }
     }
 
-    /// Lets the next sample also rise `rise` units, with rounding, on top of
-    /// its own climb or jump: how far the lift its request names as
-    /// underfoot rose over the sample's interval, which the owner of the
-    /// zone's doors works out ([`crate::doors::titanium::Lifts::carry`]). The
-    /// program's floor sweep stands a rider on a rising lift and sends
-    /// nothing of its own (read R1). Any other value than a positive number
-    /// allows none.
-    pub fn allow_lift_rise(&mut self, rise: f32) {
-        self.lift_rise = if rise.is_finite() && rise > 0.0 {
-            rise + 0.01
+    /// When the rider's account with lift `door` began: the start of the
+    /// lift's rise they may spend. A lift other than the one last named
+    /// starts a new account at the last accepted sample.
+    #[must_use]
+    pub fn lift_since(&self, door: u8) -> Instant {
+        self.lift
+            .filter(|credit| credit.door == door)
+            .map_or(self.sampled, |credit| credit.since)
+    }
+
+    /// Lets the next sample also rise, with rounding, on top of its own
+    /// climb or jump, what is left of `risen`: how far lift `door` has risen
+    /// since [`Self::lift_since`], which the owner of the zone's doors works
+    /// out ([`crate::doors::titanium::Lifts::carry`]). The rise the rider
+    /// has already spent with that lift is taken off, so a client whose
+    /// lift runs behind the session's may spend late what it did not spend
+    /// early, but never more than the lift rose. The program's floor sweep
+    /// stands a rider on a rising lift and sends nothing of its own (read
+    /// R1). `None`, or a lift that sank, closes the account.
+    pub fn allow_lift_rise(&mut self, lift: Option<(u8, f32)>) {
+        let Some((door, risen)) = lift.filter(|(_, risen)| risen.is_finite()) else {
+            self.lift = None;
+            self.lift_rise = 0.0;
+            return;
+        };
+        let since = self.lift_since(door);
+        let spent = self
+            .lift
+            .filter(|credit| credit.door == door)
+            .map_or(0.0, |credit| credit.spent);
+        self.lift = Some(LiftCredit { door, since, spent });
+        let unspent = risen - spent;
+        self.lift_rise = if unspent > 0.0 { unspent + 0.01 } else { 0.0 };
+    }
+
+    /// The rise [`Self::allow_lift_rise`] allows `request`: none unless it
+    /// names what carries it.
+    #[must_use]
+    pub fn lift_rise_for(&self, request: &MovementRequest) -> f32 {
+        if request.support.is_some() {
+            self.lift_rise
         } else {
             0.0
-        };
+        }
     }
 
     /// The rise [`Self::allow_lift_rise`] allows the next sample.
@@ -881,7 +933,8 @@ impl MovementGuard {
                 ((to - elapsed).max(0.0), to)
             }
         });
-        let rise = since_jump.map_or(0.0, |(from, to)| self.jump_rise(from, to)) + self.lift_rise;
+        let rise = since_jump.map_or(0.0, |(from, to)| self.jump_rise(from, to))
+            + self.lift_rise_for(request);
         let vertical = if request.mode.is_water_motion() {
             true // The single 3D budget already checks vertical movement.
         } else if self.flying {
@@ -929,6 +982,15 @@ impl MovementGuard {
     }
 
     fn record_move(&mut self, request: &MovementRequest) {
+        // Any rise while a lift is named counts against its account.
+        if let Some(credit) = self.lift.as_mut() {
+            if request.support.is_some() {
+                let risen = (request.position.z - self.position.z).max(0.0);
+                credit.spent += risen.min((self.lift_rise - 0.01).max(0.0));
+            } else {
+                self.lift = None;
+            }
+        }
         self.lift_rise = 0.0;
         self.position = request.position;
         self.sampled = request.created;

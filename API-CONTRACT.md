@@ -19,15 +19,23 @@ local and sends nothing, except for types 40 and 45, whose return the session se
 as `Request::ReturnDoor`: 0x043b with the door id, 0xfe and zeros, naming no player
 (0x490b20, read R1c).
 
-`MovementRequest::support` names the door the frontend's floor sweep stands the
-player on (`MovementRequest::on_door`). The session lets that sample also rise as
-far as the door rose since the last accepted sample, when the door is a floor the
-program stands players on and the last accepted position is within `RIDER_REACH`
-(310 units in 3D) of it (`Lifts::carry`, `MovementGuard::allow_lift_rise`). The rise
-composes with the ordinary grant: horizontal motion keeps its speed budget, a
-still rider is passive, and a lift carries a player whose input is withdrawn only
-straight up. Nothing lift-specific is sent; the risen height goes out by the
-generation's ordinary gate.
+`MovementRequest::support` names what the frontend's floor sweep stands the
+player on, as a `Support` (non-exhaustive; `Support::Door(id)` today), set with
+`MovementRequest::supported_by`. While a request names the same lift, the session
+keeps an account with it: the rider may rise in all as far as the lift has risen
+since they first named it, less what they have risen while naming it, so a
+frontend whose lift runs behind the session's spends late what it did not spend
+early and never rises past the lift (`MovementGuard::lift_since`,
+`MovementGuard::allow_lift_rise`, `Lifts::carry`). The door must be a floor the
+program stands players on, with the last accepted position within `RIDER_REACH`
+(310 units in 3D) of it. A request naming nothing, another door, or a lift that
+sank over the interval closes the account; only a request that names a support
+spends any of it. The rise composes with the ordinary grant: horizontal motion
+keeps its speed budget, a still rider is passive, and a lift carries (or holds
+at its top) a player whose input is withdrawn only straight up. Nothing
+lift-specific is sent; the risen height goes out by the generation's ordinary
+gate. `Lifts::returns_at` and `Lifts::sinks` give a vertical door's own return
+time, from where it stood, and whether it sank over an interval.
 
 ## Friends who, guild requests, splitting and banker change
 

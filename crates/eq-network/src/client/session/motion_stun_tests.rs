@@ -373,12 +373,14 @@ fn a_named_rising_lift_carries_the_player_even_stunned_and_nothing_else_does() {
     unnamed.result.unwrap();
     assert_eq!(world.body.position(), Some(Position::default()));
     let mut wrong = rising.clone();
-    wrong.support = Some(9);
+    wrong.support = Some(eq_network_game::movement::Support::Door(9));
     testing::run(|out| Motion::step_at(&wrong, now, &mut world, out))
         .result
         .unwrap();
     assert_eq!(world.body.position(), Some(Position::default()));
-    let named = rising.clone().on_door(4);
+    let named = rising
+        .clone()
+        .supported_by(eq_network_game::movement::Support::Door(4));
     let output = testing::run(|out| Motion::step_at(&named, now, &mut world, out));
     output.result.unwrap();
     assert_eq!(world.body.position(), Some(named.position));
@@ -396,4 +398,73 @@ fn a_named_rising_lift_carries_the_player_even_stunned_and_nothing_else_does() {
     let output = testing::run(|out| Motion::step_at(&carried, later, &mut world, out));
     output.result.unwrap();
     assert_eq!(world.body.position(), Some(carried.position));
+}
+
+#[test]
+fn a_stunned_rider_behind_the_lift_rides_to_the_top_and_no_higher() {
+    use eq_network_game::doors::Door;
+    use eq_network_game::movement::Support;
+    let start = Instant::now();
+    let mut world = setup(start);
+    let mut lift = Door {
+        id: 4,
+        model: "LIFT".into(),
+        position: Position::default(),
+        incline: 0,
+        size: 100,
+        open_type: 59,
+        state_at_spawn: 0,
+        invert_state: 0,
+        parameter: 9,
+        action: None,
+    };
+    world.lifts.spawned(&lift, start);
+    lift.action = Some(2);
+    world.lifts.moved(&lift, start);
+    stun(&mut world, start);
+    // The lift rises 9 a second to 9; the client's runs 300 ms behind.
+    #[allow(clippy::cast_precision_loss)]
+    let behind = |at: u64| (0.009 * at.saturating_sub(300) as f32).min(9.0);
+    for step in 1..=16_u64 {
+        let at = step * 100;
+        let created = start + Duration::from_millis(at);
+        let mut carried = request(
+            created,
+            Position {
+                z: behind(at),
+                ..Position::default()
+            },
+        );
+        carried.mode = MovementMode::Forward;
+        let carried = carried.supported_by(Support::Door(4));
+        let output = testing::run(|out| Motion::step_at(&carried, created, &mut world, out));
+        output.result.unwrap();
+        assert!(
+            !output.events.iter().any(|event| matches!(
+                event,
+                ClientEvent::World(WorldEvent::MotionSent {
+                    refused: Some(_),
+                    ..
+                })
+            )),
+            "refused at {at} ms: {:?}",
+            output.events
+        );
+        assert_eq!(world.body.position(), Some(carried.position));
+    }
+    assert!((world.body.position().unwrap().z - 9.0).abs() < 1e-3);
+    let later = start + Duration::from_millis(1700);
+    let mut higher = request(
+        later,
+        Position {
+            z: 9.2,
+            ..Position::default()
+        },
+    );
+    higher.mode = MovementMode::Forward;
+    let higher = higher.supported_by(Support::Door(4));
+    testing::run(|out| Motion::step_at(&higher, later, &mut world, out))
+        .result
+        .unwrap();
+    assert!((world.body.position().unwrap().z - 9.0).abs() < 1e-3);
 }

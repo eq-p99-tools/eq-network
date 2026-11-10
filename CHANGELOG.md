@@ -12,10 +12,13 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   slides, floor and wall solidity, the client's own return times, and the
   +0x66 field (the param's low 16 bits). `Lifts` steps each vertical door
   from the received updates, and the session keeps one for the zone.
-  `MovementRequest` gains `support`, the door underfoot
-  (`MovementRequest::on_door`); a sample naming a floor door that rose may
-  rise as far as it did (`MovementGuard::allow_lift_rise`,
-  `MotionSession::allow_lift_rise`). Types 40 and 45 return by a click with
+  `MovementRequest` gains `support`, a non-exhaustive `Support`
+  (`Support::Door` today) set with `MovementRequest::supported_by`; while a
+  sample names the same floor door, the rider may rise in all as far as it
+  has risen since they named it (`MovementGuard::lift_since`,
+  `MovementGuard::allow_lift_rise`, `MotionSession::allow_lift_rise`), and
+  only a sample naming a support spends any of it. `Lifts::returns_at` and
+  `Lifts::sinks` give a vertical door's own return and descent. Types 40 and 45 return by a click with
   no player, `Request::ReturnDoor`. `WorldEvent::Entered` gains `zone_id`
   (serde default 0), the zone number the program's door rules name. The
   lift rider radius and a hinged door's return start are inferred

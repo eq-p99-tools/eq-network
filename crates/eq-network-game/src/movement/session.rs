@@ -654,10 +654,17 @@ impl MotionSession {
         Ok(())
     }
 
-    /// Lets the next sample also rise `rise` units with the lift its request
-    /// names ([`super::MovementGuard::allow_lift_rise`]).
-    pub fn allow_lift_rise(&mut self, rise: f32) {
-        self.guard.allow_lift_rise(rise);
+    /// When the rider's account with lift `door` began
+    /// ([`super::MovementGuard::lift_since`]).
+    #[must_use]
+    pub fn lift_since(&self, door: u8) -> Instant {
+        self.guard.lift_since(door)
+    }
+
+    /// Lets the next sample also rise what is left of how far the lift its
+    /// request names has risen ([`super::MovementGuard::allow_lift_rise`]).
+    pub fn allow_lift_rise(&mut self, lift: Option<(u8, f32)>) {
+        self.guard.allow_lift_rise(lift);
     }
 
     /// When the last accepted sample was made, where the next one's interval
@@ -709,7 +716,7 @@ impl MotionSession {
             };
             self.guard.jump_rise(from, to)
         });
-        request.position.z <= self.position.z + rise + self.guard.lift_rise()
+        request.position.z <= self.position.z + rise + self.guard.lift_rise_for(request)
     }
 
     /// Resumes stationary heartbeats after a denied transfer; walking stays disabled.
@@ -779,10 +786,10 @@ impl MotionSession {
                     && request.position.heading == self.position.heading
                     && match request.mode {
                         MovementMode::Fall => request.position.z <= self.position.z,
-                        // A lift may still carry a player who can't move.
+                        // A lift may still carry a player who can't move,
+                        // and one stopped at the top holds them there.
                         MovementMode::Forward => {
                             request.support.is_some()
-                                && self.guard.lift_rise() > 0.0
                                 && request.position.z <= self.position.z + self.guard.lift_rise()
                         }
                         _ => false,

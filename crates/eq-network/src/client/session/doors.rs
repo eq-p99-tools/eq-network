@@ -95,6 +95,10 @@ impl Doors {
             DoorUpdate::Spawn(doors) => {
                 for door in doors {
                     world.lifts.spawned(door, now);
+                    // A type 40 or 45 door spawned away from its rest
+                    // schedules no return click: whether the program sends
+                    // one then is unread, and sending none is the cautious
+                    // side (recording checklist 6.423).
                     self.return_clicks.remove(&door.id);
                 }
             }

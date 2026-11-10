@@ -15,7 +15,8 @@ use eq_network_game::{
     message::Message,
     movement::{
         DiagonalRates, MotionCalibration, MotionSession, MovementRequest, PositionPacket,
-        SpeedInputAcceptance, SpeedInputState, SpeedInputs, SpeedState, STATIONARY_HEARTBEAT,
+        SpeedInputAcceptance, SpeedInputState, SpeedInputs, SpeedState, Support,
+        STATIONARY_HEARTBEAT,
     },
     request::Request,
     world::{PlayerState, Position, PostureState, WorldEvent},
@@ -621,12 +622,23 @@ impl Motion {
         };
         let (to, from) = (request.position, motion.position());
         // A lift the client stands the player on may carry them up as far as
-        // it rose since the last sample.
-        motion.allow_lift_rise(request.support.map_or(0.0, |door| {
-            world
-                .lifts
-                .carry(door, world.zone.0, from, motion.sampled(), request.created)
-        }));
+        // it has risen since they named it, less what they have risen with it
+        // already; one that sinks closes that account.
+        let lift = match request.support {
+            Some(Support::Door(door))
+                if !world.lifts.sinks(door, motion.sampled(), request.created) =>
+            {
+                let since = motion.lift_since(door);
+                Some((
+                    door,
+                    world
+                        .lifts
+                        .carry(door, world.zone.0, from, since, request.created),
+                ))
+            }
+            _ => None,
+        };
+        motion.allow_lift_rise(lift);
         let may_walk_while_stunned =
             !request.mode.is_water_motion() && motion.options().walk_while_stunned;
         if let Some(reason) = world.control.motion_refusal(
