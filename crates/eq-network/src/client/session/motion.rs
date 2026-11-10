@@ -262,11 +262,12 @@ pub(super) fn withdrawn(session_id: u64) -> WorldEvent {
     }
 }
 
-/// How long a grant kept while the host works out new inputs runs at the
-/// rates in force before it falls to the walk rate (recording checklist
-/// 6.452). Movement is never withdrawn for it: the program reads its speed
-/// modifier live and never stops input for it (read R7, 0x4a1d74).
-const KEPT_GRANT_LIMIT: Duration = Duration::from_secs(1);
+/// How long a grant kept while the host works out new inputs runs before
+/// the session notes, once, that the answer is late. The grant stays: the
+/// program recomputes its speed modifier on buff and effect changes and once
+/// a second, and its input reads the result as it stands without waiting for
+/// it (reads R7 and R18, 0x4a1d74, 0x410fdb).
+const KEPT_GRANT_NOTICE: Duration = Duration::from_secs(1);
 
 /// The player's movement and stance.
 #[allow(
@@ -298,17 +299,14 @@ pub(super) struct Motion {
     /// again while the player held a grant. Until the answer lands the last
     /// inputs stay in force (health, stance and fatigue still apply at
     /// once); the answer replaces them. An answer late by
-    /// [`KEPT_GRANT_LIMIT`] drops the grant to the walk rate
-    /// ([`Self::walk_capped`]). Anything that withdraws movement ends it.
+    /// [`KEPT_GRANT_NOTICE`] is noted once and the grant stays. Anything
+    /// that withdraws movement ends it.
     kept_since: Option<Instant>,
-    /// Whether the grant in force is held at the walk rate: the host's
-    /// answer was late, or it could not bound new inputs at all
-    /// (recording checklist 6.452). The next report the session takes ends
-    /// it.
-    walk_capped: bool,
-    /// What the inputs in force leave unproven, when the host reported them
-    /// as the slowest still possible (recording checklist 6.451).
-    conservative: Option<eq_network_game::movement::SpeedInputUnavailable>,
+    /// What the inputs in force leave unproven: the host could not work
+    /// them out, so the last ones are kept, with any term it could prove
+    /// slower applied (recording checklist 6.451). The first exact report
+    /// ends it.
+    unproven: Option<eq_network_game::movement::SpeedInputUnavailable>,
     /// Whether the player carried too much at the last grant, so the
     /// official client's line goes out once each way.
     encumbered: Option<bool>,
@@ -341,8 +339,7 @@ impl Motion {
             fatigue: None,
             belongings: None,
             kept_since: None,
-            walk_capped: false,
-            conservative: None,
+            unproven: None,
             encumbered: None,
             sneaking: false,
             hit_points: None,
@@ -394,12 +391,7 @@ impl Motion {
             return Ok(false);
         };
         let speeds = rule(&SpeedState {
-            // Held at the walk rate, the player runs no faster than they walk.
-            run: if self.walk_capped {
-                player.run_speed.min(player.walk_speed)
-            } else {
-                player.run_speed
-            },
+            run: player.run_speed,
             walk: player.walk_speed,
             level: player.level,
             hit_points: self.hit_points,
@@ -522,10 +514,8 @@ impl Motion {
         self.kept_since = None;
         let held = self.holds_grant(world);
         let mut state = state;
-        if let (
-            SpeedInputState::Ready(inputs) | SpeedInputState::Conservative { inputs, .. },
-            true,
-        ) = (state, world.inventory.ground_drop_pending())
+        if let (SpeedInputState::Ready(inputs) | SpeedInputState::Bounded { inputs, .. }, true) =
+            (state, world.inventory.ground_drop_pending())
         {
             let bound = world.coins.carried_coin_count().and_then(|coins| {
                 world
@@ -542,11 +532,11 @@ impl Motion {
                         "Movement needs a current carried-weight bound after the drop".into(),
                     );
                 }
-                // With a grant in force, the drop's bound is the heaviest the
-                // player can carry, so it slows the grant; without a bound
-                // the grant goes on at the walk rate.
+                // With a grant in force, the drop's bound is a weight the
+                // player is proven to carry at least, so it slows the grant;
+                // without a bound the grant in force is kept.
                 state = match floor {
-                    Some(weight) => SpeedInputState::Conservative {
+                    Some(weight) => SpeedInputState::Bounded {
                         inputs: SpeedInputs { weight, ..inputs },
                         missing: eq_network_game::movement::SpeedInputUnavailable::Inventory,
                     },
@@ -560,31 +550,25 @@ impl Motion {
             SpeedInputState::Ready(inputs) => {
                 self.input_report_id = Some(report_id);
                 self.inputs = Some(inputs);
-                self.walk_capped = false;
-                self.conservative = None;
+                self.unproven = None;
             }
-            // The slowest inputs still possible replace the grant in place.
-            SpeedInputState::Conservative { inputs, missing } if held => {
+            // A slower bound the host proved replaces the grant in place.
+            SpeedInputState::Bounded { inputs, missing } if held => {
                 self.input_report_id = Some(report_id);
                 self.inputs = Some(inputs);
-                self.walk_capped = false;
-                self.conservative = Some(missing);
+                self.note_unproven(missing, out)?;
             }
-            // Nothing the host can bound: the grant in force goes on at the
-            // walk rate until a report the session can take.
+            // Nothing the host can prove: the grant in force and its inputs
+            // stay, with no time limit (Adam's decision of 11-10; 6.451).
             SpeedInputState::Unavailable(missing) if held => {
                 self.input_report_id = None;
                 self.accepted_inputs = None;
-                self.walk_capped = true;
-                out.log.diagnostic(format!(
-                    "Movement held at the walk rate: the host cannot bound new inputs ({missing:?})"
-                ))?;
+                self.note_unproven(missing, out)?;
             }
-            SpeedInputState::Conservative { .. } | SpeedInputState::Unavailable(_) => {
+            SpeedInputState::Bounded { .. } | SpeedInputState::Unavailable(_) => {
                 self.input_report_id = None;
                 self.inputs = None;
-                self.walk_capped = false;
-                self.conservative = None;
+                self.unproven = None;
                 self.withdraw_input(world, out)?;
             }
         }
@@ -595,7 +579,7 @@ impl Motion {
     fn withdraw_input(&mut self, world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
         self.accepted_inputs = None;
         self.kept_since = None;
-        self.walk_capped = false;
+        self.unproven = None;
         if let Some(motion) = world.body.motion.as_mut() {
             motion.withdraw();
         }
@@ -636,6 +620,21 @@ impl Motion {
         }
         self.belongings = Some(current);
         self.recalculate(world, out)
+    }
+
+    /// Notes, once for each cause, that the inputs in force are kept while
+    /// the host cannot prove new ones.
+    fn note_unproven(
+        &mut self,
+        missing: eq_network_game::movement::SpeedInputUnavailable,
+        out: &mut Out<'_, '_>,
+    ) -> Result<()> {
+        if self.unproven.replace(missing) == Some(missing) {
+            return Ok(());
+        }
+        out.log.diagnostic(format!(
+            "Kept the movement inputs in force: the host cannot prove new ones ({missing:?})"
+        ))
     }
 
     /// Whether the player holds a grant from inputs the host reported.
@@ -948,14 +947,13 @@ impl Feature for Motion {
         self.refresh_belongings(world, out)?;
         if self
             .kept_since
-            .is_some_and(|since| now.saturating_duration_since(since) > KEPT_GRANT_LIMIT)
+            .is_some_and(|since| now.saturating_duration_since(since) > KEPT_GRANT_NOTICE)
         {
-            // No answer in time: hold the grant at the walk rate until the
+            // No answer in time: say so once, and keep the grant until the
             // answer to the same request lands.
             self.kept_since = None;
-            self.walk_capped = true;
             out.log.diagnostic(
-                "Movement inputs are late; held at the walk rate until they land".into(),
+                "Movement inputs are late; the last ones stay in force until they land".into(),
             )?;
         }
         self.grant(world, out)?;
@@ -1050,7 +1048,7 @@ impl Feature for Motion {
             // The transfers feature stops the body when the player dies.
             event if world.owns_death(event) => {
                 self.kept_since = None;
-                self.walk_capped = false;
+                self.unproven = None;
                 self.accepted_inputs = None;
                 out.log
                     .send(ClientEvent::World(withdrawn(world.session_id)))
@@ -1935,12 +1933,12 @@ mod tests {
             outcome.unreliable
         );
     }
-    /// Unbounded inputs with a grant in force hold it at the walk rate
-    /// (6.452) instead of withdrawing; without a grant they withdraw. The
-    /// slowest inputs still possible replace a grant in place (6.451), and
-    /// the first exact report ends both.
+    /// With a grant in force, inputs the host cannot prove keep the last ones
+    /// in force with no time limit (Adam's decision of 11-10, 6.451); a slower
+    /// bound it proves replaces them in place; the first exact report ends
+    /// both. Without a grant, both withdraw as before.
     #[test]
-    fn unavailable_and_conservative_inputs_slow_a_grant_but_never_stop_it() {
+    fn unproven_inputs_keep_a_grant_and_proven_bounds_slow_it_in_place() {
         use eq_network_game::{money::Wallet, movement::SpeedInputUnavailable, world::Coins};
         let unavailable = |revision| ClientCommand::SpeedInputs {
             session_id: 5,
@@ -1960,17 +1958,17 @@ mod tests {
         output.result.unwrap();
         assert!(withdrew(&output.events));
         assert_eq!(world_speed(&world), None);
-        // So do conservative ones: they never start a grant.
-        let conservative = ClientCommand::SpeedInputs {
+        // So do bounded ones: they never start a grant.
+        let bounded = ClientCommand::SpeedInputs {
             session_id: 5,
             revision: 1,
             report_id: 10,
-            state: SpeedInputState::Conservative {
+            state: SpeedInputState::Bounded {
                 inputs: inputs(0, 0),
                 missing: SpeedInputUnavailable::Inventory,
             },
         };
-        let output = testing::run_on(EQMAC, |out| motion.handle(&conservative, &mut world, out));
+        let output = testing::run_on(EQMAC, |out| motion.handle(&bounded, &mut world, out));
         output.result.unwrap();
         assert_eq!(world_speed(&world), None);
 
@@ -1979,14 +1977,13 @@ mod tests {
             .result
             .unwrap();
         let full = world_speed(&world).unwrap();
-        // With one, the grant goes on at the walk rate: slower, never stopped.
+        // With one, the grant and its inputs stay, noted once.
         let output = testing::run_on(EQMAC, |out| motion.handle(&unavailable(1), &mut world, out));
         output.result.unwrap();
         assert!(!withdrew(&output.events));
-        let walking = world_speed(&world).unwrap();
-        assert!(walking < full, "{walking} < {full}");
-        assert!(motion.walk_capped);
-        // A coin change asks again; the capped grant stays in force.
+        assert_eq!(world_speed(&world), Some(full));
+        assert_eq!(motion.unproven, Some(SpeedInputUnavailable::Inventory));
+        // A coin change asks again; long after, the grant is still in force.
         world.coins = Wallet {
             purse: Some(Coins {
                 copper: 400,
@@ -1995,31 +1992,33 @@ mod tests {
             ..Wallet::default()
         }
         .into();
-        let output = testing::run_on(EQMAC, |out| motion.tick(Instant::now(), &mut world, out));
+        let later = Instant::now() + Duration::from_secs(30);
+        let output = testing::run_on(EQMAC, |out| motion.tick(later, &mut world, out));
+        output.result.unwrap();
+        let output = testing::run_on(EQMAC, |out| motion.tick(later, &mut world, out));
         output.result.unwrap();
         assert!(!withdrew(&output.events));
         assert_eq!(motion.revision, 2);
-        assert_eq!(world_speed(&world), Some(walking));
+        assert_eq!(world_speed(&world), Some(full));
         // An old report cannot answer the new revision.
         testing::run_on(EQMAC, |out| motion.handle(&report(0, 0), &mut world, out))
             .result
             .unwrap();
-        assert_eq!(world_speed(&world), Some(walking));
-        // The slowest inputs still possible replace the grant in place.
+        assert_eq!(world_speed(&world), Some(full));
+        // A proven heavier load replaces the grant in place: slower.
         let heavier = ClientCommand::SpeedInputs {
             session_id: 5,
             revision: 2,
             report_id: 11,
-            state: SpeedInputState::Conservative {
+            state: SpeedInputState::Bounded {
                 inputs: inputs(0, 150),
-                missing: SpeedInputUnavailable::Prediction,
+                missing: SpeedInputUnavailable::Effects,
             },
         };
         let output = testing::run_on(EQMAC, |out| motion.handle(&heavier, &mut world, out));
         output.result.unwrap();
         assert!(!withdrew(&output.events));
-        assert!(!motion.walk_capped);
-        assert_eq!(motion.conservative, Some(SpeedInputUnavailable::Prediction));
+        assert_eq!(motion.unproven, Some(SpeedInputUnavailable::Effects));
         let slowed = world_speed(&world).unwrap();
         assert!(slowed < full);
         // The first exact report ends it, in place.
@@ -2032,19 +2031,85 @@ mod tests {
         let output = testing::run_on(EQMAC, |out| motion.handle(&exact, &mut world, out));
         output.result.unwrap();
         assert!(!withdrew(&output.events));
-        assert_eq!(motion.conservative, None);
+        assert_eq!(motion.unproven, None);
         assert_eq!(world_speed(&world), Some(full));
-        // A root still withdraws.
+        // A root the host proves, whatever else it cannot, withdraws.
         let rooted = ClientCommand::SpeedInputs {
             session_id: 5,
             revision: 2,
             report_id: 13,
-            state: SpeedInputState::Ready(inputs(-1000, 10)),
+            state: SpeedInputState::Bounded {
+                inputs: inputs(-1000, 10),
+                missing: SpeedInputUnavailable::Effects,
+            },
         };
         let output = testing::run_on(EQMAC, |out| motion.handle(&rooted, &mut world, out));
         output.result.unwrap();
         assert!(withdrew(&output.events));
         assert_eq!(world_speed(&world), None);
+    }
+
+    /// The guard takes its bound from the grant in force in the same step: a
+    /// sample at the old rate after a proven snare slows the grant is refused.
+    #[test]
+    fn a_sample_at_the_old_rate_after_a_slower_grant_is_refused() {
+        use eq_network_game::movement::SpeedInputUnavailable;
+        let (mut world, mut motion) = eqmac_admitted();
+        testing::run_on(EQMAC, |out| motion.handle(&report(0, 0), &mut world, out))
+            .result
+            .unwrap();
+        let full = world_speed(&world).unwrap();
+        let origin = world.body.position().unwrap();
+        let start = Instant::now() + Duration::from_millis(100);
+        let along = |dx: f32| Position {
+            x: origin.x + dx,
+            ..origin
+        };
+        let first = MovementRequest::new(MovementMode::Forward, 5, along(0.5), start);
+        let output = testing::run_on(EQMAC, |out| Motion::step_at(&first, start, &mut world, out));
+        output.result.unwrap();
+        assert!(!output.events.iter().any(|event| matches!(
+            event,
+            ClientEvent::World(WorldEvent::MotionSent {
+                refused: Some(_),
+                ..
+            })
+        )));
+        let snared = ClientCommand::SpeedInputs {
+            session_id: 5,
+            revision: 1,
+            report_id: 9,
+            state: SpeedInputState::Bounded {
+                inputs: SpeedInputs {
+                    eqmac_fatigue: None,
+                    rate: -50,
+                    weight: 0,
+                    capacity: 100,
+                },
+                missing: SpeedInputUnavailable::Effects,
+            },
+        };
+        testing::run_on(EQMAC, |out| motion.handle(&snared, &mut world, out))
+            .result
+            .unwrap();
+        let slowed = world_speed(&world).unwrap();
+        assert!(slowed < full);
+        // Half a second at the full rate is beyond the snared grant.
+        let later = start + Duration::from_millis(500);
+        let fast = MovementRequest::new(MovementMode::Forward, 5, along(0.5 + full * 0.5), later);
+        let output = testing::run_on(EQMAC, |out| Motion::step_at(&fast, later, &mut world, out));
+        output.result.unwrap();
+        assert!(
+            output.events.iter().any(|event| matches!(
+                event,
+                ClientEvent::World(WorldEvent::MotionSent {
+                    refused: Some(_),
+                    ..
+                })
+            )),
+            "{:?}",
+            output.events
+        );
     }
 
     /// A Bard's song pulses refresh a buff on the player every few seconds.
@@ -2104,61 +2169,6 @@ mod tests {
             assert!(!withdrew(&output.events));
             assert_eq!(world_speed(&world), full);
         }
-    }
-
-    /// The guard takes its bound from the grant in force in the same step: a
-    /// sample at the old rate after the grant falls is refused.
-    #[test]
-    fn a_sample_at_the_old_rate_after_a_slower_grant_is_refused() {
-        use eq_network_game::movement::SpeedInputUnavailable;
-        let (mut world, mut motion) = eqmac_admitted();
-        testing::run_on(EQMAC, |out| motion.handle(&report(0, 0), &mut world, out))
-            .result
-            .unwrap();
-        let full = world_speed(&world).unwrap();
-        let origin = world.body.position().unwrap();
-        let start = Instant::now() + Duration::from_millis(100);
-        let along = |dx: f32| Position {
-            x: origin.x + dx,
-            ..origin
-        };
-        let first = MovementRequest::new(MovementMode::Forward, 5, along(0.5), start);
-        let output = testing::run_on(EQMAC, |out| Motion::step_at(&first, start, &mut world, out));
-        output.result.unwrap();
-        assert!(!output.events.iter().any(|event| matches!(
-            event,
-            ClientEvent::World(WorldEvent::MotionSent {
-                refused: Some(_),
-                ..
-            })
-        )));
-        let unavailable = ClientCommand::SpeedInputs {
-            session_id: 5,
-            revision: 1,
-            report_id: 9,
-            state: SpeedInputState::Unavailable(SpeedInputUnavailable::Effects),
-        };
-        testing::run_on(EQMAC, |out| motion.handle(&unavailable, &mut world, out))
-            .result
-            .unwrap();
-        let walking = world_speed(&world).unwrap();
-        assert!(walking < full);
-        // Half a second at the full rate is beyond the walking grant.
-        let later = start + Duration::from_millis(500);
-        let fast = MovementRequest::new(MovementMode::Forward, 5, along(0.5 + full * 0.5), later);
-        let output = testing::run_on(EQMAC, |out| Motion::step_at(&fast, later, &mut world, out));
-        output.result.unwrap();
-        assert!(
-            output.events.iter().any(|event| matches!(
-                event,
-                ClientEvent::World(WorldEvent::MotionSent {
-                    refused: Some(_),
-                    ..
-                })
-            )),
-            "{:?}",
-            output.events
-        );
     }
 
     /// The speed the session grants the player now, if any.
@@ -2261,19 +2271,18 @@ mod tests {
         assert!(motion.kept_since.is_none());
         let after = world_speed(&world).unwrap();
         assert!(after < before.unwrap());
-        // A request never answered falls to the walk rate after the limit,
-        // never to a stop, and the late answer to it restores the grant.
+        // A request never answered keeps the grant past the notice, and the
+        // late answer to it still lands in place.
         world.coins = coins(500).into();
         testing::run_on(EQMAC, |out| motion.tick(Instant::now(), &mut world, out))
             .result
             .unwrap();
         assert_eq!(world_speed(&world), Some(after));
-        let late = Instant::now() + KEPT_GRANT_LIMIT + Duration::from_millis(10);
+        let late = Instant::now() + KEPT_GRANT_NOTICE + Duration::from_millis(10);
         let outcome = testing::run_on(EQMAC, |out| motion.tick(late, &mut world, out));
         outcome.result.unwrap();
         assert!(!withdrew(&outcome.events));
-        let walking = world_speed(&world).unwrap();
-        assert!(walking < after, "{walking} < {after}");
+        assert_eq!(world_speed(&world), Some(after));
         let late_answer = answer(motion.revision);
         testing::run_on(EQMAC, |out| motion.handle(&late_answer, &mut world, out))
             .result
@@ -2371,7 +2380,7 @@ mod tests {
         assert!(!withdrew(&outcome.events));
         assert!(world.body.motion.as_ref().unwrap().calibration().is_some());
         assert_eq!(motion.inputs.map(|inputs| inputs.weight), Some(150));
-        assert!(motion.conservative.is_some());
+        assert!(motion.unproven.is_some());
         assert!(matches!(
             acceptances(&outcome.events)[..],
             [SpeedInputAcceptance { granted: true, .. }]
@@ -2382,7 +2391,7 @@ mod tests {
         let bounded = report_at(motion.revision, 150);
         let outcome = testing::run(|out| motion.handle(&bounded, &mut world, out));
         outcome.result.unwrap();
-        assert!(motion.conservative.is_none());
+        assert!(motion.unproven.is_none());
         assert!(world.body.motion.as_ref().unwrap().calibration().is_some());
         assert!(world.inventory.ground_drop_pending());
 

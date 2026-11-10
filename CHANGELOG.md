@@ -8,25 +8,29 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Added
 
 - **Breaking:** movement is no longer stopped while the player's speeds
-  are worked out again. The program reads its speed modifier live and stops
-  input only for a stun, a freeze (posture 0x66) or a posture other than
-  standing or ducking (read R7, 0x4a1d74). A buff on the player (each Bard
-  song pulse), a buff list, a level, a spell landing, an EqMac fatigue change,
-  a change in belongings and a server's correction now ask the host for new
+  are worked out again. The program stops input only for a stun, a freeze
+  (posture 0x66) or a posture other than standing or ducking (read R7,
+  0x4a1d74); it recomputes its speed modifier on buff and effect changes and
+  once a second, and input reads the result as it stands, without waiting
+  (read R18, 0x410fdb); a server position update to the player's own spawn
+  touches no input (R18, 0x451aba). A buff on the player (each Bard song
+  pulse), a buff list, a level, a spell landing, an EqMac fatigue change, a
+  change in belongings and a server's correction now ask the host for new
   inputs while the grant in force goes on: no `MotionState` withdrawal and no
   stop sent. A correction still moves the player and stops them there, then
-  grants the speeds in force again at once. `SpeedInputState` gains
-  `Conservative { inputs, missing }`: the slowest inputs still possible while
-  `missing` is unproven, taken only while a grant is in force (recording
-  checklist 6.451; without a grant they withdraw as `Unavailable`). An
-  `Unavailable` answer, or an answer later than 1 s, holds the grant in force
-  at the walk rate instead of withdrawing it (6.452). A report under a
-  pending ground drop's weight bound is taken at the bound rather than
-  withdrawing. Root, stun, freeze, death and zone transfer still stop
-  movement as before. The same rules apply on every server type; only the
-  waits are removed. Both sides of 6.451: a grant kept across the host's
-  round trip may briefly run at the old, faster rate after a snare lands;
-  conservative inputs run slower than the program until the exact ones land.
+  grants the speeds in force again at once. With a grant in force, an
+  `Unavailable` answer, or none, keeps the last inputs in force with no time
+  limit, noted once in the diagnostics. `SpeedInputState` gains
+  `Bounded { inputs, missing }`: the last inputs with every term the host
+  can prove slower applied (a root or a snare it can evaluate, a weight it
+  knows), taken in place of a grant in force; without a grant they withdraw
+  as `Unavailable`. A report under a pending ground drop's weight bound is
+  taken at the bound. The first exact report replaces kept or bounded inputs
+  in place. Root, stun, freeze, death and zone transfer still stop movement
+  as before. The same rules apply on every server type; only the waits are
+  removed. Recording checklist 6.451, a stated excess by Adam's decision of
+  11-10: while the speed inputs are unproven, the last grant is kept without
+  a time limit and can be faster than the official client would allow.
 
 - **Breaking:** Titanium lifts. `doors::titanium` holds the program's door
   rules: vertical travel and speeds by open type, the type 15 and 78-81

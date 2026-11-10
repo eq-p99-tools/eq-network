@@ -128,7 +128,7 @@ fn speed(world: &mut World) -> Option<f32> {
 }
 
 #[test]
-fn quarm_prediction_pacing_slows_but_never_stops_an_unproven_weight_grant() {
+fn quarm_prediction_pacing_keeps_an_unproven_weight_grant() {
     use eq_network_game::{
         inventory::WeightUnavailable,
         movement::{SpeedInputState, SpeedInputUnavailable, SpeedInputs},
@@ -190,8 +190,8 @@ fn quarm_prediction_pacing_slows_but_never_stops_an_unproven_weight_grant() {
     submit(&mut features, &mut world, &ready(cursor_revision))
         .result
         .unwrap();
-    // The old report answers nothing; the grant goes on (6.452).
-    assert!(speed(&mut world).is_some_and(|speed| speed <= full));
+    // The old report answers nothing; the grant goes on (6.451).
+    assert_eq!(speed(&mut world), Some(full));
     submit(
         &mut features,
         &mut world,
@@ -205,8 +205,8 @@ fn quarm_prediction_pacing_slows_but_never_stops_an_unproven_weight_grant() {
     .result
     .unwrap();
     paced(&mut features, &mut world);
-    // Unbounded: held at the walk rate (6.452), not stopped.
-    assert!(speed(&mut world).is_some_and(|walking| walking < full));
+    // Unproven: the grant in force stays (6.451).
+    assert_eq!(speed(&mut world), Some(full));
     assert!(world.inventory.predicted());
     // A contradiction stays unusable after pacing; only the full snapshot recovers.
     observe(
