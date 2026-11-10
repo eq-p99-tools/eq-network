@@ -1429,6 +1429,9 @@ pub enum WorldEvent {
         ability: crate::abilities::Ability,
         /// How long its recovery takes, at most.
         ready_in: std::time::Duration,
+        /// The line the official client prints as it uses it, as an
+        /// `eqstr_us.txt` string ID: Titanium's cast of a fishing pole.
+        string_id: Option<u32>,
     },
     /// The abilities this server type offers, as the zone admits the player;
     /// a host greys the rest, which the session refuses.

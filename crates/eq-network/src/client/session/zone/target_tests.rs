@@ -216,6 +216,7 @@ fn ability(
     testing::run_on(servers::server_type(protocol).wire(), |out| {
         features.handle(
             &ClientCommand::UseAbility {
+                in_liquid: false,
                 session_id,
                 target,
                 ability: Ability::Taunt,

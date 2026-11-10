@@ -835,27 +835,6 @@ mod shared {
     }
 }
 
-/// The abilities offered on P99: every one but fishing, which came later.
-const P99_ABILITIES: [Ability; 17] = [
-    Ability::Kick,
-    Ability::Bash,
-    Ability::Backstab,
-    Ability::Frenzy,
-    Ability::FlyingKick,
-    Ability::RoundKick,
-    Ability::TigerClaw,
-    Ability::EagleStrike,
-    Ability::DragonPunch,
-    Ability::Taunt,
-    Ability::Hide,
-    Ability::Sneak,
-    Ability::Forage,
-    Ability::Mend,
-    Ability::BindWound,
-    Ability::FeignDeath,
-    Ability::SenseHeading,
-];
-
 /// The hazards a local `EQEmu` takes from the client: falls, whose damage it
 /// lowers by the player's fall damage reductions from spells, items and AAs,
 /// and drowning and lava, whose amounts it takes as sent
@@ -1095,7 +1074,7 @@ impl ServerType for Project1999 {
     }
 
     fn abilities(&self, _setup: &Setup<'_>) -> Provided {
-        offer(shared::abilities_with_self_bandage(&P99_ABILITIES))
+        offer(shared::abilities_with_self_bandage(&Ability::ALL))
     }
 
     fn talk(&self, _setup: &Setup<'_>) -> Provided {
@@ -2326,13 +2305,6 @@ mod tests {
             body[name..name + 7].copy_from_slice(b"example");
             assert!(read(&body).is_err(), "duplicate names remain invalid");
         }
-    }
-
-    #[test]
-    fn p99_lists_every_ability_but_fishing() {
-        assert!(!P99_ABILITIES.contains(&Ability::Fishing));
-        assert!(P99_ABILITIES.contains(&Ability::BindWound));
-        assert_eq!(P99_ABILITIES.len(), Ability::ALL.len() - 1);
     }
 
     #[test]

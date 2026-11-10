@@ -137,6 +137,7 @@ fn p99_bandage_result_or_expiry_releases_unrelated_moves_but_keeps_stock_uncerta
             session_id: world.session_id,
             target: Some(world.target.state()),
             ability: Ability::BindWound,
+            in_liquid: false,
             created: Instant::now(),
         };
         let attempt = bind(&world);
@@ -306,6 +307,7 @@ fn p99_one_bandage_decrease_settles_every_carried_stack() {
         session_id: world.session_id,
         target: Some(world.target.state()),
         ability: Ability::BindWound,
+        in_liquid: false,
         created: Instant::now(),
     };
     let sent = testing::run_on(wire, |out| {

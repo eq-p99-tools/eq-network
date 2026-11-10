@@ -1282,6 +1282,7 @@ mod tests {
                 created,
             },
             ClientCommand::UseAbility {
+                in_liquid: false,
                 target: None,
                 session_id,
                 ability: eq_network_game::abilities::Ability::Kick,

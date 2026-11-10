@@ -473,6 +473,9 @@ pub enum GameCommand {
         /// Target state displayed when requested. Targeted actions require
         /// an available, unchanged session projection.
         target: Option<crate::targets::TargetState>,
+        /// Whether the player stands in liquid, as the host's world shows
+        /// it: the Titanium program refuses Fishing in water (read R15c).
+        in_liquid: bool,
         /// Reject delayed actions instead of replaying them after a stall.
         created: std::time::Instant,
     },
