@@ -449,34 +449,35 @@ pub struct MovementOptions {
     pub run_speed_multiplier: RunSpeedMultiplier,
     /// Permit vertical travel within the current mode's elapsed speed budget.
     pub fly: bool,
-    /// Departures for a player who lies on the ground.
-    pub lying: LyingOptions,
+    /// Departures for Feign Death and for a seated player who is hit.
+    pub posture: PostureOptions,
 }
 
-/// Departures for a player who lies on the ground, as a feign leaves them,
-/// both off by default.
+/// Departures for Feign Death and for a seated player who is hit, both off
+/// by default, where the session does what the generation's program does.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize)]
-pub struct LyingOptions {
-    /// Permit walking, at walk speed only and without jumping, with no stand
-    /// sent, so a server keeps a feign it granted, on either generation.
-    /// Titanium's program moves a lying player not at all
-    /// ([`crate::feign::LyingRules::holds_still`]), the Mac-era client's
-    /// stands them first. Recording checklist 6.454.
-    pub walk: bool,
-    /// Stand the player up when a hit lands, on either generation. Titanium's
-    /// program does that only for a sitter or a looter
-    /// ([`crate::feign::LyingRules::hit_stands`]). The stand ends a feign on
-    /// the server. Recording checklist 6.453.
-    pub stand_when_hit: bool,
+pub struct PostureOptions {
+    /// The Feign Death press sends only the feign request, never the lying
+    /// posture report both programs send first, on either generation. The
+    /// player stays standing, to the session and to others, and moves as
+    /// any standing player; a server that clears a feign only on a posture
+    /// report keeps it (`EQEmu`). The next stand the player asks for still
+    /// goes out, once, to end it. Only the press changes: a feign by a spell
+    /// and a lying posture the server reports are as before. Recording
+    /// checklist 6.454.
+    pub feign_standing: bool,
+    /// A hit leaves a sitting or looting player as they are, where the
+    /// generation's program stands them
+    /// ([`crate::feign::LyingRules::hit_stands`]). Recording checklist
+    /// 6.453.
+    pub stay_seated_when_hit: bool,
 }
 
 impl MovementOptions {
     /// Whether two choices allow the same motion modes, regardless of run speed.
     #[must_use]
     pub const fn same_permissions(self, other: Self) -> bool {
-        self.walk_while_stunned == other.walk_while_stunned
-            && self.fly == other.fly
-            && self.lying.walk == other.lying.walk
+        self.walk_while_stunned == other.walk_while_stunned && self.fly == other.fly
     }
 }
 

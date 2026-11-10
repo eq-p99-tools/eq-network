@@ -34,10 +34,17 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     a knight's special or an item click (items inferred, checklist 6.455):
     `WorldEvent::CastRejected` and `WorldEvent::ItemUseAction` have a new
     `string_id`. Disciplines are not refused (the program does not check).
-  - Two departures in `MovementOptions`'s new `lying`
-    (`movement::LyingOptions`), both off by default and on both
-    generations: `walk` (walk speed only, no jump, no stand; checklist
-    6.454) and `stand_when_hit` (checklist 6.453).
+  - On Titanium a posture request for the posture the player already has
+    sends nothing, as the program's posture routine does (read R19); the
+    Mac-era client still sends it (`GameDialect::skips_unchanged_posture()`,
+    unread, checklist 6.455).
+  - Two departures in `MovementOptions`'s new `posture`
+    (`movement::PostureOptions`), both off by default and on both
+    generations: `feign_standing`, where the Feign Death press sends the
+    feign request alone and the player stays standing, and the next stand
+    asked for still goes out once to end the feign (checklist 6.454),
+    and `stay_seated_when_hit`, where a hit leaves a sitter or a looter
+    seated (checklist 6.453).
 - **Breaking:** Titanium class tools (Batch B2). On EQEmu and P99:
   - Fishing is offered on P99 too. Before it is sent, the program's checks
     run in its order, each refusing with the program's own line: already

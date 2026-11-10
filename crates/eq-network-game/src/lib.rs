@@ -212,6 +212,16 @@ impl GameDialect {
     pub const fn posture_ends_attack(self) -> bool {
         matches!(self, Self::EqMac)
     }
+
+    /// Whether asking for the posture the player already has sends nothing.
+    /// Titanium's posture routine makes no change then (program read R19,
+    /// 0x483556). The Mac-era client's is read only for lying, so it keeps
+    /// this library's earlier rule of sending every request but a second lie
+    /// (recording checklist 6.455).
+    #[must_use]
+    pub const fn skips_unchanged_posture(self) -> bool {
+        matches!(self, Self::Titanium)
+    }
 }
 
 #[cfg(test)]
@@ -232,5 +242,11 @@ mod tests {
     fn only_the_unread_mac_client_ends_auto_attack_on_a_posture() {
         assert!(!GameDialect::Titanium.posture_ends_attack());
         assert!(GameDialect::EqMac.posture_ends_attack());
+    }
+
+    #[test]
+    fn only_titanium_is_read_to_skip_an_unchanged_posture() {
+        assert!(GameDialect::Titanium.skips_unchanged_posture());
+        assert!(!GameDialect::EqMac.skips_unchanged_posture());
     }
 }

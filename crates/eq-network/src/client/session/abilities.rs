@@ -384,7 +384,15 @@ impl Abilities {
         }
         match self.aim(ability, world, now, out.wire.dialect()) {
             Ok(target) => {
-                if ability == Ability::FeignDeath {
+                // A player who chose to feign standing (6.454) sends the
+                // request alone and stays standing.
+                let standing = world
+                    .body
+                    .options()
+                    .is_some_and(|options| options.posture.feign_standing);
+                if ability == Ability::FeignDeath && standing {
+                    world.posture.feign_standing();
+                } else if ability == Ability::FeignDeath {
                     // All refusals precede this intentional stance change.
                     // Lying is visible even when the feign roll fails: both
                     // programs lie down before the feign request (Titanium
@@ -732,6 +740,51 @@ mod tests {
             outcome.sent,
             [eq_network_game::feign::titanium_request(7).unwrap()]
         );
+    }
+
+    /// Feigning standing (6.454) sends the request alone, on either
+    /// generation, and leaves the player standing.
+    #[test]
+    fn a_player_who_feigns_standing_sends_no_lying_posture() {
+        let mut abilities = Abilities::default();
+        let mut world = warrior();
+        world.player.corrected().unwrap().skills.as_mut().unwrap()[25] = 50;
+        let now = Instant::now();
+        let mut motion = eq_network_game::movement::MotionSession::new(
+            world.session_id,
+            7,
+            eq_network_game::world::Position::default(),
+            now,
+        )
+        .unwrap();
+        motion
+            .set_options(
+                eq_network_game::movement::MovementOptions {
+                    posture: eq_network_game::movement::PostureOptions {
+                        feign_standing: true,
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+                now,
+            )
+            .unwrap();
+        world.body.admit(motion);
+        let outcome = try_ability(&mut abilities, &mut world, Ability::FeignDeath, now);
+        outcome.result.unwrap();
+        assert_eq!(
+            outcome.sent,
+            [eq_network_game::feign::titanium_request(7).unwrap()]
+        );
+        assert_ne!(world.posture.current(), Some(PostureState::Lying));
+        assert!(world.posture.feigned_standing());
+        assert!(matches!(
+            outcome.events[..],
+            [ClientEvent::World(WorldEvent::AbilityUsed {
+                ability: Ability::FeignDeath,
+                ..
+            })]
+        ));
     }
 
     #[test]

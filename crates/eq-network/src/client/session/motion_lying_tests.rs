@@ -2,7 +2,7 @@
 //! (read R19 c), with fabricated values and no live traffic.
 use super::*;
 use crate::client::session::feature::testing;
-use eq_network_game::movement::{DiagonalRates, LyingOptions, MovementOptions, WalkCalibration};
+use eq_network_game::movement::{DiagonalRates, WalkCalibration};
 use std::time::Duration;
 
 const EQMAC: &dyn super::super::wire::Wire = &super::super::wire::EqMac;
@@ -138,55 +138,6 @@ fn a_lying_player_still_turns_and_falls() {
 }
 
 #[test]
-fn walking_while_lying_walks_only_and_stays_lying() {
-    let start = Instant::now();
-    let mut world = setup(start);
-    world
-        .body
-        .motion_mut()
-        .unwrap()
-        .set_options(
-            MovementOptions {
-                lying: LyingOptions {
-                    walk: true,
-                    ..LyingOptions::default()
-                },
-                ..MovementOptions::default()
-            },
-            start,
-        )
-        .unwrap();
-    let now = start + Duration::from_millis(500);
-    let output = testing::run(|out| {
-        Motion::step_at(
-            &request(MovementMode::Forward, now, ahead(0.5)),
-            now,
-            &mut world,
-            out,
-        )
-    });
-    output.result.unwrap();
-    assert!(refused(&output.events), "only a walk goes");
-    let output = testing::run(|out| {
-        Motion::step_at(
-            &request(MovementMode::Walk, now, ahead(0.5)),
-            now,
-            &mut world,
-            out,
-        )
-    });
-    output.result.unwrap();
-    assert!(!refused(&output.events));
-    assert!(output.sent.is_empty(), "no stand goes out");
-    assert_eq!(output.unreliable.len(), 1);
-    assert_eq!(world.posture.current(), Some(PostureState::Lying));
-    let motion = Motion::new(true, true, None);
-    let output = testing::run(|out| motion.jump(now, &mut world, out));
-    output.result.unwrap();
-    assert!(output.sent.is_empty(), "no jump while lying");
-}
-
-#[test]
 fn the_mac_client_still_stands_a_lying_player_to_move() {
     let start = Instant::now();
     let mut world = setup(start);
@@ -201,60 +152,6 @@ fn the_mac_client_still_stands_a_lying_player_to_move() {
     });
     output.result.unwrap();
     assert!(!refused(&output.events));
-    assert_eq!(output.sent.len(), 1, "the stand");
-    assert_eq!(world.posture.current(), Some(PostureState::Standing));
-}
-
-#[test]
-fn the_mac_client_walks_a_lying_player_by_choice_and_stands_them_otherwise() {
-    let start = Instant::now();
-    let mut world = setup(start);
-    world
-        .body
-        .motion_mut()
-        .unwrap()
-        .set_options(
-            MovementOptions {
-                lying: LyingOptions {
-                    walk: true,
-                    ..LyingOptions::default()
-                },
-                ..MovementOptions::default()
-            },
-            start,
-        )
-        .unwrap();
-    let now = start + Duration::from_millis(500);
-    let output = testing::run_on(EQMAC, |out| {
-        Motion::step_at(
-            &request(MovementMode::Walk, now, ahead(0.5)),
-            now,
-            &mut world,
-            out,
-        )
-    });
-    output.result.unwrap();
-    assert!(output.sent.is_empty(), "no stand: {:?}", output.sent);
-    assert_eq!(output.unreliable.len(), 1);
-    assert_eq!(world.posture.current(), Some(PostureState::Lying));
-    let motion = Motion::new(true, true, None);
-    let output = testing::run_on(EQMAC, |out| motion.jump(now, &mut world, out));
-    output.result.unwrap();
-    assert!(
-        output.sent.is_empty(),
-        "no jump while lying: {:?}",
-        output.sent
-    );
-    let later = now + Duration::from_millis(500);
-    let output = testing::run_on(EQMAC, |out| {
-        Motion::step_at(
-            &request(MovementMode::Forward, later, ahead(1.5)),
-            later,
-            &mut world,
-            out,
-        )
-    });
-    output.result.unwrap();
     assert_eq!(output.sent.len(), 1, "the stand");
     assert_eq!(world.posture.current(), Some(PostureState::Standing));
 }

@@ -69,6 +69,13 @@ impl Feature for Stances {
                 Ok(())
             }
             Message::Event(WorldEvent::Damage(damage)) => stand_when_hit(damage, world, out),
+            // Death ends any feign the server held.
+            Message::Event(WorldEvent::Death(death))
+                if world.own_spawn.map(u32::from) == Some(death.spawn_id) =>
+            {
+                world.posture.forget_feign();
+                Ok(())
+            }
             _ => Ok(()),
         }
     }
@@ -77,11 +84,10 @@ impl Feature for Stances {
 /// Stands the player up when a hit lands while they sit or kneel to loot,
 /// as the Titanium program's `OP_Damage` handler does (read R19 b, 0x4a56e3,
 /// rechecked 11-10): any record of more than 0 to the player, whatever its
-/// type, and never a miss. Lying and ducking stay as they are, unless the
-/// player chose to stand when hit while lying (6.453), which holds on the
-/// Mac-era client too. The handler's early
-/// return for a source it does not know is kept; the one for a spell it does
-/// not know is not, since the session has no spell table (6.455).
+/// type, and never a miss. Lying and ducking stay as they are. A player who
+/// chose to stay seated when hit (6.453) is left as they are. The handler's
+/// early return for a source it does not know is kept; the one for a spell
+/// it does not know is not, since the session has no spell table (6.455).
 fn stand_when_hit(damage: &Damage, world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
     let (Some(spawn_id), DamageOutcome::Hit(1..)) = (world.own_spawn, damage.outcome) else {
         return Ok(());
@@ -90,17 +96,15 @@ fn stand_when_hit(damage: &Damage, world: &mut World, out: &mut Out<'_, '_>) -> 
     if damage.target_id != spawn_id || !known(damage.source_id) {
         return Ok(());
     }
-    // The player's choice for a lying player holds on either generation.
-    let stands = match world.posture.current() {
-        Some(PostureState::Sitting | PostureState::Looting) => {
-            out.wire.dialect().lying().hit_stands
-        }
-        Some(PostureState::Lying) => world
-            .body
-            .options()
-            .is_some_and(|options| options.lying.stand_when_hit),
-        _ => false,
-    };
+    let stays = world
+        .body
+        .options()
+        .is_some_and(|options| options.posture.stay_seated_when_hit);
+    let stands = matches!(
+        world.posture.current(),
+        Some(PostureState::Sitting | PostureState::Looting)
+    ) && out.wire.dialect().lying().hit_stands
+        && !stays;
     if stands {
         world.posture.set(spawn_id, Posture::Standing, out)?;
     }
@@ -109,7 +113,14 @@ fn stand_when_hit(damage: &Damage, world: &mut World, out: &mut Out<'_, '_>) -> 
 
 /// The player's stance in this zone admission; unknown counts as standing.
 #[derive(Debug, Default)]
-pub(super) struct OwnPosture(Option<PostureState>);
+pub(super) struct OwnPosture {
+    /// The last requested or server-reported stance.
+    posture: Option<PostureState>,
+    /// A Feign Death the player pressed standing (6.454): the server holds
+    /// the feign, which only a posture report ends, while the player already
+    /// stands. A stand then still goes out, once.
+    feigned_standing: bool,
+}
 
 impl OwnPosture {
     /// Reports the requested lying posture, without asserting feign success.
@@ -119,11 +130,12 @@ impl OwnPosture {
     /// dispatcher 0x4bdf2f) return at once when the player already lies, so
     /// nothing is sent then.
     pub(super) fn lie_for_feign(&mut self, spawn_id: u16, out: &mut Out<'_, '_>) -> Result<()> {
-        if self.0 == Some(PostureState::Lying) {
+        if self.posture == Some(PostureState::Lying) {
             return Ok(());
         }
         out.request(&Request::FeignDeathPosture)?;
-        self.0 = Some(PostureState::Lying);
+        self.posture = Some(PostureState::Lying);
+        self.feigned_standing = false;
         out.log.send(ClientEvent::World(WorldEvent::Posture {
             spawn_id,
             posture: PostureState::Lying,
@@ -132,11 +144,29 @@ impl OwnPosture {
 
     /// The last requested or server-reported stance.
     pub(super) fn current(&self) -> Option<PostureState> {
-        self.0
+        self.posture
     }
-    /// Notes a stance the server reported for the player.
+    /// Notes a stance the server reported for the player, which ends a feign
+    /// pressed standing as any posture report does.
     pub(super) fn observed(&mut self, posture: PostureState) {
-        self.0 = Some(posture);
+        self.posture = Some(posture);
+        self.feigned_standing = false;
+    }
+
+    /// Notes a Feign Death the player pressed standing (6.454).
+    pub(super) fn feign_standing(&mut self) {
+        self.feigned_standing = true;
+    }
+
+    /// Whether a feign pressed standing is still held.
+    #[cfg(test)]
+    pub(super) const fn feigned_standing(&self) -> bool {
+        self.feigned_standing
+    }
+
+    /// Ends a feign pressed standing without a report, as death does.
+    pub(super) fn forget_feign(&mut self) {
+        self.feigned_standing = false;
     }
 
     /// Sits, stands or crouches the player: sends the stance, notes it and
@@ -151,18 +181,23 @@ impl OwnPosture {
         posture: Posture,
         out: &mut Out<'_, '_>,
     ) -> Result<()> {
+        // Titanium's posture routine changes nothing for the posture the
+        // player already has (read R19), but a stand still ends a feign the
+        // player pressed standing.
+        let unchanged = self.posture == Some(state(posture))
+            && !(posture == Posture::Standing && self.feigned_standing);
+        if unchanged && out.wire.dialect().skips_unchanged_posture() {
+            return Ok(());
+        }
         out.request(&Request::Posture(posture))?;
         self.sent(spawn_id, posture, out.log)
     }
 
     /// Notes a stance this session sent, and reports it since the server will not.
     fn sent(&mut self, spawn_id: u16, posture: Posture, log: &mut Events<'_>) -> Result<()> {
-        let posture = match posture {
-            Posture::Standing => PostureState::Standing,
-            Posture::Sitting => PostureState::Sitting,
-            Posture::Ducking => PostureState::Ducking,
-        };
-        self.0 = Some(posture);
+        let posture = state(posture);
+        self.posture = Some(posture);
+        self.feigned_standing = false;
         log.send(ClientEvent::World(WorldEvent::Posture {
             spawn_id,
             posture,
@@ -171,9 +206,9 @@ impl OwnPosture {
 
     /// Whether the character must stand up before it can move. Where the
     /// program holds a lying player still, nothing stands them to move
-    /// (read R19 c), and a walk while lying (6.454) stays lying.
+    /// (read R19 c).
     fn grounded(&self, lying_holds_still: bool) -> bool {
-        match self.0 {
+        match self.posture {
             Some(PostureState::Sitting | PostureState::Ducking) => true,
             Some(PostureState::Lying) => !lying_holds_still,
             _ => false,
@@ -186,6 +221,15 @@ impl OwnPosture {
             return Ok(());
         }
         self.set(spawn_id, Posture::Standing, out)
+    }
+}
+
+/// The stance a posture request leaves the player in.
+const fn state(posture: Posture) -> PostureState {
+    match posture {
+        Posture::Standing => PostureState::Standing,
+        Posture::Sitting => PostureState::Sitting,
+        Posture::Ducking => PostureState::Ducking,
     }
 }
 
@@ -328,7 +372,7 @@ mod tests {
         assert_eq!(outcome.sent.len(), 1);
     }
 
-    /// A world whose player chose to stand when hit while lying.
+    /// A world whose player chose to stay seated when hit (6.453).
     fn choosing_world(posture: PostureState) -> World {
         let start = Instant::now();
         let mut world = hit_world(posture);
@@ -342,8 +386,8 @@ mod tests {
         motion
             .set_options(
                 eq_network_game::movement::MovementOptions {
-                    lying: eq_network_game::movement::LyingOptions {
-                        stand_when_hit: true,
+                    posture: eq_network_game::movement::PostureOptions {
+                        stay_seated_when_hit: true,
                         ..Default::default()
                     },
                     ..Default::default()
@@ -356,37 +400,114 @@ mod tests {
     }
 
     #[test]
-    fn a_hit_stands_a_lying_player_only_when_they_chose_it() {
-        let mut world = choosing_world(PostureState::Lying);
-        let outcome = testing::run(|out| {
-            Stances.observe(&hit(7, 42, DamageOutcome::Hit(3)), &mut world, out)
-        });
+    fn a_hit_leaves_a_sitter_or_looter_seated_only_when_they_chose_it() {
+        for posture in [
+            PostureState::Sitting,
+            PostureState::Looting,
+            PostureState::Lying,
+        ] {
+            let mut world = choosing_world(posture);
+            let outcome = testing::run(|out| {
+                Stances.observe(&hit(7, 42, DamageOutcome::Hit(3)), &mut world, out)
+            });
+            outcome.result.unwrap();
+            assert!(outcome.sent.is_empty(), "{posture:?}: {:?}", outcome.sent);
+            assert_eq!(world.posture.current(), Some(posture));
+        }
+    }
+
+    #[test]
+    fn the_mac_client_stands_no_one_when_hit() {
+        const EQMAC: &dyn super::super::wire::Wire = &super::super::wire::EqMac;
+        for posture in [
+            PostureState::Sitting,
+            PostureState::Looting,
+            PostureState::Lying,
+        ] {
+            let mut world = hit_world(posture);
+            let outcome = testing::run_on(EQMAC, |out| {
+                Stances.observe(&hit(7, 42, DamageOutcome::Hit(3)), &mut world, out)
+            });
+            outcome.result.unwrap();
+            assert!(outcome.sent.is_empty(), "{posture:?}: {:?}", outcome.sent);
+        }
+    }
+
+    fn ask(posture: command::Posture) -> ClientCommand {
+        ClientCommand::SetPosture {
+            session_id: 5,
+            spawn_id: 7,
+            posture,
+            created: Instant::now(),
+        }
+    }
+
+    /// Titanium's posture routine changes nothing for the posture the player
+    /// has (read R19); a feign pressed standing (6.454) is ended by one stand.
+    #[test]
+    fn a_stand_ends_a_feign_pressed_standing_once() {
+        let mut world = hit_world(PostureState::Standing);
+        let stand = ask(command::Posture::Standing);
+        let outcome = testing::run(|out| Stances.handle(&stand, &mut world, out));
+        outcome.result.unwrap();
+        assert!(
+            outcome.sent.is_empty(),
+            "already standing: {:?}",
+            outcome.sent
+        );
+        world.posture.feign_standing();
+        let outcome = testing::run(|out| Stances.handle(&stand, &mut world, out));
         outcome.result.unwrap();
         assert_eq!(
             outcome.sent,
             [command::titanium_posture(7, command::Posture::Standing).unwrap()]
         );
-        assert_eq!(world.posture.current(), Some(PostureState::Standing));
-    }
-
-    #[test]
-    fn the_mac_client_stands_a_sitter_never_and_a_lying_player_by_choice() {
-        const EQMAC: &dyn super::super::wire::Wire = &super::super::wire::EqMac;
-        let mut world = hit_world(PostureState::Sitting);
-        let outcome = testing::run_on(EQMAC, |out| {
-            Stances.observe(&hit(7, 42, DamageOutcome::Hit(3)), &mut world, out)
-        });
+        let outcome = testing::run(|out| Stances.handle(&stand, &mut world, out));
         outcome.result.unwrap();
-        assert!(outcome.sent.is_empty(), "{:?}", outcome.sent);
-        let mut world = choosing_world(PostureState::Lying);
-        let outcome = testing::run_on(EQMAC, |out| {
-            Stances.observe(&hit(7, 42, DamageOutcome::Hit(3)), &mut world, out)
-        });
+        assert!(
+            outcome.sent.is_empty(),
+            "a second stand: {:?}",
+            outcome.sent
+        );
+        // A sit ends it too, and a stand after it is an ordinary stand.
+        world.posture.feign_standing();
+        let outcome =
+            testing::run(|out| Stances.handle(&ask(command::Posture::Sitting), &mut world, out));
         outcome.result.unwrap();
         assert_eq!(
             outcome.sent,
-            [eq_network_game::quarm::posture(7, command::Posture::Standing).unwrap()]
+            [command::titanium_posture(7, command::Posture::Sitting).unwrap()]
         );
+        assert!(!world.posture.feigned_standing());
+        // A report from the server and the player's death end it as well.
+        world.posture.feign_standing();
+        world.posture.observed(PostureState::Standing);
+        assert!(!world.posture.feigned_standing());
+        world.posture.feign_standing();
+        let death = Message::Event(WorldEvent::Death(eq_network_game::zoning::Death {
+            spawn_id: 7,
+            killer_id: 42,
+            corpse_id: 7,
+            bind_zone_id: 1,
+            corpse_name: None,
+        }));
+        testing::run(|out| Stances.observe(&death, &mut world, out))
+            .result
+            .unwrap();
+        assert!(!world.posture.feigned_standing());
+    }
+
+    /// The Mac-era client's routine is unread, so every request but a second
+    /// lie still goes.
+    #[test]
+    fn the_mac_client_still_sends_an_unchanged_posture() {
+        const EQMAC: &dyn super::super::wire::Wire = &super::super::wire::EqMac;
+        let mut world = hit_world(PostureState::Standing);
+        let outcome = testing::run_on(EQMAC, |out| {
+            Stances.handle(&ask(command::Posture::Standing), &mut world, out)
+        });
+        outcome.result.unwrap();
+        assert_eq!(outcome.sent.len(), 1);
     }
 
     /// The press lies the player down on Titanium too, before the feign
