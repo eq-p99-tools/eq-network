@@ -338,13 +338,23 @@ mod tests {
             player.position.z = z;
             player
         };
-        // It is called from its base and used from its top, but not from
-        // halfway between, out of reach of both.
-        for (z, sent) in [(0.0, 1), (45.0, 1), (22.5, 0)] {
-            world.player.admit(at(z));
+        let at = |x: f32, z: f32| {
+            let mut player = at(z);
+            player.position.x = x;
+            player
+        };
+        // Reach is 2-D to where it stands now: used from its base, its top
+        // or anywhere between alike, but not from 21 units across.
+        for (x, z, sent) in [
+            (0.0, 0.0, 1),
+            (0.0, 45.0, 1),
+            (0.0, 22.5, 1),
+            (21.0, 45.0, 0),
+        ] {
+            world.player.admit(at(x, z));
             let clicked = testing::run(|out| doors.handle(&click, &mut world, out));
             clicked.result.unwrap();
-            assert_eq!(clicked.sent.len(), sent, "from {z}");
+            assert_eq!(clicked.sent.len(), sent, "from {x}, {z}");
         }
     }
 
@@ -354,9 +364,9 @@ mod tests {
         let spawn = WorldEvent::Doors(DoorUpdate::Spawn(vec![Door {
             id: 1,
             model: "DOOR".into(),
-            // 15 across and 15 up: 21.2 away, 15 on the ground.
+            // 21 across: out of reach on the ground.
             position: Position {
-                x: 15.0,
+                x: 21.0,
                 z: 15.0,
                 ..Position::default()
             },
@@ -386,13 +396,20 @@ mod tests {
                 ..
             })]
         ));
-        // EQMac's conservative base door reach is 2-D.
-        assert_eq!(
-            doors
-                .click(&click, &world, eq_network_game::reach::EQMAC.doors)
-                .unwrap(),
-            Request::ClickDoor(1)
-        );
+        // Both generations measure it in 2-D (Titanium read R16b), so 15
+        // up counts for nothing.
+        let mut nearer = testing::player(7);
+        nearer.position.x = 6.0;
+        world.player.admit(nearer);
+        for reach in [
+            eq_network_game::reach::TITANIUM.doors,
+            eq_network_game::reach::EQMAC.doors,
+        ] {
+            assert_eq!(
+                doors.click(&click, &world, reach).unwrap(),
+                Request::ClickDoor(1)
+            );
+        }
     }
 
     #[test]

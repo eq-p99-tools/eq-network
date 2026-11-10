@@ -64,11 +64,14 @@ pub const CONTAINER_CHECK: Duration = Duration::from_millis(500);
 
 /// The Titanium program's reaches.
 pub const TITANIUM: Reaches = Reaches {
-    // 20 (0x644368) plus two size terms, at most (s8a T6); the distance
-    // routine's dimension is unread, so height counts as before.
+    // A door used with no point on it clicked (contact, 0x47f7dc; read
+    // R16b): a 2-D distance, x and y, to where the door stands now (+0x38,
+    // +0x3c), of at most the door's radius, the player's and 20 (0x644368).
+    // The two radii are left out, so this reach is never longer than the
+    // program's (recording checklist 6.440).
     doors: Reach {
         distance: 20.0,
-        flat: false,
+        flat: true,
         inclusive: true,
     },
     // Unread: today's.
@@ -141,9 +144,10 @@ mod tests {
     #[test]
     fn a_reach_measures_as_its_program_does() {
         let here = Position::default();
-        // Height counts on Titanium's doors, not on TAKP's.
-        assert!(!TITANIUM.doors.admits(here, at(15.0, 15.0)));
+        // Height counts on neither's doors (Titanium read R16b).
+        assert!(TITANIUM.doors.admits(here, at(15.0, 15.0)));
         assert!(EQMAC.doors.admits(here, at(15.0, 15.0)));
+        assert!(!TITANIUM.doors.admits(here, at(20.1, 0.0)));
         assert!(EQMAC.doors.admits(here, at(20.0, 0.0)));
         // TAKP's ground items are reached under 20, not at it.
         assert!(!EQMAC.objects.admits(here, at(20.0, 0.0)));

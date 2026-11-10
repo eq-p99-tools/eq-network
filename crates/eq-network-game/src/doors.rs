@@ -145,10 +145,9 @@ impl Doors {
 
     /// [`Self::check_click`] for a door standing `raised` above its placed
     /// height now, as a Titanium lift does ([`titanium::Lifts::offset`]):
-    /// it is in reach from where it was placed or from where it stands now,
-    /// so a lift resting raised is called from below and sent down from its
-    /// top (inferred, recording checklist 6.436; which position the program
-    /// measures to is unread).
+    /// the reach runs to where the door stands now, never where it was
+    /// placed (read R16b, 0x4906c5 and 0x47f7dc). Titanium's reach is 2-D,
+    /// so a lift resting raised is used from below and from its top alike.
     ///
     /// # Errors
     /// As [`Self::check_click`].
@@ -170,10 +169,7 @@ impl Doors {
             z: door.position.z + raised,
             ..door.position
         };
-        ensure!(
-            reach.admits(position, door.position) || reach.admits(position, now),
-            OutOfReach
-        );
+        ensure!(reach.admits(position, now), OutOfReach);
         Ok(())
     }
     /// Current server-provided definitions in stable door-ID order. Static
@@ -387,8 +383,11 @@ mod tests {
         assert_eq!(&packet.body[12..], &[0x34, 0x12, 0, 0]);
         assert!(admitted.click_packet(7, 0, position).is_err());
         assert!(admitted.click_packet(8, 1, position).is_err());
+        // Titanium measures across, not up (read R16b).
         let mut distant = position;
         distant.z += Doors::USE_DISTANCE + 1.0;
+        assert!(admitted.click_packet(7, 1, distant).is_ok());
+        distant.x += Doors::USE_DISTANCE + 1.0;
         assert!(admitted.click_packet(7, 1, distant).is_err());
         distant.z = f32::NAN;
         assert!(admitted.click_packet(7, 1, distant).is_err());
