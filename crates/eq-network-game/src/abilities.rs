@@ -579,7 +579,9 @@ const PICK_POCKET_ANSWER_LENGTH: usize = 84;
 /// passes over too.
 ///
 /// Layout reference: `EQEmu`'s `BeggingResponse_Struct` and
-/// `sPickPocket_Struct` (`common/patches/titanium_structs.h`).
+/// `sPickPocket_Struct` (`common/patches/titanium_structs.h`). The 20- and
+/// 84-byte floors are those structs' sizes in the reference server, not
+/// lengths the program tests.
 ///
 /// # Errors
 /// Rejects a body too short for its fields, and another opcode.

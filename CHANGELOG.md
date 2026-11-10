@@ -54,7 +54,11 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
       six minutes pass. Stopping while following sends the program's stop
       and says nothing.
     - The Ranger's sort and colour filter are not offered.
-  - A frozen player uses none of these, with the program's line.
+  - A frozen player uses none of these, with the program's line. The
+    program's mount gate, which allows only Tracking and Fishing of these
+    while riding, is not followed, since the host does not tell the session
+    when the player rides; a mounted player's request goes out where the
+    program refuses it (6.443).
 - **Breaking:** a Bard's `/stopsong` follows the Titanium program's song
   state (read R16) and is offered on P99 too. The song is the player's last
   own cast start: every gem cast, and an item cast over 100 ms. No song ends
@@ -65,8 +69,11 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   even while another cast is held, as the program does. An item's song of
   another spell ends locally with nothing sent. With no song, or for any
   other class, nothing is sent. A memorized spell is taken as the class's,
-  and every gem cast as over 100 ms, since the session has no spell table
-  (checklist 6.442).
+  and every gem cast as over 100 ms, since the session has no spell table:
+  so an item's song of a class spell that is not memorized ends locally
+  where the program sends the stop. The program's memorize path, where a
+  Bard memorizing a spell stops the song with the stop sent and restarts
+  that gem's, is not followed (checklist 6.442).
   - `GameCommand::UseAbility` gains `in_liquid`, the host's own liquid test,
     which Fishing refuses on. `Ability::encode` returns `None` for the two
     asks. The session follows the auto-attack toggle it sent, and the

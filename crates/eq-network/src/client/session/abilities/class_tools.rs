@@ -2,8 +2,11 @@
 //! Sense Traps, Disarm Traps, Pick Lock and Tracking (read R14, sections 0,
 //! 2, 3 and 4; R15c), in its order, each refusal with the program's own
 //! line. The shared gates come first: the skill known, a frozen posture, and
-//! the ability's wait, which the program passes over without a word. Its mount gate is not
-//! followed: the session does not know when the player rides.
+//! the ability's wait, which the program passes over without a word. Its
+//! mount gate (R16d: actor +0x15c, the ridden mount; only Tracking and
+//! Fishing of these are allowed mounted) is not followed, since the host does
+//! not tell the session when the player rides: a mounted player's request
+//! goes out where the program refuses it (recording checklist 6.443).
 use super::{refuse, Abilities, Refusal};
 use crate::client::session::feature::{Out, World};
 use anyhow::Result;
@@ -125,7 +128,7 @@ impl Abilities {
         let ((own_id, position), player) = self.usable(ability, world, GameDialect::Titanium)?;
         if world.posture.current() == Some(PostureState::Frozen) {
             return Err(Refusal::official(
-                "You cannot do that while frozen",
+                "Abilities refused: frozen",
                 lines::FROZEN,
                 Vec::new(),
             ));
@@ -179,14 +182,14 @@ impl Abilities {
                         lines::BEG_TOO_FAR
                     };
                     return Err(Refusal::official(
-                        "Your target is too far away",
+                        "Refused: target out of reach",
                         line,
                         Vec::new(),
                     ));
                 }
                 if ability == Ability::Begging && own_unseen(world, own_id) {
                     return Err(Refusal::official(
-                        "You cannot beg while unseen",
+                        "Begging refused: you are unseen",
                         lines::BEG_UNSEEN,
                         Vec::new(),
                     ));
@@ -238,14 +241,14 @@ impl Abilities {
     fn fishing(&self, in_liquid: bool, world: &World, now: Instant) -> Result<(), Refusal> {
         if self.fishing_until.is_some_and(|until| now < until) {
             return Err(Refusal::official(
-                "You are already fishing",
+                "Fishing refused: a cast is already out",
                 lines::ALREADY_FISHING,
                 Vec::new(),
             ));
         }
         if in_liquid {
             return Err(Refusal::official(
-                "You cannot fish while in the water",
+                "Fishing refused: in water",
                 lines::FISHING_IN_WATER,
                 Vec::new(),
             ));
@@ -257,14 +260,14 @@ impl Abilities {
         let items = inventory.items();
         if items.contains_key(&InventorySlot::CURSOR) {
             return Err(Refusal::official(
-                "Put down the item you are holding first",
+                "Fishing refused: cursor not empty",
                 lines::FISHING_HOLDING,
                 Vec::new(),
             ));
         }
         if world.attacking {
             return Err(Refusal::official(
-                "You cannot fish while attacking",
+                "Fishing refused: auto attack is on",
                 lines::FISHING_ATTACKING,
                 Vec::new(),
             ));
@@ -276,7 +279,7 @@ impl Abilities {
         };
         if !carried(POLE) {
             return Err(Refusal::official(
-                "You have no fishing pole",
+                "Fishing refused: no pole carried",
                 lines::NO_POLE,
                 Vec::new(),
             ));
@@ -287,14 +290,14 @@ impl Abilities {
                 .is_some_and(|item| item.rules.item_type == POLE)
         }) {
             return Err(Refusal::official(
-                "Hold your fishing pole in your hand",
+                "Fishing refused: pole not in a hand slot",
                 lines::POLE_NOT_HELD,
                 Vec::new(),
             ));
         }
         if !carried(BAIT) {
             return Err(Refusal::official(
-                "You have no bait",
+                "Fishing refused: no bait carried",
                 lines::NO_BAIT,
                 Vec::new(),
             ));
@@ -313,7 +316,7 @@ fn pick_pockets<'w>(
 ) -> Result<&'w SpawnState, Refusal> {
     let Some((target_id, spawn)) = target else {
         return Err(Refusal::official(
-            "Select a target for that first",
+            "Pick Pockets refused: no target",
             lines::PICK_NO_TARGET,
             Vec::new(),
         ));
@@ -324,14 +327,14 @@ fn pick_pockets<'w>(
     }
     if world.control.stunned() {
         return Err(Refusal::official(
-            "You cannot do that while stunned",
+            "Pick Pockets refused: stunned",
             lines::PICK_STUNNED,
             Vec::new(),
         ));
     }
     if world.attacking {
         return Err(Refusal::official(
-            "You cannot do that while attacking",
+            "Pick Pockets refused: auto attack is on",
             lines::PICK_ATTACKING,
             Vec::new(),
         ));
@@ -339,7 +342,7 @@ fn pick_pockets<'w>(
     if spawn.kind == SpawnKind::Player {
         if target_id == own_id {
             return Err(Refusal::official(
-                "You cannot pick your own pockets",
+                "Pick Pockets refused: the target is you",
                 lines::PICK_YOURSELF,
                 Vec::new(),
             ));
@@ -351,7 +354,7 @@ fn pick_pockets<'w>(
         // checklist 6.438).
         if !spawn.appearance.pvp {
             return Err(Refusal::official(
-                "That player is not open to player combat",
+                "Pick Pockets refused: target not flagged for PvP",
                 lines::PICK_PLAYER,
                 Vec::new(),
             ));
@@ -362,7 +365,7 @@ fn pick_pockets<'w>(
             .filter(|own| own.appearance.pvp)
         else {
             return Err(Refusal::official(
-                "You are not open to player combat",
+                "Pick Pockets refused: you are not flagged for PvP",
                 lines::PICK_NOT_PVP,
                 Vec::new(),
             ));
@@ -385,14 +388,14 @@ fn begging<'w>(
 ) -> Result<&'w SpawnState, Refusal> {
     let Some((_, spawn)) = target.filter(|(_, spawn)| spawn.kind == SpawnKind::Npc) else {
         return Err(Refusal::official(
-            "You can beg only from an NPC",
+            "Begging refused: target is not an NPC",
             lines::BEG_NOT_AN_NPC,
             Vec::new(),
         ));
     };
     if world.attacking {
         return Err(Refusal::official(
-            "You cannot beg while attacking",
+            "Begging refused: auto attack is on",
             lines::BEG_ATTACKING,
             Vec::new(),
         ));

@@ -309,6 +309,9 @@ impl CastGuard {
 /// The program's song state (actor +0xf98 and +0x104c, read R16): the spell
 /// of the player's own last cast start, and whether an item cast it. No song
 /// ends on its own; the server's cast update, a stop, or a new cast ends it.
+/// The program's memorize path (0x308e), where a Bard memorizing a spell stops
+/// the song with the stop sent and restarts that gem's, is not followed
+/// (6.442).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Song {
     spell: u32,
@@ -383,7 +386,9 @@ impl Casting {
         let Some(song) = self.song else {
             return out.log.diagnostic("No song is playing".into());
         };
-        // A memorized spell is taken as the class's (6.442).
+        // A memorized spell is taken as the class's (6.442), so an item's
+        // song of a class spell not memorized ends here unsent, where the
+        // program sends the stop.
         if !world
             .player
             .as_ref()
