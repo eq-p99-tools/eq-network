@@ -751,6 +751,7 @@ impl Feature for Motion {
                             && out.wire.dialect() == eq_network_game::GameDialect::Titanium,
                     )
                     .with_gate(out.wire.update_gate())
+                    .with_counter(out.wire.update_counter())
                     .with_fall_speed(out.wire.fall_speed(world.gravity))
                     .with_jump(out.wire.jump_speed().map(|speed| {
                         (

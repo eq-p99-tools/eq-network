@@ -246,6 +246,17 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- Titanium's own position update carries the program's movement-history
+  entry counter in its counter field (0x14cb offset 2; 0x4ac5c1, 0x4b70db)
+  in place of one more per update: the frames since admission at a fixed
+  65 a second, plus one entry for each earlier update, and for a local pad
+  the region's two entries and the warp's entry at the old place (R5 audit
+  U1). The per-frame history sender stays gated off on public servers by
+  our policy, and the counter counts regardless. The rate and the left-out
+  spell-path entries are inferred (recording checklist 6.420). `EQMac`'s
+  field is unread and keeps one more per update. New
+  `movement::UpdateCounter`, `TITANIUM_UPDATE_COUNTER` and
+  `MotionSession::with_counter`.
 - **Breaking:** Report the raw dialect-tagged state in `WorldEvent::Visibility`
   and the observer's current Titanium sight in `WorldEvent::ObserverSight`.
   `AppearanceChange` can report the Titanium GM flag, and item placement

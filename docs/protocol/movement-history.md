@@ -58,10 +58,13 @@ allowing `0x14cb`. The native WLD pad path at
 `0x48b52c`, `0x48b42b`, and `0x48aaa6` submits a 36-byte position at
 entry, snaps locally, and returns to the normal position stream. The local
 pad implementation uses the existing position encoder and update gate.
-Its event records local placement after entry submission. The entry uses
-the ordinary session position sequence. The native pad path uses a movement
-history cursor, so the entry word still needs a capture comparison
-(recording checklist 6.402). Live
+Its event records local placement after entry submission. Every Titanium
+update, the entry included, carries the movement-history entry counter
+(`movement::UpdateCounter`): frames since admission at a fixed rate, one
+entry for each earlier update, and for a pad the region's two entries and
+the warp's entry at the old place before the entry report copies it. The
+rate and the left-out spell-path entries are inferred (recording checklist
+6.420); the entry word still needs a capture comparison (6.402). Live
 validation of pad crossings and server receipt is pending.
 
 Before implementing stock Titanium transmission, capture a populated report

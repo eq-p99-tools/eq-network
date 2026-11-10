@@ -1,5 +1,6 @@
 //! Zone-scoped movement submission with caller-supplied calibration.
 use super::{
+    counter::{Counter, UpdateCounter},
     gate::{Flags, UpdateGate},
     DiagonalRates, HeadingUpdate, MovementGuard, MovementMode, MovementRequest, PositionPacket,
     JUMP_OPCODE,
@@ -152,7 +153,8 @@ impl MotionCalibration {
 pub struct MotionSession {
     guard: MovementGuard,
     spawn_id: u16,
-    sequence: u16,
+    /// What the next update's counter field carries ([`UpdateCounter`]).
+    counter: Counter,
     position: Position,
     /// Approach point of the latest accepted move. A correction or any
     /// other placement cannot serve as a pad entry.
@@ -170,7 +172,7 @@ pub struct MotionSession {
     gate: Option<UpdateGate>,
     /// The latest accepted sample the gate has not let out yet.
     held: Option<PositionPacket>,
-    /// The last update sent, without its sequence: Titanium's gate sends
+    /// The last update sent, without its counter: Titanium's gate sends
     /// only after a change.
     last_update: Option<PositionPacket>,
     /// The `EQMac` gate's pending flag and what it compares against.
@@ -219,7 +221,7 @@ impl PreparedMove<'_> {
                 send(&sample)?;
                 owner.held = None;
                 owner.last_sent = now;
-                owner.sequence = owner.sequence.wrapping_add(1);
+                owner.counter.sent();
                 owner.last_update = Some(PositionPacket {
                     sequence: 0,
                     ..sample
@@ -329,6 +331,14 @@ impl MotionSession {
         self
     }
 
+    /// Numbers the player's own updates as the client generation's program
+    /// does ([`UpdateCounter`]), counting from this admission.
+    #[must_use]
+    pub const fn with_counter(mut self, rule: UpdateCounter) -> Self {
+        self.counter = self.counter.with_rule(rule);
+        self
+    }
+
     /// The least time between two updates under a spacing gate.
     fn spacing(&self) -> Duration {
         match self.gate {
@@ -435,7 +445,7 @@ impl MotionSession {
         Ok(Self {
             guard: MovementGuard::new(session_id, position, now),
             spawn_id,
-            sequence: 0,
+            counter: Counter::new(now),
             position,
             previous_position: None,
             calibration: None,
@@ -561,16 +571,22 @@ impl MotionSession {
             self.pad_approach(created).is_some() && self.position == pad.entry(),
             "pad entry is no longer current"
         );
+        // Entering the pad's region and finding its zone is this one record
+        // two entries (causes 4 and 5, 0x48b60e and 0x48b647), and the warp
+        // one more at the old place before its update copies the counter.
+        let mut counter = self.counter;
+        counter.zone_line_region();
+        counter.before_warp();
         let still = PositionPacket {
             spawn_id: self.spawn_id,
-            sequence: self.sequence,
+            sequence: counter.value(now),
             position: self.position,
             delta: [0.0; 3],
             animation: 0,
             delta_heading: 0,
         };
         let entry = PositionPacket {
-            sequence: self.sequence,
+            sequence: counter.value(now),
             ..self
                 .held
                 .or(self.last_update)
@@ -588,7 +604,9 @@ impl MotionSession {
         // The 0x48aaa6 branch submits entry outside the ordinary gate.
         // Keep the existing periodic deadline for the landing or movement from it.
         self.correct(landing.position, now)?;
-        self.sequence = self.sequence.wrapping_add(1);
+        counter.sent();
+        counter.after_warp();
+        self.counter = counter;
         self.last_update = Some(PositionPacket {
             sequence: 0,
             ..entry
@@ -605,9 +623,10 @@ impl MotionSession {
     pub fn stop_voluntary(&mut self) {
         self.guard.clear_shoreline();
         if self.stop_pending() {
+            // The counter is the send's own, set as the held sample goes out.
             self.held = Some(PositionPacket {
                 spawn_id: self.spawn_id,
-                sequence: self.sequence,
+                sequence: 0,
                 position: self.position,
                 delta: [0.0; 3],
                 animation: 0,
@@ -839,7 +858,7 @@ impl MotionSession {
         };
         let sample = PositionPacket {
             spawn_id: self.spawn_id,
-            sequence: self.sequence,
+            sequence: self.counter.value(now),
             position: request.position,
             delta,
             animation: if moving { animation } else { 0 },
@@ -926,12 +945,12 @@ impl MotionSession {
                 return Ok(false);
             }
             let sample = PositionPacket {
-                sequence: self.sequence,
+                sequence: self.counter.value(now),
                 ..held
             };
             send(&sample)?;
             self.held = None;
-            self.sequence = self.sequence.wrapping_add(1);
+            self.counter.sent();
             self.last_sent = now;
             self.last_update = Some(PositionPacket {
                 sequence: 0,
@@ -949,7 +968,7 @@ impl MotionSession {
         }
         let sample = PositionPacket {
             spawn_id: self.spawn_id,
-            sequence: self.sequence,
+            sequence: self.counter.value(now),
             position: self.position,
             delta: [0.0; 3],
             animation: 0,
@@ -957,7 +976,7 @@ impl MotionSession {
         };
         sample.check()?;
         send(&sample)?;
-        self.sequence = self.sequence.wrapping_add(1);
+        self.counter.sent();
         self.last_sent = now;
         self.moving = false;
         self.last_update = Some(PositionPacket {
@@ -982,7 +1001,7 @@ impl MotionSession {
             && now.saturating_duration_since(self.last_input) >= Duration::from_millis(250);
         let still = PositionPacket {
             spawn_id: self.spawn_id,
-            sequence: self.sequence,
+            sequence: self.counter.value(now),
             position: self.position,
             delta: [0.0; 3],
             animation: 0,
@@ -991,7 +1010,7 @@ impl MotionSession {
         let candidate = match self.held {
             _ if stopped => still,
             Some(held) => PositionPacket {
-                sequence: self.sequence,
+                sequence: self.counter.value(now),
                 ..held
             },
             // The latest move went out and the host's next has not come.
@@ -1005,7 +1024,7 @@ impl MotionSession {
         if released {
             send(&candidate)?;
             self.held = None;
-            self.sequence = self.sequence.wrapping_add(1);
+            self.counter.sent();
             self.last_sent = now;
             self.last_update = Some(PositionPacket {
                 sequence: 0,
@@ -1027,7 +1046,7 @@ impl MotionSession {
     pub fn correct(&mut self, position: Position, now: Instant) -> Result<()> {
         PositionPacket {
             spawn_id: self.spawn_id,
-            sequence: self.sequence,
+            sequence: self.counter.value(now),
             position,
             delta: [0.0; 3],
             animation: 0,

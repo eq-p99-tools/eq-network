@@ -1,6 +1,7 @@
 //! Titanium movement encoding and session-scoped displacement validation.
 
 mod carry;
+mod counter;
 mod diagonal;
 mod gate;
 pub mod history;
@@ -12,6 +13,7 @@ mod session;
 mod shoreline;
 mod speeds;
 pub use carry::{between_reports, carry, Carried, ZBetween};
+pub use counter::{UpdateCounter, TITANIUM_HISTORY_FRAMES_PER_SECOND, TITANIUM_UPDATE_COUNTER};
 pub use diagonal::{DiagonalAlong, DiagonalRates, GroundedDiagonal, StrafeSide};
 pub use gate::{
     UpdateGate, EQMAC_HEADING_STEP, EQMAC_REPEATS, EQMAC_SPEED_STEP, EQMAC_UPDATE_SPACING,
@@ -250,7 +252,9 @@ impl MovementRequest {
 pub struct PositionPacket {
     /// Active character's own zone spawn ID.
     pub spawn_id: u16,
-    /// Wrapping packet counter, owned by the zone session.
+    /// Wrapping counter, owned by the zone session: Titanium's
+    /// movement-history entry count, `EQMac`'s count of updates
+    /// ([`UpdateCounter`]).
     pub sequence: u16,
     /// Server coordinates and canonical 0..512 heading.
     pub position: Position,

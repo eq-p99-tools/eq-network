@@ -890,11 +890,11 @@ fn malformed_and_excessive_requests_never_reach_transport() {
             .send_move(&request(now, x), now, |_| panic!("invalid send"))
             .is_err());
     }
-    session.sequence = u16::MAX;
+    session.counter.set_entries(u16::MAX);
     session
         .send_move(&request(now, 0.5), now, |_| Ok(()))
         .unwrap();
-    assert_eq!(session.sequence, 0);
+    assert_eq!(session.counter.entries(), 0);
 }
 
 #[test]
@@ -1132,7 +1132,7 @@ fn an_announced_jump_refuses_diagonal_credit_without_consuming_the_sample() {
         let accepted = session.position();
         let sampled = session.guard.sampled;
         let jump = session.guard.jumped_at;
-        let sequence = session.sequence;
+        let sequence = session.counter.entries();
         let combined = diagonal(accepted, now);
         let refusal = session.send_move_sample(&combined, now, |_| panic!("diagonal during jump"));
         assert_eq!(
@@ -1142,7 +1142,7 @@ fn an_announced_jump_refuses_diagonal_credit_without_consuming_the_sample() {
         assert_eq!(session.position(), accepted);
         assert_eq!(session.guard.sampled, sampled);
         assert_eq!(session.guard.jumped_at, jump);
-        assert_eq!(session.sequence, sequence);
+        assert_eq!(session.counter.entries(), sequence);
     };
 
     let ordinary = MovementOptions::default();
@@ -1433,7 +1433,7 @@ fn prepared_move_drop_preserves_owner_and_rejects_a_foreign_admission() {
         assert!(matches!(prepared.release, Release::Send));
     }
     assert_eq!(session.position(), Position::default());
-    assert_eq!(session.sequence, 0);
+    assert_eq!(session.counter.entries(), 0);
     assert_eq!(session.last_sent, start);
     // Dropping a checked candidate did not consume its guard time budget.
     session
@@ -1461,7 +1461,7 @@ fn prepared_held_sample_commits_locally_then_releases_the_same_sample() {
         .submit(|_| panic!("held acceptance must not send"))
         .unwrap();
     assert_eq!(session.position(), expected.position);
-    assert_eq!(session.sequence, 0);
+    assert_eq!(session.counter.entries(), 0);
     assert_eq!(session.last_sent, start);
     session
         .tick_sample(start + Duration::from_millis(280), |sample| {
@@ -1469,7 +1469,7 @@ fn prepared_held_sample_commits_locally_then_releases_the_same_sample() {
             Ok(())
         })
         .unwrap();
-    assert_eq!(session.sequence, 1);
+    assert_eq!(session.counter.entries(), 1);
 }
 
 #[test]
@@ -1490,7 +1490,7 @@ fn unchanged_candidate_accepts_input_once_without_a_send_or_extra_budget() {
     prepared
         .submit(|_| panic!("unchanged sample must not send"))
         .unwrap();
-    assert_eq!(session.sequence, 1);
+    assert_eq!(session.counter.entries(), 1);
     assert_eq!(session.last_sent, first);
     assert_eq!(session.last_input, now);
     assert!(session
@@ -1514,7 +1514,7 @@ fn failed_prepared_send_preserves_motion_without_undoing_external_effects() {
         .is_err());
     assert_eq!(external_effects, [motion.position]);
     assert_eq!(session.position(), Position::default());
-    assert_eq!(session.sequence, 0);
+    assert_eq!(session.counter.entries(), 0);
     assert_eq!(session.last_sent, start);
     assert_eq!(session.last_input, start);
     // Test-only inspection of preserved state; session-level execution errors
@@ -2036,4 +2036,99 @@ fn correction_drops_held_swim_and_requires_a_new_grant_and_input() {
             Ok(())
         })
         .is_ok());
+}
+
+#[test]
+fn titanium_counter_carries_its_frames_and_earlier_updates_from_each_admission() {
+    use crate::movement::TITANIUM_UPDATE_COUNTER;
+    let titanium = |start: Instant| {
+        setup(start)
+            .with_gate(Some(UpdateGate::Changed {
+                spacing: Duration::from_millis(280),
+            }))
+            .with_counter(TITANIUM_UPDATE_COUNTER)
+    };
+    let sent = |motion: &mut MotionSession, at: Instant, x: f32| {
+        let mut counter = None;
+        motion
+            .send_move_sample(&request(at, x), at, |sample| {
+                counter = Some(sample.sequence);
+                Ok(())
+            })
+            .unwrap();
+        counter
+    };
+    let start = Instant::now();
+    let at = |ms| start + Duration::from_millis(ms);
+    let mut motion = titanium(start);
+    // 300 ms is 19 frames at 65 a second; no update has gone out yet.
+    assert_eq!(sent(&mut motion, at(300), 0.5), Some(19));
+    // 600 ms is 39 frames, and the first update recorded one entry.
+    assert_eq!(sent(&mut motion, at(600), 1.0), Some(40));
+    // A held update takes the counter as it goes out, not as it was held.
+    assert_eq!(sent(&mut motion, at(700), 1.2), None);
+    let mut ticked = None;
+    assert!(motion
+        .tick_sample(at(900), |sample| {
+            ticked = Some(sample.sequence);
+            Ok(())
+        })
+        .unwrap());
+    assert_eq!(ticked, Some(58 + 2));
+    // A failed send records nothing.
+    assert!(motion
+        .send_move_sample(&request(at(1200), 1.4), at(1200), |_| {
+            anyhow::bail!("synthetic transport failure")
+        })
+        .is_err());
+    assert_eq!(sent(&mut motion, at(1200), 1.4), Some(78 + 3));
+
+    // A new admission starts again from 0.
+    let readmitted = at(5000);
+    let mut motion = titanium(readmitted);
+    assert_eq!(
+        sent(&mut motion, readmitted + Duration::from_millis(300), 0.5),
+        Some(19)
+    );
+}
+
+#[test]
+fn titanium_counter_records_the_pad_region_and_its_warp() {
+    use crate::{movement::TITANIUM_UPDATE_COUNTER, zoning::LocalPad};
+    let start = Instant::now();
+    let at = |ms| start + Duration::from_millis(ms);
+    let mut motion = setup(start)
+        .with_gate(Some(UpdateGate::Changed {
+            spacing: Duration::from_millis(280),
+        }))
+        .with_counter(TITANIUM_UPDATE_COUNTER);
+    motion
+        .send_move_sample(&request(at(300), 0.5), at(300), |_| Ok(()))
+        .unwrap();
+    let entry = motion.position();
+    let landing = Position {
+        x: -20.0,
+        z: 6.0,
+        ..entry
+    };
+    let mut reported = None;
+    motion
+        .cross_pad(LocalPad::new(entry, landing), at(400), at(400), |sample| {
+            reported = Some(sample.sequence);
+            Ok(())
+        })
+        .unwrap();
+    // 26 frames, the first update's entry, the region's two and the warp's
+    // entry at the old place.
+    assert_eq!(reported, Some(26 + 1 + 2 + 1));
+    let mut landed = None;
+    assert!(motion
+        .tick_sample(at(700), |sample| {
+            assert_eq!(sample.position, landing);
+            landed = Some(sample.sequence);
+            Ok(())
+        })
+        .unwrap());
+    // 45 frames, and the entry report's own entry and the landing's.
+    assert_eq!(landed, Some(45 + 4 + 2));
 }
