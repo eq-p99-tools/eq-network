@@ -323,12 +323,10 @@ impl Ability {
     /// (its `features.h` time less the second its handlers take off), as
     /// the TAKP read doesn't list it.
     ///
-    /// Pick Pockets, Begging, Sense Traps and Disarm Traps wait as long as
-    /// `EQEmu`'s own timers for them (recording checklist 6.435): eight
-    /// seconds, which `Client::Handle_OP_PickPocket` and `Handle_OP_Begging`
-    /// start, and `features.h`'s nine less the second `Handle_OP_SenseTraps`
-    /// and `Handle_OP_DisarmTraps` take off. The program keeps each on its
-    /// own ready flag; its periods are not decoded yet.
+    /// Pick Pockets, Begging, Sense Traps and Disarm Traps each wait ten
+    /// seconds on their own timer, the program's skill-record value (read
+    /// R16c, [0x851200 + id x 4] +4, in ms), which also gives the waits
+    /// above for the strikes, Feign Death, Hide and Mend.
     #[must_use]
     pub const fn reuse(self, dialect: GameDialect) -> Duration {
         Duration::from_millis(match self {
@@ -340,18 +338,20 @@ impl Ability {
             },
             Self::EagleStrike | Self::Taunt => 6_000,
             Self::DragonPunch => 6_200,
-            Self::Kick
-            | Self::Bash
-            | Self::PickPockets
-            | Self::Begging
-            | Self::SenseTraps
-            | Self::DisarmTraps => 8_000,
+            Self::Kick | Self::Bash => 8_000,
             Self::FlyingKick | Self::RoundKick => 8_500,
             Self::Frenzy => match dialect {
                 GameDialect::Titanium => 15_000,
                 GameDialect::EqMac => 9_000,
             },
-            Self::Backstab | Self::FeignDeath | Self::Hide | Self::Sneak => 10_000,
+            Self::Backstab
+            | Self::FeignDeath
+            | Self::Hide
+            | Self::Sneak
+            | Self::PickPockets
+            | Self::Begging
+            | Self::SenseTraps
+            | Self::DisarmTraps => 10_000,
             Self::BindWound => match dialect {
                 GameDialect::Titanium => 11_000,
                 GameDialect::EqMac => 10_000,
@@ -732,10 +732,10 @@ mod tests {
             (Ability::Sneak, 10_000),
             (Ability::SenseHeading, 2_000),
             (Ability::Frenzy, 15_000),
-            (Ability::PickPockets, 8_000),
-            (Ability::Begging, 8_000),
-            (Ability::SenseTraps, 8_000),
-            (Ability::DisarmTraps, 8_000),
+            (Ability::PickPockets, 10_000),
+            (Ability::Begging, 10_000),
+            (Ability::SenseTraps, 10_000),
+            (Ability::DisarmTraps, 10_000),
         ] {
             assert_eq!(titanium(ability), millis, "{ability:?}");
         }

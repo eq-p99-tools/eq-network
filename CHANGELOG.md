@@ -21,9 +21,9 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
       `abilities::titanium_ask`).
     - The trap skills send the program's treasure messages at a target of
       class 62 (`Request::AtTreasure`; checklist 6.432, inferred).
-    - Each waits as long as EQEmu's own timer (checklist 6.435).
-    - A player's pockets are refused with the program's first PvP line
-      (6.438), as the PvP flag the program reads is not yet read.
+    - Each waits ten seconds on its own timer, the program's value.
+    - A player's pockets are refused with the program's line for a target
+      not in PvP (6.438): the session does not yet follow the PvP flag.
     - Begging's unseen check reads the player's own invisibility (6.430),
       and the 15-unit reach is measured as the bandage's (6.431).
   - A frozen player uses none of these, with the program's line.

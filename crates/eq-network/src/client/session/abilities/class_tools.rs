@@ -319,9 +319,11 @@ fn pick_pockets<'w>(
                 Vec::new(),
             ));
         }
-        // The program allows a player's pockets only under its PvP rules,
-        // whose flag the session has not read; it refuses them all here
-        // with the first of its PvP lines (recording checklist 6.438).
+        // The program allows a player's pockets only under its PvP rules:
+        // 0x307a when the target is not in PvP, 0x307b when the target is
+        // and the player is not (read R16d). The session does not follow
+        // the PvP flag yet, so it refuses every player with the first of
+        // those lines (recording checklist 6.438).
         return Err(Refusal::official(
             "You cannot pick a player's pockets here",
             lines::PICK_PLAYER,
@@ -556,7 +558,7 @@ mod tests {
             [42, 0, 0, 0, 7, 0, 0, 0, 37, 0, 0, 0, 0xff, 0, 0, 0, 0, 0]
         );
         assert_eq!(opcodes(&picked), [0x2ad8]);
-        // Its own eight-second wait, apart from Begging's.
+        // Its own ten-second wait, apart from Begging's.
         assert_eq!(press(&mut abilities, &world, pick, now).sent, []);
         let mut beggar = player(&[(48, 37), (67, 5)]);
         beggar.target = crate::client::session::targeting::Target::from(42);
@@ -569,7 +571,7 @@ mod tests {
             )),
             [0x13e7]
         );
-        let later = now + Duration::from_secs(8);
+        let later = now + Duration::from_secs(10);
         assert_eq!(
             opcodes(&press(&mut abilities, &world, pick, later)),
             [0x2ad8]
@@ -617,7 +619,7 @@ mod tests {
         world.target = crate::client::session::targeting::Target::from(50);
         let disarmed = press(&mut abilities, &world, (Ability::DisarmTraps, false), now);
         assert_eq!(opcodes(&disarmed), [0x41b9]);
-        let later = now + Duration::from_secs(8);
+        let later = now + Duration::from_secs(10);
         let sensed = press(&mut abilities, &world, (Ability::SenseTraps, false), later);
         assert_eq!(opcodes(&sensed), [0x07a8]);
         // Without the skill, nothing goes.
