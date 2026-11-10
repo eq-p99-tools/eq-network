@@ -7,8 +7,6 @@ use super::{
     ClientCommand, ClientEvent,
 };
 use anyhow::Result;
-#[cfg(test)]
-use eq_network_game::movement::MovementMode;
 use eq_network_game::{
     appearance::AppearanceChange,
     inventory::MAX_CARRIED_WEIGHT,
@@ -1018,6 +1016,7 @@ mod lying_tests;
 mod tests {
     use super::super::feature::testing;
     use super::*;
+    use eq_network_game::movement::MovementMode;
     use std::time::Duration;
 
     fn at(x: f32) -> Position {

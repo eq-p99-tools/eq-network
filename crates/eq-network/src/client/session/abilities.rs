@@ -391,7 +391,7 @@ impl Abilities {
                     .options()
                     .is_some_and(|options| options.posture.feign_standing);
                 if ability == Ability::FeignDeath && standing {
-                    world.posture.feign_standing();
+                    world.posture.owe_stand();
                 } else if ability == Ability::FeignDeath {
                     // All refusals precede this intentional stance change.
                     // Lying is visible even when the feign roll fails: both
@@ -742,8 +742,8 @@ mod tests {
         );
     }
 
-    /// Feigning standing (6.454) sends the request alone, on either
-    /// generation, and leaves the player standing.
+    /// Feigning standing (6.454) sends the request alone and leaves the
+    /// player standing; the next stand is owed to the server.
     #[test]
     fn a_player_who_feigns_standing_sends_no_lying_posture() {
         let mut abilities = Abilities::default();
@@ -777,7 +777,7 @@ mod tests {
             [eq_network_game::feign::titanium_request(7).unwrap()]
         );
         assert_ne!(world.posture.current(), Some(PostureState::Lying));
-        assert!(world.posture.feigned_standing());
+        assert!(world.posture.stand_owed());
         assert!(matches!(
             outcome.events[..],
             [ClientEvent::World(WorldEvent::AbilityUsed {

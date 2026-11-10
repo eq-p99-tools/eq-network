@@ -421,10 +421,10 @@ mod tests {
         entities.admit(&event(hidden), &mut world).unwrap();
         assert!(world.spawns.visible(8).is_none());
         // A feign pressed standing (6.454) does not outlive the zone.
-        world.posture.feign_standing();
+        world.posture.owe_stand();
         let outcome = testing::run(|out| entities.admitted(&mut world, out));
         outcome.result.unwrap();
-        assert!(!world.posture.feigned_standing());
+        assert!(!world.posture.stand_owed());
         assert!(matches!(
             &outcome.events[..],
             [

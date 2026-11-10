@@ -2,7 +2,7 @@
 //! (read R19 c), with fabricated values and no live traffic.
 use super::*;
 use crate::client::session::feature::testing;
-use eq_network_game::movement::{DiagonalRates, WalkCalibration};
+use eq_network_game::movement::{DiagonalRates, MovementMode, WalkCalibration};
 use std::time::Duration;
 
 const EQMAC: &dyn super::super::wire::Wire = &super::super::wire::EqMac;

@@ -73,7 +73,7 @@ impl Feature for Stances {
             Message::Event(WorldEvent::Death(death))
                 if world.own_spawn.map(u32::from) == Some(death.spawn_id) =>
             {
-                world.posture.forget_feign();
+                world.posture.forget_owed_stand();
                 Ok(())
             }
             _ => Ok(()),
@@ -116,10 +116,11 @@ fn stand_when_hit(damage: &Damage, world: &mut World, out: &mut Out<'_, '_>) -> 
 pub(super) struct OwnPosture {
     /// The last requested or server-reported stance.
     posture: Option<PostureState>,
-    /// A Feign Death the player pressed standing (6.454): the server holds
-    /// the feign, which only a posture report ends, while the player already
-    /// stands. A stand then still goes out, once.
-    feigned_standing: bool,
+    /// A Standing report the server still needs although the player already
+    /// stands, which goes out once with the next stand: a Feign Death the
+    /// player pressed standing (6.454), whose feign only a posture report
+    /// ends, or a camp, whose timer only a Standing report stops.
+    stand_owed: bool,
 }
 
 impl OwnPosture {
@@ -135,7 +136,7 @@ impl OwnPosture {
         }
         out.request(&Request::FeignDeathPosture)?;
         self.posture = Some(PostureState::Lying);
-        self.feigned_standing = false;
+        self.stand_owed = false;
         out.log.send(ClientEvent::World(WorldEvent::Posture {
             spawn_id,
             posture: PostureState::Lying,
@@ -150,23 +151,25 @@ impl OwnPosture {
     /// pressed standing as any posture report does.
     pub(super) fn observed(&mut self, posture: PostureState) {
         self.posture = Some(posture);
-        self.feigned_standing = false;
+        self.stand_owed = false;
     }
 
-    /// Notes a Feign Death the player pressed standing (6.454).
-    pub(super) fn feign_standing(&mut self) {
-        self.feigned_standing = true;
+    /// Notes that the next stand must reach the server even if the player
+    /// already stands: a Feign Death pressed standing (6.454) or a camp to
+    /// cancel.
+    pub(super) fn owe_stand(&mut self) {
+        self.stand_owed = true;
     }
 
-    /// Whether a feign pressed standing is still held.
+    /// Whether the next stand still goes out though the player stands.
     #[cfg(test)]
-    pub(super) const fn feigned_standing(&self) -> bool {
-        self.feigned_standing
+    pub(super) const fn stand_owed(&self) -> bool {
+        self.stand_owed
     }
 
-    /// Ends a feign pressed standing without a report, as death does.
-    pub(super) fn forget_feign(&mut self) {
-        self.feigned_standing = false;
+    /// Forgets an owed stand without a report, as death does.
+    pub(super) fn forget_owed_stand(&mut self) {
+        self.stand_owed = false;
     }
 
     /// Sits, stands or crouches the player: sends the stance, notes it and
@@ -182,10 +185,9 @@ impl OwnPosture {
         out: &mut Out<'_, '_>,
     ) -> Result<()> {
         // Titanium's posture routine changes nothing for the posture the
-        // player already has (read R19), but a stand still ends a feign the
-        // player pressed standing.
+        // player already has (read R19), but an owed stand still goes.
         let unchanged = self.posture == Some(state(posture))
-            && !(posture == Posture::Standing && self.feigned_standing);
+            && !(posture == Posture::Standing && self.stand_owed);
         if unchanged && out.wire.dialect().skips_unchanged_posture() {
             return Ok(());
         }
@@ -197,7 +199,7 @@ impl OwnPosture {
     fn sent(&mut self, spawn_id: u16, posture: Posture, log: &mut Events<'_>) -> Result<()> {
         let posture = state(posture);
         self.posture = Some(posture);
-        self.feigned_standing = false;
+        self.stand_owed = false;
         log.send(ClientEvent::World(WorldEvent::Posture {
             spawn_id,
             posture,
@@ -455,7 +457,7 @@ mod tests {
             "already standing: {:?}",
             outcome.sent
         );
-        world.posture.feign_standing();
+        world.posture.owe_stand();
         let outcome = testing::run(|out| Stances.handle(&stand, &mut world, out));
         outcome.result.unwrap();
         assert_eq!(
@@ -470,7 +472,7 @@ mod tests {
             outcome.sent
         );
         // A sit ends it too, and a stand after it is an ordinary stand.
-        world.posture.feign_standing();
+        world.posture.owe_stand();
         let outcome =
             testing::run(|out| Stances.handle(&ask(command::Posture::Sitting), &mut world, out));
         outcome.result.unwrap();
@@ -478,12 +480,12 @@ mod tests {
             outcome.sent,
             [command::titanium_posture(7, command::Posture::Sitting).unwrap()]
         );
-        assert!(!world.posture.feigned_standing());
+        assert!(!world.posture.stand_owed());
         // A report from the server and the player's death end it as well.
-        world.posture.feign_standing();
+        world.posture.owe_stand();
         world.posture.observed(PostureState::Standing);
-        assert!(!world.posture.feigned_standing());
-        world.posture.feign_standing();
+        assert!(!world.posture.stand_owed());
+        world.posture.owe_stand();
         let death = Message::Event(WorldEvent::Death(eq_network_game::zoning::Death {
             spawn_id: 7,
             killer_id: 42,
@@ -494,7 +496,7 @@ mod tests {
         testing::run(|out| Stances.observe(&death, &mut world, out))
             .result
             .unwrap();
-        assert!(!world.posture.feigned_standing());
+        assert!(!world.posture.stand_owed());
     }
 
     /// The Mac-era client's routine is unread, so every request but a second

@@ -37,7 +37,9 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   - On Titanium a posture request for the posture the player already has
     sends nothing, as the program's posture routine does (read R19); the
     Mac-era client still sends it (`GameDialect::skips_unchanged_posture()`,
-    unread, checklist 6.455).
+    unread, checklist 6.455). A stand the server still needs goes out once
+    whatever the posture: the one that ends a feign pressed standing, and
+    the one that stops a camp's timer.
   - Two departures in `MovementOptions`'s new `posture`
     (`movement::PostureOptions`), both off by default and on both
     generations: `feign_standing`, where the Feign Death press sends the
