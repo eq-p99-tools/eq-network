@@ -142,14 +142,14 @@ pub enum SpeedInputState {
     Ready(SpeedInputs),
     /// Inputs from every term the host can prove while `missing` is still
     /// unproven: each unproven term is taken from its last report where one
-    /// exists and left out where none does, and each term it can prove slower
+    /// exists and left out where none does, and each term it can prove now
     /// (a root or a snare it can evaluate, a weight it knows) is applied. The
-    /// host proves the terms; the session never lets a bound speed up a grant
-    /// in force (each field is taken no faster than the inputs in force), and
-    /// without a grant a bound starts one, a root in it withdrawing. Only
-    /// [`Self::Ready`] may speed the player up (recording checklist 6.451).
+    /// host proves the terms, and the session takes a bound as reported, with
+    /// or without a grant in force, a root in it withdrawing. A bound is
+    /// faster than the last one only where a proven slower term ended
+    /// (recording checklist 6.451).
     Bounded {
-        /// The last report's inputs with every proven slower term applied.
+        /// The inputs from every term the host can prove.
         inputs: SpeedInputs,
         /// What is not yet proven.
         missing: SpeedInputUnavailable,

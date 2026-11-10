@@ -245,28 +245,6 @@ fn granted(
     }
 }
 
-/// A bound's inputs taken no faster than those in force: the rate no higher,
-/// the weight no lower, the capacity no higher. Only an exact report may
-/// speed the player up.
-fn no_faster(bound: SpeedInputs, in_force: SpeedInputs) -> SpeedInputs {
-    SpeedInputs {
-        rate: bound.rate.min(in_force.rate),
-        weight: bound.weight.max(in_force.weight),
-        // A capacity of 0 means no encumbrance, so it is no limit.
-        capacity: match (bound.capacity, in_force.capacity) {
-            (0, other) | (other, 0) => other,
-            (bound, in_force) => bound.min(in_force),
-        },
-        eqmac_fatigue: match (bound.eqmac_fatigue, in_force.eqmac_fatigue) {
-            (Some(bound), Some(in_force)) => Some(eq_network_game::movement::EqMacFatigueInputs {
-                strength: bound.strength.min(in_force.strength),
-                stamina: bound.stamina.zip(in_force.stamina).map(|(a, b)| a.min(b)),
-            }),
-            (bound, in_force) => bound.or(in_force),
-        },
-    }
-}
-
 /// Takes the player's movement away until it is granted again, after a
 /// correction, a death or a transfer.
 pub(super) fn withdrawn(session_id: u64) -> WorldEvent {
@@ -556,11 +534,15 @@ impl Motion {
                 }
                 // The drop's bound is a weight the player is proven to carry
                 // at least, so it bounds the report. Without a bound the
-                // report is still a bound: the clamp keeps the weight in
-                // force, and a root or a lower rate in it still applies.
+                // report is still a bound, its weight no lower than in force,
+                // so a root or a lower rate in it still applies.
+                let in_force = self
+                    .inputs
+                    .filter(|_| held)
+                    .map_or(0, |inputs| inputs.weight);
                 state = SpeedInputState::Bounded {
                     inputs: SpeedInputs {
-                        weight: floor.unwrap_or(inputs.weight),
+                        weight: floor.unwrap_or(inputs.weight.max(in_force)),
                         ..inputs
                     },
                     missing: eq_network_game::movement::SpeedInputUnavailable::Inventory,
@@ -575,16 +557,11 @@ impl Motion {
                     out.log.diagnostic("Movement inputs proven again".into())?;
                 }
             }
-            // The host proves the terms; the session never lets a bound
-            // speed up a grant in force, so each field is taken no faster
-            // than the inputs in force. Without a grant, a bound starts one
-            // from what the host could prove (Adam's decision of 11-10;
-            // 6.451). A root in it still withdraws.
+            // The host proves the terms: a bound is taken as reported, with
+            // or without a grant in force (Adam's decision of 11-10; 6.451).
+            // It is faster than the last one only where a proven slower term
+            // ended. A root in it still withdraws.
             SpeedInputState::Bounded { inputs, missing } => {
-                let inputs = match self.inputs.filter(|_| held) {
-                    Some(in_force) => no_faster(inputs, in_force),
-                    None => inputs,
-                };
                 self.input_report_id = Some(report_id);
                 self.inputs = Some(inputs);
                 self.note_unproven(missing, out)?;
@@ -2085,10 +2062,10 @@ mod tests {
 
     /// After a root, a bound with a term still unproven starts the grant
     /// again: a root that fades while a song runs does not leave the player
-    /// frozen until the song ends. A bound never speeds up a grant in force:
-    /// each field is taken no faster than the inputs in force.
+    /// frozen until the song ends. The host proves the terms, so a bound is
+    /// taken as reported, slower or faster than the inputs in force.
     #[test]
-    fn a_bound_restarts_after_a_root_and_never_speeds_up_a_grant() {
+    fn a_bound_restarts_after_a_root_and_is_taken_as_reported() {
         use eq_network_game::movement::SpeedInputUnavailable;
         let bounded = |report_id, rate, weight, capacity| ClientCommand::SpeedInputs {
             session_id: 5,
@@ -2122,19 +2099,19 @@ mod tests {
         output.result.unwrap();
         assert!(!withdrew(&output.events));
         assert_eq!(world_speed(&world), Some(full));
-        // Lighter, faster and roomier bounds change nothing in force.
+        // A faster bound (a proven snare ended) is taken as reported.
         let output = testing::run_on(EQMAC, |out| {
             motion.handle(&bounded(4, 50, 0, 500), &mut world, out)
         });
         output.result.unwrap();
-        assert_eq!(world_speed(&world), Some(full));
+        assert!(world_speed(&world).unwrap() > full);
         assert_eq!(
             motion
                 .inputs
                 .map(|inputs| (inputs.rate, inputs.weight, inputs.capacity)),
-            Some((0, 50, 100))
+            Some((50, 0, 500))
         );
-        // A slower one applies; only an exact report speeds up again.
+        // A slower one applies too, and an exact report replaces it.
         testing::run_on(EQMAC, |out| {
             motion.handle(&bounded(5, -50, 50, 100), &mut world, out)
         })
@@ -2537,25 +2514,6 @@ mod tests {
             }]
         ));
         assert!(!world.inventory.ground_drop_pending());
-    }
-
-    /// A capacity of 0 means no encumbrance: as a bound it is no limit, so
-    /// it never lifts the encumbrance in force, and a grant at 0 takes a
-    /// bound's proven limit.
-    #[test]
-    fn a_bound_takes_a_zero_capacity_as_no_limit() {
-        let inputs = |capacity| SpeedInputs {
-            eqmac_fatigue: None,
-            rate: 0,
-            weight: 50,
-            capacity,
-        };
-        let capacity = |bound, in_force| no_faster(inputs(bound), inputs(in_force)).capacity;
-        assert_eq!(capacity(0, 100), 100);
-        assert_eq!(capacity(100, 0), 100);
-        assert_eq!(capacity(0, 0), 0);
-        assert_eq!(capacity(80, 100), 80);
-        assert_eq!(capacity(120, 100), 100);
     }
 
     /// While a ground drop is pending and no weight bound can be worked out,

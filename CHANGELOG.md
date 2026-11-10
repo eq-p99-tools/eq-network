@@ -25,14 +25,14 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   prove, each unproven term taken from the last report where one exists and
   left out where none does, with every term it can prove slower applied (a
   root or a snare it can evaluate, a weight it knows). The host proves the
-  terms; the session never lets a bound speed up a grant in force (the rate
-  no higher, the weight no lower, the capacity no higher than in force, a
-  capacity of 0 meaning no encumbrance and so no limit), and without a grant
-  a bound starts one, so a root that fades while a song runs, or a zone-in
-  with a term unproven from the start, moves at once. Only `Unavailable`,
-  with nothing provable, still waits. A report under a pending ground drop's
-  weight bound is taken at the bound; with a grant in force and no bound to
-  check, it is taken as a bound, so a root in it still applies. The first
+  terms, and the session takes a bound as reported, with or without a grant
+  in force: a bound is faster than the last one only where a proven slower
+  term ended, and without a grant it starts one, so a root that fades while
+  a song runs, or a zone-in with a term unproven from the start, moves at
+  once. Only `Unavailable`, with nothing provable, still waits. A report
+  under a pending ground drop's weight bound is taken at the bound; with a
+  grant in force and no bound to check, it is taken as a bound with the
+  weight no lower than in force, so a root in it still applies. The first
   exact report replaces kept or bounded inputs in place, noted in the
   diagnostics. Root, stun, freeze, death and zone transfer still stop
   movement as before. The same rules apply on every server type; only the
