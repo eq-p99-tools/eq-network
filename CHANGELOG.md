@@ -7,6 +7,19 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Breaking:** the player stands at zone entry, as the Titanium program
+  does (program reads R24 and R24b). `SpawnState::posture` and
+  `PlayerState::posture` carry the record byte the program reads as the
+  spawn's posture (+0x57); a host constructing either adds the field. The
+  new `GameDialect::entry_stand()` (`feign::EntryStand`) says whether the
+  generation stands the player as the zone is set up, and whether that
+  stand sends: on Titanium the session reports `Standing` for the player at
+  admission and sends one standing report only when the posture before it
+  (a report staged before admission, else the own record's) was not
+  standing, so the first stand after a zone-in no longer sends one the
+  program skips. The send rests on two inferred links in the read
+  (checklist 6.461). The Mac-era client is unread and keeps an unknown
+  posture. Other spawns' record postures are decoded but not yet used.
 - **Breaking:** Feign Death by a spell lies the player down, as the Titanium
   program does on the landing (program read R21): the new host command
   `GameCommand::FeignLanded` sends one lying posture report, or none when
