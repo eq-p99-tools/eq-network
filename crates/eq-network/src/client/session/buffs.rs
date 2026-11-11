@@ -100,7 +100,10 @@ impl Buffs {
                     }
                 }
                 // A Titanium fade removes the spell from every slot
-                // of its type byte, whatever slot it names.
+                // of its type byte, whatever slot it names. A type-4
+                // record (target types 13 and 20 on oneself) outlives a
+                // type-2 fade, as in the program: a known parity item
+                // (recording checklist 6.459).
                 (Applies::FadeBySpell, _) => {
                     let removed: Vec<u32> = slots
                         .iter()

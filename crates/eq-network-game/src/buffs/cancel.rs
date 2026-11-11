@@ -16,6 +16,8 @@ pub enum Placement {
     /// The slot the Titanium program gives a landing it was not told the
     /// slot of ([`super::placement`]), with the record the program would
     /// hold there, as far as it is read (R20 (d)); its unread fields are 0.
+    /// The record and the slot are inferred where no server has acted on
+    /// them yet (recording checklist 6.457 local, 6.458 on a public server).
     Modelled(Buff),
 }
 
@@ -182,6 +184,10 @@ pub fn titanium_packet(own_id: u16, slot: u32, buff: &Buff) -> Result<EncodedCom
 /// The first record names the old spell in the cleared buff fields. Its
 /// unwritten trailing word is initialized to zero here. The second names an
 /// empty slot with its explicit clear flag.
+///
+/// With a modelled slot ([`Placement::Modelled`]) the pair names the slot
+/// the program would hold; whether that server takes it is unchecked until
+/// the attended click-off (recording checklist 6.458), so it is inferred.
 ///
 /// # Errors
 /// Refuses a missing own-player identity, a non-player slot or a sentinel spell.

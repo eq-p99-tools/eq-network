@@ -16,18 +16,26 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     - otherwise the lowest empty slot of its band is taken;
     - the bands come from spells-file fields 83, 154 and 168;
     - the normal band ends at 15 while the effect-327 sources are unread.
-    A held effect-148 spell, or a full band, leaves the landing without a
-    slot, with the reason.
+    A held effect-148 spell leaves a new landing without a slot (a held
+    spell's refresh keeps its slot), as does a full band, with the reason.
+    Steps 2 (partly read), 4 and 6 and the top past 15 are unported
+    (recording checklist 6.457). `GameDialect::buff_placement` gives the
+    finder: Titanium's, and none for the Mac-era generation.
   - `BuffUpdate` carries how the program applies an update (`Applies`)
     and the record's type byte. On Titanium:
     - action 3 writes its slot;
     - action 1 fades by spell;
     - any other action updates by spell in place and adds nothing.
+    A fade matches only the same nonzero type byte, so a type-4 record
+    outlives a type-2 fade, as in the program (a known parity item,
+    recording checklist 6.459).
     The Mac-era parser keeps today's meaning (`Applies::Received`).
     `BuffUpdate::replaces_slot` is now a method.
   - `cancel::Request` carries its `Placement`. A modelled slot sends the
     record the program would hold there (R20 (d); fields not read are 0),
-    and a fade of its spell in any slot counts as the fade observed.
+    and a fade of its spell in any slot counts as the fade observed. The
+    modelled slot and record, and the public-server pair with a modelled
+    slot, are inferred until checked live (recording checklist 6.458).
   - The session's received slots follow the same rules.
   - `SpellEffect::took_hold` is the one test that a spell took hold: an
     action of kind 231 whose flag carries `buffs::TOOK_HOLD` (0x04), as the

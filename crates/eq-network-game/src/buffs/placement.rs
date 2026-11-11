@@ -17,12 +17,21 @@
 //! landing that comes while a buff it could replace is still held is the
 //! caller's to leave unslotted. Step 6, which evicts a song when the band is
 //! full, is not ported either: such a landing has no slot here. Step 2's
-//! blocker (effect 148) is only partly read, so a landing while a held
-//! spell carries it has no slot here.
+//! blocker (effect 148) is only partly read, so a new landing while a held
+//! spell carries it has no slot here; a held spell's refresh keeps its slot
+//! whether or not step 2 refuses it, as a refusal writes nothing (R20 (g)).
 //!
 //! The normal band's top is 15 plus the effect-327 total (R20 (c)); which
 //! sources that total sums is unread, so a landing with slots 0-14 full has
 //! no slot.
+//!
+//! Unported or unread here, each leaving a landing unslotted rather than
+//! guessed: steps 2 (partly read), 4 and 6, and the top past 15 (recording
+//! checklist 6.457; the live check on a public server is 6.458).
+//!
+//! The finder is Titanium's; reach it through
+//! [`GameDialect::buff_placement`](crate::GameDialect::buff_placement),
+//! which gives none for the Mac-era generation, whose program is unread.
 use std::{collections::BTreeMap, ops::Range};
 
 /// How many slots the program's table holds for a player spawn (0x40d933).
@@ -65,10 +74,14 @@ pub enum Unplaced {
     Blocked,
 }
 
+/// A generation's slot finder for a buff landing on the player, as
+/// [`titanium_player`].
+pub type Finder = fn(&BTreeMap<u32, u32>, u32, Option<Band>, bool) -> Result<u32, Unplaced>;
+
 /// The slot the program gives `spell` landing on the player, given every
 /// slot the player holds and the spell it holds there. `band` is `None`
 /// where the spell data lacks the band's fields; `blocker` says whether a
-/// held spell carries effect 148.
+/// held spell carries effect 148, which refuses only a spell not held.
 ///
 /// # Errors
 /// Reports why the slot cannot be named.
@@ -78,13 +91,14 @@ pub fn titanium_player(
     band: Option<Band>,
     blocker: bool,
 ) -> Result<u32, Unplaced> {
-    if blocker {
-        return Err(Unplaced::Blocked);
-    }
-    // Step 3: the spell's first slot, wherever it is. Its refusals keep the
-    // old record where it is (R20 (g)), so the slot is the same either way.
+    // Step 3: the spell's first slot, wherever it is. Its refusals, and
+    // step 2's, keep the old record where it is (R20 (g)), so the slot is
+    // the same either way.
     if let Some((slot, _)) = held.iter().find(|(_, held)| **held == spell) {
         return Ok(*slot);
+    }
+    if blocker {
+        return Err(Unplaced::Blocked);
     }
     let band = band.ok_or(Unplaced::SpellFieldsUnknown)?;
     let empty = |mut slots: Range<u32>| slots.find(|slot| !held.contains_key(slot));
@@ -144,6 +158,12 @@ mod tests {
         assert_eq!(titanium_player(&slots, 278, NORMAL, false), Ok(3));
         // Even with no spell data: the step needs none.
         assert_eq!(titanium_player(&slots, 278, None, false), Ok(3));
+        // Or under a blocker: a refusal writes nothing, so the record stays.
+        assert_eq!(titanium_player(&slots, 278, NORMAL, true), Ok(3));
+        assert_eq!(
+            titanium_player(&slots, 279, NORMAL, true),
+            Err(Unplaced::Blocked)
+        );
     }
 
     #[test]
