@@ -155,3 +155,52 @@ fn the_mac_client_still_stands_a_lying_player_to_move() {
     assert_eq!(output.sent.len(), 1, "the stand");
     assert_eq!(world.posture.current(), Some(PostureState::Standing));
 }
+
+/// A feign spell landing on a walking player lies them down and stops the
+/// movement in hand, as the press does (read R21); the next step is refused
+/// and the grant is kept.
+#[test]
+fn a_feign_spell_landing_stops_a_walking_player_and_keeps_the_grant() {
+    use super::super::{feature::Feature, posture::Stances};
+    let start = Instant::now();
+    let mut world = setup(start);
+    world.posture.observed(PostureState::Standing);
+    let now = start + Duration::from_millis(500);
+    let output = testing::run(|out| {
+        Motion::step_at(
+            &request(MovementMode::Forward, now, ahead(0.5)),
+            now,
+            &mut world,
+            out,
+        )
+    });
+    output.result.unwrap();
+    assert!(!refused(&output.events));
+    let walked = world.body.position();
+    let landed = ClientCommand::FeignLanded {
+        session_id: 12,
+        spawn_id: 7,
+        created: now,
+    };
+    let output = testing::run(|out| Stances.handle(&landed, &mut world, out));
+    output.result.unwrap();
+    assert_eq!(
+        output.sent,
+        [eq_network_game::feign::titanium_posture(7).unwrap()]
+    );
+    assert_eq!(world.posture.current(), Some(PostureState::Lying));
+    let later = now + Duration::from_millis(500);
+    let output = testing::run(|out| {
+        Motion::step_at(
+            &request(MovementMode::Forward, later, ahead(1.0)),
+            later,
+            &mut world,
+            out,
+        )
+    });
+    output.result.unwrap();
+    assert!(refused(&output.events));
+    assert!(output.sent.is_empty() && output.unreliable.is_empty());
+    assert_eq!(world.body.position(), walked);
+    assert!(world.body.motion_mut().unwrap().calibration().is_some());
+}
