@@ -1,19 +1,33 @@
 //! Explicit cancellation of an ordinary beneficial buff. Slot identity is a
-//! local safety check: Titanium's server request identifies the spell.
+//! local safety check: Titanium's server request identifies the spell. The
+//! slot is a received one, or the one the program would have given a
+//! landing the server named no slot for.
 use super::Buff;
 use crate::command::EncodedCommand;
 use anyhow::{ensure, Result};
 use serde::Serialize;
 use std::{collections::BTreeMap, time::Instant};
 
-/// A selection made from a current, explicit own-player buff slot.
+/// Where the selected buff's slot comes from.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Placement {
+    /// A slot the server gave: the admission's buff table or a slot write.
+    Received,
+    /// The slot the Titanium program gives a landing it was not told the
+    /// slot of ([`super::placement`]), with the record the program would
+    /// hold there, as far as it is read (R20 (d)); its unread fields are 0.
+    Modelled(Buff),
+}
+
+/// A selection made from a current own-player buff slot.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Request {
     /// Zone admission that owns the selection.
     pub session_id: u64,
     /// Revision of received buff slots, independent of countdowns and icons.
     pub revision: u64,
-    /// Actual server slot, never a displayed ordinal for an unslotted effect.
+    /// The slot, received or modelled, never a displayed ordinal for an
+    /// effect without one.
     pub slot: u32,
     /// The spell expected in that slot.
     pub spell_id: u32,
@@ -25,6 +39,8 @@ pub struct Request {
     pub cancellable: Option<bool>,
     /// When the player selected this buff.
     pub created: Instant,
+    /// Where the slot comes from.
+    pub placement: Placement,
 }
 
 /// What happened to a request. Receipt of a fade does not establish its cause.
@@ -95,6 +111,19 @@ impl Request {
             "Invalid buff spell"
         );
         let slots = slots.ok_or_else(|| anyhow::anyhow!("Buff slots are unavailable"))?;
+        if let Placement::Modelled(buff) = &self.placement {
+            ensure!(
+                buff.spell_id == self.spell_id
+                    && self.slot < super::placement::TITANIUM_PLAYER_SLOTS,
+                "Invalid modelled buff slot"
+            );
+            ensure!(
+                !slots.contains_key(&self.slot)
+                    && !slots.values().any(|held| held.spell_id == self.spell_id),
+                "The selected buff slot changed or is unavailable"
+            );
+            return Ok(());
+        }
         ensure!(
             slots
                 .get(&self.slot)
@@ -110,6 +139,16 @@ impl Request {
             "The spell occupies more than one buff slot"
         );
         Ok(())
+    }
+
+    /// The record the cancellation names: the received one in its slot, or
+    /// the modelled one.
+    #[must_use]
+    pub fn record<'a>(&'a self, slots: Option<&'a BTreeMap<u32, Buff>>) -> Option<&'a Buff> {
+        match &self.placement {
+            Placement::Received => slots?.get(&self.slot),
+            Placement::Modelled(buff) => Some(buff),
+        }
     }
 }
 
@@ -190,6 +229,7 @@ mod tests {
             beneficial: Some(true),
             cancellable: Some(true),
             created: Instant::now(),
+            placement: Placement::Received,
         }
     }
 
@@ -216,6 +256,33 @@ mod tests {
         slots.insert(4, buff(42));
         assert!(request.check(7, Some(&slots)).is_err());
         slots.clear();
+        assert!(request.check(7, Some(&slots)).is_err());
+    }
+
+    #[test]
+    fn a_modelled_slot_is_cancellable_only_while_nothing_received_contradicts_it() {
+        let mut request = request();
+        request.placement = Placement::Modelled(buff(42));
+        let mut slots = BTreeMap::from([(1, buff(43))]);
+        assert!(request.check(7, Some(&slots)).is_ok());
+        assert_eq!(request.record(Some(&slots)), Some(&buff(42)));
+        // A received record in its slot, or of its spell elsewhere.
+        slots.insert(3, buff(44));
+        assert!(request.check(7, Some(&slots)).is_err());
+        slots.remove(&3);
+        slots.insert(5, buff(42));
+        assert!(request.check(7, Some(&slots)).is_err());
+        slots.remove(&5);
+        // A record of another spell, a slot past the table, no snapshot.
+        request.placement = Placement::Modelled(buff(43));
+        assert!(request.check(7, Some(&slots)).is_err());
+        request.placement = Placement::Modelled(buff(42));
+        request.slot = 38;
+        assert!(request.check(7, Some(&slots)).is_err());
+        request.slot = 3;
+        assert!(request.check(7, None).is_err());
+        // The same refusals as a received slot's.
+        request.beneficial = None;
         assert!(request.check(7, Some(&slots)).is_err());
     }
 

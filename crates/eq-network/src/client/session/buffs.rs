@@ -60,7 +60,9 @@ impl Buffs {
             let [fade, clear] = cancel::project1999_packets(own, request.slot, request.spell_id)?;
             Ok((fade, Some(clear)))
         } else {
-            let buff = &self.slots.as_ref().expect("checked slots")[&request.slot];
+            let buff = request
+                .record(self.slots.as_ref())
+                .ok_or_else(|| anyhow::anyhow!("The selected buff slot is unavailable"))?;
             Ok((cancel::titanium_packet(own, request.slot, buff)?, None))
         }
     }
@@ -175,6 +177,7 @@ impl Feature for Buffs {
         // Keep reducing received slots even during a transfer: a refused
         // transfer resumes this admission without another profile snapshot.
         let mut faded = None;
+        let mut modelled_fade = None;
         match event {
             WorldEvent::BuffSnapshot(buffs) => {
                 self.snapshot(buffs);
@@ -194,6 +197,11 @@ impl Feature for Buffs {
                         // Only an ordinary named fade supplies fade evidence.
                         slots.remove(&update.slot);
                         faded = Some((update.slot, update.spell_id));
+                    } else if update.buff.is_none() {
+                        // A fade of a spell no received slot holds: the
+                        // program fades by spell (R20 (e)), so it is fade
+                        // evidence for a modelled slot.
+                        modelled_fade = Some(update.spell_id);
                     }
                 }
             }
@@ -209,8 +217,14 @@ impl Feature for Buffs {
             _ => (),
         }
         if let Some((request, _)) = &self.pending {
-            let progress = if faded == Some((request.slot, request.spell_id)) {
+            let modelled = matches!(request.placement, cancel::Placement::Modelled(_));
+            let progress = if faded == Some((request.slot, request.spell_id))
+                || (modelled && modelled_fade == Some(request.spell_id))
+            {
                 Some(Progress::FadeObserved)
+            } else if modelled {
+                // A modelled slot has no received record to change.
+                None
             } else if self
                 .slots
                 .as_ref()
@@ -333,6 +347,7 @@ mod tests {
             beneficial: Some(true),
             cancellable: Some(true),
             created: Instant::now(),
+            placement: eq_network_game::buffs::cancel::Placement::Received,
         });
         (buffs, world, command)
     }
@@ -385,6 +400,51 @@ mod tests {
             progress(&outcome.events),
             [Progress::Submitted, Progress::FadeObserved]
         );
+    }
+
+    #[test]
+    fn a_modelled_slot_sends_its_record_and_a_fade_of_its_spell_anywhere_is_observed() {
+        let (mut buffs, mut world, _) = fixture();
+        let mut record = buff(278);
+        record.caster_level = 0;
+        record.caster_id = 0;
+        let command = ClientCommand::CancelBuff(Request {
+            session_id: 5,
+            revision: 1,
+            slot: 0,
+            spell_id: 278,
+            beneficial: Some(true),
+            cancellable: Some(true),
+            created: Instant::now(),
+            placement: cancel::Placement::Modelled(record.clone()),
+        });
+        let outcome = testing::run(|out| {
+            buffs.handle(&command, &mut world, out)?;
+            // The server's own slot for it was 3: it fades by spell.
+            buffs.observe(&update(7, 278, None), &mut world, out)
+        });
+        outcome.result.unwrap();
+        assert_eq!(
+            outcome.sent,
+            [cancel::titanium_packet(7, 0, &record).unwrap()]
+        );
+        assert_eq!(
+            progress(&outcome.events),
+            [Progress::Submitted, Progress::FadeObserved]
+        );
+        // A modelled slot a received record holds is refused.
+        let ClientCommand::CancelBuff(mut request) = command else {
+            unreachable!()
+        };
+        request.slot = 3;
+        let outcome =
+            testing::run(|out| buffs.handle(&ClientCommand::CancelBuff(request), &mut world, out));
+        outcome.result.unwrap();
+        assert!(outcome.sent.is_empty());
+        assert!(matches!(
+            progress(&outcome.events).as_slice(),
+            [Progress::Refused(_)]
+        ));
     }
 
     #[test]

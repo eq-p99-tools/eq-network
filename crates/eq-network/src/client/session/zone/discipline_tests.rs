@@ -115,6 +115,7 @@ fn staged_discipline_presence_or_fade_keeps_cancellation_revision_aligned() {
             beneficial: Some(true),
             cancellable: Some(true),
             created: Instant::now(),
+            placement: eq_network_game::buffs::cancel::Placement::Received,
         });
         let cancelled = testing::run(|out| features.handle(&command, &mut world, out));
         assert!(cancelled.result.unwrap());
