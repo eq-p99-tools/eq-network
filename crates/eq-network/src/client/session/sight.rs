@@ -54,7 +54,7 @@ impl Sight {
             }
             WorldEvent::SpellEffect(effect)
                 if Some(u32::from(effect.target_id)) == own
-                    && effect.effect_flag == 4
+                    && effect.took_hold()
                     && !matches!(effect.spell_id, 0 | u16::MAX) =>
             {
                 // A landing refresh has no slot. Keep one observation per

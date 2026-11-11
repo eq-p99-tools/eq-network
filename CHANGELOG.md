@@ -29,6 +29,10 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     record the program would hold there (R20 (d); fields not read are 0),
     and a fade of its spell in any slot counts as the fade observed.
   - The session's received slots follow the same rules.
+  - `SpellEffect::took_hold` is the one test that a spell took hold: an
+    action of kind 231 whose flag carries `buffs::TOOK_HOLD` (0x04), as the
+    Titanium program tests it (0x47f614). A flag with other bits set
+    besides 4 now counts; the session's buff slots use it.
 
 - **Breaking:** Feign Death and the lying posture as the Titanium program
   handles them (program reads R19, R19b and R19cd), through the new

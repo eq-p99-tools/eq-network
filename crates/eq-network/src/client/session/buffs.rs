@@ -259,7 +259,7 @@ impl Feature for Buffs {
                 (faded, modelled_fade) = self.received_update(update);
             }
             WorldEvent::SpellEffect(effect)
-                if world.is_player(effect.target_id) && effect.effect_flag == 4 =>
+                if world.is_player(effect.target_id) && effect.took_hold() =>
             {
                 // A landing carries no slot. It invalidates the old assignment,
                 // even when the host cannot yet classify the spell's duration.
