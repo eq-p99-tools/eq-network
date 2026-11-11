@@ -242,6 +242,18 @@ impl GameDialect {
     pub const fn skips_unchanged_posture(self) -> bool {
         matches!(self, Self::Titanium)
     }
+
+    /// Whether a spell with the feign effect (74) that took hold on the
+    /// player ([`buffs::SpellEffect::took_hold`]) lies them down.
+    /// Titanium's landing sends effect 74 to 0x40db88, which is the
+    /// posture routine with 115 for the player's own spawn, with no
+    /// feign request, no auto attack change and no success test (program
+    /// read R21). The Mac-era client's is unread, so it keeps this library's
+    /// earlier rule of leaving the posture alone (recording checklist 6.455).
+    #[must_use]
+    pub const fn spell_feign_lies(self) -> bool {
+        matches!(self, Self::Titanium)
+    }
 }
 
 #[cfg(test)]
@@ -272,6 +284,12 @@ mod tests {
         let eqmac = GameDialect::EqMac.sit_toggle();
         assert!(!eqmac.stands_lying_and_looting);
         assert_eq!(eqmac.mesmerize_refusal, None);
+    }
+
+    #[test]
+    fn only_titaniums_spell_feign_is_read() {
+        assert!(GameDialect::Titanium.spell_feign_lies());
+        assert!(!GameDialect::EqMac.spell_feign_lies());
     }
 
     #[test]

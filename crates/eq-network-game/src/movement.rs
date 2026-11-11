@@ -462,9 +462,11 @@ pub struct PostureOptions {
     /// player stays standing, to the session and to others, and moves as
     /// any standing player; a server that clears a feign only on a posture
     /// report keeps it (`EQEmu`). The next stand the player asks for still
-    /// goes out, once, to end it. Only the press changes: a feign by a spell
-    /// and a lying posture the server reports are as before. Recording
-    /// checklist 6.454.
+    /// goes out, once, to end it. A feign spell's landing the generation's
+    /// program lies the player down for
+    /// ([`crate::GameDialect::spell_feign_lies`]) likewise sends nothing and
+    /// owes the stand. A lying posture the server reports is as before.
+    /// Recording checklist 6.454.
     pub feign_standing: bool,
     /// A hit leaves a sitting or looting player as they are, where the
     /// generation's program stands them

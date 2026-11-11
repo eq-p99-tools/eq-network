@@ -215,6 +215,28 @@ pub enum GameCommand {
         /// Reject delayed actions instead of replaying them after a stall.
         created: std::time::Instant,
     },
+    /// The host's statement that a spell with the feign effect (74) landed
+    /// on the player, which the generation's program lies them down for.
+    /// Only the host holds the spell data, so only it can tell. Send it only
+    /// for a [`crate::buffs::SpellEffect`] on the player's own spawn that
+    /// [took hold](crate::buffs::SpellEffect::took_hold) and whose spell
+    /// carries effect 74, where [`crate::GameDialect::spell_feign_lies`]
+    /// holds.
+    /// The session does the posture alone, as Titanium's landing does (read
+    /// R21: 0x414913's effect loop calls 0x40db88, the posture routine with
+    /// 115): one lying report, or none when the player already lies, and
+    /// the movement in hand stopped; no feign request and no auto attack
+    /// change. With [`crate::movement::PostureOptions::feign_standing`] on,
+    /// it sends nothing and owes the next stand. Another spawn's id is
+    /// refused.
+    FeignLanded {
+        /// Current zone admission.
+        session_id: u64,
+        /// Own spawn identifier from this admission.
+        spawn_id: u16,
+        /// Reject delayed actions instead of replaying them after a stall.
+        created: std::time::Instant,
+    },
     /// Move an inventory item using the admitted session state.
     MoveInventory(crate::inventory::InventoryMove),
     /// Explicitly destroy the confirmed whole cursor item or stack.
@@ -964,6 +986,7 @@ impl GameCommand {
             Self::CastSpell { .. } => "CastSpell",
             Self::StopSong { .. } => "StopSong",
             Self::SetPosture { .. } => "SetPosture",
+            Self::FeignLanded { .. } => "FeignLanded",
             Self::MoveInventory(..) => "MoveInventory",
             Self::DestroyItem(..) => "DestroyItem",
             Self::DropItem(..) => "DropItem",
@@ -1085,6 +1108,7 @@ impl GameCommand {
             | Self::MemorizeSpell { session_id, .. }
             | Self::CastSpell { session_id, .. }
             | Self::SetPosture { session_id, .. }
+            | Self::FeignLanded { session_id, .. }
             | Self::InspectItem { session_id, .. }
             | Self::Consider { session_id, .. }
             | Self::Camp { session_id, .. }
@@ -1204,7 +1228,7 @@ impl GameCommand {
             Self::ClickDoor { .. } => Capability::Doors,
             Self::PickUp { .. } => Capability::GroundItems,
             Self::CrossZoneLine { .. } => Capability::Zoning,
-            Self::SetPosture { .. } => Capability::Posture,
+            Self::SetPosture { .. } | Self::FeignLanded { .. } => Capability::Posture,
             Self::Move(_)
             | Self::ConfigureMotion { .. }
             | Self::SpeedInputs { .. }
@@ -1386,6 +1410,7 @@ impl GameCommand {
             | Self::CastSpell { created, .. }
             | Self::StopSong { created, .. }
             | Self::SetPosture { created, .. }
+            | Self::FeignLanded { created, .. }
             | Self::Consider { created, .. }
             | Self::DepopLocalNpc { created, .. }
             | Self::Camp { created, .. }
@@ -1592,6 +1617,7 @@ pub fn encode(
         | GameCommand::LiquidDamage { .. }
         | GameCommand::ConfigureMotion { .. }
         | GameCommand::SpeedInputs { .. }
+        | GameCommand::FeignLanded { .. }
         | GameCommand::ClimbReach { .. }
         | GameCommand::CrossZoneLine { .. }
         | GameCommand::Consume { .. }
