@@ -158,7 +158,7 @@ impl Active {
         }
         if let Some(buff) = &update.buff {
             *self = Self::Titanium(buff.spell_id);
-        } else if update.replaces_slot
+        } else if update.replaces_slot()
             || matches!(*self, Self::Titanium(spell) if spell == update.spell_id)
         {
             *self = Self::Inactive;

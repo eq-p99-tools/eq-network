@@ -24,7 +24,8 @@ fn staged_discipline_input(faded: bool) -> Vec<Message> {
     };
     let slot = |buff| {
         Message::Event(WorldEvent::Buff(BuffUpdate {
-            replaces_slot: false,
+            applies: eq_network_game::buffs::Applies::Received,
+            record_type: 0,
             entity_id: 7,
             slot: TITANIUM_BUFF_SLOT,
             spell_id: 4499,
@@ -114,6 +115,7 @@ fn staged_discipline_presence_or_fade_keeps_cancellation_revision_aligned() {
             beneficial: Some(true),
             cancellable: Some(true),
             created: Instant::now(),
+            placement: eq_network_game::buffs::cancel::Placement::Received,
         });
         let cancelled = testing::run(|out| features.handle(&command, &mut world, out));
         assert!(cancelled.result.unwrap());

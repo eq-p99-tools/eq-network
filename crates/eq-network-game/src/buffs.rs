@@ -20,6 +20,7 @@ use anyhow::{ensure, Result};
 use serde::Serialize;
 
 pub mod cancel;
+pub mod placement;
 
 /// Scales an evaluated movement-related buff magnitude using its received
 /// instrument modifier. Both dialects use 10 as neutral. This projection
@@ -274,6 +275,29 @@ pub struct Buff {
     pub caster_id: u32,
 }
 
+/// How the receiving program applies a buff update to its buff list.
+/// Titanium's is read in R20 (e): the dispatch 0x45f088 goes by the action
+/// word at +0x1c.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+pub enum Applies {
+    /// The Mac-era reading, unchanged: a record goes into its slot; a fade
+    /// removes its slot when that holds the spell, or every slot holding
+    /// the spell when it names no slot.
+    Received,
+    /// Titanium action 3: the record, empty or not, goes into the named
+    /// slot as it stands.
+    BySlot,
+    /// Titanium action 1: every slot holding the spell, with the record's
+    /// type byte, is removed. The slot is not read, so a fade naming spell
+    /// -1 removes nothing.
+    FadeBySpell,
+    /// Any other Titanium action, such as a duration's correction (action
+    /// 0): the record is copied over every slot holding the spell with the
+    /// record's type byte. The slot is not read, and where no slot holds
+    /// the spell nothing changes.
+    BySpell,
+}
+
 /// One explicit buff-slot notification; casting success is not a buff update.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct BuffUpdate {
@@ -283,10 +307,21 @@ pub struct BuffUpdate {
     pub entity_id: u32,
     /// Server slot number, preserved without allocating by its value.
     pub slot: u32,
-    /// The Titanium receiver replaces the exact slot, including an empty record.
-    pub replaces_slot: bool,
+    /// How the receiving program applies it.
+    pub applies: Applies,
+    /// The record's type byte (byte 0), which a by-spell update must match.
+    pub record_type: u8,
     /// Present for a replacement, absent for an explicit fade or empty record.
     pub buff: Option<Buff>,
+}
+
+impl BuffUpdate {
+    /// Whether the update replaces the exact slot, including with an empty
+    /// record (Titanium action 3).
+    #[must_use]
+    pub fn replaces_slot(&self) -> bool {
+        self.applies == Applies::BySlot
+    }
 }
 
 /// Reads all 25 Titanium admission slots, retaining holes and their indexes.
@@ -303,26 +338,25 @@ pub fn titanium_profile(profile: &[u8]) -> Result<Vec<Option<Buff>>> {
         .collect())
 }
 
-/// Decodes a Titanium server buff notification or exact discipline slot replacement.
+/// Decodes a Titanium server buff notification: its action word says how
+/// the program applies it ([`Applies`], R20 (e)).
 ///
 /// # Errors
-/// Rejects unexpected lengths and unknown fade flags rather than guessing a change.
+/// Rejects unexpected lengths.
 pub fn titanium_update(body: &[u8]) -> Result<BuffUpdate> {
     ensure!(body.len() == 32, "invalid Titanium buff update length");
     let mode = word(body, 28);
     let slot = word(body, 24);
-    // Titanium eqgame.exe 0x45f095 copies the whole record to the named
-    // slot in mode 3. Accept that form for the dedicated discipline slot.
-    let replaces_slot = mode == 3 && slot == crate::disciplines::TITANIUM_BUFF_SLOT;
-    ensure!(
-        mode <= 1 || replaces_slot,
-        "unknown Titanium buff update mode"
-    );
     Ok(BuffUpdate {
         spell_id: word(body, 8),
         entity_id: word(body, 0),
         slot,
-        replaces_slot,
+        applies: match mode {
+            3 => Applies::BySlot,
+            1 => Applies::FadeBySpell,
+            _ => Applies::BySpell,
+        },
+        record_type: body[4],
         buff: if mode == 1 {
             None
         } else {
@@ -382,7 +416,8 @@ pub fn eqmac_update(body: &[u8]) -> Result<BuffUpdate> {
     let short = |offset| u16::from_le_bytes([body[offset], body[offset + 1]]);
     let fade = word(body, 16) == 1;
     Ok(BuffUpdate {
-        replaces_slot: false,
+        applies: Applies::Received,
+        record_type: body[2],
         spell_id: u32::from(short(6)),
         entity_id: u32::from(short(0)),
         slot: if fade {
@@ -539,10 +574,20 @@ mod tests {
         let update = titanium_update(&body).unwrap();
         assert_eq!((update.entity_id, update.slot), (7, 3));
         assert_eq!(update.buff, buffs[3]);
-        body[28] = 1;
-        assert!(titanium_update(&body).unwrap().buff.is_none());
-        body[28] = 2;
-        assert!(titanium_update(&body).is_err());
+        assert_eq!((update.applies, update.record_type), (Applies::BySpell, 2));
+        // The action word says how the program applies it (R20 (e)).
+        for (action, applies) in [
+            (1, Applies::FadeBySpell),
+            (2, Applies::BySpell),
+            (3, Applies::BySlot),
+            (7, Applies::BySpell),
+        ] {
+            body[28] = action;
+            let update = titanium_update(&body).unwrap();
+            assert_eq!(update.applies, applies);
+            assert_eq!(update.replaces_slot(), applies == Applies::BySlot);
+            assert_eq!(update.buff.is_none(), action == 1);
+        }
         assert!(titanium_update(&body[..31]).is_err());
     }
 
@@ -688,7 +733,8 @@ mod tests {
         assert_eq!(
             eqmac_update(&body).unwrap(),
             BuffUpdate {
-                replaces_slot: false,
+                applies: Applies::Received,
+                record_type: 2,
                 spell_id: 42,
                 entity_id: 0,
                 slot: UNKNOWN_SLOT,

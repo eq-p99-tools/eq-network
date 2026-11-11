@@ -7,6 +7,41 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Breaking:** buffs that land on the player get the slot the Titanium
+  program gives them (program reads R3 and R20). Click-off now works for
+  them, and the buff order matches the program's.
+  - `buffs::placement::titanium_player` ports the slot finder (0x414071)
+    as far as it is read:
+    - a held spell keeps its first slot;
+    - otherwise the lowest empty slot of its band is taken;
+    - the bands come from spells-file fields 83, 154 and 168;
+    - the normal band ends at 15 while the effect-327 sources are unread.
+    A held effect-148 spell leaves a new landing without a slot (a held
+    spell's refresh keeps its slot), as does a full band, with the reason.
+    Steps 2 (partly read), 4 and 6 and the top past 15 are unported
+    (recording checklist 6.457). `GameDialect::buff_placement` gives the
+    finder: Titanium's, and none for the Mac-era generation.
+  - `BuffUpdate` carries how the program applies an update (`Applies`)
+    and the record's type byte. On Titanium:
+    - action 3 writes its slot;
+    - action 1 fades by spell;
+    - any other action updates by spell in place and adds nothing.
+    A fade matches only the same nonzero type byte, so a type-4 record
+    outlives a type-2 fade, as in the program (a known parity item,
+    recording checklist 6.459).
+    The Mac-era parser keeps today's meaning (`Applies::Received`).
+    `BuffUpdate::replaces_slot` is now a method.
+  - `cancel::Request` carries its `Placement`. A modelled slot sends the
+    record the program would hold there (R20 (d); fields not read are 0),
+    and a fade of its spell in any slot counts as the fade observed. The
+    modelled slot and record, and the public-server pair with a modelled
+    slot, are inferred until checked live (recording checklist 6.458).
+  - The session's received slots follow the same rules.
+  - `SpellEffect::took_hold` is the one test that a spell took hold: an
+    action of kind 231 whose flag carries `buffs::TOOK_HOLD` (0x04), as the
+    Titanium program tests it (0x47f614). A flag with other bits set
+    besides 4 now counts; the session's buff slots use it.
+
 - **Breaking:** the player stands at zone entry, as the Titanium program
   does (program reads R24 and R24b). `SpawnState::posture` and
   `PlayerState::posture` carry the record byte the program reads as the

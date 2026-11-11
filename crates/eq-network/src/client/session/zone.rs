@@ -1040,6 +1040,7 @@ mod tests {
                 beneficial: Some(true),
                 cancellable: Some(true),
                 created,
+                placement: eq_network_game::buffs::cancel::Placement::Received,
             }),
             ClientCommand::SwapSpell {
                 session_id,

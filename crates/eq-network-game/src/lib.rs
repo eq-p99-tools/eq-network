@@ -223,6 +223,18 @@ impl GameDialect {
         matches!(self, Self::EqMac)
     }
 
+    /// The slot finder this generation's program runs for a buff landing on
+    /// the player ([`buffs::placement`]): Titanium's (program reads R3 and
+    /// R20); none for the Mac-era generation, whose program is unread, so
+    /// its landings stay unslotted as before.
+    #[must_use]
+    pub fn buff_placement(self) -> Option<buffs::placement::Finder> {
+        match self {
+            Self::Titanium => Some(buffs::placement::titanium_player),
+            Self::EqMac => None,
+        }
+    }
+
     /// What this generation's program does with the player's own posture
     /// at zone entry ([`feign::EntryStand`]).
     #[must_use]
@@ -284,6 +296,15 @@ mod tests {
     fn only_the_unread_mac_client_ends_auto_attack_on_a_posture() {
         assert!(!GameDialect::Titanium.posture_ends_attack());
         assert!(GameDialect::EqMac.posture_ends_attack());
+    }
+
+    #[test]
+    fn only_titanium_places_a_landing_buff() {
+        let held = std::collections::BTreeMap::new();
+        let band = Some(crate::buffs::placement::Band::default());
+        let finder = GameDialect::Titanium.buff_placement().unwrap();
+        assert_eq!(finder(&held, 278, band, false), Ok(0));
+        assert!(GameDialect::EqMac.buff_placement().is_none());
     }
 
     #[test]

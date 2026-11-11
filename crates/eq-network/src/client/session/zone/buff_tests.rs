@@ -51,6 +51,7 @@ fn cancellation_policy_gate_keeps_admission_age_and_lifecycle_boundaries() {
                 beneficial: Some(true),
                 cancellable: Some(true),
                 created,
+                placement: eq_network_game::buffs::cancel::Placement::Received,
             })
         };
         assert!(features
