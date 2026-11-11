@@ -2667,3 +2667,56 @@ fn a_withdrawal_or_correction_ends_a_root_and_resets_the_stamps() {
     session.calibrate(slower(6.0), ms(start, 200)).unwrap();
     assert_eq!(session.guard.sampled, ms(start, 200));
 }
+
+#[test]
+fn a_ducked_diagonal_takes_the_ducked_forward_rate_and_the_read_lateral() {
+    // Read R28: ducked, a forward-plus-strafe sample goes forward at the
+    // ducked rate (0.23 for a 0.46 walk) and sideways on half the raw run
+    // base (0.35 for a 0.7 run), with no ducking factor on the sideways part.
+    use crate::movement::{
+        titanium_speeds, DiagonalAlong, GroundedDiagonal, SpeedState, StrafeSide,
+    };
+    let ducked = titanium_speeds(&SpeedState {
+        run: 0.7,
+        walk: 0.46,
+        level: 50,
+        hit_points: Some((500, 500)),
+        rate: 0,
+        weight: 0,
+        capacity: 100,
+        sneaking: false,
+        ducking: true,
+        zone_id: 1,
+    })
+    .motion
+    .unwrap();
+    let start = Instant::now();
+    let now = start + Duration::from_millis(100);
+    let units = crate::movement::speeds::EQMAC_UNITS_PER_INPUT * 0.1;
+    let (along, lateral) = (0.23 * units, 0.35 * units);
+    let diagonal = |x: f32, y: f32| {
+        let mut motion = request(now, x);
+        motion.mode = MovementMode::GroundedDiagonal(GroundedDiagonal {
+            along: DiagonalAlong::Run,
+            side: StrafeSide::Right,
+        });
+        motion.position.y = y;
+        motion
+    };
+    let fresh = || {
+        let mut session = MotionSession::new(11, 7, Position::default(), start).unwrap();
+        session.calibrate(ducked, start).unwrap();
+        session
+    };
+    for over in [
+        diagonal(-lateral, along * 1.05),
+        diagonal(-lateral * 1.05, along),
+    ] {
+        assert!(fresh()
+            .send_move_sample(&over, now, |_| panic!("diagonal over the read"))
+            .is_err());
+    }
+    fresh()
+        .send_move_sample(&diagonal(-lateral * 0.99, along * 0.99), now, |_| Ok(()))
+        .unwrap();
+}

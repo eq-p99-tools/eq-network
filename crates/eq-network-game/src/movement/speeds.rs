@@ -30,7 +30,8 @@ pub struct SpeedState {
     /// Titanium moves a ducking player at the sneaking speeds: forward and
     /// back on half the walk speed whether running or not, with the buffs'
     /// modifier added after the halving, back in water on the land rule,
-    /// and a strafe halved (program read R23, 0x4a1d74). `EQMac` stands a
+    /// and a strafe halved on the selected base (program reads R23 and R28,
+    /// 0x4a1d74 and 0x4bfe0f). `EQMac` stands a
     /// ducking player to move ([`crate::feign::DuckRules::moves_ducked`]),
     /// so its rule takes no account of it.
     pub ducking: bool,
@@ -193,15 +194,16 @@ const TITANIUM: Generation = Generation {
 /// points, as TAKP names it. Ducking takes the sneaking branch (read R23;
 /// [`SpeedState::ducking`]). Not taken from Titanium's read: the
 /// flag at +0x1b1 and its value at +0xec4, mounts, the native swim rate,
-/// the halved decay and model 141. Sneaking takes `EQMac`'s rule, the slower
-/// side. Its values on the wire are [`titanium`]'s.
+/// the halved decay and model 141. Its values on the wire are
+/// [`titanium`]'s.
 ///
 /// Titanium strafes on whichever base speed is selected: the run speed
 /// running, the walk speed walking. A strafe doesn't say which is selected,
 /// so the session bounds it by the running rate and gives the walking rate
 /// beside it ([`StrafeCalibration::walk_units_per_second`]) for the player
-/// to keep to; `EQMac` strafes on the walk speed. Ducking halves the strafe
-/// as sneaking does, both selected bases alike. That a buff's
+/// to keep to; `EQMac` strafes on the walk speed. Sneaking or ducking halves
+/// the strafe on the selected base, both bases alike, and leaves a
+/// diagonal's sideways part unhalved on its raw base (read R28). That a buff's
 /// speed modifier adds nothing to a strafe is read from the routine's shape
 /// only; if it does add, ours is the slower side.
 ///
@@ -293,19 +295,23 @@ fn motion(generation: Generation, state: &SpeedState) -> Option<MotionCalibratio
     });
     let strafe_share = if sneaking || slowed { 0.5 } else { 1.0 };
     let strafing_walking = state.walk * 0.5 * 2.0 * multiplier * strafe_share;
-    // Sneaking takes `EQMac`'s rule on both generations, the slower side.
-    let strafing = if generation.strafes_on_selected_base && !sneaking {
+    // Titanium strafes on the selected base sneaking and ducked too, the one
+    // halving taken (read R28: 0x4a1d74 builds the factor, 0x4bfe0f picks
+    // the base by the run flag).
+    let strafing = if generation.strafes_on_selected_base {
         state.run * multiplier * strafe_share
     } else {
         strafing_walking
     };
     let speed = |input: f32| input.abs() * EQMAC_UNITS_PER_INPUT;
-    let diagonal = if generation.grounded_diagonal && !sneaking {
+    let diagonal = if generation.grounded_diagonal {
         // Titanium eqgame.exe (0x4bfe0f, 0x4c00d7–0x4c01c2) takes half
         // the active raw run/walk base for this lateral input (0x6410bc =
         // 0.5; base fields loaded at 0x48170c–0x48171f). With longitudinal
         // input, the standalone strafe factor and additive spell modifier
-        // do not enter this branch. We apply the steady-state scale.
+        // do not enter this branch, nor does ducking or sneaking (read R28):
+        // their forward part is the sneaking one. We apply the steady-state
+        // scale.
         let lateral = |base| (base > 0.0).then_some(speed(base * 0.5));
         DiagonalRates {
             run: lateral(state.run),
@@ -456,7 +462,7 @@ mod tests {
         .strafe
         .unwrap();
         assert!(close(hurt.units_per_second, 29.9 / 2.0), "{hurt:?}");
-        // Sneaking keeps `EQMac`'s rule, one rate for both.
+        // Sneaking halves both, still on the selected base (read R28).
         let sneaking = titanium(&SpeedState {
             sneaking: true,
             ..player()
@@ -465,8 +471,8 @@ mod tests {
         .unwrap()
         .strafe
         .unwrap();
-        assert!(close(sneaking.units_per_second, 9.8), "{sneaking:?}");
-        assert_eq!(sneaking.walk_units_per_second, None);
+        assert!(close(sneaking.units_per_second, 29.9 / 2.0), "{sneaking:?}");
+        assert!(close(sneaking.walk_units_per_second.unwrap(), 19.6 / 2.0));
         // `EQMac` strafes on the walk speed only.
         let mac = eqmac(&player()).motion.unwrap().strafe.unwrap();
         assert_eq!(mac.walk_units_per_second, None);
@@ -507,13 +513,20 @@ mod tests {
         })
         .motion
         .is_none());
-        let sneaking = titanium(&SpeedState {
-            sneaking: true,
-            ..state
-        })
-        .motion
-        .unwrap();
-        assert_eq!(sneaking.diagonal, DiagonalRates::default());
+        // Sneaking or ducked, the sideways part is the same (read R28).
+        for state in [
+            SpeedState {
+                sneaking: true,
+                ..state
+            },
+            SpeedState {
+                ducking: true,
+                ..state
+            },
+        ] {
+            let calibration = titanium(&state).motion.unwrap();
+            assert_eq!(calibration.diagonal, straight.diagonal, "{state:?}");
+        }
     }
 
     #[test]
@@ -627,8 +640,12 @@ mod tests {
             0.23 * EQMAC_UNITS_PER_INPUT
         ));
         let strafe = plain.strafe.unwrap();
-        assert!(close(strafe.units_per_second, 9.8), "{strafe:?}");
-        assert_eq!(plain.diagonal, DiagonalRates::default());
+        assert!(close(strafe.units_per_second, 0.35 * EQMAC_UNITS_PER_INPUT));
+        assert!(close(
+            strafe.walk_units_per_second.unwrap(),
+            0.23 * EQMAC_UNITS_PER_INPUT
+        ));
+        assert_eq!(plain.diagonal, titanium(&player()).motion.unwrap().diagonal);
         // A run buff of 50% adds its 0.35 in full to the halved base.
         let buffed = ducked(SpeedState {
             rate: 50,
@@ -654,6 +671,73 @@ mod tests {
             }),
             None
         );
+    }
+
+    #[test]
+    fn titanium_strafes_ducked_or_sneaking_on_the_selected_base_halved() {
+        // Read R28's table, run 0.7 and walk 0.46, f 1, unmounted, D >= 0:
+        // ducked run 0.35, ducked walk 0.23, sneaking run 0.35, sneaking
+        // walk 0.23. A negative modifier is the same halving, taken once.
+        for (sneaking, ducking) in [(false, true), (true, false), (true, true)] {
+            let strafe = |state: SpeedState| {
+                titanium(&SpeedState {
+                    sneaking,
+                    ducking,
+                    ..state
+                })
+                .motion
+                .unwrap()
+                .strafe
+                .unwrap()
+            };
+            for (state, factor) in [
+                (player(), 1.0),
+                (
+                    SpeedState {
+                        rate: -40,
+                        ..player()
+                    },
+                    1.0,
+                ),
+                (
+                    SpeedState {
+                        hit_points: Some((49, 500)),
+                        ..player()
+                    },
+                    0.5,
+                ),
+                (
+                    SpeedState {
+                        hit_points: Some((49, 500)),
+                        rate: -40,
+                        ..player()
+                    },
+                    0.5,
+                ),
+            ] {
+                let rates = strafe(state);
+                let (run, walk) = (rates.units_per_second, rates.walk_units_per_second);
+                assert!(
+                    close(run, 0.35 * factor * EQMAC_UNITS_PER_INPUT),
+                    "{state:?} {rates:?}"
+                );
+                assert!(
+                    close(walk.unwrap(), 0.23 * factor * EQMAC_UNITS_PER_INPUT),
+                    "{state:?} {rates:?}"
+                );
+            }
+        }
+        // The Mac-era rule is unchanged: sneaking strafes on half the walk.
+        let mac = eqmac(&SpeedState {
+            sneaking: true,
+            ..player()
+        })
+        .motion
+        .unwrap()
+        .strafe
+        .unwrap();
+        assert!(close(mac.units_per_second, 0.23 * EQMAC_UNITS_PER_INPUT));
+        assert_eq!(mac.walk_units_per_second, None);
     }
 
     #[test]
