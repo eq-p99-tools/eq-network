@@ -7,6 +7,29 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Breaking:** buffs that land on the player get the slot the Titanium
+  program gives them (program reads R3 and R20). Click-off now works for
+  them, and the buff order matches the program's.
+  - `buffs::placement::titanium_player` ports the slot finder (0x414071)
+    as far as it is read:
+    - a held spell keeps its first slot;
+    - otherwise the lowest empty slot of its band is taken;
+    - the bands come from spells-file fields 83, 154 and 168;
+    - the normal band ends at 15 while the effect-327 sources are unread.
+    A held effect-148 spell, or a full band, leaves the landing without a
+    slot, with the reason.
+  - `BuffUpdate` carries how the program applies an update (`Applies`)
+    and the record's type byte. On Titanium:
+    - action 3 writes its slot;
+    - action 1 fades by spell;
+    - any other action updates by spell in place and adds nothing.
+    The Mac-era parser keeps today's meaning (`Applies::Received`).
+    `BuffUpdate::replaces_slot` is now a method.
+  - `cancel::Request` carries its `Placement`. A modelled slot sends the
+    record the program would hold there (R20 (d); fields not read are 0),
+    and a fade of its spell in any slot counts as the fade observed.
+  - The session's received slots follow the same rules.
+
 - **Breaking:** Feign Death and the lying posture as the Titanium program
   handles them (program reads R19, R19b and R19cd), through the new
   `GameDialect::lying()` rules (`feign::LyingRules`). The Mac-era client
