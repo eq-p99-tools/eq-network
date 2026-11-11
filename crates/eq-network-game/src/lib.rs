@@ -245,6 +245,16 @@ impl GameDialect {
         }
     }
 
+    /// How this generation's program treats a ducking player who moves or
+    /// jumps ([`feign::DuckRules`]).
+    #[must_use]
+    pub const fn ducking(self) -> feign::DuckRules {
+        match self {
+            Self::Titanium => feign::TITANIUM_DUCK,
+            Self::EqMac => feign::EQMAC_DUCK,
+        }
+    }
+
     /// How this generation's sit/stand toggle chooses
     /// ([`feign::SitToggle`]).
     #[must_use]
@@ -335,5 +345,13 @@ mod tests {
         assert!(titanium.stands && titanium.sends_when_changed);
         let eqmac = GameDialect::EqMac.entry_stand();
         assert!(!eqmac.stands && !eqmac.sends_when_changed);
+    }
+
+    #[test]
+    fn only_titanium_moves_a_ducking_player_ducked() {
+        let titanium = GameDialect::Titanium.ducking();
+        assert!(titanium.moves_ducked && titanium.jump_stands);
+        let eqmac = GameDialect::EqMac.ducking();
+        assert!(!eqmac.moves_ducked && !eqmac.jump_stands);
     }
 }

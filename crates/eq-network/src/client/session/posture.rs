@@ -243,18 +243,21 @@ impl OwnPosture {
 
     /// Whether the character must stand up before it can move. Where the
     /// program holds a lying player still, nothing stands them to move
-    /// (read R19 c).
-    fn grounded(&self, lying_holds_still: bool) -> bool {
+    /// (read R19 c); where it moves a ducking player ducked, nothing stands
+    /// them either (read R23).
+    fn grounded(&self, dialect: eq_network_game::GameDialect) -> bool {
         match self.posture {
-            Some(PostureState::Sitting | PostureState::Ducking) => true,
-            Some(PostureState::Lying) => !lying_holds_still,
+            Some(PostureState::Sitting) => true,
+            Some(PostureState::Ducking) => !dialect.ducking().moves_ducked,
+            Some(PostureState::Lying) => !dialect.lying().holds_still,
             _ => false,
         }
     }
 
-    /// Stands a seated, crouched or prone character up before it moves.
+    /// Stands a seated, crouched or prone character up before it moves,
+    /// where the generation's program does.
     pub(super) fn stand_to_move(&mut self, spawn_id: u16, out: &mut Out<'_, '_>) -> Result<()> {
-        if !self.grounded(out.wire.dialect().lying().holds_still) {
+        if !self.grounded(out.wire.dialect()) {
             return Ok(());
         }
         self.set(spawn_id, Posture::Standing, out)
@@ -683,8 +686,10 @@ mod tests {
 
     #[test]
     fn only_seated_crouched_or_prone_characters_stand_to_move() {
+        use eq_network_game::GameDialect;
         let mut posture = OwnPosture::default();
-        assert!(!posture.grounded(false));
+        assert!(!posture.grounded(GameDialect::EqMac));
+        assert!(!posture.grounded(GameDialect::Titanium));
         for (state, grounded) in [
             (PostureState::Sitting, true),
             (PostureState::Ducking, true),
@@ -694,10 +699,16 @@ mod tests {
             (PostureState::Frozen, false),
         ] {
             posture.observed(state);
-            assert_eq!(posture.grounded(false), grounded, "{state:?}");
-            // Titanium stands no lying player to move (read R19 c).
-            let titanium = grounded && state != PostureState::Lying;
-            assert_eq!(posture.grounded(true), titanium, "{state:?}");
+            assert_eq!(posture.grounded(GameDialect::EqMac), grounded, "{state:?}");
+            // Titanium stands no lying player to move (read R19 c), and
+            // moves a ducking one ducked (read R23).
+            let titanium =
+                grounded && !matches!(state, PostureState::Lying | PostureState::Ducking);
+            assert_eq!(
+                posture.grounded(GameDialect::Titanium),
+                titanium,
+                "{state:?}"
+            );
         }
     }
 }

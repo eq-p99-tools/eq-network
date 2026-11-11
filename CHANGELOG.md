@@ -7,6 +7,22 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Breaking:** a ducking player moves ducked on Titanium, as its program
+  does (program read R23; checklist 6.460).
+  - `GameDialect::ducking()` gives `feign::DuckRules { moves_ducked,
+    jump_stands }`: both true on Titanium, both false on the Mac-era
+    generation, whose program is unread and keeps the earlier rule.
+  - `SpeedState` gains `ducking`. On Titanium a ducking player takes the
+    sneaking branch: forward and back on half the walk speed whatever the
+    run flag, the buffs' modifier added after the halving, back in water
+    on the land rule, a strafe halved. `EQMac` takes no account of it.
+  - The session sends no stand for a ducked step where `moves_ducked`
+    holds. The grant follows the stance when it changes, in place, with
+    nothing withdrawn, and a stand goes back the same way.
+  - A jump while ducking sends the standing report, then the jump, where
+    `jump_stands` holds. A refused jump stands no one.
+  - Ducked headroom, and whether the jump after a stand refused under a
+    low ceiling still launches, are the host's (the second is inferred).
 - **Breaking:** buffs that land on the player get the slot the Titanium
   program gives them (program reads R3 and R20). Click-off now works for
   them, and the buff order matches the program's.

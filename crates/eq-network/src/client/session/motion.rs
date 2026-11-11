@@ -9,6 +9,7 @@ use super::{
 use anyhow::Result;
 use eq_network_game::{
     appearance::AppearanceChange,
+    command::Posture,
     inventory::MAX_CARRIED_WEIGHT,
     message::Message,
     movement::{
@@ -233,6 +234,13 @@ fn lies_still(world: &World, out: &Out<'_, '_>) -> bool {
     out.wire.dialect().lying().holds_still && world.posture.current() == Some(PostureState::Lying)
 }
 
+/// Whether the player ducks where the generation's program moves them
+/// ducked (read R23).
+fn moves_ducked(world: &World, out: &Out<'_, '_>) -> bool {
+    out.wire.dialect().ducking().moves_ducked
+        && world.posture.current() == Some(PostureState::Ducking)
+}
+
 /// The player's movement at these speeds.
 fn granted(
     session_id: u64,
@@ -416,6 +424,10 @@ impl Motion {
     /// calibration from missing, withdrawn or rejected calibration. Receipt
     /// bookkeeping must not infer success from a prior positive calibration.
     fn apply_grant(&mut self, world: &mut World, out: &mut Out<'_, '_>) -> Result<bool> {
+        // The stance the speeds follow: a duck where the generation moves the
+        // player ducked takes the ducked speeds, in place, at the first grant
+        // after the change (read R23).
+        let ducking = moves_ducked(world, out);
         let (Some(rule), Some(inputs), Some(player)) =
             (out.wire.speeds(), self.inputs, world.player.as_ref())
         else {
@@ -434,6 +446,7 @@ impl Motion {
                 inputs.capacity
             },
             sneaking: self.sneaking,
+            ducking,
             zone_id: world.zone.0,
         });
         if let Some((encumbered, string_id)) = speeds.encumbrance {
@@ -752,8 +765,9 @@ impl Motion {
         }));
     }
 
-    /// Moves the player, standing them up first if they were sitting or
-    /// crouched; a refused move undoes the host's prediction.
+    /// Moves the player, standing them up first if they were sitting, or
+    /// crouched where the generation stands a ducking player to move; a
+    /// refused move undoes the host's prediction.
     fn step(request: &MovementRequest, world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
         Self::step_at(request, Instant::now(), world, out)
     }
@@ -892,7 +906,11 @@ impl Motion {
 
     /// Jumps where the server allows falls and the generation's notice of a
     /// jump is known.
-    /// The samples after it may rise as the jump does.
+    /// The samples after it may rise as the jump does. Where the program
+    /// stands a ducking player to jump (read R23), the session sends the
+    /// standing report first, then the jump. For a jump from standing still
+    /// the host times the crouch and sends the jump at its end; the session
+    /// then stands the player if they still duck, and launches.
     fn jump(&self, created: Instant, world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
         if let Some(reason) = world.control.input_refusal(created) {
             return out.log.diagnostic(format!("Rejected jump: {reason}"));
@@ -913,6 +931,13 @@ impl Motion {
         match jump {
             // A failed send ends the admission like any other.
             Ok(packet) => {
+                if out.wire.dialect().ducking().jump_stands
+                    && world.posture.current() == Some(PostureState::Ducking)
+                {
+                    if let Some(own) = world.own_spawn {
+                        world.posture.set(own, Posture::Standing, out)?;
+                    }
+                }
                 out.send(&packet)?;
                 if let Some(motion) = world.body.motion.as_mut() {
                     motion.jumped();
@@ -1167,6 +1192,10 @@ mod stun_tests;
 #[cfg(test)]
 #[path = "motion_lying_tests.rs"]
 mod lying_tests;
+
+#[cfg(test)]
+#[path = "motion_ducking_tests.rs"]
+mod ducking_tests;
 
 #[cfg(test)]
 mod tests {
