@@ -162,6 +162,103 @@ impl MotionCalibration {
     }
 }
 
+/// The most speed changes kept in place before one sample
+/// ([`MotionSession::calibrate`]).
+const MAX_EARLIER: usize = 16;
+
+/// What a sample may cover in one mode at one grant, in units a second, and
+/// what its update carries.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Rates {
+    speed: f32,
+    velocity_scale: f32,
+    animation: i16,
+    /// A grounded diagonal's sideways rate, for a diagonal sample.
+    lateral: Option<f32>,
+    /// A swim stroke's bound backing up, where the grant reads one.
+    swim_backward: Option<f32>,
+}
+
+impl Rates {
+    /// Rooted, or nothing granted: no distance at all.
+    const ROOTED: Self = Self {
+        speed: 0.0,
+        velocity_scale: 0.0,
+        animation: 0,
+        lateral: None,
+        swim_backward: None,
+    };
+
+    /// The rates `calibration` grants in `along`, and sideways for a
+    /// diagonal.
+    ///
+    /// # Errors
+    /// Rejects a mode the calibration does not grant.
+    fn of(
+        calibration: MotionCalibration,
+        along: MovementMode,
+        diagonal: Option<super::GroundedDiagonal>,
+    ) -> Result<Self> {
+        let lateral = diagonal
+            .map(|diagonal| {
+                calibration
+                    .diagonal
+                    .for_mode(diagonal)
+                    .ok_or_else(|| anyhow::anyhow!("diagonal movement is not calibrated"))
+            })
+            .transpose()?;
+        let (speed, velocity_scale, animation) = match along {
+            MovementMode::Strafe => {
+                let strafe = calibration
+                    .strafe
+                    .ok_or_else(|| anyhow::anyhow!("strafing is not calibrated"))?;
+                (
+                    strafe.units_per_second,
+                    strafe.velocity_scale,
+                    strafe.animation,
+                )
+            }
+            MovementMode::Walk => {
+                let walk = calibration
+                    .walk
+                    .ok_or_else(|| anyhow::anyhow!("walking is not calibrated"))?;
+                (walk.units_per_second, walk.velocity_scale, walk.animation)
+            }
+            MovementMode::Forward | MovementMode::Fall => (
+                calibration.units_per_second,
+                calibration.velocity_scale,
+                calibration.animation,
+            ),
+            MovementMode::Backward => {
+                let backward = calibration
+                    .backward
+                    .ok_or_else(|| anyhow::anyhow!("backward movement is not calibrated"))?;
+                (
+                    backward.units_per_second,
+                    backward.velocity_scale,
+                    backward.animation,
+                )
+            }
+            MovementMode::Swim => (
+                super::swim_speed(calibration.units_per_second),
+                calibration.velocity_scale,
+                0, // Swim animation/skill calibration is unverified.
+            ),
+            MovementMode::Shoreline(_) => (calibration.units_per_second, 0.0, 0),
+            MovementMode::GroundedDiagonal(_) => unreachable!("longitudinal mode is cardinal"),
+        };
+        Ok(Self {
+            speed,
+            velocity_scale,
+            animation,
+            lateral,
+            swim_backward: calibration
+                .swim_backward_units_per_second
+                .map(super::swim_speed),
+        })
+    }
+}
+
 /// Position, packet counter, and input expiry for one zone admission.
 #[derive(Debug)]
 #[allow(clippy::struct_excessive_bools)] // Independent session permissions and motion state.
@@ -175,6 +272,19 @@ pub struct MotionSession {
     /// other placement cannot serve as a pad entry.
     previous_position: Option<Position>,
     calibration: Option<MotionCalibration>,
+    /// Whether the player is rooted: granted, at no speed. Input goes on,
+    /// so they turn and a sample that only turns is taken, and nothing
+    /// carries them anywhere ([`Self::root`]).
+    rooted: bool,
+    /// Whether a rooted player may jump, as the client generation's program
+    /// lets them ([`crate::movement::RootRules::jumps`]).
+    rooted_jumps: bool,
+    /// The speeds in force before each change made in place since the last
+    /// accepted sample, oldest first, each with the instant it ended: None
+    /// while rooted. The next sample's allowance runs at each in its own
+    /// span, so a change neither refuses the sample under way nor lets
+    /// time at the slower speed cover more ([`Self::calibrate`]).
+    earlier: Vec<(Instant, Option<MotionCalibration>)>,
     options: super::MovementOptions,
     last_sent: Instant,
     moving: bool,
@@ -247,6 +357,8 @@ impl PreparedMove<'_> {
         }
         owner.flags = flags;
         owner.guard = guard;
+        let sampled = owner.guard.sampled;
+        owner.earlier.retain(|(until, _)| *until > sampled);
         owner.previous_position = Some(owner.position);
         owner.position = sample.position;
         owner.moving = moving;
@@ -444,7 +556,7 @@ impl MotionSession {
     pub fn check_jump(&self) -> Result<()> {
         ensure!(self.falls, "jumping is not enabled for this server");
         ensure!(
-            !self.suspended && self.calibration.is_some(),
+            !self.suspended && (self.calibration.is_some() || (self.rooted && self.rooted_jumps)),
             "player input is withdrawn"
         );
         Ok(())
@@ -471,6 +583,9 @@ impl MotionSession {
             position,
             previous_position: None,
             calibration: None,
+            rooted: false,
+            rooted_jumps: false,
+            earlier: Vec::new(),
             options: super::MovementOptions::default(),
             last_sent: now,
             moving: false,
@@ -520,12 +635,88 @@ impl MotionSession {
     ///
     /// # Errors
     /// Rejects invalid conversions and resuming a suspended session.
+    ///
+    /// A change for a player already granted, at a speed or rooted, applies
+    /// in place: the next sample's allowance runs at the earlier speeds up to
+    /// the change and at the new one after it, so the sample under way is
+    /// neither stale nor refused, and nothing earns more than its own speed
+    /// allows. A first grant, or one after a withdrawal, starts afresh.
     pub fn calibrate(&mut self, value: MotionCalibration, now: Instant) -> Result<()> {
         ensure!(!self.suspended, "movement session is suspended");
         value.validate()?;
-        self.guard.set_speed(Some(value.units_per_second), now);
+        if self.granted() {
+            self.change_in_place(now);
+            self.guard.speed = Some(value.units_per_second);
+        } else {
+            self.guard.set_speed(Some(value.units_per_second), now);
+        }
         self.calibration = Some(value);
+        self.rooted = false;
         Ok(())
+    }
+
+    /// Roots the player: granted at no speed. The program zeroes the speed
+    /// and the velocity once and blocks nothing else (read R18, 0x410fdb),
+    /// so a moving player stops where they are, a sample that only turns is
+    /// taken, and the time rooted earns no distance. The sample under way
+    /// keeps what it earned before the root. A jump goes on only where the
+    /// generation's program allows one ([`Self::with_rooted_jumps`]).
+    ///
+    /// # Errors
+    /// Rejects rooting a suspended session.
+    pub fn root(&mut self, now: Instant) -> Result<()> {
+        ensure!(!self.suspended, "movement session is suspended");
+        if self.rooted {
+            return Ok(());
+        }
+        if self.granted() {
+            self.change_in_place(now);
+        } else {
+            self.guard.set_speed(None, now);
+        }
+        self.calibration = None;
+        self.rooted = true;
+        self.hold_stop();
+        Ok(())
+    }
+
+    /// Whether the player is rooted ([`Self::root`]).
+    #[must_use]
+    pub const fn rooted(&self) -> bool {
+        self.rooted
+    }
+
+    /// Lets a rooted player jump, where the client generation's program
+    /// does ([`crate::movement::RootRules::jumps`]).
+    #[must_use]
+    pub const fn with_rooted_jumps(mut self, allowed: bool) -> Self {
+        self.rooted_jumps = allowed;
+        self
+    }
+
+    /// Whether the player holds a grant, at a speed or rooted.
+    const fn granted(&self) -> bool {
+        self.calibration.is_some() || self.rooted
+    }
+
+    /// Keeps the speeds in force until `now` for the next sample's
+    /// allowance. Past [`MAX_EARLIER`] changes before one sample, the
+    /// earlier ones count as rooted: slower, never faster.
+    fn change_in_place(&mut self, now: Instant) {
+        let in_force = self.calibration.filter(|_| !self.rooted);
+        if self.earlier.len() >= MAX_EARLIER {
+            self.earlier.clear();
+            self.earlier.push((now, None));
+            return;
+        }
+        self.earlier.push((now, in_force));
+    }
+
+    /// Clears what a reset ends: the root and the speeds before a change.
+    fn clear_grant(&mut self) {
+        self.calibration = None;
+        self.rooted = false;
+        self.earlier.clear();
     }
 
     /// Calibrates from a queued request only if it postdates the latest reset;
@@ -555,7 +746,7 @@ impl MotionSession {
     /// Takes the player's speeds away, as when they are rooted, until the
     /// next calibration.
     pub fn withdraw(&mut self) {
-        self.calibration = None;
+        self.clear_grant();
         self.previous_position = None;
         self.guard.correct(self.position, Instant::now());
         // The speed falls to 0, which the program sends as a stop.
@@ -722,7 +913,7 @@ impl MotionSession {
     /// Resumes stationary heartbeats after a denied transfer; walking stays disabled.
     pub fn resume_stationary(&mut self, now: Instant) {
         self.suspended = false;
-        self.calibration = None;
+        self.clear_grant();
         self.held = None;
         self.previous_position = None;
         self.moving = false;
@@ -779,7 +970,7 @@ impl MotionSession {
         );
         // Without player input, only an in-place descent is allowed. No fake
         // calibration, turn, climb, or horizontal rounding allowance is granted.
-        if self.calibration.is_none() {
+        if !self.granted() {
             ensure!(
                 request.position.x == self.position.x
                     && request.position.y == self.position.y
@@ -812,63 +1003,35 @@ impl MotionSession {
             "heading snapshot is outside the canonical turn"
         );
         let along = diagonal.map_or(request.mode, |diagonal| diagonal.along.mode());
-        let lateral_rate = if let Some(diagonal) = diagonal {
+        if diagonal.is_some() {
             ensure!(
                 !self.options.fly,
                 "diagonal movement requires a grounded mode"
             );
-            Some(
-                self.calibration
-                    .and_then(|value| value.diagonal.for_mode(diagonal))
-                    .ok_or_else(|| anyhow::anyhow!("diagonal movement is not calibrated"))?,
-            )
-        } else {
-            None
-        };
-        let (speed, velocity_scale, animation) = if let Some(calibration) = self.calibration {
-            match along {
-                MovementMode::Strafe => {
-                    let strafe = calibration
-                        .strafe
-                        .ok_or_else(|| anyhow::anyhow!("strafing is not calibrated"))?;
-                    (
-                        strafe.units_per_second,
-                        strafe.velocity_scale,
-                        strafe.animation,
-                    )
-                }
-                MovementMode::Walk => {
-                    let walk = calibration
-                        .walk
-                        .ok_or_else(|| anyhow::anyhow!("walking is not calibrated"))?;
-                    (walk.units_per_second, walk.velocity_scale, walk.animation)
-                }
-                MovementMode::Forward | MovementMode::Fall => (
-                    calibration.units_per_second,
-                    calibration.velocity_scale,
-                    calibration.animation,
-                ),
-                MovementMode::Backward => {
-                    let backward = calibration
-                        .backward
-                        .ok_or_else(|| anyhow::anyhow!("backward movement is not calibrated"))?;
-                    (
-                        backward.units_per_second,
-                        backward.velocity_scale,
-                        backward.animation,
-                    )
-                }
-                MovementMode::Swim => (
-                    super::swim_speed(calibration.units_per_second),
-                    calibration.velocity_scale,
-                    0, // Swim animation/skill calibration is unverified.
-                ),
-                MovementMode::Shoreline(_) => (calibration.units_per_second, 0.0, 0),
-                MovementMode::GroundedDiagonal(_) => unreachable!("longitudinal mode is cardinal"),
+        }
+        let current = if self.rooted {
+            // Rooted, every mode is granted at no speed, a diagonal too.
+            Rates {
+                lateral: diagonal.map(|_| 0.0),
+                ..Rates::ROOTED
             }
+        } else if let Some(calibration) = self.calibration {
+            Rates::of(calibration, along, diagonal)?
         } else {
-            (0.0, 0.0, 0)
+            ensure!(diagonal.is_none(), "diagonal movement is not calibrated");
+            Rates::ROOTED
         };
+        // The wire's velocity and turn rate cover the same interval the guard
+        // budgets: from the last accepted request's stamp to this one's.
+        let elapsed = guard.interval(request.created);
+        let rates = self.over_interval(current, request.created, elapsed, along, diagonal);
+        let Rates {
+            speed,
+            velocity_scale,
+            animation,
+            lateral: lateral_rate,
+            swim_backward,
+        } = rates;
         // Switching mode changes the per-sample limit without resetting input expiry
         // or granting a new time budget. The clone is committed only after send succeeds.
         // The host can integrate a boosted forward step before collision
@@ -880,14 +1043,7 @@ impl MotionSession {
             super::RunSpeedMultiplier::NORMAL
         };
         guard.speed = Some(speed);
-        // The wire's velocity and turn rate cover the same interval the guard
-        // budgets: from the last accepted request's stamp to this one's.
-        let elapsed = guard.interval(request.created);
         let swimming = request.mode.is_water_motion();
-        let swim_backward = self
-            .calibration
-            .and_then(|value| value.swim_backward_units_per_second)
-            .map(super::swim_speed);
         let displacement = guard.accept_with_modes(
             request,
             now,
@@ -937,6 +1093,68 @@ impl MotionSession {
             now,
             moving: moving || turn != 0,
         })
+    }
+
+    /// The rates over a sample's interval, `elapsed` seconds up to
+    /// `created`: each grant in force in it counts for its own span, so the
+    /// allowance is exact across changes made in place. A mode an earlier
+    /// grant did not take counts as rooted there, the slower side. The
+    /// update carries what the grant in force at `created` sends.
+    fn over_interval(
+        &self,
+        current: Rates,
+        created: Instant,
+        elapsed: f32,
+        along: MovementMode,
+        diagonal: Option<super::GroundedDiagonal>,
+    ) -> Rates {
+        if self
+            .earlier
+            .iter()
+            .all(|(until, _)| *until <= self.guard.sampled)
+            || elapsed <= 0.0
+        {
+            return current;
+        }
+        let start = created
+            .checked_sub(Duration::from_secs_f32(elapsed))
+            .unwrap_or(created);
+        let rates = |calibration: Option<MotionCalibration>| {
+            calibration
+                .and_then(|calibration| Rates::of(calibration, along, diagonal).ok())
+                .unwrap_or(Rates::ROOTED)
+        };
+        let spans = self
+            .earlier
+            .iter()
+            .map(|(until, calibration)| (*until, rates(*calibration)))
+            .chain(std::iter::once((created, current)));
+        let (mut speed, mut lateral, mut backing) = (0.0, 0.0, 0.0);
+        let mut backing_bound = false;
+        let mut from = start;
+        let mut at_created = current;
+        for (until, span) in spans {
+            let to = until.min(created);
+            if to > from {
+                let share = to.duration_since(from).as_secs_f32() / elapsed;
+                speed += span.speed * share;
+                lateral += span.lateral.unwrap_or(0.0) * share;
+                backing_bound |= span.swim_backward.is_some();
+                backing += span.swim_backward.unwrap_or(span.speed) * share;
+                from = to;
+            }
+            if until >= created {
+                at_created = span;
+                break;
+            }
+        }
+        Rates {
+            speed,
+            velocity_scale: at_created.velocity_scale,
+            animation: at_created.animation,
+            lateral: diagonal.map(|_| lateral),
+            swim_backward: backing_bound.then_some(backing),
+        }
     }
 
     /// What the generation's gate does with an accepted sample at `now`;
@@ -1163,7 +1381,7 @@ impl MotionSession {
         self.position = position;
         self.previous_position = None;
         self.guard.correct(position, now);
-        self.calibration = None;
+        self.clear_grant();
         // Movement waits for a new calibration, so a moving player stops
         // where the server put them.
         self.hold_stop();
@@ -1173,7 +1391,7 @@ impl MotionSession {
     /// Stops all position packets after death or transfer; admission creates a new instance.
     pub fn suspend(&mut self) {
         self.suspended = true;
-        self.calibration = None;
+        self.clear_grant();
         self.held = None;
         self.previous_position = None;
         self.moving = false;

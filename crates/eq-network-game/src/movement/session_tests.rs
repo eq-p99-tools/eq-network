@@ -1029,8 +1029,10 @@ fn queued_calibration_requires_valid_data_from_after_the_last_reset() {
     }
     assert_eq!(session.calibration, Some(calibration));
     assert_eq!(session.guard.sampled, start);
+    // A grant changed in place keeps the last accepted sample's stamp, so
+    // the sample under way is neither stale nor refused.
     session.calibrate_fresh(calibration, now, now).unwrap();
-    assert_eq!(session.guard.sampled, now);
+    assert_eq!(session.guard.sampled, start);
 }
 #[test]
 fn a_spacing_holds_the_latest_sample_until_it_passes_and_stops_no_sooner() {
@@ -2533,4 +2535,135 @@ fn titanium_backs_up_in_water_at_its_rate_and_on_land_at_once_again() {
     session
         .send_move_sample(&back, at(500), |_| Ok(()))
         .unwrap();
+}
+
+fn slower(units_per_second: f32) -> MotionCalibration {
+    MotionCalibration {
+        swim_backward_units_per_second: None,
+        diagonal: DiagonalRates::default(),
+        walk: None,
+        strafe: None,
+        backward: None,
+        units_per_second,
+        velocity_scale: 0.05,
+        animation: 12,
+    }
+}
+
+fn ms(start: Instant, millis: u64) -> Instant {
+    start + Duration::from_millis(millis)
+}
+
+fn sends(session: &mut MotionSession, created: Instant, x: f32) -> bool {
+    session
+        .send_move(&request(created, x), created, |_| Ok(()))
+        .is_ok()
+}
+
+#[test]
+fn a_speed_change_in_place_bounds_each_span_at_its_own_speed() {
+    // Run 2026-11-11 rows 4 and 5: each change of speed reset the guard's
+    // stamps, so the sample under way was refused and the player held.
+    let start = Instant::now();
+    let mut session = setup(start);
+    assert!(sends(&mut session, ms(start, 100), 0.6));
+    session.calibrate(slower(3.0), ms(start, 150)).unwrap();
+    // 50 ms at 6 and 50 ms at 3: 0.45, never the 0.6 the old speed allows.
+    assert!(!sends(&mut session, ms(start, 200), 0.6 + 0.47));
+    assert!(sends(&mut session, ms(start, 200), 0.6 + 0.44));
+    // The change is spent: the next sample runs at 3 alone.
+    assert!(!sends(&mut session, ms(start, 300), 1.04 + 0.32));
+    assert!(sends(&mut session, ms(start, 300), 1.04 + 0.29));
+}
+
+#[test]
+fn a_sample_made_before_a_change_is_neither_stale_nor_too_frequent() {
+    let start = Instant::now();
+    let mut session = setup(start);
+    assert!(sends(&mut session, ms(start, 100), 0.6));
+    session.calibrate(slower(3.0), ms(start, 170)).unwrap();
+    // Made before the change and taken after it, it earns 60 ms at 6 alone.
+    let made = ms(start, 160);
+    assert!(session
+        .send_move(&request(made, 0.6 + 0.38), ms(start, 180), |_| Ok(()))
+        .is_err());
+    session
+        .send_move(&request(made, 0.6 + 0.35), ms(start, 180), |_| Ok(()))
+        .unwrap();
+    // The next earns 10 ms at 6 and 60 at 3: 0.24. Made 60 ms after the
+    // change, it is not too frequent.
+    assert!(!sends(&mut session, ms(start, 230), 0.95 + 0.26));
+    assert!(sends(&mut session, ms(start, 230), 0.95 + 0.23));
+}
+
+#[test]
+fn two_changes_in_one_interval_each_count_for_their_own_span() {
+    let start = Instant::now();
+    let mut session = setup(start);
+    assert!(sends(&mut session, ms(start, 100), 0.6));
+    session.calibrate(slower(3.0), ms(start, 130)).unwrap();
+    session.calibrate(slower(12.0), ms(start, 160)).unwrap();
+    // 30 ms at 6, 30 at 3 and 40 at 12: 0.18 + 0.09 + 0.48 = 0.75.
+    assert!(!sends(&mut session, ms(start, 200), 0.6 + 0.77));
+    assert!(sends(&mut session, ms(start, 200), 0.6 + 0.74));
+}
+
+#[test]
+fn a_root_earns_no_distance_but_takes_turns_and_keeps_what_came_before() {
+    let start = Instant::now();
+    let mut session = setup(start);
+    assert!(sends(&mut session, ms(start, 100), 0.6));
+    session.root(ms(start, 150)).unwrap();
+    assert!(session.rooted());
+    assert!(session.calibration().is_none());
+    // The 50 ms before the root earn 0.3; the time rooted earns nothing.
+    assert!(!sends(&mut session, ms(start, 200), 0.6 + 0.32));
+    assert!(sends(&mut session, ms(start, 200), 0.6 + 0.29));
+    // Rooted: a step is refused, a turn in place goes out at no speed.
+    assert!(!sends(&mut session, ms(start, 300), 0.89 + 0.02));
+    let mut turn = request(ms(start, 300), 0.89);
+    turn.position.heading = 24.0;
+    session
+        .send_move(&turn, ms(start, 300), |packet| {
+            let body = &packet.body[..];
+            assert_eq!(word(body, 20) & 0x3ff, 0, "no animation rooted");
+            assert_ne!((word(body, 20) >> 10) & 0x3ff, 0, "the turn rate goes out");
+            Ok(())
+        })
+        .unwrap();
+    assert_eq!(session.position().heading, 24.0);
+    // No jump while rooted, unless the generation's program allows one.
+    assert!(session.check_jump().is_err());
+}
+
+#[test]
+fn time_rooted_earns_nothing_when_the_root_ends_in_the_same_interval() {
+    let start = Instant::now();
+    let mut session = setup(start);
+    assert!(sends(&mut session, ms(start, 100), 0.6));
+    session.root(ms(start, 120)).unwrap();
+    session.calibrate(slower(6.0), ms(start, 200)).unwrap();
+    assert!(!session.rooted());
+    // 20 ms at 6, 80 rooted, 50 at 6: 0.12 + 0.30 = 0.42.
+    assert!(!sends(&mut session, ms(start, 250), 0.6 + 0.44));
+    assert!(sends(&mut session, ms(start, 250), 0.6 + 0.41));
+}
+
+#[test]
+fn a_withdrawal_or_correction_ends_a_root_and_resets_the_stamps() {
+    let start = Instant::now();
+    let mut session = setup(start).with_falls(true).with_rooted_jumps(true);
+    session.root(ms(start, 50)).unwrap();
+    session.check_jump().unwrap();
+    session.withdraw();
+    assert!(!session.rooted());
+    assert!(session.check_jump().is_err());
+    session.root(ms(start, 100)).unwrap();
+    session
+        .correct(Position::default(), ms(start, 150))
+        .unwrap();
+    assert!(!session.rooted());
+    // A grant after the reset starts afresh from it.
+    session.calibrate(slower(6.0), ms(start, 200)).unwrap();
+    assert_eq!(session.guard.sampled, ms(start, 200));
 }

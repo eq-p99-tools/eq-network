@@ -579,6 +579,7 @@ pub(super) mod testing {
             name_parts: eq_network_game::names::NameParts::default(),
             pet_owner: None,
             hp_percent: None,
+            posture: None,
         }
     }
 
@@ -616,6 +617,8 @@ pub(super) mod testing {
     pub(in crate::client::session) fn player(spawn_id: u16) -> eq_network_game::world::PlayerState {
         let mut spawn = vec![0; 385];
         spawn[340..344].copy_from_slice(&u32::from(spawn_id).to_le_bytes());
+        // Standing in the record's posture byte, as a server sends it.
+        spawn[0x57] = 100;
         eq_network_game::world::titanium_player(&vec![0; 19592], &spawn, 256.0)
             .expect("a zeroed profile admits a player")
     }

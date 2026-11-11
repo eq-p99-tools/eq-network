@@ -965,6 +965,20 @@ hand stopped; no feign request and no auto attack change. With
 `PostureOptions::feign_standing` it sends nothing and owes the next
 stand. Another spawn's id is refused.
 
+At admission, where `GameDialect::entry_stand().stands` holds (Titanium,
+program reads R24 and R24b), the player stands. The posture before that
+stand is a report staged before admission, else the own record's
+`PlayerState::posture`. After the other staged postures the session
+reports, for the player:
+- a lone `WorldEvent::Posture` of `Standing` when the posture before was
+  standing: the posture the player enters with, not a change, and nothing
+  is sent;
+- otherwise that posture, then `Standing`: the program's stand, which is a
+  change of posture like any other (the program clears the autorun latch
+  on it), with one standing report sent where the rule sends.
+A report after admission replaces either as usual. The Mac-era client's
+program is unread: its own posture stays unknown until set.
+
 ## Movement inputs are the host's, by revision
 
 The session grants no walking, turning or jumping until the host answers the

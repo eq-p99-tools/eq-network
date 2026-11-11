@@ -36,6 +36,10 @@ pub struct SpeedState {
 pub struct Speeds {
     /// The speeds, or None while the player can't move.
     pub motion: Option<MotionCalibration>,
+    /// Whether the speeds are None because the player is rooted: the
+    /// buffs' rate at -1000 or less (see [`eqmac`]). The session grants a
+    /// rooted player at no speed rather than withdrawing their input.
+    pub rooted: bool,
     /// Whether the player carries more than they can, and the official
     /// client's line for the state, an `eqstr_us.txt` string ID, which it
     /// prints once as the player enters it; None where the generation's
@@ -207,6 +211,7 @@ fn speeds(generation: Generation, state: &SpeedState) -> Speeds {
     let encumbered = encumbered(state);
     Speeds {
         motion: motion(generation, state),
+        rooted: state.rate <= EQMAC_ROOTED,
         encumbrance: Some(if encumbered {
             (true, EQMAC_ENCUMBERED)
         } else {
