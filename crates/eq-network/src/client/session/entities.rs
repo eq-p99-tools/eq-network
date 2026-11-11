@@ -290,10 +290,12 @@ impl Feature for Entities {
     /// Where the generation's program stands the player as the zone is set
     /// up ([`eq_network_game::feign::EntryStand`], program reads R24 and
     /// R24b), the player's posture before that stand is the last one
-    /// reported before admission, or else the own spawn record's; the stand
-    /// then replaces it, sending the standing report only if it changed and
-    /// the rule sends. A posture reported after admission replaces it in
-    /// turn.
+    /// reported before admission, or else the own spawn record's. A
+    /// standing one is reported alone, as the posture the player enters
+    /// with. Any other is reported, and then the stand, which sends the
+    /// standing report where the rule sends and reports Standing: a change,
+    /// as the program's is. A posture reported after admission replaces it
+    /// in turn.
     fn admitted(&mut self, world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
         out.log.send(ClientEvent::World(WorldEvent::Spawns(
             world.spawns.all().cloned().collect(),
@@ -320,8 +322,16 @@ impl Feature for Entities {
             return Ok(());
         };
         match before {
+            // The program holds that posture from the spawn's creation to
+            // the stand, and its stand is a change (it sends, and clears the
+            // autorun latch, read R19): the host hears both, so the change
+            // is an ordinary one to it.
             Some(posture) if posture != PostureState::Standing && entry.sends_when_changed => {
                 world.posture.observed(posture);
+                out.log.send(ClientEvent::World(WorldEvent::Posture {
+                    spawn_id: own,
+                    posture,
+                }))?;
                 world
                     .posture
                     .set(own, eq_network_game::command::Posture::Standing, out)
@@ -550,27 +560,26 @@ mod tests {
             outcome.result.unwrap();
             assert_eq!(outcome.sent, [standing(7)], "{record:?}");
             assert_eq!(world.posture.current(), Some(PostureState::Standing));
-            let reported: Vec<_> = outcome
-                .events
-                .iter()
-                .filter(|event| {
-                    matches!(
-                        event,
-                        ClientEvent::World(WorldEvent::Posture { spawn_id: 7, .. })
-                    )
-                })
-                .collect();
-            assert!(
-                matches!(
-                    reported[..],
-                    [ClientEvent::World(WorldEvent::Posture {
-                        posture: PostureState::Standing,
-                        ..
-                    })]
-                ),
-                "{record:?}: {reported:?}"
+            assert_eq!(
+                player_postures(&outcome.events),
+                [record, PostureState::Standing],
+                "{record:?}"
             );
         }
+    }
+
+    /// The player's postures reported, in order.
+    fn player_postures(events: &[ClientEvent]) -> Vec<PostureState> {
+        events
+            .iter()
+            .filter_map(|event| match event {
+                ClientEvent::World(WorldEvent::Posture {
+                    spawn_id: 7,
+                    posture,
+                }) => Some(*posture),
+                _ => None,
+            })
+            .collect()
     }
 
     /// A posture the server reported for the player before admission is
@@ -596,6 +605,10 @@ mod tests {
                 }),
                 ClientEvent::World(WorldEvent::Posture {
                     spawn_id: 7,
+                    posture: PostureState::Sitting
+                }),
+                ClientEvent::World(WorldEvent::Posture {
+                    spawn_id: 7,
                     posture: PostureState::Standing
                 }),
             ]
@@ -606,6 +619,7 @@ mod tests {
         let outcome = testing::run(|out| entities.admitted(&mut world, out));
         outcome.result.unwrap();
         assert!(outcome.sent.is_empty(), "{:?}", outcome.sent);
+        assert_eq!(player_postures(&outcome.events), [PostureState::Standing]);
     }
 
     /// After admission the server's report wins, and the player's next
