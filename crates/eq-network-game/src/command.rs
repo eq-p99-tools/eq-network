@@ -219,8 +219,9 @@ pub enum GameCommand {
     /// on the player, which the generation's program lies them down for.
     /// Only the host holds the spell data, so only it can tell. Send it only
     /// for a [`crate::buffs::SpellEffect`] on the player's own spawn that
-    /// [`landed`](crate::buffs::SpellEffect::landed) and whose spell carries
-    /// effect 74, where [`crate::GameDialect::spell_feign_lies`] holds.
+    /// [took hold](crate::buffs::SpellEffect::took_hold) and whose spell
+    /// carries effect 74, where [`crate::GameDialect::spell_feign_lies`]
+    /// holds.
     /// The session does the posture alone, as Titanium's landing does (read
     /// R21: 0x414913's effect loop calls 0x40db88, the posture routine with
     /// 115): one lying report, or none when the player already lies, and

@@ -233,21 +233,8 @@ impl GameDialect {
         matches!(self, Self::Titanium)
     }
 
-    /// The flag mask by which this generation's program takes a spell
-    /// action (kind 231) as landed, if read: Titanium's action handler
-    /// 0x47f614 runs its landing (0x414913) only when the byte at +0x1e has
-    /// 0x04 set (program reads R20 b and R21). The Mac-era client's test is
-    /// unread. [`buffs::SpellEffect::landed`] applies it.
-    #[must_use]
-    pub const fn spell_landing_mask(self) -> Option<u8> {
-        match self {
-            Self::Titanium => Some(0x04),
-            Self::EqMac => None,
-        }
-    }
-
-    /// Whether a landed spell with the feign effect (74) on the player lies
-    /// them down. Titanium's landing sends effect 74 to 0x40db88, which is
+    /// Whether a spell with the feign effect (74) that took hold on the
+    /// player ([`buffs::SpellEffect::took_hold`]) lies them down. Titanium's landing sends effect 74 to 0x40db88, which is
     /// the posture routine with 115 for the player's own spawn, with no
     /// feign request, no auto attack change and no success test (program
     /// read R21). The Mac-era client's is unread, so it keeps this library's
@@ -289,9 +276,7 @@ mod tests {
     }
 
     #[test]
-    fn only_titaniums_spell_landing_and_spell_feign_are_read() {
-        assert_eq!(GameDialect::Titanium.spell_landing_mask(), Some(0x04));
-        assert_eq!(GameDialect::EqMac.spell_landing_mask(), None);
+    fn only_titaniums_spell_feign_is_read() {
         assert!(GameDialect::Titanium.spell_feign_lies());
         assert!(!GameDialect::EqMac.spell_feign_lies());
     }

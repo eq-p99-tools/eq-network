@@ -955,12 +955,11 @@ using the command capability, and send the usual sit then camp sequence.
 host's statement that a spell with the feign effect (74) landed on the
 player: only the host holds spell data. Send it only for a
 `WorldEvent::SpellEffect` on the player's own spawn for which
-`SpellEffect::landed(generation)` holds, whose spell carries effect 74, and
-where `GameDialect::spell_feign_lies()` holds. `SpellEffect::landed` is the
-one landing test, the generation's program's own
-(`GameDialect::spell_landing_mask()`); a server type's
-`spell_landing_flag` answers a different question, which servers have been
-checked. The session changes the posture only: one lying report, or none
+`SpellEffect::took_hold()` holds (the one landing test: kind 231 and the
+flag carrying 0x04, as Titanium's handler 0x47f614 tests it), whose spell
+carries effect 74, and where `GameDialect::spell_feign_lies()` holds. A
+server type's `spell_landing_flag` answers a different question, which
+servers have been checked. The session changes the posture only: one lying report, or none
 when the player already lies, with the movement in hand stopped; no feign
 request and no auto attack change. With `PostureOptions::feign_standing`
 it sends nothing and owes the next stand. Another spawn's id is refused.

@@ -135,22 +135,6 @@ pub struct SpellEffect {
     pub push: Option<crate::combat::Push>,
 }
 
-impl SpellEffect {
-    /// Whether this spell action has landed, by the generation's own test
-    /// ([`crate::GameDialect::spell_landing_mask`]): its flag has the mask
-    /// set. A `SpellEffect` is only ever a kind-231 action (the decoders
-    /// give others as [`Action::Other`] or [`Action::Spin`]), so the kind
-    /// half of the program's test always holds here. Unread for a
-    /// generation, no action has landed.
-    #[must_use]
-    pub const fn landed(&self, generation: crate::GameDialect) -> bool {
-        match generation.spell_landing_mask() {
-            Some(mask) => self.effect_flag & mask != 0,
-            None => false,
-        }
-    }
-}
-
 /// What a server's action (`OP_Action`) is, by its kind.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub enum Action {
@@ -250,6 +234,25 @@ pub fn eqmac_spell_effect(body: &[u8]) -> Result<Option<SpellEffect>> {
         effect_flag: body[33],
         push: crate::combat::push(body, 12)?,
     }))
+}
+
+/// The bit of a spell action's flag that says its spell took hold on the
+/// target: Titanium's program tests `flag & 4` on an action of kind 231
+/// before it places a buff (handler 0x47f614, then 0x414913), and a flag
+/// with other bits set besides counts. `EQMac`'s program is unread for this;
+/// its servers send 0 as the spell lands and 4 once a buff takes hold, on
+/// which this mask and the equality used before it agree.
+pub const TOOK_HOLD: u8 = 0x04;
+
+impl SpellEffect {
+    /// Whether this action says its spell took hold on the target, the one
+    /// test for it: a `SpellEffect` is decoded only from an action of kind
+    /// 231 ([`titanium_spell_effect`], [`eqmac_spell_effect`]), and its
+    /// flag carries [`TOOK_HOLD`].
+    #[must_use]
+    pub fn took_hold(&self) -> bool {
+        self.effect_flag & TOOK_HOLD != 0
+    }
 }
 
 /// A buff record supplied by the server, without evaluating its spell effects.
@@ -544,39 +547,6 @@ mod tests {
     }
 
     #[test]
-    fn a_spell_lands_by_the_programs_mask_and_only_a_spells_action_can() {
-        // Titanium's handler: kind 231 at +0x16 and 0x04 set at +0x1e
-        // (program reads R20 b and R21).
-        let mut body = [0u8; 31];
-        body[..2].copy_from_slice(&7u16.to_le_bytes());
-        body[27..29].copy_from_slice(&42u16.to_le_bytes());
-        body[30] = 4;
-        // Another kind with the flag set is not a spell's action at all.
-        assert_eq!(titanium_action(&body).unwrap(), Action::Other(0));
-        body[22] = 231;
-        for (flag, landed) in [
-            (0x04, true),
-            (0x0c, true),
-            (0x05, true),
-            (0, false),
-            (0x08, false),
-            (0x01, false),
-        ] {
-            body[30] = flag;
-            let Action::Spell(effect) = titanium_action(&body).unwrap() else {
-                panic!("a spell's action");
-            };
-            assert_eq!(
-                effect.landed(crate::GameDialect::Titanium),
-                landed,
-                "{flag:#x}"
-            );
-            // The Mac-era client's test is unread.
-            assert!(!effect.landed(crate::GameDialect::EqMac));
-        }
-    }
-
-    #[test]
     fn actions_are_a_spells_the_spin_or_another_kind() {
         // Mob::Spin's fixed record, in each generation's length.
         let mut titanium = [0u8; 31];
@@ -608,6 +578,36 @@ mod tests {
         assert!(matches!(eqmac_action(&eqmac).unwrap(), Action::Spell(_)));
         assert!(titanium_action(&titanium[..30]).is_err());
         assert!(eqmac_action(&eqmac[..35]).is_err());
+    }
+
+    #[test]
+    fn a_spell_takes_hold_on_a_kind_231_action_whose_flag_carries_4() {
+        let took_hold = |kind: u8, flag: u8| {
+            let mut titanium = [0u8; 31];
+            titanium[22] = kind;
+            titanium[30] = flag;
+            let mut eqmac = [0u8; 36];
+            eqmac[24] = kind;
+            eqmac[33] = flag;
+            let held =
+                |action: Action| matches!(action, Action::Spell(effect) if effect.took_hold());
+            let both = (
+                held(titanium_action(&titanium).unwrap()),
+                held(eqmac_action(&eqmac).unwrap()),
+            );
+            assert_eq!(both.0, both.1, "kind {kind} flag {flag:#x}");
+            both.0
+        };
+        assert!(took_hold(231, 4));
+        // Other bits besides 4 still say so; without 4 nothing does.
+        assert!(took_hold(231, 0x14));
+        assert!(took_hold(231, 0xff));
+        assert!(!took_hold(231, 0));
+        assert!(!took_hold(231, 0x10));
+        assert!(!took_hold(231, 0xfb));
+        // A flag of 4 on an action of another kind lands nothing.
+        assert!(!took_hold(230, 4));
+        assert!(!took_hold(0, 4));
     }
 
     #[test]
