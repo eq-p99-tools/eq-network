@@ -250,9 +250,12 @@ fn quarm_moves_and_jumps_with_eqmac_packets_and_obeys_corrections() {
     assert!(output.result.unwrap());
     // Leave a physics step between calibration and input without sleeping.
     let motion = world.body.motion_mut().unwrap();
+    let calibration = motion.calibration().unwrap();
+    // A change in place keeps the stamps, so start afresh to backdate them.
+    motion.withdraw();
     motion
         .calibrate(
-            motion.calibration().unwrap(),
+            calibration,
             Instant::now()
                 .checked_sub(Duration::from_millis(200))
                 .unwrap(),

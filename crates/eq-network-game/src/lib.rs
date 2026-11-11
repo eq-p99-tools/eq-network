@@ -200,6 +200,16 @@ impl GameDialect {
         }
     }
 
+    /// How this generation's program treats input while the player is
+    /// rooted ([`movement::RootRules`]).
+    #[must_use]
+    pub const fn root(self) -> movement::RootRules {
+        match self {
+            Self::Titanium => movement::TITANIUM_ROOT,
+            Self::EqMac => movement::EQMAC_ROOT,
+        }
+    }
+
     /// Whether a change of the player's posture from standing turns auto
     /// attack off. Titanium's posture routine does not, for any posture
     /// (program read R19cd 3): auto attack stays on through a sit, a duck

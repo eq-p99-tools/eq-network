@@ -481,6 +481,43 @@ impl MovementOptions {
     }
 }
 
+/// How a client generation's program treats input while the player is
+/// rooted (a speed modifier below -999). The root itself is the session's:
+/// granted at no speed, input kept, turning taken
+/// ([`MotionSession::root`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct RootRules {
+    /// The autorun latch survives the root, so the player runs again by
+    /// themselves once it ends (Titanium R22 b: the root branch of 0x410fdb
+    /// calls 0x479482, which writes nothing unless a follow target is set,
+    /// so the latch at 0x923860 stays set). Following, which the program ends there
+    /// with the latch (line 0x3196), is not modelled. Off, the root drops
+    /// the latch.
+    pub keeps_autorun: bool,
+    /// A jump is taken while rooted. Titanium refuses it (R22 c: the jump
+    /// gate in 0x4a1d74 needs the modifier at -1000 or above and clears the
+    /// request). At exactly -1000 the program roots movement and still lets
+    /// the jump through; real roots are far lower, so every root refuses
+    /// here, a labelled edge (recording checklist 6.451).
+    pub jumps: bool,
+}
+
+/// Titanium's rules (program read R22). Mouse-look pitch, which the program
+/// holds while rooted in camera modes 0-2 (R22 d, 0x4929dd), is not
+/// modelled (recording checklist 6.451).
+pub const TITANIUM_ROOT: RootRules = RootRules {
+    keeps_autorun: true,
+    jumps: false,
+};
+
+/// The Mac-era client's rules: unread, so this library's earlier ones,
+/// where a root drops the autorun latch and refuses a jump.
+pub const EQMAC_ROOT: RootRules = RootRules {
+    keeps_autorun: false,
+    jumps: false,
+};
+
 /// Validates proposed motion without trusting render-frame timing or accumulating idle credit.
 #[derive(Clone, Debug)]
 pub struct MovementGuard {
