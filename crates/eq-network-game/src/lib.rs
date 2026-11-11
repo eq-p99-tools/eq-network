@@ -234,8 +234,9 @@ impl GameDialect {
     }
 
     /// Whether a spell with the feign effect (74) that took hold on the
-    /// player ([`buffs::SpellEffect::took_hold`]) lies them down. Titanium's landing sends effect 74 to 0x40db88, which is
-    /// the posture routine with 115 for the player's own spawn, with no
+    /// player ([`buffs::SpellEffect::took_hold`]) lies them down.
+    /// Titanium's landing sends effect 74 to 0x40db88, which is the
+    /// posture routine with 115 for the player's own spawn, with no
     /// feign request, no auto attack change and no success test (program
     /// read R21). The Mac-era client's is unread, so it keeps this library's
     /// earlier rule of leaving the posture alone (recording checklist 6.455).

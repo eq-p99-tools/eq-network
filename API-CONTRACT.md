@@ -959,10 +959,11 @@ player: only the host holds spell data. Send it only for a
 flag carrying 0x04, as Titanium's handler 0x47f614 tests it), whose spell
 carries effect 74, and where `GameDialect::spell_feign_lies()` holds. A
 server type's `spell_landing_flag` answers a different question, which
-servers have been checked. The session changes the posture only: one lying report, or none
-when the player already lies, with the movement in hand stopped; no feign
-request and no auto attack change. With `PostureOptions::feign_standing`
-it sends nothing and owes the next stand. Another spawn's id is refused.
+servers have been checked. The session changes the posture only: one
+lying report, or none when the player already lies, with the movement in
+hand stopped; no feign request and no auto attack change. With
+`PostureOptions::feign_standing` it sends nothing and owes the next
+stand. Another spawn's id is refused.
 
 ## Movement inputs are the host's, by revision
 
