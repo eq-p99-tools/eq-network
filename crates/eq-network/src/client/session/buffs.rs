@@ -8,7 +8,7 @@ use anyhow::Result;
 use eq_network_game::{
     buffs::{
         cancel::{self, Progress, Request},
-        Buff,
+        Applies, Buff, BuffUpdate,
     },
     command::EncodedCommand,
     message::Message,
@@ -75,6 +75,78 @@ impl Buffs {
                 .filter_map(|(slot, buff)| Some((u32::try_from(slot).ok()?, buff.clone()?)))
                 .collect(),
         );
+    }
+
+    /// Applies a received buff update to the received slots, as the
+    /// program applies it ([`Applies`]), and says which fade evidence it
+    /// gives: a received slot's fade, or a fade of a spell no received slot
+    /// held, which is a modelled slot's evidence.
+    fn received_update(&mut self, update: &BuffUpdate) -> (Option<(u32, u32)>, Option<u32>) {
+        let mut faded = None;
+        let mut modelled_fade = None;
+        let pending = self.pending.as_ref().map(|(request, _)| request.slot);
+        if let Some(slots) = &mut self.slots {
+            match (update.applies, &update.buff) {
+                // A Titanium update by spell changes the record
+                // where a received slot holds it, and adds none
+                // (R20 (e)).
+                (Applies::BySpell, buff) => {
+                    if let Some(buff) = buff {
+                        for held in slots.values_mut().filter(|held| {
+                            held.spell_id == buff.spell_id && held.effect_type == update.record_type
+                        }) {
+                            *held = buff.clone();
+                        }
+                    }
+                }
+                // A Titanium fade removes the spell from every slot
+                // of its type byte, whatever slot it names.
+                (Applies::FadeBySpell, _) => {
+                    let removed: Vec<u32> = slots
+                        .iter()
+                        .filter(|(_, held)| {
+                            held.spell_id == update.spell_id
+                                && held.effect_type == update.record_type
+                        })
+                        .map(|(slot, _)| *slot)
+                        .collect();
+                    for slot in &removed {
+                        slots.remove(slot);
+                    }
+                    if let Some(slot) = removed
+                        .iter()
+                        .find(|slot| Some(**slot) == pending)
+                        .or(removed.first())
+                    {
+                        faded = Some((*slot, update.spell_id));
+                    } else {
+                        // No received slot held it: evidence for a
+                        // modelled one.
+                        modelled_fade = Some(update.spell_id);
+                    }
+                }
+                (_, Some(buff)) => {
+                    slots.insert(update.slot, buff.clone());
+                }
+                (_, None) if update.replaces_slot() => {
+                    slots.remove(&update.slot);
+                }
+                (_, None) => {
+                    if slots
+                        .get(&update.slot)
+                        .is_some_and(|buff| buff.spell_id == update.spell_id)
+                    {
+                        // Only an ordinary named fade supplies fade
+                        // evidence.
+                        slots.remove(&update.slot);
+                        faded = Some((update.slot, update.spell_id));
+                    } else {
+                        modelled_fade = Some(update.spell_id);
+                    }
+                }
+            }
+        }
+        (faded, modelled_fade)
     }
 
     fn report(request: &Request, progress: Progress, out: &mut Out<'_, '_>) -> Result<()> {
@@ -176,8 +248,7 @@ impl Feature for Buffs {
         };
         // Keep reducing received slots even during a transfer: a refused
         // transfer resumes this admission without another profile snapshot.
-        let mut faded = None;
-        let mut modelled_fade = None;
+        let (mut faded, mut modelled_fade) = (None, None);
         match event {
             WorldEvent::BuffSnapshot(buffs) => {
                 self.snapshot(buffs);
@@ -185,25 +256,7 @@ impl Feature for Buffs {
             }
             WorldEvent::Buff(update) if world.is_player(update.entity_id) => {
                 self.revision = self.revision.wrapping_add(1);
-                if let Some(slots) = &mut self.slots {
-                    if let Some(buff) = &update.buff {
-                        slots.insert(update.slot, buff.clone());
-                    } else if update.replaces_slot() {
-                        slots.remove(&update.slot);
-                    } else if slots
-                        .get(&update.slot)
-                        .is_some_and(|buff| buff.spell_id == update.spell_id)
-                    {
-                        // Only an ordinary named fade supplies fade evidence.
-                        slots.remove(&update.slot);
-                        faded = Some((update.slot, update.spell_id));
-                    } else if update.buff.is_none() {
-                        // A fade of a spell no received slot holds: the
-                        // program fades by spell (R20 (e)), so it is fade
-                        // evidence for a modelled slot.
-                        modelled_fade = Some(update.spell_id);
-                    }
-                }
+                (faded, modelled_fade) = self.received_update(update);
             }
             WorldEvent::SpellEffect(effect)
                 if world.is_player(effect.target_id) && effect.effect_flag == 4 =>
@@ -248,7 +301,6 @@ impl Feature for Buffs {
 mod tests {
     use super::super::feature::testing;
     use super::*;
-    use eq_network_game::buffs::BuffUpdate;
 
     #[test]
     fn failing_the_first_or_second_send_keeps_the_submitted_prefix_explicit() {
@@ -387,8 +439,14 @@ mod tests {
             buffs.observe(&update(8, 42, None), &mut world, out)?;
             buffs.observe(&update(7, 43, None), &mut world, out)?;
             assert_eq!(buffs.slots.as_ref().unwrap()[&3].spell_id, 42);
-            let mut fade = first.body.clone();
-            fade[28] = 1;
+            let mut untyped = first.body.clone();
+            untyped[28] = 1;
+            let mut fade = untyped.clone();
+            fade[4] = 2;
+            // A fade whose record has no type byte matches no slot, as in
+            // the program (R20 (e)); a server's fade carries type 2.
+            buffs.observe(&packet(&untyped), &mut world, out)?;
+            assert_eq!(buffs.slots.as_ref().unwrap()[&3].spell_id, 42);
             buffs.observe(&packet(&fade), &mut world, out)?;
             assert!(buffs.slots.as_ref().unwrap().is_empty());
             assert!(buffs.pending.is_none());
@@ -408,9 +466,10 @@ mod tests {
         let mut record = buff(278);
         record.caster_level = 0;
         record.caster_id = 0;
+        // After the correction below, the slots' revision is 2.
         let command = ClientCommand::CancelBuff(Request {
             session_id: 5,
-            revision: 1,
+            revision: 2,
             slot: 0,
             spell_id: 278,
             beneficial: Some(true),
@@ -419,8 +478,20 @@ mod tests {
             placement: cancel::Placement::Modelled(record.clone()),
         });
         let outcome = testing::run(|out| {
+            // The server's duration correction for its own slot, 6: by
+            // spell, it changes no received slot and adds none.
+            let correction = Message::Event(WorldEvent::Buff(BuffUpdate {
+                applies: Applies::BySpell,
+                record_type: 2,
+                entity_id: 7,
+                slot: 6,
+                spell_id: 278,
+                buff: Some(buff(278)),
+            }));
+            buffs.observe(&correction, &mut world, out)?;
+            assert!(!buffs.slots.as_ref().unwrap().contains_key(&6));
             buffs.handle(&command, &mut world, out)?;
-            // The server's own slot for it was 3: it fades by spell.
+            // It fades by spell, naming slot 3.
             buffs.observe(&update(7, 278, None), &mut world, out)
         });
         outcome.result.unwrap();
@@ -440,7 +511,7 @@ mod tests {
         let outcome =
             testing::run(|out| buffs.handle(&ClientCommand::CancelBuff(request), &mut world, out));
         outcome.result.unwrap();
-        assert!(outcome.sent.is_empty());
+        assert_eq!(outcome.sent.len(), 0);
         assert!(matches!(
             progress(&outcome.events).as_slice(),
             [Progress::Refused(_)]
