@@ -26,7 +26,10 @@ impl Feature for Stances {
     }
 
     fn owns(&self, command: &ClientCommand) -> bool {
-        matches!(command, ClientCommand::SetPosture { .. })
+        matches!(
+            command,
+            ClientCommand::SetPosture { .. } | ClientCommand::FeignLanded { .. }
+        )
     }
 
     fn handle(
@@ -35,18 +38,20 @@ impl Feature for Stances {
         world: &mut World,
         out: &mut Out<'_, '_>,
     ) -> Result<()> {
-        let ClientCommand::SetPosture {
-            spawn_id, posture, ..
-        } = *command
-        else {
-            return Ok(());
-        };
-        if !world.is_player(spawn_id) {
-            return out
-                .log
-                .diagnostic("Rejected a posture for another spawn".into());
+        match *command {
+            ClientCommand::SetPosture {
+                spawn_id, posture, ..
+            } => {
+                if !world.is_player(spawn_id) {
+                    return out
+                        .log
+                        .diagnostic("Rejected a posture for another spawn".into());
+                }
+                world.posture.set(spawn_id, posture, out)
+            }
+            ClientCommand::FeignLanded { spawn_id, .. } => feign_landed(spawn_id, world, out),
+            _ => Ok(()),
         }
-        world.posture.set(spawn_id, posture, out)
     }
 
     fn observe(
@@ -79,6 +84,36 @@ impl Feature for Stances {
             _ => Ok(()),
         }
     }
+}
+
+/// A feign spell landed on the player, by the host's word: the Titanium
+/// program lies them down through its posture routine, as the press does,
+/// but with no feign request and no auto attack change (read R21). A
+/// player who moves while feigned (6.454) stays standing and owes the
+/// stand, as for the press. The Mac-era client's landing is unread, so it
+/// changes nothing there (6.455).
+fn feign_landed(spawn_id: u16, world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
+    if !world.is_player(spawn_id) {
+        return out
+            .log
+            .diagnostic("Rejected a feign landing for another spawn".into());
+    }
+    if !out.wire.dialect().spell_feign_lies() {
+        return Ok(());
+    }
+    let standing = world
+        .body
+        .options()
+        .is_some_and(|options| options.posture.feign_standing);
+    if standing {
+        world.posture.owe_stand();
+        return Ok(());
+    }
+    world.posture.lie_for_feign(spawn_id, out)?;
+    if out.wire.dialect().lying().holds_still {
+        world.body.stop_voluntary();
+    }
+    Ok(())
 }
 
 /// Stands the player up when a hit lands while they sit or kneel to loot,
@@ -547,6 +582,103 @@ mod tests {
         assert_eq!(world.posture.current(), Some(PostureState::Lying));
         // Only the press turns auto attack off, never a lying report.
         assert!(world.attacking);
+    }
+
+    fn landed(spawn_id: u16) -> ClientCommand {
+        ClientCommand::FeignLanded {
+            session_id: 5,
+            spawn_id,
+            created: Instant::now(),
+        }
+    }
+
+    /// A feign spell's landing lies the player down through the posture
+    /// routine alone (read R21): one lying report, no feign request, auto
+    /// attack left as it is; nothing when they already lie; one report from
+    /// any other posture.
+    #[test]
+    fn a_feign_spell_landing_lies_the_player_once_and_sends_nothing_else() {
+        for posture in [PostureState::Standing, PostureState::Sitting] {
+            let mut world = hit_world(posture);
+            world.attacking = true;
+            let outcome = testing::run(|out| Stances.handle(&landed(7), &mut world, out));
+            outcome.result.unwrap();
+            assert_eq!(
+                outcome.sent,
+                [eq_network_game::feign::titanium_posture(7).unwrap()],
+                "{posture:?}"
+            );
+            assert!(matches!(
+                outcome.events[..],
+                [ClientEvent::World(WorldEvent::Posture {
+                    spawn_id: 7,
+                    posture: PostureState::Lying,
+                })]
+            ));
+            assert_eq!(world.posture.current(), Some(PostureState::Lying));
+            assert!(world.attacking, "the landing leaves auto attack alone");
+            // Already lying, as after the press: nothing more.
+            let outcome = testing::run(|out| Stances.handle(&landed(7), &mut world, out));
+            outcome.result.unwrap();
+            assert!(outcome.sent.is_empty() && outcome.events.is_empty());
+        }
+    }
+
+    #[test]
+    fn a_feign_landing_for_another_spawn_or_on_the_mac_client_changes_nothing() {
+        const EQMAC: &dyn super::super::wire::Wire = &super::super::wire::EqMac;
+        let mut world = hit_world(PostureState::Standing);
+        let outcome = testing::run(|out| Stances.handle(&landed(42), &mut world, out));
+        outcome.result.unwrap();
+        assert!(outcome.sent.is_empty(), "{:?}", outcome.sent);
+        assert_eq!(world.posture.current(), Some(PostureState::Standing));
+        // The Mac-era client's landing is unread (6.455).
+        let outcome = testing::run_on(EQMAC, |out| Stances.handle(&landed(7), &mut world, out));
+        outcome.result.unwrap();
+        assert!(outcome.sent.is_empty() && outcome.events.is_empty());
+        assert_eq!(world.posture.current(), Some(PostureState::Standing));
+    }
+
+    /// Moving while feigned (6.454) covers a feign spell too: the landing
+    /// sends nothing, and the next stand goes out once to end the feign.
+    #[test]
+    fn a_player_who_moves_while_feigned_stays_standing_when_a_feign_spell_lands() {
+        let mut world = hit_world(PostureState::Standing);
+        let now = Instant::now();
+        let mut motion = eq_network_game::movement::MotionSession::new(
+            5,
+            7,
+            eq_network_game::world::Position::default(),
+            now,
+        )
+        .unwrap();
+        motion
+            .set_options(
+                eq_network_game::movement::MovementOptions {
+                    posture: eq_network_game::movement::PostureOptions {
+                        feign_standing: true,
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+                now,
+            )
+            .unwrap();
+        world.body.admit(motion);
+        let outcome = testing::run(|out| Stances.handle(&landed(7), &mut world, out));
+        outcome.result.unwrap();
+        assert!(outcome.sent.is_empty() && outcome.events.is_empty());
+        assert_eq!(world.posture.current(), Some(PostureState::Standing));
+        assert!(world.posture.stand_owed());
+        let stand = |world: &mut World| {
+            testing::run(|out| Stances.handle(&ask(command::Posture::Standing), world, out))
+        };
+        let outcome = stand(&mut world);
+        outcome.result.unwrap();
+        assert_eq!(outcome.sent.len(), 1);
+        let outcome = stand(&mut world);
+        outcome.result.unwrap();
+        assert!(outcome.sent.is_empty(), "{:?}", outcome.sent);
     }
 
     #[test]

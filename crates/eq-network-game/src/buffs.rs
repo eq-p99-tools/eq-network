@@ -236,6 +236,25 @@ pub fn eqmac_spell_effect(body: &[u8]) -> Result<Option<SpellEffect>> {
     }))
 }
 
+/// The bit of a spell action's flag that says its spell took hold on the
+/// target: Titanium's program tests `flag & 4` on an action of kind 231
+/// before it places a buff (handler 0x47f614, then 0x414913), and a flag
+/// with other bits set besides counts. `EQMac`'s program is unread for this;
+/// its servers send 0 as the spell lands and 4 once a buff takes hold, on
+/// which this mask and the equality used before it agree.
+pub const TOOK_HOLD: u8 = 0x04;
+
+impl SpellEffect {
+    /// Whether this action says its spell took hold on the target, the one
+    /// test for it: a `SpellEffect` is decoded only from an action of kind
+    /// 231 ([`titanium_spell_effect`], [`eqmac_spell_effect`]), and its
+    /// flag carries [`TOOK_HOLD`].
+    #[must_use]
+    pub fn took_hold(&self) -> bool {
+        self.effect_flag & TOOK_HOLD != 0
+    }
+}
+
 /// A buff record supplied by the server, without evaluating its spell effects.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct Buff {
@@ -559,6 +578,36 @@ mod tests {
         assert!(matches!(eqmac_action(&eqmac).unwrap(), Action::Spell(_)));
         assert!(titanium_action(&titanium[..30]).is_err());
         assert!(eqmac_action(&eqmac[..35]).is_err());
+    }
+
+    #[test]
+    fn a_spell_takes_hold_on_a_kind_231_action_whose_flag_carries_4() {
+        let took_hold = |kind: u8, flag: u8| {
+            let mut titanium = [0u8; 31];
+            titanium[22] = kind;
+            titanium[30] = flag;
+            let mut eqmac = [0u8; 36];
+            eqmac[24] = kind;
+            eqmac[33] = flag;
+            let held =
+                |action: Action| matches!(action, Action::Spell(effect) if effect.took_hold());
+            let both = (
+                held(titanium_action(&titanium).unwrap()),
+                held(eqmac_action(&eqmac).unwrap()),
+            );
+            assert_eq!(both.0, both.1, "kind {kind} flag {flag:#x}");
+            both.0
+        };
+        assert!(took_hold(231, 4));
+        // Other bits besides 4 still say so; without 4 nothing does.
+        assert!(took_hold(231, 0x14));
+        assert!(took_hold(231, 0xff));
+        assert!(!took_hold(231, 0));
+        assert!(!took_hold(231, 0x10));
+        assert!(!took_hold(231, 0xfb));
+        // A flag of 4 on an action of another kind lands nothing.
+        assert!(!took_hold(230, 4));
+        assert!(!took_hold(0, 4));
     }
 
     #[test]
