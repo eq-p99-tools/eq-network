@@ -286,12 +286,28 @@ impl Feature for Entities {
 
     /// Reports the spawns and their postures; the player's own posture is
     /// noted, since the server never repeats it.
+    ///
+    /// Where the generation's program stands the player as the zone is set
+    /// up ([`eq_network_game::feign::EntryStand`], program reads R24 and
+    /// R24b), the player's posture before that stand is the last one
+    /// reported before admission, or else the own spawn record's; the stand
+    /// then replaces it, sending the standing report only if it changed and
+    /// the rule sends. A posture reported after admission replaces it in
+    /// turn.
     fn admitted(&mut self, world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
         out.log.send(ClientEvent::World(WorldEvent::Spawns(
             world.spawns.all().cloned().collect(),
         )))?;
         world.posture = OwnPosture::default();
-        for (spawn_id, posture) in std::mem::take(&mut self.postures) {
+        let entry = out.wire.dialect().entry_stand();
+        let mut postures = std::mem::take(&mut self.postures);
+        let stood = world.own_spawn.filter(|_| entry.stands);
+        let before = stood.and_then(|own| {
+            postures
+                .remove(&own)
+                .or_else(|| world.player.as_ref().and_then(|player| player.posture))
+        });
+        for (spawn_id, posture) in postures {
             if world.is_player(spawn_id) {
                 world.posture.observed(posture);
             }
@@ -300,7 +316,24 @@ impl Feature for Entities {
                 posture,
             }))?;
         }
-        Ok(())
+        let Some(own) = stood else {
+            return Ok(());
+        };
+        match before {
+            Some(posture) if posture != PostureState::Standing && entry.sends_when_changed => {
+                world.posture.observed(posture);
+                world
+                    .posture
+                    .set(own, eq_network_game::command::Posture::Standing, out)
+            }
+            _ => {
+                world.posture.observed(PostureState::Standing);
+                out.log.send(ClientEvent::World(WorldEvent::Posture {
+                    spawn_id: own,
+                    posture: PostureState::Standing,
+                }))
+            }
+        }
     }
 
     /// Keeps the table current; a corpse keeps its spawn ID.
@@ -397,16 +430,23 @@ mod tests {
         }
     }
 
-    #[test]
-    fn spawns_staged_before_admission_are_reported_with_their_postures() {
+    const EQMAC: &dyn super::super::wire::Wire = &super::super::wire::EqMac;
+
+    /// A zone with the player (7) and an NPC (8) staged, the player's
+    /// record giving `record` as its posture, and `reported` the postures
+    /// the server reported before admission.
+    fn staged(record: Option<PostureState>, reported: &[(u16, PostureState)]) -> (Entities, World) {
         let mut entities = Entities::default();
         let mut world = World::new(5);
         world.own_spawn = Some(7);
+        let mut player = testing::player(7);
+        player.posture = record;
+        world.player.admit(player);
         let spawns = vec![spawn(7, SpawnKind::Player), spawn(8, SpawnKind::Npc)];
         entities
             .admit(&event(WorldEvent::Spawns(spawns)), &mut world)
             .unwrap();
-        for (spawn_id, posture) in [(7, PostureState::Sitting), (8, PostureState::Lying)] {
+        for &(spawn_id, posture) in reported {
             entities
                 .admit(
                     &event(WorldEvent::Posture { spawn_id, posture }),
@@ -414,6 +454,26 @@ mod tests {
                 )
                 .unwrap();
         }
+        (entities, world)
+    }
+
+    fn standing(spawn_id: u16) -> eq_network_game::command::EncodedCommand {
+        eq_network_game::command::titanium_posture(
+            spawn_id,
+            eq_network_game::command::Posture::Standing,
+        )
+        .unwrap()
+    }
+
+    /// The Mac-era client's program is unread: the postures staged before
+    /// admission are reported as they came, the player's included, and
+    /// nothing stands the player (recording checklist 6.461).
+    #[test]
+    fn spawns_staged_before_admission_are_reported_with_their_postures() {
+        let (mut entities, mut world) = staged(
+            None,
+            &[(7, PostureState::Sitting), (8, PostureState::Lying)],
+        );
         let hidden = WorldEvent::Visibility {
             spawn_id: 8,
             state: eq_network_game::vision::Invisibility::EqMac(1),
@@ -422,9 +482,11 @@ mod tests {
         assert!(world.spawns.visible(8).is_none());
         // A feign pressed standing (6.454) does not outlive the zone.
         world.posture.owe_stand();
-        let outcome = testing::run(|out| entities.admitted(&mut world, out));
+        let outcome = testing::run_on(EQMAC, |out| entities.admitted(&mut world, out));
         outcome.result.unwrap();
         assert!(!world.posture.stand_owed());
+        assert!(outcome.sent.is_empty(), "{:?}", outcome.sent);
+        assert_eq!(world.posture.current(), Some(PostureState::Sitting));
         assert!(matches!(
             &outcome.events[..],
             [
@@ -433,6 +495,148 @@ mod tests {
                 ClientEvent::World(WorldEvent::Posture { spawn_id: 8, .. }),
             ] if spawns.len() == 2
         ));
+    }
+
+    /// The Mac-era client's player with no posture staged stays unknown, so
+    /// its first stand still goes out.
+    #[test]
+    fn the_mac_client_leaves_the_players_posture_unknown_at_entry() {
+        let (mut entities, mut world) = staged(None, &[]);
+        let outcome = testing::run_on(EQMAC, |out| entities.admitted(&mut world, out));
+        outcome.result.unwrap();
+        assert!(outcome.sent.is_empty(), "{:?}", outcome.sent);
+        assert_eq!(world.posture.current(), None);
+        assert!(matches!(
+            &outcome.events[..],
+            [ClientEvent::World(WorldEvent::Spawns(_))]
+        ));
+    }
+
+    /// Titanium builds the player in the record's posture and then stands
+    /// them as the zone is set up; a standing record sends nothing (program
+    /// reads R24 and R24b), and the player stands once, reported.
+    #[test]
+    fn titanium_stands_the_player_at_entry_and_sends_nothing_for_a_standing_record() {
+        let (mut entities, mut world) = staged(Some(PostureState::Standing), &[]);
+        world.posture.owe_stand();
+        let outcome = testing::run(|out| entities.admitted(&mut world, out));
+        outcome.result.unwrap();
+        assert!(outcome.sent.is_empty(), "{:?}", outcome.sent);
+        assert_eq!(world.posture.current(), Some(PostureState::Standing));
+        assert!(!world.posture.stand_owed());
+        assert!(matches!(
+            &outcome.events[..],
+            [
+                ClientEvent::World(WorldEvent::Spawns(_)),
+                ClientEvent::World(WorldEvent::Posture {
+                    spawn_id: 7,
+                    posture: PostureState::Standing
+                }),
+            ]
+        ));
+    }
+
+    /// A record that doesn't stand the player gets exactly one standing
+    /// report at entry (inferred, recording checklist 6.461).
+    #[test]
+    fn titanium_sends_one_stand_at_entry_for_a_record_that_does_not_stand() {
+        for record in [
+            PostureState::Sitting,
+            PostureState::Lying,
+            PostureState::Unknown(0),
+        ] {
+            let (mut entities, mut world) = staged(Some(record), &[]);
+            let outcome = testing::run(|out| entities.admitted(&mut world, out));
+            outcome.result.unwrap();
+            assert_eq!(outcome.sent, [standing(7)], "{record:?}");
+            assert_eq!(world.posture.current(), Some(PostureState::Standing));
+            let reported: Vec<_> = outcome
+                .events
+                .iter()
+                .filter(|event| {
+                    matches!(
+                        event,
+                        ClientEvent::World(WorldEvent::Posture { spawn_id: 7, .. })
+                    )
+                })
+                .collect();
+            assert!(
+                matches!(
+                    reported[..],
+                    [ClientEvent::World(WorldEvent::Posture {
+                        posture: PostureState::Standing,
+                        ..
+                    })]
+                ),
+                "{record:?}: {reported:?}"
+            );
+        }
+    }
+
+    /// A posture the server reported for the player before admission is
+    /// applied first, and the stand at entry then replaces it: the stand
+    /// runs after the setup (R24). Other spawns keep theirs.
+    #[test]
+    fn a_report_before_admission_gives_way_to_the_stand_at_entry() {
+        let (mut entities, mut world) = staged(
+            Some(PostureState::Standing),
+            &[(7, PostureState::Sitting), (8, PostureState::Lying)],
+        );
+        let outcome = testing::run(|out| entities.admitted(&mut world, out));
+        outcome.result.unwrap();
+        assert_eq!(outcome.sent, [standing(7)]);
+        assert_eq!(world.posture.current(), Some(PostureState::Standing));
+        assert!(matches!(
+            &outcome.events[..],
+            [
+                ClientEvent::World(WorldEvent::Spawns(_)),
+                ClientEvent::World(WorldEvent::Posture {
+                    spawn_id: 8,
+                    posture: PostureState::Lying
+                }),
+                ClientEvent::World(WorldEvent::Posture {
+                    spawn_id: 7,
+                    posture: PostureState::Standing
+                }),
+            ]
+        ));
+        // A standing report staged over a seated record sends nothing.
+        let (mut entities, mut world) =
+            staged(Some(PostureState::Sitting), &[(7, PostureState::Standing)]);
+        let outcome = testing::run(|out| entities.admitted(&mut world, out));
+        outcome.result.unwrap();
+        assert!(outcome.sent.is_empty(), "{:?}", outcome.sent);
+    }
+
+    /// After admission the server's report wins, and the player's next
+    /// stand from the seeded posture sends nothing on Titanium.
+    #[test]
+    fn a_report_after_admission_replaces_the_stand_at_entry() {
+        use super::super::posture::Stances;
+        let (mut entities, mut world) = staged(Some(PostureState::Standing), &[]);
+        testing::run(|out| entities.admitted(&mut world, out))
+            .result
+            .unwrap();
+        let stand = super::super::ClientCommand::SetPosture {
+            session_id: 5,
+            spawn_id: 7,
+            posture: eq_network_game::command::Posture::Standing,
+            created: std::time::Instant::now(),
+        };
+        let outcome = testing::run(|out| Stances.handle(&stand, &mut world, out));
+        outcome.result.unwrap();
+        assert!(outcome.sent.is_empty(), "{:?}", outcome.sent);
+        let seated = event(WorldEvent::Posture {
+            spawn_id: 7,
+            posture: PostureState::Sitting,
+        });
+        testing::run(|out| Stances.observe(&seated, &mut world, out))
+            .result
+            .unwrap();
+        assert_eq!(world.posture.current(), Some(PostureState::Sitting));
+        let outcome = testing::run(|out| Stances.handle(&stand, &mut world, out));
+        outcome.result.unwrap();
+        assert_eq!(outcome.sent, [standing(7)]);
     }
 
     #[test]

@@ -607,6 +607,7 @@ fn decoded_profile(data: &[u8], character: &str) -> Result<PlayerState> {
         // EQMac /who fields are not decoded yet.
         listing: crate::listing::Listing::default(),
         name_parts: crate::names::NameParts::default(),
+        posture: None,
     })
 }
 
@@ -773,6 +774,7 @@ fn decoded_spawns(data: &[u8]) -> Result<Vec<SpawnState>> {
                 name_parts: crate::names::NameParts::default(),
                 pet_owner: None,
                 hp_percent: None,
+                posture: None,
             })
         })
         .collect()

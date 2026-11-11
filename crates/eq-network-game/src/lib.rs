@@ -213,6 +213,16 @@ impl GameDialect {
         matches!(self, Self::EqMac)
     }
 
+    /// What this generation's program does with the player's own posture
+    /// at zone entry ([`feign::EntryStand`]).
+    #[must_use]
+    pub const fn entry_stand(self) -> feign::EntryStand {
+        match self {
+            Self::Titanium => feign::TITANIUM_ENTRY,
+            Self::EqMac => feign::EQMAC_ENTRY,
+        }
+    }
+
     /// How this generation's sit/stand toggle chooses
     /// ([`feign::SitToggle`]).
     #[must_use]
@@ -286,5 +296,13 @@ mod tests {
     fn only_titanium_is_read_to_skip_an_unchanged_posture() {
         assert!(GameDialect::Titanium.skips_unchanged_posture());
         assert!(!GameDialect::EqMac.skips_unchanged_posture());
+    }
+
+    #[test]
+    fn only_titanium_stands_the_player_at_entry() {
+        let titanium = GameDialect::Titanium.entry_stand();
+        assert!(titanium.stands && titanium.sends_when_changed);
+        let eqmac = GameDialect::EqMac.entry_stand();
+        assert!(!eqmac.stands && !eqmac.sends_when_changed);
     }
 }

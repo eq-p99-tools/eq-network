@@ -124,6 +124,12 @@ pub struct PlayerState {
     pub run_speed: f32,
     /// HP percentage, if valid in the spawn record.
     pub hp_percent: Option<u8>,
+    /// The posture the own spawn record gives, from the byte the Titanium
+    /// program reads as the spawn's posture (record +0x57, program read
+    /// R24); None where the dialect does not report it. The program stands
+    /// the player as the zone is set up whatever it says
+    /// ([`crate::GameDialect::entry_stand`]).
+    pub posture: Option<PostureState>,
     /// Worn gear and features from the own spawn record; default where the
     /// dialect does not report them.
     pub appearance: crate::appearance::Appearance,
@@ -272,6 +278,11 @@ pub struct SpawnState {
     /// Health in percent when the record was sent; None where the record's
     /// value is out of range or the dialect does not report it.
     pub hp_percent: Option<u8>,
+    /// The posture the record gives, from the byte the Titanium program
+    /// reads as the spawn's posture (record +0x57, program read R24); None
+    /// where the dialect does not report it. A later posture report
+    /// replaces it.
+    pub posture: Option<PostureState>,
     /// The spawn's title, last name and suffix; empty where the dialect does
     /// not report them.
     pub name_parts: crate::names::NameParts,
@@ -304,6 +315,11 @@ impl SpawnState {
         }
     }
 }
+
+/// The byte of a Titanium spawn record the program copies into the spawn's
+/// posture as it builds the spawn (0x4816d7 at 0x481865, program read R24):
+/// 100 standing, 110 sitting, 120 dead and so on.
+const POSTURE_BYTE: usize = 0x57;
 
 /// Decode a decrypted Titanium spawn batch, without accepting partial records.
 ///
@@ -356,6 +372,7 @@ pub fn titanium_spawns(body: &[u8]) -> Result<Vec<SpawnState>> {
                 listing: crate::listing::titanium_spawn(record),
                 pet_owner: crate::pets::titanium_owner(record),
                 hp_percent: (record[86] <= 100).then_some(record[86]),
+                posture: Some(PostureState::from(u32::from(record[POSTURE_BYTE]))),
                 name_parts: crate::names::titanium_spawn(record),
             })
         })
@@ -1909,6 +1926,7 @@ pub fn titanium_player(profile: &[u8], spawn: &[u8], revolution: f32) -> Result<
         walk_speed,
         run_speed,
         hp_percent: (spawn[86] <= 100).then_some(spawn[86]),
+        posture: Some(PostureState::from(u32::from(spawn[POSTURE_BYTE]))),
         appearance: crate::appearance::titanium_spawn(spawn),
         listing: crate::listing::titanium_spawn(spawn),
         name_parts: crate::names::titanium_spawn(spawn),
@@ -2619,9 +2637,11 @@ mod tests {
         profile[4360..4364].copy_from_slice(&42u32.to_le_bytes());
         profile[4364..4368].copy_from_slice(&u32::MAX.to_le_bytes());
         spawn[340..344].copy_from_slice(&7u32.to_le_bytes());
+        spawn[0x57] = 110;
         profile[12940..12947].copy_from_slice(b"Example");
         let mut player = titanium_player(&profile, &spawn, 256.0).unwrap();
         assert_eq!(player.name, "Example");
+        assert_eq!(player.posture, Some(PostureState::Sitting));
         // Stock EQEmu saves the heading on the 512-unit scale itself.
         let stock = titanium_player(&profile, &spawn, 512.0).unwrap();
         assert!((stock.position.heading - 28.125).abs() < 0.001);
@@ -2803,6 +2823,8 @@ mod tests {
             record[7..14].copy_from_slice(b"Fixture");
             record[83] = if index == 0 { 1 } else { 3 };
             record[86] = if index == 0 { 64 } else { 200 };
+            // The posture byte: standing, and a corpse's 120.
+            record[87] = if index == 0 { 100 } else { 120 };
             record[331] = if index == 0 { 40 } else { 255 };
             record[75..79].copy_from_slice(&6f32.to_le_bytes());
             record[284..288].copy_from_slice(&42u32.to_le_bytes());
@@ -2846,6 +2868,14 @@ mod tests {
         assert_eq!(
             (spawns[0].hp_percent, spawns[1].hp_percent),
             (Some(64), None)
+        );
+        // The byte after health is the program's posture (R24).
+        assert_eq!(
+            (spawns[0].posture, spawns[1].posture),
+            (
+                Some(PostureState::Standing),
+                Some(PostureState::Unknown(120))
+            )
         );
         assert!((spawns[0].position.x + 1.0).abs() < 0.001);
         assert!((spawns[0].position.heading - 256.0).abs() < 0.001);
