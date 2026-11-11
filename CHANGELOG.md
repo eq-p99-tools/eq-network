@@ -21,6 +21,34 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `Standing`, a change like any other, and sends one standing report. The send rests on two inferred links in the read
   (checklist 6.461). The Mac-era client is unread and keeps an unknown
   posture. Other spawns' record postures are decoded but not yet used.
+- **Breaking:** a root is a grant at no speed, not a withdrawal. The
+  program zeroes the speed and the velocity once and blocks nothing else
+  (read R18, 0x410fdb; read R22): a rooted player turns, by keys and by
+  mouse, and nothing carries them. `MotionSession::root` grants the player
+  rooted, and the session tells the host with a `MotionState` of 0 units a
+  second. A song pulse or any other change while rooted withdraws nothing,
+  and the fade grants the speed again in place. `Speeds::rooted` says a
+  rule's None comes from a root. The new `GameDialect::root()` rules
+  (`movement::RootRules`): on Titanium the autorun latch survives a root,
+  so the player runs again by themselves once it ends (R22 b), and a jump
+  is refused while rooted (R22 c; the program's exact -1000 edge, which
+  roots and still jumps, is not modelled). Mouse-look pitch, which the
+  program holds while rooted in camera modes 0-2 (R22 d), is not modelled.
+  The Mac-era client is unread and keeps the earlier result: the root
+  drops the latch and refuses a jump. Stun, freeze, death, transfer and an
+  unproven start still withdraw. Recording checklist 6.451.
+- A speed change for a player already granted applies in place.
+  `MotionSession::calibrate` no longer resets the guard's stamps when a
+  grant, at a speed or rooted, is already in force. The next sample's
+  allowance runs at each speed in force over its own span of the sample's
+  interval, so every change while moving no longer refuses the sample
+  under way as stale, too frequent or over its budget. Run 2026-11-11
+  rows 4 and 5 held 0.12 s and 0.38 s at each snare. Time rooted earns no
+  distance, and distance made before a root is still taken within its
+  allowance. More than 16 changes before one sample count the earlier
+  time as rooted, the slower side. A correction, an admission and a
+  withdrawal still start afresh.
+
 - **Breaking:** Feign Death by a spell lies the player down, as the Titanium
   program does on the landing (program read R21): the new host command
   `GameCommand::FeignLanded` sends one lying posture report, or none when
