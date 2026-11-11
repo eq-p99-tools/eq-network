@@ -254,6 +254,23 @@ fn granted(
     }
 }
 
+/// The player rooted: granted, at no speed. Input goes on and nothing
+/// carries them anywhere ([`MotionSession::root`]).
+fn rooted(session_id: u64, falls: bool, jump_factor: f32) -> WorldEvent {
+    WorldEvent::MotionState {
+        session_id,
+        units_per_second: Some(0.0),
+        strafe_units_per_second: None,
+        strafe_walk_units_per_second: None,
+        swim_backward_units_per_second: None,
+        walk_units_per_second: None,
+        backward_units_per_second: None,
+        diagonal: DiagonalRates::default(),
+        falls,
+        jump_factor,
+    }
+}
+
 /// Takes the player's movement away until it is granted again, after a
 /// correction, a death or a transfer.
 pub(super) fn withdrawn(session_id: u64) -> WorldEvent {
@@ -439,6 +456,30 @@ impl Motion {
         // factor comes with a changed calibration and its grant.
         motion.set_jump_factor(speeds.jump_factor);
         let jump_factor = speeds.jump_factor;
+        // A root is a grant at no speed: the program zeroes the speed and
+        // the velocity once and blocks nothing else (read R18, 0x410fdb), so
+        // input goes on, the player turns, a song pulse or a fade withdraws
+        // nothing, and the autorun latch is the generation's
+        // ([`eq_network_game::movement::RootRules`]). It is never a positive
+        // grant for the host's receipt.
+        if speeds.rooted {
+            if !motion.rooted() {
+                if let Err(error) = motion.root(Instant::now()) {
+                    self.grant_in_force = false;
+                    return out
+                        .log
+                        .diagnostic(format!("Could not root the player: {error}"))
+                        .map(|()| false);
+                }
+                out.log.send(ClientEvent::World(rooted(
+                    world.session_id,
+                    motion.falls(),
+                    jump_factor,
+                )))?;
+            }
+            self.grant_in_force = true;
+            return Ok(false);
+        }
         if motion.calibration() == speeds.motion {
             self.grant_in_force = speeds.motion.is_some();
             return Ok(self.grant_in_force);
@@ -915,6 +956,7 @@ impl Feature for Motion {
             world.body.motion = Some(
                 MotionSession::new(world.session_id, player.spawn_id, player.position, admitted)?
                     .with_falls(self.falls)
+                    .with_rooted_jumps(out.wire.dialect().root().jumps)
                     .with_heading_snapshots(out.wire.dialect().supports_heading_snapshots())
                     .with_swimming(
                         self.swimming
@@ -1834,11 +1876,11 @@ mod tests {
             motion.handle(&fresh_report(0), &mut world, out)
         });
         assert_eq!(speeds(&outcome.events), Vec::<Option<f32>>::new());
-        // A root takes it away until it wears off.
+        // A root grants no speed until it wears off, withdrawing nothing.
         let outcome = testing::run_on(eqmac, |out| {
             motion.handle(&fresh_report(-1000), &mut world, out)
         });
-        assert_eq!(speeds(&outcome.events), [None]);
+        assert_eq!(speeds(&outcome.events), [Some(0.0)]);
         let outcome = testing::run_on(eqmac, |out| {
             motion.handle(&fresh_report(0), &mut world, out)
         });
@@ -2111,7 +2153,8 @@ mod tests {
         };
         let output = testing::run_on(EQMAC, |out| motion.handle(&rooted, &mut world, out));
         output.result.unwrap();
-        assert!(withdrew(&output.events));
+        assert!(!withdrew(&output.events));
+        assert!(was_rooted(&output.events));
         assert_eq!(world_speed(&world), None);
     }
 
@@ -2146,7 +2189,9 @@ mod tests {
             motion.handle(&bounded(2, -1000, 50, 100), &mut world, out)
         });
         output.result.unwrap();
-        assert!(withdrew(&output.events));
+        assert!(!withdrew(&output.events));
+        assert!(was_rooted(&output.events));
+        assert!(world.body.motion.as_ref().unwrap().rooted());
         // The root fades; the song is still unproven.
         let output = testing::run_on(EQMAC, |out| {
             motion.handle(&bounded(3, 0, 50, 100), &mut world, out)
@@ -2313,6 +2358,85 @@ mod tests {
         }
     }
 
+    /// A root is a grant at no speed (read R18, 0x410fdb zeroes the speed
+    /// once and blocks nothing else): no withdrawal at the landing, none
+    /// at each song pulse while rooted, a turn in place goes out, and the
+    /// fade grants the speed again in place. Run 2026-11-11 row 3 withdrew
+    /// ten times.
+    #[test]
+    fn a_root_grants_no_speed_and_withdraws_nothing_through_pulses_and_the_fade() {
+        use eq_network_game::buffs::BuffUpdate;
+        let (mut world, mut motion) = eqmac_admitted();
+        testing::run_on(EQMAC, |out| motion.handle(&report(0, 0), &mut world, out))
+            .result
+            .unwrap();
+        let full = world_speed(&world);
+        let answer = |motion: &Motion, report_id: u64, rate: i16| ClientCommand::SpeedInputs {
+            session_id: 5,
+            revision: motion.revision,
+            report_id,
+            state: SpeedInputState::Ready(SpeedInputs {
+                eqmac_fatigue: Some(eq_network_game::movement::EqMacFatigueInputs {
+                    strength: 100,
+                    stamina: Some(100),
+                }),
+                rate,
+                weight: 0,
+                capacity: 100,
+            }),
+        };
+        let pulse = Message::Event(WorldEvent::Buff(BuffUpdate {
+            spell_id: 230,
+            entity_id: 7,
+            slot: 0,
+            replaces_slot: true,
+            buff: None,
+        }));
+        // The root lands.
+        let output = testing::run_on(EQMAC, |out| motion.observe(&pulse, &mut world, out));
+        output.result.unwrap();
+        assert!(!withdrew(&output.events));
+        let output = testing::run_on(EQMAC, |out| {
+            motion.handle(&answer(&motion, 2, -10_000), &mut world, out)
+        });
+        output.result.unwrap();
+        assert_eq!(speeds(&output.events), [Some(0.0)]);
+        assert!(world.body.motion.as_ref().unwrap().rooted());
+        // Song pulses while rooted withdraw nothing and grant nothing new.
+        for report_id in 3..6 {
+            let output = testing::run_on(EQMAC, |out| motion.observe(&pulse, &mut world, out));
+            output.result.unwrap();
+            assert_eq!(speeds(&output.events), Vec::<Option<f32>>::new());
+            let output = testing::run_on(EQMAC, |out| {
+                motion.handle(&answer(&motion, report_id, -10_000), &mut world, out)
+            });
+            output.result.unwrap();
+            assert_eq!(speeds(&output.events), Vec::<Option<f32>>::new());
+        }
+        // A turn in place goes out while rooted; a step does not.
+        let origin = world.body.position().unwrap();
+        let now = Instant::now() + Duration::from_millis(300);
+        let turned = Position {
+            heading: origin.heading + 32.0,
+            ..origin
+        };
+        let turn = MovementRequest::new(MovementMode::Forward, 5, turned, now);
+        let output = testing::run_on(EQMAC, |out| Motion::step_at(&turn, now, &mut world, out));
+        output.result.unwrap();
+        assert_eq!(output.unreliable.len(), 1, "{:?}", output.events);
+        assert_eq!(world.body.position().unwrap().heading, turned.heading);
+        // The fade grants the speed again, in place.
+        let output = testing::run_on(EQMAC, |out| motion.observe(&pulse, &mut world, out));
+        output.result.unwrap();
+        let output = testing::run_on(EQMAC, |out| {
+            motion.handle(&answer(&motion, 9, 0), &mut world, out)
+        });
+        output.result.unwrap();
+        assert!(!withdrew(&output.events));
+        assert_eq!(speeds(&output.events), [full]);
+        assert!(!world.body.motion.as_ref().unwrap().rooted());
+    }
+
     /// The speed the session grants the player now, if any.
     /// A same-zone relocation (summon, GM move) or a local pad crossing,
     /// which the transfers feature has already made, keeps a grant in force
@@ -2379,6 +2503,19 @@ mod tests {
             .as_ref()
             .and_then(MotionSession::calibration)
             .map(|speeds| speeds.units_per_second)
+    }
+
+    /// Whether the events grant the player rooted: at no speed.
+    fn was_rooted(events: &[ClientEvent]) -> bool {
+        events.iter().any(|event| {
+            matches!(
+                event,
+                ClientEvent::World(WorldEvent::MotionState {
+                    units_per_second: Some(speed),
+                    ..
+                }) if *speed == 0.0
+            )
+        })
     }
 
     /// Whether the events withdraw movement, keeping falls.
@@ -2687,7 +2824,8 @@ mod tests {
         let rooted = report_at(motion.revision, 3, -1000, 3);
         let outcome = testing::run(|out| motion.handle(&rooted, &mut world, out));
         outcome.result.unwrap();
-        assert!(withdrew(&outcome.events));
+        assert!(!withdrew(&outcome.events));
+        assert!(was_rooted(&outcome.events));
     }
 
     /// A same-zone relocation or a refused transfer's rewind corrects the
