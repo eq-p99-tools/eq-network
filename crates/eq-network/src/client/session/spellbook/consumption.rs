@@ -14,6 +14,9 @@ struct Receipt {
     spell_id: u32,
     /// When the server confirmed the scribe; its cursor removal follows.
     confirmed: Option<std::time::Instant>,
+    /// The scribe's reply did not come in time, so the receipt no longer
+    /// holds the cursor; it stays only to read a late answer.
+    timed_out: bool,
 }
 
 /// How long a confirmed scribe waits for the cursor removal that follows it.
@@ -33,19 +36,42 @@ impl ScribeConsumption {
                 book_slot: u32::from(slot),
                 spell_id,
                 confirmed: None,
+                timed_out: false,
             });
         }
     }
 
-    /// Requires both the exact book update and the outstanding edit's confirmation.
+    /// Requires both the exact book update and the outstanding edit's
+    /// confirmation, or, for a scribe that timed out, the exact book update
+    /// alone: the server's late word that its cursor removal follows.
     pub fn observe(&mut self, update: &SpellUpdate, edit_confirmed: bool) {
         if let Some(receipt) = self.0.as_mut() {
-            if edit_confirmed
+            if (edit_confirmed || receipt.timed_out)
+                && receipt.confirmed.is_none()
                 && matches!(update, SpellUpdate::Slot { slot, spell_id, mode: 0 }
                 if *slot == receipt.book_slot && *spell_id == receipt.spell_id)
             {
                 receipt.confirmed = Some(std::time::Instant::now());
             }
+        }
+    }
+
+    /// The server refused the scribe before touching the cursor, so its
+    /// scroll stays where it is and nothing will consume it.
+    pub fn refused(&mut self) {
+        self.0.take_if(|receipt| receipt.confirmed.is_none());
+    }
+
+    /// The scribe of this spell into this book slot went unanswered: its
+    /// receipt stops holding the cursor (recording checklist 6.462). Any
+    /// other custody is left as it is.
+    pub fn timed_out(&mut self, book_slot: u32, spell_id: u32) {
+        if let Some(receipt) = self.0.as_mut().filter(|receipt| {
+            receipt.confirmed.is_none()
+                && receipt.book_slot == book_slot
+                && receipt.spell_id == spell_id
+        }) {
+            receipt.timed_out = true;
         }
     }
 
@@ -60,11 +86,12 @@ impl ScribeConsumption {
         })
     }
 
-    /// An unconfirmed scribe can still affect the cursor after the book is free.
+    /// An unconfirmed scribe can still affect the cursor after the book is
+    /// free, until its reply times out.
     pub fn unconfirmed(&self) -> bool {
         self.0
             .as_ref()
-            .is_some_and(|receipt| receipt.confirmed.is_none())
+            .is_some_and(|receipt| receipt.confirmed.is_none() && !receipt.timed_out)
     }
 
     /// An uncertain scribe keeps its custody hold until received cursor evidence
@@ -117,6 +144,11 @@ impl ScribeConsumption {
                 }
                 _ => update,
             }
+        } else if receipt.timed_out && update == InventoryUpdate::Remove(cursor) {
+            // A late answer to a scribe whose custody was released: the
+            // server used up the scroll, but the player may have moved items
+            // since, so the model cannot say where it went.
+            InventoryUpdate::Invalidated
         } else {
             update
         }
@@ -264,6 +296,26 @@ pub(super) mod tests {
                 "case {case}"
             );
         }
+    }
+
+    #[test]
+    fn a_timeout_releases_only_the_unanswered_scribes_own_custody() {
+        let inventory = scroll_on_cursor();
+        // Another scribe's timeout leaves this one's custody alone.
+        let mut tracker = tracker(&inventory);
+        tracker.timed_out(3, 73);
+        tracker.timed_out(2, 74);
+        assert!(tracker.unconfirmed());
+        tracker.timed_out(2, 73);
+        assert!(!tracker.unconfirmed());
+        // A confirmed scribe awaiting its removal keeps its hold.
+        let mut tracker = super::tests::tracker(&inventory);
+        tracker.observe(&confirmation(), true);
+        tracker.timed_out(2, 73);
+        assert!(tracker.awaiting_cursor(std::time::Instant::now()));
+        // A refusal does not drop a confirmed scribe's custody either.
+        tracker.refused();
+        assert!(tracker.awaiting_cursor(std::time::Instant::now()));
     }
 
     #[test]

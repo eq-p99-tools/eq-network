@@ -19,6 +19,12 @@ pub const ITEM_CAST_SLOT: u16 = 10;
 
 /// `OP_MemorizeSpell`: scribing, memorizing and forgetting, by mode.
 pub const MEMORIZE_OPCODE: u16 = 0x308e;
+/// Titanium's `OP_FormattedMessage`, a string-table line with arguments.
+pub const TITANIUM_FORMATTED_OPCODE: u16 = 0x5a48;
+/// The installed program's string a server sends when it refuses a scribe
+/// or memorization for the player's level, with the level and the spell's
+/// name as its arguments (`EQEmu`'s `SPELL_LEVEL_TO_LOW`).
+pub const LEVEL_REFUSAL: u32 = 12048;
 /// `OP_DeleteSpell`: a book entry removed.
 pub const DELETE_OPCODE: u16 = 0x4f37;
 /// `OP_SwapSpell`: two book entries exchanged.
