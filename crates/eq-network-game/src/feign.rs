@@ -94,6 +94,42 @@ pub const EQMAC_SIT_TOGGLE: SitToggle = SitToggle {
     mesmerize_refusal: None,
 };
 
+/// What a client generation's program does with the player's own posture
+/// as the zone is set up.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct EntryStand {
+    /// The player always stands after entry: Titanium's zone setup
+    /// (0x4aba14 at 0x4ac28c) calls the posture routine with 100 on the
+    /// player's own spawn, after the spawn took its record's posture
+    /// (program read R24). Without it the own posture stays unknown until
+    /// the player or the server sets one.
+    pub stands: bool,
+    /// That stand also sends the standing report when the posture it
+    /// replaces wasn't standing; the routine returns at once for an
+    /// unchanged posture (read R19), so a standing record sends nothing.
+    pub sends_when_changed: bool,
+}
+
+/// Titanium's zone entry: the player stands after the setup, sending the
+/// standing report when the posture before it wasn't standing (program
+/// reads R24 and R24b). The send path, the own-player pointer (+0x218) set
+/// as the own spawn is created (0x4850a0, 0x4852f4) and the gate's test of
+/// it (0x47c31a) are read. Two links are inferred (recording checklist
+/// 6.461): that the own spawn exists before the call at 0x4ac28c, and that
+/// the gate's virtual call returns the character. The call acts on that
+/// spawn, so it can act at all only if both hold.
+pub const TITANIUM_ENTRY: EntryStand = EntryStand {
+    stands: true,
+    sends_when_changed: true,
+};
+
+/// The Mac-era client's zone entry: unread, so this library's earlier rule
+/// of an unknown posture until one is set (recording checklist 6.461).
+pub const EQMAC_ENTRY: EntryStand = EntryStand {
+    stands: false,
+    sends_when_changed: false,
+};
+
 /// Titanium's lying posture report, which the press sends before the feign
 /// request (R19 a): `OP_SpawnAppearance` {u16 spawn id, u16 type 14, u32
 /// 115}.

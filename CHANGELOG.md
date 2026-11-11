@@ -7,6 +7,20 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Breaking:** the player stands at zone entry, as the Titanium program
+  does (program reads R24 and R24b). `SpawnState::posture` and
+  `PlayerState::posture` carry the record byte the program reads as the
+  spawn's posture (+0x57); a host constructing either adds the field. The
+  new `GameDialect::entry_stand()` (`feign::EntryStand`) says whether the
+  generation stands the player as the zone is set up, and whether that
+  stand sends. On Titanium the posture before it is a report staged
+  before admission, else the own record's: when that is standing the
+  session reports a lone `Standing` for the player, the posture they enter
+  with, and sends nothing, so the first stand after a zone-in no longer
+  sends one the program skips; otherwise it reports that posture, then
+  `Standing`, a change like any other, and sends one standing report. The
+  send rests on two inferred links in the read (checklist 6.461). The
+  Mac-era client is unread and keeps an unknown posture. Other spawns' record postures are decoded but not yet used.
 - **Breaking:** a root is a grant at no speed, not a withdrawal. The
   program zeroes the speed and the velocity once and blocks nothing else
   (read R18, 0x410fdb; read R22): a rooted player turns, by keys and by

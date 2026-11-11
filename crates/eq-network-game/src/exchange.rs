@@ -484,6 +484,7 @@ mod tests {
             name_parts: crate::names::NameParts::default(),
             pet_owner: None,
             hp_percent: None,
+            posture: None,
         };
         let origin = Position::default();
         npc.position.x = REACH;
