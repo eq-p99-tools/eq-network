@@ -292,6 +292,26 @@ impl Spellbook {
         Ok(())
     }
 
+    /// Ends the scribe or memorization the server refused for the player's
+    /// level, releasing the book and the cursor: the server answers with only
+    /// the refusal line, before it touches either.
+    /// The status carries the server's own line, by its string and
+    /// arguments, rather than words of ours; the host shows the line itself.
+    fn refused(&mut self, arguments: &[String], out: &mut Out<'_, '_>) -> Result<()> {
+        if !self.answers.refused() {
+            return Ok(());
+        }
+        self.consumption.refused();
+        let reason = format!(
+            "server line {} ({})",
+            spells::LEVEL_REFUSAL,
+            arguments.join(", ")
+        );
+        out.log
+            .diagnostic(format!("Spellbook change refused: {reason}"))?;
+        report(BookActionStatus::Rejected(reason), out)
+    }
+
     /// Drops a scribe or memorization still waiting to go out, telling the
     /// host why.
     fn cancel(&mut self, reason: &str, out: &mut Out<'_, '_>) -> Result<()> {
@@ -456,9 +476,18 @@ impl Feature for Spellbook {
     /// and submits an eligible prepared request.
     fn tick(&mut self, now: Instant, world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
         // Silence ends this local wait. Only distinguishable requests can
-        // take a new reply, and cursor custody has its own hold.
-        if let Some(status) = self.answers.timeout(now) {
-            report(status, out)?;
+        // take a new reply. A scribe's cursor custody ends with it
+        // (inferred, recording checklist 6.462): the stream is ordered and
+        // reliable, so 30 s of silence on a live link means the server has
+        // handled the request and is not using up the scroll, and the
+        // program itself holds nothing after a scribe click, so releasing
+        // is never more permissive than the original. A consumption that
+        // still comes is applied as the server's word.
+        if let Some(timed_out) = self.answers.timeout(now) {
+            if let edits::TimedOut::Scribe { slot, spell_id } = timed_out {
+                self.consumption.timed_out(slot, spell_id);
+            }
+            report(BookActionStatus::Unconfirmed, out)?;
         }
         if world.lifecycle.is_dead() {
             self.cancel("Character died", out)
@@ -483,6 +512,7 @@ impl Feature for Spellbook {
                 Ok(())
             }
             Message::Event(WorldEvent::Spell(update)) => self.spell(update, world, out),
+            Message::BookLevelRefused { arguments } => self.refused(arguments, out),
             Message::Event(WorldEvent::Posture { spawn_id, posture })
                 if world.is_player(*spawn_id)
                     && *posture != PostureState::Sitting
@@ -952,7 +982,7 @@ mod tests {
     }
 
     #[test]
-    fn an_unconfirmed_scribe_releases_the_book_but_preserves_cursor_custody() {
+    fn an_unanswered_scribe_releases_the_book_and_the_cursor_and_a_late_answer_still_counts() {
         let (mut spellbook, mut world) = admitted(Some(42));
         world.inventory = consumption::tests::scroll_on_cursor().into();
         let scribe = ClientCommand::ScribeSpell {
@@ -974,10 +1004,10 @@ mod tests {
         output.result.unwrap();
         assert_eq!(output.sent, []);
         assert_eq!(statuses(&output.events), [&BookActionStatus::Unconfirmed]);
-        assert_eq!(
-            spellbook.holds(&world, timed_out),
-            [(Resource::Inventory, "Wait for scribing to finish")]
-        );
+        // Silence frees the cursor (6.462), but the same scribe stays
+        // refused until the next admission.
+        assert_eq!(spellbook.holds(&world, timed_out), []);
+        assert!(spellbook.answers.ambiguous(&scribe));
 
         spellbook.memorize_without_sitting = true;
         let memorize = ClientCommand::MemorizeSpell {
@@ -989,6 +1019,9 @@ mod tests {
         let output = testing::run(|out| spellbook.handle(&memorize, &mut world, out));
         output.result.unwrap();
         assert_eq!(output.sent.len(), 1);
+        // The scribe's late answer settles nothing outstanding, but it is
+        // the server's word that the scroll is going: the cursor is held
+        // again for its removal.
         let scribed = Message::Event(WorldEvent::Spell(SpellUpdate::Slot {
             slot: 2,
             spell_id: 73,
@@ -999,12 +1032,90 @@ mod tests {
         assert!(output.events.is_empty());
         assert!(spellbook.answers.outstanding());
         assert_eq!(spellbook.book.as_ref().unwrap().slots()[2], Some(73));
-
-        let mut unrelated = Message::Event(WorldEvent::Inventory(InventoryUpdate::Remove(
-            InventorySlot(29),
+        let now = Instant::now();
+        assert_eq!(
+            spellbook.holds(&world, now),
+            [
+                (Resource::Inventory, "Wait for scribing to finish"),
+                (Resource::Spellbook, "Wait for the current spellbook change")
+            ]
+        );
+        // The model still holds the scroll on the cursor, so the removal is
+        // the server using it up.
+        let mut removal = Message::Event(WorldEvent::Inventory(InventoryUpdate::Remove(
+            InventorySlot(30),
         )));
-        spellbook.explain(&mut unrelated, &world);
-        assert!(spellbook.consumption.unconfirmed());
+        spellbook.explain(&mut removal, &world);
+        let Message::Event(WorldEvent::Inventory(update)) = removal else {
+            panic!("not an inventory update");
+        };
+        assert_eq!(
+            update,
+            InventoryUpdate::Consume {
+                slot: InventorySlot(30),
+                charge: false
+            }
+        );
+        let mut inventory = world.inventory.clone();
+        inventory.apply(update);
+        assert!(!inventory.items().contains_key(&InventorySlot(30)));
+        assert!(!inventory.stale());
+        assert_eq!(
+            spellbook.holds(&world, now),
+            [(Resource::Spellbook, "Wait for the current spellbook change")]
+        );
+    }
+
+    #[test]
+    fn a_late_scribe_answer_after_the_player_moved_items_marks_the_inventory_stale() {
+        let (mut spellbook, mut world) = admitted(None);
+        world.inventory = consumption::tests::scroll_on_cursor().into();
+        let scribe = ClientCommand::ScribeSpell {
+            session_id: 5,
+            revision: world.inventory.revision(),
+            slot: 2,
+            spell_id: 73,
+            created: Instant::now(),
+        };
+        testing::run(|out| spellbook.handle(&scribe, &mut world, out))
+            .result
+            .unwrap();
+        let submitted = Instant::now() + SITTING;
+        testing::run(|out| spellbook.tick(submitted, &mut world, out))
+            .result
+            .unwrap();
+        let timed_out = submitted + Duration::from_secs(31);
+        testing::run(|out| spellbook.tick(timed_out, &mut world, out))
+            .result
+            .unwrap();
+        assert_eq!(spellbook.holds(&world, timed_out), []);
+        // The player puts the scroll back in the bag meanwhile.
+        let mut inventory = world.inventory.clone();
+        let mut scroll = inventory.items()[&InventorySlot(30)].clone();
+        scroll.slot = InventorySlot(22);
+        inventory.apply(InventoryUpdate::Remove(InventorySlot(30)));
+        inventory.apply(InventoryUpdate::Set(vec![scroll]));
+        world.inventory = inventory.into();
+        let scribed = Message::Event(WorldEvent::Spell(SpellUpdate::Slot {
+            slot: 2,
+            spell_id: 73,
+            mode: 0,
+        }));
+        testing::run(|out| spellbook.observe(&scribed, &mut world, out))
+            .result
+            .unwrap();
+        let mut removal = Message::Event(WorldEvent::Inventory(InventoryUpdate::Remove(
+            InventorySlot(30),
+        )));
+        spellbook.explain(&mut removal, &world);
+        let Message::Event(WorldEvent::Inventory(update)) = removal else {
+            panic!("not an inventory update");
+        };
+        assert_eq!(update, InventoryUpdate::Invalidated);
+        let mut inventory = world.inventory.clone();
+        inventory.apply(update);
+        assert!(inventory.stale());
+        // Its custody is spent; a later cursor removal is just a removal.
         let mut removal = Message::Event(WorldEvent::Inventory(InventoryUpdate::Remove(
             InventorySlot(30),
         )));
@@ -1015,9 +1126,128 @@ mod tests {
                 InventorySlot(30)
             )))
         ));
+    }
+
+    /// Player 7 with a scroll for spell 73 on the cursor and its scribe
+    /// into book slot 2 sent.
+    fn scribe_sent() -> (Spellbook, World, ClientCommand) {
+        let (mut spellbook, mut world) = admitted(None);
+        world.inventory = consumption::tests::scroll_on_cursor().into();
+        let scribe = ClientCommand::ScribeSpell {
+            session_id: 5,
+            revision: world.inventory.revision(),
+            slot: 2,
+            spell_id: 73,
+            created: Instant::now(),
+        };
+        testing::run(|out| spellbook.handle(&scribe, &mut world, out))
+            .result
+            .unwrap();
+        let output = testing::run(|out| spellbook.tick(Instant::now() + SITTING, &mut world, out));
+        output.result.unwrap();
+        assert_eq!(output.sent.len(), 1);
+        (spellbook, world, scribe)
+    }
+
+    fn level_refusal() -> Message {
+        Message::BookLevelRefused {
+            arguments: vec!["5".into(), "Synthetic spell".into()],
+        }
+    }
+
+    fn refused(arguments: &str) -> BookActionStatus {
+        BookActionStatus::Rejected(format!("server line 12048 ({arguments})"))
+    }
+
+    #[test]
+    fn the_servers_level_refusal_ends_a_scribe_and_frees_the_cursor() {
+        let (mut spellbook, mut world, scribe) = scribe_sent();
         assert_eq!(
-            spellbook.holds(&world, timed_out),
+            spellbook.holds(&world, Instant::now()),
+            [
+                (Resource::Inventory, "Wait for scribing to finish"),
+                (Resource::Spellbook, "Wait for the current spellbook change")
+            ]
+        );
+        // EQEmu's OPMemorizeSpell answers only with SPELL_LEVEL_TO_LOW.
+        let mut line = vec![0; 12];
+        line[4..8].copy_from_slice(&spells::LEVEL_REFUSAL.to_le_bytes());
+        line[8..12].copy_from_slice(&13u32.to_le_bytes());
+        line.extend_from_slice(b"255\0Synthetic song\0\0");
+        let messages = eq_network_game::message::titanium(spells::TITANIUM_FORMATTED_OPCODE, &line);
+        assert!(
+            matches!(&messages[..], [Message::BookLevelRefused { arguments }] if arguments == &["255", "Synthetic song"])
+        );
+        let output = testing::run(|out| spellbook.observe(&messages[0], &mut world, out));
+        output.result.unwrap();
+        assert_eq!(statuses(&output.events), [&refused("255, Synthetic song")]);
+        assert!(
+            spellbook.holds(&world, Instant::now()).is_empty(),
+            "a hold remains: {:?}",
+            spellbook.holds(&world, Instant::now())
+        );
+        // The scroll is still the player's: a later removal is not the
+        // server using it up.
+        let mut removal = Message::Event(WorldEvent::Inventory(InventoryUpdate::Remove(
+            InventorySlot(30),
+        )));
+        spellbook.explain(&mut removal, &world);
+        assert!(matches!(
+            removal,
+            Message::Event(WorldEvent::Inventory(InventoryUpdate::Remove(
+                InventorySlot(30)
+            )))
+        ));
+        // A refusal answered the request, so the same scribe can go again.
+        assert!(!spellbook.answers.ambiguous(&scribe));
+        let output = testing::run(|out| spellbook.handle(&scribe, &mut world, out));
+        output.result.unwrap();
+        assert_eq!(statuses(&output.events), [&BookActionStatus::Preparing]);
+    }
+
+    #[test]
+    fn the_servers_level_refusal_ends_a_memorization() {
+        let (mut spellbook, mut world) = memorizing();
+        let output = testing::run(|out| spellbook.tick(Instant::now() + SITTING, &mut world, out));
+        output.result.unwrap();
+        assert_eq!(output.sent.len(), 1);
+        let output = testing::run(|out| spellbook.observe(&level_refusal(), &mut world, out));
+        output.result.unwrap();
+        assert_eq!(statuses(&output.events), [&refused("5, Synthetic spell")]);
+        assert_eq!(spellbook.holds(&world, Instant::now()), []);
+        assert!(!spellbook.answers.ambiguous(&memorize(2)));
+    }
+
+    #[test]
+    fn a_level_refusal_with_nothing_outstanding_changes_nothing() {
+        // Nothing sent yet: the player is still sitting.
+        let (mut spellbook, mut world) = memorizing();
+        let output = testing::run(|out| spellbook.observe(&level_refusal(), &mut world, out));
+        output.result.unwrap();
+        assert!(output.events.is_empty());
+        assert_eq!(
+            spellbook.holds(&world, Instant::now()),
             [(Resource::Spellbook, "Wait for the current spellbook change")]
+        );
+        // A confirmed scribe awaiting its cursor removal keeps custody.
+        let (mut spellbook, mut world, _) = scribe_sent();
+        let answer = Message::Event(WorldEvent::Spell(SpellUpdate::Slot {
+            slot: 2,
+            spell_id: 73,
+            mode: 0,
+        }));
+        testing::run(|out| spellbook.observe(&answer, &mut world, out))
+            .result
+            .unwrap();
+        let output = testing::run(|out| spellbook.observe(&level_refusal(), &mut world, out));
+        output.result.unwrap();
+        assert!(output.events.is_empty());
+        assert_eq!(
+            spellbook.holds(&world, Instant::now()),
+            [
+                (Resource::Inventory, "Wait for scribing to finish"),
+                (Resource::Spellbook, "Wait for the current spellbook change")
+            ]
         );
     }
 

@@ -807,6 +807,24 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **Breaking:** a scribe or memorization the server refuses for the
+  player's level ends at once. `EQEmu` answers such a request with only its
+  `SPELL_LEVEL_TO_LOW` line (string 12048) and leaves the cursor alone; the
+  session now decodes that Titanium formatted message as the new
+  `Message::BookLevelRefused { arguments }` (a host matching `Message`
+  exhaustively adds the arm), reports `BookActionStatus::Rejected` naming
+  the server's line and its arguments, and releases both the spellbook and
+  the cursor custody hold. The refusal is an answer, so the same request can
+  be sent again. The line still reaches the host as chat. Before, the scroll
+  stayed held ("Wait for scribing to finish") until the next zone.
+- A scribe left unanswered for 30 seconds now also releases its cursor
+  custody with `BookActionStatus::Unconfirmed` (inferred, recording
+  checklist 6.462), so a refusal the session does not read, such as a
+  plain-text one, no longer holds the cursor until the next zone. A late
+  book update for it holds the cursor again for its removal; a late cursor
+  removal is a consumption while the model still holds the scroll there,
+  and otherwise marks the inventory stale (`InventoryUpdate::Invalidated`).
+  The same edit stays refused until the next admission.
 - A player the zone admits without any inventory message now holds an empty
   inventory instead of an unknown one, so movement is granted after a death
   that left everything on the corpse; the original client then holds nothing

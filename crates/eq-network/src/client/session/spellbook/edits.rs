@@ -41,6 +41,15 @@ impl Edit {
     }
 }
 
+/// The edit whose reply did not come in time.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum TimedOut {
+    /// A scribe into this book slot of this spell.
+    Scribe { slot: u32, spell_id: u32 },
+    /// Any other edit.
+    Other,
+}
+
 /// At most one tracked edit owns a reply. An abandoned reply identity stays
 /// ambiguous within this admission, even after a matching update arrives.
 #[derive(Default)]
@@ -155,11 +164,28 @@ impl BookEdits {
         }
     }
 
-    /// Ends reply ownership on silence without accepting a matching retry.
-    pub fn timeout(&mut self, now: Instant) -> Option<BookActionStatus> {
+    /// Ends an outstanding scribe or memorization the server refused. The
+    /// refusal is its answer, so a retry is not ambiguous and nothing is
+    /// retired. Returns whether one was outstanding.
+    pub fn refused(&mut self) -> bool {
+        self.active
+            .take_if(|pending| matches!(pending.edit, Edit::Slot { mode: 0 | 1, .. }))
+            .is_some()
+    }
+
+    /// Ends reply ownership on silence without accepting a matching retry,
+    /// saying which edit it was.
+    pub fn timeout(&mut self, now: Instant) -> Option<TimedOut> {
         let pending = self.active.take_if(|pending| now >= pending.notify_at)?;
         self.retired.push(pending.edit);
-        Some(BookActionStatus::Unconfirmed)
+        Some(match pending.edit {
+            Edit::Slot {
+                slot,
+                spell_id,
+                mode: 0,
+            } => TimedOut::Scribe { slot, spell_id },
+            _ => TimedOut::Other,
+        })
     }
 }
 
@@ -329,7 +355,7 @@ mod tests {
         assert_eq!(edits.timeout(now + Duration::from_secs(29)), None);
         assert_eq!(
             edits.timeout(now + Duration::from_secs(30)),
-            Some(BookActionStatus::Unconfirmed)
+            Some(TimedOut::Other)
         );
         assert!(!edits.outstanding());
         assert!(edits.ambiguous(&delete(3, 99)));

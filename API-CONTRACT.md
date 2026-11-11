@@ -302,9 +302,27 @@ independently of spell identity, and repeating it against an empty gem keeps
 that gem empty. Only the matching gem and spell or an empty sentinel can
 confirm an active forget. A repeated application-level book swap can apply
 the same delta again because its wire record carries only the two slots.
-An unconfirmed scribe retains its inventory hold until a received whole-slot
-removal or replacement accounts for the cursor scroll, or the admission
-ends. A unit decrement or late book insertion alone cannot release custody.
+An unconfirmed scribe holds the inventory until a received whole-slot
+removal or replacement accounts for the cursor scroll, its edit reaches the
+30-second `Unconfirmed`, or the admission ends. A unit decrement or late
+book insertion alone cannot release custody. The timeout releases only the
+custody of the scribe that timed out (inferred, recording checklist 6.462).
+After it, the exact late book insertion holds the cursor again for the
+removal that follows; that removal becomes `InventoryUpdate::Consume` while
+the model still holds the scroll on the cursor at the scribe's revision, and
+`InventoryUpdate::Invalidated` otherwise, marking the inventory stale. Known
+limit of an unanswered edit: its reply identity keeps refusing a
+wire-identical retry until the next admission.
+
+The server's level refusal (Titanium formatted string 12048, decoded as
+`Message::BookLevelRefused { arguments }`) is a definite answer to an
+outstanding scribe or memorization: the worker reports
+`BookActionStatus::Rejected` naming that line and its arguments, releases
+the book and the scribe's cursor custody, and retires nothing, so the same
+request can be sent again. It is the only answer that frees such a retry.
+With no scribe or memorization outstanding, or a scribe already confirmed,
+the line changes nothing. The `EqMac` wire's refusal is unread and falls to
+the timeout.
 
 Titanium EQEmu offers `Capability::StoppingSongs` and handles an explicit
 `ClientCommand::StopSong { session_id, created }` for the current Bard.

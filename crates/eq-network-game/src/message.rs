@@ -63,6 +63,16 @@ pub enum Message {
     LoggedOut,
     /// A Titanium system notice identifying an invalid tradeskill recipe.
     TradeskillNoRecipe,
+    /// The server refusing a scribe or memorization because the player has
+    /// not reached the spell's level: `EQEmu`'s `SPELL_LEVEL_TO_LOW` (string
+    /// 12048), the only answer its `OPMemorizeSpell` gives before returning.
+    /// The spellbook feature ends the request it answers; the line itself
+    /// still reaches the host as chat.
+    BookLevelRefused {
+        /// The line's arguments as the server sent them: the level, then
+        /// the spell's name.
+        arguments: Vec<String>,
+    },
     /// A message a session feature withholds, to pass on later as it was or
     /// as what the next one shows it to be; no other feature hears it, and
     /// the host hears nothing of it.
@@ -143,6 +153,30 @@ pub fn titanium(opcode: u16, body: &[u8]) -> Vec<Message> {
         // the early return that sends a reset without a station clear.
         0x673c if body.len() == 12 && body[..4] == 334_u32.to_le_bytes() => {
             Message::TradeskillNoRecipe
+        }
+        // EQEmu's SPELL_LEVEL_TO_LOW (zone/string_ids.h), a formatted
+        // message with the level and spell name as its arguments.
+        crate::spells::TITANIUM_FORMATTED_OPCODE
+            if body.len() >= 12 && body[4..8] == crate::spells::LEVEL_REFUSAL.to_le_bytes() =>
+        {
+            Message::BookLevelRefused {
+                arguments: crate::chat::parse_for(
+                    crate::GameDialect::Titanium,
+                    opcode,
+                    body,
+                    false,
+                )
+                .ok()
+                .flatten()
+                .and_then(|line| line.arguments)
+                .map(|arguments| {
+                    arguments
+                        .into_iter()
+                        .map(|argument| argument.text)
+                        .collect()
+                })
+                .unwrap_or_default(),
+            }
         }
         crate::merchant::BUY_OPCODE
         | crate::merchant::SELL_OPCODE
