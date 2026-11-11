@@ -135,6 +135,22 @@ pub struct SpellEffect {
     pub push: Option<crate::combat::Push>,
 }
 
+impl SpellEffect {
+    /// Whether this spell action has landed, by the generation's own test
+    /// ([`crate::GameDialect::spell_landing_mask`]): its flag has the mask
+    /// set. A `SpellEffect` is only ever a kind-231 action (the decoders
+    /// give others as [`Action::Other`] or [`Action::Spin`]), so the kind
+    /// half of the program's test always holds here. Unread for a
+    /// generation, no action has landed.
+    #[must_use]
+    pub const fn landed(&self, generation: crate::GameDialect) -> bool {
+        match generation.spell_landing_mask() {
+            Some(mask) => self.effect_flag & mask != 0,
+            None => false,
+        }
+    }
+}
+
 /// What a server's action (`OP_Action`) is, by its kind.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub enum Action {
@@ -525,6 +541,39 @@ mod tests {
         body[28] = 2;
         assert!(titanium_update(&body).is_err());
         assert!(titanium_update(&body[..31]).is_err());
+    }
+
+    #[test]
+    fn a_spell_lands_by_the_programs_mask_and_only_a_spells_action_can() {
+        // Titanium's handler: kind 231 at +0x16 and 0x04 set at +0x1e
+        // (program reads R20 b and R21).
+        let mut body = [0u8; 31];
+        body[..2].copy_from_slice(&7u16.to_le_bytes());
+        body[27..29].copy_from_slice(&42u16.to_le_bytes());
+        body[30] = 4;
+        // Another kind with the flag set is not a spell's action at all.
+        assert_eq!(titanium_action(&body).unwrap(), Action::Other(0));
+        body[22] = 231;
+        for (flag, landed) in [
+            (0x04, true),
+            (0x0c, true),
+            (0x05, true),
+            (0, false),
+            (0x08, false),
+            (0x01, false),
+        ] {
+            body[30] = flag;
+            let Action::Spell(effect) = titanium_action(&body).unwrap() else {
+                panic!("a spell's action");
+            };
+            assert_eq!(
+                effect.landed(crate::GameDialect::Titanium),
+                landed,
+                "{flag:#x}"
+            );
+            // The Mac-era client's test is unread.
+            assert!(!effect.landed(crate::GameDialect::EqMac));
+        }
     }
 
     #[test]

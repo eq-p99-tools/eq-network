@@ -951,6 +951,20 @@ or ducking. All current server policies offer posture independently of
 movement readiness. Hosts should gate stance buttons and hotkeys
 using the command capability, and send the usual sit then camp sequence.
 
+`GameCommand::FeignLanded` also requires `Capability::Posture`. It is the
+host's statement that a spell with the feign effect (74) landed on the
+player: only the host holds spell data. Send it only for a
+`WorldEvent::SpellEffect` on the player's own spawn for which
+`SpellEffect::landed(generation)` holds, whose spell carries effect 74, and
+where `GameDialect::spell_feign_lies()` holds. `SpellEffect::landed` is the
+one landing test, the generation's program's own
+(`GameDialect::spell_landing_mask()`); a server type's
+`spell_landing_flag` answers a different question, which servers have been
+checked. The session changes the posture only: one lying report, or none
+when the player already lies, with the movement in hand stopped; no feign
+request and no auto attack change. With `PostureOptions::feign_standing`
+it sends nothing and owes the next stand. Another spawn's id is refused.
+
 ## Movement inputs are the host's, by revision
 
 The session grants no walking, turning or jumping until the host answers the
@@ -1177,7 +1191,8 @@ within the current mode's unscaled elapsed speed budget. `posture`
 (`PostureOptions`) holds two departures, on both generations: with
 `feign_standing` the Feign Death press sends the feign request alone,
 without the lying posture report both programs send first, so the player
-stays standing and moves as any standing player; with
+stays standing and moves as any standing player, and a feign spell's
+landing (`FeignLanded`) sends nothing; with
 `stay_seated_when_hit` an `OP_Damage` hit leaves a sitter or a looter
 seated where the generation's program stands them (`GameDialect::lying()`).
 These options never

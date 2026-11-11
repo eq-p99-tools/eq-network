@@ -879,7 +879,7 @@ mod tests {
     };
 
     /// How many kinds of command there are.
-    const KINDS: usize = 104;
+    const KINDS: usize = 105;
 
     /// The kinds the login and world servers take, before any zone session.
     const BEFORE_ZONES: [usize; 4] = [0, 1, 70, 75];
@@ -911,6 +911,7 @@ mod tests {
             ClientCommand::StopSong { .. } => 83,
             ClientCommand::DepopLocalNpc { .. } => 84,
             ClientCommand::SetPosture { .. } => 12,
+            ClientCommand::FeignLanded { .. } => 104,
             ClientCommand::MoveInventory(_) => 13,
             ClientCommand::DestroyItem(_) => 80,
             ClientCommand::DropItem(_) => 86,
@@ -1123,6 +1124,11 @@ mod tests {
                 session_id,
                 spawn_id: 7,
                 posture: eq_network_game::command::Posture::Sitting,
+                created,
+            },
+            ClientCommand::FeignLanded {
+                session_id,
+                spawn_id: 7,
                 created,
             },
             ClientCommand::MoveInventory(InventoryMove {

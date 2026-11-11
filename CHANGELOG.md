@@ -7,6 +7,20 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Breaking:** Feign Death by a spell lies the player down, as the Titanium
+  program does on the landing (program read R21): the new host command
+  `GameCommand::FeignLanded` sends one lying posture report, or none when
+  the player already lies, and stops the movement in hand, with no feign
+  request and no auto attack change. Only the host holds spell data, so it
+  sends the command for a landed spell with effect 74 on the player.
+  `SpellEffect::landed(generation)` is the program's one landing test (kind
+  231 and the flag mask from the new `GameDialect::spell_landing_mask()`,
+  0x04 on Titanium), and `GameDialect::spell_feign_lies()` says whether the
+  generation's program lies the player down; the Mac-era client's are
+  unread (checklist 6.455). `PostureOptions::feign_standing` covers the
+  spell too: the landing sends nothing and the next stand is owed
+  (checklist 6.454). The dismount and the mount buff's removal the program
+  also does are not modelled (6.455).
 - **Breaking:** Feign Death and the lying posture as the Titanium program
   handles them (program reads R19, R19b and R19cd), through the new
   `GameDialect::lying()` rules (`feign::LyingRules`). The Mac-era client
