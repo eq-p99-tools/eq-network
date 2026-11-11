@@ -348,13 +348,6 @@ pub(super) struct Motion {
     /// appearance update to the player, or its end of their hiding and
     /// sneaking.
     sneaking: bool,
-    /// Whether the player ducks where the generation moves them ducked
-    /// ([`eq_network_game::feign::DuckRules::moves_ducked`]), as the last
-    /// movement command found them: the grant takes the ducked speeds from
-    /// it. It follows the stance only at a move or a jump, so the change
-    /// comes after the sample the client made before it, never between a
-    /// sample and the grant the client moved at.
-    ducking: bool,
     /// The player's hit points and their maximum, as the server last
     /// reported them. `EQMac`'s servers leave out what items add from the
     /// current alone, so the player reads as more hurt than they are: the
@@ -387,7 +380,6 @@ impl Motion {
             unproven: None,
             encumbered: None,
             sneaking: false,
-            ducking: false,
             hit_points: None,
             grant_in_force: false,
         }
@@ -432,6 +424,10 @@ impl Motion {
     /// calibration from missing, withdrawn or rejected calibration. Receipt
     /// bookkeeping must not infer success from a prior positive calibration.
     fn apply_grant(&mut self, world: &mut World, out: &mut Out<'_, '_>) -> Result<bool> {
+        // The stance the speeds follow: a duck where the generation moves the
+        // player ducked takes the ducked speeds, in place, at the first grant
+        // after the change (read R23).
+        let ducking = moves_ducked(world, out);
         let (Some(rule), Some(inputs), Some(player)) =
             (out.wire.speeds(), self.inputs, world.player.as_ref())
         else {
@@ -450,7 +446,7 @@ impl Motion {
                 inputs.capacity
             },
             sneaking: self.sneaking,
-            ducking: self.ducking,
+            ducking,
             zone_id: world.zone.0,
         });
         if let Some((encumbered, string_id)) = speeds.encumbrance {
@@ -908,28 +904,13 @@ impl Motion {
         }
     }
 
-    /// Takes a change in the player's ducking into their speeds, at the
-    /// movement command that first finds it: ducking and standing both
-    /// apply in place ([`MotionSession::calibrate`]), so the sample under
-    /// way keeps the speeds it was made at and nothing is withdrawn.
-    fn follow_ducking(&mut self, world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
-        let ducking = moves_ducked(world, out);
-        if ducking == self.ducking {
-            return Ok(());
-        }
-        self.ducking = ducking;
-        if world.ready() && !world.lifecycle.blocks_motion() {
-            self.grant(world, out)?;
-        }
-        Ok(())
-    }
-
     /// Jumps where the server allows falls and the generation's notice of a
     /// jump is known.
     /// The samples after it may rise as the jump does. Where the program
-    /// stands a ducking player to jump (read R23), the standing report goes
-    /// first; a jump from standing still has crouched already on the host's
-    /// side, which stood the player at its end.
+    /// stands a ducking player to jump (read R23), the session sends the
+    /// standing report first, then the jump. For a jump from standing still
+    /// the host times the crouch and sends the jump at its end; the session
+    /// then stands the player if they still duck, and launches.
     fn jump(&self, created: Instant, world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
         if let Some(reason) = world.control.input_refusal(created) {
             return out.log.diagnostic(format!("Rejected jump: {reason}"));
@@ -1044,9 +1025,6 @@ impl Feature for Motion {
         out: &mut Out<'_, '_>,
     ) -> Result<()> {
         self.refresh_belongings(world, out)?;
-        if matches!(command, ClientCommand::Move(_) | ClientCommand::Jump { .. }) {
-            self.follow_ducking(world, out)?;
-        }
         match command {
             ClientCommand::Move(request) => Self::step(request, world, out),
             ClientCommand::Jump { created, .. } => self.jump(*created, world, out),

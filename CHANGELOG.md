@@ -17,8 +17,8 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     run flag, the buffs' modifier added after the halving, back in water
     on the land rule, a strafe halved. `EQMac` takes no account of it.
   - The session sends no stand for a ducked step where `moves_ducked`
-    holds, and takes the duck into the grant at the next move or jump, in
-    place, with nothing withdrawn. A stand goes back the same way.
+    holds. The grant follows the stance when it changes, in place, with
+    nothing withdrawn, and a stand goes back the same way.
   - A jump while ducking sends the standing report, then the jump, where
     `jump_stands` holds. A refused jump stands no one.
   - Ducked headroom, and whether the jump after a stand refused under a

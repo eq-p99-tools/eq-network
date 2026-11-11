@@ -81,7 +81,6 @@ fn speed(world: &World) -> f32 {
 /// Moves forward to `x`, in a sample made at `created`.
 fn forward(
     wire: &'static dyn super::super::wire::Wire,
-    motion: &mut Motion,
     world: &mut World,
     x: f32,
     created: Instant,
@@ -95,11 +94,27 @@ fn forward(
         },
         created,
     );
-    // As `handle` takes a move, at the sample's own time.
-    testing::run_on(wire, |out| {
-        motion.follow_ducking(world, out)?;
-        Motion::step_at(&request, created, world, out)
-    })
+    testing::run_on(wire, |out| Motion::step_at(&request, created, world, out))
+}
+
+/// One session tick, which keeps the grant in step with the stance.
+fn tick(motion: &mut Motion, world: &mut World) -> testing::Outcome<Result<()>> {
+    testing::run(|out| motion.tick(Instant::now(), world, out))
+}
+
+/// Ticks once and checks the tick granted `expected` alone, in place,
+/// sending nothing reliable.
+fn ticks_to(motion: &mut Motion, world: &mut World, expected: f32) {
+    let output = tick(motion, world);
+    output.result.unwrap();
+    assert!(output.sent.is_empty(), "{:?}", output.sent);
+    let (speeds, withdrawn) = grants(&output.events);
+    assert!(!withdrawn, "{:?}", output.events);
+    assert!(
+        speeds.len() == 1 && close(speeds[0], expected),
+        "{:?}",
+        output.events
+    );
 }
 
 fn refused(events: &[ClientEvent]) -> bool {
@@ -151,90 +166,84 @@ fn jump() -> ClientCommand {
 #[test]
 fn titanium_moves_a_ducking_player_ducked_at_the_sneaking_speed() {
     let (mut world, mut motion) = admitted(TITANIUM, PostureState::Ducking);
+    // The grant follows the duck at the next tick, before any move.
+    ticks_to(&mut motion, &mut world, DUCKED);
     let start = Instant::now();
     let half = start + Duration::from_millis(250);
-    let output = forward(TITANIUM, &mut motion, &mut world, 1.0, half);
+    let output = forward(TITANIUM, &mut world, 1.0, half);
     output.result.unwrap();
-    // No stand goes out, the step is taken, and the grant follows the duck
-    // in place.
+    // No stand goes out and the step is taken.
     assert!(output.sent.is_empty(), "{:?}", output.sent);
     assert!(!refused(&output.events), "{:?}", output.events);
     assert!(world.body.position().is_some_and(|at| close(at.x, 1.0)));
     assert_eq!(world.posture.current(), Some(PostureState::Ducking));
-    let (speeds, withdrawn) = grants(&output.events);
-    assert!(!withdrawn);
-    assert!(
-        speeds.len() == 1 && close(speeds[0], DUCKED),
-        "{:?}",
-        output.events
-    );
     // A quarter second more at most of the standing run rate is beyond the
     // ducked one (the guard counts at most a quarter second a sample).
     let later = half + Duration::from_millis(250);
-    let output = forward(
-        TITANIUM,
-        &mut motion,
-        &mut world,
-        1.0 + RUNNING * 0.2,
-        later,
-    );
+    let output = forward(TITANIUM, &mut world, 1.0 + RUNNING * 0.2, later);
     output.result.unwrap();
     assert!(refused(&output.events), "{:?}", output.events);
     assert!(output.sent.is_empty(), "{:?}", output.sent);
     // Standing, the same two samples are taken.
-    let (mut world, mut motion) = admitted(TITANIUM, PostureState::Standing);
+    let (mut world, _) = admitted(TITANIUM, PostureState::Standing);
     let start = Instant::now();
     let half = start + Duration::from_millis(250);
     let later = half + Duration::from_millis(250);
     for (x, created) in [(1.0, half), (1.0 + RUNNING * 0.2, later)] {
-        let output = forward(TITANIUM, &mut motion, &mut world, x, created);
+        let output = forward(TITANIUM, &mut world, x, created);
         output.result.unwrap();
         assert!(!refused(&output.events), "{:?}", output.events);
     }
 }
 
 #[test]
-fn a_stand_from_a_duck_restores_the_running_speed_in_place() {
-    let (mut world, mut motion) = admitted(TITANIUM, PostureState::Ducking);
-    let start = Instant::now();
-    let output = forward(
-        TITANIUM,
-        &mut motion,
-        &mut world,
-        1.0,
-        start + Duration::from_millis(200),
-    );
+fn a_duck_at_rest_slows_the_first_sample() {
+    // Ducked at rest, the first quarter second goes at the ducked rate from
+    // the start: at the run rate it is refused, at the ducked rate taken.
+    // A sample straddling the change takes each speed for its own span,
+    // which the game crate's in-place tests cover.
+    for (rate, taken) in [(RUNNING, false), (DUCKED, true)] {
+        let (mut world, mut motion) = admitted(TITANIUM, PostureState::Ducking);
+        ticks_to(&mut motion, &mut world, DUCKED);
+        let created = Instant::now() + Duration::from_millis(250);
+        let output = forward(TITANIUM, &mut world, rate * 0.24, created);
+        output.result.unwrap();
+        assert_eq!(!refused(&output.events), taken, "{:?}", output.events);
+    }
+}
+
+#[test]
+fn the_grant_follows_a_duck_and_a_stand_in_place() {
+    let (mut world, mut motion) = admitted(TITANIUM, PostureState::Standing);
+    // Our own duck, then a tick: the ducked grant, nothing withdrawn.
+    let duck = ClientCommand::SetPosture {
+        session_id: 5,
+        spawn_id: 7,
+        posture: command::Posture::Ducking,
+        created: Instant::now(),
+    };
+    let output = testing::run(|out| Stances.handle(&duck, &mut world, out));
     output.result.unwrap();
-    assert!(close(speed(&world), DUCKED));
+    assert_eq!(
+        output.sent,
+        [command::titanium_posture(7, command::Posture::Ducking).unwrap()]
+    );
+    ticks_to(&mut motion, &mut world, DUCKED);
+    // A stand, then a tick: the running grant, nothing withdrawn.
     let output = testing::run(|out| Stances.handle(&stand(), &mut world, out));
     output.result.unwrap();
     assert_eq!(
         output.sent,
         [command::titanium_posture(7, command::Posture::Standing).unwrap()]
     );
-    // The next move finds the stand: the running grant, nothing withdrawn,
-    // and no second stand.
-    let output = forward(
-        TITANIUM,
-        &mut motion,
-        &mut world,
-        2.0,
-        start + Duration::from_millis(400),
-    );
-    output.result.unwrap();
-    assert!(output.sent.is_empty(), "{:?}", output.sent);
-    assert!(!refused(&output.events), "{:?}", output.events);
-    let (speeds, withdrawn) = grants(&output.events);
-    assert!(!withdrawn);
-    assert!(
-        speeds.len() == 1 && close(speeds[0], RUNNING),
-        "{:?}",
-        output.events
-    );
-    // A tick changes nothing more.
-    let output = testing::run(|out| motion.tick(Instant::now(), &mut world, out));
+    ticks_to(&mut motion, &mut world, RUNNING);
+    // A second tick grants nothing.
+    let output = tick(&mut motion, &mut world);
     output.result.unwrap();
     assert!(grants(&output.events).0.is_empty(), "{:?}", output.events);
+    // A server's report of a duck is followed the same way.
+    world.posture.observed(PostureState::Ducking);
+    ticks_to(&mut motion, &mut world, DUCKED);
 }
 
 #[test]
@@ -242,7 +251,6 @@ fn the_mac_era_client_still_stands_a_ducking_player_to_move() {
     let (mut world, mut motion) = admitted(EQMAC, PostureState::Ducking);
     let output = forward(
         EQMAC,
-        &mut motion,
         &mut world,
         1.0,
         Instant::now() + Duration::from_millis(200),
