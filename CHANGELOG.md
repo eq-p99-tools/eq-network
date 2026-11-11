@@ -16,6 +16,13 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     sneaking branch: forward and back on half the walk speed whatever the
     run flag, the buffs' modifier added after the halving, back in water
     on the land rule, a strafe halved. `EQMac` takes no account of it.
+  - On Titanium a ducking or sneaking player strafes on the selected base,
+    halved: the run speed running, the walk speed walking, both rates in
+    the grant as standing (program read R28; 0.35 and 0.23 of input for a
+    0.7 run and 0.46 walk). Sneaking no longer takes the Mac-era rule there.
+    A grounded diagonal, ducked or sneaking, now has rates: its sideways
+    part is half the raw base as standing, and its forward part the ducked
+    one. The Mac-era rule is unchanged.
   - The session sends no stand for a ducked step where `moves_ducked`
     holds. The grant follows the stance when it changes, in place, with
     nothing withdrawn, and a stand goes back the same way.

@@ -1073,7 +1073,9 @@ speed, so `strafe_units_per_second` is then the running rate, which bounds a
 `MovementMode::Strafe` sample either way; a frontend keeps a walking strafe to
 the walking rate. A ducking player's grant already carries the ducked rates
 where the generation moves them ducked (see below), so a frontend halves
-nothing for ducking.
+nothing for ducking. On Titanium a ducking or sneaking player strafes on the
+selected base halved, both rates given as standing, and a grounded diagonal's
+sideways rates are the standing ones (program read R28).
 `MotionState.swim_backward_units_per_second`, where present, is how fast the
 player backs up in water, in the land's units per second before the water's
 share (`movement::swim_speed`) applies: Titanium backs up in water, unless
