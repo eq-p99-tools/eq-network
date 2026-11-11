@@ -18,9 +18,9 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   session reports a lone `Standing` for the player, the posture they enter
   with, and sends nothing, so the first stand after a zone-in no longer
   sends one the program skips; otherwise it reports that posture, then
-  `Standing`, a change like any other, and sends one standing report. The send rests on two inferred links in the read
-  (checklist 6.461). The Mac-era client is unread and keeps an unknown
-  posture. Other spawns' record postures are decoded but not yet used.
+  `Standing`, a change like any other, and sends one standing report. The
+  send rests on two inferred links in the read (checklist 6.461). The
+  Mac-era client is unread and keeps an unknown posture. Other spawns' record postures are decoded but not yet used.
 - **Breaking:** a root is a grant at no speed, not a withdrawal. The
   program zeroes the speed and the velocity once and blocks nothing else
   (read R18, 0x410fdb; read R22): a rooted player turns, by keys and by
