@@ -9,6 +9,7 @@ use super::{
 use anyhow::Result;
 use eq_network_game::{
     appearance::AppearanceChange,
+    command::Posture,
     inventory::MAX_CARRIED_WEIGHT,
     message::Message,
     movement::{
@@ -233,6 +234,13 @@ fn lies_still(world: &World, out: &Out<'_, '_>) -> bool {
     out.wire.dialect().lying().holds_still && world.posture.current() == Some(PostureState::Lying)
 }
 
+/// Whether the player ducks where the generation's program moves them
+/// ducked (read R23).
+fn moves_ducked(world: &World, out: &Out<'_, '_>) -> bool {
+    out.wire.dialect().ducking().moves_ducked
+        && world.posture.current() == Some(PostureState::Ducking)
+}
+
 /// The player's movement at these speeds.
 fn granted(
     session_id: u64,
@@ -340,6 +348,13 @@ pub(super) struct Motion {
     /// appearance update to the player, or its end of their hiding and
     /// sneaking.
     sneaking: bool,
+    /// Whether the player ducks where the generation moves them ducked
+    /// ([`eq_network_game::feign::DuckRules::moves_ducked`]), as the last
+    /// movement command found them: the grant takes the ducked speeds from
+    /// it. It follows the stance only at a move or a jump, so the change
+    /// comes after the sample the client made before it, never between a
+    /// sample and the grant the client moved at.
+    ducking: bool,
     /// The player's hit points and their maximum, as the server last
     /// reported them. `EQMac`'s servers leave out what items add from the
     /// current alone, so the player reads as more hurt than they are: the
@@ -372,6 +387,7 @@ impl Motion {
             unproven: None,
             encumbered: None,
             sneaking: false,
+            ducking: false,
             hit_points: None,
             grant_in_force: false,
         }
@@ -434,6 +450,7 @@ impl Motion {
                 inputs.capacity
             },
             sneaking: self.sneaking,
+            ducking: self.ducking,
             zone_id: world.zone.0,
         });
         if let Some((encumbered, string_id)) = speeds.encumbrance {
@@ -752,8 +769,9 @@ impl Motion {
         }));
     }
 
-    /// Moves the player, standing them up first if they were sitting or
-    /// crouched; a refused move undoes the host's prediction.
+    /// Moves the player, standing them up first if they were sitting, or
+    /// crouched where the generation stands a ducking player to move; a
+    /// refused move undoes the host's prediction.
     fn step(request: &MovementRequest, world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
         Self::step_at(request, Instant::now(), world, out)
     }
@@ -890,9 +908,28 @@ impl Motion {
         }
     }
 
+    /// Takes a change in the player's ducking into their speeds, at the
+    /// movement command that first finds it: ducking and standing both
+    /// apply in place ([`MotionSession::calibrate`]), so the sample under
+    /// way keeps the speeds it was made at and nothing is withdrawn.
+    fn follow_ducking(&mut self, world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
+        let ducking = moves_ducked(world, out);
+        if ducking == self.ducking {
+            return Ok(());
+        }
+        self.ducking = ducking;
+        if world.ready() && !world.lifecycle.blocks_motion() {
+            self.grant(world, out)?;
+        }
+        Ok(())
+    }
+
     /// Jumps where the server allows falls and the generation's notice of a
     /// jump is known.
-    /// The samples after it may rise as the jump does.
+    /// The samples after it may rise as the jump does. Where the program
+    /// stands a ducking player to jump (read R23), the standing report goes
+    /// first; a jump from standing still has crouched already on the host's
+    /// side, which stood the player at its end.
     fn jump(&self, created: Instant, world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
         if let Some(reason) = world.control.input_refusal(created) {
             return out.log.diagnostic(format!("Rejected jump: {reason}"));
@@ -913,6 +950,13 @@ impl Motion {
         match jump {
             // A failed send ends the admission like any other.
             Ok(packet) => {
+                if out.wire.dialect().ducking().jump_stands
+                    && world.posture.current() == Some(PostureState::Ducking)
+                {
+                    if let Some(own) = world.own_spawn {
+                        world.posture.set(own, Posture::Standing, out)?;
+                    }
+                }
                 out.send(&packet)?;
                 if let Some(motion) = world.body.motion.as_mut() {
                     motion.jumped();
@@ -1000,6 +1044,9 @@ impl Feature for Motion {
         out: &mut Out<'_, '_>,
     ) -> Result<()> {
         self.refresh_belongings(world, out)?;
+        if matches!(command, ClientCommand::Move(_) | ClientCommand::Jump { .. }) {
+            self.follow_ducking(world, out)?;
+        }
         match command {
             ClientCommand::Move(request) => Self::step(request, world, out),
             ClientCommand::Jump { created, .. } => self.jump(*created, world, out),
@@ -1167,6 +1214,10 @@ mod stun_tests;
 #[cfg(test)]
 #[path = "motion_lying_tests.rs"]
 mod lying_tests;
+
+#[cfg(test)]
+#[path = "motion_ducking_tests.rs"]
+mod ducking_tests;
 
 #[cfg(test)]
 mod tests {

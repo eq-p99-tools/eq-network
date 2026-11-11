@@ -969,6 +969,18 @@ or ducking. All current server policies offer posture independently of
 movement readiness. Hosts should gate stance buttons and hotkeys
 using the command capability, and send the usual sit then camp sequence.
 
+A step stands a seated player first. A ducking player moves ducked where
+`GameDialect::ducking().moves_ducked` holds (Titanium, program read R23): the
+step sends no stand, and the next move or jump takes the duck into the grant,
+in place, at the sneaking speeds (`SpeedState::ducking`), so a frontend moves
+at the `MotionState` it then receives. A stand from a duck goes back the same
+way. Where `jump_stands` holds, a jump while ducking sends the standing report
+before the jump, and the host hears the player's `WorldEvent::Posture`
+Standing; a refused jump stands no one. Elsewhere a step stands a ducking
+player first, as before. Headroom is the frontend's: Titanium moves a ducking
+player under a clearance of their size plus one, and refuses a stand under a
+lower ceiling.
+
 `GameCommand::FeignLanded` also requires `Capability::Posture`. It is the
 host's statement that a spell with the feign effect (74) landed on the
 player: only the host holds spell data. Send it only for a
@@ -1058,7 +1070,9 @@ started with. `MotionState.strafe_walk_units_per_second`, where present, is
 the strafe rate with walking selected: Titanium strafes on the selected base
 speed, so `strafe_units_per_second` is then the running rate, which bounds a
 `MovementMode::Strafe` sample either way; a frontend keeps a walking strafe to
-the walking rate, and halves either while the player ducks.
+the walking rate. A ducking player's grant already carries the ducked rates
+where the generation moves them ducked (see below), so a frontend halves
+nothing for ducking.
 `MotionState.swim_backward_units_per_second`, where present, is how fast the
 player backs up in water, in the land's units per second before the water's
 share (`movement::swim_speed`) applies: Titanium backs up in water, unless

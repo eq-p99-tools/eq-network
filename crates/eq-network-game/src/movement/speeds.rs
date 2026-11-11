@@ -26,6 +26,14 @@ pub struct SpeedState {
     pub capacity: u32,
     /// Whether the player is sneaking, as the server last said.
     pub sneaking: bool,
+    /// Whether the player ducks, as the session last sent or was told.
+    /// Titanium moves a ducking player at the sneaking speeds: forward and
+    /// back on half the walk speed whether running or not, with the buffs'
+    /// modifier added after the halving, back in water on the land rule,
+    /// and a strafe halved (program read R23, 0x4a1d74). `EQMac` stands a
+    /// ducking player to move ([`crate::feign::DuckRules::moves_ducked`]),
+    /// so its rule takes no account of it.
+    pub ducking: bool,
     /// The zone the player is in.
     pub zone_id: u16,
 }
@@ -105,6 +113,18 @@ struct Generation {
     /// modifier (Titanium 0x4a2bd8-0x4a2c06; read R13 b). `EQMac`'s is
     /// unread, so it keeps backing up in water as any swim stroke.
     swim_backs_on_modifier: bool,
+    /// How fast a ducking player moves.
+    ducked: Ducked,
+}
+
+/// How fast a generation's client moves a ducking player.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Ducked {
+    /// At the sneaking speeds (Titanium read R23).
+    Sneaking,
+    /// Unread: the client stands them to move, so ducking changes nothing
+    /// (`EQMac`).
+    Stands,
 }
 
 /// `EQMac`'s side of the table.
@@ -115,6 +135,7 @@ const EQMAC: Generation = Generation {
     grounded_diagonal: false,
     strafes_on_selected_base: false,
     swim_backs_on_modifier: false,
+    ducked: Ducked::Stands,
 };
 
 /// Titanium's side of the table, from the Titanium speeds read and the
@@ -126,6 +147,7 @@ const TITANIUM: Generation = Generation {
     grounded_diagonal: true,
     strafes_on_selected_base: true,
     swim_backs_on_modifier: true,
+    ducked: Ducked::Sneaking,
 };
 
 /// `EQMac`'s speeds, from the program (TAKP sitting 2 M1, "Speeds", and the
@@ -168,7 +190,8 @@ const TITANIUM: Generation = Generation {
 /// advancement; and the cap rises 0.01 per point of effect 290, also 0 until
 /// then. Its two tests that hold the multiplier at 1 are unread, so zone
 /// 151's exception is `EQMac`'s only. The hit-point pair is read as a current and maximum that fits hit
-/// points, as TAKP names it. Not taken from Titanium's read: ducking, the
+/// points, as TAKP names it. Ducking takes the sneaking branch (read R23;
+/// [`SpeedState::ducking`]). Not taken from Titanium's read: the
 /// flag at +0x1b1 and its value at +0xec4, mounts, the native swim rate,
 /// the halved decay and model 141. Sneaking takes `EQMac`'s rule, the slower
 /// side. Its values on the wire are [`titanium`]'s.
@@ -178,7 +201,7 @@ const TITANIUM: Generation = Generation {
 /// so the session bounds it by the running rate and gives the walking rate
 /// beside it ([`StrafeCalibration::walk_units_per_second`]) for the player
 /// to keep to; `EQMac` strafes on the walk speed. Ducking halves the strafe
-/// on the player's side, which the session doesn't track. That a buff's
+/// as sneaking does, both selected bases alike. That a buff's
 /// speed modifier adds nothing to a strafe is read from the routine's shape
 /// only; if it does add, ours is the slower side.
 ///
@@ -231,12 +254,15 @@ fn motion(generation: Generation, state: &SpeedState) -> Option<MotionCalibratio
         .map_or(state.rate, |floor| state.rate.max(floor));
     let modifier = (f32::from(rate) / 100.0 * state.run).min(EQMAC_MODIFIER_CAP);
     let slowed = modifier < 0.0;
-    let walk = if state.sneaking {
+    // A ducking player takes the sneaking branch where the generation moves
+    // them ducked (read R23): the same halving, the same floors.
+    let sneaking = state.sneaking || (state.ducking && generation.ducked == Ducked::Sneaking);
+    let walk = if sneaking {
         state.walk * 0.5
     } else {
         state.walk
     };
-    let run = if state.sneaking { walk } else { state.run };
+    let run = if sneaking { walk } else { state.run };
     let forward = |base: f32| {
         let input = base * multiplier + modifier;
         if input < 0.0 {
@@ -256,9 +282,8 @@ fn motion(generation: Generation, state: &SpeedState) -> Option<MotionCalibratio
     };
     // In water, not sneaking, the base is 0: the player backs up only by
     // the modifier, as slowly as a slow lets them when it would go the
-    // other way. Sneaking keeps the land rule. Ducking is the host's, and
-    // keeps the land rule there too.
-    let swim_backing = (generation.swim_backs_on_modifier && !state.sneaking).then(|| {
+    // other way. Sneaking keeps the land rule, and so does ducking (R23).
+    let swim_backing = (generation.swim_backs_on_modifier && !sneaking).then(|| {
         let input = -modifier;
         if input > 0.0 {
             -EQMAC_SLOWEST
@@ -266,16 +291,16 @@ fn motion(generation: Generation, state: &SpeedState) -> Option<MotionCalibratio
             input
         }
     });
-    let strafe_share = if state.sneaking || slowed { 0.5 } else { 1.0 };
+    let strafe_share = if sneaking || slowed { 0.5 } else { 1.0 };
     let strafing_walking = state.walk * 0.5 * 2.0 * multiplier * strafe_share;
     // Sneaking takes `EQMac`'s rule on both generations, the slower side.
-    let strafing = if generation.strafes_on_selected_base && !state.sneaking {
+    let strafing = if generation.strafes_on_selected_base && !sneaking {
         state.run * multiplier * strafe_share
     } else {
         strafing_walking
     };
     let speed = |input: f32| input.abs() * EQMAC_UNITS_PER_INPUT;
-    let diagonal = if generation.grounded_diagonal && !state.sneaking {
+    let diagonal = if generation.grounded_diagonal && !sneaking {
         // Titanium eqgame.exe (0x4bfe0f, 0x4c00d7–0x4c01c2) takes half
         // the active raw run/walk base for this lateral input (0x6410bc =
         // 0.5; base fields loaded at 0x48170c–0x48171f). With longitudinal
@@ -370,6 +395,7 @@ mod tests {
             weight: 50,
             capacity: 100,
             sneaking: false,
+            ducking: false,
             zone_id: 1,
         }
     }
@@ -537,6 +563,117 @@ mod tests {
                 .swim_backward_units_per_second,
             None
         );
+    }
+
+    #[test]
+    fn titanium_moves_a_ducking_player_at_the_sneaking_speeds() {
+        // Read R23: ducking takes the sneaking branch of 0x4a1d74, forward
+        // on half the walk speed whatever the run flag, the buffs' modifier
+        // added in full after the halving, back on the land rule in water,
+        // and the strafe halved.
+        for state in [
+            player(),
+            SpeedState {
+                rate: 50,
+                ..player()
+            },
+            SpeedState {
+                rate: -40,
+                ..player()
+            },
+            SpeedState {
+                rate: -90,
+                ..player()
+            },
+            SpeedState {
+                hit_points: Some((49, 500)),
+                ..player()
+            },
+            SpeedState {
+                weight: 150,
+                ..player()
+            },
+        ] {
+            let ducking = titanium(&SpeedState {
+                ducking: true,
+                ..state
+            });
+            let sneaking = titanium(&SpeedState {
+                sneaking: true,
+                ..state
+            });
+            assert_eq!(ducking, sneaking, "{state:?}");
+            assert_ne!(ducking.motion, titanium(&state).motion, "{state:?}");
+        }
+        let ducked = |state: SpeedState| {
+            titanium(&SpeedState {
+                ducking: true,
+                ..state
+            })
+            .motion
+        };
+        let plain = ducked(player()).unwrap();
+        assert!(close(plain.units_per_second, 0.23 * EQMAC_UNITS_PER_INPUT));
+        assert!(close(
+            plain.walk.unwrap().units_per_second,
+            plain.units_per_second
+        ));
+        assert!(close(
+            plain.backward.unwrap().units_per_second,
+            0.23 * EQMAC_UNITS_PER_INPUT
+        ));
+        assert!(close(
+            plain.swim_backward_units_per_second.unwrap(),
+            0.23 * EQMAC_UNITS_PER_INPUT
+        ));
+        let strafe = plain.strafe.unwrap();
+        assert!(close(strafe.units_per_second, 9.8), "{strafe:?}");
+        assert_eq!(plain.diagonal, DiagonalRates::default());
+        // A run buff of 50% adds its 0.35 in full to the halved base.
+        let buffed = ducked(SpeedState {
+            rate: 50,
+            ..player()
+        })
+        .unwrap();
+        assert!(close(
+            buffed.units_per_second,
+            (0.23 + 0.35) * EQMAC_UNITS_PER_INPUT
+        ));
+        // A slow past the halved base creeps at the 0.01 floor.
+        let slowed = ducked(SpeedState {
+            rate: -60,
+            ..player()
+        })
+        .unwrap();
+        assert!(close(slowed.units_per_second, 0.01 * EQMAC_UNITS_PER_INPUT));
+        // A root still moves nothing.
+        assert_eq!(
+            ducked(SpeedState {
+                rate: -1000,
+                ..player()
+            }),
+            None
+        );
+    }
+
+    #[test]
+    fn eqmac_takes_no_account_of_ducking() {
+        // Its client stands a ducking player to move (unread, 6.460).
+        for state in [
+            player(),
+            SpeedState {
+                rate: 50,
+                ..player()
+            },
+        ] {
+            assert_eq!(
+                eqmac(&SpeedState {
+                    ducking: true,
+                    ..state
+                }),
+                eqmac(&state)
+            );
+        }
     }
 
     #[test]
