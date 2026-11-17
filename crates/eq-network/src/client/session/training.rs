@@ -45,8 +45,8 @@ pub(super) struct Training {
     p99: bool,
     /// Each trainer ID can receive one opening request in this P99 admission.
     requested_trainers: BTreeSet<u16>,
-    /// EQEmu replies carry no request/incarnation token. After a timed-out
-    /// opening or trainer replacement, reuse needs a fresh zone admission.
+    /// EQEmu replies carry no request/incarnation token. Retiring an
+    /// unanswered opening needs fresh admission before that ID can reopen.
     retired_trainers: BTreeSet<u16>,
 }
 
@@ -320,7 +320,11 @@ impl Training {
         } else {
             self.retire_eqemu_languages(world, None);
             if let Some(trainer) = &self.trainer {
-                self.retired_trainers.insert(trainer.spawn_id);
+                // An answered offer has consumed its opening response. Only
+                // an unanswered opening can be confused with a later request.
+                if trainer.offer.is_none() {
+                    self.retired_trainers.insert(trainer.spawn_id);
+                }
             }
         }
         if self.trainer.take().is_some() {
@@ -804,7 +808,7 @@ mod tests {
     }
 
     #[test]
-    fn eqemu_trainer_replacement_retires_openings_offers_and_pending_languages() {
+    fn eqemu_replacement_separates_unanswered_opens_from_uncertain_spend() {
         for offered in [false, true] {
             for despawn_first in [false, true] {
                 let (mut training, mut world) = warrior();
@@ -858,9 +862,118 @@ mod tests {
                 )
                 .sent
                 .is_empty());
-                assert!(open(&mut training, &mut world, 42).sent.is_empty());
+                let reopened = open(&mut training, &mut world, 42);
+                if offered {
+                    assert_eq!(reopened.sent, [training::titanium_open(42, 7)]);
+                    hear(&mut training, &mut world, reply(42, 7, true));
+                    // A fresh offer does not restore an unresolved practice balance.
+                    assert!(handle(
+                        &mut training,
+                        &mut world,
+                        TrainingRequest::PracticeAt {
+                            trainer: 42,
+                            subject: TrainingSubject::Language(5)
+                        }
+                    )
+                    .sent
+                    .is_empty());
+                    assert_eq!(training.points, None);
+                } else {
+                    assert!(reopened.sent.is_empty());
+                    assert!(refusals(&reopened.events)[0].contains("Re-enter the zone"));
+                }
             }
         }
+    }
+
+    #[test]
+    fn an_answered_eqemu_offer_can_reopen_after_no_spend_replacement() {
+        for despawn_first in [false, true] {
+            let (mut training, mut world) = warrior();
+            world.player.corrected().unwrap().languages = Some(vec![20; 28]);
+            open(&mut training, &mut world, 42).result.unwrap();
+            hear(&mut training, &mut world, reply(42, 7, true));
+            if despawn_first {
+                hear(
+                    &mut training,
+                    &mut world,
+                    Message::Event(WorldEvent::Despawn(42)),
+                );
+            }
+            let mut replacement = testing::spawn(42, SpawnKind::Npc);
+            replacement.class = Some(20);
+            hear(
+                &mut training,
+                &mut world,
+                Message::Event(WorldEvent::Spawns(vec![replacement.clone()])),
+            );
+            world.spawns.insert(replacement);
+            assert!(training.trainer.is_none());
+            assert_eq!(training.points, Some(3));
+            assert!(!training.retired_trainers.contains(&42));
+            let practice = TrainingRequest::PracticeAt {
+                trainer: 42,
+                subject: TrainingSubject::Language(5),
+            };
+            assert!(handle(&mut training, &mut world, practice).sent.is_empty());
+            // With no pending Open, a reply cannot silently restore the old offer.
+            assert!(matches!(
+                hear(&mut training, &mut world, reply(42, 7, true)).0,
+                Message::TrainingReply(_)
+            ));
+            assert_eq!(
+                open(&mut training, &mut world, 42).sent,
+                [training::titanium_open(42, 7)]
+            );
+            assert!(
+                handle(&mut training, &mut world, practice).sent.is_empty(),
+                "fresh reply required"
+            );
+            assert!(matches!(
+                hear(&mut training, &mut world, reply(42, 7, true)).0,
+                Message::Event(WorldEvent::Training(TrainingUpdate::Offered(_)))
+            ));
+            assert_eq!(
+                handle(&mut training, &mut world, practice).sent,
+                [training::titanium_practice(42, TrainingSubject::Language(5)).unwrap()]
+            );
+        }
+    }
+
+    #[test]
+    fn an_answered_eqemu_offer_can_reopen_after_same_admission_recovery() {
+        let (mut training, mut world) = warrior();
+        world.player.corrected().unwrap().languages = Some(vec![0; 28]);
+        open(&mut training, &mut world, 42).result.unwrap();
+        hear(&mut training, &mut world, reply(42, 7, true));
+        let session_id = world.session_id;
+        world.lifecycle.mark_dead();
+        hear(
+            &mut training,
+            &mut world,
+            Message::Event(WorldEvent::DeathBind { session_id }),
+        );
+        assert!(training.trainer.is_none());
+        assert!(!training.retired_trainers.contains(&42));
+        assert_eq!(training.points, Some(3));
+        // Model fixture for the recovered world: retain the same admission,
+        // trainer and Training owner. This is not a live recovery claim.
+        world.lifecycle = Default::default();
+        assert_eq!(world.session_id, session_id);
+        assert_eq!(
+            open(&mut training, &mut world, 42).sent,
+            [training::titanium_open(42, 7)]
+        );
+        let practice = TrainingRequest::PracticeAt {
+            trainer: 42,
+            subject: TrainingSubject::Language(5),
+        };
+        assert!(handle(&mut training, &mut world, practice).sent.is_empty());
+        hear(&mut training, &mut world, reply(42, 7, true));
+        assert_eq!(
+            handle(&mut training, &mut world, practice).sent,
+            [training::titanium_practice(42, TrainingSubject::Language(5)).unwrap()]
+        );
     }
 
     #[test]
