@@ -58,6 +58,21 @@ use std::{
 };
 use zeroize::Zeroizing;
 
+/// Receive records always carry precisely three fractional digits and UTC `Z`.
+const RECORD_TIMESTAMP: jiff::fmt::temporal::DateTimePrinter =
+    jiff::fmt::temporal::DateTimePrinter::new().precision(Some(3));
+
+/// Unix seconds count the preceding whole second, including before the epoch.
+fn unix_seconds(at: jiff::Timestamp) -> i64 {
+    at.round(
+        jiff::TimestampRound::new()
+            .smallest(jiff::Unit::Second)
+            .mode(jiff::RoundMode::Floor),
+    )
+    .expect("rounding down to a whole second stays within timestamp bounds")
+    .as_second()
+}
+
 /// Typed work submitted by the host while a character is connected.
 pub use eq_network_game::command::GameCommand as ClientCommand;
 /// The selected network policy's installed-spell provider contract.
@@ -474,7 +489,7 @@ impl SessionStatus {
     pub fn new(state: ConnectionState, session_id: impl Into<String>) -> Self {
         Self {
             state,
-            timestamp: chrono::Utc::now().timestamp(),
+            timestamp: unix_seconds(jiff::Timestamp::now()),
             run_id: None,
             session_id: session_id.into(),
             zone: String::new(),
@@ -593,7 +608,7 @@ impl Record {
         event: RecordEvent,
     ) -> Self {
         Self {
-            timestamp: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+            timestamp: RECORD_TIMESTAMP.timestamp_to_string(&jiff::Timestamp::now()),
             server: server.into(),
             character: character.into(),
             zone: zone.into(),
@@ -952,7 +967,7 @@ impl<'a> Events<'a> {
     ) -> Result<()> {
         self.send(ClientEvent::Status(SessionStatus {
             state,
-            timestamp: chrono::Utc::now().timestamp(),
+            timestamp: unix_seconds(jiff::Timestamp::now()),
             run_id: Some(self.spell_tables.run_id()),
             session_id: self.session_id.clone(),
             zone: self.zone.clone(),
@@ -970,7 +985,7 @@ impl<'a> Events<'a> {
         }
         self.messages += 1;
         self.send(ClientEvent::Record(Box::new(Record {
-            timestamp: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+            timestamp: RECORD_TIMESTAMP.timestamp_to_string(&jiff::Timestamp::now()),
             server: self.server.clone(),
             character: self.character.clone(),
             zone: zone.to_owned(),
@@ -1019,6 +1034,76 @@ fn is_local(ip: std::net::IpAddr) -> bool {
 mod tests {
     use super::*;
     use crate::chat;
+
+    #[test]
+    fn timestamps_preserve_unix_seconds_and_millisecond_utc_records() {
+        for (input, seconds, record) in [
+            ("1970-01-01T00:00:00Z", 0, "1970-01-01T00:00:00.000Z"),
+            (
+                "1970-01-01T00:00:00.999999999Z",
+                0,
+                "1970-01-01T00:00:00.999Z",
+            ),
+            (
+                "1969-12-31T23:59:59.999999999Z",
+                -1,
+                "1969-12-31T23:59:59.999Z",
+            ),
+            ("1969-12-31T23:59:59Z", -1, "1969-12-31T23:59:59.000Z"),
+            (
+                "1969-12-31T23:59:58.999999999Z",
+                -2,
+                "1969-12-31T23:59:58.999Z",
+            ),
+            (
+                "2024-02-29T23:59:59.987654321Z",
+                1_709_251_199,
+                "2024-02-29T23:59:59.987Z",
+            ),
+            (
+                "2024-03-01T08:59:59.987654321+09:00",
+                1_709_251_199,
+                "2024-02-29T23:59:59.987Z",
+            ),
+        ] {
+            let at = input.parse::<jiff::Timestamp>().unwrap();
+            assert_eq!(unix_seconds(at), seconds, "{input}");
+            assert_eq!(RECORD_TIMESTAMP.timestamp_to_string(&at), record, "{input}");
+        }
+        // Whole-second flooring is valid even at the library's range limits.
+        for at in [jiff::Timestamp::MIN, jiff::Timestamp::MAX] {
+            assert_eq!(unix_seconds(at), at.as_second());
+        }
+    }
+
+    #[test]
+    fn timestamp_fields_keep_their_public_json_types() {
+        let status =
+            SessionStatus::new(ConnectionState::Connecting, "synthetic").with_timestamp(-1);
+        assert_eq!(serde_json::to_value(status).unwrap()["timestamp"], -1);
+        let record = Record::new(
+            "Test Server",
+            "ExampleCharacter",
+            "testzone",
+            "synthetic",
+            1,
+            RecordEvent::Chat(chat(4)),
+        );
+        let timestamp = &record.timestamp;
+        assert_eq!(timestamp.len(), "2026-10-03T17:42:05.000Z".len());
+        assert!(timestamp.ends_with('Z'));
+        assert!(timestamp.parse::<jiff::Timestamp>().is_ok());
+        assert_eq!(
+            serde_json::to_value(&record).unwrap()["timestamp"],
+            *timestamp
+        );
+        // Imported strings stay verbatim, as before.
+        let record = record.with_timestamp("2024-03-01T08:59:59.987+09:00");
+        assert_eq!(
+            serde_json::to_value(record).unwrap()["timestamp"],
+            "2024-03-01T08:59:59.987+09:00",
+        );
+    }
 
     #[test]
     fn local_only_sessions_refuse_public_servers() {
@@ -1114,9 +1199,10 @@ mod tests {
         assert_eq!(record["zone"], "testzone");
         assert_eq!(record["message_id"], 1);
         assert!(record.get("event").is_none() && record.get("payload_hex").is_none());
-        assert!(
-            chrono::DateTime::parse_from_rfc3339(record["timestamp"].as_str().unwrap()).is_ok()
-        );
+        let timestamp = record["timestamp"].as_str().unwrap();
+        assert!(timestamp.parse::<jiff::Timestamp>().is_ok());
+        assert_eq!(timestamp.len(), "2026-10-03T17:42:05.000Z".len());
+        assert!(timestamp.ends_with('Z'));
         assert_eq!(records[1]["type"], "decode_error");
         assert_eq!(records[1]["message_id"], 2);
         assert_eq!(records[1]["payload_hex"], "00");

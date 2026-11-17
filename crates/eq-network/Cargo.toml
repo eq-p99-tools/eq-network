@@ -13,7 +13,7 @@ categories = ["network-programming"]
 
 [dependencies]
 anyhow.workspace = true
-chrono.workspace = true
+jiff.workspace = true
 crc32fast.workspace = true
 eq-network-game = { path = "../eq-network-game", version = "0.1.2" }
 eq-network-login = { path = "../eq-network-login", version = "0.1.2" }

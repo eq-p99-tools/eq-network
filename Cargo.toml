@@ -13,7 +13,7 @@ repository = "https://github.com/eq-p99-tools/eq-network"
 anyhow = "1"
 cbc = "0.1"
 cipher = "0.4"
-chrono = { version = "0.4", default-features = false, features = ["clock", "serde"] }
+jiff = { version = "0.2", default-features = false, features = ["std"] }
 crc32fast = "1"
 des = "0.8"
 hex = "0.4"
