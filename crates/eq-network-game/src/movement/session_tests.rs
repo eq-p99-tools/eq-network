@@ -1448,6 +1448,39 @@ fn a_grounded_climb_rises_the_bodys_reach_each_step_once_set() {
 }
 
 #[test]
+fn withdrawn_forward_without_support_cannot_spend_the_next_fall_samples_time() {
+    let start = Instant::now();
+    let mut session = MotionSession::new(11, 7, Position::default(), start)
+        .unwrap()
+        .with_falls(true);
+    let first = start + Duration::from_millis(100);
+    let unsupported = request(first, 0.0);
+    let refused = session
+        .send_move_sample(&unsupported, first, |_| {
+            panic!("unsupported withdrawn forward")
+        })
+        .unwrap_err();
+    assert_eq!(
+        refused.to_string(),
+        "player input is withdrawn; only vertical descent is allowed"
+    );
+    assert_eq!(session.sampled(), start);
+    assert_eq!(session.counter.entries(), 0);
+    let later = first + Duration::from_millis(20);
+    let mut fall = request(later, 0.0);
+    fall.mode = MovementMode::Fall;
+    fall.position.z = -0.1;
+    session
+        .send_move_sample(&fall, later, |sample| {
+            assert_eq!(sample.position, fall.position);
+            Ok(())
+        })
+        .unwrap();
+    assert_eq!(session.sampled(), later);
+    assert_eq!(session.counter.entries(), 1);
+}
+
+#[test]
 fn withdrawn_input_allows_only_fresh_vertical_descent_and_no_jump() {
     let start = Instant::now();
     let mut session = setup(start).with_falls(true);

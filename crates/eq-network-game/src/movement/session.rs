@@ -975,12 +975,39 @@ impl MotionSession {
             request.mode != MovementMode::Fall || self.falls,
             "falling is not enabled for this server"
         );
-        // Without player input, only an in-place descent is allowed. No fake
-        // calibration, turn, climb, or horizontal rounding allowance is granted.
+        // Without player input, only descent or passive support motion is
+        // allowed. Ordinary descent keeps exact XY and heading; a carrier
+        // cannot turn this permission into voluntary input.
         if !self.granted() {
+            let passive = match request.support {
+                Some(super::Support::Spawn(sample)) => {
+                    // A verified carrier can move the world point without
+                    // giving the rider voluntary movement.
+                    self.guard
+                        .carrier_pose
+                        .is_some_and(|(named, _)| named == sample)
+                        && matches!(request.mode, MovementMode::Fall | MovementMode::Forward)
+                        && self.is_passive(request)
+                }
+                _ => {
+                    request.position.x == self.position.x
+                        && request.position.y == self.position.y
+                        && request.position.heading == self.position.heading
+                        && match request.mode {
+                            MovementMode::Fall => request.position.z <= self.position.z,
+                            // A lift may still carry a player who can't move,
+                            // and one stopped at the top holds them there.
+                            MovementMode::Forward => {
+                                request.support.is_some()
+                                    && request.position.z
+                                        <= self.position.z + self.guard.lift_rise()
+                            }
+                            _ => false,
+                        }
+                }
+            };
             ensure!(
-                self.is_passive(request)
-                    && matches!(request.mode, MovementMode::Fall | MovementMode::Forward),
+                passive,
                 "player input is withdrawn; only vertical descent is allowed"
             );
         }

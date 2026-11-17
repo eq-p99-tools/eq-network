@@ -62,6 +62,56 @@ fn attach(session: &mut MotionSession, start: Instant) -> Position {
 }
 
 #[test]
+fn a_verified_carrier_keeps_passive_motion_without_granting_player_input() {
+    let start = Instant::now();
+    let mut session = MotionSession::new(
+        11,
+        7,
+        Position {
+            x: 20.0,
+            ..Position::default()
+        },
+        start,
+    )
+    .unwrap();
+    let local = attach(&mut session, start);
+    assert!(!session.granted());
+    let at = start + Duration::from_millis(200);
+    let pose = Position {
+        x: 100.0,
+        heading: 128.0,
+        ..Position::default()
+    };
+    let still = request(start, at, pose, local);
+    // An unverified support name cannot bypass withdrawn input checks.
+    session.allow_carrier(None);
+    assert!(session
+        .send_move_sample(&still, at, |_| panic!("unverified carrier"))
+        .is_err());
+    session.allow_carrier(Some((sample(start, at), pose)));
+    session
+        .send_move_sample(&still, at, |wire| {
+            assert_eq!(wire.position, still.position);
+            assert_eq!(wire.delta, [0.0; 3]);
+            assert_eq!(wire.delta_heading, 0);
+            assert_eq!(wire.animation, 0);
+            Ok(())
+        })
+        .unwrap();
+    assert!(!session.granted());
+    let later = at + Duration::from_millis(100);
+    let mut walked = local;
+    walked.x += 0.1;
+    session.allow_carrier(Some((sample(start, later), pose)));
+    assert!(session
+        .send_move_sample(&request(start, later, pose, walked), later, |_| {
+            panic!("a carrier cannot grant the rider movement");
+        })
+        .is_err());
+    assert_eq!(session.position(), still.position);
+}
+
+#[test]
 fn translation_and_yaw_do_not_spend_the_riders_walk_or_own_turn_budget() {
     let start = Instant::now();
     let mut session = setup(start);
