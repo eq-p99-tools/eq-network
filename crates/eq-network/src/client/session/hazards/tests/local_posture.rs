@@ -65,7 +65,7 @@ fn local_report(hazard: Hazard, amount: u32) -> ClientCommand {
                 sampled_at: Instant::now(),
             },
         },
-        _ => unreachable!("this fixture reports only fall, drowning and lava"),
+        Hazard::Freezing => unreachable!("this fixture reports only fall, drowning and lava"),
     }
 }
 
@@ -175,7 +175,7 @@ fn zero_unencodable_and_refused_reports_stand_no_one() {
     let outcome =
         testing::run(|out| unavailable.handle(&report(Hazard::Falling, 13), &mut world, out));
     outcome.result.unwrap();
-    assert!(outcome.sent.is_empty());
+    assert_eq!(outcome.sent, []);
     assert_eq!(world.posture.current(), Some(PostureState::Sitting));
 }
 

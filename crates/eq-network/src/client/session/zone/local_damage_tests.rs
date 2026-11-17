@@ -67,7 +67,7 @@ fn report(hazard: Hazard, session_id: u64) -> ClientCommand {
                 sampled_at: Instant::now(),
             },
         },
-        _ => unreachable!("this fixture reports only fall, drowning and lava"),
+        Hazard::Freezing => unreachable!("this fixture reports only fall, drowning and lava"),
     }
 }
 
