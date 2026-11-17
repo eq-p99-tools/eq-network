@@ -436,8 +436,9 @@ mod tests {
         assert!(titanium_practice(42, TrainingSubject::Language(26)).is_err());
         assert!(titanium_practice(42, TrainingSubject::Skill(100)).is_err());
         let offer = titanium_offer(&titanium_open(42, 7).body).unwrap();
-        assert!(
-            offer.language_caps.is_empty(),
+        assert_eq!(
+            offer.language_caps,
+            [],
             "the numeric skill-cap decoder does not invent language policy"
         );
         assert_eq!(offer.subject_cap(TrainingSubject::Language(5)), 0);

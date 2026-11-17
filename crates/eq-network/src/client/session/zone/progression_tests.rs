@@ -269,59 +269,70 @@ fn p99_skill_update_remains_authoritative_without_releasing_practice() {
     assert_eq!(visit.command(request(train)).sent, []);
 }
 
+fn language_training_command(request: TrainingRequest) -> ClientCommand {
+    ClientCommand::Training {
+        session_id: 5,
+        request,
+        created: Instant::now(),
+    }
+}
+
+/// Establishes one pending language operation through the actual feature,
+/// command, offer and purse owners, before any timeout/replacement is injected.
+fn stage_eqemu_language_practice(from: u8) -> (Visit, eq_network_game::world::Coins) {
+    use eq_network_game::{training::TrainingSubject, world::Coins};
+    let mut visit = Visit::on(ServerProtocol::EqEmu);
+    visit.world.player.corrected().unwrap().languages = Some(vec![from; 28]);
+    let coins = Coins {
+        copper: 20,
+        ..Coins::default()
+    };
+    visit
+        .news(vec![Message::Event(WorldEvent::Coins(coins))])
+        .result
+        .unwrap();
+    let mut trainer = testing::spawn(42, SpawnKind::Npc);
+    trainer.class = Some(20);
+    visit.world.spawns.insert(trainer);
+    assert_eq!(
+        visit
+            .command(language_training_command(TrainingRequest::Open {
+                trainer: 42
+            }))
+            .sent
+            .len(),
+        1
+    );
+    let mut body = training::titanium_open(42, 7).body;
+    body[412] = 1;
+    body[413..445].fill(0xc9);
+    visit.packet(training::OFFER_OPCODE, &body).result.unwrap();
+    assert_eq!(
+        visit
+            .command(language_training_command(TrainingRequest::PracticeAt {
+                trainer: 42,
+                subject: TrainingSubject::Language(5)
+            }))
+            .sent
+            .len(),
+        1
+    );
+    assert_eq!(
+        visit.world.coins.purse,
+        Some(coins),
+        "projection stays known during observation"
+    );
+    (visit, coins)
+}
+
 #[test]
 fn eqemu_unknown_language_outcomes_withdraw_only_potentially_spent_balances() {
-    use eq_network_game::{
-        training::{PracticeUpdate, TrainingSubject},
-        world::Coins,
-    };
+    use eq_network_game::training::{PracticeUpdate, TrainingSubject};
     for from in [0, 20] {
         for replaced in [false, true] {
-            let mut visit = Visit::on(ServerProtocol::EqEmu);
-            visit.world.player.corrected().unwrap().languages = Some(vec![from; 28]);
-            let coins = Coins {
-                copper: 20,
-                ..Coins::default()
-            };
-            visit
-                .news(vec![Message::Event(WorldEvent::Coins(coins))])
-                .result
-                .unwrap();
-            let mut trainer = testing::spawn(42, SpawnKind::Npc);
-            trainer.class = Some(20);
-            visit.world.spawns.insert(trainer.clone());
-            let command = |request| ClientCommand::Training {
-                session_id: 5,
-                request,
-                created: Instant::now(),
-            };
-            assert_eq!(
-                visit
-                    .command(command(TrainingRequest::Open { trainer: 42 }))
-                    .sent
-                    .len(),
-                1
-            );
-            let mut body = training::titanium_open(42, 7).body;
-            body[412] = 1;
-            body[413..445].fill(0xc9);
-            visit.packet(training::OFFER_OPCODE, &body).result.unwrap();
-            assert_eq!(
-                visit
-                    .command(command(TrainingRequest::PracticeAt {
-                        trainer: 42,
-                        subject: TrainingSubject::Language(5)
-                    }))
-                    .sent
-                    .len(),
-                1
-            );
-            assert_eq!(
-                visit.world.coins.purse,
-                Some(coins),
-                "projection stays known during observation"
-            );
+            let (mut visit, coins) = stage_eqemu_language_practice(from);
             let outcome = if replaced {
+                let trainer = visit.world.spawns.visible(42).unwrap().clone();
                 visit.news(vec![Message::Event(WorldEvent::Spawns(vec![trainer]))])
             } else {
                 testing::run(|out| {
@@ -375,21 +386,25 @@ fn eqemu_unknown_language_outcomes_withdraw_only_potentially_spent_balances() {
             )));
             assert!(!received.events.iter().any(|event| matches!(
                 event,
-                ClientEvent::World(WorldEvent::Training(TrainingUpdate::Trained { .. }))
-                    | ClientEvent::World(WorldEvent::PracticePoints(_))
-                    | ClientEvent::World(WorldEvent::Coins(_))
+                ClientEvent::World(
+                    WorldEvent::Training(TrainingUpdate::Trained { .. })
+                        | WorldEvent::PracticePoints(_)
+                        | WorldEvent::Coins(_)
+                )
             )));
             assert_eq!(
                 visit.world.coins.purse,
                 if from == 0 { Some(coins) } else { None }
             );
-            assert!(visit
-                .command(command(TrainingRequest::PracticeAt {
-                    trainer: 42,
-                    subject: TrainingSubject::Language(5)
-                }))
-                .sent
-                .is_empty());
+            assert_eq!(
+                visit
+                    .command(language_training_command(TrainingRequest::PracticeAt {
+                        trainer: 42,
+                        subject: TrainingSubject::Language(5)
+                    }))
+                    .sent,
+                []
+            );
         }
     }
 }

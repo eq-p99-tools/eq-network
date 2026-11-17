@@ -319,12 +319,14 @@ impl Training {
             self.retire_practice(out)?;
         } else {
             self.retire_eqemu_languages(world, None);
-            if let Some(trainer) = &self.trainer {
-                // An answered offer has consumed its opening response. Only
-                // an unanswered opening can be confused with a later request.
-                if trainer.offer.is_none() {
-                    self.retired_trainers.insert(trainer.spawn_id);
-                }
+            // An answered offer has consumed its opening response. Only
+            // an unanswered opening can be confused with a later request.
+            if let Some(trainer) = self
+                .trainer
+                .as_ref()
+                .filter(|trainer| trainer.offer.is_none())
+            {
+                self.retired_trainers.insert(trainer.spawn_id);
             }
         }
         if self.trainer.take().is_some() {
@@ -785,7 +787,8 @@ mod tests {
     fn expired_eqemu_openings_retire_the_id_without_trapping_a_pending_window() {
         let (mut training, mut world) = warrior();
         open(&mut training, &mut world, 42).result.unwrap();
-        training.trainer.as_mut().unwrap().requested_at = Instant::now() - ANSWER_WAIT;
+        training.trainer.as_mut().unwrap().requested_at =
+            Instant::now().checked_sub(ANSWER_WAIT).unwrap();
         let outcome = testing::run(|out| training.tick(Instant::now(), &mut world, out));
         outcome.result.unwrap();
         assert!(training.trainer.is_none());
@@ -795,7 +798,7 @@ mod tests {
             Message::TrainingReply(_)
         ));
         let retry = open(&mut training, &mut world, 42);
-        assert!(retry.sent.is_empty());
+        assert_eq!(retry.sent, []);
         assert!(refusals(&retry.events)[0].contains("Re-enter the zone"));
         // A different trainer remains usable; a fresh zone admission has a fresh feature.
         assert_eq!(open(&mut training, &mut world, 45).sent.len(), 1);
@@ -852,22 +855,8 @@ mod tests {
                     hear(&mut training, &mut world, reply(42, 7, true)).0,
                     Message::TrainingReply(_)
                 ));
-                assert!(handle(
-                    &mut training,
-                    &mut world,
-                    TrainingRequest::PracticeAt {
-                        trainer: 42,
-                        subject: TrainingSubject::Language(5)
-                    }
-                )
-                .sent
-                .is_empty());
-                let reopened = open(&mut training, &mut world, 42);
-                if offered {
-                    assert_eq!(reopened.sent, [training::titanium_open(42, 7)]);
-                    hear(&mut training, &mut world, reply(42, 7, true));
-                    // A fresh offer does not restore an unresolved practice balance.
-                    assert!(handle(
+                assert_eq!(
+                    handle(
                         &mut training,
                         &mut world,
                         TrainingRequest::PracticeAt {
@@ -875,11 +864,29 @@ mod tests {
                             subject: TrainingSubject::Language(5)
                         }
                     )
-                    .sent
-                    .is_empty());
+                    .sent,
+                    []
+                );
+                let reopened = open(&mut training, &mut world, 42);
+                if offered {
+                    assert_eq!(reopened.sent, [training::titanium_open(42, 7)]);
+                    hear(&mut training, &mut world, reply(42, 7, true));
+                    // A fresh offer does not restore an unresolved practice balance.
+                    assert_eq!(
+                        handle(
+                            &mut training,
+                            &mut world,
+                            TrainingRequest::PracticeAt {
+                                trainer: 42,
+                                subject: TrainingSubject::Language(5)
+                            }
+                        )
+                        .sent,
+                        []
+                    );
                     assert_eq!(training.points, None);
                 } else {
-                    assert!(reopened.sent.is_empty());
+                    assert_eq!(reopened.sent, []);
                     assert!(refusals(&reopened.events)[0].contains("Re-enter the zone"));
                 }
             }
@@ -915,7 +922,7 @@ mod tests {
                 trainer: 42,
                 subject: TrainingSubject::Language(5),
             };
-            assert!(handle(&mut training, &mut world, practice).sent.is_empty());
+            assert_eq!(handle(&mut training, &mut world, practice).sent, []);
             // With no pending Open, a reply cannot silently restore the old offer.
             assert!(matches!(
                 hear(&mut training, &mut world, reply(42, 7, true)).0,
@@ -925,8 +932,9 @@ mod tests {
                 open(&mut training, &mut world, 42).sent,
                 [training::titanium_open(42, 7)]
             );
-            assert!(
-                handle(&mut training, &mut world, practice).sent.is_empty(),
+            assert_eq!(
+                handle(&mut training, &mut world, practice).sent,
+                [],
                 "fresh reply required"
             );
             assert!(matches!(
@@ -958,7 +966,7 @@ mod tests {
         assert_eq!(training.points, Some(3));
         // Model fixture for the recovered world: retain the same admission,
         // trainer and Training owner. This is not a live recovery claim.
-        world.lifecycle = Default::default();
+        world.lifecycle = super::super::lifecycle::ZoneLifecycle::default();
         assert_eq!(world.session_id, session_id);
         assert_eq!(
             open(&mut training, &mut world, 42).sent,
@@ -968,7 +976,7 @@ mod tests {
             trainer: 42,
             subject: TrainingSubject::Language(5),
         };
-        assert!(handle(&mut training, &mut world, practice).sent.is_empty());
+        assert_eq!(handle(&mut training, &mut world, practice).sent, []);
         hear(&mut training, &mut world, reply(42, 7, true));
         assert_eq!(
             handle(&mut training, &mut world, practice).sent,
@@ -976,8 +984,9 @@ mod tests {
         );
     }
 
-    #[test]
-    fn eqemu_language_offers_use_server_bounds_and_correlate_the_update_bank() {
+    /// Opens a received language offer with one withheld flag, retaining the
+    /// exact cap projection assertion before tests issue a practice.
+    fn language_offer_with_one_missing_flag() -> (Training, World) {
         let (mut training, mut world) = warrior();
         world.player.corrected().unwrap().languages = Some(vec![20; 28]);
         open(&mut training, &mut world, 42).result.unwrap();
@@ -994,6 +1003,12 @@ mod tests {
         let mut expected_caps = vec![100; 26];
         expected_caps[4] = 0;
         assert_eq!(offer.language_caps, expected_caps);
+        (training, world)
+    }
+
+    #[test]
+    fn eqemu_language_offers_use_server_bounds_and_correlate_the_update_bank() {
+        let (mut training, mut world) = language_offer_with_one_missing_flag();
         let request = TrainingRequest::PracticeAt {
             trainer: 42,
             subject: TrainingSubject::Language(5),
@@ -1002,17 +1017,19 @@ mod tests {
             handle(&mut training, &mut world, request).sent,
             [training::titanium_practice(42, TrainingSubject::Language(5)).unwrap()]
         );
-        assert!(handle(&mut training, &mut world, request).sent.is_empty());
-        assert!(handle(
-            &mut training,
-            &mut world,
-            TrainingRequest::PracticeAt {
-                trainer: 42,
-                subject: TrainingSubject::Language(4)
-            }
-        )
-        .sent
-        .is_empty());
+        assert_eq!(handle(&mut training, &mut world, request).sent, []);
+        assert_eq!(
+            handle(
+                &mut training,
+                &mut world,
+                TrainingRequest::PracticeAt {
+                    trainer: 42,
+                    subject: TrainingSubject::Language(4)
+                }
+            )
+            .sent,
+            []
+        );
         // The ordinary skill with the same index is not the language response.
         let mut ordinary = Message::Event(WorldEvent::Skill {
             skill_id: 5,
@@ -1043,26 +1060,30 @@ mod tests {
         assert!(events
             .iter()
             .any(|event| matches!(event, ClientEvent::World(WorldEvent::PracticePoints(2)))));
-        assert!(handle(
-            &mut training,
-            &mut world,
-            TrainingRequest::PracticeAt {
-                trainer: 43,
-                subject: TrainingSubject::Language(5)
-            }
-        )
-        .sent
-        .is_empty());
-        assert!(handle(
-            &mut training,
-            &mut world,
-            TrainingRequest::PracticeAt {
-                trainer: 42,
-                subject: TrainingSubject::Language(26)
-            }
-        )
-        .sent
-        .is_empty());
+        assert_eq!(
+            handle(
+                &mut training,
+                &mut world,
+                TrainingRequest::PracticeAt {
+                    trainer: 43,
+                    subject: TrainingSubject::Language(5)
+                }
+            )
+            .sent,
+            []
+        );
+        assert_eq!(
+            handle(
+                &mut training,
+                &mut world,
+                TrainingRequest::PracticeAt {
+                    trainer: 42,
+                    subject: TrainingSubject::Language(26)
+                }
+            )
+            .sent,
+            []
+        );
         world
             .player
             .corrected()
@@ -1070,13 +1091,13 @@ mod tests {
             .languages
             .as_mut()
             .unwrap()[5] = 100;
-        assert!(handle(&mut training, &mut world, request).sent.is_empty());
+        assert_eq!(handle(&mut training, &mut world, request).sent, []);
         world.player.corrected().unwrap().languages = None;
-        assert!(handle(&mut training, &mut world, request).sent.is_empty());
+        assert_eq!(handle(&mut training, &mut world, request).sent, []);
         handle(&mut training, &mut world, TrainingRequest::End)
             .result
             .unwrap();
-        assert!(handle(&mut training, &mut world, request).sent.is_empty());
+        assert_eq!(handle(&mut training, &mut world, request).sent, []);
     }
 
     #[test]
@@ -1098,7 +1119,7 @@ mod tests {
             event,
             ClientEvent::World(WorldEvent::Training(TrainingUpdate::Trained { .. }))
         )));
-        assert!(handle(&mut training, &mut world, request).sent.is_empty());
+        assert_eq!(handle(&mut training, &mut world, request).sent, []);
         assert_eq!(
             world.player.as_ref().unwrap().languages.as_ref().unwrap()[5],
             0
@@ -1142,7 +1163,7 @@ mod tests {
             })
         ));
         assert_eq!(training.points, None);
-        assert!(handle(&mut training, &mut world, request).sent.is_empty());
+        assert_eq!(handle(&mut training, &mut world, request).sent, []);
     }
 
     #[test]
