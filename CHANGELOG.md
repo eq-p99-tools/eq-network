@@ -5,6 +5,17 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Add typed skill/language training subjects, `titanium_practice`, and current
+  language offers from received availability flags and server-specific rules.
+  Existing ordinary-skill training entry points remain available.
+- Unresolved EQEmu language operations withdraw points and potentially spent
+  purse balances; free operations preserve known coins. Late skill updates
+  remain proficiency news. Expired or invalidated unanswered openings retire
+  that trainer ID until fresh admission; answered offers can request a new offer.
+- **Breaking:** `TrainingOffer` requires `language_caps`; `TrainingReply` requires
+  `language_flags`. Exhaustive matches must handle `TrainingRequest::PracticeAt`,
+  `Request::Practice` and `PracticeUpdate::OutcomeUnknown`.
+
 - Add `SendChatInAdmission` for callers that must bind queued chat to its
   originating zone visit. Stale requests are refused before feature handling;
   ordinary chat payloads, capabilities and timing remain unchanged.
