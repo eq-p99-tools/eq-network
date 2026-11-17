@@ -55,6 +55,53 @@ fn fixture_world(protocol: ServerProtocol, local_only: bool) -> World {
     World::for_zone(5, &config)
 }
 
+#[test]
+fn queued_scoped_chat_cannot_reach_any_feature_in_a_later_admission() {
+    use super::super::feature::Feature;
+    use std::sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    };
+    struct Notices(Arc<AtomicUsize>);
+    impl Feature for Notices {
+        fn capabilities(&self) -> Vec<Capability> {
+            Vec::new()
+        }
+        fn owns(&self, _: &ClientCommand) -> bool {
+            false
+        }
+        fn notice(&mut self, _: &ClientCommand, _: &mut World, _: &mut Out<'_, '_>) -> Result<()> {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+    }
+    for protocol in SERVERS {
+        let (mut features, mut world) = setup(protocol);
+        let notices = Arc::new(AtomicUsize::new(0));
+        features.provided.push(Box::new(Notices(notices.clone())));
+        let queued = ClientCommand::SendChatInAdmission {
+            session_id: 4,
+            message: OutboundChat::Say("synthetic scoped message".into()),
+        };
+        let output = testing::run_on(servers::server_type(protocol).wire(), |out| {
+            apply_commands(&[queued], &mut features, &mut world, out, true)
+        });
+        output.result.unwrap();
+        assert!(output.sent.is_empty() && output.unreliable.is_empty());
+        assert_eq!(notices.load(Ordering::SeqCst), 0);
+        let current = ClientCommand::SendChatInAdmission {
+            session_id: world.session_id,
+            message: OutboundChat::Say("synthetic scoped message".into()),
+        };
+        let output = testing::run_on(servers::server_type(protocol).wire(), |out| {
+            apply_commands(&[current], &mut features, &mut world, out, true)
+        });
+        output.result.unwrap();
+        assert_eq!(output.sent.len(), 1);
+        assert_eq!(notices.load(Ordering::SeqCst), 1);
+    }
+}
+
 fn drain_depop(
     protocol: ServerProtocol,
     features: &mut Features,
