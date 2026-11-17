@@ -1,5 +1,16 @@
 # API and integration contracts
 
+## Own-player update gates
+
+`UpdateGate::Flagged` applies the generation's `FlagRule` and packet packing.
+The provisional `UpdateGate::Changed` has been removed. Titanium uses
+`TITANIUM_FLAGS`, and the Mac-era generation uses `EQMAC_FLAGS`; neither
+production rule changes in this cleanup. A gate holds an accepted sample
+until it is due and more than its spacing has passed. A later host sample
+replaces the held one without advancing the outgoing counter; that counter
+is sampled only when the update goes out. Exhaustive host matches on
+`UpdateGate` need a fallback because the enum is non-exhaustive.
+
 ## Titanium lifts and door mechanisms
 
 `doors::titanium` holds Titanium's own door rules, read from `eqgame.exe`:

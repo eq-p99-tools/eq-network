@@ -311,7 +311,6 @@ pub struct MotionSession {
 enum Release {
     Send,
     Hold,
-    Unchanged,
 }
 
 /// One locally checked candidate, tied to the only movement owner until it
@@ -328,7 +327,7 @@ struct PreparedMove<'a> {
 }
 
 impl PreparedMove<'_> {
-    /// A checked candidate is accepted only here: held/unchanged candidates
+    /// A checked candidate is accepted only here: held candidates
     /// commit locally, and an immediate send commits after its callback succeeds.
     /// External callback side effects are never rolled back by this owner.
     fn submit(self, send: impl FnOnce(&PositionPacket) -> Result<()>) -> Result<()> {
@@ -353,7 +352,6 @@ impl PreparedMove<'_> {
                 });
             }
             Release::Hold => owner.held = Some(sample),
-            Release::Unchanged => owner.held = None,
         }
         owner.flags = flags;
         owner.guard = guard;
@@ -470,14 +468,6 @@ impl MotionSession {
     /// passes [`Hold::None`] while a departure lets a stunned player move.
     pub fn set_hold(&mut self, hold: Hold) {
         self.hold = hold;
-    }
-
-    /// The least time between two updates under a spacing gate.
-    fn spacing(&self) -> Duration {
-        match self.gate {
-            Some(UpdateGate::Changed { spacing }) => spacing,
-            _ => Duration::ZERO,
-        }
     }
 
     /// Lets fall samples descend as fast as the client generation's falls
@@ -1169,19 +1159,6 @@ impl MotionSession {
         let since = now.saturating_duration_since(self.last_sent);
         Ok(match self.gate {
             None => Release::Send,
-            Some(UpdateGate::Changed { spacing }) => {
-                let unsequenced = PositionPacket {
-                    sequence: 0,
-                    ..*sample
-                };
-                if self.last_update == Some(unsequenced) {
-                    Release::Unchanged
-                } else if since < spacing {
-                    Release::Hold
-                } else {
-                    Release::Send
-                }
-            }
             Some(UpdateGate::Flagged { pack, rule }) => {
                 flags.observe(sample, now, &rule, strafing);
                 if flags.release(sample, since, pack, &rule)? {
@@ -1218,7 +1195,6 @@ impl MotionSession {
         now: Instant,
         send: impl FnOnce(&PositionPacket) -> Result<()>,
     ) -> Result<bool> {
-        let spacing = self.spacing();
         let since = now.saturating_duration_since(self.last_sent);
         if self.suspended {
             return Ok(false);
@@ -1234,9 +1210,6 @@ impl MotionSession {
             return self.tick_flagged(now, since, (pack, &rule), send);
         }
         if let Some(held) = self.held {
-            if since < spacing {
-                return Ok(false);
-            }
             let sample = PositionPacket {
                 sequence: self.counter.value(now),
                 ..held

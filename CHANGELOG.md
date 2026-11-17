@@ -5,6 +5,11 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- **Breaking:** remove `UpdateGate::Changed`. Hosts choosing a movement gate
+  use `UpdateGate::Flagged` with the generation's `FlagRule` and packing.
+  `UpdateGate` is non-exhaustive. The production gates already use the
+  native rules; counter, pad and transaction tests now use flagged gates too.
+
 ### Added
 
 - **Breaking:** a ducking player moves ducked on Titanium, as its program
