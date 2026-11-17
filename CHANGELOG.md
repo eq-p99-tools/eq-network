@@ -5,6 +5,9 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Keep the worker's guild membership current from received own-spawn listing
+  changes, so ordinary guild requests follow joins and leaves without a relog.
+
 - Add typed skill/language training subjects, `titanium_practice`, and current
   language offers from received availability flags and server-specific rules.
   Existing ordinary-skill training entry points remain available.
