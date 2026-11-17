@@ -145,6 +145,23 @@ fn purse_uncertain(world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
     Ok(())
 }
 
+/// A paid training request or unresolved outcome leaves potentially spent coins
+/// unavailable until the server supplies a fresh balance. Free practices do not.
+fn training_cost_uncertain(message: &Message) -> bool {
+    matches!(
+        message,
+        Message::Event(WorldEvent::Training(TrainingUpdate::Practice(
+            eq_network_game::training::PracticeUpdate::Requested {
+                estimated_cost: 1..,
+                ..
+            } | eq_network_game::training::PracticeUpdate::OutcomeUnknown {
+                estimated_cost: 1..,
+                ..
+            },
+        )))
+    )
+}
+
 /// A closed or silent merchant window does not establish a transaction result.
 fn merchant_unanswered(world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
     purse_uncertain(world, out)?;
@@ -1241,15 +1258,7 @@ impl Feature for Belongings {
         if matches!(message, Message::Event(WorldEvent::Coins(_))) {
             self.trades.coins_replaced();
         }
-        if matches!(
-            message,
-            Message::Event(WorldEvent::Training(TrainingUpdate::Practice(
-                eq_network_game::training::PracticeUpdate::Requested {
-                    estimated_cost: 1..,
-                    ..
-                },
-            )))
-        ) {
+        if training_cost_uncertain(message) {
             purse_uncertain(world, out)?;
         }
         let known_coins = match message {

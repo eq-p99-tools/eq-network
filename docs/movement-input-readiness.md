@@ -7,25 +7,62 @@ STR and movement modifier. Missing input is a state, never numeric zero.
 ## Host API migration
 
 On `WorldEvent::SpeedInputsRequired { session_id, revision }`, send
-`GameCommand::SpeedInputs { session_id, revision, state }`. `state` is either
-`SpeedInputState::Ready(SpeedInputs { rate, weight, capacity })` or
-`Unavailable(SpeedInputUnavailable)`. Send a changed state even if the revision
-has not changed, for example after spell data becomes available. Retry a full
-command queue. Reports from an obsolete revision cannot restore a grant.
+`GameCommand::SpeedInputs { session_id, revision, report_id, state }` (also
+exported as `ClientCommand::SpeedInputs`). The report fields are defined in
+[`command.rs`](../crates/eq-network-game/src/command.rs); the input and receipt
+types are in [`movement/inputs.rs`](../crates/eq-network-game/src/movement/inputs.rs).
 
-Admission, server position correction, inventory/coin changes, own buff changes,
-level changes and changed EQMac fatigue withdraw the cached inputs and request
-a fresh revision. Inventory revisions include predictions and invalidation.
-The session compares belongings before accepting motion commands and on ticks,
-including changes published directly by the inventory owner. HP and sneak stay
-session-owned inputs to the existing speed formula.
+`SpeedInputs` contains `rate: i16`, `weight: u16`, `capacity: u32` and
+`eqmac_fatigue: Option<EqMacFatigueInputs>`. The state is one of:
 
-`Unavailable` clears held movement and the timing/jump epoch. Stationary
-heartbeats remain enabled. Servers supporting falls accept only bounded passive
-descent while input is withdrawn: unchanged X/Y/heading, no ascent, and existing
-fall/time/coordinate guards. Jump and ordinary locomotion are rejected. Death and
-transfer suspension continue to stop motion entirely. `ConfigureMotion` cannot
-bypass this contract on generations with a known speed formula.
+| State | Session behavior |
+| --- | --- |
+| `Ready(inputs)` | Replace the inputs with the complete report and evaluate the grant. |
+| `Bounded { inputs, missing }` | Use the reported inputs while retaining the unresolved category. This can establish a grant even without an earlier one. |
+| `Unavailable(missing)` | With an active grant, keep its inputs and grant without a timeout. Without one, withdraw input and wait for a usable report. |
+
+The host evaluates each provable term now and omits terms it cannot evaluate.
+The desktop retains positive equipment/food or buff terms from its earlier
+same-admission report where the corresponding state is unknown, and applies
+known current roots, snares and weight. A known ended speed buff ends at once.
+This bounded-input policy can temporarily allow more speed than the original
+client until all inputs are proven (recording checklist 6.451). Neither a bound
+nor a retained grant establishes inventory placement or delivery.
+
+Send a changed state even if the revision has not changed. Allocate a fresh
+`report_id` whenever the state or revision changes, including identical-value
+recovery after an unavailable report; retries of one logical report reuse its
+identity. Retry a full command queue. Reports from another admission or obsolete
+revision are rejected. `WorldEvent::SpeedInputsAccepted` reports the local
+session's exact input identity and whether it currently has a positive grant;
+it is not a server acknowledgement. A root has no positive grant.
+
+Admission needs fresh inputs. Inventory/coin changes, own buff changes, spell
+landings, level changes and server position corrections request a fresh
+revision. When a grant is already in force, these rechecks preserve its speeds
+while the host prepares a report; a late report is logged without expiring the
+grant. A server correction restarts prediction at the new position while held
+input continues. Inventory revisions include predictions and invalidation, and
+the session compares belongings before accepting motion commands and on ticks.
+HP, sneak and posture remain session-owned inputs and still apply immediately.
+
+On EQMac, `EqMacFatigueInputs { strength: i64, stamina: Option<u8> }` carries
+effective strength before fatigue/final capping and effective stamina capped to
+1..255 when known. The session applies its received fatigue before the final
+STR cap.
+Unknown fatigue or stamina uses the maximum ten-point penalty. When this
+component is present, a fatigue-only update changes the grant without changing
+the host report or revision; `capacity` is a stable maximum-penalty fallback.
+With `eqmac_fatigue: None`, the legacy capacity and fatigue-triggered report
+refresh remain. Titanium ignores the component.
+
+A root grants no travel speed while preserving turning input. Stun, freeze,
+posture, death and zoning still impose their own holds. When input is actually
+withdrawn, the frontend clears autorun, taps and queued jumps. Stationary
+heartbeats remain enabled; supported passive descent must keep X/Y/heading
+unchanged, without ascent and within the existing fall/time/coordinate guards. Death and
+transfer suspension stop motion entirely. `ConfigureMotion` cannot bypass the
+input-report contract on generations with a known speed formula.
 
 The speed formulas are unchanged: capacity zero still means no encumbrance;
 `rate == -1000` means an actual root. Neither is an unavailable-state sentinel.
@@ -57,6 +94,14 @@ are unavailable. Pending item moves are usable only if reconstructing the
 prediction origins produces the same total, including coin-purse effects.
 This method does not make predictions authoritative or settle them on a timer.
 
+After a pending Titanium ground drop, the session independently checks the
+report against the current carried-weight bound, including possible queued
+cursor arrivals. A report below a known bound is raised to that bound and marked
+`Bounded` with inventory unresolved. If no bound is available, a new grant is
+refused; an existing grant can continue, keeping its weight as a floor while
+applying usable reported terms. This does not acknowledge the drop or any
+predicted placement. Fall-weight availability is a separate calculation.
+
 Equipment contribution uncertainty is independent of carried weight. The inventory
 owner remembers every stat-bearing slot whose unresolved history included nonzero
 direct bonuses, a worn effect or missing metadata. Such a history stays gated
@@ -72,6 +117,14 @@ Known rules with explicitly zero direct bonuses and no worn effect are neutral
 across that history, so they do not require withholding unchanged contributions.
 This proof does not confirm a move, fill in missing definitions, establish load,
 or grant movement without the session's normal input acceptance and calibration.
+
+These calculation and authority rules do not offer inventory actions by
+themselves. The [server policy](../crates/eq-network/src/client/session/servers.rs)
+separately selects item/coin moves, merchants, meals, splitting and banker change.
+P99 and Titanium EQEmu offer splitting/banker change; Quarm offers merchants and
+meals but not those two actions or exchanges. Cursor dropping is offered only
+for local-only Titanium EQEmu, and submission also checks the current admission,
+actor, item and carried-coin prerequisites.
 
 The item decoders retain bag weight reduction (EQMac byte 272; Titanium serialized
 field 99). `Nourishment::fatigue` is optional: EQMac stamina/profile packets

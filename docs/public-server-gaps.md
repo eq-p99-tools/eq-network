@@ -1,13 +1,15 @@
 # P99 and Quarm: remaining client gaps
 
-Inspection date: 2026-11-02. Baselines: networking
+Source/policy refresh: 2026-11-17. The current snapshot below supersedes the
+older implementation labels. It adds no native-test or live-server evidence.
+
+Historical inspection date: 2026-11-02. Baselines: networking
 [`6ae8956`](https://github.com/eq-p99-tools/eq-network/tree/6ae8956068415fa30934485ccdae1a102757b50c)
 and desktop client
 [`c03fb30`](https://github.com/eq-p99-tools/eq-client/tree/c03fb30f191808840e7ee4eedfb540956bea7663).
 The initial inventory is a code, source and saved-capture inspection. The
-follow-up implementation and limited live checks are recorded separately below;
-they do not certify every interaction. Other agents' changes may supersede this
-snapshot.
+follow-up implementation and limited live checks are retained separately below;
+they certify only their recorded scenarios and revisions.
 
 ## What counts as a gap
 
@@ -27,7 +29,54 @@ the whole interaction works. The policy inventory is
 [`servers.rs`](../crates/eq-network/src/client/session/servers.rs); wire coverage
 is separately tracked under `client/session/coverage`.
 
-## First three fixes
+## Current source and policy snapshot, 2026-11-17
+
+This table reconciles the older inventory with the checked-in
+[`servers.rs` policy and tests](../crates/eq-network/src/client/session/servers.rs).
+**Offered** describes policy, with each operation still checking its own
+prerequisites. It does not mean that a scenario passed on the public server.
+The desktop [support guide](https://github.com/eq-p99-tools/eq-client/blob/main/SUPPORT.md)
+records frontend limits and separately dated observations; its manifest and
+lockfile select the networking revision used by that client.
+
+| Area | P99 policy / implementation | Quarm policy / implementation | Remaining boundary |
+| --- | --- | --- | --- |
+| Character creation, deletion and previews | Offered | Offered | Creation and deletion have typed paths and confirmation safeguards. A refreshed list does not establish permanent deletion; public scenarios and rendered appearance variants need their own evidence. |
+| Walking, turning, jump and fall | Offered | Offered through EQMac motion | Admission, collision, correction and speed checks remain. The historical Quarm movement run below covers only its named scenarios and revision. |
+| Swimming and liquid damage | Bounded Titanium swimming; liquid damage reports withheld on P99 | Swimming and liquid hazard work remain unavailable | Local-only Titanium EQEmu can report liquid damage. P99 wet movement, exact tuning and deployed liquid report handling require separate validation. Boat support and scenarios also need the desktop's evidence; this policy snapshot does not validate them. |
+| Movement input refresh | Existing grants continue during ordinary belongings/buff rechecks | Same shared grant lifecycle | Fresh reports can replace speeds without clearing held input. Bounded terms can temporarily allow more speed than the original client; inventory uncertainty is not a confirmed placement. See [movement inputs](movement-input-readiness.md). |
+| Camping, posture and zone transfers | Offered | Offered | Cancellation, destination, refusal, death/bind and reconnect scenarios remain distinct. EQMac client-reported bleed-out is still withheld without complete item-HP accounting. |
+| Item/coin moves and personal banking | Offered; cursor destruction offered; ground drop withheld | Guarded item/coin moves and personal banking offered; no ground drop | Only local-only Titanium EQEmu offers cursor ground drop. Received holdings remain separate from predictions, local ledgers and elapsed time. |
+| Coin splitting and banker change | Offered | Unavailable | Source-backed Titanium requests; partner balances and server outcomes need scenario evidence. |
+| Merchants, meals, trade and giving | Offered | Merchants and meals offered; exchanges unavailable | A submitted purchase or sale does not settle it. Player trade and NPC giving require separate checks. P99 still withholds the separate merchant-offer capability. |
+| Casting and basic spellbook | Offered; book moving offered, deletion withheld | Casting, scribing, memorizing and forgetting offered; book edits withheld | Refusal, interruption, repeat use, item clicks and delayed replies require scenario coverage; the early Quarm admission did not test spell actions. |
+| Abilities and class tools | Includes Fishing, Forage, Pick Pockets, Begging, trap skills and Tracking; Bind Wound requires explicit self-target | Source-backed EQMac subset | The [EQMac exclusions](eqmac-abilities-parity.md) remain. Other-player bandaging and stock/reply ordering on P99 require separate proof. Class-tool eligibility and replies still govern each request. |
+| Knight abilities, disciplines, buffs and cooldowns | Implemented with documented estimates and incomplete coverage | Supported EQMac subset and received state | Wider disciplines, linked reuse, unknown denominators and ambiguous buff replacement remain distinct gaps. Unknown values do not mean zero; a local timer does not prove server reuse. |
+| Targeting, attack and considering | Offered | Offered | Local submission and refusal events are not server combat outcomes. |
+| Loot and corpse commands | Offered | Manual corpse-item looting offered; corpse commands unavailable | EQMac has no automatic loot-all. Only ordinary inventory/coin updates establish delivered holdings; corpse row retirement alone does not. See [EQMac looting](eqmac-looting.md). |
+| Doors and ground items | Offered, with Titanium type-specific motion | Ordinary guarded EQMac door use and ground pickup offered | Specialized/unknown EQMac door mechanisms remain unavailable. A sent click does not open a door, and object disappearance does not establish delivery. See [world objects](eqmac-world-objects.md). |
+| Groups | Offered | Unavailable | P99 invitation, refusal, leader/roster changes, zoning and disband need partner checks. TAKP's shared implementation does not enable Quarm groups. |
+| Friends-online lookup and guild requests | Offered | Unavailable | Protocol requests are separate from complete desktop roster/rank workflows and public partner validation. |
+| Reading and tradeskills | Reading, carried combines and ordinary forge path offered | Reading offered; tradeskills unavailable | Forge moves/combines require a matching server open. Live response ordering and inventory custody need scenario evidence. See [manual combines](p99-manual-combines.md). |
+| Training, dialogs and inspection | Offered | Unavailable | Source-backed requests retain admission, pending-operation and received-state guards; public exchanges need their own checks. |
+| Resurrection and translocate | Offered with offer-bound consent | Unavailable | TAKP translocate is a separate policy. Bind continuation without a server-directed destination remains unverified. |
+| Who, time, ordinary socials and listing | Offered | Unavailable | Assist reply ownership, observer propagation, pacing and reconnect state still need scenario evidence. |
+| Raids, sacrifice, helm and server ticks | Withheld; the native raid-window restriction is reported below | Unavailable | An unavailable raid UI does not establish that raiding gameplay is absent. Unknown applicability stays a gap. |
+| Local map, rendering and UI | Frontend features, independent of most gameplay policy | Same distinction | Weather, appearance, skins, scripts and local maps require client-specific coverage; a protocol capability count cannot certify their fidelity. |
+
+The historical baseline below is preserved for provenance. Its disabled/missing
+labels and its "What remains" column are superseded wherever this snapshot or a
+later dated result differs. Source, synthetic tests, native suite results,
+historical runtime observations and attended P99 validation are separate kinds
+of evidence.
+
+## Historical implementation notes, 2026-11-02–03
+
+The following narrative describes the early stacks at the revisions recorded
+above and in the validation section. Present-tense implementation statements in
+this section describe those stacks, rather than current policy.
+
+### First three fixes
 
 Ranked by evidence, user-visible value and whether the fix can stand on its own
 without live tests. Broad Quarm movement remains urgent, but needs more than
@@ -162,28 +211,32 @@ that client timing is inherited/inferred, not measured on public Quarm.
 `Handle_OP_SpawnAppearance` processes sitting/standing and cancels camping when
 standing. See [the inspected handlers](https://github.com/SecretsOTheP/EQMacEmu/blob/c2cd2651045ab063b236b08f3a9e83cbf10289e9/zone/client_packet.cpp).
 
-## Confirmed implementation and policy gaps
+## Historical inventory (superseded)
 
 P99 offers carried manual combines and the ordinary forge path. The session
 requires a matching server open before accepting moves or a combine for that
 forge. Live P99 response ordering and custody remain to be verified.
 [Manual combine evidence and limits](p99-manual-combines.md)
 
-This table records the baseline above; completed fixes and follow-up checks are
-called out separately so a new capability is not mistaken for live verification.
+The table records the early baseline and follow-up annotations. Read the current
+source/policy snapshot above for offered paths; these historical labels are not
+a current backlog.
 
 State after the 2026-11-03 stack, for a reader of the table: the Quarm
 "Disabled" baseline rows for previews, walking/running, jump/fall, zoning,
 death/return to bind, camping/posture, inventory/coin moves (guarded, no
 merchants or meals), casting/spellbook (no book edits), targeting
 and abilities (the supported subset) are now offered by policy, and P99 jumps
-are enabled. P99 previews are capture-checked. Everything else in "What
-remains" still stands, and the live evidence for the new rows is only what the
-validation sections below record.
+are enabled. P99 previews are capture-checked. This described that stack only;
+later source changes supersede its remaining-work labels. The live evidence
+retains the scope recorded in the validation sections below.
 
 The separate combat follow-up additionally offers Quarm normal attack toggles
 and considering. Its local request events are not server acknowledgments and
 it adds no live combat/death evidence to this report.
+
+<details>
+<summary>Historical baseline table and early follow-up annotations</summary>
 
 | Area | P99 baseline | Quarm baseline | What remains |
 | --- | --- | --- | --- |
@@ -223,6 +276,8 @@ it adds no live combat/death evidence to this report.
 | Hiding acknowledgement | P99 reply behavior unverified | EQMac ends hiding itself | P99 needs evidence; redundant EQMac acknowledgement is not a missing action. |
 | Local map/editor/help/free camera | Available independently of gameplay policy | Same | Target actions still need targeting capability. Existing local UI checks do not certify the whole public-server gameplay matrix. |
 | Art/UI completeness | Partial | Partial | Assets come from user installs; model variants, equipment tints, animations and UI coverage remain incomplete. |
+
+</details>
 
 ### Project 1999 ordinary socials (6.404)
 
@@ -334,9 +389,13 @@ the later live batch remains pending.
   transition still needs a focused retest. This is an unresolved observation,
   not a reproduced destination-loss defect.
 
-## Live verification queue
+## Historical live verification queue, 2026-11-02
 
-Still open: P99 preview/jump in the integrated client; public creation, rejection
+This queue records what was open after the early validation above. It is not a
+claim about later attended results or the current integrated client. Reconcile
+the exact revisions and scenario evidence before carrying an item forward.
+
+Then open: P99 preview/jump in the integrated client; public creation, rejection
 and refresh; Quarm NPC target/clear, walking/turning, camp cancellation and the
 desktop-exit transition; boundary/teleport/refusal and death/bind paths; reconnect
 position persistence and unusual movement states; Quarm gem/item casting,

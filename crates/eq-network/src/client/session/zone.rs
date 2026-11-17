@@ -3188,6 +3188,9 @@ mod target_tests;
 mod social_tests;
 
 #[cfg(test)]
+mod guild_tests;
+
+#[cfg(test)]
 mod pet_tests;
 
 #[cfg(test)]

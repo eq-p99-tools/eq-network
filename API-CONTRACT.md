@@ -148,6 +148,12 @@ Titanium program sends, and the server decides what it allows.
   list the server sent, spelled as it spells them. The server decides who
   may do what and says so in its own lines.
 
+Received listing changes for the current player's spawn also update the
+worker's admitted guild membership. Joining or leaving during an admission
+therefore changes the guild used by ordinary requests without requiring a
+relog. Another spawn's listing cannot change the player's membership; guild
+names and permission outcomes still require their own received evidence.
+
 ## P99 self-bandage stock
 
 A self-targeted P99 Bind Wound request can hold inventory while awaiting

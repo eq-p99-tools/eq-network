@@ -12,7 +12,8 @@ use eq_network_game::{
     message::Message,
     request::Request,
     training::{
-        self, PracticeUpdate, TrainingOffer, TrainingReply, TrainingRequest, TrainingUpdate,
+        self, PracticeUpdate, TrainingOffer, TrainingReply, TrainingRequest, TrainingSubject,
+        TrainingUpdate,
     },
     world::{SpawnKind, WorldEvent},
 };
@@ -44,6 +45,9 @@ pub(super) struct Training {
     p99: bool,
     /// Each trainer ID can receive one opening request in this P99 admission.
     requested_trainers: BTreeSet<u16>,
+    /// `EQEmu` replies carry no request/incarnation token. Retiring an
+    /// unanswered opening needs fresh admission before that ID can reopen.
+    retired_trainers: BTreeSet<u16>,
 }
 
 /// A guildmaster the player asked to train with.
@@ -111,11 +115,18 @@ impl Training {
         &mut self,
         command: &ClientCommand,
         trainer: u16,
-        world: &World,
+        world: &mut World,
         out: &mut Out<'_, '_>,
     ) -> Result<()> {
         if let Err(reason) = Self::eligible(trainer, world) {
             return actions::refuse(command, reason, out.log);
+        }
+        if self.retired_trainers.contains(&trainer) {
+            return actions::refuse(
+                command,
+                "Re-enter the zone before asking this retired guildmaster again.",
+                out.log,
+            );
         }
         if self
             .trainer
@@ -141,6 +152,10 @@ impl Training {
             }
         }
         if let Some(open) = self.trainer.take() {
+            if open.offer.is_none() {
+                self.retired_trainers.insert(open.spawn_id);
+            }
+            self.retire_eqemu_languages(world, None);
             out.request(&Request::EndTraining(open.spawn_id))?;
         }
         out.request(&Request::OpenTraining(trainer))?;
@@ -157,7 +172,11 @@ impl Training {
 
     /// Why the player cannot practice a skill now, if they cannot, and what
     /// the practice costs if they can.
-    fn practice(&self, skill: u32, world: &World) -> Result<(u16, u32, u64), &'static str> {
+    fn practice(
+        &self,
+        subject: TrainingSubject,
+        world: &World,
+    ) -> Result<(u16, u32, u64), &'static str> {
         let Some((trainer, offer)) = self.trainer.as_ref().and_then(|trainer| {
             trainer
                 .offer
@@ -177,7 +196,32 @@ impl Training {
                 );
             }
         }
-        let cap = offer.cap(skill);
+        // Recheck the live trainer for the new bank as well as the received offer.
+        if matches!(subject, TrainingSubject::Language(_)) {
+            Self::eligible(trainer, world)?;
+        }
+        let cap = offer.subject_cap(subject);
+        if let TrainingSubject::Language(language) = subject {
+            if self
+                .pending
+                .iter()
+                .any(|practice| practice.skill == subject.update_id())
+            {
+                return Err("Wait for the current language practice outcome.");
+            }
+            if self.p99
+                && !world.player.as_ref().is_some_and(|player| {
+                    training::titanium_language_trainable(
+                        language,
+                        player.race,
+                        player.class,
+                        player.level,
+                    )
+                })
+            {
+                return Err("Your guildmaster cannot train you in that language yet.");
+            }
+        }
         if cap == 0 {
             return Err("Your guildmaster cannot train you in that skill.");
         }
@@ -188,12 +232,12 @@ impl Training {
         let value = world
             .player
             .as_ref()
-            .and_then(|player| player.skills.as_ref())
-            .and_then(|skills| skills.get(usize::try_from(skill).ok()?))
-            .copied();
+            .and_then(|player| subject.value(player));
         let value = match value {
             Some(value) => value,
-            None if self.p99 => return Err("Your current skill value is unknown."),
+            None if self.p99 || matches!(subject, TrainingSubject::Language(_)) => {
+                return Err("Your current skill value is unknown.")
+            }
             None => 0,
         };
         if value >= cap {
@@ -215,16 +259,20 @@ impl Training {
     fn train(
         &mut self,
         command: &ClientCommand,
-        skill: u32,
+        subject: TrainingSubject,
         world: &mut World,
         out: &mut Out<'_, '_>,
         now: Instant,
     ) -> Result<()> {
-        let (trainer, from, cost) = match self.practice(skill, world) {
+        let (trainer, from, cost) = match self.practice(subject, world) {
             Ok(practice) => practice,
             Err(reason) => return actions::refuse(command, reason, out.log),
         };
-        out.request(&Request::Train { trainer, skill })?;
+        let skill = subject.update_id();
+        match subject {
+            TrainingSubject::Skill(skill) => out.request(&Request::Train { trainer, skill })?,
+            TrainingSubject::Language(_) => out.request(&Request::Practice { trainer, subject })?,
+        }
         self.pending.push_back(Practice {
             skill,
             from,
@@ -245,7 +293,7 @@ impl Training {
     }
 
     /// Leaves training; with none open there is nothing to leave.
-    fn end(&mut self, out: &mut Out<'_, '_>) -> Result<()> {
+    fn end(&mut self, world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
         let Some(trainer) = self.trainer.take() else {
             return Ok(());
         };
@@ -254,6 +302,11 @@ impl Training {
         }
         if self.p99 {
             self.retire_practice(out)?;
+        } else {
+            if trainer.offer.is_none() {
+                self.retired_trainers.insert(trainer.spawn_id);
+            }
+            self.retire_eqemu_languages(world, None);
         }
         out.log.send(ClientEvent::World(WorldEvent::Training(
             TrainingUpdate::Ended,
@@ -261,8 +314,21 @@ impl Training {
     }
 
     /// Drops an offer when its trainer or zone is no longer current.
-    fn invalidate_trainer(&mut self, out: &mut Out<'_, '_>) -> Result<()> {
-        self.retire_practice(out)?;
+    fn invalidate_trainer(&mut self, world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
+        if self.p99 {
+            self.retire_practice(out)?;
+        } else {
+            self.retire_eqemu_languages(world, None);
+            // An answered offer has consumed its opening response. Only
+            // an unanswered opening can be confused with a later request.
+            if let Some(trainer) = self
+                .trainer
+                .as_ref()
+                .filter(|trainer| trainer.offer.is_none())
+            {
+                self.retired_trainers.insert(trainer.spawn_id);
+            }
+        }
         if self.trainer.take().is_some() {
             out.log.send(ClientEvent::World(WorldEvent::Training(
                 TrainingUpdate::Ended,
@@ -282,6 +348,33 @@ impl Training {
             )?;
         }
         Ok(())
+    }
+
+    /// Retires only unresolved `EQEmu` language operations. Ordinary skill
+    /// projection remains unchanged. The event goes through the feature loop
+    /// so the purse owner can withdraw potentially spent coins exactly once.
+    fn retire_eqemu_languages(&mut self, world: &mut World, expired_at: Option<Instant>) {
+        let mut retired = Vec::new();
+        self.pending.retain(|practice| {
+            let retire = practice.skill >= training::SKILLS
+                && expired_at
+                    .is_none_or(|now| now.saturating_duration_since(practice.sent) >= ANSWER_WAIT);
+            if retire {
+                retired.push((practice.skill, practice.cost));
+            }
+            !retire
+        });
+        if !retired.is_empty() {
+            self.points = None;
+        }
+        for (skill, estimated_cost) in retired {
+            world.happened(Message::Event(WorldEvent::Training(
+                TrainingUpdate::Practice(PracticeUpdate::OutcomeUnknown {
+                    skill,
+                    estimated_cost,
+                }),
+            )));
+        }
     }
 
     /// Both reply values require the same live, unexpired opening.
@@ -325,7 +418,7 @@ impl Training {
             }
             Message::Event(WorldEvent::Skill { skill_id, value }) => {
                 if world.lifecycle.blocks_motion() {
-                    self.invalidate_trainer(out)?;
+                    self.invalidate_trainer(world, out)?;
                 } else if let Some(practice) = self.pending.front_mut().filter(|practice| {
                     !practice.skill_rise_reported
                         && practice.skill == *skill_id
@@ -347,21 +440,21 @@ impl Training {
                 Self::report_practice(PracticeUpdate::PointsUncertain, out)?;
             }
             Message::Event(WorldEvent::Despawn(id)) if trainer == Some(*id) => {
-                self.invalidate_trainer(out)?;
+                self.invalidate_trainer(world, out)?;
             }
             Message::Event(WorldEvent::Spawns(spawns))
                 if spawns.iter().any(|spawn| trainer == Some(spawn.spawn_id)) =>
             {
-                self.invalidate_trainer(out)?;
+                self.invalidate_trainer(world, out)?;
             }
             Message::Event(event) if world.owns_death(event) => {
-                self.invalidate_trainer(out)?;
+                self.invalidate_trainer(world, out)?;
             }
             Message::ZoneOffer(_)
             | Message::ZoneAnswer(_)
             | Message::Handoff(_)
             | Message::LoggedOut => {
-                self.invalidate_trainer(out)?;
+                self.invalidate_trainer(world, out)?;
             }
             _ => (),
         }
@@ -407,9 +500,13 @@ impl Feature for Training {
         };
         match *request {
             TrainingRequest::Open { trainer } => self.open(command, trainer, world, out),
-            TrainingRequest::Train { skill } => {
-                self.train(command, skill, world, out, Instant::now())
-            }
+            TrainingRequest::Train { skill } => self.train(
+                command,
+                TrainingSubject::Skill(skill),
+                world,
+                out,
+                Instant::now(),
+            ),
             TrainingRequest::TrainAt { trainer, skill } => {
                 if self.trainer.as_ref().map(|offer| offer.spawn_id) != Some(trainer) {
                     return actions::refuse(
@@ -418,33 +515,53 @@ impl Feature for Training {
                         out.log,
                     );
                 }
-                self.train(command, skill, world, out, Instant::now())
+                self.train(
+                    command,
+                    TrainingSubject::Skill(skill),
+                    world,
+                    out,
+                    Instant::now(),
+                )
             }
-            TrainingRequest::End => self.end(out),
+            TrainingRequest::PracticeAt { trainer, subject } => {
+                if self.trainer.as_ref().map(|offer| offer.spawn_id) != Some(trainer) {
+                    return actions::refuse(
+                        command,
+                        "That training window is no longer current.",
+                        out.log,
+                    );
+                }
+                self.train(command, subject, world, out, Instant::now())
+            }
+            TrainingRequest::End => self.end(world, out),
         }
     }
 
     fn tick(&mut self, now: Instant, world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
-        if !self.p99 {
-            self.pending
-                .retain(|practice| now.saturating_duration_since(practice.sent) < ANSWER_WAIT);
-            return Ok(());
-        }
         if let Some(trainer) = self.trainer.as_ref() {
             if trainer.offer.is_none()
                 && now.saturating_duration_since(trainer.requested_at) >= ANSWER_WAIT
             {
+                if !self.p99 {
+                    self.retired_trainers.insert(trainer.spawn_id);
+                }
                 self.trainer = None;
-                out.log
-                    .send(ClientEvent::World(WorldEvent::TrainingRefused {
-                        session_id: world.session_id,
-                        reason: "The guildmaster has not answered. The outcome is unknown.".into(),
-                    }))?;
-            } else if world.lifecycle.blocks_motion()
-                || Self::eligible(trainer.spawn_id, world).is_err()
+                out.log.send(ClientEvent::World(WorldEvent::TrainingRefused {
+                    session_id: world.session_id,
+                    reason: if self.p99 { "The guildmaster has not answered. The outcome is unknown." } else { "The guildmaster has not answered. The outcome is unknown; re-enter the zone before asking this guildmaster again." }.into(),
+                }))?;
+            } else if self.p99
+                && (world.lifecycle.blocks_motion()
+                    || Self::eligible(trainer.spawn_id, world).is_err())
             {
-                self.invalidate_trainer(out)?;
+                self.invalidate_trainer(world, out)?;
             }
+        }
+        if !self.p99 {
+            self.retire_eqemu_languages(world, Some(now));
+            self.pending
+                .retain(|practice| now.saturating_duration_since(practice.sent) < ANSWER_WAIT);
+            return Ok(());
         }
         if self
             .pending
@@ -459,14 +576,42 @@ impl Feature for Training {
     /// Scopes opening replies and preserves `EQEmu`'s existing skill projection.
     fn explain(&mut self, message: &mut Message, world: &World) {
         if let Message::TrainingReply(reply) = message {
-            if !self.p99 {
-                *message = Message::Event(WorldEvent::Training(TrainingUpdate::Offered(
-                    reply.offer.clone(),
-                )));
-            } else if reply.accepted && self.p99_reply_current(reply, world) {
-                *message = Message::Event(WorldEvent::Training(TrainingUpdate::Offered(
-                    training::p99_offer(reply.offer.clone()),
-                )));
+            let current = if self.p99 {
+                reply.accepted && self.p99_reply_current(reply, world)
+            } else {
+                self.trainer.as_ref().is_some_and(|trainer| {
+                    trainer.spawn_id == reply.offer.trainer
+                        && trainer.offer.is_none()
+                        && trainer.requested_at.elapsed() < ANSWER_WAIT
+                }) && world.own_spawn.map(u32::from) == Some(reply.trainee)
+                    && Self::eligible(reply.offer.trainer, world).is_ok()
+            };
+            if current {
+                let mut offer = if self.p99 {
+                    training::p99_offer(reply.offer.clone())
+                } else {
+                    reply.offer.clone()
+                };
+                offer.language_caps = (0..training::LANGUAGES)
+                    .map(|language| {
+                        if reply.language_flags[usize::from(language)] != 0
+                            && (!self.p99
+                                || world.player.as_ref().is_some_and(|player| {
+                                    training::titanium_language_trainable(
+                                        language,
+                                        player.race,
+                                        player.class,
+                                        player.level,
+                                    )
+                                }))
+                        {
+                            training::LANGUAGE_CAP
+                        } else {
+                            0
+                        }
+                    })
+                    .collect();
+                *message = Message::Event(WorldEvent::Training(TrainingUpdate::Offered(offer)));
             }
             return;
         }
@@ -476,11 +621,12 @@ impl Feature for Training {
         let Message::Event(WorldEvent::Skill { skill_id, value }) = message else {
             return;
         };
-        let Some(index) = self
-            .pending
-            .iter()
-            .position(|practice| practice.skill == *skill_id)
-        else {
+        let Some(index) = self.pending.iter().position(|practice| {
+            practice.skill == *skill_id
+                && (practice.skill < training::SKILLS
+                    || (practice.sent.elapsed() < ANSWER_WAIT
+                        && *value == practice.from.saturating_add(1)))
+        }) else {
             return;
         };
         let Some(practice) = self.pending.remove(index) else {
@@ -503,6 +649,23 @@ impl Feature for Training {
     ) -> Result<()> {
         if self.p99 {
             self.observe_p99(message, world, out)?;
+        } else {
+            let trainer = self.trainer.as_ref().map(|trainer| trainer.spawn_id);
+            let invalidated = match message {
+                Message::Event(WorldEvent::Despawn(id)) => trainer == Some(*id),
+                Message::Event(WorldEvent::Spawns(spawns)) => {
+                    spawns.iter().any(|spawn| trainer == Some(spawn.spawn_id))
+                }
+                Message::Event(event) => world.owns_death(event),
+                Message::ZoneOffer(_)
+                | Message::ZoneAnswer(_)
+                | Message::Handoff(_)
+                | Message::LoggedOut => true,
+                _ => false,
+            };
+            if invalidated {
+                self.invalidate_trainer(world, out)?;
+            }
         }
         let Message::Event(event) = message else {
             return Ok(());
@@ -604,7 +767,11 @@ mod tests {
         let mut caps = vec![0; 100];
         caps[30] = 200;
         Message::Event(WorldEvent::Training(TrainingUpdate::Offered(
-            TrainingOffer { trainer, caps },
+            TrainingOffer {
+                trainer,
+                caps,
+                language_caps: Vec::new(),
+            },
         )))
     }
 
@@ -614,6 +781,409 @@ mod tests {
         request: TrainingRequest,
     ) -> testing::Outcome<Result<()>> {
         testing::run(|out| training.handle(&ask(request), world, out))
+    }
+
+    #[test]
+    fn expired_eqemu_openings_retire_the_id_without_trapping_a_pending_window() {
+        let (mut training, mut world) = warrior();
+        open(&mut training, &mut world, 42).result.unwrap();
+        training.trainer.as_mut().unwrap().requested_at =
+            Instant::now().checked_sub(ANSWER_WAIT).unwrap();
+        let outcome = testing::run(|out| training.tick(Instant::now(), &mut world, out));
+        outcome.result.unwrap();
+        assert!(training.trainer.is_none());
+        assert!(refusals(&outcome.events)[0].contains("outcome is unknown"));
+        assert!(matches!(
+            hear(&mut training, &mut world, reply(42, 7, true)).0,
+            Message::TrainingReply(_)
+        ));
+        let retry = open(&mut training, &mut world, 42);
+        assert_eq!(retry.sent, []);
+        assert!(refusals(&retry.events)[0].contains("Re-enter the zone"));
+        // A different trainer remains usable; a fresh zone admission has a fresh feature.
+        assert_eq!(open(&mut training, &mut world, 45).sent.len(), 1);
+        let (mut next, mut next_world) = warrior();
+        assert_eq!(open(&mut next, &mut next_world, 42).sent.len(), 1);
+        assert!(matches!(
+            hear(&mut next, &mut next_world, reply(42, 7, true)).0,
+            Message::Event(WorldEvent::Training(TrainingUpdate::Offered(_)))
+        ));
+    }
+
+    #[test]
+    fn eqemu_replacement_separates_unanswered_opens_from_uncertain_spend() {
+        for offered in [false, true] {
+            for despawn_first in [false, true] {
+                let (mut training, mut world) = warrior();
+                world.player.corrected().unwrap().languages = Some(vec![20; 28]);
+                open(&mut training, &mut world, 42).result.unwrap();
+                if offered {
+                    hear(&mut training, &mut world, reply(42, 7, true));
+                    assert_eq!(
+                        handle(
+                            &mut training,
+                            &mut world,
+                            TrainingRequest::PracticeAt {
+                                trainer: 42,
+                                subject: TrainingSubject::Language(5)
+                            }
+                        )
+                        .sent
+                        .len(),
+                        1
+                    );
+                }
+                if despawn_first {
+                    hear(
+                        &mut training,
+                        &mut world,
+                        Message::Event(WorldEvent::Despawn(42)),
+                    );
+                }
+                let mut replacement = testing::spawn(42, SpawnKind::Npc);
+                replacement.class = Some(20);
+                hear(
+                    &mut training,
+                    &mut world,
+                    Message::Event(WorldEvent::Spawns(vec![replacement.clone()])),
+                );
+                world.spawns.insert(replacement);
+                assert!(training.trainer.is_none());
+                assert!(training.pending.is_empty());
+                assert_eq!(training.points, if offered { None } else { Some(3) });
+                assert!(matches!(
+                    hear(&mut training, &mut world, reply(42, 7, true)).0,
+                    Message::TrainingReply(_)
+                ));
+                assert_eq!(
+                    handle(
+                        &mut training,
+                        &mut world,
+                        TrainingRequest::PracticeAt {
+                            trainer: 42,
+                            subject: TrainingSubject::Language(5)
+                        }
+                    )
+                    .sent,
+                    []
+                );
+                let reopened = open(&mut training, &mut world, 42);
+                if offered {
+                    assert_eq!(reopened.sent, [training::titanium_open(42, 7)]);
+                    hear(&mut training, &mut world, reply(42, 7, true));
+                    // A fresh offer does not restore an unresolved practice balance.
+                    assert_eq!(
+                        handle(
+                            &mut training,
+                            &mut world,
+                            TrainingRequest::PracticeAt {
+                                trainer: 42,
+                                subject: TrainingSubject::Language(5)
+                            }
+                        )
+                        .sent,
+                        []
+                    );
+                    assert_eq!(training.points, None);
+                } else {
+                    assert_eq!(reopened.sent, []);
+                    assert!(refusals(&reopened.events)[0].contains("Re-enter the zone"));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn an_answered_eqemu_offer_can_reopen_after_no_spend_replacement() {
+        for despawn_first in [false, true] {
+            let (mut training, mut world) = warrior();
+            world.player.corrected().unwrap().languages = Some(vec![20; 28]);
+            open(&mut training, &mut world, 42).result.unwrap();
+            hear(&mut training, &mut world, reply(42, 7, true));
+            if despawn_first {
+                hear(
+                    &mut training,
+                    &mut world,
+                    Message::Event(WorldEvent::Despawn(42)),
+                );
+            }
+            let mut replacement = testing::spawn(42, SpawnKind::Npc);
+            replacement.class = Some(20);
+            hear(
+                &mut training,
+                &mut world,
+                Message::Event(WorldEvent::Spawns(vec![replacement.clone()])),
+            );
+            world.spawns.insert(replacement);
+            assert!(training.trainer.is_none());
+            assert_eq!(training.points, Some(3));
+            assert!(!training.retired_trainers.contains(&42));
+            let practice = TrainingRequest::PracticeAt {
+                trainer: 42,
+                subject: TrainingSubject::Language(5),
+            };
+            assert_eq!(handle(&mut training, &mut world, practice).sent, []);
+            // With no pending Open, a reply cannot silently restore the old offer.
+            assert!(matches!(
+                hear(&mut training, &mut world, reply(42, 7, true)).0,
+                Message::TrainingReply(_)
+            ));
+            assert_eq!(
+                open(&mut training, &mut world, 42).sent,
+                [training::titanium_open(42, 7)]
+            );
+            assert_eq!(
+                handle(&mut training, &mut world, practice).sent,
+                [],
+                "fresh reply required"
+            );
+            assert!(matches!(
+                hear(&mut training, &mut world, reply(42, 7, true)).0,
+                Message::Event(WorldEvent::Training(TrainingUpdate::Offered(_)))
+            ));
+            assert_eq!(
+                handle(&mut training, &mut world, practice).sent,
+                [training::titanium_practice(42, TrainingSubject::Language(5)).unwrap()]
+            );
+        }
+    }
+
+    #[test]
+    fn an_answered_eqemu_offer_can_reopen_after_same_admission_recovery() {
+        let (mut training, mut world) = warrior();
+        world.player.corrected().unwrap().languages = Some(vec![0; 28]);
+        open(&mut training, &mut world, 42).result.unwrap();
+        hear(&mut training, &mut world, reply(42, 7, true));
+        let session_id = world.session_id;
+        world.lifecycle.mark_dead();
+        hear(
+            &mut training,
+            &mut world,
+            Message::Event(WorldEvent::DeathBind { session_id }),
+        );
+        assert!(training.trainer.is_none());
+        assert!(!training.retired_trainers.contains(&42));
+        assert_eq!(training.points, Some(3));
+        // Model fixture for the recovered world: retain the same admission,
+        // trainer and Training owner. This is not a live recovery claim.
+        world.lifecycle = super::super::lifecycle::ZoneLifecycle::default();
+        assert_eq!(world.session_id, session_id);
+        assert_eq!(
+            open(&mut training, &mut world, 42).sent,
+            [training::titanium_open(42, 7)]
+        );
+        let practice = TrainingRequest::PracticeAt {
+            trainer: 42,
+            subject: TrainingSubject::Language(5),
+        };
+        assert_eq!(handle(&mut training, &mut world, practice).sent, []);
+        hear(&mut training, &mut world, reply(42, 7, true));
+        assert_eq!(
+            handle(&mut training, &mut world, practice).sent,
+            [training::titanium_practice(42, TrainingSubject::Language(5)).unwrap()]
+        );
+    }
+
+    /// Opens a received language offer with one withheld flag, retaining the
+    /// exact cap projection assertion before tests issue a practice.
+    fn language_offer_with_one_missing_flag() -> (Training, World) {
+        let (mut training, mut world) = warrior();
+        world.player.corrected().unwrap().languages = Some(vec![20; 28]);
+        open(&mut training, &mut world, 42).result.unwrap();
+        let mut reply_body = training::titanium_open(42, 7).body;
+        reply_body[412] = 1;
+        reply_body[413..445].fill(0xc9);
+        reply_body[413 + 4] = 0;
+        let reply =
+            eq_network_game::message::titanium(training::OFFER_OPCODE, &reply_body).remove(0);
+        let (offered, _) = hear(&mut training, &mut world, reply);
+        let Message::Event(WorldEvent::Training(TrainingUpdate::Offered(offer))) = offered else {
+            panic!("no offer");
+        };
+        let mut expected_caps = vec![100; 26];
+        expected_caps[4] = 0;
+        assert_eq!(offer.language_caps, expected_caps);
+        (training, world)
+    }
+
+    #[test]
+    fn eqemu_language_offers_use_server_bounds_and_correlate_the_update_bank() {
+        let (mut training, mut world) = language_offer_with_one_missing_flag();
+        let request = TrainingRequest::PracticeAt {
+            trainer: 42,
+            subject: TrainingSubject::Language(5),
+        };
+        assert_eq!(
+            handle(&mut training, &mut world, request).sent,
+            [training::titanium_practice(42, TrainingSubject::Language(5)).unwrap()]
+        );
+        assert_eq!(handle(&mut training, &mut world, request).sent, []);
+        assert_eq!(
+            handle(
+                &mut training,
+                &mut world,
+                TrainingRequest::PracticeAt {
+                    trainer: 42,
+                    subject: TrainingSubject::Language(4)
+                }
+            )
+            .sent,
+            []
+        );
+        // The ordinary skill with the same index is not the language response.
+        let mut ordinary = Message::Event(WorldEvent::Skill {
+            skill_id: 5,
+            value: 21,
+        });
+        training.explain(&mut ordinary, &world);
+        assert!(matches!(
+            ordinary,
+            Message::Event(WorldEvent::Skill { skill_id: 5, .. })
+        ));
+        assert_eq!(training.pending.len(), 1);
+        let (answer, events) = hear(
+            &mut training,
+            &mut world,
+            Message::Event(WorldEvent::Skill {
+                skill_id: 105,
+                value: 21,
+            }),
+        );
+        assert!(matches!(
+            answer,
+            Message::Event(WorldEvent::Training(TrainingUpdate::Trained {
+                skill: 105,
+                value: 21,
+                cost: 10
+            }))
+        ));
+        assert!(events
+            .iter()
+            .any(|event| matches!(event, ClientEvent::World(WorldEvent::PracticePoints(2)))));
+        assert_eq!(
+            handle(
+                &mut training,
+                &mut world,
+                TrainingRequest::PracticeAt {
+                    trainer: 43,
+                    subject: TrainingSubject::Language(5)
+                }
+            )
+            .sent,
+            []
+        );
+        assert_eq!(
+            handle(
+                &mut training,
+                &mut world,
+                TrainingRequest::PracticeAt {
+                    trainer: 42,
+                    subject: TrainingSubject::Language(26)
+                }
+            )
+            .sent,
+            []
+        );
+        world
+            .player
+            .corrected()
+            .unwrap()
+            .languages
+            .as_mut()
+            .unwrap()[5] = 100;
+        assert_eq!(handle(&mut training, &mut world, request).sent, []);
+        world.player.corrected().unwrap().languages = None;
+        assert_eq!(handle(&mut training, &mut world, request).sent, []);
+        handle(&mut training, &mut world, TrainingRequest::End)
+            .result
+            .unwrap();
+        assert_eq!(handle(&mut training, &mut world, request).sent, []);
+    }
+
+    #[test]
+    fn language_silence_is_not_a_point_or_coin_receipt() {
+        let (mut training, mut world) = warrior();
+        world.player.corrected().unwrap().languages = Some(vec![0; 28]);
+        open(&mut training, &mut world, 42).result.unwrap();
+        hear(&mut training, &mut world, reply(42, 7, true));
+        let request = TrainingRequest::PracticeAt {
+            trainer: 42,
+            subject: TrainingSubject::Language(5),
+        };
+        assert_eq!(handle(&mut training, &mut world, request).sent.len(), 1);
+        let outcome =
+            testing::run(|out| training.tick(Instant::now() + ANSWER_WAIT, &mut world, out));
+        outcome.result.unwrap();
+        assert_eq!(training.points, None);
+        assert!(!outcome.events.iter().any(|event| matches!(
+            event,
+            ClientEvent::World(WorldEvent::Training(TrainingUpdate::Trained { .. }))
+        )));
+        assert_eq!(handle(&mut training, &mut world, request).sent, []);
+        assert_eq!(
+            world.player.as_ref().unwrap().languages.as_ref().unwrap()[5],
+            0
+        );
+    }
+
+    #[test]
+    fn p99_language_training_uses_native_eligibility_and_retains_balance_uncertainty() {
+        let (mut training, mut world) = p99();
+        let player = world.player.corrected().unwrap();
+        player.race = 1;
+        player.languages = Some(vec![0; 32]);
+        open_and_admit(&mut training, &mut world, 42);
+        let offer = training.trainer.as_ref().unwrap().offer.as_ref().unwrap();
+        assert_eq!(
+            (
+                offer.language_caps[1],
+                offer.language_caps[5],
+                offer.language_caps[25]
+            ),
+            (100, 0, 0)
+        );
+        let request = TrainingRequest::PracticeAt {
+            trainer: 42,
+            subject: TrainingSubject::Language(1),
+        };
+        assert_eq!(handle(&mut training, &mut world, request).sent.len(), 1);
+        let (answer, _) = hear(
+            &mut training,
+            &mut world,
+            Message::Event(WorldEvent::Skill {
+                skill_id: 101,
+                value: 1,
+            }),
+        );
+        assert!(matches!(
+            answer,
+            Message::Event(WorldEvent::Skill {
+                skill_id: 101,
+                value: 1
+            })
+        ));
+        assert_eq!(training.points, None);
+        assert_eq!(handle(&mut training, &mut world, request).sent, []);
+    }
+
+    #[test]
+    fn eqemu_does_not_accept_unrequested_or_wrong_player_language_offers() {
+        let (mut training, mut world) = warrior();
+        assert!(matches!(
+            hear(&mut training, &mut world, reply(42, 7, true)).0,
+            Message::TrainingReply(_)
+        ));
+        open(&mut training, &mut world, 42).result.unwrap();
+        for message in [reply(43, 7, true), reply(42, 9, true)] {
+            assert!(matches!(
+                hear(&mut training, &mut world, message).0,
+                Message::TrainingReply(_)
+            ));
+        }
+        assert!(matches!(
+            hear(&mut training, &mut world, reply(42, 7, true)).0,
+            Message::Event(WorldEvent::Training(TrainingUpdate::Offered(_)))
+        ));
     }
 
     #[test]
@@ -796,6 +1366,7 @@ mod tests {
     fn reply(trainer: u16, recipient: u16, accepted: bool) -> Message {
         let mut body = training::titanium_open(trainer, recipient).body;
         body[412] = u8::from(accepted);
+        body[413..445].fill(0xc9);
         body[8 + 30 * 4] = 200;
         eq_network_game::message::titanium(training::OFFER_OPCODE, &body).remove(0)
     }

@@ -132,6 +132,10 @@ impl Feature for Character {
             WorldEvent::WearChange(change) if change.spawn_id == player.spawn_id => {
                 player.appearance.apply(change);
             }
+            WorldEvent::Listing { spawn_id, change } if *spawn_id == player.spawn_id => {
+                // Guild requests read this record, independently of the spawn table.
+                player.listing.apply(*change);
+            }
             WorldEvent::Level { current, .. } => player.level = *current,
             WorldEvent::Skill { skill_id, value } => player.apply_skill(*skill_id, *value),
             WorldEvent::Disciplines(list) => player.disciplines = Some(list.clone()),

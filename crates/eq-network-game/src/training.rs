@@ -3,7 +3,7 @@
 //! training, and the guildmaster answers with how far each skill can be
 //! trained; each practice raises one skill by a point for a practice point
 //! and, past a skill of 10, coins; leaving says goodbye. An ordinary skill
-//! update has no receipt fields. EQEmu retains the existing local point
+//! update has no receipt fields. `EQEmu` retains the existing local point
 //! and purse projection. P99 waits for a fresh balance after a practice.
 //!
 //! Layout reference: `EQEmu`'s `GMTrainee_Struct`, `GMSkillChange_Struct` and
@@ -30,6 +30,105 @@ pub const RANGE: f32 = 200.0;
 /// The skill numbers a practice may name; languages are trained apart.
 pub const SKILLS: u32 = 100;
 
+/// `EQEmu`'s trainer accepts language IDs zero through 25.
+pub const LANGUAGES: u8 = 26;
+/// The maximum language proficiency.
+pub const LANGUAGE_CAP: u32 = 100;
+
+/// The separate skill banks named by a trainer request.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+pub enum TrainingSubject {
+    /// An ordinary skill, in bank zero.
+    Skill(u32),
+    /// A language, in bank one; this is not an ordinary skill number.
+    Language(u8),
+}
+
+impl TrainingSubject {
+    /// The ID used by received skill updates, rather than training requests.
+    #[must_use]
+    pub const fn update_id(self) -> u32 {
+        match self {
+            Self::Skill(skill) => skill,
+            Self::Language(language) => crate::world::LANGUAGE_SKILLS + language as u32,
+        }
+    }
+
+    /// The received value in the corresponding profile bank.
+    #[must_use]
+    pub fn value(self, player: &crate::world::PlayerState) -> Option<u32> {
+        match self {
+            Self::Skill(skill) if skill < SKILLS => player
+                .skills
+                .as_ref()?
+                .get(usize::try_from(skill).ok()?)
+                .copied(),
+            Self::Language(language) if language < LANGUAGES => player
+                .languages
+                .as_ref()?
+                .get(usize::from(language))
+                .copied()
+                .map(u32::from),
+            _ => None,
+        }
+    }
+}
+
+/// Native Titanium language eligibility (eqgame 0x4bbeda), including the
+/// table at 0x78f010. `EQEmu`'s server has its own, separate trainer rules.
+#[must_use]
+pub fn titanium_language_trainable(language: u8, race: u32, class: Option<u32>, level: u8) -> bool {
+    let column = match race {
+        1..=12 => usize::try_from(race - 1).ok(),
+        128 => Some(12),
+        130 => Some(13),
+        330 => Some(14),
+        _ => None,
+    };
+    let Some(minimum) = column.and_then(|column| {
+        LANGUAGE_LEVELS
+            .get(usize::from(language))
+            .map(|row| row[column])
+    }) else {
+        return false;
+    };
+    level >= minimum
+        || matches!((class, language),
+            (Some(11), 12) if level > 7
+        )
+        || matches!((class, language), (Some(11), 17) if level > 19)
+        || (language == 11 && (class == Some(14) || (matches!(class, Some(12 | 13)) && level > 7)))
+}
+
+// Rows: languages 0..24. Columns: races 1..12, Iksar, Vah Shir, Froglok.
+const LANGUAGE_LEVELS: [[u8; 15]; 25] = [
+    [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+    [10, 1, 15, 20, 20, 10, 15, 25, 15, 15, 10, 20, 15, 30, 30],
+    [5, 20, 1, 35, 35, 23, 25, 35, 20, 20, 20, 35, 20, 10, 30],
+    [20, 25, 30, 1, 1, 25, 1, 10, 25, 25, 25, 10, 25, 30, 30],
+    [25, 10, 25, 15, 15, 1, 15, 15, 30, 30, 15, 15, 30, 30, 30],
+    [20, 25, 30, 10, 10, 25, 10, 1, 20, 20, 25, 10, 20, 30, 30],
+    [15, 15, 25, 25, 25, 13, 20, 25, 1, 5, 20, 30, 15, 30, 10],
+    [15, 15, 25, 25, 25, 13, 20, 25, 5, 1, 20, 30, 15, 30, 20],
+    [20, 25, 15, 10, 10, 25, 10, 15, 25, 25, 30, 1, 20, 30, 30],
+    [15, 10, 20, 20, 20, 10, 15, 20, 20, 20, 1, 25, 25, 30, 30],
+    [99; 15],
+    [12; 15],
+    [25, 30, 30, 15, 15, 30, 15, 30, 30, 30, 15, 20, 30, 30, 30],
+    [15, 20, 20, 20, 20, 20, 20, 20, 15, 15, 20, 20, 15, 20, 1],
+    [20, 15, 20, 15, 15, 15, 15, 20, 20, 20, 15, 15, 15, 20, 20],
+    [10, 15, 10, 10, 10, 10, 10, 10, 10, 10, 10, 15, 15, 15, 15],
+    [20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 1, 20],
+    [12, 30, 30, 15, 15, 12, 15, 30, 12, 12, 15, 20, 12, 30, 30],
+    [15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 1, 15, 15],
+    [20; 15],
+    [20; 15],
+    [30; 15],
+    [40; 15],
+    [99; 15],
+    [30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 1, 30],
+];
+
 /// The length of the request and of the guildmaster's answer.
 const OFFER_LENGTH: usize = 448;
 
@@ -53,6 +152,13 @@ pub enum TrainingRequest {
         /// The selected skill.
         skill: u32,
     },
+    /// Practices a typed subject from the currently displayed offer.
+    PracticeAt {
+        /// The guildmaster shown in the open offer.
+        trainer: u16,
+        /// The skill bank and entry selected in that offer.
+        subject: TrainingSubject,
+    },
     /// Leaves training.
     End,
 }
@@ -67,9 +173,27 @@ pub struct TrainingOffer {
     /// A skill may stop below this at the player's level, which the server
     /// says when the player tries.
     pub caps: Vec<u32>,
+    /// Language limits projected from received nonzero availability flags
+    /// and the session's source-backed eligibility rules. The wire carries
+    /// flags rather than numeric language caps (native eqgame 0x56b897).
+    pub language_caps: Vec<u32>,
 }
 
 impl TrainingOffer {
+    /// The current offer's limit in the selected bank; absent entries cannot train.
+    #[must_use]
+    pub fn subject_cap(&self, subject: TrainingSubject) -> u32 {
+        match subject {
+            TrainingSubject::Skill(skill) if skill < SKILLS => self.cap(skill),
+            TrainingSubject::Language(language) if language < LANGUAGES => self
+                .language_caps
+                .get(usize::from(language))
+                .copied()
+                .unwrap_or(0),
+            _ => 0,
+        }
+    }
+
     /// The most a skill can be trained to, 0 when it cannot be.
     #[must_use]
     pub fn cap(&self, skill: u32) -> u32 {
@@ -86,10 +210,11 @@ impl TrainingOffer {
 pub enum TrainingUpdate {
     /// A guildmaster opened training.
     Offered(TrainingOffer),
-    /// A practice took: the skill's new value, and the coins, in copper, it
-    /// cost.
+    /// `EQEmu`'s existing projection after a matching received increase. The
+    /// ID is the update ID (100 + language ID for languages); cost and
+    /// point changes are projections, not receipt fields.
     Trained {
-        /// The skill's number.
+        /// The received update ID: ordinary skill or 100 plus language ID.
         skill: u32,
         /// Its value now.
         value: u32,
@@ -112,7 +237,7 @@ pub enum PracticePoints {
     Balance(u32),
 }
 
-/// Progress of a Project 1999 practice. A regular skill update does not
+/// Progress and uncertainty of a Titanium practice. A regular skill update does not
 /// contain a practice receipt, a point balance or a price.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 pub enum PracticeUpdate {
@@ -135,6 +260,14 @@ pub enum PracticeUpdate {
         /// The requested skill.
         skill: u32,
     },
+    /// An `EQEmu` language operation was retired without a received outcome.
+    /// The estimate only identifies potentially spent coins; it is not a receipt.
+    OutcomeUnknown {
+        /// The received-update ID of the requested language.
+        skill: u32,
+        /// The request's estimated cost in copper.
+        estimated_cost: u64,
+    },
     /// The profile point count can no longer be projected.
     PointsUncertain,
 }
@@ -146,6 +279,9 @@ pub struct TrainingReply {
     pub trainee: u32,
     /// Whether the trainer admitted the player.
     pub accepted: bool,
+    /// Raw availability flags for the 32 language slots, from bytes 413..445.
+    /// Nonzero permits the native fixed cap of 100; the bytes are not caps.
+    pub language_flags: [u8; 32],
     /// The trainer and their skill limits.
     pub offer: TrainingOffer,
 }
@@ -212,6 +348,7 @@ pub fn titanium_offer(body: &[u8]) -> Result<TrainingOffer> {
     Ok(TrainingOffer {
         trainer,
         caps: (0..100).map(|skill| word(8 + skill * 4)).collect(),
+        language_caps: Vec::new(),
     })
 }
 
@@ -224,6 +361,7 @@ pub fn titanium_reply(body: &[u8]) -> Result<TrainingReply> {
         offer: titanium_offer(body)?,
         trainee: u32::from_le_bytes(body[4..8].try_into()?),
         accepted: body[412] != 0,
+        language_flags: body[413..445].try_into()?,
     })
 }
 
@@ -243,12 +381,28 @@ pub fn p99_offer(mut offer: TrainingOffer) -> TrainingOffer {
 /// # Errors
 /// Rejects a number that is not a skill's.
 pub fn titanium_train(trainer: u16, skill: u32) -> Result<EncodedCommand> {
-    ensure!(skill < SKILLS, "not a skill a guildmaster trains");
+    titanium_practice(trainer, TrainingSubject::Skill(skill))
+}
+
+/// Encodes a practice without borrowing the other bank's ID namespace.
+///
+/// # Errors
+/// Rejects ordinary skill IDs outside 0..100 and language IDs outside 0..26.
+pub fn titanium_practice(trainer: u16, subject: TrainingSubject) -> Result<EncodedCommand> {
+    let (bank, id) = match subject {
+        TrainingSubject::Skill(skill) => {
+            ensure!(skill < SKILLS, "not a skill a guildmaster trains");
+            (0u16, u16::try_from(skill)?)
+        }
+        TrainingSubject::Language(language) => {
+            ensure!(language < LANGUAGES, "not a language a guildmaster trains");
+            (1, u16::from(language))
+        }
+    };
     let mut body = vec![0; 12];
     body[..2].copy_from_slice(&trainer.to_le_bytes());
-    // Bytes 4 and 5 say which bank the number is from: 0 for skills, 1 for
-    // languages.
-    body[8..10].copy_from_slice(&u16::try_from(skill)?.to_le_bytes());
+    body[4..6].copy_from_slice(&bank.to_le_bytes());
+    body[8..10].copy_from_slice(&id.to_le_bytes());
     Ok(EncodedCommand {
         opcode: TRAIN_OPCODE,
         body,
@@ -270,6 +424,88 @@ pub fn titanium_end(trainer: u16, player: u16) -> EncodedCommand {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_two_training_banks_do_not_share_request_ids() {
+        let ordinary = titanium_train(42, 5).unwrap();
+        let language = titanium_practice(42, TrainingSubject::Language(5)).unwrap();
+        assert_eq!(ordinary.body[4..6], [0, 0]);
+        assert_eq!(language.body, [42, 0, 0, 0, 1, 0, 0, 0, 5, 0, 0, 0]);
+        assert_eq!(TrainingSubject::Language(5).update_id(), 105);
+        assert!(titanium_practice(42, TrainingSubject::Language(25)).is_ok());
+        assert!(titanium_practice(42, TrainingSubject::Language(26)).is_err());
+        assert!(titanium_practice(42, TrainingSubject::Skill(100)).is_err());
+        let offer = titanium_offer(&titanium_open(42, 7).body).unwrap();
+        assert_eq!(
+            offer.language_caps,
+            Vec::<u32>::new(),
+            "the numeric skill-cap decoder does not invent language policy"
+        );
+        assert_eq!(offer.subject_cap(TrainingSubject::Language(5)), 0);
+        let mut body = titanium_open(42, 7).body;
+        body[413 + 5] = 0xc9;
+        let reply = titanium_reply(&body).unwrap();
+        assert_eq!(reply.language_flags[5], 0xc9);
+        assert_eq!(reply.language_flags[4], 0);
+    }
+
+    #[test]
+    fn native_language_training_keeps_racial_levels_and_class_overrides() {
+        assert!(!titanium_language_trainable(1, 1, Some(1), 9));
+        assert!(titanium_language_trainable(1, 1, Some(1), 10));
+        for (race, language) in [(128, 18), (130, 24), (330, 13)] {
+            assert!(titanium_language_trainable(language, race, Some(1), 1));
+        }
+        // Use races whose ordinary threshold is above each override. Human
+        // Elder Teir'Dal starts at12, so it cannot test the Necromancer20 edge.
+        for (race, class, language, level) in [
+            (1, 11, 12, 8),
+            (2, 11, 17, 20),
+            (1, 12, 11, 8),
+            (1, 13, 11, 8),
+        ] {
+            assert!(
+                !titanium_language_trainable(language, race, Some(class), level - 1),
+                "race {race}, class {class}, language {language}: below override {level}"
+            );
+            assert!(titanium_language_trainable(
+                language,
+                race,
+                Some(class),
+                level
+            ));
+            assert!(
+                !titanium_language_trainable(language, race, Some(1), level),
+                "the racial threshold must not supply this class-override fixture"
+            );
+        }
+        // Racial eligibility can precede a class override; the override never
+        // removes an earlier grant (native eqgame0x4bbeda, table0x78f010).
+        assert!(!titanium_language_trainable(17, 1, Some(11), 11));
+        assert!(titanium_language_trainable(17, 1, Some(11), 12));
+        assert!(titanium_language_trainable(17, 1, Some(11), 19));
+        assert!(titanium_language_trainable(11, 1, Some(14), 1));
+        assert!(!titanium_language_trainable(25, 1, Some(14), 100));
+        assert!(!titanium_language_trainable(1, 999, Some(1), 100));
+        // Every racial column has its own exact boundary, without importing it into EQEmu.
+        for (column, race) in (1..=12).chain([128, 130, 330]).enumerate() {
+            for (language, row) in LANGUAGE_LEVELS.iter().enumerate() {
+                let language = u8::try_from(language).unwrap();
+                assert!(!titanium_language_trainable(
+                    language,
+                    race,
+                    Some(1),
+                    row[column] - 1
+                ));
+                assert!(titanium_language_trainable(
+                    language,
+                    race,
+                    Some(1),
+                    row[column]
+                ));
+            }
+        }
+    }
 
     #[test]
     fn opening_asks_with_both_spawns_and_the_answer_names_each_cap() {

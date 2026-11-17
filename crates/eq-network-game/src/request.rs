@@ -92,6 +92,13 @@ pub enum Request {
         /// The skill's number.
         skill: u32,
     },
+    /// Practice a typed entry in one of the trainer's two banks.
+    Practice {
+        /// The guildmaster's spawn.
+        trainer: u16,
+        /// The selected bank and entry.
+        subject: training::TrainingSubject,
+    },
     /// Leave training with a guildmaster.
     EndTraining(u16),
     /// Ask for a book's or note's text.
@@ -471,6 +478,7 @@ pub fn titanium(request: &Request, sender: Sender<'_>) -> Result<EncodedCommand>
         Request::TrackSpawn(spawn_id) => crate::tracking::titanium_follow(*spawn_id),
         Request::OpenTraining(trainer) => training::titanium_open(*trainer, sender.spawn()),
         Request::Train { trainer, skill } => training::titanium_train(*trainer, *skill)?,
+        Request::Practice { trainer, subject } => training::titanium_practice(*trainer, *subject)?,
         Request::EndTraining(trainer) => training::titanium_end(*trainer, sender.spawn()),
         Request::AnswerResurrection { offer, accept } => {
             resurrection::titanium_answer(offer, *accept)
@@ -880,6 +888,25 @@ mod tests {
             .unwrap(),
             training::titanium_train(42, 30).unwrap()
         );
+        assert_eq!(
+            titanium(
+                &Request::Practice {
+                    trainer: 42,
+                    subject: training::TrainingSubject::Language(5)
+                },
+                PLAYER
+            )
+            .unwrap(),
+            training::titanium_practice(42, training::TrainingSubject::Language(5)).unwrap()
+        );
+        assert!(eqmac(
+            &Request::Practice {
+                trainer: 42,
+                subject: training::TrainingSubject::Language(5)
+            },
+            PLAYER
+        )
+        .is_err());
         assert_eq!(
             titanium(&Request::EndTraining(42), PLAYER).unwrap(),
             training::titanium_end(42, 7)
