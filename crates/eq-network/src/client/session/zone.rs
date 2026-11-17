@@ -169,6 +169,13 @@ impl Features {
         world: &mut World,
         out: &mut Out<'_, '_>,
     ) -> Result<bool> {
+        // Defend this dispatch boundary too: no feature may even observe a
+        // queued scoped message from a different admission.
+        if matches!(command, ClientCommand::SendChatInAdmission { session_id, .. } if *session_id != world.session_id)
+        {
+            actions::refuse(command, "That was meant for an earlier zone visit", out.log)?;
+            return Ok(true);
+        }
         if out.sink.termination().is_some() {
             actions::refuse(command, "The zone connection ended", out.log)?;
             return Ok(true);
@@ -879,7 +886,7 @@ mod tests {
     };
 
     /// How many kinds of command there are.
-    const KINDS: usize = 105;
+    const KINDS: usize = 106;
 
     /// The kinds the login and world servers take, before any zone session.
     const BEFORE_ZONES: [usize; 4] = [0, 1, 70, 75];
@@ -916,6 +923,7 @@ mod tests {
             ClientCommand::DestroyItem(_) => 80,
             ClientCommand::DropItem(_) => 86,
             ClientCommand::SendChat(_) => 14,
+            ClientCommand::SendChatInAdmission { .. } => 105,
             ClientCommand::InspectItem { .. } => 15,
             ClientCommand::Consider { .. } => 16,
             ClientCommand::Camp { .. } => 17,
@@ -1155,6 +1163,10 @@ mod tests {
                 item: super::super::feature::testing::item(30),
             })),
             ClientCommand::SendChat(OutboundChat::Say("Hail".into())),
+            ClientCommand::SendChatInAdmission {
+                session_id,
+                message: OutboundChat::Say("Hail".into()),
+            },
             ClientCommand::DepopLocalNpc {
                 session_id,
                 target: eq_network_game::targets::TargetState::default(),

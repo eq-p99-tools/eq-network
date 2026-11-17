@@ -245,6 +245,14 @@ pub enum GameCommand {
     DropItem(Box<crate::inventory::InventoryDrop>),
     /// Send one chat message.
     SendChat(OutboundChat),
+    /// Send chat only in the named admission. This adds a local queue guard,
+    /// with the same wire message and timing as ordinary chat.
+    SendChatInAdmission {
+        /// The originating zone admission; a later visit must refuse it.
+        session_id: u64,
+        /// The ordinary message, including any local fixture command.
+        message: OutboundChat,
+    },
     /// Remove the selected NPC in a network-constrained local `EQEmu` fixture.
     DepopLocalNpc {
         /// Current zone admission.
@@ -991,6 +999,7 @@ impl GameCommand {
             Self::DestroyItem(..) => "DestroyItem",
             Self::DropItem(..) => "DropItem",
             Self::SendChat(..) => "SendChat",
+            Self::SendChatInAdmission { .. } => "SendChatInAdmission",
             Self::DepopLocalNpc { .. } => "DepopLocalNpc",
             Self::InspectItem { .. } => "InspectItem",
             Self::Consider { .. } => "Consider",
@@ -1097,6 +1106,7 @@ impl GameCommand {
             Self::DropItem(request) => Some(request.session_id),
             Self::Move(request) => Some(request.session_id),
             Self::SwapSpell { session_id, .. }
+            | Self::SendChatInAdmission { session_id, .. }
             | Self::ClickDoor { session_id, .. }
             | Self::PickUp { session_id, .. }
             | Self::OpenContainer { session_id, .. }
@@ -1244,9 +1254,10 @@ impl GameCommand {
             Self::DropItem(_) => Capability::GroundDropping,
             Self::Consume { .. } | Self::AutoEat { .. } => Capability::Meals,
             Self::AnswerListPolls { .. } => Capability::AnsweringListPolls,
-            Self::SendChat(_) | Self::InspectItem { .. } | Self::DepopLocalNpc { .. } => {
-                Capability::Talking
-            }
+            Self::SendChat(_)
+            | Self::SendChatInAdmission { .. }
+            | Self::InspectItem { .. }
+            | Self::DepopLocalNpc { .. } => Capability::Talking,
             Self::Consider { .. } | Self::AutoAttack { .. } => Capability::Combat,
             Self::Camp { .. } | Self::ExitAtOnce { .. } => Capability::Camping,
             Self::BledOut { .. } => Capability::BleedingOut,
@@ -1336,6 +1347,7 @@ impl GameCommand {
             | Self::DeleteCharacter(_)
             | Self::CreateCharacter { .. }
             | Self::SendChat(_)
+            | Self::SendChatInAdmission { .. }
             | Self::InspectItem { .. }
             | Self::EndLoot { .. }
             | Self::CancelTrade { .. }
@@ -1687,13 +1699,15 @@ pub fn encode(
         | GameCommand::BledOut { .. } => {
             anyhow::bail!("this command requires the admitted session controller")
         }
-        GameCommand::SendChat(message) => Ok(EncodedCommand {
-            opcode: match dialect {
-                GameDialect::Titanium => 0x1004,
-                GameDialect::EqMac => 0x0741,
-            },
-            body: chat::encode_outbound_for(dialect, message, character)?,
-        }),
+        GameCommand::SendChat(message) | GameCommand::SendChatInAdmission { message, .. } => {
+            Ok(EncodedCommand {
+                opcode: match dialect {
+                    GameDialect::Titanium => 0x1004,
+                    GameDialect::EqMac => 0x0741,
+                },
+                body: chat::encode_outbound_for(dialect, message, character)?,
+            })
+        }
     }
 }
 
@@ -2092,5 +2106,25 @@ mod tests {
         assert_eq!(titanium.opcode, 0x1004);
         assert_eq!(eqmac.opcode, 0x0741);
         assert_ne!(titanium.body, eqmac.body);
+    }
+
+    #[test]
+    fn admission_scoped_chat_keeps_ordinary_wire_bytes_and_timing() {
+        let message = OutboundChat::Say("synthetic words".into());
+        let scoped = GameCommand::SendChatInAdmission {
+            session_id: 7,
+            message: message.clone(),
+        };
+        let ordinary = GameCommand::SendChat(message);
+        assert_eq!(scoped.session_id(), Some(7));
+        assert_eq!(ordinary.session_id(), None);
+        assert_eq!(scoped.created(), None);
+        assert_eq!(scoped.capability(), ordinary.capability());
+        for dialect in [GameDialect::Titanium, GameDialect::EqMac] {
+            assert_eq!(
+                encode(dialect, &scoped, "Example").unwrap(),
+                encode(dialect, &ordinary, "Example").unwrap()
+            );
+        }
     }
 }

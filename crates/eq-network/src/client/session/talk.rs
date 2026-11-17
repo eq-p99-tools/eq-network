@@ -20,6 +20,7 @@ impl Feature for Talk {
         matches!(
             command,
             ClientCommand::SendChat(_)
+                | ClientCommand::SendChatInAdmission { .. }
                 | ClientCommand::InspectItem { .. }
                 | ClientCommand::DepopLocalNpc { .. }
         )
@@ -33,6 +34,14 @@ impl Feature for Talk {
         world: &mut World,
         out: &mut Out<'_, '_>,
     ) -> Result<()> {
+        if matches!(command, ClientCommand::SendChatInAdmission { session_id, .. } if *session_id != world.session_id)
+        {
+            return super::actions::refuse(
+                command,
+                "That was meant for an earlier zone visit",
+                out.log,
+            );
+        }
         if let ClientCommand::DepopLocalNpc {
             session_id, target, ..
         } = *command
@@ -83,5 +92,19 @@ mod tests {
         outcome.result.unwrap();
         assert_eq!(outcome.sent.len(), 1);
         assert_eq!(outcome.sent[0].opcode, 0x1004);
+    }
+
+    #[test]
+    fn scoped_chat_refuses_an_earlier_admission_even_at_the_talk_boundary() {
+        let mut talk = Talk;
+        let mut world = World::new(8);
+        let queued = ClientCommand::SendChatInAdmission {
+            session_id: 7,
+            message: OutboundChat::Say("synthetic".into()),
+        };
+        let output = testing::run(|out| talk.handle(&queued, &mut world, out));
+        output.result.unwrap();
+        assert_eq!(output.sent, []);
+        assert!(output.events.iter().any(|event| matches!(event, crate::client::ClientEvent::Diagnostic(message) if message.contains("earlier zone visit"))));
     }
 }

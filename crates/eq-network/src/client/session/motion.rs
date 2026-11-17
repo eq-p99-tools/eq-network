@@ -844,6 +844,10 @@ impl Motion {
                 refused: Some("The player lies on the ground".into()),
             }));
         }
+        // Titanium's movement, vehicle and physics paths do not call its
+        // posture setter (0x483556; read 6.475, including 0x4bfe0f and
+        // 0x4aba14). Positive damage has a separate stand path (0x4a56e3);
+        // passive displacement alone does not stand the player.
         if let (true, Some(player)) = (
             (!world.control.stunned() || motion.options().walk_while_stunned)
                 && moves

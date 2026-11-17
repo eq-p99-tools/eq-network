@@ -477,7 +477,14 @@ impl Feature for Raids {
         _world: &mut World,
         out: &mut Out<'_, '_>,
     ) -> Result<()> {
-        if !matches!(command, ClientCommand::SendChat(OutboundChat::Raid(_))) || self.raid.is_none()
+        if !matches!(
+            command,
+            ClientCommand::SendChat(OutboundChat::Raid(_))
+                | ClientCommand::SendChatInAdmission {
+                    message: OutboundChat::Raid(_),
+                    ..
+                }
+        ) || self.raid.is_none()
         {
             return Ok(());
         }

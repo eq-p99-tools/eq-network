@@ -42,6 +42,32 @@ animation (6.470). No piloting opcode or route is invented. Pitch and continuing
 boat yaw are absent from the decoded position API. Boat zoning remains separate;
 source and synthetic coverage do not establish a witnessed ride.
 
+The worker does not call stand-to-move solely for passive fall, lift or carrier
+displacement. Titanium's movement, vehicle and physics paths do not call its
+posture setter at `eqgame.exe` 0x483556 (read 6.475, including movement step
+0x4bfe0f and vehicle placement 0x4aba14). Voluntary movement keeps the existing
+stand-to-move policy; this read establishes no Mac-era rule.
+
+Positive own damage has a separate stand path for sitting or kneeling players
+(0x4a56e3, call at 0x4a6d6c); lying is left alone. The received-damage handler
+already follows that posture distinction and the stay-seated option. The native
+early return for spawn+0x244 > 1 remains unidentified, and mounted state is not
+supplied to the session. The native local damage reporter also calls that path
+(0x41c905); local environmental reports here do not yet invoke it before a
+received damage event. These are separate damage-parity gaps, not reasons for
+passive movement to stand the player.
+
+## Admission-scoped chat
+
+`GameCommand::SendChatInAdmission { session_id, message }` binds queued chat to
+the originating zone admission. The session refuses a mismatched admission
+before notifying or invoking features, and the talk handler checks again before
+encoding. This is a local queue guard; the message uses the ordinary chat wire
+layout, capability and timing. It adds no server acknowledgement or retry.
+`SendChat` remains available for callers intentionally using unscoped chat.
+The pure `encode` helper does not own a session and cannot perform this guard;
+hosts using it directly must validate their own admission first.
+
 ## Titanium lifts and door mechanisms
 
 `doors::titanium` holds Titanium's own door rules, read from `eqgame.exe`:

@@ -171,6 +171,7 @@ pub(super) fn needs(command: &ClientCommand) -> &'static [Resource] {
         | ClientCommand::SetPosture { .. }
         | ClientCommand::FeignLanded { .. }
         | ClientCommand::SendChat(_)
+        | ClientCommand::SendChatInAdmission { .. }
         | ClientCommand::DepopLocalNpc { .. }
         | ClientCommand::InspectItem { .. }
         | ClientCommand::Consider { .. }
@@ -469,6 +470,7 @@ fn refusal(command: &ClientCommand, reason: &str) -> Option<WorldEvent> {
         | ClientCommand::SetPosture { .. }
         | ClientCommand::FeignLanded { .. }
         | ClientCommand::SendChat(_)
+        | ClientCommand::SendChatInAdmission { .. }
         | ClientCommand::DepopLocalNpc { .. }
         | ClientCommand::InspectItem { .. }
         | ClientCommand::Shop { .. }
