@@ -13,16 +13,16 @@ language availability flags at bytes 413..445. Native eqgame 0x452387 passes
 those flags to 0x56b897, which admits nonzero entries at a fixed cap of 100.
 `TrainingReply::language_flags` preserves the raw bytes; `language_caps` is
 projected only for the pending, current trainer and trainee. Zero flags
-stay unavailable. EQEmu permits offered IDs 0..25 at cap 100,
-following `OPGMTrainSkill` and `IncreaseLanguageSkill` at EQEmu revision
-`4aceae18b94ffaafc08e2b17bc41cd72c77f795d`. No race, class-language or level
-restriction is imported into this server policy. The ordinary guildmaster
-class/reach checks still apply. Unknown language proficiency is not zero.
+stay unavailable.
 
-P99 uses native Titanium eqgame 0x4bbeda, its 25-by-15 minimum-level table at
-0x78f010, and the class exceptions in that function. The table columns are
-races 1..12, 128, 130 and 330. Language 25 has no native eligibility entry;
-unknown races remain unavailable. Native eqgame 0x56b48e separates request
+Every server with supported language training uses native Titanium eqgame
+0x4bbeda, its 25-by-15 minimum-level table at 0x78f010, and the class exceptions
+in that function. These checks filter received availability and are repeated
+before practice. Current proficiency does not bypass eligibility. The table
+columns are races 1..12, 128, 130 and 330. Language 25 has no native eligibility
+entry; unknown races remain unavailable. The ordinary guildmaster class/reach
+checks still apply. Unknown language proficiency is not zero, even when the
+language is eligible. Native eqgame 0x56b48e separates request
 banks; 0x4bdad1 computes the cubic price above proficiency 10. None of these
 source reads establishes a P99 runtime result.
 

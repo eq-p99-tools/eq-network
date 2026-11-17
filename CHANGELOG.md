@@ -9,7 +9,8 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   changes, so ordinary guild requests follow joins and leaves without a relog.
 
 - Add typed skill/language training subjects, `titanium_practice`, and current
-  language offers from received availability flags and server-specific rules.
+  language offers from received availability flags and native race/class/level
+  eligibility on every server with supported language training.
   Existing ordinary-skill training entry points remain available.
 - Unresolved EQEmu language operations withdraw points and potentially spent
   purse balances; free operations preserve known coins. Late skill updates

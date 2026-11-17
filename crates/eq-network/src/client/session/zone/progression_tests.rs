@@ -277,12 +277,76 @@ fn language_training_command(request: TrainingRequest) -> ClientCommand {
     }
 }
 
+#[test]
+fn language_eligibility_reaches_the_eqemu_and_p99_command_loops() {
+    use eq_network_game::training::TrainingSubject;
+    for protocol in [ServerProtocol::EqEmu, ServerProtocol::Project1999] {
+        for (language, level, value, cap, allowed) in [
+            (0, 1, 0, 100, true),
+            (0, 1, 100, 100, false),
+            (1, 9, 0, 0, false),
+            (1, 10, 0, 100, true),
+        ] {
+            let mut visit = Visit::on(protocol);
+            let player = visit.world.player.corrected().unwrap();
+            player.race = 1;
+            player.level = level;
+            player.languages = Some(vec![value; 32]);
+            let mut trainer = testing::spawn(42, SpawnKind::Npc);
+            trainer.class = Some(20);
+            visit.world.spawns.insert(trainer);
+            let opened = visit.command(language_training_command(TrainingRequest::Open {
+                trainer: 42,
+            }));
+            opened.result.unwrap();
+            assert_eq!(opened.sent, [training::titanium_open(42, 7)]);
+            let mut body = opened.sent[0].body.clone();
+            body[412] = 1;
+            body[413..445].fill(0xc9);
+            let offered = visit.packet(training::OFFER_OPCODE, &body);
+            offered.result.unwrap();
+            assert!(offered.events.iter().any(|event| matches!(
+                event,
+                ClientEvent::World(WorldEvent::Training(TrainingUpdate::Offered(offer)))
+                    if offer.subject_cap(TrainingSubject::Language(language)) == cap
+            )));
+            let practiced = visit.command(language_training_command(TrainingRequest::PracticeAt {
+                trainer: 42,
+                subject: TrainingSubject::Language(language),
+            }));
+            practiced.result.unwrap();
+            if allowed {
+                assert_eq!(
+                    practiced.sent,
+                    [
+                        training::titanium_practice(42, TrainingSubject::Language(language))
+                            .unwrap()
+                    ]
+                );
+            } else {
+                assert_eq!(practiced.sent, []);
+                assert!(practiced.events.iter().any(|event| matches!(
+                    event,
+                    ClientEvent::World(WorldEvent::TrainingRefused { .. })
+                )));
+                assert_eq!(
+                    visit.world.player.as_ref().unwrap().practice_points,
+                    Some(3)
+                );
+            }
+        }
+    }
+}
+
 /// Establishes one pending language operation through the actual feature,
 /// command, offer and purse owners, before any timeout/replacement is injected.
 fn stage_eqemu_language_practice(from: u8) -> (Visit, eq_network_game::world::Coins) {
     use eq_network_game::{training::TrainingSubject, world::Coins};
     let mut visit = Visit::on(ServerProtocol::EqEmu);
-    visit.world.player.corrected().unwrap().languages = Some(vec![from; 28]);
+    let player = visit.world.player.corrected().unwrap();
+    player.race = 1;
+    player.level = 20;
+    player.languages = Some(vec![from; 28]);
     let coins = Coins {
         copper: 20,
         ..Coins::default()
