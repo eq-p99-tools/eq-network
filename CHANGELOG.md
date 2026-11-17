@@ -13,9 +13,12 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Document read 6.475: Titanium's movement, vehicle and physics paths do not
   stand the player solely for passive displacement. Positive damage has its
-  own posture path; local environmental-report handling, mounted state and an
-  unidentified guard remain separate parity gaps. No posture policy changes
-  in this clarification. Regressions cover fast carrier translation and yaw
+  own posture path. Successfully submitted local fall, drowning and lava
+  reports now share the received-damage sitting/kneeling and stay-seated
+  policy, without synthesizing damage or hit points. Refused, unsent and zero
+  reports stand no one; lying and Mac-era posture behavior are unchanged.
+  Mounted state and an unidentified guard remain separate parity gaps.
+  Regressions cover fast carrier translation and yaw
   during a final named walk-off and ordinary steps after it.
 
 - **Breaking:** remove `UpdateGate::Changed`. Hosts choosing a movement gate

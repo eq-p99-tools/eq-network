@@ -3216,3 +3216,6 @@ mod progression_tests;
 
 #[cfg(test)]
 mod discipline_tests;
+
+#[cfg(test)]
+mod local_damage_tests;

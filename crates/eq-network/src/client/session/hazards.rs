@@ -10,7 +10,7 @@
 use super::{
     actions,
     feature::{Feature, Out, World},
-    ClientCommand, ClientEvent,
+    posture, ClientCommand, ClientEvent,
 };
 use anyhow::Result;
 use eq_network_game::{
@@ -123,6 +123,7 @@ impl Hazards {
         hazard: Hazard,
         amount: u32,
         safe_fall: bool,
+        world: &mut World,
         out: &mut Out<'_, '_>,
     ) -> Result<()> {
         // Both programs announce Safe Fall first, even when it left nothing.
@@ -148,6 +149,10 @@ impl Hazards {
                     out.send(&notice)?;
                 }
                 out.send(&packet)?;
+                // Only an accepted, submitted local report reaches the same
+                // posture policy as received damage (read R31 / 6.475).
+                // Submission establishes no received damage or HP authority.
+                posture::stand_for_own_damage(amount, world, out)?;
                 out.log
                     .diagnostic(format!("Reported {amount} points of {hazard:?} damage"))
             }
@@ -250,7 +255,7 @@ impl Feature for Hazards {
                 out.log,
             );
         }
-        self.send_report(hazard, amount, safe_fall, out)
+        self.send_report(hazard, amount, safe_fall, world, out)
     }
 }
 
@@ -259,6 +264,8 @@ mod tests {
     use super::super::{feature::testing, ClientEvent};
     use super::*;
     use eq_network_game::hazards;
+
+    mod local_posture;
 
     fn report(hazard: Hazard, amount: u32) -> ClientCommand {
         ClientCommand::EnvironmentalDamage {

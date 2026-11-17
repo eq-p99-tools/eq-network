@@ -38,10 +38,12 @@ pub struct LyingRules {
     /// or ducks (Titanium R19 c, 0x4a1d74). Turning by mouse look in the
     /// chase views goes on. Off, a move stands the player first.
     pub holds_still: bool,
-    /// Any `OP_Damage` record of more than 0 to the player stands them when
-    /// they sit or kneel to loot; lying and ducking are left alone
+    /// Any `OP_Damage` record or submitted local environmental report of more
+    /// than 0 to the player stands them when they sit or kneel to loot;
+    /// lying and ducking are left alone
     /// (Titanium R19 b and R19b 2, 0x4a56e3, rechecked 11-10). Whatever
-    /// the damage's type.
+    /// the damage's type. The local reporter calls the same handler (R31 /
+    /// 6.475, 0x41c905).
     pub hit_stands: bool,
     /// The line that refuses a cast while the player lies, if the program
     /// refuses one (Titanium R19 d, 0x411f3d: `eqstr_us.txt` 0x3099).
