@@ -11,10 +11,12 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Replace the unmaintained `chrono` dependency with `jiff`, preserving integer
   Unix seconds and UTC RFC3339 timestamps with exactly three fractional digits.
 
-- Label posture preservation during passive falls, lifts and carrier movement
-  as inference 6.475 pending the program's auto-stand read. No movement or
-  posture policy changes in this clarification. Regressions cover fast carrier
-  translation and yaw during a final named walk-off and ordinary steps after it.
+- Document read 6.475: Titanium's movement, vehicle and physics paths do not
+  stand the player solely for passive displacement. Positive damage has its
+  own posture path; local environmental-report handling, mounted state and an
+  unidentified guard remain separate parity gaps. No posture policy changes
+  in this clarification. Regressions cover fast carrier translation and yaw
+  during a final named walk-off and ordinary steps after it.
 
 - **Breaking:** remove `UpdateGate::Changed`. Hosts choosing a movement gate
   use `UpdateGate::Flagged` with the generation's `FlagRule` and packing.

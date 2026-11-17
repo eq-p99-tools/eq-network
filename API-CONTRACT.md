@@ -43,9 +43,19 @@ boat yaw are absent from the decoded position API. Boat zoning remains separate;
 source and synthetic coverage do not establish a witnessed ride.
 
 The worker does not call stand-to-move solely for passive fall, lift or carrier
-displacement. This posture preservation is inferred (recording checklist
-6.475): the native auto-stand path for physics-only movement remains unread.
-Voluntary movement keeps the existing stand-to-move policy.
+displacement. Titanium's movement, vehicle and physics paths do not call its
+posture setter at `eqgame.exe` 0x483556 (read 6.475, including movement step
+0x4bfe0f and vehicle placement 0x4aba14). Voluntary movement keeps the existing
+stand-to-move policy; this read establishes no Mac-era rule.
+
+Positive own damage has a separate stand path for sitting or kneeling players
+(0x4a56e3, call at 0x4a6d6c); lying is left alone. The received-damage handler
+already follows that posture distinction and the stay-seated option. The native
+early return for spawn+0x244 > 1 remains unidentified, and mounted state is not
+supplied to the session. The native local damage reporter also calls that path
+(0x41c905); local environmental reports here do not yet invoke it before a
+received damage event. These are separate damage-parity gaps, not reasons for
+passive movement to stand the player.
 
 ## Admission-scoped chat
 
