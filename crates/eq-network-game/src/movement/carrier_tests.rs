@@ -293,6 +293,111 @@ fn own_turns_accumulate_across_carrier_wrap_and_failed_sends_do_not_spend_them()
 }
 
 #[test]
+fn a_fast_boat_walk_off_keeps_own_budget_and_the_next_step_is_unsupported() {
+    let start = Instant::now();
+    let at = |ms| start + Duration::from_millis(ms);
+    let mut session = setup(start);
+    let mut local = attach(&mut session, start);
+    let before = session.position();
+    let pose = Position {
+        x: 1000.0,
+        y: 200.0,
+        heading: 128.0,
+        ..Position::default()
+    };
+    local.x += 0.5;
+    let leaving = request(start, at(200), pose, local);
+    session.allow_carrier(Some((sample(start, at(200)), pose)));
+    // A generic host that drops support one sample early must still pay
+    // world motion. No carrier allowance is inferred from its old link.
+    let unsupported = MovementRequest {
+        support: None,
+        ..leaving.clone()
+    };
+    assert!(session
+        .send_move_sample(&unsupported, at(200), |_| panic!("unnamed carrier motion"))
+        .is_err());
+    assert_eq!(session.position(), before);
+    assert!(session
+        .send_move_sample(&leaving, at(200), |_| anyhow::bail!(
+            "synthetic send failure"
+        ))
+        .is_err());
+    assert_eq!(session.position(), before);
+    session
+        .send_move_sample(&leaving, at(200), |wire| {
+            assert_eq!(wire.position, leaving.position);
+            assert!(wire.delta[0].abs() < 0.001);
+            assert!((wire.delta[1] + 0.25).abs() < 0.001);
+            assert_eq!(wire.delta_heading, 0);
+            assert_eq!(wire.animation, 12);
+            Ok(())
+        })
+        .unwrap();
+    // The accepted endpoint is now on ordinary ground. Its next request
+    // names no carrier and spends only the ordinary walking budget.
+    let next = MovementRequest::new(
+        MovementMode::Forward,
+        11,
+        Position {
+            x: leaving.position.x + 0.5,
+            ..leaving.position
+        },
+        at(300),
+    );
+    session.allow_carrier(None);
+    session
+        .send_move_sample(&next, at(300), |_| Ok(()))
+        .unwrap();
+    let unsupported = session.position();
+    let later_pose = Position { x: 2000.0, ..pose };
+    session.allow_carrier(Some((sample(start, at(400)), later_pose)));
+    assert!(session
+        .send_move_sample(&request(start, at(400), later_pose, local), at(400), |_| {
+            panic!("detached carrier allowance was reused");
+        })
+        .is_err());
+    assert_eq!(session.position(), unsupported);
+}
+
+#[test]
+fn a_fast_walk_off_rejects_stale_replaced_missing_and_unreachable_support() {
+    let start = Instant::now();
+    let at = start + Duration::from_millis(200);
+    let pose = Position {
+        x: 1000.0,
+        heading: 128.0,
+        ..Position::default()
+    };
+    for case in 0..4 {
+        let mut session = setup(start);
+        let mut local = attach(&mut session, start);
+        local.x += 0.5;
+        let mut leaving = request(start, at, pose, local);
+        let mut named = sample(start, at);
+        let mut checked = at;
+        let mut supplied = true;
+        match case {
+            0 => checked += Duration::from_millis(251),
+            1 => {
+                named.incarnation += 1;
+                leaving.support = Some(Support::Spawn(named));
+            }
+            2 => supplied = false,
+            3 => leaving.position = carrier_world(pose, Position { x: 1000.0, ..local }),
+            _ => unreachable!(),
+        }
+        session.allow_carrier(supplied.then_some((named, pose)));
+        let before = session.position();
+        assert!(session
+            .send_move_sample(&leaving, checked, |_| panic!("invalid carrier support"))
+            .is_err());
+        assert_eq!(session.position(), before);
+        assert_eq!(session.counter.entries(), 1);
+    }
+}
+
+#[test]
 fn walking_off_or_a_missing_report_removes_carrier_allowance() {
     let start = Instant::now();
     let mut session = setup(start);

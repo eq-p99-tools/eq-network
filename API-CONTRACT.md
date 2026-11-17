@@ -42,6 +42,11 @@ animation (6.470). No piloting opcode or route is invented. Pitch and continuing
 boat yaw are absent from the decoded position API. Boat zoning remains separate;
 source and synthetic coverage do not establish a witnessed ride.
 
+The worker does not call stand-to-move solely for passive fall, lift or carrier
+displacement. This posture preservation is inferred (recording checklist
+6.475): the native auto-stand path for physics-only movement remains unread.
+Voluntary movement keeps the existing stand-to-move policy.
+
 ## Titanium lifts and door mechanisms
 
 `doors::titanium` holds Titanium's own door rules, read from `eqgame.exe`:

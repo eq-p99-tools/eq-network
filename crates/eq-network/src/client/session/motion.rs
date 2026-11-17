@@ -844,6 +844,9 @@ impl Motion {
                 refused: Some("The player lies on the ground".into()),
             }));
         }
+        // Suppressing auto-stand for passive falls, lifts and carriers is
+        // inferred (checklist 6.475); the native physics-only call path is
+        // unread. Keep this behavior pending that program read.
         if let (true, Some(player)) = (
             (!world.control.stunned() || motion.options().walk_while_stunned)
                 && moves

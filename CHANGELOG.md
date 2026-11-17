@@ -5,6 +5,11 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Label posture preservation during passive falls, lifts and carrier movement
+  as inference 6.475 pending the program's auto-stand read. No movement or
+  posture policy changes in this clarification. Regressions cover fast carrier
+  translation and yaw during a final named walk-off and ordinary steps after it.
+
 - **Breaking:** remove `UpdateGate::Changed`. Hosts choosing a movement gate
   use `UpdateGate::Flagged` with the generation's `FlagRule` and packing.
   `UpdateGate` is non-exhaustive. The production gates already use the
