@@ -3,7 +3,7 @@
 //! training, and the guildmaster answers with how far each skill can be
 //! trained; each practice raises one skill by a point for a practice point
 //! and, past a skill of 10, coins; leaving says goodbye. An ordinary skill
-//! update has no receipt fields. EQEmu retains the existing local point
+//! update has no receipt fields. `EQEmu` retains the existing local point
 //! and purse projection. P99 waits for a fresh balance after a practice.
 //!
 //! Layout reference: `EQEmu`'s `GMTrainee_Struct`, `GMSkillChange_Struct` and
@@ -30,7 +30,7 @@ pub const RANGE: f32 = 200.0;
 /// The skill numbers a practice may name; languages are trained apart.
 pub const SKILLS: u32 = 100;
 
-/// EQEmu's trainer accepts language IDs zero through 25.
+/// `EQEmu`'s trainer accepts language IDs zero through 25.
 pub const LANGUAGES: u8 = 26;
 /// The maximum language proficiency.
 pub const LANGUAGE_CAP: u32 = 100;
@@ -75,7 +75,7 @@ impl TrainingSubject {
 }
 
 /// Native Titanium language eligibility (eqgame 0x4bbeda), including the
-/// table at 0x78f010. EQEmu's server has its own, separate trainer rules.
+/// table at 0x78f010. `EQEmu`'s server has its own, separate trainer rules.
 #[must_use]
 pub fn titanium_language_trainable(language: u8, race: u32, class: Option<u32>, level: u8) -> bool {
     let column = match race {
@@ -210,7 +210,7 @@ impl TrainingOffer {
 pub enum TrainingUpdate {
     /// A guildmaster opened training.
     Offered(TrainingOffer),
-    /// EQEmu's existing projection after a matching received increase. The
+    /// `EQEmu`'s existing projection after a matching received increase. The
     /// ID is the update ID (100 + language ID for languages); cost and
     /// point changes are projections, not receipt fields.
     Trained {
@@ -260,7 +260,7 @@ pub enum PracticeUpdate {
         /// The requested skill.
         skill: u32,
     },
-    /// An EQEmu language operation was retired without a received outcome.
+    /// An `EQEmu` language operation was retired without a received outcome.
     /// The estimate only identifies potentially spent coins; it is not a receipt.
     OutcomeUnknown {
         /// The received-update ID of the requested language.

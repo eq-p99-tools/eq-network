@@ -45,7 +45,7 @@ pub(super) struct Training {
     p99: bool,
     /// Each trainer ID can receive one opening request in this P99 admission.
     requested_trainers: BTreeSet<u16>,
-    /// EQEmu replies carry no request/incarnation token. Retiring an
+    /// `EQEmu` replies carry no request/incarnation token. Retiring an
     /// unanswered opening needs fresh admission before that ID can reopen.
     retired_trainers: BTreeSet<u16>,
 }
@@ -348,7 +348,7 @@ impl Training {
         Ok(())
     }
 
-    /// Retires only unresolved EQEmu language operations. Ordinary skill
+    /// Retires only unresolved `EQEmu` language operations. Ordinary skill
     /// projection remains unchanged. The event goes through the feature loop
     /// so the purse owner can withdraw potentially spent coins exactly once.
     fn retire_eqemu_languages(&mut self, world: &mut World, expired_at: Option<Instant>) {
