@@ -1,6 +1,5 @@
 # API and integration contracts
 
-<<<<<<< HEAD
 ## Own-player update gates
 
 `UpdateGate::Flagged` applies the generation's `FlagRule` and packet packing.
@@ -11,7 +10,7 @@ until it is due and more than its spacing has passed. A later host sample
 replaces the held one without advancing the outgoing counter; that counter
 is sampled only when the update goes out. Exhaustive host matches on
 `UpdateGate` need a fallback because the enum is non-exhaustive.
-=======
+
 ## Titanium carrier support
 
 `movement::Carriers` holds only received Titanium carrier reports for the races
@@ -42,7 +41,6 @@ their successor, within a 64-report history (6.469). A still rider's existing
 animation (6.470). No piloting opcode or route is invented. Pitch and continuing
 boat yaw are absent from the decoded position API. Boat zoning remains separate;
 source and synthetic coverage do not establish a witnessed ride.
->>>>>>> d55e086 (feat(movement): add carrier-relative support)
 
 ## Titanium lifts and door mechanisms
 
