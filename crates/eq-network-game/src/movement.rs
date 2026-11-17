@@ -475,8 +475,8 @@ pub struct PostureOptions {
     /// owes the stand. A lying posture the server reports is as before.
     /// Recording checklist 6.454.
     pub feign_standing: bool,
-    /// A hit leaves a sitting or looting player as they are, where the
-    /// generation's program stands them
+    /// A hit or submitted local environmental-damage report leaves a sitting
+    /// or looting player as they are, where the generation's program stands them
     /// ([`crate::feign::LyingRules::hit_stands`]). Recording checklist
     /// 6.453.
     pub stay_seated_when_hit: bool,

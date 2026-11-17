@@ -49,13 +49,17 @@ posture setter at `eqgame.exe` 0x483556 (read 6.475, including movement step
 stand-to-move policy; this read establishes no Mac-era rule.
 
 Positive own damage has a separate stand path for sitting or kneeling players
-(0x4a56e3, call at 0x4a6d6c); lying is left alone. The received-damage handler
-already follows that posture distinction and the stay-seated option. The native
-early return for spawn+0x244 > 1 remains unidentified, and mounted state is not
-supplied to the session. The native local damage reporter also calls that path
-(0x41c905); local environmental reports here do not yet invoke it before a
-received damage event. These are separate damage-parity gaps, not reasons for
-passive movement to stand the player.
+(0x4a56e3, call at 0x4a6d6c); lying is left alone. Both received damage and a
+successfully submitted local fall, drowning or lava report use that posture
+policy and the stay-seated option. The native local reporter also calls that
+path (0x41c905, read R31 / 6.475). Refused, unencodable and unsent reports do not
+stand the player; zero damage, including a fall fully absorbed by Safe Fall,
+does not stand them either. A later server damage event does not send a second
+stand while they already stand. Local reporting creates no received damage
+event, hit-point change or acknowledgement. This Titanium read establishes no
+Mac-era rule. The native early return for spawn+0x244 > 1 remains unidentified,
+and mounted state is not supplied to the session; these remain damage-parity
+gaps.
 
 ## Admission-scoped chat
 
@@ -1310,8 +1314,9 @@ within the current mode's unscaled elapsed speed budget. `posture`
 without the lying posture report both programs send first, so the player
 stays standing and moves as any standing player, and a feign spell's
 landing (`FeignLanded`) sends nothing; with
-`stay_seated_when_hit` an `OP_Damage` hit leaves a sitter or a looter
-seated where the generation's program stands them (`GameDialect::lying()`).
+`stay_seated_when_hit` an `OP_Damage` hit or submitted local environmental
+report leaves a sitter or a looter seated where the generation's program stands
+them (`GameDialect::lying()`).
 These options never
 bypass session identity, input freshness, finite coordinates, fixed bounds, current
 known speed, corrections, death or transfer gates. Changes invalidate pre-toggle queued input using the caller stamp and preserve

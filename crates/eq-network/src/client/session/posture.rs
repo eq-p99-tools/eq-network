@@ -124,13 +124,28 @@ fn feign_landed(spawn_id: u16, world: &mut World, out: &mut Out<'_, '_>) -> Resu
 /// early return for a source it does not know is kept; the one for a spell
 /// it does not know is not, since the session has no spell table (6.455).
 fn stand_when_hit(damage: &Damage, world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
-    let (Some(spawn_id), DamageOutcome::Hit(1..)) = (world.own_spawn, damage.outcome) else {
+    let (Some(spawn_id), DamageOutcome::Hit(amount)) = (world.own_spawn, damage.outcome) else {
         return Ok(());
     };
     let known = |id: u16| id == 0 || world.is_player(id) || world.spawns.get(id).is_some();
     if damage.target_id != spawn_id || !known(damage.source_id) {
         return Ok(());
     }
+    stand_for_own_damage(amount, world, out)
+}
+
+/// Applies the shared positive-own-damage posture policy, without inventing
+/// a received damage event or changing hit points. Titanium's local reporter
+/// (0x41c905) calls the same handler as received damage (read R31 / 6.475).
+/// The unidentified spawn+0x244 guard and mounted case remain unmodelled.
+pub(super) fn stand_for_own_damage(
+    amount: u32,
+    world: &mut World,
+    out: &mut Out<'_, '_>,
+) -> Result<()> {
+    let Some(spawn_id) = world.own_spawn.filter(|_| amount > 0) else {
+        return Ok(());
+    };
     let stays = world
         .body
         .options()
