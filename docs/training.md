@@ -29,8 +29,13 @@ source reads establishes a P99 runtime result.
 Both banks share the existing transaction model. On EQEmu, a matching
 received rise permits the existing point/purse projection; a language rise
 must be exactly one point and within the observation interval. These
-updates contain no balance or price receipt. A language timeout withdraws
-point authority and requires fresh admission before further practices.
+updates contain no balance or price receipt. An unanswered language timeout,
+trainer replacement or early trainer close withdraws point authority and, for a paid request, purse authority. A free
+request preserves known coins. A later language update remains proficiency
+news and cannot restore points or purse. Further practices need fresh admission.
+Timed-out openings and replaced/despawned trainer IDs are retired until the
+next admission: replies carry no request or incarnation token, so retrying
+that ID in the same admission cannot safely distinguish an old answer.
 P99 retains its one unresolved practice and fresh-balance policy, even when
 a language increase is received. Silence is never a successful practice.
 Validate actual point and coin spending against the next received profile;

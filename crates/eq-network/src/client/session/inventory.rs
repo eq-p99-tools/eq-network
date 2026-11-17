@@ -1247,6 +1247,9 @@ impl Feature for Belongings {
                 eq_network_game::training::PracticeUpdate::Requested {
                     estimated_cost: 1..,
                     ..
+                } | eq_network_game::training::PracticeUpdate::OutcomeUnknown {
+                    estimated_cost: 1..,
+                    ..
                 },
             )))
         ) {

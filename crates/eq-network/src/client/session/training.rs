@@ -45,6 +45,9 @@ pub(super) struct Training {
     p99: bool,
     /// Each trainer ID can receive one opening request in this P99 admission.
     requested_trainers: BTreeSet<u16>,
+    /// EQEmu replies carry no request/incarnation token. After a timed-out
+    /// opening or trainer replacement, reuse needs a fresh zone admission.
+    retired_trainers: BTreeSet<u16>,
 }
 
 /// A guildmaster the player asked to train with.
@@ -112,11 +115,18 @@ impl Training {
         &mut self,
         command: &ClientCommand,
         trainer: u16,
-        world: &World,
+        world: &mut World,
         out: &mut Out<'_, '_>,
     ) -> Result<()> {
         if let Err(reason) = Self::eligible(trainer, world) {
             return actions::refuse(command, reason, out.log);
+        }
+        if self.retired_trainers.contains(&trainer) {
+            return actions::refuse(
+                command,
+                "Re-enter the zone before asking this retired guildmaster again.",
+                out.log,
+            );
         }
         if self
             .trainer
@@ -142,6 +152,10 @@ impl Training {
             }
         }
         if let Some(open) = self.trainer.take() {
+            if open.offer.is_none() {
+                self.retired_trainers.insert(open.spawn_id);
+            }
+            self.retire_eqemu_languages(world, None);
             out.request(&Request::EndTraining(open.spawn_id))?;
         }
         out.request(&Request::OpenTraining(trainer))?;
@@ -279,7 +293,7 @@ impl Training {
     }
 
     /// Leaves training; with none open there is nothing to leave.
-    fn end(&mut self, out: &mut Out<'_, '_>) -> Result<()> {
+    fn end(&mut self, world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
         let Some(trainer) = self.trainer.take() else {
             return Ok(());
         };
@@ -288,6 +302,11 @@ impl Training {
         }
         if self.p99 {
             self.retire_practice(out)?;
+        } else {
+            if trainer.offer.is_none() {
+                self.retired_trainers.insert(trainer.spawn_id);
+            }
+            self.retire_eqemu_languages(world, None);
         }
         out.log.send(ClientEvent::World(WorldEvent::Training(
             TrainingUpdate::Ended,
@@ -295,8 +314,15 @@ impl Training {
     }
 
     /// Drops an offer when its trainer or zone is no longer current.
-    fn invalidate_trainer(&mut self, out: &mut Out<'_, '_>) -> Result<()> {
-        self.retire_practice(out)?;
+    fn invalidate_trainer(&mut self, world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
+        if self.p99 {
+            self.retire_practice(out)?;
+        } else {
+            self.retire_eqemu_languages(world, None);
+            if let Some(trainer) = &self.trainer {
+                self.retired_trainers.insert(trainer.spawn_id);
+            }
+        }
         if self.trainer.take().is_some() {
             out.log.send(ClientEvent::World(WorldEvent::Training(
                 TrainingUpdate::Ended,
@@ -316,6 +342,33 @@ impl Training {
             )?;
         }
         Ok(())
+    }
+
+    /// Retires only unresolved EQEmu language operations. Ordinary skill
+    /// projection remains unchanged. The event goes through the feature loop
+    /// so the purse owner can withdraw potentially spent coins exactly once.
+    fn retire_eqemu_languages(&mut self, world: &mut World, expired_at: Option<Instant>) {
+        let mut retired = Vec::new();
+        self.pending.retain(|practice| {
+            let retire = practice.skill >= training::SKILLS
+                && expired_at
+                    .is_none_or(|now| now.saturating_duration_since(practice.sent) >= ANSWER_WAIT);
+            if retire {
+                retired.push((practice.skill, practice.cost));
+            }
+            !retire
+        });
+        if !retired.is_empty() {
+            self.points = None;
+        }
+        for (skill, estimated_cost) in retired {
+            world.happened(Message::Event(WorldEvent::Training(
+                TrainingUpdate::Practice(PracticeUpdate::OutcomeUnknown {
+                    skill,
+                    estimated_cost,
+                }),
+            )));
+        }
     }
 
     /// Both reply values require the same live, unexpired opening.
@@ -359,7 +412,7 @@ impl Training {
             }
             Message::Event(WorldEvent::Skill { skill_id, value }) => {
                 if world.lifecycle.blocks_motion() {
-                    self.invalidate_trainer(out)?;
+                    self.invalidate_trainer(world, out)?;
                 } else if let Some(practice) = self.pending.front_mut().filter(|practice| {
                     !practice.skill_rise_reported
                         && practice.skill == *skill_id
@@ -381,21 +434,21 @@ impl Training {
                 Self::report_practice(PracticeUpdate::PointsUncertain, out)?;
             }
             Message::Event(WorldEvent::Despawn(id)) if trainer == Some(*id) => {
-                self.invalidate_trainer(out)?;
+                self.invalidate_trainer(world, out)?;
             }
             Message::Event(WorldEvent::Spawns(spawns))
                 if spawns.iter().any(|spawn| trainer == Some(spawn.spawn_id)) =>
             {
-                self.invalidate_trainer(out)?;
+                self.invalidate_trainer(world, out)?;
             }
             Message::Event(event) if world.owns_death(event) => {
-                self.invalidate_trainer(out)?;
+                self.invalidate_trainer(world, out)?;
             }
             Message::ZoneOffer(_)
             | Message::ZoneAnswer(_)
             | Message::Handoff(_)
             | Message::LoggedOut => {
-                self.invalidate_trainer(out)?;
+                self.invalidate_trainer(world, out)?;
             }
             _ => (),
         }
@@ -474,38 +527,35 @@ impl Feature for Training {
                 }
                 self.train(command, subject, world, out, Instant::now())
             }
-            TrainingRequest::End => self.end(out),
+            TrainingRequest::End => self.end(world, out),
         }
     }
 
     fn tick(&mut self, now: Instant, world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
-        if !self.p99 {
-            if self.pending.iter().any(|practice| {
-                practice.skill >= training::SKILLS
-                    && now.saturating_duration_since(practice.sent) >= ANSWER_WAIT
-            }) {
-                self.points = None;
-                Self::report_practice(PracticeUpdate::PointsUncertain, out)?;
-            }
-            self.pending
-                .retain(|practice| now.saturating_duration_since(practice.sent) < ANSWER_WAIT);
-            return Ok(());
-        }
         if let Some(trainer) = self.trainer.as_ref() {
             if trainer.offer.is_none()
                 && now.saturating_duration_since(trainer.requested_at) >= ANSWER_WAIT
             {
+                if !self.p99 {
+                    self.retired_trainers.insert(trainer.spawn_id);
+                }
                 self.trainer = None;
-                out.log
-                    .send(ClientEvent::World(WorldEvent::TrainingRefused {
-                        session_id: world.session_id,
-                        reason: "The guildmaster has not answered. The outcome is unknown.".into(),
-                    }))?;
-            } else if world.lifecycle.blocks_motion()
-                || Self::eligible(trainer.spawn_id, world).is_err()
+                out.log.send(ClientEvent::World(WorldEvent::TrainingRefused {
+                    session_id: world.session_id,
+                    reason: if self.p99 { "The guildmaster has not answered. The outcome is unknown." } else { "The guildmaster has not answered. The outcome is unknown; re-enter the zone before asking this guildmaster again." }.into(),
+                }))?;
+            } else if self.p99
+                && (world.lifecycle.blocks_motion()
+                    || Self::eligible(trainer.spawn_id, world).is_err())
             {
-                self.invalidate_trainer(out)?;
+                self.invalidate_trainer(world, out)?;
             }
+        }
+        if !self.p99 {
+            self.retire_eqemu_languages(world, Some(now));
+            self.pending
+                .retain(|practice| now.saturating_duration_since(practice.sent) < ANSWER_WAIT);
+            return Ok(());
         }
         if self
             .pending
@@ -593,6 +643,23 @@ impl Feature for Training {
     ) -> Result<()> {
         if self.p99 {
             self.observe_p99(message, world, out)?;
+        } else {
+            let trainer = self.trainer.as_ref().map(|trainer| trainer.spawn_id);
+            let invalidated = match message {
+                Message::Event(WorldEvent::Despawn(id)) => trainer == Some(*id),
+                Message::Event(WorldEvent::Spawns(spawns)) => {
+                    spawns.iter().any(|spawn| trainer == Some(spawn.spawn_id))
+                }
+                Message::Event(event) => world.owns_death(event),
+                Message::ZoneOffer(_)
+                | Message::ZoneAnswer(_)
+                | Message::Handoff(_)
+                | Message::LoggedOut => true,
+                _ => false,
+            };
+            if invalidated {
+                self.invalidate_trainer(world, out)?;
+            }
         }
         let Message::Event(event) = message else {
             return Ok(());
@@ -708,6 +775,92 @@ mod tests {
         request: TrainingRequest,
     ) -> testing::Outcome<Result<()>> {
         testing::run(|out| training.handle(&ask(request), world, out))
+    }
+
+    #[test]
+    fn expired_eqemu_openings_retire_the_id_without_trapping_a_pending_window() {
+        let (mut training, mut world) = warrior();
+        open(&mut training, &mut world, 42).result.unwrap();
+        training.trainer.as_mut().unwrap().requested_at = Instant::now() - ANSWER_WAIT;
+        let outcome = testing::run(|out| training.tick(Instant::now(), &mut world, out));
+        outcome.result.unwrap();
+        assert!(training.trainer.is_none());
+        assert!(refusals(&outcome.events)[0].contains("outcome is unknown"));
+        assert!(matches!(
+            hear(&mut training, &mut world, reply(42, 7, true)).0,
+            Message::TrainingReply(_)
+        ));
+        let retry = open(&mut training, &mut world, 42);
+        assert!(retry.sent.is_empty());
+        assert!(refusals(&retry.events)[0].contains("Re-enter the zone"));
+        // A different trainer remains usable; a fresh zone admission has a fresh feature.
+        assert_eq!(open(&mut training, &mut world, 45).sent.len(), 1);
+        let (mut next, mut next_world) = warrior();
+        assert_eq!(open(&mut next, &mut next_world, 42).sent.len(), 1);
+        assert!(matches!(
+            hear(&mut next, &mut next_world, reply(42, 7, true)).0,
+            Message::Event(WorldEvent::Training(TrainingUpdate::Offered(_)))
+        ));
+    }
+
+    #[test]
+    fn eqemu_trainer_replacement_retires_openings_offers_and_pending_languages() {
+        for offered in [false, true] {
+            for despawn_first in [false, true] {
+                let (mut training, mut world) = warrior();
+                world.player.corrected().unwrap().languages = Some(vec![20; 28]);
+                open(&mut training, &mut world, 42).result.unwrap();
+                if offered {
+                    hear(&mut training, &mut world, reply(42, 7, true));
+                    assert_eq!(
+                        handle(
+                            &mut training,
+                            &mut world,
+                            TrainingRequest::PracticeAt {
+                                trainer: 42,
+                                subject: TrainingSubject::Language(5)
+                            }
+                        )
+                        .sent
+                        .len(),
+                        1
+                    );
+                }
+                if despawn_first {
+                    hear(
+                        &mut training,
+                        &mut world,
+                        Message::Event(WorldEvent::Despawn(42)),
+                    );
+                }
+                let mut replacement = testing::spawn(42, SpawnKind::Npc);
+                replacement.class = Some(20);
+                hear(
+                    &mut training,
+                    &mut world,
+                    Message::Event(WorldEvent::Spawns(vec![replacement.clone()])),
+                );
+                world.spawns.insert(replacement);
+                assert!(training.trainer.is_none());
+                assert!(training.pending.is_empty());
+                assert_eq!(training.points, if offered { None } else { Some(3) });
+                assert!(matches!(
+                    hear(&mut training, &mut world, reply(42, 7, true)).0,
+                    Message::TrainingReply(_)
+                ));
+                assert!(handle(
+                    &mut training,
+                    &mut world,
+                    TrainingRequest::PracticeAt {
+                        trainer: 42,
+                        subject: TrainingSubject::Language(5)
+                    }
+                )
+                .sent
+                .is_empty());
+                assert!(open(&mut training, &mut world, 42).sent.is_empty());
+            }
+        }
     }
 
     #[test]

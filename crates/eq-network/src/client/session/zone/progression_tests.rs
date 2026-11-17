@@ -17,7 +17,11 @@ struct Visit {
 
 impl Visit {
     fn new() -> Self {
-        let server = servers::server_type(ServerProtocol::Project1999);
+        Self::on(ServerProtocol::Project1999)
+    }
+
+    fn on(protocol: ServerProtocol) -> Self {
+        let server = servers::server_type(protocol);
         let mut features =
             Features::new(server, "Tester", eq_network_game::food::AutoEat::default());
         let mut world = World::new(5);
@@ -263,4 +267,129 @@ fn p99_skill_update_remains_authoritative_without_releasing_practice() {
     assert_eq!(player.skills.as_ref().unwrap()[30], 13);
     assert_eq!(player.practice_points, Some(3));
     assert_eq!(visit.command(request(train)).sent, []);
+}
+
+#[test]
+fn eqemu_unknown_language_outcomes_withdraw_only_potentially_spent_balances() {
+    use eq_network_game::{
+        training::{PracticeUpdate, TrainingSubject},
+        world::Coins,
+    };
+    for from in [0, 20] {
+        for replaced in [false, true] {
+            let mut visit = Visit::on(ServerProtocol::EqEmu);
+            visit.world.player.corrected().unwrap().languages = Some(vec![from; 28]);
+            let coins = Coins {
+                copper: 20,
+                ..Coins::default()
+            };
+            visit
+                .news(vec![Message::Event(WorldEvent::Coins(coins))])
+                .result
+                .unwrap();
+            let mut trainer = testing::spawn(42, SpawnKind::Npc);
+            trainer.class = Some(20);
+            visit.world.spawns.insert(trainer.clone());
+            let command = |request| ClientCommand::Training {
+                session_id: 5,
+                request,
+                created: Instant::now(),
+            };
+            assert_eq!(
+                visit
+                    .command(command(TrainingRequest::Open { trainer: 42 }))
+                    .sent
+                    .len(),
+                1
+            );
+            let mut body = training::titanium_open(42, 7).body;
+            body[412] = 1;
+            body[413..445].fill(0xc9);
+            visit.packet(training::OFFER_OPCODE, &body).result.unwrap();
+            assert_eq!(
+                visit
+                    .command(command(TrainingRequest::PracticeAt {
+                        trainer: 42,
+                        subject: TrainingSubject::Language(5)
+                    }))
+                    .sent
+                    .len(),
+                1
+            );
+            assert_eq!(
+                visit.world.coins.purse,
+                Some(coins),
+                "projection stays known during observation"
+            );
+            let outcome = if replaced {
+                visit.news(vec![Message::Event(WorldEvent::Spawns(vec![trainer]))])
+            } else {
+                testing::run(|out| {
+                    visit.features.tick(
+                        Instant::now() + Duration::from_secs(6),
+                        &mut visit.world,
+                        out,
+                    )?;
+                    settle(&mut visit.features, &mut visit.world, out, true)
+                })
+            };
+            outcome.result.unwrap();
+            assert!(outcome.events.iter().any(|event| matches!(event,
+                ClientEvent::World(WorldEvent::Training(TrainingUpdate::Practice(
+                    PracticeUpdate::OutcomeUnknown { skill: 105, estimated_cost }
+                ))) if *estimated_cost == if from == 0 { 0 } else { 10 })));
+            assert_eq!(
+                visit.world.coins.purse,
+                if from == 0 { Some(coins) } else { None }
+            );
+            assert_eq!(
+                outcome
+                    .events
+                    .iter()
+                    .filter(|event| matches!(
+                        event,
+                        ClientEvent::World(WorldEvent::PurseUncertain { .. })
+                    ))
+                    .count(),
+                usize::from(from != 0)
+            );
+            let received = visit.packet(
+                0x6a93,
+                &[105u32.to_le_bytes(), u32::from(from + 1).to_le_bytes()].concat(),
+            );
+            received.result.unwrap();
+            assert_eq!(
+                visit
+                    .world
+                    .player
+                    .as_ref()
+                    .unwrap()
+                    .languages
+                    .as_ref()
+                    .unwrap()[5],
+                from + 1
+            );
+            assert!(received.events.iter().any(|event| matches!(
+                event,
+                ClientEvent::World(WorldEvent::Skill { skill_id: 105, .. })
+            )));
+            assert!(!received.events.iter().any(|event| matches!(
+                event,
+                ClientEvent::World(WorldEvent::Training(TrainingUpdate::Trained { .. }))
+                    | ClientEvent::World(WorldEvent::PracticePoints(_))
+                    | ClientEvent::World(WorldEvent::Coins(_))
+            )));
+            assert_eq!(
+                visit.world.coins.purse,
+                if from == 0 { Some(coins) } else { None }
+            );
+            assert!(visit
+                .command(command(TrainingRequest::PracticeAt {
+                    trainer: 42,
+                    subject: TrainingSubject::Language(5)
+                }))
+                .sent
+                .is_empty());
+        }
+    }
 }

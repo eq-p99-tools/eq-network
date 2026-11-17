@@ -260,6 +260,14 @@ pub enum PracticeUpdate {
         /// The requested skill.
         skill: u32,
     },
+    /// An EQEmu language operation was retired without a received outcome.
+    /// The estimate only identifies potentially spent coins; it is not a receipt.
+    OutcomeUnknown {
+        /// The received-update ID of the requested language.
+        skill: u32,
+        /// The request's estimated cost in copper.
+        estimated_cost: u64,
+    },
     /// The profile point count can no longer be projected.
     PointsUncertain,
 }
