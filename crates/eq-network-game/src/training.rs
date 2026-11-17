@@ -75,7 +75,8 @@ impl TrainingSubject {
 }
 
 /// Native Titanium language eligibility (eqgame 0x4bbeda), including the
-/// table at 0x78f010. `EQEmu`'s server has its own, separate trainer rules.
+/// table at 0x78f010. Applied alongside received availability on every server
+/// with supported language training; proficiency does not bypass this rule.
 #[must_use]
 pub fn titanium_language_trainable(language: u8, race: u32, class: Option<u32>, level: u8) -> bool {
     let column = match race {
@@ -487,7 +488,7 @@ mod tests {
         assert!(titanium_language_trainable(11, 1, Some(14), 1));
         assert!(!titanium_language_trainable(25, 1, Some(14), 100));
         assert!(!titanium_language_trainable(1, 999, Some(1), 100));
-        // Every racial column has its own exact boundary, without importing it into EQEmu.
+        // Every racial column has its own exact boundary.
         for (column, race) in (1..=12).chain([128, 130, 330]).enumerate() {
             for (language, row) in LANGUAGE_LEVELS.iter().enumerate() {
                 let language = u8::try_from(language).unwrap();

@@ -209,16 +209,14 @@ impl Training {
             {
                 return Err("Wait for the current language practice outcome.");
             }
-            if self.p99
-                && !world.player.as_ref().is_some_and(|player| {
-                    training::titanium_language_trainable(
-                        language,
-                        player.race,
-                        player.class,
-                        player.level,
-                    )
-                })
-            {
+            if !world.player.as_ref().is_some_and(|player| {
+                training::titanium_language_trainable(
+                    language,
+                    player.race,
+                    player.class,
+                    player.level,
+                )
+            }) {
                 return Err("Your guildmaster cannot train you in that language yet.");
             }
         }
@@ -595,15 +593,14 @@ impl Feature for Training {
                 offer.language_caps = (0..training::LANGUAGES)
                     .map(|language| {
                         if reply.language_flags[usize::from(language)] != 0
-                            && (!self.p99
-                                || world.player.as_ref().is_some_and(|player| {
-                                    training::titanium_language_trainable(
-                                        language,
-                                        player.race,
-                                        player.class,
-                                        player.level,
-                                    )
-                                }))
+                            && world.player.as_ref().is_some_and(|player| {
+                                training::titanium_language_trainable(
+                                    language,
+                                    player.race,
+                                    player.class,
+                                    player.level,
+                                )
+                            })
                         {
                             training::LANGUAGE_CAP
                         } else {
@@ -710,6 +707,7 @@ mod tests {
     fn warrior() -> (Training, World) {
         let mut world = World::new(5);
         let mut player = testing::player(7);
+        player.race = 1;
         player.class = Some(1);
         player.level = 10;
         player.practice_points = Some(3);
@@ -739,6 +737,13 @@ mod tests {
         testing::run(|out| training.admitted(&mut world, out))
             .result
             .unwrap();
+        (training, world)
+    }
+
+    /// A Human warrior at the native threshold for language 5.
+    fn language_warrior() -> (Training, World) {
+        let (training, mut world) = warrior();
+        world.player.corrected().unwrap().level = 20;
         (training, world)
     }
 
@@ -814,7 +819,7 @@ mod tests {
     fn eqemu_replacement_separates_unanswered_opens_from_uncertain_spend() {
         for offered in [false, true] {
             for despawn_first in [false, true] {
-                let (mut training, mut world) = warrior();
+                let (mut training, mut world) = language_warrior();
                 world.player.corrected().unwrap().languages = Some(vec![20; 28]);
                 open(&mut training, &mut world, 42).result.unwrap();
                 if offered {
@@ -896,7 +901,7 @@ mod tests {
     #[test]
     fn an_answered_eqemu_offer_can_reopen_after_no_spend_replacement() {
         for despawn_first in [false, true] {
-            let (mut training, mut world) = warrior();
+            let (mut training, mut world) = language_warrior();
             world.player.corrected().unwrap().languages = Some(vec![20; 28]);
             open(&mut training, &mut world, 42).result.unwrap();
             hear(&mut training, &mut world, reply(42, 7, true));
@@ -950,7 +955,7 @@ mod tests {
 
     #[test]
     fn an_answered_eqemu_offer_can_reopen_after_same_admission_recovery() {
-        let (mut training, mut world) = warrior();
+        let (mut training, mut world) = language_warrior();
         world.player.corrected().unwrap().languages = Some(vec![0; 28]);
         open(&mut training, &mut world, 42).result.unwrap();
         hear(&mut training, &mut world, reply(42, 7, true));
@@ -987,13 +992,13 @@ mod tests {
     /// Opens a received language offer with one withheld flag, retaining the
     /// exact cap projection assertion before tests issue a practice.
     fn language_offer_with_one_missing_flag() -> (Training, World) {
-        let (mut training, mut world) = warrior();
+        let (mut training, mut world) = language_warrior();
         world.player.corrected().unwrap().languages = Some(vec![20; 28]);
         open(&mut training, &mut world, 42).result.unwrap();
         let mut reply_body = training::titanium_open(42, 7).body;
         reply_body[412] = 1;
         reply_body[413..445].fill(0xc9);
-        reply_body[413 + 4] = 0;
+        reply_body[413 + 2] = 0;
         let reply =
             eq_network_game::message::titanium(training::OFFER_OPCODE, &reply_body).remove(0);
         let (offered, _) = hear(&mut training, &mut world, reply);
@@ -1001,13 +1006,15 @@ mod tests {
             panic!("no offer");
         };
         let mut expected_caps = vec![100; 26];
-        expected_caps[4] = 0;
+        for language in [2, 4, 10, 12, 21, 22, 23, 24, 25] {
+            expected_caps[language] = 0;
+        }
         assert_eq!(offer.language_caps, expected_caps);
         (training, world)
     }
 
     #[test]
-    fn eqemu_language_offers_use_server_bounds_and_correlate_the_update_bank() {
+    fn eqemu_language_offers_use_native_and_server_bounds_and_correlate_the_update_bank() {
         let (mut training, mut world) = language_offer_with_one_missing_flag();
         let request = TrainingRequest::PracticeAt {
             trainer: 42,
@@ -1024,7 +1031,7 @@ mod tests {
                 &mut world,
                 TrainingRequest::PracticeAt {
                     trainer: 42,
-                    subject: TrainingSubject::Language(4)
+                    subject: TrainingSubject::Language(2)
                 }
             )
             .sent,
@@ -1102,7 +1109,7 @@ mod tests {
 
     #[test]
     fn language_silence_is_not_a_point_or_coin_receipt() {
-        let (mut training, mut world) = warrior();
+        let (mut training, mut world) = language_warrior();
         world.player.corrected().unwrap().languages = Some(vec![0; 28]);
         open(&mut training, &mut world, 42).result.unwrap();
         hear(&mut training, &mut world, reply(42, 7, true));
@@ -1124,6 +1131,118 @@ mod tests {
             world.player.as_ref().unwrap().languages.as_ref().unwrap()[5],
             0
         );
+    }
+
+    #[test]
+    fn language_eligibility_and_caps_apply_to_eqemu_and_p99() {
+        for project1999 in [false, true] {
+            for (language, level, value, flag, cap, allowed) in [
+                (0, 1, Some(0), true, 100, true),
+                (0, 1, Some(100), true, 100, false),
+                (1, 9, Some(0), true, 0, false),
+                (1, 10, Some(0), true, 100, true),
+                (5, 19, Some(20), true, 0, false),
+                (5, 20, Some(20), true, 100, true),
+                (5, 20, Some(100), true, 100, false),
+                (1, 10, Some(0), false, 0, false),
+                (1, 10, None, true, 100, false),
+                (25, 100, Some(0), true, 0, false),
+            ] {
+                let (mut training, mut world) = if project1999 { p99() } else { warrior() };
+                let player = world.player.corrected().unwrap();
+                player.level = level;
+                player.languages = value.map(|value| vec![value; 32]);
+                open(&mut training, &mut world, 42).result.unwrap();
+                let Message::TrainingReply(mut answer) = reply(42, 7, true) else {
+                    panic!("expected trainer reply");
+                };
+                answer.language_flags[usize::from(language)] = u8::from(flag);
+                hear(&mut training, &mut world, Message::TrainingReply(answer));
+                assert_eq!(
+                    training
+                        .trainer
+                        .as_ref()
+                        .unwrap()
+                        .offer
+                        .as_ref()
+                        .unwrap()
+                        .subject_cap(TrainingSubject::Language(language)),
+                    cap,
+                    "P99 {project1999}, language {language}, level {level}, value {value:?}"
+                );
+                let purse = world.coins.purse;
+                let outcome = handle(
+                    &mut training,
+                    &mut world,
+                    TrainingRequest::PracticeAt {
+                        trainer: 42,
+                        subject: TrainingSubject::Language(language),
+                    },
+                );
+                outcome.result.unwrap();
+                if allowed {
+                    assert_eq!(
+                        outcome.sent,
+                        [
+                            training::titanium_practice(42, TrainingSubject::Language(language))
+                                .unwrap()
+                        ]
+                    );
+                    let practice = training.pending.front().unwrap();
+                    assert_eq!(practice.from, u32::from(value.unwrap()));
+                    assert_eq!(practice.cost, if value == Some(20) { 10 } else { 0 });
+                } else {
+                    assert!(outcome.sent.is_empty(), "refusal must encode no command");
+                    assert_eq!(refusals(&outcome.events).len(), 1);
+                    assert!(training.pending.is_empty());
+                    assert_eq!(training.points, Some(3));
+                }
+                assert_eq!(world.coins.purse, purse);
+            }
+        }
+    }
+
+    #[test]
+    fn language_practice_rechecks_native_eligibility_after_the_offer() {
+        for project1999 in [false, true] {
+            for (race, level) in [(1, 19), (999, 20)] {
+                let (mut training, mut world) = if project1999 { p99() } else { warrior() };
+                let player = world.player.corrected().unwrap();
+                player.level = 20;
+                player.languages = Some(vec![20; 32]);
+                open_and_admit(&mut training, &mut world, 42);
+                assert_eq!(
+                    training
+                        .trainer
+                        .as_ref()
+                        .unwrap()
+                        .offer
+                        .as_ref()
+                        .unwrap()
+                        .subject_cap(TrainingSubject::Language(5)),
+                    100
+                );
+                let player = world.player.corrected().unwrap();
+                player.race = race;
+                player.level = level;
+                let outcome = handle(
+                    &mut training,
+                    &mut world,
+                    TrainingRequest::PracticeAt {
+                        trainer: 42,
+                        subject: TrainingSubject::Language(5),
+                    },
+                );
+                outcome.result.unwrap();
+                assert_eq!(outcome.sent, []);
+                assert_eq!(
+                    refusals(&outcome.events),
+                    ["Your guildmaster cannot train you in that language yet."]
+                );
+                assert!(training.pending.is_empty());
+                assert_eq!(training.points, Some(3));
+            }
+        }
     }
 
     #[test]
