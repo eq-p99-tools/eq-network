@@ -261,6 +261,12 @@ impl Feature for Entities {
             return Ok(());
         };
         world.spawns.apply(event, world.own_spawn);
+        let carriers = world
+            .carriers
+            .observe(event, self.dialect, std::time::Instant::now());
+        if !carriers.is_empty() {
+            world.happened(Message::Event(WorldEvent::Carriers(carriers)));
+        }
         if world.owns_death(event) {
             world.sight.clear();
         } else {
@@ -300,6 +306,15 @@ impl Feature for Entities {
         out.log.send(ClientEvent::World(WorldEvent::Spawns(
             world.spawns.all().cloned().collect(),
         )))?;
+        let carriers: Vec<_> = world
+            .carriers
+            .reports()
+            .map(eq_network_game::movement::CarrierUpdate::Reported)
+            .collect();
+        if !carriers.is_empty() {
+            out.log
+                .send(ClientEvent::World(WorldEvent::Carriers(carriers)))?;
+        }
         world.posture = OwnPosture::default();
         let entry = out.wire.dialect().entry_stand();
         let mut postures = std::mem::take(&mut self.postures);
@@ -357,6 +372,12 @@ impl Feature for Entities {
             return Ok(());
         };
         world.spawns.apply(event, world.own_spawn);
+        let carriers = world
+            .carriers
+            .observe(event, self.dialect, std::time::Instant::now());
+        if !carriers.is_empty() {
+            world.happened(Message::Event(WorldEvent::Carriers(carriers)));
+        }
         if world.owns_death(event) {
             world.sight.clear();
         } else {

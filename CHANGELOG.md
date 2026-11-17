@@ -12,6 +12,12 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Titanium carrier support: `Support::Spawn`, canonical receipt-time carrier
+  reports, shared report-driven poses and boat-relative movement validation.
+  Carrier translation and yaw preserve the rider's own motion budget and
+  update pacing; superseded reports and rider reach are bounded. Pitch and
+  boat zoning remain unsupported, and live rides remain unverified.
+
 - **Breaking:** a ducking player moves ducked on Titanium, as its program
   does (program read R23; checklist 6.460).
   - `GameDialect::ducking()` gives `feign::DuckRules { moves_ducked,

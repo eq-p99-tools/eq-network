@@ -218,6 +218,13 @@ impl Flags {
         }
     }
 
+    /// Moves the heading threshold with carrier-only yaw. The packet still
+    /// carries absolute heading; neither accepting it nor a later held tick
+    /// mistakes the carrier's turn for the rider's input (inferred, 6.470).
+    pub(super) fn carried_turn(&mut self, yaw: f32) {
+        self.heading = (self.heading + yaw).rem_euclid(512.0);
+    }
+
     /// Marks an update due as the program's timer would at `now`.
     pub(super) fn observe_tick(&mut self, now: Instant, rule: &FlagRule) {
         if self

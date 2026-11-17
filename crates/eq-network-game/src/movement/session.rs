@@ -848,6 +848,11 @@ impl MotionSession {
         self.guard.allow_lift_rise(lift);
     }
 
+    /// Supplies the session-verified pose of the named carrier report.
+    pub fn allow_carrier(&mut self, pose: Option<(super::CarrierSample, Position)>) {
+        self.guard.allow_carrier(pose);
+    }
+
     /// When the last accepted sample was made, where the next one's interval
     /// starts.
     #[must_use]
@@ -874,9 +879,18 @@ impl MotionSession {
         reason = "Passive movement preserves exact horizontal coordinates and heading"
     )]
     pub fn is_passive(&self, request: &MovementRequest) -> bool {
-        if request.position.x != self.position.x
-            || request.position.y != self.position.y
-            || request.position.heading != self.position.heading
+        let (from, to) = self.guard.comparison(request);
+        let carrier = matches!(request.support, Some(super::Support::Spawn(_)));
+        let close = |a: f32, b: f32| {
+            if carrier {
+                (a - b).abs() < 0.001
+            } else {
+                a == b
+            }
+        };
+        if !close(to.x, from.x)
+            || !close(to.y, from.y)
+            || !close(super::carriers::heading_arc(from.heading, to.heading), 0.0)
         {
             return false;
         }
@@ -897,7 +911,10 @@ impl MotionSession {
             };
             self.guard.jump_rise(from, to)
         });
-        request.position.z <= self.position.z + rise + self.guard.lift_rise_for(request)
+        to.z <= from.z
+            + rise
+            + self.guard.lift_rise_for(request)
+            + if carrier { 0.001 } else { 0.0 }
     }
 
     /// Resumes stationary heartbeats after a denied transfer; walking stays disabled.
@@ -962,19 +979,8 @@ impl MotionSession {
         // calibration, turn, climb, or horizontal rounding allowance is granted.
         if !self.granted() {
             ensure!(
-                request.position.x == self.position.x
-                    && request.position.y == self.position.y
-                    && request.position.heading == self.position.heading
-                    && match request.mode {
-                        MovementMode::Fall => request.position.z <= self.position.z,
-                        // A lift may still carry a player who can't move,
-                        // and one stopped at the top holds them there.
-                        MovementMode::Forward => {
-                            request.support.is_some()
-                                && request.position.z <= self.position.z + self.guard.lift_rise()
-                        }
-                        _ => false,
-                    },
+                self.is_passive(request)
+                    && matches!(request.mode, MovementMode::Fall | MovementMode::Forward),
                 "player input is withdrawn; only vertical descent is allowed"
             );
         }
@@ -1034,6 +1040,7 @@ impl MotionSession {
         };
         guard.speed = Some(speed);
         let swimming = request.mode.is_water_motion();
+        let (from_heading, to_heading) = guard.own_headings(request);
         let displacement = guard.accept_with_modes(
             request,
             now,
@@ -1060,7 +1067,7 @@ impl MotionSession {
         let turn = if snapshot {
             0
         } else {
-            heading_velocity(self.position.heading, request.position.heading, elapsed)?
+            heading_velocity(from_heading, to_heading, elapsed)?
         };
         let sample = PositionPacket {
             spawn_id: self.spawn_id,
@@ -1072,6 +1079,10 @@ impl MotionSession {
         };
         sample.check()?;
         let mut flags = self.flags.clone();
+        let world_turn =
+            super::carriers::heading_arc(self.position.heading, request.position.heading);
+        let own_turn = super::carriers::heading_arc(from_heading, to_heading);
+        flags.carried_turn(world_turn - own_turn);
         let strafing = diagonal.is_some() || along == MovementMode::Strafe;
         let release = self.release(&sample, &mut flags, now, strafing)?;
         Ok(PreparedMove {
@@ -1370,6 +1381,10 @@ impl MotionSession {
         self.moving = false;
     }
 }
+#[cfg(test)]
+#[path = "carrier_tests.rs"]
+mod carrier_tests;
+
 #[cfg(test)]
 #[path = "lift_tests.rs"]
 mod lift_tests;

@@ -1,6 +1,11 @@
 //! Titanium movement encoding and session-scoped displacement validation.
 
+mod carriers;
 mod carry;
+pub use carriers::{
+    carrier_local, carrier_race, carrier_world, CarrierReport, CarrierSample, CarrierUpdate,
+    Carriers, CARRIER_REACH,
+};
 mod counter;
 mod diagonal;
 mod gate;
@@ -251,6 +256,8 @@ pub struct MovementRequest {
 pub enum Support {
     /// A door by its id: a Titanium lift or other vertical door.
     Door(u8),
+    /// The received carrier report used by the floor sweep.
+    Spawn(CarrierSample),
 }
 
 impl MovementRequest {
@@ -558,6 +565,9 @@ pub struct MovementGuard {
     /// The lift the rider has named since `since`, and how far they have
     /// risen while naming it.
     lift: Option<LiftCredit>,
+    /// Last accepted and next verified carrier poses; never extra budget.
+    carrier: Option<(CarrierSample, Position)>,
+    carrier_pose: Option<(CarrierSample, Position)>,
     last_shoreline: Option<Instant>,
     shoreline: Option<ShorelineArc>,
     shoreline_velocity: Option<[f32; 3]>,
@@ -611,6 +621,8 @@ impl MovementGuard {
             jumped_at: None,
             lift_rise: 0.0,
             lift: None,
+            carrier: None,
+            carrier_pose: None,
             last_shoreline: None,
             shoreline: None,
             shoreline_velocity: None,
@@ -741,6 +753,36 @@ impl MovementGuard {
         self.lift_rise
     }
 
+    /// Supplies the session-verified carrier pose for the next proposal.
+    /// Each endpoint is checked in its own boat frame, so a frontend behind
+    /// a newer report neither loses nor earns that pose difference.
+    pub fn allow_carrier(&mut self, pose: Option<(CarrierSample, Position)>) {
+        self.carrier_pose = pose;
+    }
+
+    fn comparison(&self, request: &MovementRequest) -> (Position, Position) {
+        match (request.support, self.carrier, self.carrier_pose) {
+            (Some(Support::Spawn(sample)), Some((previous, before)), Some((named, after)))
+                if sample == named
+                    && sample.spawn_id == previous.spawn_id
+                    && sample.incarnation == previous.incarnation =>
+            {
+                (
+                    carrier_local(before, self.position),
+                    carrier_local(after, request.position),
+                )
+            }
+            _ => (self.position, request.position),
+        }
+    }
+
+    /// Proposed headings after removing the named carrier's yaw.
+    #[must_use]
+    pub fn own_headings(&self, request: &MovementRequest) -> (f32, f32) {
+        let (from, to) = self.comparison(request);
+        (from.heading, to.heading)
+    }
+
     /// When the last accepted sample was made: the start of the next one's
     /// interval.
     #[must_use]
@@ -783,6 +825,8 @@ impl MovementGuard {
     /// Resets both position and pending motion after a server correction.
     pub fn correct(&mut self, position: Position, now: Instant) {
         self.position = position;
+        self.carrier = None;
+        self.carrier_pose = None;
         self.sampled = now;
         self.input_epoch = now;
         self.speed = None;
@@ -936,11 +980,42 @@ impl MovementGuard {
         let horizontal_speed = speed * run_speed_multiplier.factor();
         let elapsed = self.interval(request.created);
         ensure!(elapsed >= 0.05, "movement samples arrive too frequently");
-        let delta = [
-            request.position.x - self.position.x,
-            request.position.y - self.position.y,
-            request.position.z - self.position.z,
-        ];
+        if let Some(Support::Spawn(sample)) = request.support {
+            let Some((named, pose)) = self.carrier_pose else {
+                anyhow::bail!("carrier report is unavailable");
+            };
+            ensure!(
+                sample == named && valid_position(pose),
+                "carrier report does not match"
+            );
+            ensure!(
+                carriers::within_carrier(carrier_local(pose, request.position)),
+                "rider exceeds carrier reach"
+            );
+            if let Some((_, previous)) = self.carrier.filter(|(old, _)| {
+                old.spawn_id == sample.spawn_id && old.incarnation == sample.incarnation
+            }) {
+                ensure!(
+                    carriers::within_carrier(carrier_local(previous, self.position)),
+                    "previous rider point exceeds carrier reach"
+                );
+            }
+            ensure!(
+                !request.mode.is_water_motion() && !self.flying,
+                "carrier support requires ground motion"
+            );
+        }
+        let (from, to) = self.comparison(request);
+        let mut delta = [to.x - from.x, to.y - from.y, to.z - from.z];
+        if matches!(request.support, Some(Support::Spawn(_))) {
+            // Only the existing rounding tolerance is spent here; a rigid
+            // transform's f32 residue must not animate a still rider.
+            for value in &mut delta {
+                if value.abs() <= 0.001 {
+                    *value = 0.0;
+                }
+            }
+        }
         if let MovementMode::Shoreline(trace) = request.mode {
             return self.accept_shoreline(request, trace, speed, delta, swimming);
         }
@@ -964,8 +1039,8 @@ impl MovementGuard {
                 !self.flying
                     && lateral_rate.is_some_and(|lateral| {
                         diagonal.admits_with_heading(
-                            self.position,
-                            request.position,
+                            from,
+                            to,
                             request.heading,
                             horizontal_speed,
                             lateral,
@@ -1014,6 +1089,33 @@ impl MovementGuard {
             vertical,
             "vertical motion requires a supported movement mode"
         );
+        // A still rider sends changed absolute world coordinates on the
+        // ordinary 1 s tick, with zero own deltas/yaw/animation (6.470).
+        let delta = match (request.support, self.carrier_pose) {
+            (Some(Support::Spawn(sample)), Some((named, pose)))
+                if sample == named
+                    && self.carrier.is_some_and(|(old, _)| {
+                        old.spawn_id == sample.spawn_id && old.incarnation == sample.incarnation
+                    }) =>
+            {
+                let rotated = carrier_world(
+                    Position {
+                        x: 0.0,
+                        y: 0.0,
+                        z: 0.0,
+                        heading: pose.heading,
+                    },
+                    Position {
+                        x: delta[0],
+                        y: delta[1],
+                        z: delta[2],
+                        heading: 0.0,
+                    },
+                );
+                [rotated.x, rotated.y, rotated.z]
+            }
+            _ => delta,
+        };
         self.record_move(request);
         self.update_jump_after_move(request.mode, request.created, since_jump.map(|(_, to)| to));
         Ok(delta)
@@ -1053,6 +1155,13 @@ impl MovementGuard {
             }
         }
         self.lift_rise = 0.0;
+        self.carrier = match (request.support, self.carrier_pose) {
+            (Some(Support::Spawn(sample)), Some((named, pose))) if sample == named => {
+                Some((sample, pose))
+            }
+            _ => None,
+        };
+        self.carrier_pose = None;
         self.position = request.position;
         self.sampled = request.created;
         self.clear_shoreline();

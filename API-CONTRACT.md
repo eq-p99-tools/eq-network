@@ -1,5 +1,6 @@
 # API and integration contracts
 
+<<<<<<< HEAD
 ## Own-player update gates
 
 `UpdateGate::Flagged` applies the generation's `FlagRule` and packet packing.
@@ -10,6 +11,34 @@ until it is due and more than its spacing has passed. A later host sample
 replaces the held one without advancing the outgoing counter; that counter
 is sampled only when the update goes out. Exhaustive host matches on
 `UpdateGate` need a fallback because the enum is non-exhaustive.
+=======
+## Titanium carrier support
+
+`movement::Carriers` holds only received Titanium carrier reports for the races
+read at `eqgame.exe` 0x47a741. The session publishes `WorldEvent::Carriers` after
+the ordinary spawn event, preserving its receipt clock for a delayed frontend.
+`CarrierSample` names the spawn, report serial and incarnation; duplicate spawn
+IDs follow the ordinary table's last-record rule. Replacement, death, despawn
+and a new admission retire the old identity.
+
+`Support::Spawn(sample)` names the report actually used by a frontend's floor
+sweep. The session resolves that report itself, calls `allow_carrier`, and
+checks both accepted world points in their own carrier frames. Only the rider's
+relative movement spends the ordinary budget. First attachment gets no carrier
+allowance; walking off names the old support for that final step and the next
+unsupported sample closes it. A rigid boat turn changes absolute world heading
+without creating player yaw or raising the heading-input flag.
+
+Inferred bounds and behavior: the actual model's authored collision is a
+frontend choice (6.467); the existing spawn carry step evaluated in fixed 50 ms
+calls, with a 12 s hold, supplies the shared between-report pose (6.468); rider
+reach is 600 units and superseded reports remain usable for at most 2 s after
+their successor, within a 64-report history (6.469). A still rider's existing
+1 s tick sends ordinary world coordinates with zero own velocity, yaw and
+animation (6.470). No piloting opcode or route is invented. Pitch and continuing
+boat yaw are absent from the decoded position API. Boat zoning remains separate;
+source and synthetic coverage do not establish a witnessed ride.
+>>>>>>> d55e086 (feat(movement): add carrier-relative support)
 
 ## Titanium lifts and door mechanisms
 
@@ -31,7 +60,7 @@ as `Request::ReturnDoor`: 0x043b with the door id, 0xfe and zeros, naming no pla
 (0x490b20, read R1c).
 
 `MovementRequest::support` names what the frontend's floor sweep stands the
-player on, as a `Support` (non-exhaustive; `Support::Door(id)` today), set with
+player on, as a `Support` (non-exhaustive; `Support::Door(id)` or `Support::Spawn(sample)`), set with
 `MovementRequest::supported_by`. While a request names the same lift, the session
 keeps an account with it: the rider may rise in all as far as the lift has risen
 since they first named it, less what they have risen while naming it, so a

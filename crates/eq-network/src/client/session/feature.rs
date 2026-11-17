@@ -231,6 +231,8 @@ pub(in crate::client) struct World {
     /// The zone's vertical doors as Titanium steps them, which only the doors
     /// feature changes.
     pub(super) lifts: eq_network_game::doors::titanium::Lifts,
+    /// Canonical received carrier reports, owned by entities.
+    pub(super) carriers: eq_network_game::movement::Carriers,
     /// The world container asked for or open, which only the tradeskills
     /// feature changes.
     pub(super) container: OpenContainer,
@@ -264,6 +266,7 @@ impl World {
             packets: 0,
             spawns: Spawns::default(),
             lifts: eq_network_game::doors::titanium::Lifts::default(),
+            carriers: eq_network_game::movement::Carriers::default(),
             sight: super::sight::Sight::default(),
             exchange: Exchanging::default(),
             target: super::targeting::Target::default(),
