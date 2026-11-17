@@ -1,14 +1,25 @@
 use super::*;
 use crate::movement::RunSpeedMultiplier;
 
+/// Transaction and spacing fixtures make each sample due; the generation's
+/// thresholds and timer have their own tests with the unmodified rules.
+fn spacing_gate(spacing: Duration) -> UpdateGate {
+    UpdateGate::Flagged {
+        pack: |sample| sample.packet(),
+        rule: FlagRule {
+            spacing,
+            heading_step: 0.0,
+            ..crate::movement::TITANIUM_FLAGS
+        },
+    }
+}
+
 #[test]
 fn stopping_voluntary_motion_replaces_a_paced_update_and_keeps_calibration_and_jump() {
     let start = Instant::now();
     let at = |ms| start + Duration::from_millis(ms);
     let mut motion = setup(start)
-        .with_gate(Some(UpdateGate::Changed {
-            spacing: Duration::from_millis(280),
-        }))
+        .with_gate(Some(spacing_gate(Duration::from_millis(280))))
         .with_jump(Some((44.55, 400.0)));
     motion
         .send_move_sample(&request(at(300), 0.5), at(300), |_| Ok(()))
@@ -32,11 +43,11 @@ fn stopping_voluntary_motion_replaces_a_paced_update_and_keeps_calibration_and_j
         .tick_sample(at(579), |_| panic!("stop bypassed pacing"))
         .unwrap());
     assert!(motion
-        .tick_sample(at(580), |_| anyhow::bail!("synthetic transport failure"))
+        .tick_sample(at(581), |_| anyhow::bail!("synthetic transport failure"))
         .is_err());
     assert!(motion.stop_pending());
     assert!(motion
-        .tick_sample(at(580), |sample| {
+        .tick_sample(at(581), |sample| {
             assert_eq!(sample.position, motion_position(1.0));
             assert_eq!(sample.delta, [0.0; 3]);
             assert_eq!((sample.animation, sample.delta_heading), (0, 0));
@@ -467,12 +478,9 @@ fn request(created: Instant, x: f32) -> MovementRequest {
 fn titanium_heading_snapshots_keep_absolute_heading_and_ordinary_cadence() {
     let start = Instant::now();
     let at = |ms| start + Duration::from_millis(ms);
-    let mut session =
-        setup(start)
-            .with_heading_snapshots(true)
-            .with_gate(Some(UpdateGate::Changed {
-                spacing: Duration::from_millis(280),
-            }));
+    let mut session = setup(start)
+        .with_heading_snapshots(true)
+        .with_gate(Some(spacing_gate(Duration::from_millis(280))));
     let mut half_turn = request(at(300), 0.0);
     half_turn.position.heading = 256.0;
     assert!(session
@@ -505,7 +513,7 @@ fn titanium_heading_snapshots_keep_absolute_heading_and_ordinary_cadence() {
         .tick(at(579), |_| panic!("early position update"))
         .unwrap());
     assert!(session
-        .tick(at(580), |packet| {
+        .tick(at(581), |packet| {
             assert_eq!(word(&packet.body, 32) & 0xfff, 1536);
             assert_eq!(word(&packet.body, 20) >> 10 & 0x3ff, 0);
             assert_ne!(word(&packet.body, 20) & 0x3ff, 0);
@@ -569,12 +577,9 @@ fn completed_heading_snapshot_budgets_and_paces_a_chord_in_its_new_heading() {
     let start = Instant::now();
     let at = |ms| start + Duration::from_millis(ms);
     for (side, sign) in [(StrafeSide::Left, -1.0), (StrafeSide::Right, 1.0)] {
-        let mut session =
-            setup(start)
-                .with_heading_snapshots(true)
-                .with_gate(Some(UpdateGate::Changed {
-                    spacing: Duration::from_millis(280),
-                }));
+        let mut session = setup(start)
+            .with_heading_snapshots(true)
+            .with_gate(Some(spacing_gate(Duration::from_millis(280))));
         grant_grounded_diagonal(&mut session, start);
         let initial = request(at(300), 0.0);
         session
@@ -638,7 +643,7 @@ fn completed_heading_snapshot_budgets_and_paces_a_chord_in_its_new_heading() {
             .tick_sample(at(579), |_| panic!("early chord"))
             .unwrap());
         assert!(session
-            .tick_sample(at(580), |sample| {
+            .tick_sample(at(581), |sample| {
                 assert_eq!(sample.position, later.position);
                 assert_eq!((sample.animation, sample.delta_heading), (12, 0));
                 assert!((sample.delta[0] - 0.3).abs() < 0.001);
@@ -1037,9 +1042,7 @@ fn queued_calibration_requires_valid_data_from_after_the_last_reset() {
 #[test]
 fn a_spacing_holds_the_latest_sample_until_it_passes_and_stops_no_sooner() {
     let start = Instant::now();
-    let mut session = setup(start).with_gate(Some(UpdateGate::Changed {
-        spacing: Duration::from_millis(280),
-    }));
+    let mut session = setup(start).with_gate(Some(spacing_gate(Duration::from_millis(280))));
     let at = |ms| start + Duration::from_millis(ms);
     let mut sent = Vec::new();
     // The first sample goes out at once; the session began 300 ms earlier.
@@ -1061,7 +1064,7 @@ fn a_spacing_holds_the_latest_sample_until_it_passes_and_stops_no_sooner() {
     }
     assert!(!session.tick(at(579), |_| panic!("early")).unwrap());
     assert!(session
-        .tick(at(580), |packet| {
+        .tick(at(581), |packet| {
             sent.push(packet.body.clone());
             Ok(())
         })
@@ -1083,7 +1086,7 @@ fn a_spacing_holds_the_latest_sample_until_it_passes_and_stops_no_sooner() {
         .unwrap();
     assert!(!session.tick(at(859), |_| panic!("early stop")).unwrap());
     assert!(session
-        .tick(at(860), |packet| {
+        .tick(at(862), |packet| {
             assert_eq!(&packet.body[2..4], &[2, 0]);
             assert_eq!(word(&packet.body, 20) & 0x3ff, 0);
             Ok(())
@@ -1094,9 +1097,7 @@ fn a_spacing_holds_the_latest_sample_until_it_passes_and_stops_no_sooner() {
 #[test]
 fn a_correction_drops_a_held_sample() {
     let start = Instant::now();
-    let mut session = setup(start).with_gate(Some(UpdateGate::Changed {
-        spacing: Duration::from_millis(280),
-    }));
+    let mut session = setup(start).with_gate(Some(spacing_gate(Duration::from_millis(280))));
     let at = |ms| start + Duration::from_millis(ms);
     session
         .send_move(&request(at(300), 0.5), at(300), |_| Ok(()))
@@ -1400,7 +1401,7 @@ fn the_mac_era_gate_lets_a_turn_out_no_sooner_than_150_ms_after_the_last() {
 }
 
 #[test]
-fn the_mac_era_gate_sends_after_a_jump_and_the_titanium_gate_skips_no_change() {
+fn the_mac_era_gate_sends_after_a_jump_and_titanium_waits_for_its_tick() {
     let start = Instant::now();
     let at = |ms| start + Duration::from_millis(ms);
     let mut session = mac_era(start).with_falls(true);
@@ -1410,20 +1411,19 @@ fn the_mac_era_gate_sends_after_a_jump_and_the_titanium_gate_skips_no_change() {
     session.jumped();
     assert!(session.tick_sample(at(500), |_| Ok(())).unwrap());
 
-    let mut titanium = setup(start).with_gate(Some(UpdateGate::Changed {
-        spacing: Duration::from_millis(280),
-    }));
+    let mut titanium = titanium_flagged(start);
     titanium
         .send_move(&request(at(300), 0.5), at(300), |_| Ok(()))
         .unwrap();
-    // Standing there is a change (the stop); standing there again isn't,
-    // so nothing is sent or held.
+    // A stop marks an update due. An unchanged sample waits for the timer.
     titanium
         .send_move(&request(at(700), 0.5), at(700), |_| Ok(()))
         .unwrap();
     titanium
         .send_move(&request(at(1100), 0.5), at(1100), |_| panic!("no change"))
         .unwrap();
+    assert!(titanium.held.is_some());
+    assert!(titanium.tick_sample(at(1301), |_| Ok(())).unwrap());
     assert!(titanium.held.is_none());
 }
 #[test]
@@ -1445,6 +1445,39 @@ fn a_grounded_climb_rises_the_bodys_reach_each_step_once_set() {
         .is_err());
     session.send_move(&climb, now, |_| Ok(())).unwrap();
     assert_eq!(session.position().z.to_bits(), 15.75f32.to_bits());
+}
+
+#[test]
+fn withdrawn_forward_without_support_cannot_spend_the_next_fall_samples_time() {
+    let start = Instant::now();
+    let mut session = MotionSession::new(11, 7, Position::default(), start)
+        .unwrap()
+        .with_falls(true);
+    let first = start + Duration::from_millis(100);
+    let unsupported = request(first, 0.0);
+    let refused = session
+        .send_move_sample(&unsupported, first, |_| {
+            panic!("unsupported withdrawn forward")
+        })
+        .unwrap_err();
+    assert_eq!(
+        refused.to_string(),
+        "player input is withdrawn; only vertical descent is allowed"
+    );
+    assert_eq!(session.sampled(), start);
+    assert_eq!(session.counter.entries(), 0);
+    let later = first + Duration::from_millis(20);
+    let mut fall = request(later, 0.0);
+    fall.mode = MovementMode::Fall;
+    fall.position.z = -0.1;
+    session
+        .send_move_sample(&fall, later, |sample| {
+            assert_eq!(sample.position, fall.position);
+            Ok(())
+        })
+        .unwrap();
+    assert_eq!(session.sampled(), later);
+    assert_eq!(session.counter.entries(), 1);
 }
 
 #[test]
@@ -1527,9 +1560,7 @@ fn prepared_move_drop_preserves_owner_and_rejects_a_foreign_admission() {
 fn prepared_held_sample_commits_locally_then_releases_the_same_sample() {
     let start = Instant::now();
     let now = start + Duration::from_millis(100);
-    let mut session = setup(start).with_gate(Some(UpdateGate::Changed {
-        spacing: Duration::from_millis(280),
-    }));
+    let mut session = setup(start).with_gate(Some(spacing_gate(Duration::from_millis(280))));
     let motion = request(now, 0.5);
     let prepared = session.prepare_move_sample(&motion, now).unwrap();
     assert!(matches!(prepared.release, Release::Hold));
@@ -1540,8 +1571,13 @@ fn prepared_held_sample_commits_locally_then_releases_the_same_sample() {
     assert_eq!(session.position(), expected.position);
     assert_eq!(session.counter.entries(), 0);
     assert_eq!(session.last_sent, start);
+    assert!(!session
+        .tick_sample(start + Duration::from_millis(280), |_| panic!(
+            "strict spacing"
+        ))
+        .unwrap());
     session
-        .tick_sample(start + Duration::from_millis(280), |sample| {
+        .tick_sample(start + Duration::from_millis(281), |sample| {
             assert_eq!(*sample, expected);
             Ok(())
         })
@@ -1551,21 +1587,19 @@ fn prepared_held_sample_commits_locally_then_releases_the_same_sample() {
 
 #[test]
 #[allow(clippy::float_cmp, reason = "Exact checked and assigned positions")]
-fn unchanged_candidate_accepts_input_once_without_a_send_or_extra_budget() {
+fn held_candidate_accepts_input_once_without_a_send_or_extra_budget() {
     let start = Instant::now();
-    let mut session = setup(start).with_gate(Some(UpdateGate::Changed {
-        spacing: Duration::from_millis(50),
-    }));
-    let first = start + Duration::from_millis(100);
+    let mut session = setup(start).with_gate(Some(spacing_gate(Duration::from_millis(280))));
+    let first = start + Duration::from_millis(300);
     let still = request(first, 0.0);
     session.send_move_sample(&still, first, |_| Ok(())).unwrap();
     let now = first + Duration::from_millis(100);
     let next = request(now, 0.0);
     let prepared = session.prepare_move_sample(&next, now).unwrap();
-    assert!(matches!(prepared.release, Release::Unchanged));
+    assert!(matches!(prepared.release, Release::Hold));
     assert_eq!(prepared.sample.position, next.position);
     prepared
-        .submit(|_| panic!("unchanged sample must not send"))
+        .submit(|_| panic!("held sample must not send"))
         .unwrap();
     assert_eq!(session.counter.entries(), 1);
     assert_eq!(session.last_sent, first);
@@ -1654,9 +1688,7 @@ fn changing_run_speed_keeps_the_moving_sample_and_its_send_deadline() {
 
     let start = Instant::now();
     let at = |ms| start + Duration::from_millis(ms);
-    let mut session = setup(start).with_gate(Some(UpdateGate::Changed {
-        spacing: Duration::from_millis(280),
-    }));
+    let mut session = setup(start).with_gate(Some(spacing_gate(Duration::from_millis(280))));
     session
         .set_options(
             MovementOptions {
@@ -1685,7 +1717,7 @@ fn changing_run_speed_keeps_the_moving_sample_and_its_send_deadline() {
         .tick_sample(at(579), |_| panic!("speed change bypassed pacing"))
         .unwrap());
     assert!(session
-        .tick_sample(at(580), |sample| {
+        .tick_sample(at(581), |sample| {
             assert_eq!(*sample, held);
             Ok(())
         })
@@ -2070,9 +2102,7 @@ fn correction_drops_held_swim_and_requires_a_new_grant_and_input() {
     let later = start + Duration::from_millis(600);
     let mut session = setup(start)
         .with_swimming(true)
-        .with_gate(Some(UpdateGate::Changed {
-            spacing: Duration::from_millis(280),
-        }));
+        .with_gate(Some(spacing_gate(Duration::from_millis(280))));
     let calibration = session.calibration().unwrap();
     let mut old = request(stroke, 0.0);
     old.mode = MovementMode::Swim;
@@ -2116,17 +2146,13 @@ fn correction_drops_held_swim_and_requires_a_new_grant_and_input() {
 #[test]
 fn titanium_counter_carries_its_frames_and_earlier_updates_from_each_admission() {
     use crate::movement::TITANIUM_UPDATE_COUNTER;
-    let titanium = |start: Instant| {
-        setup(start)
-            .with_gate(Some(UpdateGate::Changed {
-                spacing: Duration::from_millis(280),
-            }))
-            .with_counter(TITANIUM_UPDATE_COUNTER)
-    };
+    let titanium = |start: Instant| titanium_flagged(start).with_counter(TITANIUM_UPDATE_COUNTER);
     let sent = |motion: &mut MotionSession, at: Instant, x: f32| {
         let mut counter = None;
+        let mut turn = request(at, x);
+        turn.position.heading = motion.position().heading + 3.0;
         motion
-            .send_move_sample(&request(at, x), at, |sample| {
+            .send_move_sample(&turn, at, |sample| {
                 counter = Some(sample.sequence);
                 Ok(())
             })
@@ -2150,9 +2176,12 @@ fn titanium_counter_carries_its_frames_and_earlier_updates_from_each_admission()
         })
         .unwrap());
     assert_eq!(ticked, Some(58 + 2));
-    // A failed send records nothing.
+    // A failed send records nothing. Each turn crosses the native heading
+    // threshold, so these updates are due independently of the 1 s tick.
+    let mut failed = request(at(1200), 1.4);
+    failed.position.heading = motion.position().heading + 3.0;
     assert!(motion
-        .send_move_sample(&request(at(1200), 1.4), at(1200), |_| {
+        .send_move_sample(&failed, at(1200), |_| {
             anyhow::bail!("synthetic transport failure")
         })
         .is_err());
@@ -2172,11 +2201,7 @@ fn titanium_counter_records_the_pad_region_and_its_warp() {
     use crate::{movement::TITANIUM_UPDATE_COUNTER, zoning::LocalPad};
     let start = Instant::now();
     let at = |ms| start + Duration::from_millis(ms);
-    let mut motion = setup(start)
-        .with_gate(Some(UpdateGate::Changed {
-            spacing: Duration::from_millis(280),
-        }))
-        .with_counter(TITANIUM_UPDATE_COUNTER);
+    let mut motion = titanium_flagged(start).with_counter(TITANIUM_UPDATE_COUNTER);
     motion
         .send_move_sample(&request(at(300), 0.5), at(300), |_| Ok(()))
         .unwrap();

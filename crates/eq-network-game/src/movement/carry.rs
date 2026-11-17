@@ -7,7 +7,7 @@ use crate::{
 use std::time::Duration;
 
 /// A spawn's motion as the client carries it between the server's reports.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize)]
 pub struct Carried {
     /// Where it is now.
     pub position: Position,

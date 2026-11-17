@@ -809,6 +809,14 @@ impl Motion {
             _ => None,
         };
         motion.allow_lift_rise(lift);
+        let carrier = match request.support {
+            Some(Support::Spawn(sample)) => world
+                .carriers
+                .pose(sample, request.created)
+                .map(|pose| (sample, pose)),
+            _ => None,
+        };
+        motion.allow_carrier(carrier);
         let may_walk_while_stunned =
             !request.mode.is_water_motion() && motion.options().walk_while_stunned;
         if let Some(reason) = world.control.motion_refusal(
@@ -837,7 +845,9 @@ impl Motion {
             }));
         }
         if let (true, Some(player)) = (
-            (!world.control.stunned() || motion.options().walk_while_stunned) && moves,
+            (!world.control.stunned() || motion.options().walk_while_stunned)
+                && moves
+                && !motion.is_passive(request),
             world.player.as_ref(),
         ) {
             world.posture.stand_to_move(player.spawn_id, out)?;

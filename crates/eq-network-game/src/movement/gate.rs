@@ -146,16 +146,8 @@ pub const TITANIUM_FROZEN_SPACING: Duration = Duration::from_millis(560);
 
 /// How the generation gates the player's own update.
 #[derive(Clone, Copy, Debug)]
+#[non_exhaustive]
 pub enum UpdateGate {
-    /// An update goes out only after a change, and at least `spacing` after
-    /// the last; a sample accepted sooner is held, and the latest goes out
-    /// once the spacing passes, with a stationary heartbeat. Titanium used
-    /// this before its flag rule was read ([`TITANIUM_FLAGS`]); a host may
-    /// still choose it.
-    Changed {
-        /// The least time between two updates.
-        spacing: Duration,
-    },
     /// An update is due when the generation's [`FlagRule`] marks it, and
     /// goes out on the next pass more than its spacing after the last
     /// ([`EQMAC_FLAGS`], [`TITANIUM_FLAGS`]). For `EQMac`, paths B (a spawn
@@ -224,6 +216,13 @@ impl Flags {
         if rule.strafing && strafing {
             self.pending = true;
         }
+    }
+
+    /// Moves the heading threshold with carrier-only yaw. The packet still
+    /// carries absolute heading; neither accepting it nor a later held tick
+    /// mistakes the carrier's turn for the rider's input (inferred, 6.470).
+    pub(super) fn carried_turn(&mut self, yaw: f32) {
+        self.heading = (self.heading + yaw).rem_euclid(512.0);
     }
 
     /// Marks an update due as the program's timer would at `now`.

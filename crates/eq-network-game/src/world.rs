@@ -1238,6 +1238,9 @@ pub enum WorldEvent {
         /// then no action says so.
         spell_landing_flag: Option<u8>,
     },
+    /// Canonical session receipt-time carrier state, generated from the
+    /// ordinary spawn events; no opcode of its own.
+    Carriers(Vec<crate::movement::CarrierUpdate>),
     /// Server-reported position, including corrections for the local player.
     Position {
         /// Spawn identifier.

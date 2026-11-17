@@ -311,7 +311,6 @@ pub struct MotionSession {
 enum Release {
     Send,
     Hold,
-    Unchanged,
 }
 
 /// One locally checked candidate, tied to the only movement owner until it
@@ -328,7 +327,7 @@ struct PreparedMove<'a> {
 }
 
 impl PreparedMove<'_> {
-    /// A checked candidate is accepted only here: held/unchanged candidates
+    /// A checked candidate is accepted only here: held candidates
     /// commit locally, and an immediate send commits after its callback succeeds.
     /// External callback side effects are never rolled back by this owner.
     fn submit(self, send: impl FnOnce(&PositionPacket) -> Result<()>) -> Result<()> {
@@ -353,7 +352,6 @@ impl PreparedMove<'_> {
                 });
             }
             Release::Hold => owner.held = Some(sample),
-            Release::Unchanged => owner.held = None,
         }
         owner.flags = flags;
         owner.guard = guard;
@@ -470,14 +468,6 @@ impl MotionSession {
     /// passes [`Hold::None`] while a departure lets a stunned player move.
     pub fn set_hold(&mut self, hold: Hold) {
         self.hold = hold;
-    }
-
-    /// The least time between two updates under a spacing gate.
-    fn spacing(&self) -> Duration {
-        match self.gate {
-            Some(UpdateGate::Changed { spacing }) => spacing,
-            _ => Duration::ZERO,
-        }
     }
 
     /// Lets fall samples descend as fast as the client generation's falls
@@ -858,6 +848,11 @@ impl MotionSession {
         self.guard.allow_lift_rise(lift);
     }
 
+    /// Supplies the session-verified pose of the named carrier report.
+    pub fn allow_carrier(&mut self, pose: Option<(super::CarrierSample, Position)>) {
+        self.guard.allow_carrier(pose);
+    }
+
     /// When the last accepted sample was made, where the next one's interval
     /// starts.
     #[must_use]
@@ -884,9 +879,18 @@ impl MotionSession {
         reason = "Passive movement preserves exact horizontal coordinates and heading"
     )]
     pub fn is_passive(&self, request: &MovementRequest) -> bool {
-        if request.position.x != self.position.x
-            || request.position.y != self.position.y
-            || request.position.heading != self.position.heading
+        let (from, to) = self.guard.comparison(request);
+        let carrier = matches!(request.support, Some(super::Support::Spawn(_)));
+        let close = |a: f32, b: f32| {
+            if carrier {
+                (a - b).abs() < 0.001
+            } else {
+                a == b
+            }
+        };
+        if !close(to.x, from.x)
+            || !close(to.y, from.y)
+            || !close(super::carriers::heading_arc(from.heading, to.heading), 0.0)
         {
             return false;
         }
@@ -907,7 +911,10 @@ impl MotionSession {
             };
             self.guard.jump_rise(from, to)
         });
-        request.position.z <= self.position.z + rise + self.guard.lift_rise_for(request)
+        to.z <= from.z
+            + rise
+            + self.guard.lift_rise_for(request)
+            + if carrier { 0.001 } else { 0.0 }
     }
 
     /// Resumes stationary heartbeats after a denied transfer; walking stays disabled.
@@ -968,23 +975,39 @@ impl MotionSession {
             request.mode != MovementMode::Fall || self.falls,
             "falling is not enabled for this server"
         );
-        // Without player input, only an in-place descent is allowed. No fake
-        // calibration, turn, climb, or horizontal rounding allowance is granted.
+        // Without player input, only descent or passive support motion is
+        // allowed. Ordinary descent keeps exact XY and heading; a carrier
+        // cannot turn this permission into voluntary input.
         if !self.granted() {
-            ensure!(
-                request.position.x == self.position.x
-                    && request.position.y == self.position.y
-                    && request.position.heading == self.position.heading
-                    && match request.mode {
-                        MovementMode::Fall => request.position.z <= self.position.z,
-                        // A lift may still carry a player who can't move,
-                        // and one stopped at the top holds them there.
-                        MovementMode::Forward => {
-                            request.support.is_some()
-                                && request.position.z <= self.position.z + self.guard.lift_rise()
+            let passive = match request.support {
+                Some(super::Support::Spawn(sample)) => {
+                    // A verified carrier can move the world point without
+                    // giving the rider voluntary movement.
+                    self.guard
+                        .carrier_pose
+                        .is_some_and(|(named, _)| named == sample)
+                        && matches!(request.mode, MovementMode::Fall | MovementMode::Forward)
+                        && self.is_passive(request)
+                }
+                _ => {
+                    request.position.x == self.position.x
+                        && request.position.y == self.position.y
+                        && request.position.heading == self.position.heading
+                        && match request.mode {
+                            MovementMode::Fall => request.position.z <= self.position.z,
+                            // A lift may still carry a player who can't move,
+                            // and one stopped at the top holds them there.
+                            MovementMode::Forward => {
+                                request.support.is_some()
+                                    && request.position.z
+                                        <= self.position.z + self.guard.lift_rise()
+                            }
+                            _ => false,
                         }
-                        _ => false,
-                    },
+                }
+            };
+            ensure!(
+                passive,
                 "player input is withdrawn; only vertical descent is allowed"
             );
         }
@@ -1044,6 +1067,7 @@ impl MotionSession {
         };
         guard.speed = Some(speed);
         let swimming = request.mode.is_water_motion();
+        let (from_heading, to_heading) = guard.own_headings(request);
         let displacement = guard.accept_with_modes(
             request,
             now,
@@ -1070,7 +1094,7 @@ impl MotionSession {
         let turn = if snapshot {
             0
         } else {
-            heading_velocity(self.position.heading, request.position.heading, elapsed)?
+            heading_velocity(from_heading, to_heading, elapsed)?
         };
         let sample = PositionPacket {
             spawn_id: self.spawn_id,
@@ -1082,6 +1106,10 @@ impl MotionSession {
         };
         sample.check()?;
         let mut flags = self.flags.clone();
+        let world_turn =
+            super::carriers::heading_arc(self.position.heading, request.position.heading);
+        let own_turn = super::carriers::heading_arc(from_heading, to_heading);
+        flags.carried_turn(world_turn - own_turn);
         let strafing = diagonal.is_some() || along == MovementMode::Strafe;
         let release = self.release(&sample, &mut flags, now, strafing)?;
         Ok(PreparedMove {
@@ -1169,19 +1197,6 @@ impl MotionSession {
         let since = now.saturating_duration_since(self.last_sent);
         Ok(match self.gate {
             None => Release::Send,
-            Some(UpdateGate::Changed { spacing }) => {
-                let unsequenced = PositionPacket {
-                    sequence: 0,
-                    ..*sample
-                };
-                if self.last_update == Some(unsequenced) {
-                    Release::Unchanged
-                } else if since < spacing {
-                    Release::Hold
-                } else {
-                    Release::Send
-                }
-            }
             Some(UpdateGate::Flagged { pack, rule }) => {
                 flags.observe(sample, now, &rule, strafing);
                 if flags.release(sample, since, pack, &rule)? {
@@ -1218,7 +1233,6 @@ impl MotionSession {
         now: Instant,
         send: impl FnOnce(&PositionPacket) -> Result<()>,
     ) -> Result<bool> {
-        let spacing = self.spacing();
         let since = now.saturating_duration_since(self.last_sent);
         if self.suspended {
             return Ok(false);
@@ -1234,9 +1248,6 @@ impl MotionSession {
             return self.tick_flagged(now, since, (pack, &rule), send);
         }
         if let Some(held) = self.held {
-            if since < spacing {
-                return Ok(false);
-            }
             let sample = PositionPacket {
                 sequence: self.counter.value(now),
                 ..held
@@ -1397,6 +1408,10 @@ impl MotionSession {
         self.moving = false;
     }
 }
+#[cfg(test)]
+#[path = "carrier_tests.rs"]
+mod carrier_tests;
+
 #[cfg(test)]
 #[path = "lift_tests.rs"]
 mod lift_tests;

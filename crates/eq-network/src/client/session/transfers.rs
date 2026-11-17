@@ -565,7 +565,7 @@ mod tests {
         use crate::client::{ClientConfig, InstalledZoneBoundaries};
         use eq_network_game::movement::{
             MotionCalibration, MovementMode, MovementRequest, UpdateGate, POSITION_OPCODE,
-            TITANIUM_POSITION_SPACING,
+            TITANIUM_FLAGS,
         };
 
         #[derive(Debug)]
@@ -608,8 +608,9 @@ mod tests {
         world.player.admit(testing::player(7));
         let mut motion = MotionSession::new(5, 7, from, start)
             .unwrap()
-            .with_gate(Some(UpdateGate::Changed {
-                spacing: TITANIUM_POSITION_SPACING,
+            .with_gate(Some(UpdateGate::Flagged {
+                pack: |sample| sample.packet(),
+                rule: TITANIUM_FLAGS,
             }));
         motion
             .calibrate(
