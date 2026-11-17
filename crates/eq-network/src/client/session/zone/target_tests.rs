@@ -4,6 +4,7 @@ use super::*;
 use crate::client::{ClientConfig, ServerProtocol};
 use eq_network_game::{
     abilities::Ability,
+    chat::OutboundChat,
     food::AutoEat,
     request::{Request, Sender},
     targets::TargetState,
