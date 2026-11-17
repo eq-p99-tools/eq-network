@@ -456,15 +456,34 @@ mod tests {
         for (race, language) in [(128, 18), (130, 24), (330, 13)] {
             assert!(titanium_language_trainable(language, race, Some(1), 1));
         }
-        for (class, language, level) in [(11, 12, 8), (11, 17, 20), (12, 11, 8), (13, 11, 8)] {
-            assert!(!titanium_language_trainable(
+        // Use races whose ordinary threshold is above each override. Human
+        // Elder Teir'Dal starts at12, so it cannot test the Necromancer20 edge.
+        for (race, class, language, level) in [
+            (1, 11, 12, 8),
+            (2, 11, 17, 20),
+            (1, 12, 11, 8),
+            (1, 13, 11, 8),
+        ] {
+            assert!(
+                !titanium_language_trainable(language, race, Some(class), level - 1),
+                "race {race}, class {class}, language {language}: below override {level}"
+            );
+            assert!(titanium_language_trainable(
                 language,
-                1,
+                race,
                 Some(class),
-                level - 1
+                level
             ));
-            assert!(titanium_language_trainable(language, 1, Some(class), level));
+            assert!(
+                !titanium_language_trainable(language, race, Some(1), level),
+                "the racial threshold must not supply this class-override fixture"
+            );
         }
+        // Racial eligibility can precede a class override; the override never
+        // removes an earlier grant (native eqgame0x4bbeda, table0x78f010).
+        assert!(!titanium_language_trainable(17, 1, Some(11), 11));
+        assert!(titanium_language_trainable(17, 1, Some(11), 12));
+        assert!(titanium_language_trainable(17, 1, Some(11), 19));
         assert!(titanium_language_trainable(11, 1, Some(14), 1));
         assert!(!titanium_language_trainable(25, 1, Some(14), 100));
         assert!(!titanium_language_trainable(1, 999, Some(1), 100));
