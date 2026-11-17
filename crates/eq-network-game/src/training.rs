@@ -438,7 +438,7 @@ mod tests {
         let offer = titanium_offer(&titanium_open(42, 7).body).unwrap();
         assert_eq!(
             offer.language_caps,
-            [],
+            Vec::<u32>::new(),
             "the numeric skill-cap decoder does not invent language policy"
         );
         assert_eq!(offer.subject_cap(TrainingSubject::Language(5)), 0);
