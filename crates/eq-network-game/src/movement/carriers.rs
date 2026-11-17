@@ -25,7 +25,9 @@ pub const fn carrier_race(race: u32) -> bool {
 
 /// Names the received report whose pose the frontend used. The timestamp is
 /// the session's, preserved when the frontend consumes the event later.
+/// Obtain this identity from [`CarrierReport::sample`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+#[non_exhaustive]
 pub struct CarrierSample {
     /// Zone-local carrier identity.
     pub spawn_id: u16,
@@ -43,6 +45,7 @@ pub struct CarrierSample {
 
 /// One received carrier report, with no route or extrapolated authority.
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize)]
+#[non_exhaustive]
 pub struct CarrierReport {
     sample: CarrierSample,
     dialect: GameDialect,
@@ -80,6 +83,7 @@ impl CarrierReport {
 /// Canonical receipt-time state sent by the session, after the ordinary spawn
 /// event. Removal never certifies a boat route or a successful ride.
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize)]
+#[non_exhaustive]
 pub enum CarrierUpdate {
     /// Replaces or advances a carrier's received report.
     Reported(CarrierReport),
@@ -216,7 +220,7 @@ impl Carriers {
                 }
             }
             WorldEvent::Despawn(id) if self.latest(*id).is_some() => {
-                updates.push(CarrierUpdate::Removed(*id))
+                updates.push(CarrierUpdate::Removed(*id));
             }
             WorldEvent::Death(death) => {
                 if let Some(id) = u16::try_from(death.spawn_id)
@@ -229,12 +233,10 @@ impl Carriers {
             WorldEvent::Appearance {
                 spawn_id,
                 change: crate::appearance::AppearanceChange::Illusion(_),
-            } => {
+            } if self.latest(*spawn_id).is_some() => {
                 // An appearance can replace the model. Wait for a fresh
                 // spawn record before offering its geometry as a carrier.
-                if self.latest(*spawn_id).is_some() {
-                    updates.push(CarrierUpdate::Removed(*spawn_id));
-                }
+                updates.push(CarrierUpdate::Removed(*spawn_id));
             }
             _ => (),
         }
@@ -299,6 +301,11 @@ pub(super) fn within_carrier(position: Position) -> bool {
     position.x.hypot(position.y).hypot(position.z) <= CARRIER_REACH
 }
 
+/// Shortest signed difference in EQ heading units.
+pub(super) fn heading_arc(from: f32, to: f32) -> f32 {
+    (to - from + 256.0).rem_euclid(512.0) - 256.0
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -351,7 +358,17 @@ mod tests {
         let mut next = report;
         next.sample.reported = later;
         next.sample.serial += 1;
-        next.carried.position.x = 20.0;
+        next.carried = Carried::reported(
+            GameDialect::Titanium,
+            SpawnKind::Npc,
+            72,
+            Position {
+                x: 20.0,
+                ..Position::default()
+            },
+            [0.0; 3],
+            0.0,
+        );
         carriers.apply(CarrierUpdate::Reported(next));
         assert_eq!(
             carriers.pose(report.sample(), later),
@@ -363,9 +380,17 @@ mod tests {
         );
         // Silence after a newer stop cannot retain an old moving report's
         // authority beyond the documented frontend lag window.
-        let expired = later + Duration::from_secs(3);
+        let boundary = later + HISTORY;
+        assert!(carriers.pose(report.sample(), boundary).is_some());
+        let expired = boundary + Duration::from_nanos(1);
         assert!(carriers.pose(report.sample(), expired).is_none());
-        assert!(carriers.pose(next.sample(), expired).is_some());
+        assert_eq!(
+            carriers.pose(next.sample(), expired),
+            Some(Position {
+                x: 20.0,
+                ..Position::default()
+            })
+        );
         carriers.observe(&WorldEvent::Despawn(7), GameDialect::Titanium, later);
         assert!(carriers.pose(report.sample(), later).is_none());
         carriers.clear();
@@ -389,13 +414,13 @@ mod tests {
             run_speed: 0.0,
             size: 1.0,
             invisible: false,
-            appearance: Default::default(),
+            appearance: crate::appearance::Appearance::default(),
             level: 1,
-            listing: Default::default(),
+            listing: crate::listing::Listing::default(),
             pet_owner: None,
             hp_percent: None,
             posture: None,
-            name_parts: Default::default(),
+            name_parts: crate::names::NameParts::default(),
         }
     }
 
@@ -427,9 +452,4 @@ mod tests {
         );
         assert!(carriers.latest(7).is_none());
     }
-}
-
-/// Shortest signed difference in EQ heading units.
-pub(super) fn heading_arc(from: f32, to: f32) -> f32 {
-    (to - from + 256.0).rem_euclid(512.0) - 256.0
 }

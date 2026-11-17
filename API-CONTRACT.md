@@ -21,6 +21,10 @@ the ordinary spawn event, preserving its receipt clock for a delayed frontend.
 IDs follow the ordinary table's last-record rule. Replacement, death, despawn
 and a new admission retire the old identity.
 
+`CarrierSample`, `CarrierReport` and `CarrierUpdate` are non-exhaustive. Hosts
+obtain the sample from `CarrierReport::sample` and include a fallback when
+matching carrier updates; report identities are not assembled from spawn IDs.
+
 `Support::Spawn(sample)` names the report actually used by a frontend's floor
 sweep. The session resolves that report itself, calls `allow_carrier`, and
 checks both accepted world points in their own carrier frames. Only the rider's

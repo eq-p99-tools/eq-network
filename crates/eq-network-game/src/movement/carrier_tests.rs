@@ -187,6 +187,62 @@ fn a_still_turning_rider_uses_the_tick_without_flagging_the_boats_yaw() {
 }
 
 #[test]
+fn own_turns_accumulate_across_carrier_wrap_and_failed_sends_do_not_spend_them() {
+    let start = Instant::now();
+    let at = |ms| start + Duration::from_millis(ms);
+    let mut session = setup(start).with_gate(Some(UpdateGate::Flagged {
+        pack: |sample| sample.packet(),
+        rule: TITANIUM_FLAGS,
+    }));
+    let mut local = attach(&mut session, start);
+    assert!(session.tick_sample(at(300), |_| Ok(())).unwrap());
+    for (ms, heading, own) in [(400, 500.0, 0.0), (500, 4.0, 1.0)] {
+        let pose = Position {
+            heading,
+            ..Position::default()
+        };
+        local.heading = own;
+        session.allow_carrier(Some((sample(start, at(ms)), pose)));
+        session
+            .send_move_sample(&request(start, at(ms), pose, local), at(ms), |_| {
+                panic!("carrier yaw and sub-threshold own turn must wait for the timer");
+            })
+            .unwrap();
+        assert!(!session
+            .tick_sample(at(ms), |_| panic!("held yaw raised the input flag"))
+            .unwrap());
+    }
+    let before = session.position();
+    let pose = Position {
+        heading: 8.0,
+        ..Position::default()
+    };
+    local.heading = 2.25;
+    let turn = request(start, at(600), pose, local);
+    session.allow_carrier(Some((sample(start, at(600)), pose)));
+    let mut failed = None;
+    assert!(session
+        .send_move_sample(&turn, at(600), |wire| {
+            failed = Some(*wire);
+            anyhow::bail!("synthetic transport failure");
+        })
+        .is_err());
+    assert_eq!(session.position(), before);
+    assert_eq!(session.counter.entries(), 1);
+    session
+        .send_move_sample(&turn, at(600), |wire| {
+            assert_eq!(Some(*wire), failed);
+            assert_eq!(wire.position, turn.position);
+            assert_eq!(wire.delta, [0.0; 3]);
+            assert_eq!(wire.animation, 0);
+            assert_eq!(wire.delta_heading, 12);
+            Ok(())
+        })
+        .unwrap();
+    assert_eq!(session.counter.entries(), 2);
+}
+
+#[test]
 fn walking_off_or_a_missing_report_removes_carrier_allowance() {
     let start = Instant::now();
     let mut session = setup(start);
