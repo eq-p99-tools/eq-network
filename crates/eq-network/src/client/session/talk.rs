@@ -104,7 +104,7 @@ mod tests {
         };
         let output = testing::run(|out| talk.handle(&queued, &mut world, out));
         output.result.unwrap();
-        assert!(output.sent.is_empty());
+        assert_eq!(output.sent, []);
         assert!(output.events.iter().any(|event| matches!(event, crate::client::ClientEvent::Diagnostic(message) if message.contains("earlier zone visit"))));
     }
 }
