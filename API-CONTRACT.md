@@ -47,6 +47,17 @@ displacement. This posture preservation is inferred (recording checklist
 6.475): the native auto-stand path for physics-only movement remains unread.
 Voluntary movement keeps the existing stand-to-move policy.
 
+## Admission-scoped chat
+
+`GameCommand::SendChatInAdmission { session_id, message }` binds queued chat to
+the originating zone admission. The session refuses a mismatched admission
+before notifying or invoking features, and the talk handler checks again before
+encoding. This is a local queue guard; the message uses the ordinary chat wire
+layout, capability and timing. It adds no server acknowledgement or retry.
+`SendChat` remains available for callers intentionally using unscoped chat.
+The pure `encode` helper does not own a session and cannot perform this guard;
+hosts using it directly must validate their own admission first.
+
 ## Titanium lifts and door mechanisms
 
 `doors::titanium` holds Titanium's own door rules, read from `eqgame.exe`:

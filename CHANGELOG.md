@@ -5,6 +5,12 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Add `SendChatInAdmission` for callers that must bind queued chat to its
+  originating zone visit. Stale requests are refused before feature handling;
+  ordinary chat payloads, capabilities and timing remain unchanged.
+- Replace the unmaintained `chrono` dependency with `jiff`, preserving integer
+  Unix seconds and UTC RFC3339 timestamps with exactly three fractional digits.
+
 - Label posture preservation during passive falls, lifts and carrier movement
   as inference 6.475 pending the program's auto-stand read. No movement or
   posture policy changes in this clarification. Regressions cover fast carrier
