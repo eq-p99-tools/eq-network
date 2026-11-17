@@ -2,6 +2,7 @@
 use super::super::feature::testing;
 use super::*;
 use eq_network_game::{
+    command::EncodedCommand,
     guild,
     listing::{GuildRank, Listing, ListingChange},
     world::SpawnKind,
@@ -42,7 +43,7 @@ impl Visit {
             )
         });
         assert!(received.result.unwrap().is_none());
-        assert!(received.sent.is_empty());
+        assert_eq!(received.sent, Vec::<EncodedCommand>::new());
     }
 
     fn own_listing(&self) -> Listing {
@@ -68,7 +69,7 @@ impl Visit {
     fn assert_guildless_invite(&mut self) {
         let refused = self.invite();
         assert!(refused.result.unwrap().is_none());
-        assert!(refused.sent.is_empty());
+        assert_eq!(refused.sent, Vec::<EncodedCommand>::new());
         assert!(refused.events.iter().any(|event| matches!(
             event,
             ClientEvent::World(WorldEvent::GuildRefused { reason, .. })
@@ -92,7 +93,7 @@ fn received_own_guild_join_reaches_normal_invite_serialization() {
         invited.sent,
         [guild::titanium_invite("Friend", "Tester", 3, GuildRank::Member).unwrap()]
     );
-    assert!(invited.unreliable.is_empty());
+    assert_eq!(invited.unreliable, Vec::<EncodedCommand>::new());
     assert!(invited
         .events
         .iter()
