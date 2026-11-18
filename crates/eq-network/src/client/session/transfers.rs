@@ -241,6 +241,7 @@ impl Transfers {
         }
         // The player stays, so movement resumes before anyone hears of the
         // rewind or the refusal: a calibration sent in answer postdates it.
+        let from_wait = world.carried_from == super::riders::CarriedFrom::Wait;
         world.transfer_refused(Instant::now())?;
         let reason = match &reply {
             zoning::ZoneReply::Denied(reason) => *reason,
@@ -264,6 +265,12 @@ impl Transfers {
             }))?;
         if alive {
             out.status(ConnectionState::Connected, world)?;
+        }
+        if from_wait {
+            // A refused zone request clears the link and the name and
+            // stands the player at the safe point (0x496d00; read R36b §7):
+            // the rider carried on from the arrival wait has no boat here.
+            super::riders::Riders::safe_point(world, out)?;
         }
         Ok(())
     }

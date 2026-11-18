@@ -495,3 +495,45 @@ fn a_host_that_never_places_the_player_aboard_ends_at_the_safe_point() {
     );
     assert_eq!(outcome.sent, []);
 }
+
+#[test]
+fn a_refused_carry_on_from_the_wait_ends_at_the_safe_point() {
+    let flag = Arc::new(AtomicBool::new(false));
+    let safe = Position {
+        x: -5.0,
+        y: 6.0,
+        z: 7.0,
+        heading: 0.0,
+    };
+    let outcome = testing::run(|out| {
+        let mut world = admitted(out);
+        world.safe_point = Some(safe);
+        let mut riders = Riders::new(&flag);
+        riders
+            .admit(&Message::VehicleName(Some(BOAT.into())), &mut world)
+            .unwrap();
+        riders.admitted(&mut world, out).unwrap();
+        riders.observe(&transfer(BOAT), &mut world, out).unwrap();
+        // The zone refuses the request.
+        let answer = world
+            .lifecycle
+            .pending()
+            .unwrap()
+            .response("Tester")
+            .unwrap()
+            .body;
+        let answer = zoning::ZoneAnswer::titanium(&answer).unwrap();
+        Transfers::new("Tester", super::super::transfers::Home::Offered)
+            .observe(&Message::ZoneAnswer(answer), &mut world, out)
+            .unwrap();
+        assert!(!world.lifecycle.blocks_motion() && !world.motion_held());
+        assert_eq!(world.vehicle, None);
+        assert_eq!(world.carried_from, CarriedFrom::Elsewhere);
+        world.body.position()
+    });
+    assert_eq!(outcome.result, Some(safe));
+    assert_eq!(
+        arrivals(&outcome.events).last(),
+        Some(&&Arrival::SafePoint { position: safe })
+    );
+}

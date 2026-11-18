@@ -51,15 +51,18 @@ At the approval the program saves the player (`OP_SaveOnZoneReq`, `0x1540`,
   finds the boat by its name, this client fills the fields the read
   verified: the player's place in the boat's frame at +0x05 and the vehicle
   name at +0x6d. The position goes in the zone request's axis order (y, x,
-  z), which is inferred.
+  z): the program fills both from the same three record fields in the same
+  order (0x4976bf, read R36c). The checksum at +0 is 0x4b6c04 over the 0xb8
+  bytes from +0x05: the reflected CRC-32 table from a seed of all ones,
+  with no final inversion.
 - **From the arrival wait.** A transfer that began from the arrival wait
   sends no save at all and keeps the vehicle name. The program skips 0x4976bf
   while it waits.
 - **Any other transfer.** The vehicle is forgotten and the save stays the
   empty body ordinary transfers have always sent.
 
-The checksum at +0 (0x4b6c04) is not computed and stays zero, as do the
-heading at +0x11 and the other values. EQEmu reads none of the body.
+The heading at +0x11 and the other values stay zero. The empty save stays
+all zero, checksum included. EQEmu reads none of the body.
 
 ## Arriving aboard
 
@@ -89,7 +92,9 @@ EQEmu leaves this field empty.
 - **Missing.** When the lookup finds nothing, the session sends `0x3710` (the
   raw saved name and its NUL) and publishes `Arrival::Waiting`. It holds the
   player until the server's `0x0b71` carries them on, or 60 s pass and they go
-  to the safe point (0x4a8afa).
+  to the safe point (0x4a8afa). If the zone refuses that transfer, the
+  session forgets the boat and stands the player at the safe point, as the
+  program's failed zone request does (0x496d00).
 
 While an arrival is held, moves are refused and no movement is sent. The
 network still runs, so camping and quitting work. The player's death forgets
@@ -105,8 +110,11 @@ both the boat and any held arrival (0x4564ba).
 - `0x0b71`, `0x3710` and a non-empty profile vehicle name have not yet been
   seen in a recording. The path is built from the program read and synthetic
   tests only.
-- The boat transfer's save carries no checksum. A server that checks it would
-  refuse that save. Computing 0x4b6c04 waits on a read of the routine, after
-  the capture search.
-- The save's axis order follows the zone request and is unconfirmed by a
-  read or a recording.
+- The program's failed zone request (0x496d00) also uses the safe point for
+  ordinary refused requests; this client does so only for a rider carried on
+  from the arrival wait. The wider case is an open parity question.
+- The program's profile loader (0x4ba0fb) writes the profile's third
+  coordinate over the first and leaves the third record field as the
+  departure saved it (read R36c, inferred). This client restores the
+  position as decoded. Which one a server's boat-frame profile expects is
+  open until a recording shows one.
