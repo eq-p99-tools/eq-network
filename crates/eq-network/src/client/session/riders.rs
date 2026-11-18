@@ -137,7 +137,7 @@ impl Riders {
 
     /// The program's safe point: the vehicle forgotten, the player at the
     /// zone's safe point, nothing sent (0x43d7c5).
-    fn safe_point(world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
+    pub(super) fn safe_point(world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
         world.arrival = None;
         world.vehicle = None;
         let position = world

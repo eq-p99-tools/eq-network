@@ -121,6 +121,27 @@ pub struct Save {
 /// Where the save keeps its fields (0x4976bf; R36b §1).
 const SAVE_POSITION: usize = 0x05;
 const SAVE_VEHICLE: usize = 0x6d;
+/// How many bytes from +0x05 the save's checksum covers.
+const SAVE_CHECKED: usize = 0xb8;
+
+/// Titanium's checksum 0x4b6c04 (read R36c): the reflected CRC-32 table
+/// (0xEDB88320) from a seed of all ones, with no final inversion, which is
+/// the bitwise NOT of the ordinary CRC-32.
+#[must_use]
+pub fn save_checksum(bytes: &[u8]) -> u32 {
+    let mut crc = u32::MAX;
+    for byte in bytes {
+        crc ^= u32::from(*byte);
+        for _ in 0..8 {
+            crc = if crc & 1 == 1 {
+                (crc >> 1) ^ 0xedb8_8320
+            } else {
+                crc >> 1
+            };
+        }
+    }
+    crc
+}
 
 /// Titanium's request that the zone save the player before they leave it
 /// (`OP_SaveOnZoneReq`, 0xc0 bytes). `EQEmu` reads nothing in its 192 bytes
@@ -132,9 +153,10 @@ const SAVE_VEHICLE: usize = 0x6d;
 ///
 /// Aboard a boat transfer the session fills what the program read shows it
 /// fills (0x4976bf): the place in the boat's frame at +0x05, in the zone
-/// request's axis order (inferred, 6.478), and the vehicle name at +0x6d.
-/// The checksum at +0 (0x4b6c04, not computed here), the heading at +0x11
-/// (its conversion is unread) and the other values stay zero (6.478).
+/// request's axis order (both take the same three record fields in the same
+/// order; read R36c), the vehicle name at +0x6d, and the checksum at +0 over
+/// the 0xb8 bytes from +0x05 ([`save_checksum`]). The heading at +0x11 (its
+/// conversion is unread) and the other values stay zero (6.478).
 #[must_use]
 pub fn titanium_save_on_zone(save: &Save) -> EncodedCommand {
     let mut body = vec![0; 192];
@@ -151,6 +173,11 @@ pub fn titanium_save_on_zone(save: &Save) -> EncodedCommand {
         .filter(|name| name.len() < crate::boats::riders::NAME_LENGTH)
     {
         body[SAVE_VEHICLE..SAVE_VEHICLE + name.len()].copy_from_slice(name.as_bytes());
+    }
+    // The empty save stays all zero, as ordinary transfers have sent it.
+    if *save != Save::default() {
+        let checksum = save_checksum(&body[SAVE_POSITION..SAVE_POSITION + SAVE_CHECKED]);
+        body[..4].copy_from_slice(&checksum.to_le_bytes());
     }
     EncodedCommand {
         opcode: SAVE_ON_ZONE_OPCODE,
@@ -667,7 +694,11 @@ mod tests {
             vehicle: Some("Sabrina00".into()),
         });
         assert_eq!(aboard.body.len(), 0xc0);
-        assert_eq!(&aboard.body[..5], &[0; 5]);
+        assert_eq!(
+            &aboard.body[..4],
+            &save_checksum(&aboard.body[5..5 + 0xb8]).to_le_bytes()
+        );
+        assert_eq!(aboard.body[4], 0);
         // The save writes its position as the zone request does.
         let request = titanium_answer(
             "Tester",
@@ -714,5 +745,12 @@ mod tests {
         body[20..24].copy_from_slice(&9u32.to_le_bytes());
         assert_eq!(death(&body).unwrap().bind_zone_id, 9);
         assert_eq!(death(&body).unwrap().spawn_id, 19);
+    }
+
+    #[test]
+    fn the_save_checksum_is_the_inverse_of_the_ordinary_crc32() {
+        // The ordinary CRC-32 check value of "123456789" is 0xcbf43926.
+        assert_eq!(save_checksum(b"123456789"), !0xcbf4_3926);
+        assert_eq!(save_checksum(&[]), u32::MAX);
     }
 }

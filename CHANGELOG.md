@@ -5,6 +5,14 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Fill a boat transfer's Titanium save checksum (0x4b6c04, read R36c: the
+  reflected CRC-32 table from a seed of all ones, no final inversion) as
+  `zoning::save_checksum`; the save's y, x, z order is now read, not
+  inferred. Ordinary transfers still send the all-zero save.
+- A refused transfer that carried a rider on from the arrival wait forgets the
+  boat and stands the player at the zone's safe point (0x496d00), publishing
+  `Arrival::SafePoint`, so a host's hold ends.
+
 - Speak Titanium's boat-riding wire on EQEmu and P99 (`Capability::BoatRiding`):
   `OP_BoardBoat` on the first linked one-second tick, `OP_LeaveBoat` after two
   unlinked ticks, zoning with reason 2 when the server's vehicle transfer
