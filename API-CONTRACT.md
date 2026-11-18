@@ -1473,10 +1473,13 @@ When a received profile names a vehicle, the session publishes
 - `Arrival::Aboard` names the boat, the received report of the spawn found and
   the profile's position in its frame. The host stands the player there,
   floor-sweeps from one unit above, retries at (0, 0, 25) in the frame, and
-  sends one `GameCommand::ArrivalPlacement` with the result, or `None` when it
-  found no floor. The session takes only a placement where that sweep could
+  sends one `GameCommand::ArrivalPlacement` with the result. It must send
+  `None` when it found no floor, or when the floor its sweep found is not
+  the named carrier's: the session cannot see the link, and the program
+  takes only a floor that links the carrier. The session takes only a placement where that sweep could
   land, then publishes `Arrival::Placed`; any other answer, a second one, or
-  one after death changes nothing or ends at the safe point.
+  one after death changes nothing or ends at the safe point. With no answer
+  within 60 s the session uses the safe point.
 - `Arrival::Waiting` means the boat was not found and the server was asked for
   it. The session ends the hold itself, by a transfer or after 60 s.
 - `Arrival::SafePoint` gives the position the session placed the player at.

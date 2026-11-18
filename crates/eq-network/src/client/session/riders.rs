@@ -45,7 +45,7 @@ const TICK: Duration = Duration::from_secs(1);
 /// Unlinked ticks in a row before the boat is forgotten.
 const UNLINKED_TICKS: u8 = 2;
 /// How long the program waits for the server to carry the player on
-/// (0x4a8afa).
+/// (0x4a8afa); the session holds a placement aboard no longer.
 const WAIT: Duration = Duration::from_secs(60);
 /// The program's second try, in the boat's frame (0x4aba14).
 const RETRY: [f32; 3] = [0.0, 0.0, 25.0];
@@ -68,12 +68,27 @@ pub(super) enum Pending {
         sample: CarrierSample,
         /// The profile's position, in the boat's frame.
         local: Position,
+        /// When the session stops waiting for the host and uses the safe
+        /// point. The program places at once; this bounds a host that
+        /// never answers (inferred, 6.478).
+        until: Instant,
     },
     /// The vehicle is missing; the server's transfer is awaited.
     Waiting {
         /// When the program gives up and uses the safe point.
         until: Instant,
     },
+}
+
+/// Where a transfer under way began, for the save before leaving.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(super) enum CarriedFrom {
+    /// Anywhere but the arrival wait: the save is made.
+    #[default]
+    Elsewhere,
+    /// The arrival wait: the program sends no save and keeps the vehicle
+    /// (0x4976bf skips while [0x924676] is set; read R36 §2).
+    Wait,
 }
 
 /// The riding wire's state in one zone session.
@@ -151,7 +166,7 @@ impl Riders {
         world: &mut World,
         out: &mut Out<'_, '_>,
     ) -> Result<()> {
-        let Some(Pending::Aboard { sample, local }) = world.arrival.clone() else {
+        let Some(Pending::Aboard { sample, local, .. }) = world.arrival.clone() else {
             return out
                 .log
                 .diagnostic("Refused an arrival placement: no boat is awaiting one".into());
@@ -200,7 +215,11 @@ impl Riders {
             .and_then(|id| world.carriers.latest(id))
             .map(eq_network_game::movement::CarrierReport::sample);
         if let Some(sample) = found {
-            world.arrival = Some(Pending::Aboard { sample, local });
+            world.arrival = Some(Pending::Aboard {
+                sample,
+                local,
+                until: Instant::now() + WAIT,
+            });
             return Self::publish(
                 Arrival::Aboard {
                     name,
@@ -232,7 +251,13 @@ impl Riders {
             // Another boat, or no boat saved: the program does nothing.
             return Ok(());
         }
-        let zone_id = u16::try_from(transfer.zone_id).context("vehicle transfer zone")?;
+        let Ok(zone_id) = u16::try_from(transfer.zone_id) else {
+            return out.log.diagnostic(format!(
+                "Ignored a vehicle transfer to zone {}, which no zone id can name",
+                transfer.zone_id
+            ));
+        };
+        let from_wait = matches!(world.arrival, Some(Pending::Waiting { .. }));
         // The program passes the profile's last saved position; this
         // session passes the accepted one (inferred, 6.478). The save after
         // the approval carries the place in the boat's frame.
@@ -252,7 +277,13 @@ impl Riders {
             },
             world,
             out,
-        )
+        )?;
+        // Carried on from the wait, the program sends no save at the
+        // approval and keeps the name (0x4976bf; R36 §2).
+        if from_wait {
+            world.carried_from = CarriedFrom::Wait;
+        }
+        Ok(())
     }
 
     /// The character tick: name the boat underfoot, or forget it.
@@ -328,7 +359,10 @@ impl Feature for Riders {
     }
 
     fn tick(&mut self, now: Instant, world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
-        if matches!(world.arrival, Some(Pending::Waiting { until }) if now >= until) {
+        if matches!(
+            world.arrival,
+            Some(Pending::Waiting { until } | Pending::Aboard { until, .. }) if now >= until
+        ) {
             return Self::safe_point(world, out);
         }
         // No frames run while the arrival is held, nor in a transfer.

@@ -234,13 +234,10 @@ fn a_boat_in_at_the_profile_holds_the_player_for_one_placement_on_it() {
     let mut riders = Riders::new(&aboard_flag);
     let outcome = testing::run(|out| {
         let (mut world, sample) = aboard(out, &mut riders);
-        assert_eq!(
+        assert!(matches!(
             world.arrival,
-            Some(Pending::Aboard {
-                sample,
-                local: DECK
-            })
-        );
+            Some(Pending::Aboard { sample: held, local, .. }) if held == sample && local == DECK
+        ));
         assert!(world.motion_held());
         // The host swept to the deck a little below the restored point.
         let restored = carrier_world(AT, DECK);
@@ -382,7 +379,7 @@ fn a_missing_boat_is_asked_for_and_the_wait_ends_at_the_safe_point() {
 }
 
 #[test]
-fn the_server_carrying_a_waiting_rider_on_zones_them_with_the_boat() {
+fn the_server_carrying_a_waiting_rider_on_zones_them_with_the_boat_and_no_save() {
     let flag = Arc::new(AtomicBool::new(false));
     let outcome = testing::run(|out| {
         let mut world = admitted(out);
@@ -395,15 +392,51 @@ fn the_server_carrying_a_waiting_rider_on_zones_them_with_the_boat() {
         assert!(world.arrival.is_none());
         assert!(world.lifecycle.blocks_motion());
         assert_eq!(world.vehicle.as_deref(), Some(BOAT));
+        // The zone approves: the departure goes, with no save before it,
+        // and the boat's name is kept for the next zone.
+        let mut answer = world
+            .lifecycle
+            .pending()
+            .unwrap()
+            .response("Tester")
+            .unwrap()
+            .body;
+        answer[84..88].copy_from_slice(&1i32.to_le_bytes());
+        let answer = zoning::ZoneAnswer::titanium(&answer).unwrap();
+        Transfers::new("Tester", super::super::transfers::Home::Offered)
+            .observe(&Message::ZoneAnswer(answer), &mut world, out)
+            .unwrap();
+        assert!(world.lifecycle.departing());
+        assert_eq!(world.vehicle.as_deref(), Some(BOAT));
     });
     assert_eq!(
         outcome.sent,
         [
             titanium_missing(BOAT).unwrap(),
             zoning::titanium_answer("Tester", (69, 0), Position::default(), riders::ZONE_REASON)
-                .unwrap()
+                .unwrap(),
+            zoning::titanium_depart(7),
         ]
     );
+}
+
+#[test]
+fn a_transfer_to_a_zone_no_id_can_name_is_dropped_with_a_word() {
+    let flag = Arc::new(AtomicBool::new(false));
+    let outcome = testing::run(|out| {
+        let mut world = admitted(out);
+        world.vehicle = Some(BOAT.into());
+        let message = Message::VehicleTransfer(Transfer {
+            name: BOAT.into(),
+            zone_id: 70_000,
+        });
+        Riders::new(&flag).observe(&message, &mut world, out)?;
+        assert!(!world.lifecycle.blocks_motion());
+        anyhow::Ok(())
+    });
+    outcome.result.unwrap();
+    assert_eq!(outcome.sent, []);
+    assert_eq!(diagnostics(&outcome.events), 1);
 }
 
 #[test]
@@ -428,4 +461,37 @@ fn death_forgets_the_boat_and_the_arrival() {
         assert_eq!(world.body.position(), Some(DECK));
     });
     assert_eq!(diagnostics(&outcome.events), 1);
+}
+
+#[test]
+fn a_host_that_never_places_the_player_aboard_ends_at_the_safe_point() {
+    let flag = Arc::new(AtomicBool::new(false));
+    let mut riders = Riders::new(&flag);
+    let outcome = testing::run(|out| {
+        let (mut world, _) = aboard(out, &mut riders);
+        let Some(Pending::Aboard { until, .. }) = world.arrival else {
+            panic!("the arrival is held aboard");
+        };
+        riders
+            .tick(
+                until.checked_sub(Duration::from_secs(1)).unwrap(),
+                &mut world,
+                out,
+            )
+            .unwrap();
+        assert!(world.motion_held());
+        riders.tick(until, &mut world, out).unwrap();
+        assert!(world.arrival.is_none() && world.vehicle.is_none());
+        world.body.position()
+    });
+    assert_eq!(
+        outcome.result,
+        Some(Position {
+            x: -5.0,
+            y: 6.0,
+            z: 7.0,
+            heading: 0.0,
+        })
+    );
+    assert_eq!(outcome.sent, []);
 }

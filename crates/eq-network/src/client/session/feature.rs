@@ -245,6 +245,8 @@ pub(in crate::client) struct World {
     pub(super) arrival: Option<super::riders::Pending>,
     /// The zone's safe point from its header, as a position.
     pub(super) safe_point: Option<Position>,
+    /// Where the transfer under way began, for the save before leaving.
+    pub(super) carried_from: super::riders::CarriedFrom,
     /// What the session itself made happen, for every feature and the host
     /// to hear next; see [`World::happened`].
     news: Vec<Message>,
@@ -285,6 +287,7 @@ impl World {
             vehicle: None,
             arrival: None,
             safe_point: None,
+            carried_from: super::riders::CarriedFrom::Elsewhere,
             news: Vec::new(),
         }
     }
@@ -419,6 +422,7 @@ impl World {
     /// Rejects a refusal without a transfer under way.
     pub(super) fn transfer_refused(&mut self, now: Instant) -> Result<()> {
         self.lifecycle.finish(false, now)?;
+        self.carried_from = super::riders::CarriedFrom::Elsewhere;
         if !self.lifecycle.is_dead() {
             self.body.resume(now);
         }

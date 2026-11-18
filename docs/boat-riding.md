@@ -45,16 +45,21 @@ rider lands at the command's point, as the original client does there.
 ## The save before leaving
 
 At the approval the program saves the player (`OP_SaveOnZoneReq`, `0x1540`,
-0xc0 bytes; 0x4976bf). This client fills the fields the read verified: x, y
-and z at +0x05, and the vehicle name at +0x6d.
+0xc0 bytes; 0x4976bf).
 
-- For a boat transfer (reason 2), while the session still finds the boat by
-  its name, the position is the player's place in the boat's frame.
-- For any other transfer, the vehicle is forgotten and the position is the
-  accepted world position.
+- **Boat transfer.** For a boat transfer (reason 2), while the session still
+  finds the boat by its name, this client fills the fields the read
+  verified: the player's place in the boat's frame at +0x05 and the vehicle
+  name at +0x6d. The position goes in the zone request's axis order (y, x,
+  z), which is inferred.
+- **From the arrival wait.** A transfer that began from the arrival wait
+  sends no save at all and keeps the vehicle name. The program skips 0x4976bf
+  while it waits.
+- **Any other transfer.** The vehicle is forgotten and the save stays the
+  empty body ordinary transfers have always sent.
 
-The checksum at +0, the heading at +0x11 and the 22 values at +0x15 stay zero.
-EQEmu reads none of the body.
+The checksum at +0 (0x4b6c04) is not computed and stays zero, as do the
+heading at +0x11 and the other values. EQEmu reads none of the body.
 
 ## Arriving aboard
 
@@ -68,7 +73,10 @@ EQEmu leaves this field empty.
   report, and the profile's position in the boat's frame. Movement is held.
   The host stands the player at that point, floor-sweeps from one unit above
   it, retries at (0, 0, 25) in the frame, and answers with
-  `GameCommand::ArrivalPlacement` (0x4aba14).
+  `GameCommand::ArrivalPlacement` (0x4aba14). The program accepts a floor
+  only when it links the named carrier, which only the host can see, so the
+  host answers with no position when the floor its sweep found is not that
+  carrier's.
 - **Placed.** The session takes one placement. It must be within rounding of
   either point across and in heading, no higher than one unit above it, and
   at most 30 units below it. A taken placement corrects the player there and
@@ -76,7 +84,8 @@ EQEmu leaves this field empty.
 - **Not placed.** A placement elsewhere, or none at all (the host found no
   floor), sends the player to the zone's safe point with the vehicle
   forgotten (`Arrival::SafePoint`). This is a local placement, and nothing is
-  sent (0x43d7c5).
+  sent (0x43d7c5). So does a host that gives no answer within 60 s; the
+  program places at once, so this bound is this client's.
 - **Missing.** When the lookup finds nothing, the session sends `0x3710` (the
   raw saved name and its NUL) and publishes `Arrival::Waiting`. It holds the
   player until the server's `0x0b71` carries them on, or 60 s pass and they go
@@ -88,10 +97,16 @@ both the boat and any held arrival (0x4564ba).
 
 ## Limits
 
-- The 30-unit sweep bound and the rounding bounds are this client's. The
+- The 30-unit sweep bound, the rounding bounds and the 60 s bound on a
+  host's placement are this client's. The
   program's own sweep reach is unread.
 - The `0x0b71` zone request passes the accepted position, where the program
   passes the profile's last saved one.
 - `0x0b71`, `0x3710` and a non-empty profile vehicle name have not yet been
   seen in a recording. The path is built from the program read and synthetic
   tests only.
+- The boat transfer's save carries no checksum. A server that checks it would
+  refuse that save. Computing 0x4b6c04 waits on a read of the routine, after
+  the capture search.
+- The save's axis order follows the zone request and is unconfirmed by a
+  read or a recording.

@@ -107,11 +107,12 @@ pub fn titanium_answer(
 }
 
 /// What the save before leaving a zone holds, as far as this client knows
-/// it for certain.
+/// it for certain. The default is the empty save every ordinary transfer
+/// sends.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Save {
-    /// Where the player stands: the accepted world position, or, aboard a
-    /// boat the session still finds, the position in the boat's frame.
+    /// Aboard a boat transfer the session still finds the boat for: the
+    /// player's place in the boat's frame.
     pub position: Option<Position>,
     /// The raw name of the boat the player is aboard.
     pub vehicle: Option<String>,
@@ -122,16 +123,24 @@ const SAVE_POSITION: usize = 0x05;
 const SAVE_VEHICLE: usize = 0x6d;
 
 /// Titanium's request that the zone save the player before they leave it
-/// (`OP_SaveOnZoneReq`, 0xc0 bytes). The program fills x, y and z at +0x05
-/// and the vehicle name at +0x6d, which this client fills too. Its
-/// checksum at +0, the heading at +0x11 (its conversion is unread) and the
-/// 22 values at +0x15 stay zero (6.478). `EQEmu` reads none of it
-/// (`Handle_OP_SaveOnZoneReq` calls `Handle_OP_Save`).
+/// (`OP_SaveOnZoneReq`, 0xc0 bytes). `EQEmu` reads nothing in its 192 bytes
+/// (`Handle_OP_SaveOnZoneReq` calls `Handle_OP_Save`), so an ordinary
+/// transfer's stay zero (inferred). The official client's are not zero: in
+/// Adam's P99 recording about 56 of them are set, in short runs, none
+/// holding the player's position; what they mean, and whether P99 reads
+/// them, is unrecorded.
+///
+/// Aboard a boat transfer the session fills what the program read shows it
+/// fills (0x4976bf): the place in the boat's frame at +0x05, in the zone
+/// request's axis order (inferred, 6.478), and the vehicle name at +0x6d.
+/// The checksum at +0 (0x4b6c04, not computed here), the heading at +0x11
+/// (its conversion is unread) and the other values stay zero (6.478).
 #[must_use]
 pub fn titanium_save_on_zone(save: &Save) -> EncodedCommand {
     let mut body = vec![0; 192];
     if let Some(position) = save.position {
-        for (index, value) in [position.x, position.y, position.z].into_iter().enumerate() {
+        // The zone request's order: y, then x, then z.
+        for (index, value) in [position.y, position.x, position.z].into_iter().enumerate() {
             let at = SAVE_POSITION + index * 4;
             body[at..at + 4].copy_from_slice(&value.to_le_bytes());
         }
@@ -659,8 +668,22 @@ mod tests {
         });
         assert_eq!(aboard.body.len(), 0xc0);
         assert_eq!(&aboard.body[..5], &[0; 5]);
-        assert_eq!(&aboard.body[5..9], &1.5f32.to_le_bytes());
-        assert_eq!(&aboard.body[9..13], &(-2.0f32).to_le_bytes());
+        // The save writes its position as the zone request does.
+        let request = titanium_answer(
+            "Tester",
+            (4, 0),
+            Position {
+                x: 1.5,
+                y: -2.0,
+                z: 20.0,
+                heading: 128.0,
+            },
+            2,
+        )
+        .unwrap();
+        assert_eq!(&aboard.body[5..17], &request.body[68..80]);
+        assert_eq!(&aboard.body[5..9], &(-2.0f32).to_le_bytes());
+        assert_eq!(&aboard.body[9..13], &1.5f32.to_le_bytes());
         assert_eq!(&aboard.body[13..17], &20.0f32.to_le_bytes());
         // The heading and the unread values stay zero.
         assert!(aboard.body[17..0x6d].iter().all(|byte| *byte == 0));

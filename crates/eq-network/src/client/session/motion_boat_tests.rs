@@ -116,6 +116,7 @@ fn no_move_is_sent_while_an_arrival_aboard_is_held() {
     world.arrival = Some(super::super::riders::Pending::Aboard {
         sample,
         local: Position::default(),
+        until: start + Duration::from_secs(60),
     });
     let held = MovementRequest::new(
         MovementMode::Forward,
