@@ -106,17 +106,46 @@ pub fn titanium_answer(
     })
 }
 
-/// Titanium's request that the zone save the player before they leave it.
-/// `EQEmu` reads nothing in its 192 bytes (`Handle_OP_SaveOnZoneReq` calls
-/// `Handle_OP_Save`), so they stay zero (inferred). The official client's
-/// are not zero: in Adam's P99 recording about 56 of them are set, in short
-/// runs, none holding the player's position; what they mean, and whether
-/// P99 reads them, is unrecorded.
+/// What the save before leaving a zone holds, as far as this client knows
+/// it for certain.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Save {
+    /// Where the player stands: the accepted world position, or, aboard a
+    /// boat the session still finds, the position in the boat's frame.
+    pub position: Option<Position>,
+    /// The raw name of the boat the player is aboard.
+    pub vehicle: Option<String>,
+}
+
+/// Where the save keeps its fields (0x4976bf; R36b §1).
+const SAVE_POSITION: usize = 0x05;
+const SAVE_VEHICLE: usize = 0x6d;
+
+/// Titanium's request that the zone save the player before they leave it
+/// (`OP_SaveOnZoneReq`, 0xc0 bytes). The program fills x, y and z at +0x05
+/// and the vehicle name at +0x6d, which this client fills too. Its
+/// checksum at +0, the heading at +0x11 (its conversion is unread) and the
+/// 22 values at +0x15 stay zero (6.478). `EQEmu` reads none of it
+/// (`Handle_OP_SaveOnZoneReq` calls `Handle_OP_Save`).
 #[must_use]
-pub fn titanium_save_on_zone() -> EncodedCommand {
+pub fn titanium_save_on_zone(save: &Save) -> EncodedCommand {
+    let mut body = vec![0; 192];
+    if let Some(position) = save.position {
+        for (index, value) in [position.x, position.y, position.z].into_iter().enumerate() {
+            let at = SAVE_POSITION + index * 4;
+            body[at..at + 4].copy_from_slice(&value.to_le_bytes());
+        }
+    }
+    if let Some(name) = save
+        .vehicle
+        .as_deref()
+        .filter(|name| name.len() < crate::boats::riders::NAME_LENGTH)
+    {
+        body[SAVE_VEHICLE..SAVE_VEHICLE + name.len()].copy_from_slice(name.as_bytes());
+    }
     EncodedCommand {
         opcode: SAVE_ON_ZONE_OPCODE,
-        body: vec![0; 192],
+        body,
     }
 }
 
@@ -613,9 +642,30 @@ mod tests {
     #[test]
     fn titanium_departs_with_a_save_and_its_own_spawn() {
         assert_eq!(
-            (titanium_save_on_zone().opcode, titanium_save_on_zone().body),
+            (
+                titanium_save_on_zone(&Save::default()).opcode,
+                titanium_save_on_zone(&Save::default()).body
+            ),
             (0x1540, vec![0; 192])
         );
+        let aboard = titanium_save_on_zone(&Save {
+            position: Some(Position {
+                x: 1.5,
+                y: -2.0,
+                z: 20.0,
+                heading: 128.0,
+            }),
+            vehicle: Some("Sabrina00".into()),
+        });
+        assert_eq!(aboard.body.len(), 0xc0);
+        assert_eq!(&aboard.body[..5], &[0; 5]);
+        assert_eq!(&aboard.body[5..9], &1.5f32.to_le_bytes());
+        assert_eq!(&aboard.body[9..13], &(-2.0f32).to_le_bytes());
+        assert_eq!(&aboard.body[13..17], &20.0f32.to_le_bytes());
+        // The heading and the unread values stay zero.
+        assert!(aboard.body[17..0x6d].iter().all(|byte| *byte == 0));
+        assert_eq!(&aboard.body[0x6d..0x6d + 10], b"Sabrina00\0");
+        assert!(aboard.body[0x6d + 9..].iter().all(|byte| *byte == 0));
         assert_eq!(
             titanium_depart(7),
             EncodedCommand {

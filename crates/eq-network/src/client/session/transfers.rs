@@ -20,7 +20,9 @@ use super::{
 };
 use anyhow::{bail, ensure, Context, Result};
 use eq_network_game::{
+    boats::riders,
     message::{Message, Part},
+    movement::carrier_local,
     request::Request,
     world::{Position, WorldEvent},
 };
@@ -136,7 +138,11 @@ impl Transfers {
 
     /// Asks for a transfer: the player stops, and every later command waits
     /// for the server's answer.
-    fn start(offer: zoning::ZoneOffer, world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
+    pub(super) fn start(
+        offer: zoning::ZoneOffer,
+        world: &mut World,
+        out: &mut Out<'_, '_>,
+    ) -> Result<()> {
         noted(
             out,
             &Request::AnswerZoneOffer {
@@ -173,6 +179,10 @@ impl Transfers {
     /// Takes the server's offer to move the player, within the zone or out
     /// of it.
     fn offered(offer: &zoning::ZoneOffer, world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
+        // A server zone command forgets the boat before anything else
+        // (Titanium 0x456110; read R36 B), and so does the move home after
+        // death (0x4564ba).
+        world.vehicle = None;
         let offer = offer.clone();
         if let Some(position) = offer.local_position(world.zone) {
             // The explicit movement instruction supplies its own absolute
@@ -216,8 +226,9 @@ impl Transfers {
         }
         let reply = zoning::reply(&answer, &self.character, pending, world.zone, heading)?;
         if reply == zoning::ZoneReply::Approved {
+            let save = save_on_leaving(pending.reason, world);
             world.lifecycle.finish(true, Instant::now())?;
-            noted(out, &Request::SaveOnZone, "the save before leaving")?;
+            noted(out, &Request::SaveOnZone(save), "the save before leaving")?;
             noted(out, &Request::Depart, "the departure")?;
             out.log
                 .send(ClientEvent::Progress(ConnectionStage::ConnectingWorld))?;
@@ -250,6 +261,41 @@ impl Transfers {
             out.status(ConnectionState::Connected, world)?;
         }
         Ok(())
+    }
+}
+
+/// The save before leaving, as Titanium makes it at the accept (0x4ab056,
+/// 0x4976bf; reads R36 §2, R36b §1). Only a boat transfer (reason 2) keeps
+/// the vehicle; then, while the session still finds the boat by its name,
+/// the position is the player's in the boat's frame. Otherwise the vehicle
+/// is forgotten and the position is the accepted one.
+fn save_on_leaving(reason: u32, world: &mut World) -> zoning::Save {
+    let position = world.body.position();
+    let aboard = (reason == riders::ZONE_REASON)
+        .then(|| world.vehicle.clone())
+        .flatten()
+        .and_then(|name| {
+            let id = riders::find(
+                &name,
+                world
+                    .spawns
+                    .all()
+                    .map(|spawn| (spawn.spawn_id, spawn.name.as_str())),
+            )?;
+            let report = world.carriers.latest(id)?;
+            let pose = world.carriers.pose(report.sample(), Instant::now())?;
+            Some((name, carrier_local(pose, position?)))
+        });
+    if let Some((name, local)) = aboard {
+        return zoning::Save {
+            position: Some(local),
+            vehicle: Some(name),
+        };
+    }
+    world.vehicle = None;
+    zoning::Save {
+        position,
+        vehicle: None,
     }
 }
 
@@ -973,7 +1019,18 @@ mod tests {
         // and the player waits for the zone.
         assert_eq!(
             outcome.sent,
-            [zoning::titanium_save_on_zone(), zoning::titanium_depart(7)]
+            [
+                zoning::titanium_save_on_zone(&zoning::Save {
+                    position: Some(Position {
+                        x: 10.0,
+                        y: 20.0,
+                        z: 3.0,
+                        heading: 0.0,
+                    }),
+                    vehicle: None,
+                }),
+                zoning::titanium_depart(7)
+            ]
         );
         assert!(world.exit().is_none() && world.lifecycle.departing());
         // EQEmu's second answer changes nothing.
@@ -1224,5 +1281,66 @@ mod tests {
         outcome.result.unwrap();
         assert!(world.lifecycle.is_dead());
         assert!(matches!(outcome.events[..], [ClientEvent::Diagnostic(_)]));
+    }
+
+    #[test]
+    fn only_a_boat_transfer_saves_the_place_aboard_and_the_boat() {
+        use eq_network_game::{movement::carrier_world, world::SpawnKind, GameDialect};
+        let boat_at = Position {
+            x: 100.0,
+            y: 50.0,
+            z: 0.0,
+            heading: 128.0,
+        };
+        let deck = Position {
+            x: 4.0,
+            y: -2.0,
+            z: 3.0,
+            heading: 10.0,
+        };
+        let aboard = || {
+            let mut world = World::new(5);
+            let mut player = testing::player(7);
+            player.position = carrier_world(boat_at, deck);
+            world
+                .body
+                .admit(MotionSession::new(5, 7, player.position, Instant::now()).unwrap());
+            world.player.admit(player);
+            let mut boat = testing::spawn(8, SpawnKind::Npc);
+            boat.race = 72;
+            boat.name = "SirensBane02".into();
+            boat.position = boat_at;
+            world.spawns.insert(boat.clone());
+            world.carriers.observe(
+                &WorldEvent::Spawns(vec![boat]),
+                GameDialect::Titanium,
+                Instant::now(),
+            );
+            world.vehicle = Some("SirensBane00".into());
+            world
+        };
+        let mut world = aboard();
+        let save = save_on_leaving(riders::ZONE_REASON, &mut world);
+        assert_eq!(save.vehicle.as_deref(), Some("SirensBane00"));
+        let local = save.position.unwrap();
+        for (got, want) in [
+            (local.x, deck.x),
+            (local.y, deck.y),
+            (local.z, deck.z),
+            (local.heading, deck.heading),
+        ] {
+            assert!((got - want).abs() < 0.01, "{local:?}");
+        }
+        // Any other transfer forgets the boat and saves the world position.
+        let mut world = aboard();
+        let save = save_on_leaving(0, &mut world);
+        assert_eq!(save.vehicle, None);
+        assert_eq!(save.position, world.body.position());
+        assert_eq!(world.vehicle, None);
+        // So does a boat transfer once the boat is no longer found.
+        let mut world = aboard();
+        world.vehicle = Some("Stormbreaker".into());
+        let save = save_on_leaving(riders::ZONE_REASON, &mut world);
+        assert_eq!((save.vehicle, world.vehicle), (None, None));
     }
 }

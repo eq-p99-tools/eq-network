@@ -57,6 +57,10 @@ pub(in crate::client) fn titanium(opcode: u16) -> Option<ServerMessage> {
         0x0a94 => sent("OP_LootComplete", EQEMU, Read(&[Zone])),
         0x0b2d => sent("OP_ColoredText", EQEMU, Read(&[Chat])),
         0x0b40 => sent("OP_TradeSkillCombine", EQEMU, Read(&[Zone])),
+        // Not in `EQEmu`'s list: the program's vehicle transfer, which carries
+        // a boat's riders into the next zone (read R36). Listed as P99's,
+        // where boats cross zones; not yet seen in a recording.
+        0x0b71 => sent("the vehicle transfer", P99, Read(&[Zone])),
         0x0b97 => sent("OP_InterruptCast", EQEMU, Read(&[Zone])),
         0x0c2c => sent("OP_ApplyPoison", EQEMU, unasked(PlayerState)),
         0x0ce3 => sent("OP_CrystalCountUpdate", EQEMU, planned(LaterSystems)),

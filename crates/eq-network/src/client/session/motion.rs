@@ -789,6 +789,16 @@ impl Motion {
     /// crouched where the generation stands a ducking player to move; a
     /// refused move undoes the host's prediction.
     fn step(request: &MovementRequest, world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
+        // The program runs no frames while it waits for the boat the
+        // profile names, and stands the player on it before the next
+        // (0x4a8afa, 0x4aba14; read R36 §3).
+        if world.arrival.is_some() {
+            return actions::refuse(
+                &ClientCommand::Move(request.clone()),
+                "The player is arriving aboard a boat",
+                out.log,
+            );
+        }
         Self::step_at(request, Instant::now(), world, out)
     }
 
@@ -1104,7 +1114,7 @@ impl Feature for Motion {
     /// correction or a refused transfer took them away, and repeats the
     /// player's position while they may move.
     fn tick(&mut self, now: Instant, world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
-        if !world.ready() || world.lifecycle.blocks_motion() {
+        if !world.ready() || world.motion_held() {
             return Ok(());
         }
         self.refresh_belongings(world, out)?;

@@ -108,3 +108,27 @@ fn invalid_correction_preserves_support_but_correction_suspend_and_admission_cle
         .admit(MotionSession::new(6, 7, position, now).unwrap());
     assert_eq!(world.body.carrier_support(), None);
 }
+
+#[test]
+fn no_move_is_sent_while_an_arrival_aboard_is_held() {
+    let start = Instant::now();
+    let (mut world, sample) = setup(start);
+    world.arrival = Some(super::super::riders::Pending::Aboard {
+        sample,
+        local: Position::default(),
+    });
+    let held = MovementRequest::new(
+        MovementMode::Forward,
+        5,
+        world.body.position().unwrap(),
+        start,
+    );
+    let outcome = testing::run(|out| Motion::step(&held, &mut world, out));
+    outcome.result.unwrap();
+    assert_eq!(outcome.sent, []);
+    assert_eq!(outcome.unreliable, []);
+    assert!(outcome
+        .events
+        .iter()
+        .any(|event| matches!(event, ClientEvent::World(WorldEvent::MotionRefused { .. }))));
+}

@@ -314,6 +314,7 @@ fn run_connected(
     let mut list_replies = super::list_poll::Replies::default();
     let mut setup = servers::Setup::new(&config.character, config.auto_eat);
     setup.local_only = world.local_eqemu();
+    setup.aboard = std::sync::Arc::clone(&context.aboard);
     let mut features = Features::from_setup(server, &setup);
     let offered = features.capabilities();
     let follows_zones = offered.contains(&Capability::Zoning);
@@ -866,6 +867,15 @@ fn admit(
         ))?;
     }
     world.gravity = zone.description.as_ref().map(|zone| zone.gravity);
+    world.safe_point = zone.description.as_ref().map(|zone| {
+        let [x, y, z] = zone.safe_point;
+        crate::world::Position {
+            x,
+            y,
+            z,
+            heading: 0.0,
+        }
+    });
     features.admitted(world, out)?;
     out.log
         .send(ClientEvent::Progress(ConnectionStage::Ready))?;
@@ -886,7 +896,7 @@ mod tests {
     };
 
     /// How many kinds of command there are.
-    const KINDS: usize = 107;
+    const KINDS: usize = 108;
 
     /// The kinds the login and world servers take, before any zone session.
     const BEFORE_ZONES: [usize; 4] = [0, 1, 70, 75];
@@ -938,6 +948,7 @@ mod tests {
             ClientCommand::SelectTarget { .. } => 26,
             ClientCommand::ConfigureMotion { .. } => 27,
             ClientCommand::BoatControl { .. } => 106,
+            ClientCommand::ArrivalPlacement { .. } => 107,
             ClientCommand::Move(_) => 28,
             ClientCommand::OfferTrade { .. } => 29,
             ClientCommand::AcceptTrade { .. } => 30,
@@ -1071,6 +1082,11 @@ mod tests {
                 session_id,
                 created,
                 request: eq_network_game::boats::Request::Release,
+            },
+            ClientCommand::ArrivalPlacement {
+                session_id,
+                position: None,
+                created,
             },
             ClientCommand::ClickDoor {
                 session_id,

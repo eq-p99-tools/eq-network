@@ -254,6 +254,7 @@ pub(super) fn needs(command: &ClientCommand) -> &'static [Resource] {
         | ClientCommand::SetMovementOptions { .. }
         | ClientCommand::SetBookOptions { .. }
         | ClientCommand::BoatControl { .. }
+        | ClientCommand::ArrivalPlacement { .. }
         | ClientCommand::Move(_) => &[],
     }
 }
@@ -469,6 +470,7 @@ fn refusal(command: &ClientCommand, reason: &str) -> Option<WorldEvent> {
         | ClientCommand::GenerateName { .. }
         | ClientCommand::CreateCharacter { .. }
         | ClientCommand::BoatControl { .. }
+        | ClientCommand::ArrivalPlacement { .. }
         | ClientCommand::SetPosture { .. }
         | ClientCommand::FeignLanded { .. }
         | ClientCommand::SendChat(_)

@@ -5,6 +5,20 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Speak Titanium's boat-riding wire on EQEmu and P99 (`Capability::BoatRiding`):
+  `OP_BoardBoat` on the first linked one-second tick, `OP_LeaveBoat` after two
+  unlinked ticks, zoning with reason 2 when the server's vehicle transfer
+  (`0x0b71`) names the saved boat, the save before leaving with the position
+  (in the boat's frame aboard a boat transfer) and the vehicle name, and an
+  arrival aboard from the profile's vehicle name: `WorldEvent::Arrival`, one
+  `GameCommand::ArrivalPlacement`, `0x3710` and a 60 s hold when the boat is
+  missing, then the zone's safe point. See [boat riding](docs/boat-riding.md).
+- **Breaking:** `Request::SaveOnZone` carries a `zoning::Save`, and
+  `zoning::titanium_save_on_zone` takes one; the Titanium save now carries the
+  player's x, y and z. Exhaustive matches must handle `Message::VehicleName`,
+  `Message::VehicleTransfer`, `WorldEvent::Arrival`, `Capability::BoatRiding`,
+  `GameCommand::ArrivalPlacement` and the new `Request` variants.
+
 - Deliver staged environmental AA inputs as one ordered admission batch and
   one following liquid revision, retaining every fact and withdrawal.
 

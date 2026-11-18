@@ -626,12 +626,15 @@ pub enum Capability {
     Tracking,
     /// `EQEmu` acquire/release of a floor-supported Titanium boat; no steering.
     BoatControl,
+    /// Titanium's riding wire: naming the boat underfoot, zoning with a boat
+    /// the server carries on, and arriving aboard it.
+    BoatRiding,
 }
 
 impl Capability {
     /// Every capability, in order: what a session offers when its server and
     /// client generation support everything.
-    pub const ALL: [Self; 64] = [
+    pub const ALL: [Self; 65] = [
         Self::Casting,
         Self::Spellbook,
         Self::Inventory,
@@ -696,6 +699,7 @@ impl Capability {
         Self::Splitting,
         Self::Tracking,
         Self::BoatControl,
+        Self::BoatRiding,
     ];
 }
 
@@ -723,6 +727,14 @@ pub enum WorldEvent {
     /// One received Titanium boat-control echo, without request correlation
     /// or permission to move a vessel.
     BoatControl(crate::boats::ControlBoat),
+    /// How the player arrives aboard the vehicle the profile names,
+    /// scoped to its zone admission.
+    Arrival {
+        /// The admission it belongs to.
+        session_id: u64,
+        /// The step reached.
+        arrival: crate::boats::riders::Arrival,
+    },
     /// Correlated boat control knowledge, scoped to its zone admission.
     BoatControlState {
         /// Admission whose control owner produced this state.
@@ -2424,6 +2436,7 @@ mod tests {
             Capability::Splitting => 61,
             Capability::Tracking => 62,
             Capability::BoatControl => 63,
+            Capability::BoatRiding => 64,
         };
         for (index, capability) in Capability::ALL.into_iter().enumerate() {
             assert_eq!(place(capability), index, "{capability:?}");
