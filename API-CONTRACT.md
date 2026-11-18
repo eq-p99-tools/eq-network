@@ -1470,8 +1470,10 @@ server's vehicle transfer names the saved one; hosts send nothing for either.
 When a received profile names a vehicle, the session publishes
 `WorldEvent::Arrival` and holds movement:
 
-- `Arrival::Aboard` names the boat, the received report of the spawn found and
-  the profile's position in its frame. The host stands the player there,
+- `Arrival::Aboard` names the boat, the received report of the spawn found,
+  the profile's position fields as received (`profile`) and the restore
+  point in the boat's frame that the program's loader makes of them
+  (`local`). The host stands the player at `local`,
   floor-sweeps from one unit above, retries at (0, 0, 25) in the frame, and
   sends one `GameCommand::ArrivalPlacement` with the result. It must send
   `None` when it found no floor, or when the floor its sweep found is not

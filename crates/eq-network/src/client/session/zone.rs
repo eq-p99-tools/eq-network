@@ -314,7 +314,7 @@ fn run_connected(
     let mut list_replies = super::list_poll::Replies::default();
     let mut setup = servers::Setup::new(&config.character, config.auto_eat);
     setup.local_only = world.local_eqemu();
-    setup.aboard = std::sync::Arc::clone(&context.aboard);
+    world.riding = std::sync::Arc::clone(&context.riding);
     let mut features = Features::from_setup(server, &setup);
     let offered = features.capabilities();
     let follows_zones = offered.contains(&Capability::Zoning);

@@ -73,7 +73,15 @@ EQEmu leaves this field empty.
   at the profile (0x47981d). Names are cleaned, the spawn's must start with the
   saved one ignoring ASCII case, and the shortest wins. When a spawn is found,
   `WorldEvent::Arrival` carries `Arrival::Aboard`: the name, the found spawn's
-  report, and the profile's position in the boat's frame. Movement is held.
+  report, the profile's position fields as received, and the restore point
+  in the boat's frame. Movement is held.
+- **The restore point.** The program's profile loader (0x4ba21e-0x4ba25d;
+  read R36c) stores the profile's three coordinates into its record's first,
+  second and first fields again, and never writes the third. So the restore
+  point takes the profile's y (13120) and z (13124) as its x and y, and as its
+  z the boat-frame z this client's last boat save carried. That z is kept
+  across zones and forgotten with the vehicle; without one it is zero. An
+  ordinary admission is unchanged.
   The host stands the player at that point, floor-sweeps from one unit above
   it, retries at (0, 0, 25) in the frame, and answers with
   `GameCommand::ArrivalPlacement` (0x4aba14). The program accepts a floor
@@ -113,8 +121,7 @@ both the boat and any held arrival (0x4564ba).
 - The program's failed zone request (0x496d00) also uses the safe point for
   ordinary refused requests; this client does so only for a rider carried on
   from the arrival wait. The wider case is an open parity question.
-- The program's profile loader (0x4ba0fb) writes the profile's third
-  coordinate over the first and leaves the third record field as the
-  departure saved it (read R36c, inferred). This client restores the
-  position as decoded. Which one a server's boat-frame profile expects is
-  open until a recording shows one.
+- The record-to-axis mapping behind the restore point follows the zone
+  request's order and is inferred. `Arrival::Aboard` carries both the
+  profile's fields as received and the point used, so one recording settles
+  which a server writes.

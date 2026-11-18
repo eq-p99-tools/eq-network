@@ -5,6 +5,14 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Restore a rider arriving aboard where the Titanium program does (read
+  R36c): its profile loader keeps the profile's y and z as the boat-frame x
+  and y and the departure's saved z as z. `Arrival::Aboard` gains `profile`,
+  the fields as received, beside `local`, the point used. The departure z
+  is kept across zones with the aboard flag, forgotten with the vehicle and
+  at character change. **Breaking:** exhaustive constructions of
+  `Arrival::Aboard` need `profile`.
+
 - Fill a boat transfer's Titanium save checksum (0x4b6c04, read R36c: the
   reflected CRC-32 table from a seed of all ones, no final inversion) as
   `zoning::save_checksum`; the save's y, x, z order is now read, not
