@@ -317,6 +317,29 @@ and death. [Profile layout][titanium-profile] [EQEmu encoder][titanium-encoder]
 [titanium-profile]: https://github.com/EQEmu/EQEmu/blob/4aceae18b94ffaafc08e2b17bc41cd72c77f795d/common/patches/titanium_structs.h#L883
 [titanium-encoder]: https://github.com/EQEmu/EQEmu/blob/4aceae18b94ffaafc08e2b17bc41cd72c77f795d/common/patches/titanium.cpp#L1600-L1606
 
+## Local Titanium environmental AA observations
+
+The local-endpoint EQEmu policy publishes read-only
+`WorldEvent::AlternateAdvancement { session_id, update }` facts. The complete
+profile AA selection array and `OP_RespondAA` replace selected records;
+`OP_SendAATable` supplies individual definitions with required level, class
+mask and signed effects. Exact selected definition IDs determine membership.
+The raw selection value is retained and never used as an effect multiplier.
+An unowned definition grants no rank, and a partial table does not establish
+missing selected definitions. Pre-admission facts are staged and then stamped
+with the receiving admission. AA facts also advance `LiquidHazardRevision`.
+
+Malformed packets withdraw their affected observation. An unidentified
+malformed definition withdraws cached definitions; `OP_ClearAA` withdraws the
+whole AA view until replacement facts arrive. These withdrawals never supply
+an empty selection. The local effect-list bound is 256 records per definition;
+staging and definition retention are separately bounded at 4096. Exceeding a
+bound withholds observations. This feature sends no packets, offers no AA
+commands, and is absent from P99, EQMac and remote EQEmu feature sets.
+
+[EQEmu Titanium AA layouts](https://github.com/EQEmu/EQEmu/blob/f5ec714c8835b2afd2be1812bb9033ff70a17a64/common/patches/titanium_structs.h#L3229-L3261)
+[EQEmu AA encoders](https://github.com/EQEmu/EQEmu/blob/f5ec714c8835b2afd2be1812bb9033ff70a17a64/common/patches/titanium.cpp#L1749-L1816)
+
 ## Retained base held models
 
 `ItemDetails.base_held_model` keeps the checked optional base held model from
@@ -1422,3 +1445,13 @@ TAKP's distinct server move still enters the existing zone-transfer path.
 See EQEmu's [resurrection offer routing](https://github.com/EQEmu/EQEmu/blob/master/zone/worldserver.cpp#L865-L893),
 [resurrection processing](https://github.com/EQEmu/EQEmu/blob/master/zone/client_process.cpp#L971-L1055)
 and [translocate processing](https://github.com/EQEmu/EQEmu/blob/master/zone/client_packet.cpp#L14888-L14952).
+
+## Boat acquire/release
+
+`GameCommand::BoatControl` is offered by `Capability::BoatControl` on EQEmu.
+`boats::Request::Acquire` binds the current floor report and accepted rider
+position; `Release` withdraws local control; `Support` refreshes or withdraws
+the floor link. `WorldEvent::BoatControl` is only a decoded packet.
+`WorldEvent::BoatControlState` carries the admission-scoped correlated state.
+No state enables vessel position requests. See [boat control](docs/boat-control.md)
+for echo ambiguity, timeout policy and source/validation limits.

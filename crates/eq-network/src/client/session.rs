@@ -1,7 +1,9 @@
 mod abilities;
 mod actions;
 pub(super) mod admission;
+mod alternate_advancement;
 mod bleeding;
+mod boats;
 mod buffs;
 mod camp;
 mod casting;

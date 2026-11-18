@@ -287,6 +287,13 @@ pub enum Request {
     },
     /// Use a door within reach.
     ClickDoor(u8),
+    /// An `EQEmu` vessel control request; the session checks support and eligibility.
+    ControlBoat {
+        /// The selected vessel.
+        spawn_id: u16,
+        /// Acquire or release.
+        intent: crate::boats::Intent,
+    },
     /// The client's own return of a type 40 or 45 door, which Titanium sends
     /// as a click with no player ([`doors::titanium::return_click`]).
     ReturnDoor(u8),
@@ -551,6 +558,7 @@ pub fn titanium(request: &Request, sender: Sender<'_>) -> Result<EncodedCommand>
         Request::AcceptTrade { .. } => exchange::accept(sender.spawn())?,
         Request::CancelTrade { .. } => exchange::cancel(sender.spawn())?,
         Request::ClickDoor(door_id) => doors::titanium_click(*door_id, sender.spawn()),
+        Request::ControlBoat { spawn_id, intent } => crate::boats::titanium(*spawn_id, *intent)?,
         Request::ReturnDoor(door_id) => doors::titanium::return_click(*door_id),
         // A click opens a world container as it picks an item up.
         Request::PickUp(drop_id) | Request::OpenContainer(drop_id) => {

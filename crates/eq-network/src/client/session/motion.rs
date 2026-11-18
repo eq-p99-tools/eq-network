@@ -35,12 +35,15 @@ pub(super) struct Body {
     stationary_known: bool,
     /// When the stationary heartbeat last went out.
     last_sent: Instant,
+    /// Carrier named by the last accepted motion proposal, never a rejected one.
+    carrier_support: Option<eq_network_game::movement::CarrierSample>,
 }
 
 impl Default for Body {
     fn default() -> Self {
         Self {
             motion: None,
+            carrier_support: None,
             stationary: PositionPacket {
                 spawn_id: 0,
                 sequence: 0,
@@ -61,6 +64,7 @@ impl Default for Body {
 impl Body {
     /// Notes where the profile left the player.
     pub(super) fn place(&mut self, position: Position) {
+        self.carrier_support = None;
         self.stationary.position = position;
         self.stationary_known = true;
     }
@@ -73,6 +77,19 @@ impl Body {
     /// Where the player is now, once they can move.
     pub(super) fn position(&self) -> Option<Position> {
         self.motion.as_ref().map(MotionSession::position)
+    }
+
+    /// The current accepted support, independent of a frontend's new floor claim.
+    pub(super) const fn carrier_support(&self) -> Option<eq_network_game::movement::CarrierSample> {
+        self.carrier_support
+    }
+
+    /// Records support only after the movement guard accepted its proposal.
+    pub(super) fn record_carrier_support(
+        &mut self,
+        support: Option<eq_network_game::movement::CarrierSample>,
+    ) {
+        self.carrier_support = support;
     }
 
     /// Previous accepted point for corroborating a current pad entrance.
@@ -129,6 +146,7 @@ impl Body {
     /// Starts movement for the admitted player.
     #[cfg(test)]
     pub(super) fn admit(&mut self, motion: MotionSession) {
+        self.carrier_support = None;
         self.motion = Some(motion);
     }
 
@@ -140,6 +158,7 @@ impl Body {
 
     /// Stops all position updates, after death or while a transfer waits.
     pub(super) fn suspend(&mut self) {
+        self.carrier_support = None;
         if let Some(motion) = self.motion.as_mut() {
             motion.suspend();
         }
@@ -183,6 +202,7 @@ impl Body {
         if let Some(motion) = self.motion.as_mut() {
             motion.correct(position, now)?;
         }
+        self.carrier_support = None;
         player.position = position;
         self.stationary = stationary;
         self.stationary_known = true;
@@ -875,11 +895,17 @@ impl Motion {
             out.log
                 .diagnostic(format!("Rejected movement proposal: {error}"))?;
         }
+        let position = motion.position();
+        if refused.is_none() {
+            world
+                .body
+                .record_carrier_support(carrier.map(|(sample, _)| sample));
+        }
         // Refused coordinates are never published.
         out.log.send(ClientEvent::World(WorldEvent::MotionSent {
             session_id: world.session_id,
             created: request.created,
-            position: motion.position(),
+            position,
             refused,
         }))
     }
@@ -991,6 +1017,7 @@ impl Feature for Motion {
     /// counts as fresh. Its updates keep the spacing the client generation
     /// keeps between them.
     fn admitted(&mut self, world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
+        world.body.record_carrier_support(None);
         if let (Some(player), Some(admitted)) = (world.player.as_ref(), world.admitted) {
             world.body.motion = Some(
                 MotionSession::new(world.session_id, player.spawn_id, player.position, admitted)?
@@ -2965,3 +2992,7 @@ mod tests {
         assert!(world.body.motion.as_ref().unwrap().calibration().is_some());
     }
 }
+
+#[cfg(test)]
+#[path = "motion_boat_tests.rs"]
+mod boat_support_tests;

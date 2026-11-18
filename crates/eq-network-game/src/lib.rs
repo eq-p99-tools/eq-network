@@ -2,6 +2,8 @@
 
 /// Abilities: kick, bash, taunt, hide, sneak, forage and the like.
 pub mod abilities;
+/// Read-only Titanium alternate advancement inputs for environmental calculations.
+pub mod alternate_advancement;
 /// How spawns look: worn gear, features, lights and the like, and the
 /// updates, states and illusions that change them.
 pub mod appearance;
@@ -10,6 +12,8 @@ pub mod appearance;
 pub mod banker;
 /// Binding wounds with bandages.
 pub mod bind_wound;
+/// Received Titanium boat-control packets and conservative echo correlation.
+pub mod boats;
 /// Reading books and notes.
 pub mod books;
 /// Admission buffs and server-driven buff changes.
@@ -98,7 +102,7 @@ pub mod pets;
 /// What the server puts on the player's screen outside the chat window:
 /// popups and marquees.
 pub mod popups;
-/// TAKP/EQMac player and entity presentation codecs.
+/// TAKP/`EQMac` player and entity presentation codecs.
 pub mod quarm;
 /// Raids: invitations, joining, leaving, and the server's word on the raid.
 pub mod raid;
@@ -165,7 +169,7 @@ pub enum GameDialect {
     // Settings saved before the rename named it after Project 1999.
     #[serde(alias = "titanium_p99")]
     Titanium,
-    /// The Windows TAKP/EQMac client used by Project Quarm.
+    /// The Windows TAKP/`EQMac` client used by Project Quarm.
     EqMac,
 }
 

@@ -87,6 +87,15 @@ pub enum GameCommand {
     },
     /// Activate the click effect on a current carried or equipped item.
     UseItem(crate::inventory::ItemUse),
+    /// Acquire or release a supported vessel, or refresh its floor link.
+    BoatControl {
+        /// Current zone admission.
+        session_id: u64,
+        /// Source-backed control intent; steering is separate.
+        request: crate::boats::Request,
+        /// Queued input expires.
+        created: std::time::Instant,
+    },
     /// Use an ordinary nearby door; no lockpicking or cursor-item action is implied.
     ClickDoor {
         /// Current zone admission.
@@ -982,6 +991,7 @@ impl GameCommand {
             Self::SwapSpell { .. } => "SwapSpell",
             Self::UseItem(..) => "UseItem",
             Self::ClickDoor { .. } => "ClickDoor",
+            Self::BoatControl { .. } => "BoatControl",
             Self::PickUp { .. } => "PickUp",
             Self::OpenContainer { .. } => "OpenContainer",
             Self::CloseContainer { .. } => "CloseContainer",
@@ -1107,6 +1117,7 @@ impl GameCommand {
             Self::Move(request) => Some(request.session_id),
             Self::SwapSpell { session_id, .. }
             | Self::SendChatInAdmission { session_id, .. }
+            | Self::BoatControl { session_id, .. }
             | Self::ClickDoor { session_id, .. }
             | Self::PickUp { session_id, .. }
             | Self::OpenContainer { session_id, .. }
@@ -1235,6 +1246,7 @@ impl GameCommand {
             Self::CastSpell { .. } | Self::UseItem(_) | Self::DropInvisibility { .. } => {
                 Capability::Casting
             }
+            Self::BoatControl { .. } => Capability::BoatControl,
             Self::ClickDoor { .. } => Capability::Doors,
             Self::PickUp { .. } => Capability::GroundItems,
             Self::CrossZoneLine { .. } => Capability::Zoning,
@@ -1410,6 +1422,7 @@ impl GameCommand {
             Self::SwapSpell { created, .. }
             | Self::RespondToPopup { created, .. }
             | Self::InspectPlayer { created, .. }
+            | Self::BoatControl { created, .. }
             | Self::ClickDoor { created, .. }
             | Self::PickUp { created, .. }
             | Self::OpenContainer { created, .. }
@@ -1615,6 +1628,7 @@ pub fn encode(
         GameCommand::MoveInventory(_)
         | GameCommand::DestroyItem(_)
         | GameCommand::DropItem(_)
+        | GameCommand::BoatControl { .. }
         | GameCommand::ClickDoor { .. }
         | GameCommand::PickUp { .. }
         | GameCommand::OpenContainer { .. }
