@@ -278,7 +278,10 @@ mod tests {
         let event = |session_id| {
             ClientEvent::World(WorldEvent::AlternateAdvancement {
                 session_id,
-                update: eq_network_game::alternate_advancement::Update::Selections(None),
+                updates: vec![
+                    eq_network_game::alternate_advancement::Update::Selections(None),
+                    eq_network_game::alternate_advancement::Update::DefinitionsUnknown,
+                ],
             })
         };
         assert!(observations.observe(&event(4)).is_none());

@@ -5,6 +5,9 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Deliver staged environmental AA inputs as one ordered admission batch and
+  one following liquid revision, retaining every fact and withdrawal.
+
 - Observe local EQEmu Titanium AA selections and definitions for environmental
   decisions, preserving signed effects, exact selected IDs and unknown data.
 

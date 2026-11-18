@@ -320,14 +320,19 @@ and death. [Profile layout][titanium-profile] [EQEmu encoder][titanium-encoder]
 ## Local Titanium environmental AA observations
 
 The local-endpoint EQEmu policy publishes read-only
-`WorldEvent::AlternateAdvancement { session_id, update }` facts. The complete
+`WorldEvent::AlternateAdvancement { session_id, updates }` ordered facts. The complete
 profile AA selection array and `OP_RespondAA` replace selected records;
 `OP_SendAATable` supplies individual definitions with required level, class
 mask and signed effects. Exact selected definition IDs determine membership.
 The raw selection value is retained and never used as an effect multiplier.
 An unowned definition grants no rank, and a partial table does not establish
 missing selected definitions. Pre-admission facts are staged and then stamped
-with the receiving admission. AA facts also advance `LiquidHazardRevision`.
+with the receiving admission in one batch, after `Entered` and before `Ready`.
+Core applies every fact in order, including withdrawals; the batch is not a
+complete-table assertion. One `LiquidHazardRevision` follows the whole batch.
+Post-admission facts publish immediately as singleton batches. This reduces
+admission event amplification without enlarging the viewer queue or proving
+that all possible queue saturation is prevented.
 
 Malformed packets withdraw their affected observation. An unidentified
 malformed definition withdraws cached definitions; `OP_ClearAA` withdraws the

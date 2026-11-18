@@ -734,8 +734,8 @@ pub enum WorldEvent {
     AlternateAdvancement {
         /// Admission that received the profile/definition/update.
         session_id: u64,
-        /// Read-only fact or explicit withdrawal.
-        update: crate::alternate_advancement::Update,
+        /// Ordered read-only facts or withdrawals, not a complete-table assertion.
+        updates: Vec<crate::alternate_advancement::Update>,
     },
     /// The worker has delivered its changed inputs for a liquid sample.
     LiquidHazardRevision {
