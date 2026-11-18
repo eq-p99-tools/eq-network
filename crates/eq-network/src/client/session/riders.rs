@@ -35,7 +35,7 @@ use eq_network_game::{
 use std::{
     sync::{
         atomic::{AtomicBool, Ordering},
-        Arc,
+        Mutex,
     },
     time::{Duration, Instant},
 };
@@ -58,6 +58,23 @@ const SWEEP_DROP: f32 = 30.0;
 /// heading from the restored heading: float rounding only.
 const SAME_PLACE: f32 = 0.05;
 const SAME_HEADING: f32 = 0.5;
+
+/// Where the program restores a rider in the boat's frame from a received
+/// profile (0x4ba21e-0x4ba25d; read R36c). Its loader stores the profile's
+/// three coordinates into the record's first, second and first fields
+/// again, and the heading into the fourth, so the first field keeps the
+/// profile's third coordinate and the third field keeps the departure's z
+/// (zero when this client saved none). Which of this client's axes the
+/// record's first two fields are follows the zone request's order
+/// (inferred, 6.478).
+fn restored(profile: Position, departure_z: Option<f32>) -> Position {
+    Position {
+        x: profile.y,
+        y: profile.z,
+        z: departure_z.unwrap_or(0.0),
+        heading: profile.heading,
+    }
+}
 
 /// An arrival aboard that holds the player's movement.
 #[derive(Clone, Debug, PartialEq)]
@@ -91,10 +108,38 @@ pub(super) enum CarriedFrom {
     Wait,
 }
 
-/// The riding wire's state in one zone session.
-pub(super) struct Riders {
+/// What the riding wire keeps across a character's zones, as the
+/// program's globals do.
+#[derive(Debug, Default)]
+pub(in crate::client) struct Riding {
     /// Whether the last boat word sent was `OP_BoardBoat`.
-    aboard: Arc<AtomicBool>,
+    aboard: AtomicBool,
+    /// The boat-frame z the last boat save carried. The program's profile
+    /// loader never writes the record's third coordinate (0x4ba21e; read
+    /// R36c), so its restore keeps the one the departure wrote.
+    departure_z: Mutex<Option<f32>>,
+}
+
+impl Riding {
+    /// Notes the boat-frame z a boat save carried, or forgets it.
+    pub(super) fn depart_at(&self, z: Option<f32>) {
+        if let Ok(mut departure) = self.departure_z.lock() {
+            *departure = z;
+        }
+    }
+
+    /// The boat-frame z the last boat save carried, if it is kept.
+    pub(super) fn departure_z(&self) -> Option<f32> {
+        self.departure_z
+            .lock()
+            .ok()
+            .and_then(|departure| *departure)
+    }
+}
+
+/// The riding wire's state in one zone session.
+#[derive(Default)]
+pub(super) struct Riders {
     /// When the next character tick runs.
     next_tick: Option<Instant>,
     /// Unlinked ticks in a row.
@@ -107,16 +152,6 @@ pub(super) struct Riders {
 }
 
 impl Riders {
-    pub(super) fn new(aboard: &Arc<AtomicBool>) -> Self {
-        Self {
-            aboard: Arc::clone(aboard),
-            next_tick: None,
-            unlinked: 0,
-            profiled: None,
-            found: None,
-        }
-    }
-
     fn publish(arrival: Arrival, world: &World, out: &mut Out<'_, '_>) -> Result<()> {
         out.log.send(ClientEvent::World(WorldEvent::Arrival {
             session_id: world.session_id,
@@ -139,7 +174,7 @@ impl Riders {
     /// zone's safe point, nothing sent (0x43d7c5).
     pub(super) fn safe_point(world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
         world.arrival = None;
-        world.vehicle = None;
+        world.forget_vehicle();
         let position = world
             .safe_point
             .or_else(|| world.body.position())
@@ -205,10 +240,11 @@ impl Riders {
         let Some(name) = world.vehicle.clone() else {
             return Ok(());
         };
-        let local = world
+        let profile = world
             .body
             .position()
             .context("arrival aboard without a profile position")?;
+        let local = restored(profile, world.riding.departure_z());
         let found = self
             .found
             .take()
@@ -224,6 +260,7 @@ impl Riders {
                 Arrival::Aboard {
                     name,
                     sample,
+                    profile,
                     local,
                 },
                 world,
@@ -297,15 +334,15 @@ impl Riders {
         if let Some(name) = boat {
             self.unlinked = 0;
             world.vehicle = Some(name.clone());
-            if !self.aboard.swap(true, Ordering::Relaxed) {
+            if !world.riding.aboard.swap(true, Ordering::Relaxed) {
                 out.request(&Request::BoardBoat(name))?;
             }
             return Ok(());
         }
         self.unlinked = self.unlinked.saturating_add(1);
         if self.unlinked >= UNLINKED_TICKS {
-            world.vehicle = None;
-            if self.aboard.swap(false, Ordering::Relaxed) {
+            world.forget_vehicle();
+            if world.riding.aboard.swap(false, Ordering::Relaxed) {
                 out.request(&Request::LeaveBoat)?;
             }
         }
@@ -387,7 +424,7 @@ impl Feature for Riders {
             Message::Event(WorldEvent::Death(death)) if world.is_player(death.spawn_id) => {
                 // Death forgets the boat and any arrival (0x4564ba).
                 world.arrival = None;
-                world.vehicle = None;
+                world.forget_vehicle();
                 Ok(())
             }
             _ => Ok(()),

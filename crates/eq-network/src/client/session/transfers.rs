@@ -183,7 +183,7 @@ impl Transfers {
         // (Titanium 0x456110; read R36 B), and so does the move home after
         // death (0x4564ba). The server places the player now, so an arrival
         // aboard is no longer awaited either.
-        world.vehicle = None;
+        world.forget_vehicle();
         world.arrival = None;
         world.carried_from = super::riders::CarriedFrom::Elsewhere;
         let offer = offer.clone();
@@ -306,12 +306,13 @@ fn save_on_leaving(reason: u32, world: &mut World) -> Option<zoning::Save> {
             Some((name, carrier_local(pose, position?)))
         });
     if let Some((name, local)) = aboard {
+        world.riding.depart_at(Some(local.z));
         return Some(zoning::Save {
             position: Some(local),
             vehicle: Some(name),
         });
     }
-    world.vehicle = None;
+    world.forget_vehicle();
     Some(zoning::Save::default())
 }
 
@@ -1331,6 +1332,8 @@ mod tests {
         let save = save_on_leaving(riders::ZONE_REASON, &mut world).unwrap();
         assert_eq!(save.vehicle.as_deref(), Some("SirensBane00"));
         let local = save.position.unwrap();
+        // The restore in the next zone keeps this z (read R36c).
+        assert_eq!(world.riding.departure_z(), Some(local.z));
         for (got, want) in [
             (local.x, deck.x),
             (local.y, deck.y),
@@ -1346,6 +1349,7 @@ mod tests {
             Some(zoning::Save::default())
         );
         assert_eq!(world.vehicle, None);
+        assert_eq!(world.riding.departure_z(), None);
         // So does a boat transfer once the boat is no longer found.
         let mut world = aboard();
         world.vehicle = Some("Stormbreaker".into());

@@ -20,14 +20,19 @@ use serde::Serialize;
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub enum Arrival {
     /// The vehicle is here. The host stands the player at `local` in its
-    /// frame, the profile's position, floor-sweeps from 1 above, retries at
-    /// (0, 0, 25) in the frame, and offers the result (0x4aba14).
+    /// frame, floor-sweeps from 1 above, retries at (0, 0, 25) in the
+    /// frame, and offers the result (0x4aba14).
     Aboard {
         /// The vehicle's raw saved name.
         name: String,
         /// The received report of the spawn the name found.
         sample: CarrierSample,
-        /// The profile's position and heading, in the boat's frame.
+        /// The profile's position fields as received: x from 13116, y from
+        /// 13120, z from 13124, and the heading.
+        profile: Position,
+        /// Where the program restores the rider in the boat's frame from
+        /// them (read R36c): the profile's y and z as x and y, and the z
+        /// the departure saved.
         local: Position,
     },
     /// The vehicle is not here. The session asked for it (0x3710) and holds

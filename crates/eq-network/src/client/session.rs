@@ -174,9 +174,9 @@ pub(in crate::client) struct CharacterSession<'a> {
     pub(in crate::client) sysinfo_reported_at: std::cell::Cell<u64>,
     /// Current character's opt-in; zone crossings retain it.
     pub(in crate::client) answer_list_polls: std::cell::Cell<bool>,
-    /// Whether the last boat word sent was `OP_BoardBoat`: the program
-    /// keeps it in a global, across zones (read R36 §4).
-    pub(in crate::client) aboard: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    /// What the riding wire keeps across zones, as the program's globals
+    /// do (reads R36 §4, R36c).
+    pub(in crate::client) riding: std::sync::Arc<riders::Riding>,
 }
 
 impl<'a> CharacterSession<'a> {
@@ -197,7 +197,7 @@ impl<'a> CharacterSession<'a> {
             commands,
             sysinfo_reported_at: std::cell::Cell::new(0),
             answer_list_polls: std::cell::Cell::new(config.answer_list_polls),
-            aboard: std::sync::Arc::default(),
+            riding: std::sync::Arc::default(),
         }
     }
 
@@ -206,7 +206,7 @@ impl<'a> CharacterSession<'a> {
             // Show the list and forget the departing character's runtime choice.
             self.config.character.clear();
             self.answer_list_polls.set(self.config.answer_list_polls);
-            self.aboard = std::sync::Arc::default();
+            self.riding = std::sync::Arc::default();
         }
     }
 }

@@ -245,6 +245,8 @@ pub(in crate::client) struct World {
     pub(super) arrival: Option<super::riders::Pending>,
     /// The zone's safe point from its header, as a position.
     pub(super) safe_point: Option<Position>,
+    /// What the riding wire keeps across the character's zones.
+    pub(super) riding: std::sync::Arc<super::riders::Riding>,
     /// Where the transfer under way began, for the save before leaving.
     pub(super) carried_from: super::riders::CarriedFrom,
     /// What the session itself made happen, for every feature and the host
@@ -287,6 +289,7 @@ impl World {
             vehicle: None,
             arrival: None,
             safe_point: None,
+            riding: std::sync::Arc::default(),
             carried_from: super::riders::CarriedFrom::Elsewhere,
             news: Vec::new(),
         }
@@ -434,6 +437,12 @@ impl World {
     pub(super) fn died(&mut self) {
         self.lifecycle.mark_dead();
         self.body.suspend();
+    }
+
+    /// Forgets the vehicle and the boat-frame z its departure saved.
+    pub(super) fn forget_vehicle(&mut self) {
+        self.vehicle = None;
+        self.riding.depart_at(None);
     }
 
     /// Puts the admitted player where the server says they are.

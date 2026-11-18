@@ -6,6 +6,7 @@ use eq_network_game::{
     zoning::{self, Death},
     GameDialect,
 };
+use std::sync::Arc;
 
 const BOAT: &str = "SirensBane00";
 
@@ -77,11 +78,12 @@ fn diagnostics(events: &[ClientEvent]) -> usize {
 
 #[test]
 fn the_first_linked_tick_boards_and_two_unlinked_ticks_leave() {
-    let aboard = Arc::new(AtomicBool::new(false));
+    let riding = Arc::new(Riding::default());
     let outcome = testing::run(|out| {
         let mut world = admitted(out);
+        world.riding = Arc::clone(&riding);
         let sample = boat(&mut world, 8, BOAT, Position::default());
-        let mut riders = Riders::new(&aboard);
+        let mut riders = Riders::default();
         riders.admitted(&mut world, out).unwrap();
         let start = Instant::now() + TICK;
         world.body.record_carrier_support(Some(sample));
@@ -104,17 +106,21 @@ fn the_first_linked_tick_boards_and_two_unlinked_ticks_leave() {
         outcome.sent,
         [titanium_board(BOAT).unwrap(), titanium_leave()]
     );
-    assert!(!aboard.load(Ordering::Relaxed));
+    assert!(!riding.aboard.load(Ordering::Relaxed));
 }
 
 #[test]
 fn a_boarding_kept_across_zones_leaves_once_no_boat_is_underfoot() {
     // The last word was a boarding in the zone before; this zone's floor
     // links nothing.
-    let aboard = Arc::new(AtomicBool::new(true));
+    let riding = Arc::new(Riding {
+        aboard: AtomicBool::new(true),
+        ..Riding::default()
+    });
     let outcome = testing::run(|out| {
         let mut world = admitted(out);
-        let mut riders = Riders::new(&aboard);
+        world.riding = Arc::clone(&riding);
+        let mut riders = Riders::default();
         riders.admitted(&mut world, out).unwrap();
         let start = Instant::now() + TICK;
         for tick in 0..4 {
@@ -122,17 +128,16 @@ fn a_boarding_kept_across_zones_leaves_once_no_boat_is_underfoot() {
         }
     });
     assert_eq!(outcome.sent, [titanium_leave()]);
-    assert!(!aboard.load(Ordering::Relaxed));
+    assert!(!riding.aboard.load(Ordering::Relaxed));
 }
 
 #[test]
 fn a_nameless_carrier_names_nothing() {
-    let aboard = Arc::new(AtomicBool::new(false));
     let outcome = testing::run(|out| {
         let mut world = admitted(out);
         let sample = boat(&mut world, 8, "", Position::default());
         world.body.record_carrier_support(Some(sample));
-        let mut riders = Riders::new(&aboard);
+        let mut riders = Riders::default();
         riders.tick(Instant::now(), &mut world, out).unwrap();
         assert_eq!(world.vehicle, None);
     });
@@ -141,10 +146,9 @@ fn a_nameless_carrier_names_nothing() {
 
 #[test]
 fn only_a_transfer_naming_the_saved_boat_zones_with_it_and_only_once() {
-    let aboard = Arc::new(AtomicBool::new(false));
     let outcome = testing::run(|out| {
         let mut world = admitted(out);
-        let mut riders = Riders::new(&aboard);
+        let mut riders = Riders::default();
         // No boat saved: the program does nothing.
         riders.observe(&transfer(BOAT), &mut world, out).unwrap();
         world.vehicle = Some(BOAT.into());
@@ -169,11 +173,10 @@ fn only_a_transfer_naming_the_saved_boat_zones_with_it_and_only_once() {
 
 #[test]
 fn a_transfer_before_admission_is_not_taken() {
-    let aboard = Arc::new(AtomicBool::new(false));
     let outcome = testing::run(|out| {
         let mut world = World::new(5);
         world.vehicle = Some(BOAT.into());
-        Riders::new(&aboard)
+        Riders::default()
             .observe(&transfer(BOAT), &mut world, out)
             .unwrap();
     });
@@ -182,16 +185,25 @@ fn a_transfer_before_admission_is_not_taken() {
 
 #[test]
 fn a_profile_without_a_vehicle_arrives_as_ever() {
-    let aboard = Arc::new(AtomicBool::new(false));
+    let here = Position {
+        x: 1.0,
+        y: 2.0,
+        z: 3.0,
+        heading: 40.0,
+    };
     let outcome = testing::run(|out| {
-        let mut world = admitted(out);
-        let mut riders = Riders::new(&aboard);
+        let mut world = admitted_at(out, here);
+        // Even with a departure z kept, an ordinary admission decodes as
+        // ever: the loader's quirk applies only to a restore aboard.
+        world.riding.depart_at(Some(-7.5));
+        let mut riders = Riders::default();
         riders
             .admit(&Message::VehicleName(None), &mut world)
             .unwrap();
         riders.admitted(&mut world, out).unwrap();
         assert!(world.arrival.is_none() && world.vehicle.is_none());
         assert!(!world.motion_held());
+        assert_eq!(world.body.position(), Some(here));
     });
     assert_eq!(outcome.sent, []);
     assert_eq!(arrivals(&outcome.events), Vec::<&Arrival>::new());
@@ -212,8 +224,18 @@ const AT: Position = Position {
 };
 
 /// An arrival whose profile names a boat that was in at the profile.
+/// The profile's position fields that the program restores to [`DECK`],
+/// with the departure's z: its loader keeps y and z as x and y.
+const PROFILE: Position = Position {
+    x: 99.0,
+    y: DECK.x,
+    z: DECK.y,
+    heading: DECK.heading,
+};
+
 fn aboard(out: &mut Out<'_, '_>, riders: &mut Riders) -> (World, CarrierSample) {
-    let mut world = admitted_at(out, DECK);
+    let mut world = admitted_at(out, PROFILE);
+    world.riding.depart_at(Some(DECK.z));
     world.safe_point = Some(Position {
         x: -5.0,
         y: 6.0,
@@ -230,8 +252,7 @@ fn aboard(out: &mut Out<'_, '_>, riders: &mut Riders) -> (World, CarrierSample) 
 
 #[test]
 fn a_boat_in_at_the_profile_holds_the_player_for_one_placement_on_it() {
-    let aboard_flag = Arc::new(AtomicBool::new(false));
-    let mut riders = Riders::new(&aboard_flag);
+    let mut riders = Riders::default();
     let outcome = testing::run(|out| {
         let (mut world, sample) = aboard(out, &mut riders);
         assert!(matches!(
@@ -261,8 +282,10 @@ fn a_boat_in_at_the_profile_holds_the_player_for_one_placement_on_it() {
     let swept = outcome.result;
     assert_eq!(outcome.sent, []);
     let arrivals = arrivals(&outcome.events);
-    assert!(matches!(arrivals[0], Arrival::Aboard { name, local, .. }
-        if name == BOAT && *local == DECK));
+    assert!(
+        matches!(arrivals[0], Arrival::Aboard { name, profile, local, .. }
+        if name == BOAT && *profile == PROFILE && *local == DECK)
+    );
     assert_eq!(arrivals[1], &Arrival::Placed { position: swept });
     assert_eq!(arrivals.len(), 2);
     assert_eq!(diagnostics(&outcome.events), 1);
@@ -270,8 +293,7 @@ fn a_boat_in_at_the_profile_holds_the_player_for_one_placement_on_it() {
 
 #[test]
 fn the_retry_point_is_a_placement_too() {
-    let flag = Arc::new(AtomicBool::new(false));
-    let mut riders = Riders::new(&flag);
+    let mut riders = Riders::default();
     let outcome = testing::run(|out| {
         let (mut world, _) = aboard(out, &mut riders);
         let retry = carrier_world(
@@ -296,7 +318,6 @@ fn the_retry_point_is_a_placement_too() {
 
 #[test]
 fn a_placement_away_from_the_boat_or_none_goes_to_the_safe_point() {
-    let flag = Arc::new(AtomicBool::new(false));
     for offered in [
         Some(Position {
             x: 0.0,
@@ -311,7 +332,7 @@ fn a_placement_away_from_the_boat_or_none_goes_to_the_safe_point() {
         }),
         None,
     ] {
-        let mut riders = Riders::new(&flag);
+        let mut riders = Riders::default();
         let outcome = testing::run(|out| {
             let (mut world, _) = aboard(out, &mut riders);
             riders.handle(&placement(offered), &mut world, out).unwrap();
@@ -335,11 +356,10 @@ fn a_placement_away_from_the_boat_or_none_goes_to_the_safe_point() {
 
 #[test]
 fn a_missing_boat_is_asked_for_and_the_wait_ends_at_the_safe_point() {
-    let flag = Arc::new(AtomicBool::new(false));
     let outcome = testing::run(|out| {
         let mut world = admitted(out);
         world.safe_point = Some(Position::default());
-        let mut riders = Riders::new(&flag);
+        let mut riders = Riders::default();
         // The boat comes in only after the profile: the one lookup missed it.
         riders
             .admit(&Message::VehicleName(Some(BOAT.into())), &mut world)
@@ -380,10 +400,9 @@ fn a_missing_boat_is_asked_for_and_the_wait_ends_at_the_safe_point() {
 
 #[test]
 fn the_server_carrying_a_waiting_rider_on_zones_them_with_the_boat_and_no_save() {
-    let flag = Arc::new(AtomicBool::new(false));
     let outcome = testing::run(|out| {
         let mut world = admitted(out);
-        let mut riders = Riders::new(&flag);
+        let mut riders = Riders::default();
         riders
             .admit(&Message::VehicleName(Some(BOAT.into())), &mut world)
             .unwrap();
@@ -422,7 +441,6 @@ fn the_server_carrying_a_waiting_rider_on_zones_them_with_the_boat_and_no_save()
 
 #[test]
 fn a_transfer_to_a_zone_no_id_can_name_is_dropped_with_a_word() {
-    let flag = Arc::new(AtomicBool::new(false));
     let outcome = testing::run(|out| {
         let mut world = admitted(out);
         world.vehicle = Some(BOAT.into());
@@ -430,7 +448,7 @@ fn a_transfer_to_a_zone_no_id_can_name_is_dropped_with_a_word() {
             name: BOAT.into(),
             zone_id: 70_000,
         });
-        Riders::new(&flag).observe(&message, &mut world, out)?;
+        Riders::default().observe(&message, &mut world, out)?;
         assert!(!world.lifecycle.blocks_motion());
         anyhow::Ok(())
     });
@@ -441,8 +459,7 @@ fn a_transfer_to_a_zone_no_id_can_name_is_dropped_with_a_word() {
 
 #[test]
 fn death_forgets_the_boat_and_the_arrival() {
-    let flag = Arc::new(AtomicBool::new(false));
-    let mut riders = Riders::new(&flag);
+    let mut riders = Riders::default();
     let outcome = testing::run(|out| {
         let (mut world, _) = aboard(out, &mut riders);
         let died = Message::Event(WorldEvent::Death(Death {
@@ -458,15 +475,14 @@ fn death_forgets_the_boat_and_the_arrival() {
         riders
             .handle(&placement(Some(carrier_world(AT, DECK))), &mut world, out)
             .unwrap();
-        assert_eq!(world.body.position(), Some(DECK));
+        assert_eq!(world.body.position(), Some(PROFILE));
     });
     assert_eq!(diagnostics(&outcome.events), 1);
 }
 
 #[test]
 fn a_host_that_never_places_the_player_aboard_ends_at_the_safe_point() {
-    let flag = Arc::new(AtomicBool::new(false));
-    let mut riders = Riders::new(&flag);
+    let mut riders = Riders::default();
     let outcome = testing::run(|out| {
         let (mut world, _) = aboard(out, &mut riders);
         let Some(Pending::Aboard { until, .. }) = world.arrival else {
@@ -498,7 +514,6 @@ fn a_host_that_never_places_the_player_aboard_ends_at_the_safe_point() {
 
 #[test]
 fn a_refused_carry_on_from_the_wait_ends_at_the_safe_point() {
-    let flag = Arc::new(AtomicBool::new(false));
     let safe = Position {
         x: -5.0,
         y: 6.0,
@@ -508,7 +523,7 @@ fn a_refused_carry_on_from_the_wait_ends_at_the_safe_point() {
     let outcome = testing::run(|out| {
         let mut world = admitted(out);
         world.safe_point = Some(safe);
-        let mut riders = Riders::new(&flag);
+        let mut riders = Riders::default();
         riders
             .admit(&Message::VehicleName(Some(BOAT.into())), &mut world)
             .unwrap();
@@ -535,5 +550,41 @@ fn a_refused_carry_on_from_the_wait_ends_at_the_safe_point() {
     assert_eq!(
         arrivals(&outcome.events).last(),
         Some(&&Arrival::SafePoint { position: safe })
+    );
+}
+
+#[test]
+fn the_restore_keeps_the_profiles_y_and_z_and_the_departures_z() {
+    let profile = Position {
+        x: 1.0,
+        y: 2.0,
+        z: 3.0,
+        heading: 40.0,
+    };
+    assert_eq!(
+        restored(profile, Some(-7.5)),
+        Position {
+            x: 2.0,
+            y: 3.0,
+            z: -7.5,
+            heading: 40.0,
+        }
+    );
+    // No boat save this session: the record's third field is zero.
+    assert_eq!(restored(profile, None).z, 0.0);
+}
+
+#[test]
+fn the_departure_z_is_kept_by_a_boat_save_and_forgotten_with_the_boat() {
+    let riding = Riding::default();
+    riding.depart_at(Some(4.0));
+    assert_eq!(riding.departure_z(), Some(4.0));
+    let mut world = World::new(5);
+    world.riding = Arc::new(riding);
+    world.vehicle = Some(BOAT.into());
+    world.forget_vehicle();
+    assert_eq!(
+        (world.vehicle.as_deref(), world.riding.departure_z()),
+        (None, None)
     );
 }

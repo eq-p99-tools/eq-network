@@ -83,8 +83,6 @@ pub(super) struct Setup<'a> {
     pub(super) auto_eat: eq_network_game::food::AutoEat,
     /// The connection is constrained to local endpoints.
     pub(super) local_only: bool,
-    /// Whether the last boat word sent was `OP_BoardBoat`, kept across zones.
-    pub(super) aboard: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl<'a> Setup<'a> {
@@ -94,7 +92,6 @@ impl<'a> Setup<'a> {
             character,
             auto_eat,
             local_only: false,
-            aboard: std::sync::Arc::default(),
         }
     }
 }
@@ -906,8 +903,8 @@ impl ServerType for Project1999 {
 
     /// The same Titanium program rides boats on P99; its riding wire is the
     /// program's own, not a server choice (reads R36, R36b).
-    fn riders(&self, setup: &Setup<'_>) -> Provided {
-        offer(Box::new(super::riders::Riders::new(&setup.aboard)))
+    fn riders(&self, _setup: &Setup<'_>) -> Provided {
+        offer(Box::<super::riders::Riders>::default())
     }
 
     fn resurrection(&self, _setup: &Setup<'_>) -> Provided {
@@ -1280,8 +1277,8 @@ impl ServerType for EqEmu {
         offer(Box::new(super::boats::Boats::default()))
     }
 
-    fn riders(&self, setup: &Setup<'_>) -> Provided {
-        offer(Box::new(super::riders::Riders::new(&setup.aboard)))
+    fn riders(&self, _setup: &Setup<'_>) -> Provided {
+        offer(Box::<super::riders::Riders>::default())
     }
 
     fn character(&self, _setup: &Setup<'_>) -> Provided {
