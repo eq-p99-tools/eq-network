@@ -236,6 +236,17 @@ pub(in crate::client) struct World {
     /// The world container asked for or open, which only the tradeskills
     /// feature changes.
     pub(super) container: OpenContainer,
+    /// The raw name of the boat the player rides, as Titanium keeps it:
+    /// the profile's at admission, then the boat underfoot each second
+    /// (read R36). The riders and transfers features change it.
+    pub(super) vehicle: Option<String>,
+    /// An arrival aboard that holds the player's movement until the riders
+    /// feature settles it.
+    pub(super) arrival: Option<super::riders::Pending>,
+    /// The zone's safe point from its header, as a position.
+    pub(super) safe_point: Option<Position>,
+    /// Where the transfer under way began, for the save before leaving.
+    pub(super) carried_from: super::riders::CarriedFrom,
     /// What the session itself made happen, for every feature and the host
     /// to hear next; see [`World::happened`].
     news: Vec<Message>,
@@ -273,6 +284,10 @@ impl World {
             own_pet: None,
             objects: ZoneObjects::default(),
             container: OpenContainer::default(),
+            vehicle: None,
+            arrival: None,
+            safe_point: None,
+            carried_from: super::riders::CarriedFrom::Elsewhere,
             news: Vec::new(),
         }
     }
@@ -294,6 +309,12 @@ impl World {
             },
             ..Self::new(session_id)
         }
+    }
+
+    /// Whether the player may not move now: a death or transfer, or an
+    /// arrival aboard not yet settled.
+    pub(super) fn motion_held(&self) -> bool {
+        self.lifecycle.blocks_motion() || self.arrival.is_some()
     }
 
     /// Whether the zone connection permits scoped local `EQEmu` fixture commands.
@@ -401,6 +422,7 @@ impl World {
     /// Rejects a refusal without a transfer under way.
     pub(super) fn transfer_refused(&mut self, now: Instant) -> Result<()> {
         self.lifecycle.finish(false, now)?;
+        self.carried_from = super::riders::CarriedFrom::Elsewhere;
         if !self.lifecycle.is_dead() {
             self.body.resume(now);
         }

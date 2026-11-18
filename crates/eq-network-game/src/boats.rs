@@ -6,6 +6,7 @@
 //! particular, an uncorrelated echo and an expired request never grant control.
 
 mod control;
+pub mod riders;
 pub use control::{Control, ControlState, Intent, Vessel};
 
 use crate::{movement::CarrierSample, world::Position};

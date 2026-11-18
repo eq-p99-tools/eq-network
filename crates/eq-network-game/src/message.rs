@@ -54,6 +54,11 @@ pub enum Message {
     /// The server's answer to a transfer request, which the session reads
     /// against the pending request.
     ZoneAnswer(zoning::ZoneAnswer),
+    /// The vehicle the received Titanium profile names, or None.
+    VehicleName(Option<String>),
+    /// The server's word that a boat carries its riders into another zone
+    /// (Titanium 0x0b71), for the session to match against the saved vehicle.
+    VehicleTransfer(crate::boats::riders::Transfer),
     /// The next zone's address.
     Handoff(Vec<u8>),
     /// The player's bind point, from their profile: where a client that asks
@@ -155,6 +160,11 @@ pub fn titanium(opcode: u16, body: &[u8]) -> Vec<Message> {
             Message::ZoneAnswer,
         ),
         zoning::HANDOFF_OPCODE => Message::Handoff(body.to_vec()),
+        crate::boats::riders::TRANSFER_OPCODE => crate::boats::riders::Transfer::titanium(body)
+            .map_or_else(
+                |error| unreadable(Part::ZoneOffer, &error),
+                Message::VehicleTransfer,
+            ),
         LOGOUT_REPLY_OPCODE => Message::LoggedOut,
         // EQEmu's TRADESKILL_NOCOMBINE (zone/string_ids.h) accompanies
         // the early return that sends a reset without a station clear.
@@ -250,6 +260,9 @@ fn titanium_profile_messages(body: &[u8], messages: &mut Vec<Message>) -> Messag
         }
     }
     messages.extend(crate::knights::titanium_profile(body).map(Message::KnightRefresh));
+    messages.push(Message::VehicleName(
+        crate::boats::riders::titanium_profile_name(body),
+    ));
     match crate::group::titanium_profile(body) {
         Ok(group) => messages.extend(group.map(|update| Message::Event(WorldEvent::Group(update)))),
         Err(error) => messages.push(unreadable(Part::World, &error)),
@@ -552,6 +565,7 @@ mod tests {
             &titanium(PROFILE_OPCODE, &profile)[..],
             [
                 Message::AlternateAdvancement(crate::alternate_advancement::Update::Selections(Some(_))),
+                Message::VehicleName(None),
                 Message::Event(WorldEvent::Group(crate::group::GroupUpdate::Disbanded)),
                 Message::Event(WorldEvent::BuffSnapshot(_)),
                 Message::Event(WorldEvent::Coins(_)),
@@ -571,6 +585,7 @@ mod tests {
                 Message::AlternateAdvancement(crate::alternate_advancement::Update::Selections(
                     None
                 )),
+                Message::VehicleName(None),
                 Message::Unreadable {
                     part: Part::World,
                     ..

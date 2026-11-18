@@ -440,6 +440,7 @@ fn actual_zone_receive_delivers_replay_before_any_profile_or_entered_event() {
             commands: None,
             sysinfo_reported_at: std::cell::Cell::new(0),
             answer_list_polls: std::cell::Cell::new(false),
+            aboard: std::sync::Arc::default(),
         };
         let mut received = Vec::new();
         let mut handler = |event| {

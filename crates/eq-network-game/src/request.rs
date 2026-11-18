@@ -294,6 +294,14 @@ pub enum Request {
         /// Acquire or release.
         intent: crate::boats::Intent,
     },
+    /// Name the boat the player now stands on, by its raw spawn name
+    /// (Titanium `OP_BoardBoat`).
+    BoardBoat(String),
+    /// Say the player no longer stands on a boat (Titanium `OP_LeaveBoat`).
+    LeaveBoat,
+    /// Say the vehicle the profile names was not found at arrival, by its
+    /// raw saved name (Titanium 0x3710).
+    VehicleMissing(String),
     /// The client's own return of a type 40 or 45 door, which Titanium sends
     /// as a click with no player ([`doors::titanium::return_click`]).
     ReturnDoor(u8),
@@ -314,8 +322,8 @@ pub enum Request {
         name: String,
     },
     /// Ask the zone the player is leaving to save them, once it approves
-    /// the transfer.
-    SaveOnZone,
+    /// the transfer. `EQMac` sends its own fixed save and ignores these.
+    SaveOnZone(zoning::Save),
     /// Take the player's own spawn out of the zone they are leaving: the
     /// last word to it before the world server.
     Depart,
@@ -559,6 +567,9 @@ pub fn titanium(request: &Request, sender: Sender<'_>) -> Result<EncodedCommand>
         Request::CancelTrade { .. } => exchange::cancel(sender.spawn())?,
         Request::ClickDoor(door_id) => doors::titanium_click(*door_id, sender.spawn()),
         Request::ControlBoat { spawn_id, intent } => crate::boats::titanium(*spawn_id, *intent)?,
+        Request::BoardBoat(name) => crate::boats::riders::titanium_board(name)?,
+        Request::LeaveBoat => crate::boats::riders::titanium_leave(),
+        Request::VehicleMissing(name) => crate::boats::riders::titanium_missing(name)?,
         Request::ReturnDoor(door_id) => doors::titanium::return_click(*door_id),
         // A click opens a world container as it picks an item up.
         Request::PickUp(drop_id) | Request::OpenContainer(drop_id) => {
@@ -581,7 +592,7 @@ pub fn titanium(request: &Request, sender: Sender<'_>) -> Result<EncodedCommand>
             position,
             reason,
         } => zoning::titanium_answer(sender.name, (*zone_id, *instance_id), *position, *reason)?,
-        Request::SaveOnZone => zoning::titanium_save_on_zone(),
+        Request::SaveOnZone(save) => zoning::titanium_save_on_zone(save),
         Request::RangedAttack { target_id, kind } => {
             crate::combat::ranged::titanium(*target_id, *kind)?
         }
@@ -679,7 +690,7 @@ pub fn eqmac(request: &Request, sender: Sender<'_>) -> Result<EncodedCommand> {
             reason,
             ..
         } => crate::quarm::zone_change(sender.name, *zone_id, *reason),
-        Request::SaveOnZone => Ok(crate::quarm::save_on_zone()),
+        Request::SaveOnZone(_) => Ok(crate::quarm::save_on_zone()),
         Request::DestroyCursor => anyhow::bail!("Cursor destruction is unavailable for EQMac"),
         Request::DropCursor => anyhow::bail!("Cursor dropping is unavailable for EQMac"),
         Request::MoveItem { from, to, quantity } => {
@@ -803,15 +814,15 @@ mod tests {
         // EQMac has no instances.
         assert!(eqmac(&answer(2), PLAYER).is_err());
         assert_eq!(
-            titanium(&Request::SaveOnZone, PLAYER).unwrap(),
-            crate::zoning::titanium_save_on_zone()
+            titanium(&Request::SaveOnZone(zoning::Save::default()), PLAYER).unwrap(),
+            crate::zoning::titanium_save_on_zone(&zoning::Save::default())
         );
         assert_eq!(
             titanium(&Request::Depart, PLAYER).unwrap(),
             crate::zoning::titanium_depart(7)
         );
         assert_eq!(
-            eqmac(&Request::SaveOnZone, PLAYER).unwrap(),
+            eqmac(&Request::SaveOnZone(zoning::Save::default()), PLAYER).unwrap(),
             crate::quarm::save_on_zone()
         );
         assert_eq!(

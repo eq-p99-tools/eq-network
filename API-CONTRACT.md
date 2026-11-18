@@ -39,8 +39,9 @@ reach is 600 units and superseded reports remain usable for at most 2 s after
 their successor, within a 64-report history (6.469). A still rider's existing
 1 s tick sends ordinary world coordinates with zero own velocity, yaw and
 animation (6.470). No piloting opcode or route is invented. Pitch and continuing
-boat yaw are absent from the decoded position API. Boat zoning remains separate;
-source and synthetic coverage do not establish a witnessed ride.
+boat yaw are absent from the decoded position API. Boat zoning is described
+under [boat riding](#boat-riding); source and synthetic coverage do not
+establish a witnessed ride.
 
 The worker does not call stand-to-move solely for passive fall, lift or carrier
 displacement. Titanium's movement, vehicle and physics paths do not call its
@@ -1460,3 +1461,28 @@ the floor link. `WorldEvent::BoatControl` is only a decoded packet.
 `WorldEvent::BoatControlState` carries the admission-scoped correlated state.
 No state enables vessel position requests. See [boat control](docs/boat-control.md)
 for echo ambiguity, timeout policy and source/validation limits.
+
+## Boat riding
+
+`Capability::BoatRiding` is offered on EQEmu and P99. The session names the
+boat underfoot to the server on its own, and zones with a boat when the
+server's vehicle transfer names the saved one; hosts send nothing for either.
+When a received profile names a vehicle, the session publishes
+`WorldEvent::Arrival` and holds movement:
+
+- `Arrival::Aboard` names the boat, the received report of the spawn found and
+  the profile's position in its frame. The host stands the player there,
+  floor-sweeps from one unit above, retries at (0, 0, 25) in the frame, and
+  sends one `GameCommand::ArrivalPlacement` with the result. It must send
+  `None` when it found no floor, or when the floor its sweep found is not
+  the named carrier's: the session cannot see the link, and the program
+  takes only a floor that links the carrier. The session takes only a placement where that sweep could
+  land, then publishes `Arrival::Placed`; any other answer, a second one, or
+  one after death changes nothing or ends at the safe point. With no answer
+  within 60 s the session uses the safe point.
+- `Arrival::Waiting` means the boat was not found and the server was asked for
+  it. The session ends the hold itself, by a transfer or after 60 s.
+- `Arrival::SafePoint` gives the position the session placed the player at.
+
+Moves sent while an arrival is held are refused. See
+[boat riding](docs/boat-riding.md) for the wire and the inferred bounds.

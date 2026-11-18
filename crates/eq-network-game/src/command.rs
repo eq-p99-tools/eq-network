@@ -96,6 +96,17 @@ pub enum GameCommand {
         /// Queued input expires.
         created: std::time::Instant,
     },
+    /// Stand the arriving player where the host's floor sweep found the
+    /// vehicle the profile names ([`crate::boats::riders::Arrival::Aboard`]),
+    /// or say it found no floor there, which sends them to the safe point.
+    ArrivalPlacement {
+        /// Current zone admission.
+        session_id: u64,
+        /// The swept world position on the vehicle, or None.
+        position: Option<crate::world::Position>,
+        /// The time the sweep posed the vehicle at.
+        created: std::time::Instant,
+    },
     /// Use an ordinary nearby door; no lockpicking or cursor-item action is implied.
     ClickDoor {
         /// Current zone admission.
@@ -992,6 +1003,7 @@ impl GameCommand {
             Self::UseItem(..) => "UseItem",
             Self::ClickDoor { .. } => "ClickDoor",
             Self::BoatControl { .. } => "BoatControl",
+            Self::ArrivalPlacement { .. } => "ArrivalPlacement",
             Self::PickUp { .. } => "PickUp",
             Self::OpenContainer { .. } => "OpenContainer",
             Self::CloseContainer { .. } => "CloseContainer",
@@ -1118,6 +1130,7 @@ impl GameCommand {
             Self::SwapSpell { session_id, .. }
             | Self::SendChatInAdmission { session_id, .. }
             | Self::BoatControl { session_id, .. }
+            | Self::ArrivalPlacement { session_id, .. }
             | Self::ClickDoor { session_id, .. }
             | Self::PickUp { session_id, .. }
             | Self::OpenContainer { session_id, .. }
@@ -1247,6 +1260,7 @@ impl GameCommand {
                 Capability::Casting
             }
             Self::BoatControl { .. } => Capability::BoatControl,
+            Self::ArrivalPlacement { .. } => Capability::BoatRiding,
             Self::ClickDoor { .. } => Capability::Doors,
             Self::PickUp { .. } => Capability::GroundItems,
             Self::CrossZoneLine { .. } => Capability::Zoning,
@@ -1423,6 +1437,7 @@ impl GameCommand {
             | Self::RespondToPopup { created, .. }
             | Self::InspectPlayer { created, .. }
             | Self::BoatControl { created, .. }
+            | Self::ArrivalPlacement { created, .. }
             | Self::ClickDoor { created, .. }
             | Self::PickUp { created, .. }
             | Self::OpenContainer { created, .. }
@@ -1629,6 +1644,7 @@ pub fn encode(
         | GameCommand::DestroyItem(_)
         | GameCommand::DropItem(_)
         | GameCommand::BoatControl { .. }
+        | GameCommand::ArrivalPlacement { .. }
         | GameCommand::ClickDoor { .. }
         | GameCommand::PickUp { .. }
         | GameCommand::OpenContainer { .. }

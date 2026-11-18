@@ -83,6 +83,8 @@ pub(super) struct Setup<'a> {
     pub(super) auto_eat: eq_network_game::food::AutoEat,
     /// The connection is constrained to local endpoints.
     pub(super) local_only: bool,
+    /// Whether the last boat word sent was `OP_BoardBoat`, kept across zones.
+    pub(super) aboard: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl<'a> Setup<'a> {
@@ -92,6 +94,7 @@ impl<'a> Setup<'a> {
             character,
             auto_eat,
             local_only: false,
+            aboard: std::sync::Arc::default(),
         }
     }
 }
@@ -313,6 +316,12 @@ pub(super) trait ServerType: Sync {
         None
     }
 
+    /// Titanium's riding wire: naming the boat underfoot, zoning with a boat
+    /// the server carries on, and arriving aboard it.
+    fn riders(&self, _setup: &Setup<'_>) -> Provided {
+        None
+    }
+
     /// Sitting, standing and ducking, separate from walking.
     fn posture(&self, _setup: &Setup<'_>) -> Provided {
         None
@@ -528,6 +537,7 @@ pub(super) trait ServerType: Sync {
             self.character(setup),
             self.entities(setup),
             self.boats(setup),
+            self.riders(setup),
             self.targeting(setup),
             self.combat(setup),
             self.looting(setup),
@@ -892,6 +902,12 @@ struct Project1999;
 impl ServerType for Project1999 {
     fn dialogs(&self) -> Provided {
         offer(Box::<Dialogs>::default())
+    }
+
+    /// The same Titanium program rides boats on P99; its riding wire is the
+    /// program's own, not a server choice (reads R36, R36b).
+    fn riders(&self, setup: &Setup<'_>) -> Provided {
+        offer(Box::new(super::riders::Riders::new(&setup.aboard)))
     }
 
     fn resurrection(&self, _setup: &Setup<'_>) -> Provided {
@@ -1262,6 +1278,10 @@ impl ServerType for EqEmu {
 
     fn boats(&self, _setup: &Setup<'_>) -> Provided {
         offer(Box::new(super::boats::Boats::default()))
+    }
+
+    fn riders(&self, setup: &Setup<'_>) -> Provided {
+        offer(Box::new(super::riders::Riders::new(&setup.aboard)))
     }
 
     fn character(&self, _setup: &Setup<'_>) -> Provided {
@@ -2379,8 +2399,8 @@ mod tests {
         // yet checked live; and only EQEmu takes the show-helm option.
         // Both Titanium policies retain the verified own-player stun timer.
         for (protocol, count) in [
-            (ServerProtocol::Project1999, 37),
-            (ServerProtocol::EqEmu, 44),
+            (ServerProtocol::Project1999, 38),
+            (ServerProtocol::EqEmu, 45),
         ] {
             let server = server_type(protocol);
             let setup = Setup::new("Tester", AutoEat::default());
@@ -2400,8 +2420,8 @@ mod tests {
             assert!(offers(server_type(ServerProtocol::EqEmu)).contains(&capability));
         }
         assert!(offers(server_type(ServerProtocol::Project1999)).contains(&Capability::Grouping));
-        // Both Titanium providers offer the contacts, guild, coin-sharing and
-        // tracking requests the program sends.
+        // Both Titanium providers offer the contacts, guild, coin-sharing,
+        // tracking and boat-riding requests the program sends.
         for protocol in [ServerProtocol::Project1999, ServerProtocol::EqEmu] {
             let capabilities = offers(server_type(protocol));
             for capability in [
@@ -2411,6 +2431,7 @@ mod tests {
                 Capability::BankerChange,
                 Capability::Splitting,
                 Capability::Tracking,
+                Capability::BoatRiding,
             ] {
                 assert!(
                     capabilities.contains(&capability),

@@ -133,6 +133,7 @@ fn context<'a>(
         commands,
         sysinfo_reported_at: Cell::new(0),
         answer_list_polls: Cell::new(false),
+        aboard: std::sync::Arc::default(),
     }
 }
 

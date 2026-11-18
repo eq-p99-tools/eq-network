@@ -160,6 +160,7 @@ fn the_zone_loop_refuses_queued_work_and_drains_the_final_logout() {
         commands: Some(&receiver),
         sysinfo_reported_at: Cell::new(0),
         answer_list_polls: Cell::new(false),
+        aboard: std::sync::Arc::default(),
     };
     let mut seen = Vec::new();
     let mut handler = |event| {
