@@ -624,12 +624,14 @@ pub enum Capability {
     Splitting,
     /// Tracking's window: its list, following a spawn and stopping.
     Tracking,
+    /// `EQEmu` acquire/release of a floor-supported Titanium boat; no steering.
+    BoatControl,
 }
 
 impl Capability {
     /// Every capability, in order: what a session offers when its server and
     /// client generation support everything.
-    pub const ALL: [Self; 63] = [
+    pub const ALL: [Self; 64] = [
         Self::Casting,
         Self::Spellbook,
         Self::Inventory,
@@ -693,6 +695,7 @@ impl Capability {
         Self::BankerChange,
         Self::Splitting,
         Self::Tracking,
+        Self::BoatControl,
     ];
 }
 
@@ -717,6 +720,23 @@ pub enum ItemHitPoints {
 /// wildcard arm.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub enum WorldEvent {
+    /// One received Titanium boat-control echo, without request correlation
+    /// or permission to move a vessel.
+    BoatControl(crate::boats::ControlBoat),
+    /// Correlated boat control knowledge, scoped to its zone admission.
+    BoatControlState {
+        /// Admission whose control owner produced this state.
+        session_id: u64,
+        /// Explicit pending, acquired or unconfirmed state.
+        state: crate::boats::ControlState,
+    },
+    /// Received AA environmental inputs belonging only to this admission.
+    AlternateAdvancement {
+        /// Admission that received the profile/definition/update.
+        session_id: u64,
+        /// Ordered read-only facts or withdrawals, not a complete-table assertion.
+        updates: Vec<crate::alternate_advancement::Update>,
+    },
     /// The worker has delivered its changed inputs for a liquid sample.
     LiquidHazardRevision {
         /// The admission whose inputs changed.
@@ -2091,6 +2111,11 @@ pub fn titanium_update(opcode: u16, body: &[u8]) -> Result<Option<WorldEvent>> {
 #[allow(clippy::too_many_lines, reason = "one branch per codec")]
 fn titanium_views(opcode: u16, body: &[u8]) -> Result<Option<WorldEvent>> {
     match opcode {
+        crate::boats::TITANIUM_OPCODE => {
+            return Ok(Some(WorldEvent::BoatControl(
+                crate::boats::ControlBoat::titanium(body)?,
+            )));
+        }
         crate::rewards::SOUND_OPCODE => {
             return Ok(Some(match crate::rewards::titanium_sound(body)? {
                 crate::rewards::Sound::Reward(reward) => WorldEvent::Reward(reward),
@@ -2398,6 +2423,7 @@ mod tests {
             Capability::BankerChange => 60,
             Capability::Splitting => 61,
             Capability::Tracking => 62,
+            Capability::BoatControl => 63,
         };
         for (index, capability) in Capability::ALL.into_iter().enumerate() {
             assert_eq!(place(capability), index, "{capability:?}");

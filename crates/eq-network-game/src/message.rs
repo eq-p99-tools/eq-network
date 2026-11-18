@@ -16,6 +16,8 @@ const PROFILE_OPCODE: u16 = 0x75df;
 /// What a zone packet says.
 #[derive(Debug)]
 pub enum Message {
+    /// Read-only Titanium AA facts, scoped and published by the server feature.
+    AlternateAdvancement(crate::alternate_advancement::Update),
     /// News the host hears about too.
     Event(WorldEvent),
     /// A decoded trainer reply that still needs session checks.
@@ -134,6 +136,11 @@ pub fn titanium(opcode: u16, body: &[u8]) -> Vec<Message> {
         Err(error) => messages.push(unreadable(Part::Spells, &error)),
     }
     let message = match opcode {
+        crate::alternate_advancement::DEFINITION_OPCODE
+        | crate::alternate_advancement::SELECTIONS_OPCODE
+        | crate::alternate_advancement::CLEAR_OPCODE => {
+            titanium_aa_message(opcode, body, &mut messages)
+        }
         zoning::POINTS_OPCODE => zoning::ZonePoints::decode(body).map_or_else(
             |error| unreadable(Part::ZonePoints, &error),
             Message::ZonePoints,
@@ -222,7 +229,26 @@ pub fn titanium(opcode: u16, body: &[u8]) -> Vec<Message> {
     messages
 }
 
+fn titanium_aa_message(opcode: u16, body: &[u8], messages: &mut Vec<Message>) -> Message {
+    match crate::alternate_advancement::titanium(opcode, body) {
+        Ok(update) => Message::AlternateAdvancement(update),
+        Err(error) => {
+            messages.push(unreadable(Part::World, &error));
+            Message::AlternateAdvancement(crate::alternate_advancement::invalidated(opcode, body))
+        }
+    }
+}
+
 fn titanium_profile_messages(body: &[u8], messages: &mut Vec<Message>) -> Message {
+    match crate::alternate_advancement::titanium_profile(body) {
+        Ok(update) => messages.push(Message::AlternateAdvancement(update)),
+        Err(error) => {
+            messages.push(unreadable(Part::World, &error));
+            messages.push(Message::AlternateAdvancement(
+                crate::alternate_advancement::Update::Selections(None),
+            ));
+        }
+    }
     messages.extend(crate::knights::titanium_profile(body).map(Message::KnightRefresh));
     match crate::group::titanium_profile(body) {
         Ok(group) => messages.extend(group.map(|update| Message::Event(WorldEvent::Group(update)))),
@@ -525,6 +551,7 @@ mod tests {
         assert!(matches!(
             &titanium(PROFILE_OPCODE, &profile)[..],
             [
+                Message::AlternateAdvancement(crate::alternate_advancement::Update::Selections(Some(_))),
                 Message::Event(WorldEvent::Group(crate::group::GroupUpdate::Disbanded)),
                 Message::Event(WorldEvent::BuffSnapshot(_)),
                 Message::Event(WorldEvent::Coins(_)),
@@ -537,6 +564,13 @@ mod tests {
         assert!(matches!(
             titanium(PROFILE_OPCODE, &[0; 8])[..],
             [
+                Message::Unreadable {
+                    part: Part::World,
+                    ..
+                },
+                Message::AlternateAdvancement(crate::alternate_advancement::Update::Selections(
+                    None
+                )),
                 Message::Unreadable {
                     part: Part::World,
                     ..

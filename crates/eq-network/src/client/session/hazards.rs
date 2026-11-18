@@ -61,7 +61,10 @@ impl Observations {
             WorldEvent::Buff(buff) => u32::from(*own) == buff.entity_id,
             WorldEvent::SpellEffect(effect) => *own == effect.target_id,
             WorldEvent::Death(death) => death.spawn_id == u32::from(*own),
-            WorldEvent::DeathBind { session_id: visit }
+            WorldEvent::AlternateAdvancement {
+                session_id: visit, ..
+            }
+            | WorldEvent::DeathBind { session_id: visit }
             | WorldEvent::InventoryAction {
                 session_id: visit,
                 update: Some(_),
@@ -266,6 +269,30 @@ mod tests {
     use eq_network_game::hazards;
 
     mod local_posture;
+
+    #[test]
+    fn environmental_aa_facts_advance_only_their_current_liquid_revision() {
+        let mut observations = Observations {
+            current: Some((5, 7, 10)),
+        };
+        let event = |session_id| {
+            ClientEvent::World(WorldEvent::AlternateAdvancement {
+                session_id,
+                updates: vec![
+                    eq_network_game::alternate_advancement::Update::Selections(None),
+                    eq_network_game::alternate_advancement::Update::DefinitionsUnknown,
+                ],
+            })
+        };
+        assert!(observations.observe(&event(4)).is_none());
+        assert_eq!(
+            observations.observe(&event(5)),
+            Some(WorldEvent::LiquidHazardRevision {
+                session_id: 5,
+                revision: 11
+            })
+        );
+    }
 
     fn report(hazard: Hazard, amount: u32) -> ClientCommand {
         ClientCommand::EnvironmentalDamage {

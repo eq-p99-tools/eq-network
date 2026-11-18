@@ -5,6 +5,16 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Deliver staged environmental AA inputs as one ordered admission batch and
+  one following liquid revision, retaining every fact and withdrawal.
+
+- Observe local EQEmu Titanium AA selections and definitions for environmental
+  decisions, preserving signed effects, exact selected IDs and unknown data.
+
+- Decode Titanium boat-control echoes with unread fields retained. Offer an
+  EQEmu acquire/release owner bound to current rider support, with explicit
+  pending, acquired, release and unconfirmed states; no vessel movement sender.
+
 - Keep the worker's guild membership current from received own-spawn listing
   changes, so ordinary guild requests follow joins and leaves without a relog.
 

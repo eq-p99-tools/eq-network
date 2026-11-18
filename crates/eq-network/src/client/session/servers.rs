@@ -308,6 +308,11 @@ pub(super) trait ServerType: Sync {
         None
     }
 
+    /// Vessel acquire/release; absent where the server contract is unverified.
+    fn boats(&self, _setup: &Setup<'_>) -> Provided {
+        None
+    }
+
     /// Sitting, standing and ducking, separate from walking.
     fn posture(&self, _setup: &Setup<'_>) -> Provided {
         None
@@ -472,6 +477,11 @@ pub(super) trait ServerType: Sync {
         None
     }
 
+    /// Read-only environmental AA facts; absent unless the server opts in.
+    fn environmental_aa(&self, _setup: &Setup<'_>) -> Provided {
+        None
+    }
+
     /// The server's regeneration tick, learned from the packets the server
     /// sends at it, for a front end to show.
     fn ticks(&self, _setup: &Setup<'_>) -> Provided {
@@ -517,6 +527,7 @@ pub(super) trait ServerType: Sync {
             self.posture(setup),
             self.character(setup),
             self.entities(setup),
+            self.boats(setup),
             self.targeting(setup),
             self.combat(setup),
             self.looting(setup),
@@ -549,6 +560,7 @@ pub(super) trait ServerType: Sync {
             self.socials(setup),
             self.raids(setup),
             self.hazards(setup),
+            self.environmental_aa(setup),
             self.ticks(setup),
             self.helm(setup),
             self.dialogs(),
@@ -1150,6 +1162,14 @@ impl ServerType for Project1999 {
 struct EqEmu;
 
 impl ServerType for EqEmu {
+    fn environmental_aa(&self, setup: &Setup<'_>) -> Provided {
+        if setup.local_only {
+            offer(Box::<super::alternate_advancement::AlternateAdvancement>::default())
+        } else {
+            None
+        }
+    }
+
     fn dialogs(&self) -> Provided {
         offer(Box::<Dialogs>::default())
     }
@@ -1238,6 +1258,10 @@ impl ServerType for EqEmu {
     /// handler used on P99; zero retains that handler's minimum/overlap rules.
     fn control(&self, _setup: &Setup<'_>) -> Provided {
         offer(Box::new(Stuns))
+    }
+
+    fn boats(&self, _setup: &Setup<'_>) -> Provided {
+        offer(Box::new(super::boats::Boats::default()))
     }
 
     fn character(&self, _setup: &Setup<'_>) -> Provided {
@@ -1816,6 +1840,21 @@ mod tests {
     }
 
     #[test]
+    fn environmental_aa_observations_are_only_enabled_for_local_eqemu() {
+        let mut setup = Setup::new("Tester", AutoEat::default());
+        assert!(EqEmu.environmental_aa(&setup).is_none());
+        setup.local_only = true;
+        assert!(EqEmu.environmental_aa(&setup).is_some());
+        for protocol in [
+            ServerProtocol::Project1999,
+            ServerProtocol::Quarm,
+            ServerProtocol::Takp,
+        ] {
+            assert!(server_type(protocol).environmental_aa(&setup).is_none());
+        }
+    }
+
+    #[test]
     fn only_verified_titanium_policies_enable_own_stun_interpretation() {
         let setup = Setup::new("Tester", AutoEat::default());
         for protocol in [ServerProtocol::Project1999, ServerProtocol::EqEmu] {
@@ -2341,7 +2380,7 @@ mod tests {
         // Both Titanium policies retain the verified own-player stun timer.
         for (protocol, count) in [
             (ServerProtocol::Project1999, 37),
-            (ServerProtocol::EqEmu, 43),
+            (ServerProtocol::EqEmu, 44),
         ] {
             let server = server_type(protocol);
             let setup = Setup::new("Tester", AutoEat::default());
@@ -2355,6 +2394,7 @@ mod tests {
             Capability::Raiding,
             Capability::ServerTicks,
             Capability::ShowingHelm,
+            Capability::BoatControl,
         ] {
             assert!(!offers(server_type(ServerProtocol::Project1999)).contains(&capability));
             assert!(offers(server_type(ServerProtocol::EqEmu)).contains(&capability));

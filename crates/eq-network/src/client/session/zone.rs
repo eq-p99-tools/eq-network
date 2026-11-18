@@ -886,7 +886,7 @@ mod tests {
     };
 
     /// How many kinds of command there are.
-    const KINDS: usize = 106;
+    const KINDS: usize = 107;
 
     /// The kinds the login and world servers take, before any zone session.
     const BEFORE_ZONES: [usize; 4] = [0, 1, 70, 75];
@@ -937,6 +937,7 @@ mod tests {
             ClientCommand::AutoAttack { .. } => 25,
             ClientCommand::SelectTarget { .. } => 26,
             ClientCommand::ConfigureMotion { .. } => 27,
+            ClientCommand::BoatControl { .. } => 106,
             ClientCommand::Move(_) => 28,
             ClientCommand::OfferTrade { .. } => 29,
             ClientCommand::AcceptTrade { .. } => 30,
@@ -1066,6 +1067,11 @@ mod tests {
                 target_id: 7,
                 created,
             }),
+            ClientCommand::BoatControl {
+                session_id,
+                created,
+                request: eq_network_game::boats::Request::Release,
+            },
             ClientCommand::ClickDoor {
                 session_id,
                 door_id: 1,
