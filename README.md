@@ -1,11 +1,11 @@
 # eq-network
 
 Reusable Rust networking crates for native EverQuest-compatible clients. The
-workspace contains the protocol code shared by
+workspace holds the protocol code shared by
 [`eq-client`](https://github.com/eq-p99-tools/eq-client), the graphical desktop
 client,
 [`p99-login-proxy`](https://github.com/eq-p99-tools/p99-login-proxy),
-[`p99-logger-client`](https://github.com/rm-you/p99-logger-client), and the
+[`p99-logger-client`](https://github.com/eq-p99-tools/p99-logger-client), and the
 native mobile client.
 
 The high-level client logs in, plays on the configured world or the one the
@@ -15,34 +15,129 @@ characters, and runs a zone session: it reports typed world state
 (`ClientCommand`), reconnects, and shuts down cooperatively. Chat arrives
 structured, with item-link data, for consumers that only talk.
 
-What a zone session offers depends on its server type (`ServerProtocol`), and
-each session reports the `Capability` values it offers so that a front end can
-grey out the rest. A server type gains a feature only once it has been checked
-against that kind of server; P99's earliest listings predate that rule and wait
-for their check on P99:
+## Server types
 
-| Server type | Protocol | What a zone session offers |
+| Server type | Protocol | For |
 | --- | --- | --- |
-| `EqEmu` | Titanium, for a stock `EQEmu` server | Moving, jumping and falling (and a fall's damage), targeting, combat, casting and the spellbook (deleting and moving its spells too), the inventory and bank, merchants and what they pay, handing items to NPCs and trading with players, looting, chat, camping, doors, items on the ground, zoning, abilities, `/who`, corpses and consent, pets, training, resurrection, reading, tradeskill containers, groups and raids, `/afk`, `/anonymous` and `/roleplay`, `/random`, `/emote` and `/assist`, the map, the time of day and the server's regeneration tick |
-| `Project1999` | Titanium with P99's V62 protection | Includes carried combines and ordinary forge interaction. Includes self-targeted Bind Wound with scoped stock uncertainty after a terminal or unanswered request. The forge path awaits live P99 verification. See the [public-server gaps](docs/public-server-gaps.md) for the other capability limits. The map is left to the player. The world is told what machine the player entered on, once a week, when the host carries it (`ClientConfig::sysinfo`) — watched entering Green 2026-10-30 |
-| `Takp` | Windows TAKP/`EQMac`, for a stock TAKP server | Character creation, entering the world, chat, moving, targeting, considering and attacking, casting and the spellbook (not yet deleting or moving its spells), zoning and camping, groups, moving items and coins (the bank's beside a banker), buying and selling at merchants (not yet what a merchant pays), and eating and drinking; source-backed ground pickups and guarded ordinary door requests ([validation limits](docs/eqmac-world-objects.md)) |
-| `Quarm` | Windows TAKP/`EQMac` | Character creation and previews, admission, chat, targeting, normal attack and consider, posture, camping, ground movement, jumping, falling, zoning, casting, basic spellbook actions, the supported EQMac abilities, and guarded item/coin moves including personal banking; source-backed ground pickups and guarded ordinary door requests ([validation limits](docs/eqmac-world-objects.md)), and source-backed looting of NPC and own corpses ([evidence and limits](docs/eqmac-looting.md), live unverified). Meals use the guarded EQMac path ([limits](docs/quarm-meals.md)). Guarded ordinary merchant purchases/sales are offered ([limits](docs/quarm-merchants.md)); exchanges remain disabled. Movement requires current load/STR/buff inputs; uncertain state withdraws player input. Source evidence, confirmation limits and deferred live checks are in the [gap report](docs/public-server-gaps.md) and [combat notes](docs/quarm-combat.md). |
+| `Project1999` | Titanium, with P99's protection | Project 1999 |
+| `EqEmu` | Titanium | A stock EQEmu server |
+| `Quarm` | Windows TAKP/`EQMac` | Project Quarm |
+| `Takp` | Windows TAKP/`EQMac` | A stock TAKP server |
 
-P99 list presence replies are an explicit, default-off option
-(`ClientConfig::answer_list_polls`). A runtime choice follows the character
-across zones; returning to character selection restores the startup option.
-Pending replies belong to their zone. The session observes population notices
-without joining a list. Presence replies use a 3..=60 second application
-policy delay; deployed server acceptance remains unverified.
+Each server type names the client generation's wire it speaks and provides the
+features it offers. Every session reports the `Capability` values it offers,
+so a front end can grey out the rest. A server type gains a feature only once
+it has been checked against that kind of server, and the session answers each
+server the way that server's original client does.
 
-The table follows [`servers.rs`](crates/eq-network/src/client/session/servers.rs),
-which decides. A front end goes by the capabilities its own session reports, from
-the revision of this library its lockfile resolves. [API and integration
-contracts](API-CONTRACT.md) says how features, commands and their answers behave.
+### What each server type offers
 
-P99 and Quarm character lists retain appearance for selection previews. The
+This table lists the capabilities each server type's features offer on `main`.
+[`servers.rs`](crates/eq-network/src/client/session/servers.rs) decides. P99's
+earliest listings predate the checked-first rule and still wait for their
+check on P99. A front end goes by the capabilities its own session
+reports, from the revision of this library that its lockfile resolves. Offered
+is not the same as verified live: the
 [public-server gap report](docs/public-server-gaps.md) separates implemented,
-disabled, unverified and server-restricted features, with the evidence for each.
+disabled, unverified and server-restricted features, with the evidence for
+each.
+
+| Capability | What it covers | P99 | EQEmu | Quarm | TAKP |
+| --- | --- | :-: | :-: | :-: | :-: |
+| **Moving and the world** | | | | | |
+| `Moving` | Walking and running | Yes | Yes | Yes | Yes |
+| `Jumping` | Jumping | Yes | Yes | Yes | Yes |
+| `Falling` | Falling, which the server takes from the client | Yes | Yes | Yes | Yes |
+| `Posture` | Sitting, standing and ducking | Yes | Yes | Yes | Yes |
+| `Swimming` | Swimming in the zone's water | Yes | Yes | – | – |
+| `EnvironmentalDamage` | Reporting falls, and drowning or lava where offered | Yes | Yes | Yes | Yes |
+| `Zoning` | Crossing zone lines and being moved between zones | Yes | Yes | Yes | Yes |
+| `Camping` | Camping to the character list | Yes | Yes | Yes | Yes |
+| `Doors` | Opening doors | Yes | Yes | Yes | Yes |
+| `GroundItems` | Picking up items from the ground | Yes | Yes | Yes | Yes |
+| `BoatRiding` | Riding a boat and zoning with it | Yes | Yes | – | – |
+| `BoatControl` | Taking and releasing a boat you stand on | – | Yes | – | – |
+| `Map` | The in-game map, drawn from the installation's map files | Left to the player | Yes | – | – |
+| **Combat, abilities and spells** | | | | | |
+| `Targeting` | Choosing a target | Yes | Yes | Yes | Yes |
+| `Combat` | Considering and attacking | Yes | Yes | Yes | Yes |
+| `RangedCombat` | Firing a bow or throwing a weapon | Yes | Yes | – | – |
+| `Abilities` | Kick, bash, taunt, hide, sneak, forage and the like | Yes | Yes | Yes | Yes |
+| `KnightAbilities` | Lay on Hands and Harm Touch | Yes | Yes | – | – |
+| `UsingDisciplines` | Warrior disciplines | Yes | Yes | – | – |
+| `Tracking` | The tracking window | Yes | Yes | – | – |
+| `Pets` | Commanding a pet | Yes | Yes | – | – |
+| `Casting` | Casting memorized spells | Yes | Yes | Yes | Yes |
+| `Spellbook` | Memorizing, scribing and forgetting spells | Yes | Yes | Yes | Yes |
+| `MovingSpells` | Moving a spell within the spellbook | Yes | Yes | – | – |
+| `DeletingSpells` | Deleting a spell from the spellbook | – | Yes | – | – |
+| `CancellingBuffs` | Cancelling a beneficial buff | Yes | Yes | – | – |
+| `StoppingSongs` | Stopping a Bard song | Yes | Yes | – | – |
+| **Items and coin** | | | | | |
+| `Inventory` | Moving and using items in the inventory and the bank | Yes | Yes | Yes | Yes |
+| `Meals` | Eating and drinking | Yes | Yes | Yes | Yes |
+| `Trading` | Buying from and selling to merchants | Yes | Yes | Yes | Yes |
+| `MerchantOffers` | Showing what a merchant pays | – | Yes | – | – |
+| `Giving` | Handing items to NPCs and trading with players | Yes | Yes | – | Yes |
+| `Looting` | Looting corpses | Yes | Yes | Yes | – |
+| `Corpses` | Consenting, summoning and dragging corpses | Yes | Yes | – | – |
+| `Tradeskills` | Combining in your own containers | Yes | Yes | – | – |
+| `WorldContainers` | Combining in world containers such as forges | Yes | Yes | – | – |
+| `Reading` | Reading books and notes | Yes | Yes | Yes | Yes |
+| `BankerChange` | Changing coins at a banker | Yes | Yes | – | – |
+| `Splitting` | Sharing coin with the group | Yes | Yes | – | – |
+| **People** | | | | | |
+| `Talking` | Chat channels and item links | Yes | Yes | Yes | Yes |
+| `Who` | `/who` | Yes | Yes | – | – |
+| `FriendsWho` | Friends online | Yes | Yes | – | – |
+| `Grouping` | Groups | Yes | Yes | – | Yes |
+| `Raiding` | Raids | – | Yes | – | – |
+| `Listing` | AFK, anonymous and roleplaying | Yes | Yes | – | Yes |
+| `Rolling` | `/random` | Yes | Yes | – | – |
+| `Emoting` | `/emote` | Yes | Yes | – | – |
+| `Assisting` | `/assist` | Yes | Yes | – | – |
+| `PlayerInspection` | Inspecting other players | Yes | Yes | – | – |
+| `GuildRoster` | A guild member's side of a guild | Yes | Yes | – | – |
+| `GuildManagement` | An officer's and a leader's side of a guild | Yes | Yes | – | – |
+| **Server prompts and events** | | | | | |
+| `Training` | Training skills at a guildmaster | Yes | Yes | – | – |
+| `Resurrection` | Accepting or declining a resurrection | Yes | Yes | – | – |
+| `Translocate` | Accepting or declining a translocate | Yes | Yes | – | Yes |
+| `Sacrifice` | Accepting or declining a sacrifice | – | Yes | – | – |
+| `ServerDialogs` | Answering server dialogs | Yes | Yes | – | – |
+| `BleedingOut` | Reporting a death the server leaves to the client | – | – | – | Yes |
+| `ServerTicks` | Showing when the regeneration tick lands | – | Yes | – | – |
+| `ShowingHelm` | Showing or hiding your helm to others | – | Yes | – | – |
+
+Some capabilities depend on the session, not only on the server type:
+
+- `GameplayDepartures`: opt-in departures from the original client's movement
+  and memorization, offered where the server type permits them. Every server
+  type lists them today while they are under test.
+- `AnsweringListPolls`: P99 list presence replies, off by default
+  (`ClientConfig::answer_list_polls`). A runtime choice follows the character
+  across zones, and returning to character selection restores the startup
+  option. Replies wait 3 to 60 seconds and never join a list; whether the
+  deployed server accepts them is still unverified.
+- `Drowning`, `LavaHeat` and `GroundDropping`: offered on a stock EQEmu session
+  only when it is restricted to the local network.
+- `RaidGroupLeaders`: not offered by any server type yet.
+
+On P99 the map is left to the player: the session runs it but lists it among
+the player's choices. The world is also told what machine the player entered
+on, once a week, just before entering the world, when the host supplies it
+(`ClientConfig::sysinfo`). No other server type sends that report.
+
+More detail on particular areas:
+[boat riding](docs/boat-riding.md), [boat control](docs/boat-control.md),
+[training](docs/training.md), [P99 reading](docs/p99-reading.md),
+[P99 manual combines](docs/p99-manual-combines.md),
+[EQMac world objects](docs/eqmac-world-objects.md),
+[EQMac looting](docs/eqmac-looting.md), [Quarm combat](docs/quarm-combat.md),
+[Quarm meals](docs/quarm-meals.md), [Quarm merchants](docs/quarm-merchants.md)
+and [session termination](docs/session-termination.md).
+[API and integration contracts](API-CONTRACT.md) says how features, commands
+and their answers behave.
 
 ## Crates
 
@@ -133,38 +228,7 @@ and other protocol enums are non-exhaustive, and consumers should include a
 wildcard arm when matching them. New server families should be represented as
 explicit dialect/profile variants rather than conditionals in application code.
 
-## Compatibility and safety
-
-- The minimum supported Rust version is 1.99.
-- Public APIs follow semantic versioning. The crates begin at `0.1.0` while the
-  extracted interfaces settle.
-- Credentials are redacted from `Debug` output and zeroized when their owners
-  are dropped. Applications remain responsible for secure persistence.
-- Packet captures, logs, environment files, credentials, and official game
-  text do not belong in the repository. Tests use synthetic values, made-up
-  string tables, and generated packet bodies.
-- Legacy DES-CBC exists only for wire compatibility and provides no modern
-  confidentiality or integrity.
-
-See [CONTRIBUTING.md](CONTRIBUTING.md) for the required checks and extension
-guidelines.
-
-## Publishing
-
-The crates are published in dependency order: `eq-network-transport`,
-`eq-network-login`, `eq-network-game`, then `eq-network`. Their initial releases
-were bootstrapped with a crates.io token because trusted publishing requires an
-existing crate. Later releases use the manual `publish.yml` workflow and
-short-lived crates.io OIDC credentials.
-
-## License
-
-MIT. See [LICENSE](LICENSE).
-
-This project is not affiliated with Daybreak Game Company, Project 1999, The
-Al'Kabor Project, or Project Quarm.
-
-### Character creation choices
+## Character creation
 
 `WorldEvent::CharacterSelection.creation` offers a list-scoped `creation::Rules`
 policy: classic P99, Titanium EQEmu, or EQMac TAKP/Quarm. Frontends use its race,
@@ -193,3 +257,36 @@ The Quarm path was checked independently against
 and [creation record](https://github.com/SecretsOTheP/EQMacEmu/blob/main/common/eq_packet_structs.h).
 Its 76-byte approval body, 8452-byte creation body and refusal/list sequence match
 this codec. This source and synthetic-test evidence is not a live creation check.
+
+## Compatibility and safety
+
+- The minimum supported Rust version is 1.99.
+- Public APIs follow semantic versioning. The crates stay at `0.1.x` while the
+  extracted interfaces settle.
+- Credentials are redacted from `Debug` output and zeroized when their owners
+  are dropped. Applications remain responsible for secure persistence.
+- Packet captures, logs, environment files, credentials, and official game
+  text do not belong in the repository. Tests use synthetic values, made-up
+  string tables, and generated packet bodies.
+- Legacy DES-CBC exists only for wire compatibility and provides no modern
+  confidentiality or integrity.
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the required checks and extension
+guidelines.
+
+## Publishing
+
+The crates are published in dependency order: `eq-network-transport`,
+`eq-network-login`, `eq-network-game`, then `eq-network`. Their initial releases
+were bootstrapped with a crates.io token because trusted publishing requires an
+existing crate. Later releases use the manual `publish.yml` workflow and
+short-lived crates.io OIDC credentials.
+[`eq-client`](https://github.com/eq-p99-tools/eq-client) pins this repository
+by Git revision instead, so changes reach it without a release.
+
+## License
+
+MIT. See [LICENSE](LICENSE).
+
+This project is not affiliated with Daybreak Game Company, Project 1999, The
+Al'Kabor Project, or Project Quarm.
