@@ -51,17 +51,17 @@ pub(super) fn rejected(command: &ClientCommand, reason: &str) -> Option<crate::w
             session_id,
             spell_id,
             ..
+        }
+        | ClientCommand::UseDiscipline {
+            session_id,
+            spell_id,
+            ..
         } => (session_id, spell_id),
         ClientCommand::UseKnightAbility {
             session_id,
             ability,
             ..
         } => (session_id, ability.spell()),
-        ClientCommand::UseDiscipline {
-            session_id,
-            discipline,
-            ..
-        } => (session_id, discipline.spell()),
         _ => return None,
     };
     Some(crate::world::WorldEvent::CastRejected {
@@ -682,9 +682,12 @@ impl Feature for Casting {
             ClientCommand::UseKnightAbility {
                 ability, target, ..
             } => self.knight(command, *ability, *target, Instant::now(), world, out),
-            ClientCommand::UseDiscipline { discipline, .. } => {
-                self.use_discipline(command, *discipline, world, out)
-            }
+            ClientCommand::UseDiscipline {
+                spell_id,
+                timer,
+                target_id,
+                ..
+            } => self.use_discipline(command, (*spell_id, *timer, *target_id), world, out),
             ClientCommand::UseItem(request) => self.use_item(request, world, out),
             ClientCommand::DropInvisibility { steps, .. } => drop_invisibility(steps, out),
             _ => self.cast(command, world, out),

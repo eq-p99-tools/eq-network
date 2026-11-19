@@ -896,7 +896,7 @@ mod tests {
     };
 
     /// How many kinds of command there are.
-    const KINDS: usize = 110;
+    const KINDS: usize = 111;
 
     /// The kinds the login and world servers take, before any zone session.
     const BEFORE_ZONES: [usize; 4] = [0, 1, 70, 75];
@@ -928,6 +928,7 @@ mod tests {
             ClientCommand::StopSong { .. } => 83,
             ClientCommand::StopCasting { .. } => 108,
             ClientCommand::YellForHelp { .. } => 109,
+            ClientCommand::EmoteAnimation { .. } => 110,
             ClientCommand::DepopLocalNpc { .. } => 84,
             ClientCommand::SetPosture { .. } => 12,
             ClientCommand::FeignLanded { .. } => 104,
@@ -1141,7 +1142,14 @@ mod tests {
             },
             ClientCommand::UseDiscipline {
                 session_id,
-                discipline: eq_network_game::disciplines::Discipline::Evasive,
+                spell_id: 4503,
+                timer: 1,
+                target_id: 7,
+                created,
+            },
+            ClientCommand::EmoteAnimation {
+                session_id,
+                animation: 0x4d,
                 created,
             },
             ClientCommand::UseKnightAbility {
@@ -2780,6 +2788,32 @@ mod tests {
             let mac = offered(protocol);
             assert!(!mac.contains(&Capability::Yelling), "{protocol:?}");
             assert!(!mac.contains(&Capability::StoppingCasts), "{protocol:?}");
+        }
+    }
+
+    #[test]
+    fn emote_animations_and_disciplines_are_titanium_offers_only() {
+        use crate::{client::ServerProtocol, world::Capability};
+        let offered = |protocol| {
+            Features::new(
+                servers::server_type(protocol),
+                "Tester",
+                eq_network_game::food::AutoEat::default(),
+            )
+            .capabilities()
+        };
+        for protocol in [ServerProtocol::EqEmu, ServerProtocol::Project1999] {
+            let titanium = offered(protocol);
+            assert!(titanium.contains(&Capability::Emoting), "{protocol:?}");
+            assert!(
+                titanium.contains(&Capability::UsingDisciplines),
+                "{protocol:?}"
+            );
+        }
+        for protocol in [ServerProtocol::Quarm, ServerProtocol::Takp] {
+            let mac = offered(protocol);
+            assert!(!mac.contains(&Capability::Emoting), "{protocol:?}");
+            assert!(!mac.contains(&Capability::UsingDisciplines), "{protocol:?}");
         }
     }
 

@@ -156,6 +156,8 @@ pub enum Request {
     Unhide,
     /// Call for help to the players nearby (Titanium's `/yell`).
     YellForHelp,
+    /// Play an emote's animation on the player's own spawn.
+    EmoteAnimation(u8),
     /// Roll a die from the lowest to the highest number.
     Random {
         /// The lowest number.
@@ -520,6 +522,9 @@ pub fn titanium(request: &Request, sender: Sender<'_>) -> Result<EncodedCommand>
         Request::ShowHelm(show) => listing::titanium_show_helm(sender.spawn(), *show)?,
         Request::Unhide => abilities::titanium_unhide(sender.spawn())?,
         Request::YellForHelp => socials::titanium_yell(),
+        Request::EmoteAnimation(animation) => {
+            socials::titanium_emote_animation(sender.spawn(), *animation)?
+        }
         Request::Random { low, high } => socials::random(*low, *high),
         Request::Emote(text) => socials::emote(text)?,
         Request::Assist(spawn_id) => socials::assist(*spawn_id),
@@ -884,6 +889,11 @@ mod tests {
             assert_eq!((packet.opcode, packet.body.len()), (opcode, 0));
         }
         assert!(eqmac(&Request::YellForHelp, PLAYER).is_err());
+        // An emote's animation is the 4-byte animation record (R47).
+        let packet = titanium(&Request::EmoteAnimation(0x4d), PLAYER).unwrap();
+        assert_eq!(packet.opcode, 0x2acf);
+        assert_eq!(&packet.body[2..], [10, 0x4d]);
+        assert!(eqmac(&Request::EmoteAnimation(0x4d), PLAYER).is_err());
         assert_eq!(
             titanium(&Request::Posture(Posture::Sitting), PLAYER).unwrap(),
             command::titanium_posture(7, Posture::Sitting).unwrap()

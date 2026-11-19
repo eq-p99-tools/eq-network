@@ -180,7 +180,9 @@ fn an_exact_empty_discipline_record_releases_the_slot_but_preserves_received_reu
     };
     let use_evasive = || ClientCommand::UseDiscipline {
         session_id: 5,
-        discipline: Discipline::Evasive,
+        spell_id: Discipline::Evasive.spell(),
+        timer: Discipline::Evasive.timer(),
+        target_id: 7,
         created: Instant::now(),
     };
     let output = testing::run_on(wire, |out| -> Result<()> {
@@ -211,7 +213,7 @@ fn an_exact_empty_discipline_record_releases_the_slot_but_preserves_received_reu
     output.result.unwrap();
     assert_eq!(
         output.sent,
-        [disciplines::titanium_cast(Discipline::Evasive, 7).unwrap()]
+        [disciplines::titanium_cast(Discipline::Evasive.spell(), 7).unwrap()]
     );
     let reasons: Vec<_> = output
         .events

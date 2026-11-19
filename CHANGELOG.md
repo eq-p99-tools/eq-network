@@ -5,6 +5,23 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Send an emote command's animation and any listed discipline, as Titanium
+  does (reads R47 and R48). `GameCommand::EmoteAnimation` sends
+  `OP_Animation` (0x2acf) with the player's spawn, speed 10 and the
+  animation, under `Capability::Emoting`; the program sends it after the
+  emote's `OP_Emote` only while the player stands still, so the host checks
+  the stillness and the session sends nothing for a player with no spawn or
+  known not to stand. `GameCommand::UseDiscipline` now takes the spell, its
+  reuse timer and the cast's target from the host's spell data, in place of
+  the two Warrior disciplines: the session refuses a spell the server
+  hasn't listed (or no list at all) and one whose timer runs, and sends the
+  ordinary cast with the discipline slot (10), as 0x4bb39d does. The target
+  the program gives that cast is unread; the host sends the player's own
+  spawn for a self spell and its gem-cast choice otherwise (recording
+  checklist 6.488). `disciplines::titanium_cast` takes a spell and a
+  target. **Breaking:** `UseDiscipline`'s fields changed, and exhaustive
+  matches on `GameCommand` and `Request` need the new variants.
+
 - Send Titanium's `/yell` and `/stopcast` (read R45). `GameCommand::YellForHelp`
   sends `OP_YellForHelp` (0x61ef) with an empty body and no target or
   posture test, under the new `Capability::Yelling`, on both Titanium

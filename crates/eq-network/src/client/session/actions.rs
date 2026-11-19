@@ -198,6 +198,7 @@ pub(super) fn needs(command: &ClientCommand) -> &'static [Resource] {
         // Stopping a cast must work during one; a yell holds nothing.
         | ClientCommand::StopCasting { .. }
         | ClientCommand::YellForHelp { .. }
+        | ClientCommand::EmoteAnimation { .. }
         | ClientCommand::AutoAttack { .. }
         | ClientCommand::SelectTarget { .. }
         | ClientCommand::WhoAll { .. }
@@ -391,6 +392,7 @@ fn refusal(command: &ClientCommand, reason: &str) -> Option<WorldEvent> {
         | ClientCommand::ShowHelm { session_id, .. }
         | ClientCommand::Random { session_id, .. }
         | ClientCommand::YellForHelp { session_id, .. }
+        | ClientCommand::EmoteAnimation { session_id, .. }
         | ClientCommand::Emote { session_id, .. }
         | ClientCommand::Assist { session_id, .. }
         | ClientCommand::ChangeCoins { session_id, .. }
@@ -589,6 +591,7 @@ fn reasoned(command: &ClientCommand, session_id: u64, reason: String) -> Option<
         },
         ClientCommand::Random { .. }
         | ClientCommand::YellForHelp { .. }
+        | ClientCommand::EmoteAnimation { .. }
         | ClientCommand::Emote { .. }
         | ClientCommand::Assist { .. } => WorldEvent::SocialRefused {
             session_id,

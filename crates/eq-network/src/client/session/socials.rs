@@ -15,7 +15,12 @@ use super::{
 };
 use crate::client::RecordEvent;
 use anyhow::Result;
-use eq_network_game::{message::Message, request::Request, socials, world::WorldEvent};
+use eq_network_game::{
+    message::Message,
+    request::Request,
+    socials,
+    world::{PostureState, WorldEvent},
+};
 use std::time::{Duration, Instant};
 
 /// The official client's string for assisting oneself (`eqstr_us.txt`).
@@ -67,6 +72,7 @@ impl Feature for Socials {
                 | ClientCommand::Emote { .. }
                 | ClientCommand::Assist { .. }
                 | ClientCommand::YellForHelp { .. }
+                | ClientCommand::EmoteAnimation { .. }
         )
     }
 
@@ -127,6 +133,10 @@ impl Feature for Socials {
                 out.request(&Request::Random { low, high })
             }
             ClientCommand::YellForHelp { .. } => out.request(&Request::YellForHelp),
+            // The program sends the animation only while the player stands
+            // still (0x49e0c1, read R47); the host checks the stillness, and
+            // the session sends nothing for a player it knows isn't standing.
+            ClientCommand::EmoteAnimation { animation, .. } => animate(*animation, world, out),
             ClientCommand::Emote { text, .. } => {
                 let text = text.trim();
                 if text.is_empty() {
@@ -200,6 +210,22 @@ impl Feature for Socials {
             _ => Ok(()),
         }
     }
+}
+
+/// Sends an emote's animation, unless the player has no spawn or is known
+/// not to stand.
+fn animate(animation: u8, world: &World, out: &mut Out<'_, '_>) -> Result<()> {
+    if world.own_spawn.is_none()
+        || world
+            .posture
+            .current()
+            .is_some_and(|posture| posture != PostureState::Standing)
+    {
+        return out
+            .log
+            .diagnostic("An emote's animation needs the player standing".into());
+    }
+    out.request(&Request::EmoteAnimation(animation))
 }
 
 #[cfg(test)]
@@ -296,6 +322,33 @@ mod tests {
                 ..
             })
         )));
+    }
+
+    #[test]
+    fn an_emote_animation_goes_out_only_for_a_spawned_player_not_known_to_sit() {
+        let animate = ClientCommand::EmoteAnimation {
+            session_id: 5,
+            animation: 0x4d,
+            created: Instant::now(),
+        };
+        let mut feature = Socials::default();
+        assert!(feature.owns(&animate));
+        let mut world = World::new(5);
+        let report = testing::run(|out| feature.handle(&animate, &mut world, out));
+        report.result.unwrap();
+        assert_eq!(report.sent, []);
+        world.own_spawn = Some(7);
+        world.posture.observed(PostureState::Sitting);
+        let report = testing::run(|out| feature.handle(&animate, &mut world, out));
+        report.result.unwrap();
+        assert_eq!(report.sent, []);
+        world.posture.observed(PostureState::Standing);
+        let report = testing::run(|out| feature.handle(&animate, &mut world, out));
+        report.result.unwrap();
+        assert_eq!(
+            report.sent,
+            [socials::titanium_emote_animation(7, 0x4d).unwrap()]
+        );
     }
 
     #[test]
