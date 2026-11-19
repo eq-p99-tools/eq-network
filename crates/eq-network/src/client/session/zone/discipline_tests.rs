@@ -183,6 +183,7 @@ fn an_exact_empty_discipline_record_releases_the_slot_but_preserves_received_reu
         spell_id: Discipline::Evasive.spell(),
         timer: Discipline::Evasive.timer(),
         target_id: 7,
+        timed_self: true,
         created: Instant::now(),
     };
     let output = testing::run_on(wire, |out| -> Result<()> {
