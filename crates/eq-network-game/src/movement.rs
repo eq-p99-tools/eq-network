@@ -575,7 +575,8 @@ pub struct MovementGuard {
     shoreline_velocity: Option<[f32; 3]>,
     previous_swim: bool,
     /// When the last swim sample was accepted and the rising cap it had: a
-    /// fall that follows may rise on from it ([`Self::surfacing_rise`]).
+    /// sample that follows out of the water may rise on from it
+    /// ([`Self::surfacing_rise`]).
     surfacing: Option<(Instant, f32)>,
 }
 
@@ -677,16 +678,17 @@ impl MovementGuard {
     /// How far the announced jump rises between `from` and `to` seconds
     /// after it started: its speed less what gravity takes, and nothing
     /// past the top.
-    /// How far a fall may rise over the sample ending at `request` after a
+    /// How far a sample out of the water may rise over its interval after a
     /// swimmer left the water rising: from the last swim sample's rising cap,
     /// slowed by the jump's gravity, as the program's dry step carries the
-    /// velocity on with no input (0x4bfe0f; read R33). Nothing without a
-    /// calibrated gravity, or once the rise is spent.
+    /// velocity on with no input (0x4bfe0f; read R33). A rising body counts
+    /// as a fall in neither program's update, so any land mode takes it, as
+    /// a jump's rise. Nothing without a calibrated gravity, or once spent.
     fn surfacing_rise(&self, request: &MovementRequest, elapsed: f32) -> f32 {
         let (Some((left, speed)), Some((_, gravity))) = (self.surfacing, self.jump) else {
             return 0.0;
         };
-        if request.mode != MovementMode::Fall || gravity <= 0.0 {
+        if request.mode.is_water_motion() || gravity <= 0.0 {
             return 0.0;
         }
         let to = request
@@ -1242,9 +1244,6 @@ impl MovementGuard {
         self.sampled = request.created;
         self.clear_shoreline();
         self.previous_swim = request.mode == MovementMode::Swim;
-        if !matches!(request.mode, MovementMode::Swim | MovementMode::Fall) {
-            self.surfacing = None;
-        }
     }
 
     /// Ends jump tracking on water entry or once its upward allowance is spent.

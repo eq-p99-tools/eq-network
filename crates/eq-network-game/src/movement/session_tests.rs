@@ -2959,7 +2959,8 @@ fn samples_that_cross_the_water_line_stay_within_the_bound() {
                 .unwrap_or_else(|error| panic!("{label} step {step}: {error}"));
         }
     }
-    // Straight up to the surface, then a fall that rises on before it drops.
+    // Straight up to the surface, then a sample out of the water that rises
+    // on before it drops: a rising body goes as its land mode.
     let mut session = swimming_session(start, calibration);
     let mut velocity = WetVelocity::default();
     let mut at = Position::default();
@@ -2991,7 +2992,7 @@ fn samples_that_cross_the_water_line_stay_within_the_bound() {
     at.z += hop;
     session
         .send_move_sample(
-            &swim_to(at, 1_100, start, MovementMode::Fall),
+            &swim_to(at, 1_100, start, MovementMode::Forward),
             start + Duration::from_millis(1_100),
             |_| Ok(()),
         )

@@ -16,7 +16,7 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `WorldEvent::MotionState` gain `swim` (`SwimCalibration`), whose forward
   inputs add the Swimming skill x 0.01 standing. The session bounds a
   Titanium swim sample per axis instead of one 3-axis budget, lets a rooted
-  swimmer sink, and lets a fall rise on after a swim sample. Level swimming
+  swimmer sink, and lets a sample leaving the water rise on after a swim sample. Level swimming
   at run 0.7 and skill 100 goes from 4.7 to 17 units a second, and looking
   straight up rises about 34. **Breaking:** exhaustive constructions of
   `SpeedState`, `MotionCalibration` and `WorldEvent::MotionState` need the

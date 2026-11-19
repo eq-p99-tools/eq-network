@@ -288,8 +288,9 @@ gravity over this client's 1/60 s frame, all from the step at 0x4bfe0f
 (reads R33, R39 and R41). The bound has no carry term: a frontend that
 integrates `movement::water::WetVelocity` clamps the velocity it enters
 water with to the caps. A rooted swimmer keeps sinking within the gravity
-term. After a swim sample, a `MovementMode::Fall` may rise as a body
-leaving the water at the rising cap would under the jump's gravity.
+term. After a swim sample, a land-mode or `MovementMode::Fall` sample may
+rise as a body leaving the water at the rising cap would under the jump's
+gravity.
 
 Without `swim` (`EQMac`, and streams from before it) a swim sample keeps one
 three-dimensional budget of `movement::swim_speed` of the unboosted grant
