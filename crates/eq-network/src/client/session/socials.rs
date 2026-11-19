@@ -70,6 +70,7 @@ impl Feature for Socials {
             command,
             ClientCommand::Random { .. }
                 | ClientCommand::Emote { .. }
+                | ClientCommand::SocialEmote { .. }
                 | ClientCommand::Assist { .. }
                 | ClientCommand::YellForHelp { .. }
                 | ClientCommand::EmoteAnimation { .. }
@@ -167,6 +168,7 @@ impl Feature for Socials {
                 }
                 Ok(())
             }
+            ClientCommand::SocialEmote { text, .. } => self.social_emote(command, text, out),
             ClientCommand::Assist { spawn_id, .. } => {
                 if world.own_spawn == Some(*spawn_id) {
                     return actions::refuse_officially(
@@ -226,6 +228,37 @@ fn animate(animation: u8, world: &World, out: &mut Out<'_, '_>) -> Result<()> {
             .diagnostic("An emote's animation needs the player standing".into());
     }
     out.request(&Request::EmoteAnimation(animation))
+}
+
+impl Socials {
+    /// A social emote's own line is the client's to print, so nothing is
+    /// echoed; its text goes as the program built it.
+    fn social_emote(
+        &self,
+        command: &ClientCommand,
+        text: &str,
+        out: &mut Out<'_, '_>,
+    ) -> Result<()> {
+        if text.trim().is_empty() {
+            return actions::refuse(command, "Say what you do.", out.log);
+        }
+        if text.len() >= socials::EMOTE_LONGEST {
+            return actions::refuse(command, "That emote is too long.", out.log);
+        }
+        if self.project1999 {
+            // Its sender puts the space after the name back itself.
+            let words = text.strip_prefix(' ').unwrap_or(text);
+            let Ok(packet) = socials::project1999_emote(words) else {
+                return actions::refuse(
+                    command,
+                    "That emote is too long or contains invalid text.",
+                    out.log,
+                );
+            };
+            return out.send(&packet);
+        }
+        out.request(&Request::SocialEmote(text.to_owned()))
+    }
 }
 
 #[cfg(test)]
@@ -298,6 +331,28 @@ mod tests {
             },
         );
         assert_eq!(refused.sent, []);
+        // A social emote goes as it was built, trailing space too, and
+        // nothing is echoed: the client prints its own line.
+        let social = run(
+            &mut world,
+            ClientCommand::SocialEmote {
+                session_id: 5,
+                text: " nudges ".into(),
+            },
+        );
+        assert_eq!(social.sent, [socials::social_emote(" nudges ").unwrap()]);
+        assert!(!social
+            .events
+            .iter()
+            .any(|event| matches!(event, ClientEvent::Record(_))));
+        let silent = run(
+            &mut world,
+            ClientCommand::SocialEmote {
+                session_id: 5,
+                text: " ".into(),
+            },
+        );
+        assert_eq!(silent.sent, []);
         let assisted = run(
             &mut world,
             ClientCommand::Assist {

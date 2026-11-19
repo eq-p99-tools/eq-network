@@ -756,8 +756,18 @@ pub enum GameCommand {
         /// What the player does, after their name.
         text: String,
     },
+    /// A social emote such as `/smile`, its text exactly as Titanium's
+    /// worker 0x49e0c1 builds it, leading space and all (read R47b). Sent as
+    /// it is, with no local echo: the client prints the player's own line,
+    /// and the server sends the others theirs.
+    SocialEmote {
+        /// Current zone admission.
+        session_id: u64,
+        /// The text after the player's name, as the program sends it.
+        text: String,
+    },
     /// The animation an emote command plays (Titanium 0x49e0c1, read R47),
-    /// sent after its [`GameCommand::Emote`]: the program sends it only
+    /// sent after its [`GameCommand::SocialEmote`]: the program sends it only
     /// while the player stands still, and the session sends nothing unless
     /// the player stands.
     EmoteAnimation {
@@ -1062,6 +1072,7 @@ impl GameCommand {
             Self::StopCasting { .. } => "StopCasting",
             Self::YellForHelp { .. } => "YellForHelp",
             Self::EmoteAnimation { .. } => "EmoteAnimation",
+            Self::SocialEmote { .. } => "SocialEmote",
             Self::SetPosture { .. } => "SetPosture",
             Self::FeignLanded { .. } => "FeignLanded",
             Self::MoveInventory(..) => "MoveInventory",
@@ -1231,6 +1242,7 @@ impl GameCommand {
             | Self::StopCasting { session_id, .. }
             | Self::YellForHelp { session_id, .. }
             | Self::EmoteAnimation { session_id, .. }
+            | Self::SocialEmote { session_id, .. }
             | Self::InviteToGroup { session_id, .. }
             | Self::FollowGroup { session_id, .. }
             | Self::DeclineGroup { session_id, .. }
@@ -1389,7 +1401,9 @@ impl GameCommand {
             | Self::ToggleRoleplay { .. } => Capability::Listing,
             Self::ShowHelm { .. } => Capability::ShowingHelm,
             Self::Random { .. } => Capability::Rolling,
-            Self::Emote { .. } | Self::EmoteAnimation { .. } => Capability::Emoting,
+            Self::Emote { .. } | Self::SocialEmote { .. } | Self::EmoteAnimation { .. } => {
+                Capability::Emoting
+            }
             Self::Assist { .. } => Capability::Assisting,
             Self::RaidInvite { .. }
             | Self::RaidAccept { .. }
@@ -1452,6 +1466,7 @@ impl GameCommand {
             | Self::ShowHelm { .. }
             | Self::Random { .. }
             | Self::Emote { .. }
+            | Self::SocialEmote { .. }
             | Self::Assist { .. }
             | Self::WhoFriends { .. }
             | Self::ChangeCoins { .. }
@@ -1750,6 +1765,7 @@ pub fn encode(
         | GameCommand::ShowHelm { .. }
         | GameCommand::Random { .. }
         | GameCommand::Emote { .. }
+        | GameCommand::SocialEmote { .. }
         | GameCommand::Assist { .. }
         | GameCommand::WhoFriends { .. }
         | GameCommand::ChangeCoins { .. }

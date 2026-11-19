@@ -263,6 +263,29 @@ pub fn emote(text: &str) -> Result<EncodedCommand> {
     })
 }
 
+/// A social emote (Titanium 0x49e0c1, read R47b): the text as the worker
+/// builds it, which already starts with the space after the name, so it is
+/// sent unchanged, a trailing space included.
+///
+/// # Errors
+/// Rejects an emote with no words, one the server would cut, and one with
+/// a NUL.
+pub fn social_emote(text: &str) -> Result<EncodedCommand> {
+    ensure!(!text.trim().is_empty(), "an emote needs words");
+    ensure!(
+        text.len() < EMOTE_LONGEST,
+        "an emote is at most {} bytes",
+        EMOTE_LONGEST - 1
+    );
+    ensure!(!text.contains('\0'), "an emote cannot hold a NUL");
+    let mut body = vec![0; 4 + EMOTE_TEXT];
+    body[4..4 + text.len()].copy_from_slice(text.as_bytes());
+    Ok(EncodedCommand {
+        opcode: EMOTE_OPCODE,
+        body,
+    })
+}
+
 /// An ordinary Project 1999 emote. The Titanium sender (0x498449) prefixes
 /// a space and bounds the resulting wire string to 510 bytes. Preserve a
 /// whole literal message rather than cutting its text or escape sequence.
