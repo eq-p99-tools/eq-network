@@ -69,6 +69,7 @@ fn accepted_boat_support_changes_only_on_an_accepted_proposal() {
                 strafe: None,
                 diagonal: DiagonalRates::default(),
                 swim_backward_units_per_second: None,
+                swim: None,
             },
             later,
         )

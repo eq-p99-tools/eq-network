@@ -272,15 +272,29 @@ same classification. The provider chooses the order set for each admission.
 ## Titanium swimming bound
 
 Titanium EQEmu and Project 1999 offer `Capability::Swimming`. Quarm and
-TAKP reject `MovementMode::Swim` samples. A swim sample is bounded by one
-three-dimensional budget of `movement::swim_speed` of the unboosted grant,
-with no run boost, and is refused while flying or stunned. The native wet
-pair is read at Titanium `eqgame.exe` 0x4c052d and 0x4c0534, and the land
-pair at 0x4c04c1 and 0x4c04cd. The shared three-axis budget, the vertical
-stroke sharing the wet horizontal rate, and the absence of skill, race and
-buff scaling are inferred (recording checklist 6.390). A submitted sample
-establishes neither server acceptance nor water state. The host asserts water
-from the installed zone.
+TAKP reject `MovementMode::Swim` samples. A swim sample is refused while
+flying or stunned, and takes no run boost.
+
+On Titanium the grant carries `MotionCalibration::swim` (and
+`WorldEvent::MotionState::swim`): the swimmer's forward, walking, strafe and
+backing inputs in the program's speed units, and the water set of the
+zone's `WT` regions (`movement::water`, from `GameDialect::water`). A
+standing swimmer's forward inputs add the Swimming skill (skill 50) x 0.01,
+an unknown skill adding nothing; sneaking or ducked inputs keep the land
+speeds (`eqgame.exe` 0x4a1d74, read R33). A stroke is bounded on each axis
+by `SwimCalibration::caps`: horizontally by `c s / (1 - h)`, rising by the
+stroke and the damped jump push, sinking by the stroke and the water's
+gravity over this client's 1/60 s frame, all from the step at 0x4bfe0f
+(reads R33, R39 and R41). The bound has no carry term: a frontend that
+integrates `movement::water::WetVelocity` clamps the velocity it enters
+water with to the caps. A rooted swimmer keeps sinking within the gravity
+term. After a swim sample, a `MovementMode::Fall` may rise as a body
+leaving the water at the rising cap would under the jump's gravity.
+
+Without `swim` (`EQMac`, and streams from before it) a swim sample keeps one
+three-dimensional budget of `movement::swim_speed` of the unboosted grant
+(recording checklist 6.390). A submitted sample establishes neither server
+acceptance nor water state. The host asserts water from the installed zone.
 
 ## Local Titanium liquid reports
 

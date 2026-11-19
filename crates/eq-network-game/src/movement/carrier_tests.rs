@@ -27,6 +27,7 @@ fn setup(start: Instant) -> MotionSession {
         .calibrate(
             MotionCalibration {
                 swim_backward_units_per_second: None,
+                swim: None,
                 diagonal: DiagonalRates::default(),
                 walk: None,
                 strafe: None,

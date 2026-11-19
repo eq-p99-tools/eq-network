@@ -152,6 +152,7 @@ fn strafing_requires_its_own_calibration_and_preserves_heading() {
             .is_err());
         let calibration = MotionCalibration {
             swim_backward_units_per_second: None,
+            swim: None,
             diagonal: DiagonalRates::default(),
             units_per_second: 6.0,
             velocity_scale: 0.05,
@@ -202,6 +203,7 @@ fn walking_uses_its_own_budget_and_commits_only_after_transport() {
         .is_err());
     let calibration = MotionCalibration {
         swim_backward_units_per_second: None,
+        swim: None,
         diagonal: DiagonalRates::default(),
         units_per_second: 6.0,
         velocity_scale: 0.05,
@@ -267,6 +269,7 @@ fn backward_motion_has_its_own_budget_animation_and_transport_commit() {
         .is_err());
     let calibration = MotionCalibration {
         swim_backward_units_per_second: None,
+        swim: None,
         diagonal: DiagonalRates::default(),
         units_per_second: 6.0,
         velocity_scale: 0.05,
@@ -321,6 +324,7 @@ fn setup(now: Instant) -> MotionSession {
         .calibrate(
             MotionCalibration {
                 swim_backward_units_per_second: None,
+                swim: None,
                 diagonal: DiagonalRates::default(),
                 walk: None,
                 strafe: None,
@@ -441,6 +445,7 @@ fn grant_grounded_diagonal(session: &mut MotionSession, start: Instant) {
         .calibrate(
             MotionCalibration {
                 swim_backward_units_per_second: None,
+                swim: None,
                 diagonal: DiagonalRates {
                     run: Some(3.0),
                     walk: Some(1.0),
@@ -884,6 +889,7 @@ fn correction_revokes_motion_and_old_input_cannot_replay_after_recalibration() {
         .calibrate(
             MotionCalibration {
                 swim_backward_units_per_second: None,
+                swim: None,
                 diagonal: DiagonalRates::default(),
                 walk: None,
                 strafe: None,
@@ -916,6 +922,7 @@ fn death_or_transfer_suppresses_heartbeats_and_cannot_resume_old_admission() {
         .calibrate(
             MotionCalibration {
                 swim_backward_units_per_second: None,
+                swim: None,
                 diagonal: DiagonalRates::default(),
                 walk: None,
                 strafe: None,
@@ -932,6 +939,7 @@ fn death_or_transfer_suppresses_heartbeats_and_cannot_resume_old_admission() {
         .calibrate(
             MotionCalibration {
                 swim_backward_units_per_second: None,
+                swim: None,
                 diagonal: DiagonalRates::default(),
                 walk: None,
                 strafe: None,
@@ -1012,6 +1020,7 @@ fn queued_calibration_requires_valid_data_from_after_the_last_reset() {
     for invalid in [
         MotionCalibration {
             swim_backward_units_per_second: None,
+            swim: None,
             diagonal: DiagonalRates::default(),
             walk: None,
             strafe: None,
@@ -1021,11 +1030,13 @@ fn queued_calibration_requires_valid_data_from_after_the_last_reset() {
         },
         MotionCalibration {
             swim_backward_units_per_second: None,
+            swim: None,
             velocity_scale: 0.0,
             ..calibration
         },
         MotionCalibration {
             swim_backward_units_per_second: None,
+            swim: None,
             animation: 512,
             ..calibration
         },
@@ -2395,6 +2406,7 @@ fn titanium_flag_sends_strafing_and_a_jump_more_often_than_the_tick() {
         .calibrate(
             MotionCalibration {
                 swim_backward_units_per_second: None,
+                swim: None,
                 diagonal: DiagonalRates::default(),
                 walk: None,
                 strafe: Some(StrafeCalibration {
@@ -2499,6 +2511,7 @@ fn titanium_backs_up_in_water_at_its_rate_and_on_land_at_once_again() {
                 animation: 12,
                 // Unbuffed: no backing up in water.
                 swim_backward_units_per_second: Some(0.0),
+                swim: None,
             },
             start,
         )
@@ -2565,6 +2578,7 @@ fn titanium_backs_up_in_water_at_its_rate_and_on_land_at_once_again() {
 fn slower(units_per_second: f32) -> MotionCalibration {
     MotionCalibration {
         swim_backward_units_per_second: None,
+        swim: None,
         diagonal: DiagonalRates::default(),
         walk: None,
         strafe: None,
@@ -2712,6 +2726,7 @@ fn a_ducked_diagonal_takes_the_ducked_forward_rate_and_the_read_lateral() {
         sneaking: false,
         ducking: true,
         zone_id: 1,
+        swimming_skill: None,
     })
     .motion
     .unwrap();
@@ -2744,4 +2759,254 @@ fn a_ducked_diagonal_takes_the_ducked_forward_rate_and_the_read_lateral() {
     fresh()
         .send_move_sample(&diagonal(-lateral * 0.99, along * 0.99), now, |_| Ok(()))
         .unwrap();
+}
+
+/// A Titanium swimmer's calibration at run 0.7, the given Swimming skill.
+fn titanium_swimmer(skill: Option<u32>, zone_id: u16) -> MotionCalibration {
+    crate::movement::titanium_speeds(&crate::movement::SpeedState {
+        run: 0.7,
+        walk: 0.46,
+        level: 50,
+        hit_points: Some((500, 500)),
+        rate: 0,
+        weight: 0,
+        capacity: 100,
+        sneaking: false,
+        ducking: false,
+        zone_id,
+        swimming_skill: skill,
+    })
+    .motion
+    .unwrap()
+}
+
+fn swimming_session(start: Instant, calibration: MotionCalibration) -> MotionSession {
+    let mut session = MotionSession::new(11, 7, Position::default(), start)
+        .unwrap()
+        .with_swimming(true)
+        .with_falls(true)
+        .with_jump(Some((44.55, 160.0)));
+    session.calibrate(calibration, start).unwrap();
+    session
+}
+
+fn swim_to(position: Position, ms: u64, start: Instant, mode: MovementMode) -> MovementRequest {
+    MovementRequest::new(mode, 11, position, start + Duration::from_millis(ms))
+}
+
+#[test]
+fn titanium_swim_speed_adds_the_skill_standing_and_not_sneaking() {
+    use crate::movement::water::{LIQUID_5, LIQUID_5_POEARTHB};
+    let skilled = titanium_swimmer(Some(100), 1).swim.unwrap();
+    assert!((skilled.forward - 1.7).abs() < 1e-5, "{skilled:?}");
+    assert!((skilled.walk - 1.46).abs() < 1e-5, "{skilled:?}");
+    assert_eq!(skilled.backward, 0.0);
+    assert_eq!(skilled.set, LIQUID_5);
+    // 10 s units a second level, the program's steady state for WT water.
+    assert!((skilled.caps().horizontal - 17.0).abs() < 1e-3);
+    let unknown = titanium_swimmer(None, 1).swim.unwrap();
+    assert!((unknown.forward - 0.7).abs() < 1e-5);
+    assert_eq!(
+        titanium_swimmer(None, 222).swim.unwrap().set,
+        LIQUID_5_POEARTHB
+    );
+    let sneaking = crate::movement::titanium_speeds(&crate::movement::SpeedState {
+        run: 0.7,
+        walk: 0.46,
+        level: 50,
+        hit_points: Some((500, 500)),
+        rate: 0,
+        weight: 0,
+        capacity: 100,
+        sneaking: true,
+        ducking: false,
+        zone_id: 1,
+        swimming_skill: Some(100),
+    })
+    .motion
+    .unwrap()
+    .swim
+    .unwrap();
+    assert!((sneaking.forward - 0.23).abs() < 1e-5, "{sneaking:?}");
+    assert!(crate::movement::eqmac_speeds(&crate::movement::SpeedState {
+        run: 0.7,
+        walk: 0.46,
+        level: 50,
+        hit_points: Some((500, 500)),
+        rate: 0,
+        weight: 0,
+        capacity: 100,
+        sneaking: false,
+        ducking: false,
+        zone_id: 1,
+        swimming_skill: Some(100),
+    })
+    .motion
+    .unwrap()
+    .swim
+    .is_none());
+}
+
+#[test]
+fn titanium_swim_bounds_each_axis_by_its_own_steady_rate() {
+    let start = Instant::now();
+    let calibration = titanium_swimmer(Some(100), 1);
+    let caps = calibration.swim.unwrap().caps();
+    let mut session = swimming_session(start, calibration);
+    // Straight up: full horizontal and full rise at once, past what one
+    // shared 3-axis budget would take.
+    let up = Position {
+        y: caps.horizontal * 0.1,
+        z: caps.up * 0.1,
+        ..Position::default()
+    };
+    assert!(up.y.hypot(up.z) > caps.up * 0.1 + 0.01);
+    session
+        .send_move_sample(
+            &swim_to(up, 100, start, MovementMode::Swim),
+            start + Duration::from_millis(100),
+            |_| Ok(()),
+        )
+        .unwrap();
+    for (axis, over) in [(0, 1.01), (1, 1.01), (2, 1.01)] {
+        let mut session = swimming_session(start, calibration);
+        let mut to = Position::default();
+        match axis {
+            0 => to.y = caps.horizontal * 0.1 * over + 0.02,
+            1 => to.z = caps.up * 0.1 * over + 0.02,
+            _ => to.z = -(caps.down * 0.1 * over + 0.02),
+        }
+        let refused = session.send_move_sample(
+            &swim_to(to, 100, start, MovementMode::Swim),
+            start + Duration::from_millis(100),
+            |_| panic!("an over-fast stroke went out"),
+        );
+        assert!(refused.is_err(), "axis {axis}");
+    }
+}
+
+#[test]
+fn a_rooted_swimmer_still_sinks_within_the_water_gravity() {
+    let start = Instant::now();
+    let calibration = titanium_swimmer(Some(50), 1);
+    let mut session = swimming_session(start, calibration);
+    session.root(start).unwrap();
+    let idle = crate::movement::water::WetCaps::new(calibration.swim.unwrap().set, 0.0, 0.0);
+    let sunk = Position {
+        z: -idle.down * 0.2,
+        ..Position::default()
+    };
+    session
+        .send_move_sample(
+            &swim_to(sunk, 200, start, MovementMode::Swim),
+            start + Duration::from_millis(200),
+            |_| Ok(()),
+        )
+        .unwrap();
+    let mut moved = sunk;
+    moved.y = 0.5;
+    assert!(session
+        .send_move_sample(
+            &swim_to(moved, 400, start, MovementMode::Swim),
+            start + Duration::from_millis(400),
+            |_| panic!("a rooted stroke")
+        )
+        .is_err());
+}
+
+/// Samples across the water line, sample by sample through the bound:
+/// a run off a bank, a fall at terminal speed into water, and a rise out
+/// of it into a fall. The client clamps the entry velocity to the caps.
+#[test]
+fn samples_that_cross_the_water_line_stay_within_the_bound() {
+    use crate::movement::water::{WetInput, WetVelocity};
+    let start = Instant::now();
+    let calibration = titanium_swimmer(Some(100), 1);
+    let swim = calibration.swim.unwrap();
+    let caps = swim.caps();
+    for (entry, label) in [
+        (
+            WetVelocity::from_units_per_second([0.0, 29.87], 0.0),
+            "run off a bank",
+        ),
+        (
+            WetVelocity::from_units_per_second([0.0, 0.0], -264.0),
+            "terminal fall",
+        ),
+    ] {
+        let mut session = swimming_session(start, calibration);
+        let mut velocity = entry;
+        velocity.clamp(caps);
+        let mut at = Position::default();
+        for step in 1..=20_u64 {
+            let ([_, y], z) = velocity.advance(
+                swim.set,
+                WetInput {
+                    horizontal: [0.0, swim.forward],
+                    vertical: 0.0,
+                    jump: false,
+                },
+                0.1,
+            );
+            at.y += y;
+            at.z += z;
+            session
+                .send_move_sample(
+                    &swim_to(at, step * 100, start, MovementMode::Swim),
+                    start + Duration::from_millis(step * 100),
+                    |_| Ok(()),
+                )
+                .unwrap_or_else(|error| panic!("{label} step {step}: {error}"));
+        }
+    }
+    // Straight up to the surface, then a fall that rises on before it drops.
+    let mut session = swimming_session(start, calibration);
+    let mut velocity = WetVelocity::default();
+    let mut at = Position::default();
+    for step in 1..=10_u64 {
+        let (_, z) = velocity.advance(
+            swim.set,
+            WetInput {
+                horizontal: [0.0, 0.0],
+                vertical: swim.forward,
+                jump: false,
+            },
+            0.1,
+        );
+        at.z += z;
+        session
+            .send_move_sample(
+                &swim_to(at, step * 100, start, MovementMode::Swim),
+                start + Duration::from_millis(step * 100),
+                |_| Ok(()),
+            )
+            .unwrap();
+    }
+    let rising = velocity.units_per_second().1;
+    assert!(rising > 20.0, "{rising}");
+    // The dry step: no input, the same gravity (0.4 a tick each tick,
+    // 160 a second squared).
+    let hop = rising * 0.1 - 160.0 * 0.01 / 2.0;
+    assert!(hop > crate::movement::MAX_GROUNDED_STEP, "{hop}");
+    at.z += hop;
+    session
+        .send_move_sample(
+            &swim_to(at, 1_100, start, MovementMode::Fall),
+            start + Duration::from_millis(1_100),
+            |_| Ok(()),
+        )
+        .unwrap();
+    // Without the swim sample before it, that rise is refused.
+    let mut dry = swimming_session(start, calibration);
+    let hop = Position {
+        z: rising * 0.1 - 160.0 * 0.01 / 2.0,
+        ..Position::default()
+    };
+    assert!(dry
+        .send_move_sample(
+            &swim_to(hop, 100, start, MovementMode::Fall),
+            start + Duration::from_millis(100),
+            |_| panic!("a dry rise")
+        )
+        .is_err());
 }

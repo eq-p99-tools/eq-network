@@ -5,6 +5,23 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Swim as the Titanium program does (Batch M slice 4; reads R33, R33b, R39
+  and R41): `movement::water` holds the per-frame wet step of `eqgame.exe`
+  0x4bfe0f (`WetVelocity`, `WetInput`, `WetCaps`, the coefficient sets, the
+  0.4 gravity that also applies in water, the 500 ms jump push), stepped at a
+  fixed 1/60 s with a partial last frame (recording checklist 6.483).
+  `GameDialect::water` gives the generation's `WaterRules`: `WT` water takes
+  level 5's set, poearthb its own, and thegrey has no breathable air.
+  `SpeedState` gains `swimming_skill`; `MotionCalibration` and
+  `WorldEvent::MotionState` gain `swim` (`SwimCalibration`), whose forward
+  inputs add the Swimming skill x 0.01 standing. The session bounds a
+  Titanium swim sample per axis instead of one 3-axis budget, lets a rooted
+  swimmer sink, and lets a fall rise on after a swim sample. Level swimming
+  at run 0.7 and skill 100 goes from 4.7 to 17 units a second, and looking
+  straight up rises about 34. **Breaking:** exhaustive constructions of
+  `SpeedState`, `MotionCalibration` and `WorldEvent::MotionState` need the
+  new fields.
+
 - Restore a rider arriving aboard where the Titanium program does (read
   R36c): its profile loader keeps the profile's y and z as the boat-frame x
   and y and the departure's saved z as z. `Arrival::Aboard` gains `profile`,

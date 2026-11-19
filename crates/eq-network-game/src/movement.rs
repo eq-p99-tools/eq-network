@@ -17,6 +17,7 @@ pub use inputs::{
 mod session;
 mod shoreline;
 mod speeds;
+pub mod water;
 pub use carry::{between_reports, carry, Carried, ZBetween};
 pub use counter::{UpdateCounter, TITANIUM_HISTORY_FRAMES_PER_SECOND, TITANIUM_UPDATE_COUNTER};
 pub use diagonal::{DiagonalAlong, DiagonalRates, GroundedDiagonal, StrafeSide};
@@ -27,7 +28,7 @@ pub use gate::{
 };
 pub use session::{
     titanium_jump, BackwardCalibration, MotionCalibration, MotionSession, StrafeCalibration,
-    WalkCalibration,
+    SwimCalibration, WalkCalibration,
 };
 pub use shoreline::{
     ShorelineFrame, ShorelineStroke, ShorelineTrace, ShorelineVelocity, SHORELINE_COOLDOWN,
@@ -187,7 +188,8 @@ impl MovementMode {
     }
 }
 
-/// Conservative three-dimensional swim budget for a Titanium session.
+/// Conservative three-dimensional swim budget, where the generation's water
+/// is unread (`EQMac`) or a grant carries no [`MotionCalibration::swim`].
 ///
 /// The slower native wet horizontal branch settles at `0.02 / (1 - 0.94)`
 /// input units per tick (`eqgame.exe` 0x4c052d and 0x4c0534), versus
@@ -572,6 +574,9 @@ pub struct MovementGuard {
     shoreline: Option<ShorelineArc>,
     shoreline_velocity: Option<[f32; 3]>,
     previous_swim: bool,
+    /// When the last swim sample was accepted and the rising cap it had: a
+    /// fall that follows may rise on from it ([`Self::surfacing_rise`]).
+    surfacing: Option<(Instant, f32)>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -627,6 +632,7 @@ impl MovementGuard {
             shoreline: None,
             shoreline_velocity: None,
             previous_swim: false,
+            surfacing: None,
         }
     }
 
@@ -671,6 +677,30 @@ impl MovementGuard {
     /// How far the announced jump rises between `from` and `to` seconds
     /// after it started: its speed less what gravity takes, and nothing
     /// past the top.
+    /// How far a fall may rise over the sample ending at `request` after a
+    /// swimmer left the water rising: from the last swim sample's rising cap,
+    /// slowed by the jump's gravity, as the program's dry step carries the
+    /// velocity on with no input (0x4bfe0f; read R33). Nothing without a
+    /// calibrated gravity, or once the rise is spent.
+    fn surfacing_rise(&self, request: &MovementRequest, elapsed: f32) -> f32 {
+        let (Some((left, speed)), Some((_, gravity))) = (self.surfacing, self.jump) else {
+            return 0.0;
+        };
+        if request.mode != MovementMode::Fall || gravity <= 0.0 {
+            return 0.0;
+        }
+        let to = request
+            .created
+            .saturating_duration_since(left)
+            .as_secs_f32();
+        let from = (to - elapsed).max(0.0);
+        let height = |t: f32| {
+            let t = t.min(speed / gravity);
+            speed * t - gravity * t * t / 2.0
+        };
+        (height(to) - height(from)).max(0.0)
+    }
+
     fn jump_rise(&self, from: f32, to: f32) -> f32 {
         let Some((speed, gravity)) = self.jump else {
             return 0.0;
@@ -892,6 +922,7 @@ impl MovementGuard {
         self.input_epoch = now;
         self.speed = None;
         self.jumped_at = None;
+        self.surfacing = None;
         self.clear_shoreline();
     }
 
@@ -1000,20 +1031,22 @@ impl MovementGuard {
             now,
             RunSpeedMultiplier::NORMAL,
             None,
-            (false, None),
+            (false, None, None),
         )
     }
 
-    /// `swimming` says whether the session swims, and `swim_backward` bounds
+    /// `swimming` says whether the session swims, `swim_backward` bounds
     /// a swim stroke's backward component, in units a second, where the
-    /// generation reads one ([`MotionCalibration::swim_backward_units_per_second`]).
+    /// generation reads one ([`MotionCalibration::swim_backward_units_per_second`]),
+    /// and `swim_caps` bounds each axis of a stroke where the generation's
+    /// water is read ([`MotionCalibration::swim`]).
     fn accept_with_modes(
         &mut self,
         request: &MovementRequest,
         now: Instant,
         run_speed_multiplier: RunSpeedMultiplier,
         lateral_rate: Option<f32>,
-        (swimming, swim_backward): (bool, Option<f32>),
+        (swimming, swim_backward, swim_caps): (bool, Option<f32>, Option<water::WetCaps>),
     ) -> Result<[f32; 3]> {
         ensure!(
             request.session_id == self.session_id,
@@ -1056,12 +1089,28 @@ impl MovementGuard {
         if let MovementMode::Shoreline(trace) = request.mode {
             return self.accept_shoreline(request, trace, speed, delta, swimming);
         }
+        let mut surfaced = None;
         if request.mode == MovementMode::Swim {
             ensure!(swimming && !self.flying, "swimming is not available");
-            ensure!(
-                delta[0].hypot(delta[1]).hypot(delta[2]) <= speed * elapsed + 0.01,
-                "swimming exceeds its three-dimensional time budget"
-            );
+            if let Some(caps) = swim_caps {
+                // Each axis settles at its own rate in the program's step
+                // (0x4bfe0f), and the client's velocity starts within the
+                // caps on entering water ([`water::WetVelocity::clamp`]).
+                ensure!(
+                    delta[0].hypot(delta[1]) <= caps.horizontal * elapsed + 0.01,
+                    "swimming exceeds its horizontal time budget"
+                );
+                ensure!(
+                    delta[2] <= caps.up * elapsed + 0.01 && -delta[2] <= caps.down * elapsed + 0.01,
+                    "swimming exceeds its vertical time budget"
+                );
+                surfaced = Some((request.created, caps.up));
+            } else {
+                ensure!(
+                    delta[0].hypot(delta[1]).hypot(delta[2]) <= speed * elapsed + 0.01,
+                    "swimming exceeds its three-dimensional time budget"
+                );
+            }
             if let Some(backward) = swim_backward {
                 swim_backing(request.position.heading, delta, backward * elapsed)?;
             }
@@ -1097,6 +1146,9 @@ impl MovementGuard {
         let since_jump = self.check_vertical(request, delta, speed, elapsed)?;
         let delta = self.world_delta(request, delta);
         self.record_move(request);
+        if surfaced.is_some() {
+            self.surfacing = surfaced;
+        }
         self.update_jump_after_move(request.mode, request.created, since_jump);
         Ok(delta)
     }
@@ -1122,7 +1174,8 @@ impl MovementGuard {
             }
         });
         let rise = since_jump.map_or(0.0, |(from, to)| self.jump_rise(from, to))
-            + self.lift_rise_for(request);
+            + self.lift_rise_for(request)
+            + self.surfacing_rise(request, elapsed);
         let vertical = if request.mode.is_water_motion() {
             true // The single 3D budget already checks vertical movement.
         } else if self.flying {
@@ -1189,6 +1242,9 @@ impl MovementGuard {
         self.sampled = request.created;
         self.clear_shoreline();
         self.previous_swim = request.mode == MovementMode::Swim;
+        if !matches!(request.mode, MovementMode::Swim | MovementMode::Fall) {
+            self.surfacing = None;
+        }
     }
 
     /// Ends jump tracking on water entry or once its upward allowance is spent.

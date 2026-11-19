@@ -1023,6 +1023,11 @@ pub enum WorldEvent {
         /// 0 backs up not at all. None backs up in water as any swim stroke.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         swim_backward_units_per_second: Option<f32>,
+        /// Swimming as the generation's program moves it
+        /// (`movement::MotionCalibration::swim`): the swimmer's inputs and
+        /// the zone's water set. None swims at the conservative 3-axis rate.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        swim: Option<crate::movement::SwimCalibration>,
         /// Lateral rates while longitudinal input is active.
         #[serde(skip_serializing_if = "crate::movement::DiagonalRates::is_unavailable")]
         diagonal: crate::movement::DiagonalRates,

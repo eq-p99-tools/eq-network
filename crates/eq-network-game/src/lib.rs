@@ -204,6 +204,17 @@ impl GameDialect {
         }
     }
 
+    /// How this generation's program moves a body in water and where its
+    /// air can't be breathed ([`movement::water::WaterRules`]); None where
+    /// its program is unread, as for `EQMac`.
+    #[must_use]
+    pub const fn water(self) -> Option<movement::water::WaterRules> {
+        match self {
+            Self::Titanium => Some(movement::water::TITANIUM_WATER),
+            Self::EqMac => None,
+        }
+    }
+
     /// How this generation's program treats input while the player is
     /// rooted ([`movement::RootRules`]).
     #[must_use]
