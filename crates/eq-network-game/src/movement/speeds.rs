@@ -1,6 +1,8 @@
 //! How fast each client generation lets the player move, from what the
 //! session knows of them.
-use super::session::{BackwardCalibration, MotionCalibration, StrafeCalibration, WalkCalibration};
+use super::session::{
+    BackwardCalibration, MotionCalibration, StrafeCalibration, SwimCalibration, WalkCalibration,
+};
 use super::DiagonalRates;
 
 /// What the official client's speeds depend on, as far as the session knows
@@ -37,6 +39,9 @@ pub struct SpeedState {
     pub ducking: bool,
     /// The zone the player is in.
     pub zone_id: u16,
+    /// The player's Swimming skill (skill 50), as the profile and skill
+    /// updates give it; None counts as 0.
+    pub swimming_skill: Option<u32>,
 }
 
 /// What a generation's client makes of the player's state: the speeds it
@@ -116,6 +121,9 @@ struct Generation {
     swim_backs_on_modifier: bool,
     /// How fast a ducking player moves.
     ducked: Ducked,
+    /// How the program moves a swimmer, where read
+    /// ([`crate::GameDialect::water`]).
+    water: Option<super::water::WaterRules>,
 }
 
 /// How fast a generation's client moves a ducking player.
@@ -137,6 +145,7 @@ const EQMAC: Generation = Generation {
     strafes_on_selected_base: false,
     swim_backs_on_modifier: false,
     ducked: Ducked::Stands,
+    water: crate::GameDialect::EqMac.water(),
 };
 
 /// Titanium's side of the table, from the Titanium speeds read and the
@@ -149,6 +158,7 @@ const TITANIUM: Generation = Generation {
     strafes_on_selected_base: true,
     swim_backs_on_modifier: true,
     ducked: Ducked::Sneaking,
+    water: crate::GameDialect::Titanium.water(),
 };
 
 /// `EQMac`'s speeds, from the program (TAKP sitting 2 M1, "Speeds", and the
@@ -210,8 +220,9 @@ const TITANIUM: Generation = Generation {
 /// What the session doesn't know, it takes the slower side of: the
 /// modifier's cap is the base one, as the run-speed ability's ranks aren't
 /// tracked (nor the small modifier the ability gives with no buffs).
-/// Riding and native swim skill tuning are left out. A Titanium swim
-/// admission can apply the conservative bound in [`super::swim_speed`].
+/// Riding is left out. Titanium's swim inputs, with the Swimming skill's
+/// share, are [`MotionCalibration::swim`]; `EQMac` keeps the conservative
+/// bound in [`super::swim_speed`].
 #[must_use]
 pub fn eqmac(state: &SpeedState) -> Speeds {
     speeds(EQMAC, state)
@@ -327,7 +338,17 @@ fn motion(generation: Generation, state: &SpeedState) -> Option<MotionCalibratio
     let byte = |input: f32| {
         (input.clamp(WIRE_INPUTS.0, WIRE_INPUTS.1) * generation.animation_per_input) as i16
     };
+    let swim = swim(
+        generation,
+        state,
+        sneaking,
+        (run, walk),
+        (strafing, swim_backing.unwrap_or(backing)),
+        multiplier,
+        modifier,
+    );
     let calibration = MotionCalibration {
+        swim,
         swim_backward_units_per_second: generation
             .swim_backs_on_modifier
             .then(|| swim_backing.map_or_else(|| speed(backing), speed)),
@@ -354,6 +375,40 @@ fn motion(generation: Generation, state: &SpeedState) -> Option<MotionCalibratio
         }),
     };
     calibration.validate().ok().map(|()| calibration)
+}
+
+/// A swimmer's inputs where the generation's water is read. A standing
+/// swimmer adds the Swimming skill to the forward speed (0x4a1d74; read R33
+/// section 3); a sneaking or ducked swim keeps the land speed, since the
+/// skill's share there is unread.
+fn swim(
+    generation: Generation,
+    state: &SpeedState,
+    sneaking: bool,
+    (run, walk): (f32, f32),
+    (strafing, backing): (f32, f32),
+    multiplier: f32,
+    modifier: f32,
+) -> Option<SwimCalibration> {
+    let forward = |base: f32| {
+        let input = base * multiplier + modifier;
+        if sneaking {
+            if input < 0.0 {
+                EQMAC_SLOWEST
+            } else {
+                input
+            }
+        } else {
+            super::water::swim_input(input, state.swimming_skill)
+        }
+    };
+    generation.water.map(|water| SwimCalibration {
+        forward: forward(run),
+        walk: forward(walk),
+        strafe: strafing.abs(),
+        backward: backing.abs(),
+        set: water.set(state.zone_id),
+    })
 }
 
 /// Whether the player carries more than their capacity.
@@ -403,6 +458,7 @@ mod tests {
             sneaking: false,
             ducking: false,
             zone_id: 1,
+            swimming_skill: None,
         }
     }
 

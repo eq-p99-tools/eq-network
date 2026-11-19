@@ -50,6 +50,59 @@ pub struct MotionCalibration {
     /// that rule until its program is read.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub swim_backward_units_per_second: Option<f32>,
+    /// Swimming as the generation's program moves it, where read
+    /// (Titanium); None keeps the conservative 3-axis bound of
+    /// [`super::swim_speed`], as `EQMac` does until its program is read.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub swim: Option<SwimCalibration>,
+}
+
+/// A swimmer's inputs in the program's own speed units (the land speed's:
+/// see [`super::water`]), and the water set they move by.
+#[derive(Clone, Copy, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct SwimCalibration {
+    /// Forward running, with the Swimming skill's share where standing
+    /// (0x4a1d74; read R33 section 3).
+    pub forward: f32,
+    /// Forward walking, the same way.
+    pub walk: f32,
+    /// Sideways, as on land: water leaves the strafe term alone (R28, R33).
+    pub strafe: f32,
+    /// Backing up, as a positive input; 0 backs up not at all (R13 b).
+    pub backward: f32,
+    /// The water set of the zone's `WT` regions ([`super::water::WaterRules`]).
+    pub set: super::water::WetCoefficients,
+}
+
+impl SwimCalibration {
+    /// The fastest the swimmer moves on each axis. The vertical input comes
+    /// from the forward or backing speed alone (R39 C), so a strafe's
+    /// speed bounds only the horizontal.
+    #[must_use]
+    pub fn caps(&self) -> super::water::WetCaps {
+        let vertical = self.forward.max(self.walk).max(self.backward);
+        super::water::WetCaps::new(self.set, vertical.max(self.strafe), vertical)
+    }
+
+    fn validate(&self) -> Result<()> {
+        let set = self.set;
+        ensure!(
+            [self.forward, self.walk, self.strafe, self.backward]
+                .iter()
+                .all(|v| v.is_finite() && *v >= 0.0)
+                && [
+                    set.horizontal_input,
+                    set.vertical_input,
+                    set.horizontal_keep,
+                    set.vertical_keep
+                ]
+                .iter()
+                .all(|v| v.is_finite() && *v > 0.0 && *v < 1.0),
+            "invalid swimming calibration"
+        );
+        Ok(())
+    }
 }
 
 /// Measured backward motion, kept separate from forward speed and animation.
@@ -117,6 +170,9 @@ impl MotionCalibration {
                 "invalid water backing-up calibration"
             );
         }
+        if let Some(swim) = self.swim {
+            swim.validate()?;
+        }
         if let Some(backward) = self.backward {
             ensure!(
                 backward.units_per_second.is_finite()
@@ -177,6 +233,9 @@ struct Rates {
     lateral: Option<f32>,
     /// A swim stroke's bound backing up, where the grant reads one.
     swim_backward: Option<f32>,
+    /// A swim stroke's caps on each axis, where the grant reads the
+    /// generation's water ([`MotionCalibration::swim`]).
+    swim_caps: Option<super::water::WetCaps>,
 }
 
 impl Rates {
@@ -187,6 +246,7 @@ impl Rates {
         animation: 0,
         lateral: None,
         swim_backward: None,
+        swim_caps: None,
     };
 
     /// The rates `calibration` grants in `along`, and sideways for a
@@ -240,9 +300,12 @@ impl Rates {
                 )
             }
             MovementMode::Swim => (
-                super::swim_speed(calibration.units_per_second),
+                calibration.swim.map_or_else(
+                    || super::swim_speed(calibration.units_per_second),
+                    |swim| swim.caps().horizontal,
+                ),
                 calibration.velocity_scale,
-                0, // Swim animation/skill calibration is unverified.
+                0, // Swim animation calibration is unverified.
             ),
             MovementMode::Shoreline(_) => (calibration.units_per_second, 0.0, 0),
             MovementMode::GroundedDiagonal(_) => unreachable!("longitudinal mode is cardinal"),
@@ -252,9 +315,15 @@ impl Rates {
             velocity_scale,
             animation,
             lateral,
-            swim_backward: calibration
-                .swim_backward_units_per_second
-                .map(super::swim_speed),
+            swim_backward: calibration.swim.map_or_else(
+                || {
+                    calibration
+                        .swim_backward_units_per_second
+                        .map(super::swim_speed)
+                },
+                |swim| Some(super::water::WetCaps::new(swim.set, swim.backward, 0.0).horizontal),
+            ),
+            swim_caps: calibration.swim.map(|swim| swim.caps()),
         })
     }
 }
@@ -276,6 +345,10 @@ pub struct MotionSession {
     /// so they turn and a sample that only turns is taken, and nothing
     /// carries them anywhere ([`Self::root`]).
     rooted: bool,
+    /// The water set of the grant a root replaced: a rooted swimmer still
+    /// sinks, the root zeroing only the speed (read R18; gravity in water,
+    /// read R33 and R41 e).
+    rooted_water: Option<super::water::WetCoefficients>,
     /// Whether a rooted player may jump, as the client generation's program
     /// lets them ([`crate::movement::RootRules::jumps`]).
     rooted_jumps: bool,
@@ -574,6 +647,7 @@ impl MotionSession {
             previous_position: None,
             calibration: None,
             rooted: false,
+            rooted_water: None,
             rooted_jumps: false,
             earlier: Vec::new(),
             options: super::MovementOptions::default(),
@@ -664,6 +738,7 @@ impl MotionSession {
         } else {
             self.guard.set_speed(None, now);
         }
+        self.rooted_water = self.calibration.and_then(|c| c.swim).map(|swim| swim.set);
         self.calibration = None;
         self.rooted = true;
         self.hold_stop();
@@ -1036,6 +1111,9 @@ impl MotionSession {
             // Rooted, every mode is granted at no speed, a diagonal too.
             Rates {
                 lateral: diagonal.map(|_| 0.0),
+                swim_caps: self
+                    .rooted_water
+                    .map(|set| super::water::WetCaps::new(set, 0.0, 0.0)),
                 ..Rates::ROOTED
             }
         } else if let Some(calibration) = self.calibration {
@@ -1054,6 +1132,7 @@ impl MotionSession {
             animation,
             lateral: lateral_rate,
             swim_backward,
+            swim_caps,
         } = rates;
         // Switching mode changes the per-sample limit without resetting input expiry
         // or granting a new time budget. The clone is committed only after send succeeds.
@@ -1073,7 +1152,7 @@ impl MotionSession {
             now,
             run_speed_multiplier,
             lateral_rate,
-            (self.swimming, swim_backward),
+            (self.swimming, swim_backward, swim_caps),
         )?;
         // Following a slope has no vertical stroke. Ordinary falls still
         // carry their descent in absolute Z. For a swim stroke Titanium
@@ -1159,6 +1238,13 @@ impl MotionSession {
             .chain(std::iter::once((created, current)));
         let (mut speed, mut lateral, mut backing) = (0.0, 0.0, 0.0);
         let mut backing_bound = false;
+        // A rooted span adds no water travel; the caps hold where the grant
+        // at `created` has them.
+        let mut caps = super::water::WetCaps {
+            horizontal: 0.0,
+            up: 0.0,
+            down: 0.0,
+        };
         let mut from = start;
         let mut at_created = current;
         for (until, span) in spans {
@@ -1169,6 +1255,11 @@ impl MotionSession {
                 lateral += span.lateral.unwrap_or(0.0) * share;
                 backing_bound |= span.swim_backward.is_some();
                 backing += span.swim_backward.unwrap_or(span.speed) * share;
+                if let Some(span) = span.swim_caps {
+                    caps.horizontal += span.horizontal * share;
+                    caps.up += span.up * share;
+                    caps.down += span.down * share;
+                }
                 from = to;
             }
             if until >= created {
@@ -1182,6 +1273,7 @@ impl MotionSession {
             animation: at_created.animation,
             lateral: diagonal.map(|_| lateral),
             swim_backward: backing_bound.then_some(backing),
+            swim_caps: at_created.swim_caps.map(|_| caps),
         }
     }
 

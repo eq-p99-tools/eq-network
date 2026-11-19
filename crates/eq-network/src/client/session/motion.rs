@@ -275,6 +275,7 @@ fn granted(
         strafe_units_per_second: speeds.strafe.map(|value| value.units_per_second),
         strafe_walk_units_per_second: speeds.strafe.and_then(|value| value.walk_units_per_second),
         swim_backward_units_per_second: speeds.swim_backward_units_per_second,
+        swim: speeds.swim,
         backward_units_per_second: speeds.backward.map(|value| value.units_per_second),
         diagonal: speeds.diagonal,
         falls,
@@ -291,6 +292,7 @@ fn rooted(session_id: u64, falls: bool, jump_factor: f32) -> WorldEvent {
         strafe_units_per_second: None,
         strafe_walk_units_per_second: None,
         swim_backward_units_per_second: None,
+        swim: None,
         walk_units_per_second: None,
         backward_units_per_second: None,
         diagonal: DiagonalRates::default(),
@@ -308,6 +310,7 @@ pub(super) fn withdrawn(session_id: u64) -> WorldEvent {
         strafe_units_per_second: None,
         strafe_walk_units_per_second: None,
         swim_backward_units_per_second: None,
+        swim: None,
         walk_units_per_second: None,
         backward_units_per_second: None,
         diagonal: DiagonalRates::default(),
@@ -468,6 +471,11 @@ impl Motion {
             sneaking: self.sneaking,
             ducking,
             zone_id: world.zone.0,
+            swimming_skill: player
+                .skills
+                .as_ref()
+                .and_then(|skills| skills.get(eq_network_game::movement::water::SWIMMING_SKILL))
+                .copied(),
         });
         if let Some((encumbered, string_id)) = speeds.encumbrance {
             // The official client speaks as the player enters a state. Whether
@@ -1322,6 +1330,7 @@ mod tests {
             .calibrate(
                 MotionCalibration {
                     swim_backward_units_per_second: None,
+                    swim: None,
                     units_per_second: 6.0,
                     velocity_scale: 0.05,
                     animation: 12,
@@ -1461,6 +1470,7 @@ mod tests {
             session_id: 5,
             calibration: eq_network_game::movement::MotionCalibration {
                 swim_backward_units_per_second: None,
+                swim: None,
                 diagonal: DiagonalRates::default(),
                 units_per_second: 6.0,
                 velocity_scale: 0.05,
