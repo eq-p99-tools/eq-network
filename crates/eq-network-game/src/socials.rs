@@ -225,6 +225,22 @@ pub fn random(low: u32, high: u32) -> EncodedCommand {
     }
 }
 
+/// The animation an emote command plays (Titanium 0x49e0c1, read R47):
+/// `OP_Animation` with the player's spawn, the normal speed (10) and the
+/// animation, the record [`crate::combat::Animation`] decodes.
+///
+/// # Errors
+/// Refuses an absent own spawn.
+pub fn titanium_emote_animation(own: u16, animation: u8) -> Result<EncodedCommand> {
+    ensure!(own != 0, "an emote animation needs the player's spawn");
+    let mut body = own.to_le_bytes().to_vec();
+    body.extend([10, animation]);
+    Ok(EncodedCommand {
+        opcode: crate::combat::ANIMATION_OPCODE,
+        body,
+    })
+}
+
 /// Emotes: the server puts the player's name before the text, as it is,
 /// so the text starts with a space.
 ///

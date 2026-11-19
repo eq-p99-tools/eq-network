@@ -64,7 +64,7 @@ each.
 | `RangedCombat` | Firing a bow or throwing a weapon | Yes | Yes | – | – |
 | `Abilities` | Kick, bash, taunt, hide, sneak, forage and the like | Yes | Yes | Yes | Yes |
 | `KnightAbilities` | Lay on Hands and Harm Touch | Yes | Yes | – | – |
-| `UsingDisciplines` | Warrior disciplines | Yes | Yes | – | – |
+| `UsingDisciplines` | Disciplines the server lists, for every melee class | Yes | Yes | – | – |
 | `Tracking` | The tracking window | Yes | Yes | – | – |
 | `Pets` | Commanding a pet | Yes | Yes | – | – |
 | `Casting` | Casting memorized spells | Yes | Yes | Yes | Yes |

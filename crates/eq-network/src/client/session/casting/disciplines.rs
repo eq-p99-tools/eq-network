@@ -1,4 +1,5 @@
-//! The initial Titanium discipline set and the received reuse state.
+//! Titanium disciplines: any the server listed, cast with the discipline
+//! slot (0x4bb39d, read R48), and the received reuse and active state.
 use super::{rejected, Casting, Source};
 use crate::client::session::{
     feature::{Out, World},
@@ -6,7 +7,7 @@ use crate::client::session::{
 };
 use anyhow::{ensure, Context, Result};
 use eq_network_game::{
-    disciplines::{titanium_cast, Active, Discipline, Timers},
+    disciplines::{titanium_cast, Active, Timers},
     message::Message,
     world::WorldEvent,
 };
@@ -91,14 +92,14 @@ impl DisciplineState {
 
     /// A pending retry, an observed active discipline or an observed group
     /// wait can refuse an otherwise eligible request.
-    fn check(&self, discipline: Discipline, now: Instant) -> Result<()> {
+    fn check(&self, timer: u32, now: Instant) -> Result<()> {
         ensure!(
             !matches!(self.active, Active::Titanium(_)),
             "A discipline is already active"
         );
         ensure!(
             self.reuse
-                .remaining(discipline.timer(), now)
+                .remaining(timer, now)
                 .is_none_or(|wait| wait.is_zero()),
             "The shared discipline timer is still running"
         );
@@ -111,12 +112,13 @@ impl DisciplineState {
 }
 
 impl Casting {
-    /// Send a learned, self-targeted discipline and leave the result to the
-    /// server's cast stream, active slot and reuse notices.
+    /// Send a discipline the server listed and leave the result to the
+    /// server's cast stream, active slot and reuse notices. The spell, its
+    /// timer and its target come from the host's spell data.
     pub(super) fn use_discipline(
         &mut self,
         command: &ClientCommand,
-        discipline: Discipline,
+        (spell_id, timer, target_id): (u32, u32, u16),
         world: &World,
         out: &mut Out<'_, '_>,
     ) -> Result<()> {
@@ -127,22 +129,26 @@ impl Casting {
                 "Disciplines are unavailable on this server"
             );
             let player = world.player.as_ref().context("Not in the zone yet")?;
+            let known = player
+                .disciplines
+                .as_deref()
+                .context("The server hasn't listed your disciplines")?;
             ensure!(
-                discipline.learned(player.class, player.level, player.disciplines.as_deref()),
+                spell_id != 0 && known.contains(&spell_id),
                 "The discipline is unavailable to your character"
             );
             ensure!(
                 !world.control.stunned(),
                 "Cannot use a discipline while stunned"
             );
-            self.disciplines.check(discipline, now)?;
-            titanium_cast(discipline, player.spawn_id)
+            self.disciplines.check(timer, now)?;
+            titanium_cast(spell_id, target_id)
         })();
         match prepared {
             Ok(packet) => {
                 out.send(&packet)?;
                 self.disciplines.retry_at = Some(now + RETRY_DELAY);
-                self.submitted(discipline.spell(), Source::Discipline, world, out)
+                self.submitted(spell_id, Source::Discipline, world, out)
             }
             Err(error) => {
                 let reason = error.to_string();
@@ -159,7 +165,49 @@ impl Casting {
 mod tests {
     use super::*;
     use crate::client::session::feature::{testing, Feature};
-    use eq_network_game::disciplines::Reuse;
+    use eq_network_game::disciplines::{Discipline, Reuse};
+
+    fn use_spell(spell_id: u32, target_id: u16) -> ClientCommand {
+        ClientCommand::UseDiscipline {
+            session_id: 1,
+            spell_id,
+            timer: 1,
+            target_id,
+            created: Instant::now(),
+        }
+    }
+
+    #[test]
+    fn any_listed_discipline_casts_at_its_target_and_an_unlisted_one_is_refused() {
+        let mut world = World::new(1);
+        world.player.admit(testing::player(7));
+        let mut casting = Casting::with_titanium_combat(false, Duration::from_mins(72));
+        // No list from the server yet: nothing is sent.
+        let report = testing::run(|out| casting.handle(&use_spell(4585, 7), &mut world, out));
+        report.result.unwrap();
+        assert_eq!(report.sent, []);
+        assert!(
+            report.events.iter().any(|event| matches!(
+                event,
+                ClientEvent::World(WorldEvent::CastRejected { spell_id: 4585, .. })
+            )),
+            "{:?}",
+            report.events
+        );
+        let mut player = testing::player(7);
+        player.disciplines = Some(vec![4585, 0]);
+        world.player.admit(player);
+        // A spell the list doesn't hold, and the empty slot, are refused.
+        for spell in [4586, 0] {
+            let report = testing::run(|out| casting.handle(&use_spell(spell, 7), &mut world, out));
+            report.result.unwrap();
+            assert_eq!(report.sent, [], "{spell}");
+        }
+        // A listed one casts with the discipline slot at the target given.
+        let report = testing::run(|out| casting.handle(&use_spell(4585, 300), &mut world, out));
+        report.result.unwrap();
+        assert_eq!(report.sent, [titanium_cast(4585, 300).unwrap()]);
+    }
 
     #[test]
     fn staged_discipline_reuse_blocks_both_actions_but_same_linked_timer_does_not() {
@@ -170,11 +218,7 @@ mod tests {
         player.disciplines = Some(vec![4499, 4503]);
         world.player.admit(player);
         let mut casting = Casting::with_titanium_combat(false, Duration::from_mins(72));
-        let command = |discipline| ClientCommand::UseDiscipline {
-            session_id: 1,
-            discipline,
-            created: Instant::now(),
-        };
+        let command = |discipline: Discipline| use_spell(discipline.spell(), 7);
         let timer = |remaining| Reuse {
             timer: 1,
             remaining,

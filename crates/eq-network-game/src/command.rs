@@ -756,6 +756,18 @@ pub enum GameCommand {
         /// What the player does, after their name.
         text: String,
     },
+    /// The animation an emote command plays (Titanium 0x49e0c1, read R47),
+    /// sent after its [`GameCommand::Emote`]: the program sends it only
+    /// while the player stands still, and the session sends nothing unless
+    /// the player stands.
+    EmoteAnimation {
+        /// Current zone admission.
+        session_id: u64,
+        /// The animation's number.
+        animation: u8,
+        /// When the player asked.
+        created: std::time::Instant,
+    },
     /// Take the target of this spawn: `/assist`.
     Assist {
         /// Current zone admission.
@@ -927,12 +939,21 @@ pub enum GameCommand {
     },
     /// Fire or throw once with the current ranged loadout.
     RangedAttack(crate::combat::ranged::RangedAttack),
-    /// Use one supported self-targeted Warrior discipline.
+    /// Use a discipline the server listed for the player (Titanium
+    /// 0x4bb39d, read R48): the ordinary cast with the discipline slot. The
+    /// host judges class, level and the spell's own refusals from its spell
+    /// data; the session refuses a spell the server didn't list and one
+    /// whose timer runs.
     UseDiscipline {
         /// Admission where the player selected the discipline.
         session_id: u64,
-        /// The bounded discipline to use.
-        discipline: crate::disciplines::Discipline,
+        /// The discipline's spell, which must be in the server's list.
+        spell_id: u32,
+        /// The reuse timer the spell names (its spell data's timer slot).
+        timer: u32,
+        /// The cast's target: the player's own spawn for a self spell,
+        /// otherwise the gem cast's choice (recording checklist 6.488).
+        target_id: u16,
         /// When the player requested it.
         created: std::time::Instant,
     },
@@ -1036,6 +1057,7 @@ impl GameCommand {
             Self::StopSong { .. } => "StopSong",
             Self::StopCasting { .. } => "StopCasting",
             Self::YellForHelp { .. } => "YellForHelp",
+            Self::EmoteAnimation { .. } => "EmoteAnimation",
             Self::SetPosture { .. } => "SetPosture",
             Self::FeignLanded { .. } => "FeignLanded",
             Self::MoveInventory(..) => "MoveInventory",
@@ -1204,6 +1226,7 @@ impl GameCommand {
             | Self::StopSong { session_id, .. }
             | Self::StopCasting { session_id, .. }
             | Self::YellForHelp { session_id, .. }
+            | Self::EmoteAnimation { session_id, .. }
             | Self::InviteToGroup { session_id, .. }
             | Self::FollowGroup { session_id, .. }
             | Self::DeclineGroup { session_id, .. }
@@ -1362,7 +1385,7 @@ impl GameCommand {
             | Self::ToggleRoleplay { .. } => Capability::Listing,
             Self::ShowHelm { .. } => Capability::ShowingHelm,
             Self::Random { .. } => Capability::Rolling,
-            Self::Emote { .. } => Capability::Emoting,
+            Self::Emote { .. } | Self::EmoteAnimation { .. } => Capability::Emoting,
             Self::Assist { .. } => Capability::Assisting,
             Self::RaidInvite { .. }
             | Self::RaidAccept { .. }
@@ -1476,6 +1499,7 @@ impl GameCommand {
             | Self::StopSong { created, .. }
             | Self::StopCasting { created, .. }
             | Self::YellForHelp { created, .. }
+            | Self::EmoteAnimation { created, .. }
             | Self::SetPosture { created, .. }
             | Self::FeignLanded { created, .. }
             | Self::Consider { created, .. }
@@ -1711,6 +1735,7 @@ pub fn encode(
         | GameCommand::StopSong { .. }
         | GameCommand::StopCasting { .. }
         | GameCommand::YellForHelp { .. }
+        | GameCommand::EmoteAnimation { .. }
         | GameCommand::InviteToGroup { .. }
         | GameCommand::FollowGroup { .. }
         | GameCommand::DeclineGroup { .. }

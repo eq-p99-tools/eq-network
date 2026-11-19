@@ -123,14 +123,15 @@ impl Discipline {
 /// The Titanium item/discipline slot. No item is named for a discipline.
 pub const CAST_SLOT: u8 = 10;
 
-/// Cast a supported self-targeted discipline. The caller supplies only the
-/// session's own spawn ID after eligibility and reuse checks.
+/// Cast a discipline: Titanium 0x4bb39d starts the ordinary cast with the
+/// discipline slot (read R48). The caller checks the list and the timer.
 ///
 /// # Errors
-/// Refuses an absent own spawn.
-pub fn titanium_cast(discipline: Discipline, own: u16) -> Result<EncodedCommand> {
-    ensure!(own != 0, "invalid discipline self target");
-    Ok(spells::titanium_cast(CAST_SLOT, discipline.spell(), own))
+/// Refuses no spell or no target.
+pub fn titanium_cast(spell_id: u32, target: u16) -> Result<EncodedCommand> {
+    ensure!(spell_id != 0, "invalid discipline spell");
+    ensure!(target != 0, "invalid discipline target");
+    Ok(spells::titanium_cast(CAST_SLOT, spell_id, target))
 }
 
 /// An active discipline reported by the server. Titanium's buff slot and
@@ -297,9 +298,14 @@ mod tests {
         assert!(!Discipline::Defensive.learned(Some(1), 55, None));
         assert!(Discipline::Defensive.learned(Some(1), 55, Some(&[4503, 4499])));
         assert_eq!(Discipline::Evasive.timer(), Discipline::Defensive.timer());
-        let packet = titanium_cast(Discipline::Defensive, 81).unwrap();
+        let packet = titanium_cast(Discipline::Defensive.spell(), 81).unwrap();
         assert_eq!(packet.opcode, 0x304b);
         assert_eq!(packet.body, record(&[10, 4499, u32::MAX, 81, 0]));
+        // Any discipline casts the same way, at the target given (R48).
+        let packet = titanium_cast(4585, 300).unwrap();
+        assert_eq!(packet.body, record(&[10, 4585, u32::MAX, 300, 0]));
+        assert!(titanium_cast(0, 81).is_err());
+        assert!(titanium_cast(4585, 0).is_err());
     }
 
     #[test]
