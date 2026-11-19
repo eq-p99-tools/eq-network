@@ -263,9 +263,9 @@ pub fn emote(text: &str) -> Result<EncodedCommand> {
     })
 }
 
-/// A social emote (Titanium 0x49e0c1, read R47b): the text as the worker
-/// builds it, which already starts with the space after the name, so it is
-/// sent unchanged, a trailing space included.
+/// A social emote (Titanium 0x49e0c1, read R47b): `0xffffffff`, then the
+/// text as the worker builds it, which already starts with the space after
+/// the name, so it is sent unchanged, a trailing space included.
 ///
 /// # Errors
 /// Rejects an emote with no words, one the server would cut, and one with
@@ -278,7 +278,9 @@ pub fn social_emote(text: &str) -> Result<EncodedCommand> {
         EMOTE_LONGEST - 1
     );
     ensure!(!text.contains('\0'), "an emote cannot hold a NUL");
+    // The worker's body leads with 0xffffffff, then the text (R47b b).
     let mut body = vec![0; 4 + EMOTE_TEXT];
+    body[..4].copy_from_slice(&u32::MAX.to_le_bytes());
     body[4..4 + text.len()].copy_from_slice(text.as_bytes());
     Ok(EncodedCommand {
         opcode: EMOTE_OPCODE,
@@ -530,6 +532,17 @@ mod tests {
         assert!(emote(&"a".repeat(EMOTE_LONGEST)).is_err());
         assert_eq!(assist(300).body, [44, 1, 0, 0]);
         assert_eq!(heard_emote("Tester", "waves."), b"\0\0\0\0Tester waves.\0");
+    }
+
+    #[test]
+    fn a_social_emote_leads_with_the_workers_header_and_keeps_its_spaces() {
+        let nudged = social_emote(" nudges ").unwrap();
+        assert_eq!((nudged.opcode, nudged.body.len()), (EMOTE_OPCODE, 1028));
+        assert_eq!(&nudged.body[..13], b"\xff\xff\xff\xff nudges \0");
+        assert!(nudged.body[12..].iter().all(|byte| *byte == 0));
+        assert!(social_emote(" ").is_err());
+        assert!(social_emote(&"a".repeat(EMOTE_LONGEST)).is_err());
+        assert!(social_emote(" a\0b").is_err());
     }
 
     #[test]

@@ -425,4 +425,28 @@ mod tests {
         let packet = socials::titanium_yell();
         assert_eq!((packet.opcode, packet.body.len()), (0x61ef, 0));
     }
+
+    #[test]
+    fn a_project1999_social_emote_drops_one_leading_space_and_echoes_nothing() {
+        let mut feature = Socials::project1999();
+        let mut world = World::new(5);
+        world.own_spawn = Some(7);
+        let social = |text: &str| ClientCommand::SocialEmote {
+            session_id: 5,
+            text: text.into(),
+        };
+        let nudged = testing::run(|out| feature.handle(&social(" nudges "), &mut world, out));
+        assert_eq!(
+            nudged.sent,
+            [socials::project1999_emote("nudges ").unwrap()]
+        );
+        assert!(!nudged
+            .events
+            .iter()
+            .any(|event| matches!(event, ClientEvent::Record(_))));
+        // Past the P99 sender's 510-byte bound, under the general one.
+        let long = format!(" {}", "a".repeat(600));
+        let refused = testing::run(|out| feature.handle(&social(&long), &mut world, out));
+        assert_eq!(refused.sent, []);
+    }
 }

@@ -5,6 +5,17 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Send a social emote as the Titanium worker builds it, with no local
+  echo (read R47b). The program prints a social emote's own line itself,
+  so the session's echo for every emote doubled it. `GameCommand::SocialEmote`
+  and `Request::SocialEmote` send `OP_Emote` (0x547a) with the header
+  0xffffffff and the text unchanged, leading and trailing spaces kept;
+  `socials::social_emote` encodes it. Empty, too-long or NUL text is
+  refused. On Project 1999 the one leading space is dropped and the text
+  goes through the P99 sender, which keeps its zero header. `/emote` keeps
+  its echo and its sender. **Breaking:** the new `GameCommand` and
+  `Request` variants.
+
 - Cast a discipline as the program does after read R48b.
   `disciplines::titanium_cast` takes target 0, which the cast carries when
   nothing is targeted, and the host now sends the current target for a
