@@ -451,8 +451,9 @@ pub struct Inventory {
     #[serde(skip)]
     stack_weight: Option<stack_weight::StackWeightBound>,
     correcting: bool,
-    /// Original cursor mass retained after explicit destructive submission.
-    /// Never retired by the ordinary movement silence heuristic.
+    /// Original cursor mass retained after explicit destructive submission,
+    /// until a covering record, a snapshot or the refusal window: `EQEmu`
+    /// accepts a destroy in silence and refuses one by resending the cursor.
     destroyed: Option<InventoryItem>,
     ground_drop: Option<NonZeroU32>,
     #[serde(skip)]
@@ -565,11 +566,12 @@ impl Inventory {
     }
 
     /// Whether the ordinary Titanium refusal window can retire any moves
-    /// while keeping unresolved station transfers and destruction separate.
+    /// or a destroy, while keeping unresolved station transfers separate.
     #[must_use]
     pub fn has_settleable_moves(&self) -> bool {
         let station_pending = self.station_moves_unconfirmed();
         self.handoff_returns_settleable()
+            || self.destroyed.is_some()
             || self.weight_history_uncertain
             || !self.weight_rebased.is_empty()
             || self
@@ -578,12 +580,11 @@ impl Inventory {
                 .is_some_and(stack_weight::StackWeightBound::active)
             || !self.equipment_uncertainty.is_empty()
             || self.unconfirmed.keys().any(|&slot| {
-                (slot != CURSOR || self.destroyed.is_none())
-                    && !(station_pending
-                        && self
-                            .projected_custody
-                            .get(&slot)
-                            .is_some_and(|custody| custody.station))
+                !(station_pending
+                    && self
+                        .projected_custody
+                        .get(&slot)
+                        .is_some_and(|custody| custody.station))
             })
     }
 
@@ -839,13 +840,15 @@ impl Inventory {
 
     fn settle_predictions(&mut self) {
         let station_pending = self.station_moves_unconfirmed();
+        // An unrefused destroy took the item: `EQEmu` deletes it without a
+        // record and refuses only by resending the cursor.
+        self.destroyed = None;
         self.unconfirmed.retain(|slot, _| {
-            (self.destroyed.is_some() && *slot == CURSOR)
-                || (station_pending
-                    && self
-                        .projected_custody
-                        .get(slot)
-                        .is_some_and(|custody| custody.station))
+            station_pending
+                && self
+                    .projected_custody
+                    .get(slot)
+                    .is_some_and(|custody| custody.station)
         });
         if !station_pending {
             // The station cleared or detached a refusal window ago: what it

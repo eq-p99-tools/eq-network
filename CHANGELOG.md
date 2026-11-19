@@ -5,6 +5,15 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Settle a cursor destroy by the refusal window, as a move is settled.
+  `EQEmu` deletes the destroyed item without sending any record, so the
+  prediction used to stay until the next full snapshot, and every destroy
+  after the first in a zone was refused ("Wait for received inventory
+  state..."). The session now starts the two-second refusal window when it
+  sends a destroy, and `InventoryUpdate::Settled` ends the prediction and
+  drops the item's mass from the carried-weight bound. A resent cursor item
+  inside the window still restores it.
+
 - Send an emote command's animation and any listed discipline, as Titanium
   does (reads R47 and R48). `GameCommand::EmoteAnimation` sends
   `OP_Animation` (0x2acf) with the player's spawn, speed 10 and the

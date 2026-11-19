@@ -27,10 +27,13 @@ fn projected_cursor_eligibility_keeps_correction_drop_and_trade_fences() {
     drop.apply(InventoryUpdate::Settled);
     assert!(!drop.projected_cursor_empty());
 
+    // A destroy fences the cursor until the refusal window passes; `EQEmu`
+    // accepts one in silence.
     let mut destroy = inventory.clone();
     destroy.apply(InventoryUpdate::DestroyCursor);
-    destroy.apply(InventoryUpdate::Settled);
     assert!(!destroy.projected_cursor_empty());
+    destroy.apply(InventoryUpdate::Settled);
+    assert!(destroy.projected_cursor_empty());
 
     inventory.apply(InventoryUpdate::Prediction(at(3000, 46)));
     inventory.apply(InventoryUpdate::Settled);

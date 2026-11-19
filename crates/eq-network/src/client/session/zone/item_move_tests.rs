@@ -811,13 +811,43 @@ fn explicit_destroy_is_single_submission_through_p99_and_eqemu_inventory_owner()
                 ..
             })
         )));
-        let after = Instant::now() + Duration::from_secs(30);
-        testing::run_on(servers::server_type(protocol).wire(), |out| {
-            features.tick(after, &mut world, out)
+        // Inside the refusal window the destroy is still a prediction.
+        let wire = servers::server_type(protocol).wire();
+        testing::run_on(wire, |out| {
+            features.tick(Instant::now() + Duration::from_secs(1), &mut world, out)
         })
         .result
         .unwrap();
         assert!(world.inventory.predicted());
+        // `EQEmu` deletes the item without a record: the window's silence
+        // settles the destroy, and the next item on the cursor can go too.
+        let after = Instant::now() + Duration::from_secs(30);
+        testing::run_on(wire, |out| features.tick(after, &mut world, out))
+            .result
+            .unwrap();
+        assert!(!world.inventory.predicted());
+        let next = stack(30, 3);
+        observe(
+            protocol,
+            &mut features,
+            &mut world,
+            InventoryUpdate::Cursor(vec![next.clone()]),
+        );
+        let second =
+            ClientCommand::DestroyItem(Box::new(eq_network_game::inventory::InventoryDestroy {
+                session_id: world.session_id,
+                revision: world.inventory.revision(),
+                item: next,
+                created: Instant::now(),
+            }));
+        let output = submit(protocol, &mut features, &mut world, &second);
+        assert!(output.result.unwrap());
+        assert_eq!(
+            output.sent,
+            [eq_network_game::inventory::titanium_destroy()],
+            "{protocol:?}"
+        );
+        // A received removal also ends it.
         observe(
             protocol,
             &mut features,

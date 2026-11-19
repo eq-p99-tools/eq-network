@@ -609,7 +609,8 @@ impl Belongings {
     }
 
     /// Destruction is owned here, once. Transport failure ends admission and
-    /// does not commit or retry the prediction. Silence never settles it.
+    /// does not commit or retry the prediction. The refusal window settles it,
+    /// as it does a move: `EQEmu` never acknowledges a destroy.
     fn destroy_item(
         &mut self,
         request: &eq_network_game::inventory::InventoryDestroy,
@@ -624,6 +625,9 @@ impl Belongings {
             Ok((update, packet)) => {
                 out.send(&packet)?;
                 world.inventory.0.apply(update.clone());
+                if self.rules.settles_by_silence() {
+                    self.settlement.sent(Instant::now());
+                }
                 (Some(update), None)
             }
             Err(error) => (None, Some(error.to_string())),
