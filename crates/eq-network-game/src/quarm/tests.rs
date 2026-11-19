@@ -245,6 +245,10 @@ fn a_spawn_says_its_class_and_level() {
             (12, Some(2), 1)
         ]
     );
+    // The Mac-era record's body type is unread, so none is reported and
+    // nothing is refused or hidden by it (eq-network-game GameDialect::targeting).
+    assert!(spawns.iter().all(|spawn| spawn.body_type.is_none()));
+    assert!(crate::GameDialect::EqMac.targeting().is_none());
     assert!(decoded_spawns(&data[1..]).is_err());
     // The record's light and fly mode reach the spawn's look.
     data[94] = 2;

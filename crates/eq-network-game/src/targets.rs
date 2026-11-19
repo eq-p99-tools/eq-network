@@ -67,6 +67,57 @@ pub fn eqmac_target(body: &[u8]) -> Result<Option<u16>> {
     Ok((spawn != 0).then_some(spawn))
 }
 
+/// What a client generation's program refuses or hides by a spawn's body
+/// type ([`crate::world::SpawnState::body_type`]). A spawn whose body type
+/// is unknown is never refused, kept from use or hidden.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TargetRules {
+    /// The body types the program's target setter will not take: it puts
+    /// the previous target back, with no line and nothing sent.
+    refused: &'static [u32],
+    /// The body types the program will not interact with.
+    no_interaction: &'static [u32],
+    /// The program hides every body type above this one.
+    hidden_above: u32,
+}
+
+/// Titanium's rules (program read R44).
+///
+/// - Refused: 11, 60, 65 and 67. The target setter 0x4a6f0e (a left click on
+///   the world, 0x4a91a4, and the use key) puts the previous target back at
+///   0x4a6fd5-0x4a6ff7, and so does the view pick of key command 0x1b
+///   (0x4c9585).
+/// - No interaction: 11, 65 and 67. Interaction 0x4a7356 returns at once for
+///   them.
+/// - Hidden: above 64. The per-spawn visibility and name update 0x480409
+///   returns early for them.
+pub const TITANIUM_TARGETING: TargetRules = TargetRules {
+    refused: &[11, 60, 65, 67],
+    no_interaction: &[11, 65, 67],
+    hidden_above: 0x40,
+};
+
+impl TargetRules {
+    /// Whether the program's target setter refuses a spawn of this body type.
+    #[must_use]
+    pub fn refuses(&self, body_type: Option<u32>) -> bool {
+        body_type.is_some_and(|body| self.refused.contains(&body))
+    }
+
+    /// Whether the program will interact with a spawn of this body type.
+    #[must_use]
+    pub fn interacts(&self, body_type: Option<u32>) -> bool {
+        !body_type.is_some_and(|body| self.no_interaction.contains(&body))
+    }
+
+    /// Whether the program hides a spawn of this body type: no name label
+    /// and no per-frame visibility update.
+    #[must_use]
+    pub const fn hides(&self, body_type: Option<u32>) -> bool {
+        matches!(body_type, Some(body) if body > self.hidden_above)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -84,5 +135,31 @@ mod tests {
         for body in [&[0u8; 1][..], &[0; 4]] {
             assert!(eqmac_target(body).is_err());
         }
+    }
+
+    #[test]
+    fn titanium_refuses_hides_and_keeps_from_use_the_body_types_it_reads() {
+        let rules = TITANIUM_TARGETING;
+        for body in [11, 60, 65, 67] {
+            assert!(rules.refuses(Some(body)), "{body}");
+        }
+        for body in [0, 1, 10, 12, 21, 33, 59, 61, 64, 66, 68] {
+            assert!(!rules.refuses(Some(body)), "{body}");
+        }
+        for body in [11, 65, 67] {
+            assert!(!rules.interacts(Some(body)), "{body}");
+        }
+        assert!(rules.interacts(Some(60)) && rules.interacts(Some(1)));
+        assert!(!rules.hides(Some(64)) && rules.hides(Some(65)));
+        assert!(!rules.hides(Some(11)) && !rules.hides(Some(60)));
+        assert!(rules.hides(Some(u32::MAX)));
+    }
+
+    #[test]
+    fn an_unknown_body_type_is_never_refused_kept_from_use_or_hidden() {
+        let rules = TITANIUM_TARGETING;
+        assert!(!rules.refuses(None));
+        assert!(rules.interacts(None));
+        assert!(!rules.hides(None));
     }
 }

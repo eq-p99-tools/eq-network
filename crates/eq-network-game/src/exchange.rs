@@ -482,6 +482,7 @@ mod tests {
             level: 0,
             listing: crate::listing::Listing::default(),
             name_parts: crate::names::NameParts::default(),
+            body_type: None,
             pet_owner: None,
             hp_percent: None,
             posture: None,

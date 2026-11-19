@@ -286,6 +286,12 @@ pub struct SpawnState {
     /// The spawn's title, last name and suffix; empty where the dialect does
     /// not report them.
     pub name_parts: crate::names::NameParts,
+    /// The record's body type, the dword the Titanium program copies from
+    /// record +0x14f into the spawn (0x4816d7 at 0x48175d, program read
+    /// R44), which no appearance or illusion changes afterwards; None where
+    /// the dialect's record is unread, as `EQMac`'s. What the program
+    /// refuses or hides by it is [`crate::GameDialect::targeting`].
+    pub body_type: Option<u32>,
 }
 
 impl SpawnState {
@@ -320,6 +326,10 @@ impl SpawnState {
 /// posture as it builds the spawn (0x4816d7 at 0x481865, program read R24):
 /// 100 standing, 110 sitting, 120 dead and so on.
 const POSTURE_BYTE: usize = 0x57;
+/// Where a Titanium spawn record holds the body type, a dword the program
+/// copies into the spawn as it builds it (0x4816d7 at 0x48175d, program
+/// read R44); `EQEmu` writes it as `bodytype` (`Spawn_Struct` offset 335).
+const BODY_TYPE: usize = 0x14f;
 
 /// Decode a decrypted Titanium spawn batch, without accepting partial records.
 ///
@@ -374,6 +384,7 @@ pub fn titanium_spawns(body: &[u8]) -> Result<Vec<SpawnState>> {
                 hp_percent: (record[86] <= 100).then_some(record[86]),
                 posture: Some(PostureState::from(u32::from(record[POSTURE_BYTE]))),
                 name_parts: crate::names::titanium_spawn(record),
+                body_type: Some(word(record, BODY_TYPE)),
             })
         })
         .collect()
@@ -2514,6 +2525,29 @@ mod tests {
         let spawns = super::titanium_spawns(&record).unwrap();
         assert_eq!(spawns[0].level, 42);
         assert!(spawns[0].listing.away);
+    }
+
+    #[test]
+    fn a_titanium_spawn_carries_the_body_type_dword_the_program_copies() {
+        let mut record = vec![0; 385];
+        record[340..344].copy_from_slice(&73u32.to_le_bytes());
+        record[335] = 11;
+        assert_eq!(
+            super::titanium_spawns(&record).unwrap()[0].body_type,
+            Some(11)
+        );
+        // The program copies all four bytes (0x48175d), so a set high byte
+        // is not body type 11.
+        record[338] = 1;
+        assert_eq!(
+            super::titanium_spawns(&record).unwrap()[0].body_type,
+            Some(0x0100_000b)
+        );
+        record[335..339].fill(0);
+        assert_eq!(
+            super::titanium_spawns(&record).unwrap()[0].body_type,
+            Some(0)
+        );
     }
 
     #[test]
