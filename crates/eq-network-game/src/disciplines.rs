@@ -124,13 +124,13 @@ impl Discipline {
 pub const CAST_SLOT: u8 = 10;
 
 /// Cast a discipline: Titanium 0x4bb39d starts the ordinary cast with the
-/// discipline slot (read R48). The caller checks the list and the timer.
+/// discipline slot (read R48), carrying the current target's id, or 0 with
+/// none (read R48b a). The caller checks the list and the timer.
 ///
 /// # Errors
-/// Refuses no spell or no target.
+/// Refuses no spell.
 pub fn titanium_cast(spell_id: u32, target: u16) -> Result<EncodedCommand> {
     ensure!(spell_id != 0, "invalid discipline spell");
-    ensure!(target != 0, "invalid discipline target");
     Ok(spells::titanium_cast(CAST_SLOT, spell_id, target))
 }
 
@@ -305,7 +305,9 @@ mod tests {
         let packet = titanium_cast(4585, 300).unwrap();
         assert_eq!(packet.body, record(&[10, 4585, u32::MAX, 300, 0]));
         assert!(titanium_cast(0, 81).is_err());
-        assert!(titanium_cast(4585, 0).is_err());
+        // No target sends 0, as the program does (R48b a).
+        let packet = titanium_cast(4585, 0).unwrap();
+        assert_eq!(packet.body, record(&[10, 4585, u32::MAX, 0, 0]));
     }
 
     #[test]

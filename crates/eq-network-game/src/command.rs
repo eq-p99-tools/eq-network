@@ -942,8 +942,8 @@ pub enum GameCommand {
     /// Use a discipline the server listed for the player (Titanium
     /// 0x4bb39d, read R48): the ordinary cast with the discipline slot. The
     /// host judges class, level and the spell's own refusals from its spell
-    /// data; the session refuses a spell the server didn't list and one
-    /// whose timer runs.
+    /// data; the session refuses a spell the server didn't list, one whose
+    /// timer runs, and a timed self one while a discipline is active.
     UseDiscipline {
         /// Admission where the player selected the discipline.
         session_id: u64,
@@ -951,9 +951,13 @@ pub enum GameCommand {
         spell_id: u32,
         /// The reuse timer the spell names (its spell data's timer slot).
         timer: u32,
-        /// The cast's target: the player's own spawn for a self spell,
-        /// otherwise the gem cast's choice (recording checklist 6.488).
+        /// The cast's target: the current target's spawn, or 0 with none,
+        /// for a self spell too (read R48b a).
         target_id: u16,
+        /// Whether the spell has a duration and targets its caster: only
+        /// such a discipline is refused while one is active (0x4bb039,
+        /// read R48b b).
+        timed_self: bool,
         /// When the player requested it.
         created: std::time::Instant,
     },

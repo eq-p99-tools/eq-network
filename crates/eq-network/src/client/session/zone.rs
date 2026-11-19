@@ -1145,6 +1145,7 @@ mod tests {
                 spell_id: 4503,
                 timer: 1,
                 target_id: 7,
+                timed_self: true,
                 created,
             },
             ClientCommand::EmoteAnimation {

@@ -5,6 +5,14 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Cast a discipline as the program does after read R48b.
+  `disciplines::titanium_cast` takes target 0, which the cast carries when
+  nothing is targeted, and the host now sends the current target for a
+  self discipline too. `GameCommand::UseDiscipline` gains `timed_self`:
+  the session refuses on an active discipline only for a spell with a
+  duration that targets its caster (0x4bb039), so any other discipline goes
+  to the server while one runs. **Breaking:** the new field.
+
 - Settle a cursor destroy by the refusal window, as a move is settled.
   `EQEmu` deletes the destroyed item without sending any record, so the
   prediction used to stay until the next full snapshot, and every destroy

@@ -686,8 +686,14 @@ impl Feature for Casting {
                 spell_id,
                 timer,
                 target_id,
+                timed_self,
                 ..
-            } => self.use_discipline(command, (*spell_id, *timer, *target_id), world, out),
+            } => self.use_discipline(
+                command,
+                (*spell_id, *timer, *target_id, *timed_self),
+                world,
+                out,
+            ),
             ClientCommand::UseItem(request) => self.use_item(request, world, out),
             ClientCommand::DropInvisibility { steps, .. } => drop_invisibility(steps, out),
             _ => self.cast(command, world, out),

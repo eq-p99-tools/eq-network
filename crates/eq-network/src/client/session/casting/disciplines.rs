@@ -90,11 +90,12 @@ impl DisciplineState {
         self.active = Active::Unknown;
     }
 
-    /// A pending retry, an observed active discipline or an observed group
-    /// wait can refuse an otherwise eligible request.
-    fn check(&self, timer: u32, now: Instant) -> Result<()> {
+    /// A pending retry, an observed group wait, or, for a timed self
+    /// discipline, an observed active one (0x4bb039, read R48b b) can refuse
+    /// an otherwise eligible request.
+    fn check(&self, timer: u32, timed_self: bool, now: Instant) -> Result<()> {
         ensure!(
-            !matches!(self.active, Active::Titanium(_)),
+            !(timed_self && matches!(self.active, Active::Titanium(_))),
             "A discipline is already active"
         );
         ensure!(
@@ -114,11 +115,12 @@ impl DisciplineState {
 impl Casting {
     /// Send a discipline the server listed and leave the result to the
     /// server's cast stream, active slot and reuse notices. The spell, its
-    /// timer and its target come from the host's spell data.
+    /// timer, its target and whether it is a timed self spell come from the
+    /// host's spell data.
     pub(super) fn use_discipline(
         &mut self,
         command: &ClientCommand,
-        (spell_id, timer, target_id): (u32, u32, u16),
+        (spell_id, timer, target_id, timed_self): (u32, u32, u16, bool),
         world: &World,
         out: &mut Out<'_, '_>,
     ) -> Result<()> {
@@ -141,7 +143,7 @@ impl Casting {
                 !world.control.stunned(),
                 "Cannot use a discipline while stunned"
             );
-            self.disciplines.check(timer, now)?;
+            self.disciplines.check(timer, timed_self, now)?;
             titanium_cast(spell_id, target_id)
         })();
         match prepared {
@@ -173,6 +175,7 @@ mod tests {
             spell_id,
             timer: 1,
             target_id,
+            timed_self: true,
             created: Instant::now(),
         }
     }
@@ -207,6 +210,41 @@ mod tests {
         let report = testing::run(|out| casting.handle(&use_spell(4585, 300), &mut world, out));
         report.result.unwrap();
         assert_eq!(report.sent, [titanium_cast(4585, 300).unwrap()]);
+    }
+
+    #[test]
+    fn no_target_sends_zero_and_only_a_timed_self_discipline_waits_for_the_active_one() {
+        let mut world = World::new(1);
+        let mut player = testing::player(7);
+        player.disciplines = Some(vec![4585, 4586]);
+        world.player.admit(player);
+        let command = |spell_id, target_id, timed_self| ClientCommand::UseDiscipline {
+            session_id: 1,
+            spell_id,
+            timer: 1,
+            target_id,
+            timed_self,
+            created: Instant::now(),
+        };
+        let mut casting = Casting::with_titanium_combat(false, Duration::from_mins(72));
+        let report = testing::run(|out| casting.handle(&command(4585, 0, true), &mut world, out));
+        report.result.unwrap();
+        assert_eq!(report.sent, [titanium_cast(4585, 0).unwrap()]);
+        // With a discipline active: a timed self one is refused, any other
+        // goes to the server.
+        for timed_self in [true, false] {
+            let mut casting = Casting::with_titanium_combat(false, Duration::from_mins(72));
+            casting.disciplines.active = Active::Titanium(4585);
+            let report = testing::run(|out| {
+                casting.handle(&command(4586, 300, timed_self), &mut world, out)
+            });
+            report.result.unwrap();
+            if timed_self {
+                assert_eq!(report.sent, []);
+            } else {
+                assert_eq!(report.sent, [titanium_cast(4586, 300).unwrap()]);
+            }
+        }
     }
 
     #[test]
