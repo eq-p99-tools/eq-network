@@ -167,6 +167,8 @@ pub enum Request {
     },
     /// Emote, in the player's own words.
     Emote(String),
+    /// A social emote's text, sent as the program builds it.
+    SocialEmote(String),
     /// Take the target of this spawn.
     Assist(u16),
     /// Ask which of these friends are online.
@@ -527,6 +529,7 @@ pub fn titanium(request: &Request, sender: Sender<'_>) -> Result<EncodedCommand>
         }
         Request::Random { low, high } => socials::random(*low, *high),
         Request::Emote(text) => socials::emote(text)?,
+        Request::SocialEmote(text) => socials::social_emote(text)?,
         Request::Assist(spawn_id) => socials::assist(*spawn_id),
         Request::WhoFriends(names) => crate::friends::titanium_request(names)?,
         Request::ChangeCoins => crate::banker::titanium_request(),

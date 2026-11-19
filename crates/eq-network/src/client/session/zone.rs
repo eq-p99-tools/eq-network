@@ -896,7 +896,7 @@ mod tests {
     };
 
     /// How many kinds of command there are.
-    const KINDS: usize = 111;
+    const KINDS: usize = 112;
 
     /// The kinds the login and world servers take, before any zone session.
     const BEFORE_ZONES: [usize; 4] = [0, 1, 70, 75];
@@ -929,6 +929,7 @@ mod tests {
             ClientCommand::StopCasting { .. } => 108,
             ClientCommand::YellForHelp { .. } => 109,
             ClientCommand::EmoteAnimation { .. } => 110,
+            ClientCommand::SocialEmote { .. } => 111,
             ClientCommand::DepopLocalNpc { .. } => 84,
             ClientCommand::SetPosture { .. } => 12,
             ClientCommand::FeignLanded { .. } => 104,
@@ -1152,6 +1153,10 @@ mod tests {
                 session_id,
                 animation: 0x4d,
                 created,
+            },
+            ClientCommand::SocialEmote {
+                session_id,
+                text: " smiles.".into(),
             },
             ClientCommand::UseKnightAbility {
                 session_id,
