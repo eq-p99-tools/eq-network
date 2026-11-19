@@ -5,6 +5,18 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Send Titanium's `/yell` and `/stopcast` (read R45). `GameCommand::YellForHelp`
+  sends `OP_YellForHelp` (0x61ef) with an empty body and no target or
+  posture test, under the new `Capability::Yelling`, on both Titanium
+  servers. `GameCommand::StopCasting` stops a Bard's song as
+  `GameCommand::StopSong` does and otherwise sends the same empty
+  `OP_ManaChange` (0x4839); the cast ends when the server answers. It is
+  under the new `Capability::StoppingCasts`, offered on `EQEmu` only and held
+  off P99 until checked there. Whether the player is mounted, which the
+  program also refuses, isn't decoded (recording checklist 6.487). The
+  Mac-era generation offers neither. **Breaking:** exhaustive matches on
+  `GameCommand`, `Capability` and `Request` need the new variants.
+
 - Decode each Titanium spawn's body type and say what the program does by
   it (read R44): `SpawnState::body_type` is the dword the program copies
   from record +0x14f, `None` for the Mac-era records, whose layout is

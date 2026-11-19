@@ -1,11 +1,13 @@
-//! Rolling dice, emoting and assisting. The server rolls a die for every
+//! Rolling dice, emoting, assisting and yelling for help. The server rolls a die for every
 //! player within 400 units, the one who asked among them, and answers an
 //! assist with the target to take. It passes an emote on to everyone near
 //! but the one who made it (`EQEmu`'s `Client::Handle_OP_Emote`), so the
 //! session records the player's own emote as the others hear it, as the
 //! official client shows it (inferred). The official client refuses to
 //! assist the player themself (inferred from its string for it); `EQEmu`
-//! answers with the player's own target.
+//! answers with the player's own target. Titanium's `/yell` (0x46791a,
+//! read R45) sends an empty `OP_YellForHelp` with no target or posture
+//! test, and the server passes it on to the players near.
 use super::{
     actions,
     feature::{Feature, Out, World},
@@ -31,7 +33,7 @@ struct PendingAssist {
     superseded: bool,
 }
 
-/// Rolls, emotes and assists.
+/// Rolls, emotes, assists and yells.
 #[derive(Default)]
 pub(super) struct Socials {
     project1999: bool,
@@ -54,6 +56,7 @@ impl Feature for Socials {
             Capability::Rolling,
             Capability::Emoting,
             Capability::Assisting,
+            Capability::Yelling,
         ]
     }
 
@@ -63,6 +66,7 @@ impl Feature for Socials {
             ClientCommand::Random { .. }
                 | ClientCommand::Emote { .. }
                 | ClientCommand::Assist { .. }
+                | ClientCommand::YellForHelp { .. }
         )
     }
 
@@ -122,6 +126,7 @@ impl Feature for Socials {
                 }
                 out.request(&Request::Random { low, high })
             }
+            ClientCommand::YellForHelp { .. } => out.request(&Request::YellForHelp),
             ClientCommand::Emote { text, .. } => {
                 let text = text.trim();
                 if text.is_empty() {
@@ -291,5 +296,25 @@ mod tests {
                 ..
             })
         )));
+    }
+
+    #[test]
+    fn a_yell_sends_the_empty_yell_for_help_with_no_target_or_posture_test() {
+        let yell = ClientCommand::YellForHelp {
+            session_id: 5,
+            created: Instant::now(),
+        };
+        for mut feature in [Socials::default(), Socials::project1999()] {
+            // No target, no own spawn, sitting or not: the handler tests none.
+            let mut world = World::new(5);
+            let yelled = testing::run(|out| feature.handle(&yell, &mut world, out));
+            assert_eq!(yelled.sent, [socials::titanium_yell()]);
+            assert!(feature.owns(&yell));
+            assert!(feature
+                .capabilities()
+                .contains(&crate::world::Capability::Yelling));
+        }
+        let packet = socials::titanium_yell();
+        assert_eq!((packet.opcode, packet.body.len()), (0x61ef, 0));
     }
 }

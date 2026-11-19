@@ -640,12 +640,16 @@ pub enum Capability {
     /// Titanium's riding wire: naming the boat underfoot, zoning with a boat
     /// the server carries on, and arriving aboard it.
     BoatRiding,
+    /// Titanium's `/yell`: a call for help to the players nearby.
+    Yelling,
+    /// Titanium's `/stopcast`: ending one's own cast without moving.
+    StoppingCasts,
 }
 
 impl Capability {
     /// Every capability, in order: what a session offers when its server and
     /// client generation support everything.
-    pub const ALL: [Self; 65] = [
+    pub const ALL: [Self; 67] = [
         Self::Casting,
         Self::Spellbook,
         Self::Inventory,
@@ -711,6 +715,8 @@ impl Capability {
         Self::Tracking,
         Self::BoatControl,
         Self::BoatRiding,
+        Self::Yelling,
+        Self::StoppingCasts,
     ];
 }
 
@@ -2453,6 +2459,8 @@ mod tests {
             Capability::Tracking => 62,
             Capability::BoatControl => 63,
             Capability::BoatRiding => 64,
+            Capability::Yelling => 65,
+            Capability::StoppingCasts => 66,
         };
         for (index, capability) in Capability::ALL.into_iter().enumerate() {
             assert_eq!(place(capability), index, "{capability:?}");

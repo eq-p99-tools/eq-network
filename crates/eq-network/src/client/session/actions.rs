@@ -195,6 +195,9 @@ pub(super) fn needs(command: &ClientCommand) -> &'static [Resource] {
         // Nor does dropping invisibility, which goes before the cast.
         | ClientCommand::DropInvisibility { .. }
         | ClientCommand::StopSong { .. }
+        // Stopping a cast must work during one; a yell holds nothing.
+        | ClientCommand::StopCasting { .. }
+        | ClientCommand::YellForHelp { .. }
         | ClientCommand::AutoAttack { .. }
         | ClientCommand::SelectTarget { .. }
         | ClientCommand::WhoAll { .. }
@@ -387,6 +390,7 @@ fn refusal(command: &ClientCommand, reason: &str) -> Option<WorldEvent> {
         | ClientCommand::ToggleRoleplay { session_id }
         | ClientCommand::ShowHelm { session_id, .. }
         | ClientCommand::Random { session_id, .. }
+        | ClientCommand::YellForHelp { session_id, .. }
         | ClientCommand::Emote { session_id, .. }
         | ClientCommand::Assist { session_id, .. }
         | ClientCommand::ChangeCoins { session_id, .. }
@@ -484,6 +488,7 @@ fn refusal(command: &ClientCommand, reason: &str) -> Option<WorldEvent> {
         | ClientCommand::LiquidDamage { .. }
         | ClientCommand::DropInvisibility { .. }
         | ClientCommand::StopSong { .. }
+        | ClientCommand::StopCasting { .. }
         | ClientCommand::WhoAll { .. }
         | ClientCommand::WhoFriends { .. }
         | ClientCommand::Track { .. }
@@ -583,6 +588,7 @@ fn reasoned(command: &ClientCommand, session_id: u64, reason: String) -> Option<
             string_id: None,
         },
         ClientCommand::Random { .. }
+        | ClientCommand::YellForHelp { .. }
         | ClientCommand::Emote { .. }
         | ClientCommand::Assist { .. } => WorldEvent::SocialRefused {
             session_id,
