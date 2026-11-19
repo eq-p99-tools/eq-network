@@ -346,6 +346,7 @@ pub(super) struct Casting {
     guard: CastGuard,
     song: Option<Song>,
     song_stop: bool,
+    cast_stop: bool,
     knights: Option<knights::Reuse>,
     disciplines: disciplines::DisciplineState,
     use_disciplines: bool,
@@ -371,6 +372,13 @@ impl Casting {
         casting.knights = Some(knights::Reuse::new(knight_estimate));
         casting.use_disciplines = true;
         casting
+    }
+
+    /// Offers Titanium's `/stopcast`. `EQEmu` only for now: it ends a cast
+    /// without moving, and P99's own handling of it is unchecked.
+    pub(super) fn with_cast_stop(mut self) -> Self {
+        self.cast_stop = true;
+        self
     }
 
     /// Stock `EQMacEmu` rewrites the received start of selected Luclin ports.
@@ -426,6 +434,30 @@ impl Casting {
         } else {
             report_unconfirmed_stop(world.session_id, None, out)
         }
+    }
+
+    /// Titanium's `/stopcast` (0x46a75a, read R45): with the player's own
+    /// spawn present, a Bard stops the song as `/stopsong` does, and anyone
+    /// else sends the empty `OP_ManaChange`, the same body as the song stop.
+    /// The cast ends when the server answers (R25), as before. Without the
+    /// own spawn the host shows the program's line. The program also
+    /// refuses a mounted player, which this doesn't decode: the host must
+    /// refuse `/stopcast` for one (6.487).
+    fn stop_cast(&mut self, world: &World, out: &mut Out<'_, '_>) -> Result<()> {
+        if !self.cast_stop {
+            return out
+                .log
+                .diagnostic("Stopping casts is unavailable on this server".into());
+        }
+        let Some(player) = world.player.as_ref().filter(|_| world.own_spawn.is_some()) else {
+            return out
+                .log
+                .diagnostic("No own spawn to stop casting; nothing is sent".into());
+        };
+        if player.class == Some(BARD_CLASS) {
+            return self.stop_song(world, out);
+        }
+        out.request(&Request::StopSong)
     }
 
     /// The server's cast update for a spell, keep-casting clear, ends the
@@ -585,6 +617,9 @@ impl Feature for Casting {
         if self.song_stop {
             offered.push(Capability::StoppingSongs);
         }
+        if self.cast_stop {
+            offered.push(Capability::StoppingCasts);
+        }
         if self.knights.is_some() {
             offered.push(Capability::KnightAbilities);
         }
@@ -605,6 +640,7 @@ impl Feature for Casting {
                 | ClientCommand::UseItem(_)
                 | ClientCommand::DropInvisibility { .. }
                 | ClientCommand::StopSong { .. }
+                | ClientCommand::StopCasting { .. }
                 | ClientCommand::UseKnightAbility { .. }
                 | ClientCommand::UseDiscipline { .. }
         )
@@ -642,6 +678,7 @@ impl Feature for Casting {
     ) -> Result<()> {
         match command {
             ClientCommand::StopSong { .. } => self.stop_song(world, out),
+            ClientCommand::StopCasting { .. } => self.stop_cast(world, out),
             ClientCommand::UseKnightAbility {
                 ability, target, ..
             } => self.knight(command, *ability, *target, Instant::now(), world, out),
@@ -775,6 +812,9 @@ fn drop_invisibility(
 
 #[cfg(test)]
 mod song_stop_tests;
+
+#[cfg(test)]
+mod cast_stop_tests;
 
 #[cfg(test)]
 mod tests {

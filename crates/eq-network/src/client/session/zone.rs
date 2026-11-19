@@ -896,7 +896,7 @@ mod tests {
     };
 
     /// How many kinds of command there are.
-    const KINDS: usize = 108;
+    const KINDS: usize = 110;
 
     /// The kinds the login and world servers take, before any zone session.
     const BEFORE_ZONES: [usize; 4] = [0, 1, 70, 75];
@@ -926,6 +926,8 @@ mod tests {
             ClientCommand::CancelBuff(_) => 81,
             ClientCommand::RangedAttack(_) => 82,
             ClientCommand::StopSong { .. } => 83,
+            ClientCommand::StopCasting { .. } => 108,
+            ClientCommand::YellForHelp { .. } => 109,
             ClientCommand::DepopLocalNpc { .. } => 84,
             ClientCommand::SetPosture { .. } => 12,
             ClientCommand::FeignLanded { .. } => 104,
@@ -1042,6 +1044,14 @@ mod tests {
         ]));
         vec![
             ClientCommand::StopSong {
+                session_id,
+                created,
+            },
+            ClientCommand::StopCasting {
+                session_id,
+                created,
+            },
+            ClientCommand::YellForHelp {
                 session_id,
                 created,
             },
@@ -2743,6 +2753,33 @@ mod tests {
                     if *id == question.id
             ));
             assert!(!world.lifecycle.blocks_motion());
+        }
+    }
+
+    #[test]
+    fn yelling_is_offered_on_titanium_and_stopping_casts_on_eqemu_only() {
+        use crate::{client::ServerProtocol, world::Capability};
+        let offered = |protocol| {
+            Features::new(
+                servers::server_type(protocol),
+                "Tester",
+                eq_network_game::food::AutoEat::default(),
+            )
+            .capabilities()
+        };
+        let (eqemu, p99) = (
+            offered(ServerProtocol::EqEmu),
+            offered(ServerProtocol::Project1999),
+        );
+        assert!(eqemu.contains(&Capability::Yelling));
+        assert!(p99.contains(&Capability::Yelling));
+        assert!(eqemu.contains(&Capability::StoppingCasts));
+        // Held off P99 until checked there.
+        assert!(!p99.contains(&Capability::StoppingCasts));
+        for protocol in [ServerProtocol::Quarm, ServerProtocol::Takp] {
+            let mac = offered(protocol);
+            assert!(!mac.contains(&Capability::Yelling), "{protocol:?}");
+            assert!(!mac.contains(&Capability::StoppingCasts), "{protocol:?}");
         }
     }
 

@@ -154,6 +154,8 @@ pub enum Request {
     /// server's end of its hiding: its own appearance, invisibility 0
     /// ([`abilities::titanium_unhide`]).
     Unhide,
+    /// Call for help to the players nearby (Titanium's `/yell`).
+    YellForHelp,
     /// Roll a die from the lowest to the highest number.
     Random {
         /// The lowest number.
@@ -436,7 +438,9 @@ pub enum Request {
         /// The skill selected by the loadout.
         kind: crate::combat::ranged::RangedKind,
     },
-    /// Ask the server to stop the current Bard song.
+    /// The empty `OP_ManaChange`: ask the server to stop the current Bard
+    /// song, or, from `/stopcast`, the current cast (R45 0x46a75a sends the
+    /// same empty body).
     StopSong,
     /// The notice that goes before the auto-attack toggle, where the client
     /// generation sends one.
@@ -515,6 +519,7 @@ pub fn titanium(request: &Request, sender: Sender<'_>) -> Result<EncodedCommand>
         }
         Request::ShowHelm(show) => listing::titanium_show_helm(sender.spawn(), *show)?,
         Request::Unhide => abilities::titanium_unhide(sender.spawn())?,
+        Request::YellForHelp => socials::titanium_yell(),
         Request::Random { low, high } => socials::random(*low, *high),
         Request::Emote(text) => socials::emote(text)?,
         Request::Assist(spawn_id) => socials::assist(*spawn_id),
@@ -872,6 +877,13 @@ mod tests {
             titanium(&Request::Camp, PLAYER).unwrap(),
             command::titanium_camp()
         );
+        // `/yell` and `/stopcast` send empty bodies (R45); the Mac-era
+        // generation sends neither.
+        for (request, opcode) in [(Request::YellForHelp, 0x61ef), (Request::StopSong, 0x4839)] {
+            let packet = titanium(&request, PLAYER).unwrap();
+            assert_eq!((packet.opcode, packet.body.len()), (opcode, 0));
+        }
+        assert!(eqmac(&Request::YellForHelp, PLAYER).is_err());
         assert_eq!(
             titanium(&Request::Posture(Posture::Sitting), PLAYER).unwrap(),
             command::titanium_posture(7, Posture::Sitting).unwrap()

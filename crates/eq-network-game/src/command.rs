@@ -211,6 +211,25 @@ pub enum GameCommand {
         /// When the player requested the stop.
         created: std::time::Instant,
     },
+    /// Titanium's `/stopcast` (0x46a75a, read R45): a Bard stops the song
+    /// as [`GameCommand::StopSong`] does; anyone else sends the empty
+    /// `OP_ManaChange`, and the cast ends when the server answers. The
+    /// program refuses a mounted player, which the session doesn't decode:
+    /// the host must refuse this for one (recording checklist 6.487).
+    StopCasting {
+        /// Current zone admission.
+        session_id: u64,
+        /// When the player asked.
+        created: std::time::Instant,
+    },
+    /// Titanium's `/yell` (0x46791a, read R45): a call for help to the
+    /// players nearby, with no target or posture test.
+    YellForHelp {
+        /// Current zone admission.
+        session_id: u64,
+        /// When the player asked.
+        created: std::time::Instant,
+    },
     /// Cast a memorized spell; the server decides completion and resource use.
     CastSpell {
         /// Current zone admission.
@@ -1015,6 +1034,8 @@ impl GameCommand {
             Self::CancelBuff(_) => "CancelBuff",
             Self::CastSpell { .. } => "CastSpell",
             Self::StopSong { .. } => "StopSong",
+            Self::StopCasting { .. } => "StopCasting",
+            Self::YellForHelp { .. } => "YellForHelp",
             Self::SetPosture { .. } => "SetPosture",
             Self::FeignLanded { .. } => "FeignLanded",
             Self::MoveInventory(..) => "MoveInventory",
@@ -1181,6 +1202,8 @@ impl GameCommand {
             | Self::SetInspectNote { session_id, .. }
             | Self::DropInvisibility { session_id, .. }
             | Self::StopSong { session_id, .. }
+            | Self::StopCasting { session_id, .. }
+            | Self::YellForHelp { session_id, .. }
             | Self::InviteToGroup { session_id, .. }
             | Self::FollowGroup { session_id, .. }
             | Self::DeclineGroup { session_id, .. }
@@ -1253,6 +1276,8 @@ impl GameCommand {
             Self::CancelBuff(_) => Capability::CancellingBuffs,
             Self::RangedAttack(_) => Capability::RangedCombat,
             Self::StopSong { .. } => Capability::StoppingSongs,
+            Self::StopCasting { .. } => Capability::StoppingCasts,
+            Self::YellForHelp { .. } => Capability::Yelling,
             Self::DeleteSpell { .. } => Capability::DeletingSpells,
             Self::SwapSpell { .. } => Capability::MovingSpells,
             // An item's click effect is a cast.
@@ -1449,6 +1474,8 @@ impl GameCommand {
             | Self::MemorizeSpell { created, .. }
             | Self::CastSpell { created, .. }
             | Self::StopSong { created, .. }
+            | Self::StopCasting { created, .. }
+            | Self::YellForHelp { created, .. }
             | Self::SetPosture { created, .. }
             | Self::FeignLanded { created, .. }
             | Self::Consider { created, .. }
@@ -1682,6 +1709,8 @@ pub fn encode(
         | GameCommand::SetInspectNote { .. }
         | GameCommand::DropInvisibility { .. }
         | GameCommand::StopSong { .. }
+        | GameCommand::StopCasting { .. }
+        | GameCommand::YellForHelp { .. }
         | GameCommand::InviteToGroup { .. }
         | GameCommand::FollowGroup { .. }
         | GameCommand::DeclineGroup { .. }

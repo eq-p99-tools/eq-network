@@ -1234,10 +1234,11 @@ impl ServerType for EqEmu {
 
     fn casting(&self, _setup: &Setup<'_>) -> Provided {
         // EQEmu common/features.h: LayOnHandsReuseTime and HarmTouchReuseTime.
-        offer(Box::new(Casting::with_titanium_combat(
-            true,
-            std::time::Duration::from_secs(4300),
-        )))
+        // `/stopcast` is offered here only (held off P99 until checked there).
+        offer(Box::new(
+            Casting::with_titanium_combat(true, std::time::Duration::from_secs(4300))
+                .with_cast_stop(),
+        ))
     }
 
     fn spellbook(&self, _setup: &Setup<'_>) -> Provided {

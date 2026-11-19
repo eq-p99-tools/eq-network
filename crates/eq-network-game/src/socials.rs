@@ -281,6 +281,16 @@ pub fn heard_emote(name: &str, text: &str) -> Vec<u8> {
     body
 }
 
+/// Titanium's `/yell` (0x46791a, read R45): `OP_YellForHelp` with an empty
+/// body. The server passes it to the players near the yeller.
+#[must_use]
+pub fn titanium_yell() -> EncodedCommand {
+    EncodedCommand {
+        opcode: YELL_OPCODE,
+        body: Vec::new(),
+    }
+}
+
 /// Takes the target of the spawn assisted.
 #[must_use]
 pub fn assist(spawn_id: u16) -> EncodedCommand {
