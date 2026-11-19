@@ -675,9 +675,6 @@ impl MovementGuard {
         }
     }
 
-    /// How far the announced jump rises between `from` and `to` seconds
-    /// after it started: its speed less what gravity takes, and nothing
-    /// past the top.
     /// How far a sample out of the water may rise over its interval after a
     /// swimmer left the water rising: from the last swim sample's rising cap,
     /// slowed by the jump's gravity, as the program's dry step carries the
@@ -703,6 +700,9 @@ impl MovementGuard {
         (height(to) - height(from)).max(0.0)
     }
 
+    /// How far the announced jump rises between `from` and `to` seconds
+    /// after it started: its speed less what gravity takes, and nothing
+    /// past the top.
     fn jump_rise(&self, from: f32, to: f32) -> f32 {
         let Some((speed, gravity)) = self.jump else {
             return 0.0;

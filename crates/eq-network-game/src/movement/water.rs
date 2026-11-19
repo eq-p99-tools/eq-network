@@ -11,9 +11,10 @@
 //!
 //! The program damps once per frame, with no time step, so its damping
 //! depends on the frame rate. This client steps water at a fixed 60 frames
-//! a second ([`WET_FRAME_SECONDS`]), integrating exactly the time a sample
-//! covers: whole frames, then one partial frame whose damping is the
-//! fractional power of the frame's (recording checklist 6.483). A jump's
+//! a second ([`WET_FRAME_SECONDS`]) and carries the frame phase from sample
+//! to sample, so the velocity changes only at whole frames and a sample's
+//! travel doesn't depend on how the time is cut up (recording checklist
+//! 6.483). A jump's
 //! push comes before the frame's step (0x4aba14, read R41 b), so the step
 //! damps it; that a skipped step can take two pushes is not modelled.
 use std::time::Duration;
@@ -129,6 +130,9 @@ pub const WET_FRAME_TICKS: f32 = WET_FRAME_SECONDS / super::PROGRAM_STEP_SECONDS
 
 const TICKS_PER_SECOND: f32 = 1.0 / super::PROGRAM_STEP_SECONDS;
 
+/// How near a frame boundary counts as on it, in seconds.
+const BOUNDARY: f32 = 1e-5;
+
 /// Velocity components the program zeroes (0x4bfe0f, read R33 step 6).
 const NEGLIGIBLE: f32 = 1.19e-7;
 
@@ -170,32 +174,36 @@ impl WetCaps {
     /// The caps for a swimmer whose largest horizontal input is
     /// `horizontal_input` and largest vertical input `vertical_input`.
     ///
-    /// Each frame's velocity stays within these from any start within them,
-    /// whole frames and partial ones alike, so a sample's travel stays
-    /// within them times its seconds. A whole frame settles horizontally at
-    /// `c s / (1 - h)`; a partial frame of share `f` keeps `h^f` and adds
-    /// `f c s`, which settles lower. A push and gravity come before the
-    /// damping (the slower order for the push until read), and over partial
-    /// frames their share settles at most at `1 / -ln v` of them.
+    /// The velocity only changes in whole frames, so from any start within
+    /// these it stays within them, and a sample's travel stays within them
+    /// times its seconds however the samples cut the time. A frame takes the
+    /// push and gravity, damps, then adds the input, so each axis settles at
+    /// `(keep x (push or gravity) + input scale x input) / (1 - keep)`.
     #[must_use]
     pub fn new(set: WetCoefficients, horizontal_input: f32, vertical_input: f32) -> Self {
+        let keep = set.vertical_keep;
         let horizontal =
             set.horizontal_input * horizontal_input.max(0.0) / (1.0 - set.horizontal_keep);
-        let stroke = set.vertical_input * vertical_input.max(0.0) / (1.0 - set.vertical_keep);
-        let carried = 1.0 / -set.vertical_keep.ln();
+        let stroke = set.vertical_input * vertical_input.max(0.0) / (1.0 - keep);
+        let push = keep * JUMP_PUSH / (1.0 - keep);
+        let gravity = keep * WET_GRAVITY * WET_FRAME_TICKS / (1.0 - keep);
         Self {
             horizontal: horizontal * TICKS_PER_SECOND,
-            up: (stroke + JUMP_PUSH * carried) * TICKS_PER_SECOND,
-            down: (stroke + WET_GRAVITY * WET_FRAME_TICKS * carried) * TICKS_PER_SECOND,
+            up: (stroke + push) * TICKS_PER_SECOND,
+            down: (stroke + gravity) * TICKS_PER_SECOND,
         }
     }
 }
 
-/// A wet body's velocity between frames, in world units a tick.
+/// A wet body's velocity between frames, in world units a tick, and the
+/// time left until its next frame step.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct WetVelocity {
     horizontal: [f32; 2],
     vertical: f32,
+    /// Seconds until the next frame steps the velocity; none due yet means
+    /// the next call steps at once.
+    due: f32,
 }
 
 impl WetVelocity {
@@ -205,6 +213,7 @@ impl WetVelocity {
         Self {
             horizontal: horizontal.map(|v| v / TICKS_PER_SECOND),
             vertical: vertical / TICKS_PER_SECOND,
+            due: 0.0,
         }
     }
 
@@ -249,10 +258,13 @@ impl WetVelocity {
         *self = Self::default();
     }
 
-    /// Steps `seconds` of water at [`WET_FRAME_SECONDS`] a frame, the last
-    /// frame partial, and returns the travel in world units: horizontal,
-    /// then vertical. Each frame takes the push, then gravity, then damps,
-    /// then adds the scaled input, then moves (0x4bfe0f, R33 step order).
+    /// Runs `seconds` of water and returns the travel in world units:
+    /// horizontal, then vertical. The velocity changes only at whole
+    /// [`WET_FRAME_SECONDS`] frames, the phase carried from call to call, so
+    /// the result doesn't depend on how the time is cut up. Each frame takes
+    /// the push, then gravity, then damps, then adds the scaled input, and
+    /// the body moves at that velocity until the next frame (0x4bfe0f, R33
+    /// step order).
     pub fn advance(
         &mut self,
         set: WetCoefficients,
@@ -264,41 +276,49 @@ impl WetVelocity {
             return travel;
         }
         let mut left = seconds;
-        while left > 1e-7 {
-            let share = (left / WET_FRAME_SECONDS).min(1.0);
-            left -= share * WET_FRAME_SECONDS;
-            let ticks = share * WET_FRAME_TICKS;
-            let (keep_h, keep_v) = if share >= 1.0 {
-                (set.horizontal_keep, set.vertical_keep)
+        while left > 0.0 {
+            // A boundary within float rounding of the end is the next
+            // call's, so cutting the same time differently steps the same
+            // frames.
+            if self.due <= BOUNDARY && left > BOUNDARY {
+                self.step(set, input);
+                self.due += WET_FRAME_SECONDS;
+            }
+            let run = if self.due > BOUNDARY {
+                self.due.min(left)
             } else {
-                (
-                    set.horizontal_keep.powf(share),
-                    set.vertical_keep.powf(share),
-                )
+                left
             };
-            if input.jump {
-                self.vertical += JUMP_PUSH * share;
-            }
-            self.vertical -= WET_GRAVITY * ticks;
-            self.horizontal = self.horizontal.map(|v| v * keep_h);
-            self.vertical *= keep_v;
-            for value in self
-                .horizontal
-                .iter_mut()
-                .chain(std::iter::once(&mut self.vertical))
-            {
-                if value.abs() < NEGLIGIBLE {
-                    *value = 0.0;
-                }
-            }
-            self.horizontal[0] += set.horizontal_input * input.horizontal[0] * share;
-            self.horizontal[1] += set.horizontal_input * input.horizontal[1] * share;
-            self.vertical += set.vertical_input * input.vertical * share;
+            let ticks = run * TICKS_PER_SECOND;
             travel.0[0] += self.horizontal[0] * ticks;
             travel.0[1] += self.horizontal[1] * ticks;
             travel.1 += self.vertical * ticks;
+            left -= run;
+            self.due -= run;
         }
         travel
+    }
+
+    /// One whole frame of 0x4bfe0f's wet branch.
+    fn step(&mut self, set: WetCoefficients, input: WetInput) {
+        if input.jump {
+            self.vertical += JUMP_PUSH;
+        }
+        self.vertical -= WET_GRAVITY * WET_FRAME_TICKS;
+        self.horizontal = self.horizontal.map(|v| v * set.horizontal_keep);
+        self.vertical *= set.vertical_keep;
+        for value in self
+            .horizontal
+            .iter_mut()
+            .chain(std::iter::once(&mut self.vertical))
+        {
+            if value.abs() < NEGLIGIBLE {
+                *value = 0.0;
+            }
+        }
+        self.horizontal[0] += set.horizontal_input * input.horizontal[0];
+        self.horizontal[1] += set.horizontal_input * input.horizontal[1];
+        self.vertical += set.vertical_input * input.vertical;
     }
 }
 
@@ -381,40 +401,83 @@ mod tests {
     }
 
     #[test]
-    fn odd_frame_times_cover_exactly_their_seconds_and_stay_within_the_caps() {
-        let s = 1.7;
-        let input = WetInput {
-            horizontal: [s * 0.6, s * 0.8],
-            vertical: s,
-            jump: true,
-        };
-        let caps = WetCaps::new(LIQUID_6_TO_8, s, s);
-        let down = WetInput {
-            horizontal: [0.0, s],
-            vertical: -s,
-            jump: false,
-        };
-        for frame in [1.0 / 144.0, 1.0 / 30.0, 0.04, 0.3, 0.017, 0.0161] {
-            for input in [input, down] {
-                let mut velocity = WetVelocity::default();
-                for _ in 0..400 {
-                    let (h, z) = velocity.advance(LIQUID_6_TO_8, input, frame);
-                    assert!(h[0].hypot(h[1]) <= caps.horizontal * frame + 1e-4);
-                    assert!(z <= caps.up * frame + 1e-4, "{frame} {z}");
-                    assert!(-z <= caps.down * frame + 1e-4, "{frame} {z}");
+    fn the_same_time_cut_up_differently_ends_the_same_and_stays_within_the_caps() {
+        let speed = 1.7;
+        let inputs = [
+            ("idle", WetInput::default()),
+            (
+                "jump",
+                WetInput {
+                    jump: true,
+                    ..WetInput::default()
+                },
+            ),
+            (
+                "up",
+                WetInput {
+                    horizontal: [speed * 0.6, speed * 0.8],
+                    vertical: speed,
+                    jump: true,
+                },
+            ),
+            (
+                "level",
+                WetInput {
+                    horizontal: [0.0, speed],
+                    ..WetInput::default()
+                },
+            ),
+            (
+                "down",
+                WetInput {
+                    horizontal: [0.0, speed],
+                    vertical: -speed,
+                    jump: false,
+                },
+            ),
+        ];
+        let total = 2.0_f32;
+        for set in [LIQUID_5, LIQUID_6_TO_8, LIQUID_5_POEARTHB] {
+            let caps = WetCaps::new(set, speed, speed);
+            for (name, input) in inputs {
+                let mut whole = WetVelocity::default();
+                let reference = whole.advance(set, input, total);
+                for cut in [0.0042_f32, 0.0069, 1.0 / 60.0, 1.0 / 30.0, 0.04, 0.1, 0.3] {
+                    let mut velocity = WetVelocity::default();
+                    let (mut east, mut north, mut rise) = (0.0, 0.0, 0.0);
+                    let mut left = total;
+                    while left > 1e-6 {
+                        let seconds = cut.min(left);
+                        let (h, v) = velocity.advance(set, input, seconds);
+                        assert!(
+                            h[0].hypot(h[1]) <= caps.horizontal * seconds + 1e-4,
+                            "{name} {cut}"
+                        );
+                        assert!(v <= caps.up * seconds + 1e-4, "{name} {cut} {v}");
+                        assert!(-v <= caps.down * seconds + 1e-4, "{name} {cut} {v}");
+                        east += h[0];
+                        north += h[1];
+                        rise += v;
+                        left -= seconds;
+                    }
+                    let tolerance = 0.002 * (1.0 + reference.0[1].abs() + reference.1.abs());
+                    assert!(
+                        close(east, reference.0[0], tolerance),
+                        "{name} {cut} {east}"
+                    );
+                    assert!(
+                        close(north, reference.0[1], tolerance),
+                        "{name} {cut} {north}"
+                    );
+                    assert!(close(rise, reference.1, tolerance), "{name} {cut} {rise}");
+                    let (h, v) = velocity.units_per_second();
+                    let (rh, rv) = whole.units_per_second();
+                    assert!(
+                        close(h[1], rh[1], 1e-3) && close(v, rv, 1e-3),
+                        "{name} {cut} {h:?} {v} vs {rh:?} {rv}"
+                    );
                 }
             }
-        }
-        // A sample covers its own seconds: once settled, a sample of an odd
-        // length travels the steady rate for that time, near enough.
-        let level = WetInput {
-            horizontal: [s, 0.0],
-            ..WetInput::default()
-        };
-        let mut cruising = settle(LIQUID_6_TO_8, level, 10.0);
-        for seconds in [0.0161, 0.05, 0.123] {
-            let ([x, _], _) = cruising.advance(LIQUID_6_TO_8, level, seconds);
-            assert!(close(x, 6.667 * s * seconds, 0.02 * x), "{seconds} {x}");
         }
     }
 

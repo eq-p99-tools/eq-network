@@ -9,7 +9,7 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   and R41): `movement::water` holds the per-frame wet step of `eqgame.exe`
   0x4bfe0f (`WetVelocity`, `WetInput`, `WetCaps`, the coefficient sets, the
   0.4 gravity that also applies in water, the 500 ms jump push), stepped at a
-  fixed 1/60 s with a partial last frame (recording checklist 6.483).
+  fixed 1/60 s, the frame phase carried from sample to sample (recording checklist 6.483).
   `GameDialect::water` gives the generation's `WaterRules`: `WT` water takes
   level 5's set, poearthb its own, and thegrey has no breathable air.
   `SpeedState` gains `swimming_skill`; `MotionCalibration` and
