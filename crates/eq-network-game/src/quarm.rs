@@ -775,6 +775,8 @@ fn decoded_spawns(data: &[u8]) -> Result<Vec<SpawnState>> {
                 pet_owner: None,
                 hp_percent: None,
                 posture: None,
+                // The Mac-era record's body type is unread.
+                body_type: None,
             })
         })
         .collect()

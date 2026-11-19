@@ -421,6 +421,7 @@ mod tests {
             hp_percent: None,
             posture: None,
             name_parts: crate::names::NameParts::default(),
+            body_type: None,
         }
     }
 

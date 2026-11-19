@@ -5,6 +5,16 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Decode each Titanium spawn's body type and say what the program does by
+  it (read R44): `SpawnState::body_type` is the dword the program copies
+  from record +0x14f, `None` for the Mac-era records, whose layout is
+  unread there. `GameDialect::targeting` gives Titanium's
+  `targets::TargetRules`: the target setter refuses body types 11, 60, 65
+  and 67, silently and with nothing sent; interaction refuses 11, 65 and 67;
+  body types above 64 are hidden. This lets a front end stop selecting the
+  controller spawns `EQEmu` treats as untargetable. **Breaking:** exhaustive
+  constructions of `SpawnState` need the new field.
+
 - Swim as the Titanium program does (Batch M slice 4; reads R33, R33b, R39
   and R41): `movement::water` holds the per-frame wet step of `eqgame.exe`
   0x4bfe0f (`WetVelocity`, `WetInput`, `WetCaps`, the coefficient sets, the

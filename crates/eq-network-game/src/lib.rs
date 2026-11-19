@@ -301,6 +301,18 @@ impl GameDialect {
     pub const fn spell_feign_lies(self) -> bool {
         matches!(self, Self::Titanium)
     }
+
+    /// What this generation's program refuses or hides by a spawn's body
+    /// type ([`targets::TargetRules`]): Titanium's (program read R44); none
+    /// for the Mac-era generation, whose program is unread, so its spawns
+    /// are targeted, used and drawn as before.
+    #[must_use]
+    pub const fn targeting(self) -> Option<targets::TargetRules> {
+        match self {
+            Self::Titanium => Some(targets::TITANIUM_TARGETING),
+            Self::EqMac => None,
+        }
+    }
 }
 
 #[cfg(test)]
