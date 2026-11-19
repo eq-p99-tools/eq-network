@@ -642,7 +642,8 @@ pub enum Capability {
     BoatRiding,
     /// Titanium's `/yell`: a call for help to the players nearby.
     Yelling,
-    /// Titanium's `/stopcast`: ending one's own cast without moving.
+    /// Titanium's `/stopcast`: ending one's own cast without moving. The
+    /// host must refuse it for a mounted player, as the program does.
     StoppingCasts,
 }
 

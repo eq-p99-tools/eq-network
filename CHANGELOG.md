@@ -12,8 +12,9 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `GameCommand::StopSong` does and otherwise sends the same empty
   `OP_ManaChange` (0x4839); the cast ends when the server answers. It is
   under the new `Capability::StoppingCasts`, offered on `EQEmu` only and held
-  off P99 until checked there. Whether the player is mounted, which the
-  program also refuses, isn't decoded (recording checklist 6.487). The
+  off P99 until checked there. The program also refuses a mounted
+  player, which the session doesn't decode, so the host must refuse
+  `/stopcast` for one (recording checklist 6.487). The
   Mac-era generation offers neither. **Breaking:** exhaustive matches on
   `GameCommand`, `Capability` and `Request` need the new variants.
 

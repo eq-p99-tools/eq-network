@@ -397,29 +397,6 @@ impl Casting {
     /// the empty stop and ends here, whatever else is being cast; another
     /// song, from an item, ends here only; with no song nothing happens.
     /// Other classes stop nothing.
-    /// Titanium's `/stopcast` (0x46a75a, read R45): with the player's own
-    /// spawn present, a Bard stops the song as `/stopsong` does, and anyone
-    /// else sends the empty `OP_ManaChange`, the same body as the song stop.
-    /// The cast ends when the server answers (R25), as before. Without the
-    /// own spawn the host shows the program's line; whether the player is
-    /// mounted, which the program also refuses, isn't decoded (6.487).
-    fn stop_cast(&mut self, world: &World, out: &mut Out<'_, '_>) -> Result<()> {
-        if !self.cast_stop {
-            return out
-                .log
-                .diagnostic("Stopping casts is unavailable on this server".into());
-        }
-        let Some(player) = world.player.as_ref().filter(|_| world.own_spawn.is_some()) else {
-            return out
-                .log
-                .diagnostic("No own spawn to stop casting; nothing is sent".into());
-        };
-        if player.class == Some(BARD_CLASS) {
-            return self.stop_song(world, out);
-        }
-        out.request(&Request::StopSong)
-    }
-
     fn stop_song(&mut self, world: &World, out: &mut Out<'_, '_>) -> Result<()> {
         if !self.song_stop {
             return out
@@ -457,6 +434,30 @@ impl Casting {
         } else {
             report_unconfirmed_stop(world.session_id, None, out)
         }
+    }
+
+    /// Titanium's `/stopcast` (0x46a75a, read R45): with the player's own
+    /// spawn present, a Bard stops the song as `/stopsong` does, and anyone
+    /// else sends the empty `OP_ManaChange`, the same body as the song stop.
+    /// The cast ends when the server answers (R25), as before. Without the
+    /// own spawn the host shows the program's line. The program also
+    /// refuses a mounted player, which this doesn't decode: the host must
+    /// refuse `/stopcast` for one (6.487).
+    fn stop_cast(&mut self, world: &World, out: &mut Out<'_, '_>) -> Result<()> {
+        if !self.cast_stop {
+            return out
+                .log
+                .diagnostic("Stopping casts is unavailable on this server".into());
+        }
+        let Some(player) = world.player.as_ref().filter(|_| world.own_spawn.is_some()) else {
+            return out
+                .log
+                .diagnostic("No own spawn to stop casting; nothing is sent".into());
+        };
+        if player.class == Some(BARD_CLASS) {
+            return self.stop_song(world, out);
+        }
+        out.request(&Request::StopSong)
     }
 
     /// The server's cast update for a spell, keep-casting clear, ends the

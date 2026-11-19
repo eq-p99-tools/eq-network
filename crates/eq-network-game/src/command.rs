@@ -213,7 +213,9 @@ pub enum GameCommand {
     },
     /// Titanium's `/stopcast` (0x46a75a, read R45): a Bard stops the song
     /// as [`GameCommand::StopSong`] does; anyone else sends the empty
-    /// `OP_ManaChange`, and the cast ends when the server answers.
+    /// `OP_ManaChange`, and the cast ends when the server answers. The
+    /// program refuses a mounted player, which the session doesn't decode:
+    /// the host must refuse this for one (recording checklist 6.487).
     StopCasting {
         /// Current zone admission.
         session_id: u64,
