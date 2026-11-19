@@ -23,12 +23,16 @@ The [Titanium slot layout](https://github.com/EQEmu/EQEmu/blob/fa08ea4445c0494f8
 allocates ten cursor bag child addresses (331 through 340). A larger reported
 capacity cannot be checked completely and is refused.
 
-A submitted destruction is a local `DestroyCursor` prediction. Received slot
-updates or a full snapshot can reconcile it; the ordinary movement silence
-heuristic cannot confirm it. The original item's mass remains in a conservative
-carried-weight bound until then. A late unversioned cursor removal after a new
-cursor arrival marks inventory stale and preserves the new item for recovery.
-There is no automatic retry, and a second destruction requires received state.
+A submitted destruction is a local `DestroyCursor` prediction. `EQEmu`'s
+handler deletes the cursor item without sending any record, and refuses a move
+by resending its slots at once (`SwapItemResync`). So received slot updates, a
+full snapshot, or the ordinary two-second refusal window passing in silence
+settle it, as they settle a move; a resent cursor item within the window
+restores it. The original item's mass remains in a conservative carried-weight
+bound until then. A late unversioned cursor removal after a new cursor arrival,
+inside the window, marks inventory stale and preserves the new item for
+recovery. There is no automatic retry, and a second destruction waits for the
+first to settle.
 
 Currency destruction needs its own native wire, denomination/amount, purse and
 cursor custody, confirmation, and refusal/recovery contract. The separate

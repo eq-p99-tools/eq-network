@@ -221,11 +221,15 @@ mod tests {
     }
 
     #[test]
-    fn silence_does_not_confirm_destroy_or_lower_weight_and_received_removal_does() {
+    fn the_refusal_window_settles_a_destroy_as_a_received_removal_does() {
+        // `EQEmu` deletes a destroyed cursor item without a record, so the
+        // refusal window, like a covering removal, ends the prediction and
+        // lets the next destroy through.
         let (mut inventory, request) = fixture(item());
         inventory.apply(inventory.plan_destroy(MoveRules::EqEmu, &request).unwrap());
         assert!(!inventory.items().contains_key(&InventorySlot::CURSOR));
         assert!(inventory.predicted());
+        assert!(inventory.has_settleable_moves());
         assert!(inventory.carried_weight_is_conservative());
         assert_eq!(
             inventory.carried_weight_tenths(GameDialect::Titanium, 0),
@@ -233,12 +237,27 @@ mod tests {
         );
         assert!(inventory.plan_destroy(MoveRules::EqEmu, &request).is_err());
         inventory.apply(InventoryUpdate::Settled);
-        assert!(inventory.predicted());
-        assert_eq!(inventory.prediction_origins().count(), 1);
+        assert!(!inventory.predicted());
+        assert!(!inventory.has_settleable_moves());
+        assert!(!inventory.carried_weight_is_conservative());
+        assert_eq!(inventory.prediction_origins().count(), 0);
         assert_eq!(
             inventory.carried_weight_tenths(GameDialect::Titanium, 0),
-            Ok(15)
+            Ok(0)
         );
+        // A second item on the cursor can be destroyed at once.
+        inventory.apply(InventoryUpdate::Cursor(vec![item()]));
+        let second = InventoryDestroy {
+            revision: inventory.revision(),
+            ..request.clone()
+        };
+        assert_eq!(
+            inventory.plan_destroy(MoveRules::EqEmu, &second).unwrap(),
+            InventoryUpdate::DestroyCursor
+        );
+
+        let (mut inventory, request) = fixture(item());
+        inventory.apply(inventory.plan_destroy(MoveRules::EqEmu, &request).unwrap());
         inventory.apply(InventoryUpdate::Remove(InventorySlot::CURSOR));
         assert!(!inventory.predicted());
         assert_eq!(
