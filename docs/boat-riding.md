@@ -121,6 +121,10 @@ both the boat and any held arrival (0x4564ba).
 - The program's failed zone request (0x496d00) also uses the safe point for
   ordinary refused requests; this client does so only for a rider carried on
   from the arrival wait. The wider case is an open parity question.
+- Logging in aboard, rather than zoning with the boat, can restore to a
+  different height. The program's restore z is whatever its last save of any
+  kind wrote, since every save writes the world position (0x4976bf). This
+  client keeps only the boat save's z and uses zero without one.
 - The record-to-axis mapping behind the restore point follows the zone
   request's order and is inferred. `Arrival::Aboard` carries both the
   profile's fields as received and the point used, so one recording settles
