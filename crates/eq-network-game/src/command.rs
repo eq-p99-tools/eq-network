@@ -1862,10 +1862,10 @@ pub fn titanium_logout() -> EncodedCommand {
 }
 
 fn encode_posture(dialect: GameDialect, spawn_id: u16, posture: Posture) -> Result<EncodedCommand> {
-    anyhow::ensure!(
-        dialect == GameDialect::Titanium,
-        "posture is not implemented for this dialect"
-    );
+    match dialect {
+        GameDialect::Titanium => {}
+        GameDialect::EqMac => anyhow::bail!("posture is not implemented for this dialect"),
+    }
     anyhow::ensure!(spawn_id != 0, "posture requires an own-spawn ID");
     let mut body = spawn_id.to_le_bytes().to_vec();
     body.extend_from_slice(&14u16.to_le_bytes());
@@ -1879,8 +1879,9 @@ fn encode_posture(dialect: GameDialect, spawn_id: u16, posture: Posture) -> Resu
 /// Corpse and merchant requests in Titanium's layouts, and merchant
 /// requests in `EQMac`'s.
 fn encode_trade(dialect: GameDialect, command: &GameCommand) -> Result<EncodedCommand> {
-    if dialect == GameDialect::EqMac {
-        return encode_eqmac_trade(command);
+    match dialect {
+        GameDialect::Titanium => {}
+        GameDialect::EqMac => return encode_eqmac_trade(command),
     }
     let (opcode, body) = match command {
         GameCommand::Loot { corpse_id, .. } => (
@@ -1947,22 +1948,19 @@ fn encode_combat(dialect: GameDialect, command: &GameCommand) -> Result<EncodedC
     use crate::combat;
     match (dialect, command) {
         (
-            GameDialect::Titanium,
+            dialect,
             GameCommand::Consider {
                 own_id, target_id, ..
             },
-        ) => Ok(EncodedCommand {
-            opcode: combat::CONSIDER_OPCODE,
-            body: combat::consider_request(*own_id, *target_id)?.to_vec(),
-        }),
-        (
-            GameDialect::EqMac,
-            GameCommand::Consider {
-                own_id, target_id, ..
+        ) => Ok(match dialect {
+            GameDialect::Titanium => EncodedCommand {
+                opcode: combat::CONSIDER_OPCODE,
+                body: combat::consider_request(*own_id, *target_id)?.to_vec(),
             },
-        ) => Ok(EncodedCommand {
-            opcode: combat::EQMAC_CONSIDER_OPCODE,
-            body: combat::eqmac_consider_request(*own_id, *target_id)?.to_vec(),
+            GameDialect::EqMac => EncodedCommand {
+                opcode: combat::EQMAC_CONSIDER_OPCODE,
+                body: combat::eqmac_consider_request(*own_id, *target_id)?.to_vec(),
+            },
         }),
         (dialect, GameCommand::AutoAttack { enabled, .. }) => Ok(EncodedCommand {
             opcode: match dialect {

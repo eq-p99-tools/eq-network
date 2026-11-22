@@ -195,9 +195,9 @@ impl BookText {
     #[must_use]
     pub const fn window(&self, dialect: GameDialect) -> Option<ReadingWindow> {
         match (dialect, self.kind) {
-            (_, 0) => Some(ReadingWindow::Note),
-            (GameDialect::EqMac, _) | (_, 1) => Some(ReadingWindow::Book),
-            _ => None,
+            (GameDialect::Titanium | GameDialect::EqMac, 0) => Some(ReadingWindow::Note),
+            (GameDialect::Titanium, 1) | (GameDialect::EqMac, _) => Some(ReadingWindow::Book),
+            (GameDialect::Titanium, _) => None,
         }
     }
 }

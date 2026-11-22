@@ -206,7 +206,10 @@ impl Inventory {
         if self.ground_drop_pending() {
             return self
                 .ground_drop_weight_tenths(coins)
-                .filter(|_| generation == GameDialect::Titanium)
+                .filter(|_| match generation {
+                    GameDialect::Titanium => true,
+                    GameDialect::EqMac => false,
+                })
                 .ok_or(WeightUnavailable::Inventory);
         }
         let current: BTreeMap<_, _> = self.items().iter().map(|(&s, i)| (s, i)).collect();
@@ -272,10 +275,11 @@ fn total(
                 return Err(WeightUnavailable::Container);
             }
             let raw = u64::from(item.details.weight_tenths);
-            if generation == crate::GameDialect::Titanium {
-                weight += raw - raw * u64::from(bag.rules.bag_weight_reduction) / 100;
-            } else {
-                *contents.entry(parent).or_default() += raw;
+            match generation {
+                crate::GameDialect::Titanium => {
+                    weight += raw - raw * u64::from(bag.rules.bag_weight_reduction) / 100;
+                }
+                crate::GameDialect::EqMac => *contents.entry(parent).or_default() += raw,
             }
         }
     }
@@ -284,15 +288,14 @@ fn total(
         weight += raw - raw * reduction / 100;
     }
     let coin_weight = coins / 4;
-    let reduction = if generation == crate::GameDialect::EqMac {
-        items
+    let reduction = match generation {
+        crate::GameDialect::EqMac => items
             .iter()
             .filter(|(slot, item)| slot.is_pack() && (17201..=17230).contains(&item.details.id))
             .map(|(_, item)| u64::from(item.rules.bag_weight_reduction))
             .max()
-            .unwrap_or(0)
-    } else {
-        0
+            .unwrap_or(0),
+        crate::GameDialect::Titanium => 0,
     };
     if reduction > 100 {
         return Err(WeightUnavailable::Container);

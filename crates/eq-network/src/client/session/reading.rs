@@ -46,8 +46,12 @@ impl Feature for Reading {
                 "Finish the pending item move before reading"
             );
             let slot = selection.slot();
+            let reads_anywhere = match out.wire.dialect() {
+                eq_network_game::GameDialect::Titanium => false,
+                eq_network_game::GameDialect::EqMac => true,
+            };
             ensure!(
-                out.wire.dialect() != eq_network_game::GameDialect::Titanium
+                reads_anywhere
                     || slot.is_equipment()
                     || slot.is_carried()
                     || slot == eq_network_game::inventory::InventorySlot::CURSOR

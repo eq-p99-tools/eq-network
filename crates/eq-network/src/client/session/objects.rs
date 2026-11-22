@@ -54,7 +54,7 @@ impl GroundObjects {
         Self {
             results: match generation {
                 eq_network_game::GameDialect::EqMac => PickupResults::SeparateCursorDelivery,
-                _ => PickupResults::Existing,
+                eq_network_game::GameDialect::Titanium => PickupResults::Existing,
             },
         }
     }

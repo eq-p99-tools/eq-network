@@ -383,7 +383,11 @@ impl Feature for Entities {
         } else {
             world.sight.apply(event, world.own_spawn);
         }
-        if self.dialect == GameDialect::EqMac && matches!(event, WorldEvent::HideAndSneakEnded) {
+        let sneak_ends_itself = match self.dialect {
+            GameDialect::Titanium => false,
+            GameDialect::EqMac => true,
+        };
+        if sneak_ends_itself && matches!(event, WorldEvent::HideAndSneakEnded) {
             if let Some(spawn_id) = world.own_spawn {
                 let ended = WorldEvent::Appearance {
                     spawn_id,

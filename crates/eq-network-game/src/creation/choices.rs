@@ -136,7 +136,10 @@ impl Rules {
     /// Whether creation can opt into the tutorial instead of the home city.
     #[must_use]
     pub const fn offers_tutorial(self) -> bool {
-        matches!(self, Self::Titanium)
+        match self {
+            Self::Titanium => true,
+            Self::Classic | Self::EqMac => false,
+        }
     }
 
     /// Packet generation used by these choices.
@@ -313,10 +316,9 @@ impl Rules {
                 };
                 City {
                     name,
-                    start_zone: if self == Self::EqMac {
-                        eqmac_zone(race, class, deity, city)
-                    } else {
-                        city
+                    start_zone: match self {
+                        Self::Classic | Self::Titanium => city,
+                        Self::EqMac => eqmac_zone(race, class, deity, city),
                     },
                 }
             })

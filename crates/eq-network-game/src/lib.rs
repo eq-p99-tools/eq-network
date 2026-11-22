@@ -161,7 +161,6 @@ use serde::{Deserialize, Serialize};
 /// Game packet layout used by a client generation.
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
-#[non_exhaustive]
 pub enum GameDialect {
     /// Titanium, as stock `EQEmu` servers speak it and Project 1999 does
     /// under its V62 protection.
@@ -178,20 +177,29 @@ impl GameDialect {
     /// continuing turn hint in its movement requests.
     #[must_use]
     pub const fn supports_heading_snapshots(self) -> bool {
-        matches!(self, Self::Titanium)
+        match self {
+            Self::Titanium => true,
+            Self::EqMac => false,
+        }
     }
 
     /// Whether carrying capacity depends on the current fatigue and stamina.
     #[must_use]
     pub const fn uses_fatigue_for_carry_capacity(self) -> bool {
-        matches!(self, Self::EqMac)
+        match self {
+            Self::EqMac => true,
+            Self::Titanium => false,
+        }
     }
 
     /// Whether an ordinary door click requires a current inventory and an
     /// empty cursor.
     #[must_use]
     pub const fn requires_clear_cursor_for_doors(self) -> bool {
-        matches!(self, Self::EqMac)
+        match self {
+            Self::EqMac => true,
+            Self::Titanium => false,
+        }
     }
 
     /// How this generation's program treats Feign Death and a lying player
@@ -235,7 +243,10 @@ impl GameDialect {
     /// posture but standing ends auto attack (recording checklist 6.455).
     #[must_use]
     pub const fn posture_ends_attack(self) -> bool {
-        matches!(self, Self::EqMac)
+        match self {
+            Self::EqMac => true,
+            Self::Titanium => false,
+        }
     }
 
     /// The slot finder this generation's program runs for a buff landing on
@@ -287,7 +298,10 @@ impl GameDialect {
     /// (recording checklist 6.455).
     #[must_use]
     pub const fn skips_unchanged_posture(self) -> bool {
-        matches!(self, Self::Titanium)
+        match self {
+            Self::Titanium => true,
+            Self::EqMac => false,
+        }
     }
 
     /// Whether a spell with the feign effect (74) that took hold on the
@@ -299,7 +313,10 @@ impl GameDialect {
     /// earlier rule of leaving the posture alone (recording checklist 6.455).
     #[must_use]
     pub const fn spell_feign_lies(self) -> bool {
-        matches!(self, Self::Titanium)
+        match self {
+            Self::Titanium => true,
+            Self::EqMac => false,
+        }
     }
 
     /// What this generation's program refuses or hides by a spawn's body

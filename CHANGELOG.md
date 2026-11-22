@@ -5,6 +5,17 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Make every client-generation and server-type decision exhaustive, so a
+  third generation (such as RoF2) or a new server type breaks each place
+  that must decide what it does, instead of taking another generation's
+  branch. `GameDialect` and `ServerProtocol` are no longer
+  `#[non_exhaustive]`, every comparison on one of their variants is a
+  `match` naming them all, and a test refuses new comparisons in production
+  code. No behaviour changes. **Breaking:** `ServerProtocol::is_titanium()`
+  is removed; match on `GameDialect::from(protocol)` instead. Matches on
+  either enum in other crates no longer need a `_` arm, and one left in
+  place now warns as unreachable.
+
 - Send a social emote as the Titanium worker builds it, with no local
   echo (read R47b). The program prints a social emote's own line itself,
   so the session's echo for every emote doubled it. `GameCommand::SocialEmote`

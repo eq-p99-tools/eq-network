@@ -227,7 +227,7 @@ pub fn corpse_name(
                 .collect();
             Some(base + &suffix)
         }
-        _ => None,
+        crate::GameDialect::EqMac => None,
     }
 }
 

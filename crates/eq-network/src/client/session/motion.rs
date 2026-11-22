@@ -463,7 +463,7 @@ impl Motion {
             hit_points: self.hit_points,
             rate: inputs.rate,
             weight: inputs.weight,
-            capacity: if out.wire.dialect() == eq_network_game::GameDialect::EqMac {
+            capacity: if out.wire.dialect().uses_fatigue_for_carry_capacity() {
                 inputs.eqmac_capacity(self.fatigue)
             } else {
                 inputs.capacity
@@ -1044,7 +1044,10 @@ impl Feature for Motion {
                     .with_heading_snapshots(out.wire.dialect().supports_heading_snapshots())
                     .with_swimming(
                         self.swimming
-                            && out.wire.dialect() == eq_network_game::GameDialect::Titanium,
+                            && match out.wire.dialect() {
+                                eq_network_game::GameDialect::Titanium => true,
+                                eq_network_game::GameDialect::EqMac => false,
+                            },
                     )
                     .with_gate(out.wire.update_gate())
                     .with_counter(out.wire.update_counter())
@@ -1162,7 +1165,7 @@ impl Feature for Motion {
         match event {
             WorldEvent::Nourishment(value) if value.fatigue != self.fatigue => {
                 self.fatigue = value.fatigue;
-                if out.wire.dialect() == eq_network_game::GameDialect::EqMac
+                if out.wire.dialect().uses_fatigue_for_carry_capacity()
                     && self
                         .inputs
                         .is_none_or(|inputs| inputs.eqmac_fatigue.is_none())

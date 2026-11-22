@@ -51,7 +51,10 @@ impl CharacterChoice {
     /// `EQMac` the level and zone too.
     #[must_use]
     pub fn without_look(self, dialect: GameDialect) -> Self {
-        let verified = dialect == GameDialect::Titanium;
+        let verified = match dialect {
+            GameDialect::Titanium => true,
+            GameDialect::EqMac => false,
+        };
         Self {
             level: self.level.filter(|_| verified),
             zone_id: self.zone_id.filter(|_| verified),

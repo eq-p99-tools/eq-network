@@ -132,12 +132,17 @@ fn target_refusal(
         return Some("You cannot use that on your target".into());
     }
     // Taunt reaches 150 units, and the server says so itself beyond that.
-    if dialect == GameDialect::Titanium && !ability.strikes() {
-        return None;
+    match dialect {
+        GameDialect::Titanium if !ability.strikes() => return None,
+        GameDialect::Titanium | GameDialect::EqMac => {}
     }
-    if dialect == GameDialect::EqMac {
-        return (!eqmac::in_melee_range(position, target.position))
-            .then(|| Refusal::official("Your target is out of reach", OUT_OF_REACH, Vec::new()));
+    match dialect {
+        GameDialect::Titanium => {}
+        GameDialect::EqMac => {
+            return (!eqmac::in_melee_range(position, target.position)).then(|| {
+                Refusal::official("Your target is out of reach", OUT_OF_REACH, Vec::new())
+            });
+        }
     }
     // The player's own spawn carries the size the server gave them by race,
     // which counts for reach.
@@ -203,7 +208,6 @@ impl Abilities {
         let known = match dialect {
             GameDialect::Titanium => ability.known(skills, player.race),
             GameDialect::EqMac => eqmac::known(ability, skills, player.race, player.class),
-            _ => false,
         };
         if !known {
             return Err("You do not have that ability".into());
@@ -229,8 +233,11 @@ impl Abilities {
         dialect: GameDialect,
     ) -> Result<Option<u16>, Refusal> {
         let ((own_id, position), player) = self.usable(ability, world, dialect)?;
-        if dialect == GameDialect::EqMac {
-            self.eqmac_refusal(ability, world, player)?;
+        match dialect {
+            GameDialect::Titanium => {}
+            GameDialect::EqMac => {
+                self.eqmac_refusal(ability, world, player)?;
+            }
         }
         if ability.at_target() {
             if let Some(refusal) =
@@ -578,7 +585,11 @@ impl Feature for Abilities {
                 out,
             );
         }
-        if out.wire.dialect() == GameDialect::Titanium && class_tools::checks(ability) {
+        let titanium = match out.wire.dialect() {
+            GameDialect::Titanium => true,
+            GameDialect::EqMac => false,
+        };
+        if titanium && class_tools::checks(ability) {
             return self.use_class_tool(
                 (session_id, ability),
                 in_liquid,

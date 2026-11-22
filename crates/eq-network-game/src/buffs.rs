@@ -35,11 +35,11 @@ pub fn scale_instrument_effect(
     modifier: u32,
 ) -> Option<i64> {
     match (dialect, modifier) {
-        (_, 0 | 10) => Some(magnitude),
+        (crate::GameDialect::Titanium | crate::GameDialect::EqMac, 0 | 10) => Some(magnitude),
         (crate::GameDialect::Titanium, 11..=45) => {
             i64::try_from(i128::from(magnitude) * i128::from(modifier) / 10).ok()
         }
-        _ => None,
+        (crate::GameDialect::Titanium | crate::GameDialect::EqMac, _) => None,
     }
 }
 

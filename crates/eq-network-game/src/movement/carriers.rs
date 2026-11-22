@@ -185,7 +185,11 @@ impl Carriers {
                     if previous {
                         updates.push(CarrierUpdate::Removed(spawn.spawn_id));
                     }
-                    if dialect == GameDialect::Titanium
+                    let reports = match dialect {
+                        GameDialect::Titanium => true,
+                        GameDialect::EqMac => false,
+                    };
+                    if reports
                         && carrier_race(spawn.race)
                         && !matches!(spawn.kind, SpawnKind::NpcCorpse | SpawnKind::PlayerCorpse)
                     {

@@ -6,6 +6,7 @@ use super::{
     ClientCommand, ClientEvent, ServerProtocol,
 };
 use anyhow::Result;
+use eq_network_game::GameDialect;
 use eq_network_game::{
     combat::{CombatRequest, CombatRequestStatus},
     message::Message,
@@ -61,7 +62,10 @@ impl Combat {
     pub(super) fn new(protocol: ServerProtocol) -> Self {
         use ranged::SkillAdmission;
         Self {
-            attack_notice: !protocol.is_titanium(),
+            attack_notice: match GameDialect::from(protocol) {
+                GameDialect::Titanium => false,
+                GameDialect::EqMac => true,
+            },
             shots: match protocol {
                 ServerProtocol::EqEmu => Some(ranged::Shots::new(SkillAdmission::ServerCap)),
                 ServerProtocol::Project1999 => {
