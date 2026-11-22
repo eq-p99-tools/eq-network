@@ -81,7 +81,6 @@ pub use eq_network_game::spell_tables::ProviderPolicy;
 /// Wire protocol and client family used by a server.
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
-#[non_exhaustive]
 pub enum ServerProtocol {
     /// Project 1999's Titanium/P99-V62 protocol.
     #[default]
@@ -110,18 +109,15 @@ impl ServerProtocol {
         }
     }
 
-    /// Whether this server uses the Titanium game protocol (P99 or stock `EQEmu`).
-    #[must_use]
-    pub const fn is_titanium(self) -> bool {
-        matches!(self, Self::Project1999 | Self::EqEmu)
-    }
-
     /// Whether this is a stock emulator server (`EQEmu` or TAKP) rather than
     /// a public server with rules of its own, such as one run locally for
     /// testing.
     #[must_use]
     pub const fn is_stock(self) -> bool {
-        matches!(self, Self::EqEmu | Self::Takp)
+        match self {
+            Self::EqEmu | Self::Takp => true,
+            Self::Project1999 | Self::Quarm => false,
+        }
     }
 }
 
@@ -309,11 +305,12 @@ impl ClientConfig {
         }
         ensure!(self.port != 0, "login port must be nonzero");
         // EQMac's login packs both into 20-byte fields (`login/eqmac.rs`).
-        if !self.protocol.is_titanium() {
-            ensure!(
+        match GameDialect::from(self.protocol) {
+            GameDialect::Titanium => {}
+            GameDialect::EqMac => ensure!(
                 self.credentials.account().len() < 20 && self.credentials.password().len() < 20,
                 "EQMac login fields must fit in 19 bytes"
-            );
+            ),
         }
         ensure!(
             self.character.len() < 64 && !self.character.contains('\0'),

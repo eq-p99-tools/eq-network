@@ -20,6 +20,7 @@ use super::{
     ClientCommand, ClientConfig, ConnectionState, Events, ServerProtocol, ZoneExit,
 };
 use anyhow::{Context, Result};
+use eq_network_game::GameDialect;
 use eq_network_game::{
     command::EncodedCommand,
     message::Message,
@@ -298,17 +299,22 @@ impl World {
     /// The shared state of a production zone and its connection policy.
     pub(super) fn for_zone(session_id: u64, config: &ClientConfig) -> Self {
         Self {
-            local_eqemu: config.local_only && config.protocol == ServerProtocol::EqEmu,
-            sight: super::sight::Sight::new(
-                config
-                    .sight_catalog
-                    .clone()
-                    .filter(|_| config.protocol.is_titanium()),
-            ),
-            pad_boundaries: if config.protocol == ServerProtocol::Project1999 {
-                config.installed_zone_boundaries.clone()
-            } else {
-                None
+            local_eqemu: config.local_only
+                && match config.protocol {
+                    ServerProtocol::EqEmu => true,
+                    ServerProtocol::Project1999 | ServerProtocol::Quarm | ServerProtocol::Takp => {
+                        false
+                    }
+                },
+            sight: super::sight::Sight::new(config.sight_catalog.clone().filter(|_| {
+                match GameDialect::from(config.protocol) {
+                    GameDialect::Titanium => true,
+                    GameDialect::EqMac => false,
+                }
+            })),
+            pad_boundaries: match config.protocol {
+                ServerProtocol::Project1999 => config.installed_zone_boundaries.clone(),
+                ServerProtocol::EqEmu | ServerProtocol::Quarm | ServerProtocol::Takp => None,
             },
             ..Self::new(session_id)
         }

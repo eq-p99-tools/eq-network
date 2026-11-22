@@ -654,6 +654,11 @@ fn spawn_update(body: &[u8], dialect: crate::GameDialect) -> Result<Option<World
         );
         return Ok(None);
     }
+    // Only Titanium's program reads type 20 as the GM flag.
+    let gm_flag = match dialect {
+        crate::GameDialect::Titanium => true,
+        crate::GameDialect::EqMac => false,
+    };
     Ok(Some(match (kind, listing) {
         (_, Some(change)) => WorldEvent::Listing { spawn_id, change },
         (INVISIBILITY, None) => WorldEvent::Visibility {
@@ -671,7 +676,7 @@ fn spawn_update(body: &[u8], dialect: crate::GameDialect) -> Result<Option<World
                 owner: (owner != 0).then_some(owner),
             }
         }
-        (20, None) if dialect == crate::GameDialect::Titanium => WorldEvent::Appearance {
+        (20, None) if gm_flag => WorldEvent::Appearance {
             spawn_id,
             change: AppearanceChange::TitaniumGm(value),
         },

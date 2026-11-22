@@ -409,10 +409,11 @@ pub(super) fn close_exchange(
 ) -> Result<()> {
     let given = std::mem::take(&mut world.coins.0.given);
     let offered = std::mem::take(&mut world.coins.0.offered);
-    if returning
-        && !given.is_empty()
-        && out.wire.dialect() == eq_network_game::GameDialect::Titanium
-    {
+    let returned_purse_unknown = match out.wire.dialect() {
+        eq_network_game::GameDialect::Titanium => true,
+        eq_network_game::GameDialect::EqMac => false,
+    };
+    if returning && !given.is_empty() && returned_purse_unknown {
         purse_uncertain(world, out)?;
     }
     if !given.is_empty() || !offered.is_empty() {

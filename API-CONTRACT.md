@@ -949,6 +949,15 @@ releasing; the workspace version alone is not evidence of compatibility.
 - Do not retrofit `#[non_exhaustive]` as a supposedly compatible fix. Adding it
   is itself a breaking change. Choose it deliberately for extensible public
   boundaries in the next version; keep internal dispatch exhaustive.
+- `GameDialect` (the client generation) and `ServerProtocol` (the server
+  type) are deliberately exhaustive. Adding a variant to either is a breaking
+  change by design: every host and library `match` on them must then decide
+  what the new generation or server type does. Do not put `#[non_exhaustive]`
+  back on them. Decisions on them are exhaustive matches, or named predicates
+  whose bodies are; a comparison on one variant (`==`, `!=`, `matches!`,
+  `if let`) is refused by `crates/eq-network/tests/exhaustive_checks.rs`.
+  [docs/adding-a-generation.md](docs/adding-a-generation.md) lists what a new
+  generation needs.
 - Carry typed payloads, quantities, slots and capabilities. Introduce an ID
   newtype where it prevents meaningful mixing; avoid wrappers without an invariant.
 

@@ -52,12 +52,12 @@ impl Doors {
 
     fn apply(&mut self, update: &DoorUpdate, now: Instant, world: &mut World) {
         self.table.apply(update);
-        if self.dialect == GameDialect::Titanium {
-            self.follow(update, now, world);
-            return;
-        }
-        if self.dialect != GameDialect::EqMac {
-            return;
+        match self.dialect {
+            GameDialect::Titanium => {
+                self.follow(update, now, world);
+                return;
+            }
+            GameDialect::EqMac => {}
         }
         match update {
             DoorUpdate::RemoveAll => self.hinges.clear(),
@@ -136,16 +136,19 @@ impl Doors {
         let raised = world.lifts.offset(*door_id, Instant::now()).unwrap_or(0.0);
         self.table
             .check_click_raised(*door_id, spawn_id, position, reach, raised)?;
-        if self.dialect == GameDialect::EqMac {
-            let door = self
-                .table
-                .entries()
-                .get(door_id)
-                .ok_or_else(|| anyhow!("door is no longer available"))?;
-            ensure!(
-                eqmac::ordinary(door),
-                "this door mechanism is not supported"
-            );
+        match self.dialect {
+            GameDialect::Titanium => {}
+            GameDialect::EqMac => {
+                let door = self
+                    .table
+                    .entries()
+                    .get(door_id)
+                    .ok_or_else(|| anyhow!("door is no longer available"))?;
+                ensure!(
+                    eqmac::ordinary(door),
+                    "this door mechanism is not supported"
+                );
+            }
         }
         if self.dialect.requires_clear_cursor_for_doors() {
             ensure!(
@@ -157,14 +160,17 @@ impl Doors {
                 "put down the item on your cursor first"
             );
         }
-        if self.dialect == GameDialect::EqMac {
-            let mut hinge = self
-                .hinges
-                .get(door_id)
-                .cloned()
-                .ok_or_else(|| anyhow!("door motion is unavailable"))?;
-            hinge.tick(Instant::now());
-            ensure!(hinge.settled(), "door is moving");
+        match self.dialect {
+            GameDialect::Titanium => {}
+            GameDialect::EqMac => {
+                let mut hinge = self
+                    .hinges
+                    .get(door_id)
+                    .cloned()
+                    .ok_or_else(|| anyhow!("door motion is unavailable"))?;
+                hinge.tick(Instant::now());
+                ensure!(hinge.settled(), "door is moving");
+            }
         }
         Ok(Request::ClickDoor(*door_id))
     }

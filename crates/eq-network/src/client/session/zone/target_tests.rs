@@ -235,17 +235,18 @@ fn receive_target(
 ) -> testing::Outcome<Result<Option<ZoneExit>>> {
     let server = servers::server_type(protocol);
     let id = id.unwrap_or(0);
-    let (opcode, body) = if protocol.is_titanium() {
-        (
-            eq_network_game::targets::TARGET_COMMAND_OPCODE,
-            u32::from(id).to_le_bytes().to_vec(),
-        )
-    } else {
-        (
-            eq_network_game::targets::EQMAC_TARGET_COMMAND_OPCODE,
-            id.to_le_bytes().to_vec(),
-        )
-    };
+    let (opcode, body) =
+        if eq_network_game::GameDialect::from(protocol) == eq_network_game::GameDialect::Titanium {
+            (
+                eq_network_game::targets::TARGET_COMMAND_OPCODE,
+                u32::from(id).to_le_bytes().to_vec(),
+            )
+        } else {
+            (
+                eq_network_game::targets::EQMAC_TARGET_COMMAND_OPCODE,
+                id.to_le_bytes().to_vec(),
+            )
+        };
     hear_events(
         protocol,
         features,

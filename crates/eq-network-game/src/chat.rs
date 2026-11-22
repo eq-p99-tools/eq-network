@@ -238,7 +238,10 @@ pub fn encode_outbound_for(
         GameDialect::EqMac => MAC_CHANNEL_MESSAGE_HEADER,
     };
     // The EQMac PC client includes four zero bytes after the message terminator.
-    let trailer = usize::from(protocol == GameDialect::EqMac) * 4;
+    let trailer = match protocol {
+        GameDialect::Titanium => 0,
+        GameDialect::EqMac => 4,
+    };
     let mut body = vec![0; header + wire_text.len() + 1 + trailer];
     if let Some(recipient) = message.recipient() {
         ensure!(
@@ -753,19 +756,22 @@ fn guild_motd(
     channel: ChannelName,
     include_raw: bool,
 ) -> Result<ChatEvent> {
-    Ok(if protocol == GameDialect::EqMac {
-        ensure!(body.len() > 68, "truncated guild MOTD");
-        let mut event = ChatEvent::new(opcode, body, channel, include_raw)
-            .with_message(message_for(protocol, &body[68..], include_raw));
-        event.sender = nonempty_text(&body[..64]);
-        event
-    } else {
-        ensure!(body.len() >= 137, "truncated guild MOTD");
-        let mut event = ChatEvent::new(opcode, body, channel, include_raw)
-            .with_message(message_for(protocol, &body[136..], include_raw));
-        event.sender = Some(text(&body[68..132]));
-        event.target = nonempty_text(&body[4..68]);
-        event
+    Ok(match protocol {
+        GameDialect::EqMac => {
+            ensure!(body.len() > 68, "truncated guild MOTD");
+            let mut event = ChatEvent::new(opcode, body, channel, include_raw)
+                .with_message(message_for(protocol, &body[68..], include_raw));
+            event.sender = nonempty_text(&body[..64]);
+            event
+        }
+        GameDialect::Titanium => {
+            ensure!(body.len() >= 137, "truncated guild MOTD");
+            let mut event = ChatEvent::new(opcode, body, channel, include_raw)
+                .with_message(message_for(protocol, &body[136..], include_raw));
+            event.sender = Some(text(&body[68..132]));
+            event.target = nonempty_text(&body[4..68]);
+            event
+        }
     })
 }
 
@@ -817,15 +823,14 @@ pub fn parse_for(
                 include_raw,
             ))
         }
-        CommunicationOpcode::SpecialMessage => {
-            if protocol == GameDialect::EqMac {
+        CommunicationOpcode::SpecialMessage => match protocol {
+            GameDialect::EqMac => {
                 ensure!(body.len() > 4, "truncated SpecialMesg");
                 ChatEvent::new(opcode, body, ChannelName::System, include_raw)
                     .with_message(message_for(protocol, &body[4..], include_raw))
-            } else {
-                titanium_special(opcode, body, include_raw)?
             }
-        }
+            GameDialect::Titanium => titanium_special(opcode, body, include_raw)?,
+        },
         CommunicationOpcode::FormattedMessage => {
             let arguments_offset = match protocol {
                 GameDialect::Titanium => 12,
@@ -843,7 +848,10 @@ pub fn parse_for(
                 GameDialect::EqMac => u32::from(u16_at(body, 2)),
             });
             // EqMac's layout is left until it is checked on TAKP.
-            event.message_type = (protocol == GameDialect::Titanium).then(|| u32_at(body, 8));
+            event.message_type = match protocol {
+                GameDialect::Titanium => Some(u32_at(body, 8)),
+                GameDialect::EqMac => None,
+            };
             event.arguments = Some(arguments);
             event
         }
