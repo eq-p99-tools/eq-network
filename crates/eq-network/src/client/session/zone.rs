@@ -947,7 +947,7 @@ mod tests {
     };
 
     /// How many kinds of command there are.
-    const KINDS: usize = 143;
+    const KINDS: usize = 144;
 
     /// The kinds the login and world servers take, before any zone session.
     const BEFORE_ZONES: [usize; 5] = [0, 1, 70, 75, 113];
@@ -1034,6 +1034,7 @@ mod tests {
             ClientCommand::ClearBandolier { .. } => 140,
             ClientCommand::SetPotionBelt { .. } => 141,
             ClientCommand::ClearPotionBelt { .. } => 142,
+            ClientCommand::SwapBandolier { .. } => 143,
             ClientCommand::UseAbility { .. } => 33,
             ClientCommand::Consume { .. } => 34,
             ClientCommand::WhoAll { .. } => 35,
@@ -1684,6 +1685,7 @@ mod tests {
                 name: "Tank".into(),
             },
             ClientCommand::ClearBandolier { session_id, set: 0 },
+            ClientCommand::SwapBandolier { session_id, set: 0 },
             ClientCommand::SetPotionBelt {
                 session_id,
                 slot: 0,
@@ -2140,7 +2142,7 @@ mod tests {
             // Built and tested, and listed by no server type until each
             // one's own live check: feedback (6.511f), AAs (6.556), the
             // Bazaar's search (6.550a), browsing a trader (6.558a), and the
-            // bandolier's sets and belt (6.564).
+            // bandolier's sets and belt (6.564) and its swap (6.566).
             if let Some(unlisted) = command.capability().filter(|capability| {
                 [
                     crate::world::Capability::SendingFeedback,
@@ -2149,6 +2151,7 @@ mod tests {
                     crate::world::Capability::BazaarBrowsing,
                     crate::world::Capability::Bandoliers,
                     crate::world::Capability::PotionBelt,
+                    crate::world::Capability::BandolierSwap,
                 ]
                 .contains(capability)
             }) {

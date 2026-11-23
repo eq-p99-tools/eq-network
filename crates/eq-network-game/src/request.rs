@@ -221,6 +221,8 @@ pub enum Request {
     },
     /// Clear a bandolier set ([`crate::bandolier::clear`]).
     ClearBandolier(u8),
+    /// Swap to a bandolier set ([`crate::bandolier::swap_to`]).
+    SwapBandolier(u8),
     /// Put an item in a potion belt slot ([`crate::bandolier::set_belt`]).
     SetPotionBelt {
         /// The belt slot, 0 to 3.
@@ -666,6 +668,10 @@ pub fn titanium(request: &Request, sender: Sender<'_>) -> Result<EncodedCommand>
         Request::ClearBandolier(set) => EncodedCommand {
             opcode: crate::bandolier::OPCODE,
             body: crate::bandolier::clear(*set)?.to_vec(),
+        },
+        Request::SwapBandolier(set) => EncodedCommand {
+            opcode: crate::bandolier::OPCODE,
+            body: crate::bandolier::swap_to(*set)?.to_vec(),
         },
         Request::SetPotionBelt { slot, item_id } => EncodedCommand {
             opcode: crate::bandolier::BELT_OPCODE,
@@ -1207,6 +1213,13 @@ mod tests {
         )
         .unwrap();
         assert_eq!((belt.opcode, belt.body.len()), (0x0719, 12));
+        let swapped = titanium(&Request::SwapBandolier(3), PLAYER).unwrap();
+        assert_eq!(
+            (swapped.opcode, swapped.body),
+            (0x6f0c, crate::bandolier::swap_to(3).unwrap().to_vec())
+        );
+        assert!(titanium(&Request::SwapBandolier(4), PLAYER).is_err());
+        assert!(eqmac(&Request::SwapBandolier(0), PLAYER).is_err());
         assert!(titanium(&Request::ClearBandolier(4), PLAYER).is_err());
         assert!(eqmac(&Request::ClearBandolier(1), PLAYER).is_err());
         assert!(eqmac(

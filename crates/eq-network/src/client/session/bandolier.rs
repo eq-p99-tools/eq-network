@@ -1,7 +1,7 @@
 //! The player's bandolier sets and potion belt on Titanium: the profile's
 //! copy told at each admission (6.559), and the player's saving and
-//! clearing of a set and setting and clearing of a belt slot (6.564). No
-//! swap and no use from the belt is sent from here.
+//! clearing of a set and setting and clearing of a belt slot (6.564), and
+//! the swap to a set (6.566). No use from the belt is sent from here.
 //!
 //! Stock `EQEmu` answers none of the four (`Client::CreateBandolier`,
 //! `Client::RemoveBandolier`, `Client::Handle_OP_PotionBelt`), so after
@@ -15,8 +15,14 @@
 //! plain letters, and a belt item the player wears or carries that is a
 //! potion or made for the belt.
 //!
+//! A swap moves up to eight items and the server tells the client none of
+//! the moves (`Client::SetBandolier`). The session works out every one
+//! ([`bandolier::swap()`]) and applies them as its prediction, settled as an
+//! ordinary move is, or refuses and sends nothing.
+//!
 //! Every Titanium server tells the profile's copy; no server takes the
-//! four commands until their local live rows pass (6.564 rows 1 to 5).
+//! commands until their local live rows pass (6.564 rows 1 to 5; 6.566
+//! rows 1 to 4 and read R49-45 d for the swap).
 use super::{
     actions,
     feature::{Feature, Out, World},
@@ -25,7 +31,8 @@ use super::{
 use anyhow::Result;
 use eq_network_game::{
     bandolier::{self, BandolierSet, BeltItem, BELT_SLOTS, SETS, WEAPON_SLOTS},
-    inventory::InventoryItem,
+    inventory::{InventoryItem, InventoryUpdate},
+    merchant::MerchantUpdate,
     message::Message,
     request::Request,
     world::WorldEvent,
@@ -52,16 +59,26 @@ enum Known {
     Read { sets: Box<Sets>, belt: Box<Belt> },
 }
 
+/// Which commands a server takes, each once its live rows pass.
+#[derive(Clone, Copy, Debug, Default)]
+pub(super) struct Offered {
+    /// Sets saved and cleared.
+    pub(super) sets: bool,
+    /// Swaps to a set.
+    pub(super) swap: bool,
+    /// Belt slots set and cleared.
+    pub(super) belt: bool,
+}
+
 /// Tells the profile's sets and belt, and where offered, saves and clears
-/// a set and sets and clears a belt slot.
+/// a set, swaps to one, and sets and clears a belt slot.
 #[derive(Debug, Default)]
 pub(super) struct Bandolier {
     known: Known,
-    /// Sets saved and cleared.
-    sets_offered: bool,
-    /// Belt slots set and cleared.
-    belt_offered: bool,
+    offered: Offered,
     sent: Option<Instant>,
+    /// The merchant whose window is open, if any.
+    merchant: Option<u16>,
     /// Parts of the profile heard before the other.
     staged_sets: Option<Box<Sets>>,
     staged_belt: Option<Box<Belt>>,
@@ -73,16 +90,17 @@ impl Bandolier {
         Self::default()
     }
 
-    /// Takes the set commands, the belt commands, or both, as their live
-    /// rows pass.
+    /// Takes the commands `offered` names, as their live rows pass.
     #[cfg_attr(
         not(test),
-        expect(dead_code, reason = "offered on stock EQEmu once rows 6.564 1-5 pass")
+        expect(
+            dead_code,
+            reason = "offered on stock EQEmu once rows 6.564 1-5 and 6.566 1-4 pass"
+        )
     )]
-    pub(super) fn sending(sets: bool, belt: bool) -> Self {
+    pub(super) fn sending(offered: Offered) -> Self {
         Self {
-            sets_offered: sets,
-            belt_offered: belt,
+            offered,
             ..Self::default()
         }
     }
@@ -152,6 +170,50 @@ impl Bandolier {
             name: name.to_owned(),
             items: WEAPON_SLOTS.map(|slot| inventory.items().get(&slot).map(belt_item)),
         });
+        Ok(true)
+    }
+
+    /// Sends the swap to `set` when every move it makes is known, and
+    /// applies them as the session's prediction.
+    fn swap(
+        command: &ClientCommand,
+        set: u8,
+        sets: &Sets,
+        merchant: Option<u16>,
+        world: &mut World,
+        out: &mut Out<'_, '_>,
+    ) -> Result<bool> {
+        if let Err(error) = bandolier::swap_to(set) {
+            return refused(command, &format!("Choose {error}."), out);
+        }
+        let Some(chosen) = &sets[usize::from(set)] else {
+            return refused(command, "That set is empty.", out);
+        };
+        // What the official client checks first is read R49-45 b; until
+        // then these wait (inferred). A cast, a move and a trader's window
+        // are held by `actions::needs`.
+        let busy = if world.control.stunned() || world.lifecycle.is_dead() {
+            Some("You can't swap sets now.")
+        } else if world.exchange.is_some() {
+            Some("Finish the trade before swapping sets.")
+        } else if merchant.is_some() {
+            Some("Close the merchant's window before swapping sets.")
+        } else if world.container.is_open() {
+            Some("Close the container before swapping sets.")
+        } else {
+            None
+        };
+        if let Some(reason) = busy {
+            return refused(command, reason, out);
+        }
+        let items = match bandolier::swap(chosen, &world.inventory) {
+            Ok(items) => items,
+            Err(reason) => return refused(command, reason, out),
+        };
+        out.request(&Request::SwapBandolier(set))?;
+        // The server sends no item updates for the swap; its own moves are
+        // settled by silence as an ordinary move's are.
+        super::inventory::change(InventoryUpdate::Prediction(items), world, out)?;
         Ok(true)
     }
 
@@ -250,14 +312,14 @@ fn refused(command: &ClientCommand, reason: &str, out: &mut Out<'_, '_>) -> Resu
 
 impl Feature for Bandolier {
     fn capabilities(&self) -> Vec<crate::world::Capability> {
-        let mut offered = Vec::new();
-        if self.sets_offered {
-            offered.push(crate::world::Capability::Bandoliers);
-        }
-        if self.belt_offered {
-            offered.push(crate::world::Capability::PotionBelt);
-        }
-        offered
+        [
+            (self.offered.sets, crate::world::Capability::Bandoliers),
+            (self.offered.swap, crate::world::Capability::BandolierSwap),
+            (self.offered.belt, crate::world::Capability::PotionBelt),
+        ]
+        .into_iter()
+        .filter_map(|(offered, capability)| offered.then_some(capability))
+        .collect()
     }
 
     fn admit(&mut self, message: &Message, _world: &mut World) -> Result<()> {
@@ -283,10 +345,11 @@ impl Feature for Bandolier {
     fn owns(&self, command: &ClientCommand) -> bool {
         match command {
             ClientCommand::SaveBandolier { .. } | ClientCommand::ClearBandolier { .. } => {
-                self.sets_offered
+                self.offered.sets
             }
+            ClientCommand::SwapBandolier { .. } => self.offered.swap,
             ClientCommand::SetPotionBelt { .. } | ClientCommand::ClearPotionBelt { .. } => {
-                self.belt_offered
+                self.offered.belt
             }
             _ => false,
         }
@@ -307,6 +370,12 @@ impl Feature for Bandolier {
             .is_some_and(|sent| now.saturating_duration_since(sent) < FLOOR)
         {
             return actions::refuse(command, "You just changed your bandolier.", out.log);
+        }
+        if let ClientCommand::SwapBandolier { set, .. } = command {
+            if Self::swap(command, *set, sets, self.merchant, world, out)? {
+                self.sent = Some(now);
+            }
+            return Ok(());
         }
         let (sent, event) = match command {
             ClientCommand::SaveBandolier { set, name, .. } => (
@@ -342,6 +411,18 @@ impl Feature for Bandolier {
     ) -> Result<()> {
         // The zone tells the host these itself once the player is in.
         self.hear(message);
+        match message {
+            Message::Event(WorldEvent::Merchant(MerchantUpdate::Opened {
+                merchant_id,
+                accepted: true,
+                ..
+            })) => self.merchant = Some(*merchant_id),
+            Message::Event(WorldEvent::Merchant(MerchantUpdate::Closed)) => self.merchant = None,
+            Message::Event(WorldEvent::Despawn(id)) if self.merchant == Some(*id) => {
+                self.merchant = None;
+            }
+            _ => (),
+        }
         Ok(())
     }
 }

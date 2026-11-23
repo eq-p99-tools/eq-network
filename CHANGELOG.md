@@ -5,6 +5,16 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Swap to a bandolier set on Titanium (6.566, slice 3), from stock
+  `EQEmu`'s source and not yet checked live. New
+  `GameCommand::SwapBandolier` under the new `Capability::BandolierSwap`,
+  offered by no server type until its live rows and read R49-45 d. The
+  server makes the swap's moves without telling the client, so the new
+  `bandolier::swap` works them out as `EQEmu` does and the session sends
+  the swap only when every move is known, as an inventory prediction;
+  otherwise it refuses and sends nothing. New `bandolier::swap_to` and
+  `request::Request::SwapBandolier`. **Breaking:** the new `GameCommand`,
+  `Request` and `Capability` variants (`Capability::ALL` is 87 long).
 - Save and clear bandolier sets and set and clear potion belt slots on
   Titanium (6.564, slice 2), from stock `EQEmu`'s source and not yet
   checked live. New `GameCommand::SaveBandolier`, `ClearBandolier`,

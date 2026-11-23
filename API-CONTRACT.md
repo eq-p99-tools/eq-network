@@ -1899,7 +1899,30 @@ nothing sent: sets unknown, a set, slot or name out of bounds, a save
 while the inventory is not known or while casting (inferred until read
 R49-45 b), a clear of a set or slot already empty, a belt item not carried
 or not for the belt, and a second send within 250 ms (ours, inferred). The
-swap and the belt's use are later slices.
+belt's use is a later slice.
+
+Swapping to a set (`GameCommand::SwapBandolier`, under its own
+`Capability::BandolierSwap`) is built and tested from source (6.566) and
+offered by no server type until its local live rows pass and read
+R49-45 d confirms the program's order; P99 never. It sends `OP_Bandolier`
+action 2. Stock `EQEmu` then moves up to eight items (`SetBandolier`,
+`MoveItemToInventory`) and sends no item update, so the session works out
+every move (`bandolier::swap`) and tells the host the whole result as
+`WorldEvent::Inventory(InventoryUpdate::Prediction(..))`, settled by the
+ordinary refusal window. **A host sends a swap only on the player's own
+click or key, never from a script or a social** (until decided). The swap
+is refused, with nothing sent (`BandolierRefused`), when any move can't be
+worked out exactly: an inventory not known or with a move in flight or
+custody unknown, anything on the cursor, an item record lacking what the
+moves read, a return that would reach the cursor (ours: `EQEmu` pushes it
+there), an empty set, or nothing to swap; and while stunned, dead,
+trading, at a merchant, with a world container or a trader's window open,
+casting, or within 250 ms of the last bandolier send (inferred until read
+R49-45 b). An item with augments makes its record unreadable today, which
+leaves the inventory stale, so a swap never meets `EQEmu`'s augment
+match. Because the server confirms no move, the slots a swap moved stay
+of unknown custody until the server next sends them, and a second swap or
+a save waits until then.
 
 ## Bazaar search
 

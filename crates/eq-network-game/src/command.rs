@@ -974,6 +974,17 @@ pub enum GameCommand {
         /// The set, 0 to 3.
         set: u8,
     },
+    /// Swap to bandolier set `set` (0 to 3): the server puts the set's
+    /// items in the weapon slots and returns what they held, telling the
+    /// client nothing; the session predicts every move or refuses
+    /// ([`crate::bandolier::swap()`]). Only on the player's own click or key,
+    /// never from a script or a social.
+    SwapBandolier {
+        /// Current zone admission.
+        session_id: u64,
+        /// The set, 0 to 3.
+        set: u8,
+    },
     /// Put an item the player carries, a potion or one made for the belt,
     /// in potion belt slot `slot` (0 to 3). The session tells its own copy
     /// of the belt as [`crate::world::WorldEvent::PotionBelt`].
@@ -1465,6 +1476,7 @@ impl GameCommand {
             Self::EndBrowse { .. } => "EndBrowse",
             Self::SaveBandolier { .. } => "SaveBandolier",
             Self::ClearBandolier { .. } => "ClearBandolier",
+            Self::SwapBandolier { .. } => "SwapBandolier",
             Self::SetPotionBelt { .. } => "SetPotionBelt",
             Self::ClearPotionBelt { .. } => "ClearPotionBelt",
             Self::Emote { .. } => "Emote",
@@ -1617,6 +1629,7 @@ impl GameCommand {
             | Self::EndBrowse { session_id }
             | Self::SaveBandolier { session_id, .. }
             | Self::ClearBandolier { session_id, .. }
+            | Self::SwapBandolier { session_id, .. }
             | Self::SetPotionBelt { session_id, .. }
             | Self::ClearPotionBelt { session_id, .. }
             | Self::Emote { session_id, .. }
@@ -1792,6 +1805,7 @@ impl GameCommand {
             Self::BazaarSearch { .. } | Self::BazaarWelcome { .. } => Capability::BazaarSearching,
             Self::BrowseTrader { .. } | Self::EndBrowse { .. } => Capability::BazaarBrowsing,
             Self::SaveBandolier { .. } | Self::ClearBandolier { .. } => Capability::Bandoliers,
+            Self::SwapBandolier { .. } => Capability::BandolierSwap,
             Self::SetPotionBelt { .. } | Self::ClearPotionBelt { .. } => Capability::PotionBelt,
             Self::Emote { .. } | Self::SocialEmote { .. } | Self::EmoteAnimation { .. } => {
                 Capability::Emoting
@@ -1873,6 +1887,7 @@ impl GameCommand {
             | Self::EndBrowse { .. }
             | Self::SaveBandolier { .. }
             | Self::ClearBandolier { .. }
+            | Self::SwapBandolier { .. }
             | Self::SetPotionBelt { .. }
             | Self::ClearPotionBelt { .. }
             | Self::Emote { .. }
@@ -2218,6 +2233,7 @@ pub fn encode(
         | GameCommand::EndBrowse { .. }
         | GameCommand::SaveBandolier { .. }
         | GameCommand::ClearBandolier { .. }
+        | GameCommand::SwapBandolier { .. }
         | GameCommand::SetPotionBelt { .. }
         | GameCommand::ClearPotionBelt { .. }
         | GameCommand::Emote { .. }

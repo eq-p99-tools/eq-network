@@ -6,6 +6,11 @@ use eq_network_game::{
 };
 
 const SESSION: u64 = 5;
+const ALL: Offered = Offered {
+    sets: true,
+    swap: true,
+    belt: true,
+};
 
 fn worn(slot: i32, id: u32, name: &str) -> InventoryItem {
     let mut item = testing::item(slot);
@@ -60,7 +65,7 @@ fn belt() -> Belt {
 /// A feature taking both kinds of command, admitted with `sets()` and
 /// `belt()`.
 fn admitted() -> Bandolier {
-    let mut feature = Bandolier::sending(true, true);
+    let mut feature = Bandolier::sending(ALL);
     let mut world = World::new(SESSION);
     for message in [
         Message::Event(WorldEvent::Bandoliers(Box::new(sets()))),
@@ -91,6 +96,13 @@ fn set_belt(slot: u8, item_id: u32) -> ClientCommand {
         session_id: SESSION,
         slot,
         item_id,
+    }
+}
+
+fn swap(set: u8) -> ClientCommand {
+    ClientCommand::SwapBandolier {
+        session_id: SESSION,
+        set,
     }
 }
 
@@ -169,14 +181,20 @@ fn the_profiles_copy_is_told_at_admission_on_every_titanium_server() {
         ] if **sets == super::tests::sets() && **belt == super::tests::belt()
     ));
     assert_eq!(feature.capabilities(), Vec::new());
-    for command in [save(0, "A"), clear(1), set_belt(0, 200), clear_belt(2)] {
+    for command in [
+        save(0, "A"),
+        clear(1),
+        swap(1),
+        set_belt(0, 200),
+        clear_belt(2),
+    ] {
         assert!(!feature.owns(&command), "{command:?}");
     }
 }
 
 #[test]
 fn an_unreadable_profile_is_told_and_refuses_all_four() {
-    let mut feature = Bandolier::sending(true, true);
+    let mut feature = Bandolier::sending(ALL);
     let mut world = world();
     feature
         .admit(&Message::Event(WorldEvent::BandoliersUnknown), &mut world)
@@ -186,23 +204,34 @@ fn an_unreadable_profile_is_told_and_refuses_all_four() {
         &told.events[..],
         [ClientEvent::World(WorldEvent::BandoliersUnknown)]
     ));
-    for command in [save(0, "A"), clear(1), set_belt(0, 200), clear_belt(2)] {
+    for command in [
+        save(0, "A"),
+        clear(1),
+        swap(1),
+        set_belt(0, 200),
+        clear_belt(2),
+    ] {
         let outcome = run(&mut feature, &mut world, &command);
         assert_eq!(refusal(&outcome).as_deref(), Some(UNKNOWN), "{command:?}");
     }
     // Before any profile, too.
-    let mut unread = Bandolier::sending(true, true);
+    let mut unread = Bandolier::sending(ALL);
     let outcome = run(&mut unread, &mut world, &clear(1));
     assert_eq!(refusal(&outcome).as_deref(), Some(UNKNOWN));
 }
 
 #[test]
 fn each_kind_is_offered_and_taken_only_once_its_row_passes() {
-    let sets = Bandolier::sending(true, false);
+    let only = |sets, swap, belt| Bandolier::sending(Offered { sets, swap, belt });
+    let sets = only(true, false, false);
     assert_eq!(sets.capabilities(), [Capability::Bandoliers]);
     assert!(sets.owns(&save(0, "A")) && sets.owns(&clear(0)));
     assert!(!sets.owns(&set_belt(0, 1)) && !sets.owns(&clear_belt(0)));
-    let belt = Bandolier::sending(false, true);
+    assert!(!sets.owns(&swap(0)));
+    let swaps = only(false, true, false);
+    assert_eq!(swaps.capabilities(), [Capability::BandolierSwap]);
+    assert!(swaps.owns(&swap(0)) && !swaps.owns(&save(0, "A")));
+    let belt = only(false, false, true);
     assert_eq!(belt.capabilities(), [Capability::PotionBelt]);
     assert!(belt.owns(&set_belt(0, 1)) && belt.owns(&clear_belt(0)));
     assert!(!belt.owns(&save(0, "A")));
@@ -267,6 +296,7 @@ fn a_bad_set_or_name_is_refused_in_our_words() {
         save(0, "Bad\u{7}"),
         save(0, "Caf\u{e9}"),
         clear(4),
+        swap(4),
         set_belt(4, 200),
         set_belt(0, 0),
         clear_belt(4),
@@ -416,4 +446,121 @@ fn sends_are_a_floor_apart() {
     assert!(refusal(&refused).is_some());
     let next = testing::run(|out| feature.handle(&clear(1), &mut world, out));
     assert_eq!(next.sent.len(), 1);
+}
+
+#[test]
+fn a_swap_sends_and_predicts_every_move_the_server_makes() {
+    let mut feature = admitted();
+    let mut world = world();
+    // Save set 0 with the sword and the shield worn.
+    let saved = run(&mut feature, &mut world, &save(0, "Tank"));
+    assert_eq!(saved.sent.len(), 1);
+    let mut world = World::new(SESSION);
+    let mut inventory = Inventory::default();
+    let mut sword = worn(13, 100, "Sword");
+    sword.rules.titanium_item_class = Some(0);
+    let mut shield = worn(14, 101, "Shield");
+    shield.rules.titanium_item_class = Some(0);
+    inventory.apply(InventoryUpdate::Snapshot(vec![sword, shield]));
+    world.inventory = inventory.into();
+    // Swap to the set just saved: both are found where they are.
+    let outcome = run(&mut feature, &mut world, &swap(0));
+    assert_eq!(outcome.sent.len(), 1);
+    assert_eq!(outcome.sent[0].opcode, bandolier::OPCODE);
+    assert_eq!(outcome.sent[0].body, bandolier::swap_to(0).unwrap());
+    assert!(outcome.events.iter().any(|event| matches!(
+        event,
+        ClientEvent::World(WorldEvent::Inventory(InventoryUpdate::Prediction(_)))
+    )));
+    // Nothing moved, so nothing is left to settle.
+    assert!(!world.inventory.predicted());
+    // Swap to set 1, which names nothing: both go back to the packs.
+    let outcome = run(&mut feature, &mut world, &swap(1));
+    assert_eq!(outcome.sent.len(), 1);
+    let at = |slot: i32| {
+        world
+            .inventory
+            .items()
+            .get(&eq_network_game::inventory::InventorySlot(slot))
+            .map(|item| item.details.id)
+    };
+    assert_eq!(
+        (at(13), at(14), at(22), at(23)),
+        (None, None, Some(100), Some(101))
+    );
+    // Until those moves settle, the next swap waits.
+    let outcome = run(&mut feature, &mut world, &swap(0));
+    assert_eq!(
+        refusal(&outcome).as_deref(),
+        Some("Wait until your inventory is known to swap sets.")
+    );
+}
+
+#[test]
+fn a_swap_to_an_empty_set_returns_the_weapons() {
+    let mut feature = admitted();
+    let mut world = World::new(SESSION);
+    let mut inventory = Inventory::default();
+    let mut sword = worn(13, 100, "Sword");
+    sword.rules.titanium_item_class = Some(0);
+    inventory.apply(InventoryUpdate::Snapshot(vec![sword]));
+    world.inventory = inventory.into();
+    // Set 1 holds a name and no item.
+    let outcome = run(&mut feature, &mut world, &swap(1));
+    assert_eq!(outcome.sent.len(), 1);
+    let items = world.inventory.items();
+    assert_eq!(items.keys().map(|slot| slot.0).collect::<Vec<_>>(), [22]);
+    // Set 2 is empty: nothing is sent.
+    let outcome = run(&mut feature, &mut world, &swap(2));
+    assert_eq!(refusal(&outcome).as_deref(), Some("That set is empty."));
+}
+
+#[test]
+fn a_swap_waits_for_a_merchant_trade_or_container_and_the_mirrors_refusals() {
+    let mut feature = admitted();
+    let mut world = World::new(SESSION);
+    let mut inventory = Inventory::default();
+    let mut sword = worn(13, 100, "Sword");
+    sword.rules.titanium_item_class = Some(0);
+    let cursor = potion(30, 200);
+    inventory.apply(InventoryUpdate::Snapshot(vec![sword, cursor]));
+    world.inventory = inventory.into();
+    // The mirror's own words for the cursor.
+    let outcome = run(&mut feature, &mut world, &swap(1));
+    assert_eq!(
+        refusal(&outcome).as_deref(),
+        Some("Put down what you hold before swapping sets.")
+    );
+    let opened = Message::Event(WorldEvent::Merchant(MerchantUpdate::Opened {
+        merchant_id: 9,
+        accepted: true,
+        rate: 1.0,
+    }));
+    testing::run(|out| feature.observe(&opened, &mut world, out))
+        .result
+        .unwrap();
+    let outcome = run(&mut feature, &mut world, &swap(1));
+    assert_eq!(
+        refusal(&outcome).as_deref(),
+        Some("Close the merchant's window before swapping sets.")
+    );
+    let gone = Message::Event(WorldEvent::Despawn(9));
+    testing::run(|out| feature.observe(&gone, &mut world, out))
+        .result
+        .unwrap();
+    let outcome = run(&mut feature, &mut world, &swap(1));
+    assert_eq!(
+        refusal(&outcome).as_deref(),
+        Some("Put down what you hold before swapping sets.")
+    );
+    // A cast, a move, a station and a trader's window hold it first.
+    assert_eq!(
+        actions::needs(&swap(0)),
+        [
+            actions::Resource::Casting,
+            actions::Resource::Inventory,
+            actions::Resource::CursorAndStation,
+            actions::Resource::Shopping,
+        ]
+    );
 }
