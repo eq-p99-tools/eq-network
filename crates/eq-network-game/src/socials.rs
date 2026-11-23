@@ -19,9 +19,9 @@
 //! them, and with them a client's answer turning a challenge down
 //! (`OP_DuelResponse`), where `EQEmu` and Quarm send a line of text.
 //!
-//! The player's answer to a challenge ([`titanium_duel_accept`],
-//! [`titanium_duel_decline`], [`eqmac_duel_accept`],
-//! [`eqmac_duel_decline`]) names the challenger, then the player, as each
+//! The player's answer to a challenge ([`titanium_duel_accept`](crate::socials::titanium_duel_accept),
+//! [`titanium_duel_decline`](crate::socials::titanium_duel_decline), [`eqmac_duel_accept`](crate::socials::eqmac_duel_accept),
+//! [`eqmac_duel_decline`](crate::socials::eqmac_duel_decline)) names the challenger, then the player, as each
 //! server's handler reads it: `EQEmu`'s `Handle_OP_DuelAccept` takes the
 //! challenger as `duel_initiator` and the player as `duel_target`, and its
 //! `Handle_OP_DuelDecline` tells the challenger in either order; TAKP's
@@ -29,7 +29,7 @@
 //! `Handle_OP_DuelResponse2` and `Handle_OP_DuelResponse` read the same
 //! bytes as initiator and target. TAKP says the `EQMac` client sends
 //! `OP_RequestDuel` both when it challenges and when it accepts
-//! ([`eqmac_duel_request`]). The field order the official programs write
+//! ([`eqmac_duel_request`](crate::socials::eqmac_duel_request)). The field order the official programs write
 //! is inferred from those handlers (checklist 6.492, pending R49-6a).
 //!
 //! Layout reference: `EQEmu`'s Titanium `RandomReq_Struct`,
