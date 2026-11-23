@@ -950,6 +950,24 @@ active. The progress enum is non-exhaustive, and its new serialized value is
 `recording`. Errors in the handshake itself continue to follow the existing
 session error policy.
 
+## Titanium event saves
+
+On stock `EQEmu` Titanium, four existing actions now put one more packet on
+the wire, after their own: `ClientCommand::ToggleRoleplay` and
+`ClientCommand::ToggleAnonymous` (after the appearance update), the player's
+`ClientCommand::Shop` close of an open merchant's window (after the close),
+and the server's end of an open loot (`LootUpdate::Closed`). Each sends
+`OP_Save` (0x736b, 192 bytes): the zone save's body with the event's reason
+at +4 (`zoning::save_reason`: 0x0a, 0x0b, 0x14, 0x15), carrying the own
+spawn's place at that moment, the heading cut to a whole number. Only stock
+`EQEmu` sends it. P99 is built and held off until an official-client capture
+there shows it; Quarm, TAKP and RoF2 send none, and `Request::EventSave` is
+refused on `EQMac`. It is withheld, with a diagnostic and nothing sent, when
+the player has no own spawn or place yet, is dead, or has a merchant's window
+or a trade open. A refused or paced toggle, and a loot close with no loot
+open, send no save. Stock `EQEmu` saves the character on any `OP_Save` and
+reads nothing in the body. Reads R49-22g and R49-22h, checklist 6.615.
+
 ## Modern session termination
 
 `eq_network_transport::modern::SessionTermination` is an additive typed error
