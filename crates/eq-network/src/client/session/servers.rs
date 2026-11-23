@@ -1325,11 +1325,15 @@ impl ServerType for EqEmu {
         true
     }
 
-    /// Local only until #310's local live row passes; then a one-line
-    /// follow-up offers it on every stock `EQEmu` session (checklist 6.547).
+    /// The AA facts and requests, local only until the local live rows
+    /// pass (6.547, 6.556); then a one-line follow-up offers them on every
+    /// stock `EQEmu` session. The requests share the facts' gate
+    /// (checklist 6.581).
     fn environmental_aa(&self, setup: &Setup<'_>) -> Provided {
         if setup.local_only {
-            offer(Box::<super::alternate_advancement::AlternateAdvancement>::default())
+            offer(Box::new(
+                super::alternate_advancement::AlternateAdvancement::listed(),
+            ))
         } else {
             None
         }
@@ -1714,9 +1718,13 @@ impl ServerType for Quarm {
     }
 
     /// Quarm's source-derived corpse flow uses the existing inventory owner
-    /// for delivery and coins. Public-server validation remains pending.
+    /// for delivery and coins, with item requests paced to its 10 ms
+    /// `loot_cooldown_timer` ([`super::looting::EQMAC_ITEM_PACE`], fc75fcf).
+    /// Public-server validation remains pending.
     fn looting(&self, _setup: &Setup<'_>) -> Provided {
-        offer(Box::new(Looting::requiring_empty_cursor()))
+        offer(Box::new(
+            Looting::requiring_empty_cursor().with_item_pace(super::looting::EQMAC_ITEM_PACE),
+        ))
     }
 
     fn item_rules(&self) -> ItemRules {
@@ -1839,6 +1847,48 @@ impl ServerType for Quarm {
     fn talk(&self, setup: &Setup<'_>) -> Provided {
         offer(shared::talk(setup))
     }
+
+    /// Giving items to NPCs and trading with players. Source-derived, not
+    /// live (6.576): Quarm's `Handle_OP_TradeRequest`, `TradeRequestAck`,
+    /// `TradeAcceptClick`, `CancelTrade` and `TradeRefused`
+    /// (SecretsOTheP/EQMacEmu fc75fcf, `zone/client_packet.cpp`) take the
+    /// 4-byte request and acknowledgement {to u16, from u16}, which they
+    /// check names the player, and the 6-byte refusal, as
+    /// [`eq_network_game::exchange::eqmac`] sends them. Quarm adds its own
+    /// refusals (self-found, Iksar zones, GM checks, an engaged NPC) and
+    /// paces requests itself; its `OP_TradeReset` before an NPC's
+    /// acknowledgement stays an unread planned gap.
+    fn exchange(&self, _setup: &Setup<'_>) -> Provided {
+        offer(shared::exchange())
+    }
+
+    /// Groups. Source-derived, not live (6.576): Quarm's
+    /// `Handle_OP_GroupInvite2`, `GroupFollow`, `GroupCancelInvite` and
+    /// `GroupDisband` (fc75fcf) check the same 193-, 128-, 129- and 128-byte
+    /// records as TAKP, and add their own refusals (solo and challenge
+    /// modes, GM checks).
+    fn groups(&self, _setup: &Setup<'_>) -> Provided {
+        offer(shared::groups())
+    }
+
+    /// Anonymous and roleplaying. Source-derived, not live (6.576):
+    /// Quarm's `Handle_OP_SpawnAppearance` (fc75fcf) takes the 8-byte
+    /// appearance update and its anonymous type 0, 1 or 2, paced by its own
+    /// toggle timer. The away update stays refused, as on TAKP.
+    fn listing(&self, _setup: &Setup<'_>) -> Provided {
+        offer(shared::listing(false))
+    }
+
+    /// Answered only on the player's word. Source-derived, not live
+    /// (6.576): Quarm's `Handle_OP_Translocate` (fc75fcf) takes the 92-byte
+    /// offer back with `Complete` 1 for a yes. Unlike TAKP it sends no
+    /// second offer: it moves the player itself (`MovePCGuildID`, or
+    /// `GoToBind` for a bind port in the bind zone), which reaches the
+    /// session as its zone change. Quarm's own time limit is a rule, 0 (none)
+    /// by default; the session's hour is ours, as on TAKP.
+    fn translocate(&self, _setup: &Setup<'_>) -> Provided {
+        offer(shared::translocate(std::time::Duration::from_secs(3600)))
+    }
 }
 
 /// The HP at which TAKP takes a player as dead: below -10 (`zone/attack.cpp`
@@ -1861,11 +1911,15 @@ impl ServerType for Takp {
     }
 
     /// TAKP's AA ranks, points, experience and timers (checklist 6.548),
-    /// local only until a local TAKP row passes. Quarm shares the decoding
-    /// "assumed as TAKP" but isn't offered it until its own attended row.
+    /// and the split request (6.562), local only until a local TAKP row
+    /// passes; Train and Activate stay refused on the Mac client until
+    /// R49-41b (checklist 6.581). Quarm shares the decoding "assumed as
+    /// TAKP" but isn't offered it until its own attended row.
     fn environmental_aa(&self, setup: &Setup<'_>) -> Provided {
         if setup.local_only {
-            offer(Box::<super::alternate_advancement::AlternateAdvancement>::default())
+            offer(Box::new(
+                super::alternate_advancement::AlternateAdvancement::listed(),
+            ))
         } else {
             None
         }
@@ -2015,6 +2069,24 @@ impl ServerType for Takp {
         offer(shared::translocate(std::time::Duration::from_secs(3600)))
     }
 
+    /// Corpse looting in the `EQMac` program's packets
+    /// ([`eq_network_game::loot::eqmac`]), from TAKP's own handlers at
+    /// EQMacEmu/Server 44afcbf: `Handle_OP_LootRequest` and
+    /// `Handle_OP_EndLootRequest` take a 2-byte corpse ID,
+    /// `Handle_OP_LootItem` the 12-byte item request, and
+    /// `Corpse::LootCorpseItem` echoes the request before its checks.
+    /// TAKP's `CheckCursorEmptyWhenLooting` defaults true
+    /// (`common/ruletypes.h`), so an item request waits for an empty
+    /// cursor, as on Quarm. Its `loot_cooldown_timer` is 10 ms, as Quarm's,
+    /// so item requests are paced ([`super::looting::EQMAC_ITEM_PACE`]).
+    /// Delivery and coins stay with the inventory owner. Source-derived, not
+    /// live (6.577).
+    fn looting(&self, _setup: &Setup<'_>) -> Provided {
+        offer(Box::new(
+            Looting::requiring_empty_cursor().with_item_pace(super::looting::EQMAC_ITEM_PACE),
+        ))
+    }
+
     /// Giving items to NPCs and trading with players, in the `EQMac`
     /// program's packets ([`eq_network_game::exchange::eqmac`], TAKP program
     /// read N4); not yet checked live, and the player half waits for a
@@ -2139,8 +2211,9 @@ mod tests {
         ] {
             assert!(server_type(protocol).environmental_aa(&setup).is_none());
         }
-        // The AA requests wait for their own local EQEmu live row (6.556):
-        // no server type lists them, local or not.
+        // The AA requests share the facts' gate (6.581): listed only on
+        // local `EQEmu` and local TAKP, never on public sessions, P99,
+        // Quarm or RoF2, local or not.
         for local_only in [false, true] {
             setup.local_only = local_only;
             for protocol in [
@@ -2150,11 +2223,14 @@ mod tests {
                 ServerProtocol::Quarm,
                 ServerProtocol::EqEmuRof2,
             ] {
-                assert!(!server_type(protocol)
+                let lists = server_type(protocol)
                     .features(&setup)
                     .iter()
                     .flat_map(|provided| provided.feature.capabilities())
-                    .any(|capability| capability == Capability::AlternateAdvancement));
+                    .any(|capability| capability == Capability::AlternateAdvancement);
+                let expected =
+                    local_only && matches!(protocol, ServerProtocol::EqEmu | ServerProtocol::Takp);
+                assert_eq!(lists, expected, "{protocol:?} local {local_only}");
             }
         }
     }
@@ -2440,11 +2516,12 @@ mod tests {
     fn eqmac_servers_provide_the_features_built_for_them() {
         // Quarm shares TAKP's movement, falls, jumps, zone handoff and
         // posture/camp lifecycle, abilities, casting, basic spellbook and
-        // personal inventory actions, and both search the Bazaar from source
-        // (6.580). Other features await their own evidence.
+        // personal inventory actions, and, each from its own handlers, its
+        // giving, groups, listing and translocate (6.576); both search the
+        // Bazaar from source (6.580). Other features await their own evidence.
         let setup = Setup::new("Tester", AutoEat::default());
         let quarm = server_type(ServerProtocol::Quarm);
-        assert_eq!(quarm.features(&setup).len(), 19);
+        assert_eq!(quarm.features(&setup).len(), 23);
         assert_eq!(
             offers(quarm),
             [
@@ -2452,6 +2529,7 @@ mod tests {
                 Capability::Spellbook,
                 Capability::Inventory,
                 Capability::Trading,
+                Capability::Giving,
                 Capability::Moving,
                 Capability::Falling,
                 Capability::Targeting,
@@ -2464,7 +2542,10 @@ mod tests {
                 Capability::Zoning,
                 Capability::Abilities,
                 Capability::Reading,
+                Capability::Grouping,
+                Capability::Listing,
                 Capability::EnvironmentalDamage,
+                Capability::Translocate,
                 Capability::Jumping,
                 Capability::Posture,
                 Capability::Meals,
@@ -2473,7 +2554,7 @@ mod tests {
             ]
         );
         let takp = server_type(ServerProtocol::Takp);
-        assert_eq!(takp.features(&setup).len(), 24);
+        assert_eq!(takp.features(&setup).len(), 25);
         assert_eq!(
             offers(takp),
             [
@@ -2486,6 +2567,7 @@ mod tests {
                 Capability::Falling,
                 Capability::Targeting,
                 Capability::Combat,
+                Capability::Looting,
                 Capability::Talking,
                 Capability::Camping,
                 Capability::Doors,

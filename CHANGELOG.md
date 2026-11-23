@@ -20,6 +20,35 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `bazaar::eqmac::{search, welcome, answer, Answer, SEARCH_OPCODE,
   SEARCH_LENGTH, WELCOME_LENGTH, ROW_LENGTH, DONE_LENGTH}`.
 
+- Offer `Looting` on TAKP (6.577), from TAKP's own corpse handlers at
+  EQMacEmu/Server 44afcbf: the same `EQMac` packets and sizes as Quarm's,
+  the echo before the server's checks, and an empty cursor before an item
+  request, as TAKP's `CheckCursorEmptyWhenLooting` defaults. Source-derived,
+  not yet checked live. On TAKP and Quarm, item requests on one corpse are
+  now at least 10 ms apart, the servers' `loot_cooldown_timer`; one asked
+  sooner is refused.
+
+- List the AA requests on local sessions only (6.581): a local stock
+  `EQEmu` session and a local TAKP session now offer
+  `Capability::AlternateAdvancement`, under the same local-only gate as
+  the AA facts, so the live rows 6.556 and 6.562 can run. Public `EQEmu`,
+  P99, Quarm and RoF2 still list it nowhere, local or not. On TAKP only
+  the split goes; Train and Activate stay refused until read R49-41b.
+
+- Lift the hosts' script holds (6.578): a host may now send a report, a
+  bandolier swap, a task's acceptance or a task's cancel from a script, a
+  social or a hotbutton as well as from the player's own typing or click,
+  since a script may do whatever the player can. Documentation only: the
+  session never knew where a command came from, and its checks and paces
+  hold whatever sends it.
+
+- Offer Quarm giving and trading, groups, anonymous and roleplaying, and
+  translocate answers (6.576), each from Quarm's own handlers at
+  SecretsOTheP/EQMacEmu fc75fcf. Source-derived, not live. The encoders
+  are TAKP's; tests pin each body to the size Quarm's handler checks
+  (requests 4, refusal 6, group 193/128/129/128, appearance 8, translocate
+  92). Quarm moves an accepted translocate with its own zone change.
+
 - Read the guild bank as stock `EQEmu` tells a Titanium client of it
   (6.563, slice G1): `OP_GuildBank` (0xb4ab) item updates (a slot shown or
   emptied), the deposit answer, the bare acknowledgement and the clear, by

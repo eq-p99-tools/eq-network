@@ -1,6 +1,8 @@
 //! `EQMac` corpse access, source-derived from Quarm c2cd265:
 //! `common/eq_packet_structs.h`, `common/patches/mac.cpp`,
-//! `utils/patches/patch_Mac.conf` and `zone/corpse.cpp`.
+//! `utils/patches/patch_Mac.conf` and `zone/corpse.cpp`. TAKP's server
+//! (EQMacEmu/Server 44afcbf) uses the same opcodes, structs, responses
+//! (0, 1, 2) and loot item records (6.577).
 //!
 //! The open echo ends the list; the item echo precedes the server's checks.
 //! Coins in a successful open are already transferred. Item delivery comes
@@ -128,8 +130,15 @@ mod tests {
         super::decode(opcode, body, inventory::ItemRules::Quarm)
     }
 
+    /// The sizes each server's handler checks: Quarm's, and TAKP's at
+    /// EQMacEmu/Server 44afcbf (6.577), where `Handle_OP_LootRequest` and
+    /// `Handle_OP_EndLootRequest` drop a body other than `sizeof(uint16)`
+    /// and `Handle_OP_LootItem` one other than its 12-byte
+    /// `LootingItem_Struct`.
     #[test]
     fn requests_and_unconditional_echo_use_eqmac_layout() {
+        assert_eq!(request(513).unwrap().len(), 2);
+        assert_eq!(item_request(513, 7, 0, false).unwrap().len(), 12);
         assert_eq!(request(513).unwrap(), [1, 2]);
         assert!(request(0).is_err());
         let packet = item_request(513, 7, 0, true).unwrap();

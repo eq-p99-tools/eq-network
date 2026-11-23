@@ -2149,14 +2149,14 @@ mod tests {
                 continue;
             }
             // Built and tested, and listed by no server type until each
-            // one's own live check: feedback (6.511f), AAs (6.556),
-            // browsing a trader (6.558a), and the
-            // bandolier's sets and belt (6.564), its swap (6.566) and belt
-            // use (6.568).
+            // one's own live check: feedback (6.511f), browsing a trader
+            // (6.558a), and the bandolier's sets and belt (6.564), its swap
+            // (6.566) and belt use (6.568). AAs are listed on local EQEmu
+            // (6.581), so they take the owner check below, as does the
+            // Mac-era Bazaar search, offered on TAKP and Quarm (6.580).
             if let Some(unlisted) = command.capability().filter(|capability| {
                 [
                     crate::world::Capability::SendingFeedback,
-                    crate::world::Capability::AlternateAdvancement,
                     crate::world::Capability::BazaarBrowsing,
                     crate::world::Capability::Bandoliers,
                     crate::world::Capability::PotionBelt,
@@ -2863,7 +2863,7 @@ mod tests {
     }
 
     #[test]
-    fn combined_quarm_inventory_capabilities_keep_one_owner_and_exchanges_disabled() {
+    fn combined_quarm_inventory_capabilities_keep_one_owner_with_giving() {
         use crate::client::ServerProtocol;
         use eq_network_game::{food::AutoEat, inventory::InventorySlot, world::Capability};
         let server = servers::server_type(ServerProtocol::Quarm);
@@ -2874,10 +2874,11 @@ mod tests {
             Capability::Meals,
             Capability::Trading,
             Capability::Reading,
+            // Quarm's own trade handlers (6.576).
+            Capability::Giving,
         ] {
             assert!(capabilities.contains(&capability), "{capability:?}");
         }
-        assert!(!capabilities.contains(&Capability::Giving));
         for command in [
             ClientCommand::AutoEat {
                 session_id: 5,
@@ -3240,8 +3241,9 @@ mod tests {
             .capabilities()
         };
         // Both EQMac policies move, jump, fall, zone, camp, cast spells and
-        // move inventory, read, shop and eat. TAKP also offers the social
-        // actions checked there.
+        // move inventory, read, shop, eat, give, group, list and answer a
+        // translocate (Quarm from its own handlers, 6.576). TAKP also offers
+        // the bleed-out report checked there.
         assert_eq!(
             features(crate::client::ServerProtocol::Quarm),
             [
@@ -3249,6 +3251,7 @@ mod tests {
                 Capability::Spellbook,
                 Capability::Inventory,
                 Capability::Trading,
+                Capability::Giving,
                 Capability::Moving,
                 Capability::Falling,
                 Capability::Targeting,
@@ -3261,7 +3264,10 @@ mod tests {
                 Capability::Zoning,
                 Capability::Abilities,
                 Capability::Reading,
+                Capability::Grouping,
+                Capability::Listing,
                 Capability::EnvironmentalDamage,
+                Capability::Translocate,
                 Capability::Jumping,
                 Capability::Posture,
                 Capability::Meals,
@@ -3283,6 +3289,7 @@ mod tests {
                 Capability::Falling,
                 Capability::Targeting,
                 Capability::Combat,
+                Capability::Looting,
                 Capability::Talking,
                 Capability::Camping,
                 Capability::Doors,
