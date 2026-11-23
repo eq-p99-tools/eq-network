@@ -697,12 +697,16 @@ pub enum Capability {
     /// suffix ([`crate::command::GameCommand::RequestTitles`],
     /// [`crate::command::GameCommand::SetTitle`]).
     Titling,
+    /// Searching the Bazaar for traders' items, and asking how many traders
+    /// and items there are ([`crate::command::GameCommand::BazaarSearch`],
+    /// [`crate::command::GameCommand::BazaarWelcome`]). No money moves.
+    BazaarSearching,
 }
 
 impl Capability {
     /// Every capability, in order: what a session offers when its server and
     /// client generation support everything.
-    pub const ALL: [Self; 80] = [
+    pub const ALL: [Self; 81] = [
         Self::Casting,
         Self::Spellbook,
         Self::Inventory,
@@ -783,6 +787,7 @@ impl Capability {
         Self::LookingForGroup,
         Self::Shielding,
         Self::Titling,
+        Self::BazaarSearching,
     ];
 }
 
@@ -1319,6 +1324,17 @@ pub enum WorldEvent {
     /// answer to [`crate::command::GameCommand::RequestTitles`]
     /// (`names::title_list`).
     TitleList(Vec<crate::names::TitleChoice>),
+    /// What the server says of the player's Bazaar search
+    /// ([`crate::command::GameCommand::BazaarSearch`],
+    /// [`crate::command::GameCommand::BazaarWelcome`]).
+    Bazaar(crate::bazaar::BazaarEvent),
+    /// A Bazaar search or welcome request was not sent, and why.
+    BazaarRefused {
+        /// Admission from the request.
+        session_id: u64,
+        /// Why not.
+        reason: String,
+    },
     /// The server's answer to the player's `/surname`
     /// (`OP_Surname`'s reply): whether it took the surname, and
     /// the surname as it took it or refused it. Where taken, the zone's
@@ -2735,6 +2751,7 @@ mod tests {
             Capability::LookingForGroup => 77,
             Capability::Shielding => 78,
             Capability::Titling => 79,
+            Capability::BazaarSearching => 80,
         };
         for (index, capability) in Capability::ALL.into_iter().enumerate() {
             assert_eq!(place(capability), index, "{capability:?}");
