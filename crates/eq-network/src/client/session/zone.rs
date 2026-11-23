@@ -947,7 +947,7 @@ mod tests {
     };
 
     /// How many kinds of command there are.
-    const KINDS: usize = 144;
+    const KINDS: usize = 145;
 
     /// The kinds the login and world servers take, before any zone session.
     const BEFORE_ZONES: [usize; 5] = [0, 1, 70, 75, 113];
@@ -1035,6 +1035,7 @@ mod tests {
             ClientCommand::SetPotionBelt { .. } => 141,
             ClientCommand::ClearPotionBelt { .. } => 142,
             ClientCommand::SwapBandolier { .. } => 143,
+            ClientCommand::UseBeltItem(_) => 144,
             ClientCommand::UseAbility { .. } => 33,
             ClientCommand::Consume { .. } => 34,
             ClientCommand::WhoAll { .. } => 35,
@@ -1686,6 +1687,14 @@ mod tests {
             },
             ClientCommand::ClearBandolier { session_id, set: 0 },
             ClientCommand::SwapBandolier { session_id, set: 0 },
+            ClientCommand::UseBeltItem(eq_network_game::bandolier::BeltUse {
+                request_id: 1,
+                session_id,
+                belt_slot: 0,
+                target_id: 7,
+                created,
+                installed_class_spell: None,
+            }),
             ClientCommand::SetPotionBelt {
                 session_id,
                 slot: 0,
@@ -2142,7 +2151,8 @@ mod tests {
             // Built and tested, and listed by no server type until each
             // one's own live check: feedback (6.511f), AAs (6.556), the
             // Bazaar's search (6.550a), browsing a trader (6.558a), and the
-            // bandolier's sets and belt (6.564) and its swap (6.566).
+            // bandolier's sets and belt (6.564), its swap (6.566) and belt
+            // use (6.568).
             if let Some(unlisted) = command.capability().filter(|capability| {
                 [
                     crate::world::Capability::SendingFeedback,
@@ -2152,6 +2162,7 @@ mod tests {
                     crate::world::Capability::Bandoliers,
                     crate::world::Capability::PotionBelt,
                     crate::world::Capability::BandolierSwap,
+                    crate::world::Capability::UsingPotionBelt,
                 ]
                 .contains(capability)
             }) {
@@ -3603,6 +3614,8 @@ mod admission_tests;
 #[cfg(test)]
 mod command_batch_tests;
 
+#[cfg(test)]
+mod belt_use_tests;
 #[cfg(test)]
 mod cast_result_tests;
 

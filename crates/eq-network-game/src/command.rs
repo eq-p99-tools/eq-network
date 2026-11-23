@@ -96,6 +96,9 @@ pub enum GameCommand {
     },
     /// Activate the click effect on a current carried or equipped item.
     UseItem(crate::inventory::ItemUse),
+    /// Use the item a potion belt slot names, as an item click from the
+    /// first slot the player wears or carries it in (6.568).
+    UseBeltItem(crate::bandolier::BeltUse),
     /// Acquire or release a supported vessel, or refresh its floor link.
     BoatControl {
         /// Current zone admission.
@@ -1373,6 +1376,7 @@ impl GameCommand {
             Self::GenerateName { .. } => "GenerateName",
             Self::SwapSpell { .. } => "SwapSpell",
             Self::UseItem(..) => "UseItem",
+            Self::UseBeltItem(..) => "UseBeltItem",
             Self::ClickDoor { .. } => "ClickDoor",
             Self::BoatControl { .. } => "BoatControl",
             Self::ArrivalPlacement { .. } => "ArrivalPlacement",
@@ -1530,6 +1534,7 @@ impl GameCommand {
             Self::CancelBuff(request) => Some(request.session_id),
             Self::RangedAttack(request) => Some(request.session_id),
             Self::UseItem(request) => Some(request.session_id),
+            Self::UseBeltItem(request) => Some(request.session_id),
             Self::MoveInventory(request) => Some(request.session_id),
             Self::DestroyItem(request) => Some(request.session_id),
             Self::DropItem(request) => Some(request.session_id),
@@ -1707,6 +1712,7 @@ impl GameCommand {
             Self::CastSpell { .. } | Self::UseItem(_) | Self::DropInvisibility { .. } => {
                 Capability::Casting
             }
+            Self::UseBeltItem(_) => Capability::UsingPotionBelt,
             Self::BoatControl { .. } => Capability::BoatControl,
             Self::ArrivalPlacement { .. } => Capability::BoatRiding,
             Self::ClickDoor { .. } => Capability::Doors,
@@ -1922,6 +1928,7 @@ impl GameCommand {
             Self::CancelBuff(request) => Some(request.created),
             Self::RangedAttack(request) => Some(request.created),
             Self::UseItem(request) => Some(request.created),
+            Self::UseBeltItem(request) => Some(request.created),
             Self::MoveInventory(request) => Some(request.created),
             Self::DestroyItem(request) => Some(request.created),
             Self::DropItem(request) => Some(request.created),
@@ -2266,6 +2273,7 @@ pub fn encode(
         | GameCommand::DragCorpse { .. }
         | GameCommand::DropCorpse { .. }
         | GameCommand::UseItem(_)
+        | GameCommand::UseBeltItem(_)
         | GameCommand::MemorizeSpell { .. }
         | GameCommand::ForgetSpell { .. }
         | GameCommand::DeleteSpell { .. }

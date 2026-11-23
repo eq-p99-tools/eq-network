@@ -105,8 +105,26 @@ impl Bandolier {
         }
     }
 
-    /// Records what a message says of the sets and the belt.
-    fn hear(&mut self, message: &Message) {
+    /// Records what a message says of the sets and the belt, and shows
+    /// the belt to the other features (6.568 B1).
+    fn hear(&mut self, message: &Message, world: &mut World) {
+        let before = std::mem::discriminant(&self.known);
+        let changed = self.heard(message);
+        if changed || std::mem::discriminant(&self.known) != before {
+            self.show_belt(world);
+        }
+    }
+
+    /// The belt the other features read: this feature's copy, or `None`.
+    fn show_belt(&self, world: &mut World) {
+        world.belt = match &self.known {
+            Known::Read { belt, .. } => Some(belt.clone()),
+            Known::Unread | Known::Unknown => None,
+        };
+    }
+
+    /// Records what a message says; whether the copy changed.
+    fn heard(&mut self, message: &Message) -> bool {
         match message {
             Message::Event(WorldEvent::Bandoliers(sets)) => {
                 self.staged_sets = Some(sets.clone());
@@ -118,9 +136,9 @@ impl Bandolier {
                 self.known = Known::Unknown;
                 self.staged_sets = None;
                 self.staged_belt = None;
-                return;
+                return true;
             }
-            _ => return,
+            _ => return false,
         }
         // The profile tells the sets, then the belt.
         if let (Some(sets), Some(belt)) = (&self.staged_sets, &self.staged_belt) {
@@ -130,7 +148,9 @@ impl Bandolier {
             };
             self.staged_sets = None;
             self.staged_belt = None;
+            return true;
         }
+        false
     }
 
     fn save(
@@ -322,8 +342,8 @@ impl Feature for Bandolier {
         .collect()
     }
 
-    fn admit(&mut self, message: &Message, _world: &mut World) -> Result<()> {
-        self.hear(message);
+    fn admit(&mut self, message: &Message, world: &mut World) -> Result<()> {
+        self.hear(message, world);
         Ok(())
     }
 
@@ -398,6 +418,9 @@ impl Feature for Bandolier {
         };
         if sent {
             self.sent = Some(now);
+            if matches!(event, WorldEvent::PotionBelt(_)) {
+                self.show_belt(world);
+            }
             out.log.send(ClientEvent::World(event))?;
         }
         Ok(())
@@ -406,11 +429,11 @@ impl Feature for Bandolier {
     fn observe(
         &mut self,
         message: &Message,
-        _world: &mut World,
+        world: &mut World,
         _out: &mut Out<'_, '_>,
     ) -> Result<()> {
         // The zone tells the host these itself once the player is in.
-        self.hear(message);
+        self.hear(message, world);
         match message {
             Message::Event(WorldEvent::Merchant(MerchantUpdate::Opened {
                 merchant_id,

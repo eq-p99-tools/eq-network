@@ -467,6 +467,16 @@ pub enum Request {
         /// The spawn it is cast on.
         target_id: u16,
     },
+    /// Cast the click effect of an item used from the potion belt, already
+    /// checked as an item click is (Titanium only).
+    CastBeltItem {
+        /// The effect's spell.
+        spell_id: u32,
+        /// Where the item is.
+        slot: InventorySlot,
+        /// The spawn it is cast on.
+        target_id: u16,
+    },
     /// Move an item between slots.
     MoveItem {
         /// Where it is.
@@ -788,6 +798,11 @@ pub fn titanium(request: &Request, sender: Sender<'_>) -> Result<EncodedCommand>
             slot,
             target_id,
         } => inventory::titanium_item_cast(*spell_id, *slot, *target_id)?,
+        Request::CastBeltItem {
+            spell_id,
+            slot,
+            target_id,
+        } => inventory::titanium_belt_cast(*spell_id, *slot, *target_id)?,
         Request::MoveItem { from, to, quantity } => {
             inventory::titanium_move(*from, *to, *quantity)?
         }
