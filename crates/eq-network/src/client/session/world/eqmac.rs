@@ -97,7 +97,12 @@ fn world_owned(
         deletion.tick(log)?;
         if !entered {
             let choice = match &selection {
-                Some(list) => Selection::poll(list, context.commands, log)?,
+                Some(list) => Selection::poll(
+                    list,
+                    context.commands,
+                    Some((&context.server_filters, eq_network_game::GameDialect::EqMac)),
+                    log,
+                )?,
                 None => None,
             };
             match choice {

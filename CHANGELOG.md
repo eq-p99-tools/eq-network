@@ -5,6 +5,75 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Build RoF2's world stage against stock `EQEmu` from its public source,
+  labelled inferred for RoF2 (6.499): the 488-byte login info, the character
+  list into the shared selection, `OP_EnterWorld` (refusing a name it would
+  have to cut), and the handoff (`OP_ZoneServerInfo`, its address terminated
+  inside its field) or the zone-unavailable notice. Between zones it enters
+  the character in play once the world's post-entry message arrives. It
+  sends nothing stock `EQEmu` ignores. Still unreachable: a RoF2
+  configuration is refused before a socket opens, and the RoF2 handoff,
+  zone connection and admission still refuse.
+
+- Take the server filters from the host and send a change again (parity
+  item 6). The filter packet (Titanium `OP_SetServerFilter` 0x6563, 29
+  words; `EQMac` 0xff41, 17 words) was a fixed array sent at zone-in.
+  `eq_network_game::filters` now names each word's kind (`FilterCategory`)
+  and mode (`FilterMode`: show, hide, mine only, group only), placed and
+  valued as the servers that read it do (`EQEmu`'s and TAKP's
+  `Client::ServerFilter`); `ServerFilters::default()` is today's packet
+  byte for byte on both generations, and RoF2 refuses.
+  `FilterCategory::modes(dialect)` says which kinds and modes a generation
+  takes; `ServerFilters::fitted` and `check` use it.
+  `ClientConfig::server_filters` is the character's starting set, checked in
+  `validate`. `GameCommand::ChooseServerFilters` at the character list keeps
+  a set for the character entered next, so its first zone-in carries it on
+  every server type. `GameCommand::SetServerFilters` mid-zone keeps a
+  change for every later zone-in, and sends it at once only where the
+  server type reads one then (`EQEmu`); elsewhere it waits for the next
+  zone-in (6.494e). The session answers `WorldEvent::ServerFiltersKept` or
+  `ServerFiltersRefused`; capabilities `ServerFilters` (every server type)
+  and `ServerFiltersAtOnce` (`EQEmu`). Which official option sets each word,
+  and when the official client sends the packet again, are unread (6.494b
+  and c). **Breaking:** `chat::server_filters` and `quarm::server_filters`
+  are removed; `ClientConfig` gains the public field `server_filters`; the
+  new variants on the exhaustive `GameCommand`, `WorldEvent` and
+  `Capability` enums.
+
+- Build RoF2's login stage, character list and world login info from
+  `EQEmu`'s public source, labelled inferred for RoF2 (6.497). The login is
+  Titanium's exchange read through the login server's opcodes for clients
+  newer than Titanium, and skips the expansion list it may send them.
+  `characters::decode` reads RoF2's variable-length list, bounding its count
+  by the body before keeping anything. `world_login::rof2` writes the
+  488-byte login info, and refuses an account or key that doesn't fit
+  rather than cut it. Nothing reaches any of it yet: a RoF2 configuration is
+  still refused before a socket opens, and the RoF2 world stage still
+  refuses.
+
+- Put a Rogue's poison on the weapon (`OP_ApplyPoison`, Titanium 0x0c2c and
+  `EQMac` 0xba41): `GameCommand::ApplyPoison { slot }` sends the 8-byte
+  `{slot, success 0}` the servers take, in each generation's slot numbering,
+  behind the new `Capability::ApplyingPoison`. One request is in flight at a
+  time; the slot must hold an item of type 42. The server's answer arrives as
+  `WorldEvent::PoisonAnswered` and its own inventory record removes the
+  poison. Refusals come as `WorldEvent::ApplyPoisonRefused`. The program's
+  side (what starts it, its gates, its lines and any wait) is pending read
+  R49-1. **Breaking:** new variants on the exhaustive command, event and
+  capability enums.
+
+- Speak in a chosen language (parity item 9). `chat::Tongue` (private fields,
+  made only by `Tongue::COMMON` or `Tongue::spoken` from the player's profile)
+  travels on `SendChatInAdmission { tongue }`, and `chat::encode_outbound_in`
+  writes its language and the speaker's skill on both generations;
+  `encode_outbound_for` and `SendChat` stay in the common tongue. A received
+  channel message keeps its language and skill as sent
+  (`ChatEvent::language`, new `ChatEvent::language_skill`). What the official
+  client puts in the skill field, and on which channels, waits for program
+  read R49-4b; RoF2 refuses. **Breaking:** `SendChatInAdmission` constructors
+  need `tongue`; the JSON of every channel message gains `language` and
+  `language_skill`.
+
 - Answer another player's challenge to a duel. On stock `EQEmu` a challenge
   now also comes as `WorldEvent::DuelOffer` (`socials::DuelQuestion`, with an
   admission-scoped `ConsentId` of the new `ConsentKind::Duel`), and

@@ -160,6 +160,7 @@ fn the_zone_loop_refuses_queued_work_and_drains_the_final_logout() {
         commands: Some(&receiver),
         sysinfo_reported_at: Cell::new(0),
         answer_list_polls: Cell::new(false),
+        server_filters: std::cell::RefCell::default(),
         riding: std::sync::Arc::default(),
     };
     let mut seen = Vec::new();
@@ -268,6 +269,7 @@ fn only_the_matching_latched_send_refusal_is_deferred() {
             choices: Vec::new(),
             spell_landing_flag: None,
             answers_list_polls: false,
+            server_filters_at_once: false,
             gameplay_departures: false,
         };
         let result = features.observe(

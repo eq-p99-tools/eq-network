@@ -27,6 +27,8 @@ struct Features {
     /// says.
     spell_landing_flag: Option<u8>,
     answers_list_polls: bool,
+    /// Whether the server type takes a server filter change mid-zone.
+    server_filters_at_once: bool,
     /// Whether the server type offers the explicit gameplay departures
     /// (movement and memorization options). Every server type offers them
     /// while the owner tests them; public parity needs them withheld on
@@ -67,6 +69,7 @@ impl Features {
             choices,
             spell_landing_flag: server.spell_landing_flag(),
             answers_list_polls: server.answers_list_polls(),
+            server_filters_at_once: server.server_filters_at_once(),
             gameplay_departures: server.offers_gameplay_departures(),
         }
     }
@@ -85,6 +88,11 @@ impl Features {
         }
         if self.gameplay_departures {
             capabilities.push(crate::world::Capability::GameplayDepartures);
+        }
+        // Every server type keeps the filters for its zone-ins.
+        capabilities.push(crate::world::Capability::ServerFilters);
+        if self.server_filters_at_once {
+            capabilities.push(crate::world::Capability::ServerFiltersAtOnce);
         }
         capabilities.sort_unstable();
         capabilities.dedup();
@@ -292,6 +300,7 @@ fn run_connected(
     let stop = context.stop;
     let duration = context.duration;
     log.liquid_inputs = super::hazards::Observations::default();
+    let filters = context.server_filters.borrow().clone();
     let mut admission = server.wire().admit(
         &config.character,
         server.profile_turn(),
@@ -301,6 +310,7 @@ fn run_connected(
             key: &credentials.key,
             checksums: &mut checksums,
             log: &mut *log,
+            filters: &filters,
         },
     )?;
     let connected = Instant::now();
@@ -382,6 +392,13 @@ fn run_connected(
                         &command,
                         session_id,
                         &context.answer_list_polls,
+                        log,
+                    )? && !super::server_filters::set(
+                        server,
+                        &command,
+                        session_id,
+                        &context.server_filters,
+                        session,
                         log,
                     )? {
                         commands.push(command);
@@ -479,6 +496,7 @@ fn run_connected(
                 key: &credentials.key,
                 checksums: &mut checksums,
                 log: &mut *log,
+                filters: &filters,
             },
         )? {
             let player = match player {
@@ -896,10 +914,10 @@ mod tests {
     };
 
     /// How many kinds of command there are.
-    const KINDS: usize = 113;
+    const KINDS: usize = 116;
 
     /// The kinds the login and world servers take, before any zone session.
-    const BEFORE_ZONES: [usize; 4] = [0, 1, 70, 75];
+    const BEFORE_ZONES: [usize; 5] = [0, 1, 70, 75, 113];
 
     /// Which kind of command this is. A new command is a compile error here
     /// until it has a number, and then a test failure until the list below
@@ -909,6 +927,8 @@ mod tests {
         match command {
             // The world server's, before any zone session.
             ClientCommand::SelectCharacter { .. } => 0,
+            ClientCommand::ChooseServerFilters { .. } => 113,
+            ClientCommand::SetServerFilters { .. } => 114,
             ClientCommand::DeleteCharacter(_) => 75,
             ClientCommand::CreateCharacter { .. } | ClientCommand::GenerateName { .. } => 1,
             ClientCommand::SwapSpell { .. } => 2,
@@ -930,6 +950,7 @@ mod tests {
             ClientCommand::YellForHelp { .. } => 109,
             ClientCommand::EmoteAnimation { .. } => 110,
             ClientCommand::SocialEmote { .. } => 111,
+            ClientCommand::ApplyPoison { .. } => 112,
             ClientCommand::DepopLocalNpc { .. } => 84,
             ClientCommand::SetPosture { .. } => 12,
             ClientCommand::FeignLanded { .. } => 104,
@@ -999,7 +1020,7 @@ mod tests {
             ClientCommand::BledOut { .. } => 67,
             ClientCommand::AnswerSacrifice { .. } => 68,
             ClientCommand::AnswerTranslocate { .. } => 69,
-            ClientCommand::AnswerDuel { .. } => 112,
+            ClientCommand::AnswerDuel { .. } => 115,
             // The login server's, before the world.
             ClientCommand::SelectServer { .. } => 70,
             ClientCommand::DropInvisibility { .. } => 71,
@@ -1213,6 +1234,7 @@ mod tests {
             ClientCommand::SendChatInAdmission {
                 session_id,
                 message: OutboundChat::Say("Hail".into()),
+                tongue: eq_network_game::chat::Tongue::COMMON,
             },
             ClientCommand::DepopLocalNpc {
                 session_id,
@@ -1361,9 +1383,18 @@ mod tests {
                 slot: InventorySlot(22),
                 created,
             },
+            ClientCommand::ApplyPoison {
+                session_id,
+                slot: InventorySlot(23),
+                created,
+            },
             ClientCommand::AnswerListPolls {
                 session_id,
                 enabled: false,
+            },
+            ClientCommand::SetServerFilters {
+                session_id,
+                filters: eq_network_game::filters::ServerFilters::default(),
             },
             ClientCommand::SetMovementOptions {
                 session_id,
@@ -1915,6 +1946,14 @@ mod tests {
                 assert!(servers.iter().any(|features| features.answers_list_polls));
                 continue;
             }
+            if matches!(command, ClientCommand::SetServerFilters { .. }) {
+                // The session keeps the filters itself, before the feature
+                // gates, on every server type.
+                assert!(servers.iter().all(|features| features
+                    .capabilities()
+                    .contains(&crate::world::Capability::ServerFilters)));
+                continue;
+            }
             if Features::is_departure(&command) {
                 // Departures are gated by the server type before their owner.
                 assert!(servers.iter().any(|features| features.gameplay_departures));
@@ -2259,6 +2298,7 @@ mod tests {
             choices: Vec::new(),
             spell_landing_flag: None,
             answers_list_polls: false,
+            server_filters_at_once: false,
             gameplay_departures: false,
         };
         let (world, outcome) = bleed_out(features);
@@ -2315,6 +2355,7 @@ mod tests {
             choices: Vec::new(),
             spell_landing_flag: None,
             answers_list_polls: false,
+            server_filters_at_once: false,
             gameplay_departures: false,
         };
         let mut world = World::new(5);
@@ -2397,6 +2438,7 @@ mod tests {
             choices: Vec::new(),
             spell_landing_flag: None,
             answers_list_polls: false,
+            server_filters_at_once: false,
             gameplay_departures: false,
         };
         let mut world = World::new(5);
@@ -2523,6 +2565,7 @@ mod tests {
             choices: Vec::new(),
             spell_landing_flag: None,
             answers_list_polls: false,
+            server_filters_at_once: false,
             gameplay_departures: false,
         };
         let mut world = World::new(5);
@@ -2689,6 +2732,7 @@ mod tests {
             choices: Vec::new(),
             spell_landing_flag: None,
             answers_list_polls: false,
+            server_filters_at_once: false,
             gameplay_departures: false,
         };
         let click = ClientCommand::ClickDoor {
@@ -2938,6 +2982,30 @@ mod tests {
     }
 
     #[test]
+    fn every_zone_keeps_the_filters_and_only_eqemu_takes_a_change_at_once() {
+        use crate::world::Capability;
+        for (protocol, at_once) in [
+            (crate::client::ServerProtocol::EqEmu, true),
+            (crate::client::ServerProtocol::Project1999, false),
+            (crate::client::ServerProtocol::Quarm, false),
+            (crate::client::ServerProtocol::Takp, false),
+        ] {
+            let offered = Features::new(
+                servers::server_type(protocol),
+                "Tester",
+                eq_network_game::food::AutoEat::default(),
+            )
+            .capabilities();
+            assert!(offered.contains(&Capability::ServerFilters), "{protocol:?}");
+            assert_eq!(
+                offered.contains(&Capability::ServerFiltersAtOnce),
+                at_once,
+                "{protocol:?}"
+            );
+        }
+    }
+
+    #[test]
     fn an_eqmac_zone_reports_everything_its_features_offer() {
         use crate::world::Capability;
         let features = |protocol| {
@@ -2974,7 +3042,9 @@ mod tests {
                 Capability::Jumping,
                 Capability::Posture,
                 Capability::Meals,
-                Capability::GameplayDepartures
+                Capability::GameplayDepartures,
+                Capability::ApplyingPoison,
+                Capability::ServerFilters
             ]
         );
         assert_eq!(
@@ -3004,7 +3074,9 @@ mod tests {
                 Capability::Jumping,
                 Capability::Posture,
                 Capability::Meals,
-                Capability::GameplayDepartures
+                Capability::GameplayDepartures,
+                Capability::ApplyingPoison,
+                Capability::ServerFilters
             ]
         );
     }

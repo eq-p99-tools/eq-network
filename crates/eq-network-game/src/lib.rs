@@ -53,6 +53,9 @@ pub mod effects;
 pub mod exchange;
 /// Feign Death and the lying posture, by client generation.
 pub mod feign;
+/// The server filters: which kinds of message the player asks the server
+/// not to send.
+pub mod filters;
 /// Food and drink: hunger, thirst, and eating and drinking.
 pub mod food;
 /// Asking which of the player's friends are online.
@@ -99,6 +102,8 @@ pub mod objects;
 pub mod p99;
 /// Pets: commands, owners and buffs.
 pub mod pets;
+/// A Rogue's poison put on the weapon: the request and the server's answer.
+pub mod poisons;
 /// What the server puts on the player's screen outside the chat window:
 /// popups and marquees.
 pub mod popups;
@@ -146,6 +151,8 @@ pub mod vision;
 pub mod who;
 /// Renderer-independent world-state packet decoding.
 pub mod world;
+/// The login info a client generation opens the world with.
+pub mod world_login;
 /// Zone numbers and short names.
 pub mod zones;
 /// Death and server-directed zone transfer codecs.
@@ -388,7 +395,6 @@ mod tests {
         for opcode in [0x1004, 0x0741, 0x5a48, 0x024d] {
             refused(chat::parse_for(rof2, opcode, &channel_message, false).map(drop));
         }
-        refused(crate::characters::decode(rof2, &[0; 4096]).map(drop));
         let now = std::time::Instant::now();
         for request in [
             GameCommand::SendChat(say),

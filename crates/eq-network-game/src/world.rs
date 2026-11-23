@@ -645,6 +645,18 @@ pub enum Capability {
     /// Titanium's `/stopcast`: ending one's own cast without moving. The
     /// host must refuse it for a mounted player, as the program does.
     StoppingCasts,
+    /// A Rogue's poison put on the weapon from the slot it sits in
+    /// ([`crate::poisons`]).
+    ApplyingPoison,
+    /// Keeping the character's server filters for every zone-in
+    /// ([`crate::command::GameCommand::SetServerFilters`]); every server
+    /// type takes the set.
+    ServerFilters,
+    /// Sending a change of the server filters at once, mid-zone, where the
+    /// server type is known to read it then (`EQEmu`'s
+    /// `Client::Handle_OP_SetServerFilter`). Elsewhere a change waits for
+    /// the next zone-in (recording checklist 6.494e).
+    ServerFiltersAtOnce,
     /// Accepting or declining a challenge to a duel.
     Dueling,
 }
@@ -652,7 +664,7 @@ pub enum Capability {
 impl Capability {
     /// Every capability, in order: what a session offers when its server and
     /// client generation support everything.
-    pub const ALL: [Self; 68] = [
+    pub const ALL: [Self; 71] = [
         Self::Casting,
         Self::Spellbook,
         Self::Inventory,
@@ -720,6 +732,9 @@ impl Capability {
         Self::BoatRiding,
         Self::Yelling,
         Self::StoppingCasts,
+        Self::ApplyingPoison,
+        Self::ServerFilters,
+        Self::ServerFiltersAtOnce,
         Self::Dueling,
     ];
 }
@@ -1515,6 +1530,21 @@ pub enum WorldEvent {
         /// `reason` says the same in this library's words.
         string_id: Option<u32>,
     },
+    /// The server's answer to a poison put on ([`crate::poisons`]): where it
+    /// sat and whether it took. The server's own inventory record removes
+    /// it.
+    PoisonAnswered(crate::poisons::PoisonAnswer),
+    /// A poison was not put on: nothing was sent.
+    ApplyPoisonRefused {
+        /// Admission from the request.
+        session_id: u64,
+        /// Why not.
+        reason: String,
+        /// The official client's own words for this refusal, as an
+        /// `eqstr_us.txt` string ID; none yet (pending read R49-1, recording
+        /// checklist 6.493).
+        string_id: Option<u32>,
+    },
     /// The player used an ability; its timer runs this long before the
     /// server takes the next use.
     AbilityUsed {
@@ -1700,6 +1730,22 @@ pub enum WorldEvent {
         session_id: u64,
         /// The requested value.
         change: crate::listing::ListingChange,
+    },
+    /// The character's server filters were kept: every later zone-in sends
+    /// them. `sent` says whether they also went to the zone at once; when
+    /// not, they wait for the next zone-in.
+    ServerFiltersKept {
+        /// Admission from the request; none at the character list.
+        session_id: Option<u64>,
+        /// Whether the zone was sent them now.
+        sent: bool,
+    },
+    /// A server filter change was not kept, and why; the prior set stands.
+    ServerFiltersRefused {
+        /// Admission from the request; none at the character list.
+        session_id: Option<u64>,
+        /// Why not.
+        reason: String,
     },
     /// A listing change was not sent, and why.
     ListingRefused {
@@ -2160,6 +2206,11 @@ pub fn titanium_update(opcode: u16, body: &[u8]) -> Result<Option<WorldEvent>> {
 #[allow(clippy::too_many_lines, reason = "one branch per codec")]
 fn titanium_views(opcode: u16, body: &[u8]) -> Result<Option<WorldEvent>> {
     match opcode {
+        crate::poisons::TITANIUM_OPCODE => {
+            return Ok(Some(WorldEvent::PoisonAnswered(
+                crate::poisons::titanium_answer(body)?,
+            )));
+        }
         crate::boats::TITANIUM_OPCODE => {
             return Ok(Some(WorldEvent::BoatControl(
                 crate::boats::ControlBoat::titanium(body)?,
@@ -2476,7 +2527,10 @@ mod tests {
             Capability::BoatRiding => 64,
             Capability::Yelling => 65,
             Capability::StoppingCasts => 66,
-            Capability::Dueling => 67,
+            Capability::ApplyingPoison => 67,
+            Capability::ServerFilters => 68,
+            Capability::ServerFiltersAtOnce => 69,
+            Capability::Dueling => 70,
         };
         for (index, capability) in Capability::ALL.into_iter().enumerate() {
             assert_eq!(place(capability), index, "{capability:?}");

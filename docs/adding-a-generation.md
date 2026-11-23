@@ -78,6 +78,21 @@ and nothing of RoF2 is built:
   arm. Where a function carries `#[expect(clippy::match_same_arms)]` for its RoF2 arms, the
   expectation fails once no arm matches Titanium's any more, so it leaves with the last one.
 
+Built since, from `EQEmu`'s public source and labelled inferred for `RoF2` (6.497), and still
+unreachable because validation refuses the generation:
+
+- The login stage: Titanium's exchange read through `RoF2`'s login server opcodes
+  (`LoginOpcodes::ROF2`), skipping the expansion list newer clients may be sent. It is tested
+  over a socket inside the crate.
+- The character list (`characters::decode` for `Rof2`) and the 488-byte world login info
+  (`world_login::rof2`). The session keeps only names from a `RoF2` list (`without_look`), since
+  the layout is not checked against the client.
+- The world stage against stock `EQEmu` (`world::rof2`, 6.499): the login info, the list, the
+  entry (`OP_EnterWorld`) and the handoff (`OP_ZoneServerInfo`) or the zone-unavailable notice.
+  Between zones it enters once the world's post-entry message arrives. It sends nothing stock
+  `EQEmu` ignores; what the `RoF2` program sends there is a read still owed. The handoff, zone
+  connection and admission still refuse.
+
 Server-software checks follow the same rule. A comparison such as
 `protocol == ServerProtocol::EqEmu` would silently answer "no" for a second `EQEmu` server type.
 So these are exhaustive matches too, and the guard test covers `ServerProtocol` as well.

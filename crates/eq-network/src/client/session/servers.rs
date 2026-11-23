@@ -242,6 +242,15 @@ pub(super) trait ServerType: Sync {
         false
     }
 
+    /// Whether this server type is known to read a server filter change
+    /// mid-zone, so the session sends one at once
+    /// ([`crate::world::Capability::ServerFiltersAtOnce`]). Elsewhere a
+    /// change waits for the next zone-in, until when the official client
+    /// sends one is read (6.494c) and checked live there (6.494e).
+    fn server_filters_at_once(&self) -> bool {
+        false
+    }
+
     /// Whether this server policy recognizes P99 list notices and supports
     /// the separately opted-in presence reply. Recognition is source-backed;
     /// deployed server acceptance remains unverified.
@@ -1185,6 +1194,12 @@ impl ServerType for Project1999 {
 struct EqEmu;
 
 impl ServerType for EqEmu {
+    /// Stock `EQEmu` reads the filters while connected as well as while
+    /// connecting (`Client::Handle_OP_SetServerFilter`), with no reply.
+    fn server_filters_at_once(&self) -> bool {
+        true
+    }
+
     fn environmental_aa(&self, setup: &Setup<'_>) -> Provided {
         if setup.local_only {
             offer(Box::<super::alternate_advancement::AlternateAdvancement>::default())
@@ -2150,6 +2165,7 @@ mod tests {
                 Capability::Jumping,
                 Capability::Posture,
                 Capability::Meals,
+                Capability::ApplyingPoison,
             ]
         );
         let takp = server_type(ServerProtocol::Takp);
@@ -2180,7 +2196,8 @@ mod tests {
                 Capability::Translocate,
                 Capability::Jumping,
                 Capability::Posture,
-                Capability::Meals
+                Capability::Meals,
+                Capability::ApplyingPoison,
             ]
         );
         for server in [quarm, takp] {

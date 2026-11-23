@@ -443,13 +443,38 @@ impl Wire for EqMac {
     }
 }
 
-/// The `RoF2` client's packets: a placeholder. Every stage keeps the trait's
-/// refusal, so it logs in, enters, reads and sends nothing.
+/// The `RoF2` client's packets: a placeholder. It logs in and enters the
+/// world the way stock `EQEmu` expects the `RoF2` client to (inferred, 6.497
+/// and 6.499); every later stage keeps the trait's refusal, so it connects to
+/// no zone and reads and sends nothing there.
+/// Nothing reaches the login either: a configuration for the `RoF2`
+/// generation is refused before a session starts.
 pub(super) struct Rof2;
 
 impl Wire for Rof2 {
     fn dialect(&self) -> GameDialect {
         GameDialect::Rof2
+    }
+
+    fn login(
+        &self,
+        config: &ClientConfig,
+        stop: &CancellationToken,
+        commands: Option<&Receiver<ClientCommand>>,
+        log: &mut Events<'_>,
+    ) -> Result<(Credentials, String)> {
+        login::rof2(config, stop, commands, log)
+    }
+
+    fn world(
+        &self,
+        context: &CharacterSession<'_>,
+        assets: &Assets,
+        ip: &str,
+        flags: (bool, bool),
+        log: &mut Events<'_>,
+    ) -> Result<Option<ZoneDestination>> {
+        world::rof2::world(context, assets, ip, flags, log)
     }
 
     fn window_closes(&self) -> eq_network_game::exchange::WindowCloses {
@@ -585,6 +610,23 @@ mod tests {
         }
     }
 
+    /// A zone connection for a stage that must send nothing.
+    struct Silent;
+    impl Transport for Silent {
+        fn send(&mut self, _opcode: u16, _body: &[u8]) -> Result<()> {
+            panic!("the refusing admission sends nothing");
+        }
+        fn receive(&mut self) -> Result<Option<crate::transport::Application>> {
+            Ok(None)
+        }
+        fn close(&mut self) -> Result<()> {
+            Ok(())
+        }
+        fn last_received_seconds(&self) -> u64 {
+            0
+        }
+    }
+
     #[test]
     fn the_rof2_placeholder_logs_in_sends_and_reads_nothing() {
         use crate::client::{ClientConfig, ServerProtocol};
@@ -596,16 +638,51 @@ mod tests {
             "Server",
             "",
         );
+        // Its login is built (and tested in `login`), and refused before
+        // it starts: the configuration is.
+        assert_eq!(
+            config.validate().unwrap_err().to_string(),
+            "the RoF2 client generation cannot log in yet"
+        );
+        // Its world stage is built (and tested in `world::rof2`); every
+        // zone stage past the handoff still refuses.
+        let assets = Assets {
+            client: "none".into(),
+            files: std::collections::BTreeMap::new(),
+        };
         let mut handler = |_| Ok(());
         let mut log = Events::new(&config, &mut handler);
-        let refused = Rof2
-            .login(&config, &CancellationToken::default(), None, &mut log)
+        let handoff = Rof2
+            .handoff(None, &[0; 130], &assets, &mut log)
             .err()
             .unwrap();
         assert_eq!(
-            refused.to_string(),
-            "this client generation cannot log in yet"
+            handoff.to_string(),
+            "this client generation cannot hand off between zones yet"
         );
+        let mut session = Silent;
+        let mut shield = None;
+        let mut checksums = Vec::new();
+        let admitted = Rof2
+            .admit(
+                "Tester",
+                512.0,
+                &mut Handshake {
+                    session: &mut session,
+                    shield: &mut shield,
+                    key: b"EXAMPLEKEY",
+                    checksums: &mut checksums,
+                    filters: &eq_network_game::filters::ServerFilters::default(),
+                    log: &mut log,
+                },
+            )
+            .err()
+            .unwrap();
+        assert_eq!(
+            admitted.to_string(),
+            "this client generation cannot enter a zone yet"
+        );
+        drop(log);
         let stop = AtomicBool::new(false);
         let zone = Rof2
             .connect_zone(SocketAddr::from(([127, 0, 0, 1], 9)), &stop)

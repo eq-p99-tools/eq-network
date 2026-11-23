@@ -4,11 +4,15 @@
 //! Titanium's is here. Everything else the zone says meanwhile goes to the
 //! features, which stage it for the admission.
 use super::{
-    bail, chat, cstr, ensure, feature::World, le32, put_string, servers::Shield, ClientEvent,
+    bail, cstr, ensure, feature::World, le32, put_string, servers::Shield, ClientEvent,
     ConnectionStage, ConnectionState, Context, Events, Result,
 };
 use crate::world::{PlayerState, Position};
-use eq_network_game::zones::{self, ZoneDescription};
+use eq_network_game::{
+    filters,
+    zones::{self, ZoneDescription},
+    GameDialect,
+};
 use eq_network_transport::{Application, Transport};
 
 mod eqmac;
@@ -41,6 +45,8 @@ pub(in crate::client) struct Handshake<'a, 'e> {
     pub(in crate::client) checksums: &'a mut [u8],
     /// The host's events.
     pub(in crate::client) log: &'a mut Events<'e>,
+    /// The character's server filters, sent at zone-in.
+    pub(in crate::client) filters: &'a eq_network_game::filters::ServerFilters,
 }
 
 /// One client generation's zone handshake in progress.
@@ -266,7 +272,8 @@ impl Admission for TitaniumAdmission {
                 self.reports = Reports::Answered;
             }
             EXPERIENCE_OPCODE if self.zone.is_some() => {
-                handshake.session.send(0x6563, &chat::server_filters())?;
+                let filters = filters::encode(GameDialect::Titanium, handshake.filters)?;
+                handshake.session.send(filters.opcode, &filters.body)?;
                 handshake.session.send(0x5e20, &[])?;
                 handshake.session.send(0x0c11, &1u32.to_le_bytes())?;
                 self.reports = Reports::Complete;
@@ -347,6 +354,7 @@ mod tests {
             key: &[],
             checksums: &mut checksums,
             log: &mut log,
+            filters: &eq_network_game::filters::ServerFilters::default(),
         };
         let mut admission = TitaniumAdmission::start("Tester", 512.0, &mut handshake).unwrap();
         let mut spawn = vec![0; 385];
@@ -468,6 +476,7 @@ mod tests {
             key: b"0123456789",
             checksums: &mut checksums,
             log: &mut log,
+            filters: &eq_network_game::filters::ServerFilters::default(),
         };
         let mut admission = TitaniumAdmission::start("Tester", 256.0, &mut handshake).unwrap();
         let mut spawn = vec![0; 385];
@@ -505,6 +514,7 @@ mod tests {
             key: &[],
             checksums: &mut checksums,
             log: &mut log,
+            filters: &eq_network_game::filters::ServerFilters::default(),
         };
         let mut admission = TitaniumAdmission::start("Tester", 512.0, &mut handshake).unwrap();
         let mut other = vec![0; 385];

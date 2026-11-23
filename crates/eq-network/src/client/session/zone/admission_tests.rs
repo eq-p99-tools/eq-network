@@ -21,6 +21,8 @@ struct Script {
     incoming: VecDeque<Application>,
     stop_when_drained: Option<CancellationToken>,
     sent: Vec<u16>,
+    /// The bodies of the server filter packets sent.
+    filters: Vec<Vec<u8>>,
     closed: bool,
     refuse_list_reply: bool,
 }
@@ -40,6 +42,7 @@ impl Script {
             incoming: VecDeque::new(),
             stop_when_drained: None,
             sent: Vec::new(),
+            filters: Vec::new(),
             closed: false,
             refuse_list_reply: false,
         };
@@ -77,6 +80,9 @@ impl Transport for Script {
     fn send(&mut self, opcode: u16, body: &[u8]) -> Result<()> {
         assert!(!self.closed);
         self.sent.push(opcode);
+        if opcode == eq_network_game::filters::TITANIUM_OPCODE {
+            self.filters.push(body.to_vec());
+        }
         if opcode == list_poll::OPCODE {
             assert_eq!(body, [3, 0, 0, 0, 0]);
             ensure!(!self.refuse_list_reply, "scripted list reply send failure");
@@ -133,6 +139,7 @@ fn context<'a>(
         commands,
         sysinfo_reported_at: Cell::new(0),
         answer_list_polls: Cell::new(false),
+        server_filters: std::cell::RefCell::default(),
         riding: std::sync::Arc::default(),
     }
 }
@@ -713,4 +720,41 @@ fn a_titanium_admission_without_an_inventory_admits_an_empty_one() {
         &inventory[..],
         [eq_network_game::inventory::InventoryUpdate::Snapshot(items)] if items.is_empty()
     ));
+}
+
+#[test]
+fn every_server_type_sends_the_characters_kept_filters_at_zone_in() {
+    // P99 takes no change mid-zone, but the set the character list kept
+    // still goes at the first zone-in (6.494e is only the mid-zone send).
+    use eq_network_game::filters::{FilterCategory, FilterMode, ServerFilters};
+    for protocol in [ServerProtocol::Project1999, ServerProtocol::EqEmu] {
+        let mut config = config();
+        config.protocol = protocol;
+        let identity = ClientIdentity::new("example-host", "example-user");
+        let credentials = credentials();
+        let stop = CancellationToken::default();
+        let context = context(&config, &identity, &credentials, &stop, None);
+        let mut kept = ServerFilters::default();
+        kept.set(FilterCategory::Shouts, FilterMode::Hide);
+        context.server_filters.replace(kept.clone());
+        let mut script = Script::titanium(1.0);
+        script.stop_when_drained = Some(stop.clone());
+        let mut handler = |_| Ok(());
+        assert!(matches!(
+            run_script(
+                &context,
+                &mut script,
+                &mut Events::new(&config, &mut handler)
+            )
+            .unwrap(),
+            ZoneExit::Stopped
+        ));
+        let expected =
+            eq_network_game::filters::encode(eq_network_game::GameDialect::Titanium, &kept)
+                .unwrap()
+                .body;
+        assert_eq!(script.filters, [expected], "{protocol:?}");
+        // Shouts are word 4: hidden is 0.
+        assert_eq!(script.filters[0][16..20], [0, 0, 0, 0]);
+    }
 }
