@@ -338,6 +338,7 @@ fn run_connected(
     // Channels are offered only where the world offered a chat server and
     // a link was opened from it (the server's own signal).
     setup.chat = Some(std::sync::Arc::clone(&context.chat)).filter(|link| link.opened());
+    setup.chat_pace = std::sync::Arc::clone(&context.chat_pace);
     world.riding = std::sync::Arc::clone(&context.riding);
     let mut features = Features::from_setup(server, &setup);
     let offered = features.capabilities();

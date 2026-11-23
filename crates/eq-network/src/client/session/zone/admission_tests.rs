@@ -149,6 +149,7 @@ fn context<'a>(
         server_filters: std::cell::RefCell::default(),
         riding: std::sync::Arc::default(),
         chat: std::sync::Arc::default(),
+        chat_pace: std::sync::Arc::default(),
     }
 }
 

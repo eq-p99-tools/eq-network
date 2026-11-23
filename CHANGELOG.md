@@ -5,6 +5,19 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Pace all chat a host asks for (6.523). Every `SendChat`,
+  `SendChatInAdmission` and `ChatChannel` goes through one pace that spans
+  zones: at most 10 lines in any 5 s, and at most 12 shout, auction,
+  out-of-character, tell and channel messages and chat server commands in
+  any 60 s, below stock `EQEmu`'s disconnect at more than 20 a minute. Only
+  `join`, `leave`, `leaveall`, `list`, `listall` and `announce`, which reach
+  no one else, are left out of that count; an unknown word is counted. Both bounds are inferred
+  (R49-17) and only ever make the client slower. A paced line is refused,
+  not queued and not counted; zone chat is told by the new
+  `WorldEvent::ChatRefused`, channel commands by `ChatChannelRefused`, with
+  the whole seconds to wait and never the line. The chat link's own login
+  is not counted. **Breaking:** `WorldEvent::ChatRefused` is a new variant.
+
 - Read RoF2's casting, stuns and illusions as stock `EQEmu` sends them,
   labelled inferred for RoF2 (6.522). The new `rof2_casting` module reads
   `OP_BeginCast` (0x318f, 10 bytes, the spell in 32 bits refused past 16),
