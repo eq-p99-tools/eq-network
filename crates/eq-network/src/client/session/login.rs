@@ -474,7 +474,7 @@ fn login_credentials(body: &[u8]) -> Result<Credentials> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::*;
     use crate::world::WorldEvent;
     use eq_network_login::crypto::des_encrypt;
@@ -643,17 +643,17 @@ mod tests {
     }
 
     /// The server's side of the transport, for a login over a real socket.
-    mod peer {
+    pub(in crate::client::session) mod peer {
         use std::net::{SocketAddr, UdpSocket};
 
-        pub(super) fn receive(socket: &UdpSocket) -> (Vec<u8>, SocketAddr) {
+        pub(in crate::client::session) fn receive(socket: &UdpSocket) -> (Vec<u8>, SocketAddr) {
             let mut buffer = [0; 2048];
             let (length, address) = socket.recv_from(&mut buffer).unwrap();
             (buffer[..length].to_vec(), address)
         }
 
         /// Answers the client's session request with CRC key 1234.
-        pub(super) fn negotiate(socket: &UdpSocket) -> (SocketAddr, Vec<u8>) {
+        pub(in crate::client::session) fn negotiate(socket: &UdpSocket) -> (SocketAddr, Vec<u8>) {
             let (request, address) = receive(socket);
             assert_eq!(&request[..6], &[0, 1, 0, 0, 0, 2]);
             let id = request[6..10].to_vec();
@@ -666,7 +666,11 @@ mod tests {
             (address, id)
         }
 
-        pub(super) fn application(sequence: u16, opcode: u16, body: &[u8]) -> Vec<u8> {
+        pub(in crate::client::session) fn application(
+            sequence: u16,
+            opcode: u16,
+            body: &[u8],
+        ) -> Vec<u8> {
             let mut packet = vec![0, 9];
             packet.extend(sequence.to_be_bytes());
             packet.extend(opcode.to_le_bytes());
@@ -680,7 +684,10 @@ mod tests {
 
         /// The client's next packet that starts with `prefix`, skipping
         /// acknowledgements and retransmissions.
-        pub(super) fn next_starting(socket: &UdpSocket, prefix: &[u8]) -> Vec<u8> {
+        pub(in crate::client::session) fn next_starting(
+            socket: &UdpSocket,
+            prefix: &[u8],
+        ) -> Vec<u8> {
             loop {
                 let (packet, _) = receive(socket);
                 if packet.starts_with(prefix) {

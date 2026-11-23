@@ -85,9 +85,13 @@ unreachable because validation refuses the generation:
   (`LoginOpcodes::ROF2`), skipping the expansion list newer clients may be sent. It is tested
   over a socket inside the crate.
 - The character list (`characters::decode` for `Rof2`) and the 488-byte world login info
-  (`world_login::rof2`). The world stage that sends and reads them is not built: `Rof2::world()`
-  still refuses. The session keeps only names from a `RoF2` list (`without_look`), since the
-  layout is not checked against the client.
+  (`world_login::rof2`). The session keeps only names from a `RoF2` list (`without_look`), since
+  the layout is not checked against the client.
+- The world stage against stock `EQEmu` (`world::rof2`, 6.499): the login info, the list, the
+  entry (`OP_EnterWorld`) and the handoff (`OP_ZoneServerInfo`) or the zone-unavailable notice.
+  Between zones it enters once the world's post-entry message arrives. It sends nothing stock
+  `EQEmu` ignores; what the `RoF2` program sends there is a read still owed. The handoff, zone
+  connection and admission still refuse.
 
 Server-software checks follow the same rule. A comparison such as
 `protocol == ServerProtocol::EqEmu` would silently answer "no" for a second `EQEmu` server type.
