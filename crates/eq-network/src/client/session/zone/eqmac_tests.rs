@@ -116,6 +116,7 @@ fn dll_version_precedes_zone_ready_and_answers_requests() {
                 riding: std::sync::Arc::default(),
                 chat: std::sync::Arc::default(),
                 chat_pace: std::sync::Arc::default(),
+                world_ruleset: std::cell::Cell::new(None),
             };
             run(
                 &context,
