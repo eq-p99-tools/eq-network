@@ -205,7 +205,8 @@ fn each_message_refuses_what_titaniums_refuses() {
             "{opcode:#06x}"
         );
     }
-    // Any word but 0 is taken, as Titanium's program reads it (R49-10).
+    // Any word but 0 is taken, as Titanium's program reads it (R49-10);
+    // for RoF2 that rule is inferred from the Titanium read.
     assert!(read(
         SURNAME_OPCODE,
         &surname_body("Testplayer", 2, "Testsurname")
