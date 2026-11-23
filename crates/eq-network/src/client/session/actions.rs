@@ -382,7 +382,9 @@ pub(super) fn refuse_naming(
     log: &mut Events<'_>,
 ) -> Result<()> {
     if let Some(mut event) = refusal(command, reason) {
-        if let WorldEvent::RaidRefused { arguments, .. } = &mut event {
+        if let WorldEvent::RaidRefused { arguments, .. }
+        | WorldEvent::TrainingRefused { arguments, .. } = &mut event
+        {
             arguments.extend_from_slice(names);
         }
         if let WorldEvent::ConsumeRefused { string_id, .. }
@@ -396,7 +398,8 @@ pub(super) fn refuse_naming(
         | WorldEvent::ListingRefused { string_id, .. }
         | WorldEvent::SocialRefused { string_id, .. }
         | WorldEvent::RaidRefused { string_id, .. }
-        | WorldEvent::AbilityRefused { string_id, .. } = &mut event
+        | WorldEvent::AbilityRefused { string_id, .. }
+        | WorldEvent::TrainingRefused { string_id, .. } = &mut event
         {
             *string_id = official;
         }
@@ -706,7 +709,12 @@ fn reasoned(command: &ClientCommand, session_id: u64, reason: String) -> Option<
             reason,
             string_id: None,
         },
-        ClientCommand::Training { .. } => WorldEvent::TrainingRefused { session_id, reason },
+        ClientCommand::Training { .. } => WorldEvent::TrainingRefused {
+            session_id,
+            reason,
+            string_id: None,
+            arguments: Vec::new(),
+        },
         ClientCommand::AnswerResurrection { offer_id, .. } => WorldEvent::ResurrectionRefused {
             offer_id: *offer_id,
             session_id,

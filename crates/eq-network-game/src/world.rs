@@ -2019,6 +2019,14 @@ pub enum WorldEvent {
         session_id: u64,
         /// Why not.
         reason: String,
+        /// The official client's own words for this refusal, as a string ID
+        /// of its installed strings, for a host that has them; `reason` says
+        /// the same in this library's words.
+        string_id: Option<u32>,
+        /// What the official words name, in order: the guildmaster's name,
+        /// or for the `EQMac` program's maxed-language line (0x327e) the
+        /// language's number, which the host names from its own list.
+        arguments: Vec<String>,
     },
     /// How many practice points the player has left.
     PracticePoints(u32),
