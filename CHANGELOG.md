@@ -5,6 +5,22 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Read the task journal stock `EQEmu` sends a Titanium player (gap list
+  section 5, checklist 6.546), from source and not yet checked live. The
+  new `tasks` module reads `OP_TaskDescription` (0x5ef7), `OP_TaskActivity`
+  (0x682d), `OP_TaskActivityComplete` (0x54eb), `OP_CompletedTasks`
+  (0x76a2) and the server's `OP_CancelTask` (0x3ba8), refusing a record
+  whole rather than cutting it. A session journal, offered by stock
+  `EQEmu` only, keeps the task and 19 quests per admission and tells the
+  host five new events for its ignore arms: `WorldEvent::TaskDescribed`,
+  `TaskStepUpdated`, `TaskConcluded`, `TaskRemoved` and `CompletedTasks`.
+  A step for no entry of its task is told as a gap. The five coverage rows
+  are read, the description's crystal parts and three step words partly;
+  their gaps keep no sample, since the bodies carry the player's quest
+  text (new `sent_private` coverage rows). P99, TAKP, Quarm and RoF2 keep
+  no journal; RoF2's coverage is unchanged. Nothing is sent yet.
+  **Breaking:** `Message::Journal` and the five `WorldEvent` variants.
+
 - Read RoF2's rolls, assists, yells for help and effects as stock `EQEmu`
   sends them, labelled inferred for RoF2 (6.541). The new `rof2_socials`
   module reads `OP_RandomReply` (0x106b), `OP_Assist` (0x4478),

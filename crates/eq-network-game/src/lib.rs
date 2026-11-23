@@ -152,6 +152,8 @@ pub mod stats;
 pub mod sysinfo;
 /// The player's target as the server sets it, and whom that target targets.
 pub mod targets;
+/// The task journal stock `EQEmu` keeps for a Titanium player.
+pub mod tasks;
 /// The server's regeneration tick and how often it comes.
 pub mod ticks;
 /// Tracking: the server's list and following a spawn.
