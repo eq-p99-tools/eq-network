@@ -208,6 +208,92 @@ fn a_world_container_takes_from_the_cursor_and_gives_back_whole_while_open() {
 }
 
 #[test]
+fn mac_world_moves_are_only_those_quarm_accepts() {
+    let open = InventoryActor {
+        world_container: true,
+        ..actor()
+    };
+    let mut other = item(30, None, 0);
+    other.details.id = 43;
+    for rules in [MoveRules::Takp, MoveRules::Quarm] {
+        let plan = |inventory: &Inventory, from, to, actor| {
+            inventory.plan_move_for(rules, &request(inventory, from, to), actor)
+        };
+        // In from the cursor, while the container is open.
+        let inventory = state(vec![
+            item(30, None, 0),
+            item(22, None, 2),
+            item(251, None, 0),
+        ]);
+        assert!(plan(&inventory, 30, 4000, actor()).is_err());
+        assert!(plan(&inventory, 30, 4000, open).is_ok());
+        for from in [22, 251] {
+            assert!(plan(&inventory, from, 4000, open).is_err());
+        }
+        // A cursor item over another in a place swaps, as both servers'
+        // `SwapItem` do: the container's item comes onto the cursor.
+        let swapping = state(vec![other.clone(), item(4001, None, 0)]);
+        let Ok(InventoryUpdate::Prediction(items)) = plan(&swapping, 30, 4001, open) else {
+            panic!("a swap with the cursor is accepted");
+        };
+        let at = |slot| items.iter().find(|item| item.slot == InventorySlot(slot));
+        assert_eq!(at(4001).map(|item| item.details.id), Some(43));
+        assert_eq!(at(30).map(|item| item.details.id), Some(42));
+        // The same stack on the cursor would be merged by the servers whole,
+        // whatever count the move names: refused rather than predicted.
+        let stacking = state(vec![item(30, Some(3), 0), item(4001, Some(2), 0)]);
+        assert!(plan(&stacking, 30, 4001, open).is_err());
+        let mut part = request(&stacking, 30, 4001);
+        part.quantity = MoveQuantity::Count(NonZeroU32::new(1).unwrap());
+        assert!(stacking.plan_move_for(rules, &part, open).is_err());
+        let mut part = request(&inventory, 30, 4002);
+        part.quantity = MoveQuantity::Count(NonZeroU32::new(1).unwrap());
+        assert!(inventory.plan_move_for(rules, &part, open).is_err());
+        // Out whole onto the empty cursor only: Quarm also takes an empty
+        // carried slot, which the `EQMac` program's cursor moves never name.
+        let held = state(vec![item(4001, None, 0), item(22, None, 2)]);
+        assert!(plan(&held, 4001, 30, open).is_ok());
+        assert!(plan(&held, 4001, 30, actor()).is_err());
+        for to in [23, 252, 2000, 3000, 4002] {
+            assert!(plan(&held, 4001, to, open).is_err());
+        }
+        assert!(plan(&swapping, 4001, 30, open).is_err());
+    }
+}
+
+#[test]
+fn a_lore_refused_pickup_leaves_the_item_in_the_container() {
+    let open = InventoryActor {
+        world_container: true,
+        ..actor()
+    };
+    for count in [None, Some(3)] {
+        let mut inventory = state(vec![item(4001, count, 0)]);
+        let before = inventory.items[&InventorySlot(4001)].clone();
+        let update = inventory
+            .plan_move_for(MoveRules::Quarm, &request(&inventory, 4001, 30), open)
+            .unwrap();
+        inventory.apply(update);
+        assert!(inventory.items.contains_key(&InventorySlot(30)));
+        // The server's delete of the destination, with the duplicate-lore
+        // line: the item is still in its place.
+        inventory.apply(InventoryUpdate::Remove(InventorySlot(30)));
+        assert_eq!(inventory.items.get(&InventorySlot(4001)), Some(&before));
+        assert!(!inventory.items.contains_key(&InventorySlot(30)));
+        assert!(!inventory.predicted() && !inventory.stale());
+    }
+    // A delete of an item that came from the player's own pack is only a
+    // delete.
+    let mut carried = state(vec![item(22, None, 0)]);
+    let update = carried
+        .plan_move_for(MoveRules::Quarm, &request(&carried, 22, 30), actor())
+        .unwrap();
+    carried.apply(update);
+    carried.apply(InventoryUpdate::Remove(InventorySlot(30)));
+    assert!(carried.items.is_empty());
+}
+
+#[test]
 fn trade_slots_take_only_what_servers_accept_while_a_window_is_open() {
     let giving = InventoryActor {
         trade_slots: 4,

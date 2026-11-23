@@ -5,6 +5,24 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Offer `Tradeskills` and `WorldContainers` on Quarm and TAKP (6.598), from
+  their own handlers (Quarm fc75fcf, TAKP 44afcbf).
+  - New: `tradeskills::{EQMAC_COMBINE_OPCODE, eqmac_combine, eqmac_decode}`,
+    `objects::eqmac::{ACTION_OPCODE, close}` and `Message::ContainerReleased`.
+    The Mac inventory reader now takes `OP_ObjectItemPacket` (places 0 to 9
+    as 4000 to 4009) and `OP_ClearObject`.
+  - The 32-byte combine names only the container's slot, the one field both
+    servers read; the rest is zero (open row 6.598a).
+  - A Mac close leaves the container's items in it: the server's empty
+    answer ends the use and takes the places out of view.
+  - Mac moves into a world container go whole from the cursor, and out only
+    onto the empty cursor, a rule Quarm and TAKP both accept. A pickup the
+    server refuses for lore stays in the container on every server.
+  - A Mac combine refused without a reset frees the player after 10 s
+    (open row 6.598c). The session closes the container when the player dies
+    (open row 6.598d).
+  - Source-derived, not live.
+
 - Offer `Training` on Quarm and TAKP (6.597), from their own handlers (Quarm
   fc75fcf, TAKP 44afcbf).
   - New: `training::{EQMAC_OFFER_OPCODE, EQMAC_TRAIN_OPCODE, EQMAC_END_OPCODE,

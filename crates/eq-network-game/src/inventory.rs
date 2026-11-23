@@ -761,6 +761,20 @@ impl Inventory {
     }
 
     fn change(&mut self, update: InventoryUpdate) {
+        let returned = match update {
+            InventoryUpdate::Remove(slot) => self.refused_station_pickup(slot),
+            _ => None,
+        };
+        self.follow(update);
+        if let Some(item) = returned {
+            // The refused item never left the container.
+            self.unconfirmed.remove(&item.slot);
+            self.items.insert(item.slot, item);
+            self.resolved();
+        }
+    }
+
+    fn follow(&mut self, update: InventoryUpdate) {
         self.observe_stack_weight(&update);
         let arrival = self.rebase_cursor_arrival(&update);
         self.observe_rebased_weight(&update, arrival);
@@ -863,6 +877,31 @@ impl Inventory {
             }
             InventoryUpdate::Settled => self.settle_predictions(),
         }
+    }
+
+    /// The item a server's delete takes back from an unconfirmed pickup out
+    /// of a world container, still in its place.
+    ///
+    /// A pickup that would break a lore rule is refused by every server's
+    /// `Client::SwapItem` with a delete of the destination and the
+    /// duplicate-lore line; the item stays in the container (6.598 C7). This
+    /// applies only when the deleted slot was empty before an unconfirmed
+    /// prediction, now holds exactly what one unconfirmed world place held
+    /// before, and that place is empty.
+    fn refused_station_pickup(&self, slot: InventorySlot) -> Option<InventoryItem> {
+        if slot.is_world() || !matches!(self.unconfirmed.get(&slot), Some(None)) {
+            return None;
+        }
+        let held = self.items.get(&slot)?;
+        let mut places = self.unconfirmed.iter().filter_map(|(place, before)| {
+            before.as_ref().filter(|before| {
+                place.is_world()
+                    && !self.items.contains_key(place)
+                    && prediction::same_item(before, held)
+            })
+        });
+        let item = places.next()?;
+        places.next().is_none().then(|| item.clone())
     }
 
     fn settle_predictions(&mut self) {

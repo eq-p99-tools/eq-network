@@ -3296,6 +3296,7 @@ mod tests {
                 Capability::Training,
                 Capability::Resurrection,
                 Capability::Reading,
+                Capability::Tradeskills,
                 Capability::Grouping,
                 Capability::Listing,
                 Capability::Rolling,
@@ -3306,6 +3307,7 @@ mod tests {
                 Capability::Jumping,
                 Capability::Posture,
                 Capability::Meals,
+                Capability::WorldContainers,
                 Capability::GameplayDepartures,
                 Capability::FriendsWho,
                 Capability::Splitting,
@@ -3339,6 +3341,7 @@ mod tests {
                 Capability::Training,
                 Capability::Resurrection,
                 Capability::Reading,
+                Capability::Tradeskills,
                 Capability::Grouping,
                 Capability::Listing,
                 Capability::Rolling,
@@ -3350,6 +3353,7 @@ mod tests {
                 Capability::Jumping,
                 Capability::Posture,
                 Capability::Meals,
+                Capability::WorldContainers,
                 Capability::GameplayDepartures,
                 Capability::FriendsWho,
                 Capability::Splitting,
@@ -3694,6 +3698,9 @@ mod pet_tests;
 
 #[cfg(test)]
 mod manual_combine_tests;
+
+#[cfg(test)]
+mod eqmac_tradeskill_tests;
 
 #[cfg(test)]
 mod terminal_tests;
