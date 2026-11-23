@@ -869,3 +869,203 @@ fn rof2s_zone_decoder_makes_each_record_one_spawn_and_a_refused_one_unreadable()
     // Nothing else is read yet.
     assert!(rof2(PROFILE_OPCODE, &profile_body(&Sample::default()).bytes).is_empty());
 }
+
+use super::samples::{despawn_body, update_body};
+use crate::world::WorldEvent;
+
+/// An update's position, velocity and forward input.
+fn moved(packed: Packed) -> (Position, [f32; 3], f32) {
+    match position(&update_body(9, 0, &packed)).unwrap() {
+        WorldEvent::Position {
+            spawn_id: 9,
+            position,
+            velocity,
+            forward,
+        } => (position, velocity, forward),
+        other => panic!("{other:?}"),
+    }
+}
+
+#[test]
+fn an_update_reads_its_position_from_the_records_table() {
+    let at = |x: f32, y: f32, z: f32, heading: f32| Position { x, y, z, heading };
+    // Each coordinate alone, so a swapped pair fails.
+    assert_eq!(
+        moved(Packed {
+            x: 8,
+            ..Packed::default()
+        })
+        .0,
+        at(1.0, 0.0, 0.0, 0.0)
+    );
+    assert_eq!(
+        moved(Packed {
+            y: 8,
+            ..Packed::default()
+        })
+        .0,
+        at(0.0, 1.0, 0.0, 0.0)
+    );
+    assert_eq!(
+        moved(Packed {
+            z: 8,
+            ..Packed::default()
+        })
+        .0,
+        at(0.0, 0.0, 1.0, 0.0)
+    );
+    assert_eq!(
+        moved(Packed {
+            heading: 4,
+            ..Packed::default()
+        })
+        .0,
+        at(0.0, 0.0, 0.0, 1.0)
+    );
+    // Negatives and both 19-bit extremes.
+    let low = -(1 << 18);
+    let high = (1 << 18) - 1;
+    assert_eq!(
+        moved(Packed {
+            x: low,
+            y: high,
+            z: -1,
+            ..Packed::default()
+        })
+        .0,
+        at(-32768.0, 32767.875, -0.125, 0.0)
+    );
+    // The heading is unsigned 12 bits.
+    assert!(
+        (moved(Packed {
+            heading: 0xfff,
+            ..Packed::default()
+        })
+        .0
+        .heading
+            - 1023.75)
+            .abs()
+            < f32::EPSILON
+    );
+    // The first 12 bits, the delta heading and the vehicle id change
+    // nothing.
+    let unread = Packed {
+        angle: 0xfff,
+        delta_heading: -1,
+        ..Packed::default()
+    };
+    assert_eq!(moved(unread), (at(0.0, 0.0, 0.0, 0.0), [0.0; 3], 0.0));
+    let aboard = update_body(9, 0xffff, &Packed::default());
+    assert_eq!(
+        position(&aboard).unwrap(),
+        position(&update_body(9, 0, &Packed::default())).unwrap()
+    );
+}
+
+#[test]
+fn an_updates_motion_is_signed_and_on_titaniums_scales() {
+    let unit = crate::world::DELTA_UNITS_PER_SECOND;
+    // Each delta alone, at both of its 13-bit extremes.
+    for (value, read) in [(1, 1.0), (-1, -1.0), (4095, 4095.0), (-4096, -4096.0)] {
+        assert_eq!(
+            moved(Packed {
+                delta_x: value,
+                ..Packed::default()
+            })
+            .1,
+            [read * unit, 0.0, 0.0]
+        );
+        assert_eq!(
+            moved(Packed {
+                delta_y: value,
+                ..Packed::default()
+            })
+            .1,
+            [0.0, read * unit, 0.0]
+        );
+        assert_eq!(
+            moved(Packed {
+                delta_z: value,
+                ..Packed::default()
+            })
+            .1,
+            [0.0, 0.0, read * unit]
+        );
+    }
+    // The animation, at both of its 10-bit extremes.
+    let input = crate::world::ANIMATION_INPUT;
+    for (value, read) in [(1, 1.0), (-1, -1.0), (511, 511.0), (-512, -512.0)] {
+        let (_, velocity, forward) = moved(Packed {
+            animation: value,
+            ..Packed::default()
+        });
+        assert_eq!((velocity, forward), ([0.0; 3], read * input));
+    }
+    // Zero is exactly zero.
+    let (_, velocity, forward) = moved(Packed::default());
+    assert!(velocity.iter().all(|value| value.to_bits() == 0) && forward.to_bits() == 0);
+}
+
+#[test]
+fn an_update_and_a_removal_refuse_what_they_cannot_trust() {
+    let update = update_body(
+        9,
+        0,
+        &Packed {
+            x: 8,
+            ..Packed::default()
+        },
+    );
+    assert_eq!(update.len(), 24);
+    let removal = despawn_body(9);
+    assert_eq!(despawn(&removal).unwrap(), WorldEvent::Despawn(9));
+    for (what, body, read) in [
+        (
+            "update",
+            &update,
+            position as fn(&[u8]) -> Result<WorldEvent>,
+        ),
+        ("removal", &removal, despawn),
+    ] {
+        for end in 0..body.len() {
+            assert!(read(&body[..end]).is_err(), "{what} cut at {end}");
+        }
+        let mut long = body.clone();
+        long.push(0);
+        assert!(read(&long).is_err(), "{what} with a trailing byte");
+    }
+    assert!(position(&update_body(0, 0, &Packed::default())).is_err());
+    for id in [0, 0x1_0000, u32::MAX] {
+        assert!(despawn(&despawn_body(id)).is_err(), "{id}");
+    }
+    // The removal's last byte is the encoder's constant, and not read.
+    let mut zero = despawn_body(9);
+    zero[4] = 0;
+    assert_eq!(despawn(&zero).unwrap(), WorldEvent::Despawn(9));
+}
+
+#[test]
+fn rof2s_zone_decoder_reads_movement_and_removal_as_one_event_each() {
+    use crate::message::{rof2, Message, Part};
+    let update = update_body(9, 0, &Packed::default());
+    assert!(matches!(
+        rof2(POSITION_OPCODE, &update).as_slice(),
+        [Message::Event(WorldEvent::Position { spawn_id: 9, .. })]
+    ));
+    assert!(matches!(
+        rof2(DESPAWN_OPCODE, &despawn_body(9)).as_slice(),
+        [Message::Event(WorldEvent::Despawn(9))]
+    ));
+    for opcode in [POSITION_OPCODE, DESPAWN_OPCODE] {
+        assert!(matches!(
+            rof2(opcode, &[0; 3]).as_slice(),
+            [Message::Unreadable {
+                part: Part::World,
+                ..
+            }]
+        ));
+    }
+    // Stock EQEmu sends neither OP_MobUpdate nor OP_NPCMoveUpdate.
+    assert!(rof2(0x2c84, &[0; 24]).is_empty());
+    assert!(rof2(0x5892, &[0; 24]).is_empty());
+}

@@ -127,9 +127,16 @@ impl fmt::Display for Part {
     }
 }
 
-/// What one `RoF2` zone packet says. Only its spawn records are read yet,
-/// each one spawn (6.510); a record the walker refuses is unreadable, told
-/// by its opcode and length only.
+/// The numbers [`rof2`] reads, for the session's coverage table.
+pub const ROF2_READS: [u16; 3] = [
+    crate::rof2_player::SPAWN_OPCODE,
+    crate::rof2_player::POSITION_OPCODE,
+    crate::rof2_player::DESPAWN_OPCODE,
+];
+
+/// What one `RoF2` zone packet says. Only its spawn records (6.510) and
+/// its spawns' movement and removal (6.514) are read yet; a body a reader
+/// refuses is unreadable, told by its opcode and length only.
 #[must_use]
 pub fn rof2(opcode: u16, body: &[u8]) -> Vec<Message> {
     match opcode {
@@ -137,6 +144,10 @@ pub fn rof2(opcode: u16, body: &[u8]) -> Vec<Message> {
             |error| unreadable(Part::World, &error),
             |spawn| Message::Event(WorldEvent::Spawns(vec![spawn])),
         )],
+        crate::rof2_player::POSITION_OPCODE => vec![crate::rof2_player::position(body)
+            .map_or_else(|error| unreadable(Part::World, &error), Message::Event)],
+        crate::rof2_player::DESPAWN_OPCODE => vec![crate::rof2_player::despawn(body)
+            .map_or_else(|error| unreadable(Part::World, &error), Message::Event)],
         _ => Vec::new(),
     }
 }
