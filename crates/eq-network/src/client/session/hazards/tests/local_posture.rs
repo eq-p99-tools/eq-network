@@ -458,3 +458,32 @@ fn zone_200_lava_goes_as_its_own_type_with_its_record() {
     assert_eq!(outcome.sent, titanium_report(Hazard::ZoneHeat, 90));
     assert_eq!(outcome.sent[0].body[22], 244);
 }
+
+#[test]
+fn velious_waters_cold_goes_as_type_246_with_its_record_and_only_where_taken() {
+    let mut world = seated_world(PostureState::Standing, false);
+    let mut feature = Hazards::new(
+        &[
+            Hazard::Falling,
+            Hazard::Drowning,
+            Hazard::Lava,
+            Hazard::Freezing,
+        ],
+        false,
+    );
+    let outcome = testing::run(|out| -> Result<()> {
+        enter(&feature, &world, out)?;
+        feature.handle(&liquid_report(LiquidHazard::Cold, 40), &mut world, out)
+    });
+    outcome.result.unwrap();
+    assert_eq!(outcome.sent, titanium_report(Hazard::Freezing, 40));
+    assert_eq!(outcome.sent[0].body[22], 246);
+    // A session that doesn't take cold refuses it and sends nothing.
+    let mut world = seated_world(PostureState::Standing, false);
+    let mut feature = Hazards::new(&[Hazard::Falling, Hazard::Drowning, Hazard::Lava], false);
+    let outcome = testing::run(|out| -> Result<()> {
+        enter(&feature, &world, out)?;
+        feature.handle(&liquid_report(LiquidHazard::Cold, 40), &mut world, out)
+    });
+    assert!(outcome.sent.is_empty(), "{:?}", outcome.sent);
+}

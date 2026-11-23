@@ -48,6 +48,7 @@ mod reading;
 mod reports;
 mod resurrection;
 mod riders;
+mod saves;
 pub(super) mod server_filters;
 mod servers;
 mod shielding;

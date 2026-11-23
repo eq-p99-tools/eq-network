@@ -18,6 +18,7 @@ use eq_network_game::{
     message::Message,
     request::Request,
     world::WorldEvent,
+    zoning,
 };
 use std::time::{Duration, Instant};
 
@@ -181,7 +182,16 @@ impl Feature for Listing {
                 session_id: world.session_id,
                 change,
             }
-        }))
+        }))?;
+        // The Titanium program's `/roleplay` and `/anonymous` handlers save
+        // (0x46a3fa, 0x4726f1; read R49-22g, 6.615). That the save follows
+        // the appearance update is inferred.
+        let reason = match command {
+            ClientCommand::ToggleRoleplay { .. } => zoning::save_reason::ROLEPLAY,
+            ClientCommand::ToggleAnonymous { .. } => zoning::save_reason::ANONYMOUS,
+            _ => return Ok(()),
+        };
+        super::saves::event(world, reason, out)
     }
 
     fn observe(
@@ -307,6 +317,16 @@ impl Feature for Looking {
 }
 
 #[cfg(test)]
+impl Listing {
+    /// Lets the server take another change of each kind.
+    pub(super) fn settled_for_tests(&mut self) {
+        let before = Instant::now().checked_sub(SETTLING * 2);
+        self.away_sent = before;
+        self.anonymity_sent = before;
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::super::{feature::testing, ClientEvent};
     use super::*;
@@ -335,9 +355,7 @@ mod tests {
 
     /// Lets the server take another change of each kind.
     fn settle(feature: &mut Listing) {
-        let before = Instant::now().checked_sub(SETTLING * 2);
-        feature.away_sent = before;
-        feature.anonymity_sent = before;
+        feature.settled_for_tests();
     }
 
     /// What one `/lfg` sent and the changes it told.

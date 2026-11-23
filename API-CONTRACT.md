@@ -26,8 +26,13 @@ program's own line (R49-3 e). `record` says whether the damage record
 followed, so a front end can expect its echo.
 
 Zone 200's lava is `LiquidHazard::ZoneHeat`, sent as type 244 under
-`LavaHeat`. `Hazard::Freezing` now encodes as Titanium type 246. No host
-sends it yet, since cold is unwired until R49-26.
+`LavaHeat`. Velious water's cold is `LiquidHazard::Cold`, sent as
+`Hazard::Freezing`, Titanium type 246, under the new `Capability::ColdWater`.
+It's offered on every Titanium session and shares the feet tick with lava
+(reads R49-3 b and R49-26: region kind 8, `VW`, at the origin). The host
+works out the amount, 50 − cold resist / 3 with a floor of 10. TAKP and Quarm
+don't offer it until a Mac read. **Breaking:** `LiquidHazard::Cold` and
+`Capability::ColdWater` on exhaustive enums; `Capability::ALL` grows to 91.
 
 **Breaking:**
 - `WorldEvent::HazardReported`;
@@ -949,6 +954,24 @@ listener continues on its current connection while the transport remains
 active. The progress enum is non-exhaustive, and its new serialized value is
 `recording`. Errors in the handshake itself continue to follow the existing
 session error policy.
+
+## Titanium event saves
+
+On stock `EQEmu` Titanium, four existing actions now put one more packet on
+the wire, after their own: `ClientCommand::ToggleRoleplay` and
+`ClientCommand::ToggleAnonymous` (after the appearance update), the player's
+`ClientCommand::Shop` close of an open merchant's window (after the close),
+and the server's end of an open loot (`LootUpdate::Closed`). Each sends
+`OP_Save` (0x736b, 192 bytes): the zone save's body with the event's reason
+at +4 (`zoning::save_reason`: 0x0a, 0x0b, 0x14, 0x15), carrying the own
+spawn's place at that moment, the heading cut to a whole number. Only stock
+`EQEmu` sends it. P99 is built and held off until an official-client capture
+there shows it; Quarm, TAKP and RoF2 send none, and `Request::EventSave` is
+refused on `EQMac`. It is withheld, with a diagnostic and nothing sent, when
+the player has no own spawn or place yet, is dead, or has a merchant's window
+or a trade open. A refused or paced toggle, and a loot close with no loot
+open, send no save. Stock `EQEmu` saves the character on any `OP_Save` and
+reads nothing in the body. Reads R49-22g and R49-22h, checklist 6.615.
 
 ## Modern session termination
 

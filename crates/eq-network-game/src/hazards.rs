@@ -66,6 +66,16 @@ pub struct TitaniumEnvironment {
     ///
     /// [encoder]: https://github.com/EQEmu/EQEmu/blob/4aceae18b94ffaafc08e2b17bc41cd72c77f795d/common/patches/titanium.cpp#L1600-L1606
     pub base_fire_resistance: i32,
+    /// Profile cold resistance before racial, class and active modifiers.
+    /// Titanium `eqgame.exe`'s profile routine copies the dword at byte
+    /// 12872 (0x4b9741), and its base getter 0x4188ef reads it for the
+    /// cold total 0x41897d (read R49-3c). The cited encoder's constant
+    /// block puts 1050 there, so on stock `EQEmu` the cold total is far
+    /// past 120 and every cold tick is the floor of 10: that is what the
+    /// program reports with the same profile, so it's parity, not a fault.
+    /// This field retains the received value. Server-side resist is
+    /// separate.
+    pub base_cold_resistance: i32,
     /// A rank is present in the profile's alternate advancement array.
     pub has_alternate_advancement: bool,
 }
@@ -81,6 +91,10 @@ pub enum LiquidHazard {
     /// reports as its own type and works out from disease resist (read
     /// R49-3 b).
     ZoneHeat,
+    /// The body origin was in Velious water (region kind 8, `VW`), which the
+    /// program's liquid routine reports as cold, type 246, by the same
+    /// tick as lava (reads R49-3 b and R49-26).
+    Cold,
 }
 
 /// The session view used when the host sampled a liquid hazard.
@@ -99,6 +113,7 @@ pub(crate) fn titanium_environment(profile: &[u8]) -> TitaniumEnvironment {
     TitaniumEnvironment {
         zone_id: u16::from_le_bytes([profile[13276], profile[13277]]),
         base_fire_resistance: i32::from_le_bytes(profile[12876..12880].try_into().unwrap()),
+        base_cold_resistance: i32::from_le_bytes(profile[12872..12876].try_into().unwrap()),
         has_alternate_advancement: profile[304..2224]
             .as_chunks::<8>()
             .0
@@ -355,12 +370,15 @@ mod tests {
         let mut profile = vec![0; 19592];
         assert_eq!(titanium_environment(&profile).base_fire_resistance, 0);
         profile[12876..12880].copy_from_slice(&25i32.to_le_bytes());
+        // The cited encoder's block puts 1050 in the cold dword.
+        profile[12872..12876].copy_from_slice(&1050i32.to_le_bytes());
         profile[13276..13278].copy_from_slice(&27u16.to_le_bytes());
         assert_eq!(
             titanium_environment(&profile),
             TitaniumEnvironment {
                 zone_id: 27,
                 base_fire_resistance: 25,
+                base_cold_resistance: 1050,
                 has_alternate_advancement: false,
             }
         );
