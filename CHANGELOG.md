@@ -5,6 +5,20 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Stock EQEmu Titanium takes the program's event saves (`OP_Save`, 0x736b;
+  read R49-22g and R49-22h, checklist 6.615 slice 1): the zone save's
+  192-byte body with the event's reason at +4, carrying where the player
+  is at that moment (heading cut to a whole number). Sent after `/roleplay`
+  (0x0a) and `/anonymous` (0x0b), the player's close of a merchant's window
+  (0x14; which window the program's site is, is inferred) and the server's
+  end of an open loot (0x15). None while the player is dead or has no
+  spawn, or while a merchant's window or a trade is open; the program's
+  other gates are unread. P99, the Mac-era types and RoF2 send none: P99
+  waits on an official capture showing 0x736b.
+  - **Breaking:** `Request::EventSave { save, reason }`, with
+    `zoning::titanium_event_save`, `zoning::EVENT_SAVE_OPCODE` and
+    `zoning::save_reason`. `Request::EventSave` is refused on `EQMac`.
+
 - The chat server login and link follow the Titanium program (read R49-12 a,
   checklist 6.616).
   - **The login's bytes change on the wire:** after the key and its NUL
