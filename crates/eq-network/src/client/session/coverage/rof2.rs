@@ -6,8 +6,8 @@
 //! and the login stage (6.497); the world rows from
 //! `utils/patches/patch_RoF2.conf` and the world stage (6.499); the zone
 //! rows from the same list, the entry (6.501, 6.502) and the zone decoder
-//! (6.510, 6.514, 6.518, 6.519, 6.522, 6.527, 6.532, 6.538), and the chat
-//! rows from the chat parser (6.521).
+//! (6.510, 6.514, 6.518, 6.519, 6.522, 6.527, 6.532, 6.538, 6.539, 6.541),
+//! and the chat rows from the chat parser (6.521).
 
 use super::{
     sent, Part,
@@ -16,7 +16,7 @@ use super::{
     Reason::{Needless, Planned},
     ServerMessage,
     Step::Rof2,
-    ROF2,
+    NIMBUS, ROF2,
 };
 
 /// What the entry leaves unread of `RoF2`'s zone description (6.501).
@@ -213,6 +213,16 @@ pub(in crate::client) fn rof2(opcode: u16) -> Option<ServerMessage> {
         0x6fca => sent("OP_GroundSpawn", ROF2, Partly(&[Zone], GROUND_OBJECT)),
         0x4aa1 => sent("OP_ClickObject", ROF2, Read(&[Zone])),
         0x661e => sent("OP_Weather", ROF2, Partly(&[Zone], WEATHER)),
+        // Rolls, assists, yells for help and effects (6.541), unencoded for
+        // both generations, the bytes Titanium gets. The spell effect's
+        // unread field and bytes are Titanium's part.
+        0x106b => sent("OP_RandomReply", ROF2, Read(&[Zone])),
+        0x4478 => sent("OP_Assist", ROF2, Read(&[Zone])),
+        0x4e56 => sent("OP_YellForHelp", ROF2, Read(&[Zone])),
+        0x3bc9 => sent("OP_LevelAppearance", ROF2, Read(&[Zone])),
+        0x127f => sent("OP_CameraEffect", ROF2, Read(&[Zone])),
+        0x5770 => sent("OP_PlayMP3", ROF2, Read(&[Zone])),
+        0x5936 => sent("OP_SpellEffect", ROF2, Partly(&[Zone], NIMBUS)),
         // Its chat and the server's own lines (6.521). The channel
         // message's two words and the byte the encoder writes as 0, and its
         // 15-byte zero tail, are not parts: they carry nothing from the

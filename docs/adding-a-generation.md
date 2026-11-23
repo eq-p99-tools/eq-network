@@ -169,6 +169,10 @@ unreachable because validation refuses the generation:
   object have encoders of their own, and Titanium's readers take the door table by record length
   and size width; the door's move, the click and the weather go out unencoded. The door record's
   constants, the ground object's tilts and size, and the zone-in weather are reads still owed.
+- Its rolls, assists, yells for help and effects (`rof2_socials`, 6.541): seven messages with no
+  encoder for either generation, read by Titanium's readers under `RoF2`'s numbers. Whether the
+  program reads the spell effect's last fields and plays the sound file as Titanium does is a
+  read still owed.
 - Its coverage table (`coverage::rof2`, 6.508): a row for each message a `RoF2` stage reads,
   and nothing else, so the gap log tells every other message as unlisted. A test holds the
   rows to the stages' own opcodes in both directions.

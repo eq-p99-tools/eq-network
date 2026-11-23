@@ -197,7 +197,8 @@ fn model(bytes: &[u8]) -> String {
     String::from_utf8_lossy(crate::world::until_nul(bytes)).into_owned()
 }
 
-/// Decodes Titanium's `OP_SpellEffect` (28 bytes): the effect, the spawn
+/// Decodes `OP_SpellEffect` (28 bytes), which stock `EQEmu` sends Titanium
+/// and `RoF2` alike with no encoder: the effect, the spawn
 /// it plays from and the one it is drawn on, each 32 bits, how long it
 /// plays and how long its last part waits, in milliseconds, then a field
 /// `EQEmu` sets to 3000 unless a quest gives another, and four bytes it
@@ -205,7 +206,7 @@ fn model(bytes: &[u8]) -> String {
 ///
 /// # Errors
 /// Rejects a wrong length and a spawn that is zero or past 16 bits.
-fn titanium_nimbus(body: &[u8]) -> Result<Effect> {
+pub(crate) fn titanium_nimbus(body: &[u8]) -> Result<Effect> {
     ensure!(body.len() == 28, "invalid spell effect length");
     Ok(Effect::Nimbus {
         effect: word(body, 0),
@@ -216,13 +217,14 @@ fn titanium_nimbus(body: &[u8]) -> Result<Effect> {
     })
 }
 
-/// Decodes Titanium's `OP_LevelAppearance` (64 bytes): the spawn, then five
+/// Decodes `OP_LevelAppearance` (64 bytes), the same on Titanium and
+/// `RoF2`: the spawn, then five
 /// particles, each an effect and its two values, all 32 bits. An effect of
 /// 0 names none.
 ///
 /// # Errors
 /// Rejects a wrong length and a spawn that is zero or past 16 bits.
-fn titanium_particles(body: &[u8]) -> Result<Effect> {
+pub(crate) fn titanium_particles(body: &[u8]) -> Result<Effect> {
     ensure!(body.len() == 64, "invalid level appearance length");
     Ok(Effect::Particles {
         spawn_id: spawn(body, 0, "level appearance")?,
@@ -238,12 +240,13 @@ fn titanium_particles(body: &[u8]) -> Result<Effect> {
     })
 }
 
-/// Decodes Titanium's `OP_CameraEffect` (8 bytes): how long the camera
+/// Decodes `OP_CameraEffect` (8 bytes), the same on Titanium and `RoF2`:
+/// how long the camera
 /// shakes, in milliseconds, then how hard, a float.
 ///
 /// # Errors
 /// Rejects a wrong length and an intensity that is not a number.
-fn titanium_camera_shake(body: &[u8]) -> Result<Effect> {
+pub(crate) fn titanium_camera_shake(body: &[u8]) -> Result<Effect> {
     ensure!(body.len() == 8, "invalid camera effect length");
     let intensity = f32::from_bits(word(body, 4));
     ensure!(intensity.is_finite(), "invalid camera shake intensity");
@@ -253,12 +256,13 @@ fn titanium_camera_shake(body: &[u8]) -> Result<Effect> {
     })
 }
 
-/// Decodes Titanium's `OP_PlayMP3`: the sound file's name and its NUL,
+/// Decodes `OP_PlayMP3`, the same on Titanium and `RoF2`: the sound file's
+/// name and its NUL,
 /// which `EQEmu` sizes the record to fit.
 ///
 /// # Errors
 /// Rejects a record that does not end the name.
-fn titanium_sound_file(body: &[u8]) -> Result<Effect> {
+pub(crate) fn titanium_sound_file(body: &[u8]) -> Result<Effect> {
     ensure!(body.last() == Some(&0), "sound file name without its end");
     Ok(Effect::Sound(Cue::File(
         String::from_utf8_lossy(crate::world::until_nul(body)).into_owned(),

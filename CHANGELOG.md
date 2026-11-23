@@ -5,6 +5,17 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Read RoF2's rolls, assists, yells for help and effects as stock `EQEmu`
+  sends them, labelled inferred for RoF2 (6.541). The new `rof2_socials`
+  module reads `OP_RandomReply` (0x106b), `OP_Assist` (0x4478),
+  `OP_YellForHelp` (0x4e56), `OP_LevelAppearance` (0x3bc9),
+  `OP_CameraEffect` (0x127f), `OP_PlayMP3` (0x5770) and `OP_SpellEffect`
+  (0x5936), which have no encoder for either generation, through
+  Titanium's readers into Titanium's events. Titanium's roll and assist
+  readers are now the named `socials::roll` and `socials::assist_answer`,
+  and its four effect readers are shared. Coverage lists the seven, the
+  spell effect with Titanium's part. An admitted RoF2 session hands the
+  host each and still sends and offers nothing.
 - Bound a walking strafe by the walking strafe rate (checklist 6.540).
   `MovementMode::Strafe` carries the new `movement::Pace` (`Run`, the
   default, or `Walk`), as a diagonal already says Walk or Run. The session

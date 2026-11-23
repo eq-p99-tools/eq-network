@@ -836,6 +836,7 @@ impl Script {
             .chain(rof2_spellbook())
             .chain(rof2_pools())
             .chain(rof2_world())
+            .chain(rof2_socials())
         {
             script.packet(opcode, body);
         }
@@ -1134,6 +1135,31 @@ fn rof2_world() -> Vec<(u16, Vec<u8>)> {
         (0x4aa1, words(&[4321, 4321])),
         (0x661e, words(&[0, 5, 0])),
         (0x661e, words(&[1, 3])),
+    ]
+}
+
+/// A roll, an assist, a yell for help, particles, a camera shake, a sound
+/// file and a spell's nimbus, as stock `EQEmu` sends them to `RoF2` (6.541).
+fn rof2_socials() -> Vec<(u16, Vec<u8>)> {
+    let words =
+        |words: &[u32]| -> Vec<u8> { words.iter().flat_map(|word| word.to_le_bytes()).collect() };
+    let mut roll = words(&[1, 100, 42]);
+    let mut name = vec![0; 64];
+    name[..10].copy_from_slice(b"Testroller");
+    roll.extend(name);
+    let mut particles = vec![77];
+    particles.extend([88, 1, 0]);
+    particles.extend([0; 12]);
+    let mut nimbus = words(&[1234, 4321, 77, 6000, 0, 3000]);
+    nimbus.extend([1, 1, 0, 0]);
+    vec![
+        (0x106b, roll),
+        (0x4478, words(&[77])),
+        (0x4e56, words(&[77])),
+        (0x3bc9, words(&particles)),
+        (0x127f, words(&[1500, 0.25f32.to_bits()])),
+        (0x5770, b"testsound.mp3\0".to_vec()),
+        (0x5936, nimbus),
     ]
 }
 
@@ -1684,6 +1710,70 @@ fn an_admitted_rof2_session_hands_the_host_its_doors_objects_and_weather() {
             "{opcode}: {diagnostics:?}"
         );
     }
+}
+
+#[test]
+fn an_admitted_rof2_session_hands_the_host_its_rolls_assists_and_effects() {
+    use eq_network_game::{
+        effects::{Cue, Effect},
+        socials::{Assisted, Roll},
+    };
+    let (sent, diagnostics, events, _) = rof2_session(true, None);
+    assert_eq!(sent, [0x5089, 0x35fa, 0x345d]);
+    let read: Vec<&str> = events
+        .iter()
+        .filter_map(|event| match event {
+            WorldEvent::Roll(Roll {
+                name,
+                low: 1,
+                high: 100,
+                result: 42,
+            }) if name == "Testroller" => Some("roll"),
+            WorldEvent::Assisted(Assisted { target: Some(77) }) => Some("assist"),
+            WorldEvent::YellForHelp { spawn_id: 77 } => Some("yell"),
+            WorldEvent::Effect(Effect::Particles {
+                spawn_id: 77,
+                effects,
+            }) if effects.len() == 1 && effects[0].effect == 88 => Some("particles"),
+            WorldEvent::Effect(Effect::CameraShake { intensity, .. })
+                if intensity.to_bits() == 0.25f32.to_bits() =>
+            {
+                Some("camera")
+            }
+            WorldEvent::Effect(Effect::Sound(Cue::File(file))) if file == "testsound.mp3" => {
+                Some("sound")
+            }
+            WorldEvent::Effect(Effect::Nimbus {
+                effect: 1234,
+                caster_id: 4321,
+                target_id: 77,
+                ..
+            }) => Some("nimbus"),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        read,
+        [
+            "roll",
+            "assist",
+            "yell",
+            "particles",
+            "camera",
+            "sound",
+            "nimbus"
+        ]
+    );
+    for opcode in [
+        "0x106b", "0x4478", "0x4e56", "0x3bc9", "0x127f", "0x5770", "0x5936",
+    ] {
+        assert!(
+            !diagnostics.iter().any(|line| line.contains(opcode)),
+            "{opcode}: {diagnostics:?}"
+        );
+    }
+    // The roller's name reaches the host in the event only.
+    assert!(!diagnostics.iter().any(|line| line.contains("Testroller")));
 }
 
 #[test]

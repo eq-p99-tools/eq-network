@@ -458,15 +458,26 @@ pub fn decode_roll(opcode: u16, body: &[u8]) -> Result<Option<Roll>> {
     if opcode != ROLL_OPCODE {
         return Ok(None);
     }
+    roll(body).map(Some)
+}
+
+/// Reads a roll's result, the server's 76-byte `RandomReply_Struct`, which
+/// stock `EQEmu` sends Titanium and `RoF2` alike with no encoder
+/// (`Client::Handle_OP_RandomRequest`): the low and high ends, the result,
+/// and the roller's name in 64 bytes.
+///
+/// # Errors
+/// Rejects any length but 76.
+pub(crate) fn roll(body: &[u8]) -> Result<Roll> {
     ensure!(body.len() == 12 + NAME, "invalid roll length");
     let field = &body[12..12 + NAME];
     let end = field.iter().position(|byte| *byte == 0).unwrap_or(NAME);
-    Ok(Some(Roll {
+    Ok(Roll {
         name: String::from_utf8_lossy(&field[..end]).into_owned(),
         low: word(body, 0),
         high: word(body, 4),
         result: word(body, 8),
-    }))
+    })
 }
 
 /// Decodes the server's answer to an assist; None for any other opcode.
@@ -477,11 +488,22 @@ pub fn decode_assist(opcode: u16, body: &[u8]) -> Result<Option<Assisted>> {
     if opcode != ASSIST_OPCODE {
         return Ok(None);
     }
+    assist_answer(body).map(Some)
+}
+
+/// Reads the server's answer to an assist, the 4-byte `EntityId_Struct`
+/// stock `EQEmu` sends Titanium and `RoF2` alike with no encoder
+/// (`Client::Handle_OP_Assist`, `Client::Handle_OP_AssistGroup`): the new
+/// target, or 0 for none.
+///
+/// # Errors
+/// Rejects any length but 4 and a target past 16 bits.
+pub(crate) fn assist_answer(body: &[u8]) -> Result<Assisted> {
     ensure!(body.len() == 4, "invalid assist length");
     let target = u16::try_from(word(body, 0))?;
-    Ok(Some(Assisted {
+    Ok(Assisted {
         target: (target != 0).then_some(target),
-    }))
+    })
 }
 
 /// What Titanium's messages from other players say: a yell for help, a
