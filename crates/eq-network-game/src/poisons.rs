@@ -2,8 +2,10 @@
 //! names the inventory slot the poison sits in, and the server answers with
 //! the same opcode, the slot and whether the poison took.
 //!
-//! What the servers do, from their source (the program's own side is
-//! pending read R49-1, recording checklist 6.493):
+//! The program's own side (read R49-1, recording checklist 6.493) is the
+//! session's: a right-click on a type-42 item in a top-level slot sits the
+//! player, waits, and sends `{slot, 0}`; the answer's line is 0x3269 when
+//! the poison took, else 0x326a. What the servers do, from their source:
 //! - `EQEmu`'s `Client::Handle_OP_ApplyPoison` (`zone/client_packet.cpp`)
 //!   takes the item in the slot sent, wants item type 42 and a Rogue, says
 //!   its own line when the poison is above the player's level, and deletes
@@ -27,8 +29,8 @@ pub const TITANIUM_OPCODE: u16 = 0x0c2c;
 /// `EQMac`'s `OP_ApplyPoison`.
 pub const EQMAC_OPCODE: u16 = 0xba41;
 /// The item type both servers take as a poison (`EQEmu`'s
-/// `ItemTypePoison`). Which type the program itself tests, if any, is
-/// pending read R49-1 (recording checklist 6.493).
+/// `ItemTypePoison`), and the one the program's item use tests before it
+/// starts a poison (read R49-1 a).
 pub const POISON_ITEM_TYPE: u8 = 42;
 /// The body's length, both ways.
 const LENGTH: usize = 8;
