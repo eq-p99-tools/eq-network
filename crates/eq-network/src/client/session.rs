@@ -45,6 +45,7 @@ mod resurrection;
 mod riders;
 pub(super) mod server_filters;
 mod servers;
+mod shielding;
 mod sight;
 mod socials;
 pub(super) mod spell_tables;

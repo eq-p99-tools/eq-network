@@ -1109,6 +1109,17 @@ pub enum GameCommand {
         /// When the player requested the action.
         created: std::time::Instant,
     },
+    /// A Warrior's `/shield` of another player
+    /// ([`crate::shielding`]). The server checks the level, class, recast,
+    /// target and distance, and answers each case with a line of its own.
+    Shield {
+        /// Current zone admission.
+        session_id: u64,
+        /// The player to shield.
+        spawn_id: u16,
+        /// When the player asked.
+        created: std::time::Instant,
+    },
     /// Select or clear a target in the current zone session, without attacking.
     SelectTarget {
         /// Connection identifier supplied by zone admission.
@@ -1241,6 +1252,7 @@ impl GameCommand {
             Self::ExitAtOnce { .. } => "ExitAtOnce",
             Self::UseAbility { .. } => "UseAbility",
             Self::UseKnightAbility { .. } => "UseKnightAbility",
+            Self::Shield { .. } => "Shield",
             Self::UseDiscipline { .. } => "UseDiscipline",
             Self::Consent { .. } => "Consent",
             Self::SummonCorpse { .. } => "SummonCorpse",
@@ -1371,6 +1383,7 @@ impl GameCommand {
             | Self::ExitAtOnce { session_id, .. }
             | Self::UseAbility { session_id, .. }
             | Self::UseKnightAbility { session_id, .. }
+            | Self::Shield { session_id, .. }
             | Self::UseDiscipline { session_id, .. }
             | Self::WhoAll { session_id, .. }
             | Self::Pet { session_id, .. }
@@ -1528,6 +1541,7 @@ impl GameCommand {
             Self::SelectTarget { .. } => Capability::Targeting,
             Self::UseAbility { .. } => Capability::Abilities,
             Self::UseKnightAbility { .. } => Capability::KnightAbilities,
+            Self::Shield { .. } => Capability::Shielding,
             Self::UseDiscipline { .. } => Capability::UsingDisciplines,
             Self::WhoAll { .. } => Capability::Who,
             Self::WhoFriends { .. } => Capability::FriendsWho,
@@ -1713,6 +1727,7 @@ impl GameCommand {
             | Self::ChatChannel { created, .. }
             | Self::UseAbility { created, .. }
             | Self::UseKnightAbility { created, .. }
+            | Self::Shield { created, .. }
             | Self::UseDiscipline { created, .. }
             | Self::Pet { created, .. }
             | Self::Training { created, .. }
@@ -1921,6 +1936,7 @@ pub fn encode(
         | GameCommand::ExitAtOnce { .. }
         | GameCommand::UseAbility { .. }
         | GameCommand::UseKnightAbility { .. }
+        | GameCommand::Shield { .. }
         | GameCommand::UseDiscipline { .. }
         | GameCommand::WhoAll { .. }
         | GameCommand::Pet { .. }
