@@ -44,7 +44,12 @@ impl Observations {
         {
             self.current = capabilities
                 .iter()
-                .any(|capability| matches!(capability, Capability::Drowning | Capability::LavaHeat))
+                .any(|capability| {
+                    matches!(
+                        capability,
+                        Capability::Drowning | Capability::LavaHeat | Capability::ColdWater
+                    )
+                })
                 .then_some((*session_id, player.spawn_id, 0));
             return self.current.map(|(session_id, _, revision)| {
                 WorldEvent::LiquidHazardRevision {
@@ -283,6 +288,9 @@ impl Feature for Hazards {
         if self.taken.contains(&Hazard::Lava) {
             capabilities.push(Capability::LavaHeat);
         }
+        if self.taken.contains(&Hazard::Freezing) {
+            capabilities.push(Capability::ColdWater);
+        }
         capabilities
     }
 
@@ -324,7 +332,7 @@ impl Feature for Hazards {
             ClientCommand::EnvironmentalDamage { .. } => {
                 return actions::refuse(
                     command,
-                    "Only a completed fall is reported here; drowning and lava go through LiquidDamage, and freezing is not reported",
+                    "Only a completed fall is reported here; drowning, lava and cold go through LiquidDamage",
                     out.log,
                 );
             }
@@ -340,6 +348,8 @@ impl Feature for Hazards {
                     LiquidHazard::Drowning => (Hazard::Drowning, 0),
                     LiquidHazard::Lava => (Hazard::Lava, 1),
                     LiquidHazard::ZoneHeat => (Hazard::ZoneHeat, 1),
+                    // Velious water's cold is the same feet tick (0x41d4ba).
+                    LiquidHazard::Cold => (Hazard::Freezing, 1),
                 };
                 if !self.taken.contains(&hazard) {
                     return actions::refuse(
