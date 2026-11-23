@@ -1144,10 +1144,10 @@ impl ServerType for Project1999 {
     /// A Bard's `/stopsong` sends what the Titanium program sends (read R16).
     fn casting(&self, _setup: &Setup<'_>) -> Provided {
         // Inferred local estimate (recording checklist 6.399) from the classic once-per-game-day reuse.
-        offer(Box::new(Casting::with_titanium_combat(
-            true,
-            std::time::Duration::from_mins(72),
-        )))
+        // `/melody` is offered on P99 by Adam's word (11-23).
+        offer(Box::new(
+            Casting::with_titanium_combat(true, std::time::Duration::from_mins(72)).with_melody(),
+        ))
     }
 
     /// Moving the book's spells works on P99 as on `EQEmu` (checked with the
@@ -2807,7 +2807,7 @@ mod tests {
     }
 
     #[test]
-    fn only_stock_eqemu_offers_melody_until_p99_is_decided() {
+    fn the_titanium_servers_offer_melody() {
         for protocol in [
             ServerProtocol::Project1999,
             ServerProtocol::EqEmu,
@@ -2816,7 +2816,10 @@ mod tests {
         ] {
             assert_eq!(
                 offers(server_type(protocol)).contains(&Capability::Melody),
-                protocol == ServerProtocol::EqEmu,
+                matches!(
+                    protocol,
+                    ServerProtocol::EqEmu | ServerProtocol::Project1999
+                ),
                 "{protocol:?}"
             );
         }

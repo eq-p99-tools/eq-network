@@ -454,8 +454,8 @@ impl Casting {
     }
 
     /// Offers a Bard's `/melody` (read R49-33 c), which the host runs with
-    /// `StopSong` and gem casts. Stock `EQEmu` only for now: whether P99
-    /// takes it is Adam's call.
+    /// `StopSong` and gem casts. The Titanium server types (P99 and stock
+    /// `EQEmu`) take it; the Mac-era program is unread.
     pub(super) fn with_melody(mut self) -> Self {
         self.melody = MelodyUse::Offered;
         self

@@ -6,8 +6,8 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 - `Capability::Melody`: where the server type takes a Bard's `/melody`
-  (read R49-33 c), stock Titanium `EQEmu` only for now; P99 waits on the
-  owner's word. The host runs the melody with `StopSong` and gem casts, and a
+  (read R49-33 c): P99 and stock Titanium `EQEmu`; not the Mac-era server
+  types, whose program is unread. The host runs the melody with `StopSong` and gem casts, and a
   test shows the stop followed at once by a gem press casts. **Breaking:** a
   new `Capability` variant.
 

@@ -77,8 +77,8 @@ cast holds, a gem click casts, and the book's answers leave the song alone.
 The Mac-era program is unread. First use on P99 is attended.
 
 `Capability::Melody` says where the server type takes a Bard's `/melody`
-(read R49-33 c): stock Titanium `EQEmu` only for now. P99 waits on the
-owner's word, and the Mac-era program is unread. The host keeps the melody
+(read R49-33 c): the Titanium server types, P99 (by the owner's word) and
+stock `EQEmu`. The Mac-era program is unread, so TAKP and Quarm don't. The host keeps the melody
 list and runs each step on the player's own gem refresh as `StopSong` then
 the next gem's `CastSpell`; the session adds no command for it. The stop
 ends the song, so the press that follows casts.
