@@ -894,8 +894,9 @@ pub enum WorldEvent {
         hazard: crate::hazards::Hazard,
         /// The amount reported.
         amount: u32,
-        /// Whether the damage record followed the report (Titanium's
-        /// drowning, lava and cold), whose echo a front end may then expect.
+        /// Whether the damage record followed the report (Titanium's falls,
+        /// drowning, lava and cold, R49-3a). `EQEmu` echoes the record to
+        /// its sender for every type but a fall.
         record: bool,
     },
     /// P99 spell-table facts, delivered in world/zone receive order even
