@@ -19,6 +19,15 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Titanium defaults, so each generation states its own. Titanium and `EQMac`
   answer as before. **Breaking:** the new variants on both exhaustive enums.
 
+- Place the cursor item as the Titanium program's `/autoinventory` does
+  (read R46). `Inventory::auto_inventory_destination` tries the worn slots
+  first (onto the same item, else the first empty slot the item fits and
+  the player can wear), then a general stack, a stack inside a bag (not
+  for a bag), the first empty general slot and the first empty bag slot
+  (not for a bag). It plans one move and its quantity; what a stack has no
+  room for stays on the cursor. `auto_store_destination` keeps its rule
+  for the inventory window's button, sharing the same checks.
+
 - Make every client-generation and server-type decision exhaustive, so a
   third generation (such as RoF2) or a new server type breaks each place
   that must decide what it does, instead of taking another generation's

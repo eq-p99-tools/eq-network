@@ -143,6 +143,11 @@ impl MoveRules {
     }
 }
 
+/// The worn slots, in the program's order.
+const WORN: std::ops::RangeInclusive<i32> = 0..=21;
+/// The general slots, in the program's order.
+const GENERAL: std::ops::RangeInclusive<i32> = 22..=29;
+
 impl Inventory {
     /// Selects the next carried destination, filling compatible stacks before empty slots.
     /// Re-evaluate after every submitted move; never cache a sequence across revisions.
@@ -150,69 +155,121 @@ impl Inventory {
     /// # Errors
     /// Rejects unavailable inventory, an empty cursor, or no compatible space.
     pub fn auto_store_destination(&self, actor: InventoryActor) -> Result<InventorySlot> {
+        let source = self.cursor_source()?;
+        let mut slots: Vec<_> = GENERAL.map(InventorySlot).collect();
+        slots.extend(self.bag_slots());
+        slots
+            .iter()
+            .find(|&&slot| self.stack_onto(source, slot, actor).is_some())
+            .or_else(|| slots.iter().find(|&&slot| self.place_into(slot, actor)))
+            .copied()
+            .context("No compatible inventory space; item remains on the cursor")
+    }
+
+    /// Where the Titanium program's `/autoinventory` puts the cursor item,
+    /// and how much of it (read R46 section 1). First the equipment
+    /// (0x47477f): onto the same item in a worn slot, else the first empty
+    /// worn slot it fits and the player can use. Then the general slots and
+    /// bags (0x4bcf0b): onto a general stack; unless it is a bag, onto a
+    /// stack inside a bag; the first empty general slot; unless it is a bag,
+    /// the first empty bag slot. One move is planned: what doesn't fit on a
+    /// stack stays on the cursor (inferred).
+    ///
+    /// # Errors
+    /// Rejects unavailable inventory, an empty cursor, or no place the item
+    /// fits.
+    pub fn auto_inventory_destination(
+        &self,
+        actor: InventoryActor,
+    ) -> Result<(InventorySlot, MoveQuantity)> {
+        let source = self.cursor_source()?;
+        let worn: Vec<_> = WORN.map(InventorySlot).collect();
+        let general: Vec<_> = GENERAL.map(InventorySlot).collect();
+        let bags: Vec<_> = if source.bag_slots == 0 {
+            self.bag_slots().collect()
+        } else {
+            Vec::new()
+        };
+        let stack = |slots: &[InventorySlot]| {
+            slots.iter().find_map(|&slot| {
+                self.stack_onto(source, slot, actor)
+                    .map(|amount| (slot, MoveQuantity::Count(amount)))
+            })
+        };
+        let empty = |slots: &[InventorySlot]| {
+            slots
+                .iter()
+                .find(|&&slot| self.place_into(slot, actor))
+                .map(|&slot| (slot, MoveQuantity::Whole))
+        };
+        stack(&worn)
+            .or_else(|| empty(&worn))
+            .or_else(|| stack(&general))
+            .or_else(|| stack(&bags))
+            .or_else(|| empty(&general))
+            .or_else(|| empty(&bags))
+            .context("No compatible inventory space; item remains on the cursor")
+    }
+
+    /// The item on the cursor, from a current inventory.
+    fn cursor_source(&self) -> Result<&InventoryItem> {
         ensure!(
             self.received && !self.stale(),
             "Wait for a current inventory snapshot"
         );
-        let source = self
-            .items
-            .get(&InventorySlot(30))
-            .context("The cursor is empty")?;
-        let mut slots: Vec<_> = (22..=29).map(InventorySlot).collect();
-        for root in 22..=29 {
-            let root = InventorySlot(root);
-            if let Some(bag) = self.items.get(&root) {
-                slots.extend((0..bag.bag_slots).filter_map(|index| root.child(index)));
-            }
+        self.items
+            .get(&InventorySlot::CURSOR)
+            .context("The cursor is empty")
+    }
+
+    /// The slots of the bags in the general slots, bag by bag in slot order.
+    fn bag_slots(&self) -> impl Iterator<Item = InventorySlot> + '_ {
+        GENERAL.map(InventorySlot).flat_map(move |root| {
+            let count = self.items.get(&root).map_or(0, |bag| bag.bag_slots);
+            (0..count).filter_map(move |index| root.child(index))
+        })
+    }
+
+    /// How many of the cursor's stack a stack of the same item in `slot`
+    /// takes, if the move is allowed.
+    fn stack_onto(
+        &self,
+        source: &InventoryItem,
+        slot: InventorySlot,
+        actor: InventoryActor,
+    ) -> Option<NonZeroU32> {
+        let destination = self.items.get(&slot)?;
+        if source.details.id != destination.details.id {
+            return None;
         }
-        for &slot in &slots {
-            let Some(destination) = self.items.get(&slot) else {
-                continue;
-            };
-            if source.details.id != destination.details.id {
-                continue;
-            }
-            let Some(available) = source.stack_count else {
-                continue;
-            };
-            let Some(existing) = destination.stack_count else {
-                continue;
-            };
-            let amount = available.min(destination.rules.stack_size.saturating_sub(existing));
-            let Some(amount) = NonZeroU32::new(amount) else {
-                continue;
-            };
-            let request = InventoryMove {
-                sequence: None,
-                session_id: 0,
-                revision: self.revision,
-                from: InventorySlot(30),
-                to: slot,
-                quantity: MoveQuantity::Count(amount),
-                created: Instant::now(),
-            };
-            if self.plan_move(&request, actor).is_ok() {
-                return Ok(slot);
-            }
+        let available = source.stack_count?;
+        let existing = destination.stack_count?;
+        let amount =
+            NonZeroU32::new(available.min(destination.rules.stack_size.saturating_sub(existing)))?;
+        self.plan_move(&self.cursor_move(slot, MoveQuantity::Count(amount)), actor)
+            .is_ok()
+            .then_some(amount)
+    }
+
+    /// Whether the whole cursor item may go into `slot`, which is empty.
+    fn place_into(&self, slot: InventorySlot, actor: InventoryActor) -> bool {
+        !self.items.contains_key(&slot)
+            && self
+                .plan_move(&self.cursor_move(slot, MoveQuantity::Whole), actor)
+                .is_ok()
+    }
+
+    /// A move from the cursor to `slot`, for planning only.
+    fn cursor_move(&self, to: InventorySlot, quantity: MoveQuantity) -> InventoryMove {
+        InventoryMove {
+            sequence: None,
+            session_id: 0,
+            revision: self.revision,
+            from: InventorySlot::CURSOR,
+            to,
+            quantity,
+            created: Instant::now(),
         }
-        for slot in slots {
-            if self.items.contains_key(&slot) {
-                continue;
-            }
-            let request = InventoryMove {
-                sequence: None,
-                session_id: 0,
-                revision: self.revision,
-                from: InventorySlot(30),
-                to: slot,
-                quantity: MoveQuantity::Whole,
-                created: Instant::now(),
-            };
-            if self.plan_move(&request, actor).is_ok() {
-                return Ok(slot);
-            }
-        }
-        anyhow::bail!("No compatible inventory space; item remains on the cursor")
     }
 
     /// Validates and sends once, committing a local prediction only after transport success.

@@ -798,3 +798,140 @@ fn takps_item_packets_for_a_moved_bags_contents_confirm_the_move() {
     state.apply(InventoryUpdate::Settled);
     assert!(!state.predicted());
 }
+
+#[test]
+fn autoinventory_equips_first_then_fills_general_slots_and_bags_in_order() {
+    let whole = MoveQuantity::Whole;
+    // An item the player can wear goes to the first worn slot it fits.
+    let inventory = state(vec![item(30, None, 0)]);
+    assert_eq!(
+        inventory.auto_inventory_destination(actor()).unwrap(),
+        (InventorySlot(13), whole)
+    );
+    // With both hands full it goes to the first empty general slot.
+    let inventory = state(vec![
+        item(30, None, 0),
+        item(13, None, 0),
+        item(14, None, 0),
+    ]);
+    assert_eq!(
+        inventory.auto_inventory_destination(actor()).unwrap(),
+        (InventorySlot(22), whole)
+    );
+    // A general stack takes it before a stack in a bag, and a stack in a bag
+    // before an empty general slot.
+    let stack = |slot, count| {
+        let mut stack = item(slot, Some(count), 0);
+        stack.details.slots = 0;
+        stack
+    };
+    let in_bag = state(vec![stack(30, 5), item(22, None, 4), stack(251, 10)]);
+    assert_eq!(
+        in_bag.auto_inventory_destination(actor()).unwrap(),
+        (
+            InventorySlot(251),
+            MoveQuantity::Count(NonZeroU32::new(5).unwrap())
+        )
+    );
+    let both = state(vec![
+        stack(30, 5),
+        item(22, None, 4),
+        stack(251, 10),
+        stack(23, 10),
+    ]);
+    assert_eq!(
+        both.auto_inventory_destination(actor()).unwrap(),
+        (
+            InventorySlot(23),
+            MoveQuantity::Count(NonZeroU32::new(5).unwrap())
+        )
+    );
+    // One move: what the stack has no room for stays on the cursor.
+    let nearly = state(vec![stack(30, 5), stack(22, 18)]);
+    assert_eq!(
+        nearly.auto_inventory_destination(actor()).unwrap(),
+        (
+            InventorySlot(22),
+            MoveQuantity::Count(NonZeroU32::new(2).unwrap())
+        )
+    );
+    // An empty general slot comes before an empty bag slot.
+    let plain = state(vec![stack(30, 5), item(22, None, 4)]);
+    assert_eq!(
+        plain.auto_inventory_destination(actor()).unwrap(),
+        (InventorySlot(23), whole)
+    );
+    // Nothing fits.
+    let mut full: Vec<_> = (22..=29).map(|slot| stack(slot, 20)).collect();
+    full.push(stack(30, 5));
+    assert!(state(full).auto_inventory_destination(actor()).is_err());
+    assert!(state(Vec::new())
+        .auto_inventory_destination(actor())
+        .is_err());
+}
+
+#[test]
+fn autoinventory_never_equips_what_the_worn_slot_refuses() {
+    let general = (InventorySlot(22), MoveQuantity::Whole);
+    // A two-hander with the secondary filled.
+    let mut two_hander = item(30, None, 0);
+    two_hander.rules.item_type = 1;
+    two_hander.details.slots = 1 << 13;
+    let inventory = state(vec![two_hander, item(14, None, 0)]);
+    assert_eq!(
+        inventory.auto_inventory_destination(actor()).unwrap(),
+        general
+    );
+    // A secondary item under a two-hander.
+    let mut primary = item(13, None, 0);
+    primary.rules.item_type = 1;
+    let mut off_hand = item(30, None, 0);
+    off_hand.details.slots = 1 << 14;
+    let inventory = state(vec![off_hand, primary]);
+    assert_eq!(
+        inventory.auto_inventory_destination(actor()).unwrap(),
+        general
+    );
+    // A race, a class or a level the item refuses.
+    for refuse in [
+        |item: &mut InventoryItem| item.details.races = 2,
+        |item: &mut InventoryItem| item.details.classes = 2,
+        |item: &mut InventoryItem| {
+            item.details.stats = vec![crate::items::ItemStat {
+                label: "Required level".into(),
+                value: 20,
+            }];
+        },
+    ] {
+        let mut wearable = item(30, None, 0);
+        refuse(&mut wearable);
+        let inventory = state(vec![wearable]);
+        assert_eq!(
+            inventory.auto_inventory_destination(actor()).unwrap(),
+            general
+        );
+    }
+    // A bag never goes into a bag.
+    let mut bag = item(30, None, 4);
+    bag.details.slots = 0;
+    let mut items: Vec<_> = (22..=29).map(|slot| item(slot, None, 4)).collect();
+    items.push(bag);
+    assert!(state(items).auto_inventory_destination(actor()).is_err());
+}
+
+#[test]
+fn autoinventory_stacks_ammunition_onto_the_worn_stack() {
+    let ammo = |slot, count| {
+        let mut ammo = item(slot, Some(count), 0);
+        ammo.details.slots = 1 << 21;
+        ammo
+    };
+    let inventory = state(vec![ammo(30, 5), ammo(21, 10)]);
+    assert_eq!(
+        inventory.auto_inventory_destination(actor()).unwrap(),
+        (
+            InventorySlot(21),
+            MoveQuantity::Count(NonZeroU32::new(5).unwrap())
+        )
+    );
+}
