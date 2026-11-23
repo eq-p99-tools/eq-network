@@ -18,7 +18,7 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   asker when they are a known spawn other than the player; the program's
   option for it is unread, so it is always said. Asking to inspect, and
   showing an answer received, stay unoffered on `EQMac`.
-  - **Breaking:** `Capability::InspectAnswer` (91); `SetInspectNote` now
+  - **Breaking:** `Capability::InspectAnswer` (92); `SetInspectNote` now
     needs it instead of `PlayerInspection` (Titanium sessions offer both);
     `WorldEvent::InspectedBy { session_id, inspector_id, name, string_id }`;
     `inspection::eqmac::answer`.
