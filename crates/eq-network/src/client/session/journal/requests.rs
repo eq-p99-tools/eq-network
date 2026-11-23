@@ -21,10 +21,9 @@
 //!   needs an entry there, and sends one cancel for a slot until the
 //!   server's removal or the zone's end.
 //!
-//! Taking or cancelling a task only ever comes from the player's own
-//! choice: a host doesn't send either from a script, social or hotbutton.
-//! That is this library's own safeguard, not the program's, and it stays
-//! until the question of lifting it is settled.
+//! A host may take or cancel a task from a click, a social, a hotbutton or
+//! a script, since a script may do whatever the player can; the checks
+//! above hold whatever sends it.
 //! Declining sends nothing, since `EQEmu` ignores an acceptance of task 0;
 //! whether the program sends one is unread (R49-38), so this is inferred.
 //! A history request and `/tasktimers` are paced by this library's own
