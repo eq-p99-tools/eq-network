@@ -5,6 +5,17 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Build RoF2's login stage, character list and world login info from
+  `EQEmu`'s public source, labelled inferred for RoF2 (6.497). The login is
+  Titanium's exchange read through the login server's opcodes for clients
+  newer than Titanium, and skips the expansion list it may send them.
+  `characters::decode` reads RoF2's variable-length list, bounding its count
+  by the body before keeping anything. `world_login::rof2` writes the
+  488-byte login info, and refuses an account or key that doesn't fit
+  rather than cut it. Nothing reaches any of it yet: a RoF2 configuration is
+  still refused before a socket opens, and the RoF2 world stage still
+  refuses.
+
 - Add RoF2 as a placeholder client generation and server type, so each
   decision a third generation needs has an answer before any of it is built.
   `GameDialect::Rof2` and `ServerProtocol::EqEmuRof2` (stock `EQEmu` with the
