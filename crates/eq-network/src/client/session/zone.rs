@@ -914,10 +914,10 @@ mod tests {
     };
 
     /// How many kinds of command there are.
-    const KINDS: usize = 114;
+    const KINDS: usize = 115;
 
     /// The kinds the login and world servers take, before any zone session.
-    const BEFORE_ZONES: [usize; 5] = [0, 1, 70, 75, 112];
+    const BEFORE_ZONES: [usize; 5] = [0, 1, 70, 75, 113];
 
     /// Which kind of command this is. A new command is a compile error here
     /// until it has a number, and then a test failure until the list below
@@ -927,8 +927,8 @@ mod tests {
         match command {
             // The world server's, before any zone session.
             ClientCommand::SelectCharacter { .. } => 0,
-            ClientCommand::ChooseServerFilters { .. } => 112,
-            ClientCommand::SetServerFilters { .. } => 113,
+            ClientCommand::ChooseServerFilters { .. } => 113,
+            ClientCommand::SetServerFilters { .. } => 114,
             ClientCommand::DeleteCharacter(_) => 75,
             ClientCommand::CreateCharacter { .. } | ClientCommand::GenerateName { .. } => 1,
             ClientCommand::SwapSpell { .. } => 2,
@@ -950,6 +950,7 @@ mod tests {
             ClientCommand::YellForHelp { .. } => 109,
             ClientCommand::EmoteAnimation { .. } => 110,
             ClientCommand::SocialEmote { .. } => 111,
+            ClientCommand::ApplyPoison { .. } => 112,
             ClientCommand::DepopLocalNpc { .. } => 84,
             ClientCommand::SetPosture { .. } => 12,
             ClientCommand::FeignLanded { .. } => 104,
@@ -1232,6 +1233,7 @@ mod tests {
             ClientCommand::SendChatInAdmission {
                 session_id,
                 message: OutboundChat::Say("Hail".into()),
+                tongue: eq_network_game::chat::Tongue::COMMON,
             },
             ClientCommand::DepopLocalNpc {
                 session_id,
@@ -1378,6 +1380,11 @@ mod tests {
             ClientCommand::Consume {
                 session_id,
                 slot: InventorySlot(22),
+                created,
+            },
+            ClientCommand::ApplyPoison {
+                session_id,
+                slot: InventorySlot(23),
                 created,
             },
             ClientCommand::AnswerListPolls {
@@ -1924,12 +1931,17 @@ mod tests {
         })
         .collect();
         for command in zone_commands() {
-            if matches!(
-                command,
-                ClientCommand::AnswerListPolls { .. } | ClientCommand::SetServerFilters { .. }
-            ) {
+            if matches!(command, ClientCommand::AnswerListPolls { .. }) {
                 // Session control is owned before the gameplay feature gates.
                 assert!(servers.iter().any(|features| features.answers_list_polls));
+                continue;
+            }
+            if matches!(command, ClientCommand::SetServerFilters { .. }) {
+                // The session keeps the filters itself, before the feature
+                // gates, on every server type.
+                assert!(servers.iter().all(|features| features
+                    .capabilities()
+                    .contains(&crate::world::Capability::ServerFilters)));
                 continue;
             }
             if Features::is_departure(&command) {
@@ -3021,6 +3033,7 @@ mod tests {
                 Capability::Posture,
                 Capability::Meals,
                 Capability::GameplayDepartures,
+                Capability::ApplyingPoison,
                 Capability::ServerFilters
             ]
         );
@@ -3052,6 +3065,7 @@ mod tests {
                 Capability::Posture,
                 Capability::Meals,
                 Capability::GameplayDepartures,
+                Capability::ApplyingPoison,
                 Capability::ServerFilters
             ]
         );

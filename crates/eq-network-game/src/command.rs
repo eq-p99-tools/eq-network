@@ -291,15 +291,19 @@ pub enum GameCommand {
     DestroyItem(Box<crate::inventory::InventoryDestroy>),
     /// Drop the exact current ordinary cursor item into the zone.
     DropItem(Box<crate::inventory::InventoryDrop>),
-    /// Send one chat message.
+    /// Send one chat message in the common tongue.
     SendChat(OutboundChat),
-    /// Send chat only in the named admission. This adds a local queue guard,
-    /// with the same wire message and timing as ordinary chat.
+    /// Send chat only in the named admission, in the tongue the player
+    /// speaks. This adds a local queue guard, with the same wire message
+    /// and timing as ordinary chat.
     SendChatInAdmission {
         /// The originating zone admission; a later visit must refuse it.
         session_id: u64,
         /// The ordinary message, including any local fixture command.
         message: OutboundChat,
+        /// The tongue it is spoken in ([`chat::Tongue::COMMON`] for none
+        /// chosen).
+        tongue: chat::Tongue,
     },
     /// Remove the selected NPC in a network-constrained local `EQEmu` fixture.
     DepopLocalNpc {
@@ -494,6 +498,17 @@ pub enum GameCommand {
         /// Current zone admission.
         session_id: u64,
         /// The item's slot.
+        slot: crate::inventory::InventorySlot,
+        /// Reject delayed actions instead of replaying them after a stall.
+        created: std::time::Instant,
+    },
+    /// Put the poison in a slot on the weapon, as a right-click on it does
+    /// ([`crate::poisons`]; what starts it in the program is pending read
+    /// R49-1, recording checklist 6.493).
+    ApplyPoison {
+        /// Current zone admission.
+        session_id: u64,
+        /// The poison's slot.
         slot: crate::inventory::InventorySlot,
         /// Reject delayed actions instead of replaying them after a stall.
         created: std::time::Instant,
@@ -1121,6 +1136,7 @@ impl GameCommand {
             Self::EnvironmentalDamage { .. } => "EnvironmentalDamage",
             Self::LiquidDamage { .. } => "LiquidDamage",
             Self::Consume { .. } => "Consume",
+            Self::ApplyPoison { .. } => "ApplyPoison",
             Self::AutoEat { .. } => "AutoEat",
             Self::AnswerListPolls { .. } => "AnswerListPolls",
             Self::SetMovementOptions { .. } => "SetMovementOptions",
@@ -1243,6 +1259,7 @@ impl GameCommand {
             | Self::LiquidDamage { session_id, .. }
             | Self::AutoAttack { session_id, .. }
             | Self::Consume { session_id, .. }
+            | Self::ApplyPoison { session_id, .. }
             | Self::AutoEat { session_id, .. }
             | Self::AnswerListPolls { session_id, .. }
             | Self::SetServerFilters { session_id, .. }
@@ -1368,6 +1385,7 @@ impl GameCommand {
             Self::MoveInventory(_) | Self::DestroyItem(_) => Capability::Inventory,
             Self::DropItem(_) => Capability::GroundDropping,
             Self::Consume { .. } | Self::AutoEat { .. } => Capability::Meals,
+            Self::ApplyPoison { .. } => Capability::ApplyingPoison,
             Self::AnswerListPolls { .. } => Capability::AnsweringListPolls,
             Self::SetServerFilters { .. } => Capability::ServerFilters,
             Self::SendChat(_)
@@ -1565,6 +1583,7 @@ impl GameCommand {
             | Self::Jump { created, .. }
             | Self::AutoAttack { created, .. }
             | Self::Consume { created, .. }
+            | Self::ApplyPoison { created, .. }
             | Self::UseAbility { created, .. }
             | Self::UseKnightAbility { created, .. }
             | Self::UseDiscipline { created, .. }
@@ -1764,6 +1783,7 @@ pub fn encode(
         | GameCommand::ClimbReach { .. }
         | GameCommand::CrossZoneLine { .. }
         | GameCommand::Consume { .. }
+        | GameCommand::ApplyPoison { .. }
         | GameCommand::AutoEat { .. }
         | GameCommand::AnswerListPolls { .. }
         | GameCommand::SetServerFilters { .. }
@@ -1835,17 +1855,30 @@ pub fn encode(
         | GameCommand::BledOut { .. } => {
             anyhow::bail!("this command requires the admitted session controller")
         }
-        GameCommand::SendChat(message) | GameCommand::SendChatInAdmission { message, .. } => {
-            Ok(EncodedCommand {
-                opcode: match dialect {
-                    GameDialect::Titanium => 0x1004,
-                    GameDialect::EqMac => 0x0741,
-                    GameDialect::Rof2 => anyhow::bail!("not built for RoF2 yet"),
-                },
-                body: chat::encode_outbound_for(dialect, message, character)?,
-            })
+        GameCommand::SendChat(message) => {
+            encode_chat(dialect, message, character, chat::Tongue::COMMON)
         }
+        GameCommand::SendChatInAdmission {
+            message, tongue, ..
+        } => encode_chat(dialect, message, character, *tongue),
     }
+}
+
+/// `OP_ChannelMessage`: a chat message in a tongue.
+fn encode_chat(
+    dialect: GameDialect,
+    message: &OutboundChat,
+    character: &str,
+    tongue: chat::Tongue,
+) -> Result<EncodedCommand> {
+    Ok(EncodedCommand {
+        opcode: match dialect {
+            GameDialect::Titanium => 0x1004,
+            GameDialect::EqMac => 0x0741,
+            GameDialect::Rof2 => anyhow::bail!("not built for RoF2 yet"),
+        },
+        body: chat::encode_outbound_in(dialect, message, character, tongue)?,
+    })
 }
 
 /// `OP_TargetMouse`: the player's target, or none.
@@ -2254,6 +2287,7 @@ mod tests {
         let scoped = GameCommand::SendChatInAdmission {
             session_id: 7,
             message: message.clone(),
+            tongue: chat::Tongue::COMMON,
         };
         let ordinary = GameCommand::SendChat(message);
         assert_eq!(scoped.session_id(), Some(7));

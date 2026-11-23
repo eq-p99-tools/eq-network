@@ -986,6 +986,11 @@ pub fn updates(opcode: u16, body: &[u8]) -> Result<Vec<WorldEvent>> {
                 value: word(body, 4),
             }]
         }
+        crate::poisons::EQMAC_OPCODE => {
+            vec![WorldEvent::PoisonAnswered(crate::poisons::eqmac_answer(
+                body,
+            )?)]
+        }
         crate::abilities::EQMAC_RESET_SKILL_OPCODE => {
             let reset = crate::abilities::eqmac::reset_skill(body)?;
             let mut events = vec![WorldEvent::SkillReset(reset)];

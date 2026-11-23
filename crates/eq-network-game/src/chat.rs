@@ -92,7 +92,8 @@ pub enum ChannelName {
 }
 
 /// A chat message the logged-in character can send through the zone server.
-/// Every variant uses Common Tongue; tells carry their recipient explicitly.
+/// The tongue it is spoken in travels beside it ([`Tongue`]); tells carry
+/// their recipient explicitly.
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum OutboundChat {
@@ -151,6 +152,61 @@ impl OutboundChat {
             Self::Tell { recipient, .. } => Some(recipient),
             _ => None,
         }
+    }
+}
+
+/// The tongue a message is spoken in, by the servers' number for it (0 the
+/// common tongue, 1 to 24 the others the profile lists), and the speaker's
+/// skill in it.
+///
+/// `EQEmu` and TAKP take the language from the packet but ignore its skill,
+/// using the speaker's own from their records, and both turn out-of-
+/// character, GM, broadcast and petition chat back to the common tongue
+/// themselves (`Client::ChannelMessageReceived`). What the official client
+/// writes in the skill field is inferred to be the speaker's skill, pending
+/// program read R49-4b.
+///
+/// A tongue is only ever the common one or one the player's profile gives
+/// them skill in ([`Tongue::spoken`]): no caller names a language or a
+/// skill of its own.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Tongue {
+    /// The language, by the servers' number.
+    language: u8,
+    /// The speaker's skill in it, 1 to 100.
+    skill: u8,
+}
+
+impl Tongue {
+    /// The common tongue at full skill, which every message was sent in
+    /// before languages were chosen.
+    pub const COMMON: Self = Self {
+        language: 0,
+        skill: 100,
+    };
+
+    /// The language, by the servers' number.
+    #[must_use]
+    pub const fn language(self) -> u8 {
+        self.language
+    }
+
+    /// The speaker's skill in it.
+    #[must_use]
+    pub const fn skill(self) -> u8 {
+        self.skill
+    }
+
+    /// The tongue the player speaks a language in: their skill from the
+    /// profile. None when the profile has no languages, lacks this one, or
+    /// holds no skill in it.
+    #[must_use]
+    pub fn spoken(player: &crate::world::PlayerState, language: u8) -> Option<Self> {
+        let skill = *player.languages.as_ref()?.get(usize::from(language))?;
+        (skill > 0).then_some(Self {
+            language,
+            skill: skill.min(100),
+        })
     }
 }
 
@@ -214,7 +270,8 @@ impl Layout {
     }
 }
 
-/// Encode a client-to-zone `ChannelMessage_Struct` for the selected client family.
+/// Encode a client-to-zone `ChannelMessage_Struct` in the common tongue for
+/// the selected client family.
 ///
 /// # Errors
 ///
@@ -224,6 +281,24 @@ pub fn encode_outbound_for(
     protocol: GameDialect,
     message: &OutboundChat,
     sender: &str,
+) -> Result<Vec<u8>> {
+    encode_outbound_in(protocol, message, sender, Tongue::COMMON)
+}
+
+/// Encode a client-to-zone `ChannelMessage_Struct` spoken in `tongue` for
+/// the selected client family. Which channels carry a chosen tongue is the
+/// caller's choice; the servers turn the channels that take none back to the
+/// common tongue themselves.
+///
+/// # Errors
+///
+/// Returns an error when the sender, recipient, or message cannot be represented
+/// by the selected client packet layout.
+pub fn encode_outbound_in(
+    protocol: GameDialect,
+    message: &OutboundChat,
+    sender: &str,
+    tongue: Tongue,
 ) -> Result<Vec<u8>> {
     let layout = Layout::of(protocol)?;
     let message_text = message.message();
@@ -263,15 +338,17 @@ pub fn encode_outbound_for(
         body[..recipient.len()].copy_from_slice(recipient.as_bytes());
     }
     body[64..64 + sender.len()].copy_from_slice(sender.as_bytes());
-    // Language 0 is Common Tongue. The two unknown words remain zero.
+    // The language, the channel, two unknown words left zero, then the skill.
     match layout {
         Layout::Titanium => {
+            body[128..132].copy_from_slice(&u32::from(tongue.language).to_le_bytes());
             body[132..136].copy_from_slice(&u32::from(message.channel()).to_le_bytes());
-            body[144..148].copy_from_slice(&100u32.to_le_bytes());
+            body[144..148].copy_from_slice(&u32::from(tongue.skill).to_le_bytes());
         }
         Layout::EqMac => {
+            body[128..130].copy_from_slice(&u16::from(tongue.language).to_le_bytes());
             body[130..132].copy_from_slice(&message.channel().to_le_bytes());
-            body[134..136].copy_from_slice(&100u16.to_le_bytes());
+            body[134..136].copy_from_slice(&u16::from(tongue.skill).to_le_bytes());
         }
     }
     body[header..header + wire_text.len()].copy_from_slice(wire_text.as_bytes());
@@ -633,10 +710,17 @@ pub struct ChatEvent {
     /// 0 none, 1 and 2 journalled); None elsewhere.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub journal_mode: Option<u8>,
-    /// The language a special message is spoken in, by the server's number
-    /// for it (0 the common tongue); None elsewhere.
+    /// The language a channel or special message is spoken in, by the
+    /// server's number for it (0 the common tongue; `EQEmu` sends 27 for one
+    /// the listener knows too little of), as sent; a number past 254 reads
+    /// 255. None elsewhere.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub language: Option<u8>,
+    /// The skill a channel message gives its language, as sent: `EQEmu`'s
+    /// lower of the speaker's and the listener's, TAKP's the speaker's; a
+    /// number past 254 reads 255. None elsewhere.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub language_skill: Option<u8>,
     /// The spawn a special message is meant for, such as the player who
     /// hailed a quest NPC, or 0 for none; None elsewhere.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -667,6 +751,7 @@ impl ChatEvent {
             speak_mode: None,
             journal_mode: None,
             language: None,
+            language_skill: None,
             target_spawn_id: None,
             source_spawn_id: None,
         }
@@ -786,6 +871,47 @@ fn guild_motd(
     })
 }
 
+/// A channel message: the recipient, the sender, the language, the channel,
+/// two unknown words and the skill, then the text.
+fn channel_message(
+    layout: Layout,
+    opcode: u16,
+    body: &[u8],
+    include_raw: bool,
+) -> Result<ChatEvent> {
+    let header = match layout {
+        Layout::Titanium => TITANIUM_CHANNEL_MESSAGE_HEADER,
+        Layout::EqMac => MAC_CHANNEL_MESSAGE_HEADER,
+    };
+    ensure!(body.len() > header, "truncated ChannelMessage");
+    ensure!(body[header..].contains(&0), "unterminated ChannelMessage");
+    let channel = match layout {
+        Layout::Titanium => u32_at(body, 132),
+        Layout::EqMac => u32::from(u16::from_le_bytes([body[130], body[131]])),
+    };
+    let name = match channel {
+        TELL_ECHO => ChannelName::TellEcho,
+        _ => channel_name(channel),
+    };
+    let mut event = ChatEvent::new(opcode, body, name, include_raw).with_message(message_for(
+        layout,
+        &body[header..],
+        include_raw,
+    ));
+    event.channel = Some(channel);
+    event.sender = Some(text(&body[64..128]));
+    event.target = nonempty_text(&body[..64]);
+    // As sent: `EQEmu` sends 27 for a tongue the listener barely
+    // knows and the lower of the two skills; TAKP the speaker's.
+    let (language, skill) = match layout {
+        Layout::Titanium => (u32_at(body, 128), u32_at(body, 144)),
+        Layout::EqMac => (u32::from(u16_at(body, 128)), u32::from(u16_at(body, 134))),
+    };
+    event.language = Some(u8::try_from(language).unwrap_or(u8::MAX));
+    event.language_skill = Some(u8::try_from(skill).unwrap_or(u8::MAX));
+    Ok(event)
+}
+
 /// Decode communication packets for the selected server protocol.
 ///
 /// # Errors
@@ -801,28 +927,7 @@ pub fn parse_for(
     let event = match CommunicationOpcode::for_protocol(layout, opcode) {
         CommunicationOpcode::Motd => ChatEvent::new(opcode, body, ChannelName::Motd, include_raw)
             .with_message(message_for(layout, body, include_raw)),
-        CommunicationOpcode::ChannelMessage => {
-            let header = match layout {
-                Layout::Titanium => TITANIUM_CHANNEL_MESSAGE_HEADER,
-                Layout::EqMac => MAC_CHANNEL_MESSAGE_HEADER,
-            };
-            ensure!(body.len() > header, "truncated ChannelMessage");
-            ensure!(body[header..].contains(&0), "unterminated ChannelMessage");
-            let channel = match layout {
-                Layout::Titanium => u32_at(body, 132),
-                Layout::EqMac => u32::from(u16::from_le_bytes([body[130], body[131]])),
-            };
-            let name = match channel {
-                TELL_ECHO => ChannelName::TellEcho,
-                _ => channel_name(channel),
-            };
-            let mut event = ChatEvent::new(opcode, body, name, include_raw)
-                .with_message(message_for(layout, &body[header..], include_raw));
-            event.channel = Some(channel);
-            event.sender = Some(text(&body[64..128]));
-            event.target = nonempty_text(&body[..64]);
-            event
-        }
+        CommunicationOpcode::ChannelMessage => channel_message(layout, opcode, body, include_raw)?,
         CommunicationOpcode::Emote => {
             let text_offset = match layout {
                 Layout::Titanium => 4,
@@ -918,11 +1023,12 @@ mod tests {
                 "message_hex",
                 "item_links",
                 "target",
-                "language",
-                "language_skill",
             ] {
                 assert!(json.get(field).is_none());
             }
+            // A channel message always names its tongue and skill, as sent.
+            assert_eq!(json["language"], 0);
+            assert_eq!(json["language_skill"], 0);
         }
         assert!(parse(0xffff, &[], false).unwrap().is_none());
     }
@@ -995,6 +1101,94 @@ mod tests {
             );
             assert_eq!(body.last(), Some(&0));
         }
+    }
+
+    #[test]
+    fn a_chosen_tongue_goes_in_the_language_and_skill_fields_of_both_layouts() {
+        let elvish = Tongue {
+            language: 3,
+            skill: 47,
+        };
+        for message in [
+            OutboundChat::Say("mae govannen".into()),
+            OutboundChat::Group("mae govannen".into()),
+            OutboundChat::Ooc("mae govannen".into()),
+        ] {
+            let body =
+                encode_outbound_in(GameDialect::Titanium, &message, "Example", elvish).unwrap();
+            assert_eq!(u32_at(&body, 128), 3);
+            assert_eq!(u32_at(&body, 132), u32::from(message.channel()));
+            assert_eq!(&body[136..144], &[0; 8]);
+            assert_eq!(u32_at(&body, 144), 47);
+            let body = encode_outbound_in(GameDialect::EqMac, &message, "Example", elvish).unwrap();
+            assert_eq!(u16_at(&body, 128), 3);
+            assert_eq!(u16_at(&body, 130), message.channel());
+            assert_eq!(u16_at(&body, 132), 0);
+            assert_eq!(u16_at(&body, 134), 47);
+        }
+        // The common tongue is what the plain encoder writes.
+        let say = OutboundChat::Say("hail".into());
+        for dialect in [GameDialect::Titanium, GameDialect::EqMac] {
+            assert_eq!(
+                encode_outbound_in(dialect, &say, "Example", Tongue::COMMON).unwrap(),
+                encode_outbound_for(dialect, &say, "Example").unwrap()
+            );
+        }
+        assert!(encode_outbound_in(GameDialect::Rof2, &say, "Example", elvish).is_err());
+    }
+
+    #[test]
+    fn a_heard_channel_message_keeps_its_language_and_skill_as_sent() {
+        let mut body = vec![0; TITANIUM_CHANNEL_MESSAGE_HEADER];
+        body[64..70].copy_from_slice(b"Trader");
+        body[128..132].copy_from_slice(&27u32.to_le_bytes());
+        body[132..136].copy_from_slice(&8u32.to_le_bytes());
+        body[144..148].copy_from_slice(&12u32.to_le_bytes());
+        body.extend_from_slice(b"hello\0");
+        let event = parse(0x1004, &body, false).unwrap().unwrap();
+        assert_eq!(event.language, Some(27));
+        assert_eq!(event.language_skill, Some(12));
+        body[128..132].copy_from_slice(&300u32.to_le_bytes());
+        body[144..148].copy_from_slice(&u32::MAX.to_le_bytes());
+        let event = parse(0x1004, &body, false).unwrap().unwrap();
+        assert_eq!(event.language, Some(u8::MAX));
+        assert_eq!(event.language_skill, Some(u8::MAX));
+
+        let mut body = vec![0; MAC_CHANNEL_MESSAGE_HEADER];
+        body[64..70].copy_from_slice(b"Trader");
+        body[128..130].copy_from_slice(&4u16.to_le_bytes());
+        body[130..132].copy_from_slice(&2u16.to_le_bytes());
+        body[134..136].copy_from_slice(&66u16.to_le_bytes());
+        body.extend_from_slice(b"hello\0");
+        let event = parse_for(GameDialect::EqMac, 0x0741, &body, false)
+            .unwrap()
+            .unwrap();
+        assert_eq!(event.channel_name, ChannelName::Group);
+        assert_eq!(event.language, Some(4));
+        assert_eq!(event.language_skill, Some(66));
+    }
+
+    #[test]
+    fn the_player_speaks_only_a_tongue_the_profile_gives_them_skill_in() {
+        let mut spawn = vec![0; 385];
+        spawn[340..344].copy_from_slice(&7u32.to_le_bytes());
+        spawn[0x57] = 100;
+        let mut player = crate::world::titanium_player(&vec![0; 19592], &spawn, 256.0).unwrap();
+        player.languages = Some(vec![100, 0, 0, 25]);
+        assert_eq!(Tongue::spoken(&player, 0), Some(Tongue::COMMON));
+        assert_eq!(
+            Tongue::spoken(&player, 3),
+            Some(Tongue {
+                language: 3,
+                skill: 25
+            })
+        );
+        assert_eq!(Tongue::spoken(&player, 1), None);
+        assert_eq!(Tongue::spoken(&player, 9), None);
+        player.languages.as_mut().unwrap()[3] = 200;
+        assert_eq!(Tongue::spoken(&player, 3).unwrap().skill, 100);
+        player.languages = None;
+        assert_eq!(Tongue::spoken(&player, 0), None);
     }
 
     #[test]

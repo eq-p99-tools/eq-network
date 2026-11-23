@@ -50,7 +50,7 @@ fn first(inventory: &Inventory, meal: Meal, auto_eat: AutoEat) -> Option<Invento
 }
 
 /// A move of the item or its containing bag has no consumption authority.
-fn known_slot(inventory: &Inventory, slot: InventorySlot) -> bool {
+pub(super) fn known_slot(inventory: &Inventory, slot: InventorySlot) -> bool {
     !inventory.prediction_origins().any(|(changed, _)| {
         changed == slot || slot.parent().is_some_and(|(parent, _)| parent == changed)
     })

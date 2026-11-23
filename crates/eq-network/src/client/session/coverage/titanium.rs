@@ -6,7 +6,7 @@ use super::{
     Reading::{Partly, Read, Unread},
     Reason::{Needless, Planned, Unmapped},
     ServerMessage,
-    Step::{AlternateAdvancement, Bazaar, LaterSystems, PlayerState, Raids, Social},
+    Step::{AlternateAdvancement, Bazaar, LaterSystems, Raids, Social},
     BECOME_NPC, DISCIPLINE_TIMER, DUEL_REQUEST, EQEMU, ILLUSION, INVITE, KICK, MARQUEE, MEMBER_ADD,
     MEMBER_LIST, MEMBER_RANK, MEMBER_UPDATE, NIMBUS, P99, POPUP, PROJECTILE, RENAME, REWARD,
     SACRIFICE, STATS, TITANIUM_DESCRIPTION, TITANIUM_PROFILE, TRANSLOCATE, VOICE_MACRO,
@@ -63,7 +63,7 @@ pub(in crate::client) fn titanium(opcode: u16) -> Option<ServerMessage> {
         // recording. The senders are a record only and change nothing.
         0x0b71 => sent("the vehicle transfer (P99 inferred)", P99, Read(&[Zone])),
         0x0b97 => sent("OP_InterruptCast", EQEMU, Read(&[Zone])),
-        0x0c2c => sent("OP_ApplyPoison", EQEMU, unasked(PlayerState)),
+        0x0c2c => sent("OP_ApplyPoison", EQEMU, Read(&[Zone])),
         0x0ce3 => sent("OP_CrystalCountUpdate", EQEMU, planned(LaterSystems)),
         0x0cfc => sent("OP_GuildOptInOut", EQEMU, planned(LaterSystems)),
         0x0d0f => sent("OP_AdventureLeaderboardReply", EQEMU, planned(LaterSystems)),
