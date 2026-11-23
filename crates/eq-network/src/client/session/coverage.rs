@@ -974,6 +974,46 @@ mod tests {
         assert!(parts.is_some_and(|parts| !parts.is_empty()));
     }
 
+    /// Quarm sends an empty `OP_TradeReset` (0x1040) after the cancel echo
+    /// on an NPC's give window (Quarm fc75fcf `Handle_OP_CancelTrade`,
+    /// `Handle_OP_TradeRequest`), as TAKP's server does. Nothing reads it
+    /// yet: it is the planned gap, never an unreadable message or an error
+    /// (checklist 6.576).
+    #[test]
+    fn quarms_empty_trade_reset_is_the_planned_gap_never_an_error() {
+        use crate::client::{session::wire::EqMac, Gap, GapStage};
+        let wire: &dyn Wire = &EqMac;
+        let messages = wire.messages(0x1040, &[], eq_network_game::inventory::ItemRules::Quarm);
+        assert!(messages.is_empty(), "read as {messages:?}");
+        let config = ClientConfig::new("ACCOUNT", "PASSWORD", "Test Server", "Tester");
+        let mut gaps: Vec<Gap> = Vec::new();
+        let mut handler = |event| {
+            if let ClientEvent::Gap(gap) = event {
+                gaps.push(*gap);
+            }
+            Ok(())
+        };
+        let mut log = Events::new(&config, &mut handler);
+        log.begin_stage(GapStage::Zone).unwrap();
+        let mut unheard = Unheard::new(Stage::Zone);
+        unheard.tell(wire, 0x1040, &[], &mut log).unwrap();
+        let kept = unheard
+            .sift(wire, (0x1040, &[]), messages, &mut log)
+            .unwrap();
+        assert!(kept.is_empty());
+        log.end_stage().unwrap();
+        drop(log);
+        assert_eq!(gaps.len(), 1);
+        assert_eq!(
+            (gaps[0].opcode, gaps[0].name, gaps[0].kind.key()),
+            (0x1040, Some("OP_TradeReset"), "unread".to_owned())
+        );
+        assert!(matches!(
+            &gaps[0].kind,
+            GapKind::Unread { reason } if reason == "planned with EQMac's catch-up on exchanges"
+        ));
+    }
+
     #[test]
     fn the_bazaars_and_traders_gaps_keep_no_sample() {
         use crate::client::{Gap, GapStage};

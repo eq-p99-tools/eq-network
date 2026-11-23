@@ -12,6 +12,13 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   session never knew where a command came from, and its checks and paces
   hold whatever sends it.
 
+- Offer Quarm giving and trading, groups, anonymous and roleplaying, and
+  translocate answers (6.576), each from Quarm's own handlers at
+  SecretsOTheP/EQMacEmu fc75fcf. Source-derived, not live. The encoders
+  are TAKP's; tests pin each body to the size Quarm's handler checks
+  (requests 4, refusal 6, group 193/128/129/128, appearance 8, translocate
+  92). Quarm moves an accepted translocate with its own zone change.
+
 - Read the guild bank as stock `EQEmu` tells a Titanium client of it
   (6.563, slice G1): `OP_GuildBank` (0xb4ab) item updates (a slot shown or
   emptied), the deposit answer, the bare acknowledgement and the clear, by

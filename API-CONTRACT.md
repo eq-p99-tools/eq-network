@@ -1429,6 +1429,27 @@ revision, capability and scenario. Separate source-derived behavior, synthetic
 codec/state-machine tests, and live evidence. A check on one server type does not
 list a feature on another: one checked on TAKP waits for its own check on Quarm.
 
+A Mac server type may also list a feature from a read of that server's own
+handlers at a named commit, never from another server's: the offer is
+labelled "source-derived, not live" in its server type, its checklist row
+stays open until a live row, and a live defect withdraws the offer on that
+server first. Quarm's source is public (SecretsOTheP/EQMacEmu). Quarm offers
+`Giving`, `Grouping`, `Listing` and `Translocate` this way, from its handlers
+at fc75fcf (6.576). Its own refusals (self-found and challenge modes, Iksar
+zones, GM checks) answer as its lines. A Quarm translocate is answered as on
+TAKP, but Quarm sends no second offer after a yes: it moves the player with
+its ordinary zone change.
+
+What Quarm sends back on those four, from the same commit: its group packets
+use the same layouts as TAKP's. Its trade cancel names who closed at +0 and
+carries a fixed 1665 at +2, which is not read. It echoes the player's own
+cancel back to them (with their own ID, or the NPC's on a give window), and
+echoes the `EQMac` program's second cancel too; the window is already closed,
+so the session withholds each echo and sends nothing more. On an NPC's give
+window it sends an empty `OP_TradeReset` (0x1040) before the NPC's
+acknowledgement and after a cancel; nothing reads it yet, so it is recorded
+as the planned exchanges gap, never as an error.
+
 Applications using a Git branch still resolve a specific commit in their
 `Cargo.lock`. A networking merge is not integrated into an application until its
 lockfile changes and that combination passes checks. Coordinate related open PRs

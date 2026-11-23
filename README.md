@@ -79,7 +79,7 @@ each.
 | `Meals` | Eating and drinking | Yes | Yes | Yes | Yes |
 | `Trading` | Buying from and selling to merchants | Yes | Yes | Yes | Yes |
 | `MerchantOffers` | Showing what a merchant pays | – | Yes | – | – |
-| `Giving` | Handing items to NPCs and trading with players | Yes | Yes | – | Yes |
+| `Giving` | Handing items to NPCs and trading with players | Yes | Yes | Yes | Yes |
 | `Looting` | Looting corpses | Yes | Yes | Yes | – |
 | `Corpses` | Consenting, summoning and dragging corpses | Yes | Yes | – | – |
 | `Tradeskills` | Combining in your own containers | Yes | Yes | – | – |
@@ -91,9 +91,9 @@ each.
 | `Talking` | Chat channels and item links | Yes | Yes | Yes | Yes |
 | `Who` | `/who` | Yes | Yes | – | – |
 | `FriendsWho` | Friends online | Yes | Yes | – | – |
-| `Grouping` | Groups | Yes | Yes | – | Yes |
+| `Grouping` | Groups | Yes | Yes | Yes | Yes |
 | `Raiding` | Raids | – | Yes | – | – |
-| `Listing` | AFK, anonymous and roleplaying | Yes | Yes | – | Yes |
+| `Listing` | AFK, anonymous and roleplaying | Yes | Yes | Yes | Yes |
 | `Rolling` | `/random` | Yes | Yes | – | – |
 | `Emoting` | `/emote` | Yes | Yes | – | – |
 | `Assisting` | `/assist` | Yes | Yes | – | – |
@@ -106,7 +106,7 @@ each.
 | **Server prompts and events** | | | | | |
 | `Training` | Training skills at a guildmaster | Yes | Yes | – | – |
 | `Resurrection` | Accepting or declining a resurrection | Yes | Yes | – | – |
-| `Translocate` | Accepting or declining a translocate | Yes | Yes | – | Yes |
+| `Translocate` | Accepting or declining a translocate | Yes | Yes | Yes | Yes |
 | `Sacrifice` | Accepting or declining a sacrifice | – | Yes | – | – |
 | `ServerDialogs` | Answering server dialogs | Yes | Yes | – | – |
 | `BleedingOut` | Reporting a death the server leaves to the client | – | – | – | Yes |

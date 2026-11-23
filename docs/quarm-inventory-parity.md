@@ -101,3 +101,9 @@ Integration notes: `MoveRules::Quarm`, `ItemPlacement::eqmac` and the
 external `ItemPlacement` literals need `eqmac: None` (or `..Default::default()`).
 The desktop's existing constructors already use defaults. Combined-stack
 capability assertions must retain independent casting/ability additions.
+
+Update (6.576): Quarm now offers giving and trading, groups, listing and
+translocate answers from its own handlers at SecretsOTheP/EQMacEmu fc75fcf
+(source-derived, not live). Moves into the trade window use this inventory
+owner's trade-slot checks; Quarm's `SwapItem` refuses an item taken back out
+of the window, as this client does.

@@ -274,6 +274,11 @@ mod tests {
         decode(opcode, body).unwrap()
     }
 
+    /// TAKP's and Quarm's handlers (Quarm: SecretsOTheP/EQMacEmu fc75fcf)
+    /// drop a request or acknowledgement other than 4 bytes
+    /// (`TradeRequest_Struct`), a cancel other than 4 (`CancelTrade_Struct`)
+    /// and a refusal other than 6 (`RefuseTrade_Struct`); the accept's size
+    /// is unchecked.
     #[test]
     fn the_player_asks_takes_clicks_and_closes_in_sixteen_bit_ids() {
         assert_eq!(
@@ -359,6 +364,26 @@ mod tests {
         assert!(decode(REQUEST_OPCODE, &[7, 0, 50]).is_err());
         assert!(decode(COINS_OPCODE, &[0; 7]).is_err());
         assert_eq!(update(0x1234, &[]), None);
+    }
+
+    /// Quarm's `ENCODE(OP_CancelTrade)` (fc75fcf `common/patches/mac.cpp`)
+    /// writes who closed at +0 and a fixed 1665 at +2, which this decoder
+    /// doesn't read. `Handle_OP_CancelTrade` sends the canceller their own
+    /// ID, the other player the canceller's, and an NPC giver the NPC's
+    /// (checklist 6.576).
+    #[test]
+    fn quarms_cancel_names_who_closed_and_its_fixed_action_is_not_read() {
+        let action = 1665u16.to_le_bytes();
+        for by in [7u16, 42, 50] {
+            let [low, high] = by.to_le_bytes();
+            assert_eq!(
+                update(CANCEL_OPCODE, &[low, high, action[0], action[1]]),
+                Some(TradeMessage::Update(ExchangeUpdate::Cancelled {
+                    by: by.into()
+                }))
+            );
+        }
+        assert_eq!(action, [0x81, 0x06]);
     }
 
     #[test]
