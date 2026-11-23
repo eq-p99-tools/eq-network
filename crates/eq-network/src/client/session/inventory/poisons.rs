@@ -1,26 +1,66 @@
 //! A Rogue's poison put on the weapon, by the slot it sits in
-//! ([`eq_network_game::poisons`]). The servers decide the class, the skill,
-//! the weapon and the level, answer every request and take the poison out
-//! with their own inventory record, so nothing is taken out here.
+//! ([`eq_network_game::poisons`]), as the Titanium program does it (read
+//! R49-1, recording checklist 6.493): putting a poison on is a timed sit.
 //!
-//! Which checks the Titanium program makes before it sends, and its lines,
-//! are pending read R49-1 (recording checklist 6.493): here the gates are
-//! the ones eating by hand has (a current inventory and the slot's moves
-//! confirmed), then an item that is not there or not a poison, and one
-//! request in flight at a time, since `EQEmu` takes a poison for each
-//! request. All are refused in this library's words.
+//! - A right-click on a poison in a top-level slot (the cursor included)
+//!   starts it. With no Apply Poison skill the program says 0x305f and stops;
+//!   a standing player is sat down (0x483556), and one who is still not
+//!   sitting is told 0x305d. One already starting or in flight is ignored
+//!   without a word. Otherwise the wait starts, with 0x305e.
+//! - The request goes out when the wait ends: effect 234's total, or 10 s
+//!   when that is 0 (the character tick, 0x422617). This session waits the
+//!   10 s always, as it does not sum effect 234: where an effect would
+//!   shorten the wait, this one is the slower (inferred, a follow-up).
+//! - Any posture change before then cancels it, with 0x30d1. Leaving the
+//!   zone drops it without a line, as the program's zoning clears it: this
+//!   state ends with the zone session. The posture
+//!   state counts its changes, so a stand and re-sit between two ticks
+//!   cancels too. A change the server forces without a posture report is
+//!   not seen (inferred: the servers report the stances they force). The
+//!   read gives 0x30d1 no colour: the host's 0x111 for it is inferred.
+//! - The answer ends the hold; which line it brings is the host's. The
+//!   program's hold is its general wait for a server answer, which other
+//!   answers clear too (read R49-5 asks); this one is the poison's own.
+//!
+//! The servers decide the class, the weapon and the level, answer every
+//! request and take the poison out with their own inventory record, so
+//! nothing is taken out here. The Mac-era program is not read: its clients
+//! take the same flow, which can only be slower (inferred). The gates
+//! before the program's own (a current inventory, the slot's moves
+//! confirmed, and the player's skills known) are this library's, in its
+//! words.
 use super::{meals::known_slot, Out, World};
 use crate::client::ClientEvent;
 use anyhow::Result;
 use eq_network_game::{
+    command::Posture,
     inventory::InventorySlot,
     poisons::{PoisonAnswer, POISON_ITEM_TYPE},
     request::Request,
+    world::{PostureState, WorldEvent},
 };
+use std::time::{Duration, Instant};
 
-/// The poison request in flight, for this zone session.
+/// How long the program waits, seated, before it sends: effect 234's total,
+/// or this when that is 0 (read R49-1 c). Effect 234 is not summed here, so
+/// this wait is always used (inferred): where the effect would shorten it,
+/// this session is the slower, never the faster.
+pub(super) const WAIT: Duration = Duration::from_secs(10);
+/// The Apply Poison skill, the program's only class test (read R49-1 b).
+const APPLY_POISON_SKILL: usize = 6;
+/// "You can't" lines and the start, as `eqstr_us.txt` string IDs (read
+/// R49-1 b, d).
+const NO_SKILL: u32 = 0x305f;
+const NOT_SITTING: u32 = 0x305d;
+const STARTED: u32 = 0x305e;
+const INTERRUPTED: u32 = 0x30d1;
+
+/// Where a poison stands, for this zone session.
 #[derive(Default)]
 pub(super) struct Poisons {
+    /// The poison waiting to go out, when its wait began, and the posture
+    /// change count then (after the session's own sit).
+    starting: Option<(InventorySlot, Instant, u64)>,
     /// The slot named by the request the server has not answered yet.
     pending: Option<InventorySlot>,
     /// Whether an answer to no request in flight was reported already.
@@ -28,32 +68,110 @@ pub(super) struct Poisons {
 }
 
 impl Poisons {
-    /// Sends the request for the poison in a slot, or says why not.
+    /// Starts putting on the poison in a slot, or says why not: a refusal in
+    /// this library's words, and the program's string for it where it has
+    /// one. One already starting or in flight is ignored, as the program
+    /// ignores it.
     pub(super) fn apply(
         &mut self,
         slot: InventorySlot,
-        world: &World,
+        world: &mut World,
         out: &mut Out<'_, '_>,
-    ) -> Result<Option<&'static str>> {
+    ) -> Result<Option<(&'static str, Option<u32>)>> {
         let inventory = &world.inventory;
         if !inventory.received() || inventory.stale() {
-            return Ok(Some("Wait for a current inventory snapshot"));
+            return Ok(Some(("Wait for a current inventory snapshot", None)));
         }
         if !known_slot(inventory, slot) {
-            return Ok(Some("Wait for that item's moves to be confirmed"));
-        }
-        if self.pending.is_some() {
-            return Ok(Some("Wait for the poison you are applying"));
+            return Ok(Some(("Wait for that item's moves to be confirmed", None)));
         }
         let Some(item) = inventory.items().get(&slot) else {
-            return Ok(Some("There is no item there"));
+            return Ok(Some(("There is no item there", None)));
         };
         if item.rules.item_type != POISON_ITEM_TYPE {
-            return Ok(Some("That is not a poison"));
+            return Ok(Some(("That is not a poison", None)));
         }
+        // The program's item use passes only the slots below 0x20 (read
+        // R49-1 a): what a bag holds is not used this way.
+        if !(0..0x20).contains(&slot.0) {
+            return Ok(Some(("Take the poison out of the bag to apply it", None)));
+        }
+        // Skills not yet reported are not the program's 0: they are refused
+        // in this library's words.
+        let Some(skill) = world
+            .player
+            .as_ref()
+            .and_then(|player| player.skills.as_deref())
+            .and_then(|skills| skills.get(APPLY_POISON_SKILL).copied())
+        else {
+            return Ok(Some(("Wait for your skills to be known", None)));
+        };
+        if skill == 0 {
+            return Ok(Some((
+                "You don't know how to apply poisons",
+                Some(NO_SKILL),
+            )));
+        }
+        if self.starting.is_some() || self.pending.is_some() {
+            return out
+                .log
+                .diagnostic(
+                    "A poison click while one is under way was ignored, as the program ignores it"
+                        .into(),
+                )
+                .map(|()| None);
+        }
+        let Some(spawn_id) = world.own_spawn else {
+            return Ok(Some(("Not in the zone yet", None)));
+        };
+        if matches!(world.posture.current(), None | Some(PostureState::Standing)) {
+            world.posture.set(spawn_id, Posture::Sitting, out)?;
+        }
+        if world.posture.current() != Some(PostureState::Sitting) {
+            return Ok(Some((
+                "You must be sitting to apply a poison",
+                Some(NOT_SITTING),
+            )));
+        }
+        self.starting = Some((slot, Instant::now(), world.posture.changes()));
+        out.log
+            .send(ClientEvent::World(WorldEvent::PoisonStarted {
+                session_id: world.session_id,
+                slot,
+                string_id: STARTED,
+            }))
+            .map(|()| None)
+    }
+
+    /// Sends a poison whose wait is over, or cancels one whose player left
+    /// the seat first.
+    pub(super) fn tick(
+        &mut self,
+        now: Instant,
+        world: &World,
+        out: &mut Out<'_, '_>,
+    ) -> Result<()> {
+        let Some((slot, since, changes)) = self.starting else {
+            return Ok(());
+        };
+        if world.posture.changes() != changes
+            || world.posture.current() != Some(PostureState::Sitting)
+        {
+            self.starting = None;
+            return out
+                .log
+                .send(ClientEvent::World(WorldEvent::PoisonInterrupted {
+                    session_id: world.session_id,
+                    string_id: INTERRUPTED,
+                }));
+        }
+        if now.saturating_duration_since(since) <= WAIT {
+            return Ok(());
+        }
+        self.starting = None;
         out.request(&Request::ApplyPoison { slot })?;
         self.pending = Some(slot);
-        Ok(None)
+        Ok(())
     }
 
     /// Hears the server's answer, which ends the request in flight. An answer
@@ -69,5 +187,14 @@ impl Poisons {
             "A poison answer for slot {} matched no request in flight",
             answer.slot.0
         )))
+    }
+
+    /// Moves the start of a wait under way back by `by`, for tests that
+    /// cannot wait it out.
+    #[cfg(test)]
+    pub(super) fn backdate(&mut self, by: Duration) {
+        if let Some((_, since, _)) = &mut self.starting {
+            *since = since.checked_sub(by).unwrap_or(*since);
+        }
     }
 }

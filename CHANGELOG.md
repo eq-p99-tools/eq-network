@@ -5,6 +5,19 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Apply Poison as the Titanium program does it (read R49-1, 6.493): the
+  session sits a standing player, waits 10 s seated, then sends the request.
+  Any posture change before then cancels it. The skill and posture refusals
+  carry the program's string ids (0x305f, 0x305d); a bag slot and unknown
+  skills are refused in this library's words; a command while one is under
+  way is ignored. The 10 s wait ignores effect 234, so it can only be slower
+  (inferred, follow-up filed). `EQMac` takes the same flow, inferred.
+  - New: `WorldEvent::PoisonStarted { session_id, slot, string_id }` and
+    `WorldEvent::PoisonInterrupted { session_id, string_id }`.
+  - **Breaking:** new variants on the exhaustive `WorldEvent`. A host that
+    showed its own line when it posted `ApplyPoison` should show
+    `PoisonStarted` instead.
+
 - Offer emotes, yells, buff cancels, book deletes and moves, surnames,
   petitions and bug reports on Quarm and TAKP (6.604 E1 to E6), from each
   server's own handlers (Quarm fc75fcf, TAKP 44afcbf). This is

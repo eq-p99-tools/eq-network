@@ -860,14 +860,36 @@ allowance policies remain with the existing inventory owner.
 
 `Capability::ApplyingPoison` gates `GameCommand::ApplyPoison { slot }`. The
 inventory feature offers it with `Inventory`, on Titanium and `EQMac`
-admissions; RoF2 offers no features. The session refuses, with
-`WorldEvent::ApplyPoisonRefused` and nothing sent, while the inventory is not
-current, while the slot has moves unconfirmed, while an earlier request waits
-for its answer, and when the slot holds no item of type 42. It never removes
-the poison itself: the server's own inventory record does, applied or not.
-`WorldEvent::PoisonAnswered { slot, applied }` is the server's answer and ends
-the request in flight. The Titanium program's own gates and lines are pending
-read R49-1 (recording checklist 6.493).
+admissions; RoF2 offers no features. The session follows the Titanium
+program's flow (read R49-1, recording checklist 6.493); `EQMac` takes the
+same flow, inferred, as its program is not read.
+
+- It refuses, with `WorldEvent::ApplyPoisonRefused` and nothing sent, in this
+  library's words with no `string_id`: while the inventory is not current,
+  while the slot has moves unconfirmed, when the slot holds no item of type
+  42, when the slot is inside a bag (the program's item use passes only
+  top-level slots, the cursor included), and while the player's skills are
+  not yet known.
+- With the Apply Poison skill at 0 it refuses with `string_id` 0x305f.
+- A standing player is sat down through the usual posture request and
+  `WorldEvent::Posture`. A player still not sitting (ducking, lying,
+  feigning) is refused with `string_id` 0x305d.
+- A command while a poison is waiting or in flight is ignored, as the
+  program ignores it: a diagnostic, and no world event.
+- Otherwise the wait starts, with `WorldEvent::PoisonStarted { slot,
+  string_id: 0x305e }`. After 10 s seated the request goes out. The program
+  waits effect 234's total where that is not 0; this session does not sum
+  it and always waits 10 s, which can only be slower (inferred).
+- Any posture change before the send, a stand and re-sit between two ticks
+  included, cancels it with `WorldEvent::PoisonInterrupted { string_id:
+  0x30d1 }` and nothing sent. The read gives that line no colour. Leaving
+  the zone drops it silently, as the program's zoning does.
+
+It never removes the poison itself: the server's own inventory record does,
+applied or not. `WorldEvent::PoisonAnswered { slot, applied }` is the
+server's answer and ends the request in flight; the program says 0x3269 when
+`applied`, else 0x326a, in colour 0x10e. The program's lines for 0x305f,
+0x305d and 0x305e are in colour 0x111.
 
 ## Command diagnostic identity
 
