@@ -556,7 +556,10 @@ impl Belongings {
             merchant: OpenMerchant::default(),
             quotes,
             meals: meals::Meals::new(auto_eat, hungry),
-            sharing: sharing::Sharing::default(),
+            sharing: match rules {
+                MoveRules::EqEmu => sharing::Sharing::default(),
+                MoveRules::Takp | MoveRules::Quarm => sharing::Sharing::eqmac(),
+            },
             poisons: poisons::Poisons::default(),
             heard: false,
         }
@@ -3761,6 +3764,7 @@ mod tests {
     ) {
         let (mut belongings, mut world, _) = with_gold();
         belongings.allows.splitting = true;
+        belongings.sharing = sharing::Sharing::eqmac();
         world.grouped = true;
         world.coins.0.purse = Some(purse);
         let command = ClientCommand::SplitCoins {
@@ -3891,6 +3895,68 @@ mod tests {
         assert!(events
             .iter()
             .any(|event| matches!(event, ClientEvent::World(WorldEvent::PurseUncertain { .. }))));
+    }
+
+    #[test]
+    fn a_second_eqmac_split_waits_for_the_first_ones_answer() {
+        let (mut belongings, mut world, sent) = eqmac_split(coins(0, 0, 0, 10), coins(0, 0, 0, 6));
+        assert_eq!(sent.len(), 1);
+        let again = ClientCommand::SplitCoins {
+            session_id: 5,
+            coins: coins(0, 0, 0, 1),
+        };
+        let outcome = testing::run_on(&super::super::wire::EqMac, |out| {
+            belongings.handle(&again, &mut world, out)
+        });
+        outcome.result.unwrap();
+        assert_eq!(outcome.sent, []);
+        assert_eq!(
+            coins_refused(&outcome.events),
+            ["Wait for the last split's answer."]
+        );
+        assert_eq!(world.coins.purse, Some(coins(0, 0, 0, 4)));
+        // Once answered, the next goes.
+        eqmac_answers(&mut belongings, &mut world, &additions(0, 0, 0, 3));
+        let outcome = testing::run_on(&super::super::wire::EqMac, |out| {
+            belongings.handle(&again, &mut world, out)
+        });
+        outcome.result.unwrap();
+        assert_eq!(outcome.sent.len(), 1);
+    }
+
+    #[test]
+    fn coins_moved_while_an_eqmac_split_waits_leave_the_purse_unknown() {
+        let (mut belongings, mut world, _) = eqmac_split(coins(2, 0, 0, 500), coins(1, 0, 0, 0));
+        // A coin move to the cursor while the split waits.
+        let purse = world.coins.0.purse.as_mut().unwrap();
+        purse.copper -= 100;
+        let events = eqmac_answers(&mut belongings, &mut world, &additions(1, 0, 0, 0));
+        assert_eq!(world.coins.purse, None);
+        assert!(events
+            .iter()
+            .any(|event| matches!(event, ClientEvent::World(WorldEvent::PurseUncertain { .. }))));
+    }
+
+    #[test]
+    fn titanium_sharing_ignores_the_mac_answers() {
+        let (mut belongings, mut world, _) = with_gold();
+        belongings.allows.splitting = true;
+        world.grouped = true;
+        let split = ClientCommand::SplitCoins {
+            session_id: 5,
+            coins: Coins {
+                gold: 1,
+                ..Coins::default()
+            },
+        };
+        testing::run(|out| belongings.handle(&split, &mut world, out))
+            .result
+            .unwrap();
+        let before = world.coins.purse;
+        let mut answers = vec![Message::SplitRefused];
+        answers.extend(additions(0, 0, 0, 0));
+        eqmac_answers(&mut belongings, &mut world, &answers);
+        assert_eq!(world.coins.purse, before);
     }
 
     #[test]

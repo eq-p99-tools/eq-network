@@ -87,6 +87,8 @@ struct Split {
 /// splitting until the admission reports it.
 #[derive(Debug, Default)]
 pub(super) struct Sharing {
+    /// TAKP and Quarm: one split at a time, settled by what they send back.
+    eqmac: bool,
     split: Option<Split>,
     change: Option<Instant>,
     profile_auto_split: Option<bool>,
@@ -104,6 +106,15 @@ fn refused(session_id: u64, reason: &str, out: &mut Out<'_, '_>) -> Result<()> {
 }
 
 impl Sharing {
+    /// Sharing on TAKP and Quarm, whose answers to a split
+    /// [`Self::eqmac_answer`] follows.
+    pub(super) fn eqmac() -> Self {
+        Self {
+            eqmac: true,
+            ..Self::default()
+        }
+    }
+
     /// Whether a banker's change holds the coins.
     pub(super) const fn changing(&self) -> bool {
         self.change.is_some()
@@ -129,6 +140,11 @@ impl Sharing {
             return out
                 .log
                 .diagnostic("Split withheld while a banker's change is unanswered".into());
+        }
+        if self.eqmac && self.split.is_some() {
+            // A second split would muddle the first one's four additions
+            // (ours; the program's handling of one is unread, 6.585c).
+            return actions::refuse(command, "Wait for the last split's answer.", out.log);
         }
         if coins.is_empty() {
             return actions::refuse_officially(
@@ -241,13 +257,22 @@ impl Sharing {
     }
 
     /// Follows what TAKP and Quarm send back after a split, once the
-    /// addition is in the purse: a refusal's line, then four additions.
+    /// addition is in the purse: a refusal's line, then four additions. Only
+    /// sharing made with [`Self::eqmac`] follows them; only the `EQMac`
+    /// reader makes [`Message::SplitRefused`] and [`Message::PurseAdded`].
+    ///
+    /// The purse settles only if nothing else moved it meanwhile: it must
+    /// still be what the split left plus the additions counted, or it
+    /// becomes unknown.
     pub(super) fn eqmac_answer(
         &mut self,
         message: &Message,
         world: &mut World,
         out: &mut Out<'_, '_>,
     ) -> Result<()> {
+        if !self.eqmac {
+            return Ok(());
+        }
         let Some(split) = &mut self.split else {
             return Ok(());
         };
@@ -271,6 +296,19 @@ impl Sharing {
         let Some(split) = self.split.take() else {
             return Ok(());
         };
+        // What the purse holds if only the split and its additions moved it.
+        let untouched = Coin::ALL
+            .into_iter()
+            .try_fold(split.before, |mut purse, coin| {
+                let held = purse.of_mut(coin);
+                *held = held
+                    .checked_sub(split.asked.of(coin))?
+                    .checked_add(split.added.of(coin))?;
+                Some(purse)
+            });
+        if untouched.is_none() || world.coins.purse != untouched {
+            return purse_uncertain(world, out);
+        }
         let settled = if split.refused {
             // Given back as asked: the purse is as it was.
             (split.added == split.asked).then_some(split.before)
@@ -306,7 +344,10 @@ impl Sharing {
     /// profile's automatic splitting.
     pub(super) fn admitted(&mut self, out: &mut Out<'_, '_>) -> Result<()> {
         let profile = self.profile_auto_split.take();
-        *self = Self::default();
+        *self = Self {
+            eqmac: self.eqmac,
+            ..Self::default()
+        };
         if let Some(on) = profile {
             out.log
                 .send(ClientEvent::World(WorldEvent::AutoSplit(on)))?;

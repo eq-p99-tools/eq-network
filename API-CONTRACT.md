@@ -1501,6 +1501,9 @@ Quarm and TAKP offer `Rolling`, `Assisting` and `Splitting` the same way
     so the purse becomes what the take left plus the share.
   - With fewer than four additions within 3 seconds, the purse is unknown.
     Quarm pays a self-found splitter nothing.
+  - One split is in flight at a time; another asked before the answer is
+    refused. The purse settles only if nothing else moved it during the
+    wait, and is otherwise unknown.
   - What the `EQMac` program's purse shows after a split that made change is
     unread (open row 6.585d).
 
