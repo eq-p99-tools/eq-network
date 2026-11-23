@@ -733,12 +733,15 @@ pub enum Capability {
     /// ([`crate::command::GameCommand::AskDisciplineReuse`]): `EQMac`'s
     /// bare `/disc`.
     DisciplineReuse,
+    /// Titanium's `/sheathe` and `/aggressive`
+    /// ([`crate::command::GameCommand::ToggleStance`]).
+    WeaponStances,
 }
 
 impl Capability {
     /// Every capability, in order: what a session offers when its server and
     /// client generation support everything.
-    pub const ALL: [Self; 89] = [
+    pub const ALL: [Self; 90] = [
         Self::Casting,
         Self::Spellbook,
         Self::Inventory,
@@ -828,6 +831,7 @@ impl Capability {
         Self::BandolierSwap,
         Self::UsingPotionBelt,
         Self::DisciplineReuse,
+        Self::WeaponStances,
     ];
 }
 
@@ -2065,6 +2069,9 @@ pub enum WorldEvent {
     Duel(crate::socials::DuelUpdate),
     /// A challenge to a duel the player may accept or decline, once.
     DuelOffer(crate::socials::DuelQuestion),
+    /// What a Titanium duel means to the player, as the official program
+    /// words it (R49-6 a, e, h); the session tells it.
+    DuelNews(crate::socials::DuelNews),
     /// An answer to a duel was not sent, and why.
     DuelRefused {
         /// The offer the command named.
@@ -2872,6 +2879,7 @@ mod tests {
             Capability::BandolierSwap => 86,
             Capability::UsingPotionBelt => 87,
             Capability::DisciplineReuse => 88,
+            Capability::WeaponStances => 89,
         };
         for (index, capability) in Capability::ALL.into_iter().enumerate() {
             assert_eq!(place(capability), index, "{capability:?}");

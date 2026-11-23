@@ -5,6 +5,33 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Follow the Titanium program's read R49-6 for duels, stuns, becoming a
+  corpse, `/lfg`, the quest reward and `/sheathe` and `/aggressive`.
+  - **Breaking.** `WorldEvent::DuelNews(socials::DuelNews)` is new, and
+    `Capability::WeaponStances` and `GameCommand::ToggleStance` are new.
+    `GameCommand::ChallengeDuel`'s `target` is now the player's target, or
+    0 for none. `Request::AnswerDuel` with `accept: false` is refused on
+    Titanium, and `Request::AutoDeclineDuel` and `Request::PlayerState` are
+    new.
+  - **Duel.** The program has no challenge window and no decline. A
+    challenge is news. `/duel` at the challenger accepts with
+    `OP_RequestDuel`, then `OP_DuelAccept`; anywhere else it challenges.
+    The session turns a challenge down on its own, as the program does
+    (0x3ea0, 12 bytes, reason 1 or 2), and keeps no pace, time-out or
+    distance test. The host's question stays, as a departure the host
+    owns: a yes sends what `/duel` sends, and a no sends nothing. The
+    Mac-era duel is held for row 11g. The ignore-list refusal (reason 0)
+    and the 8-byte 0x3bad on a win are not sent.
+  - **Stun.** A stun under divine aura (effect 40) is ignored (0x417839).
+    A stun during a stun doesn't extend it.
+  - **Corpse.** `OP_BecomeCorpse` places the spawn and stops it.
+  - **LFG.** Titanium's body says the program's range, 100, at +0xc.
+  - **Quest reward.** The coin order is cited to `EQEmu`'s
+    `QuestReward_Struct` and `AddMoneyToPP` (1d9cb5c7).
+  - **Stances.** `/sheathe` and `/aggressive` flip state bit 2 or 8 and send
+    `OP_PlayerStateAdd` or `OP_PlayerStateRemove`, on stock `EQEmu` only.
+    The first P99 use is attended.
+
 - Offer emotes, yells, buff cancels, book deletes and moves, surnames,
   petitions and bug reports on Quarm and TAKP (6.604 E1 to E6), from each
   server's own handlers (Quarm fc75fcf, TAKP 44afcbf). This is

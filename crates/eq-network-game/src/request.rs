@@ -141,6 +141,24 @@ pub enum Request {
         /// True accepts.
         accept: bool,
     },
+    /// The player took on (`on`) or left a stance's state
+    /// ([`crate::appearance::titanium_player_state`]); the `EQMac` client's
+    /// is not read.
+    PlayerState {
+        /// Which.
+        stance: crate::appearance::Stance,
+        /// Took it on, or left it.
+        on: bool,
+    },
+    /// The Titanium program's own refusal of a challenge, by its reason
+    /// ([`socials::titanium_duel_auto_decline`]); the `EQMac` client's is
+    /// not read.
+    AutoDeclineDuel {
+        /// Who challenged.
+        challenger: u16,
+        /// Why.
+        reason: socials::DuelAutoDecline,
+    },
     /// `OP_RequestDuel` naming the other player: a challenge, and on
     /// `EQMac`, by TAKP's note, also what its client sends before it
     /// accepts.
@@ -620,12 +638,15 @@ pub fn titanium(request: &Request, sender: Sender<'_>) -> Result<EncodedCommand>
             confirmations::titanium_translocate_answer(offer, *accept)
         }
         Request::AnswerDuel { challenger, accept } => {
-            let own = duelist(sender)?;
-            if *accept {
-                socials::titanium_duel_accept(*challenger, own)
-            } else {
-                socials::titanium_duel_decline(*challenger, own)
-            }
+            // The program has no decline (R49-6a): a no is the host's own.
+            anyhow::ensure!(*accept, "the Titanium client sends no decline to a duel");
+            socials::titanium_duel_accept(*challenger, duelist(sender)?)
+        }
+        Request::PlayerState { stance, on } => {
+            crate::appearance::titanium_player_state(duelist(sender)?, stance.states(), *on)
+        }
+        Request::AutoDeclineDuel { challenger, reason } => {
+            socials::titanium_duel_auto_decline(*challenger, duelist(sender)?, *reason)
         }
         Request::DuelRequest { other } => socials::titanium_duel_request(*other, duelist(sender)?),
         Request::InviteToGroup { name, .. } => group::invite(name, sender.name)?,

@@ -974,7 +974,7 @@ mod tests {
     };
 
     /// How many kinds of command there are.
-    const KINDS: usize = 146;
+    const KINDS: usize = 147;
 
     /// The kinds the login and world servers take, before any zone session.
     const BEFORE_ZONES: [usize; 5] = [0, 1, 70, 75, 113];
@@ -1064,6 +1064,7 @@ mod tests {
             ClientCommand::SwapBandolier { .. } => 143,
             ClientCommand::UseBeltItem(_) => 144,
             ClientCommand::AskDisciplineReuse { .. } => 145,
+            ClientCommand::ToggleStance { .. } => 146,
             ClientCommand::UseAbility { .. } => 33,
             ClientCommand::Consume { .. } => 34,
             ClientCommand::WhoAll { .. } => 35,
@@ -1498,6 +1499,11 @@ mod tests {
             },
             ClientCommand::AskDisciplineReuse {
                 session_id,
+                created,
+            },
+            ClientCommand::ToggleStance {
+                session_id,
+                stance: eq_network_game::appearance::Stance::Sheathed,
                 created,
             },
             ClientCommand::AcceptTask {

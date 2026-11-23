@@ -63,4 +63,12 @@ pub const fn can_see(spawn: &SpawnState, sees_invisible: bool) -> bool {
 pub trait SightCatalog: std::fmt::Debug + Send + Sync {
     /// Whether the known application grants positive Titanium SPA 13.
     fn sees_invisible(&self, spell_id: u32, caster_level: u16, landed: bool) -> bool;
+
+    /// Whether the known application grants a positive Titanium SPA 40
+    /// (divine aura), under which the program ignores a stun (R49-6b:
+    /// 0x417839 tests effect 40's total). False, the default, where the
+    /// host does not know.
+    fn grants_divine_aura(&self, _spell_id: u32, _caster_level: u16, _landed: bool) -> bool {
+        false
+    }
 }

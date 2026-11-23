@@ -1,7 +1,9 @@
 //! What a quest or a task gives the player.
 //!
-//! `EQEmu` tells a Titanium client of a quest's reward in `OP_Sound`
-//! (`Client::QuestReward`), and of coins alone in `OP_CashReward`
+//! `EQEmu` tells a Titanium client of a quest's reward in what its table
+//! names `OP_Sound` (`Client::QuestReward`), which the official program reads
+//! as the reward it is: a line per coin and sound 0x8d (read R49-6g, case
+//! 0x45df62; no other sound cue comes on it), and of coins alone in `OP_CashReward`
 //! (`Client::CashReward`: a task's coins and a quest's `givecash`); TAKP
 //! and Quarm tell an `EQMac` client of a quest's reward in `OP_Reward`
 //! (`Client::QuestReward`). Each adds the coins to the purse without a money

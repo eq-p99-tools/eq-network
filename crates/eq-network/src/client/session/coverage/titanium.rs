@@ -258,6 +258,7 @@ pub(in crate::client) fn titanium(opcode: u16) -> Option<ServerMessage> {
             Partly(&[Zone], DISCIPLINE_TIMER),
         ),
         // A quest's reward, or EQEmu's fixed record that gives nothing.
+        // EQEmu names it OP_Sound; the program reads a quest reward (R49-6g).
         0x541e => sent("OP_Sound", EQEMU, Partly(&[Zone], REWARD)),
         0x547a => sent("OP_Emote", EQEMU, Read(&[Chat])),
         0x5483 => sent("OP_MarkNPC", EQEMU, planned(Raids)),

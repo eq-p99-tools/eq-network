@@ -84,8 +84,15 @@ pub const EQMAC_REQUEST_DUEL_OPCODE: u16 = 0xcf40;
 pub const EQMAC_DUEL_ACCEPT_OPCODE: u16 = 0x5d41;
 /// TAKP's `OP_DuelResponse`: a client's answer turning a challenge down.
 pub const EQMAC_DUEL_RESPONSE_OPCODE: u16 = 0xd040;
-/// `OP_DuelDecline`: the player turns a challenge down (Titanium).
+/// `OP_DuelDecline` in `EQEmu`'s Titanium table: the player turns a
+/// challenge down (Titanium). The official program sends no decline of its
+/// own on it: it sends 0x3bad only when the player wins a duel, in 8 bytes
+/// it is not read what (R49-6e), which `EQEmu`'s 12-byte handler drops.
 pub const DUEL_DECLINE_OPCODE: u16 = 0x3bad;
+/// The Titanium program's own refusal of a challenge (R49-6a: handler
+/// 0x453231), 12 bytes. `EQEmu`'s Titanium table names no opcode 0x3ea0, so
+/// stock `EQEmu` drops it.
+pub const DUEL_AUTO_DECLINE_OPCODE: u16 = 0x3ea0;
 /// `OP_RandomReq` on TAKP and Quarm (Mac 0x41e7).
 pub const EQMAC_RANDOM_OPCODE: u16 = 0xe741;
 /// `OP_RandomReply` on TAKP and Quarm (Mac 0x4016).
@@ -203,6 +210,106 @@ pub struct DuelQuestion {
     pub id: crate::confirmations::ConsentId,
     /// The player who challenged.
     pub challenger: u16,
+}
+
+/// Why the Titanium program turns a challenge down on its own, by the
+/// byte it sends (R49-6a).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+pub enum DuelAutoDecline {
+    /// 0: the challenger is on the player's ignore list (the list test is
+    /// inferred, 0x49297b).
+    Ignored,
+    /// 1: the player is in a duel with someone else.
+    Dueling,
+    /// 2: another challenge is waiting, or the player challenged someone
+    /// else.
+    Considering,
+}
+
+impl DuelAutoDecline {
+    /// The byte the program sends.
+    #[must_use]
+    pub const fn byte(self) -> u8 {
+        match self {
+            Self::Ignored => 0,
+            Self::Dueling => 1,
+            Self::Considering => 2,
+        }
+    }
+}
+
+/// What a Titanium duel means to the player, as the official program words
+/// it (R49-6 a, e, h). Each names the line it shows; the host words it from
+/// the installed client's strings.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+pub enum DuelNews {
+    /// Another player challenged the player (0x592, %1 their name).
+    Challenged {
+        /// Who.
+        by: u16,
+    },
+    /// The player the player challenged accepted, and the duel began
+    /// (0x590, %1 their name).
+    Begun {
+        /// The opponent.
+        with: u16,
+    },
+    /// The player challenged their target (`/duel`, 0x33c6, %1 its name).
+    Challenging {
+        /// Who.
+        target: u16,
+    },
+    /// The player accepted their target's challenge, and the duel began
+    /// (`/duel`, 0x33c4, %1 its name).
+    Accepting {
+        /// The opponent.
+        challenger: u16,
+    },
+    /// `/duel` with no target, or one that is not a player (0x33c0).
+    NoPlayerTarget,
+    /// `/duel` at the player themselves (0x33c1).
+    NotYourself,
+    /// `/duel` during a duel: at the opponent (0x33c2), or at someone else
+    /// (0x33c3).
+    AlreadyDueling {
+        /// Whether the target is the opponent.
+        at_opponent: bool,
+    },
+    /// `/duel` at one player while another's challenge waits (0x33c5).
+    ConsideringAnother,
+    /// The player won the duel (0x2f44, %1 the player's name, %2 the
+    /// opponent's).
+    Won {
+        /// The opponent who died.
+        over: u16,
+    },
+    /// The duel ended with the opponent's death at another's hand
+    /// (0x2f45, %1 and %2 the opponent's name).
+    Ended {
+        /// The opponent who died.
+        opponent: u16,
+    },
+}
+
+/// The Titanium program's own refusal of a challenge (R49-6a):
+/// `0x3ea0`, 12 bytes, the challenger and the player as 32 bits each, then
+/// the reason's byte. The program leaves the last three bytes unwritten;
+/// these are zero.
+#[must_use]
+pub fn titanium_duel_auto_decline(
+    challenger: u16,
+    own: u16,
+    reason: DuelAutoDecline,
+) -> EncodedCommand {
+    let mut body: Vec<u8> = [u32::from(challenger), u32::from(own)]
+        .iter()
+        .flat_map(|id| id.to_le_bytes())
+        .collect();
+    body.extend([reason.byte(), 0, 0, 0]);
+    EncodedCommand {
+        opcode: DUEL_AUTO_DECLINE_OPCODE,
+        body,
+    }
 }
 
 /// Why a client turned a duel down, by TAKP's numbers for it.
@@ -422,8 +529,8 @@ pub fn titanium_yell() -> EncodedCommand {
 }
 
 /// Titanium's yes to a challenge: `OP_DuelAccept` (8 bytes), the
-/// challenger then the player, each 32 bits (`Duel_Struct`). The order is
-/// what `EQEmu`'s handler takes (inferred, 6.492, pending R49-6a).
+/// challenger then the player, each 32 bits (`Duel_Struct`), as `/duel`
+/// sends it after [`titanium_duel_request`] (R49-6h, 0x472a67).
 #[must_use]
 pub fn titanium_duel_accept(challenger: u16, own: u16) -> EncodedCommand {
     EncodedCommand {
@@ -435,10 +542,10 @@ pub fn titanium_duel_accept(challenger: u16, own: u16) -> EncodedCommand {
     }
 }
 
-/// Titanium's no to a challenge: `OP_DuelDecline` (12 bytes,
-/// `DuelResponse_Struct`), the challenger, the player and a zero word.
-/// `EQEmu` tells the challenger in either order; this one is inferred
-/// (6.492, pending R49-6a).
+/// `EQEmu`'s Titanium decline: `OP_DuelDecline` (12 bytes,
+/// `DuelResponse_Struct`), the challenger, the player and a zero word. The
+/// official program has no decline command and never sends this (R49-6a),
+/// so no request encodes it on Titanium.
 #[must_use]
 pub fn titanium_duel_decline(challenger: u16, own: u16) -> EncodedCommand {
     EncodedCommand {
@@ -451,11 +558,10 @@ pub fn titanium_duel_decline(challenger: u16, own: u16) -> EncodedCommand {
 }
 
 /// Titanium's challenge to a duel: `OP_RequestDuel` (8 bytes,
-/// `Duel_Struct`), the other player then the player, each 32 bits.
-/// `EQEmu`'s `Handle_OP_RequestDuel` swaps the two words and looks up the
-/// first as the one challenged, so it must name a spawn in the zone; the
-/// order the official program writes is inferred from that handler
-/// (checklist 6.492b, pending R49-6h).
+/// `Duel_Struct`), the other player then the player, each 32 bits, as the
+/// official program writes it (R49-6h, 0x472a67). `EQEmu`'s
+/// `Handle_OP_RequestDuel` swaps the two words and looks up the first as
+/// the one challenged, so it must name a spawn in the zone.
 #[must_use]
 pub fn titanium_duel_request(other: u16, own: u16) -> EncodedCommand {
     EncodedCommand {
