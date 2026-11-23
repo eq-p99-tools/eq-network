@@ -943,7 +943,7 @@ mod tests {
     };
 
     /// How many kinds of command there are.
-    const KINDS: usize = 122;
+    const KINDS: usize = 123;
 
     /// The kinds the login and world servers take, before any zone session.
     const BEFORE_ZONES: [usize; 5] = [0, 1, 70, 75, 113];
@@ -1009,6 +1009,7 @@ mod tests {
             ClientCommand::AcceptTrade { .. } => 30,
             ClientCommand::CancelTrade { .. } => 31,
             ClientCommand::MoveCoins { .. } => 32,
+            ClientCommand::DestroyCoins { .. } => 122,
             ClientCommand::UseAbility { .. } => 33,
             ClientCommand::Consume { .. } => 34,
             ClientCommand::WhoAll { .. } => 35,
@@ -1422,6 +1423,14 @@ mod tests {
                     to: eq_network_game::money::CoinPlace::Cursor,
                     coin: eq_network_game::money::Coin::Gold,
                     into: eq_network_game::money::Coin::Gold,
+                    amount: 2,
+                },
+                created,
+            },
+            ClientCommand::DestroyCoins {
+                session_id,
+                destroy: eq_network_game::money::CoinDestroy {
+                    coin: eq_network_game::money::Coin::Gold,
                     amount: 2,
                 },
                 created,

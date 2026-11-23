@@ -451,6 +451,9 @@ pub(super) struct Allowances {
     pub(super) splitting: bool,
     /// Asking a banker to change the purse's and the bank's coins.
     pub(super) banker_change: bool,
+    /// Destroying coins from the cursor, where the server type's own live
+    /// check has shown it takes them (checklist 6.512).
+    pub(super) destroying_coins: bool,
 }
 
 impl Allowances {
@@ -463,6 +466,7 @@ impl Allowances {
         meals: true,
         splitting: false,
         banker_change: false,
+        destroying_coins: false,
     };
 }
 
@@ -986,6 +990,52 @@ impl Belongings {
         out.log.diagnostic(format!("Coin move refused: {reason}"))
     }
 
+    /// Destroys coins of one kind from the cursor. No answer comes and the
+    /// server takes no more than it counts on the cursor, so only what the
+    /// ledger already holds there goes, all of that kind at once
+    /// (checklist 6.512, reviewer K2).
+    fn destroy_coins(
+        command: &ClientCommand,
+        world: &mut World,
+        out: &mut Out<'_, '_>,
+    ) -> Result<()> {
+        let ClientCommand::DestroyCoins {
+            session_id,
+            destroy,
+            ..
+        } = command
+        else {
+            return Ok(());
+        };
+        let held = world.coins.cursor.of(destroy.coin);
+        let refusal = if held == destroy.amount {
+            let mut after = *world.coins;
+            match after
+                .destroy(*destroy)
+                .map_err(str::to_owned)
+                .and_then(|()| {
+                    out.encode(&Request::DestroyCoins(*destroy))
+                        .map_err(|error| error.to_string())
+                }) {
+                Ok(packet) => {
+                    out.send(&packet)?;
+                    world.coins.0 = after;
+                    return tell_coins(world, false, out);
+                }
+                Err(reason) => reason,
+            }
+        } else {
+            "Destroy the coins on the cursor, all of one kind".to_owned()
+        };
+        out.log.send(ClientEvent::World(WorldEvent::CoinsRefused {
+            session_id: *session_id,
+            reason: refusal.clone(),
+            string_id: None,
+        }))?;
+        out.log
+            .diagnostic(format!("Coin destroy refused: {refusal}"))
+    }
+
     /// Opens or closes a merchant's window; only a merchant the player can
     /// see will trade, and opens only within the generation's reach where
     /// it is read (TAKP: 3-D, at most 20). Out of reach the program says
@@ -1059,6 +1109,9 @@ impl Feature for Belongings {
         }
         if self.allows.banker_change {
             offered.push(Capability::BankerChange);
+        }
+        if self.allows.coins && self.allows.destroying_coins {
+            offered.push(Capability::DestroyingCoins);
         }
         offered
     }
@@ -1135,6 +1188,7 @@ impl Feature for Belongings {
             ClientCommand::DestroyItem(_) => self.allows.items && self.rules == MoveRules::EqEmu,
             ClientCommand::DropItem(_) => self.allows.ground_drop,
             ClientCommand::MoveCoins { .. } => self.allows.coins,
+            ClientCommand::DestroyCoins { .. } => self.allows.coins && self.allows.destroying_coins,
             ClientCommand::Shop { .. } | ClientCommand::Buy { .. } | ClientCommand::Sell { .. } => {
                 self.allows.merchants
             }
@@ -1160,10 +1214,13 @@ impl Feature for Belongings {
             ClientCommand::MoveInventory(request) => self.move_item(request, world, out),
             ClientCommand::DestroyItem(request) => self.destroy_item(request, world, out),
             ClientCommand::DropItem(request) => Self::drop_item(request, world, out),
-            ClientCommand::MoveCoins { .. } if self.sharing.changing() => {
+            ClientCommand::MoveCoins { .. } | ClientCommand::DestroyCoins { .. }
+                if self.sharing.changing() =>
+            {
                 super::actions::refuse(command, "Wait for the banker's change.", out.log)
             }
             ClientCommand::MoveCoins { .. } => Self::move_coins(command, world, out),
+            ClientCommand::DestroyCoins { .. } => Self::destroy_coins(command, world, out),
             ClientCommand::SplitCoins { coins, .. } => {
                 self.sharing.split(command, *coins, world, out)
             }
@@ -3164,6 +3221,72 @@ mod tests {
             );
             assert_eq!(coins_refused(&outcome.events), [reason]);
         }
+    }
+
+    #[test]
+    fn coins_on_the_cursor_are_destroyed_all_of_one_kind_and_only_where_offered() {
+        use eq_network_game::money::{
+            Coin, CoinDestroy, CoinPlace, EQMAC_MOVE_OPCODE, MOVE_OPCODE as COIN_OPCODE,
+        };
+        let (mut belongings, mut world, move_coins) = with_gold();
+        let standard = belongings.allows;
+        belongings.allows.destroying_coins = true;
+        let destroy = |coin, amount| ClientCommand::DestroyCoins {
+            session_id: 5,
+            destroy: CoinDestroy { coin, amount },
+            created: Instant::now(),
+        };
+        // Two gold onto the cursor.
+        testing::run(|out| {
+            belongings.handle(
+                &move_coins(CoinPlace::Purse, CoinPlace::Cursor),
+                &mut world,
+                out,
+            )
+        })
+        .result
+        .unwrap();
+        assert!(belongings.owns(&destroy(Coin::Gold, 2)));
+        assert!(belongings
+            .capabilities()
+            .contains(&crate::world::Capability::DestroyingCoins));
+        // Not all of the kind, more than it, or a kind not there: nothing sent.
+        for (coin, amount) in [(Coin::Gold, 1), (Coin::Gold, 3), (Coin::Platinum, 1)] {
+            let outcome =
+                testing::run(|out| belongings.handle(&destroy(coin, amount), &mut world, out));
+            assert_eq!(outcome.sent, [], "{coin:?} {amount}");
+            assert_eq!(
+                coins_refused(&outcome.events),
+                ["Destroy the coins on the cursor, all of one kind"]
+            );
+        }
+        assert_eq!(world.coins.cursor.gold, 2);
+        let outcome =
+            testing::run(|out| belongings.handle(&destroy(Coin::Gold, 2), &mut world, out));
+        outcome.result.unwrap();
+        assert_eq!(outcome.sent.len(), 1);
+        assert_eq!(outcome.sent[0].opcode, COIN_OPCODE);
+        assert_eq!(&outcome.sent[0].body[4..8], &(-1i32).to_le_bytes());
+        assert!(world.coins.cursor.is_empty());
+        assert_eq!(world.coins.purse.map(|purse| purse.gold), Some(3));
+        // The purse is unchanged, so only the rest is told.
+        assert!(matches!(
+            outcome.events[..],
+            [ClientEvent::World(WorldEvent::CoinsElsewhere { cursor, .. })] if cursor.is_empty()
+        ));
+        // TAKP's packet is its own opcode, the same five words.
+        world.coins.0.cursor.gold = 2;
+        let outcome = testing::run_on(&super::super::wire::EqMac, |out| {
+            belongings.handle(&destroy(Coin::Gold, 2), &mut world, out)
+        });
+        outcome.result.unwrap();
+        assert_eq!(outcome.sent[0].opcode, EQMAC_MOVE_OPCODE);
+        // Standard allowances neither offer nor take it.
+        belongings.allows = standard;
+        assert!(!belongings.owns(&destroy(Coin::Gold, 2)));
+        assert!(!belongings
+            .capabilities()
+            .contains(&crate::world::Capability::DestroyingCoins));
     }
 
     #[test]

@@ -673,12 +673,15 @@ pub enum Capability {
     /// the server type opens a chat link; whether one is up is told by
     /// [`WorldEvent::ChannelLink`].
     ChatChannels,
+    /// Destroying coins from the cursor
+    /// ([`crate::command::GameCommand::DestroyCoins`]).
+    DestroyingCoins,
 }
 
 impl Capability {
     /// Every capability, in order: what a session offers when its server and
     /// client generation support everything.
-    pub const ALL: [Self; 76] = [
+    pub const ALL: [Self; 77] = [
         Self::Casting,
         Self::Spellbook,
         Self::Inventory,
@@ -755,6 +758,7 @@ impl Capability {
         Self::ReportingBugs,
         Self::SendingFeedback,
         Self::ChatChannels,
+        Self::DestroyingCoins,
     ];
 }
 
@@ -2598,6 +2602,7 @@ mod tests {
             Capability::ReportingBugs => 73,
             Capability::SendingFeedback => 74,
             Capability::ChatChannels => 75,
+            Capability::DestroyingCoins => 76,
         };
         for (index, capability) in Capability::ALL.into_iter().enumerate() {
             assert_eq!(place(capability), index, "{capability:?}");

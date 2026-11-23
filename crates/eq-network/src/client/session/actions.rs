@@ -194,6 +194,7 @@ pub(super) fn needs(command: &ClientCommand) -> &'static [Resource] {
         | ClientCommand::OfferTrade { .. }
         | ClientCommand::CancelTrade { .. }
         | ClientCommand::MoveCoins { .. }
+        | ClientCommand::DestroyCoins { .. }
         | ClientCommand::Jump { .. }
         // Damage done holds nothing back.
         | ClientCommand::EnvironmentalDamage { .. }
@@ -398,6 +399,7 @@ fn refusal(command: &ClientCommand, reason: &str) -> Option<WorldEvent> {
         | ClientCommand::OfferTrade { session_id, .. }
         | ClientCommand::AcceptTrade { session_id, .. }
         | ClientCommand::MoveCoins { session_id, .. }
+        | ClientCommand::DestroyCoins { session_id, .. }
         | ClientCommand::Consume { session_id, .. }
         | ClientCommand::ApplyPoison { session_id, .. }
         | ClientCommand::ChatChannel { session_id, .. }
@@ -557,6 +559,7 @@ fn reasoned(command: &ClientCommand, session_id: u64, reason: String) -> Option<
             WorldEvent::ExchangeRefused { session_id, reason }
         }
         ClientCommand::MoveCoins { .. }
+        | ClientCommand::DestroyCoins { .. }
         | ClientCommand::ChangeCoins { .. }
         | ClientCommand::SplitCoins { .. }
         | ClientCommand::SetAutoSplit { .. } => WorldEvent::CoinsRefused {

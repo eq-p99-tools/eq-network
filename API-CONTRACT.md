@@ -226,6 +226,14 @@ Titanium program sends, and the server decides what it allows.
   coin moves until `WorldEvent::CoinsChanged` arrives, which the worker
   follows with `Coins` and `CoinsElsewhere`. If no answer arrives within the
   wait, `CoinsRefused` reports it and the coins stay as they were.
+- `GameCommand::DestroyCoins` destroys coins of one kind from the cursor,
+  under `Capability::DestroyingCoins`, which only stock `EQEmu` offers
+  (`Client::OPMoveCoin` takes slot -1 as destroyed). It must name exactly
+  what the cursor holds of that kind; anything else is refused on
+  `CoinsRefused` and nothing is sent. A host destroying several kinds sends
+  one command per kind. No answer comes, so the worker takes the coins from
+  the cursor at once and reports `CoinsElsewhere`. It waits, refused, while a
+  banker's change is unanswered. The host asks the player first.
 - `GameCommand::RequestGuildMotd` names the player's guild; outside one it
   is refused with the official string ID. The reply arrives as chat on
   `ChannelName::GuildMotdReply`, which the official client always shows.
