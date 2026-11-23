@@ -8,6 +8,8 @@
 //! Independent inventory updates supply consumption and any product. As the
 //! official client does, it refuses a combine while the cursor holds an
 //! item or coins, and names the official client's own words for that.
+//! On TAKP and Quarm a close leaves the container's items in it, and the
+//! server's empty answer ends the use (6.598).
 use super::{
     actions::{self, Resource},
     feature::{Feature, Out, World},
@@ -27,6 +29,15 @@ use eq_network_game::{
 use std::time::{Duration, Instant};
 
 const OPEN_WINDOW: Duration = Duration::from_secs(8);
+
+/// How long a combine on TAKP or Quarm waits for the server's reset before
+/// the session lets the player combine again. Both servers refuse some
+/// combines with a line and no reset: alchemy outside a shaman's level,
+/// tinkering for anyone but a gnome, poison for anyone but a rogue, and
+/// Quarm's out-of-era product. The wait ends by time alone, never by the
+/// line's words (6.598 C3); whether the `EQMac` program waits at all is
+/// unread (row 6.598c).
+const EQMAC_COMBINE_WINDOW: Duration = Duration::from_secs(10);
 
 /// The world container the player asked to open, or has open. Every
 /// feature reads it; only this module changes it.
@@ -67,6 +78,12 @@ impl OpenContainer {
     /// Whether a world container is open for the player.
     pub(super) const fn is_open(&self) -> bool {
         matches!(self.0, Some(Container::Open { .. }))
+    }
+
+    /// Whether no world container is asked for, open, closing or blocked.
+    #[cfg(test)]
+    pub(super) const fn idle(&self) -> bool {
+        self.0.is_none()
     }
 
     /// Whether the player asked to open this container and waits for it.
@@ -213,6 +230,11 @@ pub(super) struct Tradeskills {
     inventory_changed: Option<Instant>,
     /// A world combine may emit an untagged full clear after its reset.
     station_clear_pending: bool,
+    /// TAKP and Quarm (6.598): the clear comes before the reset, a close
+    /// leaves the container's items in it, and a combine's wait is bounded.
+    eqmac: bool,
+    /// When the waiting combine was sent.
+    combined_at: Option<Instant>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -246,6 +268,38 @@ impl Tradeskills {
         );
         if self.scope == Scope::Forge {
             station_ingredients(&world.inventory).map_err(|reason| anyhow!(reason))?;
+        }
+        Ok(())
+    }
+
+    /// TAKP's and Quarm's combines and world containers (6.598).
+    pub(super) fn eqmac() -> Self {
+        Self {
+            eqmac: true,
+            ..Self::default()
+        }
+    }
+
+    /// The server no longer counts the player as the user of a world
+    /// container: TAKP's and Quarm's empty answer to a close. What the
+    /// container held stays in it, so its places leave the player's view.
+    fn released(&mut self, world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
+        match &world.container.0 {
+            // A late answer to an earlier close cannot end a newer open.
+            Some(Container::Asked { .. }) | None => return Ok(()),
+            Some(Container::Open { view, .. }) => {
+                world.happened(Message::Event(WorldEvent::Objects(ObjectUpdate::Closed {
+                    drop_id: view.drop_id,
+                })));
+            }
+            Some(Container::Closing { .. } | Container::Blocked) => (),
+        }
+        world.container.0 = None;
+        self.station_clear_pending = false;
+        if world.inventory.items().keys().any(|slot| slot.is_world())
+            || world.inventory.station_moves_unconfirmed()
+        {
+            inventory::change(InventoryUpdate::WorldDetached, world, out)?;
         }
         Ok(())
     }
@@ -501,6 +555,7 @@ impl Feature for Tradeskills {
         }
         out.request(&Request::Combine(container))?;
         self.combining = Some(container);
+        self.combined_at = Some(Instant::now());
         if container == WORLD_CONTAINER {
             self.station_clear_pending = true;
         }
@@ -533,6 +588,19 @@ impl Feature for Tradeskills {
                 }))?;
             }
         }
+        if self.eqmac
+            && self.combining.is_some()
+            && self
+                .combined_at
+                .is_some_and(|at| now.saturating_duration_since(at) >= EQMAC_COMBINE_WINDOW)
+        {
+            // A refusal with a line and no reset: nothing was cleared.
+            self.combining = None;
+            self.combined_at = None;
+            self.station_clear_pending = false;
+            out.log
+                .diagnostic("No combine answer came; combining is allowed again".into())?;
+        }
         let reach = out.wire.reaches().containers;
         keep_in_reach((&mut self.reach_checked, reach), now, world, out)
     }
@@ -545,7 +613,30 @@ impl Feature for Tradeskills {
     ) -> Result<()> {
         self.admit(message, world)?;
         match message {
-            Message::Event(WorldEvent::Combine(CombineUpdate::Answered)) => self.combining = None,
+            Message::Event(WorldEvent::Combine(CombineUpdate::Answered)) => {
+                self.combining = None;
+                self.combined_at = None;
+                if self.eqmac {
+                    // Both Mac servers send `OP_ClearObject` before the
+                    // reset, so no clear follows it.
+                    self.station_clear_pending = false;
+                }
+            }
+            Message::ContainerReleased if self.eqmac => self.released(world, out)?,
+            Message::Event(WorldEvent::Death(death))
+                if self.eqmac && world.is_player(death.spawn_id) && world.container.is_open() =>
+            {
+                // Neither Mac server closes a dead player's container until
+                // they leave the zone; the session closes it as it does out
+                // of reach (row 6.598d).
+                if let Some(Container::Open { view, .. }) = &world.container.0 {
+                    let drop_id = view.drop_id;
+                    close(world, out)?;
+                    out.log.send(ClientEvent::World(WorldEvent::Objects(
+                        ObjectUpdate::Closed { drop_id },
+                    )))?;
+                }
+            }
             Message::TradeskillNoRecipe if self.combining == Some(WORLD_CONTAINER) => {
                 self.station_clear_pending = false;
             }

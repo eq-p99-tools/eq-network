@@ -76,6 +76,12 @@ const SUMMONED_OPCODE: u16 = 0x7841;
 const MOVE_OPCODE: u16 = 0x2c41;
 /// `OP_DeleteCharge`: a unit or charge of the item in a slot used up.
 const DELETE_CHARGE_OPCODE: u16 = 0x4741;
+/// `OP_ObjectItemPacket`: an item the open world container holds, at its
+/// place 0 to 9 (6.598).
+const WORLD_ITEM_OPCODE: u16 = 0xfb40;
+/// `OP_ClearObject`: the open world container emptied by a combine
+/// (`ClearObject_Struct`, 8 bytes, `Clear` then seven unused).
+const CLEAR_OBJECT_OPCODE: u16 = 0x0542;
 
 /// An item record.
 const RECORD: usize = 360;
@@ -159,6 +165,27 @@ pub fn decode_with(opcode: u16, body: &[u8], rules: ItemRules) -> Result<Option<
                 "summoned item is not on cursor"
             );
             Ok(Some(InventoryUpdate::Cursor(vec![item])))
+        }
+        WORLD_ITEM_OPCODE => {
+            // Both servers send the place itself (`SendItemPacket(i, ...)`),
+            // and the Mac patch does not translate it: place 0 is not the
+            // cursor here. Moves name the same place as 4000 to 4009.
+            ensure!(body.len() == RECORD, "invalid EQMac item length");
+            let record = Record(body);
+            let place = record.short(184);
+            ensure!((0..=9).contains(&place), "invalid world container place");
+            let slot = InventorySlot(4000 + i32::from(place));
+            Ok(Some(InventoryUpdate::Set(vec![item_at_for(
+                &record, slot, rules,
+            )?])))
+        }
+        CLEAR_OBJECT_OPCODE => {
+            // Both servers set `Clear` to 1; the Mac struct names no place.
+            ensure!(
+                body.len() == 8 && body[0] != 0,
+                "invalid EQMac world container clear"
+            );
+            Ok(Some(InventoryUpdate::WorldEmptied))
         }
         MOVE_OPCODE | DELETE_CHARGE_OPCODE => {
             let ([from, to, quantity], []) = body.as_chunks::<4>() else {

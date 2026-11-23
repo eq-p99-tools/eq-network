@@ -951,47 +951,17 @@ fn a_new_admission_drops_a_pending_combine_and_other_profiles_keep_their_offers(
         fresh.refusal(&combine(InventorySlot(23)), &world, Instant::now()),
         Some("That was meant for an earlier zone visit")
     );
-    for (protocol, carried, station) in [
-        (ServerProtocol::Project1999, true, true),
-        (ServerProtocol::EqEmu, true, true),
-        (ServerProtocol::Quarm, false, false),
-        (ServerProtocol::Takp, false, false),
+    // Every server type now offers both (TAKP and Quarm from 6.598).
+    for protocol in [
+        ServerProtocol::Project1999,
+        ServerProtocol::EqEmu,
+        ServerProtocol::Quarm,
+        ServerProtocol::Takp,
     ] {
         let server = servers::server_type(protocol);
-        let mut features = Features::new(server, "Tester", AutoEat::default());
+        let features = Features::new(server, "Tester", AutoEat::default());
         let caps = features.capabilities();
-        assert_eq!(
-            caps.contains(&Capability::Tradeskills),
-            carried,
-            "{protocol:?}"
-        );
-        assert_eq!(
-            caps.contains(&Capability::WorldContainers),
-            station,
-            "{protocol:?}"
-        );
-        if !carried {
-            let (_, mut world) = setup();
-            for command in [
-                combine(InventorySlot(23)),
-                combine(WORLD_CONTAINER),
-                ClientCommand::OpenContainer {
-                    session_id: 5,
-                    drop_id: 71,
-                    created: Instant::now(),
-                },
-                ClientCommand::CloseContainer {
-                    session_id: 5,
-                    drop_id: 42,
-                    created: Instant::now(),
-                },
-            ] {
-                let outcome = testing::run_on(server.wire(), |out| {
-                    features.handle(&command, &mut world, out)
-                });
-                assert!(!outcome.result.unwrap(), "{protocol:?}");
-                assert!(outcome.sent.is_empty(), "{protocol:?}");
-            }
-        }
+        assert!(caps.contains(&Capability::Tradeskills), "{protocol:?}");
+        assert!(caps.contains(&Capability::WorldContainers), "{protocol:?}");
     }
 }

@@ -25,8 +25,8 @@ pub(in crate::client) fn eqmac(opcode: u16) -> Option<ServerMessage> {
         0x0400 => sent("OP_LoginAccepted", TAKP, Read(&[Login])),
         0x0442 => sent("OP_GuildMOTD", EQMAC, Read(&[Chat])),
         0x0480 => sent("OP_ZoneServerInfo", EQMAC, Read(&[World])),
-        0x0541 => sent("OP_TradeSkillCombine", EQMAC, planned(EqMacWorld)),
-        0x0542 => sent("OP_ClearObject", EQMAC, planned(EqMacWorld)),
+        0x0541 => sent("OP_TradeSkillCombine", EQMAC, Read(&[Zone])),
+        0x0542 => sent("OP_ClearObject", EQMAC, Read(&[Zone])),
         0x0580 => sent("OP_ZoneUnavail", EQMAC, Read(&[World])),
         // An offer, and TAKP's word that the player may go after their yes.
         0x0642 => sent("OP_Translocate", EQMAC, Partly(&[Zone], TRANSLOCATE)),
@@ -218,7 +218,7 @@ pub(in crate::client) fn eqmac(opcode: u16) -> Option<ServerMessage> {
         0xd440 => sent("OP_SetTitle", EQMAC, Partly(&[Zone], EQMAC_TITLE)),
         0xd540 => sent("OP_ConsentResponse", EQMAC, Read(&[Zone])),
         0xd640 => sent("OP_TradeRefused", EQMAC, Read(&[Zone])),
-        0xd740 => sent("OP_ClickObjectAction", EQMAC, planned(EqMacWorld)),
+        0xd740 => sent("OP_ClickObjectAction", EQMAC, Read(&[Zone])),
         0xd840 => sent("OP_SendExpZonein", EQMAC, Read(&[Admission])),
         0xd841 => sent("OP_ExpansionInfo", EQMAC, Read(&[World])),
         0xda40 => sent("OP_TradeAcceptClick", EQMAC, Read(&[Zone])),
@@ -255,7 +255,7 @@ pub(in crate::client) fn eqmac(opcode: u16) -> Option<ServerMessage> {
         ),
         0xf641 => sent("OP_CharInventory", EQMAC, Read(&[Zone])),
         0xf741 => sent("OP_SpawnDoor", EQMAC, Read(&[Zone])),
-        0xfb40 => sent("OP_ObjectItemPacket", EQMAC, planned(EqMacWorld)),
+        0xfb40 => sent("OP_ObjectItemPacket", EQMAC, Read(&[Zone])),
         0xfe41 => sent("OP_TargetCommand", EQMAC, Read(&[Zone])),
         _ => return None,
     })
