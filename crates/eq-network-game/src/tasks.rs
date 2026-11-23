@@ -26,6 +26,8 @@
 use anyhow::{bail, ensure, Context, Result};
 use serde::Serialize;
 
+pub mod offers;
+
 /// Titanium's `OP_TaskDescription`: one journal entry's description.
 pub const DESCRIPTION_OPCODE: u16 = 0x5ef7;
 /// Titanium's `OP_TaskActivity`: one step of a journal entry.
@@ -546,6 +548,10 @@ pub enum News {
     Completed(Vec<CompletedTask>),
     /// The server took an entry out.
     Removed(TaskSlot),
+    /// An NPC's offer of tasks.
+    Offered(offers::TaskOffers),
+    /// A finished task's done steps.
+    History(offers::TaskHistory),
 }
 
 /// Reads a Titanium journal message, or None for another opcode.
@@ -561,6 +567,8 @@ pub fn titanium(opcode: u16, body: &[u8]) -> Option<Result<News>> {
         COMPLETION_OPCODE => completion(body).map(News::Concluded),
         COMPLETED_OPCODE => completed_list(body).map(News::Completed),
         REMOVAL_OPCODE => removal(body).map(News::Removed),
+        offers::OFFERS_OPCODE => offers::offers(body).map(News::Offered),
+        offers::HISTORY_OPCODE => offers::history(body).map(News::History),
         _ => return None,
     })
 }

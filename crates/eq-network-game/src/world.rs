@@ -697,6 +697,13 @@ pub enum Capability {
     /// suffix ([`crate::command::GameCommand::RequestTitles`],
     /// [`crate::command::GameCommand::SetTitle`]).
     Titling,
+    /// Searching the Bazaar for traders' items, and asking how many traders
+    /// and items there are ([`crate::command::GameCommand::BazaarSearch`],
+    /// [`crate::command::GameCommand::BazaarWelcome`]). No money moves.
+    BazaarSearching,
+    /// Taking offered tasks, cancelling journal entries, a finished task's
+    /// steps and `/tasktimers` ([`crate::tasks::offers`]).
+    Tasks,
     /// Training, activating and setting the experience split of the
     /// player's AAs ([`crate::command::GameCommand::TrainAlternateAdvancement`],
     /// [`crate::command::GameCommand::ActivateAlternateAdvancement`],
@@ -707,7 +714,7 @@ pub enum Capability {
 impl Capability {
     /// Every capability, in order: what a session offers when its server and
     /// client generation support everything.
-    pub const ALL: [Self; 81] = [
+    pub const ALL: [Self; 83] = [
         Self::Casting,
         Self::Spellbook,
         Self::Inventory,
@@ -788,6 +795,8 @@ impl Capability {
         Self::LookingForGroup,
         Self::Shielding,
         Self::Titling,
+        Self::BazaarSearching,
+        Self::Tasks,
         Self::AlternateAdvancement,
     ];
 }
@@ -1325,6 +1334,17 @@ pub enum WorldEvent {
     /// answer to [`crate::command::GameCommand::RequestTitles`]
     /// (`names::title_list`).
     TitleList(Vec<crate::names::TitleChoice>),
+    /// What the server says of the player's Bazaar search
+    /// ([`crate::command::GameCommand::BazaarSearch`],
+    /// [`crate::command::GameCommand::BazaarWelcome`]).
+    Bazaar(crate::bazaar::BazaarEvent),
+    /// A Bazaar search or welcome request was not sent, and why.
+    BazaarRefused {
+        /// Admission from the request.
+        session_id: u64,
+        /// Why not.
+        reason: String,
+    },
     /// The server's answer to the player's `/surname`
     /// (`OP_Surname`'s reply): whether it took the surname, and
     /// the surname as it took it or refused it. Where taken, the zone's
@@ -1682,6 +1702,29 @@ pub enum WorldEvent {
         session_id: u64,
         /// The list, oldest first, as sent.
         list: Vec<crate::tasks::CompletedTask>,
+    },
+    /// An NPC offers the player tasks, replacing any earlier offer. The
+    /// offer stands until the player takes one or declines, the next offer,
+    /// or the zone's end.
+    TasksOffered {
+        /// Admission it arrived in.
+        session_id: u64,
+        /// The offer, as sent.
+        offers: crate::tasks::offers::TaskOffers,
+    },
+    /// A finished task's done steps, as asked for.
+    TaskHistory {
+        /// Admission it arrived in.
+        session_id: u64,
+        /// The steps.
+        history: crate::tasks::offers::TaskHistory,
+    },
+    /// A task request was not sent, and why.
+    TaskRefused {
+        /// Admission from the request.
+        session_id: u64,
+        /// Why not.
+        reason: String,
     },
     /// A chat line was not sent, and is not kept for later: the session's
     /// pace for all chat held it (recording checklist 6.523).
@@ -2751,7 +2794,9 @@ mod tests {
             Capability::LookingForGroup => 77,
             Capability::Shielding => 78,
             Capability::Titling => 79,
-            Capability::AlternateAdvancement => 80,
+            Capability::BazaarSearching => 80,
+            Capability::Tasks => 81,
+            Capability::AlternateAdvancement => 82,
         };
         for (index, capability) in Capability::ALL.into_iter().enumerate() {
             assert_eq!(place(capability), index, "{capability:?}");

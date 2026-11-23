@@ -136,7 +136,7 @@ impl fmt::Display for Part {
 }
 
 /// The numbers [`rof2`] reads, for the session's coverage table.
-pub const ROF2_READS: [u16; 62] = [
+pub const ROF2_READS: [u16; 67] = [
     crate::rof2_player::SPAWN_OPCODE,
     crate::rof2_player::POSITION_OPCODE,
     crate::rof2_player::DESPAWN_OPCODE,
@@ -199,6 +199,11 @@ pub const ROF2_READS: [u16; 62] = [
     crate::rof2_notices::RENAME_OPCODE,
     crate::rof2_notices::NEW_TITLES_OPCODE,
     crate::rof2_notices::BANKER_CHANGE_OPCODE,
+    crate::rof2_loot_titles::MONEY_OPCODE,
+    crate::rof2_loot_titles::LOOT_COMPLETE_OPCODE,
+    crate::rof2_loot_titles::SURNAME_OPCODE,
+    crate::rof2_loot_titles::TITLE_LIST_OPCODE,
+    crate::rof2_loot_titles::TITLE_OPCODE,
 ];
 
 /// What one `RoF2` zone packet says. Only its spawn records (6.510), its
@@ -208,7 +213,8 @@ pub const ROF2_READS: [u16; 62] = [
 /// gems (6.532), the mana and endurance pools (6.538), doors, ground objects
 /// and the weather (6.539), rolls, assists, yells and effects (6.541), and
 /// targets, charms, rewards, reuse and skill answers (6.544), and quest
-/// rewards, renames, new titles and the banker's change (6.549) are read
+/// rewards, renames, new titles and the banker's change (6.549), and corpse
+/// money and the loot close, the surname answer and titles (6.552) are read
 /// yet; a body a reader refuses is unreadable, told by its opcode and length
 /// only.
 #[must_use]
@@ -251,6 +257,7 @@ fn rof2_readers(opcode: u16, body: &[u8]) -> Option<Vec<Message>> {
         .or_else(|| one(crate::rof2_socials::read(opcode, body), Part::World))
         .or_else(|| one(crate::rof2_answers::read(opcode, body), Part::World))
         .or_else(|| one(crate::rof2_notices::read(opcode, body), Part::World))
+        .or_else(|| one(crate::rof2_loot_titles::read(opcode, body), Part::World))
         .or_else(|| spell(crate::rof2_spellbook::read(opcode, body)))
         .or_else(|| rof2_casting(opcode, body).map(|message| vec![message]))
 }
@@ -365,6 +372,7 @@ pub fn titanium(opcode: u16, body: &[u8]) -> Vec<Message> {
             }
         }
         crate::buffs::TITANIUM_ACTION_OPCODE => action(crate::buffs::titanium_action(body)),
+        crate::bazaar::SEARCH_OPCODE => return bazaar(body, messages),
         crate::zones::TITANIUM_HEADER_OPCODE => {
             messages.extend(crate::clock::titanium_zone_sky(body).map(sky));
             described(crate::zones::titanium_description(body))
@@ -670,6 +678,20 @@ fn eqmac_profile(body: &[u8]) -> Vec<Message> {
     messages
 }
 
+/// What the server's `OP_BazaarSearch` adds to the packet's messages: an
+/// event; nothing for the parcel costs `EQEmu` sends after a search's
+/// results, which only `RoF` and later use (the coverage table's needless
+/// part); or a kind no server is known to send Titanium.
+fn bazaar(body: &[u8], mut messages: Vec<Message>) -> Vec<Message> {
+    messages.extend(match crate::bazaar::answer(body) {
+        Ok(crate::bazaar::Answer::Event(event)) => Some(Message::Event(WorldEvent::Bazaar(event))),
+        Ok(crate::bazaar::Answer::DeliveryCosts) => None,
+        Ok(crate::bazaar::Answer::Other(kind)) => Some(Message::UnknownKind(kind)),
+        Err(error) => Some(unreadable(Part::World, &error)),
+    });
+    messages
+}
+
 /// What an action says: a spell's, the spin, or a kind no server is known
 /// to send.
 fn action(action: anyhow::Result<crate::buffs::Action>) -> Message {
@@ -728,6 +750,34 @@ mod tests {
                     endurance: 80
                 })
             ]
+        ));
+    }
+
+    #[test]
+    fn a_bazaar_answer_is_an_event_nothing_a_kind_or_unreadable() {
+        let mut done = vec![0; 20];
+        done[0] = 12;
+        assert!(matches!(
+            titanium(crate::bazaar::SEARCH_OPCODE, &done)[..],
+            [Message::Event(WorldEvent::Bazaar(
+                crate::bazaar::BazaarEvent::SearchDone
+            ))]
+        ));
+        let mut costs = vec![0; 14];
+        costs[0] = 29;
+        assert!(titanium(crate::bazaar::SEARCH_OPCODE, &costs).is_empty());
+        assert!(matches!(
+            titanium(crate::bazaar::SEARCH_OPCODE, &[22, 0, 0, 0])[..],
+            [Message::UnknownKind(22)]
+        ));
+        let mut short_row = vec![0; crate::bazaar::ROW_LENGTH - 1];
+        short_row[0] = 7;
+        assert!(matches!(
+            titanium(crate::bazaar::SEARCH_OPCODE, &short_row)[..],
+            [Message::Unreadable {
+                part: Part::World,
+                ..
+            }]
         ));
     }
 

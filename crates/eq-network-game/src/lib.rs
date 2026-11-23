@@ -10,6 +10,8 @@ pub mod appearance;
 /// A banker's change of the purse's and the bank's coins into the fewest
 /// coins of the largest kinds.
 pub mod banker;
+/// The Bazaar's search on stock `EQEmu`, read only.
+pub mod bazaar;
 /// Binding wounds with bandages.
 pub mod bind_wound;
 /// Received Titanium boat-control packets and conservative echo correlation.
@@ -125,6 +127,7 @@ pub mod rof2_answers;
 pub mod rof2_buffs;
 pub mod rof2_casting;
 pub mod rof2_looks;
+pub mod rof2_loot_titles;
 pub mod rof2_news;
 pub mod rof2_notices;
 pub mod rof2_player;

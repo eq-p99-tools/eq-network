@@ -207,6 +207,12 @@ pub(super) fn needs(command: &ClientCommand) -> &'static [Resource] {
         | ClientCommand::YellForHelp { .. }
         // Nor does a shield: the server keeps its recast.
         | ClientCommand::Shield { .. }
+        // Nor do the journal's requests: the journal paces its own.
+        | ClientCommand::AcceptTask { .. }
+        | ClientCommand::DeclineTasks { .. }
+        | ClientCommand::CancelTask { .. }
+        | ClientCommand::AskTaskHistory { .. }
+        | ClientCommand::ListTaskTimers { .. }
         // A challenge holds nothing; the duel feature paces it.
         | ClientCommand::ChallengeDuel { .. }
         // A report to the staff holds nothing back either.
@@ -244,6 +250,8 @@ pub(super) fn needs(command: &ClientCommand) -> &'static [Resource] {
         // The server judges a cast in flight itself; the program's own
         // check is read R49-39b.
         | ClientCommand::ActivateAlternateAdvancement { .. }
+        | ClientCommand::BazaarSearch { .. }
+        | ClientCommand::BazaarWelcome { .. }
         | ClientCommand::Emote { .. }
         | ClientCommand::SocialEmote { .. }
         | ClientCommand::Assist { .. }
@@ -439,8 +447,15 @@ fn refusal(command: &ClientCommand, reason: &str) -> Option<WorldEvent> {
         | ClientCommand::TrainAlternateAdvancement { session_id, .. }
         | ClientCommand::ActivateAlternateAdvancement { session_id, .. }
         | ClientCommand::SetAlternateAdvancementSplit { session_id, .. }
+        | ClientCommand::BazaarSearch { session_id, .. }
+        | ClientCommand::BazaarWelcome { session_id }
         | ClientCommand::YellForHelp { session_id, .. }
         | ClientCommand::Shield { session_id, .. }
+        | ClientCommand::AcceptTask { session_id, .. }
+        | ClientCommand::DeclineTasks { session_id }
+        | ClientCommand::CancelTask { session_id, .. }
+        | ClientCommand::AskTaskHistory { session_id, .. }
+        | ClientCommand::ListTaskTimers { session_id, .. }
         | ClientCommand::ChallengeDuel { session_id, .. }
         | ClientCommand::SendPetition { session_id, .. }
         | ClientCommand::ReportBug { session_id, .. }
@@ -709,6 +724,14 @@ fn reasoned(command: &ClientCommand, session_id: u64, reason: String) -> Option<
                 refusal: None,
             }
         }
+        ClientCommand::BazaarSearch { .. } | ClientCommand::BazaarWelcome { .. } => {
+            WorldEvent::BazaarRefused { session_id, reason }
+        }
+        ClientCommand::AcceptTask { .. }
+        | ClientCommand::DeclineTasks { .. }
+        | ClientCommand::CancelTask { .. }
+        | ClientCommand::AskTaskHistory { .. }
+        | ClientCommand::ListTaskTimers { .. } => WorldEvent::TaskRefused { session_id, reason },
         ClientCommand::Combine { .. } => WorldEvent::CombineRefused {
             session_id,
             reason,

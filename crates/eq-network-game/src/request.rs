@@ -203,6 +203,11 @@ pub enum Request {
     /// Train, activate or set the split of the player's AAs
     /// ([`crate::alternate_advancement::titanium_action`]).
     AlternateAdvancement(crate::alternate_advancement::Action),
+    /// Search the Bazaar ([`crate::bazaar::search`]).
+    BazaarSearch(crate::bazaar::BazaarCriteria),
+    /// Ask how many traders and items the Bazaar has
+    /// ([`crate::bazaar::welcome`]).
+    BazaarWelcome,
     /// Emote, in the player's own words.
     Emote(String),
     /// A social emote's text, sent as the program builds it.
@@ -452,6 +457,22 @@ pub enum Request {
     DestroyCoins(CoinDestroy),
     /// A Warrior's `/shield` of this player ([`crate::shielding`]).
     Shield(u16),
+    /// Take an offered task ([`crate::tasks::offers`]).
+    AcceptTask {
+        /// The kind the offer was sent as.
+        kind: crate::tasks::TaskKind,
+        /// The task.
+        task_id: u32,
+        /// The offering NPC's spawn.
+        giver: u16,
+    },
+    /// Cancel a journal entry ([`crate::tasks::offers`]).
+    CancelTask(crate::tasks::TaskSlot),
+    /// Ask for the done steps of the finished task at this index of the
+    /// last finished list ([`crate::tasks::offers`]).
+    TaskHistory(u32),
+    /// `/tasktimers` ([`crate::tasks::offers`]).
+    TaskTimers,
     /// Eat or drink.
     Consume {
         /// Where the food or drink is.
@@ -595,6 +616,14 @@ pub fn titanium(request: &Request, sender: Sender<'_>) -> Result<EncodedCommand>
             opcode: crate::names::REQUEST_TITLES_OPCODE,
             body: Vec::new(),
         },
+        Request::BazaarSearch(criteria) => EncodedCommand {
+            opcode: crate::bazaar::SEARCH_OPCODE,
+            body: crate::bazaar::search(criteria)?,
+        },
+        Request::BazaarWelcome => EncodedCommand {
+            opcode: crate::bazaar::SEARCH_OPCODE,
+            body: crate::bazaar::welcome(),
+        },
         Request::SetTitle { title_id, suffix } => EncodedCommand {
             opcode: crate::names::SET_TITLE_OPCODE,
             body: crate::names::set_title(*title_id, *suffix),
@@ -710,6 +739,14 @@ pub fn titanium(request: &Request, sender: Sender<'_>) -> Result<EncodedCommand>
         Request::MoveCoins(transfer) => transfer.encode()?,
         Request::DestroyCoins(destroy) => destroy.encode()?,
         Request::Shield(target) => crate::shielding::titanium_shield(*target)?,
+        Request::AcceptTask {
+            kind,
+            task_id,
+            giver,
+        } => crate::tasks::offers::titanium_accept(*kind, *task_id, *giver)?,
+        Request::CancelTask(at) => crate::tasks::offers::titanium_cancel(*at)?,
+        Request::TaskHistory(index) => crate::tasks::offers::titanium_history(*index)?,
+        Request::TaskTimers => crate::tasks::offers::titanium_timers(),
         Request::Consume {
             slot,
             meal,
@@ -984,6 +1021,32 @@ mod tests {
     }
 
     #[test]
+    fn only_titanium_sends_the_task_requests() {
+        use crate::tasks::{TaskKind, TaskSlot};
+        let requests = [
+            Request::AcceptTask {
+                kind: TaskKind::Quest,
+                task_id: 9,
+                giver: 77,
+            },
+            Request::CancelTask(TaskSlot {
+                kind: TaskKind::Quest,
+                slot: 3,
+            }),
+            Request::TaskHistory(2),
+            Request::TaskTimers,
+        ];
+        let opcodes: Vec<_> = requests
+            .iter()
+            .map(|request| titanium(request, PLAYER).unwrap().opcode)
+            .collect();
+        assert_eq!(opcodes, [0x207f, 0x3ba8, 0x5df4, 0x6a1d]);
+        for request in &requests {
+            assert!(eqmac(request, PLAYER).is_err(), "{request:?}");
+        }
+    }
+
+    #[test]
     fn only_titanium_sends_a_shield() {
         let packet = titanium(&Request::Shield(42), PLAYER).unwrap();
         assert_eq!((packet.opcode, packet.body), (0x3fe6, vec![42, 0, 0, 0]));
@@ -1025,6 +1088,28 @@ mod tests {
         .is_err());
         // TAKP's request is text, slice N4.
         assert!(eqmac(&train, PLAYER).is_err());
+    }
+
+    #[test]
+    fn only_titanium_searches_the_bazaar() {
+        let criteria = crate::bazaar::BazaarCriteria::default();
+        let searched = titanium(&Request::BazaarSearch(criteria.clone()), PLAYER).unwrap();
+        assert_eq!(
+            (searched.opcode, searched.body.len()),
+            (0x1ee9, crate::bazaar::SEARCH_LENGTH)
+        );
+        let welcomed = titanium(&Request::BazaarWelcome, PLAYER).unwrap();
+        assert_eq!(
+            (welcomed.opcode, welcomed.body),
+            (0x1ee9, crate::bazaar::welcome())
+        );
+        let long = crate::bazaar::BazaarCriteria {
+            name: "a".repeat(64),
+            ..criteria.clone()
+        };
+        assert!(titanium(&Request::BazaarSearch(long), PLAYER).is_err());
+        assert!(eqmac(&Request::BazaarSearch(criteria), PLAYER).is_err());
+        assert!(eqmac(&Request::BazaarWelcome, PLAYER).is_err());
     }
 
     #[test]

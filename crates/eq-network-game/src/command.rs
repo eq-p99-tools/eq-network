@@ -928,6 +928,22 @@ pub enum GameCommand {
         /// The share, 0 to 100.
         percentage: u8,
     },
+    /// Search the Bazaar for traders' items; the server answers with
+    /// [`crate::bazaar::BazaarEvent::Results`] when anything matched, then
+    /// [`crate::bazaar::BazaarEvent::SearchDone`]. Only in the Bazaar, and
+    /// one at a time.
+    BazaarSearch {
+        /// Current zone admission.
+        session_id: u64,
+        /// What to look for.
+        criteria: crate::bazaar::BazaarCriteria,
+    },
+    /// Ask how many traders and items the Bazaar has; the server answers
+    /// with [`crate::bazaar::BazaarEvent::Welcome`].
+    BazaarWelcome {
+        /// Current zone admission.
+        session_id: u64,
+    },
     /// Emote, in the player's own words: `/emote`.
     Emote {
         /// Current zone admission.
@@ -1172,6 +1188,50 @@ pub enum GameCommand {
         /// When the player asked.
         created: std::time::Instant,
     },
+    /// Take a task the last offer holds ([`crate::tasks::offers`]). The
+    /// giver must still be in the zone. A host sends it only on the
+    /// player's own click, never from a script, social or hotbutton.
+    AcceptTask {
+        /// Current zone admission.
+        session_id: u64,
+        /// The offered task.
+        task_id: u32,
+        /// When the player chose it.
+        created: std::time::Instant,
+    },
+    /// Close the last offer without taking a task.
+    DeclineTasks {
+        /// Current zone admission.
+        session_id: u64,
+    },
+    /// Cancel a journal entry, losing its progress
+    /// ([`crate::tasks::offers`]). A host sends it only on the player's own
+    /// confirmed choice, never from a script, social or hotbutton.
+    CancelTask {
+        /// Current zone admission.
+        session_id: u64,
+        /// The entry.
+        at: crate::tasks::TaskSlot,
+        /// When the player chose it.
+        created: std::time::Instant,
+    },
+    /// Ask for the done steps of the finished task at this index of the
+    /// last finished list ([`crate::tasks::offers`]).
+    AskTaskHistory {
+        /// Current zone admission.
+        session_id: u64,
+        /// The index in the last finished list.
+        index: u32,
+        /// When the player asked.
+        created: std::time::Instant,
+    },
+    /// `/tasktimers`: the server answers with lines of its own.
+    ListTaskTimers {
+        /// Current zone admission.
+        session_id: u64,
+        /// When the player asked.
+        created: std::time::Instant,
+    },
     /// Select or clear a target in the current zone session, without attacking.
     SelectTarget {
         /// Connection identifier supplied by zone admission.
@@ -1305,6 +1365,11 @@ impl GameCommand {
             Self::UseAbility { .. } => "UseAbility",
             Self::UseKnightAbility { .. } => "UseKnightAbility",
             Self::Shield { .. } => "Shield",
+            Self::AcceptTask { .. } => "AcceptTask",
+            Self::DeclineTasks { .. } => "DeclineTasks",
+            Self::CancelTask { .. } => "CancelTask",
+            Self::AskTaskHistory { .. } => "AskTaskHistory",
+            Self::ListTaskTimers { .. } => "ListTaskTimers",
             Self::UseDiscipline { .. } => "UseDiscipline",
             Self::Consent { .. } => "Consent",
             Self::SummonCorpse { .. } => "SummonCorpse",
@@ -1339,6 +1404,8 @@ impl GameCommand {
             Self::TrainAlternateAdvancement { .. } => "TrainAlternateAdvancement",
             Self::ActivateAlternateAdvancement { .. } => "ActivateAlternateAdvancement",
             Self::SetAlternateAdvancementSplit { .. } => "SetAlternateAdvancementSplit",
+            Self::BazaarSearch { .. } => "BazaarSearch",
+            Self::BazaarWelcome { .. } => "BazaarWelcome",
             Self::Emote { .. } => "Emote",
             Self::Assist { .. } => "Assist",
             Self::RaidInvite { .. } => "RaidInvite",
@@ -1441,6 +1508,11 @@ impl GameCommand {
             | Self::UseAbility { session_id, .. }
             | Self::UseKnightAbility { session_id, .. }
             | Self::Shield { session_id, .. }
+            | Self::AcceptTask { session_id, .. }
+            | Self::DeclineTasks { session_id }
+            | Self::CancelTask { session_id, .. }
+            | Self::AskTaskHistory { session_id, .. }
+            | Self::ListTaskTimers { session_id, .. }
             | Self::UseDiscipline { session_id, .. }
             | Self::WhoAll { session_id, .. }
             | Self::Pet { session_id, .. }
@@ -1478,6 +1550,8 @@ impl GameCommand {
             | Self::TrainAlternateAdvancement { session_id, .. }
             | Self::ActivateAlternateAdvancement { session_id, .. }
             | Self::SetAlternateAdvancementSplit { session_id, .. }
+            | Self::BazaarSearch { session_id, .. }
+            | Self::BazaarWelcome { session_id }
             | Self::Emote { session_id, .. }
             | Self::Assist { session_id, .. }
             | Self::WhoFriends { session_id, .. }
@@ -1604,6 +1678,11 @@ impl GameCommand {
             Self::UseAbility { .. } => Capability::Abilities,
             Self::UseKnightAbility { .. } => Capability::KnightAbilities,
             Self::Shield { .. } => Capability::Shielding,
+            Self::AcceptTask { .. }
+            | Self::DeclineTasks { .. }
+            | Self::CancelTask { .. }
+            | Self::AskTaskHistory { .. }
+            | Self::ListTaskTimers { .. } => Capability::Tasks,
             Self::UseDiscipline { .. } => Capability::UsingDisciplines,
             Self::WhoAll { .. } => Capability::Who,
             Self::WhoFriends { .. } => Capability::FriendsWho,
@@ -1643,6 +1722,7 @@ impl GameCommand {
             Self::TrainAlternateAdvancement { .. }
             | Self::ActivateAlternateAdvancement { .. }
             | Self::SetAlternateAdvancementSplit { .. } => Capability::AlternateAdvancement,
+            Self::BazaarSearch { .. } | Self::BazaarWelcome { .. } => Capability::BazaarSearching,
             Self::Emote { .. } | Self::SocialEmote { .. } | Self::EmoteAnimation { .. } => {
                 Capability::Emoting
             }
@@ -1717,6 +1797,8 @@ impl GameCommand {
             | Self::TrainAlternateAdvancement { .. }
             | Self::ActivateAlternateAdvancement { .. }
             | Self::SetAlternateAdvancementSplit { .. }
+            | Self::BazaarSearch { .. }
+            | Self::BazaarWelcome { .. }
             | Self::Emote { .. }
             | Self::SocialEmote { .. }
             | Self::Assist { .. }
@@ -1744,6 +1826,7 @@ impl GameCommand {
             | Self::SummonCorpse { .. }
             | Self::DragCorpse { .. }
             | Self::DropCorpse { .. }
+            | Self::DeclineTasks { .. }
             | Self::SelectTarget { .. } => None,
             Self::CancelBuff(request) => Some(request.created),
             Self::RangedAttack(request) => Some(request.created),
@@ -1799,6 +1882,10 @@ impl GameCommand {
             | Self::UseAbility { created, .. }
             | Self::UseKnightAbility { created, .. }
             | Self::Shield { created, .. }
+            | Self::AcceptTask { created, .. }
+            | Self::CancelTask { created, .. }
+            | Self::AskTaskHistory { created, .. }
+            | Self::ListTaskTimers { created, .. }
             | Self::UseDiscipline { created, .. }
             | Self::Pet { created, .. }
             | Self::Training { created, .. }
@@ -2008,6 +2095,11 @@ pub fn encode(
         | GameCommand::UseAbility { .. }
         | GameCommand::UseKnightAbility { .. }
         | GameCommand::Shield { .. }
+        | GameCommand::AcceptTask { .. }
+        | GameCommand::DeclineTasks { .. }
+        | GameCommand::CancelTask { .. }
+        | GameCommand::AskTaskHistory { .. }
+        | GameCommand::ListTaskTimers { .. }
         | GameCommand::UseDiscipline { .. }
         | GameCommand::WhoAll { .. }
         | GameCommand::Pet { .. }
@@ -2044,6 +2136,8 @@ pub fn encode(
         | GameCommand::TrainAlternateAdvancement { .. }
         | GameCommand::ActivateAlternateAdvancement { .. }
         | GameCommand::SetAlternateAdvancementSplit { .. }
+        | GameCommand::BazaarSearch { .. }
+        | GameCommand::BazaarWelcome { .. }
         | GameCommand::Emote { .. }
         | GameCommand::SocialEmote { .. }
         | GameCommand::Assist { .. }

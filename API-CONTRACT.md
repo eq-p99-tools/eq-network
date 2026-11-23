@@ -1834,6 +1834,44 @@ program's title window is read (R49-14). `EQMac` and RoF2 build neither
 request: `EQMac` has no titles, and RoF2's numbers are owed (inferred for
 RoF2, 6.489).
 
+## Bazaar search
+
+Stock `EQEmu` on Titanium has a Bazaar; P99's era has none, and TAKP's,
+Quarm's and RoF2's searches are other records. `Capability::BazaarSearching`
+is built and tested from `EQEmu`'s source and offered by no server type
+until its local live row passes (6.550a). No buy, browse or trader mode is
+sent: a later buy must send the listed price exactly, since stock `EQEmu`
+charges the price the client sends.
+
+`GameCommand::BazaarSearch { criteria }` sends `OP_BazaarSearch` (0x1ee9)
+action 7 as `BazaarSearch_Struct`, 108 bytes. Each `BazaarCriteria` field
+left `None` is sent as the value the server takes as open: all ones for
+the class, race, stat, slot and item type, 0 for a price, 1 and 100 for the
+levels (what the official client sends for an open criterion is owed to
+read R49-42a). The trader is a spawn id, 0 for all. The name is at most 63
+bytes of printable ASCII; prices are whole platinum from 1 (the server
+counts them in thousands of copper); levels are 1 to 100; each least must
+not pass its most. `GameCommand::BazaarWelcome` sends action 9, padded to
+20 bytes (inferred). Each is refused with `WorldEvent::BazaarRefused` and
+nothing is sent outside the Bazaar (zone 151; `EQEmu` searches only the
+player's own zone and instance, so elsewhere it finds nothing, and where
+the original lets a player search is owed to R49-42), while another is in
+flight (until its answer, a zone change, a new admission or 10 s), within
+2 s of the last (ours, inferred), or when the criteria are out of bounds.
+
+The server's answers come as `WorldEvent::Bazaar`: `Results` with each
+`BazaarListing` (the trader's spawn, item id, serial number, name and the
+count the server adds as `"Name(count)"`, `None` where the field cut it
+off, the price in copper and the searched stat), then `SearchDone`, which
+alone answers a search that found nothing; and `Welcome { traders, items }`.
+The host names traders from its own spawn list. Results that are not whole
+96-byte rows, more than 1000 rows, a row of another action or of a spawn past
+16 bits, and an action no server is known to send are gaps; an answer
+nobody asked for is withheld and a gap too. The bazaar's and traders'
+gaps keep no sample, only opcode and length. The parcel delivery costs
+`EQEmu` sends after results (action 29) are read and dropped: only RoF and
+later have parcels.
+
 ## Task journal
 
 Stock `EQEmu` sessions (Titanium) read the task journal the zone sends
@@ -1872,6 +1910,48 @@ whole, never cut, and goes to the gap log by opcode and length only: no
 journal message's gap keeps a sample, and no diagnostic or error carries a
 task's words. Inferred until read R49-38: the official program's use of
 each field, and whether it clears its journal at zone-in.
+
+### Offers and requests
+
+The same sessions read an NPC's offer and a finished task's steps
+(checklist 6.555, from `EQEmu`'s source and not yet checked live), each
+heard only after the admission, its words in the event alone:
+
+- `WorldEvent::TasksOffered { offers }`: `TaskOffers` from `OP_TaskSelectWindow`,
+  1 to 40 `OfferedTask`s from the giver's spawn, with the steps the window
+  shows. It replaces any earlier offer, which stands until the player takes
+  one or declines, the next offer, or the zone's end.
+- `WorldEvent::TaskHistory { history }`: a finished task's done steps, as
+  asked for.
+
+`Capability::Tasks` covers five commands. It is offered only on a local
+stock `EQEmu` session until its live row passes, because a wrong
+acceptance can bring down a zone other players share. Each refusal is
+`WorldEvent::TaskRefused { reason }`, and nothing is sent:
+
+- `GameCommand::AcceptTask { task_id }` sends `OP_AcceptNewTask` (12 bytes:
+  the kind as offered, the task and the giver) only for a task in the
+  current offer, not already held, while the giver is an NPC spawn the
+  session holds. `EQEmu`'s `CanAcceptNewTask` dereferences the giver
+  without a null check, so a giver gone from the zone is refused here; one
+  that leaves between this check and the server's read can't be guarded.
+  One send ends the offer, as `EQEmu` clears its own.
+- `GameCommand::DeclineTasks` ends the offer and sends nothing, since
+  `EQEmu` ignores an acceptance of task 0 (inferred until read R49-38).
+- `GameCommand::CancelTask { at }` sends `OP_CancelTask` (8 bytes) only for
+  a slot that exists and holds an entry, once until the server's removal or
+  the zone's end. `EQEmu`'s `RemoveTask` doesn't check the slot, so a quest
+  slot past 18 or a second cancel would corrupt its count of quests.
+- `GameCommand::AskTaskHistory { index }` sends `OP_TaskHistoryRequest`
+  for an index in the last finished list. `GameCommand::ListTaskTimers`
+  sends `/tasktimers` with an empty body, which `EQEmu` doesn't read (the
+  program's body is inferred until read R49-38); the server answers in
+  chat. Each is paced at one per second, this library's floor (inferred).
+
+A host sends `AcceptTask` and `CancelTask` only on the player's own choice,
+never from a script, social or hotbutton: this library's safeguard, not
+the program's. A cancel loses the entry's progress, so a host confirms it
+first.
 
 ## Resurrection and translocate consent
 

@@ -509,6 +509,15 @@ pub(super) trait ServerType: Sync {
         None
     }
 
+    /// Searching the Bazaar, read only. Stock `EQEmu` alone has it on
+    /// Titanium; P99's era has no Bazaar, and TAKP's, Quarm's and `RoF2`'s
+    /// searches are other records. No server offers it until the local
+    /// live row passes (6.550a); then stock `EQEmu` offers
+    /// `offer(Box::<Bazaar>::default())`.
+    fn bazaar(&self, _setup: &Setup<'_>) -> Provided {
+        None
+    }
+
     /// Raids: invitations, joining, declining and leaving.
     fn raids(&self, _setup: &Setup<'_>) -> Provided {
         None
@@ -644,6 +653,7 @@ pub(super) trait ServerType: Sync {
             self.surnames(setup),
             self.shielding(setup),
             self.titles(setup),
+            self.bazaar(setup),
             self.raids(setup),
             self.hazards(setup),
             self.environmental_aa(setup),
@@ -1535,8 +1545,16 @@ impl ServerType for EqEmu {
     /// The task journal as `TaskManager::SendActiveTaskToClient` and the
     /// senders around it build it, from source; not yet checked live
     /// (checklist 6.546).
-    fn journal(&self, _setup: &Setup<'_>) -> Provided {
-        offer(Box::<super::journal::Journal>::default())
+    ///
+    /// The player's task requests (checklist 6.555) only on a local
+    /// session until the live row passes: a wrong acceptance can bring
+    /// down a zone other players share.
+    fn journal(&self, setup: &Setup<'_>) -> Provided {
+        offer(Box::new(if setup.local_only {
+            super::journal::Journal::with_requests()
+        } else {
+            super::journal::Journal::default()
+        }))
     }
 
     /// Stock `EQEmu`'s `Handle_OP_Petition` and `Handle_OP_Bug`; feedback has
@@ -2148,6 +2166,37 @@ mod tests {
     }
 
     #[test]
+    fn only_a_local_stock_eqemu_session_takes_task_requests() {
+        use crate::client::ServerProtocol;
+        use crate::world::Capability;
+        let mut setup = Setup::new("Tester", AutoEat::default());
+        for local in [false, true] {
+            setup.local_only = local;
+            for protocol in [
+                ServerProtocol::Project1999,
+                ServerProtocol::EqEmu,
+                ServerProtocol::Quarm,
+                ServerProtocol::Takp,
+                ServerProtocol::EqEmuRof2,
+            ] {
+                let takes = match protocol {
+                    ServerProtocol::EqEmu => local,
+                    ServerProtocol::Project1999
+                    | ServerProtocol::Quarm
+                    | ServerProtocol::Takp
+                    | ServerProtocol::EqEmuRof2 => false,
+                };
+                let offered = server_type(protocol)
+                    .journal(&setup)
+                    .is_some_and(|journal| {
+                        journal.feature.capabilities().contains(&Capability::Tasks)
+                    });
+                assert_eq!(offered, takes, "{protocol:?} local {local}");
+            }
+        }
+    }
+
+    #[test]
     fn deletion_is_explicit_for_each_checked_native_generation() {
         use crate::client::ServerProtocol;
         use eq_network_game::deletion::Rules;
@@ -2747,6 +2796,28 @@ mod tests {
                 "{protocol:?}"
             );
         }
+    }
+
+    #[test]
+    fn no_server_offers_the_bazaar_search_before_its_live_row() {
+        // Built and tested from source (6.550); stock EQEmu offers it once
+        // the local live row passes.
+        for protocol in [
+            ServerProtocol::EqEmu,
+            ServerProtocol::Project1999,
+            ServerProtocol::Quarm,
+            ServerProtocol::Takp,
+            ServerProtocol::EqEmuRof2,
+        ] {
+            assert!(
+                !offers(server_type(protocol)).contains(&Capability::BazaarSearching),
+                "{protocol:?}"
+            );
+        }
+        assert_eq!(
+            super::super::bazaar::Bazaar::default().capabilities(),
+            [Capability::BazaarSearching]
+        );
     }
 
     #[test]

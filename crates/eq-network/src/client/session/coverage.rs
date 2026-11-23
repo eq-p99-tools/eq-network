@@ -303,6 +303,14 @@ const ILLUSION: &[Part] = &[
         Reason::Needless("EQEmu's Titanium encoder leaves them zero"),
     ),
 ];
+/// What the session leaves unread of Titanium's `OP_BazaarSearch`.
+const BAZAAR_SEARCH: &[Part] = &[Part(
+    "the parcel delivery costs (action 29)",
+    Reason::Needless(
+        "EQEmu sends them after each search's results; only RoF and later have parcels \
+         (zone/trading.cpp Client::SendBazaarDeliveryCosts)",
+    ),
+)];
 
 /// What `OP_TaskDescription`'s reader leaves (gap list section 5, 6.546).
 const TASK_DESCRIPTION: &[Part] = &[
@@ -331,6 +339,18 @@ const TASK_ACTIVITY: &[Part] = &[
         Reason::Planned(Step::LaterSystems),
     ),
 ];
+
+/// What `OP_TaskSelectWindow`'s reader leaves (6.555).
+const TASK_OFFERS: &[Part] = &[Part(
+    "each offered step's request-type word",
+    Reason::Needless("EQEmu writes 0, \"no longer in live\""),
+)];
+
+/// What `OP_TaskHistoryReply`'s reader leaves (6.555).
+const TASK_HISTORY: &[Part] = &[Part(
+    "each done step's two marks and last word",
+    Reason::Needless("EQEmu writes 0xffffffff, 0xffffffff and 0"),
+)];
 
 /// What the session leaves unread of a rename.
 const RENAME: &[Part] = &[
@@ -691,7 +711,12 @@ impl Unheard {
                     continue;
                 }
             };
-            log.gap(opcode, name, body, GapKind::UnknownKind { kind })?;
+            let gap = GapKind::UnknownKind { kind };
+            if private {
+                log.gap_unsampled(opcode, name, body.len(), gap)?;
+            } else {
+                log.gap(opcode, name, body, gap)?;
+            }
             if self.kinds.insert((opcode, kind)) {
                 let name = name.unwrap_or("an unlisted message");
                 log.diagnostic(format!(
@@ -939,6 +964,51 @@ mod tests {
             _ => None,
         });
         assert!(parts.is_some_and(|parts| !parts.is_empty()));
+    }
+
+    #[test]
+    fn the_bazaars_and_traders_gaps_keep_no_sample() {
+        use crate::client::{Gap, GapStage};
+        let config = ClientConfig::new("ACCOUNT", "PASSWORD", "Test Server", "Tester");
+        let mut gaps: Vec<Gap> = Vec::new();
+        let mut handler = |event| {
+            if let ClientEvent::Gap(gap) = event {
+                gaps.push(*gap);
+            }
+            Ok(())
+        };
+        let mut log = Events::new(&config, &mut handler);
+        log.begin_stage(GapStage::Zone).unwrap();
+        let mut unheard = Unheard::new(Stage::Zone);
+        // A trader's sign, still planned, and the search's unknown kind and
+        // unreadable rows.
+        unheard
+            .tell(&Titanium, 0x2844, &[1, 2, 3], &mut log)
+            .unwrap();
+        let unreadable = Message::Unreadable {
+            part: eq_network_game::message::Part::World,
+            error: "bazaar results not whole rows".into(),
+        };
+        unheard
+            .sift(
+                &Titanium,
+                (0x1ee9, &[7; 95]),
+                vec![Message::UnknownKind(22), unreadable],
+                &mut log,
+            )
+            .unwrap();
+        // The search itself, read but for its needless part, is no gap.
+        unheard.tell(&Titanium, 0x1ee9, &[7; 96], &mut log).unwrap();
+        log.end_stage().unwrap();
+        drop(log);
+        let told: Vec<_> = gaps
+            .iter()
+            .map(|gap| (gap.opcode, gap.min_length, gap.sample.is_none()))
+            .collect();
+        assert_eq!(
+            told,
+            [(0x2844, 3, true), (0x1ee9, 95, true), (0x1ee9, 95, true)]
+        );
     }
 
     #[test]
