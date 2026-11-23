@@ -1,6 +1,7 @@
-//! The Bazaar's search on stock `EQEmu` (6.550): the player's search and
-//! welcome request, and the server's answers, read only. Nothing here buys,
-//! browses a trader or turns trader mode on.
+//! The Bazaar on stock `EQEmu`: the player's search and welcome request,
+//! and the server's answers (6.550), and the player's browse of one
+//! trader's wares (6.558), read only. Nothing here buys or turns trader
+//! mode on.
 //!
 //! `EQEmu` searches the traders of the player's own zone and instance
 //! (`Bazaar::GetSearchResults`, `Local_Scope`), so a search outside the
@@ -12,25 +13,42 @@
 //! told as a gap, by its opcode and length alone: its rows list other
 //! players' sales.
 //!
-//! Built, and not yet offered: stock `EQEmu` offers it once the local live
-//! row passes (6.550a).
+//! A browse ([`Browsing`]) clicks only a player whose trader sign the
+//! session saw go on, or whom a search answer named as a trader, within
+//! reach, with no merchant or other browse open, one click at a time. The
+//! server does not check that the player clicked is a trader, and records
+//! the player as their one customer until the browse ends
+//! (`Client::Handle_OP_TraderShop`, `Client::WithCustomer`), so every
+//! browse the session closes itself sends its end, and an approval that
+//! comes after its click stopped waiting is ended too.
+//!
+//! Built, and not yet offered: stock `EQEmu` offers each once its local live
+//! row passes (6.550a, 6.558a).
 #![cfg_attr(
     not(test),
-    expect(dead_code, reason = "offered on stock EQEmu once row 6.550a passes")
+    expect(
+        dead_code,
+        reason = "offered on stock EQEmu once rows 6.550a and 6.558a pass"
+    )
 )]
 use super::{
-    actions,
+    actions::{self, Resource},
     feature::{Feature, Out, World},
-    ClientCommand,
+    ClientCommand, ClientEvent,
 };
 use anyhow::Result;
 use eq_network_game::{
     bazaar::{self, BazaarEvent},
+    merchant::MerchantUpdate,
     message::Message,
+    reach::Reach,
     request::Request,
-    world::WorldEvent,
+    world::{SpawnKind, WorldEvent},
 };
-use std::time::{Duration, Instant};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    time::{Duration, Instant},
+};
 
 /// How long a search or welcome request waits for its answer before
 /// another may go (inferred: `EQEmu` always ends a search, so this only
@@ -94,13 +112,17 @@ impl Feature for Bazaar {
             }
             return;
         };
+        let Some(length) = length(event) else {
+            // A browse's, which [`Browsing`] keeps.
+            return;
+        };
         let waiting = self.waiting(Instant::now());
         match (event, waiting) {
             (BazaarEvent::Results(_), Some(Asked::Search)) => {}
             (BazaarEvent::SearchDone, Some(Asked::Search))
             | (BazaarEvent::Welcome { .. }, Some(Asked::Welcome)) => self.asked = None,
-            (event, _) => {
-                self.unasked.push(length(event));
+            _ => {
+                self.unasked.push(length);
                 *message = Message::Withheld;
             }
         }
@@ -155,12 +177,460 @@ impl Feature for Bazaar {
     }
 }
 
-/// The length of the record an answer came in, as [`bazaar::answer`] reads
-/// it.
-fn length(event: &BazaarEvent) -> usize {
+/// The length of the record a search's answer came in, as
+/// [`bazaar::answer`] reads it; `None` for a browse's event.
+fn length(event: &BazaarEvent) -> Option<usize> {
     match event {
-        BazaarEvent::Results(rows) => rows.len() * bazaar::ROW_LENGTH,
-        BazaarEvent::SearchDone | BazaarEvent::Welcome { .. } => bazaar::WELCOME_LENGTH,
+        BazaarEvent::Results(rows) => Some(rows.len() * bazaar::ROW_LENGTH),
+        BazaarEvent::SearchDone | BazaarEvent::Welcome { .. } => Some(bazaar::WELCOME_LENGTH),
+        BazaarEvent::Admitted { .. }
+        | BazaarEvent::TraderSign { .. }
+        | BazaarEvent::ShopEnded
+        | BazaarEvent::Listed(_)
+        | BazaarEvent::Delisted { .. }
+        | BazaarEvent::BrowseEnded { .. } => None,
+    }
+}
+
+/// How long a click on a trader waits for the server's admission (ours,
+/// inferred: `EQEmu` answers every click on a player in the zone at once).
+const CLICK_WAIT: Duration = Duration::from_secs(10);
+/// The least time between one click on a trader and the next (ours,
+/// inferred), since each records the player as a customer.
+const CLICK_FLOOR: Duration = Duration::from_secs(1);
+/// How many clicks that stopped waiting are kept, so a late approval of
+/// any of them is ended.
+const MOST_LAPSED: usize = 8;
+/// The reach a click on a trader takes where the generation's merchant
+/// reach is unread: 20 in 3-D, as TAKP's program reaches merchants and
+/// trader shops alike (inferred for Titanium, R49-42 d). `EQEmu` checks
+/// no distance on the click.
+const INFERRED_REACH: Reach = Reach {
+    distance: 20.0,
+    flat: false,
+    inclusive: true,
+};
+
+/// An open browse of one trader.
+#[derive(Debug)]
+struct Browse {
+    /// The trader.
+    trader: u16,
+    /// Each item on their list by serial: its price and count, which a
+    /// later buy must send exactly.
+    list: BTreeMap<u32, (u32, u32)>,
+}
+
+/// What the session owes the server or the host once it may send.
+#[derive(Debug, PartialEq)]
+enum Owed {
+    /// The end of a browse the session closed, or of a late approval.
+    End(u16),
+    /// A browse is over: tell the host.
+    Ended(u16),
+    /// A gap, by its opcode, name, length and why.
+    Gap(u16, &'static str, usize, &'static str),
+}
+
+/// Browsing a trader's wares in the Bazaar (6.558).
+#[derive(Default)]
+pub(super) struct Browsing {
+    /// The players the session knows trade now: their sign went on, or a
+    /// search named them. Only spawns the session knows, and cleared on
+    /// despawn and zoning.
+    traders: BTreeSet<u16>,
+    /// The click in flight: the trader and when it went.
+    click: Option<(u16, Instant)>,
+    /// When the last click went.
+    clicked: Option<Instant>,
+    /// Clicks that stopped waiting, newest last.
+    lapsed: Vec<u16>,
+    /// The browse open.
+    browse: Option<Browse>,
+    /// The merchant whose window the server opened, as the session last
+    /// heard.
+    merchant: Option<u16>,
+    /// What the session owes, in order.
+    owed: Vec<Owed>,
+}
+
+impl Browsing {
+    fn waiting(&self, now: Instant) -> Option<u16> {
+        self.click
+            .filter(|(_, at)| now.saturating_duration_since(*at) < CLICK_WAIT)
+            .map(|(trader, _)| trader)
+    }
+
+    /// Moves a click that stopped waiting to the lapsed.
+    fn lapse(&mut self, now: Instant) {
+        if let Some((trader, at)) = self.click {
+            if now.saturating_duration_since(at) >= CLICK_WAIT {
+                self.click = None;
+                self.lapsed.retain(|lapsed| *lapsed != trader);
+                self.lapsed.push(trader);
+                if self.lapsed.len() > MOST_LAPSED {
+                    self.lapsed.remove(0);
+                }
+            }
+        }
+    }
+
+    /// Forgets everything the zone kept: the server forgets the customer
+    /// with the zone, so nothing is sent (inferred).
+    fn forget(&mut self) {
+        if let Some(browse) = self.browse.take() {
+            self.owed.push(Owed::Ended(browse.trader));
+        }
+        self.traders.clear();
+        self.click = None;
+        self.lapsed.clear();
+        self.merchant = None;
+    }
+
+    /// Closes the open browse of `trader`: with its end when the session
+    /// closes it, without when the server or the trader did.
+    fn close(&mut self, trader: u16, send_end: bool) {
+        if self
+            .browse
+            .as_ref()
+            .is_some_and(|browse| browse.trader == trader)
+        {
+            self.browse = None;
+            if send_end {
+                self.owed.push(Owed::End(trader));
+            }
+            self.owed.push(Owed::Ended(trader));
+        }
+    }
+
+    /// A trader left: their sign went off or they despawned.
+    fn trader_left(&mut self, spawn: u16) {
+        self.traders.remove(&spawn);
+        self.close(spawn, false);
+    }
+
+    fn admitted_answer(&mut self, trader: u16, approved: bool, message: &mut Message) {
+        let now = Instant::now();
+        self.lapse(now);
+        if self.waiting(now) == Some(trader) {
+            self.click = None;
+            if approved {
+                self.browse = Some(Browse {
+                    trader,
+                    list: BTreeMap::new(),
+                });
+            }
+        } else if let Some(at) = self.lapsed.iter().position(|lapsed| *lapsed == trader) {
+            // A late answer: an approval recorded the player as the
+            // trader's customer, so it is ended at once.
+            self.lapsed.remove(at);
+            if approved {
+                self.owed.push(Owed::End(trader));
+            }
+            *message = Message::Withheld;
+        } else {
+            self.owed.push(Owed::Gap(
+                bazaar::BROWSE_OPCODE,
+                "OP_TraderShop",
+                bazaar::BROWSE_LENGTH,
+                "a trader's admission no click asked for",
+            ));
+            *message = Message::Withheld;
+        }
+    }
+
+    /// An item packet while browsing: an entry of the trader's list.
+    fn listed(
+        &mut self,
+        serial: Option<u32>,
+        length: usize,
+        item: &Result<Box<eq_network_game::merchant::MerchantItem>, String>,
+    ) -> Message {
+        let Some(browse) = self.browse.as_mut() else {
+            return Message::Withheld;
+        };
+        let trader = browse.trader;
+        let (Some(serial), Ok(item)) = (serial, item) else {
+            // Never keep a half list a buy could use.
+            self.owed.push(Owed::Gap(
+                eq_network_game::merchant::ITEM_PACKET_OPCODE,
+                "OP_ItemPacket",
+                length,
+                "a trader's item that could not be read",
+            ));
+            self.close(trader, true);
+            return Message::Withheld;
+        };
+        if item.price == 0 {
+            return if browse.list.remove(&serial).is_some() {
+                Message::Event(WorldEvent::Bazaar(BazaarEvent::Delisted { trader, serial }))
+            } else {
+                Message::Withheld
+            };
+        }
+        if !browse.list.contains_key(&serial) && browse.list.len() >= bazaar::MOST_LISTED {
+            self.owed.push(Owed::Gap(
+                eq_network_game::merchant::ITEM_PACKET_OPCODE,
+                "OP_ItemPacket",
+                length,
+                "a trader's list past the most a trader lists",
+            ));
+            self.close(trader, true);
+            return Message::Withheld;
+        }
+        browse.list.insert(serial, (item.price, item.quantity));
+        Message::Event(WorldEvent::Bazaar(BazaarEvent::Listed(Box::new(
+            bazaar::TraderListing {
+                trader,
+                serial,
+                price: item.price,
+                count: item.quantity,
+                item: item.item.clone(),
+            },
+        ))))
+    }
+
+    /// Pays what the session owes.
+    fn pay(&mut self, out: &mut Out<'_, '_>) -> Result<()> {
+        for owed in std::mem::take(&mut self.owed) {
+            match owed {
+                Owed::End(trader) => out.request(&Request::EndBrowse(trader))?,
+                Owed::Ended(trader) => out.log.send(ClientEvent::World(WorldEvent::Bazaar(
+                    BazaarEvent::BrowseEnded { trader },
+                )))?,
+                Owed::Gap(opcode, name, length, reason) => out.log.gap_unsampled(
+                    opcode,
+                    Some(name),
+                    length,
+                    crate::client::GapKind::Unread {
+                        reason: reason.to_owned(),
+                    },
+                )?,
+            }
+        }
+        Ok(())
+    }
+
+    fn refusal(
+        &self,
+        trader: u16,
+        world: &World,
+        out: &Out<'_, '_>,
+        now: Instant,
+    ) -> Option<&'static str> {
+        if world.zone.0 != bazaar::ZONE_ID {
+            return Some("You can browse traders only in the Bazaar.");
+        }
+        let Some(spawn) = world
+            .visible_spawn(trader)
+            .filter(|spawn| spawn.kind == SpawnKind::Player && self.traders.contains(&trader))
+        else {
+            return Some("That player is not a trader.");
+        };
+        let reach = out.wire.reaches().merchants.unwrap_or(INFERRED_REACH);
+        if !world
+            .player_at()
+            .is_some_and(|(_, position)| reach.admits(position, spawn.position))
+        {
+            return Some("That trader is too far away.");
+        }
+        if self.browse.is_some() {
+            return Some("Close the trader's window first.");
+        }
+        if self.merchant.is_some() {
+            return Some("Close the merchant's window first.");
+        }
+        if self.waiting(now).is_some() {
+            return Some("Wait for the trader to answer.");
+        }
+        if self
+            .clicked
+            .is_some_and(|clicked| now.saturating_duration_since(clicked) < CLICK_FLOOR)
+        {
+            return Some("Wait a moment before clicking again.");
+        }
+        None
+    }
+}
+
+impl Feature for Browsing {
+    fn capabilities(&self) -> Vec<crate::world::Capability> {
+        vec![crate::world::Capability::BazaarBrowsing]
+    }
+
+    fn owns(&self, command: &ClientCommand) -> bool {
+        matches!(
+            command,
+            ClientCommand::BrowseTrader { .. } | ClientCommand::EndBrowse { .. }
+        )
+    }
+
+    /// A merchant may not open over a browse or a click in flight, as the
+    /// trader's list and a merchant's come in the same packets.
+    fn holds(&self, _world: &World, now: Instant) -> Vec<(Resource, &'static str)> {
+        if self.browse.is_some() || self.waiting(now).is_some() {
+            vec![(Resource::Shopping, "Close the trader's window first")]
+        } else {
+            Vec::new()
+        }
+    }
+
+    /// A new admission forgets the zone's browse, traders and clicks.
+    fn admitted(&mut self, _world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
+        self.forget();
+        self.pay(out)
+    }
+
+    fn explain(&mut self, message: &mut Message, world: &World) {
+        match message {
+            Message::ZoneOffer(_) | Message::ZoneAnswer(_) | Message::Handoff(_) => self.forget(),
+            Message::Event(WorldEvent::Bazaar(event)) => match event {
+                BazaarEvent::TraderSign { spawn, on: true } => {
+                    if world
+                        .spawns
+                        .get(*spawn)
+                        .is_some_and(|known| known.kind == SpawnKind::Player)
+                    {
+                        self.traders.insert(*spawn);
+                    }
+                }
+                BazaarEvent::TraderSign { spawn, on: false } => self.trader_left(*spawn),
+                BazaarEvent::Results(rows) => {
+                    // The server's word that each trades now, in this zone
+                    // (`Local_Scope`; inferred as the program's own).
+                    for row in rows {
+                        if world
+                            .spawns
+                            .get(row.trader)
+                            .is_some_and(|known| known.kind == SpawnKind::Player)
+                        {
+                            self.traders.insert(row.trader);
+                        }
+                    }
+                }
+                BazaarEvent::Admitted { trader, approved } => {
+                    let (trader, approved) = (*trader, *approved);
+                    self.admitted_answer(trader, approved, message);
+                }
+                BazaarEvent::ShopEnded => {
+                    if let Some(trader) = self.browse.as_ref().map(|browse| browse.trader) {
+                        // The trader left trader mode, and the server freed
+                        // them.
+                        self.close(trader, false);
+                    } else {
+                        self.owed.push(Owed::Gap(
+                            bazaar::SHOP_END_OPCODE,
+                            "OP_ShopEnd",
+                            0,
+                            "a shop's end with no browse open",
+                        ));
+                    }
+                    *message = Message::Withheld;
+                }
+                BazaarEvent::SearchDone
+                | BazaarEvent::Welcome { .. }
+                | BazaarEvent::Listed(_)
+                | BazaarEvent::Delisted { .. }
+                | BazaarEvent::BrowseEnded { .. } => {}
+            },
+            Message::MerchantView {
+                serial,
+                length,
+                item,
+            } if self.browse.is_some() => {
+                *message = self.listed(*serial, *length, item);
+            }
+            Message::MerchantScoped {
+                merchant_id: 0,
+                update: MerchantUpdate::Removed { slot },
+            } => {
+                // `OP_TraderDelItem` names no merchant: while browsing, its
+                // serial left the trader's list.
+                if let Some(browse) = self.browse.as_mut() {
+                    let (trader, serial) = (browse.trader, *slot);
+                    *message = if browse.list.remove(&serial).is_some() {
+                        Message::Event(WorldEvent::Bazaar(BazaarEvent::Delisted { trader, serial }))
+                    } else {
+                        Message::Withheld
+                    };
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn observe(
+        &mut self,
+        message: &Message,
+        _world: &mut World,
+        out: &mut Out<'_, '_>,
+    ) -> Result<()> {
+        match message {
+            Message::Event(WorldEvent::Merchant(MerchantUpdate::Opened {
+                merchant_id,
+                accepted: true,
+                ..
+            })) => self.merchant = Some(*merchant_id),
+            Message::Event(WorldEvent::Merchant(MerchantUpdate::Closed)) => self.merchant = None,
+            Message::Event(WorldEvent::Despawn(id)) => {
+                if self.merchant == Some(*id) {
+                    self.merchant = None;
+                }
+                self.trader_left(*id);
+            }
+            Message::Event(WorldEvent::Spawns(spawns)) => {
+                // A spawn sent again is someone new in that place.
+                for spawn in spawns {
+                    if self.merchant == Some(spawn.spawn_id) {
+                        self.merchant = None;
+                    }
+                    self.trader_left(spawn.spawn_id);
+                }
+            }
+            _ => {}
+        }
+        self.pay(out)
+    }
+
+    fn tick(&mut self, now: Instant, _world: &mut World, out: &mut Out<'_, '_>) -> Result<()> {
+        self.lapse(now);
+        self.pay(out)
+    }
+
+    fn handle(
+        &mut self,
+        command: &ClientCommand,
+        world: &mut World,
+        out: &mut Out<'_, '_>,
+    ) -> Result<()> {
+        let now = Instant::now();
+        self.lapse(now);
+        match command {
+            ClientCommand::BrowseTrader { trader, .. } => {
+                if let Some(reason) = self.refusal(*trader, world, out, now) {
+                    return actions::refuse(command, reason, out.log);
+                }
+                if let Err(error) = out.request(&Request::BrowseTrader(*trader)) {
+                    return actions::refuse(
+                        command,
+                        &format!("Cannot browse: {error:#}."),
+                        out.log,
+                    );
+                }
+                self.click = Some((*trader, now));
+                self.clicked = Some(now);
+                self.lapsed.retain(|lapsed| lapsed != trader);
+                Ok(())
+            }
+            ClientCommand::EndBrowse { .. } => {
+                let Some(trader) = self.browse.as_ref().map(|browse| browse.trader) else {
+                    return actions::refuse(command, "No trader's window is open.", out.log);
+                };
+                self.close(trader, true);
+                self.pay(out)
+            }
+            _ => Ok(()),
+        }
     }
 }
 
@@ -377,5 +847,464 @@ mod tests {
         let mut end = done();
         feature.explain(&mut end, &world);
         assert!(matches!(end, Message::Withheld));
+    }
+
+    mod browsing {
+        use super::super::super::{actions, feature::testing, ClientEvent};
+        use super::super::*;
+        use eq_network_game::{bazaar::BazaarListing, merchant::MerchantItem};
+
+        const TRADER: u16 = 40;
+
+        fn bazaar_world() -> World {
+            let mut world = World::new(5);
+            world.own_spawn = Some(7);
+            world.player.admit(testing::player(7));
+            world.zone = (bazaar::ZONE_ID, 0);
+            world
+                .spawns
+                .insert(testing::spawn(TRADER, SpawnKind::Player));
+            world
+        }
+
+        fn event(event: BazaarEvent) -> Message {
+            Message::Event(WorldEvent::Bazaar(event))
+        }
+
+        /// A browsing feature that saw the trader's sign go on.
+        fn signed(world: &World) -> Browsing {
+            let mut feature = Browsing::default();
+            feature.explain(
+                &mut event(BazaarEvent::TraderSign {
+                    spawn: TRADER,
+                    on: true,
+                }),
+                world,
+            );
+            feature
+        }
+
+        fn click() -> ClientCommand {
+            ClientCommand::BrowseTrader {
+                session_id: 5,
+                trader: TRADER,
+            }
+        }
+
+        fn refused(outcome: &testing::Outcome<Result<()>>) -> Option<String> {
+            if !outcome.sent.is_empty() {
+                return None;
+            }
+            outcome.events.iter().find_map(|event| match event {
+                ClientEvent::World(WorldEvent::BazaarRefused {
+                    session_id: 5,
+                    reason,
+                }) => Some(reason.clone()),
+                _ => None,
+            })
+        }
+
+        fn ended(outcome: &testing::Outcome<Result<()>>) -> bool {
+            outcome.events.iter().any(|event| {
+                matches!(
+                    event,
+                    ClientEvent::World(WorldEvent::Bazaar(BazaarEvent::BrowseEnded {
+                        trader: TRADER
+                    }))
+                )
+            })
+        }
+
+        fn gaps(outcome: &testing::Outcome<Result<()>>) -> Vec<&crate::client::Gap> {
+            outcome
+                .events
+                .iter()
+                .filter_map(|event| match event {
+                    ClientEvent::Gap(gap) => Some(&**gap),
+                    _ => None,
+                })
+                .collect()
+        }
+
+        fn view(serial: Option<u32>, price: u32) -> Message {
+            Message::MerchantView {
+                serial,
+                length: 400,
+                item: Ok(Box::new(MerchantItem {
+                    slot: 30,
+                    price,
+                    quantity: 1,
+                    item: testing::item(30),
+                })),
+            }
+        }
+
+        /// A feature browsing the trader, approved.
+        fn browsing(world: &mut World) -> Browsing {
+            let mut feature = signed(world);
+            let outcome = testing::run(|out| feature.handle(&click(), world, out));
+            assert_eq!(outcome.sent.len(), 1);
+            let mut admitted = event(BazaarEvent::Admitted {
+                trader: TRADER,
+                approved: true,
+            });
+            feature.explain(&mut admitted, world);
+            assert!(matches!(admitted, Message::Event(_)));
+            assert!(feature.browse.is_some());
+            feature
+        }
+
+        #[test]
+        fn a_click_goes_as_built_to_a_signed_trader_in_reach() {
+            let mut world = bazaar_world();
+            let mut feature = signed(&world);
+            let outcome = testing::run(|out| feature.handle(&click(), &mut world, out));
+            assert_eq!(
+                (outcome.sent[0].opcode, &outcome.sent[0].body[..]),
+                (bazaar::BROWSE_OPCODE, &bazaar::browse(TRADER)[..])
+            );
+            assert_eq!(feature.waiting(Instant::now()), Some(TRADER));
+            // A merchant may not open over the click in flight.
+            assert_eq!(
+                feature.holds(&world, Instant::now()),
+                [(Resource::Shopping, "Close the trader's window first")]
+            );
+            let shop = ClientCommand::Shop {
+                session_id: 5,
+                merchant_id: 9,
+                own_id: 7,
+                open: true,
+                created: Instant::now(),
+            };
+            assert_eq!(actions::needs(&shop), [Resource::Shopping]);
+        }
+
+        #[test]
+        fn a_click_is_refused_in_our_words_with_nothing_sent() {
+            let reason = |world: &mut World, feature: &mut Browsing| {
+                refused(&testing::run(|out| feature.handle(&click(), world, out)))
+            };
+            let mut world = bazaar_world();
+            world.zone = (202, 0);
+            let mut feature = signed(&world);
+            assert_eq!(
+                reason(&mut world, &mut feature).as_deref(),
+                Some("You can browse traders only in the Bazaar.")
+            );
+            // No sign seen.
+            let mut world = bazaar_world();
+            let mut unsigned = Browsing::default();
+            assert_eq!(
+                reason(&mut world, &mut unsigned).as_deref(),
+                Some("That player is not a trader.")
+            );
+            // Out of reach: 20 in 3-D where the merchant reach is unread.
+            let mut feature = signed(&world);
+            let mut far = testing::spawn(TRADER, SpawnKind::Player);
+            far.position.x = 20.5;
+            world.spawns.insert(far);
+            assert_eq!(
+                reason(&mut world, &mut feature).as_deref(),
+                Some("That trader is too far away.")
+            );
+            let mut near = testing::spawn(TRADER, SpawnKind::Player);
+            near.position.x = 20.0;
+            world.spawns.insert(near);
+            // A merchant's window open.
+            testing::run(|out| {
+                feature.observe(
+                    &Message::Event(WorldEvent::Merchant(MerchantUpdate::Opened {
+                        merchant_id: 9,
+                        accepted: true,
+                        rate: 1.0,
+                    })),
+                    &mut world,
+                    out,
+                )
+            });
+            assert_eq!(
+                reason(&mut world, &mut feature).as_deref(),
+                Some("Close the merchant's window first.")
+            );
+            testing::run(|out| {
+                feature.observe(
+                    &Message::Event(WorldEvent::Merchant(MerchantUpdate::Closed)),
+                    &mut world,
+                    out,
+                )
+            });
+            // In flight, then too soon after the last.
+            assert!(reason(&mut world, &mut feature).is_none());
+            assert_eq!(
+                reason(&mut world, &mut feature).as_deref(),
+                Some("Wait for the trader to answer.")
+            );
+            feature.explain(
+                &mut event(BazaarEvent::Admitted {
+                    trader: TRADER,
+                    approved: false,
+                }),
+                &world,
+            );
+            assert_eq!(
+                reason(&mut world, &mut feature).as_deref(),
+                Some("Wait a moment before clicking again.")
+            );
+            feature.clicked = Instant::now().checked_sub(CLICK_FLOOR);
+            assert!(reason(&mut world, &mut feature).is_none());
+        }
+
+        #[test]
+        fn a_sign_or_search_counts_only_for_a_known_player() {
+            let mut world = bazaar_world();
+            world.spawns.insert(testing::spawn(41, SpawnKind::Npc));
+            let mut feature = Browsing::default();
+            for spawn in [41, 99] {
+                feature.explain(
+                    &mut event(BazaarEvent::TraderSign { spawn, on: true }),
+                    &world,
+                );
+            }
+            assert_eq!(feature.traders, BTreeSet::new());
+            let row = |trader| BazaarListing {
+                trader,
+                item_id: 1001,
+                serial: 77,
+                name: "Bone Chips".into(),
+                count: Some(20),
+                price: 1250,
+                stat: 0,
+            };
+            feature.explain(
+                &mut event(BazaarEvent::Results(vec![row(TRADER), row(99)])),
+                &world,
+            );
+            assert_eq!(feature.traders, BTreeSet::from([TRADER]));
+            feature.explain(
+                &mut event(BazaarEvent::TraderSign {
+                    spawn: TRADER,
+                    on: false,
+                }),
+                &world,
+            );
+            assert_eq!(feature.traders, BTreeSet::new());
+        }
+
+        #[test]
+        fn a_refused_admission_opens_nothing() {
+            let mut world = bazaar_world();
+            let mut feature = signed(&world);
+            testing::run(|out| feature.handle(&click(), &mut world, out));
+            let mut answer = event(BazaarEvent::Admitted {
+                trader: TRADER,
+                approved: false,
+            });
+            feature.explain(&mut answer, &world);
+            assert!(matches!(answer, Message::Event(_)));
+            assert!(feature.browse.is_none() && feature.click.is_none());
+            // Items after it stay the merchant's.
+            let mut item = view(Some(90), 1250);
+            feature.explain(&mut item, &world);
+            assert!(matches!(item, Message::MerchantView { .. }));
+        }
+
+        #[test]
+        fn the_list_follows_the_server_and_merchant_packets_stay_outside() {
+            let mut world = bazaar_world();
+            let mut feature = browsing(&mut world);
+            let mut item = view(Some(90), 1250);
+            feature.explain(&mut item, &world);
+            let Message::Event(WorldEvent::Bazaar(BazaarEvent::Listed(listing))) = &item else {
+                panic!("listed: {item:?}");
+            };
+            assert_eq!(
+                (listing.trader, listing.serial, listing.price, listing.count),
+                (TRADER, 90, 1250, 1)
+            );
+            // A price cut replaces the entry.
+            let mut cut = view(Some(90), 1000);
+            feature.explain(&mut cut, &world);
+            assert!(
+                matches!(&cut, Message::Event(WorldEvent::Bazaar(BazaarEvent::Listed(l))) if l.price == 1000)
+            );
+            assert_eq!(feature.browse.as_ref().unwrap().list[&90], (1000, 1));
+            // Removed by OP_TraderDelItem, then by price 0.
+            let mut gone = Message::MerchantScoped {
+                merchant_id: 0,
+                update: MerchantUpdate::Removed { slot: 90 },
+            };
+            feature.explain(&mut gone, &world);
+            assert!(matches!(
+                gone,
+                Message::Event(WorldEvent::Bazaar(BazaarEvent::Delisted {
+                    trader: TRADER,
+                    serial: 90
+                }))
+            ));
+            feature.explain(&mut view(Some(91), 5), &world);
+            let mut zero = view(Some(91), 0);
+            feature.explain(&mut zero, &world);
+            assert!(matches!(
+                zero,
+                Message::Event(WorldEvent::Bazaar(BazaarEvent::Delisted { serial: 91, .. }))
+            ));
+            assert_eq!(feature.browse.as_ref().unwrap().list, BTreeMap::new());
+            // Ended, a merchant's packets are the merchant's again.
+            let outcome = testing::run(|out| {
+                feature.handle(&ClientCommand::EndBrowse { session_id: 5 }, &mut world, out)
+            });
+            assert_eq!(
+                (outcome.sent[0].opcode, &outcome.sent[0].body[..]),
+                (bazaar::TRADER_OPCODE, &bazaar::end_browse(TRADER)[..])
+            );
+            assert!(ended(&outcome));
+            let mut merchant = view(Some(4), 12);
+            feature.explain(&mut merchant, &world);
+            super::super::super::inventory::merchant_view(&mut merchant);
+            assert!(matches!(
+                merchant,
+                Message::Event(WorldEvent::Merchant(MerchantUpdate::Item(_)))
+            ));
+            let mut removal = Message::MerchantScoped {
+                merchant_id: 0,
+                update: MerchantUpdate::Removed { slot: 4 },
+            };
+            feature.explain(&mut removal, &world);
+            assert!(matches!(removal, Message::MerchantScoped { .. }));
+            assert_eq!(
+                refused(&testing::run(|out| feature.handle(
+                    &ClientCommand::EndBrowse { session_id: 5 },
+                    &mut world,
+                    out
+                )))
+                .as_deref(),
+                Some("No trader's window is open.")
+            );
+        }
+
+        #[test]
+        fn a_list_past_the_cap_or_unreadable_ends_the_browse_with_its_end() {
+            for (overflow, unreadable) in [(true, false), (false, true), (false, false)] {
+                let mut world = bazaar_world();
+                let mut feature = browsing(&mut world);
+                if overflow {
+                    for serial in 0..80 {
+                        feature.explain(&mut view(Some(serial), 10), &world);
+                    }
+                    // A known serial is a change, not a new entry.
+                    feature.explain(&mut view(Some(79), 9), &world);
+                    assert!(feature.browse.is_some());
+                }
+                let mut last = if unreadable {
+                    Message::MerchantView {
+                        serial: Some(500),
+                        length: 20,
+                        item: Err("truncated".into()),
+                    }
+                } else if overflow {
+                    view(Some(500), 10)
+                } else {
+                    view(None, 10)
+                };
+                feature.explain(&mut last, &world);
+                assert!(matches!(last, Message::Withheld));
+                assert!(feature.browse.is_none());
+                let outcome = testing::run(|out| feature.tick(Instant::now(), &mut world, out));
+                assert_eq!(
+                    (outcome.sent[0].opcode, &outcome.sent[0].body[..]),
+                    (bazaar::TRADER_OPCODE, &bazaar::end_browse(TRADER)[..])
+                );
+                assert!(ended(&outcome));
+                let told = gaps(&outcome);
+                assert_eq!(told.len(), 1);
+                assert!(told[0].sample.is_none());
+            }
+        }
+
+        #[test]
+        fn the_server_or_the_trader_ends_a_browse_without_our_end() {
+            type End = fn(&mut Browsing, &mut World) -> testing::Outcome<Result<()>>;
+            let ends: [End; 4] = [
+                |feature, world| {
+                    let mut end = event(BazaarEvent::ShopEnded);
+                    feature.explain(&mut end, world);
+                    assert!(matches!(end, Message::Withheld));
+                    testing::run(|out| feature.observe(&end, world, out))
+                },
+                |feature, world| {
+                    let mut off = event(BazaarEvent::TraderSign {
+                        spawn: TRADER,
+                        on: false,
+                    });
+                    feature.explain(&mut off, world);
+                    testing::run(|out| feature.observe(&off, world, out))
+                },
+                |feature, world| {
+                    let gone = Message::Event(WorldEvent::Despawn(TRADER));
+                    testing::run(|out| feature.observe(&gone, world, out))
+                },
+                |feature, world| {
+                    let mut zoned = Message::Handoff(Vec::default());
+                    feature.explain(&mut zoned, world);
+                    testing::run(|out| feature.tick(Instant::now(), world, out))
+                },
+            ];
+            for end in ends {
+                let mut world = bazaar_world();
+                let mut feature = browsing(&mut world);
+                let outcome = end(&mut feature, &mut world);
+                assert_eq!(outcome.sent, Vec::new());
+                assert!(ended(&outcome));
+                assert!(feature.browse.is_none());
+            }
+        }
+
+        #[test]
+        fn an_admission_nobody_asked_for_is_withheld_and_a_late_approval_ended() {
+            let mut world = bazaar_world();
+            let mut feature = signed(&world);
+            let mut unasked = event(BazaarEvent::Admitted {
+                trader: TRADER,
+                approved: true,
+            });
+            feature.explain(&mut unasked, &world);
+            assert!(matches!(unasked, Message::Withheld));
+            let outcome = testing::run(|out| feature.tick(Instant::now(), &mut world, out));
+            assert_eq!(outcome.sent, Vec::new());
+            assert_eq!(gaps(&outcome).len(), 1);
+            assert!(feature.browse.is_none());
+            // A click that stopped waiting: its approval is ended at once.
+            testing::run(|out| feature.handle(&click(), &mut world, out));
+            feature.click = feature
+                .click
+                .map(|(trader, _)| (trader, Instant::now().checked_sub(CLICK_WAIT).unwrap()));
+            testing::run(|out| feature.tick(Instant::now(), &mut world, out));
+            assert_eq!(feature.lapsed, [TRADER]);
+            let mut late = event(BazaarEvent::Admitted {
+                trader: TRADER,
+                approved: true,
+            });
+            feature.explain(&mut late, &world);
+            assert!(matches!(late, Message::Withheld));
+            assert!(feature.browse.is_none());
+            let outcome = testing::run(|out| feature.tick(Instant::now(), &mut world, out));
+            assert_eq!(
+                (outcome.sent[0].opcode, &outcome.sent[0].body[..]),
+                (bazaar::TRADER_OPCODE, &bazaar::end_browse(TRADER)[..])
+            );
+            assert!(gaps(&outcome).is_empty() && feature.lapsed.is_empty());
+        }
+
+        #[test]
+        fn a_shop_end_with_no_browse_is_a_gap() {
+            let mut world = bazaar_world();
+            let mut feature = Browsing::default();
+            let mut end = event(BazaarEvent::ShopEnded);
+            feature.explain(&mut end, &world);
+            assert!(matches!(end, Message::Withheld));
+            let outcome = testing::run(|out| feature.tick(Instant::now(), &mut world, out));
+            assert_eq!(gaps(&outcome).len(), 1);
+            assert!(!ended(&outcome));
+        }
     }
 }

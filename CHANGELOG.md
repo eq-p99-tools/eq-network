@@ -5,6 +5,20 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Browse a trader's wares in the Bazaar on stock `EQEmu`, read only
+  (6.558, slice 3), from source and not yet checked live. New
+  `GameCommand::BrowseTrader` and `EndBrowse` under the new
+  `Capability::BazaarBrowsing`, which no server type offers until its live
+  row passes. New `BazaarEvent` variants: `Admitted`, `TraderSign`,
+  `ShopEnded`, `Listed(TraderListing)`, `Delisted` and `BrowseEnded`. The
+  session clicks only a player whose trader sign it saw go on or a search
+  named, within reach, one click at a time, and ends every browse it closes
+  and every late approval, since `EQEmu` records the player as the trader's
+  one customer until then. Titanium's merchant item packets now come to
+  the session as the new `Message::MerchantView` with their serial; the
+  merchant window is unchanged. **Breaking:** the new `GameCommand`,
+  `Request`, `Message`, `BazaarEvent` and `Capability` variants, and
+  `BazaarEvent` is no longer `Eq`.
 - Read the player's bandolier sets and potion belt from the Titanium
   profile (6.559, slice 1). The new `bandolier` module reads the four sets
   (a name and four items) and four belt slots into the new

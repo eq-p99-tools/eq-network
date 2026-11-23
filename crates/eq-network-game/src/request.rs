@@ -205,6 +205,10 @@ pub enum Request {
     /// Ask how many traders and items the Bazaar has
     /// ([`crate::bazaar::welcome`]).
     BazaarWelcome,
+    /// Click on a trader to browse their wares ([`crate::bazaar::browse`]).
+    BrowseTrader(u16),
+    /// End the browse of a trader ([`crate::bazaar::end_browse`]).
+    EndBrowse(u16),
     /// Emote, in the player's own words.
     Emote(String),
     /// A social emote's text, sent as the program builds it.
@@ -620,6 +624,14 @@ pub fn titanium(request: &Request, sender: Sender<'_>) -> Result<EncodedCommand>
         Request::BazaarWelcome => EncodedCommand {
             opcode: crate::bazaar::SEARCH_OPCODE,
             body: crate::bazaar::welcome(),
+        },
+        Request::BrowseTrader(trader) => EncodedCommand {
+            opcode: crate::bazaar::BROWSE_OPCODE,
+            body: crate::bazaar::browse(*trader).to_vec(),
+        },
+        Request::EndBrowse(trader) => EncodedCommand {
+            opcode: crate::bazaar::TRADER_OPCODE,
+            body: crate::bazaar::end_browse(*trader).to_vec(),
         },
         Request::SetTitle { title_id, suffix } => EncodedCommand {
             opcode: crate::names::SET_TITLE_OPCODE,
@@ -1085,6 +1097,18 @@ mod tests {
         assert!(titanium(&Request::BazaarSearch(long), PLAYER).is_err());
         assert!(eqmac(&Request::BazaarSearch(criteria), PLAYER).is_err());
         assert!(eqmac(&Request::BazaarWelcome, PLAYER).is_err());
+        let clicked = titanium(&Request::BrowseTrader(312), PLAYER).unwrap();
+        assert_eq!(
+            (clicked.opcode, clicked.body),
+            (0x35e8, crate::bazaar::browse(312).to_vec())
+        );
+        let ended = titanium(&Request::EndBrowse(312), PLAYER).unwrap();
+        assert_eq!(
+            (ended.opcode, ended.body),
+            (0x524e, crate::bazaar::end_browse(312).to_vec())
+        );
+        assert!(eqmac(&Request::BrowseTrader(312), PLAYER).is_err());
+        assert!(eqmac(&Request::EndBrowse(312), PLAYER).is_err());
     }
 
     #[test]

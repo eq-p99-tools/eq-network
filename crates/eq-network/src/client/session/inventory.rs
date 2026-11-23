@@ -1087,6 +1087,20 @@ impl Belongings {
     }
 }
 
+/// Takes a merchant item packet no browse took as the merchant's: its
+/// item, or unreadable.
+pub(super) fn merchant_view(message: &mut Message) {
+    if let Message::MerchantView { item, .. } = message {
+        *message = match item {
+            Ok(item) => Message::Event(WorldEvent::Merchant(MerchantUpdate::Item(item.clone()))),
+            Err(error) => Message::Unreadable {
+                part: eq_network_game::message::Part::World,
+                error: std::mem::take(error),
+            },
+        };
+    }
+}
+
 impl Feature for Belongings {
     fn capabilities(&self) -> Vec<crate::world::Capability> {
         use crate::world::Capability;
@@ -1284,6 +1298,7 @@ impl Feature for Belongings {
     /// session remembers adds nothing, so the purse never rises past what
     /// the server added.
     fn explain(&mut self, message: &mut Message, _world: &World) {
+        merchant_view(message);
         if let Message::Event(event) = message {
             self.sharing.heard(event);
         }

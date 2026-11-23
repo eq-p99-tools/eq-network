@@ -701,6 +701,10 @@ pub enum Capability {
     /// and items there are ([`crate::command::GameCommand::BazaarSearch`],
     /// [`crate::command::GameCommand::BazaarWelcome`]). No money moves.
     BazaarSearching,
+    /// Browsing a trader's wares in the Bazaar, read only
+    /// ([`crate::command::GameCommand::BrowseTrader`],
+    /// [`crate::command::GameCommand::EndBrowse`]). No money moves.
+    BazaarBrowsing,
     /// Taking offered tasks, cancelling journal entries, a finished task's
     /// steps and `/tasktimers` ([`crate::tasks::offers`]).
     Tasks,
@@ -709,7 +713,7 @@ pub enum Capability {
 impl Capability {
     /// Every capability, in order: what a session offers when its server and
     /// client generation support everything.
-    pub const ALL: [Self; 82] = [
+    pub const ALL: [Self; 83] = [
         Self::Casting,
         Self::Spellbook,
         Self::Inventory,
@@ -792,6 +796,7 @@ impl Capability {
         Self::Titling,
         Self::BazaarSearching,
         Self::Tasks,
+        Self::BazaarBrowsing,
     ];
 }
 
@@ -1330,7 +1335,9 @@ pub enum WorldEvent {
     TitleList(Vec<crate::names::TitleChoice>),
     /// What the server says of the player's Bazaar search
     /// ([`crate::command::GameCommand::BazaarSearch`],
-    /// [`crate::command::GameCommand::BazaarWelcome`]).
+    /// [`crate::command::GameCommand::BazaarWelcome`]), of a browse of a
+    /// trader ([`crate::command::GameCommand::BrowseTrader`]), and of
+    /// other players' trader signs.
     Bazaar(crate::bazaar::BazaarEvent),
     /// The player's four bandolier sets, as the profile at admission keeps
     /// them; each `None` where it is empty
@@ -1339,7 +1346,8 @@ pub enum WorldEvent {
     /// The player's four potion belt slots, as the profile at admission
     /// keeps them; each `None` where it is empty.
     PotionBelt(Box<[Option<crate::bandolier::BeltItem>; crate::bandolier::BELT_SLOTS]>),
-    /// A Bazaar search or welcome request was not sent, and why.
+    /// A Bazaar search, welcome request, click on a trader or end of a
+    /// browse was not sent, and why.
     BazaarRefused {
         /// Admission from the request.
         session_id: u64,
@@ -2787,6 +2795,7 @@ mod tests {
             Capability::Titling => 79,
             Capability::BazaarSearching => 80,
             Capability::Tasks => 81,
+            Capability::BazaarBrowsing => 82,
         };
         for (index, capability) in Capability::ALL.into_iter().enumerate() {
             assert_eq!(place(capability), index, "{capability:?}");
