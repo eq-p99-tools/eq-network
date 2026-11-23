@@ -2045,10 +2045,12 @@ message, and RoF2's bank is another layout, owed.
 
 ## Bazaar search
 
-Stock `EQEmu` on Titanium has a Bazaar; P99's era has none, and TAKP's,
-Quarm's and RoF2's searches are other records. `Capability::BazaarSearching`
-is built and tested from `EQEmu`'s source and offered by no server type
-until its local live row passes (6.550a). No buy, browse or trader mode is
+Stock `EQEmu` on Titanium has a Bazaar, and TAKP and Quarm have the
+Mac-era one (below); P99's era has none, and RoF2's search is unread.
+`Capability::BazaarSearching` is built and tested from each server's
+source. TAKP and Quarm offer it from source, not live yet (6.580a stays
+open, and the first use on either is attended); stock `EQEmu` offers it
+once its local live row passes (6.550a). No buy, browse or trader mode is
 sent: a later buy must send the listed price exactly, since stock `EQEmu`
 charges the price the client sends.
 
@@ -2080,6 +2082,39 @@ nobody asked for is withheld and a gap too. The bazaar's and traders'
 gaps keep no sample, only opcode and length. The parcel delivery costs
 `EQEmu` sends after results (action 29) are read and dropped: only RoF and
 later have parcels.
+
+### On TAKP and Quarm
+
+TAKP's and Quarm's servers share `Client::Handle_OP_BazaarSearch` and
+`Client::SendBazaarResults` (EQMacEmu `zone/client_packet.cpp`,
+`zone/trading.cpp`), and the same commands send their records on
+`OP_BazaarSearch` (0x1142). The search is `BazaarSearch_Struct`, 88 bytes:
+action 7, then the trader, class, race, stat, slot and item type as 16-bit
+fields, the name, and the least and most price in whole platinum (0 for
+no bound). The server reads class, race and slot as bit positions in the
+item's masks, counted from 1 for the class and race (the race is its
+mask bit, Human 1 to Iksar 13) and from 0 for the slot, all ones as any, the stat as 0 to 20, and the
+item type with its own special values (0, 31, 46 to 49). Its record has no
+level bound, so a search with either level is refused, as is a criterion
+past 16 bits or equal to all ones. The welcome request is action 9 in 20
+bytes. The handler drops any other size. Neither server refuses a search
+from outside the Bazaar: the handler builds a "Bazaar Search hack" note
+when the zone is not 151 (`Zones::BAZAAR`) and answers all the same. The
+session sends one only in zone 151, our own stricter rule, taken because
+the servers flag it; the same one in flight, 10 s wait and 2 s floor hold.
+
+Each result comes in a packet of its own, a 76-byte row, and the end after
+the last (20 bytes, action 12). So the host hears one `Results` with one
+`BazaarListing` per row, then `SearchDone`. A Mac row's listing has
+`serial` and `stat` `None`, since the row carries neither; `trader` is
+`None` where the server sends 0, a trader not in the zone; `listings` is
+how many listings the server grouped in the row; the name's `" (N)"`
+gives `count`, as on Titanium. **The item id is as the server sent it:
+`SendBazaarResults` stores it through a 16-bit signed field, so an id past
+32767 arrives wrapped and can't be trusted as an id** (nor the count, which
+the server picks by that id's stacking). Rows past 1000 in one search are
+withheld and a gap. When a search reaches `Bazaar:MaxSearchResults`, the
+server's yellow line comes as ordinary chat.
 
 ## Browsing a trader
 

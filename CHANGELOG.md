@@ -5,6 +5,22 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Search the Bazaar on TAKP and Quarm (6.580), from EQMacEmu's source,
+  which both servers share: `OP_BazaarSearch` (0x1142) with the Mac-era
+  88-byte search and 20-byte welcome request, and the server's 76-byte
+  result rows, each in a packet of its own, and its end. Offered on TAKP
+  and Quarm as source-derived, not live (row 6.580a open; first use
+  attended). Sent only in the Bazaar (zone 151; ours, stricter, since the
+  servers flag a search from elsewhere but answer it), with Titanium's pacing.
+  A search with a level bound is refused: the Mac record has none. An item
+  id past 32767 arrives wrapped and can't be trusted as an id.
+
+  **Breaking:** `BazaarListing::trader`, `serial` and `stat` become
+  `Option`, since a Mac row carries no serial or stat and names no trader
+  out of the zone, and `BazaarListing` gains `listings`. New:
+  `bazaar::eqmac::{search, welcome, answer, Answer, SEARCH_OPCODE,
+  SEARCH_LENGTH, WELCOME_LENGTH, ROW_LENGTH, DONE_LENGTH}`.
+
 - Offer `Looting` on TAKP (6.577), from TAKP's own corpse handlers at
   EQMacEmu/Server 44afcbf: the same `EQMac` packets and sizes as Quarm's,
   the echo before the server's checks, and an empty cursor before an item

@@ -87,6 +87,7 @@ each.
 | `Reading` | Reading books and notes | Yes | Yes | Yes | Yes |
 | `BankerChange` | Changing coins at a banker | Yes | Yes | – | – |
 | `Splitting` | Sharing coin with the group | Yes | Yes | – | – |
+| `BazaarSearching` | Searching the Bazaar's traders, read only (source-derived on TAKP and Quarm, not yet checked live) | – | – | Yes | Yes |
 | **People** | | | | | |
 | `Talking` | Chat channels and item links | Yes | Yes | Yes | Yes |
 | `Who` | `/who` | Yes | Yes | – | – |

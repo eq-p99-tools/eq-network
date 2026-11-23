@@ -948,6 +948,14 @@ pub fn eqmac(request: &Request, sender: Sender<'_>) -> Result<EncodedCommand> {
             opcode: crate::names::EQMAC_SURNAME_OPCODE,
             body: crate::names::surname_request(sender.name, surname)?,
         }),
+        Request::BazaarSearch(criteria) => Ok(EncodedCommand {
+            opcode: crate::bazaar::eqmac::SEARCH_OPCODE,
+            body: crate::bazaar::eqmac::search(criteria)?,
+        }),
+        Request::BazaarWelcome => Ok(EncodedCommand {
+            opcode: crate::bazaar::eqmac::SEARCH_OPCODE,
+            body: crate::bazaar::eqmac::welcome(),
+        }),
         _ => anyhow::bail!("the EQMac client cannot send {request:?} yet"),
     }
 }
@@ -1170,7 +1178,7 @@ mod tests {
     }
 
     #[test]
-    fn only_titanium_searches_the_bazaar() {
+    fn titanium_and_eqmac_search_the_bazaar_and_only_titanium_browses() {
         let criteria = crate::bazaar::BazaarCriteria::default();
         let searched = titanium(&Request::BazaarSearch(criteria.clone()), PLAYER).unwrap();
         assert_eq!(
@@ -1187,8 +1195,21 @@ mod tests {
             ..criteria.clone()
         };
         assert!(titanium(&Request::BazaarSearch(long), PLAYER).is_err());
-        assert!(eqmac(&Request::BazaarSearch(criteria), PLAYER).is_err());
-        assert!(eqmac(&Request::BazaarWelcome, PLAYER).is_err());
+        let mac = eqmac(&Request::BazaarSearch(criteria.clone()), PLAYER).unwrap();
+        assert_eq!(
+            (mac.opcode, mac.body),
+            (0x1142, crate::bazaar::eqmac::search(&criteria).unwrap())
+        );
+        let mac_welcome = eqmac(&Request::BazaarWelcome, PLAYER).unwrap();
+        assert_eq!(
+            (mac_welcome.opcode, mac_welcome.body),
+            (0x1142, crate::bazaar::eqmac::welcome())
+        );
+        let bounded = crate::bazaar::BazaarCriteria {
+            min_level: Some(10),
+            ..criteria
+        };
+        assert!(eqmac(&Request::BazaarSearch(bounded), PLAYER).is_err());
         let clicked = titanium(&Request::BrowseTrader(312), PLAYER).unwrap();
         assert_eq!(
             (clicked.opcode, clicked.body),
